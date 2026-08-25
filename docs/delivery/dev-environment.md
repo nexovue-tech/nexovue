@@ -35,6 +35,12 @@ Docker Desktop on macOS runs a Linux VM, so allocate it **~13 GB** and leave ~11
 
 **4. Playwright: arm64 image, `--ipc=host`, `shm_size: 1gb`.** The 64 MB `/dev/shm` default is the most common cause of Chromium instability in Docker. The official images ship ARM64 variants covering Chromium, Firefox and WebKit — the Apple Silicon Rosetta problem applies to native installs, not the container.
 
+## Running the OTel Demo (P1-62)
+
+The OpenTelemetry Demo needs [4 GB minimal, 8 GB+ full](https://opentelemetry.io/docs/demo/requirements/system/) across 18 services. It does **not** coexist with our stack in a 13 GB VM, and it is not meant to — it is a periodic realism gate, not a dependency.
+
+To run it: stop the `doors` and `tools` profiles, raise the Docker allocation temporarily, and use the demo's *minimal* deployment (which drops its own Kafka and the services depending on it). Point its OTLP exporter at our receiver.
+
 ## What the performance budgets mean here
 
 On a single developer laptop with the whole stack co-resident, the budgets in `phase-1-plan.md` §4 are a **regression gate, not a capacity model**. "10,000 spans/sec on an M4 Pro with everything running" is a number worth defending against regressions, and says almost nothing about how many customers can be served.

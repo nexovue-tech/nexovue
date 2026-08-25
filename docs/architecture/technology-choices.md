@@ -23,6 +23,15 @@
 | **Celery + Beat** | DB-backed schedules editable from the UI; process-based model suits heavy Playwright checks | BSD-3 | **[Taskiq / FastStream / Dramatiq](https://docs.bswen.com/blog/2026-06-18-celery-alternatives-2026/)** — genuinely faster on I/O-bound work, but our probe volume is per-minute, not per-second, so the overhead never binds |
 | **clickhouse-connect** | Official Python client for the read path | Apache 2.0 | — |
 
+## Testing & telemetry tooling
+
+| Choice | Why | Licence | Alternative rejected |
+|---|---|---|---|
+| **[Playwright](https://playwright.dev/docs/docker)** | Two jobs: browser-flow synthetic checks (P1-35) and our own e2e tests (P1-60/61). Three engines including WebKit, and auto-waiting — which is what keeps unattended checks from producing 3am false alarms. Official ARM64 images | Apache 2.0 | **Puppeteer** (Chromium only) · **Selenium/Cypress** (weaker multi-engine and waiting semantics). Checkly, the category leader in browser synthetics, is Playwright-based |
+| **[telemetrygen](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/cmd/telemetrygen)** | Synthetic OTLP traces/metrics/logs over HTTP and gRPC with no application to deploy — the right shape for load and soak testing (P1-18, P1-50) | Apache 2.0 | Hand-rolled load generator — more work, less realistic protocol coverage |
+| **Own demo app** (`tools/demo-app`) | Daily driver: 2–3 services, ~300 MB, deterministic fault injection on command, and it dogfoods the exact customer onboarding path every day | — | Using the OTel Demo daily — it needs 4–8 GB and does not coexist with our stack on a 24 GB machine |
+| **[OpenTelemetry Demo](https://opentelemetry.io/docs/demo/requirements/system/)** | Periodic realism gate (P1-62): 18 services across ~10 languages with `flagd` fault injection. Answers what our tidy demo app cannot — cardinality, semconv variation, service-map density | Apache 2.0 | Building our own realistic polyglot fleet — enormous effort to reproduce something maintained by the OTel community |
+
 ## Frontend (TypeScript)
 
 | Choice | Why | Licence | Alternative rejected |

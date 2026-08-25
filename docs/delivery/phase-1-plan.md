@@ -90,7 +90,7 @@ nexovue/
 | P1-10 | Migrations | ClickHouse DDL migration tool + Alembic for Postgres; both reversible | todo |
 
 ### M1 — Walking skeleton
-*Exit: demo app emits a span; it is visible in the browser as a trace waterfall; the whole path runs from `docker compose up`.*
+*Exit: demo app emits a span; it is visible in the browser as a trace waterfall; the whole path runs from `docker compose up`, and one e2e test proves it end to end in CI.*
 
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
@@ -101,7 +101,8 @@ nexovue/
 | P1-15 | Trace assembler | `franz-go` consumer, partition by trace_id, in-memory join, batched insert via `ch-go` | todo |
 | P1-16 | Query API | FastAPI `GET /traces`, `/traces/{id}` through a repository that cannot omit the tenant filter | todo |
 | P1-17 | Web shell | routing, layout, session auth, trace list + waterfall screen | todo |
-| P1-18 | Load generator | `tools/loadgen`; first performance numbers recorded in this doc | todo |
+| P1-60 | E2E harness | Playwright against the running compose stack in CI; first critical path: signup → org/project/key created → first span → trace visible | todo |
+| P1-18 | Load generator | `tools/loadgen` wrapping `telemetrygen` (OTLP/HTTP + gRPC, no app needed); first performance numbers recorded in this doc | todo |
 
 ### M2 — Spine hardening (the part that makes it a product, not a demo)
 *Exit: the five core invariants in §5 each have a test that fails loudly when broken.*
@@ -151,7 +152,7 @@ nexovue/
 | P1-58 | Source maps | upload + store source maps per release; symbolicate JS stack traces. Without this, RUM errors are minified noise | todo |
 
 ### M6 — Dashboard UI surface
-*Exit: every signal we collect has a competent screen. This is the credibility layer, built once, not polished forever.*
+*Exit: every signal we collect has a competent screen, each covered by an e2e critical path, and the whole set survives the OTel Demo realism gate. This is the credibility layer, built once, not polished forever.*
 
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
@@ -165,6 +166,8 @@ nexovue/
 | P1-46 | Database screen | slow queries, mean time, calls, connection health | todo |
 | P1-47 | RUM screen | Core Web Vitals by page/geo/device; JS errors | todo |
 | P1-48 | Usage & cost view | per-tenant ingestion counters → usage table → projected cost in-product | todo |
+| P1-61 | E2E screen coverage | Critical path per screen against the running stack; runs in CI on every PR | todo |
+| P1-62 | **OTel Demo realism gate** | Run the OpenTelemetry Demo (18 services, ~10 languages) against our receiver and confirm the screens hold: service map readable at 18 nodes, trace search survives real attribute cardinality, promoted columns survive semconv variation across languages. Not a daily dependency — needs 4–8 GB, so optional services stop and the Docker allocation is raised | todo |
 | P1-49 | Onboarding | signup collects org details + one email → transaction creates org, owner user, `production` project and first key → two env vars → live first-span celebration. User never sees the words org or project | todo |
 
 ### M7 — Phase 1 exit
@@ -249,6 +252,7 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 | Per-tenant retention (ClickHouse TTL is table-level) | Open question in the architecture doc — decide before M7, not before M1 |
 | Scope creep from Phase 2 | Anything touching findings/AI/alerts is out; the hooks list in §0 is the complete exception |
 | Playwright resource cost | Isolated queue, hard timeouts, low concurrency (P1-35) |
+| Our demo app is too tidy to be realistic | It is 2–3 services we control; real customers send messy polyglot telemetry. The OTel Demo gate (P1-62) is the counterweight before M6 is called done |
 
 ---
 
