@@ -1,0 +1,247 @@
+# Phase 1 — Core System: Implementation Plan
+
+> **Owner:** Raj · **Status:** Planned, not started (no code yet)
+> **Companion docs:** `observability-platform-focus.md` (scope) · `observability-architecture.md` (technical design) · `observability-prd.md` (features) · market analysis
+> **How to use:** every task has a stable ID (`P1-nn`). Status values: `todo` · `wip` · `done` · `blocked` · `dropped`. Update the status column in place; never renumber IDs.
+
+---
+
+## 0. Scope
+
+**Phase 1 = the core system.** Every data door lands its data in storage in one normalized shape, and the UI can show all of it.
+
+**In scope**
+- All four ingestion doors (OTLP, our probes, browser snippet, webhooks/pollers)
+- All three signal shapes (spans, logs, metrics) + deploy events
+- Storage, query layer, multi-tenancy, retention
+- A competent dashboard UI over that data (the table-stakes screens)
+- Onboarding to first data
+
+**Out of scope — Phase 2**
+Findings feed (F1), finding detail (F2), AI insights/chatbot/solution (F3–F5), anomaly detection (F6), owner status page (F7), case management (F22), alerting connectors (F21), session replay (F16), continuous profiling (F17), SLOs (F19), service map (F9).
+
+**Phase 2 hooks built now because they are nearly free later:** per-minute materialized views, exact pre-sampling counters, deploy-events table, live-update pub/sub channel, usage metering counters. Skipping these means retrofitting the data layer.
+
+**Standing rule:** the UI route `/` is reserved for the Phase 2 findings feed. Phase 1 dashboards live under named routes and never become the front door.
+
+---
+
+## 1. Decisions locked for Phase 1
+
+| # | Decision | Rationale |
+|---|---|---|
+| D1 | **Walking skeleton first, then widen** | One thin end-to-end path running in ~2 weeks beats four parallel ingestion projects that integrate at the end |
+| D2 | **Go on the data plane from day one** | Matches the architecture doc; avoids writing the hot path twice |
+| D3 | **Redpanda instead of Kafka** | Kafka API-compatible (code identical, `franz-go`), single binary, no JVM — decisive on a single on-prem host |
+| D4 | **Monorepo + GitHub issues + this plan as source of truth** | Plan lives in the repo so it is readable and updatable in-session |
+| D5 | **Vite + React + TanStack over Next.js** | App is entirely behind auth; no SEO surface to pay RSC complexity for |
+| D6 | **uPlot for time series** | Renders 100k points; card-oriented chart libs will not |
+| D7 | **Auth built in FastAPI (sessions + argon2)** | Three personas do not justify Keycloak/Ory |
+| D8 | **testcontainers for integration tests** | Mocks lie about columnar databases and brokers |
+
+---
+
+## 2. Repository structure
+
+```
+nexovue/
+├─ apps/
+│  ├─ receiver/         Go — OTLP/HTTP + gRPC, auth, rate limit, → Redpanda
+│  ├─ workers/          Go — trace-assembler, log-writer, metrics-deriver
+│  ├─ api/              Python FastAPI — query layer + control plane
+│  ├─ scheduler/        Python Celery — probes (door 2) + pollers (door 4b)
+│  └─ web/             TypeScript — React app
+├─ packages/
+│  ├─ contracts/        internal normalized envelope + golden fixtures
+│  ├─ ui/               design tokens + primitives
+│  └─ client-ts/        API client generated from OpenAPI
+├─ deploy/              compose, ClickHouse DDL, Postgres migrations
+├─ tools/               loadgen, demo-app
+└─ docs/                PRD, architecture, ADRs, phase plans
+```
+
+**Inside services: domain-oriented, not layer-oriented** — `ingest/ traces/ logs/ metrics/ tenancy/`, not `models/ controllers/ services/`. Features arrive as domains; layer-first folders force every feature to touch six directories.
+
+---
+
+## 3. Milestones & tasks
+
+### M0 — Foundations (repo, contracts, guardrails)
+*Exit: `just dev` brings the infrastructure up, CI is green on an empty codebase, and the internal data contract is frozen.*
+
+| ID | Task | Deliverable | Status |
+|---|---|---|---|
+| P1-01 | Repo init | git repo, `.gitignore`, README, LICENSE, branch protection | todo |
+| P1-02 | Monorepo scaffolding | `apps/ packages/ deploy/ tools/ docs/`; `go.work`, uv workspace, pnpm workspace | todo |
+| P1-03 | Task runner | `just dev / test / lint / migrate / load` — same verbs for every service | todo |
+| P1-04 | CI pipeline | golangci-lint, ruff + mypy --strict, biome; unit tests; docker build; required checks | todo |
+| P1-05 | Agent context | root `CLAUDE.md` + one per app, scoped to what is true inside it | todo |
+| P1-06 | ADR process | `docs/adr/` format; backfill existing architecture decisions | todo |
+| P1-07 | **Normalized envelope** | `packages/contracts` — the one internal format all doors produce, + golden fixtures per door | todo |
+| P1-08 | Design tokens | `packages/ui` tokens + written anti-pattern list (see §7) | todo |
+| P1-09 | Compose baseline | Redpanda, ClickHouse, Postgres, Redis with volumes + healthchecks | todo |
+| P1-10 | Migrations | ClickHouse DDL migration tool + Alembic for Postgres; both reversible | todo |
+
+### M1 — Walking skeleton
+*Exit: demo app emits a span; it is visible in the browser as a trace waterfall; the whole path runs from `docker compose up`.*
+
+| ID | Task | Deliverable | Status |
+|---|---|---|---|
+| P1-11 | Demo app | `tools/demo-app` — fake shop emitting real traces, with fault injection ("break checkout DB now") | todo |
+| P1-12 | Receiver: OTLP/HTTP | `/v1/traces`, protobuf parse via official OTel libs, produce to Redpanda | todo |
+| P1-13 | API keys + tenancy | keys hashed in Postgres, cached in Redis; every span tagged with tenant at the edge | todo |
+| P1-14 | Rate limiting | per-key Redis counters; reject over-limit before any cost | todo |
+| P1-15 | Trace assembler | `franz-go` consumer, partition by trace_id, in-memory join, batched ClickHouse insert | todo |
+| P1-16 | Query API | FastAPI `GET /traces`, `/traces/{id}` through a repository that cannot omit the tenant filter | todo |
+| P1-17 | Web shell | routing, layout, session auth, trace list + waterfall screen | todo |
+| P1-18 | Load generator | `tools/loadgen`; first performance numbers recorded in this doc | todo |
+
+### M2 — Spine hardening (the part that makes it a product, not a demo)
+*Exit: the five core invariants in §5 each have a test that fails loudly when broken.*
+
+| ID | Task | Deliverable | Status |
+|---|---|---|---|
+| P1-19 | OTLP/gRPC | port 4317 alongside 4318 | todo |
+| P1-20 | No-loss semantics | ack only after broker accept; idempotent consumers; dead-letter queue | todo |
+| P1-21 | Tail sampling | 100% error + slow traces, 10% healthy; per-tenant tunable | todo |
+| P1-22 | Exact counters | metrics derived from **all** traces before sampling → `metrics` table | todo |
+| P1-23 | Materialized view | `endpoint_stats_1m` (Phase 2 anomaly-detection hook) | todo |
+| P1-24 | PII masking | masking step in workers; rules configurable in Postgres | todo |
+| P1-25 | Tenant isolation suite | tests that actively try to leak across tenants and must fail to | todo |
+| P1-26 | Self-instrumentation | every service exports OTel to our own receiver — we are customer zero | todo |
+| P1-27 | Chaos test | kill broker and ClickHouse mid-load, restart, assert zero loss | todo |
+
+### M3 — Widen door 1 (logs + metrics + errors)
+*Exit: all three signal shapes flow through the same pipeline and are queryable together.*
+
+| ID | Task | Deliverable | Status |
+|---|---|---|---|
+| P1-28 | Logs pipeline | `/v1/logs` → log-writer → `logs` table with tokenbf text index | todo |
+| P1-29 | Metrics pipeline | `/v1/metrics` → `metrics` table | todo |
+| P1-30 | Error extraction | `exception_type` / `exception_message` promoted to columns; grouping view | todo |
+| P1-31 | Log↔trace correlation | "logs for this trace" query path both directions | todo |
+| P1-32 | Log pattern grouping | Drain-style templating → `pattern_id` on logs *(optional — drop if it delays M4)* | todo |
+
+### M4 — Doors 2 and 4 (our probes, webhooks, pollers)
+*Exit: data arrives from sources the customer installed nothing for.*
+
+| ID | Task | Deliverable | Status |
+|---|---|---|---|
+| P1-33 | Celery + Beat | DB-backed schedules in Postgres (UI edits config, no redeploy); Redis broker | todo |
+| P1-34 | Uptime + SSL checks | HTTP/latency-breakdown + certificate expiry → normalized metrics → Redpanda | todo |
+| P1-35 | Browser flow checks | Playwright on an isolated queue (low concurrency, bigger containers) | todo |
+| P1-36 | Deploy webhooks | GitHub/CI → `deploy_events` in Postgres (Phase 2 correlation hook) | todo |
+| P1-37 | Cloud + DB pollers | CloudWatch metrics; `pg_stat_statements` read-only; credentials encrypted at rest | todo |
+
+### M5 — Door 3 (browser / RUM)
+*Exit: real user data from a script tag, correlated to backend traces.*
+
+| ID | Task | Deliverable | Status |
+|---|---|---|---|
+| P1-38 | Public site keys + CORS | non-secret per-site key path on the receiver | todo |
+| P1-39 | Browser SDK ingestion | OTel browser SDK → spans/metrics; Core Web Vitals (LCP/INP/CLS) | todo |
+
+### M6 — Dashboard UI surface
+*Exit: every signal we collect has a competent screen. This is the credibility layer, built once, not polished forever.*
+
+| ID | Task | Deliverable | Status |
+|---|---|---|---|
+| P1-40 | Service overview | request rate, error rate, p95 trend; endpoints ranked by slowness/errors | todo |
+| P1-41 | Trace explorer | search + filters over the M1 waterfall | todo |
+| P1-42 | Errors screen | grouped exceptions, counts, first/last seen, stack traces | todo |
+| P1-43 | Logs screen | search, filters, **live tail** via WebSocket ← Redpanda/Redis pub-sub | todo |
+| P1-44 | Infrastructure screen | hosts/containers: CPU, memory, disk, network | todo |
+| P1-45 | Synthetics screen | check list, status, latency trends, failure detail with screenshot | todo |
+| P1-46 | Database screen | slow queries, mean time, calls, connection health | todo |
+| P1-47 | RUM screen | Core Web Vitals by page/geo/device; JS errors | todo |
+| P1-48 | Usage & cost view | per-tenant ingestion counters → usage table → projected cost in-product | todo |
+| P1-49 | Onboarding | signup → project → two env vars → live first-span celebration | todo |
+
+### M7 — Phase 1 exit
+| ID | Task | Deliverable | Status |
+|---|---|---|---|
+| P1-50 | Load + soak | 24h soak against the budgets in §4; results recorded here | todo |
+| P1-51 | Backup/restore | runbook + tested restore for ClickHouse and Postgres volumes | todo |
+| P1-52 | Ingest kill switch | per-tenant stop valve for runaway ingestion | todo |
+| P1-53 | Security pass | key hashing, TLS at the edge, secret handling, dependency audit | todo |
+| P1-54 | Customer docs | setup guide for both onboarding patterns (SDK direct, own collector) | todo |
+
+---
+
+## 4. Performance budgets (measured in CI, not estimated)
+
+| Budget | Target | Measured |
+|---|---|---|
+| Receiver throughput | ≥ 10,000 spans/sec sustained, single instance | — |
+| Receiver accept latency | p99 < 50 ms | — |
+| Receiver memory | < 512 MB under sustained load | — |
+| Span → queryable lag | p99 < 15 s | — |
+| Trace-by-ID query | p95 < 500 ms | — |
+| Endpoint stats, 24h window | p95 < 300 ms | — |
+| Log search, 1h window | p95 < 2 s | — |
+| First screen load | < 2 s (PRD AC1.1) | — |
+| Data loss under broker restart | zero | — |
+
+Numbers are provisional until M1 gives us a baseline on the actual host; revise once, then hold.
+
+---
+
+## 5. Core invariants (each needs a test that fails loudly)
+
+1. **Tenant isolation** — a query cannot be constructed without a tenant filter. Enforced by the repository layer + a lint rule + a suite that tries to break it.
+2. **No data loss** — ack after broker accept, idempotent consumers, DLQ for poison messages.
+3. **Correct numbers** — metrics derived pre-sampling. Test: sample at 10%, assert counts stay exact.
+4. **One internal format** — all doors normalize before the broker. Storage never learns that doors exist.
+5. **Budgets hold** — §4 is enforced continuously, not audited occasionally.
+
+---
+
+## 6. Claude tooling to build (and when)
+
+Context management matters more than the skills themselves. The lever is **scoped `CLAUDE.md`** (P1-05) plus splitting the PRD into `docs/prd/F01-*.md` per feature once more features are specified — so a session loads one feature, not thirty.
+
+| Build | What it does | When |
+|---|---|---|
+| `spec-feature` | Writes a PRD feature in the exact F1 template | Before Phase 2 specs resume |
+| `feature-research` | Analyzes a feature from the user's point of view + what the market ships | Alongside `spec-feature` |
+| `ui-system` | Encodes the design spine and anti-pattern list so agents inherit the constraint | M0 (P1-08) |
+| `new-service` / `new-endpoint` | Scaffolds to our conventions — tenancy, logging, tests, metrics pre-wired | After M1 proves the conventions |
+| `review-nexovue` | Repo-specific review: tenant filter, unbounded queries, reversible migrations, error paths | After M2 |
+
+Subagents: **architect**, **ui-designer**, **market-analyst**, **perf-auditor**. Already connected: Figma, Playwright, Chrome DevTools MCP *(Figma needs OAuth from an interactive session)*.
+Rule: build a skill only after the task has repeated three times.
+
+---
+
+## 7. UI/UX spine
+
+**Thesis:** this is a *reading* product, not a charting product. The primary object is a sentence — "Checkout is 4× slower than normal since 15:04." Everything else is evidence supporting a sentence.
+
+Consequences: typography-led and editorial, not card-grid; density closer to a terminal or newspaper than a marketing page; charts as sparklines inside sentences rather than panels beside them; severity encoded by weight and shape, not color alone; dark mode first-class (this is read at 2am); keyboard-first with a command palette.
+
+**Anti-patterns — the recognizable "AI-generated UI" signature, banned:** default shadcn styling, slate-gray palette, uniform rounded card grids, Lucide icons as the whole visual language, gradient hero accents, 16px padding everywhere, color as the sole carrier of meaning.
+
+Mechanically: tokens exist before the first screen; raw hex outside `packages/ui` fails lint.
+
+---
+
+## 8. Risk register
+
+| Risk | Mitigation |
+|---|---|
+| Go proficiency on the data plane | M1 is deliberately small; receiver and assembler are the learning surface before volume matters |
+| Single-host sizing (Redpanda + ClickHouse together) | Measure at M1, size at M7; kill switch (P1-52) before any external traffic |
+| Attribute-map cardinality explosion | Promotion policy reviewed against real query logs after M3 |
+| Per-tenant retention (ClickHouse TTL is table-level) | Open question in the architecture doc — decide before M7, not before M1 |
+| Scope creep from Phase 2 | Anything touching findings/AI/alerts is out; the hooks list in §0 is the complete exception |
+| Playwright resource cost | Isolated queue, hard timeouts, low concurrency (P1-35) |
+
+---
+
+## 9. Tracking
+
+- This file is the source of truth. Update the `Status` column in place.
+- Milestones mirror to GitHub milestones; tasks that take more than a day get an issue referencing their `P1-nn` ID.
+- Measured numbers land in §4 as they are taken — the table is a log, not a wish.
+
+*Update log: plan created 2026-08-25. Next action: P1-01 → P1-09 (M0).*
