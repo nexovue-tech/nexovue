@@ -18,7 +18,9 @@
 - Onboarding to first data
 
 **Out of scope — Phase 2**
-Findings feed (F1), finding detail (F2), AI insights/chatbot/solution (F3–F5), anomaly detection (F6), owner status page (F7), case management (F22), alerting connectors (F21), session replay (F16), continuous profiling (F17), SLOs (F19), service map (F9).
+Findings feed (F1), finding detail (F2), AI insights/chatbot/solution (F3–F5), anomaly detection (F6), owner status page (F7), case management (F22), alerting connectors (F21), session replay (F16), continuous profiling (F17), SLOs (F19), dashboard builder (F20).
+
+**Scope boundaries decided 2026-08-25:** service map **is** in Phase 1 (F9 — a screen over trace data we already hold). Kubernetes telemetry **is ingested** via door 1 and is queryable, but pod/node/namespace-aware screens are Phase 2. The UI is fixed screens per signal — no user-built dashboards. Network monitoring (eBPF) and SIEM remain unplaced in any phase — open question, see §8.
 
 **Phase 2 hooks built now because they are nearly free later:** per-minute materialized views, exact pre-sampling counters, deploy-events table, live-update pub/sub channel, usage metering counters. Skipping these means retrofitting the data layer.
 
@@ -38,6 +40,10 @@ Findings feed (F1), finding detail (F2), AI insights/chatbot/solution (F3–F5),
 | D6 | **uPlot for time series** | Renders 100k points; card-oriented chart libs will not |
 | D7 | **Auth built in FastAPI (sessions + argon2)** | Three personas do not justify Keycloak/Ory |
 | D8 | **testcontainers for integration tests** | Mocks lie about columnar databases and brokers |
+| D9 | **Service map is in Phase 1** (P1-55, P1-56) | Table stakes, and it is a derived aggregation over spans we already store — no new collection |
+| D10 | **K8s ingested, not visualized, in Phase 1** | The data arrives free through door 1; pod/node concepts on screen are their own design problem |
+| D11 | **Fixed screens, no dashboard builder** | F20 is explicitly the optional mode; building a builder now contradicts the insight-first thesis |
+| D12 | **Cold tier built in Phase 1** (P1-57) | Raw TTL is 30 days; without tiering the data is simply deleted. Interim: raise raw TTL on the dev instance until P1-57 lands, so nothing is lost before the tier exists |
 
 ---
 
@@ -76,7 +82,7 @@ nexovue/
 | P1-03 | Task runner | `just dev / test / lint / migrate / load` — same verbs for every service | todo |
 | P1-04 | CI pipeline | golangci-lint, ruff + mypy --strict, biome; unit tests; docker build; required checks | todo |
 | P1-05 | Agent context | root `CLAUDE.md` + one per app, scoped to what is true inside it | todo |
-| P1-06 | ADR process | `docs/adr/` format; backfill existing architecture decisions | todo |
+| P1-06 | ADR process | `docs/architecture/decisions/` format; backfill from the decisions log | todo |
 | P1-07 | **Normalized envelope** | `packages/contracts` — the one internal format all doors produce, + golden fixtures per door | todo |
 | P1-08 | Design tokens | `packages/ui` tokens + written anti-pattern list (see §7) | todo |
 | P1-09 | Compose baseline | Redpanda, ClickHouse, Postgres, Redis with volumes + healthchecks | todo |
@@ -121,6 +127,7 @@ nexovue/
 | P1-30 | Error extraction | `exception_type` / `exception_message` promoted to columns; grouping view | todo |
 | P1-31 | Log↔trace correlation | "logs for this trace" query path both directions | todo |
 | P1-32 | Log pattern grouping | Drain-style templating → `pattern_id` on logs *(optional — drop if it delays M4)* | todo |
+| P1-55 | Service dependency edges | Go worker derives caller→callee edges (call rate, error rate, latency) from cross-service parent/child spans → small ClickHouse table. No new collection | todo |
 
 ### M4 — Doors 2 and 4 (our probes, webhooks, pollers)
 *Exit: data arrives from sources the customer installed nothing for.*
@@ -140,6 +147,7 @@ nexovue/
 |---|---|---|---|
 | P1-38 | Public site keys + CORS | non-secret per-site key path on the receiver | todo |
 | P1-39 | Browser SDK ingestion | OTel browser SDK → spans/metrics; Core Web Vitals (LCP/INP/CLS) | todo |
+| P1-58 | Source maps | upload + store source maps per release; symbolicate JS stack traces. Without this, RUM errors are minified noise | todo |
 
 ### M6 — Dashboard UI surface
 *Exit: every signal we collect has a competent screen. This is the credibility layer, built once, not polished forever.*
@@ -148,9 +156,10 @@ nexovue/
 |---|---|---|---|
 | P1-40 | Service overview | request rate, error rate, p95 trend; endpoints ranked by slowness/errors | todo |
 | P1-41 | Trace explorer | search + filters over the M1 waterfall | todo |
+| P1-56 | Service map | dependency graph from P1-55 edges; edge call rate/error/latency; click-through to a service | todo |
 | P1-42 | Errors screen | grouped exceptions, counts, first/last seen, stack traces | todo |
 | P1-43 | Logs screen | search, filters, **live tail** via WebSocket ← Redpanda/Redis pub-sub | todo |
-| P1-44 | Infrastructure screen | hosts/containers: CPU, memory, disk, network | todo |
+| P1-44 | Infrastructure screen | hosts/containers: CPU, memory, disk, network. K8s metrics are ingested and queryable, but pod/node/namespace views are Phase 2 | todo |
 | P1-45 | Synthetics screen | check list, status, latency trends, failure detail with screenshot | todo |
 | P1-46 | Database screen | slow queries, mean time, calls, connection health | todo |
 | P1-47 | RUM screen | Core Web Vitals by page/geo/device; JS errors | todo |
@@ -161,6 +170,7 @@ nexovue/
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
 | P1-50 | Load + soak | 24h soak against the budgets in §4; results recorded here | todo |
+| P1-57 | Object storage cold tier | MinIO in compose; ClickHouse-native S3 tiering for spans/logs past the hot window, plus a tested restore path | todo |
 | P1-51 | Backup/restore | runbook + tested restore for ClickHouse and Postgres volumes | todo |
 | P1-52 | Ingest kill switch | per-tenant stop valve for runaway ingestion | todo |
 | P1-53 | Security pass | key hashing, TLS at the edge, secret handling, dependency audit | todo |
@@ -244,4 +254,9 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 - Milestones mirror to GitHub milestones; tasks that take more than a day get an issue referencing their `P1-nn` ID.
 - Measured numbers land in §4 as they are taken — the table is a log, not a wish.
 
-*Update log: plan created 2026-08-25. Next action: P1-01 → P1-09 (M0).*
+## 8. Open scope questions
+
+- **Network monitoring (category 10)** has no home in any phase. It needs eBPF kernel agents, which contradicts the standing decision not to build collection agents. Park it explicitly, or accept the contradiction deliberately?
+- **SIEM / security (category 11)** is marked "evaluate later" in the vision doc and appears in no plan. Same call needed.
+
+*Update log: plan created 2026-08-25. Scope decisions folded in 2026-08-25 (D9–D12; tasks P1-55 → P1-58). Next action: P1-01 → P1-09 (M0).*
