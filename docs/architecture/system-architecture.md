@@ -116,12 +116,14 @@ At normalization (receiver / Celery workers), every door's data is forced into t
 | Deploy webhook (door 4a) | **Event → Postgres, not ClickHouse** (low volume; joined with cases/findings) |
 | Session replay (door 3, later) | Exception: DOM event blobs → object storage, indexed by session_id |
 
-### Principle 2 — No JSON dumps. Hybrid schema: promoted columns + attributes map
+### Principle 2 — Hybrid schema: promoted columns + native JSON attributes
 
-ClickHouse is columnar — queries read only the columns they touch. JSON blobs destroy this. Pattern (SigNoz-style):
+ClickHouse is columnar — queries read only the columns they touch. A JSON *string blob* destroys that, because every query re-parses it. The pattern:
 - **Promoted columns**: typed columns for fields every query touches (fast filter/aggregate).
-- **Attributes map**: `Map(String, String)` for everything else — customers can send any attribute with no schema change; queryable, just slower.
+- **Attributes as the native `JSON` type**: customers can send any attribute with no schema change, and ClickHouse stores each path as a real subcolumn — individually indexed, individually compressed, and read without touching the others.
 - **Promotion rule**: if an attribute becomes hot in queries, promote it to a real column.
+
+> **Revised 2026-08-25.** This previously specified `Map(LowCardinality(String), String)`. ClickHouse's own observability stack (ClickStack) migrated off Map to the native JSON type and reports ~9× faster queries. The reason is structural: Map keys are not true subcolumns, so reading *any* key loads the entire map into memory, and keys cannot be individually indexed or compressed. The JSON type was built for exactly this workload. Requires a recent ClickHouse version — pin it in compose.
 
 ### Principle 3 — Design backwards from the screens
 
@@ -158,8 +160,8 @@ CREATE TABLE spans (
     http_route       LowCardinality(String),
     http_status      UInt16,
     deployment_version LowCardinality(String),    -- enrichment join key
-    resource_attrs   Map(LowCardinality(String), String),
-    span_attrs       Map(LowCardinality(String), String),
+    resource_attrs   JSON,
+    span_attrs       JSON,
     events           String,                      -- span events as JSON (exceptions live here)
     INDEX idx_trace_id trace_id TYPE bloom_filter GRANULARITY 4
 ) ENGINE = MergeTree
@@ -179,7 +181,7 @@ CREATE TABLE logs (
     service_name  LowCardinality(String),
     severity      LowCardinality(String),        -- DEBUG/INFO/WARN/ERROR/FATAL
     body          String,
-    attrs         Map(LowCardinality(String), String),
+    attrs         JSON,
     INDEX idx_body body TYPE tokenbf_v1(32768, 3, 0) GRANULARITY 4,  -- text search
     INDEX idx_log_trace trace_id TYPE bloom_filter GRANULARITY 4
 ) ENGINE = MergeTree
@@ -197,7 +199,7 @@ CREATE TABLE metrics (
     metric_name  LowCardinality(String),   -- e.g. synthetic.check.duration, aws.rds.connections
     value        Float64,
     service_name LowCardinality(String),
-    attrs        Map(LowCardinality(String), String)  -- region, check_id, query_hash...
+    attrs        JSON                     -- region, check_id, query_hash...
 ) ENGINE = MergeTree
 PARTITION BY toDate(timestamp)
 ORDER BY (tenant_id, metric_name, timestamp)
@@ -227,6 +229,7 @@ GROUP BY tenant_id, service_name, span_name, minute;
 **Schema design rationale:**
 - `tenant_id` FIRST in every ORDER BY → multi-tenant isolation + every query prunes to one tenant's data blocks.
 - `LowCardinality(String)` on repeating values (service names, routes) → major compression + speed.
+- Attributes as native `JSON` → each attribute path is its own subcolumn, so a query for one attribute never reads the rest.
 - Bloom-filter index on `trace_id` → fast single-trace lookup despite ORDER BY favoring service/time queries.
 - `tokenbf_v1` index on log body → log text search without full scans.
 - Daily partitions → TTL drops whole partitions cheaply; time-range queries prune partitions.
@@ -253,7 +256,7 @@ erDiagram
         Float64 duration_ms
         String status_code
         String deployment_version
-        Map span_attrs
+        JSON span_attrs
     }
     LOGS {
         DateTime64 timestamp
@@ -261,14 +264,14 @@ erDiagram
         FixedString trace_id
         String severity
         String body
-        Map attrs
+        JSON attrs
     }
     METRICS {
         DateTime64 timestamp
         String tenant_id
         String metric_name
         Float64 value
-        Map attrs
+        JSON attrs
     }
     ENDPOINT_STATS_1M {
         DateTime minute
@@ -366,6 +369,9 @@ Zero-impact notes: LLM-app observability = traces with `gen_ai.*` attributes (al
 | 2026-08-25 | **✅ DECIDED: service-map rendering = React Flow (xyflow), MIT.** Nodes are React components, so each service box carries name, health colour, request/error rate and a sparkline; pan/zoom/drag come free; layout via dagre or elkjs. Cytoscape.js is the stronger engine for thousands of nodes with WebGL rendering, but our target customers (2–15 person startups) have 5–50 services, and Cytoscape's non-React rendering world makes rich node content harder. Revisit only if graph size ever contradicts that assumption. |
 | 2026-08-25 | **✅ DECIDED: UI stack = Tailwind v4 + Base UI, scaffolded with shadcn/ui.** shadcn is a code *distribution registry* built on Base UI, not a competing library — the CLI copies source into our repo which we then own and restyle, and it has defaulted to Base UI since December 2025. Base UI over Radix because the original Radix engineers now build it at MUI with a full-time team and monthly releases, while Radix maintenance has visibly slowed. The risk shadcn carries is its default look — the recognizable AI-generated signature — handled by a lint gate: default Tailwind palette names fail CI anywhere in the repo, so only our tokens exist. Waterfall, log viewer, service map and sparkline are built from scratch regardless. |
 | 2026-08-25 | **✅ DECIDED: colour system — OKLCH, dark-first, and health is the absence of colour.** OKLCH for perceptual uniformity; separate light and dark palettes; twelve steps each with a defined job; APCA Lc ≥ 60 for body text. The governing rule: status hues are reserved and excluded from the categorical series palette, because if a chart series can be red then red stops meaning "bad". Severity is critical=red, warning=amber, info=blue, **healthy=neutral with no hue** — colour means something needs you, and a wall of green dots contradicts a product whose point is calm. This also sidesteps the red/green deuteranopia collision without abandoning red, which is too deeply learned to fight. Colour is never the sole carrier: every severity also has shape, weight and position. Full system in `docs/design/design-system.md`. |
+| 2026-08-25 | **✅ DECIDED (revises §5c Principle 2): attributes use ClickHouse's native `JSON` type, not `Map`.** ClickStack — ClickHouse's own OpenTelemetry stack — migrated off Map to the JSON type and reports ~9× faster queries. Map keys are not true subcolumns: reading any key loads the whole map into memory, and keys cannot be individually indexed or compressed. The JSON type stores each path as a real subcolumn. This is the exact query pattern the chatbot's tool-calling and BubbleUp-style outlier analysis depend on, so the difference compounds. Pin a ClickHouse version with production JSON support in compose. |
+| 2026-08-25 | **✅ DECIDED: object storage — MinIO pinned for local dev only, AWS S3 in deployment.** MinIO's community edition entered maintenance in Dec 2025 and was archived 25 Apr 2026 — read-only, no releases, no security patches — and is AGPLv3. Neither risk applies to a local, non-exposed dev container, so we pin its **last release by digest** (never `:latest`) in compose. Deployments use AWS S3. **Rule: application and ClickHouse tiering code use the generic S3 API only — never a MinIO-specific endpoint or admin call — so the swap is configuration, not code.** Noted deviation: this puts a cloud dependency in the production cold tier, against the otherwise on-premise stance. |
+| 2026-08-25 | **✅ DECIDED: we write our own Celery Beat scheduler.** DB-backed schedules are first-party only in Django (`django-celery-beat`); outside it there are three small community packages, one recently maintained and one semi-abandoned. A `Scheduler` subclass reading check definitions from Postgres is ~150 lines, carries no single-maintainer dependency risk under a customer-facing feature, and lets the schema model *checks* rather than generic crontab rows. |
 
 ## 7. Open Questions (discuss next)
 

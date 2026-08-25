@@ -10,6 +10,7 @@
 | **Apache Kafka 4.x (KRaft)** | ZooKeeper removed in 4.0; [April 2026 benchmark](https://computingforgeeks.com/kafka-vs-redpanda-benchmarks/) measured higher sustained throughput at 3× less memory than Redpanda on identical hardware | Apache 2.0 | **Redpanda** — [BSL 1.1](https://docs.redpanda.com/current/get-started/licensing/overview/); its Streaming/Queueing Service clause is an unresolved ambiguity for a commercial SaaS and would forbid per-tenant topics permanently |
 | **[franz-go](https://github.com/twmb/franz-go)** | Pure Go, feature-complete through Kafka 4.2+, no cgo | Apache 2.0 | **confluent-kafka-go** — more stars, but wraps librdkafka in C, complicating static builds and cross-compilation |
 | **[ch-go](https://clickhouse.com/docs/integrations/language-clients/go/index)** (write path) | ClickHouse's own docs recommend it for insert-heavy workloads; `clickhouse-go` pays a row→column pivot plus reflection per insert | Apache 2.0 | **clickhouse-go/v2** — friendlier `database/sql` semantics we do not need on a pure insert path |
+| **MinIO (local dev only, pinned by digest)** + **AWS S3 (deployment)** | MinIO's community edition was archived 25 Apr 2026 — no releases, no security patches — and is AGPLv3. Neither risk applies to a non-exposed local container. Deployments use S3. Code touches the **generic S3 API only**, so the swap is configuration | AGPLv3 / — | **[SeaweedFS](https://productimpossible.com/articles/self-hosted-s3-after-minio/)** (Apache 2.0) and **Garage** (AGPLv3) — both actively maintained; revisit if deployments ever need to be fully on-premise |
 | **Go stdlib `net/http` + `google.golang.org/grpc`** | Stdlib routing is sufficient since 1.22; one less dependency on the hot path | BSD-3 | **chi** — fine, but earns nothing here |
 | **Protobuf + [buf](https://buf.build)** for the internal envelope | Cross-language contract between Go producers and Go/Python consumers; renames fail CI instead of silently zeroing data; `buf breaking` enforces compatibility. Envelope holds our metadata only — the payload is untouched OTLP | Apache 2.0 | **JSON + JSON Schema** — readable on the wire, but no compile-time safety across two languages, 2–5× larger messages, slower parsing at ingest volume |
 
@@ -44,3 +45,21 @@
 ## Structure references
 
 Layout decisions and their sources are in [repository-structure.md](repository-structure.md#references).
+
+---
+
+## Pending verification
+
+Not yet searched. None block M0; each is checked before the task that depends on it starts.
+
+| Area | Why it matters | Blocks |
+|---|---|---|
+| OTel browser SDK maturity | The RUM door assumes it is production-ready; it was still maturing when the focus doc was written | P1-39 |
+| OTel semantic conventions | Which attribute names get promoted to real columns — several were renamed during stabilization | ClickHouse schema |
+| ClickHouse Kafka table engine | ClickHouse can consume Kafka directly; we chose Go workers because assembly, sampling and masking need logic. Confirm that still holds | P1-15 |
+| OTel collector `tailsampling` processor | We are building our own tail sampling — check we are not reinventing it | P1-21 |
+| Kafka 4.x single-host config | KRaft settings, retention defaults, memory sizing for compose | P1-09, P1-50 |
+| ClickHouse per-tenant retention | TTL is table-level; scheduled deletes vs per-plan TTL expressions | P1-57, M7 |
+| Playwright container footprint | Sizing the browser check queue on one host | P1-35 |
+| testcontainers (Go + Python) | The whole integration-test strategy rests on it | P1-04 |
+| APCA reference implementation | The formula was implemented from the W3C draft, not the official library | P1-08 |

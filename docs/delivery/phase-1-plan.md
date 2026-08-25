@@ -85,7 +85,7 @@ nexovue/
 | P1-06 | ADR process | `docs/architecture/decisions/` format; backfill from the decisions log | todo |
 | P1-07 | **Normalized envelope** | `packages/contracts` — thin protobuf envelope (tenant_id, project_id, door, received_at) wrapping untouched OTLP payload bytes; `buf` codegen for Go + Python; `buf breaking` in CI; golden fixtures per door | todo |
 | P1-08 | Design tokens | `packages/ui` OKLCH token scales per `docs/design/design-system.md`; validate under APCA + colourblind simulation; lint gate banning default Tailwind palette names | todo |
-| P1-09 | Compose baseline | Kafka (KRaft), ClickHouse, Postgres, Redis with volumes + healthchecks | todo |
+| P1-09 | Compose baseline | Kafka (KRaft), ClickHouse (JSON-type capable version, pinned), Postgres, Redis, MinIO (pinned digest, dev only) with volumes + healthchecks | todo |
 | P1-10 | Migrations | ClickHouse DDL migration tool + Alembic for Postgres; both reversible | todo |
 
 ### M1 — Walking skeleton
@@ -134,7 +134,7 @@ nexovue/
 
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
-| P1-33 | Celery + Beat | DB-backed schedules in Postgres (UI edits config, no redeploy); Redis broker | todo |
+| P1-33 | Celery + our own Beat scheduler | `Scheduler` subclass reading check definitions from Postgres (UI edits config, no redeploy); Redis broker. No community DB-scheduler dependency | todo |
 | P1-34 | Uptime + SSL checks | HTTP/latency-breakdown + certificate expiry → normalized metrics → Kafka | todo |
 | P1-35 | Browser flow checks | Playwright on an isolated queue (low concurrency, bigger containers) | todo |
 | P1-36 | Deploy webhooks | GitHub/CI → `deploy_events` in Postgres (Phase 2 correlation hook) | todo |
@@ -170,7 +170,7 @@ nexovue/
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
 | P1-50 | Load + soak | 24h soak against the budgets in §4; results recorded here | todo |
-| P1-57 | Object storage cold tier | MinIO in compose; ClickHouse-native S3 tiering for spans/logs past the hot window, plus a tested restore path | todo |
+| P1-57 | Object storage cold tier | MinIO pinned by digest in compose for local dev; **AWS S3 in deployment**; ClickHouse-native S3 tiering past the hot window + tested restore. Generic S3 API only — no MinIO-specific calls | todo |
 | P1-51 | Backup/restore | runbook + tested restore for ClickHouse and Postgres volumes | todo |
 | P1-52 | Ingest kill switch | per-tenant stop valve for runaway ingestion | todo |
 | P1-53 | Security pass | key hashing, TLS at the edge, secret handling, dependency audit | todo |
