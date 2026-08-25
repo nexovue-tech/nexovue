@@ -1,4 +1,7 @@
-# End-User-Facing Features in Observability Platforms: 2026 Market Analysis & Feature Landscape for an Insight-First Platform
+# Market Analysis — Observability Platforms, 2026
+
+> **Type:** Research snapshot, point-in-time (2026). Not a living doc — supersede with a new dated file rather than editing.
+> **Scope:** End-user-facing features only; competitive landscape and gap analysis.
  
 ## TL;DR
 - The market has bifurcated: incumbents (Datadog, New Relic, Dynatrace, Splunk, Grafana, Elastic) offer deep, broad, but complex and expensive dashboard-centric platforms, while a wave of AI-native and simplicity-focused challengers (Middleware OpsAI, Sentry Seer, Better Stack, SigNoz, Coralogix, plus AI-SRE startups like Traversal, Observe, Resolve AI, Cleric) are competing on autonomous root-cause analysis, plain-language insight, and predictable pricing — which is exactly Raj's positioning.

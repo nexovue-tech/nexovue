@@ -1,7 +1,7 @@
 # Phase 1 — Core System: Implementation Plan
 
 > **Owner:** Raj · **Status:** Planned, not started (no code yet)
-> **Companion docs:** `observability-platform-focus.md` (scope) · `observability-architecture.md` (technical design) · `observability-prd.md` (features) · market analysis
+> **Companion docs:** `../product/vision-and-scope.md` (scope) · `../architecture/system-architecture.md` (technical design) · `../product/requirements.md` (features) · `../research/market-analysis-2026.md` (research)
 > **How to use:** every task has a stable ID (`P1-nn`). Status values: `todo` · `wip` · `done` · `blocked` · `dropped`. Update the status column in place; never renumber IDs.
 
 ---

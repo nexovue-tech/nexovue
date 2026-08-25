@@ -1,8 +1,9 @@
-# Observability Platform — Focus Document (Living Doc)
+# Product Vision & Scope
 
 > **Owner:** Raj
 > **Status:** Ideation / scoping. No code, no prototypes, no timelines yet.
-> **Purpose:** Capture what we are focusing on. Update this file as thinking evolves.
+> **Purpose:** What we are building, for whom, and what is in or out of scope. Update as thinking evolves.
+> **Companion docs:** `../architecture/system-architecture.md` (technical design) · `requirements.md` (features) · `../research/market-analysis-2026.md` (research)
 > **Last updated:** 2026-08-15
 
 ---

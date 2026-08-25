@@ -1,6 +1,6 @@
 # nexovue — working rules
 
-Insight-first observability platform. Phase 1 (core system) is planned in `docs/phase-1/plan.md`; product and technical context live in the four root documents.
+Insight-first observability platform. Phase 1 (core system) is planned in `docs/delivery/phase-1-plan.md`; product and technical context live under `docs/` — see `docs/README.md`.
 
 ## Rules
 
@@ -24,4 +24,4 @@ Insight-first observability platform. Phase 1 (core system) is planned in `docs/
 
 ## Invariants (Phase 1)
 
-Tenant isolation enforced at the repository layer · no data loss between receiver and storage · metrics derived from all traces **before** sampling · every door normalizes to one internal envelope before the broker · performance budgets in `docs/phase-1/plan.md` §4 measured, not estimated.
+Tenant isolation enforced at the repository layer · no data loss between receiver and storage · metrics derived from all traces **before** sampling · every door normalizes to one internal envelope before the broker · performance budgets in `docs/delivery/phase-1-plan.md` §4 measured, not estimated.

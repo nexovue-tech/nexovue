@@ -1,7 +1,7 @@
-# Product Requirements Document (PRD) — Insight-First Observability Platform
+# Product Requirements Document (PRD)
 
 > **Owner:** Raj · **Status:** Draft — living document
-> **Companion docs:** focus doc (scope) · architecture doc (technical design) · market analysis (research)
+> **Companion docs:** `vision-and-scope.md` (scope) · `../architecture/system-architecture.md` (technical design) · `../research/market-analysis-2026.md` (research)
 > **How to use this doc:** every feature gets the same structure as F1 (the template): Description → User stories → Acceptance criteria → UI notes → Dependencies → Open questions. We fill features in one by one; a feature is "specified" when its acceptance criteria are testable.
 
 ---

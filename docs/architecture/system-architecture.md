@@ -1,8 +1,8 @@
-# Observability Platform — High-Level Architecture (Living Doc)
+# System Architecture
 
 > **Owner:** Raj
 > **Status:** Design discussion. No code yet.
-> **Companion doc:** observability-platform-focus.md (product scope)
+> **Companion docs:** `../product/vision-and-scope.md` (scope) · `../product/requirements.md` (features) · `../delivery/phase-1-plan.md` (build plan)
 > **Last updated:** 2026-08-15
 
 ---
@@ -351,7 +351,7 @@ Zero-impact notes: LLM-app observability = traces with `gen_ai.*` attributes (al
 | 2026-08 | **✅ DECIDED: Ingestion protection** — receiver does per-key validation + rate limiting via Redis counters (part of receiver decision; confirmed). |
 | 2026-08 | **✅ DECIDED: Full-feature audit passed — core architecture unchanged; 9 additions adopted (see §5d):** service-map edge aggregation, SLO computation on existing aggregates, live-tail real-time path (WebSocket ← Kafka/Redis pub/sub), usage metering (extends rate-limit counters), PII masking step in workers, log pattern grouping (Drain-style), OTLP-profiles + profiles table, one flexible ad-hoc query layer (dashboards + chatbot tools + outlier analysis), RBAC tables. |
 | 2026-08 | **✅ DECIDED: Data layer design (see §5c).** All doors normalize to 3 shapes (spans/logs/metrics); deploy events → Postgres; replay blobs → object storage. ClickHouse hybrid schema: promoted columns + attributes Map (no JSON dumps). tenant_id first in every ORDER BY (multi-tenancy). Materialized views for per-minute endpoint stats (dashboards + anomaly feed). Three gates: receiver rejects garbage, tail sampling keeps 100% error/slow + 1–10% healthy (metrics derived BEFORE sampling), TTL 30d raw / 90d metrics / 13mo aggregates. Design driven backwards from UI + insight questions. |
-| 2026-08-25 | **✅ DECIDED: Phase 1 sequencing = walking skeleton, then widen.** One thin end-to-end path (demo app → receiver → broker → worker → ClickHouse → API → UI, running in compose) before any door is built out. Rationale: four parallel ingestion projects integrate only at the end; a running spine de-risks every later door. See `docs/phase-1/plan.md`. |
+| 2026-08-25 | **✅ DECIDED: Phase 1 sequencing = walking skeleton, then widen.** One thin end-to-end path (demo app → receiver → broker → worker → ClickHouse → API → UI, running in compose) before any door is built out. Rationale: four parallel ingestion projects integrate only at the end; a running spine de-risks every later door. See `../delivery/phase-1-plan.md`. |
 | 2026-08-25 | **✅ DECIDED: Redpanda replaces Kafka as the buffer** (for on-prem single-host compose). Kafka API-compatible — `franz-go` producer/consumer code is unchanged — but single binary, no JVM, no KRaft/ZK tuning, far lower memory. Moving to real Kafka later is a config change, not a rewrite. Topic names and partitioning strategy (by trace_id) unchanged. |
 | 2026-08-25 | **✅ DECIDED: Go on the data plane from day one** — no interim Python receiver. Confirms the earlier language-split decision; avoids writing the hot path twice and porting exactly when volume makes it urgent. |
 | 2026-08-25 | **✅ DECIDED: Monorepo, polyglot.** `apps/` (receiver, workers, api, scheduler, web) · `packages/` (contracts, ui, client-ts) · `deploy/` · `tools/` · `docs/`. Go workspaces + uv workspace + pnpm workspace, one `just` task runner with identical verbs per service. Inside services: domain-oriented folders (`ingest/ traces/ logs/ metrics/ tenancy/`), never layer-oriented. |
