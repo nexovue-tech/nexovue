@@ -181,6 +181,8 @@ nexovue/
 
 ## 4. Performance budgets (measured in CI, not estimated)
 
+**Target machine: Apple M4 Pro, 24 GB, full stack co-resident in Docker** (see `dev-environment.md`). On one laptop these are a **regression gate, not a capacity model** — production numbers are re-measured when a production host exists.
+
 | Budget | Target | Measured |
 |---|---|---|
 | Receiver throughput | ≥ 10,000 spans/sec sustained, single instance | — |
@@ -194,7 +196,7 @@ nexovue/
 | First screen load | < 2 s (PRD AC1.1) | — |
 | Data loss under broker restart | zero | — |
 
-Numbers are provisional until M1 gives us a baseline on the actual host; revise once, then hold.
+Numbers are provisional until M1 gives a baseline on the M4 Pro; revise once, then hold. Disk in dev is bounded by a 3-day ClickHouse TTL rather than the 30-day production setting.
 
 ---
 
