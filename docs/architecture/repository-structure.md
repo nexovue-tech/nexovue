@@ -156,13 +156,18 @@ The design system lives in `packages/ui`, never here — the anti-pattern rules 
 ```
 packages/
 ├─ contracts/                    the internal normalized envelope (P1-07)
-│  ├─ proto/nexovue/v1/          span · log · metric · envelope
+│  ├─ proto/nexovue/v1/          envelope.proto — our metadata only
 │  ├─ gen/go/ · gen/python/      generated bindings, committed
 │  ├─ fixtures/                  golden payloads, one per door
+│  ├─ buf.yaml · buf.gen.yaml    codegen + `buf breaking` compatibility checks
 │  └─ README.md                  versioning and compatibility rules
 ├─ ui/                           tokens · primitives · uPlot chart wrappers
 └─ client-ts/                    API client generated from the OpenAPI schema
 ```
+
+The envelope carries **our** metadata as typed fields — `tenant_id`, `project_id`, `door`, `received_at` — around an untouched **OTLP payload**. We do not define our own span/log/metric messages: OpenTelemetry already did, and it is what customer SDKs emit. Door 1 therefore validates and forwards the same bytes rather than re-modelling them, which is the cheapest possible hot path at 99% of ingest volume.
+
+`tenant_id` being a typed field rather than a map key is deliberate — the entire multi-tenancy invariant rests on it, and a typo in a string key should not be possible.
 
 Contracts are committed generated code so no service needs the codegen toolchain to build.
 

@@ -11,6 +11,7 @@
 | **[franz-go](https://github.com/twmb/franz-go)** | Pure Go, feature-complete through Kafka 4.2+, no cgo | Apache 2.0 | **confluent-kafka-go** — more stars, but wraps librdkafka in C, complicating static builds and cross-compilation |
 | **[ch-go](https://clickhouse.com/docs/integrations/language-clients/go/index)** (write path) | ClickHouse's own docs recommend it for insert-heavy workloads; `clickhouse-go` pays a row→column pivot plus reflection per insert | Apache 2.0 | **clickhouse-go/v2** — friendlier `database/sql` semantics we do not need on a pure insert path |
 | **Go stdlib `net/http` + `google.golang.org/grpc`** | Stdlib routing is sufficient since 1.22; one less dependency on the hot path | BSD-3 | **chi** — fine, but earns nothing here |
+| **Protobuf + [buf](https://buf.build)** for the internal envelope | Cross-language contract between Go producers and Go/Python consumers; renames fail CI instead of silently zeroing data; `buf breaking` enforces compatibility. Envelope holds our metadata only — the payload is untouched OTLP | Apache 2.0 | **JSON + JSON Schema** — readable on the wire, but no compile-time safety across two languages, 2–5× larger messages, slower parsing at ingest volume |
 
 ## Control plane (Python)
 
@@ -29,12 +30,12 @@
 | **[TanStack Router](https://tanstack.com/router)** | Typed search params matter unusually much when time ranges, filters, service names and trace IDs all live in the URL; pairs natively with TanStack Query | MIT | **React Router v8** — larger ecosystem, weaker search-param inference, yearly majors with a painful migration history |
 | **TanStack Query** | Server-state cache, request dedup, background refetch | MIT | — |
 | **[uPlot](https://github.com/leeoniya/uPlot)** | Time-series specialist; [ECharts hits a canvas ceiling past ~500K–1M points](https://lightningchart.com/blog/best-apache-echarts-alternative-in-2026/) | MIT | **ECharts / Recharts** — Recharts cannot handle telemetry density at all |
+| **[React Flow / xyflow](https://xyflow.com/open-source)** | Service-map nodes are React components, so a box can hold name, health colour, rate and a sparkline. Our customers run 5–50 services, well inside its DOM-node comfort zone. Layout via dagre/elkjs | MIT | **[Cytoscape.js](https://radar.firstaimovers.com/react-flow-vs-cytoscape-graph-engine-choice)** — better at thousands of nodes and richer built-in layouts, but a separate non-React rendering world; right answer only if graphs get far larger than our customers have |
 | **[Biome](https://biomejs.dev/blog/roadmap-2026/)** | Format + lint in one Rust binary; 2.2's `noRestrictedImports` patterns and `noImportCycle` cover our import-boundary rules | MIT | **ESLint + plugins** — kept in reserve; `dependency-cruiser` is the fallback if Biome's boundary support proves too weak ([Nx-style module boundaries are still only a discussion](https://github.com/biomejs/biome/discussions/6245)) |
 
 ## Still unpicked
 
-- **Graph rendering for the service map (P1-56)** — uPlot draws time series, not node-edge graphs. Candidates: ECharts graph series, Cytoscape, React Flow. Decide at M6.
-- **Envelope encoding (P1-07)** — protobuf via `buf` versus JSON Schema. Blocks M0.
+*(Nothing blocking. Add here as gaps appear.)*
 
 ## Structure references
 
