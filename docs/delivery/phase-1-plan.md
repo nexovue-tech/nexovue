@@ -34,7 +34,7 @@ Findings feed (F1), finding detail (F2), AI insights/chatbot/solution (F3–F5),
 |---|---|---|
 | D1 | **Walking skeleton first, then widen** | One thin end-to-end path running in ~2 weeks beats four parallel ingestion projects that integrate at the end |
 | D2 | **Go on the data plane from day one** | Matches the architecture doc; avoids writing the hot path twice |
-| D3 | **Redpanda instead of Kafka** | Kafka API-compatible (code identical, `franz-go`), single binary, no JVM — decisive on a single on-prem host |
+| D3 | ~~Redpanda instead of Kafka~~ → **Apache Kafka 4.x (KRaft)** | **Reversed 2026-08-25 after research.** Redpanda Community Edition is BSL 1.1, whose Streaming/Queueing Service clause is a live ambiguity for a commercial SaaS. The efficiency argument was also stale: Kafka 4.0 dropped ZooKeeper, and an April 2026 benchmark put Kafka 4.2 KRaft ahead on throughput at 3× less memory. `franz-go` code is unchanged either way |
 | D4 | **Monorepo + GitHub issues + this plan as source of truth** | Plan lives in the repo so it is readable and updatable in-session |
 | D5 | **Vite + React + TanStack over Next.js** | App is entirely behind auth; no SEO surface to pay RSC complexity for |
 | D6 | **uPlot for time series** | Renders 100k points; card-oriented chart libs will not |
@@ -52,7 +52,7 @@ Findings feed (F1), finding detail (F2), AI insights/chatbot/solution (F3–F5),
 ```
 nexovue/
 ├─ apps/
-│  ├─ receiver/         Go — OTLP/HTTP + gRPC, auth, rate limit, → Redpanda
+│  ├─ receiver/         Go — OTLP/HTTP + gRPC, auth, rate limit, → Kafka
 │  ├─ workers/          Go — trace-assembler, log-writer, metrics-deriver
 │  ├─ api/              Python FastAPI — query layer + control plane
 │  ├─ scheduler/        Python Celery — probes (door 2) + pollers (door 4b)
@@ -85,7 +85,7 @@ nexovue/
 | P1-06 | ADR process | `docs/architecture/decisions/` format; backfill from the decisions log | todo |
 | P1-07 | **Normalized envelope** | `packages/contracts` — the one internal format all doors produce, + golden fixtures per door | todo |
 | P1-08 | Design tokens | `packages/ui` tokens + written anti-pattern list (see §7) | todo |
-| P1-09 | Compose baseline | Redpanda, ClickHouse, Postgres, Redis with volumes + healthchecks | todo |
+| P1-09 | Compose baseline | Kafka (KRaft), ClickHouse, Postgres, Redis with volumes + healthchecks | todo |
 | P1-10 | Migrations | ClickHouse DDL migration tool + Alembic for Postgres; both reversible | todo |
 
 ### M1 — Walking skeleton
@@ -94,10 +94,10 @@ nexovue/
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
 | P1-11 | Demo app | `tools/demo-app` — fake shop emitting real traces, with fault injection ("break checkout DB now") | todo |
-| P1-12 | Receiver: OTLP/HTTP | `/v1/traces`, protobuf parse via official OTel libs, produce to Redpanda | todo |
+| P1-12 | Receiver: OTLP/HTTP | `/v1/traces`, protobuf parse via official OTel libs, produce to Kafka | todo |
 | P1-13 | API keys + tenancy | keys hashed in Postgres, cached in Redis; every span tagged with tenant at the edge | todo |
 | P1-14 | Rate limiting | per-key Redis counters; reject over-limit before any cost | todo |
-| P1-15 | Trace assembler | `franz-go` consumer, partition by trace_id, in-memory join, batched ClickHouse insert | todo |
+| P1-15 | Trace assembler | `franz-go` consumer, partition by trace_id, in-memory join, batched insert via `ch-go` | todo |
 | P1-16 | Query API | FastAPI `GET /traces`, `/traces/{id}` through a repository that cannot omit the tenant filter | todo |
 | P1-17 | Web shell | routing, layout, session auth, trace list + waterfall screen | todo |
 | P1-18 | Load generator | `tools/loadgen`; first performance numbers recorded in this doc | todo |
@@ -135,7 +135,7 @@ nexovue/
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
 | P1-33 | Celery + Beat | DB-backed schedules in Postgres (UI edits config, no redeploy); Redis broker | todo |
-| P1-34 | Uptime + SSL checks | HTTP/latency-breakdown + certificate expiry → normalized metrics → Redpanda | todo |
+| P1-34 | Uptime + SSL checks | HTTP/latency-breakdown + certificate expiry → normalized metrics → Kafka | todo |
 | P1-35 | Browser flow checks | Playwright on an isolated queue (low concurrency, bigger containers) | todo |
 | P1-36 | Deploy webhooks | GitHub/CI → `deploy_events` in Postgres (Phase 2 correlation hook) | todo |
 | P1-37 | Cloud + DB pollers | CloudWatch metrics; `pg_stat_statements` read-only; credentials encrypted at rest | todo |
@@ -158,7 +158,7 @@ nexovue/
 | P1-41 | Trace explorer | search + filters over the M1 waterfall | todo |
 | P1-56 | Service map | dependency graph from P1-55 edges; edge call rate/error/latency; click-through to a service | todo |
 | P1-42 | Errors screen | grouped exceptions, counts, first/last seen, stack traces | todo |
-| P1-43 | Logs screen | search, filters, **live tail** via WebSocket ← Redpanda/Redis pub-sub | todo |
+| P1-43 | Logs screen | search, filters, **live tail** via WebSocket ← Kafka/Redis pub-sub | todo |
 | P1-44 | Infrastructure screen | hosts/containers: CPU, memory, disk, network. K8s metrics are ingested and queryable, but pod/node/namespace views are Phase 2 | todo |
 | P1-45 | Synthetics screen | check list, status, latency trends, failure detail with screenshot | todo |
 | P1-46 | Database screen | slow queries, mean time, calls, connection health | todo |
@@ -240,7 +240,7 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 | Risk | Mitigation |
 |---|---|
 | Go proficiency on the data plane | M1 is deliberately small; receiver and assembler are the learning surface before volume matters |
-| Single-host sizing (Redpanda + ClickHouse together) | Measure at M1, size at M7; kill switch (P1-52) before any external traffic |
+| Single-host sizing (Kafka + ClickHouse together) | Measure at M1, size at M7; kill switch (P1-52) before any external traffic |
 | Attribute-map cardinality explosion | Promotion policy reviewed against real query logs after M3 |
 | Per-tenant retention (ClickHouse TTL is table-level) | Open question in the architecture doc — decide before M7, not before M1 |
 | Scope creep from Phase 2 | Anything touching findings/AI/alerts is out; the hooks list in §0 is the complete exception |

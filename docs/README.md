@@ -6,6 +6,7 @@
 | [product/requirements.md](product/requirements.md) | PRD | End-user features F1–F30 — user stories, acceptance criteria, UI notes. F1 is the specification template |
 | [architecture/system-architecture.md](architecture/system-architecture.md) | Architecture | Components, data plane vs control plane, data layer and schemas, decisions log |
 | [architecture/repository-structure.md](architecture/repository-structure.md) | Architecture reference | Monorepo layout and what lives inside each service |
+| [architecture/technology-choices.md](architecture/technology-choices.md) | Architecture reference | Every framework and library, why it was picked, its licence, and what was rejected |
 | [architecture/decisions/](architecture/decisions/) | ADRs | One decision per file, with context and consequences *(P1-06 — to be backfilled from the decisions log)* |
 | [delivery/phase-1-plan.md](delivery/phase-1-plan.md) | Delivery plan | Phase 1 milestones, tasks `P1-nn`, exit criteria, performance budgets |
 | [research/market-analysis-2026.md](research/market-analysis-2026.md) | Research snapshot | 2026 competitive and feature landscape, table stakes vs gaps |

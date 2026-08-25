@@ -65,7 +65,7 @@ apps/workers/
 │  ├─ mask/                      PII rules (P1-24)
 │  ├─ sample/                    tail sampling policy (P1-21)
 │  ├─ derive/                    counters (P1-22) and dependency edges (P1-55)
-│  ├─ sink/clickhouse/           batched inserts, retry, backpressure
+│  ├─ sink/clickhouse/           batched inserts via ch-go, retry, backpressure
 │  └─ health/
 ├─ testdata/
 └─ Dockerfile
@@ -173,7 +173,7 @@ deploy/
 ├─ compose/                      docker-compose.yml + dev override
 ├─ clickhouse/migrations/        001_spans.sql, 002_logs.sql, ...
 ├─ postgres/                     init, roles (schema migrations live with the API)
-├─ redpanda/                     topic bootstrap: partitions, retention
+├─ kafka/                        topic bootstrap: partitions, retention
 └─ minio/                        cold tier (P1-57)
 
 tools/
