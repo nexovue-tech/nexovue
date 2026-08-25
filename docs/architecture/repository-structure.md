@@ -179,7 +179,7 @@ deploy/
 ├─ clickhouse/migrations/        001_spans.sql, 002_logs.sql, ...
 ├─ postgres/                     init, roles (schema migrations live with the API)
 ├─ kafka/                        topic bootstrap: partitions, retention
-└─ minio/                        cold tier (P1-57)
+└─ seaweedfs/                    cold tier, local dev (P1-57)
 
 tools/
 ├─ demo-app/                     fake shop emitting real telemetry, with fault injection

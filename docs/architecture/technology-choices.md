@@ -10,7 +10,7 @@
 | **Apache Kafka 4.x (KRaft)** | ZooKeeper removed in 4.0; [April 2026 benchmark](https://computingforgeeks.com/kafka-vs-redpanda-benchmarks/) measured higher sustained throughput at 3× less memory than Redpanda on identical hardware | Apache 2.0 | **Redpanda** — [BSL 1.1](https://docs.redpanda.com/current/get-started/licensing/overview/); its Streaming/Queueing Service clause is an unresolved ambiguity for a commercial SaaS and would forbid per-tenant topics permanently |
 | **[franz-go](https://github.com/twmb/franz-go)** | Pure Go, feature-complete through Kafka 4.2+, no cgo | Apache 2.0 | **confluent-kafka-go** — more stars, but wraps librdkafka in C, complicating static builds and cross-compilation |
 | **[ch-go](https://clickhouse.com/docs/integrations/language-clients/go/index)** (write path) | ClickHouse's own docs recommend it for insert-heavy workloads; `clickhouse-go` pays a row→column pivot plus reflection per insert | Apache 2.0 | **clickhouse-go/v2** — friendlier `database/sql` semantics we do not need on a pure insert path |
-| **MinIO (local dev only, pinned by digest)** + **AWS S3 (deployment)** | MinIO's community edition was archived 25 Apr 2026 — no releases, no security patches — and is AGPLv3. Neither risk applies to a non-exposed local container. Deployments use S3. Code touches the **generic S3 API only**, so the swap is configuration | AGPLv3 / — | **[SeaweedFS](https://productimpossible.com/articles/self-hosted-s3-after-minio/)** (Apache 2.0) and **Garage** (AGPLv3) — both actively maintained; revisit if deployments ever need to be fully on-premise |
+| **[SeaweedFS](https://productimpossible.com/articles/self-hosted-s3-after-minio/)** (local dev) + **AWS S3** (deployment) | S3-compatible, actively maintained, Apache 2.0 — so no archived or copyleft component exists anywhere in the stack. Code touches the **generic S3 API only**, so the deployment swap is configuration. SeaweedFS also remains a viable production target if a fully on-premise deployment is ever needed | Apache 2.0 / — | **MinIO** — community edition archived 25 Apr 2026, unpatched, AGPLv3. **Garage** — maintained but AGPLv3 |
 | **Go stdlib `net/http` + `google.golang.org/grpc`** | Stdlib routing is sufficient since 1.22; one less dependency on the hot path | BSD-3 | **chi** — fine, but earns nothing here |
 | **Protobuf + [buf](https://buf.build)** for the internal envelope | Cross-language contract between Go producers and Go/Python consumers; renames fail CI instead of silently zeroing data; `buf breaking` enforces compatibility. Envelope holds our metadata only — the payload is untouched OTLP | Apache 2.0 | **JSON + JSON Schema** — readable on the wire, but no compile-time safety across two languages, 2–5× larger messages, slower parsing at ingest volume |
 
@@ -48,18 +48,18 @@ Layout decisions and their sources are in [repository-structure.md](repository-s
 
 ---
 
-## Pending verification
+## Verification log
 
-Not yet searched. None block M0; each is checked before the task that depends on it starts.
+Checked 2026-08-26. Results feed the tasks named.
 
-| Area | Why it matters | Blocks |
+| Area | Finding | Outcome |
 |---|---|---|
-| OTel browser SDK maturity | The RUM door assumes it is production-ready; it was still maturing when the focus doc was written | P1-39 |
-| OTel semantic conventions | Which attribute names get promoted to real columns — several were renamed during stabilization | ClickHouse schema |
-| ClickHouse Kafka table engine | ClickHouse can consume Kafka directly; we chose Go workers because assembly, sampling and masking need logic. Confirm that still holds | P1-15 |
-| OTel collector `tailsampling` processor | We are building our own tail sampling — check we are not reinventing it | P1-21 |
-| Kafka 4.x single-host config | KRaft settings, retention defaults, memory sizing for compose | P1-09, P1-50 |
-| ClickHouse per-tenant retention | TTL is table-level; scheduled deletes vs per-plan TTL expressions | P1-57, M7 |
-| Playwright container footprint | Sizing the browser check queue on one host | P1-35 |
-| testcontainers (Go + Python) | The whole integration-test strategy rests on it | P1-04 |
-| APCA reference implementation | The formula was implemented from the W3C draft, not the official library | P1-08 |
+| **OTel browser SDK** | The core JS SDK is stable and production-used, but [browser instrumentation is "experimental and mostly unspecified"](https://opentelemetry.io/docs/languages/js/) and lives in a separate `opentelemetry-browser` repo | ⚠️ **Risk on P1-39.** Door 3 rests on an experimental component. Budget for churn, or pin hard and accept manual upgrades |
+| **OTel semantic conventions** | [HTTP conventions stable since Nov 2023, with 17 attributes renamed](https://opentelemetry.io/docs/specs/semconv/non-normative/http-migration/) (`http.status_code` → `http.response.status_code`, etc.). SDKs support `OTEL_SEMCONV_STABILITY_OPT_IN=http/dup` to emit both | ⚠️ **Schema impact.** Promoted columns use stable names, and normalization must accept **old and new** — customers run varying SDK versions. GenAI conventions renamed three times in one 2026 cycle, so `gen_ai.*` stays in attributes, never promoted |
+| **ClickHouse Kafka engine** | [At-least-once, offsets committed after insert](https://clickhouse.com/docs/integrations/kafka); it moves messages into a table and nothing more | ✅ **Our Go workers stand.** Trace assembly, tail sampling, masking and derivation have nowhere to run inside a table engine |
+| **Collector `tailsampling`** | [Cannot scale easily — state is in memory and every span of a trace must reach the same instance](https://opentelemetry.io/docs/collector/scaling/), needing a two-layer collector deployment. Its future is under active discussion. The docs name our exact design as the alternative: "route spans through Kafka using trace ID as the partition key" | ✅ **Strongly validates P1-21.** Our approach is the recommended pattern and avoids the two-layer topology |
+| **ClickHouse per-tenant retention** | Conditional TTL works: `MODIFY TTL ... INTERVAL 30 DAY WHERE tenant_id IN (...)`, plus `ttl_only_drop_parts=1` to drop whole parts instead of running mutations | ✅ **Long-standing open question closed.** No scheduled deletes needed — a job regenerates the TTL expression from plan data in Postgres. Note: partitioning *by* tenant_id would explode part counts with many small tenants, so date partitioning stays |
+| **testcontainers** | Actively developed for both Go and Python; ClickHouse and Kafka modules are [community-maintained rather than first-party](https://testcontainers.com/modules/clickhouse/) | ✅ Fine for P1-04, with the note that two modules we depend on are community-owned |
+| **Playwright footprint** | [~1 GB per concurrent browser, 2 GB+ under load](https://bug0.com/knowledge-base/playwright-docker); needs `--ipc=host` and an enlarged `/dev/shm` or Chromium crashes leaving zombie processes; roughly one vCPU per concurrent browser | ✅ **Concrete sizing for P1-35 and M7.** The `/dev/shm` default of 64 MB is the most common cause of "unstable" Playwright in Docker |
+| **APCA** | [WCAG 3 is not a recommendation and "WCAG 3 Compliant does not exist yet"](https://git.apcacontrast.com/documentation/README); the `apca-w3` package is licensed to W3/AGWG for WCAG-related web content use | ⚠️ **Acted on already.** The palette is now verified against APCA *and* WCAG 2.1 AA, since only the latter is something a buyer can hold us to. Use the reference library as a dev-time check at P1-08, not shipped in the bundle |
+| **Kafka 4.x single-host config** | Not researched — this is a measurement task, not a literature question | Open: settled by the load test at P1-50 |

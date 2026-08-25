@@ -85,7 +85,7 @@ nexovue/
 | P1-06 | ADR process | `docs/architecture/decisions/` format; backfill from the decisions log | todo |
 | P1-07 | **Normalized envelope** | `packages/contracts` — thin protobuf envelope (tenant_id, project_id, door, received_at) wrapping untouched OTLP payload bytes; `buf` codegen for Go + Python; `buf breaking` in CI; golden fixtures per door | todo |
 | P1-08 | Design tokens | `packages/ui` OKLCH token scales per `docs/design/design-system.md`; validate under APCA + colourblind simulation; lint gate banning default Tailwind palette names | todo |
-| P1-09 | Compose baseline | Kafka (KRaft), ClickHouse (JSON-type capable version, pinned), Postgres, Redis, MinIO (pinned digest, dev only) with volumes + healthchecks | todo |
+| P1-09 | Compose baseline | Kafka (KRaft), ClickHouse (JSON-type capable version, pinned), Postgres, Redis, SeaweedFS with volumes + healthchecks | todo |
 | P1-10 | Migrations | ClickHouse DDL migration tool + Alembic for Postgres; both reversible | todo |
 
 ### M1 — Walking skeleton
@@ -170,7 +170,7 @@ nexovue/
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
 | P1-50 | Load + soak | 24h soak against the budgets in §4; results recorded here | todo |
-| P1-57 | Object storage cold tier | MinIO pinned by digest in compose for local dev; **AWS S3 in deployment**; ClickHouse-native S3 tiering past the hot window + tested restore. Generic S3 API only — no MinIO-specific calls | todo |
+| P1-57 | Object storage cold tier | **SeaweedFS** in compose for local dev; **AWS S3 in deployment**; ClickHouse-native S3 tiering past the hot window + tested restore. Generic S3 API only | todo |
 | P1-51 | Backup/restore | runbook + tested restore for ClickHouse and Postgres volumes | todo |
 | P1-52 | Ingest kill switch | per-tenant stop valve for runaway ingestion | todo |
 | P1-53 | Security pass | key hashing, TLS at the edge, secret handling, dependency audit | todo |

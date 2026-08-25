@@ -61,6 +61,8 @@ They collide constantly in existing tools. **If a chart series can be red, red s
 | Info | Blue | Small dot |
 | **Healthy** | **Neutral — no colour** | Absence of a badge |
 
+**Badge anatomy.** A severity badge is a *subtle tinted fill* + *coloured label* + *border* — never white text on a saturated block. Saturated mid-lightness fills sit in the 4.5:1 dead zone where neither white nor black text passes WCAG, and forcing it distorts the colour badly. Each severity therefore has four tokens: `-subtle` (badge fill), `-text` (label), `-border`, and `-solid` (the dot or accent bar, a non-text element needing only 3:1).
+
 Colour means *something needs you*. A wall of green dots is a tool shouting that nothing is happening, which contradicts the whole product: when everything is fine, the feed should be calm.
 
 This also resolves the accessibility problem for free. Red/green pairs are the classic failure for deuteranopia and protanopia — both read as the same indistinct pale colour, and roughly 1 in 12 men has some red-green deficiency. Red survives because it is too deeply learned to fight; green is simply never asked to carry meaning opposite it.
@@ -81,7 +83,7 @@ The neutral scale carries a trace of the brand hue (chroma 0.010 at 157.1°) rat
 
 ### Tokens
 
-Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verified — not eyeballed. Hex comments are the sRGB equivalents.
+Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verified against both contrast standards — not eyeballed. Hex comments are the sRGB equivalents.
 
 ```css
 /* ---------- DARK (default) ---------- */
@@ -96,7 +98,7 @@ Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verifie
   --n-8: oklch(0.510 0.007 157.1);   /* #636764 */
   --n-9: oklch(0.620 0.010 157.1);   /* #818884 */
   --n-10: oklch(0.700 0.009 157.1);   /* #9AA09C */
-  --n-11: oklch(0.816 0.006 157.1);   /* #C0C4C1 */
+  --n-11: oklch(0.775 0.006 157.1);   /* #B3B7B4 */
   --n-12: oklch(0.960 0.003 157.1);   /* #F0F2F1 */
 
   --brand-1: oklch(0.150 0.020 157.1);   /* #050E08 */
@@ -112,12 +114,18 @@ Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verifie
   --brand-11: oklch(0.816 0.117 157.1);   /* #7EDAA5 */
   --brand-12: oklch(0.960 0.058 157.1);   /* #D3FEE2 */
 
-  --sev-critical: oklch(0.580 0.200 25);   /* #D73337 — white text */
-  --sev-critical-text: oklch(0.775 0.132 25);   /* #FF938B */
-  --sev-warning: oklch(0.830 0.135 70);   /* #FFB75D — black text */
-  --sev-warning-text: oklch(0.767 0.160 70);   /* #F39E1C */
-  --sev-info: oklch(0.630 0.144 240);   /* #0092D7 — white text */
-  --sev-info-text: oklch(0.754 0.141 240);   /* #4ABAFF */
+  --sev-critical-subtle: oklch(0.205 0.045 25);   /* #280E0C badge fill */
+  --sev-critical-border: oklch(0.355 0.075 25);   /* #5D2A27 */
+  --sev-critical-solid:  oklch(0.620 0.200 25);   /* #E64343 dot / accent bar */
+  --sev-critical-text:   oklch(0.779 0.129 25);   /* #FF958D label */
+  --sev-warning-subtle: oklch(0.205 0.044 70);   /* #241300 badge fill */
+  --sev-warning-border: oklch(0.355 0.075 70);   /* #543403 */
+  --sev-warning-solid:  oklch(0.800 0.162 70);   /* #FFA82A dot / accent bar */
+  --sev-warning-text:   oklch(0.782 0.167 70);   /* #FBA20F label */
+  --sev-info-subtle: oklch(0.205 0.045 240);   /* #011929 badge fill */
+  --sev-info-border: oklch(0.355 0.075 240);   /* #0A405F */
+  --sev-info-solid:  oklch(0.700 0.160 240);   /* #00A9F7 dot / accent bar */
+  --sev-info-text:   oklch(0.760 0.137 240);   /* #51BCFF label */
   --sev-healthy: var(--n-11);   /* no hue, by design */
 
   --series-1: oklch(0.800 0.136 200);   /* #00D7E0 cyan */
@@ -140,7 +148,7 @@ Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verifie
   --n-8: oklch(0.760 0.007 157.1);   /* #AEB2AF */
   --n-9: oklch(0.620 0.010 157.1);   /* #818884 */
   --n-10: oklch(0.560 0.009 157.1);   /* #707672 */
-  --n-11: oklch(0.569 0.006 157.1);   /* #747876 */
+  --n-11: oklch(0.563 0.006 157.1);   /* #737674 */
   --n-12: oklch(0.310 0.003 157.1);   /* #2F3130 */
 
   --brand-1: oklch(0.995 0.007 157.1);   /* #FAFFFB */
@@ -153,15 +161,21 @@ Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verifie
   --brand-8: oklch(0.760 0.136 157.1);   /* #5ACB8E */
   --brand-9: oklch(0.825 0.195 157.1);   /* #0AEA91 */
   --brand-10: oklch(0.765 0.182 157.1);   /* #00D482 */
-  --brand-11: oklch(0.569 0.117 157.1);   /* #2A8B5B */
+  --brand-11: oklch(0.505 0.117 157.1);   /* #0A7849 */
   --brand-12: oklch(0.310 0.058 157.1);   /* #123924 */
 
-  --sev-critical: oklch(0.530 0.200 25);   /* #C51D28 — white text */
-  --sev-critical-text: oklch(0.655 0.160 25);   /* #E2635D */
-  --sev-warning: oklch(0.630 0.136 70);   /* #BD7800 — white text */
-  --sev-warning-text: oklch(0.645 0.140 70);   /* #C37C00 */
-  --sev-info: oklch(0.530 0.121 240);   /* #0073AA — white text */
-  --sev-info-text: oklch(0.631 0.145 240);   /* #0093D7 */
+  --sev-critical-subtle: oklch(0.965 0.017 25);   /* #FFEFEE badge fill */
+  --sev-critical-border: oklch(0.860 0.075 25);   /* #FFBFB8 */
+  --sev-critical-solid:  oklch(0.560 0.200 25);   /* #D02B31 dot / accent bar */
+  --sev-critical-text:   oklch(0.553 0.170 25);   /* #C23D3C label */
+  --sev-warning-subtle: oklch(0.965 0.025 70);   /* #FFF1E2 badge fill */
+  --sev-warning-border: oklch(0.860 0.075 70);   /* #F1C99C */
+  --sev-warning-solid:  oklch(0.660 0.143 70);   /* #C98000 dot / accent bar */
+  --sev-warning-text:   oklch(0.549 0.119 70);   /* #9D6300 label */
+  --sev-info-subtle: oklch(0.965 0.019 240);   /* #E9F6FF badge fill */
+  --sev-info-border: oklch(0.860 0.075 240);   /* #A4D8FE */
+  --sev-info-solid:  oklch(0.480 0.110 240);   /* #006495 dot / accent bar */
+  --sev-info-text:   oklch(0.540 0.124 240);   /* #0076AF label */
   --sev-healthy: var(--n-11);   /* no hue, by design */
 
   --series-1: oklch(0.600 0.102 200);   /* #009298 cyan */
@@ -173,53 +187,58 @@ Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verifie
 }
 ```
 
-### Verification
+### Verification — against two standards, deliberately
 
-Measured with APCA (the W3C draft algorithm), not WCAG 2 ratios, because WCAG 2 systematically misjudges dark backgrounds and we are dark-first.
+Measured with **APCA** (the W3C draft algorithm) *and* **WCAG 2.1 ratios**. Both, because they disagree and each answers a different question:
 
-Thresholds: **Lc 75** for body text · **Lc 60** for medium/bold text and chart marks · **Lc 15** for non-text boundaries like a badge fill.
+- **APCA** models perception far better on dark backgrounds, where WCAG 2 systematically misjudges. It is what makes the interface actually readable.
+- **WCAG 2.1 AA is what anyone can hold us to.** APCA belongs to WCAG 3, which is [still developmental and not an official recommendation](https://git.apcacontrast.com/documentation/README) — "WCAG 3 Compliant does not exist yet." Enterprise procurement asks for WCAG 2.1 AA and a VPAT.
 
-| Pair | APCA Lc | Target | |
-|---|---:|---:|:--|
-| dark · primary text (n-12) on background | 99 | 75 | ✓ |
-| dark · secondary text (n-11) on background | 70 | 60 | ✓ |
-| dark · brand link (brand-11) on background | 73 | 60 | ✓ |
-| dark · black text on brand solid button | 78 | 75 | ✓ |
-| dark · white text on critical badge | 77 | 60 | ✓ |
-| dark · critical badge fill vs background | 30 | 15 | ✓ |
-| dark · critical text variant on background | 60 | 60 | ✓ |
-| dark · black text on warning badge | 73 | 60 | ✓ |
-| dark · warning badge fill vs background | 72 | 15 | ✓ |
-| dark · warning text variant on background | 60 | 60 | ✓ |
-| dark · white text on info badge | 67 | 60 | ✓ |
-| dark · info badge fill vs background | 40 | 15 | ✓ |
-| dark · info text variant on background | 60 | 60 | ✓ |
-| dark · worst chart series vs background | 64 | 60 | ✓ |
-| light · primary text (n-12) on background | 98 | 75 | ✓ |
-| light · secondary text (n-11) on background | 70 | 60 | ✓ |
-| light · brand link (brand-11) on background | 68 | 60 | ✓ |
-| light · black text on brand solid button | 78 | 75 | ✓ |
-| light · white text on critical badge | 83 | 60 | ✓ |
-| light · critical badge fill vs background | 76 | 15 | ✓ |
-| light · critical text variant on background | 60 | 60 | ✓ |
-| light · white text on warning badge | 69 | 60 | ✓ |
-| light · warning badge fill vs background | 62 | 15 | ✓ |
-| light · warning text variant on background | 60 | 60 | ✓ |
-| light · white text on info badge | 81 | 60 | ✓ |
-| light · info badge fill vs background | 74 | 15 | ✓ |
-| light · info text variant on background | 60 | 60 | ✓ |
-| light · worst chart series vs background | 63 | 60 | ✓ |
+Tuning to APCA alone produced a palette that **failed WCAG 2.1 AA in six places**, all in the light theme. Every value below clears both.
+
+Targets: body text Lc 75 / 4.5:1 · labels and chart marks Lc 60 / 4.5:1 · non-text UI Lc 15 / 3:1.
+
+| Pair | APCA Lc | WCAG | Targets | |
+|---|---:|---:|---|:--|
+| dark · primary text (n-12) on page | 99 | 17.53:1 | Lc 75 · 4.5:1 | ✓ |
+| dark · secondary text (n-11) on page | 63 | 9.68:1 | Lc 60 · 4.5:1 | ✓ |
+| dark · brand link (brand-11) on page | 73 | 11.64:1 | Lc 60 · 4.5:1 | ✓ |
+| dark · black text on brand button | 78 | 13.18:1 | Lc 75 · 4.5:1 | ✓ |
+| dark · critical label on badge fill | 60 | 8.56:1 | Lc 60 · 4.5:1 | ✓ |
+| dark · critical label on page | 61 | 9.29:1 | Lc 60 · 4.5:1 | ✓ |
+| dark · critical dot vs page (UI) | 35 | 4.90:1 | Lc 15 · 3.0:1 | ✓ |
+| dark · warning label on badge fill | 62 | 8.78:1 | Lc 60 · 4.5:1 | ✓ |
+| dark · warning label on page | 63 | 9.60:1 | Lc 60 · 4.5:1 | ✓ |
+| dark · warning dot vs page (UI) | 66 | 10.23:1 | Lc 15 · 3.0:1 | ✓ |
+| dark · info label on badge fill | 60 | 8.46:1 | Lc 60 · 4.5:1 | ✓ |
+| dark · info label on page | 61 | 9.32:1 | Lc 60 · 4.5:1 | ✓ |
+| dark · info dot vs page (UI) | 51 | 7.49:1 | Lc 15 · 3.0:1 | ✓ |
+| dark · worst chart series vs page (UI) | 64 | 9.92:1 | Lc 60 · 3.0:1 | ✓ |
+| light · primary text (n-12) on page | 98 | 12.96:1 | Lc 75 · 4.5:1 | ✓ |
+| light · secondary text (n-11) on page | 71 | 4.52:1 | Lc 60 · 4.5:1 | ✓ |
+| light · brand link (brand-11) on page | 76 | 5.46:1 | Lc 60 · 4.5:1 | ✓ |
+| light · black text on brand button | 78 | 13.18:1 | Lc 75 · 4.5:1 | ✓ |
+| light · critical label on badge fill | 67 | 4.69:1 | Lc 60 · 4.5:1 | ✓ |
+| light · critical label on page | 74 | 5.15:1 | Lc 60 · 4.5:1 | ✓ |
+| light · critical dot vs page (UI) | 73 | 5.08:1 | Lc 15 · 3.0:1 | ✓ |
+| light · warning label on badge fill | 67 | 4.51:1 | Lc 60 · 4.5:1 | ✓ |
+| light · warning label on page | 73 | 4.93:1 | Lc 60 · 4.5:1 | ✓ |
+| light · warning dot vs page (UI) | 58 | 3.16:1 | Lc 15 · 3.0:1 | ✓ |
+| light · info label on badge fill | 67 | 4.51:1 | Lc 60 · 4.5:1 | ✓ |
+| light · info label on page | 73 | 4.91:1 | Lc 60 · 4.5:1 | ✓ |
+| light · info dot vs page (UI) | 80 | 6.36:1 | Lc 15 · 3.0:1 | ✓ |
+| light · worst chart series vs page (UI) | 63 | 3.68:1 | Lc 60 · 3.0:1 | ✓ |
 
 ### Colourblind separation
 
-Severity fills are deliberately staggered in lightness where the hues are confusable:
+Severity *dots* are deliberately staggered in lightness where hues are confusable:
 
-| Pair | ΔL | Why |
-|---|---|---|
-| critical ↔ warning | **0.25** (dark) / **0.10** (light) | Red and amber are the pair that collapses under protanopia and deuteranopia. Lightness carries the difference when hue cannot. |
-| critical ↔ info | 0.05 | Red vs blue survives every common CVD type on hue alone — no lightness gap needed. |
+| Pair | ΔL dark | ΔL light | Why |
+|---|---|---|---|
+| critical ↔ warning | **0.18** | **0.10** | Red and amber collapse together under protanopia and deuteranopia. Lightness carries the difference when hue cannot. |
+| critical ↔ info | 0.08 | 0.08 | Red vs blue survives every common CVD type on hue alone. |
 
-This is why the severity fills are not all tuned to the same contrast: forcing equal Lc drove them to identical lightness, which is exactly what breaks greyscale legibility. Contrast and separation are different requirements.
+This is why severity colours are *not* all tuned to identical contrast. An early pass did exactly that and drove all three to the same lightness — perfectly legible, and indistinguishable in greyscale. **Contrast and separation are different requirements**, and optimising for one silently destroys the other.
 
 ### Other colour uses
 
