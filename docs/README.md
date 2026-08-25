@@ -9,6 +9,7 @@
 | [architecture/technology-choices.md](architecture/technology-choices.md) | Architecture reference | Every framework and library, why it was picked, its licence, and what was rejected |
 | [architecture/decisions/](architecture/decisions/) | ADRs | One decision per file, with context and consequences *(P1-06 — to be backfilled from the decisions log)* |
 | [delivery/phase-1-plan.md](delivery/phase-1-plan.md) | Delivery plan | Phase 1 milestones, tasks `P1-nn`, exit criteria, performance budgets |
+| [design/design-system.md](design/design-system.md) | Design reference | Colour system, severity encoding, component inventory, and the banned defaults |
 | [research/market-analysis-2026.md](research/market-analysis-2026.md) | Research snapshot | 2026 competitive and feature landscape, table stakes vs gaps |
 
 ## Conventions

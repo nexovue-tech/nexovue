@@ -84,7 +84,7 @@ nexovue/
 | P1-05 | Agent context | root `CLAUDE.md` + one per app, scoped to what is true inside it | todo |
 | P1-06 | ADR process | `docs/architecture/decisions/` format; backfill from the decisions log | todo |
 | P1-07 | **Normalized envelope** | `packages/contracts` — thin protobuf envelope (tenant_id, project_id, door, received_at) wrapping untouched OTLP payload bytes; `buf` codegen for Go + Python; `buf breaking` in CI; golden fixtures per door | todo |
-| P1-08 | Design tokens | `packages/ui` tokens + written anti-pattern list (see §7) | todo |
+| P1-08 | Design tokens | `packages/ui` OKLCH token scales per `docs/design/design-system.md`; validate under APCA + colourblind simulation; lint gate banning default Tailwind palette names | todo |
 | P1-09 | Compose baseline | Kafka (KRaft), ClickHouse, Postgres, Redis with volumes + healthchecks | todo |
 | P1-10 | Migrations | ClickHouse DDL migration tool + Alembic for Postgres; both reversible | todo |
 
