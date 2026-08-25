@@ -18,6 +18,8 @@ nexovue/
 
 Configuration from environment, validated at boot, failing fast · `/healthz` and `/readyz` · structured logging · self-instrumented with OTel exporting to our own receiver · graceful shutdown draining in-flight work · its own `Dockerfile`, `README.md`, and `testdata/`.
 
+**Start simple and grow into it.** The trees below are the shape at Phase 1 completion, not what gets created on day one. Official Go guidance is explicit that layout is a function of size; create a package when there is code to put in it.
+
 **Folders are domain-oriented, never layer-oriented.** `traces/ logs/ metrics/` rather than `models/ controllers/ services/` — features arrive as domains, and layer-first folders force every feature to touch six directories.
 
 ---
@@ -73,6 +75,8 @@ Pipeline order carries the invariants: **`derive` runs before `sample`** so coun
 
 Separate binaries because they scale independently — trace assembly is memory-bound, log writing is I/O-bound.
 
+`cmd/` + `internal/` is the layout the official Go docs recommend for a repo of several binaries sharing server logic. We deliberately do **not** use `pkg/` — it means nothing to the toolchain, the official layout doc does not recommend it, and it comes from a community repo the Go team has disowned.
+
 ## apps/api — Python, FastAPI, query and control plane
 
 ```
@@ -85,6 +89,7 @@ apps/api/
 │  ├─ domain/                    traces/ logs/ errors/ services/ service_map/ infra/
 │  │                             synthetics/ database/ rum/ usage/ projects/ keys/
 │  │                             each: router.py · schemas.py · service.py · queries.py
+│  │                             dependencies.py · exceptions.py · constants.py
 │  ├─ data/
 │  │  ├─ clickhouse/base.py      the tenancy choke point (see below)
 │  │  ├─ postgres/               SQLAlchemy models + repositories
@@ -95,6 +100,8 @@ apps/api/
 ├─ tests/
 └─ Dockerfile
 ```
+
+Domain packages follow the Netflix Dispatch–derived FastAPI convention, with one deliberate deviation: **database access does not live inside the domain**. The convention puts `models.py` in each package; we centralize it in `data/` because twelve domains holding their own query builders means twelve places to forget the tenant filter.
 
 `data/clickhouse/base.py` is where invariant 1 lives: every query is constructed through it and the tenant filter is injected there, not by callers. This is what makes the lint rule — no raw SQL outside `data/` — enforceable rather than aspirational.
 
@@ -120,15 +127,27 @@ apps/scheduler/
 ```
 apps/web/
 ├─ src/
-│  ├─ app/                       router, providers, layout, command palette
+│  ├─ app/                       routes, providers, router, layout, command palette
 │  ├─ features/                  traces/ logs/ errors/ services/ service-map/ infra/
 │  │                             synthetics/ database/ rum/ usage/ onboarding/
-│  │                             each: routes · components · queries (TanStack) · types
-│  ├─ shared/                    api client, time-range state, formatting, auth
-│  └─ styles/
+│  │                             each: api/ · components/ · hooks/ · stores/ · types/
+│  ├─ components/                shared UI, composed from packages/ui
+│  ├─ hooks/                     shared hooks
+│  ├─ lib/                       preconfigured libraries (api client, query client)
+│  ├─ stores/                    global client state
+│  ├─ config/                    env, feature flags
+│  ├─ types/                     shared types
+│  ├─ testing/                   test utilities, request mocks
+│  └─ assets/
 ├─ index.html · vite.config.ts
 └─ Dockerfile                    nginx serving the build
 ```
+
+**Imports flow one direction only: shared → features → app.** Shared code may be used anywhere; a feature may import shared code but not another feature; only `app/` composes features together. Cross-feature reuse is a signal that the shared thing belongs in `components/` or `lib/`.
+
+This is the part that makes feature folders worth having, and it only holds if a tool enforces it — a lint rule restricting import paths between these zones, failing CI like any other rule. Without enforcement, `features/` degrades into `components/` with extra nesting within months.
+
+The buckets above are named rather than a single `shared/` on purpose: one shared folder becomes a junk drawer that nobody can safely delete from.
 
 The design system lives in `packages/ui`, never here — the anti-pattern rules need a single chokepoint to be enforceable.
 
@@ -163,3 +182,15 @@ tools/
 ```
 
 `tools/demo-app` is built in week one (P1-11) — no UI screen can be built or demonstrated without data that behaves like production.
+
+---
+
+## References
+
+Structure validated against current production practice rather than invented:
+
+- [Organizing a Go module](https://go.dev/doc/modules/layout) — official Go guidance on `cmd/` and `internal/` for multi-binary server repos
+- [bulletproof-react — project structure](https://github.com/alan2207/bulletproof-react/blob/master/docs/project-structure.md) — feature folders, unidirectional imports, no cross-feature imports
+- [Feature-Sliced Design](https://feature-sliced.design/docs/get-started/overview) — layered alternative; heavier, aimed at large teams. Compatible enough to migrate to later
+- [FastAPI best practices](https://github.com/zhanymkanov/fastapi-best-practices) — Netflix Dispatch–derived domain packages and their file set
+- [Go project layout controversy](https://waken.dev/go-project-layout-controversy/) — why `pkg/` is avoided here
