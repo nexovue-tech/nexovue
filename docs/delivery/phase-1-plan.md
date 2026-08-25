@@ -83,7 +83,8 @@ nexovue/
 | P1-04 | CI pipeline | golangci-lint, ruff + mypy --strict, biome; unit tests; docker build; required checks | todo |
 | P1-05 | Agent context | root `CLAUDE.md` + one per app, scoped to what is true inside it | todo |
 | P1-06 | ADR process | `docs/architecture/decisions/` format; backfill from the decisions log | todo |
-| P1-07 | **Normalized envelope** | `packages/contracts` — thin protobuf envelope (tenant_id, project_id, door, received_at) wrapping untouched OTLP payload bytes; `buf` codegen for Go + Python; `buf breaking` in CI; golden fixtures per door | todo |
+| P1-07 | **Normalized envelope** | `packages/contracts` per `docs/architecture/ingestion-envelope.md` — protobuf envelope wrapping untouched OTLP bytes; `buf` codegen Go + Python; `buf breaking` in CI; 8 golden fixtures | todo |
+| P1-59 | **Control-plane schema** | Postgres tables per `docs/architecture/tenancy-and-data-model.md`; Alembic migrations; org/user/project/api_key seed for local dev | todo |
 | P1-08 | Design tokens | `packages/ui` OKLCH token scales per `docs/design/design-system.md`; validate under APCA + colourblind simulation; lint gate banning default Tailwind palette names | todo |
 | P1-09 | Compose baseline | Kafka (KRaft), ClickHouse (JSON-type capable version, pinned), Postgres, Redis, SeaweedFS with volumes + healthchecks | todo |
 | P1-10 | Migrations | ClickHouse DDL migration tool + Alembic for Postgres; both reversible | todo |
@@ -94,8 +95,8 @@ nexovue/
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
 | P1-11 | Demo app | `tools/demo-app` — fake shop emitting real traces, with fault injection ("break checkout DB now") | todo |
-| P1-12 | Receiver: OTLP/HTTP | `/v1/traces`, protobuf parse via official OTel libs, produce to Kafka | todo |
-| P1-13 | API keys + tenancy | keys hashed in Postgres, cached in Redis; every span tagged with tenant at the edge | todo |
+| P1-12 | Receiver: OTLP/HTTP | `/v1/traces`, protobuf parse via official OTel libs, **split batches one envelope per trace_id**, produce to Kafka keyed by trace_id | todo |
+| P1-13 | API keys + tenancy | SHA-256 key hash (never argon2 — hot path), lookup by prefix, single cached lookup resolving org_id + project_id; every envelope tagged at the edge | todo |
 | P1-14 | Rate limiting | per-key Redis counters; reject over-limit before any cost | todo |
 | P1-15 | Trace assembler | `franz-go` consumer, partition by trace_id, in-memory join, batched insert via `ch-go` | todo |
 | P1-16 | Query API | FastAPI `GET /traces`, `/traces/{id}` through a repository that cannot omit the tenant filter | todo |
@@ -164,7 +165,7 @@ nexovue/
 | P1-46 | Database screen | slow queries, mean time, calls, connection health | todo |
 | P1-47 | RUM screen | Core Web Vitals by page/geo/device; JS errors | todo |
 | P1-48 | Usage & cost view | per-tenant ingestion counters → usage table → projected cost in-product | todo |
-| P1-49 | Onboarding | signup → project → two env vars → live first-span celebration | todo |
+| P1-49 | Onboarding | signup collects org details + one email → transaction creates org, owner user, `production` project and first key → two env vars → live first-span celebration. User never sees the words org or project | todo |
 
 ### M7 — Phase 1 exit
 | ID | Task | Deliverable | Status |
@@ -184,6 +185,7 @@ nexovue/
 |---|---|---|
 | Receiver throughput | ≥ 10,000 spans/sec sustained, single instance | — |
 | Receiver accept latency | p99 < 50 ms | — |
+| Trace-split re-encode overhead | < 20% of receiver CPU | — |
 | Receiver memory | < 512 MB under sustained load | — |
 | Span → queryable lag | p99 < 15 s | — |
 | Trace-by-ID query | p95 < 500 ms | — |

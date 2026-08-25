@@ -5,6 +5,8 @@
 | [product/vision-and-scope.md](product/vision-and-scope.md) | Vision & Scope | Why this exists, who it serves, which signals and categories are in scope, how data gets in |
 | [product/requirements.md](product/requirements.md) | PRD | End-user features F1–F30 — user stories, acceptance criteria, UI notes. F1 is the specification template |
 | [architecture/system-architecture.md](architecture/system-architecture.md) | Architecture | Components, data plane vs control plane, data layer and schemas, decisions log |
+| [architecture/tenancy-and-data-model.md](architecture/tenancy-and-data-model.md) | Architecture reference | What a tenant and project are, and the control-plane schema |
+| [architecture/ingestion-envelope.md](architecture/ingestion-envelope.md) | Frozen contract | The internal message every door writes and every worker reads |
 | [architecture/repository-structure.md](architecture/repository-structure.md) | Architecture reference | Monorepo layout and what lives inside each service |
 | [architecture/technology-choices.md](architecture/technology-choices.md) | Architecture reference | Every framework and library, why it was picked, its licence, and what was rejected |
 | [architecture/decisions/](architecture/decisions/) | ADRs | One decision per file, with context and consequences *(P1-06 — to be backfilled from the decisions log)* |
