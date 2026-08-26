@@ -73,21 +73,26 @@ nexovue/
 ## 3. Milestones & tasks
 
 ### M0 — Foundations (repo, contracts, guardrails)
-*Exit: `just dev` brings the infrastructure up, CI is green on an empty codebase, and the internal data contract is frozen.*
+*Exit: `just dev` brings the infrastructure up healthy, `just check` passes, the envelope contract is frozen with golden fixtures, both databases migrate reversibly, and the app shell is walkable in both themes.*
 
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
-| P1-01 | Repo init | git repo, `.gitignore`, README, LICENSE, branch protection | todo |
-| P1-02 | Monorepo scaffolding | `apps/ packages/ deploy/ tools/ docs/`; `go.work`, uv workspace, pnpm workspace | todo |
-| P1-03 | Task runner | `just dev / test / lint / migrate / load` — same verbs for every service | todo |
-| P1-04 | CI pipeline | golangci-lint, ruff + mypy --strict, biome; unit tests; docker build; required checks | todo |
-| P1-05 | Agent context | root `CLAUDE.md` + one per app, scoped to what is true inside it | todo |
+| P1-01 | Repo init | git repo, `.gitignore`, README, LICENSE | ✅ done |
+| P1-02 | Monorepo scaffolding | `apps/ packages/ deploy/`; `go.work`, uv workspace, pnpm workspace | ✅ done |
+| P1-03 | Task runner | `justfile` — same verbs for every service; `just check` is the pre-commit gate | ✅ done |
+| P1-04 | Quality gates | `.golangci.yml` (v2 schema), ruff + mypy --strict, `biome.json` with import-boundary rules. Run by `just check` — the GitHub Actions workflow is deferred to the deployment phase | ✅ done |
+| P1-05 | Agent context | root `CLAUDE.md` + one per app, scoped to what is true inside it | ✅ done |
 | P1-06 | ADR process | `docs/architecture/decisions/` format; backfill from the decisions log | todo |
 | P1-07 | **Normalized envelope** | `packages/contracts` per `docs/architecture/ingestion-envelope.md` — protobuf envelope wrapping untouched OTLP bytes; `buf` codegen Go + Python; `buf breaking` in CI; 8 golden fixtures | todo |
 | P1-59 | **Control-plane schema** | Postgres tables per `docs/architecture/tenancy-and-data-model.md`; Alembic migrations; org/user/project/api_key seed for local dev | todo |
 | P1-08 | Design tokens | `packages/ui` OKLCH token scales per `docs/design/design-system.md`; validate under APCA + colourblind simulation; lint gate banning default Tailwind palette names | todo |
 | P1-09 | Compose baseline | Kafka (KRaft), ClickHouse (JSON-type capable version, pinned), Postgres, Redis, SeaweedFS with volumes + healthchecks | todo |
-| P1-10 | Migrations | ClickHouse DDL migration tool + Alembic for Postgres; both reversible | todo |
+| P1-10 | Migrations | golang-migrate for ClickHouse + Alembic for Postgres; both reversible | todo |
+| P1-63 | App shell & routes | Vite + React + TanStack Router; global layout; every Phase 1 route rendering a `ComingSoon` template naming its delivering task; `/api/v1/` from the first route | todo |
+| P1-64 | Config, validation & health | Typed config validated at boot per service; `/healthz` (no dependency checks) and `/readyz` (with them) | todo |
+| P1-65 | Backend cross-cutting | RFC 9457 problem+json with correlation ids; API rate limiting distinct from ingest; pool sizes, session-per-request, Redis sessions | todo |
+| P1-66 | Logging & UI handling | One JSON log contract across three languages; React 19 root handlers, boundaries, one query-error mapper | todo |
+| P1-67 | Documentation reconciliation | Fifteen corrections applied with their owning task | todo |
 
 ### M1 — Walking skeleton
 *Exit: demo app emits a span; it is visible in the browser as a trace waterfall; the whole path runs from `docker compose up`, and one e2e test proves it end to end in CI.*
@@ -182,7 +187,7 @@ nexovue/
 
 ---
 
-## 4. Performance budgets (measured in CI, not estimated)
+## 4. Performance budgets (measured by `just load`, not estimated)
 
 **Target machine: Apple M4 Pro, 24 GB, full stack co-resident in Docker** (see `dev-environment.md`). On one laptop these are a **regression gate, not a capacity model** — production numbers are re-measured when a production host exists.
 

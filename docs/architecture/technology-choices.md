@@ -57,6 +57,24 @@ Layout decisions and their sources are in [repository-structure.md](repository-s
 
 ---
 
+## Pinned versions
+
+Installed and verified on the dev machine 2026-08-26. Pins that carry a *reason* rather than "latest at the time":
+
+| | Version | Why pinned here |
+|---|---|---|
+| Go | 1.27.0 | — |
+| Node | 26.7.0 | — |
+| Python | 3.13 | 3.14 is on the machine, but C-extension dependencies (asyncpg, pydantic-core, clickhouse-connect) lag a new minor. Revisit once they publish 3.14 wheels |
+| **ClickHouse** | **≥ 25.3** | The native JSON type is production-ready only from 25.3; our attribute schema depends on it |
+| **Postgres** | **18** | Native `uuidv7()`, used as a column default across the control-plane schema |
+| golangci-lint | 2.13.1 | v2 config schema — a v1 file will not load |
+| buf | 1.72.0 | `buf.gen.yaml` v2 syntax |
+| Biome | 2.5.10 | `linter.rules.preset` replaced the deprecated `recommended` key |
+| pnpm / uv / just | 11.24.0 / 0.12.6 / 1.58.0 | — |
+
+Libraries chosen during M0 planning: `caarlos0/env/v11` (Go config) · `structlog` (Python logging) · `air` (Go live reload) · `golang-migrate` (ClickHouse migrations) · native `fetch` (web HTTP) · IBM Plex superfamily (typography).
+
 ## Verification log
 
 Checked 2026-08-26. Results feed the tasks named.

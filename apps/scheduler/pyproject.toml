@@ -1,0 +1,21 @@
+[project]
+name = "nexovue-scheduler"
+version = "0.1.0"
+description = "Doors 2 and 4b: synthetic probes and cloud/database pollers"
+requires-python = ">=3.13"
+dependencies = [
+    "celery[redis]>=5.4",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "structlog>=24.4",
+    "httpx>=0.28",
+]
+
+[build-system]
+requires = ["uv_build>=0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src"

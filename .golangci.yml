@@ -1,0 +1,39 @@
+# golangci-lint v2 config. v2 cannot read a v1 file: the `version` key is required.
+version: "2"
+
+linters:
+  default: standard          # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose              # HTTP bodies left open leak connections on the hot path
+    - contextcheck           # a dropped context breaks cancellation and tracing
+    - errorlint              # errors must wrap, so context survives
+    - goconst                # repeated literals are the magic values we ban
+    - gosec
+    - misspell
+    - nilerr
+    - revive
+    - unconvert
+    - wastedassign
+  settings:
+    errcheck:
+      check-type-assertions: true
+    goconst:
+      min-occurrences: 3
+    revive:
+      rules:
+        - name: exported          # exported identifiers carry doc comments
+        - name: early-return
+        - name: unnecessary-stmt
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [gosec, goconst]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/nexovue-tech/nexovue

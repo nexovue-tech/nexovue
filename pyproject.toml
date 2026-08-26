@@ -1,0 +1,59 @@
+[project]
+name = "nexovue"
+version = "0.1.0"
+description = "Insight-first observability platform"
+requires-python = ">=3.13"
+
+[tool.uv.workspace]
+members = ["apps/api", "apps/scheduler"]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["apps/api/src", "apps/scheduler/src"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # import sorting
+    "N",         # naming — intention-revealing names are a standard here, not a preference
+    "UP",        # pyupgrade
+    "B",         # bugbear
+    "A",         # shadowed builtins
+    "C4",        # comprehensions
+    "DTZ",       # naive datetimes: every timestamp in this system is timezone-aware
+    "T20",       # no print(); we have a structured logger
+    "SIM",
+    "RUF",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unreachable = true
+disallow_any_explicit = false          # Map-typed telemetry attributes are legitimately dynamic
+plugins = ["pydantic.mypy"]
+exclude = ["packages/contracts/gen/"]  # generated code is not ours to type
+
+[[tool.mypy.overrides]]
+module = ["clickhouse_connect.*", "celery.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests"]
