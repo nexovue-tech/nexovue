@@ -76,11 +76,16 @@ services:
         limits:
           memory: ${WORKER_MEMORY:-768M}
 
-  api:
+  # One service: FastAPI, Celery Beat and the Celery worker together, run by
+  # supervisord. Beat is a singleton by nature — two of it fires every
+  # customer's checks twice — so this container must never run more than one
+  # replica. On-prem splits them for exactly that reason.
+  app:
     build:
       context: ../..
-      dockerfile: apps/api/Dockerfile
-    image: nexovue/api:${NEXOVUE_VERSION:-dev}
+      dockerfile: deploy/docker/app.Dockerfile
+    image: nexovue/app:${NEXOVUE_VERSION:-dev}
+    shm_size: 1gb
     environment: &control-plane-env
       ENV: production
       LOG_LEVEL: info
@@ -91,6 +96,8 @@ services:
       KAFKA_BROKERS: kafka:9092
       # TODO(name): settings.py has no S3 field yet; align with P1-57.
       NEXOVUE_S3_ENDPOINT: http://seaweedfs:8333
+      # Beat and the worker live here too; the worker drains both queues.
+      CELERY_QUEUES: light,browser
     ports:
       - "8000:8000"
     depends_on:
@@ -103,7 +110,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 832M
+          # FastAPI plus beat plus a worker that may be driving Chromium.
+          memory: 2560M
 
   web:
     build:
@@ -117,7 +125,6 @@ services:
         limits:
           memory: 128M
 
-  # ---------- doors 2 and 4b ----------
   scheduler-beat:
     profiles: ["doors"]
     build:

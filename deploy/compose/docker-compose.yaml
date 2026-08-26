@@ -234,7 +234,10 @@ services:
         limits:
           memory: 256M
 
-  scheduler-light:
+  # One Celery worker drains every queue, browser checks included. Playwright
+  # wants ~1GB per browser, so concurrency is low and the image carries
+  # Chromium — see the note in deploy/docker/python-dev.Dockerfile.
+  scheduler-worker:
     profiles: ["doors"]
     build:
       context: ../..
@@ -242,45 +245,25 @@ services:
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
-      celery -A nexovue_scheduler.celery_app worker --queues light --concurrency 8 --loglevel info
+      celery -A nexovue_scheduler.celery_app worker --queues light,browser --concurrency 2
     working_dir: /workspace
     volumes:
       - ../..:/workspace
       - python-venv:/workspace/.venv
     environment: *scheduler-env
-    depends_on:
-      redis:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-
-  scheduler-browser:
-    profiles: ["doors"]
-    build:
-      context: ../..
-      dockerfile: apps/scheduler/Dockerfile.browser
-    command: >-
-      celery -A nexovue_scheduler.celery_app worker
-      --queues browser --concurrency 1 --loglevel info
-    volumes:
-      - ../../apps/scheduler/src:/app/src
-    environment: *scheduler-env
-    # Chromium's default 64 MB /dev/shm is the usual cause of crashes in Docker.
+    # Chromium uses shared memory heavily and the 64MB default is the most
+    # common cause of it dying mid-check.
     shm_size: 1gb
-    ipc: host
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     deploy:
       resources:
         limits:
-          memory: 1536M
+          memory: 2G
 
-  # ---------- tools ----------
   demo-app:
     profiles: ["tools"]
     build:

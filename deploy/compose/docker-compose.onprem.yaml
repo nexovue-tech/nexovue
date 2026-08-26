@@ -90,7 +90,7 @@ services:
       #   proxied to api and receiver.
       - web-assets:/srv/web:ro
     depends_on:
-      api:
+      app:
         condition: service_started
       receiver:
         condition: service_started
@@ -137,7 +137,14 @@ services:
         limits:
           memory: ${WORKER_MEMORY:-768M}
 
-  api:
+  # FastAPI, Beat and the Celery worker in one container, matching the replica
+  # in docker-compose.app.yaml so what runs here is what was tested locally.
+  #
+  # Never more than one replica: Beat is a singleton, and a second instance
+  # fires every customer's scheduled checks twice. Splitting beat into its own
+  # service is the first move when this needs to scale — not adding replicas.
+  app:
+    shm_size: 1gb
     <<: *service-defaults
     image: *image-base
     environment: &control-plane-env
@@ -172,40 +179,6 @@ services:
     volumes:
       - web-assets:/assets
 
-  scheduler-beat:
-    <<: *service-defaults
-    image: *image-base
-    command: >-
-      celery -A nexovue_scheduler.celery_app beat
-      --scheduler nexovue_scheduler.beat:PostgresScheduler
-    environment: *control-plane-env
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  scheduler-light:
-    <<: *service-defaults
-    image: *image-base
-    command: >-
-      celery -A nexovue_scheduler.celery_app worker
-      --queues light --concurrency 8 --loglevel info
-    environment: *control-plane-env
-
-  scheduler-browser:
-    <<: *service-defaults
-    image: *image-base
-    command: >-
-      celery -A nexovue_scheduler.celery_app worker
-      --queues browser --concurrency 1 --loglevel info
-    environment: *control-plane-env
-    shm_size: 1gb
-    ipc: host
-
-# TODO(backups): P1-51 owns the runbook. Volume snapshots alone do not give a
-#   consistent ClickHouse or Postgres backup, and no volume here is on a
-#   deliberately chosen disk yet.
 volumes:
   caddy-data:
   caddy-config:
