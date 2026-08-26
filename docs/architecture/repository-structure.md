@@ -171,7 +171,11 @@ Contracts are committed generated code so no service needs the codegen toolchain
 
 ```
 deploy/
-├─ compose/                      docker-compose.yml + dev override
+├─ compose/
+│  ├─ compose.infra.yaml         shared infrastructure, pulled in with `include:`
+│  ├─ docker-compose.yaml        DEV — bind mounts, hot reload          ← default
+│  ├─ docker-compose.app.yaml    production replica, built images
+│  └─ docker-compose.onprem.yaml deployment target, registry refs, TLS
 ├─ clickhouse/migrations/        001_spans.sql, 002_logs.sql, ...
 ├─ postgres/                     init, roles (schema migrations live with the API)
 ├─ kafka/                        topic bootstrap: partitions, retention
@@ -185,6 +189,60 @@ tools/
 `tools/demo-app` is built in week one (P1-11) — no UI screen can be built or demonstrated without data that behaves like production.
 
 ---
+
+## Reference implementation
+
+The structure above is a description; these are the files that make it real. Each is the shape to copy when adding the next one.
+
+**Config fails at boot, naming the variable** — `apps/receiver/internal/config/config.go`, `apps/api/src/nexovue_api/settings.py`
+
+```go
+type Config struct {
+    Env         string   `env:"ENV,required"`
+    KafkaBrokers []string `env:"KAFKA_BROKERS,required"`
+    PostgresDSN  string   `env:"POSTGRES_DSN,required"`
+}
+```
+```
+$ env -i ./receiver
+receiver: invalid configuration: env: required environment variable "ENV" is not set; ...
+exit=1
+```
+Never a nil dereference at first use, never a default that works locally and is wrong everywhere else. Secrets carry no default at all.
+
+**The tenancy chokepoint** — `apps/api/src/nexovue_api/data/clickhouse/base.py`
+
+```python
+async def query(self, sql: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if TENANT_BINDING not in sql:          # "{tenant_id:String}"
+        raise TenantFilterMissingError(sql)
+    bound = {**(parameters or {}), "tenant_id": self._tenant_id}
+    return await self._client.query(sql, parameters=bound, settings={
+        "max_execution_time": MAX_EXECUTION_SECONDS,
+        "max_result_rows": MAX_RESULT_ROWS,
+        "result_overflow_mode": "throw",
+    })
+```
+Every ClickHouse read in the service is built here. The multi-tenancy invariant rests on this file: a query that reaches the driver unscoped means isolation is a convention rather than a guarantee. It raises rather than silently scoping, because a query written without the binding was written by someone not thinking about tenancy.
+
+**Routers raise, one handler formats** — `apps/api/src/nexovue_api/errors/`
+
+```python
+class TraceNotFound(DomainError):
+    problem_type = "https://nexovue.com/problems/trace-not-found"
+    status = 404
+```
+Routers raise `TraceNotFound()` and never build a response. One handler turns every `DomainError` into RFC 9457 problem+json carrying the correlation id. Nothing else knows an HTTP status code.
+
+**Health is two different questions** — `health/` in every service
+
+`/healthz` checks nothing external and answers *restart me*. `/readyz` probes each dependency under **its own deadline** and answers *route to me*. The deadline lives in the runner, not the driver: `franz-go`'s `Ping` ignores context cancellation, and trusting it hung readiness past ten seconds.
+
+**Gate order is visible in the handler** — `apps/receiver/internal/transport/httpx/`
+
+`auth` → `ratelimit` → `decode` → `normalize` → `produce`. Everything after `normalize` is door-agnostic. Trace batches split one envelope per `trace_id` before publishing, because assembly depends on Kafka partitioning by trace id.
+
+**When M1 adds the first domain package**, it splits three ways: `router.py` knows HTTP, `service.py` knows rules and touches neither HTTP nor SQL text, `queries.py` holds the SQL. A change to a query never reaches the router.
 
 ## References
 

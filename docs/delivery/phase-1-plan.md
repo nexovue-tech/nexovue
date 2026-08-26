@@ -92,7 +92,7 @@ nexovue/
 | P1-64 | Config, validation & health | Typed config validated at boot, exiting with the variable named; `/healthz` dependency-free, `/readyz` per-dependency with its own deadline | ✅ done |
 | P1-65 | Backend cross-cutting | RFC 9457 problem+json with correlation ids; sliding-window rate limits per IP and per email; explicit pool sizes, session-per-request, Valkey sessions; ClickHouse tenancy chokepoint | ✅ done |
 | P1-66 | Logging & UI handling | One JSON log contract across three languages with redaction proved by test; React 19 root handlers, boundaries, one query-error mapper | ✅ done |
-| P1-67 | Documentation reconciliation | Fifteen corrections applied with their owning task | todo |
+| P1-67 | Documentation reconciliation | Fifteen corrections applied; docs describe no tool, file or flow that does not exist as described | ✅ done |
 
 ### M1 — Walking skeleton
 *Exit: demo app emits a span; it is visible in the browser as a trace waterfall; the whole path runs from `docker compose up`, and one e2e test proves it end to end in CI.*
@@ -105,8 +105,8 @@ nexovue/
 | P1-14 | Rate limiting | per-key Redis counters; reject over-limit before any cost | todo |
 | P1-15 | Trace assembler | `franz-go` consumer, partition by trace_id, in-memory join, batched insert via `ch-go` | todo |
 | P1-16 | Query API | FastAPI `GET /traces`, `/traces/{id}` through a repository that cannot omit the tenant filter | todo |
-| P1-17 | Web shell | routing, layout, session auth, trace list + waterfall screen | todo |
-| P1-60 | E2E harness | Playwright against the running compose stack in CI; first critical path: signup → org/project/key created → first span → trace visible | todo |
+| P1-17 | Traces in the shell | session auth, trace list + waterfall screen, built into the shell P1-63 already provides. Routing and layout are **not** here — they landed in M0 | todo |
+| P1-60 | E2E harness | Playwright against the running compose stack via `just test`; first critical path: signup → org/project/key created → first span → trace visible | todo |
 | P1-18 | Load generator | `tools/loadgen` wrapping `telemetrygen` (OTLP/HTTP + gRPC, no app needed); first performance numbers recorded in this doc | todo |
 
 ### M2 — Spine hardening (the part that makes it a product, not a demo)
@@ -159,6 +159,8 @@ nexovue/
 ### M6 — Dashboard UI surface
 *Exit: every signal we collect has a competent screen, each covered by an e2e critical path, and the whole set survives the OTel Demo realism gate. This is the credibility layer, built once, not polished forever.*
 
+**Every screen task below replaces an existing `ComingSoon` placeholder** — the route, the layout and the navigation entry already exist from P1-63. None of them creates a route, and none rebuilds the shell.
+
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
 | P1-40 | Service overview | request rate, error rate, p95 trend; endpoints ranked by slowness/errors | todo |
@@ -171,7 +173,7 @@ nexovue/
 | P1-46 | Database screen | slow queries, mean time, calls, connection health | todo |
 | P1-47 | RUM screen | Core Web Vitals by page/geo/device; JS errors | todo |
 | P1-48 | Usage & cost view | per-tenant ingestion counters → usage table → projected cost in-product | todo |
-| P1-61 | E2E screen coverage | Critical path per screen against the running stack; runs in CI on every PR | todo |
+| P1-61 | E2E screen coverage | Critical path per screen against the running stack; part of `just check` | todo |
 | P1-62 | **OTel Demo realism gate** | Run the OpenTelemetry Demo (18 services, ~10 languages) against our receiver and confirm the screens hold: service map readable at 18 nodes, trace search survives real attribute cardinality, promoted columns survive semconv variation across languages. Not a daily dependency — needs 4–8 GB, so optional services stop and the Docker allocation is raised | todo |
 | P1-49 | Onboarding | signup collects org details + one email → transaction creates org, owner user, `production` project and first key → two env vars → live first-span celebration. User never sees the words org or project | todo |
 

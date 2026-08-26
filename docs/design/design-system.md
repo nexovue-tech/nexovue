@@ -262,6 +262,18 @@ This is why severity colours are *not* all tuned to identical contrast. An early
 | Custom, high-risk | **TraceWaterfall** · **LogViewer** — no library provides these; both need virtualization |
 | Feedback | Drawer · Toast · EmptyState · LoadingSkeleton |
 
+## Global handling
+
+Components without a policy get one invented per screen. These are the policies.
+
+**Errors.** React 19 root handlers (`onUncaughtError` / `onCaughtError`) report centrally — note React 19 no longer re-throws, so uncaught errors reach `window.reportError`. A root boundary means **never a white page**: a recoverable screen showing the correlation id. Route-level boundaries keep one broken screen from taking the shell with it. `window.onerror` and `unhandledrejection` catch what boundaries cannot — async work and event handlers.
+
+**API failures are mapped once**, in the query client, never per screen: `401` clears the session and redirects to login · `403` renders forbidden · `429` toasts honouring `Retry-After` · `5xx` toasts and retries · offline shows a banner. A feature that handles `401` itself is a bug.
+
+**Where each error appears.** Toast for transient. Inline for field and form errors. Full screen only for boundary-level failure. Every user-visible error carries the correlation id, because the id is what turns "it broke" into a log line and a trace.
+
+**Loading is skeletons, not spinners.** A skeleton says what is coming and holds the layout still; a spinner says only that something is happening. That difference is the reading-product thesis applied to waiting.
+
 ## Banned
 
 The recognizable AI-generated UI signature: default shadcn styling · slate-grey palette · uniform rounded card grids · Lucide icons as the entire visual language · gradient hero accents · 16px padding everywhere · colour as the sole carrier of meaning.

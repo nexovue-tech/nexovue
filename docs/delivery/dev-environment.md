@@ -36,7 +36,11 @@ The dev ceiling is high because a dev container is also a build machine. Go's co
 
 ## Rules
 
-**1. Every service declares a hard `mem_limit`.** Without one, ClickHouse expands to fill the VM and everything else starts swapping. A limit turns "the laptop got slow" into a clear OOM on one container.
+**1. Every service declares a hard `deploy.resources.limits.memory`.** Without one, ClickHouse expands to fill the VM and everything else starts swapping. A limit turns "the laptop got slow" into a clear OOM on one container.
+
+Use `deploy.resources.limits`, **not `mem_limit`**. The widespread advice that `deploy` requires Swarm is wrong for the `resources` subsection — Compose v2+ applies it with no Swarm anywhere. Only `mode`, `placement`, `update_config` and `endpoint_mode` are Swarm-only. Following that advice leaves every service with no limit at all, which is the failure this rule exists to prevent.
+
+ClickHouse is a special case: it misreads cgroup limits in Docker, so its cap is set explicitly in `deploy/clickhouse/config.d/memory.xml` rather than inherited from the container.
 
 **2. Compose profiles, not one big up.** `just dev` starts the core only. `doors` adds Celery and Playwright; `tools` adds the demo app and load generator. The full stack is rarely needed at once.
 
