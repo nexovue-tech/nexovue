@@ -14,7 +14,7 @@ Consequences that follow from that, not from taste: typography-led rather than c
 | Layer | Choice | Note |
 |---|---|---|
 | Styling | **Tailwind v4** | CSS-first config on custom properties, OKLCH native. Our tokens *are* the framework's tokens |
-| Primitives | **Base UI** | Built by the original Radix engineers, now at MUI. v1.0 December 2025 |
+| Primitives | **Base UI** | Built by the original Radix engineers, now at MUI. npm latest is `1.0.0-rc.0` as of 2026-08-26 — still a release candidate, so **no primitives are adopted yet**; revisit when it ships stable |
 | Scaffolding | **shadcn/ui** | A code distribution registry built on Base UI, not a dependency — the CLI copies source we then own and restyle |
 | Charts | **uPlot** | Time series |
 | Graphs | **React Flow** | Service map |
@@ -171,7 +171,7 @@ Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verifie
   --sev-warning-subtle: oklch(0.965 0.025 70);   /* #FFF1E2 badge fill */
   --sev-warning-border: oklch(0.860 0.075 70);   /* #F1C99C */
   --sev-warning-solid:  oklch(0.660 0.143 70);   /* #C98000 dot / accent bar */
-  --sev-warning-text:   oklch(0.549 0.119 70);   /* #9D6300 label */
+  --sev-warning-text:   oklch(0.547 0.119 70);   /* #9C6200 label */
   --sev-info-subtle: oklch(0.965 0.019 240);   /* #E9F6FF badge fill */
   --sev-info-border: oklch(0.860 0.075 240);   /* #A4D8FE */
   --sev-info-solid:  oklch(0.480 0.110 240);   /* #006495 dot / accent bar */
@@ -221,13 +221,17 @@ Targets: body text Lc 75 / 4.5:1 · labels and chart marks Lc 60 / 4.5:1 · non-
 | light · critical label on badge fill | 67 | 4.69:1 | Lc 60 · 4.5:1 | ✓ |
 | light · critical label on page | 74 | 5.15:1 | Lc 60 · 4.5:1 | ✓ |
 | light · critical dot vs page (UI) | 73 | 5.08:1 | Lc 15 · 3.0:1 | ✓ |
-| light · warning label on badge fill | 67 | 4.51:1 | Lc 60 · 4.5:1 | ✓ |
+| light · warning label on badge fill | 67 | 4.55:1 | Lc 60 · 4.5:1 | ✓ |
 | light · warning label on page | 73 | 4.93:1 | Lc 60 · 4.5:1 | ✓ |
 | light · warning dot vs page (UI) | 58 | 3.16:1 | Lc 15 · 3.0:1 | ✓ |
 | light · info label on badge fill | 67 | 4.51:1 | Lc 60 · 4.5:1 | ✓ |
 | light · info label on page | 73 | 4.91:1 | Lc 60 · 4.5:1 | ✓ |
 | light · info dot vs page (UI) | 80 | 6.36:1 | Lc 15 · 3.0:1 | ✓ |
 | light · worst chart series vs page (UI) | 63 | 3.68:1 | Lc 60 · 3.0:1 | ✓ |
+
+> **WCAG figures are measured on 8-bit sRGB**, corrected 2026-08-26. WCAG 2.x defines relative luminance over 8-bit channel values — what a browser actually paints — while the first pass computed it on unquantised floats. One pair passed in float and failed once rounded: light warning-label-on-badge measured 4.509 unquantised but **4.488 as painted**, below AA. `--sev-warning-text` moved from L 0.549 to 0.547 and now measures 4.55. Two pairs remain thin by design — light info-on-badge at 4.53 and light secondary text at 4.54 — so any future change to those hues must be re-measured quantised, not in float.
+>
+> Verified with the official `apca-w3` package rather than a hand-implementation. Across all 28 pairs the APCA values agreed exactly; only the WCAG quantisation differed.
 
 ### Colourblind separation
 

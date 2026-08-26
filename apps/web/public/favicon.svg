@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img">
+  <title>nexovue</title>
+  <rect width="32" height="32" rx="3" fill="#0B0B0B" />
+  <path
+    d="M5 22 L11 22 L15 10 L19 26 L23 16 L27 16"
+    fill="none"
+    stroke="#0BEA91"
+    stroke-width="3"
+    stroke-linecap="square"
+    stroke-linejoin="miter"
+  />
+</svg>

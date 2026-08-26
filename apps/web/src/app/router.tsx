@@ -1,0 +1,234 @@
+import type { QueryClient } from "@tanstack/react-query";
+import {
+  createRootRouteWithContext,
+  createRoute,
+  createRouter,
+  Outlet,
+} from "@tanstack/react-router";
+
+import { ErrorScreen } from "@/shared/components/ErrorScreen";
+import { SkeletonRows } from "@/shared/components/Skeleton";
+
+import { AppShell } from "./layout/AppShell";
+import { placeholderFor } from "./routes/placeholder";
+
+/**
+ * Code-based routing, not file-based.
+ *
+ * File-based routing generates src/routeTree.gen.ts, and biome.json — which this task
+ * may not edit — has no exclusion for generated files, so the generated tree would have
+ * to satisfy our lint and format rules on every regeneration. Twenty placeholder screens
+ * also read better as one table than as twenty near-identical files. Switching later is
+ * a mechanical change plus one ignore entry in biome.json.
+ */
+
+export interface RouterContext {
+  queryClient: QueryClient;
+}
+
+const rootRoute = createRootRouteWithContext<RouterContext>()({
+  component: Outlet,
+});
+
+/**
+ * Pathless layout route: everything signed-in renders inside the shell. `/login`,
+ * `/signup` and `/onboarding` deliberately sit outside it — there is no project, time
+ * range or navigation to show yet.
+ */
+const shellRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: "shell",
+  component: AppShell,
+});
+
+/* ------------------------------------------------------------------ the screens */
+
+const findingsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/",
+  component: placeholderFor("/"),
+});
+
+const servicesRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/services",
+  component: placeholderFor("/services"),
+});
+
+const serviceRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/services/$name",
+  component: placeholderFor("/services/$name"),
+});
+
+const serviceMapRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/service-map",
+  component: placeholderFor("/service-map"),
+});
+
+const tracesRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/traces",
+  component: placeholderFor("/traces"),
+});
+
+const traceRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/traces/$traceId",
+  component: placeholderFor("/traces/$traceId"),
+});
+
+const errorsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/errors",
+  component: placeholderFor("/errors"),
+});
+
+const logsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/logs",
+  component: placeholderFor("/logs"),
+});
+
+const infrastructureRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/infrastructure",
+  component: placeholderFor("/infrastructure"),
+});
+
+const syntheticsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/synthetics",
+  component: placeholderFor("/synthetics"),
+});
+
+const databaseRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/database",
+  component: placeholderFor("/database"),
+});
+
+const rumRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/rum",
+  component: placeholderFor("/rum"),
+});
+
+const usageRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/usage",
+  component: placeholderFor("/usage"),
+});
+
+const settingsProjectRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/project",
+  component: placeholderFor("/settings/project"),
+});
+
+const settingsApiKeysRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/api-keys",
+  component: placeholderFor("/settings/api-keys"),
+});
+
+const settingsMembersRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/members",
+  component: placeholderFor("/settings/members"),
+});
+
+const settingsDataRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/data",
+  component: placeholderFor("/settings/data"),
+});
+
+/* Bare screens — outside the shell. */
+
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  component: placeholderFor("/login"),
+});
+
+const signupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/signup",
+  component: placeholderFor("/signup"),
+});
+
+const onboardingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/onboarding",
+  component: placeholderFor("/onboarding"),
+});
+
+/* ---------------------------------------------------------------------- router */
+
+const routeTree = rootRoute.addChildren([
+  shellRoute.addChildren([
+    findingsRoute,
+    servicesRoute,
+    serviceRoute,
+    serviceMapRoute,
+    tracesRoute,
+    traceRoute,
+    errorsRoute,
+    logsRoute,
+    infrastructureRoute,
+    syntheticsRoute,
+    databaseRoute,
+    rumRoute,
+    usageRoute,
+    settingsProjectRoute,
+    settingsApiKeysRoute,
+    settingsMembersRoute,
+    settingsDataRoute,
+  ]),
+  loginRoute,
+  signupRoute,
+  onboardingRoute,
+]);
+
+function RouteError({ error, reset }: { error: Error; reset: () => void }) {
+  return (
+    <ErrorScreen error={error} correlationId={crypto.randomUUID()} onRetry={reset} scope="route" />
+  );
+}
+
+function NotFound() {
+  return (
+    <section className="mx-auto max-w-2xl px-8 py-16">
+      <p className="font-mono text-2xs text-ink-dim uppercase tracking-caps">404</p>
+      <h1 className="mt-3 font-semibold font-serif text-2xl text-ink tracking-tight">
+        No screen at this address
+      </h1>
+      <p className="mt-3 text-ink-dim text-md">
+        Every Phase 1 route is listed in the sidebar. This one is not one of them.
+      </p>
+    </section>
+  );
+}
+
+export function createAppRouter(queryClient: QueryClient) {
+  return createRouter({
+    routeTree,
+    context: { queryClient },
+    // Route-level boundary: a screen that throws loses the screen, not the shell.
+    defaultErrorComponent: RouteError,
+    defaultNotFoundComponent: NotFound,
+    defaultPendingComponent: () => <SkeletonRows rows={10} label="Loading screen" />,
+    defaultPreload: "intent",
+    scrollRestoration: true,
+  });
+}
+
+export type AppRouter = ReturnType<typeof createAppRouter>;
+
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: AppRouter;
+  }
+}

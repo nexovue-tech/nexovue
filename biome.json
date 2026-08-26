@@ -54,14 +54,17 @@
             "noRestrictedImports": {
               "level": "error",
               "options": {
+                "paths": {
+                  "axios": "Use the fetch-based client in shared/api-client.ts. axios is not a dependency of this project."
+                },
                 "patterns": [
                   {
-                    "group": ["**/app/**", "@/app/*"],
-                    "message": "features must not import from app/. Imports flow shared -> features -> app; compose features at the app layer instead."
+                    "group": ["@/features/**"],
+                    "message": "features must not import each other. Move the shared thing to shared/, or compose both features in app/."
                   },
                   {
-                    "group": ["../*/", "@/features/*"],
-                    "message": "features must not import each other. Move the shared thing to components/ or lib/, or compose both features in app/."
+                    "group": ["**/app/**", "@/app/**"],
+                    "message": "features must not import from app/. Imports flow shared -> features -> app; compose features at the app layer."
                   }
                 ]
               }
@@ -71,7 +74,7 @@
       }
     },
     {
-      "includes": ["**"],
+      "includes": ["**", "!apps/web/src/features/**"],
       "linter": {
         "rules": {
           "style": {

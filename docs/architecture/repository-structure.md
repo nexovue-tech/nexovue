@@ -130,15 +130,9 @@ apps/web/
 │  ├─ app/                       routes, providers, router, layout, command palette
 │  ├─ features/                  traces/ logs/ errors/ services/ service-map/ infra/
 │  │                             synthetics/ database/ rum/ usage/ onboarding/
-│  │                             each: api/ · components/ · hooks/ · stores/ · types/
-│  ├─ components/                shared UI, composed from packages/ui
-│  ├─ hooks/                     shared hooks
-│  ├─ lib/                       preconfigured libraries (api client, query client)
-│  ├─ stores/                    global client state
-│  ├─ config/                    env, feature flags
-│  ├─ types/                     shared types
-│  ├─ testing/                   test utilities, request mocks
-│  └─ assets/
+│  │                             each: api/ · components/ · hooks/ · types/
+│  └─ shared/                    api-client · logger · session · global-handlers
+│                                theme/ · toast/ · components/ · hooks/
 ├─ index.html · vite.config.ts
 └─ Dockerfile                    nginx serving the build
 ```
@@ -147,7 +141,9 @@ apps/web/
 
 This is the part that makes feature folders worth having, and it only holds if a tool enforces it — a lint rule restricting import paths between these zones, failing CI like any other rule. Without enforcement, `features/` degrades into `components/` with extra nesting within months.
 
-The buckets above are named rather than a single `shared/` on purpose: one shared folder becomes a junk drawer that nobody can safely delete from.
+Shared code sits under one `shared/` directory with **named buckets inside it** — `theme/`, `toast/`, `components/`, `hooks/` — rather than as top-level siblings. Revised 2026-08-26: the buckets are what stop a junk drawer forming, and a single top-level name is what the import rule can actually point at. `features/**` may import `@/shared/*` freely and may import neither `@/app/*` nor another feature.
+
+**Cross-feature imports written as relative paths cannot be caught by a specifier glob** — `../../logs/api` is indistinguishable from `../../../shared/api-client`. The enforceable rule is therefore *use the `@/` alias for anything outside your own feature*, which is what the lint rule checks.
 
 The design system lives in `packages/ui`, never here — the anti-pattern rules need a single chokepoint to be enforceable.
 

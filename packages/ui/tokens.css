@@ -1,0 +1,349 @@
+/* nexovue design tokens — P1-08.
+   Specification: docs/design/design-system.md. The OKLCH values below are transcribed
+   from that document unchanged; they are verified against APCA and WCAG 2.1 AA by
+   scripts/verify-contrast.js, which is the gate, not the eye.
+
+   Three layers, in this order:
+     1. Raw scales      --n-*, --brand-*, --sev-*, --series-*   swap per theme, never used directly
+     2. Semantic tokens @theme inline                            what components name
+     3. Non-colour      type, spacing, radius, motion            also under @theme
+
+   Components use layer 2 only. A component that reaches for --n-7 has skipped the
+   decision that layer 2 encodes, which is what "which grey was that" is made of. */
+
+/* ---------------------------------------------------------------- 1. raw scales */
+
+/* Dark is the designed palette and therefore the default: this gets read at 2am. */
+:root {
+  --n-1: oklch(0.15 0.001 157.1); /* #0B0B0B */
+  --n-2: oklch(0.185 0.002 157.1); /* #121312 */
+  --n-3: oklch(0.225 0.003 157.1); /* #1B1C1B */
+  --n-4: oklch(0.265 0.003 157.1); /* #242624 */
+  --n-5: oklch(0.305 0.005 157.1); /* #2D302E */
+  --n-6: oklch(0.355 0.005 157.1); /* #3A3D3B */
+  --n-7: oklch(0.42 0.006 157.1); /* #4B4E4C */
+  --n-8: oklch(0.51 0.007 157.1); /* #636764 */
+  --n-9: oklch(0.62 0.01 157.1); /* #818884 */
+  --n-10: oklch(0.7 0.009 157.1); /* #9AA09C */
+  --n-11: oklch(0.775 0.006 157.1); /* #B3B7B4 */
+  --n-12: oklch(0.96 0.003 157.1); /* #F0F2F1 */
+
+  --brand-1: oklch(0.15 0.02 157.1); /* #050E08 */
+  --brand-2: oklch(0.185 0.029 157.1); /* #07170D */
+  --brand-3: oklch(0.225 0.049 157.1); /* #032212 */
+  --brand-4: oklch(0.265 0.063 157.1); /* #002E18 */
+  --brand-5: oklch(0.305 0.073 157.1); /* #003A20 */
+  --brand-6: oklch(0.355 0.084 157.1); /* #004829 */
+  --brand-7: oklch(0.42 0.1 157.1); /* #005D36 */
+  --brand-8: oklch(0.51 0.121 157.1); /* #007A49 */
+  --brand-9: oklch(0.825 0.195 157.1); /* #0AEA91 */
+  --brand-10: oklch(0.895 0.179 157.1); /* #5DFFAC */
+  --brand-11: oklch(0.816 0.117 157.1); /* #7EDAA5 */
+  --brand-12: oklch(0.96 0.058 157.1); /* #D3FEE2 */
+
+  --sev-critical-subtle: oklch(0.205 0.045 25); /* #280E0C badge fill */
+  --sev-critical-border: oklch(0.355 0.075 25); /* #5D2A27 */
+  --sev-critical-solid: oklch(0.62 0.2 25); /* #E64343 dot / accent bar */
+  --sev-critical-text: oklch(0.779 0.129 25); /* #FF958D label */
+  --sev-warning-subtle: oklch(0.205 0.044 70); /* #241300 badge fill */
+  --sev-warning-border: oklch(0.355 0.075 70); /* #543403 */
+  --sev-warning-solid: oklch(0.8 0.162 70); /* #FFA82A dot / accent bar */
+  --sev-warning-text: oklch(0.782 0.167 70); /* #FBA20F label */
+  --sev-info-subtle: oklch(0.205 0.045 240); /* #011929 badge fill */
+  --sev-info-border: oklch(0.355 0.075 240); /* #0A405F */
+  --sev-info-solid: oklch(0.7 0.16 240); /* #00A9F7 dot / accent bar */
+  --sev-info-text: oklch(0.76 0.137 240); /* #51BCFF label */
+  --sev-healthy: var(--n-11); /* no hue, by design */
+
+  --series-1: oklch(0.8 0.136 200); /* #00D7E0 cyan */
+  --series-2: oklch(0.8 0.14 180); /* #23DBC1 teal */
+  --series-3: oklch(0.8 0.108 290); /* #BCB2FF violet */
+  --series-4: oklch(0.8 0.1 265); /* #9EBDFF indigo */
+  --series-5: oklch(0.8 0.14 330); /* #F09BE8 magenta */
+  --series-6: oklch(0.8 0.118 10); /* #FF9DAC rose */
+
+  color-scheme: dark;
+}
+
+/* Light, derived from dark rather than invented — one palette cannot serve both.
+   Written out twice rather than through light-dark(): the values are transcribed
+   from the design doc block-for-block, so a diff against it stays readable, and a
+   browser without light-dark() would lose the whole palette rather than one rule.
+   No stored choice follows the OS; an explicit [data-theme] always wins, because
+   :root:not([data-theme="dark"]) cannot match once the user has chosen dark. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --n-1: oklch(0.995 0.001 157.1); /* #FDFEFD */
+    --n-2: oklch(0.98 0.002 157.1); /* #F8F9F8 */
+    --n-3: oklch(0.955 0.003 157.1); /* #EFF1EF */
+    --n-4: oklch(0.93 0.003 157.1); /* #E6E8E7 */
+    --n-5: oklch(0.905 0.005 157.1); /* #DDE0DE */
+    --n-6: oklch(0.875 0.005 157.1); /* #D3D7D4 */
+    --n-7: oklch(0.83 0.006 157.1); /* #C4C8C6 */
+    --n-8: oklch(0.76 0.007 157.1); /* #AEB2AF */
+    --n-9: oklch(0.62 0.01 157.1); /* #818884 */
+    --n-10: oklch(0.56 0.009 157.1); /* #707672 */
+    --n-11: oklch(0.563 0.006 157.1); /* #737674 */
+    --n-12: oklch(0.31 0.003 157.1); /* #2F3130 */
+
+    --brand-1: oklch(0.995 0.007 157.1); /* #FAFFFB */
+    --brand-2: oklch(0.98 0.029 157.1); /* #E9FFF1 */
+    --brand-3: oklch(0.955 0.049 157.1); /* #D6FBE3 */
+    --brand-4: oklch(0.93 0.068 157.1); /* #C3F6D6 */
+    --brand-5: oklch(0.905 0.088 157.1); /* #AFF2C9 */
+    --brand-6: oklch(0.875 0.098 157.1); /* #9FEABC */
+    --brand-7: oklch(0.83 0.107 157.1); /* #8ADDAC */
+    --brand-8: oklch(0.76 0.136 157.1); /* #5ACB8E */
+    --brand-9: oklch(0.825 0.195 157.1); /* #0AEA91 */
+    --brand-10: oklch(0.765 0.182 157.1); /* #00D482 */
+    --brand-11: oklch(0.505 0.117 157.1); /* #0A7849 */
+    --brand-12: oklch(0.31 0.058 157.1); /* #123924 */
+
+    --sev-critical-subtle: oklch(0.965 0.017 25); /* #FFEFEE badge fill */
+    --sev-critical-border: oklch(0.86 0.075 25); /* #FFBFB8 */
+    --sev-critical-solid: oklch(0.56 0.2 25); /* #D02B31 dot / accent bar */
+    --sev-critical-text: oklch(0.553 0.17 25); /* #C23D3C label */
+    --sev-warning-subtle: oklch(0.965 0.025 70); /* #FFF1E2 badge fill */
+    --sev-warning-border: oklch(0.86 0.075 70); /* #F1C99C */
+    --sev-warning-solid: oklch(0.66 0.143 70); /* #C98000 dot / accent bar */
+    --sev-warning-text: oklch(0.547 0.119 70); /* #9C6200 label */
+    --sev-info-subtle: oklch(0.965 0.019 240); /* #E9F6FF badge fill */
+    --sev-info-border: oklch(0.86 0.075 240); /* #A4D8FE */
+    --sev-info-solid: oklch(0.48 0.11 240); /* #006495 dot / accent bar */
+    --sev-info-text: oklch(0.54 0.124 240); /* #0076AF label */
+    --sev-healthy: var(--n-11); /* no hue, by design */
+
+    --series-1: oklch(0.6 0.102 200); /* #009298 cyan */
+    --series-2: oklch(0.6 0.109 180); /* #009583 teal */
+    --series-3: oklch(0.6 0.14 290); /* #806FCD violet */
+    --series-4: oklch(0.6 0.14 265); /* #567CD3 indigo */
+    --series-5: oklch(0.6 0.14 330); /* #AE5EA8 magenta */
+    --series-6: oklch(0.6 0.14 10); /* #C4576D rose */
+
+    color-scheme: light;
+  }
+}
+
+[data-theme="light"] {
+  --n-1: oklch(0.995 0.001 157.1); /* #FDFEFD */
+  --n-2: oklch(0.98 0.002 157.1); /* #F8F9F8 */
+  --n-3: oklch(0.955 0.003 157.1); /* #EFF1EF */
+  --n-4: oklch(0.93 0.003 157.1); /* #E6E8E7 */
+  --n-5: oklch(0.905 0.005 157.1); /* #DDE0DE */
+  --n-6: oklch(0.875 0.005 157.1); /* #D3D7D4 */
+  --n-7: oklch(0.83 0.006 157.1); /* #C4C8C6 */
+  --n-8: oklch(0.76 0.007 157.1); /* #AEB2AF */
+  --n-9: oklch(0.62 0.01 157.1); /* #818884 */
+  --n-10: oklch(0.56 0.009 157.1); /* #707672 */
+  --n-11: oklch(0.563 0.006 157.1); /* #737674 */
+  --n-12: oklch(0.31 0.003 157.1); /* #2F3130 */
+
+  --brand-1: oklch(0.995 0.007 157.1); /* #FAFFFB */
+  --brand-2: oklch(0.98 0.029 157.1); /* #E9FFF1 */
+  --brand-3: oklch(0.955 0.049 157.1); /* #D6FBE3 */
+  --brand-4: oklch(0.93 0.068 157.1); /* #C3F6D6 */
+  --brand-5: oklch(0.905 0.088 157.1); /* #AFF2C9 */
+  --brand-6: oklch(0.875 0.098 157.1); /* #9FEABC */
+  --brand-7: oklch(0.83 0.107 157.1); /* #8ADDAC */
+  --brand-8: oklch(0.76 0.136 157.1); /* #5ACB8E */
+  --brand-9: oklch(0.825 0.195 157.1); /* #0AEA91 */
+  --brand-10: oklch(0.765 0.182 157.1); /* #00D482 */
+  --brand-11: oklch(0.505 0.117 157.1); /* #0A7849 */
+  --brand-12: oklch(0.31 0.058 157.1); /* #123924 */
+
+  --sev-critical-subtle: oklch(0.965 0.017 25); /* #FFEFEE badge fill */
+  --sev-critical-border: oklch(0.86 0.075 25); /* #FFBFB8 */
+  --sev-critical-solid: oklch(0.56 0.2 25); /* #D02B31 dot / accent bar */
+  --sev-critical-text: oklch(0.553 0.17 25); /* #C23D3C label */
+  --sev-warning-subtle: oklch(0.965 0.025 70); /* #FFF1E2 badge fill */
+  --sev-warning-border: oklch(0.86 0.075 70); /* #F1C99C */
+  --sev-warning-solid: oklch(0.66 0.143 70); /* #C98000 dot / accent bar */
+  --sev-warning-text: oklch(0.547 0.119 70); /* #9C6200 label */
+  --sev-info-subtle: oklch(0.965 0.019 240); /* #E9F6FF badge fill */
+  --sev-info-border: oklch(0.86 0.075 240); /* #A4D8FE */
+  --sev-info-solid: oklch(0.48 0.11 240); /* #006495 dot / accent bar */
+  --sev-info-text: oklch(0.54 0.124 240); /* #0076AF label */
+  --sev-healthy: var(--n-11); /* no hue, by design */
+
+  --series-1: oklch(0.6 0.102 200); /* #009298 cyan */
+  --series-2: oklch(0.6 0.109 180); /* #009583 teal */
+  --series-3: oklch(0.6 0.14 290); /* #806FCD violet */
+  --series-4: oklch(0.6 0.14 265); /* #567CD3 indigo */
+  --series-5: oklch(0.6 0.14 330); /* #AE5EA8 magenta */
+  --series-6: oklch(0.6 0.14 10); /* #C4576D rose */
+
+  color-scheme: light;
+}
+
+/* -------------------------------------------------------- 2. semantic tokens */
+
+/* Our tokens ARE the framework's tokens: the default Tailwind palette, type scale,
+   radii and font stacks are erased so `bg-slate-800` and `rounded-xl` resolve to
+   nothing. That is the structural half of the anti-default rule in the design doc. */
+@theme {
+  --color-*: initial;
+  --font-*: initial;
+  --text-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+
+  --color-transparent: transparent;
+  --color-current: currentcolor;
+  --color-black: #000;
+  --color-white: #fff;
+}
+
+/* `inline` so utilities emit var(--n-1) rather than a value frozen at :root —
+   that is what makes one class correct in both themes with no `dark:` variant. */
+@theme inline {
+  /* Surfaces, in the twelve-step order: each step has one job. */
+  --color-page: var(--n-1); /* app background */
+  --color-surface: var(--n-2); /* panel behind content */
+  --color-raised: var(--n-3); /* element background */
+  --color-hover: var(--n-4);
+  --color-active: var(--n-5);
+
+  /* Rules. A reading product separates with lines, not with elevation. */
+  --color-line-subtle: var(--n-6);
+  --color-line: var(--n-7);
+  --color-line-strong: var(--n-8);
+
+  /* Neutral solids — non-text UI marks only. */
+  --color-solid: var(--n-9);
+  --color-solid-hover: var(--n-10);
+
+  /* Text. Two levels, deliberately: a third invites drift. */
+  --color-ink-dim: var(--n-11); /* secondary, labels, metadata */
+  --color-ink: var(--n-12); /* primary */
+
+  /* Brand — interactive and identity only. Never a status, never a chart series. */
+  --color-brand: var(--brand-9);
+  --color-brand-hover: var(--brand-10);
+  --color-brand-text: var(--brand-11); /* links and brand text on the page */
+  --color-brand-surface: var(--brand-3);
+  --color-brand-line: var(--brand-7);
+  --color-brand-contrast: #000; /* text on a brand fill; white measures Lc 29.5 */
+
+  /* Severity, as four-part badge sets. A badge is subtle fill + border + label;
+     -solid is the dot or accent bar, a non-text mark needing only 3:1. */
+  --color-critical-subtle: var(--sev-critical-subtle);
+  --color-critical-border: var(--sev-critical-border);
+  --color-critical-solid: var(--sev-critical-solid);
+  --color-critical-text: var(--sev-critical-text);
+
+  --color-warning-subtle: var(--sev-warning-subtle);
+  --color-warning-border: var(--sev-warning-border);
+  --color-warning-solid: var(--sev-warning-solid);
+  --color-warning-text: var(--sev-warning-text);
+
+  --color-info-subtle: var(--sev-info-subtle);
+  --color-info-border: var(--sev-info-border);
+  --color-info-solid: var(--sev-info-solid);
+  --color-info-text: var(--sev-info-text);
+
+  /* Healthy is the absence of colour — a wall of green dots is noise. */
+  --color-healthy: var(--sev-healthy);
+
+  /* Categorical chart series. Red, amber and green are absent on purpose:
+     if a series can be red, red stops meaning "bad". */
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-series-3: var(--series-3);
+  --color-series-4: var(--series-4);
+  --color-series-5: var(--series-5);
+  --color-series-6: var(--series-6);
+
+  --color-focus: var(--brand-9);
+}
+
+/* ----------------------------------------------- 3. type, space, radius, motion */
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-serif: "IBM Plex Serif", ui-serif, Georgia, serif;
+
+  /* Denser than a marketing page: 13px is the body size, not 16px. Line heights
+     are tight at small sizes and loosen for prose, which is where reading happens. */
+  --text-2xs: 0.6875rem; /* 11px — dense table metadata */
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem; /* 12px — labels, column headers */
+  --text-xs--line-height: 1.125rem;
+  --text-sm: 0.8125rem; /* 13px — UI default */
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem; /* 14px — table rows, log lines */
+  --text-base--line-height: 1.375rem;
+  --text-md: 1rem; /* 16px — prose */
+  --text-md--line-height: 1.625rem;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.625rem;
+  --text-xl: 1.375rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.75rem;
+  --text-2xl--line-height: 2.125rem;
+  --text-3xl: 2.25rem;
+  --text-3xl--line-height: 2.5rem;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  --tracking-tight: -0.011em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.02em;
+  --tracking-caps: 0.06em; /* small-caps column headers */
+
+  /* 4px grid. The design doc bans 16px everywhere, not the number 16. */
+  --spacing: 0.25rem;
+
+  /* Terminal, not app store. Nothing here is above 5px. */
+  --radius-none: 0;
+  --radius-xs: 1px;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 5px;
+  --radius-full: 9999px;
+
+  /* Shadows exist only where something genuinely floats above the page. */
+  --shadow-overlay: 0 8px 24px -8px oklch(0 0 0 / 0.6);
+
+  --ease-out-quick: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* ------------------------------------------------------------------- base layer */
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    font-size: 100%;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background-color: var(--color-page);
+    color: var(--color-ink);
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
+    font-variant-numeric: tabular-nums; /* numbers in a column must line up */
+  }
+
+  /* Focus is brand green everywhere, and always visible for keyboard users —
+     the primary user lives on the keyboard. */
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 1px;
+  }
+
+  ::selection {
+    background-color: var(--color-brand-surface);
+    color: var(--color-ink);
+  }
+
+  code,
+  kbd,
+  pre,
+  samp {
+    font-family: var(--font-mono);
+  }
+}

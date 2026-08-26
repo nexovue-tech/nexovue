@@ -1,0 +1,56 @@
+import { Link } from "@tanstack/react-router";
+
+import { NAV_SECTIONS } from "../routes/route-manifest";
+
+/**
+ * Navigation as an index, not a toolbar. No icons: a list of thirteen icons is thirteen
+ * things to decode, and the design doc rules icons-as-the-whole-language out.
+ *
+ * The active screen is marked by a rule down its left edge and a weight change, so it
+ * still reads when the colour does not.
+ */
+export function Sidebar() {
+  return (
+    <nav
+      aria-label="Screens"
+      className="flex w-52 shrink-0 flex-col border-line border-r bg-surface"
+    >
+      <Link
+        to="/"
+        className="flex h-10 items-center border-line border-b px-4 font-semibold font-serif text-ink text-md tracking-tight"
+      >
+        nexovue
+      </Link>
+
+      <div className="flex-1 overflow-y-auto py-3">
+        {NAV_SECTIONS.map((section) => (
+          <div key={section.label} className="mb-5">
+            <h2 className="px-4 pb-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps">
+              {section.label}
+            </h2>
+            <ul>
+              {section.items.map((item) => (
+                <li key={item.path}>
+                  <Link
+                    to={item.path}
+                    activeOptions={{ exact: item.path === "/" }}
+                    className="block border-transparent border-l-2 py-1 pr-3 pl-3.5 text-ink-dim text-sm hover:bg-hover hover:text-ink"
+                    activeProps={{
+                      className: "border-brand bg-raised font-medium text-ink",
+                    }}
+                  >
+                    {item.title}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      <p className="border-line border-t px-4 py-2 font-mono text-2xs text-ink-dim">
+        phase 1 · shell only
+      </p>
+    </nav>
+  );
+}
