@@ -6,7 +6,7 @@
 
 ## Context
 
-Redis 8 is tri-licensed AGPLv3 / RSALv2 / SSPLv1. We had already rejected MinIO partly for AGPLv3 ([0037](0037-seaweedfs-for-local-dev-s3-in-deployment.md)) and Redpanda for BSL ([0026](0026-apache-kafka-4-in-kraft-mode.md)), so keeping Redis meant applying a licence standard to two components and not to a third.
+Redis 8 is tri-licensed AGPLv3 / RSALv2 / SSPLv1. We had already rejected MinIO partly for AGPLv3 ([0037](0037-seaweedfs-for-local-dev-object-storage.md)) and Redpanda for BSL ([0026](0026-apache-kafka-4-in-kraft-mode.md)), so keeping Redis meant applying a licence standard to two components and not to a third.
 
 Surfaced while building the compose stack, when nothing yet depended on it.
 

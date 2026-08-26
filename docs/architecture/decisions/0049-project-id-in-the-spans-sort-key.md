@@ -8,7 +8,7 @@
 
 The `spans` schema in [0018](0018-data-layer-design.md) sorts by `(tenant_id, service_name, toStartOfHour(timestamp), trace_id)`. It was written before the tenancy model existed.
 
-[0042](0042-tenancy-model-organization-project-service.md) then established that a **project is an environment** — production, staging — which means every query in the product filters by `project_id`, not merely most of them.
+[0042](0042-tenancy-model-organization-and-project.md) then established that a **project is an environment** — production, staging — which means every query in the product filters by `project_id`, not merely most of them.
 
 Without it in the sort key, staging and production rows interleave within the same granules, so every production read pulls staging data off disk to discard it.
 
