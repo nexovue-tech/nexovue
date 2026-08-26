@@ -334,6 +334,8 @@ Zero-impact notes: LLM-app observability = traces with `gen_ai.*` attributes (al
 
 ## 6. Decisions Log
 
+> This table is the chronological index. The full record of each decision — context, decision, and the consequences we accepted — lives as one ADR per file in [`decisions/`](decisions/), numbered in the order below. ADRs are never edited once accepted; a changed decision gets a new ADR that supersedes the old one.
+
 | Date | Decision |
 |---|---|
 | 2026-08 | **✅ DECIDED: Ingestion edge = Option B — our own custom receiver.** OTLP/HTTP endpoint first (standard paths /v1/traces, /v1/metrics, /v1/logs; protobuf parsed via official opentelemetry-proto libs), OTLP/gRPC added later. Python acceptable for v1 (stateless — can rewrite in Go if it becomes the bottleneck; invisible to customers). Same endpoint serves SDK-direct customers (Pattern A) AND customers' own collectors (Pattern B, via their otlphttp exporter config). Receiver does auth (API key), rate limiting, tenant tagging, normalization → publishes to Kafka. Will also host other receiving doors' routes (RUM, replay, webhooks) later. **Kafka is internal-only, always** — customers never touch it; receiver is the security & tenancy boundary. Trade-off accepted: we own the receiver code (protocol updates, performance) instead of the collector community. |

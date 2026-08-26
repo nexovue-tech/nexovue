@@ -9,7 +9,7 @@
 | [architecture/ingestion-envelope.md](architecture/ingestion-envelope.md) | Frozen contract | The internal message every door writes and every worker reads |
 | [architecture/repository-structure.md](architecture/repository-structure.md) | Architecture reference | Monorepo layout and what lives inside each service |
 | [architecture/technology-choices.md](architecture/technology-choices.md) | Architecture reference | Every framework and library, why it was picked, its licence, and what was rejected |
-| [architecture/decisions/](architecture/decisions/) | ADRs | One decision per file, with context and consequences *(P1-06 — to be backfilled from the decisions log)* |
+| [architecture/decisions/](architecture/decisions/) | ADRs | 47 decisions, one per file, with context and consequences. Never edited once accepted — superseded instead |
 | [delivery/dev-environment.md](delivery/dev-environment.md) | Delivery reference | Memory budget and compose rules for the M4 Pro dev machine |
 | [delivery/phase-1-plan.md](delivery/phase-1-plan.md) | Delivery plan | Phase 1 milestones, tasks `P1-nn`, exit criteria, performance budgets |
 | [design/design-system.md](design/design-system.md) | Design reference | Colour system, severity encoding, component inventory, and the banned defaults |
