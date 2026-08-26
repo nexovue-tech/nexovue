@@ -16,7 +16,7 @@ nexovue/
 
 ## Conventions every service follows
 
-Configuration from environment, validated at boot, failing fast · `/healthz` and `/readyz` · structured logging · self-instrumented with OTel exporting to our own receiver · graceful shutdown draining in-flight work · its own `Dockerfile`, `README.md`, and `testdata/`.
+Configuration from environment, validated at boot, failing fast · `/healthz` and `/readyz` · structured JSON logging with identical field names across languages — `ts`, `level`, `msg`, `service`, `env`, `correlation_id`, plus `trace_id` and `span_id` **when a span is active**, which with P1-26 deferred is nowhere yet · self-instrumented with OTel exporting to our own receiver · graceful shutdown draining in-flight work · its own `Dockerfile`, `README.md`, and `testdata/`.
 
 **Start simple and grow into it.** The trees below are the shape at Phase 1 completion, not what gets created on day one. Official Go guidance is explicit that layout is a function of size; create a package when there is code to put in it.
 

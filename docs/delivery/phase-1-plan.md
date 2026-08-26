@@ -121,7 +121,6 @@ nexovue/
 | P1-23 | Materialized view | `endpoint_stats_1m` (Phase 2 anomaly-detection hook) | todo |
 | P1-24 | PII masking | masking step in workers; rules configurable in Postgres | todo |
 | P1-25 | Tenant isolation suite | tests that actively try to leak across tenants and must fail to | todo |
-| P1-26 | Self-instrumentation | every service exports OTel to our own receiver, into its own org and project, rate-limited like any tenant. Logs keep going to stdout independently — that is the fallback when the pipeline is the broken part. See ADR 0053 | todo |
 | P1-27 | Chaos test | kill broker and ClickHouse mid-load, restart, assert zero loss | todo |
 
 ### M3 — Widen door 1 (logs + metrics + errors)
@@ -268,6 +267,11 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 - This file is the source of truth. Update the `Status` column in place.
 - Milestones mirror to GitHub milestones; tasks that take more than a day get an issue referencing their `P1-nn` ID.
 - Measured numbers land in §4 as they are taken — the table is a log, not a wish.
+
+## 7a. Deferred to after production
+
+- **P1-26 · Self-instrumentation** — nexovue monitoring nexovue. Deferred 2026-08-26: worth doing, but not before the platform runs somewhere real. There is no production outage to survive, no external alerting to sit outside it, and no customer ingest to protect from a self-inflicted error storm. The rules that make it safe are settled in ADR 0053, so revisiting is a question of timing, not design.
+  *While deferred:* log lines carry no `trace_id` or `span_id` — nothing produces spans. Per-request correlation still works, because `correlation_id` comes from middleware rather than OTel.
 
 ## 7b. Follow-ups surfaced while building M0
 

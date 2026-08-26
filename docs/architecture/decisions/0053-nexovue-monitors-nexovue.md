@@ -1,6 +1,6 @@
 # 0053 — nexovue monitors nexovue, with an out-of-band escape hatch
 
-- **Status:** Accepted
+- **Status:** Deferred 2026-08-26 — revisit once the platform is in production
 - **Date:** 2026-08-26
 - **Relates to:** P1-26 (self-instrumentation, M2)
 
@@ -57,3 +57,20 @@ on the same code path as everyone else.
   load. That is the correct trade: customer ingest is what is being protected.
 - Instrumentation bugs are self-inflicted incidents. A bad span attribute in a
   hot path is a load problem, not just a data problem.
+
+## Deferred
+
+Not built in Phase 1. Self-instrumentation is worth doing and the three rules
+above are what make it safe, but neither is worth building before the platform
+runs anywhere real: there is no production outage to survive, no external
+alerting to sit outside, and no customer ingest to protect a self-inflicted
+error storm from.
+
+Revisit when the platform is in production. The rules are the starting point,
+not a fresh discussion — what changes is only whether it is time.
+
+**Consequence while deferred:** log lines carry no `trace_id` or `span_id`,
+because nothing produces spans. Correlation across a request still works — the
+`correlation_id` is generated in middleware and does not depend on OTel — so
+"which log lines belong to this request" is answerable today. "Which trace does
+this log line belong to" is not.
