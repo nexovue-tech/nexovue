@@ -1,0 +1,56 @@
+// The one internal message every door writes and every worker reads.
+// Frozen contract: field numbers are never reused or renumbered, fields are
+// added but never removed, and `buf breaking` guards it against the last commit.
+// Design and rationale: docs/architecture/ingestion-envelope.md
+syntax = "proto3";
+
+package nexovue.v1;
+
+// Which entrance produced the payload. Typed so DLQ triage never parses a string.
+enum Door {
+  DOOR_UNSPECIFIED = 0;
+  DOOR_OTLP = 1;
+  DOOR_SYNTHETIC = 2;
+  DOOR_POLLER = 3;
+  DOOR_RUM = 4;
+  DOOR_WEBHOOK = 5;
+}
+
+// Which OTLP request shape `payload` holds. Redundant with the Kafka topic and
+// kept anyway, so a message on the wrong topic is a validation failure, not a parse crash.
+enum Signal {
+  SIGNAL_UNSPECIFIED = 0;
+  SIGNAL_SPANS = 1;
+  SIGNAL_LOGS = 2;
+  SIGNAL_METRICS = 3;
+}
+
+// Our metadata, typed, wrapped around an untouched OTLP payload.
+// We define no span/log/metric schema of our own: OpenTelemetry did, and it is
+// what customer SDKs emit.
+message Envelope {
+  // Organization id (UUIDv7, canonical string). The whole multi-tenancy invariant
+  // rests on this, so it is a typed field and never a key in an attribute map.
+  string tenant_id = 1;
+
+  // Project id (UUIDv7, canonical string). A project is an environment.
+  string project_id = 2;
+
+  Door door = 3;
+  Signal signal = 4;
+
+  // When WE received it, not when it happened. Payload timestamps stay authoritative
+  // for the event itself; this one measures our own pipeline lag.
+  int64 received_at_unix_nano = 5;
+
+  // UUIDv7 for pipeline tracing and DLQ correlation.
+  string ingest_id = 6;
+
+  // Which OTel semantic-convention generation the payload speaks. HTTP conventions
+  // stabilized with 17 attribute renames, so normalization reads this rather than assuming.
+  string semconv_version = 7;
+
+  // OTLP protobuf, unmodified: one of ExportTraceServiceRequest,
+  // ExportLogsServiceRequest or ExportMetricsServiceRequest, per `signal`.
+  bytes payload = 8;
+}

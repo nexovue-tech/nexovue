@@ -4,7 +4,7 @@
 compose := "deploy/compose"
 
 # go.work members. Go tooling runs per-module: `./...` from the root sees no packages.
-go_modules := "apps/receiver apps/workers"
+go_modules := "apps/receiver apps/workers packages/contracts"
 
 _default:
     @just --list --unsorted
@@ -99,7 +99,7 @@ contracts:
 # Lint the proto and fail on any change that would break consumers
 contracts-check:
     cd packages/contracts && buf lint
-    cd packages/contracts && buf breaking --against '.git#branch=main,subdir=packages/contracts'
+    cd packages/contracts && buf breaking --against '../../.git#branch=main,subdir=packages/contracts'
 
 # ---------- data ----------
 

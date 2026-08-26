@@ -83,7 +83,7 @@ nexovue/
 | P1-04 | Quality gates | `.golangci.yml` (v2 schema), ruff + mypy --strict, `biome.json` with import-boundary rules. Run by `just check` — the GitHub Actions workflow is deferred to the deployment phase | ✅ done |
 | P1-05 | Agent context | root `CLAUDE.md` + one per app, scoped to what is true inside it | ✅ done |
 | P1-06 | ADR process | `docs/architecture/decisions/` — template, README, and 47 backfilled ADRs with supersede links in both directions | ✅ done |
-| P1-07 | **Normalized envelope** | `packages/contracts` per `docs/architecture/ingestion-envelope.md` — protobuf envelope wrapping untouched OTLP bytes; `buf` codegen Go + Python; `buf breaking` in CI; 8 golden fixtures | todo |
+| P1-07 | **Normalized envelope** | `packages/contracts` — protobuf envelope wrapping untouched OTLP bytes; `buf` codegen to committed Go + Python bindings; `buf breaking` gate; 8 golden fixtures with round-trip proofs in both languages | ✅ done |
 | P1-59 | **Control-plane schema** | Postgres tables per `docs/architecture/tenancy-and-data-model.md`; Alembic migrations; org/user/project/api_key seed for local dev | todo |
 | P1-08 | Design tokens | `packages/ui` OKLCH token scales per `docs/design/design-system.md`; validate under APCA + colourblind simulation; lint gate banning default Tailwind palette names | todo |
 | P1-09 | Compose baseline | Kafka (KRaft), ClickHouse (JSON-type capable version, pinned), Postgres, Redis, SeaweedFS with volumes + healthchecks | todo |

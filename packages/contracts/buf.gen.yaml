@@ -1,0 +1,26 @@
+version: v2
+
+# Generated code is committed, so a stale file left behind by a rename would ship.
+clean: true
+
+# Language-specific options stay out of the frozen contract.
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/nexovue-tech/nexovue/packages/contracts/gen/go
+
+# Remote plugins, pinned: no service and no contributor needs a local protoc.
+plugins:
+  - remote: buf.build/protocolbuffers/go:v1.36.12
+    out: gen/go
+    # Mirror the proto tree instead of nesting the full module path under gen/go.
+    opt: paths=source_relative
+  - remote: buf.build/protocolbuffers/python:v36.0
+    out: gen/python
+  # Stubs, so the generated Python is typed for mypy --strict.
+  - remote: buf.build/protocolbuffers/pyi:v36.0
+    out: gen/python
+
+inputs:
+  - directory: proto

@@ -14,8 +14,13 @@ Two producers write it — the receiver (Go) and the scheduler (Python). Four wo
 syntax = "proto3";
 package nexovue.v1;
 
-enum Door   { DOOR_UNSPECIFIED = 0; OTLP = 1; SYNTHETIC = 2; POLLER = 3; RUM = 4; WEBHOOK = 5; }
-enum Signal { SIGNAL_UNSPECIFIED = 0; SPANS = 1; LOGS = 2; METRICS = 3; }
+enum Door {
+  DOOR_UNSPECIFIED = 0; DOOR_OTLP = 1; DOOR_SYNTHETIC = 2;
+  DOOR_POLLER = 3; DOOR_RUM = 4; DOOR_WEBHOOK = 5;
+}
+enum Signal {
+  SIGNAL_UNSPECIFIED = 0; SIGNAL_SPANS = 1; SIGNAL_LOGS = 2; SIGNAL_METRICS = 3;
+}
 
 message Envelope {
   string tenant_id             = 1;  // organization id (UUIDv7, canonical string)
@@ -28,6 +33,8 @@ message Envelope {
   bytes  payload               = 8;  // OTLP protobuf, unmodified
 }
 ```
+
+> **Enum values carry their enum's prefix**, corrected 2026-08-26 after `buf lint` rejected the original unprefixed form. This is not cosmetic: proto3 enum values live in the **enclosing package** scope, not the enum's, so `OTLP` and `SYNTHETIC` would become package-level identifiers in `nexovue.v1` and a third enum added later could collide — on a contract whose whole premise is that it is never renumbered. Silencing the rule was the alternative, and that is the kind of workaround this project does not take.
 
 ## Why the payload is OTLP, not our own schema
 

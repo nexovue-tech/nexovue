@@ -12,6 +12,9 @@ package = false
 
 [dependency-groups]
 dev = [
+    "protobuf>=7.36",          # runtime for the generated envelope bindings
+    "opentelemetry-proto>=1.44",  # test-only: proves a payload parses as the OTLP request its signal names
+    "types-protobuf",
     "ruff>=0.8",
     "mypy>=1.13",
     "pytest>=8.3",
@@ -22,6 +25,7 @@ dev = [
 target-version = "py313"
 line-length = 100
 src = ["apps/api/src", "apps/scheduler/src"]
+extend-exclude = ["packages/contracts/gen"]   # generated code is not ours to lint
 
 [tool.ruff.lint]
 select = [
@@ -49,6 +53,7 @@ warn_unreachable = true
 disallow_any_explicit = false          # Map-typed telemetry attributes are legitimately dynamic
 plugins = ["pydantic.mypy"]
 exclude = ["packages/contracts/gen/"]  # generated code is not ours to type
+mypy_path = ["packages/contracts/gen/python"]  # ...but it must still resolve
 
 [[tool.mypy.overrides]]
 module = ["clickhouse_connect.*", "celery.*"]

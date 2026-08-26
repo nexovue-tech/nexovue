@@ -1,0 +1,18 @@
+version: v2
+
+modules:
+  - path: proto
+
+# No deps: the envelope carries OTLP as opaque bytes and imports nothing. When a
+# proto here does import OTLP, add buf.build/opentelemetry/opentelemetry — from the
+# BSR, never vendored. See the README.
+
+lint:
+  use:
+    - STANDARD
+
+# FILE is the strictest category: it forbids anything that breaks a generated
+# consumer, not merely anything that breaks the wire. Six programs read this message.
+breaking:
+  use:
+    - FILE
