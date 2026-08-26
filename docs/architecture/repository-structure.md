@@ -214,14 +214,18 @@ Never a nil dereference at first use, never a default that works locally and is 
 
 ```python
 async def query(self, sql: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    if TENANT_BINDING not in sql:          # "{tenant_id:String}"
+    if TENANT_BINDING not in sql:  # "{tenant_id:String}"
         raise TenantFilterMissingError(sql)
     bound = {**(parameters or {}), "tenant_id": self._tenant_id}
-    return await self._client.query(sql, parameters=bound, settings={
-        "max_execution_time": MAX_EXECUTION_SECONDS,
-        "max_result_rows": MAX_RESULT_ROWS,
-        "result_overflow_mode": "throw",
-    })
+    return await self._client.query(
+        sql,
+        parameters=bound,
+        settings={
+            "max_execution_time": MAX_EXECUTION_SECONDS,
+            "max_result_rows": MAX_RESULT_ROWS,
+            "result_overflow_mode": "throw",
+        },
+    )
 ```
 Every ClickHouse read in the service is built here. The multi-tenancy invariant rests on this file: a query that reaches the driver unscoped means isolation is a convention rather than a guarantee. It raises rather than silently scoping, because a query written without the binding was written by someone not thinking about tenancy.
 
