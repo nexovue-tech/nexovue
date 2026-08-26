@@ -89,9 +89,9 @@ nexovue/
 | P1-09 | Compose — three targets | `compose.infra.yaml` shared via `include:`, plus dev (hot reload), app (production replica) and onprem (skeleton). 12 services healthy from cold start | ✅ done |
 | P1-10 | Migrations | golang-migrate for ClickHouse + Alembic for Postgres; both proved reversible up → down → up | ✅ done |
 | P1-63 | App shell & routes | Vite + React 19 + TanStack Router/Query; global layout; 20 routes + 404 rendering `ComingSoon` with their task id; fetch client on `/api/v1/` | ✅ done |
-| P1-64 | Config, validation & health | Typed config validated at boot per service; `/healthz` (no dependency checks) and `/readyz` (with them) | todo |
-| P1-65 | Backend cross-cutting | RFC 9457 problem+json with correlation ids; API rate limiting distinct from ingest; pool sizes, session-per-request, Redis sessions | todo |
-| P1-66 | Logging & UI handling | One JSON log contract across three languages; React 19 root handlers, boundaries, one query-error mapper | todo |
+| P1-64 | Config, validation & health | Typed config validated at boot, exiting with the variable named; `/healthz` dependency-free, `/readyz` per-dependency with its own deadline | ✅ done |
+| P1-65 | Backend cross-cutting | RFC 9457 problem+json with correlation ids; sliding-window rate limits per IP and per email; explicit pool sizes, session-per-request, Valkey sessions; ClickHouse tenancy chokepoint | ✅ done |
+| P1-66 | Logging & UI handling | One JSON log contract across three languages with redaction proved by test; React 19 root handlers, boundaries, one query-error mapper | ✅ done |
 | P1-67 | Documentation reconciliation | Fifteen corrections applied with their owning task | todo |
 
 ### M1 — Walking skeleton
@@ -266,6 +266,13 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 - This file is the source of truth. Update the `Status` column in place.
 - Milestones mirror to GitHub milestones; tasks that take more than a day get an issue referencing their `P1-nn` ID.
 - Measured numbers land in §4 as they are taken — the table is a log, not a wish.
+
+## 7b. Follow-ups surfaced while building M0
+
+- **The three Python telemetry modules are duplicated** between `api` and `scheduler`. The root fix is a `packages/py-platform` uv workspace member; it needs a root `pyproject.toml` change and was outside every lane's ownership.
+- **No Go driver is chosen for Postgres or Valkey**, so the receiver's `/readyz` probes Kafka only, even though it requires `POSTGRES_DSN` and `REDIS_URL`. `pgx/v5` and `go-redis/v9` are the obvious picks, but Valkey sits on the receiver's hot path so `rueidis` deserves measuring — a real decision, needed by P1-13/P1-14.
+- **Plan-aware rate limits are stubbed** at a fixed multiplier until `organizations.plan` carries real tiers.
+- **`logs` and `metrics` sort keys** were left as recorded. The argument that moved `project_id` into the `spans` key (ADR 0049) applies to them too, and is worth revisiting once their query patterns are real.
 
 ## 8. Open scope questions
 

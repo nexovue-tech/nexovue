@@ -11,11 +11,17 @@ from typing import Final
 # The same variable the API itself reads, so a developer sets one thing.
 DSN_ENV_VAR: Final = "POSTGRES_DSN"
 
-# Matches the development target in deploy/compose/docker-compose.yaml, so a
-# fresh clone migrates and seeds with no environment set up.
-DEFAULT_DSN: Final = "postgresql+asyncpg://nexovue:nexovue_dev@localhost:5432/nexovue"
-
 
 def postgres_dsn() -> str:
-    """The async SQLAlchemy URL for the control-plane database."""
-    return os.environ.get(DSN_ENV_VAR, DEFAULT_DSN)
+    """The async SQLAlchemy URL for the control-plane database.
+
+    No default: the DSN carries a password, and a credential that falls back
+    to something working locally is a credential that is wrong everywhere else.
+    """
+    dsn = os.environ.get(DSN_ENV_VAR)
+    if not dsn:
+        raise RuntimeError(
+            f"{DSN_ENV_VAR} is not set. Copy .env.example, or run through "
+            f"`just dev`, which supplies it."
+        )
+    return dsn

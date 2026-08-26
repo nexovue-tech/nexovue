@@ -27,5 +27,5 @@ CREATE TABLE IF NOT EXISTS spans
 )
 ENGINE = MergeTree
 PARTITION BY toDate(timestamp)
-ORDER BY (tenant_id, service_name, toStartOfHour(timestamp), trace_id)
+ORDER BY (tenant_id, project_id, service_name, toStartOfHour(timestamp), trace_id)
 TTL toDateTime(timestamp) + INTERVAL 30 DAY

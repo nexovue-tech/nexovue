@@ -1,13 +1,11 @@
 // Command edge-aggregator derives service dependency edges from cross-service spans.
 package main
 
-import (
-	"fmt"
-	"os"
-)
+import "github.com/nexovue-tech/nexovue/apps/workers/internal/worker"
+
+// serviceName is what this binary calls itself in logs and health responses.
+const serviceName = "edge-aggregator"
 
 func main() {
-	// Wiring lands in P1-64 (config + health); behaviour in M1/M2.
-	fmt.Fprintln(os.Stderr, "edge-aggregator: not implemented yet")
-	os.Exit(1)
+	worker.Main(serviceName)
 }

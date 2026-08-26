@@ -166,7 +166,7 @@ CREATE TABLE spans (
     INDEX idx_trace_id trace_id TYPE bloom_filter GRANULARITY 4
 ) ENGINE = MergeTree
 PARTITION BY toDate(timestamp)
-ORDER BY (tenant_id, service_name, toStartOfHour(timestamp), trace_id)
+ORDER BY (tenant_id, project_id, service_name, toStartOfHour(timestamp), trace_id)
 TTL toDateTime(timestamp) + INTERVAL 30 DAY;
 ```
 
@@ -230,6 +230,7 @@ GROUP BY tenant_id, service_name, span_name, minute;
 
 **Schema design rationale:**
 - `tenant_id` FIRST in every ORDER BY → multi-tenant isolation + every query prunes to one tenant's data blocks.
+- `project_id` SECOND on `spans` — added 2026-08-26. A project *is* an environment under the tenancy model (written after this schema), so every query filters it. Without it, staging and production rows interleave in the same granules and every production read pulls staging data off disk.
 - `LowCardinality(String)` on repeating values (service names, routes) → major compression + speed.
 - Attributes as native `JSON` → each attribute path is its own subcolumn, so a query for one attribute never reads the rest.
 - Bloom-filter index on `trace_id` → fast single-trace lookup despite ORDER BY favoring service/time queries.

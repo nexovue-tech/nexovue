@@ -1,13 +1,11 @@
 // Command trace-assembler assembles spans into traces, then samples and writes them.
 package main
 
-import (
-	"fmt"
-	"os"
-)
+import "github.com/nexovue-tech/nexovue/apps/workers/internal/worker"
+
+// serviceName is what this binary calls itself in logs and health responses.
+const serviceName = "trace-assembler"
 
 func main() {
-	// Wiring lands in P1-64 (config + health); behaviour in M1/M2.
-	fmt.Fprintln(os.Stderr, "trace-assembler: not implemented yet")
-	os.Exit(1)
+	worker.Main(serviceName)
 }

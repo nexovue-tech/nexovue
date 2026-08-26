@@ -106,11 +106,13 @@ services:
         limits:
           memory: 1024M
 
+  # Valkey: the BSD-3 fork of Redis. Keeps the service name because the
+  # protocol, the URL scheme and every client library are still Redis.
   redis:
-    image: redis:8.10.1-trixie
+    image: valkey/valkey:8.1.4-alpine
     hostname: redis
     command:
-      - redis-server
+      - valkey-server
       - --appendonly
       - "yes"
       # Rate-limit counters and hot cache are both reconstructible, so evict
@@ -122,7 +124,7 @@ services:
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
