@@ -121,7 +121,7 @@ nexovue/
 | P1-23 | Materialized view | `endpoint_stats_1m` (Phase 2 anomaly-detection hook) | todo |
 | P1-24 | PII masking | masking step in workers; rules configurable in Postgres | todo |
 | P1-25 | Tenant isolation suite | tests that actively try to leak across tenants and must fail to | todo |
-| P1-26 | Self-instrumentation | every service exports OTel to our own receiver — we are customer zero | todo |
+| P1-26 | Self-instrumentation | every service exports OTel to our own receiver, into its own org and project, rate-limited like any tenant. Logs keep going to stdout independently — that is the fallback when the pipeline is the broken part. See ADR 0053 | todo |
 | P1-27 | Chaos test | kill broker and ClickHouse mid-load, restart, assert zero loss | todo |
 
 ### M3 — Widen door 1 (logs + metrics + errors)
