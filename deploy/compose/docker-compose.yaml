@@ -234,10 +234,7 @@ services:
         limits:
           memory: 256M
 
-  # One Celery worker drains every queue, browser checks included. Playwright
-  # wants ~1GB per browser, so concurrency is low and the image carries
-  # Chromium — see the note in deploy/docker/python-dev.Dockerfile.
-  scheduler-worker:
+  scheduler-light:
     profiles: ["doors"]
     build:
       context: ../..
@@ -245,25 +242,45 @@ services:
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
-      celery -A nexovue_scheduler.celery_app worker --queues light,browser --concurrency 2
+      celery -A nexovue_scheduler.celery_app worker --queues light --concurrency 8 --loglevel info
     working_dir: /workspace
     volumes:
       - ../..:/workspace
       - python-venv:/workspace/.venv
     environment: *scheduler-env
-    # Chromium uses shared memory heavily and the 64MB default is the most
-    # common cause of it dying mid-check.
-    shm_size: 1gb
     depends_on:
-      postgres:
+      redis:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  scheduler-browser:
+    profiles: ["doors"]
+    build:
+      context: ../..
+      dockerfile: apps/scheduler/Dockerfile.browser
+    command: >-
+      celery -A nexovue_scheduler.celery_app worker
+      --queues browser --concurrency 1 --loglevel info
+    volumes:
+      - ../../apps/scheduler/src:/app/src
+    environment: *scheduler-env
+    # Chromium's default 64 MB /dev/shm is the usual cause of crashes in Docker.
+    shm_size: 1gb
+    ipc: host
+    depends_on:
       redis:
         condition: service_healthy
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 1536M
 
+  # ---------- tools ----------
   demo-app:
     profiles: ["tools"]
     build:
@@ -301,7 +318,59 @@ services:
         limits:
           memory: 512M
 
+
+  # ---------- intelligence (Phase 2, `insight` profile) ----------
+  # Not part of `just dev`: apps/insight does not exist until F3/F6. Defined
+  # here so the dev stack can grow into it without a compose redesign.
+  insight:
+    profiles: ["insight"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/python-dev.Dockerfile
+    command: >-
+      uv run --package nexovue-insight
+      watchmedo auto-restart --directory apps/insight/src --pattern '*.py' --recursive --
+      python -m nexovue_insight
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - python-venv:/workspace/.venv
+    environment:
+      ENV: development
+      LOG_LEVEL: debug
+      LOG_FORMAT: console
+      POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
+      CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
+      REDIS_URL: redis://redis:6379/0
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  # Only for developers who want a container rather than a native install.
+  # On macOS prefer running Ollama natively: Docker has no Metal passthrough,
+  # so this is CPU-only here, which is why LLM_BASE_URL above defaults to the
+  # host rather than to this service.
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:0.12.11
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "${OLLAMA_HOST_PORT:-11434}:11434"
+    deploy:
+      resources:
+        limits:
+          memory: ${OLLAMA_MEMORY:-6G}
+
 volumes:
+  ollama-models:
   go-cache:
   python-venv:
   web-node-modules:

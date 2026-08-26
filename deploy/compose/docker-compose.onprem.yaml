@@ -90,7 +90,7 @@ services:
       #   proxied to api and receiver.
       - web-assets:/srv/web:ro
     depends_on:
-      app:
+      api:
         condition: service_started
       receiver:
         condition: service_started
@@ -137,14 +137,7 @@ services:
         limits:
           memory: ${WORKER_MEMORY:-768M}
 
-  # FastAPI, Beat and the Celery worker in one container, matching the replica
-  # in docker-compose.app.yaml so what runs here is what was tested locally.
-  #
-  # Never more than one replica: Beat is a singleton, and a second instance
-  # fires every customer's scheduled checks twice. Splitting beat into its own
-  # service is the first move when this needs to scale — not adding replicas.
-  app:
-    shm_size: 1gb
+  api:
     <<: *service-defaults
     image: *image-base
     environment: &control-plane-env
@@ -179,7 +172,79 @@ services:
     volumes:
       - web-assets:/assets
 
+  scheduler-beat:
+    <<: *service-defaults
+    image: *image-base
+    command: >-
+      celery -A nexovue_scheduler.celery_app beat
+      --scheduler nexovue_scheduler.beat:PostgresScheduler
+    environment: *control-plane-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler-light:
+    <<: *service-defaults
+    image: *image-base
+    command: >-
+      celery -A nexovue_scheduler.celery_app worker
+      --queues light --concurrency 8 --loglevel info
+    environment: *control-plane-env
+
+  scheduler-browser:
+    <<: *service-defaults
+    image: *image-base
+    command: >-
+      celery -A nexovue_scheduler.celery_app worker
+      --queues browser --concurrency 1 --loglevel info
+    environment: *control-plane-env
+    shm_size: 1gb
+    ipc: host
+
+# TODO(backups): P1-51 owns the runbook. Volume snapshots alone do not give a
+#   consistent ClickHouse or Postgres backup, and no volume here is on a
+#   deliberately chosen disk yet.
+  # ---------- intelligence (Phase 2) ----------
+  # Detection, correlation and the LLM call that produces a plain-language
+  # finding — sequential stages of one flow, so one service.
+  #
+  # TODO(phase-2): apps/insight does not exist yet; this describes the shape so
+  #   the deployment target is complete.
+  insight:
+    <<: *service-defaults
+    image: ${NEXOVUE_REGISTRY:?set NEXOVUE_REGISTRY}/insight:${NEXOVUE_VERSION:?set NEXOVUE_VERSION}
+    environment:
+      INSIGHT_PIPELINES: ${INSIGHT_PIPELINES:-detect,correlate,summarise}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${INSIGHT_MEMORY:-1G}
+
+  # Self-hosted inference. Drop this service and point LLM_BASE_URL at a hosted
+  # provider if you would rather not run models.
+  #
+  # TODO(gpu): a useful model wants a GPU. Without one this is CPU-only and
+  #   slow; add the device reservation once the server's hardware is known.
+  ollama:
+    <<: *service-defaults
+    image: ollama/ollama:0.12.11
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          memory: ${OLLAMA_MEMORY:-8G}
+
 volumes:
+  ollama-models:
   caddy-data:
   caddy-config:
   web-assets:

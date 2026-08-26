@@ -76,16 +76,11 @@ services:
         limits:
           memory: ${WORKER_MEMORY:-768M}
 
-  # One service: FastAPI, Celery Beat and the Celery worker together, run by
-  # supervisord. Beat is a singleton by nature — two of it fires every
-  # customer's checks twice — so this container must never run more than one
-  # replica. On-prem splits them for exactly that reason.
-  app:
+  api:
     build:
       context: ../..
-      dockerfile: deploy/docker/app.Dockerfile
-    image: nexovue/app:${NEXOVUE_VERSION:-dev}
-    shm_size: 1gb
+      dockerfile: apps/api/Dockerfile
+    image: nexovue/api:${NEXOVUE_VERSION:-dev}
     environment: &control-plane-env
       ENV: production
       LOG_LEVEL: info
@@ -96,8 +91,6 @@ services:
       KAFKA_BROKERS: kafka:9092
       # TODO(name): settings.py has no S3 field yet; align with P1-57.
       NEXOVUE_S3_ENDPOINT: http://seaweedfs:8333
-      # Beat and the worker live here too; the worker drains both queues.
-      CELERY_QUEUES: light,browser
     ports:
       - "8000:8000"
     depends_on:
@@ -110,8 +103,7 @@ services:
     deploy:
       resources:
         limits:
-          # FastAPI plus beat plus a worker that may be driving Chromium.
-          memory: 2560M
+          memory: 832M
 
   web:
     build:
@@ -125,8 +117,8 @@ services:
         limits:
           memory: 128M
 
+  # ---------- doors 2 and 4b ----------
   scheduler-beat:
-    profiles: ["doors"]
     build:
       context: ../..
       dockerfile: apps/scheduler/Dockerfile
@@ -146,7 +138,6 @@ services:
           memory: 256M
 
   scheduler-light:
-    profiles: ["doors"]
     image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
     command: >-
       celery -A nexovue_scheduler.celery_app worker
@@ -161,7 +152,6 @@ services:
           memory: 256M
 
   scheduler-browser:
-    profiles: ["doors"]
     build:
       context: ../..
       dockerfile: apps/scheduler/Dockerfile.browser
@@ -179,3 +169,50 @@ services:
       resources:
         limits:
           memory: 1536M
+
+  # ---------- intelligence (Phase 2) ----------
+  # Anomaly detection, cross-signal correlation and the LLM call that turns a
+  # detection into a plain-language finding. One service because these are
+  # sequential stages of one flow, at findings-per-hour volumes rather than
+  # spans-per-second — INSIGHT_PIPELINES splits them if that stops being true.
+  #
+  # TODO(phase-2): apps/insight does not exist yet. This describes the shape so
+  #   the deployment target is complete; it cannot build until F3/F6 land.
+  insight:
+    build:
+      context: ../..
+      dockerfile: apps/insight/Dockerfile
+    image: nexovue/insight:${NEXOVUE_VERSION:-dev}
+    environment:
+      <<: *control-plane-env
+      INSIGHT_PIPELINES: ${INSIGHT_PIPELINES:-detect,correlate,summarise}
+      # Points at the self-hosted model by default; set this to a hosted
+      # provider and the ollama container below becomes unnecessary.
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # Self-hosted inference, only needed while LLM_BASE_URL points here.
+  #
+  # NOTE: on macOS this is CPU-only — Docker has no Metal passthrough — so run
+  #   Ollama natively there and point LLM_BASE_URL at the host instead.
+  ollama:
+    image: ollama/ollama:0.12.11
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          memory: ${OLLAMA_MEMORY:-8G}
+
+volumes:
+  ollama-models:

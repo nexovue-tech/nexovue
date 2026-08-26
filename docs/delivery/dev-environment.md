@@ -48,6 +48,28 @@ ClickHouse is a special case: it misreads cgroup limits in Docker, so its cap is
 
 **4. Playwright: arm64 image, `--ipc=host`, `shm_size: 1gb`.** The 64 MB `/dev/shm` default is the most common cause of Chromium instability in Docker. The official images ship ARM64 variants covering Chromium, Firefox and WebKit — the Apple Silicon Rosetta problem applies to native installs, not the container.
 
+## Development is not production's shape
+
+`just dev` runs **nine** containers: the five infrastructure services plus
+`receiver`, `worker`, `api` and `web`. Production runs **fourteen** (ADR 0052).
+The difference is deliberate, not drift:
+
+| | Development | Production |
+|---|---|---|
+| Web | **Vite dev server** with HMR | Static build behind the proxy |
+| Proxy | none — services are reached directly | Caddy, terminating TLS |
+| Doors 2 and 4 | `--profile doors` | always on |
+| Insight, Ollama | `--profile insight` / `--profile ollama` | always on (Phase 2) |
+| Celery | beat, light and browser as separate containers | the same three |
+
+The rule: development optimises for reading logs and restarting one thing at a
+time; production optimises for failure domains. Neither should be bent toward
+the other.
+
+On this machine Ollama should run **natively rather than in the `ollama`
+profile** — Docker on macOS has no Metal passthrough, so the container is
+CPU-only. `LLM_BASE_URL` therefore defaults to `host.docker.internal`.
+
 ## Running the OTel Demo (P1-62)
 
 The OpenTelemetry Demo needs [4 GB minimal, 8 GB+ full](https://opentelemetry.io/docs/demo/requirements/system/) across 18 services. It does **not** coexist with our stack in a 13 GB VM, and it is not meant to — it is a periodic realism gate, not a dependency.

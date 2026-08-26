@@ -271,7 +271,6 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 
 ## 7b. Follow-ups surfaced while building M0
 
-- **Split Beat out of the `app` container before scaling the API.** ADR 0051 combines FastAPI, Beat and the Celery worker in deployment, which caps that container at one replica — Beat is a singleton. The split is a compose change; the trap is adding replicas first and getting duplicate checks.
 - **Split the worker back out when measurement says to.** ADR 0050 collapsed four worker containers into one because they were identical code; the pipeline names survive so that splitting is a `WORKER_PIPELINES` change per deployment, not a rewrite. The signal to split is one pipeline's memory or lag diverging from the others under the M7 load test.
 
 - **The three Python telemetry modules are duplicated** between `api` and `scheduler`. The root fix is a `packages/py-platform` uv workspace member; it needs a root `pyproject.toml` change and was outside every lane's ownership.
