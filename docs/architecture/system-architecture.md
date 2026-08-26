@@ -224,6 +224,8 @@ AS SELECT
 FROM spans
 GROUP BY tenant_id, service_name, span_name, minute;
 ```
+> ⚠️ **The form above will not aggregate correctly — corrected 2026-08-26 while building P1-10.** An implicit-inner-table materialized view over `AggregatingMergeTree` with `count()` / `countIf()` produces plain `UInt64` columns, and plain columns do not merge: rows accumulate instead of combining. It needs an **explicit target table** (`CREATE MATERIALIZED VIEW … TO …`) whose columns are `SimpleAggregateFunction(sum, UInt64)` for the counters and `AggregateFunction(quantiles(…), Float64)` for the latencies, partitioned **by month** rather than by day since it is a 13-month table. Whoever implements P1-23 should start from that shape.
+>
 > Note: MV populates from stored (post-sampling) spans. Exact counters derived pre-sampling are ALSO emitted by processing workers into `metrics` — so sampled storage never skews the numbers the anomaly detectors watch.
 
 **Schema design rationale:**

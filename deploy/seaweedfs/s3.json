@@ -1,0 +1,14 @@
+{
+  "identities": [
+    {
+      "name": "nexovue",
+      "credentials": [
+        {
+          "accessKey": "nexovue_dev_access",
+          "secretKey": "nexovue_dev_secret"
+        }
+      ],
+      "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+    }
+  ]
+}

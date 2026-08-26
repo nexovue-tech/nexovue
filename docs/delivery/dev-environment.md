@@ -5,7 +5,16 @@
 
 ## The constraint
 
-Docker Desktop on macOS runs a Linux VM, so allocate it **~13 GB** and leave ~11 GB for macOS, editor and browser. Everything below must fit inside that 13 GB.
+Docker Desktop on macOS runs a Linux VM. **Measured 2026-08-26: the VM is currently allocated 8.3 GB** (`docker info`), which is below what the dev target needs — raise it to ~13 GB in Docker Desktop settings, leaving ~11 GB for macOS, editor and browser.
+
+Two different budgets apply, and conflating them is what makes the numbers look wrong:
+
+| | What it covers | Total |
+|---|---|---|
+| **Runtime** | the services doing their job | ~2.2 GB measured steady-state |
+| **Dev ceiling** | the same services *plus the compilers they host* — `go build`, `pnpm install`, `uv sync` run inside the containers | ~12 GB of caps |
+
+The dev ceiling is high because a dev container is also a build machine. Go's compiler parallelism drives peak RSS, so `GOFLAGS=-p=2` is set — without it `ch-go/proto` was OOM-killed at 320 MB. `pnpm install` was SIGKILLed at 512 MB. The app target needs neither, and `web` there is nginx at 128 MB rather than a Vite dev server at 1 GB.
 
 ## Memory budget
 

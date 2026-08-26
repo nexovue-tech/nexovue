@@ -1,0 +1,354 @@
+# DEVELOPMENT target — `just dev`.
+#
+# Infrastructure comes from compose.infra.yaml through `include:`. It is not
+# `-f` layering on purpose: `-f` appends sequences, so the bind mounts below
+# would leak into docker-compose.app.yaml and a "production replica" would be
+# running the developer's working tree.
+#
+# Profiles (docs/delivery/dev-environment.md rule 2):
+#   default  infrastructure + the services on the walking-skeleton path
+#   doors    Celery probes and pollers, including the Playwright browser queue
+#   tools    demo app and load generator
+#
+# Every service is capped per docs/delivery/dev-environment.md. Core total is
+# ~10 GB inside a ~13 GB Docker VM allocation.
+
+name: nexovue
+
+include:
+  - path: compose.infra.yaml
+
+services:
+  # ---------- infrastructure: developer conveniences only ----------
+  # Ports are published here and nowhere else — the deployment targets keep the
+  # data stores off the host entirely. The host side is a variable because these
+  # are the well-known ports and another project on the same laptop may already
+  # hold one; the container side never moves.
+  kafka:
+    ports:
+      - "${KAFKA_HOST_PORT:-29092}:29092"
+
+  clickhouse:
+    ports:
+      - "${CLICKHOUSE_HTTP_HOST_PORT:-8123}:8123"
+      - "${CLICKHOUSE_NATIVE_HOST_PORT:-9000}:9000"
+
+  postgres:
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+
+  redis:
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+
+  seaweedfs:
+    ports:
+      - "${SEAWEEDFS_S3_HOST_PORT:-8333}:8333"
+      - "${SEAWEEDFS_MASTER_HOST_PORT:-9333}:9333"
+
+  # ---------- data plane (Go, rebuilt on save by air) ----------
+  receiver:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/go-dev.Dockerfile
+    command: air -c deploy/air/receiver.toml
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - go-cache:/cache
+    # Variable names come from apps/receiver/internal/config, which is the
+    # authority on what this service reads.
+    environment:
+      ENV: development
+      LOG_LEVEL: debug
+      LOG_FORMAT: console
+      KAFKA_BROKERS: kafka:9092
+      POSTGRES_DSN: ${DEV_POSTGRES_DSN:-postgresql://nexovue:nexovue_dev@postgres:5432/nexovue}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "${RECEIVER_GRPC_HOST_PORT:-4317}:4317"
+      - "${RECEIVER_HTTP_HOST_PORT:-4318}:4318"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      # First `go build` of the module has to compile the dependency tree.
+      start_period: 180s
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # Larger than the budget in dev-environment.md, which sizes the
+          # running process. This container also hosts the Go compiler, and
+          # every save recompiles inside it.
+          memory: 768M
+
+  trace-assembler: &go-worker
+    build:
+      context: ../..
+      dockerfile: deploy/docker/go-dev.Dockerfile
+    command: air -c deploy/air/trace-assembler.toml
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - go-cache:/cache
+    environment: &worker-env
+      ENV: development
+      LOG_LEVEL: debug
+      LOG_FORMAT: console
+      KAFKA_BROKERS: kafka:9092
+      CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:9000/nexovue}
+    healthcheck: &worker-healthcheck
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 180s
+    depends_on: &worker-deps
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # Trace assembly holds a whole trace-buffer window in memory; the
+          # other three stream through. Plus the compiler, as above.
+          memory: 896M
+
+  log-writer:
+    <<: *go-worker
+    command: air -c deploy/air/log-writer.toml
+    environment: *worker-env
+    healthcheck: *worker-healthcheck
+    depends_on: *worker-deps
+    deploy:
+      resources:
+        limits:
+          memory: 640M
+
+  metrics-deriver:
+    <<: *go-worker
+    command: air -c deploy/air/metrics-deriver.toml
+    environment: *worker-env
+    healthcheck: *worker-healthcheck
+    depends_on: *worker-deps
+    deploy:
+      resources:
+        limits:
+          memory: 640M
+
+  edge-aggregator:
+    <<: *go-worker
+    command: air -c deploy/air/edge-aggregator.toml
+    environment: *worker-env
+    healthcheck: *worker-healthcheck
+    depends_on: *worker-deps
+    deploy:
+      resources:
+        limits:
+          memory: 640M
+
+  # ---------- control plane (Python, reloaded on save by uvicorn) ----------
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/python-dev.Dockerfile
+    command: >-
+      uv run --package nexovue-api
+      uvicorn nexovue_api.main:app --host 0.0.0.0 --port 8000 --reload
+      --reload-dir apps/api/src
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - python-venv:/workspace/.venv
+    # Variable names come from apps/api/src/nexovue_api/settings.py.
+    environment: &api-env
+      ENV: development
+      LOG_LEVEL: debug
+      LOG_FORMAT: console
+      POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
+      # The API reads ClickHouse over HTTP but takes the same clickhouse:// DSN
+      # shape the workers use, and derives the port from it.
+      CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    healthcheck:
+      # python:slim ships no curl or wget; urllib is always there.
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/healthz")
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # 832 MB is the runtime budget; `uv sync` on first start needs more.
+          memory: 1024M
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/web-dev.Dockerfile
+    command: pnpm --filter @nexovue/web dev --host 0.0.0.0 --port 5173
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - web-node-modules:/workspace/node_modules
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "${WEB_HOST_PORT:-5173}:5173"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          # dev-environment.md budgets 0.1 GB for `web`. That fits the nginx
+          # image in docker-compose.app.yaml, but not a Vite dev server, and
+          # certainly not the `pnpm install` that precedes it.
+          memory: 1024M
+
+  # ---------- doors 2 and 4b ----------
+  scheduler-beat:
+    profiles: ["doors"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/python-dev.Dockerfile
+    command: >-
+      uv run --package nexovue-scheduler
+      watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
+      celery -A nexovue_scheduler.celery_app beat --scheduler nexovue_scheduler.beat:PostgresScheduler
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - python-venv:/workspace/.venv
+    environment: &scheduler-env
+      ENV: development
+      LOG_LEVEL: debug
+      LOG_FORMAT: console
+      POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
+      # Database 1 keeps probe queues out of the rate-limit counters on 0.
+      REDIS_URL: redis://redis:6379/1
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  scheduler-light:
+    profiles: ["doors"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/python-dev.Dockerfile
+    command: >-
+      uv run --package nexovue-scheduler
+      watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
+      celery -A nexovue_scheduler.celery_app worker --queues light --concurrency 8 --loglevel info
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - python-venv:/workspace/.venv
+    environment: *scheduler-env
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  scheduler-browser:
+    profiles: ["doors"]
+    build:
+      context: ../..
+      dockerfile: apps/scheduler/Dockerfile.browser
+    command: >-
+      celery -A nexovue_scheduler.celery_app worker
+      --queues browser --concurrency 1 --loglevel info
+    volumes:
+      - ../../apps/scheduler/src:/app/src
+    environment: *scheduler-env
+    # Chromium's default 64 MB /dev/shm is the usual cause of crashes in Docker.
+    shm_size: 1gb
+    ipc: host
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+
+  # ---------- tools ----------
+  demo-app:
+    profiles: ["tools"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/go-dev.Dockerfile
+    command: air -c deploy/air/demo-app.toml
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - go-cache:/cache
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://receiver:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+    ports:
+      - "${DEMO_APP_HOST_PORT:-8090}:8090"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  loadgen:
+    profiles: ["tools"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/go-dev.Dockerfile
+    command: go run ./tools/loadgen
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - go-cache:/cache
+    environment:
+      TARGET_ENDPOINT: http://receiver:4318
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  go-cache:
+  python-venv:
+  web-node-modules:

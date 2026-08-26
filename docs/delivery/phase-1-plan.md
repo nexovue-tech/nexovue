@@ -43,7 +43,7 @@ Findings feed (F1), finding detail (F2), AI insights/chatbot/solution (F3–F5),
 | D9 | **Service map is in Phase 1** (P1-55, P1-56) | Table stakes, and it is a derived aggregation over spans we already store — no new collection |
 | D10 | **K8s ingested, not visualized, in Phase 1** | The data arrives free through door 1; pod/node concepts on screen are their own design problem |
 | D11 | **Fixed screens, no dashboard builder** | F20 is explicitly the optional mode; building a builder now contradicts the insight-first thesis |
-| D12 | **Cold tier built in Phase 1** (P1-57) | Raw TTL is 30 days; without tiering the data is simply deleted. Interim: raise raw TTL on the dev instance until P1-57 lands, so nothing is lost before the tier exists |
+| D12 | **Cold tier built in Phase 1** (P1-57) | Raw TTL is 30 days; without tiering the data is simply deleted. *Clarified 2026-08-26:* this concerns any deployment holding data worth keeping. **Dev keeps its 3-day TTL** — that data is disposable and the laptop's SSD is not. The migrations carry the production 30/90-day TTLs; dev retention is applied separately by `deploy/clickhouse/dev-retention.sql` |
 
 ---
 
@@ -84,10 +84,10 @@ nexovue/
 | P1-05 | Agent context | root `CLAUDE.md` + one per app, scoped to what is true inside it | ✅ done |
 | P1-06 | ADR process | `docs/architecture/decisions/` — template, README, and 47 backfilled ADRs with supersede links in both directions | ✅ done |
 | P1-07 | **Normalized envelope** | `packages/contracts` — protobuf envelope wrapping untouched OTLP bytes; `buf` codegen to committed Go + Python bindings; `buf breaking` gate; 8 golden fixtures with round-trip proofs in both languages | ✅ done |
-| P1-59 | **Control-plane schema** | Postgres tables per `docs/architecture/tenancy-and-data-model.md`; Alembic migrations; org/user/project/api_key seed for local dev | todo |
+| P1-59 | **Control-plane schema** | 11 tables with UUIDv7 defaults, `org_id` denormalized throughout, SHA-256 key hashes; idempotent seed producing a known dev API key | ✅ done |
 | P1-08 | Design tokens & theming | `packages/ui` OKLCH scales, both themes, IBM Plex self-hosted; palette re-verified with the official `apca-w3` and a quantised WCAG check that runs as a gate | ✅ done |
-| P1-09 | Compose baseline | Kafka (KRaft), ClickHouse (JSON-type capable version, pinned), Postgres, Redis, SeaweedFS with volumes + healthchecks | todo |
-| P1-10 | Migrations | golang-migrate for ClickHouse + Alembic for Postgres; both reversible | todo |
+| P1-09 | Compose — three targets | `compose.infra.yaml` shared via `include:`, plus dev (hot reload), app (production replica) and onprem (skeleton). 12 services healthy from cold start | ✅ done |
+| P1-10 | Migrations | golang-migrate for ClickHouse + Alembic for Postgres; both proved reversible up → down → up | ✅ done |
 | P1-63 | App shell & routes | Vite + React 19 + TanStack Router/Query; global layout; 20 routes + 404 rendering `ComingSoon` with their task id; fetch client on `/api/v1/` | ✅ done |
 | P1-64 | Config, validation & health | Typed config validated at boot per service; `/healthz` (no dependency checks) and `/readyz` (with them) | todo |
 | P1-65 | Backend cross-cutting | RFC 9457 problem+json with correlation ids; API rate limiting distinct from ingest; pool sizes, session-per-request, Redis sessions | todo |

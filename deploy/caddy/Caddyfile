@@ -1,0 +1,31 @@
+# TLS edge for the on-premise deployment. SKELETON — see the TODOs.
+#
+# Caddy obtains and renews certificates on its own as long as it knows a
+# hostname and the host answers on 80 and 443.
+
+{
+	email {$NEXOVUE_TLS_EMAIL}
+}
+
+# TODO(hostname): one name for everything, or separate ingest and app names?
+# Ingest is machine traffic at high volume; the app is browser traffic. Splitting
+# them lets the two be rate-limited, logged and moved apart later.
+{$NEXOVUE_PUBLIC_HOST} {
+	# OTLP: the receiver speaks the protocol's own error semantics, so nothing
+	# here may rewrite a response body.
+	handle /v1/* {
+		reverse_proxy receiver:4318
+	}
+
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy web:8080
+	}
+}
+
+# TODO(grpc): OTLP/gRPC on 4317 (P1-19) terminates TLS separately — h2c through
+# Caddy needs its own site block and a decision on whether gRPC gets its own
+# port or is multiplexed on 443.

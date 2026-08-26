@@ -1,0 +1,164 @@
+# Shared infrastructure — Kafka, ClickHouse, Postgres, Redis, SeaweedFS.
+#
+# Every compose target pulls this in with `include:`, never with `-f` layering.
+# `-f` merges sequences by APPENDING, so a dev bind mount added in one file
+# would survive into the production file. `include:` keeps one definition.
+#
+# Memory limits come from docs/delivery/dev-environment.md and use
+# `deploy.resources.limits`, which Compose v2+ applies without Swarm.
+#
+# Credentials default to development values. Deployment targets redeclare them
+# with the `:?` required form so a real environment cannot inherit a dev secret.
+
+services:
+  kafka:
+    image: apache/kafka:4.3.1
+    hostname: kafka
+    environment:
+      # Single-node KRaft: this container is both broker and controller.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_LISTENERS: CONTROLLER://:9093,INTERNAL://:9092,HOST://:29092
+      # Two client listeners: containers reach the broker as `kafka`, the host as localhost.
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,HOST://localhost:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # base64url of a 16-byte UUID — the only shape KRaft accepts as a cluster id.
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-fo8KHCs9Tl-KmwwdLj9KWw}
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # Single node: every internal topic has exactly one replica.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_HEAP_OPTS: -Xmx1g -Xms256m
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      # Starting a JVM per probe is expensive, so probe rarely and allow a slow start.
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "kafka:9092"]
+      interval: 15s
+      timeout: 15s
+      retries: 10
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+
+  clickhouse:
+    image: clickhouse:26.3.20.7-jammy
+    hostname: clickhouse
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-nexovue}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-nexovue}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-nexovue_dev}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      # One file, not the directory: config.d already holds the image's own
+      # docker_related_config.xml, and mounting over it leaves ClickHouse
+      # listening on loopback where no other container can reach it.
+      - ../clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--host", "127.0.0.1", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 3072M
+
+  postgres:
+    # pgvector's image is the official Postgres image plus the extension, so the
+    # Phase 2 RAG store needs no image swap. Postgres 18 for native uuidv7().
+    image: pgvector/pgvector:0.8.6-pg18-trixie
+    hostname: postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nexovue}
+      POSTGRES_USER: ${POSTGRES_USER:-nexovue}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexovue_dev}
+    volumes:
+      # Postgres 18 images moved the data directory under a version-named
+      # subdirectory and refuse to start with the old /…/data mount, so that
+      # `pg_upgrade --link` can work across a single mount point.
+      - postgres-data:/var/lib/postgresql
+      - ../postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexovue} -d ${POSTGRES_DB:-nexovue}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+
+  redis:
+    image: redis:8.10.1-trixie
+    hostname: redis
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      # Rate-limit counters and hot cache are both reconstructible, so evict
+      # rather than start refusing writes when the cap is reached.
+      - --maxmemory
+      - 384mb
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.44
+    hostname: seaweedfs
+    command:
+      - server
+      - -s3
+      - -dir=/data
+      - -ip.bind=0.0.0.0
+      - -s3.config=/etc/seaweedfs/s3.json
+      - -master.volumeSizeLimitMB=256
+    volumes:
+      - seaweedfs-data:/data
+      - ../seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:9333/cluster/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  kafka-data:
+  clickhouse-data:
+  postgres-data:
+  redis-data:
+  seaweedfs-data:

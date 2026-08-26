@@ -1,0 +1,335 @@
+"""The control-plane schema.
+
+Shape and rationale: docs/architecture/tenancy-and-data-model.md.
+
+Two rules run through every table here:
+
+`org_id` is denormalized onto every tenant-scoped table, even where it is
+reachable through `project_id`. That keeps the tenant filter one column away
+everywhere, so the same rule — every query filters `org_id` — holds identically
+on the Postgres and ClickHouse sides.
+
+API keys hash with SHA-256, never argon2. Argon2 is designed to be slow, which
+is right for a human password and catastrophic for a credential the receiver
+verifies thousands of times per second; a high-entropy random key gains nothing
+from stretching. Passwords, typed by humans, use argon2.
+"""
+
+import uuid
+from datetime import date
+from typing import Any, Final
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from nexovue_api.data.postgres.base import (
+    Base,
+    CreatedAt,
+    OptionalTimestamp,
+    RequiredTimestamp,
+    UuidPrimaryKey,
+    UuidType,
+)
+
+# `viewer` is what the non-technical owner persona gets when F26 lands in
+# Phase 2. The columns exist now so nothing migrates then.
+USER_ROLES: Final = ("owner", "admin", "member", "viewer")
+UserRole: Final = Enum(*USER_ROLES, name="user_role")
+
+# Matches the production TTL on the ClickHouse tables. Per-project overrides
+# regenerate that TTL expression rather than running scheduled deletes.
+DEFAULT_RETENTION_DAYS: Final = 30
+
+# The plaintext lookup half of `nvk_live_<22 chars>`: nine characters of prefix
+# plus three of the secret.
+API_KEY_PREFIX_LENGTH: Final = 12
+SHA256_HEX_LENGTH: Final = 64
+
+# RFC 5321 caps a path at 320 octets.
+EMAIL_MAX_LENGTH: Final = 320
+SLUG_MAX_LENGTH: Final = 63
+NAME_MAX_LENGTH: Final = 200
+SHORT_LABEL_LENGTH: Final = 64
+
+
+class Organization(Base):
+    """The tenant. Billing, membership and isolation boundary; one per company."""
+
+    __tablename__ = "organizations"
+
+    id: Mapped[UuidPrimaryKey]
+    slug: Mapped[str] = mapped_column(String(SLUG_MAX_LENGTH), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    # Plan tiers are not decided yet; this holds the name the billing work will
+    # define. Retention and quotas read from `projects`, not from here.
+    plan: Mapped[str] = mapped_column(
+        String(SHORT_LABEL_LENGTH), nullable=False, server_default=text("'free'")
+    )
+    created_at: Mapped[CreatedAt]
+    # Soft delete: purging telemetry means dropping ClickHouse partitions and
+    # cold-tier objects, which cannot happen inside this transaction.
+    deleted_at: Mapped[OptionalTimestamp]
+
+
+class User(Base):
+    """A user belongs to exactly one organization, so email is globally unique.
+
+    Someone genuinely working with two companies uses two emails — accepted
+    deliberately rather than paying for a join table, an org switcher on every
+    screen and org context on every session.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    email: Mapped[str] = mapped_column(String(EMAIL_MAX_LENGTH), nullable=False, unique=True)
+    # Null until an invited user sets one (F26, Phase 2).
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    name: Mapped[str | None] = mapped_column(String(NAME_MAX_LENGTH), nullable=True)
+    role: Mapped[str] = mapped_column(UserRole, nullable=False)
+    email_verified_at: Mapped[OptionalTimestamp]
+    invited_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    invited_at: Mapped[OptionalTimestamp]
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (Index("ix_users_org_id", "org_id"),)
+
+
+class Project(Base):
+    """A project is an environment — production, staging.
+
+    Retention, sampling, quotas and ingest keys belong here rather than on the
+    organization, and keeping environments apart keeps staging noise out of
+    production findings.
+    """
+
+    __tablename__ = "projects"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    slug: Mapped[str] = mapped_column(String(SLUG_MAX_LENGTH), nullable=False)
+    name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    retention_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text(str(DEFAULT_RETENTION_DAYS))
+    )
+    sampling_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[CreatedAt]
+    deleted_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "slug", name="uq_projects_org_id_slug"),
+        Index("ix_projects_org_id", "org_id"),
+    )
+
+
+class ApiKey(Base):
+    """An ingest credential. Carries both ids so the receiver's hot path is one
+    cached lookup rather than a key → project → org chain."""
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    # Plaintext, and the only part ever stored in the clear: it is what the
+    # lookup indexes. The secret half is shown once and never persisted.
+    key_prefix: Mapped[str] = mapped_column(
+        String(API_KEY_PREFIX_LENGTH), nullable=False, unique=True
+    )
+    key_hash: Mapped[str] = mapped_column(String(SHA256_HEX_LENGTH), nullable=False)
+    last_used_at: Mapped[OptionalTimestamp]
+    created_at: Mapped[CreatedAt]
+    # Revoked rather than deleted: multiple live keys per project mean rotation
+    # never needs downtime, and an audit needs to see what was withdrawn.
+    revoked_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (Index("ix_api_keys_project_id", "project_id"),)
+
+
+class SiteKey(Base):
+    """Door 3's public, non-secret browser key. Origin-restricted rather than
+    secret, because it ships inside a page anyone can read."""
+
+    __tablename__ = "site_keys"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    public_key: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False, unique=True)
+    allowed_origins: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+    )
+    created_at: Mapped[CreatedAt]
+    revoked_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (Index("ix_site_keys_project_id", "project_id"),)
+
+
+class Check(Base):
+    """A door 2 probe definition. Our own Beat scheduler reads this table, so a
+    customer editing a check in the UI needs no redeploy."""
+
+    __tablename__ = "checks"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    type: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    target: Mapped[str] = mapped_column(Text, nullable=False)
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    created_at: Mapped[CreatedAt]
+
+    # The scheduler's only query is "every enabled check"; it runs every tick.
+    __table_args__ = (Index("ix_checks_enabled_org_id", "enabled", "org_id"),)
+
+
+class Integration(Base):
+    """A door 4b connector. Customer credentials are encrypted at rest and the
+    key never lives in this table."""
+
+    __tablename__ = "integrations"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    config_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    status: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    last_sync_at: Mapped[OptionalTimestamp]
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (Index("ix_integrations_project_id", "project_id"),)
+
+
+class DeployEvent(Base):
+    """Door 4a lands here, not in ClickHouse: volume is tiny and the insight
+    engine joins these against findings and cases."""
+
+    __tablename__ = "deploy_events"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    # Joins to spans.deployment_version — a logical join across two stores, not
+    # a foreign key.
+    version: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    service_name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    deployed_at: Mapped[RequiredTimestamp]
+    source: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    # `metadata` is taken on a declarative class, so the attribute differs from
+    # the column name.
+    event_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        Index(
+            "ix_deploy_events_org_id_project_id_deployed_at", "org_id", "project_id", "deployed_at"
+        ),
+    )
+
+
+class UsageDaily(Base):
+    """Ingestion counters rolled up per day. Feeds the in-product cost view, so
+    a customer is never surprised by a bill."""
+
+    __tablename__ = "usage_daily"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    spans: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    logs: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    metric_points: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+
+
+class Session(Base):
+    """A browser session. Kept server-side so revoking one is immediate."""
+
+    __tablename__ = "sessions"
+
+    id: Mapped[UuidPrimaryKey]
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    expires_at: Mapped[RequiredTimestamp]
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        Index("ix_sessions_user_id", "user_id"),
+        # Sweeping expired rows must not scan the table.
+        Index("ix_sessions_expires_at", "expires_at"),
+    )
+
+
+class AuditLogEntry(Base):
+    """Who changed what. `actor_user_id` is null for actions the system took."""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    action: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    target: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    at: Mapped[CreatedAt]
+
+    __table_args__ = (Index("ix_audit_log_org_id_at", "org_id", "at"),)

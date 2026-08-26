@@ -1,0 +1,214 @@
+# ON-PREMISE deployment — SKELETON, NOT YET RUNNABLE.
+#
+# The shape is settled; the facts are not. Every unknown is marked TODO and
+# nothing is guessed. Do not deploy this file until each TODO is answered.
+#
+# What differs from the other two targets:
+#   - services come from a registry by immutable tag, never from a build context
+#   - restart: unless-stopped on everything, so a host reboot restores the stack
+#   - log rotation on everything, so a chatty service cannot fill the disk
+#   - one TLS edge (Caddy); no other container publishes a port
+#
+# Caddy over Traefik at the edge because it needs no access to the Docker
+# socket — a proxy that can drive the daemon is a poor thing to expose — and
+# the service list here is fixed, so label-based discovery buys nothing.
+#
+# Usage: docker compose -f docker-compose.onprem.yaml --env-file /etc/nexovue/onprem.env up -d
+
+name: nexovue
+
+# TODO(registry): the pull path for nexovue images is not decided.
+#   Options discussed nowhere yet: GHCR under nexovue-tech, a self-hosted
+#   registry on the same host, or images side-loaded with `docker load`.
+x-image-base: &image-base ${NEXOVUE_REGISTRY:?set NEXOVUE_REGISTRY}/nexovue
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+include:
+  - path: compose.infra.yaml
+
+services:
+  # ---------- infrastructure ----------
+  # TODO(sizing): every limit below is the laptop budget from
+  #   docs/delivery/dev-environment.md. Server specs are unknown, so ClickHouse
+  #   and Kafka are certainly undersized here. Resize against the real host and
+  #   re-measure the budgets in docs/delivery/phase-1-plan.md section 4 there.
+  kafka:
+    <<: *service-defaults
+    environment:
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:?set KAFKA_HEAP_OPTS}
+
+  clickhouse:
+    <<: *service-defaults
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:?set CLICKHOUSE_DB}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:?set CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "0"
+
+  postgres:
+    <<: *service-defaults
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+
+  redis:
+    <<: *service-defaults
+
+  seaweedfs:
+    # TODO(cold tier): the deployment decision is AWS S3, not SeaweedFS
+    #   (decisions log, 2026-08-26). Keep this service only for an air-gapped
+    #   install; otherwise delete it and point NEXOVUE_S3_ENDPOINT at S3.
+    <<: *service-defaults
+
+  # ---------- TLS edge ----------
+  proxy:
+    <<: *service-defaults
+    image: caddy:2.11.4-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # TODO(hostname): the public hostname is undecided, and Caddy needs it to
+      #   obtain a certificate. Ingest and app may want separate names
+      #   (ingest.example.com / app.example.com) — that is also undecided.
+      NEXOVUE_PUBLIC_HOST: ${NEXOVUE_PUBLIC_HOST:?set NEXOVUE_PUBLIC_HOST}
+      NEXOVUE_TLS_EMAIL: ${NEXOVUE_TLS_EMAIL:?set NEXOVUE_TLS_EMAIL}
+    volumes:
+      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+      - web
+      - receiver
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # ---------- data plane ----------
+  # No published ports: the proxy is the only way in.
+  receiver:
+    <<: *service-defaults
+    image: *image-base
+    # TODO(images): compose cannot append to a YAML anchor, so each service
+    #   needs its full "<registry>/nexovue/<name>:<tag>" written out once the
+    #   registry path above is decided. The anchor documents the base only.
+    environment: &data-plane-env
+      ENV: production
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      KAFKA_BROKERS: kafka:9092
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
+      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  trace-assembler:
+    <<: *service-defaults
+    image: *image-base
+    environment: *data-plane-env
+    depends_on: &worker-deps
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
+  log-writer:
+    <<: *service-defaults
+    image: *image-base
+    environment: *data-plane-env
+    depends_on: *worker-deps
+
+  metrics-deriver:
+    <<: *service-defaults
+    image: *image-base
+    environment: *data-plane-env
+    depends_on: *worker-deps
+
+  edge-aggregator:
+    <<: *service-defaults
+    image: *image-base
+    environment: *data-plane-env
+    depends_on: *worker-deps
+
+  # ---------- control plane ----------
+  api:
+    <<: *service-defaults
+    image: *image-base
+    environment: &control-plane-env
+      ENV: production
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BROKERS: kafka:9092
+      # TODO(cold tier): AWS S3 endpoint + credentials, or the SeaweedFS
+      #   service above for an air-gapped install. Generic S3 API only.
+      # TODO(name): settings.py has no S3 field yet, so this variable name is
+      #   provisional — align it with P1-57 when the cold tier is built.
+      NEXOVUE_S3_ENDPOINT: ${NEXOVUE_S3_ENDPOINT:?set NEXOVUE_S3_ENDPOINT}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    <<: *service-defaults
+    image: *image-base
+
+  scheduler-beat:
+    <<: *service-defaults
+    image: *image-base
+    command: >-
+      celery -A nexovue_scheduler.celery_app beat
+      --scheduler nexovue_scheduler.beat:PostgresScheduler
+    environment: *control-plane-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  scheduler-light:
+    <<: *service-defaults
+    image: *image-base
+    command: >-
+      celery -A nexovue_scheduler.celery_app worker
+      --queues light --concurrency 8 --loglevel info
+    environment: *control-plane-env
+
+  scheduler-browser:
+    <<: *service-defaults
+    image: *image-base
+    command: >-
+      celery -A nexovue_scheduler.celery_app worker
+      --queues browser --concurrency 1 --loglevel info
+    environment: *control-plane-env
+    shm_size: 1gb
+    ipc: host
+
+# TODO(backups): P1-51 owns the runbook. Volume snapshots alone do not give a
+#   consistent ClickHouse or Postgres backup, and no volume here is on a
+#   deliberately chosen disk yet.
+volumes:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,18 @@
+<clickhouse>
+    <!-- ClickHouse reads the host's RAM, not the container's cgroup limit, so
+         without an absolute cap it sizes its caches for the whole machine and
+         the container is OOM-killed. 2.5 GiB inside a 3 GiB limit. -->
+    <max_server_memory_usage>2684354560</max_server_memory_usage>
+
+    <!-- Defaults are sized for a dedicated server. On a laptop sharing memory
+         with Kafka, Postgres and the app services they are the largest waste. -->
+    <mark_cache_size>536870912</mark_cache_size>
+    <index_mark_cache_size>134217728</index_mark_cache_size>
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+
+    <!-- Dropping whole parts instead of mutating rows is what makes both the
+         daily TTL and the per-tenant retention job cheap. -->
+    <merge_tree>
+        <ttl_only_drop_parts>1</ttl_only_drop_parts>
+    </merge_tree>
+</clickhouse>

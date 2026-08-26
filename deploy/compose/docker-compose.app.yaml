@@ -1,0 +1,221 @@
+# PRODUCTION REPLICA — `just dev-app`.
+#
+# Same infrastructure as development, services from their production images:
+# no bind mounts, no reloaders, no published database ports. Its job is to fail
+# here rather than in deployment when something only worked because the source
+# tree was mounted.
+#
+# It runs under its own project name, so its volumes never touch the dev data.
+#
+# Credentials are redeclared with the `:?` required form. The infrastructure
+# module carries development defaults, and inheriting one here would be silent.
+
+name: nexovue-app
+
+include:
+  - path: compose.infra.yaml
+
+services:
+  # ---------- infrastructure: no published ports ----------
+  clickhouse:
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:?set CLICKHOUSE_DB}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:?set CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "0"
+
+  postgres:
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+
+  # ---------- data plane ----------
+  receiver:
+    build:
+      context: ../..
+      dockerfile: apps/receiver/Dockerfile
+    image: nexovue/receiver:${NEXOVUE_VERSION:-dev}
+    environment: &data-plane-env
+      ENV: production
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      KAFKA_BROKERS: kafka:9092
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
+      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  trace-assembler: &worker
+    build:
+      context: ../..
+      dockerfile: apps/workers/Dockerfile
+      args:
+        BINARY: trace-assembler
+    image: nexovue/trace-assembler:${NEXOVUE_VERSION:-dev}
+    environment: *data-plane-env
+    depends_on: &worker-deps
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 640M
+
+  log-writer:
+    <<: *worker
+    build:
+      context: ../..
+      dockerfile: apps/workers/Dockerfile
+      args:
+        BINARY: log-writer
+    image: nexovue/log-writer:${NEXOVUE_VERSION:-dev}
+    environment: *data-plane-env
+    depends_on: *worker-deps
+    deploy:
+      resources:
+        limits:
+          memory: 320M
+
+  metrics-deriver:
+    <<: *worker
+    build:
+      context: ../..
+      dockerfile: apps/workers/Dockerfile
+      args:
+        BINARY: metrics-deriver
+    image: nexovue/metrics-deriver:${NEXOVUE_VERSION:-dev}
+    environment: *data-plane-env
+    depends_on: *worker-deps
+    deploy:
+      resources:
+        limits:
+          memory: 320M
+
+  edge-aggregator:
+    <<: *worker
+    build:
+      context: ../..
+      dockerfile: apps/workers/Dockerfile
+      args:
+        BINARY: edge-aggregator
+    image: nexovue/edge-aggregator:${NEXOVUE_VERSION:-dev}
+    environment: *data-plane-env
+    depends_on: *worker-deps
+    deploy:
+      resources:
+        limits:
+          memory: 320M
+
+  # ---------- control plane ----------
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    image: nexovue/api:${NEXOVUE_VERSION:-dev}
+    environment: &control-plane-env
+      ENV: production
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BROKERS: kafka:9092
+      # TODO(name): settings.py has no S3 field yet; align with P1-57.
+      NEXOVUE_S3_ENDPOINT: http://seaweedfs:8333
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 832M
+
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    image: nexovue/web:${NEXOVUE_VERSION:-dev}
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # ---------- doors 2 and 4b ----------
+  scheduler-beat:
+    profiles: ["doors"]
+    build:
+      context: ../..
+      dockerfile: apps/scheduler/Dockerfile
+    image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
+    command: >-
+      celery -A nexovue_scheduler.celery_app beat
+      --scheduler nexovue_scheduler.beat:PostgresScheduler
+    environment: *control-plane-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  scheduler-light:
+    profiles: ["doors"]
+    image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
+    command: >-
+      celery -A nexovue_scheduler.celery_app worker
+      --queues light --concurrency 8 --loglevel info
+    environment: *control-plane-env
+    depends_on:
+      scheduler-beat:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  scheduler-browser:
+    profiles: ["doors"]
+    build:
+      context: ../..
+      dockerfile: apps/scheduler/Dockerfile.browser
+    image: nexovue/scheduler-browser:${NEXOVUE_VERSION:-dev}
+    command: >-
+      celery -A nexovue_scheduler.celery_app worker
+      --queues browser --concurrency 1 --loglevel info
+    environment: *control-plane-env
+    shm_size: 1gb
+    ipc: host
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
