@@ -274,6 +274,14 @@ Components without a policy get one invented per screen. These are the policies.
 
 **Loading is skeletons, not spinners.** A skeleton says what is coming and holds the layout still; a spinner says only that something is happening. That difference is the reading-product thesis applied to waiting.
 
+## Icons
+
+**`lucide-react`, used sparingly.** The ban below is on Lucide *as the entire visual language* — icons carrying all the meaning, a grid of glyph-topped cards — not on Lucide existing. Tree-shaken, each icon costs 200–500 bytes.
+
+The rule: **an icon never carries meaning alone.** Navigation is an index of words; active state is a left rule and a weight change, not a coloured glyph. Icons earn their place where a word would be worse — a dismiss control, a disclosure chevron, an external-link marker, the command-palette hint. If removing the icon makes the interface unusable, the label is missing.
+
+Rejected: **Phosphor**, whose six weights would pair elegantly with a typography-led system — genuinely tempting, and heavier than a product with a handful of glyphs can justify. Revisit if icons ever become a real part of the visual language.
+
 ## Banned
 
 The recognizable AI-generated UI signature: default shadcn styling · slate-grey palette · uniform rounded card grids · Lucide icons as the entire visual language · gradient hero accents · 16px padding everywhere · colour as the sole carrier of meaning.
