@@ -26,7 +26,7 @@ The dev ceiling is high because a dev container is also a build machine. Go's co
 | Redis | 0.5 GB | |
 | SeaweedFS | 0.5 GB | |
 | Receiver | 0.5 GB | |
-| Workers ×4 | 1.6 GB | trace-assembler is the hungry one |
+| Worker | 1 GB | one process, all pipelines (ADR 0050); trace assembly is the hungry part |
 | API | 0.8 GB | |
 | Scheduler | 0.5 GB | |
 | Web | 0.1 GB | |

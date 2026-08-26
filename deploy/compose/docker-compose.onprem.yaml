@@ -85,10 +85,17 @@ services:
       - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+      # The built web app, served directly. TODO(caddy): the Caddyfile needs a
+      #   file_server route for /* pointing here, with /api and the OTLP paths
+      #   proxied to api and receiver.
+      - web-assets:/srv/web:ro
     depends_on:
-      - api
-      - web
-      - receiver
+      api:
+        condition: service_started
+      receiver:
+        condition: service_started
+      web-assets-init:
+        condition: service_completed_successfully
     deploy:
       resources:
         limits:
@@ -118,35 +125,18 @@ services:
       redis:
         condition: service_healthy
 
-  trace-assembler:
-    <<: *service-defaults
+  # One worker process runs every pipeline; WORKER_PIPELINES narrows the set.
+  # Deploy this image more than once with different selections when load
+  # justifies separating them — see ADR 0050.
+  worker:
     image: *image-base
-    environment: *data-plane-env
-    depends_on: &worker-deps
-      kafka:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
+    environment:
+      WORKER_PIPELINES: ${WORKER_PIPELINES:-all}
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEMORY:-768M}
 
-  log-writer:
-    <<: *service-defaults
-    image: *image-base
-    environment: *data-plane-env
-    depends_on: *worker-deps
-
-  metrics-deriver:
-    <<: *service-defaults
-    image: *image-base
-    environment: *data-plane-env
-    depends_on: *worker-deps
-
-  edge-aggregator:
-    <<: *service-defaults
-    image: *image-base
-    environment: *data-plane-env
-    depends_on: *worker-deps
-
-  # ---------- control plane ----------
   api:
     <<: *service-defaults
     image: *image-base
@@ -171,9 +161,16 @@ services:
       redis:
         condition: service_healthy
 
-  web:
-    <<: *service-defaults
-    image: *image-base
+  # The web app is static files, so the proxy serves them directly rather than
+  # running a container whose only job is to hand back bytes that never change
+  # between deploys. `web-assets` is populated at deploy time from the built
+  # image — TODO: wire that step once a registry exists (see the header).
+  web-assets-init:
+    image: ${NEXOVUE_REGISTRY:?set NEXOVUE_REGISTRY}/web:${NEXOVUE_VERSION:?set NEXOVUE_VERSION}
+    command: ["sh", "-c", "cp -r /usr/share/nginx/html/. /assets/"]
+    restart: on-failure
+    volumes:
+      - web-assets:/assets
 
   scheduler-beat:
     <<: *service-defaults
@@ -212,3 +209,4 @@ services:
 volumes:
   caddy-data:
   caddy-config:
+  web-assets:

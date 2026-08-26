@@ -1,6 +1,5 @@
-// Package worker boots one worker binary. Configuration, logging, dependency
-// probes and graceful shutdown are identical across the four binaries; only the
-// pipeline each one runs differs, and that arrives with M1/M2.
+// Package worker boots the worker process. It runs whichever pipelines its
+// configuration selects; the pipelines themselves arrive with M1/M2.
 package worker
 
 import (

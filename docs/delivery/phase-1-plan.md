@@ -271,6 +271,8 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 
 ## 7b. Follow-ups surfaced while building M0
 
+- **Split the worker back out when measurement says to.** ADR 0050 collapsed four worker containers into one because they were identical code; the pipeline names survive so that splitting is a `WORKER_PIPELINES` change per deployment, not a rewrite. The signal to split is one pipeline's memory or lag diverging from the others under the M7 load test.
+
 - **The three Python telemetry modules are duplicated** between `api` and `scheduler`. The root fix is a `packages/py-platform` uv workspace member; it needs a root `pyproject.toml` change and was outside every lane's ownership.
 - **No Go driver is chosen for Postgres or Valkey**, so the receiver's `/readyz` probes Kafka only, even though it requires `POSTGRES_DSN` and `REDIS_URL`. `pgx/v5` and `go-redis/v9` are the obvious picks, but Valkey sits on the receiver's hot path so `rueidis` deserves measuring — a real decision, needed by P1-13/P1-14.
 - **Plan-aware rate limits are stubbed** at a fixed multiplier until `organizations.plan` carries real tiers.

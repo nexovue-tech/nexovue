@@ -59,70 +59,23 @@ services:
         limits:
           memory: 512M
 
-  trace-assembler: &worker
+  # One worker process runs every pipeline; WORKER_PIPELINES narrows the set.
+  # Deploy this image more than once with different selections when load
+  # justifies separating them — see ADR 0050.
+  worker:
     build:
       context: ../..
       dockerfile: apps/workers/Dockerfile
       args:
         BINARY: trace-assembler
     image: nexovue/trace-assembler:${NEXOVUE_VERSION:-dev}
-    environment: *data-plane-env
-    depends_on: &worker-deps
-      kafka:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
+    environment:
+      WORKER_PIPELINES: ${WORKER_PIPELINES:-all}
     deploy:
       resources:
         limits:
-          memory: 640M
+          memory: ${WORKER_MEMORY:-768M}
 
-  log-writer:
-    <<: *worker
-    build:
-      context: ../..
-      dockerfile: apps/workers/Dockerfile
-      args:
-        BINARY: log-writer
-    image: nexovue/log-writer:${NEXOVUE_VERSION:-dev}
-    environment: *data-plane-env
-    depends_on: *worker-deps
-    deploy:
-      resources:
-        limits:
-          memory: 320M
-
-  metrics-deriver:
-    <<: *worker
-    build:
-      context: ../..
-      dockerfile: apps/workers/Dockerfile
-      args:
-        BINARY: metrics-deriver
-    image: nexovue/metrics-deriver:${NEXOVUE_VERSION:-dev}
-    environment: *data-plane-env
-    depends_on: *worker-deps
-    deploy:
-      resources:
-        limits:
-          memory: 320M
-
-  edge-aggregator:
-    <<: *worker
-    build:
-      context: ../..
-      dockerfile: apps/workers/Dockerfile
-      args:
-        BINARY: edge-aggregator
-    image: nexovue/edge-aggregator:${NEXOVUE_VERSION:-dev}
-    environment: *data-plane-env
-    depends_on: *worker-deps
-    deploy:
-      resources:
-        limits:
-          memory: 320M
-
-  # ---------- control plane ----------
   api:
     build:
       context: ../..

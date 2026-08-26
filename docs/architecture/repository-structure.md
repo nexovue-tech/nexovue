@@ -52,11 +52,8 @@ Gates run in order: `auth` → `ratelimit` → `decode` → `normalize` → `pro
 
 ```
 apps/workers/
-├─ cmd/
-│  ├─ trace-assembler/           spans → assembled traces → ClickHouse
-│  ├─ log-writer/                logs → ClickHouse
-│  ├─ metrics-deriver/           exact counters from ALL traces, before sampling
-│  └─ edge-aggregator/           service-map dependency edges (P1-55)
+├─ cmd/worker/                   one binary; WORKER_PIPELINES selects which
+│                                pipelines it runs (ADR 0050)
 ├─ internal/
 │  ├─ config/
 │  ├─ consume/                   consumer group, offset commit policy, dead-letter queue
@@ -73,7 +70,7 @@ apps/workers/
 
 Pipeline order carries the invariants: **`derive` runs before `sample`** so counts stay exact, and **`mask` runs before `sink`** so unmasked data is never written.
 
-Separate binaries because they scale independently — trace assembly is memory-bound, log writing is I/O-bound.
+One binary, because the four pipelines were identical code and separate containers cost ~2.5 GB to run four copies of it. They keep their names so that splitting later is a deployment change rather than a rewrite — see ADR 0050.
 
 `cmd/` + `internal/` is the layout the official Go docs recommend for a repo of several binaries sharing server logic. We deliberately do **not** use `pkg/` — it means nothing to the toolchain, the official layout doc does not recommend it, and it comes from a community repo the Go team has disowned.
 

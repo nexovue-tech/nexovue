@@ -16,7 +16,7 @@
 | **ClickHouse** | Telemetry store (traces, logs, derived metrics) | Columnar, ~10x compression, fast scans. The "big data" side. Hot window ~15–30 days. |
 | **Postgres** | Internal / control-plane DB | Users, accounts, projects, API keys, alert rules, connector configs, cases, findings. Business data = relational + transactional. |
 | **pgvector** | RAG vector store (inside Postgres) | Embeddings of past findings, resolved cases, runbooks. One less system to operate. |
-| **Redis** | Utility layer | Rate-limit counters (gateway), hot query cache, pub/sub for live UI updates (e.g. "first span arrived"). |
+| **Valkey** (BSD-3 Redis fork, ADR 0048) | Utility layer | Rate-limit counters (gateway), hot query cache, pub/sub for live UI updates (e.g. "first span arrived"). |
 
 ## 2. Additional Components We Must Build/Add
 
@@ -63,26 +63,46 @@ Keep this boundary sharp → each side scales independently.
 ## 4. End-to-End Data Flow
 
 ```mermaid
-flowchart TD
-    A[Customer apps - OTel SDK or their collector] -->|OTLP + API key| B[Custom receiver - ingestion edge]
-    B -->|auth check| R[(Redis - rate limits)]
-    B --> K[Kafka - raw topics]
-    K --> W[Processing workers - assemble, enrich, tail-sample]
-    W --> CH[(ClickHouse - traces, logs)]
-    CH --> S3[(Object storage - cold tier)]
-    W --> DM[Derived metrics]
-    DM --> AD[Anomaly detection]
-    AD -->|detection event| IE[Insight engine + LLM API]
-    CH --> IE
-    PG[(Postgres - deploy events, config)] --> IE
-    IE -->|finding + case| PG
-    IE --> AL[Alert dispatcher - Slack, Teams, WhatsApp]
-    PG --> API[Backend API]
-    CH --> API
-    API --> FE[Developer app / Owner view]
-    PG -.pgvector embeddings.-> BOT[AI chatbot - RAG]
-    API --> BOT
+flowchart LR
+    subgraph doors["The four doors"]
+        D1["1 · OTel SDK / collector<br/>OTLP + API key"]
+        D2["2 · Our probes<br/>uptime · SSL · API · browser"]
+        D3["3 · Browser snippet<br/>RUM"]
+        D4["4 · Webhooks & pollers<br/>deploys · CloudWatch · pg_stat"]
+    end
+
+    D1 --> RCV["Receiver (Go)<br/>auth → ratelimit → decode<br/>→ normalize → produce"]
+    D3 --> RCV
+    D4 -->|4a webhooks| RCV
+    D2 --> SCH["Scheduler (Python/Celery)<br/>normalizes here"]
+    D4 -->|4b pollers| SCH
+
+    RCV -->|key lookup| VK[("Valkey<br/>rate limits · cache<br/>sessions · pub/sub")]
+    RCV --> ENV{{"Envelope<br/>our metadata + OTLP bytes<br/>traces split per trace_id"}}
+    SCH --> ENV
+    ENV --> KAF["Kafka (KRaft)<br/>spans · logs · metrics"]
+
+    KAF --> WRK["Worker (Go)<br/>one process, pipelines by config<br/>assemble → mask → derive → sample → sink"]
+    WRK --> CH[("ClickHouse<br/>spans · logs · metrics<br/>JSON attributes")]
+    CH --> S3[("SeaweedFS / S3<br/>cold tier")]
+
+    CH --> API["API (Python/FastAPI)<br/>tenancy chokepoint<br/>problem+json · /api/v1"]
+    PG[("Postgres<br/>orgs · users · projects<br/>keys · checks · deploys")] --> API
+    API --> WEB["Web (React)<br/>one shell, every route"]
+    RCV -.->|API keys| PG
+
+    WRK -.->|Phase 2| AD["Anomaly detection"]
+    AD -.-> IE["Insight engine + LLM"]
+    IE -.-> PG
+
+    classDef built fill:#0d3b2e,stroke:#0BEA91,color:#d3fee2
+    classDef later fill:#241304,stroke:#F79F00,color:#ffe9c9,stroke-dasharray:4 3
+    class D1,RCV,SCH,VK,ENV,KAF,WRK,CH,S3,API,PG,WEB built
+    class D2,D3,D4,AD,IE later
 ```
+
+> **Green is running today** (M0): every door-1 path, the envelope, both stores, the API and the web shell all come up healthy under `just dev`. **Amber is designed and not yet built** — doors 2–4 land in M4/M5, and the insight engine is Phase 2.
+
 
 ## 5. What Lives Where (quick reference)
 

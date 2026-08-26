@@ -1,0 +1,12 @@
+# Live reload for the worker process. One binary, all pipelines.
+root = "."
+tmp_dir = "/cache/air/worker"
+
+[build]
+  cmd = "go build -o /cache/air/worker/worker ./apps/workers/cmd/worker"
+  bin = "/cache/air/worker/worker"
+  include_ext = ["go"]
+  include_dir = ["apps/workers", "packages/contracts"]
+  exclude_dir = ["apps/api", "apps/web", "apps/scheduler", "docs", "deploy", "node_modules"]
+  delay = 500
+  stop_on_error = true

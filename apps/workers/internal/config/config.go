@@ -45,6 +45,14 @@ type Config struct {
 	// an hour into a backlog.
 	ClickHouse ClickHouseTarget `env:"-"`
 
+	// Which pipelines this process runs. Defaults to all of them: one container
+	// until load justifies more. In production the same image runs several
+	// times with different selections.
+	PipelinesRaw string `env:"WORKER_PIPELINES" envDefault:"all"`
+
+	// Pipelines is PipelinesRaw parsed, so an unknown name fails at boot.
+	Pipelines []Pipeline `env:"-"`
+
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"30s"`
 }
 
@@ -61,6 +69,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid configuration: %w", err)
 	}
 	cfg.ClickHouse = target
+
+	pipelines, err := ParsePipelines(cfg.PipelinesRaw)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid configuration: %w", err)
+	}
+	cfg.Pipelines = pipelines
 
 	if err := cfg.validate(); err != nil {
 		return Config{}, fmt.Errorf("invalid configuration: %w", err)

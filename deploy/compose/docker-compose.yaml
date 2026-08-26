@@ -90,28 +90,32 @@ services:
           # every save recompiles inside it.
           memory: 768M
 
-  trace-assembler: &go-worker
+  # One worker process runs every pipeline. WORKER_PIPELINES narrows the set,
+  # so the same image can be deployed several times with different selections
+  # once load justifies separating them — see ADR 0050.
+  worker:
     build:
       context: ../..
       dockerfile: deploy/docker/go-dev.Dockerfile
-    command: air -c deploy/air/trace-assembler.toml
+    command: air -c deploy/air/worker.toml
     working_dir: /workspace
     volumes:
       - ../..:/workspace
       - go-cache:/cache
-    environment: &worker-env
+    environment:
       ENV: development
       LOG_LEVEL: debug
       LOG_FORMAT: console
       KAFKA_BROKERS: kafka:9092
       CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:9000/nexovue}
-    healthcheck: &worker-healthcheck
+      WORKER_PIPELINES: all
+    healthcheck:
       test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8081/healthz"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 180s
-    depends_on: &worker-deps
+    depends_on:
       kafka:
         condition: service_healthy
       clickhouse:
@@ -119,44 +123,10 @@ services:
     deploy:
       resources:
         limits:
-          # Trace assembly holds a whole trace-buffer window in memory; the
-          # other three stream through. Plus the compiler, as above.
-          memory: 896M
+          # Trace assembly holds a trace-buffer window in memory; the other
+          # pipelines stream through. Plus the compiler, which dev containers host.
+          memory: 1G
 
-  log-writer:
-    <<: *go-worker
-    command: air -c deploy/air/log-writer.toml
-    environment: *worker-env
-    healthcheck: *worker-healthcheck
-    depends_on: *worker-deps
-    deploy:
-      resources:
-        limits:
-          memory: 640M
-
-  metrics-deriver:
-    <<: *go-worker
-    command: air -c deploy/air/metrics-deriver.toml
-    environment: *worker-env
-    healthcheck: *worker-healthcheck
-    depends_on: *worker-deps
-    deploy:
-      resources:
-        limits:
-          memory: 640M
-
-  edge-aggregator:
-    <<: *go-worker
-    command: air -c deploy/air/edge-aggregator.toml
-    environment: *worker-env
-    healthcheck: *worker-healthcheck
-    depends_on: *worker-deps
-    deploy:
-      resources:
-        limits:
-          memory: 640M
-
-  # ---------- control plane (Python, reloaded on save by uvicorn) ----------
   api:
     build:
       context: ../..
