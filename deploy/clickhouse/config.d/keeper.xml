@@ -1,0 +1,47 @@
+<clickhouse>
+    <!-- Keeper, embedded in the ClickHouse process rather than run beside it.
+         Same binary, same container, so the production container inventory
+         (ADR 0052) is unchanged.
+
+         It exists for KeeperMap, which is what holds the ingest pipeline's
+         per-partition offset state. That state has to be strongly consistent and
+         has to survive a ClickHouse restart — the two properties ClickHouse's own
+         tables deliberately do not offer, and the reason the vendor's Kafka
+         connector keeps this state in Keeper rather than in a table.
+
+         A single-node ensemble is right for one node. Replicated storage would
+         want a real three-node ensemble, and moving to one is a config change:
+         nothing above this file knows where Keeper lives. -->
+    <keeper_server>
+        <tcp_port>9181</tcp_port>
+        <server_id>1</server_id>
+        <log_storage_path>/var/lib/clickhouse/coordination/log</log_storage_path>
+        <snapshot_storage_path>/var/lib/clickhouse/coordination/snapshots</snapshot_storage_path>
+
+        <coordination_settings>
+            <operation_timeout_ms>10000</operation_timeout_ms>
+            <session_timeout_ms>30000</session_timeout_ms>
+            <raft_logs_level>warning</raft_logs_level>
+        </coordination_settings>
+
+        <raft_configuration>
+            <server>
+                <id>1</id>
+                <hostname>127.0.0.1</hostname>
+                <port>9234</port>
+            </server>
+        </raft_configuration>
+    </keeper_server>
+
+    <!-- The server talks to its own Keeper over loopback. -->
+    <zookeeper>
+        <node>
+            <host>127.0.0.1</host>
+            <port>9181</port>
+        </node>
+    </zookeeper>
+
+    <!-- Every KeeperMap table is rooted under this, so no table can reach
+         another's keys by naming a path. -->
+    <keeper_map_path_prefix>/keeper_map_tables</keeper_map_path_prefix>
+</clickhouse>
