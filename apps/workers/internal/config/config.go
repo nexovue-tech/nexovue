@@ -24,6 +24,10 @@ const (
 	EnvProduction  = "production"
 )
 
+// DefaultHealthAddr is where the admin listener binds unless configured
+// otherwise. The self-check reads it too, so the two cannot drift apart.
+const DefaultHealthAddr = ":8081"
+
 // Config is a worker's complete settings surface, read from the environment
 // exactly once, at boot.
 type Config struct {

@@ -18,6 +18,10 @@ import (
 // ServiceName is the value this binary reports in logs and health responses.
 const ServiceName = "receiver"
 
+// DefaultHealthAddr is where the admin listener binds unless configured
+// otherwise. The self-check reads it too, so the two cannot drift apart.
+const DefaultHealthAddr = ":8081"
+
 // Deployment environments. ENV picks one; it is a log field and a guard against
 // a development value reaching production.
 const (

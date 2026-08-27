@@ -86,7 +86,7 @@ nexovue/
 | P1-07 | **Normalized envelope** | `packages/contracts` — protobuf envelope wrapping untouched OTLP bytes; `buf` codegen to committed Go + Python bindings; `buf breaking` gate; 8 golden fixtures with round-trip proofs in both languages | ✅ done |
 | P1-59 | **Control-plane schema** | 11 tables with UUIDv7 defaults, `org_id` denormalized throughout, SHA-256 key hashes; idempotent seed producing a known dev API key | ✅ done |
 | P1-08 | Design tokens & theming | `packages/ui` OKLCH scales, both themes, IBM Plex self-hosted; palette re-verified with the official `apca-w3` and a quantised WCAG check that runs as a gate | ✅ done |
-| P1-09 | Compose — three targets | `compose.infra.yaml` shared via `include:`, plus dev (hot reload), app (production replica) and onprem (skeleton). 12 services healthy from cold start | ✅ done |
+| P1-09 | Compose — three targets | `compose.infra.yaml` shared via `include:`, plus dev (hot reload), app (production replica, multi-stage images, all healthy) and onprem (skeleton) | ✅ done |
 | P1-10 | Migrations | golang-migrate for ClickHouse + Alembic for Postgres; both proved reversible up → down → up | ✅ done |
 | P1-63 | App shell & routes | Vite + React 19 + TanStack Router/Query; global layout; 20 routes + 404 rendering `ComingSoon` with their task id; fetch client on `/api/v1/` | ✅ done |
 | P1-64 | Config, validation & health | Typed config validated at boot, exiting with the variable named; `/healthz` dependency-free, `/readyz` per-dependency with its own deadline | ✅ done |

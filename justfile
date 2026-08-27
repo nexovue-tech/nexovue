@@ -6,6 +6,14 @@ compose := "deploy/compose"
 # go.work members. Go tooling runs per-module: `./...` from the root sees no packages.
 go_modules := "apps/receiver apps/workers packages/contracts"
 
+# Migration targets. Both default to the dev stack's published ports; override
+# either to point at another environment.
+postgres_dsn := env("POSTGRES_DSN", "postgresql+asyncpg://nexovue:nexovue_dev@localhost:" + env("POSTGRES_HOST_PORT", "5432") + "/nexovue")
+# golang-migrate's ClickHouse driver reads credentials from query parameters and
+# ignores URL userinfo — a DSN in the usual user:pass@host form authenticates as
+# `default` and fails with a confusing password error.
+clickhouse_migrate_dsn := env("CLICKHOUSE_MIGRATE_DSN", "clickhouse://localhost:" + env("CLICKHOUSE_NATIVE_HOST_PORT", "9000") + "?username=nexovue&password=nexovue_dev&database=nexovue&x-multi-statement=false")
+
 _default:
     @just --list --unsorted
 
@@ -107,19 +115,19 @@ contracts-check:
 migrate: migrate-pg migrate-ch
 
 migrate-pg:
-    uv run --package nexovue-api alembic -c apps/api/alembic.ini upgrade head
+    POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api alembic -c apps/api/alembic.ini upgrade head
 
 migrate-ch:
-    migrate -path deploy/clickhouse/migrations -database "$CLICKHOUSE_MIGRATE_DSN" up
+    migrate -path deploy/clickhouse/migrations -database "{{clickhouse_migrate_dsn}}" up
 
 # Roll both back one step, to prove the migrations are reversible
 migrate-down:
-    uv run --package nexovue-api alembic -c apps/api/alembic.ini downgrade -1
-    migrate -path deploy/clickhouse/migrations -database "$CLICKHOUSE_MIGRATE_DSN" down 1
+    POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api alembic -c apps/api/alembic.ini downgrade -1
+    migrate -path deploy/clickhouse/migrations -database "{{clickhouse_migrate_dsn}}" down 1
 
 # Create one org, one owner, a production project and a known dev API key
 seed:
-    uv run --package nexovue-api python -m nexovue_api.seed
+    POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api python -m nexovue_api.seed
 
 # ---------- performance ----------
 

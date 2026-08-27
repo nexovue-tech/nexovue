@@ -25,6 +25,11 @@ import (
 const dependencyKafka = "kafka"
 
 func main() {
+	// `receiver -health` is the container healthcheck: distroless has no shell to
+	// run one with, so the binary checks itself. Uses the default port rather than
+	// config, because a config failure is already a hard exit.
+	health.RunSelfCheckIfAsked(os.Args, config.DefaultHealthAddr)
+
 	if err := run(); err != nil {
 		// Config failures happen before the logger exists, so stderr is the
 		// only channel guaranteed to be there.

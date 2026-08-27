@@ -1,0 +1,22 @@
+# The browser-check worker. Separate from apps/scheduler/Dockerfile because
+# Chromium and its dependencies are ~1.5GB that the light queue has no use for.
+FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
+COPY --from=ghcr.io/astral-sh/uv:0.12.6 /uv /usr/local/bin/uv
+
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy PYTHONUNBUFFERED=1
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+COPY apps/api/pyproject.toml apps/api/
+COPY apps/scheduler/pyproject.toml apps/scheduler/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-workspace --package nexovue-scheduler
+
+COPY apps/scheduler apps/scheduler
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --package nexovue-scheduler
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Playwright's image already provides a non-root `pwuser` with the browsers
+# installed under its home; using it avoids re-downloading them.
+USER pwuser
+CMD ["celery", "-A", "nexovue_scheduler.celery_app", "worker", "--queues", "browser", "--concurrency", "1"]

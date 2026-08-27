@@ -35,7 +35,15 @@ services:
     build:
       context: ../..
       dockerfile: apps/receiver/Dockerfile
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     image: nexovue/receiver:${NEXOVUE_VERSION:-dev}
+    healthcheck:
+      test: ["CMD", "/receiver", "-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     environment: &data-plane-env
       ENV: production
       LOG_LEVEL: info
@@ -67,10 +75,22 @@ services:
       context: ../..
       dockerfile: apps/workers/Dockerfile
       args:
-        BINARY: trace-assembler
-    image: nexovue/trace-assembler:${NEXOVUE_VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+    image: nexovue/worker:${NEXOVUE_VERSION:-dev}
+    healthcheck:
+      test: ["CMD", "/worker", "-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     environment:
+      <<: *data-plane-env
       WORKER_PIPELINES: ${WORKER_PIPELINES:-all}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -81,6 +101,12 @@ services:
       context: ../..
       dockerfile: apps/api/Dockerfile
     image: nexovue/api:${NEXOVUE_VERSION:-dev}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     environment: &control-plane-env
       ENV: production
       LOG_LEVEL: info
@@ -110,6 +136,12 @@ services:
       context: ../..
       dockerfile: apps/web/Dockerfile
     image: nexovue/web:${NEXOVUE_VERSION:-dev}
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     ports:
       - "8080:8080"
     deploy:
