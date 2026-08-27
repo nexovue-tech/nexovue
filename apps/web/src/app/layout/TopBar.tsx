@@ -1,5 +1,6 @@
 import { Menu } from "lucide-react";
 
+import { SelectField } from "@/shared/components/SelectField";
 import { ThemeToggle } from "@/shared/theme/ThemeToggle";
 
 import { PROJECTS, TIME_RANGES, useShellControls } from "./shell-controls";
@@ -34,37 +35,23 @@ export function TopBar({
         <Menu size={16} aria-hidden="true" />
       </button>
 
-      <label className="flex items-baseline gap-2">
-        <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Project</span>
-        <select
-          value={projectId}
-          onChange={(event) => setProjectId(event.target.value)}
-          className="border-none bg-transparent font-medium text-ink text-sm outline-none"
-        >
-          {PROJECTS.map((project) => (
-            <option key={project.id} value={project.id}>
-              {project.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      <SelectField
+        label="Project"
+        value={projectId}
+        options={PROJECTS}
+        onChange={setProjectId}
+        optionLabel={(project) => project.name}
+      />
 
       <span aria-hidden className="h-4 w-px bg-line" />
 
-      <label className="flex items-baseline gap-2">
-        <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Last</span>
-        <select
-          value={rangeId}
-          onChange={(event) => setRangeId(event.target.value)}
-          className="border-none bg-transparent font-medium text-ink text-sm outline-none"
-        >
-          {TIME_RANGES.map((range) => (
-            <option key={range.id} value={range.id}>
-              {range.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <SelectField
+        label="Last"
+        value={rangeId}
+        options={TIME_RANGES}
+        onChange={setRangeId}
+        optionLabel={(range) => range.label}
+      />
 
       <div className="flex-1" />
 

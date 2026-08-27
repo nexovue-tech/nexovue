@@ -274,6 +274,17 @@ Components without a policy get one invented per screen. These are the policies.
 
 **Loading is skeletons, not spinners.** A skeleton says what is coming and holds the layout still; a spinner says only that something is happening. That difference is the reading-product thesis applied to waiting.
 
+## Form controls stay native
+
+Selects, checkboxes and inputs keep their native elements and lose only the browser's
+chrome (`appearance: none`). A custom listbox means rebuilding keyboard navigation,
+type-ahead, screen-reader semantics and the mobile picker — all of which the platform
+already does better than we would.
+
+The top-bar controls read as a sentence — `PROJECT production ⌄` — with the label in mono
+caps and the value in medium sans, so a control looks like part of the prose rather than
+a form dropped into it.
+
 ## Responsive
 
 The sidebar is a **column above `md`, a drawer below it**. At 375px a fixed 13rem rail
