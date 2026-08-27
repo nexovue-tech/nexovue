@@ -56,7 +56,7 @@ export default defineConfig({
     // The API is a separate service; the browser only ever knows the /api/v1/ path.
     proxy: {
       "/api": {
-        target: process.env.NEXOVUE_API_ORIGIN ?? "http://localhost:8000",
+        target: process.env.NEXOVUE_API_ORIGIN ?? "http://localhost:18000",
         changeOrigin: true,
       },
     },

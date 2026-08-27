@@ -34,6 +34,30 @@ The dev ceiling is high because a dev container is also a build machine. Go's co
 | *+ demo app & loadgen* | ~1 GB | `tools` profile |
 | *+ Playwright* | ~1.5 GB per browser | `doors` profile |
 
+## Host ports
+
+Every published port sits in a **nexovue-specific `1xxxx` block**, so the stack never
+fights another project on this machine for 5432, 6379, 9000, 5173 or 8000. Container-side
+ports are unchanged — only the host mapping moved.
+
+| | Host | Container |
+|---|---|---|
+| Web (Vite) | **15173** | 5173 |
+| API | **18000** | 8000 |
+| Receiver OTLP HTTP · gRPC | **14318 · 14317** | 4318 · 4317 |
+| Postgres | **15432** | 5432 |
+| ClickHouse HTTP · native | **18123 · 19000** | 8123 · 9000 |
+| Valkey | **16379** | 6379 |
+| Kafka | **19092** | 29092 |
+| SeaweedFS S3 · master | **18333 · 19333** | 8333 · 9333 |
+| Demo app | **18090** | 8090 |
+| Ollama | **21434** | 11434 |
+
+Ollama is the exception to the pattern: a natively-installed Ollama already owns 11434,
+and on this machine native is the right way to run it anyway.
+
+Each has a `*_HOST_PORT` override if even these collide.
+
 ## Rules
 
 **1. Every service declares a hard `deploy.resources.limits.memory`.** Without one, ClickHouse expands to fill the VM and everything else starts swapping. A limit turns "the laptop got slow" into a clear OOM on one container.

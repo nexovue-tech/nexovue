@@ -8,11 +8,11 @@ go_modules := "apps/receiver apps/workers packages/contracts"
 
 # Migration targets. Both default to the dev stack's published ports; override
 # either to point at another environment.
-postgres_dsn := env("POSTGRES_DSN", "postgresql+asyncpg://nexovue:nexovue_dev@localhost:" + env("POSTGRES_HOST_PORT", "5432") + "/nexovue")
+postgres_dsn := env("POSTGRES_DSN", "postgresql+asyncpg://nexovue:nexovue_dev@localhost:" + env("POSTGRES_HOST_PORT", "15432") + "/nexovue")
 # golang-migrate's ClickHouse driver reads credentials from query parameters and
 # ignores URL userinfo — a DSN in the usual user:pass@host form authenticates as
 # `default` and fails with a confusing password error.
-clickhouse_migrate_dsn := env("CLICKHOUSE_MIGRATE_DSN", "clickhouse://localhost:" + env("CLICKHOUSE_NATIVE_HOST_PORT", "9000") + "?username=nexovue&password=nexovue_dev&database=nexovue&x-multi-statement=false")
+clickhouse_migrate_dsn := env("CLICKHOUSE_MIGRATE_DSN", "clickhouse://localhost:" + env("CLICKHOUSE_NATIVE_HOST_PORT", "19000") + "?username=nexovue&password=nexovue_dev&database=nexovue&x-multi-statement=false")
 
 _default:
     @just --list --unsorted

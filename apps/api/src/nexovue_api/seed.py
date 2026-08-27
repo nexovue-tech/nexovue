@@ -105,7 +105,7 @@ async def main() -> None:
         project=DEV_PROJECT_SLUG,
         login_email=DEV_OWNER_EMAIL,
         login_password=DEV_OWNER_PASSWORD,
-        otlp_endpoint="http://localhost:4318",
+        otlp_endpoint="http://localhost:14318",
         # The header this travels in is P1-13's to decide; only the key is known here.
         api_key=DEV_API_KEY,
     )

@@ -3,7 +3,7 @@
 Vite + React 19 + TanStack Router + TanStack Query. Styling and tokens come from `@nexovue/ui`; nothing in here defines a colour.
 
 ```
-pnpm --filter @nexovue/web dev        # http://localhost:5173, /api proxied to :8000
+pnpm --filter @nexovue/web dev        # http://localhost:15173, /api proxied to :18000
 pnpm --filter @nexovue/web build      # tsc -b && vite build
 pnpm exec biome check .               # from the repo root
 ```
