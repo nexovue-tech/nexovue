@@ -28,24 +28,50 @@ block is byte-identical — `derive.Drain` sorts for precisely this reason — b
 deduplication log that would have recognised it did not survive the restart that caused
 the replay.
 
+## What the research settled
+
+Two of the four candidates are answered by ClickHouse's own
+[kafka-connect design](https://github.com/ClickHouse/clickhouse-kafka-connect/blob/main/docs/DESIGN.md),
+which solves precisely this problem and is the reference implementation.
+
+**Storing offsets in ClickHouse is rejected by its own authors** — *"ClickHouse is not
+strongly consistent by default… With careful configuration you can ensure linearizable
+inserts… however this adds significant insertion latency… a redundant component and
+unnecessary overhead."* Our narrower form — the watermark inside the counter block, atomic
+because it is one block — holds on a single node and stops holding the moment ClickHouse is
+replicated, which is the wrong property for a fix to a durability bug.
+
+**`ReplacingMergeTree` is worse than it looks.** It collapses duplicates on merge, on
+ClickHouse's own schedule, and *does not deduplicate at query time*. A `sum()` over unmerged
+parts still double-counts, so every counter query would have to pay for `FINAL`.
+
+**What the connector actually does: `KeeperMap`** — a table engine over ClickHouse Keeper,
+holding a per-partition state machine of `minOffset`/`maxOffset` with a flag written *before*
+the insert and another *after* the acknowledgement, so a replay can tell a completed batch
+from an interrupted one. Keeper is chosen because it is strongly consistent and *"ideal for
+persisting small data quantities."*
+
+The engine is present in our build. **A Keeper is not.** Adopting this means adding one to
+the stack, against an inventory [0052](0052-full-production-container-inventory.md) fixed at
+fourteen — though Keeper is also what replicated ClickHouse requires, so it is a cost that
+arrives anyway the day storage needs high availability.
+
 ## Decision
 
-**Not yet taken.** The measurement is recorded so the choice is made against a number
-rather than a fear. Three candidates, none free:
+**Not yet taken.** With the field narrowed to two, the choice is:
 
-1. **A durable watermark carried inside the counter block.** A per-partition high-water
-   offset written as a row in the same insert as the counters, so it lands atomically with
-   them — ClickHouse has no cross-table transaction, but it does have one block. On
-   partition assignment the worker reads it and declines to re-count at or below it. Sound
-   and survives anything; costs internal rows in a customer-facing table and a read on
-   every assignment.
-2. **`ReplacingMergeTree` on the series identity.** Structural rather than a transient log,
-   so it survives restarts. But it collapses on merge, not on read, so a `sum()` over
-   unmerged parts still double-counts unless every query pays for `FINAL`.
-3. **Accept and publish it.** 0.18%, only when the store restarts mid-flight, always in the
-   direction of over-counting. Cheapest, and defensible for a metric read as a rate — but
-   invariant 3 says the numbers are exact, and "exact except during an outage" is a
-   different promise than the one written down.
+1. **Accept and publish the bound.** 0.18%, only when the store restarts mid-flight, always
+   over and never under. The research supports it as normal practice — most pipelines run
+   at-least-once and reconcile in the query. Invariant 3 then reads *exact under sampling,
+   bounded across a store restart*, which is a weaker promise than the one written down but
+   an honest one.
+2. **Adopt `KeeperMap` with the connector's state machine.** Correct, vendor-proven, and
+   survives anything. Costs a Keeper.
+
+The recommendation is **(1) now, (2) when ClickHouse becomes replicated** — at which point
+Keeper is already in the stack and KeeperMap is nearly free. Deduplication from
+[0060](0060-counter-idempotency-via-clickhouse-dedup.md) stays either way: it still covers
+the common case, a worker restarting while the store stays up.
 
 ## Consequences
 
