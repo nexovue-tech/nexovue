@@ -119,7 +119,7 @@ nexovue/
 | P1-20 | No-loss semantics | ack only after broker accept; idempotent consumers; dead-letter queue | todo |
 | P1-21 | Tail sampling | 100% error + slow traces, 10% healthy; per-tenant tunable | todo |
 | P1-22 | Exact counters | metrics derived from **all** traces before sampling → `metrics` table | todo |
-| P1-23 | Materialized view | `endpoint_stats_1m` (Phase 2 anomaly-detection hook) | todo |
+| P1-23 | Materialized view | `endpoint_stats_1m` — explicit target table with `SimpleAggregateFunction` counters and `AggregateFunction` quantiles, partitioned by month; proved to merge correctly rather than accumulate (Phase 2 anomaly-detection hook) | ✅ done |
 | P1-24 | PII masking | masking step in workers; rules configurable in Postgres | todo |
 | P1-25 | Tenant isolation suite | tests that actively try to leak across tenants and must fail to | todo |
 | P1-27 | Chaos test | kill broker and ClickHouse mid-load, restart, assert zero loss | todo |
@@ -280,7 +280,7 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 - **The three Python telemetry modules are duplicated** between `api` and `scheduler`. The root fix is a `packages/py-platform` uv workspace member; it needs a root `pyproject.toml` change and was outside every lane's ownership.
 - ~~**No Go driver is chosen for Postgres or Valkey.**~~ **Resolved in M1** — ADR 0055: `pgx/v5` + `pgxpool`, and `valkey-io/valkey-go` (the maintained rueidis fork) rather than `go-redis`. `/readyz` now probes all three.
 - **Plan-aware rate limits are stubbed** at a fixed multiplier until `organizations.plan` carries real tiers.
-- **`logs` and `metrics` sort keys** were left as recorded. The argument that moved `project_id` into the `spans` key (ADR 0049) applies to them too, and is worth revisiting once their query patterns are real.
+- ~~**`logs` and `metrics` sort keys** were left as recorded.~~ **Resolved in M2** — ADR 0057: `project_id` is now second in `logs`, `metrics` and `endpoint_stats_1m`, applied while both tables were still empty, which ADR 0049 called the only moment it is free.
 
 ## 7c. Follow-ups surfaced while building M1
 
