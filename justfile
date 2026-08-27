@@ -109,6 +109,11 @@ e2e:
 e2e-headed:
     pnpm --filter @nexovue/e2e test --headed
 
+# Destructive by design, and never part of `just check`.
+# Kill the broker and the store under load; assert nothing acknowledged was lost (P1-27).
+chaos:
+    cd tools/chaos && go test -tags chaos -v -timeout 20m ./...
+
 # ---------- contracts ----------
 
 # Regenerate Go and Python bindings from the envelope proto

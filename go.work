@@ -4,6 +4,7 @@ use (
 	./apps/receiver
 	./apps/workers
 	./packages/contracts
+	./tools/chaos
 	./tools/demo-app
 	./tools/loadgen
 )

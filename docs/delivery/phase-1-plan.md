@@ -121,7 +121,7 @@ nexovue/
 | P1-22 | Exact counters | metrics derived from **all** traces before sampling → `metrics` table | ✅ done |
 | P1-23 | Materialized view | `endpoint_stats_1m` — explicit target table with `SimpleAggregateFunction` counters and `AggregateFunction` quantiles, partitioned by month; proved to merge correctly rather than accumulate (Phase 2 anomaly-detection hook) | ✅ done |
 | P1-24 | PII masking | masking step in workers; rules configurable in Postgres | ✅ done |
-| P1-25 | Tenant isolation suite | tests that actively try to leak across tenants and must fail to | todo |
+| P1-25 | Tenant isolation suite | tests that actively try to leak across tenants and must fail to | ✅ done |
 | P1-27 | Chaos test | kill broker and ClickHouse mid-load, restart, assert zero loss | todo |
 
 ### M3 — Widen door 1 (logs + metrics + errors)

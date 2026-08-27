@@ -1,18 +1,47 @@
 """The tenancy chokepoint.
 
 Every ClickHouse query in this service is built here, so the tenant filter is
-injected in one place rather than remembered in twelve. The whole
-multi-tenancy invariant rests on this file: if a query can reach the driver
-without a tenant binding, isolation is a convention rather than a guarantee.
+bound in one place rather than remembered in twelve.
+
+**What guarantees what.** Isolation rests on two layers, and it is worth being
+exact about which one is load-bearing, because an earlier version of this file
+claimed more than it delivered.
+
+The *guarantee* is structural, in `tests/test_tenant_chokepoint_structure.py`: it
+parses every module under `src/` and fails if any statement reads a telemetry
+table without the tenant predicate, if any such statement is assembled from a
+runtime value, or if the raw driver is reached outside this package. Every query
+in this service is a module constant, so that check is total.
+
+This runtime check is the *backstop*. It cannot be a complete guarantee, because
+deciding what arbitrary SQL does by inspecting its text is not soundly possible —
+the predicate has to be a real conjunct, and only a parser knows that. What it
+does do is reject the mistake anyone actually makes: forgetting the filter. It
+now also rejects the three near-misses that used to pass, all of which return
+every tenant's rows while containing the required text:
+
+    /* {tenant_id:String} */ SELECT ... FROM spans     -- inside a comment
+    ... WHERE '{tenant_id:String}' != ''               -- inside a string literal
+    SELECT {tenant_id:String}, ... FROM spans          -- projected, not filtered
 """
 
+import re
 from typing import Any, Final
 
 from clickhouse_connect.driver.asyncclient import AsyncClient
 
-# ClickHouse's server-side parameter syntax. A query that does not reference
-# this cannot have been scoped to a tenant.
+# ClickHouse's server-side parameter syntax.
 TENANT_BINDING: Final = "{tenant_id:String}"
+
+# The predicate itself, not merely a mention of the parameter. Whitespace varies;
+# nothing else may.
+TENANT_PREDICATE: Final = re.compile(r"\btenant_id\s*=\s*\{tenant_id:String\}")
+
+# Comments and single-quoted literals are stripped before the predicate is looked
+# for, because ClickHouse does not substitute a parameter in either — text there
+# reads as the requirement while doing nothing.
+_COMMENTS: Final = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
+_STRING_LITERALS: Final = re.compile(r"'(?:[^'\\]|\\.|'')*'")
 
 # A single request must never be able to exhaust the server. These are the
 # last line of defence; the client is configured with them too, so a caller
@@ -31,9 +60,20 @@ class TenantFilterMissingError(RuntimeError):
 
     def __init__(self, sql: str) -> None:
         super().__init__(
-            f"query does not reference {TENANT_BINDING} and would read across "
-            f"tenants: {sql.strip()[:200]}"
+            f"query has no `tenant_id = {TENANT_BINDING}` predicate outside of "
+            f"comments and string literals, and would read across tenants: "
+            f"{sql.strip()[:200]}"
         )
+
+
+def _executable_text(sql: str) -> str:
+    """The SQL with everything ClickHouse will not act on removed."""
+    return _STRING_LITERALS.sub("''", _COMMENTS.sub(" ", sql))
+
+
+def binds_tenant(sql: str) -> bool:
+    """Whether the statement filters on the tenant, as opposed to mentioning it."""
+    return bool(TENANT_PREDICATE.search(_executable_text(sql)))
 
 
 class TenantScopedRepository:
@@ -52,7 +92,7 @@ class TenantScopedRepository:
         self, sql: str, parameters: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
         """Run a read, scoped to this tenant, bounded in time and rows."""
-        if TENANT_BINDING not in sql:
+        if not binds_tenant(sql):
             raise TenantFilterMissingError(sql)
 
         bound: dict[str, Any] = {**(parameters or {}), "tenant_id": self._tenant_id}

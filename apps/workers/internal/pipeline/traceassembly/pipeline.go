@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/ClickHouse/ch-go/chpool"
@@ -58,6 +59,11 @@ type Pipeline struct {
 	parked  *dlq.Queue
 	seen    *dedupe.Offsets
 	commits commitQueue
+
+	// running is what readiness reports. A worker whose pipeline has stopped is
+	// not ready, however healthy its dependencies look — the failure that taught
+	// us this presented as a green container consuming nothing for nine minutes.
+	running atomic.Bool
 
 	log      *slog.Logger
 	limits   config.SpanIngest
@@ -162,6 +168,8 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		slog.Int("sampling_healthy_percent", p.sampling.HealthyPercent),
 		slog.Duration("sampling_slow_threshold", p.sampling.SlowThreshold),
 	)
+	p.running.Store(true)
+	defer p.running.Store(false)
 	defer p.log.InfoContext(ctx, "trace assembly stopped")
 
 	var pending []*kgo.Record
@@ -174,7 +182,15 @@ func (p *Pipeline) Run(ctx context.Context) error {
 
 		fetches, err := p.poll(ctx, len(pending), flushBy)
 		if errors.Is(err, errClientClosed) {
-			return nil
+			// Only our own shutdown may close the consumer. Closed while the
+			// context is still live means the pipeline is finished but the
+			// process is not — it would go on serving a healthy /readyz while
+			// consuming nothing, and ingest would be lost in silence. Returning
+			// an error is what makes the process exit and the container restart.
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("consumer closed while the pipeline was running: %w", err)
 		}
 		if err != nil {
 			return err
@@ -227,8 +243,8 @@ func (p *Pipeline) poll(
 	return fetches, p.reportFetchErrors(ctx, fetches)
 }
 
-// errClientClosed ends Run when the consumer is closed under it, which happens
-// during shutdown and is not a failure.
+// errClientClosed ends Run when the consumer is closed under it. That is only
+// benign during shutdown; see Run for why the distinction matters.
 var errClientClosed = errors.New("kafka consumer closed")
 
 // reportFetchErrors logs what franz-go will retry on its own and returns only
@@ -392,4 +408,14 @@ func later(current, candidate time.Time) time.Time {
 		return candidate
 	}
 	return current
+}
+
+// Running reports whether the consume loop is live. Registered as a readiness
+// probe so a stopped pipeline turns the container red instead of leaving it
+// healthy and idle.
+func (p *Pipeline) Running(context.Context) error {
+	if !p.running.Load() {
+		return errors.New("trace assembly is not running")
+	}
+	return nil
 }

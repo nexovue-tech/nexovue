@@ -34,6 +34,11 @@ const (
 	dependencyKafka      = "kafka"
 	dependencyClickHouse = "clickhouse"
 	dependencyPostgres   = "postgres"
+
+	// Readiness has to answer "is this worker doing its job", not merely "are
+	// its dependencies reachable". A pipeline that stops leaves every dependency
+	// probe green while nothing is consumed.
+	checkTraceAssembly = "trace-assembly"
 )
 
 // Main is the whole body of every worker binary: it runs the named worker and
@@ -107,7 +112,7 @@ func run(serviceName string) error {
 	// Buffered so the first failure is recorded even if nothing is selecting
 	// on it yet, and so reporting one never blocks a pipeline's exit.
 	failures := make(chan error, 1)
-	stopPipelines, err := startPipelines(ctx, cfg, store, log, stageOptions, failures)
+	stopPipelines, err := startPipelines(ctx, cfg, store, log, stageOptions, registry, failures)
 	if err != nil {
 		return err
 	}
@@ -124,6 +129,7 @@ func startPipelines(
 	store *chpool.Pool,
 	log *slog.Logger,
 	stageOptions traceassembly.Options,
+	registry *health.Registry,
 	failures chan<- error,
 ) (func(), error) {
 	var started []func()
@@ -140,6 +146,7 @@ func startPipelines(
 			return nil, err
 		}
 		started = append(started, spans.Close)
+		registry.Register(health.Check{Name: checkTraceAssembly, Probe: spans.Running})
 		go reportFailure(failures, func() error { return spans.Run(ctx) })
 	}
 
