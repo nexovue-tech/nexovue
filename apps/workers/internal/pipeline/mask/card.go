@@ -14,8 +14,9 @@ const (
 // dashes, the two ways a human writes a card number — are part of the run.
 //
 // Luhn is what makes this safe to have on by default: a random 16-digit id has
-// one chance in ten of passing it, and a real card number always does.
-func maskCardNumbers(text string) (string, bool) {
+// one chance in ten of passing it, and a real card number always does. The one
+// in ten is why replace may decline a run: the project allowlisted it.
+func maskCardNumbers(text string, replace func(run string) (string, bool)) (string, bool) {
 	if !hasEnoughDigits(text) {
 		return text, false
 	}
@@ -31,12 +32,14 @@ func maskCardNumbers(text string) (string, bool) {
 		}
 		end, digits := scanCardRun(text, index)
 		if isCardNumber(text[index:end], digits) {
-			if builder.Len() == 0 {
-				builder.Grow(len(text))
+			if replacement, ok := replace(text[index:end]); ok {
+				if builder.Len() == 0 {
+					builder.Grow(len(text))
+				}
+				builder.WriteString(text[copied:index])
+				builder.WriteString(replacement)
+				copied = end
 			}
-			builder.WriteString(text[copied:index])
-			builder.WriteString(Placeholder)
-			copied = end
 		}
 		index = end
 	}

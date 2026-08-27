@@ -56,13 +56,30 @@ All environment variables, all with working defaults.
 
 ## Reading the output
 
+- **spans offered** is everything put on the wire to the receiver. It splits
+  exactly three ways: accepted, refused, unknown.
 - **spans accepted** counts only what came back `200`. Refused spans are reported
   separately, because reporting refused load as throughput is exactly the mistake
   the budget table exists to catch.
+- **spans unknown** is this tool's contribution to the tolerance on an exact
+  count. These went to the receiver and no answer could be read — a timeout, a
+  reset, a cancelled caller. The receiver may already have published them before
+  the answer was lost, and the SDK retries the batch either way, so a downstream
+  count exceeding *accepted* by up to this many spans is correct behaviour, not
+  loss and not double counting. It is a lower bound on the whole tolerance: what
+  a partly-published refusal leaves downstream is the receiver's to account for,
+  so `0` here does not by itself license an equality assertion.
+- **never sent** is the opposite case: the export failed before any connection to
+  the receiver existed, so those spans are nowhere downstream and are not counted
+  as offered. Only a dial failure earns this; anything after a socket exists is
+  unknown, because Go's client cannot tell a request the receiver never read from
+  one it read and acted on.
 - **throughput / sustained** is the median whole second of the run. The first and
   last seconds are partial and are dropped.
 - **accept latency** percentiles use nearest rank, so every figure printed is a
-  latency that was actually observed — nothing is interpolated.
+  latency that was actually observed — nothing is interpolated. Only answered
+  requests contribute; an unanswered one would enter the request timeout as if
+  the receiver had taken that long.
 - **queryable lag** is accurate to one poll interval and never better.
 
 ## Known limits

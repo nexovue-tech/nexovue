@@ -33,6 +33,11 @@ type Refresher struct {
 	defaults Settings
 	interval time.Duration
 	log      *slog.Logger
+
+	// The deployment-wide masking secret, from which each project's hashing key
+	// is derived. Empty means hashing is unavailable and a rule asking for it is
+	// rejected rather than weakened.
+	maskSecret []byte
 }
 
 // NewRefresher returns a refresher that replaces cache's snapshot every
@@ -43,13 +48,15 @@ func NewRefresher(
 	defaults Settings,
 	interval time.Duration,
 	log *slog.Logger,
+	maskSecret []byte,
 ) *Refresher {
 	return &Refresher{
-		reader:   reader,
-		cache:    cache,
-		defaults: defaults,
-		interval: interval,
-		log:      log.With(slog.String("component", "project-config")),
+		reader:     reader,
+		cache:      cache,
+		defaults:   defaults,
+		interval:   interval,
+		maskSecret: maskSecret,
+		log:        log.With(slog.String("component", "project-config")),
 	}
 }
 
@@ -73,17 +80,30 @@ func (r *Refresher) Refresh(ctx context.Context) error {
 }
 
 // parse turns one row into settings, falling back to the defaults for whichever
-// half is malformed. Defaults mask more and store more, so a typo in a config
-// document never quietly reduces either.
+// half is malformed.
+//
+// The comment here used to claim the defaults mask more, so a typo could never
+// quietly reduce masking. That is false: the defaults name no keys at all, so a
+// rejected document silently stops masking every custom key the project asked
+// for — the failure mode is the opposite of the one described. Sampling is
+// genuinely safe to default; masking is not, so a rejected masking document now
+// keeps whatever last parsed for that project and only falls back to the
+// defaults when nothing ever has.
 func (r *Refresher) parse(ctx context.Context, row Row) Settings {
 	settings := r.defaults
 
-	rules, err := mask.RulesFromJSON(row.MaskingConfig)
-	if err != nil {
-		r.log.ErrorContext(ctx, "project masking config ignored, using defaults",
-			slog.String("project_id", row.ProjectID), slog.String("error", err.Error()))
-	} else {
+	rules, err := mask.RulesFromJSON(row.MaskingConfig, r.maskOptionsFor(row.ProjectID)...)
+	switch previous, known := r.cache.Loaded(row.ProjectID); {
+	case err == nil:
 		settings.Masking = rules
+	case known:
+		settings.Masking = previous.Masking
+		r.log.ErrorContext(ctx, "project masking config rejected, keeping the last good one",
+			slog.String("project_id", row.ProjectID), slog.String("error", err.Error()))
+	default:
+		r.log.ErrorContext(ctx, "project masking config rejected and none was ever loaded; "+
+			"falling back to defaults, which name no custom keys",
+			slog.String("project_id", row.ProjectID), slog.String("error", err.Error()))
 	}
 
 	policy, err := sample.PolicyFromJSON(row.SamplingConfig, r.defaults.Sampling)
@@ -127,4 +147,18 @@ func (r *Refresher) refreshAndLog(ctx context.Context) {
 	}
 	r.log.DebugContext(ctx, "project config refreshed",
 		slog.Int("projects", r.cache.Configured()))
+}
+
+// maskOptionsFor derives this project's hashing key from the deployment secret.
+func (r *Refresher) maskOptionsFor(projectID string) []mask.Option {
+	if len(r.maskSecret) == 0 {
+		return nil
+	}
+	key, err := mask.DeriveHashKey(r.maskSecret, projectID)
+	if err != nil {
+		// Width is validated at boot, so this cannot fire without the config
+		// layer being wrong.
+		return nil
+	}
+	return []mask.Option{mask.WithHashKey(key)}
 }

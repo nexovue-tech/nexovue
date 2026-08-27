@@ -44,6 +44,12 @@ const nanosPerMillisecond = 1e6
 // spanRow is one row of the `spans` table, in the order the columns are
 // declared. Ids arrive hex-encoded and padded, ready for FixedString.
 type spanRow struct {
+	// TraceState is the span's raw W3C tracestate, carried for the sampler and
+	// never written: it reads an explicit `rv` from it when a producer upstream
+	// has already fixed the trace's randomness, so our decision agrees with
+	// theirs instead of being an independent coin flip.
+	TraceState string
+
 	Timestamp         time.Time
 	TenantID          string
 	ProjectID         string
@@ -162,6 +168,10 @@ func flattenSpan(
 		ResourceAttrs:     resource.attrsJSON,
 		SpanAttrs:         attributesJSON(attributes),
 		Events:            eventsJSON(span.GetEvents()),
+		// Carried for the sampler alone, which reads an explicit `rv` out of it
+		// when a producer upstream has already fixed the trace's randomness. Not
+		// stored: nothing queries it.
+		TraceState: span.GetTraceState(),
 	}
 }
 

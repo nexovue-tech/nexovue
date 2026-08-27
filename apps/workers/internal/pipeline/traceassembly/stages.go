@@ -47,11 +47,12 @@ func (r spanRow) countable() derive.Span {
 // sampleFacts is this span as the sample stage sees it.
 func (r spanRow) sampleFacts() sample.Facts {
 	return sample.Facts{
-		TraceID:   r.traceKey(),
-		ProjectID: r.ProjectID,
-		Start:     r.Timestamp,
-		Duration:  millisecondsDuration(r.DurationMS),
-		Errored:   r.errored(),
+		TraceID:    r.traceKey(),
+		ProjectID:  r.ProjectID,
+		Start:      r.Timestamp,
+		Duration:   millisecondsDuration(r.DurationMS),
+		Errored:    r.errored(),
+		TraceState: r.TraceState,
 	}
 }
 

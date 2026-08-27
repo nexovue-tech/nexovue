@@ -45,19 +45,45 @@ func (r Report) Write(w io.Writer) error {
 func (r Report) writeTransport(out *printer) {
 	t := r.Transport
 	out.printf("requests           %d in %s\n", t.Requests, t.Window.Round(time.Millisecond))
-	out.printf("spans offered      %d\n", t.SpansOffered)
+	out.printf("spans offered      %d (everything put on the wire to the receiver)\n", t.SpansOffered)
 	out.printf("spans accepted     %d\n", t.SpansAccepted)
-	if t.TransportFailures > 0 {
-		out.printf("unanswered         %d\n", t.TransportFailures)
+	if t.SpansRefused > 0 {
+		out.printf("spans refused      %d\n", t.SpansRefused)
+	}
+	r.writeUnknown(out)
+	if t.NotSentRequests > 0 {
+		out.printf("never sent         %d spans in %d requests that did not reach the receiver;\n",
+			t.NotSentSpans, t.NotSentRequests)
+		out.printf("                   not offered, and nowhere downstream\n")
 	}
 	out.printf("responses          %s\n", statusSummary(t.Statuses))
+}
+
+// writeUnknown names this run's own contribution to the tolerance on an exact
+// count, so a reader meets it here rather than inferring it from a mismatch.
+// It is a lower bound on the whole tolerance, not the whole of it: what a
+// partly-published refusal leaves downstream is the receiver's to say.
+func (r Report) writeUnknown(out *printer) {
+	t := r.Transport
+	if t.UnknownRequests == 0 {
+		out.printf("spans unknown      0 — every offered span got a readable answer, so nothing\n")
+		out.printf("                   measured here widens an exact downstream comparison\n")
+		return
+	}
+	out.printf("spans unknown      %d in %d requests the receiver was given and did not answer\n",
+		t.UnknownSpans, t.UnknownRequests)
+	out.printf("                   readably. It may have published them before the answer was\n")
+	out.printf("                   lost, and the client retries the batch either way, so a\n")
+	out.printf("                   downstream count above accepted is expected — at least this\n")
+	out.printf("                   many spans of it originate here\n")
 }
 
 func (r Report) writeLatency(out *printer) {
 	l := r.Transport.Latency
 	out.printf("\naccept latency     p50 %s · p90 %s · p99 %s · max %s\n",
 		ms(l.P50), ms(l.P90), ms(l.P99), ms(l.Max))
-	out.printf("                   measured at the proxy, covering the receiver call only\n")
+	out.printf("                   measured at the proxy, covering the receiver call only,\n")
+	out.printf("                   over the %d requests that were answered\n", r.Transport.AnsweredRequests())
 }
 
 func (r Report) writeThroughput(out *printer) {

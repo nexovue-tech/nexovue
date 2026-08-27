@@ -14,11 +14,36 @@ type Masking struct {
 	// ProjectRefresh is how often per-project rules are reloaded from the
 	// control plane, and therefore how long a rule change takes to apply.
 	ProjectRefresh time.Duration `env:"WORKERS_PROJECT_CONFIG_REFRESH" envDefault:"30s"`
+
+	// HashSecret keys the pseudonyms a hashing rule produces, base64-encoded.
+	//
+	// A rule can replace a value with a stable pseudonym instead of blanking it,
+	// so "the same user across these requests" stays answerable without saying
+	// who. That is only worth anything keyed: an unkeyed digest of an email or an
+	// account id is brute-forced from a candidate list, which is why PCI DSS v4
+	// stopped accepting plain hashes of card numbers.
+	//
+	// Absent, and hashing is simply unavailable — a project that asks for it gets
+	// a rejected config document rather than a weak pseudonym. Masking itself
+	// still runs; the default rules blank, and blanking needs no secret. A worker
+	// that refused to boot without this would let one missing variable stop
+	// ingest for every tenant.
+	//
+	// Every replica must share the same value. Two workers with different secrets
+	// produce two pseudonyms for one person, silently.
+	HashSecret string `env:"WORKERS_MASKING_HASH_SECRET"`
 }
 
 func (m Masking) validate() error {
-	return positiveDuration("WORKERS_PROJECT_CONFIG_REFRESH", m.ProjectRefresh)
+	return errors.Join(
+		positiveDuration("WORKERS_PROJECT_CONFIG_REFRESH", m.ProjectRefresh),
+		optionalBase64Secret("WORKERS_MASKING_HASH_SECRET", m.HashSecret, maskHashSecretMinBytes),
+	)
 }
+
+// maskHashSecretMinBytes is the width below which an HMAC key stops carrying its
+// nominal strength: SHA-256's block-equivalent security is 256 bits.
+const maskHashSecretMinBytes = 32
 
 // Sampling is the tail-sampling stage's settings: ADR 0010's policy plus the
 // bounds that keep the buffer from becoming a memory leak with a traffic spike

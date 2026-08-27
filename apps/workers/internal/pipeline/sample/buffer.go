@@ -13,6 +13,11 @@ type Facts struct {
 	Start     time.Time
 	Duration  time.Duration
 	Errored   bool
+
+	// TraceState is the span's raw W3C tracestate, read only for an explicit
+	// `ot=rv:` randomness value. Empty is normal and harmless: the decision
+	// then comes from the randomness in the trace id itself.
+	TraceState string
 }
 
 // Options bound the buffer. Every limit is required: an unbounded map on the
@@ -91,12 +96,18 @@ type openTrace[T any] struct {
 }
 
 type traceFacts struct {
-	traceID  string
-	errored  bool
-	earliest time.Time
-	latest   time.Time
+	traceID string
+	// traceState is the first non-empty tracestate seen on the trace. Every
+	// span of a trace carries the same r-value, so the first one will do.
+	traceState string
+	errored    bool
+	earliest   time.Time
+	latest     time.Time
 }
 
+// duration is the whole trace's span, earliest start to latest end. Not the
+// root span's duration: a root that returns before its children finish would
+// be judged fast while the trace it belongs to is slow.
 func (t traceFacts) duration() time.Duration {
 	if t.latest.Before(t.earliest) {
 		return 0
@@ -155,6 +166,9 @@ func (b *Buffer[T]) Add(now time.Time, facts Facts, row T) []T {
 func (t *openTrace[T]) observe(facts Facts, row T) {
 	t.rows = append(t.rows, row)
 	t.facts.errored = t.facts.errored || facts.Errored
+	if t.facts.traceState == "" {
+		t.facts.traceState = facts.TraceState
+	}
 	if facts.Start.Before(t.facts.earliest) {
 		t.facts.earliest = facts.Start
 	}

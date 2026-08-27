@@ -36,7 +36,7 @@ func quietLogger() *slog.Logger {
 }
 
 func newRefresher(reader projectconfig.Reader, cache *projectconfig.Cache) *projectconfig.Refresher {
-	return projectconfig.NewRefresher(reader, cache, defaults(), time.Minute, quietLogger())
+	return projectconfig.NewRefresher(reader, cache, defaults(), time.Minute, quietLogger(), nil)
 }
 
 func TestAProjectWithoutARowGetsTheDefaults(t *testing.T) {

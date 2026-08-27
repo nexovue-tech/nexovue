@@ -131,7 +131,9 @@ func (p *Proxy) Serve(ctx context.Context, addr string) (string, func() error, e
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		p.recorder.ObserveFailure()
+		// A body that never finished arriving was never forwarded, and a partial
+		// OTLP payload cannot be decoded, so the span count is unknowable: zero.
+		p.recorder.ObserveNotSent(0)
 		http.Error(w, "cannot read export body", http.StatusBadRequest)
 		return
 	}
@@ -142,7 +144,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	upstream, err := p.upstreamRequest(r, body)
 	if err != nil {
-		p.recorder.ObserveFailure()
+		p.recorder.ObserveNotSent(export.spans)
 		http.Error(w, "cannot build upstream request", http.StatusInternalServerError)
 		return
 	}
@@ -153,15 +155,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	response, err := p.client.Do(upstream) //nolint:gosec // G704: target comes from LOADGEN_ENDPOINT
 	latency := time.Since(start)
 	if err != nil {
-		p.recorder.ObserveFailure()
-		p.logger.Warn("export not answered", slog.Any("error", err))
+		p.observeUnanswered(export.spans, err)
 		http.Error(w, "receiver unreachable", http.StatusBadGateway)
 		return
 	}
 	defer func() { _ = response.Body.Close() }()
 
 	acceptedAt := start.Add(latency)
-	p.recorder.Observe(Observation{
+	p.recorder.ObserveAnswered(Observation{
 		Spans:      export.spans,
 		Status:     response.StatusCode,
 		Latency:    latency,
@@ -176,6 +177,38 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(w, response.Body); err != nil {
 		p.logger.Warn("cannot return export response", slog.Any("error", err))
 	}
+}
+
+// observeUnanswered records an export the receiver never answered, split by
+// whether it got there at all.
+//
+// The split is what keeps the accounting honest. An export the receiver
+// received may already have been published to Kafka before the answer was lost,
+// and the SDK then retries the same batch — so folding these into "failed" made
+// the pipeline look like it invented spans. They are offered with an unknown
+// fate instead, which is what they are.
+func (p *Proxy) observeUnanswered(spans int, err error) {
+	if neverReachedReceiver(err) {
+		p.recorder.ObserveNotSent(spans)
+		p.logger.Warn("export not sent", slog.Any("error", err))
+		return
+	}
+	p.recorder.ObserveUnknown(spans)
+	p.logger.Warn("export answer not readable", slog.Any("error", err))
+}
+
+// neverReachedReceiver reports whether the transport gave up before any
+// connection to the receiver existed.
+//
+// Dialling is the one stage whose failure proves nothing was sent: no socket,
+// no bytes. Past that the request may have been written and acted on however
+// the failure reads, and Go's client cannot tell a timeout waiting for headers
+// from one where the receiver never saw the body. So the boundary is drawn at
+// the only place it can be drawn soundly, and every later failure is unknown
+// rather than assumed harmless.
+func neverReachedReceiver(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
 // follow hands one trace per interval to the sink, so the traces watched into

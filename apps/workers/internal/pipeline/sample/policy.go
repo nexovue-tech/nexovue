@@ -9,7 +9,6 @@ package sample
 import (
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"time"
 )
 
@@ -84,23 +83,16 @@ func (p Policy) keeps(trace traceFacts) bool {
 	if p.SlowThreshold > 0 && trace.duration() >= p.SlowThreshold {
 		return true
 	}
-	return keepsHealthy(trace.traceID, p.HealthyPercent)
+	return keepsHealthy(trace, p.HealthyPercent)
 }
 
-// keepsHealthy decides a healthy trace by hashing its id rather than by rolling
-// a die. The verdict is then a property of the trace: reproducible in a test,
-// and identical on every worker that ever sees it — which is what makes a late
-// span landing on a restarted worker agree with the decision already taken.
-func keepsHealthy(traceID string, percent int) bool {
-	if percent >= 100 {
-		return true
-	}
-	if percent <= 0 {
-		return false
-	}
-	digest := fnv.New64a()
-	_, _ = digest.Write([]byte(traceID))
-	return digest.Sum64()%100 < uint64(percent)
+// keepsHealthy decides a healthy trace against its own randomness rather than
+// by rolling a die. The verdict is then a property of the trace: reproducible
+// in a test, identical on every worker that ever sees it — which is what makes
+// a late span landing on a restarted worker agree with the decision already
+// taken — and shared with any other sampler using the same rule.
+func keepsHealthy(trace traceFacts, percent int) bool {
+	return traceRandomness(trace) >= rejectionThreshold(percent)
 }
 
 // PolicySource supplies the policy for a project.

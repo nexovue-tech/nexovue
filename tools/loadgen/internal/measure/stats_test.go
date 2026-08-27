@@ -43,8 +43,8 @@ func TestOnlyAcceptedSpansCountTowardsThroughput(t *testing.T) {
 	recorder := NewRecorder()
 	base := time.Unix(1000, 0)
 
-	recorder.Observe(Observation{Spans: 100, Status: http.StatusOK, AcceptedAt: base})
-	recorder.Observe(Observation{Spans: 500, Status: http.StatusTooManyRequests, AcceptedAt: base})
+	recorder.ObserveAnswered(Observation{Spans: 100, Status: http.StatusOK, AcceptedAt: base})
+	recorder.ObserveAnswered(Observation{Spans: 500, Status: http.StatusTooManyRequests, AcceptedAt: base})
 
 	result := recorder.Result()
 	if result.SpansOffered != 600 {
@@ -53,8 +53,104 @@ func TestOnlyAcceptedSpansCountTowardsThroughput(t *testing.T) {
 	if result.SpansAccepted != 100 {
 		t.Errorf("SpansAccepted = %d, want 100", result.SpansAccepted)
 	}
+	if result.SpansRefused != 500 {
+		t.Errorf("SpansRefused = %d, want 500", result.SpansRefused)
+	}
 	if result.Statuses[http.StatusTooManyRequests] != 1 {
 		t.Errorf("throttled responses = %d, want 1", result.Statuses[http.StatusTooManyRequests])
+	}
+}
+
+// Each outcome lands in exactly one bucket, and a span that went out is offered
+// whatever came back. Losing an offered count is what made a correct pipeline
+// look like it was inventing spans.
+func TestEveryOutcomeIsAccountedForExactlyOnce(t *testing.T) {
+	base := time.Unix(1000, 0)
+
+	cases := []struct {
+		name   string
+		record func(*Recorder)
+		want   Result
+	}{
+		{
+			name:   "accepted",
+			record: func(r *Recorder) { r.ObserveAnswered(Observation{Spans: 512, Status: http.StatusOK, AcceptedAt: base}) },
+			want:   Result{Requests: 1, SpansOffered: 512, SpansAccepted: 512},
+		},
+		{
+			name: "refused",
+			record: func(r *Recorder) {
+				r.ObserveAnswered(Observation{Spans: 512, Status: http.StatusServiceUnavailable, AcceptedAt: base})
+			},
+			want: Result{Requests: 1, SpansOffered: 512, SpansRefused: 512},
+		},
+		{
+			name:   "unknown",
+			record: func(r *Recorder) { r.ObserveUnknown(512) },
+			want:   Result{Requests: 1, SpansOffered: 512, UnknownRequests: 1, UnknownSpans: 512},
+		},
+		{
+			name:   "never sent",
+			record: func(r *Recorder) { r.ObserveNotSent(512) },
+			want:   Result{Requests: 1, NotSentRequests: 1, NotSentSpans: 512},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			recorder := NewRecorder()
+			c.record(recorder)
+			got := recorder.Result()
+
+			if got.Requests != c.want.Requests {
+				t.Errorf("Requests = %d, want %d", got.Requests, c.want.Requests)
+			}
+			if got.SpansOffered != c.want.SpansOffered {
+				t.Errorf("SpansOffered = %d, want %d", got.SpansOffered, c.want.SpansOffered)
+			}
+			if got.SpansAccepted != c.want.SpansAccepted {
+				t.Errorf("SpansAccepted = %d, want %d", got.SpansAccepted, c.want.SpansAccepted)
+			}
+			if got.SpansRefused != c.want.SpansRefused {
+				t.Errorf("SpansRefused = %d, want %d", got.SpansRefused, c.want.SpansRefused)
+			}
+			if got.UnknownRequests != c.want.UnknownRequests || got.UnknownSpans != c.want.UnknownSpans {
+				t.Errorf("unknown = %d requests / %d spans, want %d / %d",
+					got.UnknownRequests, got.UnknownSpans, c.want.UnknownRequests, c.want.UnknownSpans)
+			}
+			if got.NotSentRequests != c.want.NotSentRequests || got.NotSentSpans != c.want.NotSentSpans {
+				t.Errorf("not sent = %d requests / %d spans, want %d / %d",
+					got.NotSentRequests, got.NotSentSpans, c.want.NotSentRequests, c.want.NotSentSpans)
+			}
+			// Offered splits three ways and nothing else; not-sent sits outside.
+			if sum := got.SpansAccepted + got.SpansRefused + got.UnknownSpans; sum != got.SpansOffered {
+				t.Errorf("accepted+refused+unknown = %d, want SpansOffered %d", sum, got.SpansOffered)
+			}
+		})
+	}
+}
+
+// An unanswered export has no round trip to time, and letting the request
+// timeout in would report the client's own bound as receiver latency.
+func TestUnansweredRequestsAddNoLatencySample(t *testing.T) {
+	recorder := NewRecorder()
+	base := time.Unix(1000, 0)
+
+	recorder.ObserveAnswered(Observation{
+		Spans: 100, Status: http.StatusOK, Latency: 5 * time.Millisecond, AcceptedAt: base,
+	})
+	recorder.ObserveUnknown(512)
+	recorder.ObserveNotSent(512)
+
+	result := recorder.Result()
+	if result.Latency.Max != 5*time.Millisecond {
+		t.Errorf("Latency.Max = %s, want 5ms: only the answered request has a latency", result.Latency.Max)
+	}
+	if result.AnsweredRequests() != 1 {
+		t.Errorf("AnsweredRequests() = %d, want 1", result.AnsweredRequests())
+	}
+	if result.Requests != 3 {
+		t.Errorf("Requests = %d, want 3: every request handled is counted", result.Requests)
 	}
 }
 
@@ -87,14 +183,18 @@ func TestThroughputNeedsMoreThanTwoSeconds(t *testing.T) {
 	}
 }
 
-func TestFailuresAreCountedApartFromRefusals(t *testing.T) {
+func TestUnansweredRequestsAreCountedApartFromRefusals(t *testing.T) {
 	recorder := NewRecorder()
-	recorder.ObserveFailure()
+	recorder.ObserveUnknown(512)
 
 	result := recorder.Result()
-	if result.Requests != 1 || result.TransportFailures != 1 {
-		t.Errorf("Requests = %d, TransportFailures = %d, want 1 and 1",
-			result.Requests, result.TransportFailures)
+	if result.Requests != 1 || result.UnknownRequests != 1 {
+		t.Errorf("Requests = %d, UnknownRequests = %d, want 1 and 1",
+			result.Requests, result.UnknownRequests)
+	}
+	if result.SpansRefused != 0 {
+		t.Errorf("SpansRefused = %d, want 0: nothing was refused, the answer was lost",
+			result.SpansRefused)
 	}
 	if len(result.Statuses) != 0 {
 		t.Errorf("Statuses = %v, want none: an unanswered request has no status", result.Statuses)

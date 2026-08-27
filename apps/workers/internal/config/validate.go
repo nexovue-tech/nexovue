@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net"
 	"slices"
@@ -92,6 +93,24 @@ func differentValues(variable, value, otherVariable, otherValue string) error {
 	if value == otherValue {
 		return invalid(variable, "is %q, the same as %s; they must differ",
 			value, otherVariable)
+	}
+	return nil
+}
+
+// optionalBase64Secret accepts an unset value, and otherwise insists the value
+// is base64 and wide enough to be worth having. A short or malformed secret is
+// worse than none: it looks like protection and is not.
+func optionalBase64Secret(name, value string, minBytes int) error {
+	if value == "" {
+		return nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return fmt.Errorf("%s: must be base64; %w", name, err)
+	}
+	if len(decoded) < minBytes {
+		return fmt.Errorf("%s: decodes to %d bytes, want at least %d",
+			name, len(decoded), minBytes)
 	}
 	return nil
 }

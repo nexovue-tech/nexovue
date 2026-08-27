@@ -88,8 +88,13 @@ func maskAttributes(rules Rules, attributes []*commonpb.KeyValue) int {
 		if attribute == nil || attribute.GetKey() == "" {
 			continue
 		}
-		if rules.masksKey(attribute.GetKey()) {
-			attribute.Value = placeholderValue()
+		// The allowlist is checked before any rule: a value the project named
+		// as safe survives however broadly it matches.
+		if rules.allows(attribute.GetValue().GetStringValue()) {
+			continue
+		}
+		if act, ok := rules.masksKey(attribute.GetKey()); ok {
+			attribute.Value = maskedValue(rules.replace(act, attribute.GetValue().GetStringValue()))
 			masked++
 			continue
 		}
@@ -128,6 +133,6 @@ func maskValueTree(rules Rules, value *commonpb.AnyValue) int {
 	}
 }
 
-func placeholderValue() *commonpb.AnyValue {
-	return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: Placeholder}}
+func maskedValue(replacement string) *commonpb.AnyValue {
+	return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: replacement}}
 }

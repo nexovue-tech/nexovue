@@ -298,36 +298,55 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 Mostly from a research pass over M2's choices after the fact — checking what we built against
 the reference implementations rather than only against our own reasoning.
 
-- **Probabilistic sampling uses `fnv64a(trace_id) % 100`, not W3C-derived randomness.** OTel's
-  `tailsampling` processor decides against the trace's own randomness — the explicit `rv` value
-  from `tracestate` if present, otherwise the randomness the W3C spec requires in the trace id.
-  Both give a fair 10%, so nothing is wrong today; the difference is that the spec form exists so
-  **independent samplers agree**. A customer's collector sampling in front of us would keep a
-  different 10% than we do, and combined sampling probability stops being reasonable about. Worth
-  aligning before anyone runs a collector at scale in front of us.
-- **Confirm the slow-trace threshold measures the trace, not the root span.** OTel's latency policy
-  takes the earliest start and the latest end across all spans. Ours has not been checked against
-  that definition, and a trace whose root returns early would be judged differently.
-- **Masking has no `allowed_values` escape hatch.** The redaction processor lets an operator
-  whitelist a known-safe value that would otherwise trip a broad pattern. We have no override, so a
-  false positive is unfixable without switching the whole rule off.
-- **Masking replaces rather than hashes.** The redaction processor can hash a matched value
-  (`sha256`, `hmac-sha256`, …) instead of substituting a constant, which keeps *correlation* —
-  "the same user across these requests" stays answerable without revealing who. For a product
-  whose pitch is investigation, that is a real capability, not a nicety.
+- ~~**Probabilistic sampling uses `fnv64a(trace_id) % 100`.**~~ **Done.** Decides on W3C
+  randomness now — the last 7 bytes of the trace id, or an explicit `rv` from `tracestate` when a
+  producer upstream has already fixed it — compared against a rejection threshold, matching OTel's
+  `pkg/sampling` arithmetic exactly. Measured keep rate 10.10% at 10%.
+  **A correction to what this entry originally claimed:** OTel's tracestate path sits behind an
+  alpha feature gate that is *off by default*, so upstream does not do this today either. The
+  direction was right, the justification overstated.
+  It also surfaced a real defect. The fallback for ids without usable randomness was FNV-1a, as
+  OTel's legacy path uses — and a threshold comparison reads the *high* bits, which FNV leaves
+  clustered for short structured input. 200 sequential ids at 10% kept **zero**. Now SHA-256
+  truncated to the same 56-bit range: 9.81%.
+- ~~**Confirm the slow-trace threshold measures the trace, not the root span.**~~ **Already
+  correct** — `traceFacts` tracks earliest start and latest end across every span held, which is
+  OTel's latency policy. No behaviour changed; a regression test now fails if anyone reduces it to
+  the root span's duration.
+- ~~**Masking has no `allowed_values` escape hatch.**~~ **Done**, following the reference's
+  precedence: an allowlisted value survives every rule above it.
+- ~~**Masking replaces rather than hashes.**~~ **Done.** A rule can now produce a stable pseudonym
+  instead of a constant, so *"the same user across these requests"* stays answerable without saying
+  who. HMAC-SHA-256, keyed — an unkeyed digest of an email or an account id is recovered from a
+  candidate list, which is why PCI DSS v4 stopped accepting plain hashes of card numbers.
+  **The key is derived per project**, not per deployment: one shared key would give a person the
+  same pseudonym in every tenant's data, so anyone able to read two tenants could join them on it —
+  the tenant-isolation invariant leaking out through a privacy feature. What that costs is
+  correlating one person across a customer's own projects, and a project is an environment
+  (ADR 0042), so it is correlating between staging and production. Nobody needs that.
+  **Still true and worth saying in customer-facing copy:** a pseudonym is stable and joinable, so
+  under GDPR this is pseudonymised personal data — still personal data. ADR 0059's refusal to claim
+  compliance stands.
 - **M3 note: the redaction processor supports traces only.** Logs and metrics need the attributes
   or transform processor. Our masking stage will hit the same split when the log pipeline lands.
-- **`retryTransient` around Kafka calls duplicates franz-go's own retries.** franz-go already
-  retries requests (`RequestRetries`, default 20) with a 250ms–2.5s backoff. Wrapping
-  `CommitMarkedOffsets` gives 20 × 9 attempts. Harmless, and the uniform budget has some value, but
-  it was written without knowing. The ClickHouse inserts genuinely need it — `ch-go` has nothing.
+- ~~**`retryTransient` around Kafka calls duplicates franz-go's own retries.**~~ **Withdrawn —
+  the evidence contradicts it.** franz-go does retry (`RequestRetries`, default 20, 250ms–2.5s),
+  but before our wrapper existed the pipeline *died* on `commit offsets: unable to dial: lookup
+  kafka: no such host` during a twenty-second outage, which those retries did not absorb. It covers
+  a case theirs does not. The code now says so with the error quoted, so nobody deletes it as
+  redundant.
 - **`loadgen`'s `ObserveFailure()` discards the span count** for a request it already forwarded and
   the receiver may already have published. That is why a correct pipeline reports counting more
   than was acknowledged, and why the chaos test's overcount assertion had to become one-sided.
-- **One residual counter hole (ADR 0061).** If a counter insert lands but its acknowledgement is
-  lost, the retry re-inserts the identical block; within a single settlement the durable state
-  cannot see it, and ADR 0060's deduplication only catches it while ClickHouse survives. A store
-  restart between the two attempts still duplicates. Always an overcount, never an undercount.
+- ~~**One residual counter hole (ADR 0061).**~~ **Closed.** The counter insert no longer retries
+  blind: every attempt after the first asks whether the write already landed before re-sending it.
+  A ClickHouse block is atomic, so one point answers for the batch.
+- **A pre-existing masking hazard, found while adding the allowlist.** `projectconfig` fell back to
+  the defaults whenever a project's masking document failed to parse, on a comment claiming the
+  defaults mask more. They do not: the defaults name no keys at all, so a rejected document
+  silently stopped masking every custom key a project had asked for — the opposite of the stated
+  intent. It now keeps the last good configuration for that project and only reaches the defaults
+  when nothing has ever parsed.
 
 ## 8. Open scope questions
 

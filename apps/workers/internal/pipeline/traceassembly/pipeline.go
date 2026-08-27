@@ -407,9 +407,7 @@ func (p *Pipeline) settleCounters(
 	}); err != nil {
 		return err
 	}
-	if err := p.retryTransient(ctx, "insert counters", func(callCtx context.Context) error {
-		return p.metrics.Insert(callCtx, points)
-	}); err != nil {
+	if err := p.insertCounters(ctx, points); err != nil {
 		return err
 	}
 	return p.retryTransient(ctx, "confirm counted offsets", func(callCtx context.Context) error {
@@ -523,6 +521,13 @@ const (
 
 // retryTransient runs op until it succeeds, the budget runs out, or the worker
 // is asked to stop.
+//
+// franz-go retries its own requests (RequestRetries, 20 by default, backing off
+// 250ms–2.5s), so wrapping a Kafka call looks redundant. It is not: before this
+// existed the pipeline died on `commit offsets: unable to dial: lookup kafka: no
+// such host` during a twenty-second broker outage, which franz-go's own retries
+// did not absorb. Measured, not assumed — do not remove it without reproducing
+// that.
 func (p *Pipeline) retryTransient(ctx context.Context, what string, op func(context.Context) error) error {
 	deadline := p.now().Add(retryBudget)
 	delay := retryFirstDelay
@@ -562,6 +567,37 @@ func (p *Pipeline) retryTransient(ctx context.Context, what string, op func(cont
 			delay = retryMaxDelay
 		}
 	}
+}
+
+// insertCounters writes derived counters, retrying without ever writing twice.
+//
+// The retry is what makes a brief store outage survivable, and it is also the
+// only way left to double-count: if an insert lands and only its acknowledgement
+// is lost, sending it again duplicates the minute. ClickHouse normally catches
+// that, but not across the restart that tends to cause it (ADR 0061).
+//
+// So every attempt after the first asks whether the write already landed. A
+// block is atomic, so one point answers for the batch.
+func (p *Pipeline) insertCounters(ctx context.Context, points []derive.Point) error {
+	if len(points) == 0 {
+		return nil
+	}
+	attempted := false
+	return p.retryTransient(ctx, "insert counters", func(callCtx context.Context) error {
+		if attempted {
+			applied, err := p.metrics.Applied(callCtx, points[0])
+			if err != nil {
+				return err // The store is still unreachable; retry the check.
+			}
+			if applied {
+				p.log.InfoContext(callCtx, "counters had already landed; not writing them again",
+					slog.Time("minute", points[0].Timestamp))
+				return nil
+			}
+		}
+		attempted = true
+		return p.metrics.Insert(callCtx, points)
+	})
 }
 
 // insertBounded writes the accumulated block under a deadline.

@@ -28,6 +28,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Any, Final
 from urllib.parse import urlsplit
 
@@ -164,19 +165,39 @@ class LiveTenant:
     client: ApiClient
 
 
+# Signup sits behind the per-IP sliding window every other auth route shares, and
+# the whole test suite is one IP. Running this file alone stays well inside it;
+# running it after the rest of the suite does not, and the failure then surfaces
+# somewhere confusing — a later request answering 401 because its session was
+# never created. Waiting is correct: the limit is real and the suite is what
+# should yield to it.
+_RATE_LIMIT_ATTEMPTS = 4
+_RATE_LIMIT_PAUSE_SECONDS = 20
+
+
 def _sign_up() -> LiveTenant:
     """Create a tenant the way a customer does: the public signup endpoint."""
     client = ApiClient()
     suffix = uuid.uuid4().hex[:12]
-    response = client.post(
-        "/signup",
-        json={
-            "organization_name": f"Isolation Suite {suffix}",
-            # .test is reserved by RFC 2606 and can never be a real inbox.
-            "email": f"p1-25-{suffix}@nexovue.test",
-            "password": f"p1-25-{suffix}-password",
-        },
-    )
+    for attempt in range(1, _RATE_LIMIT_ATTEMPTS + 1):
+        response = client.post(
+            "/signup",
+            json={
+                "organization_name": f"Isolation Suite {suffix}",
+                # .test is reserved by RFC 2606 and can never be a real inbox.
+                "email": f"p1-25-{suffix}@nexovue.test",
+                "password": f"p1-25-{suffix}-password",
+            },
+        )
+        if response.status_code != HTTPStatus.TOO_MANY_REQUESTS:
+            break
+        assert attempt < _RATE_LIMIT_ATTEMPTS, (
+            "signup stayed rate limited across "
+            f"{_RATE_LIMIT_ATTEMPTS} attempts; the suite is outrunning the per-IP "
+            "auth window, not finding an isolation defect"
+        )
+        time.sleep(_RATE_LIMIT_PAUSE_SECONDS)
+
     assert response.status_code == 201, response.text
 
     body = response.json()

@@ -44,6 +44,20 @@ func (c *Cache) Replace(projects map[string]Settings) {
 	c.snapshot.Store(&projects)
 }
 
+// Loaded returns a project's configuration and whether one was ever loaded for
+// it, which Settings cannot express because it answers with the defaults.
+func (c *Cache) Loaded(projectID string) (Settings, bool) {
+	projects := c.snapshot.Load()
+	if projects == nil {
+		return c.defaults, false
+	}
+	configured, ok := (*projects)[projectID]
+	if !ok {
+		return c.defaults, false
+	}
+	return configured, true
+}
+
 // Settings returns one project's configuration, or the defaults.
 func (c *Cache) Settings(projectID string) Settings {
 	projects := c.snapshot.Load()

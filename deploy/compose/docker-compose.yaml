@@ -116,6 +116,11 @@ services:
       # Read-only, and only for per-project masking and sampling rules. Without
       # it the worker runs on compiled-in defaults and says so at boot.
       POSTGRES_DSN: ${DEV_POSTGRES_DSN:-postgresql://nexovue:nexovue_dev@postgres:5432/nexovue}
+      # Keys the pseudonyms a hashing masking rule produces. Fixed here so a
+      # pseudonym survives a restart in development; every deployment target
+      # supplies its own, and rotating it silently ends every correlation that
+      # spans the change.
+      WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:-7b6H4ZIcduE9aYaTRdv2LKQeIKR3hYf5w4IDCAdevfI=}
       WORKER_PIPELINES: all
     healthcheck:
       # /healthz — liveness. It now covers the pipeline as well as the process,

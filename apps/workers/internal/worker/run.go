@@ -4,6 +4,7 @@ package worker
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -246,7 +247,8 @@ func pipelineOptions(
 	}
 	cache := projectconfig.NewCache(defaults)
 	refresher := projectconfig.NewRefresher(
-		projectconfig.NewPostgresReader(control), cache, defaults, cfg.Masking.ProjectRefresh, log)
+		projectconfig.NewPostgresReader(control), cache, defaults, cfg.Masking.ProjectRefresh, log,
+		maskSecret(cfg, log))
 	go refresher.Run(ctx)
 
 	return traceassembly.Options{Masking: cache, Sampling: cache}
@@ -307,4 +309,28 @@ func serveUntilSignal(
 	}
 	log.Info("worker stopped")
 	return nil
+}
+
+// maskSecret decodes the deployment-wide masking secret, if one is set.
+//
+// The secret is derived per project rather than used directly. A single
+// deployment-wide key would give one person the same pseudonym in every
+// tenant's data, so anyone able to read two tenants could join them — which is
+// the tenant-isolation invariant leaking through a privacy feature. Deriving
+// per project costs a customer the ability to correlate one person across their
+// own projects, and a project is an environment (ADR 0042), so that is
+// correlating across staging and production: not a thing anyone needs.
+func maskSecret(cfg config.Config, log *slog.Logger) []byte {
+	if cfg.Masking.HashSecret == "" {
+		log.Info("no masking hash secret configured; rules may blank a value but not " +
+			"pseudonymise one")
+		return nil
+	}
+	secret, err := base64.StdEncoding.DecodeString(cfg.Masking.HashSecret)
+	if err != nil {
+		// Validated at boot; unreachable without the config layer being wrong.
+		log.Error("masking hash secret is not base64", slog.String("error", err.Error()))
+		return nil
+	}
+	return secret
 }

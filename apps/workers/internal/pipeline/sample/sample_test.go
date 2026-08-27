@@ -2,6 +2,8 @@ package sample_test
 
 import (
 	"fmt"
+	"math/rand/v2"
+	"slices"
 	"testing"
 	"time"
 
@@ -9,6 +11,16 @@ import (
 )
 
 var base = time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC)
+
+// maxRandomness is the largest W3C randomness value: 56 bits all set.
+const maxRandomness = uint64(1)<<56 - 1
+
+// traceIDWithRandomness builds a 32 hex digit W3C trace id whose right-most 7
+// bytes — the randomness a sampler reads — hold the given value.
+func traceIDWithRandomness(randomness uint64) string {
+	const nonRandomHalf = "0123456789abcdef00" // the 18 digits left of the randomness
+	return fmt.Sprintf("%s%014x", nonRandomHalf, randomness&maxRandomness)
+}
 
 func defaultOptions() sample.Options {
 	return sample.Options{
@@ -105,6 +117,26 @@ func TestOneFailedSpanKeepsEverySpanOfItsTrace(t *testing.T) {
 	}
 }
 
+// Slow means the whole trace, earliest start to latest end. A root that
+// returns before its children finish is fast on its own and slow as a trace,
+// and the trace is what someone opens.
+func TestSlowIsMeasuredAcrossEverySpanHeld(t *testing.T) {
+	buffer := newBuffer(t, keepEverythingSlow(), defaultOptions())
+
+	root := facts("trace-a", time.Second, false) // well under the 2s threshold
+	child := facts("trace-a", 3*time.Second, false)
+	child.Start = base.Add(500 * time.Millisecond) // still running when the root returned
+
+	buffer.Add(base, root, "root")
+	buffer.Add(base, child, "child")
+
+	released := buffer.Expire(base.Add(11 * time.Second))
+	if len(released) != 2 {
+		t.Errorf("released %v, want both spans: the trace ran 3.5s against a 2s threshold",
+			released)
+	}
+}
+
 // A span arriving after its trace was decided has to follow that decision, or a
 // dropped trace leaves orphan spans behind and a kept one loses a leg.
 func TestALateSpanFollowsItsTracesDecision(t *testing.T) {
@@ -130,44 +162,159 @@ func TestALateSpanFollowsItsTracesDecision(t *testing.T) {
 	}
 }
 
-// The verdict for a healthy trace is a hash of its id, so a worker that has
-// forgotten the trace entirely still agrees with the one that decided it.
-func TestTheHealthyVerdictIsAPropertyOfTheTrace(t *testing.T) {
-	policy := sample.DefaultPolicy(time.Hour, 10)
-	options := defaultOptions()
-	options.DecisionTTL = time.Nanosecond // forget every verdict immediately
-
-	first := newBuffer(t, policy, options)
-	second := newBuffer(t, policy, options)
-
-	for index := range 200 {
-		id := fmt.Sprintf("trace-%03d", index)
-		first.Add(base, facts(id, time.Millisecond, false), "span")
-		second.Add(base, facts(id, time.Millisecond, false), "span")
+// The healthy verdict is a comparison against the trace's own randomness — the
+// W3C form — so it lands where any other sampler using the same rule lands.
+// The threshold at 10% rejects the first 90% of the range, which is every
+// randomness value below 0xe6666666666667.
+func TestTheHealthyVerdictComesFromTheTracesOwnRandomness(t *testing.T) {
+	cases := map[string]struct {
+		randomness uint64
+		percent    int
+		want       bool
+	}{
+		"the top of the range is kept at 10%":     {randomness: maxRandomness, percent: 10, want: true},
+		"exactly at the 10% threshold is kept":    {randomness: 0xe6666666666667, percent: 10, want: true},
+		"one below the 10% threshold is dropped":  {randomness: 0xe6666666666666, percent: 10, want: false},
+		"the bottom of the range is dropped":      {randomness: 0, percent: 10, want: false},
+		"the bottom of the range is kept at 100%": {randomness: 0, percent: 100, want: true},
+		"the top of the range is dropped at 0%":   {randomness: maxRandomness, percent: 0, want: false},
 	}
-	if a, b := len(first.Expire(base.Add(11*time.Second))), len(second.Expire(base.Add(11*time.Second))); a != b {
-		t.Fatalf("two buffers kept %d and %d spans, want the same verdicts", a, b)
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			buffer := newBuffer(t, sample.DefaultPolicy(time.Hour, tc.percent), defaultOptions())
+			buffer.Add(base, facts(traceIDWithRandomness(tc.randomness), time.Millisecond, false), "span")
+
+			released := buffer.Expire(base.Add(11 * time.Second))
+			if kept := len(released) == 1; kept != tc.want {
+				t.Errorf("randomness %014x at %d%%: kept = %v, want %v",
+					tc.randomness, tc.percent, kept, tc.want)
+			}
+		})
+	}
+}
+
+// An upstream sampler that published an r-value already decided against it.
+// Following it rather than the trace id is what makes the two agree.
+func TestAnExplicitRValueOverridesTheTraceID(t *testing.T) {
+	cases := map[string]struct {
+		traceState string
+		want       bool
+	}{
+		"no tracestate falls back to the trace id": {traceState: "", want: true},
+		"an r-value below the threshold drops a trace the id would keep": {
+			traceState: "ot=rv:00000000000000", want: false,
+		},
+		"an r-value beside other fields is still found": {
+			traceState: "vendor=x,ot=th:c;rv:ffffffffffffff", want: true,
+		},
+		"a malformed r-value falls back to the trace id": {
+			traceState: "ot=rv:xyz", want: true,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			buffer := newBuffer(t, sample.DefaultPolicy(time.Hour, 10), defaultOptions())
+			span := facts(traceIDWithRandomness(maxRandomness), time.Millisecond, false)
+			span.TraceState = tc.traceState
+			buffer.Add(base, span, "span")
+
+			released := buffer.Expire(base.Add(11 * time.Second))
+			if kept := len(released) == 1; kept != tc.want {
+				t.Errorf("tracestate %q: kept = %v, want %v", tc.traceState, kept, tc.want)
+			}
+		})
+	}
+}
+
+// The verdict for a healthy trace is a property of the trace, so a worker that
+// has forgotten it entirely still agrees with the one that decided it. That
+// holds for ids carrying W3C randomness and for the hashed fallback alike.
+func TestTheHealthyVerdictIsAPropertyOfTheTrace(t *testing.T) {
+	const traces = 200
+
+	random := rand.New(rand.NewPCG(3, 4))
+	w3c := make([]string, traces)
+	legacy := make([]string, traces)
+	for index := range traces {
+		w3c[index] = traceIDWithRandomness(random.Uint64())
+		legacy[index] = fmt.Sprintf("trace-%03d", index)
+	}
+
+	for name, ids := range map[string][]string{
+		"trace ids carrying W3C randomness":   w3c,
+		"trace ids with no usable randomness": legacy,
+	} {
+		t.Run(name, func(t *testing.T) {
+			policy := sample.DefaultPolicy(time.Hour, 10)
+			options := defaultOptions()
+			options.DecisionTTL = time.Nanosecond // forget every verdict immediately
+
+			// Each span carries its own trace id as its row, so what comes back
+			// names exactly which traces were kept.
+			keptIDs := func(buffer *sample.Buffer[string], at time.Time) []string {
+				for _, id := range ids {
+					buffer.Add(at, facts(id, time.Millisecond, false), id)
+				}
+				return buffer.Expire(at.Add(11 * time.Second))
+			}
+
+			reused := newBuffer(t, policy, options)
+			first := keptIDs(reused, base)
+			again := keptIDs(reused, base.Add(time.Hour))
+			restarted := keptIDs(newBuffer(t, policy, options), base)
+
+			if len(first) == 0 || len(first) == traces {
+				t.Fatalf("kept %d of %d; a test that keeps all or none proves nothing",
+					len(first), traces)
+			}
+			if !slices.Equal(first, again) {
+				t.Errorf("the same buffer kept %v, then %v; the verdict drifted", first, again)
+			}
+			if !slices.Equal(first, restarted) {
+				t.Errorf("a restarted worker kept %v, want the same %v", restarted, first)
+			}
+		})
 	}
 }
 
 func TestHealthyTracesAreKeptAtRoughlyTheConfiguredRate(t *testing.T) {
-	const traces = 5000
-	buffer := newBuffer(t, sample.DefaultPolicy(time.Hour, 10), sample.Options{
-		Window:      10 * time.Second,
-		DecisionTTL: time.Minute,
-		MaxTraces:   traces + 1,
-		MaxSpans:    traces + 1,
-	})
+	const traces = 50000
+	const percent = 10
 
-	for index := range traces {
-		buffer.Add(base, facts(fmt.Sprintf("trace-%05d", index), time.Millisecond, false), "span")
+	// Trace ids drawn the way an SDK draws them, so the test exercises the
+	// distribution of the sampler and not the distribution of a counter.
+	random := rand.New(rand.NewPCG(1, 2))
+	ids := map[string]func() string{
+		"trace ids carrying W3C randomness": func() string {
+			return traceIDWithRandomness(random.Uint64())
+		},
+		"trace ids with no usable randomness": func() string {
+			return fmt.Sprintf("legacy-trace-%016x", random.Uint64())
+		},
 	}
-	kept := len(buffer.Expire(base.Add(11 * time.Second)))
 
-	// A hash is not a die: the tolerance is for the distribution, not for a
-	// sampler that is quietly keeping everything or nothing.
-	if kept < traces*8/100 || kept > traces*12/100 {
-		t.Errorf("kept %d of %d healthy traces, want roughly 10%%", kept, traces)
+	for name, nextID := range ids {
+		t.Run(name, func(t *testing.T) {
+			buffer := newBuffer(t, sample.DefaultPolicy(time.Hour, percent), sample.Options{
+				Window:      10 * time.Second,
+				DecisionTTL: time.Minute,
+				MaxTraces:   traces + 1,
+				MaxSpans:    traces + 1,
+			})
+			for range traces {
+				buffer.Add(base, facts(nextID(), time.Millisecond, false), "span")
+			}
+			kept := len(buffer.Expire(base.Add(11 * time.Second)))
+
+			// The tolerance is for the distribution, not for a sampler that is
+			// quietly keeping everything or nothing.
+			t.Logf("kept %d of %d (%.2f%%)", kept, traces, 100*float64(kept)/traces)
+			if kept < traces*9/100 || kept > traces*11/100 {
+				t.Errorf("kept %d of %d healthy traces, want roughly %d%%", kept, traces, percent)
+			}
+		})
 	}
 }
 
