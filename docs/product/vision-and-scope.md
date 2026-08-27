@@ -103,7 +103,23 @@ This pipeline IS the product's differentiation — competitors have pieces, not 
 
 ## 5. Business / Pricing
 
-> ⏸️ **Deferred — think later.** Direction noted so far: per-site/per-service pricing (predictable), not per-GB (the anti-Datadog). Free tier for indie devs. SaaS platform.
+> ✅ **DECIDED 2026-08-27 — the unit is the service.** See [ADR 0056](../architecture/decisions/0056-per-service-pricing.md).
+
+Price per service monitored, with a volume allowance per service and a ceiling on the service-count
+component. Free tier for one service. Four promises: the bill has a ceiling · never per seat · never
+per host · over the allowance we **block and say so rather than bill**.
+
+M1's measurements are what made this decidable — marginal cost is **$0.0017 per million spans**
+against Dash0's $0.60 list, so infrastructure is a rounding error against any defensible price. The
+margin worry that framed the question was wrong.
+
+Per-GB ingested was rejected with a full proposal built and compared, not waved away. It earns more
+at the top end. It loses on two things: the same traffic bills across a 10× range depending only on
+how richly a customer's SDK is configured, and it **taxes instrumentation** — which starves the
+Phase 2 insight layer that is the whole differentiation.
+
+**Still open:** exact price points, the Phase 2 inference cost that could still break the unit, and
+payments (below).
 
 ---
 
@@ -151,10 +167,10 @@ Key design points:
 
 **Commercial model — researched 2026-08-27, nothing decided. Must close before M6, because P1-48 (Usage & cost view) cannot be built without the billing unit.**
 
-- **The billing unit.** §5 records the direction as *per-site/per-service, not per-GB*. A market scan found **no vendor doing that**: the field is per-host (Datadog $35/host, Splunk $55/host, Dynatrace ~$58/8 GiB host), per-agent (AppDynamics — the closest existing thing), per-CPU-core, per-GB ingest (New Relic $0.40, Grafana Tempo $0.45, SigNoz $0.30, Better Stack €0.10) or per-signal-count (Dash0, which moved off GB **specifically because** GB pricing explodes with cardinality). The likely reason nobody prices per-service: **our cost tracks ingest volume and storage, not service count**, so per-service decouples price from cost — good for the customer, dangerous for margin. Tail sampling (ADR 0010) only half-helps, because metrics derive *pre*-sampling, so receiver, Kafka and worker cost track raw volume regardless of what we charge for. Also found: "predictable" is claimed by opposite units — Splunk markets per-host as the predictable one, SigNoz markets no-per-host-no-per-seat as the predictable one. **Predictability is a property set (no surprise overages, spend caps, in-product projection, no punitive dimension), not a unit.** We could achieve it on almost any unit.
-- **`usage_daily` currently counts spans, logs, metric_points and bytes** — a per-GB shape, which contradicts the recorded direction. If billing is per-service, the number that matters is *distinct `service.name` per project per day*, and nothing counts it.
-- **No `plans` table exists.** `organizations.plan` is a free string, and ADR 0038 regenerates retention TTL *from plan tiers in Postgres*. Without a table the tiers get hardcoded in the TTL job, the receiver's quota gate and the usage screen — three places, drifting.
-- **Free-tier ceiling behaviour** — the market has a clear answer: **block, do not degrade**. Sentry rejects new events until the next period, and with a spend cap on, overages are blocked rather than billed, backed by spike protection and SDK-side sampling. That maps onto P1-52 (kill switch) — same mechanism, different trigger.
+- ~~**The billing unit.**~~ **RESOLVED — ADR 0056, per service.** For the record, §5 recorded the direction as *per-site/per-service, not per-GB*. A market scan found **no vendor doing that**: the field is per-host (Datadog $35/host, Splunk $55/host, Dynatrace ~$58/8 GiB host), per-agent (AppDynamics — the closest existing thing), per-CPU-core, per-GB ingest (New Relic $0.40, Grafana Tempo $0.45, SigNoz $0.30, Better Stack €0.10) or per-signal-count (Dash0, which moved off GB **specifically because** GB pricing explodes with cardinality). The likely reason nobody prices per-service: **our cost tracks ingest volume and storage, not service count**, so per-service decouples price from cost — good for the customer, dangerous for margin. Tail sampling (ADR 0010) only half-helps, because metrics derive *pre*-sampling, so receiver, Kafka and worker cost track raw volume regardless of what we charge for. Also found: "predictable" is claimed by opposite units — Splunk markets per-host as the predictable one, SigNoz markets no-per-host-no-per-seat as the predictable one. **Predictability is a property set (no surprise overages, spend caps, in-product projection, no punitive dimension), not a unit.** We could achieve it on almost any unit.
+- **ACTIONABLE NOW (follows ADR 0056): `usage_daily` counts spans, logs, metric_points and bytes** — a per-GB shape, which contradicts the recorded direction. If billing is per-service, the number that matters is *distinct `service.name` per project per day*, and nothing counts it.
+- **ACTIONABLE NOW: no `plans` table exists.** `organizations.plan` is a free string, and ADR 0038 regenerates retention TTL *from plan tiers in Postgres*. Without a table the tiers get hardcoded in the TTL job, the receiver's quota gate and the usage screen — three places, drifting.
+- ~~**Free-tier ceiling behaviour**~~ **RESOLVED — block, do not degrade** (ADR 0056). For the record: — the market has a clear answer: **block, do not degrade**. Sentry rejects new events until the next period, and with a spend cap on, overages are blocked rather than billed, backed by spike protection and SDK-side sampling. That maps onto P1-52 (kill switch) — same mechanism, different trigger.
 - **Payments.** **Stripe Managed Payments (Stripe's own merchant of record) excludes India**, and Stripe is invite-only here — the obvious default is off the table before the comparison starts. FIRA/FIRC is statutory, not preference: Rule 89(2) CGST Rules requires a BRC or FIRC as proof of foreign-currency receipt, with an LUT (Form RFD-11) filed annually to export without paying IGST upfront; SaaS export is zero-rated under §16 IGST Act. **Unresolved and not answerable from research:** with a merchant of record, the MoR is the legal seller and money flows customer → MoR → us, so the payout is arguably a payment *from the MoR* rather than an export of services to the customer. Whether that still qualifies as zero-rated export with clean FIRA is a question for a CA who does cross-border SaaS. Vendor-comparison searches returned almost entirely one MoR's own marketing, so no provider ranking is recorded here.
 
 ---
