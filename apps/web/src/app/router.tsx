@@ -167,6 +167,13 @@ const onboardingRoute = createRoute({
 
 /* ---------------------------------------------------------------------- router */
 
+/** Catches every path the routes above do not, so the shell stays around it. */
+const notFoundRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "$",
+  component: NotFound,
+});
+
 const routeTree = rootRoute.addChildren([
   shellRoute.addChildren([
     findingsRoute,
@@ -186,6 +193,7 @@ const routeTree = rootRoute.addChildren([
     settingsApiKeysRoute,
     settingsMembersRoute,
     settingsDataRoute,
+    notFoundRoute,
   ]),
   loginRoute,
   signupRoute,
@@ -198,6 +206,11 @@ function RouteError({ error, reset }: { error: Error; reset: () => void }) {
   );
 }
 
+/**
+ * Rendered inside the shell, as a child of `shellRoute`. A person who mistypes a URL is
+ * already inside the app, and the one thing they need is the way back — which is the
+ * sidebar this copy points at.
+ */
 function NotFound() {
   return (
     <section className="mx-auto max-w-2xl px-8 py-16">

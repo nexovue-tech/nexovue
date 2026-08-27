@@ -274,6 +274,20 @@ Components without a policy get one invented per screen. These are the policies.
 
 **Loading is skeletons, not spinners.** A skeleton says what is coming and holds the layout still; a spinner says only that something is happening. That difference is the reading-product thesis applied to waiting.
 
+## Responsive
+
+The sidebar is a **column above `md`, a drawer below it**. At 375px a fixed 13rem rail
+takes more than half the screen and leaves body text wrapping every two or three words —
+which fails the commitment that the product is usable on a phone at 2am.
+
+The drawer closes when a link is followed, on Escape, and on the scrim. The scrim is
+**dark in both themes** (`--color-scrim`): a light scrim on a light ground fades content
+rather than dimming it, which reads as "disabled" instead of "something is on top".
+
+**The 404 renders inside the shell**, not outside it. Auth screens sit outside deliberately
+— there is no project or navigation to show yet — but someone who mistypes a URL is already
+inside the app, and the one thing they need is the way back.
+
 ## Icons
 
 **`lucide-react`, used sparingly.** The ban below is on Lucide *as the entire visual language* — icons carrying all the meaning, a grid of glyph-topped cards — not on Lucide existing. Tree-shaken, each icon costs 200–500 bytes.

@@ -1,3 +1,5 @@
+import { Menu } from "lucide-react";
+
 import { ThemeToggle } from "@/shared/theme/ThemeToggle";
 
 import { PROJECTS, TIME_RANGES, useShellControls } from "./shell-controls";
@@ -10,11 +12,28 @@ import { PROJECTS, TIME_RANGES, useShellControls } from "./shell-controls";
  * Both are local state until the control plane exists (P1-59) and the query layer can
  * key on them.
  */
-export function TopBar({ onOpenCommandPalette }: { onOpenCommandPalette: () => void }) {
+export function TopBar({
+  onOpenCommandPalette,
+  onOpenNav,
+}: {
+  onOpenCommandPalette: () => void;
+  onOpenNav: () => void;
+}) {
   const { projectId, setProjectId, rangeId, setRangeId } = useShellControls();
 
   return (
     <header className="flex h-10 shrink-0 items-center gap-4 border-line border-b bg-surface px-4">
+      {/* The one place an icon beats a word: it sits where every phone user already
+          looks for navigation, and the accessible name carries the meaning. */}
+      <button
+        type="button"
+        onClick={onOpenNav}
+        aria-label="Open navigation"
+        className="-ml-1 rounded p-1 text-ink-dim hover:text-ink md:hidden"
+      >
+        <Menu size={16} aria-hidden="true" />
+      </button>
+
       <label className="flex items-baseline gap-2">
         <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Project</span>
         <select

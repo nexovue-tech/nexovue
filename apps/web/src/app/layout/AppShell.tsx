@@ -1,5 +1,5 @@
 import { Outlet } from "@tanstack/react-router";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { ErrorBoundary } from "@/shared/components/ErrorBoundary";
 import { useOnlineStatus } from "@/shared/hooks/use-online-status";
@@ -18,16 +18,41 @@ export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  // Only meaningful below `md`, where the sidebar is a drawer rather than a column.
+  const [navOpen, setNavOpen] = useState(false);
+  const openNav = useCallback(() => setNavOpen(true), []);
+  const closeNav = useCallback(() => setNavOpen(false), []);
+
   const online = useOnlineStatus();
 
   useCommandPaletteShortcut(openPalette);
 
+  // Escape closes the drawer, the same way it closes every other overlay here.
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeNav();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen, closeNav]);
+
   return (
     <div className="flex h-dvh overflow-hidden bg-page text-ink">
-      <Sidebar />
+      <Sidebar open={navOpen} onNavigate={closeNav} />
+
+      {navOpen ? (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={closeNav}
+          className="fixed inset-0 z-30 bg-scrim md:hidden"
+        />
+      ) : null}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar onOpenCommandPalette={openPalette} />
+        <TopBar onOpenCommandPalette={openPalette} onOpenNav={openNav} />
 
         {online ? null : (
           <p

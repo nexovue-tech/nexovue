@@ -198,6 +198,10 @@
 @theme inline {
   /* Surfaces, in the twelve-step order: each step has one job. */
   --color-page: var(--n-1); /* app background */
+  /* Overlay scrim. Deliberately dark in BOTH themes: a light scrim on a light
+     ground fades the content rather than dimming it, which reads as "disabled"
+     instead of "something is on top of this". */
+  --color-scrim: oklch(0.15 0.001 157.1 / 0.55);
   --color-surface: var(--n-2); /* panel behind content */
   --color-raised: var(--n-3); /* element background */
   --color-hover: var(--n-4);
