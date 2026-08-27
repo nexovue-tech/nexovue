@@ -326,9 +326,10 @@ func (p *Pipeline) settle(ctx context.Context) error {
 		return err
 	}
 
-	counterCtx, cancelCounters := bounded(ctx)
-	defer cancelCounters()
-	if err := p.metrics.Insert(counterCtx, p.stages.counters.Drain(now)); err != nil {
+	points := p.stages.counters.Drain(now)
+	if err := p.retryTransient(ctx, "insert counters", func(callCtx context.Context) error {
+		return p.metrics.Insert(callCtx, points)
+	}); err != nil {
 		return err
 	}
 
@@ -377,9 +378,7 @@ func (p *Pipeline) commit(ctx context.Context, positions []position) error {
 		return nil
 	}
 	p.consumer.MarkCommitOffsets(marks)
-	commitCtx, cancel := bounded(ctx)
-	defer cancel()
-	if err := p.consumer.CommitMarkedOffsets(commitCtx); err != nil {
+	if err := p.retryTransient(ctx, "commit offsets", p.consumer.CommitMarkedOffsets); err != nil {
 		return fmt.Errorf("commit offsets: %w", err)
 	}
 	return nil
@@ -389,9 +388,9 @@ func (p *Pipeline) commit(ctx context.Context, positions []position) error {
 // only committed with the rest of its batch, so a park that fails is retried by
 // re-consuming rather than silently dropping the message.
 func (p *Pipeline) park(ctx context.Context, record *kgo.Record, cause error) error {
-	parkCtx, cancel := bounded(ctx)
-	defer cancel()
-	if err := p.parked.Park(parkCtx, record, cause.Error(), dlq.Context{}); err != nil {
+	if err := p.retryTransient(ctx, "park to dead-letter", func(callCtx context.Context) error {
+		return p.parked.Park(callCtx, record, cause.Error(), dlq.Context{})
+	}); err != nil {
 		return err
 	}
 	p.log.WarnContext(ctx, "parked an undecodable span message",
@@ -427,11 +426,69 @@ func (p *Pipeline) Running(context.Context) error {
 	return nil
 }
 
+// Retry budget for a call out of the process.
+//
+// A broker or store that is briefly unreachable is the normal weather of a
+// distributed system, not a reason to end the worker. Nothing is lost by
+// waiting: offsets stay uncommitted, so the records are still on the broker,
+// and exiting would only discard the in-memory buffer and re-consume them
+// anyway. Past the budget the outage is no longer brief, and ending the process
+// is the honest answer — a restart at least re-dials from scratch.
+const (
+	retryBudget      = 2 * time.Minute
+	retryFirstDelay  = 250 * time.Millisecond
+	retryMaxDelay    = 5 * time.Second
+	retryDelayFactor = 2
+)
+
+// retryTransient runs op until it succeeds, the budget runs out, or the worker
+// is asked to stop.
+func (p *Pipeline) retryTransient(ctx context.Context, what string, op func(context.Context) error) error {
+	deadline := p.now().Add(retryBudget)
+	delay := retryFirstDelay
+
+	for attempt := 1; ; attempt++ {
+		callCtx, cancel := bounded(ctx)
+		err := op(callCtx)
+		cancel()
+		if err == nil {
+			if attempt > 1 {
+				p.log.InfoContext(ctx, "recovered after a transient failure",
+					slog.String("operation", what),
+					slog.Int("attempts", attempt),
+				)
+			}
+			return nil
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+		if !p.now().Add(delay).Before(deadline) {
+			return fmt.Errorf("%s failed for %s: %w", what, retryBudget, err)
+		}
+
+		p.log.WarnContext(ctx, "transient failure, retrying",
+			slog.String("operation", what),
+			slog.Int("attempt", attempt),
+			slog.Duration("retry_in", delay),
+			slog.String("error", err.Error()),
+		)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+		if delay *= retryDelayFactor; delay > retryMaxDelay {
+			delay = retryMaxDelay
+		}
+	}
+}
+
 // insertBounded writes the accumulated block under a deadline.
 func (p *Pipeline) insertBounded(ctx context.Context) error {
-	writeCtx, cancel := bounded(ctx)
-	defer cancel()
-	return p.writer.insert(writeCtx, p.block)
+	return p.retryTransient(ctx, "insert spans", func(callCtx context.Context) error {
+		return p.writer.insert(callCtx, p.block)
+	})
 }
 
 // externalCallTimeout bounds every call the loop makes out of the process.
