@@ -5,8 +5,8 @@ import type { TimeWindow } from "@/shared/selection";
 
 /** The trace half of the M1 contract. Field names are the API's, unchanged. */
 
-/** The trace summary's status is mapped server-side, so its values are known. */
-export type TraceStatusCode = "STATUS_CODE_UNSET" | "STATUS_CODE_OK" | "STATUS_CODE_ERROR";
+/** The short OTel form, which is what storage holds and what the API returns. */
+export type TraceStatusCode = "UNSET" | "OK" | "ERROR";
 
 /**
  * A span's status is passed through from storage verbatim, and storage holds the short
@@ -21,6 +21,15 @@ export function normalizeStatus(statusCode: string): string {
 
 export function spanFailed(span: Span): boolean {
   return normalizeStatus(span.status_code) === "ERROR";
+}
+
+/**
+ * A trace failed if anything in it did. `error_count` is the reliable half — the
+ * status is compared through `normalizeStatus` because comparing the raw string
+ * against one spelling is exactly how this stopped working before.
+ */
+export function traceFailed(trace: TraceSummary): boolean {
+  return trace.error_count > 0 || normalizeStatus(trace.status_code) === "ERROR";
 }
 
 /** Non-HTTP spans carry 0 rather than omitting the field; 0 is not a status. */

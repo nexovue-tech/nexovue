@@ -77,7 +77,7 @@ export function WaterfallRow({
               onClick={onToggleCollapse}
               aria-label={
                 collapsed
-                  ? `Expand ${childCount} spans under ${span.span_name}`
+                  ? `Expand ${childCount} ${childCount === 1 ? "span" : "spans"} under ${span.span_name}`
                   : `Collapse ${span.span_name}`
               }
               aria-expanded={!collapsed}

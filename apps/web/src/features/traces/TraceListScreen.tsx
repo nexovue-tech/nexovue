@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useMemo, useRef } from "react";
+import { useRef } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
@@ -8,10 +8,10 @@ import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatDuration } from "@/shared/format/duration";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
-import { resolveWindow, timeRangeById, useSelection } from "@/shared/selection";
+import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
 import type { TraceSummary } from "./api";
-import { useTraceList } from "./api";
+import { traceFailed, useTraceList } from "./api";
 
 const ROW_HEIGHT = 36;
 const OVERSCAN_ROWS = 10;
@@ -25,7 +25,7 @@ const OVERSCAN_ROWS = 10;
  */
 export function TraceListScreen() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useMemo(() => resolveWindow(rangeId), [rangeId]);
+  const timeWindow = useLiveWindow(rangeId);
   const list = useTraceList(projectId, timeWindow);
 
   const traces = list.data?.traces ?? [];
@@ -114,7 +114,7 @@ function TraceRow({
   offsetTop: number;
   height: number;
 }) {
-  const failed = trace.error_count > 0 || trace.status_code === "STATUS_CODE_ERROR";
+  const failed = traceFailed(trace);
 
   return (
     <div

@@ -7,7 +7,7 @@
  * a feature may not import app/, so the shared layer has to hold the value.
  */
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 export interface TimeRange {
   id: string;
@@ -27,8 +27,12 @@ const DEFAULT_RANGE_ID = "1h";
 
 /**
  * `to` is "now", and a value that changes every millisecond changes the query key every
- * render. Flooring it to a bucket keeps the key stable between ticks, which is the
+ * render. Rounding it to a bucket keeps the key stable between ticks, which is the
  * difference between a cached window and an endless refetch loop.
+ *
+ * It rounds *up*. Rounding down excludes everything that arrived since the last bucket
+ * boundary — which is precisely the newest data, the reason anyone opened the screen.
+ * A `to` slightly in the future costs nothing: there is no telemetry from the future.
  */
 const WINDOW_BUCKET_MS = 10_000;
 const MS_PER_MINUTE = 60_000;
@@ -76,11 +80,41 @@ export interface TimeWindow {
 }
 
 export function resolveWindow(rangeId: string, now = Date.now()): TimeWindow {
-  const bucketedNow = Math.floor(now / WINDOW_BUCKET_MS) * WINDOW_BUCKET_MS;
+  const bucketedNow = Math.ceil(now / WINDOW_BUCKET_MS) * WINDOW_BUCKET_MS;
   const span = timeRangeById(rangeId).minutes * MS_PER_MINUTE;
 
   return {
     from: new Date(bucketedNow - span).toISOString(),
     to: new Date(bucketedNow).toISOString(),
   };
+}
+
+/**
+ * The window a live screen reads against, advancing one bucket at a time.
+ *
+ * `resolveWindow` alone is a snapshot: computed once, it pins the screen to the moment
+ * it mounted, and a list captioned "newest first" quietly stops being either. The tick
+ * is what makes the window move, and moving the window is what makes the query key
+ * change, which is what refetches.
+ *
+ * It stops while the tab is hidden — nobody is reading, and each tick costs a request.
+ */
+export function useLiveWindow(rangeId: string): TimeWindow {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const advance = () => setNow(Date.now());
+    const tick = setInterval(() => {
+      if (document.visibilityState === "visible") advance();
+    }, WINDOW_BUCKET_MS);
+
+    // Catch up immediately on return, rather than after up to one more bucket.
+    document.addEventListener("visibilitychange", advance);
+    return () => {
+      clearInterval(tick);
+      document.removeEventListener("visibilitychange", advance);
+    };
+  }, []);
+
+  return resolveWindow(rangeId, now);
 }

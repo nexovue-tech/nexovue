@@ -5,4 +5,5 @@ use (
 	./apps/workers
 	./packages/contracts
 	./tools/demo-app
+	./tools/loadgen
 )

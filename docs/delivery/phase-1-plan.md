@@ -105,10 +105,10 @@ nexovue/
 | P1-14 | Rate limiting | per-key Redis counters; reject over-limit before any cost | ✅ done |
 | P1-15 | Trace writer | `franz-go` consumer group on `spans-raw`; **write-through, no buffer in M1** (ADR 0054 supersedes 0009's window in part); batched insert via `ch-go`; ClickHouse migration `000004` adds the `trace_id` → time-bounds lookup the detail query needs | ✅ done |
 | P1-16 | Query API | FastAPI `GET /traces`, `/traces/{id}` through a repository that cannot omit the tenant filter | ✅ done |
-| P1-17 | Traces in the shell | session auth, trace list + waterfall screen, built into the shell P1-63 already provides. Routing and layout are **not** here — they landed in M0 | todo |
-| P1-49 | Onboarding | signup collects org details + one email → transaction creates org, owner user, `production` project and first key → two env vars → live first-span celebration. User never sees the words org or project | todo |
-| P1-60 | E2E harness | Playwright against the running compose stack via `just e2e` — deliberately **not** `just test`, which `just check` runs on every commit and must not require docker; first critical path: signup → org/project/key created → first span → trace visible | todo |
-| P1-18 | Load generator | `tools/loadgen` wrapping `telemetrygen` (OTLP/HTTP + gRPC, no app needed); first performance numbers recorded in this doc | todo |
+| P1-17 | Traces in the shell | session auth, trace list + waterfall screen, built into the shell P1-63 already provides. Routing and layout are **not** here — they landed in M0 | ✅ done |
+| P1-49 | Onboarding | signup collects org details + one email → transaction creates org, owner user, `production` project and first key → two env vars → live first-span celebration. User never sees the words org or project | ✅ done |
+| P1-60 | E2E harness | Playwright against the running compose stack via `just e2e` — deliberately **not** `just test`, which `just check` runs on every commit and must not require docker; first critical path: signup → org/project/key created → first span → trace visible | ✅ done |
+| P1-18 | Load generator | `tools/loadgen` wrapping `telemetrygen` (OTLP/HTTP + gRPC, no app needed); first performance numbers recorded in this doc | ✅ done |
 
 ### M2 — Spine hardening (the part that makes it a product, not a demo)
 *Exit: the five core invariants in §5 each have a test that fails loudly when broken.*
@@ -194,18 +194,18 @@ nexovue/
 
 | Budget | Target | Measured |
 |---|---|---|
-| Receiver throughput | ≥ 10,000 spans/sec sustained, single instance | — |
-| Receiver accept latency | p99 < 50 ms | — |
-| Trace-split re-encode overhead | < 20% of receiver CPU | — |
-| Receiver memory | < 512 MB under sustained load | — |
-| Span → queryable lag | p99 < 15 s | — |
-| Trace-by-ID query | p95 < 500 ms | — |
+| Receiver throughput | ≥ 10,000 spans/sec sustained, single instance | **62,464 spans/sec** — pass. Generator-bound, not a receiver ceiling: the receiver sat at 24% of one core. Three senders at once reached only 65,536 spans/sec and saturated the laptop |
+| Receiver accept latency | p99 < 50 ms | **p99 10.8 ms** at 12k spans/sec, 9.5 ms at 62k — pass. Rose to p99 ~72 ms only when three senders saturated the host |
+| Trace-split re-encode overhead | < 20% of receiver CPU | — not measurable from `just load`. The receiver exposes no profile endpoint and `tracesplit` is internal to `apps/receiver`, so an honest figure needs a benchmark or pprof inside that module |
+| Receiver memory | < 512 MB under sustained load | **36 MiB peak** (28 MiB at 12k spans/sec, 27 MiB idle) — pass, with two orders of magnitude of room |
+| Span → queryable lag | p99 < 15 s | **p99 2.2 s** at 12k spans/sec, 0.65 s at 62k — pass. Lag falls as load rises because the worker's batch fills on rows before its deadline |
+| Trace-by-ID query | p95 < 500 ms | **p95 21.8 ms** (p50 16.7, p99 24.9), 60 random traces against an 11.2M-span table — pass. This is the budget `span_trace_lookup` exists for: without the time bound it derives, the query would lean on the bloom filter across every partition |
 | Endpoint stats, 24h window | p95 < 300 ms | — |
 | Log search, 1h window | p95 < 2 s | — |
 | First screen load | < 2 s (PRD AC1.1) | — |
 | Data loss under broker restart | zero | — |
 
-Numbers are provisional until M1 gives a baseline on the M4 Pro; revise once, then hold. Disk in dev is bounded by a 3-day ClickHouse TTL rather than the 30-day production setting.
+**M1 gave the baseline.** Five budgets measured and passed, all with large margins; §4 said revise once against real numbers and then hold, so these targets now stand as the regression gate. The re-encode budget remains unmeasurable until the receiver exposes a profile endpoint — that is a gap in the receiver, not in the measurement. Disk in dev is bounded by a 3-day ClickHouse TTL rather than the 30-day production setting.
 
 ---
 
@@ -278,9 +278,20 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 - **Split the worker back out when measurement says to.** ADR 0050 collapsed four worker containers into one because they were identical code; the pipeline names survive so that splitting is a `WORKER_PIPELINES` change per deployment, not a rewrite. The signal to split is one pipeline's memory or lag diverging from the others under the M7 load test.
 
 - **The three Python telemetry modules are duplicated** between `api` and `scheduler`. The root fix is a `packages/py-platform` uv workspace member; it needs a root `pyproject.toml` change and was outside every lane's ownership.
-- **No Go driver is chosen for Postgres or Valkey**, so the receiver's `/readyz` probes Kafka only, even though it requires `POSTGRES_DSN` and `REDIS_URL`. `pgx/v5` and `go-redis/v9` are the obvious picks, but Valkey sits on the receiver's hot path so `rueidis` deserves measuring — a real decision, needed by P1-13/P1-14.
+- ~~**No Go driver is chosen for Postgres or Valkey.**~~ **Resolved in M1** — ADR 0055: `pgx/v5` + `pgxpool`, and `valkey-io/valkey-go` (the maintained rueidis fork) rather than `go-redis`. `/readyz` now probes all three.
 - **Plan-aware rate limits are stubbed** at a fixed multiplier until `organizations.plan` carries real tiers.
 - **`logs` and `metrics` sort keys** were left as recorded. The argument that moved `project_id` into the `spans` key (ADR 0049) applies to them too, and is worth revisiting once their query patterns are real.
+
+## 7c. Follow-ups surfaced while building M1
+
+- **Mobile waterfall hides the `detached` and `skew` tags** for want of room. They survive in the detail panel, so the information is not lost, but a phone user never sees on the row that a span is orphaned or clock-skewed — exactly the two things that make a waterfall confusing. Needs a smaller affordance, not the same one shrunk.
+- **The mobile span-detail sheet is a fixed 55dvh** with no drag-to-resize. Fine for a short span, cramped for one with many attributes.
+- **`ALTER TABLE spans DELETE` does not cascade to `span_trace_lookup`**, leaving rows that claim a trace exists after its spans are gone. The detail query treats "lookup hit, no spans" as not-found so nothing breaks, and TTL clears them eventually, but a real purge path (P1-52, GDPR delete in Phase 2) must clean both.
+- **`last_used_at` on `api_keys` is never written.** Updating it would be a database write per ingest request on the hot path. It needs a cheaper shape — sampled, batched, or derived from usage counters — before anything can show a customer when a key was last seen.
+- **The receiver's rate limiter fails open** when Valkey is unreachable, on the reasoning that losing telemetry costs more than briefly losing the limit, with body caps and the broker still bounding damage. Deliberate, and worth revisiting once a paying tenant can be harmed by it.
+- **The receiver exposes no profile endpoint**, which is what blocks the trace-split re-encode budget (§4) — permanently, not just today. `net/http/pprof` on the existing admin listener would settle it, but exposing profiles needs a deliberate decision about who can reach that port.
+- **`resolveWindow` rounded the live window's end *down* to a bucket**, so the trace list silently omitted the newest 0–10 seconds, and `TraceListScreen` then froze that window at mount. Together they broke M1's exit condition at the last hop: onboarding said the first span had arrived, and the list it linked to was empty. Fixed in M1; noted because the shape recurs — a cache-stability trick that quietly changes what the query means.
+- **The trace list groups over `spans` on every request.** Correct and cheap at M1 volume because the time window is bounded by the sort key, but it is a full group-by, and P1-41 (trace explorer, M6) is where it needs a real look.
 
 ## 8. Open scope questions
 

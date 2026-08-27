@@ -48,7 +48,12 @@ var jsonCodec = codec{
 	contentType: contentTypeJSON,
 	marshal:     func(m proto.Message) ([]byte, error) { return protojson.Marshal(m) },
 	unmarshal: func(b []byte, m proto.Message) error {
-		return protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(b, m)
+		// OTLP/JSON sends ids as hex; protojson reads `bytes` as base64.
+		normalized, err := normalizeJSONIDs(b)
+		if err != nil {
+			return err
+		}
+		return protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(normalized, m)
 	},
 }
 

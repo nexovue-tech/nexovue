@@ -96,7 +96,7 @@ test-py:
     exit $code
 
 test-web:
-    pnpm -r test
+    pnpm -r --filter '!@nexovue/e2e' test
 
 # ---------- end to end ----------
 
@@ -107,7 +107,7 @@ e2e:
 
 # The same suite with a visible browser, for working on a failing spec
 e2e-headed:
-    pnpm --filter @nexovue/e2e test -- --headed
+    pnpm --filter @nexovue/e2e test --headed
 
 # ---------- contracts ----------
 

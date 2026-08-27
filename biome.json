@@ -3,6 +3,7 @@
   "files": {
     "includes": [
       "**",
+      "!.claude",
       "!**/node_modules",
       "!**/dist",
       "!**/.venv",

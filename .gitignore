@@ -29,3 +29,9 @@ dist/
 
 # Local data volumes
 deploy/data/
+
+# `go build` at the repo root drops the loadgen binary here.
+/loadgen
+
+# Agent worktrees: a full repo copy, never part of the tree.
+.claude/worktrees/
