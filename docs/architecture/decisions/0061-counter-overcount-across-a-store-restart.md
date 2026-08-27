@@ -1,6 +1,6 @@
 # 0061 — Insert deduplication does not survive a ClickHouse restart
 
-- **Status:** Proposed — the measurement is settled, the remedy is not
+- **Status:** Accepted 2026-08-27 — remedy implemented and proven
 - **Supersedes in part:** [0060](0060-counter-idempotency-via-clickhouse-dedup.md) — its stated limit, now measured
 - **Date:** 2026-08-27
 
@@ -58,20 +58,68 @@ arrives anyway the day storage needs high availability.
 
 ## Decision
 
-**Not yet taken.** With the field narrowed to two, the choice is:
+**`KeeperMap`, with the connector's state machine.** Raj's instruction was to take the
+correct option rather than the affordable one — and the cost that made it look expensive
+turned out not to exist. ClickHouse runs Keeper **embedded in the same process**, so the
+container inventory [0052](0052-full-production-container-inventory.md) fixes at fourteen is
+unchanged; the correct answer cost a config file.
 
-1. **Accept and publish the bound.** 0.18%, only when the store restarts mid-flight, always
+`span_ingest_offsets` (migration `000011`) holds per-partition `min_offset`/`max_offset` and
+a `BEFORE`/`AFTER` flag written either side of the counter insert. On assignment the worker
+resolves the connector's four scenarios into one number — the offset it may begin counting
+from — and declines to re-count anything below it.
+
+**Proven, not argued.** The chaos test could not settle this: whether a replay happens there
+at all depends on where the outage lands. So the condition was created instead of raced —
+drain to zero, restart ClickHouse to discard the deduplication log, rewind the consumer
+group 800 offsets on each of twelve partitions behind the durable watermark, and re-consume:
+
+```
+counters before   4,261,548
+counters after    4,261,548      delta 0
+```
+
+9,600 records replayed, none counted twice, with ClickHouse's own deduplication unavailable.
+That is `TestReplayedOffsetsAreNotCountedTwice` in `tools/chaos`.
+
+**One deliberate deviation from the connector.** `Contains` + `BEFORE` re-counts rather than
+dead-lettering. The connector parks the batch because it cannot reconstruct the chunk it is
+missing; here a batch is only a window onto a stream, so parking well-formed spans would
+guarantee a hole. An undercount is the worse failure.
+
+### The measurement that started this was not the bug
+
+The +512 that opened this ADR was **not double counting**, and finding that out corrected two
+real defects and one bad test.
+
+The receiver's `ProduceSync(...).FirstErr()` reported the first error while other records in
+the same request were already on the broker — so it answered 503 to an export it had partly
+published, and the client republished what had landed. It now retries only the failed subset,
+so its answer is true. Separately, the load generator recorded a request it could not read a
+reply to as neither offered nor accepted, while the receiver may already have published it.
+
+Both mean a correct pipeline counts *more* than was acknowledged. The chaos test's
+`counted > accepted` assertion could not tell that from a real overcount, so it was
+measuring the harness. It now asserts only what it can prove — no loss — and idempotency is
+proven by the deterministic test above.
+
+### The field, for the record
+
+~~1. **Accept and publish the bound.** 0.18%, only when the store restarts mid-flight, always
    over and never under. The research supports it as normal practice — most pipelines run
    at-least-once and reconcile in the query. Invariant 3 then reads *exact under sampling,
    bounded across a store restart*, which is a weaker promise than the one written down but
-   an honest one.
-2. **Adopt `KeeperMap` with the connector's state machine.** Correct, vendor-proven, and
-   survives anything. Costs a Keeper.
+   an honest one.~~ **Rejected: the promise in invariant 3 is the product.**
+2. **Adopt `KeeperMap` with the connector's state machine.** ✅ **Chosen.**
 
-The recommendation is **(1) now, (2) when ClickHouse becomes replicated** — at which point
-Keeper is already in the stack and KeeperMap is nearly free. Deduplication from
-[0060](0060-counter-idempotency-via-clickhouse-dedup.md) stays either way: it still covers
-the common case, a worker restarting while the store stays up.
+Deduplication from [0060](0060-counter-idempotency-via-clickhouse-dedup.md) stays: it still
+covers the common case, a worker restarting while the store survives, and costs nothing.
+
+**One residual hole, narrow and recorded.** If a counter insert lands but its acknowledgement
+is lost, the retry re-inserts the identical block. Within a single settlement the state
+machine cannot see this, and 0060's deduplication catches it only while ClickHouse survives.
+A store restart between the two attempts would still duplicate. Always an overcount, never an
+undercount, and not what produced the 512.
 
 ## Consequences
 

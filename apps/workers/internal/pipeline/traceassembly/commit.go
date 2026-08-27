@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
 )
 
 // position is where one record sat on the broker — everything needed to commit
@@ -79,6 +81,56 @@ func (q *commitQueue) ready(
 	q.entries = q.entries[settled:]
 	q.count -= len(due)
 	return due
+}
+
+// countedThrough reports, per partition, the offsets held whose counter
+// contributions have all been folded into the drain about to be written or an
+// earlier one. It is what the durable ingest state records (ADR 0061).
+//
+// It scans the same prefix `ready` does and stops at the same place, but it
+// does not wait for the sampling window: a batch's spans can still be in the
+// buffer while its counters are already exact, and only the counters need this.
+func (q *commitQueue) countedThrough(
+	countersDrained func(minute time.Time) bool,
+) map[ingeststate.Partition]ingeststate.Range {
+	reached := make(map[ingeststate.Partition]ingeststate.Range)
+	for _, entry := range q.entries {
+		if !countersDrained(entry.latestMinute) {
+			break
+		}
+		for _, at := range entry.positions {
+			key := ingeststate.Partition{Topic: at.topic, ID: at.partition}
+			offsets, seen := reached[key]
+			if !seen {
+				reached[key] = ingeststate.Range{Min: at.offset, Max: at.offset}
+				continue
+			}
+			reached[key] = ingeststate.Range{
+				Min: min(offsets.Min, at.offset),
+				Max: max(offsets.Max, at.offset),
+			}
+		}
+	}
+	return reached
+}
+
+// incomingRanges is the offset range each partition contributes to one polled
+// batch, which is the "new batch" the state machine classifies.
+func incomingRanges(records []*kgo.Record) map[ingeststate.Partition]ingeststate.Range {
+	ranges := make(map[ingeststate.Partition]ingeststate.Range)
+	for _, record := range records {
+		key := ingeststate.Partition{Topic: record.Topic, ID: record.Partition}
+		offsets, seen := ranges[key]
+		if !seen {
+			ranges[key] = ingeststate.Range{Min: record.Offset, Max: record.Offset}
+			continue
+		}
+		ranges[key] = ingeststate.Range{
+			Min: min(offsets.Min, record.Offset),
+			Max: max(offsets.Max, record.Offset),
+		}
+	}
+	return ranges
 }
 
 // drain releases every held batch. Shutdown uses it, after the buffer and the

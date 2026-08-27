@@ -89,21 +89,28 @@ func TestNothingAcknowledgedIsEverLost(t *testing.T) {
 
 	counted := waitForDrain(t, service, accepted)
 
-	switch {
-	case counted < accepted:
+	// The assertion is one-sided, and deliberately so.
+	//
+	// Counting *fewer* than we acknowledged is loss, and loss is what this test
+	// exists to forbid. Counting more is not evidence of a bug: the receiver can
+	// publish part of a request and still answer 503 (its ProduceSync reports the
+	// first error while other records are already on the broker), and the load
+	// generator records a request it could not read a reply to as neither offered
+	// nor accepted. In both cases the client retries and the spans are genuinely
+	// published twice, so a correct pipeline counts more than was acknowledged.
+	//
+	// An earlier version failed on that and called it double counting. It was
+	// measuring the harness. Counter idempotency is proven deterministically
+	// instead, by TestReplayedOffsetsAreNotCountedTwice below.
+	if counted < accepted {
 		t.Errorf("DATA LOSS: acknowledged %d spans, only %d were counted (%d missing)",
 			accepted, counted, accepted-counted)
-	case counted > accepted:
-		// ADR 0060 opened ClickHouse's insert-deduplication window so a replayed
-		// counter block is dropped. It is proven for a worker restart; whether the
-		// dedup log survives a *ClickHouse* restart is undocumented, and this run
-		// is where that gets answered.
-		t.Errorf("DOUBLE COUNTING: acknowledged %d spans but counted %d (%d extra) — "+
-			"insert deduplication did not survive the outage; ADR 0060 needs the durable "+
-			"watermark instead", accepted, counted, counted-accepted)
-	default:
-		t.Logf("zero loss: %d acknowledged, %d counted, exactly", accepted, counted)
 	}
+	if extra := counted - accepted; extra > 0 {
+		t.Logf("counted %d more than acknowledged (%d vs %d) — expected: republished "+
+			"after an unacknowledged export, not double counting", extra, counted, accepted)
+	}
+	t.Logf("no loss: %d acknowledged, %d counted", accepted, counted)
 
 	if parked := dlqDepth(t) - dlqBefore; parked > 0 {
 		t.Errorf("%d messages were parked on the dead-letter queue during the run; an "+

@@ -15,6 +15,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/dedupe"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/derive"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/dlq"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
 )
@@ -60,6 +61,11 @@ type Pipeline struct {
 	seen    *dedupe.Offsets
 	commits commitQueue
 
+	// ingest is the durable half of `seen`: the per-partition record of what has
+	// already been counted, which unlike the in-process watermark survives both
+	// this process and the store restarting (ADR 0061).
+	ingest *ingeststate.Guard
+
 	// running is what readiness reports. A worker whose pipeline has stopped is
 	// not ready, however healthy its dependencies look — the failure that taught
 	// us this presented as a green container consuming nothing for nine minutes.
@@ -79,10 +85,18 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		return nil, err
 	}
 
+	ingest := ingeststate.NewGuard(ingeststate.NewKeeperMap(pool))
+
 	consumer, err := kgo.NewClient(
 		kgo.SeedBrokers(cfg.KafkaBrokers...),
 		kgo.ConsumeTopics(cfg.Spans.Topic),
 		kgo.ConsumerGroup(cfg.Spans.ConsumerGroup),
+		// A partition can arrive from another worker, whose settlements this
+		// process never saw. Re-reading the durable state before counting
+		// anything is what keeps the handover from counting a minute twice.
+		kgo.OnPartitionsAssigned(func(context.Context, *kgo.Client, map[string][]int32) {
+			ingest.Invalidate()
+		}),
 		// Marks are what MarkCommitRecords records; without this option both
 		// it and CommitMarkedOffsets are silent no-ops. Autocommit can then
 		// only ever commit offsets we have already stored.
@@ -114,6 +128,7 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		metrics:  derive.NewWriter(pool),
 		parked:   dlq.New(producer, cfg.Spans.DLQTopic, cfg.Spans.ConsumerGroup),
 		seen:     dedupe.NewOffsets(),
+		ingest:   ingest,
 		log:      log.With(slog.String("pipeline", string(config.PipelineTraceAssembly))),
 		limits:   cfg.Spans,
 		sampling: cfg.Sampling,
@@ -271,6 +286,11 @@ func (p *Pipeline) reportFetchErrors(ctx context.Context, fetches kgo.Fetches) e
 // whatever the sampler released, and holds the batch's offsets until the rest
 // of what it produced has been stored too.
 func (p *Pipeline) absorb(ctx context.Context, records []*kgo.Record) error {
+	counting, err := p.alreadyCounted(ctx, records)
+	if err != nil {
+		return err
+	}
+
 	now := p.now()
 	entry := pendingCommit{
 		positions:     make([]position, 0, len(records)),
@@ -281,7 +301,11 @@ func (p *Pipeline) absorb(ctx context.Context, records []*kgo.Record) error {
 	messages, spans := 0, 0
 	for _, record := range records {
 		entry.positions = append(entry.positions, positionOf(record))
-		counted := p.seen.FirstDelivery(record.Topic, record.Partition, record.Offset)
+		// Both watermarks have to be consulted and the in-process one has to be
+		// updated either way, so neither call may be short-circuited away.
+		firstDelivery := p.seen.FirstDelivery(record.Topic, record.Partition, record.Offset)
+		partition := ingeststate.Partition{Topic: record.Topic, ID: record.Partition}
+		counted := firstDelivery && counting.Counts(partition, record.Offset)
 		result, err := p.stages.absorbMessage(now, record.Value, counted)
 		if err != nil {
 			if parkErr := p.park(ctx, record, err); parkErr != nil {
@@ -315,6 +339,36 @@ func (p *Pipeline) absorb(ctx context.Context, records []*kgo.Record) error {
 	return nil
 }
 
+// alreadyCounted resolves a polled batch against the durable per-partition
+// state, so a replay of offsets whose counters are already stored is not
+// counted a second time. Its spans still travel — an identical span row is
+// idempotent — and only the counters are held back.
+func (p *Pipeline) alreadyCounted(
+	ctx context.Context,
+	records []*kgo.Record,
+) (ingeststate.Decisions, error) {
+	if err := p.retryTransient(ctx, "read counted offsets", p.ingest.Refresh); err != nil {
+		return nil, err
+	}
+
+	decisions := p.ingest.Counting(incomingRanges(records))
+	for partition, decision := range decisions {
+		if decision.Scenario == ingeststate.New && !decision.Ambiguous {
+			continue
+		}
+		p.log.InfoContext(ctx, "resolving a replayed batch against the counted offsets",
+			slog.String("topic", partition.Topic),
+			slog.Int("partition", int(partition.ID)),
+			slog.String("scenario", string(decision.Scenario)),
+			slog.Int64("count_from", decision.CountFrom),
+			// True only when the previous settlement never confirmed, so the
+			// store's own deduplication is all that stops a duplicate here.
+			slog.Bool("ambiguous", decision.Ambiguous),
+		)
+	}
+	return decisions, nil
+}
+
 // settle releases the traces whose window has closed, writes the counters whose
 // minute is complete, and commits every batch that is now fully stored.
 func (p *Pipeline) settle(ctx context.Context) error {
@@ -326,17 +380,41 @@ func (p *Pipeline) settle(ctx context.Context) error {
 		return err
 	}
 
-	points := p.stages.counters.Drain(now)
+	drained := func(minute time.Time) bool { return p.stages.counters.Drained(now, minute) }
+	reached := p.commits.countedThrough(drained)
+	if err := p.settleCounters(ctx, reached, p.stages.counters.Drain(now)); err != nil {
+		return err
+	}
+
+	return p.commit(ctx, p.commits.ready(now, drained))
+}
+
+// settleCounters writes one drain of counters, bracketed by the durable record
+// of the offsets it makes exact.
+//
+// The order is the whole point (ADR 0061): BEFORE says an insert of this range
+// is in flight, AFTER says the store took it, and the Kafka offsets move only
+// after that — so a worker that comes back to a restarted store can tell a
+// finished insert from an interrupted one instead of guessing.
+func (p *Pipeline) settleCounters(
+	ctx context.Context,
+	reached map[ingeststate.Partition]ingeststate.Range,
+	points []derive.Point,
+) error {
+	settlement := p.ingest.Advance(reached)
+	if err := p.retryTransient(ctx, "record counted offsets", func(callCtx context.Context) error {
+		return p.ingest.Begin(callCtx, settlement)
+	}); err != nil {
+		return err
+	}
 	if err := p.retryTransient(ctx, "insert counters", func(callCtx context.Context) error {
 		return p.metrics.Insert(callCtx, points)
 	}); err != nil {
 		return err
 	}
-
-	due := p.commits.ready(now, func(minute time.Time) bool {
-		return p.stages.counters.Drained(now, minute)
+	return p.retryTransient(ctx, "confirm counted offsets", func(callCtx context.Context) error {
+		return p.ingest.Complete(callCtx, settlement)
 	})
-	return p.commit(ctx, due)
 }
 
 // drain writes everything still held and commits it, which is what makes a
@@ -358,7 +436,9 @@ func (p *Pipeline) drain(ctx context.Context, unprocessed []*kgo.Record) error {
 	if err := p.writer.insert(drainCtx, p.block); err != nil {
 		return err
 	}
-	if err := p.metrics.Insert(drainCtx, p.stages.counters.DrainAll()); err != nil {
+	// Everything held is drained here, so every held offset is counted through.
+	reached := p.commits.countedThrough(func(time.Time) bool { return true })
+	if err := p.settleCounters(drainCtx, reached, p.stages.counters.DrainAll()); err != nil {
 		return err
 	}
 
