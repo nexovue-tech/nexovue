@@ -27,6 +27,14 @@ SEVERITY_UNSET: Final = 0
 SEVERITY_OK: Final = 1
 SEVERITY_ERROR: Final = 2
 
+# The vocabulary `spans.status_code` actually holds. The worker strips OTLP's
+# `STATUS_CODE_` prefix before writing, so these are the stored spellings —
+# comparing against the prefixed enum names matches nothing and silently reports
+# every trace as healthy. Defined once here and imported, never re-typed.
+STATUS_UNSET: Final = "UNSET"
+STATUS_OK: Final = "OK"
+STATUS_ERROR: Final = "ERROR"
+
 _SPAN_FACTS: Final = f"""
     SELECT
         trace_id,
@@ -38,8 +46,8 @@ _SPAN_FACTS: Final = f"""
             + toInt64(duration_ms * {NANOSECONDS_PER_MILLISECOND}) AS end_nanos,
         {_PARENT_CLEANED} NOT IN ('', '{ABSENT_PARENT_SENTINEL}') AS has_parent,
         multiIf(
-            status_code = 'STATUS_CODE_ERROR', {SEVERITY_ERROR},
-            status_code = 'STATUS_CODE_OK', {SEVERITY_OK},
+            status_code = '{STATUS_ERROR}', {SEVERITY_ERROR},
+            status_code = '{STATUS_OK}', {SEVERITY_OK},
             {SEVERITY_UNSET}
         ) AS severity
     FROM spans

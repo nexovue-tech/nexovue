@@ -168,13 +168,18 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   if (!response.ok) {
     const problem = await readProblem(response);
-    throw new ApiError(problem?.title ?? response.statusText ?? "Request failed", response.status, {
-      traceId,
-      correlationId: correlationIdFrom(response, problem, traceId),
-      retryAfterSeconds: parseRetryAfter(response.headers.get("retry-after")),
-      offline: false,
-      aborted: false,
-    });
+    throw new ApiError(
+      problem?.title ?? response.statusText ?? "Request failed",
+      response.status,
+      {
+        traceId,
+        correlationId: correlationIdFrom(response, problem, traceId),
+        retryAfterSeconds: parseRetryAfter(response.headers.get("retry-after")),
+        offline: false,
+        aborted: false,
+      },
+      problem,
+    );
   }
 
   if (response.status === 204) return undefined as T;

@@ -28,6 +28,9 @@ const HTTP_FORBIDDEN = 403;
 const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_SERVER_ERROR_FLOOR = 500;
 
+/** The screens where nobody is signed in yet, so a 401 is an answer rather than a lapse. */
+const AUTH_SCREEN_PATHS = new Set(["/login", "/signup"]);
+
 /** Set by the app once the router exists, so this module does not import the router. */
 let redirectToLogin: (() => void) | undefined;
 
@@ -58,6 +61,10 @@ function handleApiFailure(error: unknown, operation: string): void {
   if (context.offline || context.aborted) return; // the shell banner already says this
 
   if (status === HTTP_UNAUTHORIZED) {
+    // A 401 raised by the sign-in form is a wrong password, not an expired session.
+    // Bouncing the screen it came from would throw away the message it is about to show.
+    if (AUTH_SCREEN_PATHS.has(window.location.pathname)) return;
+
     clearSession();
     rememberReturnTo(window.location.pathname + window.location.search);
     redirectToLogin?.();

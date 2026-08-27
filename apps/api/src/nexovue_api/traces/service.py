@@ -45,11 +45,11 @@ WINDOW_SLACK: Final = timedelta(seconds=1)
 MAX_SPANS_PER_TRACE: Final = 10_000
 
 _SEVERITY_NAMES: Final[dict[int, str]] = {
-    queries.SEVERITY_ERROR: "STATUS_CODE_ERROR",
-    queries.SEVERITY_OK: "STATUS_CODE_OK",
-    queries.SEVERITY_UNSET: "STATUS_CODE_UNSET",
+    queries.SEVERITY_ERROR: queries.STATUS_ERROR,
+    queries.SEVERITY_OK: queries.STATUS_OK,
+    queries.SEVERITY_UNSET: queries.STATUS_UNSET,
 }
-UNKNOWN_STATUS: Final = "STATUS_CODE_UNSET"
+UNKNOWN_STATUS: Final = queries.STATUS_UNSET
 
 TRACE_NOT_FOUND_DETAIL: Final = "No such trace."
 
@@ -132,7 +132,7 @@ async def get_trace(
         start_time=_nanos_to_datetime(min(starts)),
         duration_ms=(max(ends) - min(starts)) / queries.NANOSECONDS_PER_MILLISECOND,
         span_count=len(spans),
-        error_count=sum(1 for span in spans if span.status_code == "STATUS_CODE_ERROR"),
+        error_count=sum(1 for span in spans if span.status_code == queries.STATUS_ERROR),
         spans=spans,
     )
 

@@ -1,17 +1,22 @@
 import { Menu } from "lucide-react";
 
 import { SelectField } from "@/shared/components/SelectField";
+import { useProjectSelection } from "@/shared/projects";
+import {
+  setSelectedProjectId,
+  setSelectedRangeId,
+  TIME_RANGES,
+  useSelection,
+} from "@/shared/selection";
 import { ThemeToggle } from "@/shared/theme/ThemeToggle";
-
-import { PROJECTS, TIME_RANGES, useShellControls } from "./shell-controls";
 
 /**
  * Project and time range are the two things that qualify everything on every screen, so
  * they sit above every screen. Both read as sentences rather than as form controls —
  * the whole product is a sentence with evidence under it.
  *
- * Both are local state until the control plane exists (P1-59) and the query layer can
- * key on them.
+ * The selections themselves live in shared/, not here: the screens that read them are
+ * features, and a feature may not import app/.
  */
 export function TopBar({
   onOpenCommandPalette,
@@ -20,7 +25,8 @@ export function TopBar({
   onOpenCommandPalette: () => void;
   onOpenNav: () => void;
 }) {
-  const { projectId, setProjectId, rangeId, setRangeId } = useShellControls();
+  const { projects, projectId } = useProjectSelection();
+  const { rangeId } = useSelection();
 
   return (
     <header className="flex h-10 shrink-0 items-center gap-4 border-line border-b bg-surface px-4">
@@ -35,13 +41,21 @@ export function TopBar({
         <Menu size={16} aria-hidden="true" />
       </button>
 
-      <SelectField
-        label="Project"
-        value={projectId}
-        options={PROJECTS}
-        onChange={setProjectId}
-        optionLabel={(project) => project.name}
-      />
+      {projects.length > 0 && projectId ? (
+        <SelectField
+          label="Project"
+          value={projectId}
+          options={projects}
+          onChange={setSelectedProjectId}
+          optionLabel={(project) => project.name}
+        />
+      ) : (
+        // Nothing to choose between yet. An empty select reads as a broken control.
+        <span className="flex items-baseline gap-2">
+          <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Project</span>
+          <span className="text-ink-dim text-sm">—</span>
+        </span>
+      )}
 
       <span aria-hidden className="h-4 w-px bg-line" />
 
@@ -49,7 +63,7 @@ export function TopBar({
         label="Last"
         value={rangeId}
         options={TIME_RANGES}
-        onChange={setRangeId}
+        onChange={setSelectedRangeId}
         optionLabel={(range) => range.label}
       />
 

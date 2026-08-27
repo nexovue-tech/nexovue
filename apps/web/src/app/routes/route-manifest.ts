@@ -166,9 +166,9 @@ export const BARE_SCREENS: ScreenDefinition[] = [
   },
   {
     path: "/signup",
-    title: "Create an organisation",
+    title: "Create an account",
     description:
-      "Name, email, password — and behind it one transaction that creates the org, the owner, a production project and the first API key.",
+      "Company name, email, password — and behind it one transaction that creates the organization, the owner, a production project and the first API key. The screen itself never says either word.",
     taskId: "P1-49",
   },
   {

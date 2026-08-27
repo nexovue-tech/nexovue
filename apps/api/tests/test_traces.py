@@ -93,10 +93,10 @@ class FakeTelemetry:
                     "",
                     "storefront",
                     "GET /checkout",
-                    "SPAN_KIND_SERVER",
+                    "SERVER",
                     _START_NANOS,
                     412.7,
-                    "STATUS_CODE_ERROR",
+                    "ERROR",
                     "boom",
                     "GET",
                     "/checkout",
@@ -195,7 +195,7 @@ def test_a_timestamp_serializes_as_iso_8601_with_milliseconds_and_a_z() -> None:
         duration_ms=412.7,
         span_count=2,
         error_count=1,
-        status_code="STATUS_CODE_ERROR",
+        status_code="ERROR",
     )
 
     assert summary.model_dump(mode="json")["start_time"] == "2026-08-27T10:15:04.123Z"

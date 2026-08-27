@@ -222,7 +222,7 @@ Targets: body text Lc 75 / 4.5:1 · labels and chart marks Lc 60 / 4.5:1 · non-
 | light · critical label on page | 74 | 5.15:1 | Lc 60 · 4.5:1 | ✓ |
 | light · critical dot vs page (UI) | 73 | 5.08:1 | Lc 15 · 3.0:1 | ✓ |
 | light · warning label on badge fill | 67 | 4.55:1 | Lc 60 · 4.5:1 | ✓ |
-| light · warning label on page | 73 | 4.93:1 | Lc 60 · 4.5:1 | ✓ |
+| light · warning label on page | 74 | 4.98:1 | Lc 60 · 4.5:1 | ✓ |
 | light · warning dot vs page (UI) | 58 | 3.16:1 | Lc 15 · 3.0:1 | ✓ |
 | light · info label on badge fill | 67 | 4.51:1 | Lc 60 · 4.5:1 | ✓ |
 | light · info label on page | 73 | 4.91:1 | Lc 60 · 4.5:1 | ✓ |

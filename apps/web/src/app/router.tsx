@@ -6,6 +6,11 @@ import {
   Outlet,
 } from "@tanstack/react-router";
 
+import { LoginScreen } from "@/features/auth/LoginScreen";
+import { SignupScreen } from "@/features/auth/SignupScreen";
+import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
+import { TraceListScreen } from "@/features/traces/TraceListScreen";
+import { TraceScreen } from "@/features/traces/TraceScreen";
 import { ErrorScreen } from "@/shared/components/ErrorScreen";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 
@@ -70,14 +75,20 @@ const serviceMapRoute = createRoute({
 const tracesRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/traces",
-  component: placeholderFor("/traces"),
+  component: TraceListScreen,
 });
 
 const traceRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/traces/$traceId",
-  component: placeholderFor("/traces/$traceId"),
+  component: TraceWaterfallScreen,
 });
+
+/** The route owns the parameter; the screen owns everything after it. */
+function TraceWaterfallScreen() {
+  const { traceId } = traceRoute.useParams();
+  return <TraceScreen traceId={traceId} />;
+}
 
 const errorsRoute = createRoute({
   getParentRoute: () => shellRoute,
@@ -150,19 +161,19 @@ const settingsDataRoute = createRoute({
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
-  component: placeholderFor("/login"),
+  component: LoginScreen,
 });
 
 const signupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/signup",
-  component: placeholderFor("/signup"),
+  component: SignupScreen,
 });
 
 const onboardingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/onboarding",
-  component: placeholderFor("/onboarding"),
+  component: OnboardingScreen,
 });
 
 /* ---------------------------------------------------------------------- router */
