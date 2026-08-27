@@ -8,6 +8,13 @@ import (
 // Facts are what the sampler needs to know about a span. The row itself is
 // opaque to this package: the buffer stores and returns it untouched.
 type Facts struct {
+	// TenantID and ProjectID are part of a trace's identity, not decoration.
+	// A trace id is not unique across tenants: W3C trace context is designed to
+	// propagate between organisations, so one customer calling another's API
+	// forwards its traceparent and both export the same id to us. Keyed on the
+	// id alone, one tenant's verdict decided the other's spans — and a cached
+	// "drop" silently deleted errored spans that policy keeps in full.
+	TenantID  string
 	TraceID   string
 	ProjectID string
 	Start     time.Time
@@ -77,14 +84,26 @@ type Buffer[T any] struct {
 	options  Options
 	policies PolicySource
 
-	open      map[string]*openTrace[T]
-	openOrder queue[string]
+	open      map[traceKey]*openTrace[T]
+	openOrder queue[traceKey]
 	spans     int
 
-	decided      map[string]verdict
-	decidedOrder queue[string]
+	decided      map[traceKey]verdict
+	decidedOrder queue[traceKey]
 
 	stats Stats
+}
+
+// traceKey identifies a trace. Comparable, so it keys a map directly, and it
+// carries the tenancy because a trace id alone does not identify a trace.
+type traceKey struct {
+	tenant  string
+	project string
+	traceID string
+}
+
+func keyOf(facts Facts) traceKey {
+	return traceKey{tenant: facts.TenantID, project: facts.ProjectID, traceID: facts.TraceID}
 }
 
 type openTrace[T any] struct {
@@ -128,8 +147,8 @@ func New[T any](options Options, policies PolicySource) (*Buffer[T], error) {
 	return &Buffer[T]{
 		options:  options,
 		policies: policies,
-		open:     make(map[string]*openTrace[T]),
-		decided:  make(map[string]verdict),
+		open:     make(map[traceKey]*openTrace[T]),
+		decided:  make(map[traceKey]verdict),
 	}, nil
 }
 
@@ -138,7 +157,8 @@ func New[T any](options Options, policies PolicySource) (*Buffer[T], error) {
 // was already decided keeps travelling immediately, and a full buffer releases
 // the traces it had to close early.
 func (b *Buffer[T]) Add(now time.Time, facts Facts, row T) []T {
-	if decision, ok := b.decided[facts.TraceID]; ok && now.Before(decision.expiresAt) {
+	key := keyOf(facts)
+	if decision, ok := b.decided[key]; ok && now.Before(decision.expiresAt) {
 		if !decision.keep {
 			b.stats.SpansDropped++
 			return nil
@@ -147,15 +167,15 @@ func (b *Buffer[T]) Add(now time.Time, facts Facts, row T) []T {
 		return []T{row}
 	}
 
-	trace, open := b.open[facts.TraceID]
+	trace, open := b.open[key]
 	if !open {
 		trace = &openTrace[T]{
 			facts:    traceFacts{traceID: facts.TraceID, earliest: facts.Start},
 			project:  facts.ProjectID,
 			closesAt: now.Add(b.options.Window),
 		}
-		b.open[facts.TraceID] = trace
-		b.openOrder.push(facts.TraceID)
+		b.open[key] = trace
+		b.openOrder.push(key)
 	}
 	trace.observe(facts, row)
 	b.spans++
@@ -232,12 +252,12 @@ func (b *Buffer[T]) enforceLimits() []T {
 }
 
 // close takes the verdict for one trace, remembers it and releases its rows.
-func (b *Buffer[T]) close(now time.Time, traceID string, trace *openTrace[T], release []T) []T {
+func (b *Buffer[T]) close(now time.Time, key traceKey, trace *openTrace[T], release []T) []T {
 	keep := b.policies.SamplingPolicy(trace.project).keeps(trace.facts)
 
-	delete(b.open, traceID)
+	delete(b.open, key)
 	b.spans -= len(trace.rows)
-	b.rememberVerdict(now, traceID, keep)
+	b.rememberVerdict(now, key, keep)
 
 	if !keep {
 		b.stats.TracesDropped++
@@ -249,12 +269,12 @@ func (b *Buffer[T]) close(now time.Time, traceID string, trace *openTrace[T], re
 	return append(release, trace.rows...)
 }
 
-func (b *Buffer[T]) rememberVerdict(now time.Time, traceID string, keep bool) {
+func (b *Buffer[T]) rememberVerdict(now time.Time, key traceKey, keep bool) {
 	if b.options.DecisionTTL == 0 {
 		return
 	}
-	b.decided[traceID] = verdict{keep: keep, expiresAt: now.Add(b.options.DecisionTTL)}
-	b.decidedOrder.push(traceID)
+	b.decided[key] = verdict{keep: keep, expiresAt: now.Add(b.options.DecisionTTL)}
+	b.decidedOrder.push(key)
 
 	// The verdict map is capped by the same trace budget as the buffer, so a
 	// flood of one-span traces cannot grow it without bound.
