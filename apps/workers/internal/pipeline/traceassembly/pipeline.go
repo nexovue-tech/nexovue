@@ -295,7 +295,7 @@ func (p *Pipeline) absorb(ctx context.Context, records []*kgo.Record) error {
 		messages++
 	}
 
-	if err := p.writer.insert(ctx, p.block); err != nil {
+	if err := p.insertBounded(ctx); err != nil {
 		return err
 	}
 	p.commits.hold(entry)
@@ -322,10 +322,13 @@ func (p *Pipeline) settle(ctx context.Context) error {
 
 	p.block.reset()
 	p.appendRows(p.stages.buffer.Expire(now))
-	if err := p.writer.insert(ctx, p.block); err != nil {
+	if err := p.insertBounded(ctx); err != nil {
 		return err
 	}
-	if err := p.metrics.Insert(ctx, p.stages.counters.Drain(now)); err != nil {
+
+	counterCtx, cancelCounters := bounded(ctx)
+	defer cancelCounters()
+	if err := p.metrics.Insert(counterCtx, p.stages.counters.Drain(now)); err != nil {
 		return err
 	}
 
@@ -374,7 +377,9 @@ func (p *Pipeline) commit(ctx context.Context, positions []position) error {
 		return nil
 	}
 	p.consumer.MarkCommitOffsets(marks)
-	if err := p.consumer.CommitMarkedOffsets(ctx); err != nil {
+	commitCtx, cancel := bounded(ctx)
+	defer cancel()
+	if err := p.consumer.CommitMarkedOffsets(commitCtx); err != nil {
 		return fmt.Errorf("commit offsets: %w", err)
 	}
 	return nil
@@ -384,7 +389,9 @@ func (p *Pipeline) commit(ctx context.Context, positions []position) error {
 // only committed with the rest of its batch, so a park that fails is retried by
 // re-consuming rather than silently dropping the message.
 func (p *Pipeline) park(ctx context.Context, record *kgo.Record, cause error) error {
-	if err := p.parked.Park(ctx, record, cause.Error(), dlq.Context{}); err != nil {
+	parkCtx, cancel := bounded(ctx)
+	defer cancel()
+	if err := p.parked.Park(parkCtx, record, cause.Error(), dlq.Context{}); err != nil {
 		return err
 	}
 	p.log.WarnContext(ctx, "parked an undecodable span message",
@@ -418,4 +425,27 @@ func (p *Pipeline) Running(context.Context) error {
 		return errors.New("trace assembly is not running")
 	}
 	return nil
+}
+
+// insertBounded writes the accumulated block under a deadline.
+func (p *Pipeline) insertBounded(ctx context.Context) error {
+	writeCtx, cancel := bounded(ctx)
+	defer cancel()
+	return p.writer.insert(writeCtx, p.block)
+}
+
+// externalCallTimeout bounds every call the loop makes out of the process.
+//
+// Without it a connection killed underneath the pool never returns: chpool dials
+// with a timeout but an established socket that dies has none, so an insert after
+// a ClickHouse restart blocks forever. The loop then stops consuming while the
+// process stays up, the goroutine stays live, and readiness stays green — a wedge
+// that reports healthy, which is worse than a crash because nothing restarts it.
+// Bounded, the same failure surfaces as an error, and an error exits the process.
+const externalCallTimeout = 30 * time.Second
+
+// bounded returns a context for one call out of the process. The caller must
+// cancel it.
+func bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, externalCallTimeout)
 }

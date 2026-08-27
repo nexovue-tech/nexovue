@@ -12,12 +12,19 @@
 
 name: nexovue-app
 
+# Production restarts on failure and after a host reboot; onprem already says so
+# on every service. A replica that does not is not replicating the thing it
+# exists to catch problems in.
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+
 include:
   - path: compose.infra.yaml
 
 services:
   # ---------- infrastructure: no published ports ----------
   clickhouse:
+    <<: *service-defaults
     environment:
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:?set CLICKHOUSE_DB}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:?set CLICKHOUSE_USER}
@@ -25,6 +32,7 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "0"
 
   postgres:
+    <<: *service-defaults
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
@@ -32,6 +40,7 @@ services:
 
   # ---------- data plane ----------
   receiver:
+    <<: *service-defaults
     build:
       context: ../..
       dockerfile: apps/receiver/Dockerfile
@@ -71,6 +80,7 @@ services:
   # Deploy this image more than once with different selections when load
   # justifies separating them — see ADR 0050.
   worker:
+    <<: *service-defaults
     build:
       context: ../..
       dockerfile: apps/workers/Dockerfile
@@ -97,6 +107,7 @@ services:
           memory: ${WORKER_MEMORY:-768M}
 
   api:
+    <<: *service-defaults
     build:
       context: ../..
       dockerfile: apps/api/Dockerfile
@@ -132,6 +143,7 @@ services:
           memory: 832M
 
   web:
+    <<: *service-defaults
     build:
       context: ../..
       dockerfile: apps/web/Dockerfile
@@ -151,6 +163,7 @@ services:
 
   # ---------- doors 2 and 4b ----------
   scheduler-beat:
+    <<: *service-defaults
     build:
       context: ../..
       dockerfile: apps/scheduler/Dockerfile
@@ -170,6 +183,7 @@ services:
           memory: 256M
 
   scheduler-light:
+    <<: *service-defaults
     image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
     command: >-
       celery -A nexovue_scheduler.celery_app worker
@@ -184,6 +198,7 @@ services:
           memory: 256M
 
   scheduler-browser:
+    <<: *service-defaults
     build:
       context: ../..
       dockerfile: apps/scheduler/Dockerfile.browser
@@ -211,6 +226,7 @@ services:
   # TODO(phase-2): apps/insight does not exist yet. This describes the shape so
   #   the deployment target is complete; it cannot build until F3/F6 land.
   insight:
+    <<: *service-defaults
     build:
       context: ../..
       dockerfile: apps/insight/Dockerfile
@@ -238,6 +254,7 @@ services:
   # NOTE: on macOS this is CPU-only — Docker has no Metal passthrough — so run
   #   Ollama natively there and point LLM_BASE_URL at the host instead.
   ollama:
+    <<: *service-defaults
     image: ollama/ollama:0.12.11
     volumes:
       - ollama-models:/root/.ollama

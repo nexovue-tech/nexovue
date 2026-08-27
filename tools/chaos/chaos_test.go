@@ -61,6 +61,10 @@ func TestNothingAcknowledgedIsEverLost(t *testing.T) {
 	requireHealthy(t)
 	t.Cleanup(func() { restoreStack(t) })
 
+	// The demo app produces continuously, and consumer lag is per-partition, not
+	// per-service. Quieten it so lag reaching zero means this run has drained.
+	quietenDemo(t)
+
 	// The queue is not empty at the start — earlier work parked poison messages
 	// deliberately, and nothing drains it by design. Only the delta is ours.
 	dlqBefore := dlqDepth(t)
@@ -152,33 +156,67 @@ func outage(t *testing.T, service string) {
 	t.Logf("%s is back", service)
 }
 
-// waitForDrain polls until the counter stops moving, then returns it. It does not
-// wait for a match — settling on the wrong number is the result the test is for.
+// waitForDrain waits until the consumer group has caught up, then returns what
+// was counted.
+//
+// It waits on the broker's own lag rather than on the counter going still. A
+// counter that stops moving is ambiguous — it looks identical whether the
+// pipeline drained or wedged — and the first version of this test called a
+// wedged consumer "data loss" when every message was still sitting in Kafka.
+// Lag tells the two apart, so the diagnosis is the true one.
 func waitForDrain(t *testing.T, service string, target int) int {
 	t.Helper()
 	deadline := time.Now().Add(drainTimeout)
-	previous, stable := -1, 0
 
 	for time.Now().Before(deadline) {
 		time.Sleep(drainPoll)
-		counted := countedSpans(t, service)
-		switch {
-		case counted == target:
-			t.Logf("counter reached %d", counted)
-			return counted
-		case counted == previous:
-			// Three identical readings: the pipeline has stopped moving.
-			if stable++; stable >= 3 {
-				t.Logf("counter settled at %d (target %d)", counted, target)
-				return counted
-			}
-		default:
-			previous, stable = counted, 0
-			t.Logf("draining… counted %d of %d", counted, target)
+		lag, counted := consumerLag(t), countedSpans(t, service)
+		if lag == 0 {
+			// The window and the commit trail mean counters land a little after
+			// the last fetch; give them room before reading the final number.
+			t.Logf("consumer caught up; counted %d of %d", counted, target)
+			time.Sleep(20 * time.Second)
+			return countedSpans(t, service)
+		}
+		t.Logf("draining… lag %d, counted %d of %d", lag, counted, target)
+	}
+
+	if lag := consumerLag(t); lag > 0 {
+		t.Errorf("PIPELINE STALLED: %d messages still unconsumed after %s. Nothing was "+
+			"lost — the worker stopped fetching. Check whether it wedged on a call with "+
+			"no deadline rather than treating this as loss", lag, drainTimeout)
+	}
+	return countedSpans(t, service)
+}
+
+// consumerLag is how far behind the group is, summed over partitions.
+func consumerLag(t *testing.T) int {
+	t.Helper()
+	out := compose(t, "exec", "-T", "kafka",
+		"/opt/kafka/bin/kafka-consumer-groups.sh", "--bootstrap-server", "kafka:9092",
+		"--describe", "--group", "nexovue-workers")
+	total := 0
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			continue
+		}
+		if lag, err := strconv.Atoi(fields[5]); err == nil {
+			total += lag
 		}
 	}
-	t.Logf("drain timed out after %s", drainTimeout)
-	return countedSpans(t, service)
+	return total
+}
+
+// quietenDemo stops the demo services for the duration of the run and brings
+// them back afterwards.
+func quietenDemo(t *testing.T) {
+	t.Helper()
+	demo := []string{"demo-storefront", "demo-checkout", "demo-payments"}
+	compose(t, append([]string{"stop"}, demo...)...)
+	t.Cleanup(func() {
+		compose(t, append([]string{"start"}, demo...)...)
+	})
 }
 
 func countedSpans(t *testing.T, service string) int {

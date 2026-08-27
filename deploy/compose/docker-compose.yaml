@@ -118,7 +118,10 @@ services:
       POSTGRES_DSN: ${DEV_POSTGRES_DSN:-postgresql://nexovue:nexovue_dev@postgres:5432/nexovue}
       WORKER_PIPELINES: all
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8081/healthz"]
+      # /readyz, not /healthz. A worker serves no traffic, so "the process is
+      # alive" cannot tell that its pipeline stopped — which is exactly the
+      # failure that hid for nine minutes behind a green container.
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8081/readyz"]
       interval: 10s
       timeout: 5s
       retries: 12

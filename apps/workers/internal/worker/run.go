@@ -147,21 +147,34 @@ func startPipelines(
 		}
 		started = append(started, spans.Close)
 		registry.Register(health.Check{Name: checkTraceAssembly, Probe: spans.Running})
-		go reportFailure(failures, func() error { return spans.Run(ctx) })
+		go reportFailure(ctx, failures, config.PipelineTraceAssembly, func() error { return spans.Run(ctx) })
 	}
 
 	return stop, nil
 }
 
-// reportFailure runs a pipeline and hands its failure to the shutdown path. A
-// full channel means an earlier pipeline already failed, and that first cause
+// reportFailure runs a pipeline and hands its ending to the shutdown path.
+//
+// A pipeline that *returns at all* while the worker is still meant to be running
+// is a failure, whatever it returned. Treating only a non-nil error that way left
+// a hole the chaos test walked straight into: after a broker outage the loop
+// ended, the process stayed up, and the worker sat for nine minutes holding its
+// partitions and consuming nothing. Why it returned matters for the fix; that it
+// returned is enough to know the worker is finished.
+//
+// A full channel means an earlier pipeline already failed, and that first cause
 // is the one worth reporting.
-func reportFailure(failures chan<- error, run func() error) {
-	if err := run(); err != nil {
-		select {
-		case failures <- err:
-		default:
-		}
+func reportFailure(ctx context.Context, failures chan<- error, name config.Pipeline, run func() error) {
+	err := run()
+	if err == nil && ctx.Err() == nil {
+		err = fmt.Errorf("%s returned while the worker was still running", name)
+	}
+	if err == nil {
+		return
+	}
+	select {
+	case failures <- err:
+	default:
 	}
 }
 

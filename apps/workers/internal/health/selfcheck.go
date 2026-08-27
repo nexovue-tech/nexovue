@@ -30,8 +30,12 @@ func RunSelfCheckIfAsked(args []string, addr string) {
 		os.Exit(1)
 	}
 
+	// /readyz, not /healthz. The worker serves no traffic, so "the process is
+	// alive" cannot tell that its pipeline stopped consuming — which is exactly
+	// the failure that hid behind a green container for nine minutes. Readiness
+	// carries the trace-assembly probe and knows the difference.
 	client := &http.Client{Timeout: selfCheckTimeout}
-	resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
+	resp, err := client.Get("http://127.0.0.1:" + port + "/readyz")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "health: %v\n", err)
 		os.Exit(1)
