@@ -24,7 +24,7 @@ func applyEnvironment(t *testing.T, values map[string]string) {
 	t.Helper()
 	known := []string{
 		"ENV", "LOG_LEVEL", "LOG_FORMAT", "RECEIVER_OTLP_HTTP_ADDR",
-		"RECEIVER_HEALTH_ADDR", "KAFKA_BROKERS", "POSTGRES_DSN", "REDIS_URL",
+		"RECEIVER_OTLP_GRPC_ADDR", "RECEIVER_HEALTH_ADDR", "KAFKA_BROKERS", "POSTGRES_DSN", "REDIS_URL",
 		"KAFKA_SPANS_TOPIC", "RECEIVER_MAX_BODY_BYTES", "RECEIVER_MAX_DECODED_BODY_BYTES",
 		"RECEIVER_API_KEY_CACHE_TTL", "RECEIVER_API_KEY_CACHE_MAX_ENTRIES",
 		"RECEIVER_RATE_LIMIT_PER_SECOND", "RECEIVER_POSTGRES_MAX_CONNS",
@@ -54,6 +54,12 @@ func TestLoadAcceptsTheMinimumEnvironment(t *testing.T) {
 	}
 	if cfg.HealthAddr == "" {
 		t.Error("HealthAddr is empty; the probe listener must have a default")
+	}
+	// Compose publishes 4318 and 4317; the ports the protocol reserves are what
+	// the receiver must bind without being told to.
+	if cfg.OTLPHTTPAddr != ":4318" || cfg.OTLPGRPCAddr != ":4317" {
+		t.Errorf("OTLP addresses = %q/%q, want the reserved %q/%q",
+			cfg.OTLPHTTPAddr, cfg.OTLPGRPCAddr, ":4318", ":4317")
 	}
 	// Compose sets none of these, so every one of them needs a working default.
 	if cfg.SpansTopic != "spans-raw" {
@@ -111,6 +117,7 @@ func TestLoadRejectsMalformedValues(t *testing.T) {
 		"unknown log level":                     {"LOG_LEVEL", "verbose"},
 		"unknown log format":                    {"LOG_FORMAT", "logfmt"},
 		"address without port":                  {"RECEIVER_HEALTH_ADDR", "localhost"},
+		"grpc address without port":             {"RECEIVER_OTLP_GRPC_ADDR", "localhost"},
 		"blank broker":                          {"KAFKA_BROKERS", "localhost:9092, "},
 		"zero timeout":                          {"SHUTDOWN_TIMEOUT", "0s"},
 		"blank topic":                           {"KAFKA_SPANS_TOPIC", "  "},

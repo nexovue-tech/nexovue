@@ -107,18 +107,31 @@ func writeStatus(w http.ResponseWriter, enc codec, httpStatus int, rpcCode code.
 	_, _ = w.Write(body)
 }
 
-// writeRetryableStatus is writeStatus for the two codes OTLP marks retryable,
-// carrying the delay the client should wait.
-func writeRetryableStatus(
-	w http.ResponseWriter,
-	enc codec,
-	httpStatus int,
-	rpcCode code.Code,
-	message string,
-	retryAfter time.Duration,
-) {
-	w.Header().Set(headerRetryAfter, retryAfterSeconds(retryAfter))
-	writeStatus(w, enc, httpStatus, rpcCode, message)
+// writeRefusal renders a gate's verdict as OTLP/HTTP, adding Retry-After when
+// waiting is worth the client's while.
+func writeRefusal(w http.ResponseWriter, enc codec, refused *refusal) {
+	if refused.retryAfter > 0 {
+		w.Header().Set(headerRetryAfter, retryAfterSeconds(refused.retryAfter))
+	}
+	writeStatus(w, enc, httpStatusFor(refused.code), refused.code, refused.message)
+}
+
+// httpStatusFor is OTLP/HTTP's pairing of an rpc code with a status line. Only
+// the codes the gates can produce are listed; anything else is our bug, and 500
+// is what a bug means.
+func httpStatusFor(rpcCode code.Code) int {
+	switch rpcCode {
+	case code.Code_UNAUTHENTICATED:
+		return http.StatusUnauthorized
+	case code.Code_RESOURCE_EXHAUSTED:
+		return http.StatusTooManyRequests
+	case code.Code_INVALID_ARGUMENT:
+		return http.StatusBadRequest
+	case code.Code_UNAVAILABLE:
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 // retryAfterSeconds renders RFC 9110's delay-seconds form. Zero is not a legal

@@ -37,9 +37,11 @@ type Config struct {
 	LogLevel  string `env:"LOG_LEVEL" envDefault:"info"`
 	LogFormat string `env:"LOG_FORMAT" envDefault:"json"`
 
-	// OTLPHTTPAddr is bound by the OTLP endpoint in P1-12; it is declared here
-	// so the port a receiver listens on is configuration, never a literal.
+	// The two OTLP transports listen on the ports the protocol reserves for
+	// them. Declared here so the port a receiver listens on is configuration,
+	// never a literal.
 	OTLPHTTPAddr string `env:"RECEIVER_OTLP_HTTP_ADDR" envDefault:":4318"`
+	OTLPGRPCAddr string `env:"RECEIVER_OTLP_GRPC_ADDR" envDefault:":4317"`
 	HealthAddr   string `env:"RECEIVER_HEALTH_ADDR" envDefault:":8081"`
 
 	KafkaBrokers []string `env:"KAFKA_BROKERS,required,notEmpty" envSeparator:","`
@@ -95,6 +97,7 @@ func (c Config) validate() error {
 		oneOf("LOG_LEVEL", c.LogLevel, logging.Levels()...),
 		oneOf("LOG_FORMAT", c.LogFormat, logging.Formats()...),
 		listeningAddress("RECEIVER_OTLP_HTTP_ADDR", c.OTLPHTTPAddr),
+		listeningAddress("RECEIVER_OTLP_GRPC_ADDR", c.OTLPGRPCAddr),
 		listeningAddress("RECEIVER_HEALTH_ADDR", c.HealthAddr),
 		noBlankEntries("KAFKA_BROKERS", c.KafkaBrokers),
 		connectionURL("POSTGRES_DSN", c.PostgresDSN, "postgres", "postgresql"),

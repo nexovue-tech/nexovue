@@ -1,12 +1,15 @@
-// Package otlp is door 1: the OTLP/HTTP endpoint customer SDKs export to.
+// Package otlp is door 1: the OTLP endpoint customer SDKs export to, over both
+// transports the protocol defines — HTTP on 4318 and gRPC on 4317.
 //
 // Gates run in order and the order is load-bearing:
 //
 //	auth -> ratelimit -> decode -> normalize -> produce
 //
 // Authentication comes first so the endpoint never exists unauthenticated, and
-// the limiter comes before the body is read so a tenant over its limit costs us
-// a Valkey round trip rather than a megabyte of parsing.
+// the limiter comes before the payload is read so a tenant over its limit costs
+// us a Valkey round trip rather than a megabyte of parsing. The gates live in
+// gates.go and both transports run the same ones: only where the credential is
+// read from and how a verdict is written differ.
 //
 // Failures answer in OTLP's own terms rather than problem+json: the callers are
 // SDKs, and the protocol defines what they will understand.
@@ -23,9 +26,7 @@ import (
 
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ingest"
-	"github.com/nexovue-tech/nexovue/apps/receiver/internal/logging"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ratelimit"
-	"github.com/nexovue-tech/nexovue/apps/receiver/internal/tracesplit"
 )
 
 // TracesPath is the OTLP/HTTP endpoint for the SPANS signal, fixed by the spec.
@@ -40,10 +41,11 @@ const brokerRetryAfter = 5 * time.Second
 // caller whether a key was missing, malformed or merely unknown helps only an
 // attacker enumerating keys.
 const (
-	messageUnauthenticated = "invalid or missing " + auth.HeaderName + " header"
-	messageThrottled       = "ingest rate limit exceeded for this key"
-	messageBrokerDown      = "ingestion buffer unavailable, retry"
-	messageUnavailable     = "receiver cannot serve this request, retry"
+	messageUnauthenticated  = "invalid or missing " + auth.HeaderName + " credential"
+	messageThrottled        = "ingest rate limit exceeded for this key"
+	messageBrokerDown       = "ingestion buffer unavailable, retry"
+	messageUnavailable      = "receiver cannot serve this request, retry"
+	messageMalformedPayload = "request is not a valid ExportTraceServiceRequest"
 )
 
 // Options are the collaborators and limits the door needs. All are required.
@@ -63,74 +65,39 @@ func (o Options) limits() bodyLimits {
 	return bodyLimits{wire: o.MaxBodyBytes, decoded: o.MaxDecodedBodyBytes}
 }
 
-// Handler serves the OTLP endpoints behind the gate chain.
+// Handler serves the OTLP/HTTP endpoints behind the gate chain.
 func Handler(opts Options) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("POST "+TracesPath, authenticate(opts, throttle(opts, traces(opts))))
 	return mux
 }
 
-// authenticate is gate one. Nothing past it runs for a caller we cannot name.
+// authenticate reads the credential out of the request header and hands the
+// verdict to the shared gate.
 func authenticate(opts Options, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		identity, err := opts.Authenticator.Authenticate(r.Context(), r.Header.Get(auth.HeaderName))
-		if err != nil {
-			if auth.IsCallerFault(err) {
-				writeStatus(w, replyCodec(r), http.StatusUnauthorized,
-					code.Code_UNAUTHENTICATED, messageUnauthenticated)
-				return
-			}
-			// The control plane is unreachable, which is our fault, not the
-			// caller's: 503 is retryable where 401 is not.
-			opts.Logger.ErrorContext(r.Context(), "cannot verify ingest key",
-				slog.String("error", logging.RedactCredentials(err.Error())))
-			writeRetryableStatus(w, replyCodec(r), http.StatusServiceUnavailable,
-				code.Code_UNAVAILABLE, messageUnavailable, brokerRetryAfter)
+		ctx, refused := opts.authenticate(r.Context(), r.Header.Get(auth.HeaderName))
+		if refused != nil {
+			writeRefusal(w, replyCodec(r), refused)
 			return
 		}
-
-		ctx := auth.NewContext(r.Context(), identity)
-		ctx = logging.WithFields(ctx, logging.Fields{
-			OrgID:     identity.OrgID,
-			ProjectID: identity.ProjectID,
-		})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// throttle is gate two. It answers before the body is read, which is the whole
-// reason it sits above decoding rather than inside the handler.
 func throttle(opts Options, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		identity, ok := auth.FromContext(r.Context())
-		if !ok {
-			// Only reachable if the gate order were rewired.
-			opts.Logger.ErrorContext(r.Context(), "rate limit gate ran before authentication")
-			writeStatus(w, replyCodec(r), http.StatusInternalServerError,
-				code.Code_INTERNAL, messageUnavailable)
-			return
-		}
-
-		decision, err := opts.Limiter.Allow(r.Context(), identity.KeyPrefix)
-		if err != nil {
-			// Fail open. A Valkey blip must not turn into an ingest outage:
-			// losing a customer's telemetry costs more than briefly losing the
-			// protection, and the broker and body caps still bound the damage.
-			opts.Logger.WarnContext(r.Context(), "rate limiter unavailable, allowing request",
-				slog.String("error", logging.RedactCredentials(err.Error())))
-			next.ServeHTTP(w, r)
-			return
-		}
-		if !decision.Allowed {
-			writeRetryableStatus(w, replyCodec(r), http.StatusTooManyRequests,
-				code.Code_RESOURCE_EXHAUSTED, messageThrottled, decision.RetryAfter)
+		if refused := opts.throttle(r.Context()); refused != nil {
+			writeRefusal(w, replyCodec(r), refused)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-// traces is the remaining three gates: decode, normalize, produce.
+// traces is the remaining three gates: decode, normalize, produce. Decoding is
+// the transport's own work — over gRPC the framework does it — so it lives here
+// rather than in the shared chain.
 func traces(opts Options) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedAt := time.Now()
@@ -151,23 +118,12 @@ func traces(opts Options) http.Handler {
 		var request collectorpb.ExportTraceServiceRequest
 		if err := encoding.unmarshal(body, &request); err != nil {
 			writeStatus(w, encoding, http.StatusBadRequest,
-				code.Code_INVALID_ARGUMENT, "request is not a valid ExportTraceServiceRequest")
+				code.Code_INVALID_ARGUMENT, messageMalformedPayload)
 			return
 		}
 
-		groups, err := tracesplit.ByTraceID(&request)
-		if err != nil {
-			writeStatus(w, encoding, http.StatusBadRequest, code.Code_INVALID_ARGUMENT, err.Error())
-			return
-		}
-
-		identity, _ := auth.FromContext(r.Context())
-		if err := opts.Publisher.PublishTraces(r.Context(), identity, receivedAt, groups); err != nil {
-			opts.Logger.ErrorContext(r.Context(), "cannot publish trace batch",
-				slog.Int("traces", len(groups)),
-				slog.String("error", logging.RedactCredentials(err.Error())))
-			writeRetryableStatus(w, encoding, http.StatusServiceUnavailable,
-				code.Code_UNAVAILABLE, messageBrokerDown, brokerRetryAfter)
+		if refused := opts.acceptTraces(r.Context(), receivedAt, &request); refused != nil {
+			writeRefusal(w, encoding, refused)
 			return
 		}
 

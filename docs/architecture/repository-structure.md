@@ -33,18 +33,29 @@ apps/receiver/
 ├─ cmd/receiver/main.go          wiring only: config → dependencies → serve
 ├─ internal/
 │  ├─ config/                    env parsing, validation, fail fast
-│  ├─ transport/
-│  │  ├─ httpx/                  OTLP/HTTP :4318, RUM routes, webhook routes
-│  │  └─ grpcx/                  OTLP/gRPC :4317
-│  ├─ auth/                      API-key verify (Postgres) → Redis cache → tenant resolve
-│  ├─ ratelimit/                 Redis counters; also the source of usage metering
-│  ├─ decode/                    protobuf → pdata; reject malformed payloads
-│  ├─ normalize/                 pdata → contracts envelope — the only place this happens
-│  ├─ produce/                   franz-go producer, partition by trace_id, retry/ack policy
+│  ├─ auth/                      API-key verify (pgx) → in-process TTL cache → tenant resolve
+│  ├─ ratelimit/                 Valkey counters; also the source of usage metering
+│  ├─ otlp/                      both doors and the gates they share:
+│  │                             gates.go   auth → ratelimit → accept, written once
+│  │                             handler.go OTLP/HTTP :4318 — routing, gzip, body caps
+│  │                             grpc.go    OTLP/gRPC :4317 — metadata, status codes
+│  │                             codec.go   protobuf and JSON, and rendering a refusal
+│  ├─ tracesplit/                one group per trace_id, resource and scope preserved
+│  ├─ ingest/                    envelope build + franz-go produce, keyed by trace_id
+│  ├─ logging/
 │  └─ health/
-├─ testdata/                     golden OTLP payloads
 └─ Dockerfile
 ```
+
+> The two doors share `gates.go` deliberately. Everything from `accept` onward — splitting,
+> envelope construction, tenancy tagging, the fail-open limiter policy — is one code path with two
+> transports in front of it. A second copy of the splitting logic is the failure mode this layout
+> exists to prevent, which is why the transports are neighbours in one package rather than siblings
+> under `transport/`.
+>
+> An earlier draft of this file described `transport/httpx`, `transport/grpcx`, and separate
+> `decode/`, `normalize/` and `produce/` packages. That structure was never built; this is the code
+> as it stands (rule 4).
 
 Gates run in order: `auth` → `ratelimit` → `decode` → `normalize` → `produce`. Everything downstream of `normalize` is door-agnostic; that is what keeps per-source conditionals from spreading.
 

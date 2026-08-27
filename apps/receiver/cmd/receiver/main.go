@@ -76,8 +76,9 @@ func run() error {
 	registry.Register(health.Check{Name: dependencyPostgres, Probe: dependencies.postgres.Ping})
 	registry.Register(health.Check{Name: dependencyValkey, Probe: dependencies.pingValkey})
 
-	admin := health.NewServer(cfg.HealthAddr, health.Handler(info, registry))
-	door := otlp.NewServer(cfg.OTLPHTTPAddr, otlp.Handler(otlp.Options{
+	// One set of collaborators for both transports: the gates behind them are
+	// the same code, and a second Options would be a second pipeline.
+	door := otlp.Options{
 		Authenticator: auth.New(auth.NewPostgresKeys(dependencies.postgres), auth.Options{
 			CacheTTL:        cfg.APIKeyCacheTTL,
 			CacheMaxEntries: cfg.APIKeyCacheMaxEntries,
@@ -87,16 +88,55 @@ func run() error {
 		Logger:              log,
 		MaxBodyBytes:        cfg.MaxBodyBytes,
 		MaxDecodedBodyBytes: cfg.MaxDecodedBodyBytes,
-	}))
+	}
+
+	admin := health.NewServer(cfg.HealthAddr, health.Handler(info, registry))
+	overHTTP := otlp.NewServer(cfg.OTLPHTTPAddr, otlp.Handler(door))
+	overGRPC := otlp.NewGRPCServer(cfg.OTLPGRPCAddr, door)
 
 	log.InfoContext(ctx, "receiver starting",
 		slog.String("revision", info.Revision),
 		slog.String("health_addr", cfg.HealthAddr),
 		slog.String("otlp_http_addr", cfg.OTLPHTTPAddr),
+		slog.String("otlp_grpc_addr", cfg.OTLPGRPCAddr),
 		slog.String("spans_topic", cfg.SpansTopic),
 	)
 
-	return serveUntilSignal(ctx, log, []*http.Server{admin, door}, cfg.ShutdownTimeout)
+	return serveUntilSignal(ctx, log, []listener{
+		httpListener(admin),
+		httpListener(overHTTP),
+		grpcListener(overGRPC),
+	}, cfg.ShutdownTimeout)
+}
+
+// listener is one served port as the start-and-drain sequence sees it. The OTLP
+// doors do not share a server type, and every listener drains on one budget.
+type listener struct {
+	addr string
+	// serve blocks until the listener stops, returning nil for a clean stop.
+	serve    func() error
+	shutdown func(context.Context) error
+}
+
+func httpListener(server *http.Server) listener {
+	return listener{
+		addr: server.Addr,
+		serve: func() error {
+			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return err
+			}
+			return nil
+		},
+		shutdown: server.Shutdown,
+	}
+}
+
+func grpcListener(server *otlp.GRPCServer) listener {
+	return listener{
+		addr:     server.Addr(),
+		serve:    server.ListenAndServe,
+		shutdown: server.Shutdown,
+	}
 }
 
 // dependencies are the clients the receiver holds open for its whole life.
@@ -187,14 +227,14 @@ func (d *dependencies) pingValkey(ctx context.Context) error {
 func serveUntilSignal(
 	ctx context.Context,
 	log *slog.Logger,
-	servers []*http.Server,
+	listeners []listener,
 	shutdownTimeout time.Duration,
 ) error {
-	failed := make(chan error, len(servers))
-	for _, server := range servers {
+	failed := make(chan error, len(listeners))
+	for _, served := range listeners {
 		go func() {
-			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				failed <- fmt.Errorf("listening on %s: %w", server.Addr, err)
+			if err := served.serve(); err != nil {
+				failed <- fmt.Errorf("listening on %s: %w", served.addr, err)
 			}
 		}()
 	}
@@ -212,9 +252,9 @@ func serveUntilSignal(
 	defer cancel()
 
 	var drainErr error
-	for _, server := range servers {
-		if err := server.Shutdown(drainCtx); err != nil {
-			drainErr = errors.Join(drainErr, fmt.Errorf("draining %s: %w", server.Addr, err))
+	for _, served := range listeners {
+		if err := served.shutdown(drainCtx); err != nil {
+			drainErr = errors.Join(drainErr, fmt.Errorf("draining %s: %w", served.addr, err))
 		}
 	}
 	if drainErr != nil {
