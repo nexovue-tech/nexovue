@@ -1,6 +1,6 @@
 # 0060 — Counter idempotency rests on ClickHouse's own insert deduplication
 
-- **Status:** Accepted
+- **Status:** Accepted — [superseded in part by 0061](0061-counter-overcount-across-a-store-restart.md): it does not survive a ClickHouse restart, as this ADR predicted it might
 - **Date:** 2026-08-27
 
 ## Context

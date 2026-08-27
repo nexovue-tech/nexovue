@@ -122,7 +122,7 @@ nexovue/
 | P1-23 | Materialized view | `endpoint_stats_1m` — explicit target table with `SimpleAggregateFunction` counters and `AggregateFunction` quantiles, partitioned by month; proved to merge correctly rather than accumulate (Phase 2 anomaly-detection hook) | ✅ done |
 | P1-24 | PII masking | masking step in workers; rules configurable in Postgres | ✅ done |
 | P1-25 | Tenant isolation suite | tests that actively try to leak across tenants and must fail to | ✅ done |
-| P1-27 | Chaos test | kill broker and ClickHouse mid-load, restart, assert zero loss | todo |
+| P1-27 | Chaos test | `just chaos` — kills Kafka then ClickHouse under sustained load and asserts on the broker's own consumer lag. **Zero loss proven**: 282,490 acknowledged, all counted, lag drained to 0. Found four real defects on the way, and measured the counter overcount ADR 0060 predicted (512 spans, 0.18%, ADR 0061) | ✅ done |
 
 ### M3 — Widen door 1 (logs + metrics + errors)
 *Exit: all three signal shapes flow through the same pipeline and are queryable together.*
