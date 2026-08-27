@@ -1,0 +1,130 @@
+package projectconfig
+
+import (
+	"context"
+	"log/slog"
+	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
+)
+
+// Row is one project's stored configuration, as JSON documents. Parsing happens
+// here rather than in the reader so a store that is not Postgres needs to
+// understand nothing about the rules.
+type Row struct {
+	ProjectID      string
+	MaskingConfig  []byte
+	SamplingConfig []byte
+}
+
+// Reader loads every project's stored configuration. An interface because the
+// refresher's behaviour — what it does with a malformed row, what it does when
+// the store is unreachable — is the part worth testing, and neither needs a
+// database.
+type Reader interface {
+	ReadProjects(ctx context.Context) ([]Row, error)
+}
+
+// Refresher keeps a Cache in step with the store.
+type Refresher struct {
+	reader   Reader
+	cache    *Cache
+	defaults Settings
+	interval time.Duration
+	log      *slog.Logger
+}
+
+// NewRefresher returns a refresher that replaces cache's snapshot every
+// interval.
+func NewRefresher(
+	reader Reader,
+	cache *Cache,
+	defaults Settings,
+	interval time.Duration,
+	log *slog.Logger,
+) *Refresher {
+	return &Refresher{
+		reader:   reader,
+		cache:    cache,
+		defaults: defaults,
+		interval: interval,
+		log:      log.With(slog.String("component", "project-config")),
+	}
+}
+
+// Refresh loads every project and installs the result.
+//
+// A failure leaves the previous snapshot in place. That is the safe direction:
+// the alternative — emptying the cache when the control plane is unreachable —
+// would silently turn a project's extra masking rules off during an outage.
+func (r *Refresher) Refresh(ctx context.Context) error {
+	rows, err := r.reader.ReadProjects(ctx)
+	if err != nil {
+		return err
+	}
+
+	projects := make(map[string]Settings, len(rows))
+	for _, row := range rows {
+		projects[row.ProjectID] = r.parse(ctx, row)
+	}
+	r.cache.Replace(projects)
+	return nil
+}
+
+// parse turns one row into settings, falling back to the defaults for whichever
+// half is malformed. Defaults mask more and store more, so a typo in a config
+// document never quietly reduces either.
+func (r *Refresher) parse(ctx context.Context, row Row) Settings {
+	settings := r.defaults
+
+	rules, err := mask.RulesFromJSON(row.MaskingConfig)
+	if err != nil {
+		r.log.ErrorContext(ctx, "project masking config ignored, using defaults",
+			slog.String("project_id", row.ProjectID), slog.String("error", err.Error()))
+	} else {
+		settings.Masking = rules
+	}
+
+	policy, err := sample.PolicyFromJSON(row.SamplingConfig, r.defaults.Sampling)
+	if err != nil {
+		r.log.ErrorContext(ctx, "project sampling config ignored, using defaults",
+			slog.String("project_id", row.ProjectID), slog.String("error", err.Error()))
+	} else {
+		settings.Sampling = policy
+	}
+	return settings
+}
+
+// Run refreshes on a timer until ctx is cancelled. The first load happens
+// immediately, so a worker is never more than one interval behind the control
+// plane and is correct from its first span if Postgres is up.
+func (r *Refresher) Run(ctx context.Context) {
+	r.refreshAndLog(ctx)
+
+	ticker := time.NewTicker(r.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.refreshAndLog(ctx)
+		}
+	}
+}
+
+func (r *Refresher) refreshAndLog(ctx context.Context) {
+	if err := r.Refresh(ctx); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		// Warn, not error: the previous snapshot is still serving, so this is
+		// degraded rather than broken.
+		r.log.WarnContext(ctx, "project config refresh failed, keeping previous snapshot",
+			slog.String("error", err.Error()))
+		return
+	}
+	r.log.DebugContext(ctx, "project config refreshed",
+		slog.Int("projects", r.cache.Configured()))
+}

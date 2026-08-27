@@ -139,6 +139,13 @@ class Project(Base):
     sampling_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # Which default masking rules this project switches off, and what it adds.
+    # Empty means the defaults in ADR 0059 apply, which is the intended state for
+    # most projects — masking is irreversible, so the shipped rules cover only
+    # what could never be legitimately needed to debug.
+    masking_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
     created_at: Mapped[CreatedAt]
     deleted_at: Mapped[OptionalTimestamp]
 

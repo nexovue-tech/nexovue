@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 )
@@ -26,6 +27,12 @@ func applyEnvironment(t *testing.T, values map[string]string) {
 		"CLICKHOUSE_DSN", "CLICKHOUSE_MAX_CONNS", "SHUTDOWN_TIMEOUT",
 		"WORKER_PIPELINES", "KAFKA_SPANS_TOPIC", "WORKERS_CONSUMER_GROUP",
 		"WORKERS_SPANS_BATCH_MAX_ROWS", "WORKERS_SPANS_BATCH_MAX_DELAY",
+		"WORKERS_SPANS_DLQ_TOPIC", "POSTGRES_DSN", "WORKERS_POSTGRES_MAX_CONNS",
+		"WORKERS_POSTGRES_MIN_CONNS", "WORKERS_PROJECT_CONFIG_REFRESH",
+		"WORKERS_SAMPLING_WINDOW", "WORKERS_SAMPLING_DECISION_TTL",
+		"WORKERS_SAMPLING_SLOW_THRESHOLD", "WORKERS_SAMPLING_HEALTHY_PERCENT",
+		"WORKERS_SAMPLING_MAX_TRACES", "WORKERS_SAMPLING_MAX_SPANS",
+		"WORKERS_METRICS_LATE_GRACE",
 	}
 	for _, key := range known {
 		if value, ok := values[key]; ok {
@@ -93,6 +100,21 @@ func TestLoadRejectsMalformedValues(t *testing.T) {
 		"dsn without database": {"CLICKHOUSE_DSN", "clickhouse://h:9000"},
 		"dsn without host":     {"CLICKHOUSE_DSN", "clickhouse:///nexovue"},
 		"zero pool":            {"CLICKHOUSE_MAX_CONNS", "0"},
+		"blank dlq topic":      {"WORKERS_SPANS_DLQ_TOPIC", " "},
+		// A dead-letter topic equal to its source replays a poison message onto
+		// itself forever.
+		"dlq topic equal to the source": {"WORKERS_SPANS_DLQ_TOPIC", "spans-raw"},
+		"wrong postgres scheme":         {"POSTGRES_DSN", "mysql://h:5432/nexovue"},
+		"postgres dsn without host":     {"POSTGRES_DSN", "postgres:///nexovue"},
+		"zero sampling window":          {"WORKERS_SAMPLING_WINDOW", "0s"},
+		"zero decision ttl":             {"WORKERS_SAMPLING_DECISION_TTL", "0s"},
+		"zero slow threshold":           {"WORKERS_SAMPLING_SLOW_THRESHOLD", "0s"},
+		"percentage above a hundred":    {"WORKERS_SAMPLING_HEALTHY_PERCENT", "101"},
+		"negative percentage":           {"WORKERS_SAMPLING_HEALTHY_PERCENT", "-1"},
+		"unbounded trace buffer":        {"WORKERS_SAMPLING_MAX_TRACES", "0"},
+		"unbounded span buffer":         {"WORKERS_SAMPLING_MAX_SPANS", "0"},
+		"zero config refresh":           {"WORKERS_PROJECT_CONFIG_REFRESH", "0s"},
+		"zero metrics grace":            {"WORKERS_METRICS_LATE_GRACE", "0s"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -146,5 +168,54 @@ func TestPipelinesDefaultToAllOfThem(t *testing.T) {
 	}
 	if len(cfg.Pipelines) != len(config.AllPipelines) {
 		t.Errorf("Pipelines = %v, want all of %v", cfg.Pipelines, config.AllPipelines)
+	}
+}
+
+// Compose sets none of these either, so the M2 stages must all boot on their
+// defaults — including the ADR 0010 policy, which is the shipped behaviour.
+func TestPipelineStageDefaultsMatchTheRecordedDecisions(t *testing.T) {
+	applyEnvironment(t, completeEnvironment())
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+
+	if cfg.Spans.DLQTopic != "spans-dlq" {
+		t.Errorf("Spans.DLQTopic = %q, want spans-dlq: it must match deploy/kafka/topics.sh",
+			cfg.Spans.DLQTopic)
+	}
+	// ADR 0054 gave P1-21 the window; 10s is what the p99 < 15s budget leaves.
+	if cfg.Sampling.Window != 10*time.Second {
+		t.Errorf("Sampling.Window = %s, want 10s", cfg.Sampling.Window)
+	}
+	if cfg.Sampling.HealthyPercent != 10 {
+		t.Errorf("Sampling.HealthyPercent = %d, want ADR 0010's 10", cfg.Sampling.HealthyPercent)
+	}
+	if cfg.Sampling.SlowThreshold != 2*time.Second {
+		t.Errorf("Sampling.SlowThreshold = %s, want ADR 0010's 2s", cfg.Sampling.SlowThreshold)
+	}
+	if cfg.Sampling.MaxTraces <= 0 || cfg.Sampling.MaxSpans <= 0 {
+		t.Error("the sampling buffer has no default bound; an unbounded map is an outage waiting")
+	}
+	if cfg.Metrics.LateGrace <= 0 {
+		t.Errorf("Metrics.LateGrace = %s, want a positive default", cfg.Metrics.LateGrace)
+	}
+	if cfg.Masking.ProjectRefresh <= 0 {
+		t.Errorf("Masking.ProjectRefresh = %s, want a positive default", cfg.Masking.ProjectRefresh)
+	}
+}
+
+// The receiver requires POSTGRES_DSN; the worker must not. Without it the
+// stages run on their built-in defaults rather than refusing to start.
+func TestAWorkerBootsWithoutAControlPlaneConnection(t *testing.T) {
+	applyEnvironment(t, completeEnvironment())
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+	if cfg.Postgres.Configured() {
+		t.Error("Postgres.Configured() is true with no POSTGRES_DSN set")
 	}
 }

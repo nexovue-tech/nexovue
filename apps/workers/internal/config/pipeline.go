@@ -1,0 +1,74 @@
+package config
+
+import (
+	"errors"
+	"time"
+)
+
+// Masking is the PII masking stage's settings.
+//
+// There is no off switch. The default rules only match values that can never be
+// legitimately needed for debugging, and a variable that turns masking off is a
+// variable that eventually gets set in production by accident.
+type Masking struct {
+	// ProjectRefresh is how often per-project rules are reloaded from the
+	// control plane, and therefore how long a rule change takes to apply.
+	ProjectRefresh time.Duration `env:"WORKERS_PROJECT_CONFIG_REFRESH" envDefault:"30s"`
+}
+
+func (m Masking) validate() error {
+	return positiveDuration("WORKERS_PROJECT_CONFIG_REFRESH", m.ProjectRefresh)
+}
+
+// Sampling is the tail-sampling stage's settings: ADR 0010's policy plus the
+// bounds that keep the buffer from becoming a memory leak with a traffic spike
+// in front of it.
+type Sampling struct {
+	// Window is how long a trace waits for the rest of its spans before it is
+	// judged. It is a floor under the span-to-queryable lag, so it is traded
+	// against that budget and not chosen for sampling accuracy alone. ADR 0009
+	// proposed ~30s; 10s is what the p99 < 15s budget leaves room for.
+	Window time.Duration `env:"WORKERS_SAMPLING_WINDOW" envDefault:"10s"`
+
+	// DecisionTTL is how long a decided trace is remembered so a span arriving
+	// after the window follows its trace rather than being judged alone.
+	DecisionTTL time.Duration `env:"WORKERS_SAMPLING_DECISION_TTL" envDefault:"60s"`
+
+	// SlowThreshold is the fixed duration above which a trace is kept whole.
+	// Per-endpoint baselines replace it later; per ADR 0010 the first version
+	// is a fixed number.
+	SlowThreshold time.Duration `env:"WORKERS_SAMPLING_SLOW_THRESHOLD" envDefault:"2s"`
+
+	// HealthyPercent is the share of traces that are neither failed nor slow
+	// that reach storage. 100 stores everything, which is what a deployment
+	// sets while it is still small enough not to care.
+	HealthyPercent int `env:"WORKERS_SAMPLING_HEALTHY_PERCENT" envDefault:"10"`
+
+	MaxTraces int `env:"WORKERS_SAMPLING_MAX_TRACES" envDefault:"50000"`
+	MaxSpans  int `env:"WORKERS_SAMPLING_MAX_SPANS" envDefault:"500000"`
+}
+
+func (s Sampling) validate() error {
+	return errors.Join(
+		positiveDuration("WORKERS_SAMPLING_WINDOW", s.Window),
+		positiveDuration("WORKERS_SAMPLING_DECISION_TTL", s.DecisionTTL),
+		positiveDuration("WORKERS_SAMPLING_SLOW_THRESHOLD", s.SlowThreshold),
+		percentage("WORKERS_SAMPLING_HEALTHY_PERCENT", s.HealthyPercent),
+		positiveCount("WORKERS_SAMPLING_MAX_TRACES", s.MaxTraces),
+		positiveCount("WORKERS_SAMPLING_MAX_SPANS", s.MaxSpans),
+	)
+}
+
+// Metrics is the exact-counter stage's settings.
+type Metrics struct {
+	// LateGrace is how long a minute stays open after it ends. A span arriving
+	// later still lands in its own minute; it just costs a second row for it.
+	//
+	// It also sets consumer lag: a batch's offsets wait for its counters to be
+	// written, so commits trail ingest by up to one minute plus this.
+	LateGrace time.Duration `env:"WORKERS_METRICS_LATE_GRACE" envDefault:"10s"`
+}
+
+func (m Metrics) validate() error {
+	return positiveDuration("WORKERS_METRICS_LATE_GRACE", m.LateGrace)
+}

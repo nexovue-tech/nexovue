@@ -19,12 +19,18 @@ type SpanIngest struct {
 	ConsumerGroup string        `env:"WORKERS_CONSUMER_GROUP" envDefault:"nexovue-workers"`
 	MaxRows       int           `env:"WORKERS_SPANS_BATCH_MAX_ROWS" envDefault:"5000"`
 	MaxDelay      time.Duration `env:"WORKERS_SPANS_BATCH_MAX_DELAY" envDefault:"2s"`
+
+	// DLQTopic parks messages that cannot be decoded. The topic is created by
+	// deploy/kafka/topics.sh, which is also where its partition count lives.
+	DLQTopic string `env:"WORKERS_SPANS_DLQ_TOPIC" envDefault:"spans-dlq"`
 }
 
 func (s SpanIngest) validate() error {
 	return errors.Join(
 		notBlank("KAFKA_SPANS_TOPIC", s.Topic),
 		notBlank("WORKERS_CONSUMER_GROUP", s.ConsumerGroup),
+		notBlank("WORKERS_SPANS_DLQ_TOPIC", s.DLQTopic),
+		differentValues("WORKERS_SPANS_DLQ_TOPIC", s.DLQTopic, "KAFKA_SPANS_TOPIC", s.Topic),
 		positiveCount("WORKERS_SPANS_BATCH_MAX_ROWS", s.MaxRows),
 		positiveDuration("WORKERS_SPANS_BATCH_MAX_DELAY", s.MaxDelay),
 	)

@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/ClickHouse/ch-go v0.74.0
 	github.com/caarlos0/env/v11 v11.4.1
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/lmittmann/tint v1.2.0
 	github.com/nexovue-tech/nexovue/packages/contracts v0.0.0
 	github.com/twmb/franz-go v1.21.6
@@ -22,6 +23,8 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/pascaldekloe/name v1.0.1 // indirect

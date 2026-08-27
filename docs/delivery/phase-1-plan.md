@@ -115,12 +115,12 @@ nexovue/
 
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
-| P1-19 | OTLP/gRPC | port 4317 alongside 4318 | todo |
-| P1-20 | No-loss semantics | ack only after broker accept; idempotent consumers; dead-letter queue | todo |
-| P1-21 | Tail sampling | 100% error + slow traces, 10% healthy; per-tenant tunable | todo |
-| P1-22 | Exact counters | metrics derived from **all** traces before sampling → `metrics` table | todo |
+| P1-19 | OTLP/gRPC | port 4317 alongside 4318 | ✅ done |
+| P1-20 | No-loss semantics | ack only after broker accept; idempotent consumers; dead-letter queue | ✅ done |
+| P1-21 | Tail sampling | 100% error + slow traces, 10% healthy; per-tenant tunable | ✅ done |
+| P1-22 | Exact counters | metrics derived from **all** traces before sampling → `metrics` table | ✅ done |
 | P1-23 | Materialized view | `endpoint_stats_1m` — explicit target table with `SimpleAggregateFunction` counters and `AggregateFunction` quantiles, partitioned by month; proved to merge correctly rather than accumulate (Phase 2 anomaly-detection hook) | ✅ done |
-| P1-24 | PII masking | masking step in workers; rules configurable in Postgres | todo |
+| P1-24 | PII masking | masking step in workers; rules configurable in Postgres | ✅ done |
 | P1-25 | Tenant isolation suite | tests that actively try to leak across tenants and must fail to | todo |
 | P1-27 | Chaos test | kill broker and ClickHouse mid-load, restart, assert zero loss | todo |
 
@@ -198,7 +198,7 @@ nexovue/
 | Receiver accept latency | p99 < 50 ms | **p99 10.8 ms** at 12k spans/sec, 9.5 ms at 62k — pass. Rose to p99 ~72 ms only when three senders saturated the host |
 | Trace-split re-encode overhead | < 20% of receiver CPU | — not measurable from `just load`. The receiver exposes no profile endpoint and `tracesplit` is internal to `apps/receiver`, so an honest figure needs a benchmark or pprof inside that module |
 | Receiver memory | < 512 MB under sustained load | **36 MiB peak** (28 MiB at 12k spans/sec, 27 MiB idle) — pass, with two orders of magnitude of room |
-| Span → queryable lag | p99 < 15 s | **p99 2.2 s** at 12k spans/sec, 0.65 s at 62k — pass. Lag falls as load rises because the worker's batch fills on rows before its deadline |
+| Span → queryable lag | p99 < 15 s | **p50 12.0 s, max 12.8 s** with tail sampling live (was 0.65–2.2 s write-through) — pass. The 10 s sampling window (ADR 0058) is now the floor, exactly as predicted; ADR 0054 required this be re-measured rather than assumed once the buffer returned |
 | Trace-by-ID query | p95 < 500 ms | **p95 21.8 ms** (p50 16.7, p99 24.9), 60 random traces against an 11.2M-span table — pass. This is the budget `span_trace_lookup` exists for: without the time bound it derives, the query would lean on the bloom filter across every partition |
 | Endpoint stats, 24h window | p95 < 300 ms | — |
 | Log search, 1h window | p95 < 2 s | — |

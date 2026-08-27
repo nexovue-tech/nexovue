@@ -5,15 +5,23 @@
 than silently not running. The names are load-bearing: splitting a deployment is a config change,
 not a rewrite.
 
-Pipeline order carries two invariants:
+Pipeline order is **decode → mask → derive → sample → sink**, and it carries two invariants:
 - **`derive` runs before `sample`** — metrics are computed from all traces, so counts stay exact
-- **`mask` runs before `sink`** — unmasked data is never written
+- **`mask` runs before everything downstream** — an unmasked value never reaches a counter, a
+  buffer or the store, because the stage rewrites the decoded payload in place
 
-**`trace-assembly` does not buffer yet.** In M1 it consumes, decodes, flattens and inserts, with no
-wait window; ClickHouse joins spans at read time. The in-memory buffer exists to let tail sampling
-see a whole trace and arrives with it in P1-21 (ADR 0054, superseding ADR 0009's window in part).
+**`trace-assembly` buffers by trace for 10s** (`WORKERS_SAMPLING_WINDOW`) so tail sampling can see a
+whole trace before deciding. ADR 0009 proposed ~30s; 10s is what the §4 p99 < 15s budget leaves.
+Spans arriving after the window follow their trace's remembered verdict, and are written
+individually once that is forgotten — ClickHouse joins them at read time.
 
-Offsets commit only after the insert returns — at-least-once, which is safe because re-inserting an
-identical span row changes nothing.
+Offsets commit only after everything a batch produced has been stored: its spans out of the
+sampling buffer *and* its counters out of their minute bucket. That is at-least-once, and it puts
+commits up to about 70s behind ingest by design — re-inserting an identical span row changes
+nothing, and `internal/pipeline/dedupe` is what stops a replay being counted twice.
+
+A message that cannot be decoded is parked on `spans-dlq` with its reason and coordinates before
+its offset moves. **Nothing drains the dead-letter topic automatically**: a poison message that
+retries on a timer is an infinite loop with extra steps.
 
 Writes use `ch-go` (not `clickhouse-go`), which is what ClickHouse recommends for insert-heavy paths.

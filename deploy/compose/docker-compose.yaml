@@ -113,6 +113,9 @@ services:
       LOG_FORMAT: console
       KAFKA_BROKERS: kafka:9092
       CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:9000/nexovue}
+      # Read-only, and only for per-project masking and sampling rules. Without
+      # it the worker runs on compiled-in defaults and says so at boot.
+      POSTGRES_DSN: ${DEV_POSTGRES_DSN:-postgresql://nexovue:nexovue_dev@postgres:5432/nexovue}
       WORKER_PIPELINES: all
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8081/healthz"]

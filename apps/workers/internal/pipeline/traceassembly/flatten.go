@@ -65,23 +65,39 @@ type spanRow struct {
 	Events            string
 }
 
-// flattenEnvelope decodes one Kafka message and returns the rows it carries.
-func flattenEnvelope(message []byte) ([]spanRow, error) {
+// decoded is one Kafka message unpacked: our envelope and the OTLP request it
+// carries, still in protobuf form.
+//
+// Decoding stops here rather than continuing into rows so the mask stage can
+// run on the decoded payload. Masking the payload rather than the rows is what
+// guarantees an unmasked value cannot reach a counter or a sampled write — the
+// stages after it never see the original at all.
+type decoded struct {
+	envelope *nexovuev1.Envelope
+	request  *tracesvc.ExportTraceServiceRequest
+}
+
+// decodeEnvelope unpacks one Kafka message.
+func decodeEnvelope(message []byte) (decoded, error) {
 	var envelope nexovuev1.Envelope
 	if err := proto.Unmarshal(message, &envelope); err != nil {
-		return nil, fmt.Errorf("decode envelope: %w", err)
+		return decoded{}, fmt.Errorf("decode envelope: %w", err)
 	}
 	if envelope.GetSignal() != nexovuev1.Signal_SIGNAL_SPANS {
-		return nil, fmt.Errorf("envelope carries signal %s, want %s",
+		return decoded{}, fmt.Errorf("envelope carries signal %s, want %s",
 			envelope.GetSignal(), nexovuev1.Signal_SIGNAL_SPANS)
 	}
 
 	var request tracesvc.ExportTraceServiceRequest
 	if err := proto.Unmarshal(envelope.GetPayload(), &request); err != nil {
-		return nil, fmt.Errorf("decode OTLP payload: %w", err)
+		return decoded{}, fmt.Errorf("decode OTLP payload: %w", err)
 	}
-	return flattenRequest(&envelope, &request), nil
+	return decoded{envelope: &envelope, request: &request}, nil
 }
+
+// rows flattens the decoded payload, which by this point has already been
+// through the mask stage.
+func (d decoded) rows() []spanRow { return flattenRequest(d.envelope, d.request) }
 
 func flattenRequest(
 	envelope *nexovuev1.Envelope,
@@ -269,4 +285,13 @@ func countSpans(request *tracesvc.ExportTraceServiceRequest) int {
 		}
 	}
 	return total
+}
+
+// millisecondsDuration converts a duration column back to a Go duration, which
+// is what the sampler compares against its threshold.
+func millisecondsDuration(durationMS float64) time.Duration {
+	if durationMS <= 0 {
+		return 0
+	}
+	return time.Duration(durationMS * float64(time.Millisecond))
 }

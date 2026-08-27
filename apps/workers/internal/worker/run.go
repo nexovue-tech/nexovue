@@ -16,19 +16,24 @@ import (
 
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/chpool"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/buildinfo"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/health"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/logging"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/traceassembly"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/projectconfig"
 )
 
 // Readiness check names; these are what a red /readyz names.
 const (
 	dependencyKafka      = "kafka"
 	dependencyClickHouse = "clickhouse"
+	dependencyPostgres   = "postgres"
 )
 
 // Main is the whole body of every worker binary: it runs the named worker and
@@ -73,9 +78,23 @@ func run(serviceName string) error {
 	}
 	defer store.Close()
 
+	// Optional: without it the pipeline stages run on their built-in defaults
+	// rather than on per-project rules.
+	control, err := controlPlanePool(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	if control != nil {
+		defer control.Close()
+	}
+	stageOptions := pipelineOptions(ctx, cfg, control, log)
+
 	registry := health.NewRegistry()
 	registry.Register(health.Check{Name: dependencyKafka, Probe: kafka.Ping})
 	registry.Register(health.Check{Name: dependencyClickHouse, Probe: store.Ping})
+	if control != nil {
+		registry.Register(health.Check{Name: dependencyPostgres, Probe: control.Ping})
+	}
 
 	server := health.NewServer(cfg.HealthAddr, health.Handler(info, registry))
 	log.InfoContext(ctx, "worker starting",
@@ -88,7 +107,7 @@ func run(serviceName string) error {
 	// Buffered so the first failure is recorded even if nothing is selecting
 	// on it yet, and so reporting one never blocks a pipeline's exit.
 	failures := make(chan error, 1)
-	stopPipelines, err := startPipelines(ctx, cfg, store, log, failures)
+	stopPipelines, err := startPipelines(ctx, cfg, store, log, stageOptions, failures)
 	if err != nil {
 		return err
 	}
@@ -104,6 +123,7 @@ func startPipelines(
 	cfg config.Config,
 	store *chpool.Pool,
 	log *slog.Logger,
+	stageOptions traceassembly.Options,
 	failures chan<- error,
 ) (func(), error) {
 	var started []func()
@@ -114,7 +134,7 @@ func startPipelines(
 	}
 
 	if slices.Contains(cfg.Pipelines, config.PipelineTraceAssembly) {
-		spans, err := traceassembly.New(cfg, store, log)
+		spans, err := traceassembly.New(cfg, store, log, stageOptions)
 		if err != nil {
 			stop()
 			return nil, err
@@ -136,6 +156,55 @@ func reportFailure(failures chan<- error, run func() error) {
 		default:
 		}
 	}
+}
+
+// controlPlanePool opens the connection the pipeline reads per-project settings
+// from, or returns nil when none is configured.
+func controlPlanePool(ctx context.Context, cfg config.Config) (*pgxpool.Pool, error) {
+	if !cfg.Postgres.Configured() {
+		return nil, nil
+	}
+	poolConfig, err := pgxpool.ParseConfig(cfg.Postgres.DSN)
+	if err != nil {
+		// A DSN in a container log outlives the process that wrote it.
+		return nil, fmt.Errorf("postgres dsn: %s", logging.RedactCredentials(err.Error()))
+	}
+	poolConfig.MaxConns = cfg.Postgres.MaxConns
+	poolConfig.MinConns = cfg.Postgres.MinConns
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		return nil, fmt.Errorf("postgres pool: %s", logging.RedactCredentials(err.Error()))
+	}
+	return pool, nil
+}
+
+// pipelineOptions builds the per-project settings source and starts refreshing
+// it. Without a control-plane connection the stages fall back to their own
+// defaults, which is said out loud rather than assumed.
+func pipelineOptions(
+	ctx context.Context,
+	cfg config.Config,
+	control *pgxpool.Pool,
+	log *slog.Logger,
+) traceassembly.Options {
+	if control == nil {
+		log.WarnContext(ctx, "no control-plane connection: per-project masking and sampling rules are not loaded",
+			slog.String("variable", "POSTGRES_DSN"))
+		return traceassembly.Options{}
+	}
+
+	defaults := projectconfig.Settings{
+		Masking: mask.Defaults(),
+		Sampling: sample.DefaultPolicy(
+			cfg.Sampling.SlowThreshold, cfg.Sampling.HealthyPercent),
+	}
+	cache := projectconfig.NewCache(defaults)
+	refresher := projectconfig.NewRefresher(
+		projectconfig.NewPostgresReader(control), cache, defaults, cfg.Masking.ProjectRefresh, log)
+	go refresher.Run(ctx)
+
+	return traceassembly.Options{Masking: cache, Sampling: cache}
 }
 
 func clickHouseOptions(cfg config.Config) chpool.Options {

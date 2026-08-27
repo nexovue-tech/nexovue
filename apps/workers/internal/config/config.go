@@ -60,6 +60,16 @@ type Config struct {
 	// Spans configures the trace-assembly pipeline.
 	Spans SpanIngest
 
+	// Postgres is the optional control-plane connection the mask and sample
+	// stages read per-project settings from.
+	Postgres Postgres
+
+	// The stages of the trace-assembly pipeline, in the order they run:
+	// decode → mask → derive → sample → sink.
+	Masking  Masking
+	Metrics  Metrics
+	Sampling Sampling
+
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"30s"`
 }
 
@@ -99,5 +109,9 @@ func (c Config) validate() error {
 		positiveCount("CLICKHOUSE_MAX_CONNS", int(c.ClickHouseMaxConns)),
 		positiveDuration("SHUTDOWN_TIMEOUT", c.ShutdownTimeout),
 		c.Spans.validate(),
+		c.Postgres.validate(),
+		c.Masking.validate(),
+		c.Metrics.validate(),
+		c.Sampling.validate(),
 	)
 }

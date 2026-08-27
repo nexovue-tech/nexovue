@@ -70,3 +70,28 @@ func notBlank(variable, value string) error {
 	}
 	return nil
 }
+
+func atMostCount(variable string, value int, limitVariable string, limit int) error {
+	if value > limit {
+		return invalid(variable, "got %d, want at most %s (%d)", value, limitVariable, limit)
+	}
+	return nil
+}
+
+func percentage(variable string, value int) error {
+	if value < 0 || value > 100 {
+		return invalid(variable, "got %d, want a percentage between 0 and 100", value)
+	}
+	return nil
+}
+
+// differentValues rejects two variables pointing at the same thing where that
+// would be a loop — a dead-letter topic equal to its source topic replays a
+// poison message onto itself forever.
+func differentValues(variable, value, otherVariable, otherValue string) error {
+	if value == otherValue {
+		return invalid(variable, "is %q, the same as %s; they must differ",
+			value, otherVariable)
+	}
+	return nil
+}

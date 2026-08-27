@@ -11,63 +11,156 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/dedupe"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/derive"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/dlq"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
 )
 
-// Pipeline consumes span envelopes and writes them to ClickHouse.
+// drainTimeout bounds the final write on shutdown. It is short because the work
+// is one insert of what is already in memory, and because a worker that will
+// not exit gets killed instead of drained.
+const drainTimeout = 15 * time.Second
+
+// Options are the collaborators the pipeline does not own.
 //
-// Offsets are committed only after the insert returns, which makes delivery
-// at-least-once: a crash between the insert and the commit replays the batch.
-// Re-inserting an identical span row is harmless while nothing downstream
-// aggregates on ingest, which is what makes that trade safe in M1.
+// Both are optional. A worker with no control-plane connection masks with the
+// compiled-in defaults and samples with the deployment default policy, which is
+// how the stages behave for a project that has configured neither.
+type Options struct {
+	Masking  mask.RulesSource
+	Sampling sample.PolicySource
+}
+
+// Pipeline consumes span envelopes and runs them through the stages:
+// decode → mask → derive → sample → sink.
+//
+// Two orderings in that list are invariants rather than preferences. `mask`
+// comes first because an unmasked value must never reach a counter, a buffer or
+// the store. `derive` comes before `sample` because counters are computed from
+// every trace, which is what keeps them exact while storage keeps a tenth of
+// the healthy ones (ADR 0010).
+//
+// Offsets commit only after everything a batch produced has been stored —
+// spans out of the sampling buffer, counters out of their minute bucket — which
+// makes delivery at-least-once. Re-inserting an identical span row is harmless;
+// re-counting one is not, which is what the dedupe stage is for.
 type Pipeline struct {
 	consumer *kgo.Client
-	writer   *spanWriter
-	block    *spanBlock
+	producer *kgo.Client
+
+	writer *spanWriter
+	block  *spanBlock
+
+	stages  *stages
+	metrics *derive.Writer
+	parked  *dlq.Queue
+	seen    *dedupe.Offsets
+	commits commitQueue
+
 	log      *slog.Logger
 	limits   config.SpanIngest
+	sampling config.Sampling
+	now      func() time.Time // replaced in tests
 }
 
 // New builds the pipeline and joins the consumer group. The caller owns the
-// pool; Close releases only what New created.
-func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger) (*Pipeline, error) {
+// ClickHouse pool; Close releases only what New created.
+func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (*Pipeline, error) {
+	stages, err := newStages(cfg, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	consumer, err := kgo.NewClient(
 		kgo.SeedBrokers(cfg.KafkaBrokers...),
 		kgo.ConsumeTopics(cfg.Spans.Topic),
 		kgo.ConsumerGroup(cfg.Spans.ConsumerGroup),
 		// Marks are what MarkCommitRecords records; without this option both
 		// it and CommitMarkedOffsets are silent no-ops. Autocommit can then
-		// only ever commit offsets we have already inserted.
+		// only ever commit offsets we have already stored.
 		kgo.AutoCommitMarks(),
 		// A rebalance between polling and committing would let us commit
 		// offsets for partitions we no longer own. Blocking it is bounded by
-		// the flush deadline, which is far inside the rebalance timeout.
+		// one loop iteration, which AllowRebalance ends.
 		kgo.BlockRebalanceOnPoll(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("span consumer: %w", err)
 	}
+
+	// A separate client for the dead-letter topic: parking a message must not
+	// depend on the state of the consumer's fetch session, and the two have
+	// nothing else in common.
+	producer, err := kgo.NewClient(kgo.SeedBrokers(cfg.KafkaBrokers...))
+	if err != nil {
+		consumer.Close()
+		return nil, fmt.Errorf("dead-letter producer: %w", err)
+	}
+
 	return &Pipeline{
 		consumer: consumer,
+		producer: producer,
 		writer:   newSpanWriter(pool),
 		block:    newSpanBlock(),
+		stages:   stages,
+		metrics:  derive.NewWriter(pool),
+		parked:   dlq.New(producer, cfg.Spans.DLQTopic, cfg.Spans.ConsumerGroup),
+		seen:     dedupe.NewOffsets(),
 		log:      log.With(slog.String("pipeline", string(config.PipelineTraceAssembly))),
 		limits:   cfg.Spans,
+		sampling: cfg.Sampling,
+		now:      time.Now,
 	}, nil
 }
 
-// Close leaves the consumer group and releases the client.
-func (p *Pipeline) Close() { p.consumer.Close() }
+func samplingOptions(cfg config.Sampling) sample.Options {
+	return sample.Options{
+		Window:      cfg.Window,
+		DecisionTTL: cfg.DecisionTTL,
+		MaxTraces:   cfg.MaxTraces,
+		MaxSpans:    cfg.MaxSpans,
+	}
+}
 
-// Run consumes until ctx is cancelled, flushing a batch when it reaches the row
-// limit or when the oldest row in it reaches the delay limit, whichever is
-// first. The delay limit is what bounds ingest lag while a tenant is quiet
-// enough that the row limit alone would never be reached.
+func samplingSource(cfg config.Config, opts Options) sample.PolicySource {
+	if opts.Sampling != nil {
+		return opts.Sampling
+	}
+	return sample.StaticPolicy(
+		sample.DefaultPolicy(cfg.Sampling.SlowThreshold, cfg.Sampling.HealthyPercent))
+}
+
+func maskingSource(opts Options) mask.RulesSource {
+	if opts.Masking != nil {
+		return opts.Masking
+	}
+	return mask.StaticRules(mask.Defaults())
+}
+
+// Close leaves the consumer group and releases both clients.
+func (p *Pipeline) Close() {
+	p.consumer.Close()
+	p.producer.Close()
+}
+
+// Run consumes until ctx is cancelled, then drains whatever it still holds.
+//
+// Each turn of the loop does the same four things: take in whatever has
+// arrived, release the traces whose sampling window has closed, write the
+// counters whose minute is complete, and commit the offsets of every batch
+// whose output is now stored.
 func (p *Pipeline) Run(ctx context.Context) error {
 	p.log.InfoContext(ctx, "trace assembly started",
 		slog.String("topic", p.limits.Topic),
 		slog.String("group", p.limits.ConsumerGroup),
+		slog.String("dlq_topic", p.limits.DLQTopic),
 		slog.Int("batch_max_rows", p.limits.MaxRows),
 		slog.Duration("batch_max_delay", p.limits.MaxDelay),
+		slog.Duration("sampling_window", p.sampling.Window),
+		slog.Int("sampling_healthy_percent", p.sampling.HealthyPercent),
+		slog.Duration("sampling_slow_threshold", p.sampling.SlowThreshold),
 	)
 	defer p.log.InfoContext(ctx, "trace assembly stopped")
 
@@ -76,7 +169,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 
 	for {
 		if ctx.Err() != nil {
-			return nil
+			return p.drain(ctx, pending)
 		}
 
 		fetches, err := p.poll(ctx, len(pending), flushBy)
@@ -88,32 +181,43 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		}
 		fetches.EachRecord(func(record *kgo.Record) { pending = append(pending, record) })
 		if len(pending) > 0 && flushBy.IsZero() {
-			flushBy = time.Now().Add(p.limits.MaxDelay)
+			flushBy = p.now().Add(p.limits.MaxDelay)
 		}
 
-		if len(pending) == 0 || (len(pending) < p.limits.MaxRows && time.Now().Before(flushBy)) {
-			continue
+		if p.batchIsReady(pending, flushBy) {
+			if err := p.absorb(ctx, pending); err != nil {
+				return err
+			}
+			pending, flushBy = pending[:0], time.Time{}
 		}
-		if err := p.flush(ctx, pending); err != nil {
+
+		if err := p.settle(ctx); err != nil {
 			return err
 		}
-		pending, flushBy = pending[:0], time.Time{}
+		// Held since this iteration's poll, so nothing committed above could
+		// have raced a reassignment.
+		p.consumer.AllowRebalance()
 	}
 }
 
+func (p *Pipeline) batchIsReady(pending []*kgo.Record, flushBy time.Time) bool {
+	return len(pending) > 0 && (len(pending) >= p.limits.MaxRows || !p.now().Before(flushBy))
+}
+
 // poll waits for records, giving up at the flush deadline once a batch has
-// started. Records already fetched stay buffered in the client, so a poll cut
-// short by the deadline loses nothing.
+// started and after one batch delay otherwise. The second deadline is what
+// keeps the loop turning while a tenant is quiet: the sampling window and the
+// counter minutes both close on wall-clock time, not on arrivals.
 func (p *Pipeline) poll(
 	ctx context.Context,
 	pending int,
 	flushBy time.Time,
 ) (kgo.Fetches, error) {
-	pollCtx, cancel := context.WithCancel(ctx)
+	deadline := p.now().Add(p.limits.MaxDelay)
 	if pending > 0 {
-		cancel()
-		pollCtx, cancel = context.WithDeadline(ctx, flushBy)
+		deadline = flushBy
 	}
+	pollCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 
 	fetches := p.consumer.PollRecords(pollCtx, p.limits.MaxRows-pending)
@@ -128,8 +232,8 @@ func (p *Pipeline) poll(
 var errClientClosed = errors.New("kafka consumer closed")
 
 // reportFetchErrors logs what franz-go will retry on its own and returns only
-// what Run cannot continue past. A deadline of our own making is the flush
-// timer firing, not a fault.
+// what Run cannot continue past. A deadline of our own making is the poll timer
+// firing, not a fault.
 func (p *Pipeline) reportFetchErrors(ctx context.Context, fetches kgo.Fetches) error {
 	for _, fetchErr := range fetches.Errors() {
 		switch {
@@ -147,46 +251,145 @@ func (p *Pipeline) reportFetchErrors(ctx context.Context, fetches kgo.Fetches) e
 	return nil
 }
 
-// flush writes every record's rows, then marks and commits the offsets. The
-// order is the durability guarantee: nothing is committed that is not stored.
-func (p *Pipeline) flush(ctx context.Context, records []*kgo.Record) error {
+// absorb runs one polled batch through decode, mask, derive and sample, writes
+// whatever the sampler released, and holds the batch's offsets until the rest
+// of what it produced has been stored too.
+func (p *Pipeline) absorb(ctx context.Context, records []*kgo.Record) error {
+	now := p.now()
+	entry := pendingCommit{
+		positions:     make([]position, 0, len(records)),
+		spansStoredAt: now.Add(p.sampling.Window),
+	}
+
 	p.block.reset()
-	decoded := 0
+	messages, spans := 0, 0
 	for _, record := range records {
-		rows, err := flattenEnvelope(record.Value)
+		entry.positions = append(entry.positions, positionOf(record))
+		counted := p.seen.FirstDelivery(record.Topic, record.Partition, record.Offset)
+		result, err := p.stages.absorbMessage(now, record.Value, counted)
 		if err != nil {
-			// One malformed message must not stall the partition behind it.
-			// It is dropped with its coordinates logged; the dead-letter topic
-			// that would keep it arrives with P1-16.
-			p.log.WarnContext(ctx, "dropping undecodable span message",
-				slog.String("topic", record.Topic),
-				slog.Int("partition", int(record.Partition)),
-				slog.Int64("offset", record.Offset),
-				slog.String("error", err.Error()),
-			)
+			if parkErr := p.park(ctx, record, err); parkErr != nil {
+				return parkErr
+			}
 			continue
 		}
-		for _, row := range rows {
-			p.block.append(row)
-		}
-		decoded++
+		p.appendRows(result.rows)
+		entry.latestMinute = later(entry.latestMinute, result.latestMinute)
+		spans += result.spans
+		messages++
 	}
 
 	if err := p.writer.insert(ctx, p.block); err != nil {
 		return err
 	}
+	p.commits.hold(entry)
 
-	p.consumer.MarkCommitRecords(records...)
+	stats := p.stages.buffer.Stats()
+	p.log.DebugContext(ctx, "batch absorbed",
+		slog.Int("messages", messages),
+		slog.Int("spans", spans),
+		slog.Int("written_now", p.block.rows()),
+		slog.Int("buffered_traces", stats.OpenTraces),
+		slog.Int("buffered_spans", stats.BufferedSpans),
+		slog.Int("uncommitted_records", p.commits.held()),
+		slog.Uint64("spans_kept", stats.SpansKept),
+		slog.Uint64("spans_dropped", stats.SpansDropped),
+		slog.Uint64("traces_closed_early", stats.ClosedEarly),
+	)
+	return nil
+}
+
+// settle releases the traces whose window has closed, writes the counters whose
+// minute is complete, and commits every batch that is now fully stored.
+func (p *Pipeline) settle(ctx context.Context) error {
+	now := p.now()
+
+	p.block.reset()
+	p.appendRows(p.stages.buffer.Expire(now))
+	if err := p.writer.insert(ctx, p.block); err != nil {
+		return err
+	}
+	if err := p.metrics.Insert(ctx, p.stages.counters.Drain(now)); err != nil {
+		return err
+	}
+
+	due := p.commits.ready(now, func(minute time.Time) bool {
+		return p.stages.counters.Drained(now, minute)
+	})
+	return p.commit(ctx, due)
+}
+
+// drain writes everything still held and commits it, which is what makes a
+// planned shutdown lose nothing. It runs on a context of its own: the one that
+// ended the loop is already cancelled, and cancelled contexts cannot insert.
+func (p *Pipeline) drain(ctx context.Context, unprocessed []*kgo.Record) error {
+	drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+	defer cancel()
+
+	// Records polled but never absorbed are simply not committed: they are
+	// still on the broker and the next owner of the partition reads them.
+	if len(unprocessed) > 0 {
+		p.log.InfoContext(drainCtx, "leaving unprocessed records for redelivery",
+			slog.Int("records", len(unprocessed)))
+	}
+
+	p.block.reset()
+	p.appendRows(p.stages.buffer.Drain(p.now()))
+	if err := p.writer.insert(drainCtx, p.block); err != nil {
+		return err
+	}
+	if err := p.metrics.Insert(drainCtx, p.stages.counters.DrainAll()); err != nil {
+		return err
+	}
+
+	stats := p.stages.buffer.Stats()
+	p.log.InfoContext(drainCtx, "trace assembly drained",
+		slog.Int("rows_written", p.block.rows()),
+		slog.Int("records_committed", p.commits.held()),
+		slog.Uint64("spans_kept", stats.SpansKept),
+		slog.Uint64("spans_dropped", stats.SpansDropped),
+	)
+	return p.commit(drainCtx, p.commits.drain())
+}
+
+func (p *Pipeline) commit(ctx context.Context, positions []position) error {
+	marks := markable(positions)
+	if marks == nil {
+		return nil
+	}
+	p.consumer.MarkCommitOffsets(marks)
 	if err := p.consumer.CommitMarkedOffsets(ctx); err != nil {
 		return fmt.Errorf("commit offsets: %w", err)
 	}
-	// Held since the first poll of this batch, so the commit above could not
-	// race a reassignment.
-	p.consumer.AllowRebalance()
+	return nil
+}
 
-	p.log.DebugContext(ctx, "spans written",
-		slog.Int("messages", decoded),
-		slog.Int("rows", p.block.rows()),
+// park sends an undecodable message to the dead-letter topic. Its offset is
+// only committed with the rest of its batch, so a park that fails is retried by
+// re-consuming rather than silently dropping the message.
+func (p *Pipeline) park(ctx context.Context, record *kgo.Record, cause error) error {
+	if err := p.parked.Park(ctx, record, cause.Error(), dlq.Context{}); err != nil {
+		return err
+	}
+	p.log.WarnContext(ctx, "parked an undecodable span message",
+		slog.String("topic", record.Topic),
+		slog.Int("partition", int(record.Partition)),
+		slog.Int64("offset", record.Offset),
+		slog.String("dlq_topic", p.limits.DLQTopic),
+		slog.String("error", cause.Error()),
 	)
 	return nil
+}
+
+func (p *Pipeline) appendRows(rows []spanRow) {
+	for _, row := range rows {
+		p.block.append(row)
+	}
+}
+
+func later(current, candidate time.Time) time.Time {
+	if candidate.After(current) {
+		return candidate
+	}
+	return current
 }

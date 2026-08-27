@@ -99,6 +99,16 @@ func marshalEnvelope(t *testing.T, semconv string, options spanOptions) []byte {
 	return message
 }
 
+// flattenEnvelope decodes a message and flattens it in one step, which is what
+// the pipeline does either side of the mask stage.
+func flattenEnvelope(message []byte) ([]spanRow, error) {
+	payload, err := decodeEnvelope(message)
+	if err != nil {
+		return nil, err
+	}
+	return payload.rows(), nil
+}
+
 // flattenOne decodes an envelope that is known to carry exactly one span.
 func flattenOne(t *testing.T, message []byte) spanRow {
 	t.Helper()
