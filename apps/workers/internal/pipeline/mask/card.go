@@ -52,7 +52,71 @@ func maskCardNumbers(text string, replace func(run string) (string, bool)) (stri
 }
 
 func isCardNumber(run string, digits int) bool {
-	return digits >= minCardDigits && digits <= maxCardDigits && luhnValid(run)
+	return digits >= minCardDigits && digits <= maxCardDigits &&
+		issuedByAKnownNetwork(run, digits) && luhnValid(run)
+}
+
+// issuedByAKnownNetwork reports whether a run begins the way a real payment card
+// does, at a length that issuer actually uses.
+//
+// Luhn alone is not a card test. One digit run in ten passes it by chance, and
+// this rule is on by default over every attribute, so that tenth run is
+// destroyed irreversibly. It is not hypothetical: a nanosecond timestamp
+// (1787816027743000000) passes Luhn, and a service name carrying one was masked
+// down to `chaos-[masked]` — the count that named it then read as total data
+// loss.
+//
+// Checking the issuer identification number costs nothing and removes almost all
+// of that. A timestamp starts 17; no network issues 17. Ranges from the card
+// networks' published IIN assignments; this deliberately answers "could this be
+// a card" and not "whose card is it", which genuinely needs a maintained
+// database and would be the wrong dependency for a masking rule.
+func issuedByAKnownNetwork(run string, digits int) bool {
+	prefix := digitsOf(run, 4)
+	switch {
+	case prefix[0] == '4': // Visa
+		return digits == 13 || digits == 16 || digits == 19
+	case between(prefix, 2, 51, 55), between(prefix, 4, 2221, 2720): // Mastercard
+		return digits == 16
+	case between(prefix, 2, 34, 34), between(prefix, 2, 37, 37): // American Express
+		return digits == 15
+	case between(prefix, 4, 6011, 6011), between(prefix, 2, 65, 65),
+		between(prefix, 3, 644, 649): // Discover
+		return digits == 16 || digits == 19
+	case between(prefix, 4, 3528, 3589): // JCB
+		return digits >= 16 && digits <= 19
+	case between(prefix, 3, 300, 305), between(prefix, 2, 36, 36),
+		between(prefix, 2, 38, 39): // Diners Club
+		return digits == 14
+	case between(prefix, 2, 62, 62): // UnionPay
+		return digits >= 16 && digits <= 19
+	default:
+		return false
+	}
+}
+
+// digitsOf returns the first n digits of a run, ignoring separators, padded so
+// a short run cannot index out of range.
+func digitsOf(run string, n int) string {
+	var out []byte
+	for i := 0; i < len(run) && len(out) < n; i++ {
+		if isDigit(run[i]) {
+			out = append(out, run[i])
+		}
+	}
+	for len(out) < n {
+		out = append(out, '0')
+	}
+	return string(out)
+}
+
+// between reports whether the first width digits of prefix fall in [low, high].
+func between(prefix string, width, low, high int) bool {
+	value := 0
+	for i := 0; i < width; i++ {
+		value = value*10 + int(prefix[i]-'0')
+	}
+	return value >= low && value <= high
 }
 
 // scanCardRun returns the end of the digit run starting at start, and how many

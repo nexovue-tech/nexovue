@@ -335,9 +335,21 @@ the reference implementations rather than only against our own reasoning.
   kafka: no such host` during a twenty-second outage, which those retries did not absorb. It covers
   a case theirs does not. The code now says so with the error quoted, so nobody deletes it as
   redundant.
-- **`loadgen`'s `ObserveFailure()` discards the span count** for a request it already forwarded and
-  the receiver may already have published. That is why a correct pipeline reports counting more
-  than was acknowledged, and why the chaos test's overcount assertion had to become one-sided.
+- ~~**`loadgen`'s `ObserveFailure()` discards the span count.**~~ **Done.** A request now has three
+  honest outcomes rather than two. *Not sent* is claimed only where it is provable — a dial failure,
+  where no socket existed and nothing can have been published. Everything else an unreadable answer
+  could mean defaults to *unknown*, because Go cannot tell a request the receiver never read from
+  one it read and acted on, and over-reporting unknown widens a stated tolerance while
+  under-reporting it hides an overcount.
+  Offered spans are never lost again: `accepted + refused + unknown == offered`, with not-sent
+  outside that sum. Latency percentiles cover only answered requests, so a chaos run's p99 is
+  finally comparable to a healthy one's.
+  The chaos test now uses it to **bound** the overcount rather than merely permit it. With
+  `spans unknown` at zero, none of an excess came from the harness — the +512 that burned five runs
+  becomes impossible to mistake for a defect again.
+  **One caution that survives:** zero unknown does not license asserting exact equality. The
+  receiver can still publish part of a request whose produce retries then exhaust, answer 503, and
+  have the client republish what landed. Narrowed, not closed.
 - ~~**One residual counter hole (ADR 0061).**~~ **Closed.** The counter insert no longer retries
   blind: every attempt after the first asks whether the write already landed before re-sending it.
   A ClickHouse block is atomic, so one point answers for the batch.
