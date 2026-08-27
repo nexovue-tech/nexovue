@@ -28,6 +28,11 @@ linters:
     rules:
       - path: _test\.go
         linters: [gosec, goconst]
+      # The demo app invents order numbers and decides which fake payments
+      # fail. None of it is security-sensitive and crypto/rand would be slower
+      # for no benefit.
+      - path: tools/demo-app/
+        linters: [gosec]
 
 formatters:
   enable:

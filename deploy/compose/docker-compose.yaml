@@ -286,25 +286,65 @@ services:
           memory: 1536M
 
   # ---------- tools ----------
-  demo-app:
+  # The fake shop, as three services. They call each other over HTTP, so a trace
+  # crosses real process boundaries and the waterfall has genuine depth.
+  #
+  # OTel is configured only by the standard OTEL_* variables — the same two lines
+  # our onboarding asks a customer for. The key is the one `just seed` creates.
+  demo-storefront:
     profiles: ["tools"]
-    build:
+    build: &demo-build
       context: ../..
       dockerfile: deploy/docker/go-dev.Dockerfile
     command: air -c deploy/air/demo-app.toml
     working_dir: /workspace
-    volumes:
+    volumes: &demo-volumes
       - ../..:/workspace
       - go-cache:/cache
     environment:
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://receiver:4318
-      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      <<: &demo-otel
+        OTEL_EXPORTER_OTLP_ENDPOINT: http://receiver:4318
+        OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+        OTEL_EXPORTER_OTLP_HEADERS: x-nexovue-key=${DEMO_API_KEY:-nvk_live_devlocaldevlocaldevloc}
+      DEMO_ROLE: storefront
+      DEMO_CHECKOUT_URL: http://demo-checkout:8090
+      DEMO_TRAFFIC_RATE: ${DEMO_TRAFFIC_RATE:-2}
     ports:
       - "${DEMO_APP_HOST_PORT:-18090}:8090"
-    deploy:
+    depends_on:
+      receiver:
+        condition: service_healthy
+    deploy: &demo-limits
       resources:
         limits:
           memory: 512M
+
+  demo-checkout:
+    profiles: ["tools"]
+    build: *demo-build
+    command: air -c deploy/air/demo-app.toml
+    working_dir: /workspace
+    volumes: *demo-volumes
+    environment:
+      <<: *demo-otel
+      DEMO_ROLE: checkout
+      DEMO_PAYMENTS_URL: http://demo-payments:8090
+    ports:
+      - "${DEMO_CHECKOUT_HOST_PORT:-18091}:8090"
+    deploy: *demo-limits
+
+  demo-payments:
+    profiles: ["tools"]
+    build: *demo-build
+    command: air -c deploy/air/demo-app.toml
+    working_dir: /workspace
+    volumes: *demo-volumes
+    environment:
+      <<: *demo-otel
+      DEMO_ROLE: payments
+    ports:
+      - "${DEMO_PAYMENTS_HOST_PORT:-18092}:8090"
+    deploy: *demo-limits
 
   loadgen:
     profiles: ["tools"]

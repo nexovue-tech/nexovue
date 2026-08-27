@@ -4,4 +4,5 @@ use (
 	./apps/receiver
 	./apps/workers
 	./packages/contracts
+	./tools/demo-app
 )

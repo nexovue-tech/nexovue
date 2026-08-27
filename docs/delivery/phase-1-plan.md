@@ -99,7 +99,7 @@ nexovue/
 
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
-| P1-11 | Demo app | `tools/demo-app` — fake shop emitting real traces, with fault injection ("break checkout DB now") | todo |
+| P1-11 | Demo app | `tools/demo-app` — three roles calling each other over HTTP, so traces cross real service boundaries; OTel configured only by standard `OTEL_*` vars; four named faults toggled at runtime | ✅ done |
 | P1-12 | Receiver: OTLP/HTTP | `/v1/traces`, protobuf parse via official OTel libs, **split batches one envelope per trace_id**, produce to Kafka keyed by trace_id | todo |
 | P1-13 | API keys + tenancy | SHA-256 key hash (never argon2 — hot path), lookup by prefix, single cached lookup resolving org_id + project_id; every envelope tagged at the edge | todo |
 | P1-14 | Rate limiting | per-key Redis counters; reject over-limit before any cost | todo |
