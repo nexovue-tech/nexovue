@@ -112,7 +112,7 @@ func run(serviceName string) error {
 	// Buffered so the first failure is recorded even if nothing is selecting
 	// on it yet, and so reporting one never blocks a pipeline's exit.
 	failures := make(chan error, 1)
-	stopPipelines, err := startPipelines(ctx, cfg, store, log, stageOptions, registry, failures)
+	stopPipelines, err := startPipelines(ctx, cfg, store, log, stageOptions, registry, failures, stop)
 	if err != nil {
 		return err
 	}
@@ -131,6 +131,7 @@ func startPipelines(
 	stageOptions traceassembly.Options,
 	registry *health.Registry,
 	failures chan<- error,
+	shutdown context.CancelFunc,
 ) (func(), error) {
 	var started []func()
 	stop := func() {
@@ -147,7 +148,7 @@ func startPipelines(
 		}
 		started = append(started, spans.Close)
 		registry.Register(health.Check{Name: checkTraceAssembly, Probe: spans.Running})
-		go reportFailure(ctx, failures, config.PipelineTraceAssembly, func() error { return spans.Run(ctx) })
+		go reportFailure(ctx, failures, shutdown, log, config.PipelineTraceAssembly, func() error { return spans.Run(ctx) })
 	}
 
 	return stop, nil
@@ -164,7 +165,14 @@ func startPipelines(
 //
 // A full channel means an earlier pipeline already failed, and that first cause
 // is the one worth reporting.
-func reportFailure(ctx context.Context, failures chan<- error, name config.Pipeline, run func() error) {
+func reportFailure(
+	ctx context.Context,
+	failures chan<- error,
+	shutdown context.CancelFunc,
+	log *slog.Logger,
+	name config.Pipeline,
+	run func() error,
+) {
 	err := run()
 	if err == nil && ctx.Err() == nil {
 		err = fmt.Errorf("%s returned while the worker was still running", name)
@@ -172,10 +180,23 @@ func reportFailure(ctx context.Context, failures chan<- error, name config.Pipel
 	if err == nil {
 		return
 	}
+
+	// Said out loud, because this is the line that explains a restart.
+	log.Error("pipeline ended; the worker cannot continue",
+		slog.String("pipeline", string(name)),
+		slog.String("error", err.Error()),
+	)
+
+	// Two independent paths out, because one is not enough. The channel carries
+	// the cause so the exit reports *why*; cancelling guarantees the process
+	// actually leaves even if nothing is listening on the channel. A worker that
+	// keeps running with a dead pipeline holds its partitions and consumes
+	// nothing, which is the failure this whole milestone kept rediscovering.
 	select {
 	case failures <- err:
 	default:
 	}
+	shutdown()
 }
 
 // controlPlanePool opens the connection the pipeline reads per-project settings
@@ -263,6 +284,13 @@ func serveUntilSignal(
 	case err := <-pipelineFailures:
 		return fmt.Errorf("pipeline: %w", err)
 	case <-ctx.Done():
+		// A pipeline that failed cancels the context as well as sending its
+		// cause; prefer the cause, so the exit explains itself.
+		select {
+		case err := <-pipelineFailures:
+			return fmt.Errorf("pipeline: %w", err)
+		default:
+		}
 		log.Info("shutdown requested, draining")
 	}
 
