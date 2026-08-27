@@ -19,7 +19,7 @@ func newHandler(checks ...health.Check) http.Handler {
 	for _, check := range checks {
 		registry.Register(check)
 	}
-	return health.Handler(buildinfo.For("trace-assembler"), registry)
+	return health.Handler(buildinfo.For("trace-assembler"), nil, registry)
 }
 
 func get(t *testing.T, handler http.Handler, path string) (int, health.Report) {

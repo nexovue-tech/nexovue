@@ -23,10 +23,19 @@ const (
 )
 
 // Handler serves the two probe endpoints.
-func Handler(info buildinfo.Info, registry *Registry) http.Handler {
+//
+// `liveness` holds only checks internal to this process — is the work still
+// happening — because a failing liveness probe means "restart me", and restarting
+// on a dependency outage turns one broken store into every worker crash-looping.
+// `readiness` holds those same checks plus every external dependency.
+//
+// A worker serves no traffic, so its liveness probe cannot be "the process
+// answers HTTP": that stayed true for nine minutes once while the pipeline was
+// dead and ingest was silently lost. Internal work checks are what close that.
+func Handler(info buildinfo.Info, liveness, readiness *Registry) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET "+LivenessPath, livenessHandler(info))
-	mux.Handle("GET "+ReadinessPath, readinessHandler(info, registry))
+	mux.Handle("GET "+LivenessPath, livenessHandler(info, liveness))
+	mux.Handle("GET "+ReadinessPath, readinessHandler(info, readiness))
 	return mux
 }
 
@@ -45,10 +54,13 @@ func NewServer(addr string, handler http.Handler) *http.Server {
 
 // livenessHandler always succeeds. Checking a dependency here would turn one
 // database blip into a restart of every replica of every service.
-func livenessHandler(info buildinfo.Info) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeReport(w, http.StatusOK, Report{Status: StatusOK, Build: info})
-	})
+func livenessHandler(info buildinfo.Info, registry *Registry) http.Handler {
+	if registry == nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeReport(w, http.StatusOK, Report{Status: StatusOK, Build: info})
+		})
+	}
+	return readinessHandler(info, registry)
 }
 
 func readinessHandler(info buildinfo.Info, registry *Registry) http.Handler {

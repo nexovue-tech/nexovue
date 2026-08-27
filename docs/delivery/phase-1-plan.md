@@ -293,6 +293,42 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 - **`resolveWindow` rounded the live window's end *down* to a bucket**, so the trace list silently omitted the newest 0–10 seconds, and `TraceListScreen` then froze that window at mount. Together they broke M1's exit condition at the last hop: onboarding said the first span had arrived, and the list it linked to was empty. Fixed in M1; noted because the shape recurs — a cache-stability trick that quietly changes what the query means.
 - **The trace list groups over `spans` on every request.** Correct and cheap at M1 volume because the time window is bounded by the sort key, but it is a full group-by, and P1-41 (trace explorer, M6) is where it needs a real look.
 
+## 7d. Follow-ups surfaced while building M2
+
+Mostly from a research pass over M2's choices after the fact — checking what we built against
+the reference implementations rather than only against our own reasoning.
+
+- **Probabilistic sampling uses `fnv64a(trace_id) % 100`, not W3C-derived randomness.** OTel's
+  `tailsampling` processor decides against the trace's own randomness — the explicit `rv` value
+  from `tracestate` if present, otherwise the randomness the W3C spec requires in the trace id.
+  Both give a fair 10%, so nothing is wrong today; the difference is that the spec form exists so
+  **independent samplers agree**. A customer's collector sampling in front of us would keep a
+  different 10% than we do, and combined sampling probability stops being reasonable about. Worth
+  aligning before anyone runs a collector at scale in front of us.
+- **Confirm the slow-trace threshold measures the trace, not the root span.** OTel's latency policy
+  takes the earliest start and the latest end across all spans. Ours has not been checked against
+  that definition, and a trace whose root returns early would be judged differently.
+- **Masking has no `allowed_values` escape hatch.** The redaction processor lets an operator
+  whitelist a known-safe value that would otherwise trip a broad pattern. We have no override, so a
+  false positive is unfixable without switching the whole rule off.
+- **Masking replaces rather than hashes.** The redaction processor can hash a matched value
+  (`sha256`, `hmac-sha256`, …) instead of substituting a constant, which keeps *correlation* —
+  "the same user across these requests" stays answerable without revealing who. For a product
+  whose pitch is investigation, that is a real capability, not a nicety.
+- **M3 note: the redaction processor supports traces only.** Logs and metrics need the attributes
+  or transform processor. Our masking stage will hit the same split when the log pipeline lands.
+- **`retryTransient` around Kafka calls duplicates franz-go's own retries.** franz-go already
+  retries requests (`RequestRetries`, default 20) with a 250ms–2.5s backoff. Wrapping
+  `CommitMarkedOffsets` gives 20 × 9 attempts. Harmless, and the uniform budget has some value, but
+  it was written without knowing. The ClickHouse inserts genuinely need it — `ch-go` has nothing.
+- **`loadgen`'s `ObserveFailure()` discards the span count** for a request it already forwarded and
+  the receiver may already have published. That is why a correct pipeline reports counting more
+  than was acknowledged, and why the chaos test's overcount assertion had to become one-sided.
+- **One residual counter hole (ADR 0061).** If a counter insert lands but its acknowledgement is
+  lost, the retry re-inserts the identical block; within a single settlement the durable state
+  cannot see it, and ADR 0060's deduplication only catches it while ClickHouse survives. A store
+  restart between the two attempts still duplicates. Always an overcount, never an undercount.
+
 ## 8. Open scope questions
 
 - **Network monitoring (category 10)** has no home in any phase. It needs eBPF kernel agents, which contradicts the standing decision not to build collection agents. Park it explicitly, or accept the contradiction deliberately?

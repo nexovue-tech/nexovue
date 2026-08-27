@@ -95,13 +95,14 @@ func run(serviceName string) error {
 	stageOptions := pipelineOptions(ctx, cfg, control, log)
 
 	registry := health.NewRegistry()
+	liveness := health.NewRegistry()
 	registry.Register(health.Check{Name: dependencyKafka, Probe: kafka.Ping})
 	registry.Register(health.Check{Name: dependencyClickHouse, Probe: store.Ping})
 	if control != nil {
 		registry.Register(health.Check{Name: dependencyPostgres, Probe: control.Ping})
 	}
 
-	server := health.NewServer(cfg.HealthAddr, health.Handler(info, registry))
+	server := health.NewServer(cfg.HealthAddr, health.Handler(info, liveness, registry))
 	log.InfoContext(ctx, "worker starting",
 		slog.String("revision", info.Revision),
 		slog.String("health_addr", cfg.HealthAddr),
@@ -112,7 +113,7 @@ func run(serviceName string) error {
 	// Buffered so the first failure is recorded even if nothing is selecting
 	// on it yet, and so reporting one never blocks a pipeline's exit.
 	failures := make(chan error, 1)
-	stopPipelines, err := startPipelines(ctx, cfg, store, log, stageOptions, registry, failures, stop)
+	stopPipelines, err := startPipelines(ctx, cfg, store, log, stageOptions, registry, liveness, failures, stop)
 	if err != nil {
 		return err
 	}
@@ -130,6 +131,7 @@ func startPipelines(
 	log *slog.Logger,
 	stageOptions traceassembly.Options,
 	registry *health.Registry,
+	liveness *health.Registry,
 	failures chan<- error,
 	shutdown context.CancelFunc,
 ) (func(), error) {
@@ -147,7 +149,9 @@ func startPipelines(
 			return nil, err
 		}
 		started = append(started, spans.Close)
+		// Both: a stopped pipeline means restart me, and also means not ready.
 		registry.Register(health.Check{Name: checkTraceAssembly, Probe: spans.Running})
+		liveness.Register(health.Check{Name: checkTraceAssembly, Probe: spans.Running})
 		go reportFailure(ctx, failures, shutdown, log, config.PipelineTraceAssembly, func() error { return spans.Run(ctx) })
 	}
 

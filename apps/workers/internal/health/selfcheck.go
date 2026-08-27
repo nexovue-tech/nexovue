@@ -30,12 +30,12 @@ func RunSelfCheckIfAsked(args []string, addr string) {
 		os.Exit(1)
 	}
 
-	// /readyz, not /healthz. The worker serves no traffic, so "the process is
-	// alive" cannot tell that its pipeline stopped consuming — which is exactly
-	// the failure that hid behind a green container for nine minutes. Readiness
-	// carries the trace-assembly probe and knows the difference.
+	// Liveness, which now covers the pipeline and not the dependencies. A
+	// container healthcheck is a restart signal, and restarting cannot fix a
+	// store outage — it only turns one down dependency into every worker
+	// crash-looping. Readiness carries the dependencies for whoever routes work.
 	client := &http.Client{Timeout: selfCheckTimeout}
-	resp, err := client.Get("http://127.0.0.1:" + port + "/readyz")
+	resp, err := client.Get("http://127.0.0.1:" + port + LivenessPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "health: %v\n", err)
 		os.Exit(1)
