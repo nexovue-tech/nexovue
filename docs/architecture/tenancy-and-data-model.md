@@ -85,7 +85,7 @@ nvk_live_<22 chars base62>
  prefix        secret (shown once, never stored)
 ```
 
-`key_prefix` stores the first 12 characters in plaintext for the lookup; only the hash of the whole key is persisted. Multiple live keys per project so rotation never requires downtime.
+`key_prefix` stores the first 16 characters in plaintext for the lookup — the nine-character scheme plus seven of the secret — and only the hash of the whole key is persisted. Seven rather than three: the prefix is unique, and three random characters gave 238,328 values, a coin-flip collision at roughly 500 live keys, which would fail one customer's signup because of another customer's key. Multiple live keys per project so rotation never requires downtime.
 
 ## 4. Deletion
 

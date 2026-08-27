@@ -74,3 +74,48 @@ func connectionURL(variable, value string, schemes ...string) error {
 	}
 	return nil
 }
+
+func notBlank(variable, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return invalid(variable, "must not be blank")
+	}
+	return nil
+}
+
+func positiveCount(variable string, value int) error {
+	if value <= 0 {
+		return invalid(variable, "got %d, want a positive count", value)
+	}
+	return nil
+}
+
+func positiveSize(variable string, value int64) error {
+	if value <= 0 {
+		return invalid(variable, "got %d, want a positive number of bytes", value)
+	}
+	return nil
+}
+
+// atLeastSize keeps a pair of byte limits in a usable order: a decompressed cap
+// below the wire cap would reject bodies the wire cap just allowed.
+func atLeastSize(variable string, value int64, floorVariable string, floor int64) error {
+	if value < floor {
+		return invalid(variable, "got %d, want at least %s (%d)", value, floorVariable, floor)
+	}
+	return nil
+}
+
+func atMostDuration(variable string, value, ceiling time.Duration) error {
+	if value > ceiling {
+		return invalid(variable, "got %s, want at most %s", value, ceiling)
+	}
+	return nil
+}
+
+// atMostCount keeps a pair of pool bounds in a usable order.
+func atMostCount(variable string, value int, ceilingVariable string, ceiling int) error {
+	if value > ceiling {
+		return invalid(variable, "got %d, want at most %s (%d)", value, ceilingVariable, ceiling)
+	}
+	return nil
+}

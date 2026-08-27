@@ -1,6 +1,6 @@
 # 9. Trace assembly = in-worker memory plus Kafka partitioning by trace_id
 
-- **Status:** Accepted
+- **Status:** Accepted — [superseded in part by 0054](0054-spans-written-through-until-tail-sampling.md): the ~30s wait window only. Partitioning by `trace_id` stands.
 - **Date:** 2026-08
 
 ## Context

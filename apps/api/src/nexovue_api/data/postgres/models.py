@@ -54,9 +54,12 @@ UserRole: Final = Enum(*USER_ROLES, name="user_role")
 # regenerate that TTL expression rather than running scheduled deletes.
 DEFAULT_RETENTION_DAYS: Final = 30
 
-# The plaintext lookup half of `nvk_live_<22 chars>`: nine characters of prefix
-# plus three of the secret.
-API_KEY_PREFIX_LENGTH: Final = 12
+# The plaintext lookup half of `nvk_live_<22 chars>`: nine characters of scheme
+# plus seven of the secret. Seven, not three: the prefix is unique, and three gave
+# 238,328 values — a coin-flip collision at ~500 live keys, which would fail a real
+# customer's signup because of someone else's key. Fifteen secret characters remain
+# hidden, which is entropy enough that lengthening the prefix costs nothing.
+API_KEY_PREFIX_LENGTH: Final = 16
 SHA256_HEX_LENGTH: Final = 64
 
 # RFC 5321 caps a path at 320 octets.

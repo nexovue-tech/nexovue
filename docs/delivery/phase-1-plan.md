@@ -100,13 +100,14 @@ nexovue/
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
 | P1-11 | Demo app | `tools/demo-app` — three roles calling each other over HTTP, so traces cross real service boundaries; OTel configured only by standard `OTEL_*` vars; four named faults toggled at runtime | ✅ done |
-| P1-12 | Receiver: OTLP/HTTP | `/v1/traces`, protobuf parse via official OTel libs, **split batches one envelope per trace_id**, produce to Kafka keyed by trace_id | todo |
-| P1-13 | API keys + tenancy | SHA-256 key hash (never argon2 — hot path), lookup by prefix, single cached lookup resolving org_id + project_id; every envelope tagged at the edge | todo |
-| P1-14 | Rate limiting | per-key Redis counters; reject over-limit before any cost | todo |
-| P1-15 | Trace assembler | `franz-go` consumer, partition by trace_id, in-memory join, batched insert via `ch-go` | todo |
-| P1-16 | Query API | FastAPI `GET /traces`, `/traces/{id}` through a repository that cannot omit the tenant filter | todo |
+| P1-12 | Receiver: OTLP/HTTP | `/v1/traces`, protobuf parse via official OTel libs, **split batches one envelope per trace_id**, produce to Kafka keyed by trace_id | ✅ done |
+| P1-13 | API keys + tenancy | SHA-256 key hash (never argon2 — hot path), lookup by prefix, single cached lookup resolving org_id + project_id; every envelope tagged at the edge | ✅ done |
+| P1-14 | Rate limiting | per-key Redis counters; reject over-limit before any cost | ✅ done |
+| P1-15 | Trace writer | `franz-go` consumer group on `spans-raw`; **write-through, no buffer in M1** (ADR 0054 supersedes 0009's window in part); batched insert via `ch-go`; ClickHouse migration `000004` adds the `trace_id` → time-bounds lookup the detail query needs | ✅ done |
+| P1-16 | Query API | FastAPI `GET /traces`, `/traces/{id}` through a repository that cannot omit the tenant filter | ✅ done |
 | P1-17 | Traces in the shell | session auth, trace list + waterfall screen, built into the shell P1-63 already provides. Routing and layout are **not** here — they landed in M0 | todo |
-| P1-60 | E2E harness | Playwright against the running compose stack via `just test`; first critical path: signup → org/project/key created → first span → trace visible | todo |
+| P1-49 | Onboarding | signup collects org details + one email → transaction creates org, owner user, `production` project and first key → two env vars → live first-span celebration. User never sees the words org or project | todo |
+| P1-60 | E2E harness | Playwright against the running compose stack via `just e2e` — deliberately **not** `just test`, which `just check` runs on every commit and must not require docker; first critical path: signup → org/project/key created → first span → trace visible | todo |
 | P1-18 | Load generator | `tools/loadgen` wrapping `telemetrygen` (OTLP/HTTP + gRPC, no app needed); first performance numbers recorded in this doc | todo |
 
 ### M2 — Spine hardening (the part that makes it a product, not a demo)
@@ -174,7 +175,6 @@ nexovue/
 | P1-48 | Usage & cost view | per-tenant ingestion counters → usage table → projected cost in-product | todo |
 | P1-61 | E2E screen coverage | Critical path per screen against the running stack; part of `just check` | todo |
 | P1-62 | **OTel Demo realism gate** | Run the OpenTelemetry Demo (18 services, ~10 languages) against our receiver and confirm the screens hold: service map readable at 18 nodes, trace search survives real attribute cardinality, promoted columns survive semconv variation across languages. Not a daily dependency — needs 4–8 GB, so optional services stop and the Docker allocation is raised | todo |
-| P1-49 | Onboarding | signup collects org details + one email → transaction creates org, owner user, `production` project and first key → two env vars → live first-span celebration. User never sees the words org or project | todo |
 
 ### M7 — Phase 1 exit
 | ID | Task | Deliverable | Status |

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/health"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/logging"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/traceassembly"
 )
 
 // Readiness check names; these are what a red /readyz names.
@@ -80,9 +82,60 @@ func run(serviceName string) error {
 		slog.String("revision", info.Revision),
 		slog.String("health_addr", cfg.HealthAddr),
 		slog.String("clickhouse_address", cfg.ClickHouse.Address),
+		slog.String("pipelines", config.JoinPipelines(cfg.Pipelines)),
 	)
 
-	return serveUntilSignal(ctx, log, server, cfg.ShutdownTimeout)
+	// Buffered so the first failure is recorded even if nothing is selecting
+	// on it yet, and so reporting one never blocks a pipeline's exit.
+	failures := make(chan error, 1)
+	stopPipelines, err := startPipelines(ctx, cfg, store, log, failures)
+	if err != nil {
+		return err
+	}
+	defer stopPipelines()
+
+	return serveUntilSignal(ctx, log, server, failures, cfg.ShutdownTimeout)
+}
+
+// startPipelines launches every pipeline this process is configured to run and
+// returns the function that releases them.
+func startPipelines(
+	ctx context.Context,
+	cfg config.Config,
+	store *chpool.Pool,
+	log *slog.Logger,
+	failures chan<- error,
+) (func(), error) {
+	var started []func()
+	stop := func() {
+		for _, release := range started {
+			release()
+		}
+	}
+
+	if slices.Contains(cfg.Pipelines, config.PipelineTraceAssembly) {
+		spans, err := traceassembly.New(cfg, store, log)
+		if err != nil {
+			stop()
+			return nil, err
+		}
+		started = append(started, spans.Close)
+		go reportFailure(failures, func() error { return spans.Run(ctx) })
+	}
+
+	return stop, nil
+}
+
+// reportFailure runs a pipeline and hands its failure to the shutdown path. A
+// full channel means an earlier pipeline already failed, and that first cause
+// is the one worth reporting.
+func reportFailure(failures chan<- error, run func() error) {
+	if err := run(); err != nil {
+		select {
+		case failures <- err:
+		default:
+		}
+	}
 }
 
 func clickHouseOptions(cfg config.Config) chpool.Options {
@@ -105,6 +158,7 @@ func serveUntilSignal(
 	ctx context.Context,
 	log *slog.Logger,
 	server *http.Server,
+	pipelineFailures <-chan error,
 	shutdownTimeout time.Duration,
 ) error {
 	failed := make(chan error, 1)
@@ -117,6 +171,8 @@ func serveUntilSignal(
 	select {
 	case err := <-failed:
 		return fmt.Errorf("health server: %w", err)
+	case err := <-pipelineFailures:
+		return fmt.Errorf("pipeline: %w", err)
 	case <-ctx.Done():
 		log.Info("shutdown requested, draining")
 	}

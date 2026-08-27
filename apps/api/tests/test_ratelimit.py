@@ -26,7 +26,7 @@ from nexovue_api.settings import API_PREFIX
     ("path", "expected"),
     [
         (f"{API_PREFIX}/auth/login", AUTH_TIER),
-        (f"{API_PREFIX}/auth/signup", AUTH_TIER),
+        (f"{API_PREFIX}/signup", AUTH_TIER),
         (f"{API_PREFIX}/traces", TELEMETRY_TIER),
         (f"{API_PREFIX}/traces/abc123", TELEMETRY_TIER),
         (f"{API_PREFIX}/logs", TELEMETRY_TIER),

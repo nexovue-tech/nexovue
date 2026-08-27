@@ -39,6 +39,7 @@
 **Owner layer:** F7 Owner status page
 **Observability screens:** F8 Service overview · F9 Service map · F10 Trace waterfall · F11 Errors screen · F12 Logs screen (search + live tail) · F13 Infrastructure monitoring · F14 Database monitoring · F15 RUM / Core Web Vitals · F16 Session replay · F17 Continuous profiling · F18 Synthetic checks · F19 SLO tracking · F20 Dashboards (optional mode) · F28 Deployment/release tracking · F29 LLM/AI-app observability
 **Workflow & operations:** F21 Alerts & notification connectors · F22 Case management · F23 Onboarding · F24 Integration settings · F25 Usage & cost view · F26 RBAC / user management · F27 Data controls (retention, PII masking rules) · F30 Public status page
+**Internal (not customer-facing):** F31 Admin console
 
 **Named capabilities inside features (so they aren't lost):** BubbleUp-style attribute/outlier analysis → F20 + F2 evidence · service ownership metadata → F8/F9 · telemetry-value transparency ("what data is worth keeping") → F25 · cross-signal global search → F1/F4 · suspect-commit/release linkage on errors → F11 + F28 · log archival tiers → F27 · **sustainability/carbon panel → F13** (derived metric: CPU utilization × instance type × grid carbon intensity from public datasets — Cloud Carbon Footprint / Kepler approach; no new data collection).
 
@@ -150,6 +151,8 @@ Connect Slack, Teams, WhatsApp, email, SMS, webhooks; what-triggers-what rules; 
 ### F22 — Case Management 🔲 TO SPECIFY
 Auto-created cases from findings; list/detail with lifecycle (open → investigating → resolved); GitHub Issues/Jira connectors (create + status sync); case timeline.
 
+> **Not a helpdesk.** A case here is an *incident* raised from a finding, never a customer support ticket. Customer support tooling is unplaced — see the commercial-model open questions in `vision-and-scope.md` §7.
+
 ### F23 — Onboarding 🔲 TO SPECIFY
 Signup → project → "2 env vars" screen → live first-span celebration → auto-created defaults (service overview, suggested synthetic check from domain, alert presets). The 10-minute promise, specified.
 
@@ -179,6 +182,11 @@ Customer-publishable status.mysite.com: components, current status, incident his
 ## 6. Non-Functional Requirements (pointer)
 
 To be written as a companion one-pager: performance targets (feed load, query latency, finding freshness), availability, durability (no data loss between receiver and storage), multi-tenant isolation guarantees, security & privacy commitments. *(Referenced by acceptance criteria such as AC1.1 and AC1.4.)*
+
+### F31 — Admin Console (internal) 🔲 TO SPECIFY
+Our own back-office, not a customer surface: find an organization, see its usage against plan, comp or suspend an account, and **impersonate a user to reproduce what they are seeing**. Impersonation is reported as the highest-value piece and the one most often missed early — it requires explicit consent, a time bound, and a full audit trail.
+
+**Schema hook, cheap now and expensive later:** the `audit_log` table already exists. Writes made during an impersonated session need an impersonation context recorded on them; adding that field when audit entries are first written costs nothing, retrofitting it means backfilling a security record that cannot be reconstructed.
 
 ## 7. Glossary
 

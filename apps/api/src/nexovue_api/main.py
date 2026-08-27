@@ -14,6 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
+from nexovue_api.auth import router as auth_router
 from nexovue_api.buildinfo import SERVICE_NAME
 from nexovue_api.errors.handlers import install_error_handlers
 from nexovue_api.health import router as health_router
@@ -22,9 +23,12 @@ from nexovue_api.middleware.correlation import CorrelationIdMiddleware
 from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
 from nexovue_api.middleware.ratelimit import RateLimitMiddleware
 from nexovue_api.middleware.request_log import RequestLogMiddleware
+from nexovue_api.projects import router as projects_router
 from nexovue_api.settings import API_PREFIX, Settings, load_settings_or_exit
+from nexovue_api.signup import router as signup_router
 from nexovue_api.system import router as system_router
 from nexovue_api.telemetry.logging import configure_logging
+from nexovue_api.traces import router as traces_router
 
 API_TITLE = "nexovue API"
 
@@ -47,6 +51,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url=f"{API_PREFIX}/openapi.json",
         docs_url=f"{API_PREFIX}/docs",
     )
+
+    # Dependencies read configuration from here, so a test that builds the app
+    # with explicit settings gets those and not whatever the environment holds.
+    app.state.settings = settings
 
     _install_middleware(app, settings)
     install_error_handlers(app)
@@ -81,6 +89,10 @@ def _install_routes(app: FastAPI) -> None:
 
     versioned = APIRouter(prefix=API_PREFIX)
     versioned.include_router(system_router.router)
+    versioned.include_router(signup_router.router)
+    versioned.include_router(auth_router.router)
+    versioned.include_router(projects_router.router)
+    versioned.include_router(traces_router.router)
     app.include_router(versioned)
 
 

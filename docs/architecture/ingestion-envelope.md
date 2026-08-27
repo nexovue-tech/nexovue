@@ -58,9 +58,17 @@ This is the same approach the OpenTelemetry collector's `loadbalancing` exporter
 
 | Topic | Signal | Kafka key | Notes |
 |---|---|---|---|
-| `spans-raw` | SPANS | `trace_id` | One trace per message, guaranteed by the split above |
+| `spans-raw` | SPANS | `trace_id`, **lower-case hex** (32 chars) | One trace per message, guaranteed by the split above |
 | `logs-raw` | LOGS | `tenant_id` | Batches forwarded intact |
 | `metrics-raw` | METRICS | `tenant_id` | Batches forwarded intact |
+
+**The key encoding is part of the contract, not an implementation detail.** A trace id is 16
+raw bytes; written as lower-case hex it is the same string the `spans` table stores in its
+`FixedString(32)` column, so one spelling serves the partitioner and the row. Two producers
+disagreeing on the encoding would hash the same trace to different partitions, and trace
+assembly — which rests entirely on all of a trace's spans reaching one consumer
+([0009](decisions/0009-trace-assembly-in-worker-memory.md)) — would fail silently, producing
+partial traces rather than an error.
 
 ## Versioning rules
 

@@ -58,7 +58,9 @@ DEFAULT_TIER: Final = Tier(quota=Quota(name="default", limit=300, window_seconds
 # Ordered longest-prefix-first so a more specific rule cannot be shadowed.
 AUTH_PATHS: Final = (
     f"{API_PREFIX}/auth/login",
-    f"{API_PREFIX}/auth/signup",
+    # Signup is a sibling of /auth, not a child: it creates the organization the
+    # session then belongs to. It is still credential-stuffing surface.
+    f"{API_PREFIX}/signup",
     f"{API_PREFIX}/auth/password-reset",
 )
 TELEMETRY_PATHS: Final = (

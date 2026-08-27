@@ -63,3 +63,10 @@ func positiveCount(variable string, value int) error {
 	}
 	return nil
 }
+
+func notBlank(variable, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return invalid(variable, "must not be blank")
+	}
+	return nil
+}

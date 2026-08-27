@@ -10,7 +10,7 @@ nexovue/
 ├─ apps/          runnable services
 ├─ packages/      shared contracts and libraries
 ├─ deploy/        compose, migrations, infrastructure config
-├─ tools/         demo app, load generator
+├─ tools/         demo app, load generator, end-to-end suite
 └─ docs/          product, architecture, delivery, research
 ```
 
@@ -57,7 +57,8 @@ apps/workers/
 ├─ internal/
 │  ├─ config/
 │  ├─ consume/                   consumer group, offset commit policy, dead-letter queue
-│  ├─ assemble/                  trace buffer, timeout eviction, latecomer spans
+│  ├─ assemble/                  trace buffer, timeout eviction, latecomer spans —
+│  │                             arrives with tail sampling in P1-21 (ADR 0054)
 │  ├─ enrich/                    deploy-version join, geo
 │  ├─ mask/                      PII rules (P1-24)
 │  ├─ sample/                    tail sampling policy (P1-21)

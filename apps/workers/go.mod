@@ -6,7 +6,10 @@ require (
 	github.com/ClickHouse/ch-go v0.74.0
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/lmittmann/tint v1.2.0
+	github.com/nexovue-tech/nexovue/packages/contracts v0.0.0
 	github.com/twmb/franz-go v1.21.6
+	go.opentelemetry.io/proto/otlp v1.11.0
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
@@ -17,6 +20,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.19.1 // indirect
@@ -31,8 +35,17 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
-	golang.org/x/mod v0.24.0 // indirect
+	golang.org/x/mod v0.37.0 // indirect
+	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/tools v0.31.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/tools v0.47.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260720211330-0afa2a65878a // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260720211330-0afa2a65878a // indirect
+	google.golang.org/grpc v1.82.1 // indirect
 )
+
+// packages/contracts is a workspace member, never published. The replace keeps
+// `go mod tidy` and any non-workspace build resolving it from the repo.
+replace github.com/nexovue-tech/nexovue/packages/contracts => ../../packages/contracts

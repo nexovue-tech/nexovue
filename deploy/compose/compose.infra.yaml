@@ -23,7 +23,9 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT
       KAFKA_LISTENERS: CONTROLLER://:9093,INTERNAL://:9092,HOST://:29092
       # Two client listeners: containers reach the broker as `kafka`, the host as localhost.
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,HOST://localhost:29092
+      # The advertised host port MUST match the published one — a client bootstraps, is told
+      # where to reconnect, and hangs if that address is not actually reachable.
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,HOST://localhost:${KAFKA_HOST_PORT:-19092}
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       # base64url of a 16-byte UUID — the only shape KRaft accepts as a cluster id.
       CLUSTER_ID: ${KAFKA_CLUSTER_ID:-fo8KHCs9Tl-KmwwdLj9KWw}

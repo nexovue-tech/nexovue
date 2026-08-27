@@ -25,7 +25,10 @@ func applyEnvironment(t *testing.T, values map[string]string) {
 	known := []string{
 		"ENV", "LOG_LEVEL", "LOG_FORMAT", "RECEIVER_OTLP_HTTP_ADDR",
 		"RECEIVER_HEALTH_ADDR", "KAFKA_BROKERS", "POSTGRES_DSN", "REDIS_URL",
-		"SHUTDOWN_TIMEOUT",
+		"KAFKA_SPANS_TOPIC", "RECEIVER_MAX_BODY_BYTES", "RECEIVER_MAX_DECODED_BODY_BYTES",
+		"RECEIVER_API_KEY_CACHE_TTL", "RECEIVER_API_KEY_CACHE_MAX_ENTRIES",
+		"RECEIVER_RATE_LIMIT_PER_SECOND", "RECEIVER_POSTGRES_MAX_CONNS",
+		"RECEIVER_POSTGRES_MIN_CONNS", "SHUTDOWN_TIMEOUT",
 	}
 	for _, key := range known {
 		if value, ok := values[key]; ok {
@@ -51,6 +54,25 @@ func TestLoadAcceptsTheMinimumEnvironment(t *testing.T) {
 	}
 	if cfg.HealthAddr == "" {
 		t.Error("HealthAddr is empty; the probe listener must have a default")
+	}
+	// Compose sets none of these, so every one of them needs a working default.
+	if cfg.SpansTopic != "spans-raw" {
+		t.Errorf("SpansTopic = %q, want the documented topic %q", cfg.SpansTopic, "spans-raw")
+	}
+	if cfg.MaxBodyBytes <= 0 || cfg.MaxDecodedBodyBytes < cfg.MaxBodyBytes {
+		t.Errorf("body limits = %d/%d, want a usable pair",
+			cfg.MaxBodyBytes, cfg.MaxDecodedBodyBytes)
+	}
+	if cfg.APIKeyCacheTTL <= 0 || cfg.APIKeyCacheTTL > config.MaxAPIKeyCacheTTL {
+		t.Errorf("APIKeyCacheTTL = %s, want a revocation window within %s",
+			cfg.APIKeyCacheTTL, config.MaxAPIKeyCacheTTL)
+	}
+	if cfg.RateLimitPerSecond <= 0 {
+		t.Errorf("RateLimitPerSecond = %d, want a positive default", cfg.RateLimitPerSecond)
+	}
+	if cfg.PostgresMinConns <= 0 || cfg.PostgresMinConns > cfg.PostgresMaxConns {
+		t.Errorf("pool bounds = %d/%d, want a usable pair",
+			cfg.PostgresMinConns, cfg.PostgresMaxConns)
 	}
 }
 
@@ -85,12 +107,18 @@ func TestLoadRejectsAnEmptySecret(t *testing.T) {
 
 func TestLoadRejectsMalformedValues(t *testing.T) {
 	cases := map[string]struct{ key, value string }{
-		"unknown environment":  {"ENV", "prod"},
-		"unknown log level":    {"LOG_LEVEL", "verbose"},
-		"unknown log format":   {"LOG_FORMAT", "logfmt"},
-		"address without port": {"RECEIVER_HEALTH_ADDR", "localhost"},
-		"blank broker":         {"KAFKA_BROKERS", "localhost:9092, "},
-		"zero timeout":         {"SHUTDOWN_TIMEOUT", "0s"},
+		"unknown environment":                   {"ENV", "prod"},
+		"unknown log level":                     {"LOG_LEVEL", "verbose"},
+		"unknown log format":                    {"LOG_FORMAT", "logfmt"},
+		"address without port":                  {"RECEIVER_HEALTH_ADDR", "localhost"},
+		"blank broker":                          {"KAFKA_BROKERS", "localhost:9092, "},
+		"zero timeout":                          {"SHUTDOWN_TIMEOUT", "0s"},
+		"blank topic":                           {"KAFKA_SPANS_TOPIC", "  "},
+		"zero body limit":                       {"RECEIVER_MAX_BODY_BYTES", "0"},
+		"decoded cap below the wire cap":        {"RECEIVER_MAX_DECODED_BODY_BYTES", "1024"},
+		"cache ttl past the revocation ceiling": {"RECEIVER_API_KEY_CACHE_TTL", "10m"},
+		"zero cache ceiling":                    {"RECEIVER_API_KEY_CACHE_MAX_ENTRIES", "0"},
+		"zero rate limit":                       {"RECEIVER_RATE_LIMIT_PER_SECOND", "0"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

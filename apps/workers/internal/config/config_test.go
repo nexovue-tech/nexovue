@@ -24,6 +24,8 @@ func applyEnvironment(t *testing.T, values map[string]string) {
 	known := []string{
 		"ENV", "LOG_LEVEL", "LOG_FORMAT", "WORKERS_HEALTH_ADDR", "KAFKA_BROKERS",
 		"CLICKHOUSE_DSN", "CLICKHOUSE_MAX_CONNS", "SHUTDOWN_TIMEOUT",
+		"WORKER_PIPELINES", "KAFKA_SPANS_TOPIC", "WORKERS_CONSUMER_GROUP",
+		"WORKERS_SPANS_BATCH_MAX_ROWS", "WORKERS_SPANS_BATCH_MAX_DELAY",
 	}
 	for _, key := range known {
 		if value, ok := values[key]; ok {
@@ -82,6 +84,11 @@ func TestLoadRejectsMalformedValues(t *testing.T) {
 		"unknown log level":    {"LOG_LEVEL", "verbose"},
 		"unknown log format":   {"LOG_FORMAT", "logfmt"},
 		"address without port": {"WORKERS_HEALTH_ADDR", "localhost"},
+		"unknown pipeline":     {"WORKER_PIPELINES", "trace-assembler"},
+		"blank spans topic":    {"KAFKA_SPANS_TOPIC", " "},
+		"blank consumer group": {"WORKERS_CONSUMER_GROUP", "  "},
+		"zero batch rows":      {"WORKERS_SPANS_BATCH_MAX_ROWS", "0"},
+		"zero batch delay":     {"WORKERS_SPANS_BATCH_MAX_DELAY", "0s"},
 		"wrong dsn scheme":     {"CLICKHOUSE_DSN", "postgresql://h:9000/nexovue"},
 		"dsn without database": {"CLICKHOUSE_DSN", "clickhouse://h:9000"},
 		"dsn without host":     {"CLICKHOUSE_DSN", "clickhouse:///nexovue"},
@@ -101,5 +108,43 @@ func TestLoadRejectsMalformedValues(t *testing.T) {
 				t.Errorf("Load() = %q, want the message to name %s", err, tc.key)
 			}
 		})
+	}
+}
+
+// Compose sets none of these, so every one of them needs a working default.
+func TestSpanIngestDefaultsLetAWorkerBootUnconfigured(t *testing.T) {
+	applyEnvironment(t, completeEnvironment())
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+
+	if cfg.Spans.Topic != "spans-raw" {
+		t.Errorf("Spans.Topic = %q, want spans-raw: it must match the receiver's default",
+			cfg.Spans.Topic)
+	}
+	if cfg.Spans.ConsumerGroup == "" {
+		t.Error("Spans.ConsumerGroup has no default; a worker would not join a group")
+	}
+	if cfg.Spans.MaxRows <= 0 {
+		t.Errorf("Spans.MaxRows = %d, want a positive default", cfg.Spans.MaxRows)
+	}
+	// Without this the p99 lag budget rests on a batch that a quiet tenant
+	// never fills.
+	if cfg.Spans.MaxDelay <= 0 {
+		t.Errorf("Spans.MaxDelay = %s, want a positive default", cfg.Spans.MaxDelay)
+	}
+}
+
+func TestPipelinesDefaultToAllOfThem(t *testing.T) {
+	applyEnvironment(t, completeEnvironment())
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+	if len(cfg.Pipelines) != len(config.AllPipelines) {
+		t.Errorf("Pipelines = %v, want all of %v", cfg.Pipelines, config.AllPipelines)
 	}
 }

@@ -33,6 +33,11 @@ ClickHouseDsn = Annotated[
 
 DEFAULT_CLICKHOUSE_HTTP_PORT: Final = 8123
 
+# Where a customer points their OTLP exporter in local development. Named here
+# rather than on the field alone so the seed can report it without building the
+# full settings object, which needs credentials the seed has no use for.
+DEFAULT_OTLP_ENDPOINT: Final = "http://localhost:14318"
+
 # Route prefix. Versioned from the very first route so no client is ever asked
 # to move later.
 API_PREFIX: Final = "/api/v1"
@@ -71,6 +76,10 @@ class Settings(BaseSettings):
     # --- sessions -----------------------------------------------------------
     session_ttl_seconds: Annotated[int, Field(gt=0)] = 60 * 60 * 24 * 7
 
+    # Where a customer points their OTLP exporter. Signup hands this back, so it
+    # has to name the receiver as the *customer* reaches it, not as we reach it.
+    otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT
+
     rate_limit_enabled: bool = True
     # How many proxies sit in front of us. Zero means X-Forwarded-For is a value
     # the client chose, and the direct peer is the only honest client address.
@@ -97,6 +106,11 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.env == "development"
+
+    @property
+    def session_cookie_secure(self) -> bool:
+        """Secure everywhere but development, which is served over plain http."""
+        return not self.is_development
 
 
 def describe_validation_error(error: ValidationError) -> str:

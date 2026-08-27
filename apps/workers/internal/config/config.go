@@ -57,6 +57,9 @@ type Config struct {
 	// Pipelines is PipelinesRaw parsed, so an unknown name fails at boot.
 	Pipelines []Pipeline `env:"-"`
 
+	// Spans configures the trace-assembly pipeline.
+	Spans SpanIngest
+
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"30s"`
 }
 
@@ -95,5 +98,6 @@ func (c Config) validate() error {
 		noBlankEntries("KAFKA_BROKERS", c.KafkaBrokers),
 		positiveCount("CLICKHOUSE_MAX_CONNS", int(c.ClickHouseMaxConns)),
 		positiveDuration("SHUTDOWN_TIMEOUT", c.ShutdownTimeout),
+		c.Spans.validate(),
 	)
 }

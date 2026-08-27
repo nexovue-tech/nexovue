@@ -19,7 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexovue_api.auth.sessions import Session, SessionStore, session_token_from_headers
 from nexovue_api.errors.exceptions import UnauthenticatedError
 from nexovue_api.lifespan import Resources
+from nexovue_api.settings import Settings
 from nexovue_api.telemetry.context import bind_tenant
+
+
+def get_app_settings(request: Request) -> Settings:
+    """The configuration this app was built with, not a fresh read of the env."""
+    settings: Settings = request.app.state.settings
+    return settings
 
 
 def get_resources(request: Request) -> Resources:
@@ -71,7 +78,9 @@ async def get_current_session(
     return session
 
 
+AppSettings = Annotated[Settings, Depends(get_app_settings)]
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 RedisClient = Annotated[Redis, Depends(get_redis)]
 ClickHouseClient = Annotated[AsyncClient, Depends(get_clickhouse)]
 CurrentSession = Annotated[Session, Depends(get_current_session)]
+SessionStoreDep = Annotated[SessionStore, Depends(get_session_store)]

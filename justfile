@@ -98,6 +98,17 @@ test-py:
 test-web:
     pnpm -r test
 
+# ---------- end to end ----------
+
+# Deliberately NOT part of `just check` — the pre-commit gate must not require docker.
+# Playwright against the running stack (P1-60). Bring the stack up first.
+e2e:
+    pnpm --filter @nexovue/e2e test
+
+# The same suite with a visible browser, for working on a failing spec
+e2e-headed:
+    pnpm --filter @nexovue/e2e test -- --headed
+
 # ---------- contracts ----------
 
 # Regenerate Go and Python bindings from the envelope proto

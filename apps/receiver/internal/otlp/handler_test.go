@@ -1,0 +1,523 @@
+package otlp_test
+
+import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/twmb/franz-go/pkg/kgo"
+	collectorpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/genproto/googleapis/rpc/code"
+	"google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
+	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
+
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ingest"
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/otlp"
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ratelimit"
+)
+
+const (
+	validKey   = "nvk_live_devlocaldevlocaldevloc"
+	orgID      = "01996d5e-8f00-7a11-9c3e-4b2f6a8d1e00"
+	projectID  = "01996d5e-9a40-7b22-8d4f-5c3a7b9e2f11"
+	spansTopic = "spans-raw"
+
+	contentTypeProtobuf = "application/x-protobuf"
+	contentTypeJSON     = "application/json"
+)
+
+// --- doubles -----------------------------------------------------------------
+
+type staticKeys struct{}
+
+func (staticKeys) CredentialFor(_ context.Context, prefix string) (auth.Credential, error) {
+	if prefix != validKey[:auth.LookupPrefixLength] {
+		return auth.Credential{Found: false}, nil
+	}
+	return auth.Credential{
+		Identity: auth.Identity{OrgID: orgID, ProjectID: projectID},
+		KeyHash:  auth.HashKey(validKey),
+		Found:    true,
+	}, nil
+}
+
+type unreachableKeys struct{}
+
+func (unreachableKeys) CredentialFor(context.Context, string) (auth.Credential, error) {
+	return auth.Credential{}, errors.New("dial tcp: connection refused")
+}
+
+// countingProducer records what reached the broker, and whether the body had
+// been read by the time it did.
+type countingProducer struct {
+	records []*kgo.Record
+	err     error
+}
+
+func (p *countingProducer) ProduceSync(_ context.Context, records ...*kgo.Record) kgo.ProduceResults {
+	if p.err != nil {
+		return kgo.ProduceResults{{Err: p.err}}
+	}
+	p.records = append(p.records, records...)
+	results := make(kgo.ProduceResults, 0, len(records))
+	for _, record := range records {
+		results = append(results, kgo.ProduceResult{Record: record})
+	}
+	return results
+}
+
+// countingCounter returns an ever-increasing count, so a test seeds `seen` to
+// place a request either inside or past its window's budget.
+type countingCounter struct {
+	seen int64
+}
+
+func (c *countingCounter) Increment(context.Context, string, time.Duration) (int64, error) {
+	c.seen++
+	return c.seen, nil
+}
+
+type brokenCounter struct{}
+
+func (brokenCounter) Increment(context.Context, string, time.Duration) (int64, error) {
+	return 0, errors.New("dial tcp: connection refused")
+}
+
+// --- fixtures ----------------------------------------------------------------
+
+type door struct {
+	handler  http.Handler
+	producer *countingProducer
+}
+
+type doorOptions struct {
+	keys           auth.KeyReader
+	counter        ratelimit.Counter
+	requestsPerSec int
+	produceErr     error
+	maxBodyBytes   int64
+}
+
+func newDoor(t *testing.T, opts doorOptions) door {
+	t.Helper()
+	if opts.keys == nil {
+		opts.keys = staticKeys{}
+	}
+	if opts.counter == nil {
+		opts.counter = &countingCounter{}
+	}
+	if opts.requestsPerSec == 0 {
+		opts.requestsPerSec = 1000
+	}
+	if opts.maxBodyBytes == 0 {
+		opts.maxBodyBytes = 1 << 20
+	}
+
+	producer := &countingProducer{err: opts.produceErr}
+	return door{
+		producer: producer,
+		handler: otlp.Handler(otlp.Options{
+			Authenticator: auth.New(opts.keys, auth.Options{
+				CacheTTL: time.Minute, CacheMaxEntries: 100,
+			}),
+			Limiter:             ratelimit.New(opts.counter, opts.requestsPerSec),
+			Publisher:           ingest.NewPublisher(producer, spansTopic),
+			Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+			MaxBodyBytes:        opts.maxBodyBytes,
+			MaxDecodedBodyBytes: opts.maxBodyBytes * 4,
+		}),
+	}
+}
+
+func traceID(marker byte) []byte {
+	id := make([]byte, 16)
+	for i := range id {
+		id[i] = marker
+	}
+	return id
+}
+
+func exportRequest(traceIDs ...[]byte) *collectorpb.ExportTraceServiceRequest {
+	spans := make([]*tracepb.Span, 0, len(traceIDs))
+	for _, id := range traceIDs {
+		spans = append(spans, &tracepb.Span{Name: "handler", TraceId: id, SpanId: make([]byte, 8)})
+	}
+	return &collectorpb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{
+			SchemaUrl:  "https://opentelemetry.io/schemas/1.43.0",
+			ScopeSpans: []*tracepb.ScopeSpans{{Spans: spans}},
+		}},
+	}
+}
+
+func encodedRequest(t *testing.T, request *collectorpb.ExportTraceServiceRequest) []byte {
+	t.Helper()
+	body, err := proto.Marshal(request)
+	if err != nil {
+		t.Fatalf("encoding request: %v", err)
+	}
+	return body
+}
+
+func post(t *testing.T, d door, body []byte, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, otlp.TracesPath, bytes.NewReader(body))
+	request.Header.Set("Content-Type", contentTypeProtobuf)
+	request.Header.Set(auth.HeaderName, validKey)
+	for name, value := range headers {
+		if value == "" {
+			request.Header.Del(name)
+			continue
+		}
+		request.Header.Set(name, value)
+	}
+
+	recorder := httptest.NewRecorder()
+	d.handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// --- the happy path ----------------------------------------------------------
+
+func TestAcceptedBatchIsSplitOneEnvelopePerTrace(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+	first, second := traceID(0x11), traceID(0x22)
+
+	response := post(t, d, encodedRequest(t, exportRequest(first, second, first)), nil)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", response.Code, http.StatusOK, response.Body)
+	}
+	if len(d.producer.records) != 2 {
+		t.Fatalf("produced %d records, want one per trace id", len(d.producer.records))
+	}
+
+	keys := map[string]bool{}
+	for _, record := range d.producer.records {
+		keys[string(record.Key)] = true
+		if record.Topic != spansTopic {
+			t.Errorf("topic = %q, want %q", record.Topic, spansTopic)
+		}
+		var envelope nexovuev1.Envelope
+		if err := proto.Unmarshal(record.Value, &envelope); err != nil {
+			t.Fatalf("record is not an Envelope: %v", err)
+		}
+		if envelope.GetTenantId() != orgID || envelope.GetProjectId() != projectID {
+			t.Errorf("envelope tenancy = %s/%s, want %s/%s",
+				envelope.GetTenantId(), envelope.GetProjectId(), orgID, projectID)
+		}
+	}
+	if len(keys) != 2 {
+		t.Errorf("keys = %v, want two distinct trace ids", keys)
+	}
+}
+
+func TestSuccessAnswersWithAnUnsetPartialSuccess(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+
+	response := post(t, d, encodedRequest(t, exportRequest(traceID(0x11))), nil)
+
+	if got := response.Header().Get("Content-Type"); got != contentTypeProtobuf {
+		t.Errorf("Content-Type = %q, want the request's %q", got, contentTypeProtobuf)
+	}
+	var body collectorpb.ExportTraceServiceResponse
+	if err := proto.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("success body is not an ExportTraceServiceResponse: %v", err)
+	}
+	if body.GetPartialSuccess() != nil {
+		t.Errorf("partial_success = %v, want unset: everything was accepted", body.GetPartialSuccess())
+	}
+}
+
+func TestJSONRequestIsAcceptedAndAnsweredInJSON(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+	body, err := protojson.Marshal(exportRequest(traceID(0x33)))
+	if err != nil {
+		t.Fatalf("encoding JSON request: %v", err)
+	}
+
+	response := post(t, d, body, map[string]string{"Content-Type": contentTypeJSON})
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", response.Code, http.StatusOK, response.Body)
+	}
+	if got := response.Header().Get("Content-Type"); got != contentTypeJSON {
+		t.Errorf("Content-Type = %q, want the request's %q", got, contentTypeJSON)
+	}
+	var accepted collectorpb.ExportTraceServiceResponse
+	if err := protojson.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatalf("success body is not JSON OTLP: %v", err)
+	}
+	if len(d.producer.records) != 1 {
+		t.Errorf("produced %d records, want 1", len(d.producer.records))
+	}
+}
+
+func TestGzippedRequestIsAccepted(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write(encodedRequest(t, exportRequest(traceID(0x44)))); err != nil {
+		t.Fatalf("compressing: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("closing gzip writer: %v", err)
+	}
+
+	response := post(t, d, compressed.Bytes(), map[string]string{"Content-Encoding": "gzip"})
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", response.Code, http.StatusOK, response.Body)
+	}
+	if len(d.producer.records) != 1 {
+		t.Errorf("produced %d records, want 1: the SDKs gzip by default", len(d.producer.records))
+	}
+}
+
+func TestBatchWithNoSpansIsAcceptedAndPublishesNothing(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+
+	response := post(t, d, encodedRequest(t, &collectorpb.ExportTraceServiceRequest{}), nil)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", response.Code, http.StatusOK, response.Body)
+	}
+	if len(d.producer.records) != 0 {
+		t.Errorf("produced %d records for a batch with no spans", len(d.producer.records))
+	}
+}
+
+// --- failures ----------------------------------------------------------------
+
+// rpcStatus decodes the body every OTLP failure must carry.
+func rpcStatus(t *testing.T, response *httptest.ResponseRecorder) *status.Status {
+	t.Helper()
+	var decoded status.Status
+	if err := proto.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("failure body is not a google.rpc.Status: %v (%q)", err, response.Body.String())
+	}
+	return &decoded
+}
+
+func TestUnusableKeyIsRefusedWithoutReachingTheBroker(t *testing.T) {
+	cases := map[string]string{
+		"absent":    "",
+		"malformed": "not-a-nexovue-key",
+		"unknown":   "nvk_live_absentabsentabsentabse",
+	}
+	for name, key := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := newDoor(t, doorOptions{})
+
+			response := post(t, d, encodedRequest(t, exportRequest(traceID(0x11))),
+				map[string]string{auth.HeaderName: key})
+
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+			}
+			if got := rpcStatus(t, response).GetCode(); got != int32(code.Code_UNAUTHENTICATED) {
+				t.Errorf("status code = %d, want UNAUTHENTICATED", got)
+			}
+			if len(d.producer.records) != 0 {
+				t.Error("an unauthenticated request reached the broker")
+			}
+		})
+	}
+}
+
+// An unreachable control plane is our failure: 503 is retryable where 401 is not.
+func TestUnreachableControlPlaneIsRetryable(t *testing.T) {
+	d := newDoor(t, doorOptions{keys: unreachableKeys{}})
+
+	response := post(t, d, encodedRequest(t, exportRequest(traceID(0x11))), nil)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	if response.Header().Get("Retry-After") == "" {
+		t.Error("a 503 must tell the client how long to wait")
+	}
+}
+
+func TestOverLimitIsRefusedBeforeTheBodyIsRead(t *testing.T) {
+	d := newDoor(t, doorOptions{counter: &countingCounter{seen: 5}, requestsPerSec: 1})
+
+	// A body far larger than the cap: if it were read, the answer would be 413.
+	response := post(t, d, bytes.Repeat([]byte{0}, 4<<20), nil)
+
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d: the limiter must answer before decoding",
+			response.Code, http.StatusTooManyRequests)
+	}
+	if got := response.Header().Get("Retry-After"); got != "1" {
+		t.Errorf("Retry-After = %q, want %q", got, "1")
+	}
+	if got := rpcStatus(t, response).GetCode(); got != int32(code.Code_RESOURCE_EXHAUSTED) {
+		t.Errorf("status code = %d, want RESOURCE_EXHAUSTED", got)
+	}
+}
+
+// A Valkey outage must not become an ingest outage.
+func TestUnavailableLimiterFailsOpen(t *testing.T) {
+	d := newDoor(t, doorOptions{counter: brokenCounter{}})
+
+	response := post(t, d, encodedRequest(t, exportRequest(traceID(0x11))), nil)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: telemetry must survive a limiter blip",
+			response.Code, http.StatusOK)
+	}
+	if len(d.producer.records) != 1 {
+		t.Errorf("produced %d records, want 1", len(d.producer.records))
+	}
+}
+
+func TestMalformedPayloadIsNotRetryable(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+
+	response := post(t, d, []byte("this is not protobuf at all"), nil)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	if got := rpcStatus(t, response).GetCode(); got != int32(code.Code_INVALID_ARGUMENT) {
+		t.Errorf("status code = %d, want INVALID_ARGUMENT", got)
+	}
+	if len(d.producer.records) != 0 {
+		t.Error("a malformed payload reached the broker")
+	}
+}
+
+func TestSpanWithAnUnroutableTraceIDIsRefused(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+	request := exportRequest(make([]byte, 8)) // not 16 bytes
+
+	response := post(t, d, encodedRequest(t, request), nil)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	if len(d.producer.records) != 0 {
+		t.Error("a span that cannot be partitioned reached the broker")
+	}
+}
+
+func TestOversizedBodyIsRefused(t *testing.T) {
+	d := newDoor(t, doorOptions{maxBodyBytes: 512})
+
+	response := post(t, d, bytes.Repeat([]byte{0}, 4096), nil)
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusRequestEntityTooLarge)
+	}
+	if len(d.producer.records) != 0 {
+		t.Error("an oversized body reached the broker")
+	}
+}
+
+func TestUnsupportedEncodingsAreRefused(t *testing.T) {
+	cases := map[string]map[string]string{
+		"content type":     {"Content-Type": "application/xml"},
+		"content encoding": {"Content-Encoding": "br"},
+	}
+	for name, headers := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := newDoor(t, doorOptions{})
+
+			response := post(t, d, encodedRequest(t, exportRequest(traceID(0x11))), headers)
+
+			if response.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusUnsupportedMediaType)
+			}
+			if rpcStatus(t, response).GetMessage() == "" {
+				t.Error("a failure must say why")
+			}
+		})
+	}
+}
+
+// An absent Content-Type is read as protobuf, OTLP/HTTP's binary default.
+func TestAbsentContentTypeIsTreatedAsProtobuf(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+
+	response := post(t, d, encodedRequest(t, exportRequest(traceID(0x11))),
+		map[string]string{"Content-Type": ""})
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", response.Code, http.StatusOK, response.Body)
+	}
+}
+
+func TestBrokerRefusalIsReportedAsRetryable(t *testing.T) {
+	d := newDoor(t, doorOptions{produceErr: errors.New("kafka: not leader for partition")})
+
+	response := post(t, d, encodedRequest(t, exportRequest(traceID(0x11))), nil)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d: the request must not be acked", response.Code,
+			http.StatusServiceUnavailable)
+	}
+	if response.Header().Get("Retry-After") == "" {
+		t.Error("a 503 must tell the client how long to wait")
+	}
+	if got := rpcStatus(t, response).GetCode(); got != int32(code.Code_UNAVAILABLE) {
+		t.Errorf("status code = %d, want UNAVAILABLE", got)
+	}
+}
+
+// A JSON caller gets a JSON failure: OTLP requires the response to use the same
+// Content-Type as the request, failures included.
+func TestJSONRequestGetsAJSONFailure(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+
+	response := post(t, d, []byte("{"), map[string]string{"Content-Type": contentTypeJSON})
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	if got := response.Header().Get("Content-Type"); got != contentTypeJSON {
+		t.Errorf("Content-Type = %q, want %q", got, contentTypeJSON)
+	}
+	var decoded status.Status
+	if err := protojson.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("failure body is not a JSON google.rpc.Status: %v (%q)", err, response.Body)
+	}
+}
+
+// A credential must never reach a log or an error body.
+func TestFailureBodiesNeverEchoTheKey(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+
+	response := post(t, d, []byte("nonsense"), map[string]string{auth.HeaderName: validKey})
+
+	if strings.Contains(response.Body.String(), validKey) {
+		t.Error("the failure body echoed the ingest key")
+	}
+}
+
+func TestOnlyPostIsRouted(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+	request := httptest.NewRequest(http.MethodGet, otlp.TracesPath, nil)
+	request.Header.Set(auth.HeaderName, validKey)
+
+	recorder := httptest.NewRecorder()
+	d.handler.ServeHTTP(recorder, request)
+
+	if recorder.Code == http.StatusOK {
+		t.Error("GET /v1/traces was accepted; OTLP/HTTP is POST only")
+	}
+}

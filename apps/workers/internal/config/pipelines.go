@@ -47,7 +47,7 @@ func ParsePipelines(raw string) ([]Pipeline, error) {
 		if !slices.Contains(AllPipelines, p) {
 			return nil, fmt.Errorf(
 				"WORKER_PIPELINES: unknown pipeline %q; valid names are %s",
-				name, joinPipelines(AllPipelines))
+				name, JoinPipelines(AllPipelines))
 		}
 		if !slices.Contains(selected, p) {
 			selected = append(selected, p)
@@ -56,7 +56,9 @@ func ParsePipelines(raw string) ([]Pipeline, error) {
 	return selected, nil
 }
 
-func joinPipelines(ps []Pipeline) string {
+// JoinPipelines renders a pipeline set as a comma-separated list, for error
+// messages and for the line a worker logs at boot.
+func JoinPipelines(ps []Pipeline) string {
 	names := make([]string, len(ps))
 	for i, p := range ps {
 		names[i] = string(p)
