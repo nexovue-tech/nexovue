@@ -79,11 +79,35 @@ func TestSummaryIsWrittenEvenWhenNothingArrives(t *testing.T) {
 	}
 }
 
+// Every door reports its own count, or a door that has silently stopped taking
+// data is invisible behind the totals of the ones that have not.
+func TestSummaryReportsEveryDoorSeparately(t *testing.T) {
+	traffic := otlp.NewTraffic()
+	traffic.Accepted(otlp.Spans, 3)
+	traffic.Accepted(otlp.LogRecords, 11)
+
+	line := summaryLine(t, runSummary(t, traffic))
+
+	want := map[string]float64{
+		"accepted_spans":       3,
+		"accepted_log_records": 11,
+		"accepted_data_points": 0,
+		"refused_spans":        0,
+		"refused_log_records":  0,
+		"refused_data_points":  0,
+	}
+	for field, expected := range want {
+		if line[field] != expected {
+			t.Errorf("%s = %v, want %v", field, line[field], expected)
+		}
+	}
+}
+
 func TestSummaryReportsWhatTheWindowSaw(t *testing.T) {
 	traffic := otlp.NewTraffic()
-	traffic.Accepted(7)
-	traffic.Accepted(3)
-	traffic.Refused("throttled", 5)
+	traffic.Accepted(otlp.Spans, 7)
+	traffic.Accepted(otlp.Spans, 3)
+	traffic.Refused(otlp.Spans, "throttled", 5)
 
 	line := summaryLine(t, runSummary(t, traffic))
 
@@ -104,7 +128,7 @@ func TestSummaryReportsWhatTheWindowSaw(t *testing.T) {
 
 func TestSummaryCountsAreThisWindowOnly(t *testing.T) {
 	traffic := otlp.NewTraffic()
-	traffic.Accepted(4)
+	traffic.Accepted(otlp.Spans, 4)
 
 	lines := recordedLines(t, runSummary(t, traffic))
 
@@ -127,11 +151,11 @@ func TestSummaryCountsAreThisWindowOnly(t *testing.T) {
 func TestRepeatedRefusalsAreCountedNotLogged(t *testing.T) {
 	traffic := otlp.NewTraffic()
 
-	if !traffic.Refused("unavailable", 1) {
+	if !traffic.Refused(otlp.Spans, "unavailable", 1) {
 		t.Fatal("the first refusal of a reason must be worth a line, or the outage is silent")
 	}
 	for range 100 {
-		if traffic.Refused("unavailable", 1) {
+		if traffic.Refused(otlp.Spans, "unavailable", 1) {
 			t.Fatal("every refusal wanted its own line; a broker outage would flood the log " +
 				"it is diagnosed from")
 		}

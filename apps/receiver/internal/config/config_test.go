@@ -25,7 +25,8 @@ func applyEnvironment(t *testing.T, values map[string]string) {
 	known := []string{
 		"ENV", "LOG_LEVEL", "LOG_FORMAT", "RECEIVER_OTLP_HTTP_ADDR",
 		"RECEIVER_OTLP_GRPC_ADDR", "RECEIVER_HEALTH_ADDR", "KAFKA_BROKERS", "POSTGRES_DSN", "REDIS_URL",
-		"KAFKA_SPANS_TOPIC", "RECEIVER_MAX_BODY_BYTES", "RECEIVER_MAX_DECODED_BODY_BYTES",
+		"KAFKA_SPANS_TOPIC", "KAFKA_LOGS_TOPIC", "KAFKA_METRICS_TOPIC",
+		"RECEIVER_MAX_BODY_BYTES", "RECEIVER_MAX_DECODED_BODY_BYTES",
 		"RECEIVER_API_KEY_CACHE_TTL", "RECEIVER_API_KEY_CACHE_MAX_ENTRIES",
 		"RECEIVER_RATE_LIMIT_PER_SECOND", "RECEIVER_POSTGRES_MAX_CONNS",
 		"RECEIVER_POSTGRES_MIN_CONNS", "SHUTDOWN_TIMEOUT",
@@ -64,8 +65,21 @@ func TestLoadAcceptsTheMinimumEnvironment(t *testing.T) {
 			cfg.OTLPHTTPAddr, cfg.OTLPGRPCAddr, ":4318", ":4317")
 	}
 	// Compose sets none of these, so every one of them needs a working default.
-	if cfg.SpansTopic != "spans-raw" {
-		t.Errorf("SpansTopic = %q, want the documented topic %q", cfg.SpansTopic, "spans-raw")
+	topics := map[string]string{
+		"KAFKA_SPANS_TOPIC":   cfg.SpansTopic,
+		"KAFKA_LOGS_TOPIC":    cfg.LogsTopic,
+		"KAFKA_METRICS_TOPIC": cfg.MetricsTopic,
+	}
+	for variable, configured := range topics {
+		want := map[string]string{
+			"KAFKA_SPANS_TOPIC":   "spans-raw",
+			"KAFKA_LOGS_TOPIC":    "logs-raw",
+			"KAFKA_METRICS_TOPIC": "metrics-raw",
+		}[variable]
+		if configured != want {
+			t.Errorf("%s = %q, want the topic deploy/kafka/topics.sh creates, %q",
+				variable, configured, want)
+		}
 	}
 	if cfg.MaxBodyBytes <= 0 || cfg.MaxDecodedBodyBytes < cfg.MaxBodyBytes {
 		t.Errorf("body limits = %d/%d, want a usable pair",
@@ -122,7 +136,9 @@ func TestLoadRejectsMalformedValues(t *testing.T) {
 		"grpc address without port":             {"RECEIVER_OTLP_GRPC_ADDR", "localhost"},
 		"blank broker":                          {"KAFKA_BROKERS", "localhost:9092, "},
 		"zero timeout":                          {"SHUTDOWN_TIMEOUT", "0s"},
-		"blank topic":                           {"KAFKA_SPANS_TOPIC", "  "},
+		"blank spans topic":                     {"KAFKA_SPANS_TOPIC", "  "},
+		"blank logs topic":                      {"KAFKA_LOGS_TOPIC", "  "},
+		"blank metrics topic":                   {"KAFKA_METRICS_TOPIC", "  "},
 		"zero body limit":                       {"RECEIVER_MAX_BODY_BYTES", "0"},
 		"decoded cap below the wire cap":        {"RECEIVER_MAX_DECODED_BODY_BYTES", "1024"},
 		"cache ttl past the revocation ceiling": {"RECEIVER_API_KEY_CACHE_TTL", "10m"},

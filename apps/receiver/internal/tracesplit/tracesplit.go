@@ -13,10 +13,11 @@ package tracesplit
 import (
 	"encoding/hex"
 	"errors"
-	"strings"
 
 	collectorpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
+
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/semconv"
 )
 
 // traceIDLength is the width OTLP fixes for a trace id.
@@ -126,7 +127,8 @@ func (g *traceGroup) add(
 	destination.Spans = append(destination.Spans, span)
 
 	if g.semconvVersion == "" {
-		g.semconvVersion = semconvVersion(scopeSpans.GetSchemaUrl(), resourceSpans.GetSchemaUrl())
+		g.semconvVersion = semconv.FromSchemaURLs(
+			scopeSpans.GetSchemaUrl(), resourceSpans.GetSchemaUrl())
 	}
 }
 
@@ -167,20 +169,4 @@ func (g *traceGroup) result() Group {
 		SemconvVersion: g.semconvVersion,
 		Request:        g.request,
 	}
-}
-
-// semconvVersion reads the convention generation out of the first schema URL
-// that carries one. The scope's URL wins: it is the one that describes the span
-// data, while the resource's describes only the resource attributes.
-func semconvVersion(schemaURLs ...string) string {
-	for _, schemaURL := range schemaURLs {
-		if schemaURL == "" {
-			continue
-		}
-		// A schema URL ends in its version: http[s]://server[:port]/path/<version>.
-		if version := schemaURL[strings.LastIndex(schemaURL, "/")+1:]; version != "" {
-			return version
-		}
-	}
-	return ""
 }

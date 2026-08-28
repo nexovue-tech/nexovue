@@ -30,15 +30,16 @@ const (
 	maxConnectionAgeGrace = 5 * time.Minute
 )
 
-// GRPCServer is the OTLP/gRPC door. Its lifecycle mirrors *http.Server's so the
-// process starts and drains every listener the same way.
+// GRPCServer is the OTLP/gRPC transport, serving all three collector services.
+// Its lifecycle mirrors *http.Server's so the process starts and drains every
+// listener the same way.
 type GRPCServer struct {
 	addr   string
 	server *grpc.Server
 }
 
-// NewGRPCServer returns the OTLP/gRPC door bound to addr, running the same gate
-// chain as the HTTP one.
+// NewGRPCServer returns the OTLP/gRPC listener bound to addr, running the same
+// gate chain the HTTP doors run.
 func NewGRPCServer(addr string, opts Options) *GRPCServer {
 	server := grpc.NewServer(
 		// Stated rather than inherited: grpc-go's own default is 4 MiB, and it
@@ -60,8 +61,7 @@ func NewGRPCServer(addr string, opts Options) *GRPCServer {
 		}),
 	)
 
-	desc := serviceDesc()
-	server.RegisterService(&desc, &traceExporter{opts: opts})
+	registerExporters(server, opts)
 	return &GRPCServer{addr: addr, server: server}
 }
 

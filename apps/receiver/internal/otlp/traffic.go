@@ -32,24 +32,45 @@ var (
 	degradationReasons = []string{reasonLimiterDown}
 )
 
+// Unit is what one signal's telemetry is counted in — the thing a customer
+// would actually lose, and the unit OTLP's own partial_success counts
+// rejections in. It is also the summary field each count appears under, so one
+// door's throughput is queryable by name.
+type Unit string
+
+const (
+	Spans      Unit = "spans"
+	LogRecords Unit = "log_records"
+	DataPoints Unit = "data_points"
+)
+
+// units fixes the summary's shape on the signal axis, the way refusalReasons
+// does on the reason axis: every window reports every door, so a door that took
+// nothing shows a zero rather than a missing field. A door absent from this
+// table would count nothing, which is the failure the summary exists to catch.
+var units = []Unit{Spans, LogRecords, DataPoints}
+
 // Summary line fields. Names follow the control plane's request log so all three
 // services answer one query.
 const (
 	fieldAcceptedRequests = "accepted_requests"
-	fieldAcceptedSpans    = "accepted_spans"
 	fieldRefusedRequests  = "refused_requests"
-	fieldRefusedSpans     = "refused_spans"
 	fieldDurationMillis   = "duration_ms"
 	fieldMethod           = "method"
 	fieldPath             = "path"
 	fieldStatus           = "status"
-	fieldSpans            = "spans"
 	fieldReason           = "reason"
 	fieldError            = "error"
 
-	// refusedPrefix turns a reason into its summary field, so the two names
+	// fieldItems is the telemetry count on one event line. The line's path says
+	// which door it came from, so the field itself stays signal-neutral and one
+	// query reads every door.
+	fieldItems = "items"
+
+	// These turn a unit or a reason into its summary field, so the two names
 	// cannot drift apart.
-	refusedPrefix = "refused_"
+	acceptedPrefix = "accepted_"
+	refusedPrefix  = "refused_"
 )
 
 // Log messages. Fixed strings, because a grep for one of them has to find every
@@ -69,14 +90,22 @@ const (
 // reason: a broker outage refuses every request, and a line per refusal would
 // turn one incident into two.
 type Traffic struct {
+	// Requests are counted across every door: a request is a request whatever
+	// signal it carried. Telemetry is counted per door, because a logs door
+	// that has gone silent is invisible in a total the traces door dominates.
 	acceptedRequests atomic.Int64
-	acceptedSpans    atomic.Int64
 	refusedRequests  atomic.Int64
-	refusedSpans     atomic.Int64
 
-	// Keys are fixed at construction, so concurrent writers only touch the
-	// counters, never the map.
+	// Keys of both maps are fixed at construction, so concurrent writers only
+	// touch the counters, never the maps.
+	items   map[Unit]*itemCounts
 	tallies map[string]*tally
+}
+
+// itemCounts is one signal's telemetry for the window.
+type itemCounts struct {
+	accepted atomic.Int64
+	refused  atomic.Int64
 }
 
 // tally is one reason's count for the window, plus whether it has already been
@@ -86,9 +115,16 @@ type tally struct {
 	logged atomic.Bool
 }
 
-// NewTraffic returns an empty tally with every reason already present.
+// NewTraffic returns an empty tally with every door and every reason already
+// present.
 func NewTraffic() *Traffic {
-	traffic := &Traffic{tallies: make(map[string]*tally)}
+	traffic := &Traffic{
+		items:   make(map[Unit]*itemCounts),
+		tallies: make(map[string]*tally),
+	}
+	for _, unit := range units {
+		traffic.items[unit] = &itemCounts{}
+	}
 	for _, reason := range refusalReasons {
 		traffic.tallies[reason] = &tally{}
 	}
@@ -98,17 +134,21 @@ func NewTraffic() *Traffic {
 	return traffic
 }
 
-// Accepted records an export the door published.
-func (t *Traffic) Accepted(spans int) {
+// Accepted records an export the door published, in the unit that door counts.
+func (t *Traffic) Accepted(unit Unit, items int) {
 	t.acceptedRequests.Add(1)
-	t.acceptedSpans.Add(int64(spans))
+	if counted, known := t.items[unit]; known {
+		counted.accepted.Add(int64(items))
+	}
 }
 
 // Refused records an export the door turned away, reporting whether this is the
 // first of its reason in the current window and therefore worth a log line.
-func (t *Traffic) Refused(reason string, spans int) bool {
+func (t *Traffic) Refused(unit Unit, reason string, items int) bool {
 	t.refusedRequests.Add(1)
-	t.refusedSpans.Add(int64(spans))
+	if counted, known := t.items[unit]; known {
+		counted.refused.Add(int64(items))
+	}
 	return t.note(reason)
 }
 
@@ -152,10 +192,14 @@ func (t *Traffic) LogSummaryEvery(ctx context.Context, log *slog.Logger, every t
 func (t *Traffic) logSummary(ctx context.Context, log *slog.Logger, window time.Duration) {
 	attrs := []any{
 		slog.Int64(fieldAcceptedRequests, t.acceptedRequests.Swap(0)),
-		slog.Int64(fieldAcceptedSpans, t.acceptedSpans.Swap(0)),
 		slog.Int64(fieldRefusedRequests, t.refusedRequests.Swap(0)),
-		slog.Int64(fieldRefusedSpans, t.refusedSpans.Swap(0)),
 		slog.Int64(fieldDurationMillis, window.Milliseconds()),
+	}
+	for _, unit := range units {
+		counted := t.items[unit]
+		attrs = append(attrs,
+			slog.Int64(acceptedPrefix+string(unit), counted.accepted.Swap(0)),
+			slog.Int64(refusedPrefix+string(unit), counted.refused.Swap(0)))
 	}
 	for _, reason := range refusalReasons {
 		attrs = append(attrs, slog.Int64(refusedPrefix+reason, t.take(reason)))

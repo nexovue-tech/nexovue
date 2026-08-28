@@ -48,9 +48,11 @@ type Config struct {
 	PostgresDSN  string   `env:"POSTGRES_DSN,required,notEmpty"`
 	RedisURL     string   `env:"REDIS_URL,required,notEmpty"`
 
-	// SpansTopic is where split trace envelopes are published. Configuration
-	// rather than a literal, so a deployment can rename a topic without a build.
-	SpansTopic string `env:"KAFKA_SPANS_TOPIC" envDefault:"spans-raw"`
+	// Where each signal's envelopes are published. Configuration rather than
+	// literals, so a deployment can rename a topic without a build.
+	SpansTopic   string `env:"KAFKA_SPANS_TOPIC" envDefault:"spans-raw"`
+	LogsTopic    string `env:"KAFKA_LOGS_TOPIC" envDefault:"logs-raw"`
+	MetricsTopic string `env:"KAFKA_METRICS_TOPIC" envDefault:"metrics-raw"`
 
 	// KafkaMaxBufferedBytes caps what the producer holds while the broker is
 	// behind. franz-go buffers without limit by default, so an outage would grow
@@ -149,6 +151,8 @@ func (c Config) validate() error {
 		connectionURL("POSTGRES_DSN", c.PostgresDSN, "postgres", "postgresql"),
 		connectionURL("REDIS_URL", c.RedisURL, "redis", "rediss"),
 		notBlank("KAFKA_SPANS_TOPIC", c.SpansTopic),
+		notBlank("KAFKA_LOGS_TOPIC", c.LogsTopic),
+		notBlank("KAFKA_METRICS_TOPIC", c.MetricsTopic),
 		positiveSize("RECEIVER_MAX_BODY_BYTES", c.MaxBodyBytes),
 		positiveSize("RECEIVER_MAX_DECODED_BODY_BYTES", c.MaxDecodedBodyBytes),
 		atLeastSize("RECEIVER_MAX_DECODED_BODY_BYTES", c.MaxDecodedBodyBytes,

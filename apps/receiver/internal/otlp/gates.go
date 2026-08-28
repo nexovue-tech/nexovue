@@ -7,18 +7,17 @@ import (
 	"net/http"
 	"time"
 
-	collectorpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/genproto/googleapis/rpc/code"
 
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/logging"
-	"github.com/nexovue-tech/nexovue/apps/receiver/internal/tracesplit"
 )
 
-// The gate chain, written once for every transport. HTTP and gRPC differ only
-// in where the credential is read from and how a verdict is rendered on the
-// wire; what the gates decide is the same code for both, which is what keeps a
-// second transport from becoming a second pipeline.
+// The gate chain, written once for every door and every transport. HTTP and
+// gRPC differ only in where the credential is read from and how a verdict is
+// rendered on the wire, and the three signals differ only in what they decode;
+// what the gates decide is the same code for all of them, which is what keeps a
+// second transport or a third signal from becoming a second pipeline.
 
 // refusal is a gate's verdict in OTLP's own terms, before a transport renders
 // it. The rpc code is the protocol's, not HTTP's, because it is the one both
@@ -99,47 +98,15 @@ func (o Options) throttle(ctx context.Context) *refusal {
 	return nil
 }
 
-// acceptTraces is the last two gates, normalize and produce. It returns only
-// once the broker holds every envelope, so a transport never acknowledges a
-// batch the receiver failed to hand on.
-func (o Options) acceptTraces(
-	ctx context.Context,
-	receivedAt time.Time,
-	request *collectorpb.ExportTraceServiceRequest,
-) *refusal {
-	groups, err := tracesplit.ByTraceID(request)
-	if err != nil {
-		return refuse(code.Code_INVALID_ARGUMENT, err.Error())
-	}
-
-	identity, _ := auth.FromContext(ctx)
-	if err := o.Publisher.PublishTraces(ctx, identity, receivedAt, groups); err != nil {
-		return refuseUntil(code.Code_UNAVAILABLE, messageBrokerDown, brokerRetryAfter).
-			because(err)
-	}
-	return nil
-}
-
-// spanCount is how much telemetry one export carried. It is what the summary
-// counts, because a batch is not a unit anyone cares about losing — spans are.
-func spanCount(request *collectorpb.ExportTraceServiceRequest) int {
-	spans := 0
-	for _, resource := range request.GetResourceSpans() {
-		for _, scope := range resource.GetScopeSpans() {
-			spans += len(scope.GetSpans())
-		}
-	}
-	return spans
-}
-
 // record is the door's one accounting point: every export ends here, accepted or
-// refused, and the summary is written from what it counted.
+// refused, and the summary is written from what it counted. path is the
+// transport's own spelling of the endpoint, unit the signal's telemetry unit.
 //
 // A refusal writes at most one line per reason per summary window, at the level
 // the control plane's request log would give its status: ERROR for a fault of
 // ours, WARN for the caller's. The rest are counted — a broker outage refusing
 // every request must not also flood the log it would be diagnosed from.
-func (o Options) record(ctx context.Context, path string, spans int, refused *refusal) {
+func (o Options) record(ctx context.Context, path string, unit Unit, items int, refused *refusal) {
 	httpStatus := http.StatusOK
 	if refused != nil {
 		httpStatus = httpStatusFor(refused.code)
@@ -148,18 +115,18 @@ func (o Options) record(ctx context.Context, path string, spans int, refused *re
 		slog.String(fieldMethod, http.MethodPost),
 		slog.String(fieldPath, path),
 		slog.Int(fieldStatus, httpStatus),
-		slog.Int(fieldSpans, spans),
+		slog.Int(fieldItems, items),
 		slog.Int64(fieldDurationMillis, time.Since(startedAt(ctx)).Milliseconds()),
 	}
 
 	if refused == nil {
-		o.Traffic.Accepted(spans)
+		o.Traffic.Accepted(unit, items)
 		o.Logger.DebugContext(ctx, acceptedMessage, attrs...)
 		return
 	}
 
 	reason := reasonFor(refused.code)
-	if !o.Traffic.Refused(reason, spans) {
+	if !o.Traffic.Refused(unit, reason, items) {
 		return
 	}
 	attrs = append(attrs, slog.String(fieldReason, reason))

@@ -30,14 +30,21 @@ import (
 )
 
 const (
-	validKey   = "nvk_live_devlocaldevlocaldevloc"
-	orgID      = "01996d5e-8f00-7a11-9c3e-4b2f6a8d1e00"
-	projectID  = "01996d5e-9a40-7b22-8d4f-5c3a7b9e2f11"
-	spansTopic = "spans-raw"
+	validKey  = "nvk_live_devlocaldevlocaldevloc"
+	orgID     = "01996d5e-8f00-7a11-9c3e-4b2f6a8d1e00"
+	projectID = "01996d5e-9a40-7b22-8d4f-5c3a7b9e2f11"
+
+	spansTopic   = "spans-raw"
+	logsTopic    = "logs-raw"
+	metricsTopic = "metrics-raw"
 
 	contentTypeProtobuf = "application/x-protobuf"
 	contentTypeJSON     = "application/json"
 )
+
+// testTopics gives each signal a distinct topic, so a batch published to the
+// wrong one shows up as the wrong name rather than as no name at all.
+var testTopics = ingest.Topics{Spans: spansTopic, Logs: logsTopic, Metrics: metricsTopic}
 
 // --- doubles -----------------------------------------------------------------
 
@@ -138,6 +145,9 @@ type doorOptions struct {
 
 	// log replaces the discarding default when a test reads what was written.
 	log *slog.Logger
+
+	// traffic replaces the default when a test reads the summary the door wrote.
+	traffic *otlp.Traffic
 }
 
 // testProduceBudget is long enough that a working broker never trips it, short
@@ -164,6 +174,9 @@ func (o *doorOptions) applyDefaults() {
 	if o.log == nil {
 		o.log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	if o.traffic == nil {
+		o.traffic = otlp.NewTraffic()
+	}
 }
 
 func newDoor(t *testing.T, opts doorOptions) door {
@@ -178,9 +191,9 @@ func newDoor(t *testing.T, opts doorOptions) door {
 				CacheTTL: time.Minute, CacheMaxEntries: 100,
 			}),
 			Limiter:             ratelimit.New(opts.counter, opts.requestsPerSec),
-			Publisher:           ingest.NewPublisher(publishingTo(producer, opts), spansTopic, opts.produceBudget),
+			Publisher:           ingest.NewPublisher(publishingTo(producer, opts), testTopics, opts.produceBudget),
 			Logger:              opts.log,
-			Traffic:             otlp.NewTraffic(),
+			Traffic:             opts.traffic,
 			MaxBodyBytes:        opts.maxBodyBytes,
 			MaxDecodedBodyBytes: opts.maxBodyBytes * 4,
 		}),
@@ -217,9 +230,23 @@ func encodedRequest(t *testing.T, request *collectorpb.ExportTraceServiceRequest
 	return body
 }
 
+// post sends an export to the traces door, which is the one most tests exercise.
 func post(t *testing.T, d door, body []byte, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	request := httptest.NewRequest(http.MethodPost, otlp.TracesPath, bytes.NewReader(body))
+	return postTo(t, d, otlp.TracesPath, body, headers)
+}
+
+// postTo sends an export to one named door, with the dev key and protobuf
+// encoding unless a header says otherwise. A header set to "" is removed.
+func postTo(
+	t *testing.T,
+	d door,
+	path string,
+	body []byte,
+	headers map[string]string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
 	request.Header.Set("Content-Type", contentTypeProtobuf)
 	request.Header.Set(auth.HeaderName, validKey)
 	for name, value := range headers {

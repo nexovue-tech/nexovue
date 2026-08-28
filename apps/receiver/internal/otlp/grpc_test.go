@@ -51,9 +51,9 @@ func newGRPCDoor(t *testing.T, opts doorOptions) grpcDoor {
 			CacheTTL: time.Minute, CacheMaxEntries: 100,
 		}),
 		Limiter:             ratelimit.New(opts.counter, opts.requestsPerSec),
-		Publisher:           ingest.NewPublisher(publishingTo(producer, opts), spansTopic, opts.produceBudget),
+		Publisher:           ingest.NewPublisher(publishingTo(producer, opts), testTopics, opts.produceBudget),
 		Logger:              opts.log,
-		Traffic:             otlp.NewTraffic(),
+		Traffic:             opts.traffic,
 		MaxBodyBytes:        opts.maxBodyBytes,
 		MaxDecodedBodyBytes: opts.maxBodyBytes * 4,
 	})
@@ -127,11 +127,11 @@ func (rawCodec) Unmarshal(data []byte, v any) error {
 	return nil
 }
 
-// exportRaw sends bytes the server has to make sense of on its own.
-func (d grpcDoor) exportRaw(t *testing.T, payload []byte) error {
+// invokeRaw sends bytes one named method has to make sense of on its own.
+func (d grpcDoor) invokeRaw(t *testing.T, method string, payload []byte) error {
 	t.Helper()
 	var reply []byte
-	return d.conn.Invoke(callContext(t, validKey), exportMethod, payload, &reply,
+	return d.conn.Invoke(callContext(t, validKey), method, payload, &reply,
 		grpc.ForceCodec(rawCodec{}))
 }
 
@@ -321,7 +321,7 @@ func TestGRPCMalformedPayloadIsNotRetryable(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			d := newGRPCDoor(t, doorOptions{})
 
-			err := d.exportRaw(t, payload)
+			err := d.invokeRaw(t, exportMethod, payload)
 
 			if got := grpcStatus(t, err).Code(); got != codes.InvalidArgument {
 				t.Errorf("code = %v, want %v", got, codes.InvalidArgument)
@@ -352,7 +352,7 @@ func TestGRPCSpanWithAnUnroutableTraceIDIsRefused(t *testing.T) {
 func TestGRPCOversizedExportIsRefused(t *testing.T) {
 	d := newGRPCDoor(t, doorOptions{maxBodyBytes: 512})
 
-	err := d.exportRaw(t, make([]byte, 4096)) // past 512 * 4
+	err := d.invokeRaw(t, exportMethod, make([]byte, 4096)) // past 512 * 4
 
 	if got := grpcStatus(t, err).Code(); got != codes.ResourceExhausted {
 		t.Errorf("code = %v, want %v", got, codes.ResourceExhausted)

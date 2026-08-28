@@ -1,15 +1,20 @@
 // Package otlp is door 1: the OTLP endpoint customer SDKs export to, over both
-// transports the protocol defines — HTTP on 4318 and gRPC on 4317.
+// transports the protocol defines — HTTP on 4318 and gRPC on 4317 — for all
+// three signals it defines: traces, logs and metrics.
 //
 // Gates run in order and the order is load-bearing:
 //
 //	auth -> ratelimit -> decode -> normalize -> produce
 //
-// Authentication comes first so the endpoint never exists unauthenticated, and
+// Authentication comes first so no endpoint ever exists unauthenticated, and
 // the limiter comes before the payload is read so a tenant over its limit costs
 // us a Valkey round trip rather than a megabyte of parsing. The gates live in
-// gates.go and both transports run the same ones: only where the credential is
-// read from and how a verdict is written differ.
+// gates.go and every door runs the same ones over both transports: only where
+// the credential is read from and how a verdict is written differ.
+//
+// What each signal does differently — the request it decodes, the unit it
+// counts, whether it is split before publishing — lives in signals.go, and is
+// the only place a fourth signal would touch.
 //
 // Failures answer in OTLP's own terms rather than problem+json: the callers are
 // SDKs, and the protocol defines what they will understand.
@@ -21,16 +26,13 @@ import (
 	"net/http"
 	"time"
 
-	collectorpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/genproto/googleapis/rpc/code"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ingest"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ratelimit"
 )
-
-// TracesPath is the OTLP/HTTP endpoint for the SPANS signal, fixed by the spec.
-const TracesPath = "/v1/traces"
 
 // brokerRetryAfter is what a client is told to wait when the broker would not
 // take the batch. Long enough to be worth a pause, short enough that a restart
@@ -41,11 +43,10 @@ const brokerRetryAfter = 5 * time.Second
 // caller whether a key was missing, malformed or merely unknown helps only an
 // attacker enumerating keys.
 const (
-	messageUnauthenticated  = "invalid or missing " + auth.HeaderName + " credential"
-	messageThrottled        = "ingest rate limit exceeded for this key"
-	messageBrokerDown       = "ingestion buffer unavailable, retry"
-	messageUnavailable      = "receiver cannot serve this request, retry"
-	messageMalformedPayload = "request is not a valid ExportTraceServiceRequest"
+	messageUnauthenticated = "invalid or missing " + auth.HeaderName + " credential"
+	messageThrottled       = "ingest rate limit exceeded for this key"
+	messageBrokerDown      = "ingestion buffer unavailable, retry"
+	messageUnavailable     = "receiver cannot serve this request, retry"
 )
 
 // Options are the collaborators and limits the door needs. All are required.
@@ -69,8 +70,19 @@ func (o Options) limits() bodyLimits {
 // Handler serves the OTLP/HTTP endpoints behind the gate chain.
 func Handler(opts Options) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("POST "+TracesPath, timed(authenticate(opts, throttle(opts, traces(opts)))))
+	route(mux, opts, tracesDoor)
+	route(mux, opts, logsDoor)
+	route(mux, opts, metricsDoor)
 	return mux
+}
+
+// route mounts one signal's endpoint behind the full chain. POST only, which is
+// the only method OTLP/HTTP defines.
+func route[Request proto.Message](mux *http.ServeMux, opts Options, door signalDoor[Request]) {
+	mux.Handle("POST "+door.httpPath,
+		timed(authenticate(opts, door.endpoint,
+			throttle(opts, door.endpoint,
+				export(opts, door)))))
 }
 
 // timed stamps when the request entered the door, so every gate below reports
@@ -83,11 +95,11 @@ func timed(next http.Handler) http.Handler {
 
 // authenticate reads the credential out of the request header and hands the
 // verdict to the shared gate.
-func authenticate(opts Options, next http.Handler) http.Handler {
+func authenticate(opts Options, at endpoint, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, refused := opts.authenticate(r.Context(), r.Header.Get(auth.HeaderName))
 		if refused != nil {
-			opts.record(ctx, TracesPath, spansNotRead, refused)
+			opts.record(ctx, at.httpPath, at.unit, itemsNotRead, refused)
 			writeRefusal(w, replyCodec(r), refused)
 			return
 		}
@@ -95,10 +107,10 @@ func authenticate(opts Options, next http.Handler) http.Handler {
 	})
 }
 
-func throttle(opts Options, next http.Handler) http.Handler {
+func throttle(opts Options, at endpoint, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if refused := opts.throttle(r.Context()); refused != nil {
-			opts.record(r.Context(), TracesPath, spansNotRead, refused)
+			opts.record(r.Context(), at.httpPath, at.unit, itemsNotRead, refused)
 			writeRefusal(w, replyCodec(r), refused)
 			return
 		}
@@ -106,15 +118,15 @@ func throttle(opts Options, next http.Handler) http.Handler {
 	})
 }
 
-// spansNotRead is what an export refused before its body was read contributes.
-// refused_spans is therefore a floor, not a total — the refused_requests count
-// beside it is the one that covers every refusal.
-const spansNotRead = 0
+// itemsNotRead is what an export refused before its body was read contributes.
+// Each refused_<unit> count is therefore a floor, not a total — the
+// refused_requests count beside it is the one that covers every refusal.
+const itemsNotRead = 0
 
-// traces is the remaining three gates: decode, normalize, produce. Decoding is
+// export is the remaining three gates: decode, normalize, produce. Decoding is
 // the transport's own work — over gRPC the framework does it — so it lives here
 // rather than in the shared chain.
-func traces(opts Options) http.Handler {
+func export[Request proto.Message](opts Options, door signalDoor[Request]) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedAt := time.Now()
 
@@ -122,7 +134,7 @@ func traces(opts Options) http.Handler {
 		if err != nil {
 			// Answered as 415 rather than the code's usual 400, so writeStatus
 			// is called directly; the tally still sees it.
-			opts.record(r.Context(), TracesPath, spansNotRead,
+			opts.record(r.Context(), door.httpPath, door.unit, itemsNotRead,
 				refuse(code.Code_INVALID_ARGUMENT, err.Error()).because(err))
 			writeStatus(w, protobufCodec, http.StatusUnsupportedMediaType,
 				code.Code_INVALID_ARGUMENT, err.Error())
@@ -131,29 +143,29 @@ func traces(opts Options) http.Handler {
 
 		body, err := readBody(w, r, opts.limits())
 		if err != nil {
-			opts.record(r.Context(), TracesPath, spansNotRead,
+			opts.record(r.Context(), door.httpPath, door.unit, itemsNotRead,
 				refuse(code.Code_INVALID_ARGUMENT, messageUnreadableRequest).because(err))
 			writeBodyFailure(w, encoding, err)
 			return
 		}
 
-		var request collectorpb.ExportTraceServiceRequest
-		if err := encoding.unmarshal(body, &request); err != nil {
-			opts.record(r.Context(), TracesPath, spansNotRead,
-				refuse(code.Code_INVALID_ARGUMENT, messageMalformedPayload).because(err))
+		request := door.newRequest()
+		if err := encoding.unmarshal(body, request); err != nil {
+			opts.record(r.Context(), door.httpPath, door.unit, itemsNotRead,
+				refuse(code.Code_INVALID_ARGUMENT, door.malformedMessage).because(err))
 			writeStatus(w, encoding, http.StatusBadRequest,
-				code.Code_INVALID_ARGUMENT, messageMalformedPayload)
+				code.Code_INVALID_ARGUMENT, door.malformedMessage)
 			return
 		}
 
-		spans := spanCount(&request)
-		if refused := opts.acceptTraces(r.Context(), receivedAt, &request); refused != nil {
-			opts.record(r.Context(), TracesPath, spans, refused)
+		items := door.countItems(request)
+		if refused := door.accept(r.Context(), opts, receivedAt, request); refused != nil {
+			opts.record(r.Context(), door.httpPath, door.unit, items, refused)
 			writeRefusal(w, encoding, refused)
 			return
 		}
 
-		opts.writeAccepted(w, r, encoding, spans)
+		opts.writeAccepted(w, r, encoding, door.endpoint, door.newResponse(), items)
 	})
 }
 
@@ -180,20 +192,27 @@ func writeBodyFailure(w http.ResponseWriter, encoding codec, err error) {
 	}
 }
 
-// writeAccepted is OTLP's success: an ExportTraceServiceResponse with
+// writeAccepted is OTLP's success: the signal's own Export…ServiceResponse with
 // partial_success left unset, which is what "we took all of it" means.
-func (o Options) writeAccepted(w http.ResponseWriter, r *http.Request, encoding codec, spans int) {
-	body, err := encoding.marshal(&collectorpb.ExportTraceServiceResponse{})
+func (o Options) writeAccepted(
+	w http.ResponseWriter,
+	r *http.Request,
+	encoding codec,
+	at endpoint,
+	response proto.Message,
+	items int,
+) {
+	body, err := encoding.marshal(response)
 	if err != nil {
 		// The batch is published but the caller will never hear so. Counted as
 		// our fault, because that is what it is.
-		o.record(r.Context(), TracesPath, spans,
+		o.record(r.Context(), at.httpPath, at.unit, items,
 			refuse(code.Code_INTERNAL, messageUnavailable).because(err))
 		writeStatus(w, encoding, http.StatusInternalServerError,
 			code.Code_INTERNAL, messageUnavailable)
 		return
 	}
-	o.record(r.Context(), TracesPath, spans, nil)
+	o.record(r.Context(), at.httpPath, at.unit, items, nil)
 	w.Header().Set(headerContentType, encoding.contentType)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)

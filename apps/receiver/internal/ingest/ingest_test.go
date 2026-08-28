@@ -8,7 +8,11 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	logscollectorpb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	metricscollectorpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectorpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
 
@@ -20,7 +24,9 @@ import (
 )
 
 const (
-	spansTopic = "spans-raw"
+	spansTopic   = "spans-raw"
+	logsTopic    = "logs-raw"
+	metricsTopic = "metrics-raw"
 
 	// testBudget is long enough that a working producer never trips it, short
 	// enough that a test proving the bound does not stall the suite.
@@ -28,6 +34,10 @@ const (
 	orgID      = "01996d5e-8f00-7a11-9c3e-4b2f6a8d1e00"
 	projectID  = "01996d5e-9a40-7b22-8d4f-5c3a7b9e2f11"
 )
+
+// testTopics is the topic set every test publishes into, so a record landing on
+// the wrong one is visible as the wrong name rather than as no name at all.
+var testTopics = ingest.Topics{Spans: spansTopic, Logs: logsTopic, Metrics: metricsTopic}
 
 // fakeProducer records what would have been published.
 type fakeProducer struct {
@@ -67,7 +77,7 @@ func TestPublishTracesWrapsEachTraceInAnEnvelope(t *testing.T) {
 	producer := &fakeProducer{}
 	receivedAt := time.Unix(1787649300, 430_000_000)
 
-	err := ingest.NewPublisher(producer, spansTopic, testBudget).PublishTraces(
+	err := ingest.NewPublisher(producer, testTopics, testBudget).PublishTraces(
 		context.Background(), identity(), receivedAt, []tracesplit.Group{groupFor("aabb", "1.43.0")},
 	)
 	if err != nil {
@@ -127,7 +137,7 @@ func TestPublishTracesWrapsEachTraceInAnEnvelope(t *testing.T) {
 func TestPublishTracesGivesEveryEnvelopeItsOwnIngestID(t *testing.T) {
 	producer := &fakeProducer{}
 
-	err := ingest.NewPublisher(producer, spansTopic, testBudget).PublishTraces(
+	err := ingest.NewPublisher(producer, testTopics, testBudget).PublishTraces(
 		context.Background(), identity(), time.Now(),
 		[]tracesplit.Group{groupFor("aa", ""), groupFor("bb", "")},
 	)
@@ -151,7 +161,7 @@ func TestPublishTracesGivesEveryEnvelopeItsOwnIngestID(t *testing.T) {
 func TestPublishTracesDoesNothingForAnEmptyBatch(t *testing.T) {
 	producer := &fakeProducer{}
 
-	err := ingest.NewPublisher(producer, spansTopic, testBudget).PublishTraces(
+	err := ingest.NewPublisher(producer, testTopics, testBudget).PublishTraces(
 		context.Background(), identity(), time.Now(), nil,
 	)
 	if err != nil {
@@ -164,7 +174,7 @@ func TestPublishTracesDoesNothingForAnEmptyBatch(t *testing.T) {
 
 func TestPublishTracesReportsABrokerRefusal(t *testing.T) {
 	refused := errors.New("kafka: not leader for partition")
-	publisher := ingest.NewPublisher(&fakeProducer{err: refused}, spansTopic, testBudget)
+	publisher := ingest.NewPublisher(&fakeProducer{err: refused}, testTopics, testBudget)
 
 	err := publisher.PublishTraces(
 		context.Background(), identity(), time.Now(), []tracesplit.Group{groupFor("aa", "")},
@@ -228,7 +238,7 @@ func (c *countingFailure) ProduceSync(_ context.Context, records ...*kgo.Record)
 
 func TestPublishTracesGivesUpOnItsBudgetRatherThanBlocking(t *testing.T) {
 	producer := &stallingProducer{}
-	publisher := ingest.NewPublisher(producer, spansTopic, testBudget)
+	publisher := ingest.NewPublisher(producer, testTopics, testBudget)
 
 	done := make(chan error, 1)
 	go func() {
@@ -252,7 +262,7 @@ func TestPublishTracesGivesUpOnItsBudgetRatherThanBlocking(t *testing.T) {
 
 func TestPublishTracesDoesNotRetryWhenNothingWasPublished(t *testing.T) {
 	producer := &countingFailure{}
-	publisher := ingest.NewPublisher(producer, spansTopic, testBudget)
+	publisher := ingest.NewPublisher(producer, testTopics, testBudget)
 
 	err := publisher.PublishTraces(
 		context.Background(), identity(), time.Now(),
@@ -269,7 +279,7 @@ func TestPublishTracesDoesNotRetryWhenNothingWasPublished(t *testing.T) {
 
 func TestPublishTracesRetriesOnlyTheRecordsThatFailed(t *testing.T) {
 	producer := &partialProducer{}
-	publisher := ingest.NewPublisher(producer, spansTopic, testBudget)
+	publisher := ingest.NewPublisher(producer, testTopics, testBudget)
 
 	err := publisher.PublishTraces(
 		context.Background(), identity(), time.Now(),
@@ -284,5 +294,139 @@ func TestPublishTracesRetriesOnlyTheRecordsThatFailed(t *testing.T) {
 	if len(producer.calls[1]) != 1 {
 		t.Errorf("retry carried %d records, want only the 1 that failed: republishing what already "+
 			"landed would duplicate it", len(producer.calls[1]))
+	}
+}
+
+// --- batches forwarded whole -------------------------------------------------
+
+func logsRequest() *logscollectorpb.ExportLogsServiceRequest {
+	return &logscollectorpb.ExportLogsServiceRequest{
+		ResourceLogs: []*logspb.ResourceLogs{{
+			ScopeLogs: []*logspb.ScopeLogs{{
+				LogRecords: []*logspb.LogRecord{{SeverityText: "ERROR"}, {SeverityText: "WARN"}},
+			}},
+		}},
+	}
+}
+
+func TestPublishBatchWrapsALogExportInOneEnvelope(t *testing.T) {
+	producer := &fakeProducer{}
+	receivedAt := time.Unix(1787649300, 430_000_000)
+	request := logsRequest()
+
+	err := ingest.NewPublisher(producer, testTopics, testBudget).PublishBatch(
+		context.Background(), identity(), receivedAt, ingest.Batch{
+			Signal:         nexovuev1.Signal_SIGNAL_LOGS,
+			SemconvVersion: "1.43.0",
+			Request:        request,
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishBatch() = %v, want no error", err)
+	}
+	if len(producer.records) != 1 {
+		t.Fatalf("produced %d records, want 1: logs forward as received, never split",
+			len(producer.records))
+	}
+
+	record := producer.records[0]
+	if record.Topic != logsTopic {
+		t.Errorf("topic = %q, want the configured %q", record.Topic, logsTopic)
+	}
+	if string(record.Key) != orgID {
+		t.Errorf("key = %q, want the tenant id %q: the envelope contract fixes this key",
+			record.Key, orgID)
+	}
+
+	var envelope nexovuev1.Envelope
+	if err := proto.Unmarshal(record.Value, &envelope); err != nil {
+		t.Fatalf("record value is not an Envelope: %v", err)
+	}
+	if envelope.GetSignal() != nexovuev1.Signal_SIGNAL_LOGS {
+		t.Errorf("signal = %v, want SIGNAL_LOGS", envelope.GetSignal())
+	}
+	if envelope.GetTenantId() != orgID || envelope.GetProjectId() != projectID {
+		t.Errorf("envelope tenancy = %s/%s, want %s/%s",
+			envelope.GetTenantId(), envelope.GetProjectId(), orgID, projectID)
+	}
+	if envelope.GetReceivedAtUnixNano() != receivedAt.UnixNano() {
+		t.Errorf("received_at_unix_nano = %d, want %d",
+			envelope.GetReceivedAtUnixNano(), receivedAt.UnixNano())
+	}
+	if envelope.GetSemconvVersion() != "1.43.0" {
+		t.Errorf("semconv_version = %q, want the version the payload declared",
+			envelope.GetSemconvVersion())
+	}
+	if envelope.GetIngestId() == "" {
+		t.Error("ingest_id is empty; DLQ correlation depends on it")
+	}
+
+	var payload logscollectorpb.ExportLogsServiceRequest
+	if err := proto.Unmarshal(envelope.GetPayload(), &payload); err != nil {
+		t.Fatalf("payload is not an ExportLogsServiceRequest: %v", err)
+	}
+	if !proto.Equal(&payload, request) {
+		t.Error("the payload was modified in transit; logs forward as received")
+	}
+}
+
+func TestPublishBatchSendsMetricsToTheMetricsTopic(t *testing.T) {
+	producer := &fakeProducer{}
+
+	err := ingest.NewPublisher(producer, testTopics, testBudget).PublishBatch(
+		context.Background(), identity(), time.Now(), ingest.Batch{
+			Signal: nexovuev1.Signal_SIGNAL_METRICS,
+			Request: &metricscollectorpb.ExportMetricsServiceRequest{
+				ResourceMetrics: []*metricspb.ResourceMetrics{{}},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishBatch() = %v, want no error", err)
+	}
+	if len(producer.records) != 1 {
+		t.Fatalf("produced %d records, want 1", len(producer.records))
+	}
+	if producer.records[0].Topic != metricsTopic {
+		t.Errorf("topic = %q, want %q: a message on the wrong topic is a parse crash downstream",
+			producer.records[0].Topic, metricsTopic)
+	}
+
+	var envelope nexovuev1.Envelope
+	if err := proto.Unmarshal(producer.records[0].Value, &envelope); err != nil {
+		t.Fatalf("record value is not an Envelope: %v", err)
+	}
+	if envelope.GetSignal() != nexovuev1.Signal_SIGNAL_METRICS {
+		t.Errorf("signal = %v, want SIGNAL_METRICS", envelope.GetSignal())
+	}
+}
+
+// A signal with no topic is our bug, and publishing it somewhere plausible would
+// hide it until a consumer failed to parse the message.
+func TestPublishBatchRefusesASignalWithNoTopic(t *testing.T) {
+	producer := &fakeProducer{}
+
+	err := ingest.NewPublisher(producer, testTopics, testBudget).PublishBatch(
+		context.Background(), identity(), time.Now(),
+		ingest.Batch{Signal: nexovuev1.Signal_SIGNAL_UNSPECIFIED, Request: logsRequest()},
+	)
+	if err == nil {
+		t.Fatal("PublishBatch() = nil for an unmapped signal, want a refusal")
+	}
+	if len(producer.records) != 0 {
+		t.Error("an unmapped signal reached the broker")
+	}
+}
+
+func TestPublishBatchReportsABrokerRefusal(t *testing.T) {
+	refused := errors.New("kafka: not leader for partition")
+	publisher := ingest.NewPublisher(&fakeProducer{err: refused}, testTopics, testBudget)
+
+	err := publisher.PublishBatch(
+		context.Background(), identity(), time.Now(),
+		ingest.Batch{Signal: nexovuev1.Signal_SIGNAL_LOGS, Request: logsRequest()},
+	)
+	if !errors.Is(err, refused) {
+		t.Fatalf("PublishBatch() = %v, want the broker failure: the request must not be acked", err)
 	}
 }

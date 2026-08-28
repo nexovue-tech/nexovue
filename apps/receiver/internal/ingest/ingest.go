@@ -27,17 +27,37 @@ type Producer interface {
 	ProduceSync(ctx context.Context, records ...*kgo.Record) kgo.ProduceResults
 }
 
-// Publisher publishes envelopes to the ingestion topics.
-type Publisher struct {
-	producer   Producer
-	spansTopic string
-	budget     time.Duration
+// Topics names where each signal's envelopes are published. One topic per
+// signal, so a consumer subscribes to the shape it knows how to read.
+type Topics struct {
+	Spans   string
+	Logs    string
+	Metrics string
 }
 
-// NewPublisher returns a publisher writing spans to spansTopic, spending at most
-// budget on any one publish before it reports failure.
-func NewPublisher(producer Producer, spansTopic string, budget time.Duration) *Publisher {
-	return &Publisher{producer: producer, spansTopic: spansTopic, budget: budget}
+// Publisher publishes envelopes to the ingestion topics.
+type Publisher struct {
+	producer Producer
+	topics   Topics
+	budget   time.Duration
+}
+
+// NewPublisher returns a publisher writing to topics, spending at most budget on
+// any one publish before it reports failure.
+func NewPublisher(producer Producer, topics Topics, budget time.Duration) *Publisher {
+	return &Publisher{producer: producer, topics: topics, budget: budget}
+}
+
+// Batch is one export forwarded exactly as it arrived: the signal it carries,
+// the OTLP request itself, and the convention generation it declares.
+//
+// Only traces are split before publishing, because trace assembly depends on
+// Kafka partitioning by trace id. Logs and metrics have no such requirement, so
+// they travel as one envelope per export.
+type Batch struct {
+	Signal         nexovuev1.Signal
+	SemconvVersion string
+	Request        proto.Message
 }
 
 // PublishTraces sends one envelope per trace, keyed by trace id so that every
@@ -50,10 +70,6 @@ func (p *Publisher) PublishTraces(
 	receivedAt time.Time,
 	groups []tracesplit.Group,
 ) error {
-	if len(groups) == 0 {
-		return nil
-	}
-
 	records := make([]*kgo.Record, 0, len(groups))
 	for _, group := range groups {
 		record, err := p.spanRecord(identity, receivedAt, group)
@@ -61,6 +77,55 @@ func (p *Publisher) PublishTraces(
 			return err
 		}
 		records = append(records, record)
+	}
+	return p.publish(ctx, p.topics.Spans, records)
+}
+
+// PublishBatch sends one export on whole, keyed by tenant id: nothing downstream
+// of a log or metric batch reassembles it, so the only thing partitioning owes
+// is that one tenant's data stays together.
+//
+// It returns only once the broker has acknowledged the message.
+func (p *Publisher) PublishBatch(
+	ctx context.Context,
+	identity auth.Identity,
+	receivedAt time.Time,
+	batch Batch,
+) error {
+	topic, err := p.topicFor(batch.Signal)
+	if err != nil {
+		return err
+	}
+
+	record, err := p.batchRecord(topic, identity, receivedAt, batch)
+	if err != nil {
+		return err
+	}
+	return p.publish(ctx, topic, []*kgo.Record{record})
+}
+
+// topicFor names the topic a signal is published to. An unmapped signal is our
+// bug, and publishing it to the wrong topic would be a parse crash downstream.
+func (p *Publisher) topicFor(signal nexovuev1.Signal) (string, error) {
+	switch signal {
+	case nexovuev1.Signal_SIGNAL_SPANS:
+		return p.topics.Spans, nil
+	case nexovuev1.Signal_SIGNAL_LOGS:
+		return p.topics.Logs, nil
+	case nexovuev1.Signal_SIGNAL_METRICS:
+		return p.topics.Metrics, nil
+	case nexovuev1.Signal_SIGNAL_UNSPECIFIED:
+		fallthrough
+	default:
+		return "", fmt.Errorf("no ingestion topic for signal %s", signal)
+	}
+}
+
+// publish hands records to the broker and returns only once it holds every one
+// of them, or the attempt is out of budget.
+func (p *Publisher) publish(ctx context.Context, topic string, records []*kgo.Record) error {
+	if len(records) == 0 {
+		return nil
 	}
 
 	// One budget for the whole publish. franz-go blocks a produce once its buffer
@@ -83,7 +148,7 @@ func (p *Publisher) PublishTraces(
 		}
 		if len(failed) == len(remaining) || attempt >= produceAttempts || ctx.Err() != nil {
 			return fmt.Errorf("producing %d of %d records to %s: %w",
-				len(failed), len(records), p.spansTopic, failed[0].err)
+				len(failed), len(records), topic, failed[0].err)
 		}
 		remaining = make([]*kgo.Record, 0, len(failed))
 		for _, outcome := range failed {
@@ -116,14 +181,49 @@ func unpublished(results kgo.ProduceResults) []outcome {
 	return failed
 }
 
+// spanRecord addresses one trace's envelope by trace id, so that every span of a
+// trace lands on the partition the assembler will read it from.
 func (p *Publisher) spanRecord(
 	identity auth.Identity,
 	receivedAt time.Time,
 	group tracesplit.Group,
 ) (*kgo.Record, error) {
-	payload, err := proto.Marshal(group.Request)
+	record, err := recordFor(p.topics.Spans, group.TraceID, identity, receivedAt, Batch{
+		Signal:         nexovuev1.Signal_SIGNAL_SPANS,
+		SemconvVersion: group.SemconvVersion,
+		Request:        group.Request,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("encoding trace %s: %w", group.TraceID, err)
+		return nil, fmt.Errorf("trace %s: %w", group.TraceID, err)
+	}
+	return record, nil
+}
+
+func (p *Publisher) batchRecord(
+	topic string,
+	identity auth.Identity,
+	receivedAt time.Time,
+	batch Batch,
+) (*kgo.Record, error) {
+	// Keyed by tenant so one customer's batches stay in order relative to each
+	// other; the envelope contract fixes this key
+	// (docs/architecture/ingestion-envelope.md).
+	return recordFor(topic, identity.OrgID, identity, receivedAt, batch)
+}
+
+// recordFor wraps an OTLP payload in the frozen envelope, addressed to topic
+// under key. The payload itself is never modified: the envelope carries only our
+// metadata around the bytes the customer's SDK produced.
+func recordFor(
+	topic string,
+	key string,
+	identity auth.Identity,
+	receivedAt time.Time,
+	batch Batch,
+) (*kgo.Record, error) {
+	payload, err := proto.Marshal(batch.Request)
+	if err != nil {
+		return nil, fmt.Errorf("encoding %s payload: %w", batch.Signal, err)
 	}
 
 	ingestID, err := uuid.NewV7()
@@ -135,19 +235,15 @@ func (p *Publisher) spanRecord(
 		TenantId:           identity.OrgID,
 		ProjectId:          identity.ProjectID,
 		Door:               nexovuev1.Door_DOOR_OTLP,
-		Signal:             nexovuev1.Signal_SIGNAL_SPANS,
+		Signal:             batch.Signal,
 		ReceivedAtUnixNano: receivedAt.UnixNano(),
 		IngestId:           ingestID.String(),
-		SemconvVersion:     group.SemconvVersion,
+		SemconvVersion:     batch.SemconvVersion,
 		Payload:            payload,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("encoding envelope for trace %s: %w", group.TraceID, err)
+		return nil, fmt.Errorf("encoding envelope for %s: %w", batch.Signal, err)
 	}
 
-	return &kgo.Record{
-		Topic: p.spansTopic,
-		Key:   []byte(group.TraceID),
-		Value: envelope,
-	}, nil
+	return &kgo.Record{Topic: topic, Key: []byte(key), Value: envelope}, nil
 }

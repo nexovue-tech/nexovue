@@ -85,8 +85,12 @@ func run() error {
 			CacheTTL:        cfg.APIKeyCacheTTL,
 			CacheMaxEntries: cfg.APIKeyCacheMaxEntries,
 		}),
-		Limiter:             ratelimit.New(ratelimit.NewValkeyCounter(dependencies.valkey), cfg.RateLimitPerSecond),
-		Publisher:           ingest.NewPublisher(dependencies.kafka, cfg.SpansTopic, cfg.ProduceTimeout),
+		Limiter: ratelimit.New(ratelimit.NewValkeyCounter(dependencies.valkey), cfg.RateLimitPerSecond),
+		Publisher: ingest.NewPublisher(dependencies.kafka, ingest.Topics{
+			Spans:   cfg.SpansTopic,
+			Logs:    cfg.LogsTopic,
+			Metrics: cfg.MetricsTopic,
+		}, cfg.ProduceTimeout),
 		Logger:              log,
 		Traffic:             traffic,
 		MaxBodyBytes:        cfg.MaxBodyBytes,
@@ -103,6 +107,8 @@ func run() error {
 		slog.String("otlp_http_addr", cfg.OTLPHTTPAddr),
 		slog.String("otlp_grpc_addr", cfg.OTLPGRPCAddr),
 		slog.String("spans_topic", cfg.SpansTopic),
+		slog.String("logs_topic", cfg.LogsTopic),
+		slog.String("metrics_topic", cfg.MetricsTopic),
 	)
 
 	// The heartbeat: without it a receiver serving nothing and a receiver
