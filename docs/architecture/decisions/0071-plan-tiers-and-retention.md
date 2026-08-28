@@ -102,6 +102,25 @@ traces.
 So this decision's cost model rests on an estimate for its largest term. **It must be re-checked
 against real numbers once P1-28 ships**, and that is a task, not a note.
 
+### First measurement, 2026-08-28
+
+The log pipeline shipped and the demo app now emits logs, so the estimate has a
+first reading against it:
+
+| | rows | bytes/row on disk | compression |
+|---|---|---|---|
+| `spans` | 12,042,879 | **17.9** | 10.8× |
+| `logs` | 65 | **85.2** | 3.5× |
+
+**This does not settle it, and must not be quoted as if it does.** Sixty-five
+rows give ZSTD almost nothing to work with — the ratio is 3.5× against spans'
+10.8× on twelve million — so the per-row figure is an upper bound that will fall,
+probably a long way, as volume arrives. The estimate above assumed ~35 bytes.
+
+What the reading does establish is direction and rough scale: a log row is
+several times a span row, which is what the model assumed. The task on P1-28
+stays open until there is a sample large enough to divide by.
+
 ## The cost control is the volume allowance, not the retention day count
 
 If measured log volume comes in far above the estimate, the lever to pull is **not** shortening

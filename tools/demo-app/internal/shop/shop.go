@@ -11,14 +11,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/nexovue-tech/nexovue/tools/demo-app/internal/config"
@@ -38,11 +41,20 @@ type Service struct {
 	faults *faults.Registry
 	client *http.Client
 	tracer trace.Tracer
+	// log goes through the OTLP bridge, so an ordinary slog call inside a span
+	// becomes a log record carrying that span's trace and span ids. That is
+	// what makes "the logs for this trace" answerable at all.
+	log *slog.Logger
+	// charges counts payment authorizations by outcome, and chargeLatency
+	// records how long each took — the two shapes a customer's own metrics
+	// arrive in, so both the counter and the histogram paths are exercised.
+	charges       metric.Int64Counter
+	chargeLatency metric.Float64Histogram
 }
 
 // New builds the service for the role in cfg.
 func New(cfg config.Config, reg *faults.Registry) *Service {
-	return &Service{
+	s := &Service{
 		cfg:    cfg,
 		faults: reg,
 		// The transport is instrumented, which is what injects traceparent on
@@ -52,7 +64,22 @@ func New(cfg config.Config, reg *faults.Registry) *Service {
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
 		tracer: otel.Tracer("demo-app/" + string(cfg.Role)),
+		log:    otelslog.NewLogger("demo-app/" + string(cfg.Role)),
 	}
+	return s.instruments()
+}
+
+// instruments builds the meters. A failure here is not fatal: a demo that
+// cannot count should still serve traffic, and a nil instrument is a no-op.
+func (s *Service) instruments() *Service {
+	meter := otel.Meter("demo-app/" + string(s.cfg.Role))
+	s.charges, _ = meter.Int64Counter("demo.payment.authorizations",
+		metric.WithDescription("Payment authorizations attempted, by outcome"),
+		metric.WithUnit("{authorization}"))
+	s.chargeLatency, _ = meter.Float64Histogram("demo.payment.duration",
+		metric.WithDescription("Time spent authorizing a payment"),
+		metric.WithUnit("ms"))
+	return s
 }
 
 // Handler is this role's HTTP surface, instrumented so every inbound request
@@ -152,6 +179,7 @@ func (s *Service) charge(w http.ResponseWriter, r *http.Request) {
 	defer span.End()
 	span.SetAttributes(attribute.String("payment.provider", "stripe-sandbox"))
 
+	started := time.Now()
 	delay := paymentCallTime
 	if s.faults.Active(faults.PaymentsSlow) {
 		delay += faults.SlowPenalty
@@ -162,10 +190,34 @@ func (s *Service) charge(w http.ResponseWriter, r *http.Request) {
 		err := errors.New("card authorization declined by upstream")
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+		// Logged inside the span, so this record carries the trace it belongs
+		// to. The authorization header is deliberately in the message: a real
+		// service logs the request it made, and this is what the masking rule
+		// has to catch before it reaches storage.
+		s.log.ErrorContext(ctx, "payment authorization failed",
+			slog.String("provider", "stripe-sandbox"),
+			slog.String("upstream_request", "POST /authorize Bearer sk_test_51HxmpleTokenThatMustNeverBeStored"),
+			slog.String("exception.type", "AuthorizationDeclined"),
+			slog.String("exception.message", err.Error()))
+		s.record(ctx, "declined", started)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.log.InfoContext(ctx, "payment authorized",
+		slog.String("provider", "stripe-sandbox"))
+	s.record(ctx, "authorized", started)
 	writeJSON(w, http.StatusOK, map[string]any{"authorized": true})
+}
+
+// record counts one authorization and times it. Both instruments carry the
+// outcome, so a rate and a latency distribution can be split the same way.
+func (s *Service) record(ctx context.Context, outcome string, started time.Time) {
+	if s.charges == nil {
+		return
+	}
+	attrs := metric.WithAttributes(attribute.String("outcome", outcome))
+	s.charges.Add(ctx, 1, attrs)
+	s.chargeLatency.Record(ctx, float64(time.Since(started).Microseconds())/1000, attrs)
 }
 
 // call makes an instrumented request to an upstream role. The response body is

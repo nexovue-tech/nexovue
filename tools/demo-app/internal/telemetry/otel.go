@@ -13,12 +13,18 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	logglobal "go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -28,11 +34,28 @@ import (
 // last few spans of a run are not lost.
 const shutdownTimeout = 5 * time.Second
 
-// Start installs the global tracer provider and returns its shutdown function.
+// metricInterval is how often the meter provider exports. Shorter than the SDK
+// default so a demo run shows a metric without waiting a minute for it.
+const metricInterval = 15 * time.Second
+
+// Start installs the global trace, log and meter providers and returns one
+// shutdown function that flushes all three.
+//
+// All three read the same OTEL_EXPORTER_OTLP_* variables, so a customer
+// configures one endpoint and one key and gets every signal — which is the
+// claim onboarding makes, and this app is where it is walked.
 func Start(ctx context.Context, serviceName, version string) (func(context.Context) error, error) {
-	exporter, err := otlptracehttp.New(ctx)
+	traceExporter, err := otlptracehttp.New(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("otlp exporter: %w", err)
+		return nil, fmt.Errorf("otlp trace exporter: %w", err)
+	}
+	logExporter, err := otlploghttp.New(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("otlp log exporter: %w", err)
+	}
+	metricExporter, err := otlpmetrichttp.New(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("otlp metric exporter: %w", err)
 	}
 
 	// The semconv version must match the schema `resource.Default()` carries, or
@@ -48,7 +71,7 @@ func Start(ctx context.Context, serviceName, version string) (func(context.Conte
 	}
 
 	provider := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
+		sdktrace.WithBatcher(traceExporter),
 		sdktrace.WithResource(res),
 		// The demo exists to produce traces, so it samples all of them. A real
 		// service would leave this to the SDK default and let our tail sampling
@@ -64,9 +87,31 @@ func Start(ctx context.Context, serviceName, version string) (func(context.Conte
 		propagation.TraceContext{}, propagation.Baggage{},
 	))
 
+	// The logs SDK is still beta, so its version is pinned and read on upgrade.
+	// A record emitted inside a span carries that span's trace and span ids
+	// automatically, which is what makes "logs for this trace" work at all.
+	logs := sdklog.NewLoggerProvider(
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
+		sdklog.WithResource(res),
+	)
+	logglobal.SetLoggerProvider(logs)
+
+	meters := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter,
+			sdkmetric.WithInterval(metricInterval))),
+		sdkmetric.WithResource(res),
+	)
+	otel.SetMeterProvider(meters)
+
+	// Shut down in the order the data flows, and keep going after a failure:
+	// a trace exporter that will not flush must not cost us the logs as well.
 	return func(ctx context.Context) error {
 		ctx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 		defer cancel()
-		return provider.Shutdown(ctx)
+		return errors.Join(
+			provider.Shutdown(ctx),
+			logs.Shutdown(ctx),
+			meters.Shutdown(ctx),
+		)
 	}, nil
 }
