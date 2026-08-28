@@ -29,6 +29,8 @@ func applyEnvironment(t *testing.T, values map[string]string) {
 		"RECEIVER_API_KEY_CACHE_TTL", "RECEIVER_API_KEY_CACHE_MAX_ENTRIES",
 		"RECEIVER_RATE_LIMIT_PER_SECOND", "RECEIVER_POSTGRES_MAX_CONNS",
 		"RECEIVER_POSTGRES_MIN_CONNS", "SHUTDOWN_TIMEOUT",
+		"RECEIVER_KAFKA_MAX_BUFFERED_BYTES", "RECEIVER_PRODUCE_TIMEOUT",
+		"RECEIVER_INGEST_SUMMARY_INTERVAL",
 	}
 	for _, key := range known {
 		if value, ok := values[key]; ok {
@@ -126,6 +128,12 @@ func TestLoadRejectsMalformedValues(t *testing.T) {
 		"cache ttl past the revocation ceiling": {"RECEIVER_API_KEY_CACHE_TTL", "10m"},
 		"zero cache ceiling":                    {"RECEIVER_API_KEY_CACHE_MAX_ENTRIES", "0"},
 		"zero rate limit":                       {"RECEIVER_RATE_LIMIT_PER_SECOND", "0"},
+		"zero produce timeout":                  {"RECEIVER_PRODUCE_TIMEOUT", "0s"},
+		"zero summary interval":                 {"RECEIVER_INGEST_SUMMARY_INTERVAL", "0s"},
+		// franz-go fails a record larger than its buffer outright, and no
+		// retry can fix that — so a buffer that cannot hold the largest legal
+		// batch is a refusal loop the sender can never escape.
+		"buffer below the largest legal batch": {"RECEIVER_KAFKA_MAX_BUFFERED_BYTES", "1048576"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -141,5 +149,26 @@ func TestLoadRejectsMalformedValues(t *testing.T) {
 				t.Errorf("Load() = %q, want the message to name %s", err, tc.key)
 			}
 		})
+	}
+}
+
+func TestLoadBoundsTheProducerByDefault(t *testing.T) {
+	applyEnvironment(t, completeEnvironment())
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+	// franz-go buffers without limit and retries forever unless told otherwise,
+	// so an unconfigured deployment has to arrive already bounded.
+	if cfg.KafkaMaxBufferedBytes < cfg.MaxDecodedBodyBytes+config.EnvelopeOverheadBytes {
+		t.Errorf("KafkaMaxBufferedBytes = %d, too small for the largest legal batch (%d)",
+			cfg.KafkaMaxBufferedBytes, cfg.MaxDecodedBodyBytes+config.EnvelopeOverheadBytes)
+	}
+	if cfg.ProduceTimeout <= 0 {
+		t.Error("ProduceTimeout is unset; a publish would have no deadline at all")
+	}
+	if cfg.IngestSummaryInterval <= 0 {
+		t.Error("IngestSummaryInterval is unset; the receiver would log nothing while serving")
 	}
 }

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"net"
 	"testing"
 	"time"
@@ -45,18 +43,7 @@ type grpcDoor struct {
 
 func newGRPCDoor(t *testing.T, opts doorOptions) grpcDoor {
 	t.Helper()
-	if opts.keys == nil {
-		opts.keys = staticKeys{}
-	}
-	if opts.counter == nil {
-		opts.counter = &countingCounter{}
-	}
-	if opts.requestsPerSec == 0 {
-		opts.requestsPerSec = 1000
-	}
-	if opts.maxBodyBytes == 0 {
-		opts.maxBodyBytes = 1 << 20
-	}
+	opts.applyDefaults()
 
 	producer := &countingProducer{err: opts.produceErr}
 	server := otlp.NewGRPCServer("bufconn", otlp.Options{
@@ -64,8 +51,9 @@ func newGRPCDoor(t *testing.T, opts doorOptions) grpcDoor {
 			CacheTTL: time.Minute, CacheMaxEntries: 100,
 		}),
 		Limiter:             ratelimit.New(opts.counter, opts.requestsPerSec),
-		Publisher:           ingest.NewPublisher(producer, spansTopic),
-		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Publisher:           ingest.NewPublisher(publishingTo(producer, opts), spansTopic, opts.produceBudget),
+		Logger:              opts.log,
+		Traffic:             otlp.NewTraffic(),
 		MaxBodyBytes:        opts.maxBodyBytes,
 		MaxDecodedBodyBytes: opts.maxBodyBytes * 4,
 	})

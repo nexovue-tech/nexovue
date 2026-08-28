@@ -52,6 +52,24 @@ type Config struct {
 	// rather than a literal, so a deployment can rename a topic without a build.
 	SpansTopic string `env:"KAFKA_SPANS_TOPIC" envDefault:"spans-raw"`
 
+	// KafkaMaxBufferedBytes caps what the producer holds while the broker is
+	// behind. franz-go buffers without limit by default, so an outage would grow
+	// the process until it dies instead of refusing work the sender can retry.
+	// Eight times the largest legal batch: enough concurrent exports to keep
+	// throughput, small enough to stay a bound.
+	KafkaMaxBufferedBytes int64 `env:"RECEIVER_KAFKA_MAX_BUFFERED_BYTES" envDefault:"134217728"`
+
+	// ProduceTimeout bounds one publish: how long the receiver will spend
+	// handing a batch to Kafka before answering "retry". It is both the client's
+	// delivery deadline and the publisher's own budget, so neither outlives the
+	// other and the answer never takes longer than a sender will wait.
+	ProduceTimeout time.Duration `env:"RECEIVER_PRODUCE_TIMEOUT" envDefault:"5s"`
+
+	// IngestSummaryInterval is how often the door writes its traffic summary.
+	// That line is the only proof the receiver is serving: without it a silently
+	// broken receiver and a healthy one produce identical logs.
+	IngestSummaryInterval time.Duration `env:"RECEIVER_INGEST_SUMMARY_INTERVAL" envDefault:"60s"`
+
 	// MaxBodyBytes caps the compressed request as it arrives; MaxDecodedBodyBytes
 	// caps what a gzip body may expand to, which is the limit that stops a bomb.
 	MaxBodyBytes        int64 `env:"RECEIVER_MAX_BODY_BYTES" envDefault:"4194304"`
@@ -72,6 +90,12 @@ type Config struct {
 
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"20s"`
 }
+
+// EnvelopeOverheadBytes is the headroom a wrapped payload needs over the body it
+// came from: tenancy, ids and the semconv version travel beside it. franz-go
+// fails a record larger than its buffer outright and no retry can fix that, so
+// the buffer has to clear the largest envelope a legal body can produce.
+const EnvelopeOverheadBytes = 4096
 
 // MaxAPIKeyCacheTTL is the ceiling on RECEIVER_API_KEY_CACHE_TTL. Revoking a key
 // is a security action, so the window in which a withdrawn key still works is
@@ -107,6 +131,12 @@ func (c Config) validate() error {
 		positiveSize("RECEIVER_MAX_DECODED_BODY_BYTES", c.MaxDecodedBodyBytes),
 		atLeastSize("RECEIVER_MAX_DECODED_BODY_BYTES", c.MaxDecodedBodyBytes,
 			"RECEIVER_MAX_BODY_BYTES", c.MaxBodyBytes),
+		positiveSize("RECEIVER_KAFKA_MAX_BUFFERED_BYTES", c.KafkaMaxBufferedBytes),
+		atLeastSize("RECEIVER_KAFKA_MAX_BUFFERED_BYTES", c.KafkaMaxBufferedBytes,
+			"RECEIVER_MAX_DECODED_BODY_BYTES plus envelope overhead",
+			c.MaxDecodedBodyBytes+EnvelopeOverheadBytes),
+		positiveDuration("RECEIVER_PRODUCE_TIMEOUT", c.ProduceTimeout),
+		positiveDuration("RECEIVER_INGEST_SUMMARY_INTERVAL", c.IngestSummaryInterval),
 		positiveDuration("RECEIVER_API_KEY_CACHE_TTL", c.APIKeyCacheTTL),
 		atMostDuration("RECEIVER_API_KEY_CACHE_TTL", c.APIKeyCacheTTL, MaxAPIKeyCacheTTL),
 		positiveCount("RECEIVER_API_KEY_CACHE_MAX_ENTRIES", c.APIKeyCacheMaxEntries),

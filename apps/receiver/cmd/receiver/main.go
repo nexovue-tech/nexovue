@@ -76,6 +76,8 @@ func run() error {
 	registry.Register(health.Check{Name: dependencyPostgres, Probe: dependencies.postgres.Ping})
 	registry.Register(health.Check{Name: dependencyValkey, Probe: dependencies.pingValkey})
 
+	traffic := otlp.NewTraffic()
+
 	// One set of collaborators for both transports: the gates behind them are
 	// the same code, and a second Options would be a second pipeline.
 	door := otlp.Options{
@@ -84,8 +86,9 @@ func run() error {
 			CacheMaxEntries: cfg.APIKeyCacheMaxEntries,
 		}),
 		Limiter:             ratelimit.New(ratelimit.NewValkeyCounter(dependencies.valkey), cfg.RateLimitPerSecond),
-		Publisher:           ingest.NewPublisher(dependencies.kafka, cfg.SpansTopic),
+		Publisher:           ingest.NewPublisher(dependencies.kafka, cfg.SpansTopic, cfg.ProduceTimeout),
 		Logger:              log,
+		Traffic:             traffic,
 		MaxBodyBytes:        cfg.MaxBodyBytes,
 		MaxDecodedBodyBytes: cfg.MaxDecodedBodyBytes,
 	}
@@ -101,6 +104,10 @@ func run() error {
 		slog.String("otlp_grpc_addr", cfg.OTLPGRPCAddr),
 		slog.String("spans_topic", cfg.SpansTopic),
 	)
+
+	// The heartbeat: without it a receiver serving nothing and a receiver
+	// serving everything write the same empty log.
+	go traffic.LogSummaryEvery(ctx, log, cfg.IngestSummaryInterval)
 
 	return serveUntilSignal(ctx, log, []listener{
 		httpListener(admin),
@@ -163,6 +170,14 @@ func dial(ctx context.Context, cfg config.Config) (opened *dependencies, err err
 		// depends on every span of a trace hashing to one partition, and that
 		// default has changed before.
 		kgo.RecordPartitioner(kgo.StickyKeyPartitioner(nil)),
+		// franz-go buffers without limit by default — looser than Kafka's own
+		// client, which bounds buffer.memory at 32 MiB. Unbounded, a broker
+		// outage grows the receiver until it dies instead of refusing work.
+		kgo.MaxBufferedBytes(int(cfg.KafkaMaxBufferedBytes)),
+		// And it retries a record forever by default. A delivery deadline is
+		// what turns a stuck publish into a 503 the sender can act on, which is
+		// the only ending that does not lose the batch.
+		kgo.RecordDeliveryTimeout(cfg.ProduceTimeout),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("kafka client: %w", err)

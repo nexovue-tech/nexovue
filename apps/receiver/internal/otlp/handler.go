@@ -54,6 +54,7 @@ type Options struct {
 	Limiter       *ratelimit.Limiter
 	Publisher     *ingest.Publisher
 	Logger        *slog.Logger
+	Traffic       *Traffic
 
 	// MaxBodyBytes caps the request as it arrives; MaxDecodedBodyBytes caps
 	// what a compressed one may expand to.
@@ -68,8 +69,16 @@ func (o Options) limits() bodyLimits {
 // Handler serves the OTLP/HTTP endpoints behind the gate chain.
 func Handler(opts Options) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("POST "+TracesPath, authenticate(opts, throttle(opts, traces(opts))))
+	mux.Handle("POST "+TracesPath, timed(authenticate(opts, throttle(opts, traces(opts)))))
 	return mux
+}
+
+// timed stamps when the request entered the door, so every gate below reports
+// the same whole-request duration.
+func timed(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(withStart(r.Context(), time.Now())))
+	})
 }
 
 // authenticate reads the credential out of the request header and hands the
@@ -78,6 +87,7 @@ func authenticate(opts Options, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, refused := opts.authenticate(r.Context(), r.Header.Get(auth.HeaderName))
 		if refused != nil {
+			opts.record(ctx, TracesPath, spansNotRead, refused)
 			writeRefusal(w, replyCodec(r), refused)
 			return
 		}
@@ -88,12 +98,18 @@ func authenticate(opts Options, next http.Handler) http.Handler {
 func throttle(opts Options, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if refused := opts.throttle(r.Context()); refused != nil {
+			opts.record(r.Context(), TracesPath, spansNotRead, refused)
 			writeRefusal(w, replyCodec(r), refused)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+// spansNotRead is what an export refused before its body was read contributes.
+// refused_spans is therefore a floor, not a total — the refused_requests count
+// beside it is the one that covers every refusal.
+const spansNotRead = 0
 
 // traces is the remaining three gates: decode, normalize, produce. Decoding is
 // the transport's own work — over gRPC the framework does it — so it lives here
@@ -104,6 +120,10 @@ func traces(opts Options) http.Handler {
 
 		encoding, err := codecFor(r.Header.Get(headerContentType))
 		if err != nil {
+			// Answered as 415 rather than the code's usual 400, so writeStatus
+			// is called directly; the tally still sees it.
+			opts.record(r.Context(), TracesPath, spansNotRead,
+				refuse(code.Code_INVALID_ARGUMENT, err.Error()).because(err))
 			writeStatus(w, protobufCodec, http.StatusUnsupportedMediaType,
 				code.Code_INVALID_ARGUMENT, err.Error())
 			return
@@ -111,25 +131,36 @@ func traces(opts Options) http.Handler {
 
 		body, err := readBody(w, r, opts.limits())
 		if err != nil {
+			opts.record(r.Context(), TracesPath, spansNotRead,
+				refuse(code.Code_INVALID_ARGUMENT, messageUnreadableRequest).because(err))
 			writeBodyFailure(w, encoding, err)
 			return
 		}
 
 		var request collectorpb.ExportTraceServiceRequest
 		if err := encoding.unmarshal(body, &request); err != nil {
+			opts.record(r.Context(), TracesPath, spansNotRead,
+				refuse(code.Code_INVALID_ARGUMENT, messageMalformedPayload).because(err))
 			writeStatus(w, encoding, http.StatusBadRequest,
 				code.Code_INVALID_ARGUMENT, messageMalformedPayload)
 			return
 		}
 
+		spans := spanCount(&request)
 		if refused := opts.acceptTraces(r.Context(), receivedAt, &request); refused != nil {
+			opts.record(r.Context(), TracesPath, spans, refused)
 			writeRefusal(w, encoding, refused)
 			return
 		}
 
-		writeAccepted(w, encoding)
+		opts.writeAccepted(w, r, encoding, spans)
 	})
 }
+
+// messageUnreadableRequest stands in for whichever body failure writeBodyFailure
+// renders: the tally cares that the request was unreadable, the caller gets the
+// specific sentinel's own wording.
+const messageUnreadableRequest = "request body could not be accepted"
 
 // writeBodyFailure answers with the sentinel's own wording rather than the
 // wrapped cause: a decompression error's text is our internals, not the
@@ -151,13 +182,18 @@ func writeBodyFailure(w http.ResponseWriter, encoding codec, err error) {
 
 // writeAccepted is OTLP's success: an ExportTraceServiceResponse with
 // partial_success left unset, which is what "we took all of it" means.
-func writeAccepted(w http.ResponseWriter, encoding codec) {
+func (o Options) writeAccepted(w http.ResponseWriter, r *http.Request, encoding codec, spans int) {
 	body, err := encoding.marshal(&collectorpb.ExportTraceServiceResponse{})
 	if err != nil {
+		// The batch is published but the caller will never hear so. Counted as
+		// our fault, because that is what it is.
+		o.record(r.Context(), TracesPath, spans,
+			refuse(code.Code_INTERNAL, messageUnavailable).because(err))
 		writeStatus(w, encoding, http.StatusInternalServerError,
 			code.Code_INTERNAL, messageUnavailable)
 		return
 	}
+	o.record(r.Context(), TracesPath, spans, nil)
 	w.Header().Set(headerContentType, encoding.contentType)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)

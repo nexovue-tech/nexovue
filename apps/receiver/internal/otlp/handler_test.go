@@ -79,6 +79,27 @@ func (p *countingProducer) ProduceSync(_ context.Context, records ...*kgo.Record
 	return results
 }
 
+// unresponsiveProducer never answers, which is what a producer whose buffer is
+// full does: franz-go blocks the produce and only the context breaks the wait.
+type unresponsiveProducer struct{}
+
+func (unresponsiveProducer) ProduceSync(ctx context.Context, records ...*kgo.Record) kgo.ProduceResults {
+	<-ctx.Done()
+	results := make(kgo.ProduceResults, 0, len(records))
+	for _, record := range records {
+		results = append(results, kgo.ProduceResult{Record: record, Err: ctx.Err()})
+	}
+	return results
+}
+
+// publishingTo picks the broker double a test asked for.
+func publishingTo(counting *countingProducer, opts doorOptions) ingest.Producer {
+	if opts.producer != nil {
+		return opts.producer
+	}
+	return counting
+}
+
 // countingCounter returns an ever-increasing count, so a test seeds `seen` to
 // place a request either inside or past its window's budget.
 type countingCounter struct {
@@ -109,22 +130,45 @@ type doorOptions struct {
 	requestsPerSec int
 	produceErr     error
 	maxBodyBytes   int64
+
+	// producer replaces the default when a test needs the broker to behave in
+	// a way a plain error cannot express, such as never answering.
+	producer      ingest.Producer
+	produceBudget time.Duration
+
+	// log replaces the discarding default when a test reads what was written.
+	log *slog.Logger
+}
+
+// testProduceBudget is long enough that a working broker never trips it, short
+// enough that a test proving the bound does not stall the suite.
+const testProduceBudget = 200 * time.Millisecond
+
+// applyDefaults fills in whatever a test did not care to state.
+func (o *doorOptions) applyDefaults() {
+	if o.keys == nil {
+		o.keys = staticKeys{}
+	}
+	if o.counter == nil {
+		o.counter = &countingCounter{}
+	}
+	if o.requestsPerSec == 0 {
+		o.requestsPerSec = 1000
+	}
+	if o.maxBodyBytes == 0 {
+		o.maxBodyBytes = 1 << 20
+	}
+	if o.produceBudget == 0 {
+		o.produceBudget = testProduceBudget
+	}
+	if o.log == nil {
+		o.log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 }
 
 func newDoor(t *testing.T, opts doorOptions) door {
 	t.Helper()
-	if opts.keys == nil {
-		opts.keys = staticKeys{}
-	}
-	if opts.counter == nil {
-		opts.counter = &countingCounter{}
-	}
-	if opts.requestsPerSec == 0 {
-		opts.requestsPerSec = 1000
-	}
-	if opts.maxBodyBytes == 0 {
-		opts.maxBodyBytes = 1 << 20
-	}
+	opts.applyDefaults()
 
 	producer := &countingProducer{err: opts.produceErr}
 	return door{
@@ -134,8 +178,9 @@ func newDoor(t *testing.T, opts doorOptions) door {
 				CacheTTL: time.Minute, CacheMaxEntries: 100,
 			}),
 			Limiter:             ratelimit.New(opts.counter, opts.requestsPerSec),
-			Publisher:           ingest.NewPublisher(producer, spansTopic),
-			Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+			Publisher:           ingest.NewPublisher(publishingTo(producer, opts), spansTopic, opts.produceBudget),
+			Logger:              opts.log,
+			Traffic:             otlp.NewTraffic(),
 			MaxBodyBytes:        opts.maxBodyBytes,
 			MaxDecodedBodyBytes: opts.maxBodyBytes * 4,
 		}),
@@ -476,6 +521,41 @@ func TestBrokerRefusalIsReportedAsRetryable(t *testing.T) {
 	}
 	if got := rpcStatus(t, response).GetCode(); got != int32(code.Code_UNAVAILABLE) {
 		t.Errorf("status code = %d, want UNAVAILABLE", got)
+	}
+}
+
+// A producer that never answers is the shape of a broker outage: the buffer
+// fills, franz-go blocks the produce, and without a bound the handler goroutine
+// waits there holding the request's memory until the process dies. The batch
+// must come back refused-and-retryable instead, because a refusal the client
+// resends is the only ending that does not lose it.
+func TestAStuckProducerIsRefusedAsRetryableRatherThanBlocking(t *testing.T) {
+	d := newDoor(t, doorOptions{producer: unresponsiveProducer{}})
+
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		answered <- post(t, d, encodedRequest(t, exportRequest(traceID(0x11))), nil)
+	}()
+
+	var response *httptest.ResponseRecorder
+	select {
+	case response = <-answered:
+	case <-time.After(testProduceBudget * 10):
+		t.Fatal("the handler never answered: a stuck broker must not pin a request goroutine")
+	}
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d: the batch must be refused, never silently dropped",
+			response.Code, http.StatusServiceUnavailable)
+	}
+	if response.Header().Get("Retry-After") == "" {
+		t.Error("a 503 must tell the client how long to wait, or the batch is lost at the sender")
+	}
+	if got := rpcStatus(t, response).GetCode(); got != int32(code.Code_UNAVAILABLE) {
+		t.Errorf("status code = %d, want UNAVAILABLE", got)
+	}
+	if len(d.producer.records) != 0 {
+		t.Error("nothing reached the broker, yet the door counted a publish")
 	}
 }
 

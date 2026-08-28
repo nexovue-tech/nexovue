@@ -31,11 +31,13 @@ type Producer interface {
 type Publisher struct {
 	producer   Producer
 	spansTopic string
+	budget     time.Duration
 }
 
-// NewPublisher returns a publisher writing spans to spansTopic.
-func NewPublisher(producer Producer, spansTopic string) *Publisher {
-	return &Publisher{producer: producer, spansTopic: spansTopic}
+// NewPublisher returns a publisher writing spans to spansTopic, spending at most
+// budget on any one publish before it reports failure.
+func NewPublisher(producer Producer, spansTopic string, budget time.Duration) *Publisher {
+	return &Publisher{producer: producer, spansTopic: spansTopic, budget: budget}
 }
 
 // PublishTraces sends one envelope per trace, keyed by trace id so that every
@@ -61,6 +63,12 @@ func (p *Publisher) PublishTraces(
 		records = append(records, record)
 	}
 
+	// One budget for the whole publish. franz-go blocks a produce once its buffer
+	// is full and only a context deadline breaks that wait, so without this a
+	// handler goroutine waits out a broker outage holding the request's memory.
+	ctx, cancel := context.WithTimeout(ctx, p.budget)
+	defer cancel()
+
 	// Retry only what did not land. ProduceSync reports the first error while
 	// other records in the same request may already be on the broker, so
 	// answering the client "failed" makes it retry the whole export and publish
@@ -73,7 +81,7 @@ func (p *Publisher) PublishTraces(
 		if len(failed) == 0 {
 			return nil
 		}
-		if attempt >= produceAttempts || ctx.Err() != nil {
+		if len(failed) == len(remaining) || attempt >= produceAttempts || ctx.Err() != nil {
 			return fmt.Errorf("producing %d of %d records to %s: %w",
 				len(failed), len(records), p.spansTopic, failed[0].err)
 		}
@@ -84,8 +92,11 @@ func (p *Publisher) PublishTraces(
 	}
 }
 
-// produceAttempts bounds the retry of a partial publish. franz-go already retries
-// internally; this is the last word before the client is told the truth.
+// produceAttempts guards against spinning on a partial failure that repeats. It
+// is not the durability bound: franz-go retries internally within its delivery
+// deadline, the customer's SDK retries underneath us, and a publish that fails
+// outright is not retried here at all — three layers of retry on one path is how
+// a broker outage stays an outage after the broker comes back.
 const produceAttempts = 3
 
 // outcome pairs a record with why it did not publish.

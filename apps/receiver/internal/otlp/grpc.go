@@ -37,21 +37,33 @@ func (e *traceExporter) Export(
 	request *collectorpb.ExportTraceServiceRequest,
 ) (*collectorpb.ExportTraceServiceResponse, error) {
 	receivedAt := time.Now()
+	ctx = withStart(ctx, receivedAt)
 
 	ctx, refused := e.opts.authenticate(ctx, presentedKey(ctx))
 	if refused != nil {
+		e.opts.record(ctx, exportPath, spansNotRead, refused)
 		return nil, refused.grpcError()
 	}
 	if refused := e.opts.throttle(ctx); refused != nil {
+		e.opts.record(ctx, exportPath, spansNotRead, refused)
 		return nil, refused.grpcError()
 	}
+
+	spans := spanCount(request)
 	if refused := e.opts.acceptTraces(ctx, receivedAt, request); refused != nil {
+		e.opts.record(ctx, exportPath, spans, refused)
 		return nil, refused.grpcError()
 	}
 
 	// OTLP's success: partial_success left unset means everything was accepted.
+	e.opts.record(ctx, exportPath, spans, nil)
 	return &collectorpb.ExportTraceServiceResponse{}, nil
 }
+
+// exportPath is the HTTP/2 path a gRPC export is a POST to. Logging it in the
+// same field the HTTP door logs /v1/traces in is what lets one query answer
+// "what did the receiver do" across both transports.
+var exportPath = "/" + collectorpb.TraceService_ServiceDesc.ServiceName + "/" + exportMethod
 
 // presentedKey reads the ingest credential out of the call's metadata. gRPC has
 // no headers, but the key travels under the name it is documented with; gRPC
@@ -127,7 +139,7 @@ func handleExport(
 	decode func(any) error,
 	interceptor grpc.UnaryServerInterceptor,
 ) (any, error) {
-	exporter, ok := service.(collectorpb.TraceServiceServer)
+	exporter, ok := service.(*traceExporter)
 	if !ok {
 		return nil, status.Error(codes.Internal, messageUnavailable)
 	}
@@ -135,7 +147,9 @@ func handleExport(
 	request := new(collectorpb.ExportTraceServiceRequest)
 	if err := decode(request); err != nil {
 		// Our own wording, not grpc-go's, which quotes our internals back.
-		return nil, refuse(code.Code_INVALID_ARGUMENT, messageMalformedPayload).grpcError()
+		refused := refuse(code.Code_INVALID_ARGUMENT, messageMalformedPayload).because(err)
+		exporter.opts.record(withStart(ctx, time.Now()), exportPath, spansNotRead, refused)
+		return nil, refused.grpcError()
 	}
 
 	if interceptor == nil {
@@ -143,7 +157,7 @@ func handleExport(
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     service,
-		FullMethod: "/" + collectorpb.TraceService_ServiceDesc.ServiceName + "/" + exportMethod,
+		FullMethod: exportPath,
 	}
 	return interceptor(ctx, request, info, func(ctx context.Context, req any) (any, error) {
 		batch, isBatch := req.(*collectorpb.ExportTraceServiceRequest)
