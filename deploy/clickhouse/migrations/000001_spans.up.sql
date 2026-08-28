@@ -1,31 +1,41 @@
--- Promoted columns for what every screen filters on; everything else stays in
--- the native JSON columns, where each attribute path is its own subcolumn.
+-- Squashed 2026-08-28. The 65 migrations this replaces rebuilt tables that had
+-- been created hours earlier — `spans` alone was rebuilt three times — and
+-- their reversibility protected data no environment held. Nothing was behind
+-- them: one development database, no customers.
+--
+-- The decisions are in docs/architecture/decisions; this file is only the
+-- shape they arrived at. Verified by applying the squashed set to an empty
+-- database and diffing SHOW CREATE for every object against the live one.
+--
+-- the trace store
 CREATE TABLE IF NOT EXISTS spans
 (
-    timestamp          DateTime64(9),
-    tenant_id          LowCardinality(String),
-    project_id         LowCardinality(String),
-    trace_id           FixedString(32),
-    span_id            FixedString(16),
-    parent_span_id     FixedString(16),
-    service_name       LowCardinality(String),
-    span_name          LowCardinality(String),
-    span_kind          LowCardinality(String),
-    duration_ms        Float64,
-    status_code        LowCardinality(String),
-    status_message     String,
-    http_method        LowCardinality(String),
-    http_route         LowCardinality(String),
-    http_status        UInt16,
-    deployment_version LowCardinality(String),
-    resource_attrs     JSON,
-    span_attrs         JSON,
-    events             String,
-    -- ORDER BY favours service/time scans, so opening one trace by id would
-    -- otherwise read every part in the range.
+    `timestamp` DateTime64(9) CODEC(Delta(8), ZSTD(1)),
+    `received_at` DateTime64(9) DEFAULT timestamp CODEC(Delta(8), ZSTD(1)),
+    `retention_days` UInt16 DEFAULT 30 CODEC(T64, ZSTD(1)),
+    `derived_retention_days` UInt16 DEFAULT 395 CODEC(T64, ZSTD(1)),
+    `tenant_id` LowCardinality(String) CODEC(ZSTD(1)),
+    `project_id` LowCardinality(String) CODEC(ZSTD(1)),
+    `trace_id` FixedString(32) CODEC(ZSTD(1)),
+    `span_id` FixedString(16) CODEC(ZSTD(1)),
+    `parent_span_id` FixedString(16) CODEC(ZSTD(1)),
+    `service_name` LowCardinality(String) CODEC(ZSTD(1)),
+    `span_name` LowCardinality(String) CODEC(ZSTD(1)),
+    `span_kind` LowCardinality(String) CODEC(ZSTD(1)),
+    `duration_ms` Float64 CODEC(Gorilla(8), ZSTD(1)),
+    `status_code` LowCardinality(String) CODEC(ZSTD(1)),
+    `status_message` String CODEC(ZSTD(1)),
+    `http_method` LowCardinality(String) CODEC(ZSTD(1)),
+    `http_route` LowCardinality(String) CODEC(ZSTD(1)),
+    `http_status` UInt16 CODEC(T64, ZSTD(1)),
+    `deployment_version` LowCardinality(String) CODEC(ZSTD(1)),
+    `resource_attrs` JSON,
+    `span_attrs` JSON CODEC(ZSTD(1)),
+    `events` String,
     INDEX idx_trace_id trace_id TYPE bloom_filter GRANULARITY 4
 )
 ENGINE = MergeTree
-PARTITION BY toDate(timestamp)
+PARTITION BY (toDate(received_at), retention_days)
 ORDER BY (tenant_id, project_id, service_name, toStartOfHour(timestamp), trace_id)
-TTL toDateTime(timestamp) + INTERVAL 30 DAY
+TTL toDateTime(received_at) + toIntervalDay(retention_days)
+SETTINGS index_granularity = 8192

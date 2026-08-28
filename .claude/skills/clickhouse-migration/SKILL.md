@@ -24,7 +24,12 @@ migration that needs three statements is three numbered pairs.
 then `migrate ... down N`, then `just migrate` again.
 
 **A rollback that empties a table is not a rollback.** If the up moves data,
-the down moves it back. Only skip that when the table is empty.
+the down moves it back.
+
+**But an empty table's down is one line.** `DROP TABLE IF EXISTS x`, or the
+previous `CREATE OR REPLACE` — not reverse DDL for rows that do not exist.
+Writing full reversibility for a table with zero rows is ceremony; it was done
+four times in one day before anyone noticed.
 
 **A partition key cannot be altered.** Changing one is a rebuild:
 - Table is **empty** → `CREATE OR REPLACE TABLE`.
@@ -77,6 +82,24 @@ SELECT name, type_full FROM system.data_skipping_indices
 Then check the writers still work: the worker keeps inserting, and
 `apps/api/tests/test_tenant_chokepoint_structure.py` derives its table list
 from this directory, so a new table must be tenant-guarded.
+
+## Squashing
+
+Before the first production deploy, and at milestone boundaries, collapse the
+set into one file per object built from `SHOW CREATE TABLE`. Nothing is behind
+them while there is a single development database, and a rebuild of a table
+created the same week is noise a future reader has to wade through.
+
+**Verify by diff, never by trust:** apply the squashed set to an empty database
+and compare `SHOW CREATE` for every object against the live one, normalising
+whitespace and the database name. A single character of drift means the squash
+is wrong.
+
+**Leave `KeeperMap` tables out of that scratch database.** Their path is a
+literal, so a second copy is a second door onto the live guard rather than a
+copy of it (ADR 0068). Verify those by comparing the generated text instead.
+Reference counting means dropping the scratch copy does not take the live rows
+with it — but check that it did not, rather than assuming.
 
 ## Finally
 

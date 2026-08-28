@@ -1,7 +1,0 @@
-ALTER TABLE metrics
-    MODIFY COLUMN timestamp    REMOVE CODEC,
-    MODIFY COLUMN tenant_id    REMOVE CODEC,
-    MODIFY COLUMN project_id   REMOVE CODEC,
-    MODIFY COLUMN metric_name  REMOVE CODEC,
-    MODIFY COLUMN value        REMOVE CODEC,
-    MODIFY COLUMN service_name REMOVE CODEC
