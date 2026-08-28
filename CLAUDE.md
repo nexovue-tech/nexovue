@@ -12,7 +12,10 @@ Insight-first observability platform. Phase 1 (core system) is planned in `docs/
 
 **4. The code is the source of truth.** Read the source to understand behaviour. Documents describe intent when written and drift; where they disagree with the code, the code wins — say so, so the doc gets fixed.
 
-**5. Root fixes only.** No temporary patches or workarounds. Trace every symptom to its cause. If the root fix is large, say so and let Raj scope it — never silently substitute a patch.
+**5. Root fixes only.** No temporary patches or workarounds. Trace every symptom to its cause. If the
+root fix is large, say so and let Raj scope it — never silently substitute a patch. **A root fix is
+applied everywhere the root exists** — the same defect in five sibling tables is one fix, not one
+table's.
 
 **6. Code Complete construction standards.** Intention-revealing names, small focused routines, low coupling, no magic values, invalid input handled deliberately. The structure should make the intent obvious.
 
@@ -29,6 +32,12 @@ database object, remove what it replaced in the same change — or say plainly w
 Report what was deleted. Measured across 623M real code changes, AI-assisted work raises
 duplication 81% and cuts refactoring 70%: agents add and rarely delete, so this is the one that
 does not happen by itself.
+
+**12. A result is evidence only if you watched it happen.** Exit code 0 is not proof a test ran —
+twice in one day a green result meant zero tests executed, once from a missing build tag and once
+from a suite that skipped itself. Read the output and check the count. Never record a claim as fact
+— in an ADR, a report or a commit message — without having run the thing that proves it. If it was
+not run, say so.
 
 ## Invariants (Phase 1)
 
