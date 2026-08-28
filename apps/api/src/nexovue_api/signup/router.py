@@ -16,6 +16,7 @@ from fastapi import APIRouter, Response
 
 from nexovue_api.auth.cookies import set_session_cookie
 from nexovue_api.auth.schemas import OrganizationSummary
+from nexovue_api.auth.service import start_session
 from nexovue_api.deps import AppSettings, DbSession, SessionStoreDep
 from nexovue_api.projects.schemas import ProjectSummary
 from nexovue_api.signup import service
@@ -44,9 +45,7 @@ async def sign_up(
         name=payload.name,
     )
 
-    token, _ = await sessions.create(
-        user_id=str(tenant.user.id), org_id=str(tenant.organization.id)
-    )
+    token = await start_session(db, sessions, user=tenant.user)
     set_session_cookie(response, token, settings)
 
     return SignupResponse(

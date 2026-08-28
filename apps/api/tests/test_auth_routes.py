@@ -78,6 +78,11 @@ class FakeDbSession:
     def __init__(self, user: User | None, organization: Organization) -> None:
         self._user = user
         self._organization = organization
+        self.written: list[Any] = []
+
+    def add(self, entity: Any) -> None:
+        """Rows the request wrote — audit entries here."""
+        self.written.append(entity)
 
     async def execute(self, statement: Any) -> Any:
         found = (self._user, self._organization) if self._user is not None else None
@@ -281,9 +286,11 @@ async def test_every_signed_in_endpoint_refuses_an_anonymous_caller(
             await client.get(
                 f"{API_PREFIX}/traces/{'a' * 32}", params={"project_id": str(project_id)}
             ),
+            await client.get(f"{API_PREFIX}/api-keys", params={"project_id": str(project_id)}),
+            await client.post(f"{API_PREFIX}/api-keys/{uuid.uuid4()}/revoke"),
         ]
 
-    assert [response.status_code for response in responses] == [401, 401, 401, 401]
+    assert [response.status_code for response in responses] == [401] * len(responses)
 
 
 async def test_the_tenant_a_query_runs_as_comes_from_the_session_not_the_request(

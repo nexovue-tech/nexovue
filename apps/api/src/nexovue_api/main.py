@@ -14,6 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter, FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
+from nexovue_api.apikeys import router as apikeys_router
 from nexovue_api.auth import router as auth_router
 from nexovue_api.buildinfo import SERVICE_NAME
 from nexovue_api.errors.handlers import install_error_handlers
@@ -92,6 +93,7 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(signup_router.router)
     versioned.include_router(auth_router.router)
     versioned.include_router(projects_router.router)
+    versioned.include_router(apikeys_router.router)
     versioned.include_router(traces_router.router)
     app.include_router(versioned)
 

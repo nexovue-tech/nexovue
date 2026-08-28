@@ -281,6 +281,11 @@ class FakeControlPlane:
     ) -> None:
         self._tenants = tenants
         self._deleted = deleted_orgs or set()
+        self.written: list[Any] = []
+
+    def add(self, entity: Any) -> None:
+        """Rows the request wrote — audit entries here. Kept so nothing is lost silently."""
+        self.written.append(entity)
 
     async def execute(self, statement: Any) -> _Row:
         """`load_identity` and `find_active_user_by_email`: a (user, org) pair."""

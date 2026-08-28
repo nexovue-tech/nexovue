@@ -18,6 +18,7 @@ from typing import Final
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexovue_api.audit import service as audit
 from nexovue_api.auth.credentials import hash_password, is_valid_email, normalize_email
 from nexovue_api.data.postgres.models import (
     API_KEY_PREFIX_LENGTH,
@@ -96,15 +97,20 @@ async def provision_tenant(
     session.add_all([user, project])
     await _flush(session)
 
-    session.add(
-        ApiKey(
-            org_id=organization.id,
-            project_id=project.id,
-            name=api_key_name,
-            key_prefix=plaintext_key[:API_KEY_PREFIX_LENGTH],
-            key_hash=hash_api_key(plaintext_key),
-        )
+    minted_key = ApiKey(
+        org_id=organization.id,
+        project_id=project.id,
+        name=api_key_name,
+        key_prefix=plaintext_key[:API_KEY_PREFIX_LENGTH],
+        key_hash=hash_api_key(plaintext_key),
     )
+    session.add(minted_key)
+    await _flush(session)
+
+    # Written here rather than in the router, so the seed and any later caller
+    # record the same two events, in the transaction that creates the tenant.
+    audit.record_organization_created(session, organization=organization, owner=user)
+    audit.record_api_key_created(session, api_key=minted_key, actor_user_id=user.id)
     await _flush(session)
 
     return ProvisionedTenant(

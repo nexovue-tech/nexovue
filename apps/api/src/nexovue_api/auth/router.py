@@ -32,7 +32,7 @@ async def login(
     user, organization = await service.authenticate(
         db, email=payload.email, password=payload.password
     )
-    token, _ = await sessions.create(user_id=str(user.id), org_id=str(user.org_id))
+    token = await service.start_session(db, sessions, user=user)
     set_session_cookie(response, token, settings)
     return service.describe_identity(user, organization)
 
@@ -45,13 +45,12 @@ async def login(
 async def logout(
     request: Request,
     response: Response,
+    db: DbSession,
     sessions: SessionStoreDep,
     settings: AppSettings,
 ) -> None:
     """Idempotent: a request with no session, or a stale one, still returns 204."""
-    token = session_token_from_headers(request.headers)
-    if token is not None:
-        await sessions.revoke(token)
+    await service.end_session(db, sessions, session_token_from_headers(request.headers))
     clear_session_cookie(response, settings)
 
 
