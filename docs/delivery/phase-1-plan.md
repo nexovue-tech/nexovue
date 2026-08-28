@@ -182,6 +182,7 @@ nexovue/
 | P1-50 | Load + soak | 24h soak against the budgets in §4; results recorded here | todo |
 | P1-57 | Object storage cold tier | **SeaweedFS** in compose for local dev; **AWS S3 in deployment**; ClickHouse-native S3 tiering past the hot window + tested restore. Generic S3 API only | todo |
 | P1-51 | Backup/restore | runbook + tested restore for ClickHouse and Postgres volumes | todo |
+| P1-68 | Apply plan retention | `plans` table holding the tier days from [ADR 0071](../architecture/decisions/0071-plan-tiers-and-retention.md); a job regenerating the conditional TTL expression per ADR 0038; a downgrade path that warns before narrowing retention, because shortening a TTL drops the parts with no undo. Deferred deliberately — nothing about it is a one-way door, and until it exists every tenant gets the fixed `pro`-shaped retention, which over-serves rather than under-serves. `scale` additionally needs P1-57 | todo |
 | P1-52 | Ingest kill switch | per-tenant stop valve for runaway ingestion | todo |
 | P1-53 | Security pass | key hashing, TLS at the edge, secret handling, dependency audit | todo |
 | P1-54 | Customer docs | setup guide for both onboarding patterns (SDK direct, own collector) | todo |
