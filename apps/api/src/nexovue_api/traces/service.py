@@ -106,7 +106,7 @@ async def get_trace(
     if window is None:
         raise NotFoundError(TRACE_NOT_FOUND_DETAIL)
 
-    window_start, window_end = window
+    window_start, window_end, received_from = window
     rows = await repository.query(
         queries.TRACE_SPANS_SQL,
         {
@@ -114,6 +114,7 @@ async def get_trace(
             "trace_id": trace_id,
             "window_start": window_start,
             "window_end": window_end,
+            "received_from": received_from,
             "limit": MAX_SPANS_PER_TRACE,
         },
     )
@@ -139,11 +140,13 @@ async def get_trace(
 
 async def _trace_window(
     repository: TenantScopedRepository, trace_id: str
-) -> tuple[datetime, datetime] | None:
-    """The span-timestamp range for a trace, from the id-to-time companion table.
+) -> tuple[datetime, datetime, datetime] | None:
+    """The span-timestamp range for a trace, and when it first reached us.
 
     Without this the spans read would have to scan every partition in the
     retention window, because `spans` is ordered by service and hour, not by id.
+    The third value bounds the partitions themselves: `spans` is partitioned on
+    our receive clock, so a span-timestamp range alone cannot prune one.
     """
     bounds = await repository.query_one(queries.TRACE_TIME_BOUNDS_SQL, {"trace_id": trace_id})
     if bounds is None or not bounds["matches"]:
@@ -151,6 +154,7 @@ async def _trace_window(
     return (
         _nanos_to_datetime(bounds["min_nanos"]) - WINDOW_SLACK,
         _nanos_to_datetime(bounds["max_nanos"]) + WINDOW_SLACK,
+        _nanos_to_datetime(bounds["received_from_nanos"]) - WINDOW_SLACK,
     )
 
 

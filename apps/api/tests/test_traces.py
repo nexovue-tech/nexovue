@@ -48,8 +48,8 @@ class FakeTelemetry:
         if "span_trace_lookup" in sql:
             matches = 1 if owned == bound.get("trace_id") else 0
             return FakeQueryResult(
-                ["matches", "min_nanos", "max_nanos"],
-                [(matches, _START_NANOS, _START_NANOS + 500_000_000)],
+                ["matches", "min_nanos", "max_nanos", "received_from_nanos"],
+                [(matches, _START_NANOS, _START_NANOS + 500_000_000, _START_NANOS)],
             )
 
         if "GROUP BY trace_id" in sql:

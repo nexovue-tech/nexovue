@@ -104,7 +104,11 @@ TRACE_TIME_BOUNDS_SQL: Final = """
 SELECT
     count() AS matches,
     toUnixTimestamp64Nano(min(span_start)) AS min_nanos,
-    toUnixTimestamp64Nano(max(span_end)) AS max_nanos
+    toUnixTimestamp64Nano(max(span_end)) AS max_nanos,
+    -- Our own clock, which is what `spans` is partitioned by (ADR 0067). The
+    -- span timestamps above cannot prune a partition, because the client
+    -- supplies them and ClickHouse cannot relate the two.
+    toUnixTimestamp64Nano(min(received_at)) AS received_from_nanos
 FROM span_trace_lookup
 WHERE tenant_id = {tenant_id:String}
   AND trace_id = {trace_id:String}
@@ -133,6 +137,10 @@ WHERE tenant_id = {{tenant_id:String}}
   AND trace_id = {{trace_id:String}}
   AND timestamp >= {{window_start:DateTime64(9)}}
   AND timestamp <= {{window_end:DateTime64(9)}}
+  -- Prunes every partition older than this trace's first arrival. Exact rather
+  -- than a guess at clock skew: no span of a trace can have reached us before
+  -- the earliest arrival the lookup recorded for it.
+  AND received_at >= {{received_from:DateTime64(9)}}
 ORDER BY timestamp, span_id
 LIMIT {{limit:UInt32}}
 """

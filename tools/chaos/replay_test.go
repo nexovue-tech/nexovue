@@ -140,7 +140,7 @@ func waitForStore(t *testing.T) {
 func totalCounted(t *testing.T) int {
 	t.Helper()
 	answer := query(t, fmt.Sprintf(
-		"SELECT toUInt64(sum(value)) FROM metrics WHERE metric_name = '%s'", spanCountMetric))
+		"SELECT toUInt64(sum(value)) FROM metrics_sum WHERE metric_name = '%s'", spanCountMetric))
 	if answer == "" {
 		return 0
 	}

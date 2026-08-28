@@ -262,7 +262,7 @@ func quietenDemo(t *testing.T) {
 func countedSpans(t *testing.T, service string) int {
 	t.Helper()
 	answer := query(t, fmt.Sprintf(
-		"SELECT toUInt64(sum(value)) FROM metrics WHERE metric_name = 'nexovue.spans.count' "+
+		"SELECT toUInt64(sum(value)) FROM metrics_sum WHERE metric_name = 'nexovue.spans.count' "+
 			"AND service_name = '%s'", service))
 	if answer == "" {
 		return 0

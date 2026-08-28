@@ -11,7 +11,15 @@ import (
 
 // metricsTable is the insert target, named once so the statement and the column
 // list cannot drift apart.
-const metricsTable = "metrics"
+const metricsTable = "metrics_sum"
+
+// Every counter here is a per-minute bucket of a quantity that only accumulates
+// within its window, which is OTLP's delta sum exactly (ADR 0066). Stating both
+// is what lets a reader turn these rows into a rate without guessing.
+const (
+	deltaTemporality = "DELTA"
+	monotonicSum     = true
+)
 
 // jsonAsStringSetting lets the JSON column travel the native protocol as one
 // JSON document per row, which is the shape ch-go's ColJSONStr encodes.
@@ -21,12 +29,15 @@ const jsonAsStringSetting = "output_format_native_write_json_as_string"
 // reused across flushes: resetting keeps the capacity.
 type block struct {
 	timestamp   proto.ColDateTime64
+	startAt     proto.ColDateTime64
 	tenantID    *proto.ColLowCardinality[string]
 	projectID   *proto.ColLowCardinality[string]
 	metricName  *proto.ColLowCardinality[string]
 	value       proto.ColFloat64
 	serviceName *proto.ColLowCardinality[string]
 	attrs       proto.ColJSONStr
+	temporality *proto.ColLowCardinality[string]
+	monotonic   proto.ColBool
 
 	columns proto.Input
 }
@@ -37,30 +48,39 @@ func newBlock() *block {
 		projectID:   new(proto.ColStr).LowCardinality(),
 		metricName:  new(proto.ColStr).LowCardinality(),
 		serviceName: new(proto.ColStr).LowCardinality(),
+		temporality: new(proto.ColStr).LowCardinality(),
 	}
 	// The column carries its own precision; the table declares DateTime64(3).
 	b.timestamp.WithPrecision(proto.PrecisionMilli)
+	b.startAt.WithPrecision(proto.PrecisionMilli)
 
 	b.columns = proto.Input{
 		{Name: "timestamp", Data: &b.timestamp},
+		{Name: "start_timestamp", Data: &b.startAt},
 		{Name: "tenant_id", Data: b.tenantID},
 		{Name: "project_id", Data: b.projectID},
 		{Name: "metric_name", Data: b.metricName},
 		{Name: "value", Data: &b.value},
 		{Name: "service_name", Data: b.serviceName},
 		{Name: "attrs", Data: &b.attrs},
+		{Name: "aggregation_temporality", Data: b.temporality},
+		{Name: "is_monotonic", Data: &b.monotonic},
 	}
 	return b
 }
 
 func (b *block) append(point Point) {
-	b.timestamp.Append(point.Timestamp)
+	start, end := point.interval()
+	b.timestamp.Append(end)
+	b.startAt.Append(start)
 	b.tenantID.Append(point.TenantID)
 	b.projectID.Append(point.ProjectID)
 	b.metricName.Append(point.MetricName)
 	b.value.Append(point.Value)
 	b.serviceName.Append(point.ServiceName)
 	b.attrs.Append(point.Attrs)
+	b.temporality.Append(deltaTemporality)
+	b.monotonic.Append(monotonicSum)
 }
 
 func (b *block) rows() int { return b.timestamp.Rows() }
@@ -120,7 +140,7 @@ func (w *Writer) Applied(ctx context.Context, point Point) (bool, error) {
 			"AND tenant_id = {tenant:String} AND project_id = {project:String} " +
 			"AND metric_name = {metric:String} AND service_name = {service:String}",
 		Parameters: ch.Parameters(map[string]any{
-			"minute":  point.Timestamp.UTC().Format("2006-01-02 15:04:05.000"),
+			"minute":  point.intervalEndForQuery(),
 			"tenant":  point.TenantID,
 			"project": point.ProjectID,
 			"metric":  point.MetricName,

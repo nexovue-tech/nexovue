@@ -108,6 +108,19 @@ type Point struct {
 	Attrs       string
 }
 
+// interval is the window this point covers: OTLP delta sums carry both ends,
+// and the bucket runs from its own minute to the next. Computed in one place so
+// the inserted row and the read-back that checks for it cannot disagree.
+func (p Point) interval() (start, end time.Time) {
+	return p.Timestamp, p.Timestamp.Add(bucketWidth)
+}
+
+// intervalEndForQuery is the stored `timestamp` in the text form a query binds.
+func (p Point) intervalEndForQuery() string {
+	_, end := p.interval()
+	return end.UTC().Format("2006-01-02 15:04:05.000")
+}
+
 // series identifies one counted line: a minute, a tenancy, a service and an
 // endpoint. It is a comparable struct so it can key a map without a formatted
 // string per span.
