@@ -113,8 +113,11 @@ e2e-headed:
 
 # Destructive by design, and never part of `just check`.
 # Kill the broker and the store under load; assert nothing acknowledged was lost (P1-27).
+# -count=1 is load-bearing, not a habit: without it Go serves a cached pass and
+# the suite reports success having executed nothing. That has now happened three
+# times here — a missing build tag, a self-skipping suite, and this.
 chaos:
-    cd tools/chaos && go test -tags chaos -v -timeout 20m ./...
+    cd tools/chaos && go test -tags chaos -v -count=1 -timeout 20m ./...
 
 # ---------- contracts ----------
 
