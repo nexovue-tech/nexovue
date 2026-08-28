@@ -97,6 +97,15 @@ type Config struct {
 // the buffer has to clear the largest envelope a legal body can produce.
 const EnvelopeOverheadBytes = 4096
 
+// MaxRecordBytes is the largest record a legal request can produce, and so the
+// size every stage after the door must carry: the producer's batch cap here,
+// and max.message.bytes on the broker (deploy/kafka/topics.sh). A stage set
+// below this refuses a trace nothing can make smaller, which the sender then
+// retries until it gives up — data loss dressed as backpressure.
+func (c Config) MaxRecordBytes() int64 {
+	return c.MaxDecodedBodyBytes + EnvelopeOverheadBytes
+}
+
 // MaxAPIKeyCacheTTL is the ceiling on RECEIVER_API_KEY_CACHE_TTL. Revoking a key
 // is a security action, so the window in which a withdrawn key still works is
 // capped by the code rather than left to whoever writes the deployment.
@@ -134,7 +143,7 @@ func (c Config) validate() error {
 		positiveSize("RECEIVER_KAFKA_MAX_BUFFERED_BYTES", c.KafkaMaxBufferedBytes),
 		atLeastSize("RECEIVER_KAFKA_MAX_BUFFERED_BYTES", c.KafkaMaxBufferedBytes,
 			"RECEIVER_MAX_DECODED_BODY_BYTES plus envelope overhead",
-			c.MaxDecodedBodyBytes+EnvelopeOverheadBytes),
+			c.MaxRecordBytes()),
 		positiveDuration("RECEIVER_PRODUCE_TIMEOUT", c.ProduceTimeout),
 		positiveDuration("RECEIVER_INGEST_SUMMARY_INTERVAL", c.IngestSummaryInterval),
 		positiveDuration("RECEIVER_API_KEY_CACHE_TTL", c.APIKeyCacheTTL),

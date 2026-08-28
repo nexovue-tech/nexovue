@@ -19,6 +19,13 @@ OTHER_PARTITIONS="${KAFKA_OTHER_PARTITIONS:-4}"
 # 7 days of buffer: long enough to replay a full weekend outage into ClickHouse.
 RETENTION_MS="${KAFKA_RETENTION_MS:-604800000}"
 
+# One record is one trace's envelope, so this must clear the largest envelope a
+# legal request can produce: RECEIVER_MAX_DECODED_BODY_BYTES (16 MiB) plus
+# envelope overhead. Kafka's 1 MiB default silently refused any trace above it,
+# and the sender retried a batch nothing could make smaller. If the receiver's
+# body cap changes, this changes with it.
+MAX_MESSAGE_BYTES="${KAFKA_MAX_MESSAGE_BYTES:-16781312}"
+
 create_topic() {
     local name="$1" partitions="$2"
     docker exec "$CONTAINER" /opt/kafka/bin/kafka-topics.sh \
@@ -28,6 +35,7 @@ create_topic() {
         --partitions "$partitions" \
         --replication-factor "$REPLICATION" \
         --config "retention.ms=$RETENTION_MS" \
+        --config "max.message.bytes=$MAX_MESSAGE_BYTES" \
         --config compression.type=zstd
     echo "topic ready: $name ($partitions partitions)"
 }

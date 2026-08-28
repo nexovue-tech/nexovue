@@ -178,6 +178,10 @@ func dial(ctx context.Context, cfg config.Config) (opened *dependencies, err err
 		// what turns a stuck publish into a 503 the sender can act on, which is
 		// the only ending that does not lose the batch.
 		kgo.RecordDeliveryTimeout(cfg.ProduceTimeout),
+		// franz-go caps a record batch at Kafka's 1 MiB default, well under what
+		// the door accepts, so a single large trace was refused here and retried
+		// by the sender forever. The producer must carry anything we accepted.
+		kgo.ProducerBatchMaxBytes(int32(cfg.MaxRecordBytes())),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("kafka client: %w", err)
