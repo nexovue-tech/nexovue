@@ -60,6 +60,13 @@ type Config struct {
 	// Spans configures the trace-assembly pipeline.
 	Spans SpanIngest
 
+	// Logs configures the log-writing pipeline.
+	Logs LogIngest
+
+	// MetricIngest configures the metric-ingest pipeline, which writes
+	// customer-sent OTLP metrics to the five metric tables (ADR 0066).
+	MetricIngest MetricIngest
+
 	// Postgres is the optional control-plane connection the mask and sample
 	// stages read per-project settings from.
 	Postgres Postgres
@@ -110,6 +117,8 @@ func (c Config) validate() error {
 		positiveCount("CLICKHOUSE_MAX_CONNS", int(c.ClickHouseMaxConns)),
 		positiveDuration("SHUTDOWN_TIMEOUT", c.ShutdownTimeout),
 		c.Spans.validate(),
+		c.Logs.validate(),
+		c.MetricIngest.validate(),
 		c.Postgres.validate(),
 		c.Masking.validate(),
 		c.Metrics.validate(),

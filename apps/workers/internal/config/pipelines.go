@@ -23,6 +23,11 @@ const (
 	PipelineLogWriting       Pipeline = "log-writing"
 	PipelineMetricDerivation Pipeline = "metric-derivation"
 	PipelineServiceEdges     Pipeline = "service-edges"
+
+	// PipelineMetricIngest writes customer-sent OTLP metrics. Distinct from
+	// metric-derivation, which computes our own counters from traces: one reads
+	// metrics-raw, the other reads nothing at all.
+	PipelineMetricIngest Pipeline = "metric-ingest"
 )
 
 // AllPipelines is the default: one process runs everything.
@@ -31,6 +36,7 @@ var AllPipelines = []Pipeline{
 	PipelineLogWriting,
 	PipelineMetricDerivation,
 	PipelineServiceEdges,
+	PipelineMetricIngest,
 }
 
 // ParsePipelines turns the WORKER_PIPELINES value into the set this process
