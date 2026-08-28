@@ -47,6 +47,11 @@ const (
 	drainTimeout = 5 * time.Minute
 	drainPoll    = 5 * time.Second
 
+	// The span pipeline's topics and group, from apps/workers/internal/config.
+	spansTopic    = "spans-raw"
+	spansDLQTopic = "spans-dlq"
+	spansGroup    = "nexovue-workers"
+
 	clickHouseURL  = "http://localhost:18123/"
 	clickHouseUser = "nexovue"
 	clickHousePass = "nexovue_dev"
@@ -74,7 +79,7 @@ func TestNothingAcknowledgedIsEverLost(t *testing.T) {
 
 	// The queue is not empty at the start — earlier work parked poison messages
 	// deliberately, and nothing drains it by design. Only the delta is ours.
-	dlqBefore := dlqDepth(t)
+	dlqBefore := dlqDepth(t, spansDLQTopic)
 
 	// Break things while the load is mid-flight. Both outages are timed from the
 	// start of the run rather than chained, so a slow restart cannot push the
@@ -130,7 +135,7 @@ func TestNothingAcknowledgedIsEverLost(t *testing.T) {
 	}
 	t.Logf("no loss: %d acknowledged, %d counted", accepted, counted)
 
-	if parked := dlqDepth(t) - dlqBefore; parked > 0 {
+	if parked := dlqDepth(t, spansDLQTopic) - dlqBefore; parked > 0 {
 		t.Errorf("%d messages were parked on the dead-letter queue during the run; an "+
 			"outage must not make a well-formed envelope undecodable", parked)
 	}
@@ -210,7 +215,7 @@ func waitForDrain(t *testing.T, service string, target int) int {
 
 	for time.Now().Before(deadline) {
 		time.Sleep(drainPoll)
-		lag, counted := consumerLag(t), countedSpans(t, service)
+		lag, counted := consumerLag(t, spansGroup, spansTopic), countedSpans(t, service)
 		if lag == 0 {
 			// The window and the commit trail mean counters land a little after
 			// the last fetch; give them room before reading the final number.
@@ -221,7 +226,7 @@ func waitForDrain(t *testing.T, service string, target int) int {
 		t.Logf("draining… lag %d, counted %d of %d", lag, counted, target)
 	}
 
-	if lag := consumerLag(t); lag > 0 {
+	if lag := consumerLag(t, spansGroup, spansTopic); lag > 0 {
 		t.Errorf("PIPELINE STALLED: %d messages still unconsumed after %s. Nothing was "+
 			"lost — the worker stopped fetching. Check whether it wedged on a call with "+
 			"no deadline rather than treating this as loss", lag, drainTimeout)
@@ -229,16 +234,21 @@ func waitForDrain(t *testing.T, service string, target int) int {
 	return countedSpans(t, service)
 }
 
-// consumerLag is how far behind the group is, summed over partitions.
-func consumerLag(t *testing.T) int {
+// consumerLag is how far behind one group is on one topic, summed over
+// partitions.
+//
+// The topic is named rather than assumed because a group is not a pipeline: the
+// log-writing pipeline shares the span group and only its topic tells the two
+// apart, so a lag read without one would make each signal wait for the other.
+func consumerLag(t *testing.T, group, topic string) int {
 	t.Helper()
 	out := compose(t, "exec", "-T", "kafka",
 		"/opt/kafka/bin/kafka-consumer-groups.sh", "--bootstrap-server", "kafka:9092",
-		"--describe", "--group", "nexovue-workers")
+		"--describe", "--group", group)
 	total := 0
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 6 {
+		if len(fields) < 6 || fields[1] != topic {
 			continue
 		}
 		if lag, err := strconv.Atoi(fields[5]); err == nil {
@@ -274,10 +284,10 @@ func countedSpans(t *testing.T, service string) int {
 	return counted
 }
 
-func dlqDepth(t *testing.T) int {
+func dlqDepth(t *testing.T, topic string) int {
 	t.Helper()
 	out := compose(t, "exec", "-T", "kafka",
-		"/opt/kafka/bin/kafka-get-offsets.sh", "--bootstrap-server", "kafka:9092", "--topic", "spans-dlq")
+		"/opt/kafka/bin/kafka-get-offsets.sh", "--bootstrap-server", "kafka:9092", "--topic", topic)
 	total := 0
 	for _, line := range strings.Split(out, "\n") {
 		parts := strings.Split(strings.TrimSpace(line), ":")

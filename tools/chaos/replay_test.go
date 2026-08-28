@@ -54,8 +54,8 @@ func TestReplayedOffsetsAreNotCountedTwice(t *testing.T) {
 	waitForGroupInactive(t)
 
 	out := compose(t, "exec", "-T", "kafka", "/opt/kafka/bin/kafka-consumer-groups.sh",
-		"--bootstrap-server", "kafka:9092", "--group", "nexovue-workers",
-		"--topic", "spans-raw", "--reset-offsets", "--shift-by",
+		"--bootstrap-server", "kafka:9092", "--group", spansGroup,
+		"--topic", spansTopic, "--reset-offsets", "--shift-by",
 		"-"+strconv.Itoa(rewindPerPartition), "--execute")
 	if strings.Contains(strings.ToLower(out), "error") {
 		t.Fatalf("could not rewind the consumer group:\n%s", out)
@@ -89,7 +89,7 @@ func waitForQuiet(t *testing.T) {
 
 	for time.Now().Before(deadline) {
 		time.Sleep(5 * time.Second)
-		if consumerLag(t) > 0 {
+		if consumerLag(t, spansGroup, spansTopic) > 0 {
 			stable, previous = 0, -1
 			continue
 		}
@@ -112,7 +112,7 @@ func waitForGroupInactive(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
 		out := compose(t, "exec", "-T", "kafka", "/opt/kafka/bin/kafka-consumer-groups.sh",
-			"--bootstrap-server", "kafka:9092", "--group", "nexovue-workers",
+			"--bootstrap-server", "kafka:9092", "--group", spansGroup,
 			"--describe", "--state")
 		if strings.Contains(out, "Empty") || strings.Contains(out, "Dead") {
 			t.Log("consumer group is inactive")
