@@ -90,6 +90,13 @@ for them, and it keeps them in the partitions they already occupied.
 a way it was not here: empty, and with no writer yet, so there was nothing to copy and nothing to
 exchange. P1-28's writer owes the column.
 
+The five metric tables carried it too and followed in
+[000038](../../../deploy/clickhouse/migrations/000038_metrics_gauge_received_at.up.sql)–[000045](../../../deploy/clickhouse/migrations/000045_metrics_sum_received_at_cleanup.up.sql).
+They were missed on the first pass: only `spans` and `span_trace_lookup` were checked, and the
+metric tables had been created hours earlier the same day. Four were empty and replaced outright;
+`metrics_sum` holds the derived counters and was exchanged, which the worker kept writing across.
+For a customer-sent metric `timestamp` is the customer's clock, so the defect was identical.
+
 The rollback path copies the rows back rather than discarding them
 ([000029 down](../../../deploy/clickhouse/migrations/000029_spans_received_at_backfill.down.sql)): a
 rollback that empties the table is not a rollback.
