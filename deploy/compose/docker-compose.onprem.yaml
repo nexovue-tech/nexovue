@@ -129,9 +129,17 @@ services:
   # Deploy this image more than once with different selections when load
   # justifies separating them — see ADR 0050.
   worker:
+    <<: *service-defaults
     image: *image-base
     environment:
+      # The worker was the one service missing this merge, so it had no broker
+      # or store address at all — it could not have reached either.
+      <<: *data-plane-env
       WORKER_PIPELINES: ${WORKER_PIPELINES:-all}
+      # Required rather than optional: the worker treats an absent secret as
+      # "hashing rules unavailable" and boots anyway, so a missing value here
+      # would disable pseudonymisation without anything going red.
+      WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:?set WORKERS_MASKING_HASH_SECRET}
     deploy:
       resources:
         limits:
@@ -212,7 +220,11 @@ services:
   #
   # TODO(phase-2): apps/insight does not exist yet; this describes the shape so
   #   the deployment target is complete.
+  #
+  # Behind a profile for the same reason as the replica: in the default set, a
+  # service whose image cannot exist yet fails the pull for the whole stack.
   insight:
+    profiles: ["insight"]
     <<: *service-defaults
     image: ${NEXOVUE_REGISTRY:?set NEXOVUE_REGISTRY}/insight:${NEXOVUE_VERSION:?set NEXOVUE_VERSION}
     environment:
@@ -234,6 +246,8 @@ services:
   # TODO(gpu): a useful model wants a GPU. Without one this is CPU-only and
   #   slow; add the device reservation once the server's hardware is known.
   ollama:
+    # Same profile as insight: its only consumer, and nothing else dials it.
+    profiles: ["insight"]
     <<: *service-defaults
     image: ollama/ollama:0.12.11
     volumes:

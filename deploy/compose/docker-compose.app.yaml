@@ -23,6 +23,18 @@ include:
 
 services:
   # ---------- infrastructure: no published ports ----------
+  # The infrastructure module carries no restart policy, because development
+  # wants a crashed container to stay down and be looked at. These three are
+  # redeclared for the policy alone; the rest of their definition is inherited.
+  kafka:
+    <<: *service-defaults
+
+  redis:
+    <<: *service-defaults
+
+  seaweedfs:
+    <<: *service-defaults
+
   clickhouse:
     <<: *service-defaults
     environment:
@@ -96,6 +108,10 @@ services:
     environment:
       <<: *data-plane-env
       WORKER_PIPELINES: ${WORKER_PIPELINES:-all}
+      # Required rather than optional: the worker treats an absent secret as
+      # "hashing rules unavailable" and boots anyway, so a missing value here
+      # would disable pseudonymisation without anything going red.
+      WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:?set WORKERS_MASKING_HASH_SECRET}
     depends_on:
       kafka:
         condition: service_healthy
@@ -225,7 +241,11 @@ services:
   #
   # TODO(phase-2): apps/insight does not exist yet. This describes the shape so
   #   the deployment target is complete; it cannot build until F3/F6 land.
+  #
+  # Behind a profile because `just dev-app` builds what it starts: in the default
+  # set, the missing build context fails the whole recipe before anything runs.
   insight:
+    profiles: ["insight"]
     <<: *service-defaults
     build:
       context: ../..
@@ -254,6 +274,8 @@ services:
   # NOTE: on macOS this is CPU-only — Docker has no Metal passthrough — so run
   #   Ollama natively there and point LLM_BASE_URL at the host instead.
   ollama:
+    # Same profile as insight: its only consumer, and nothing else dials it.
+    profiles: ["insight"]
     <<: *service-defaults
     image: ollama/ollama:0.12.11
     volumes:
