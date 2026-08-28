@@ -42,6 +42,11 @@ func positionOf(record *kgo.Record) position {
 type pendingCommit struct {
 	positions []position
 
+	// polledAt is when this batch was taken off the broker. The age of the
+	// oldest one held is how far behind ingest the committed offsets are, which
+	// is the number an operator otherwise has to reach into Kafka for.
+	polledAt time.Time
+
 	// spansStoredAt is when the sampling window over this batch has certainly
 	// closed. Before it, some of these spans may still be in the buffer.
 	spansStoredAt time.Time
@@ -147,6 +152,24 @@ func (q *commitQueue) drain() []position {
 // held reports how many records are waiting, which is the replay a crash would
 // cost and the number a lag dashboard would show.
 func (q *commitQueue) held() int { return q.count }
+
+// commitLag is how long the oldest batch still held has been waiting. Batches
+// are held in poll order, so the front one is the oldest. Nothing held is no
+// lag.
+//
+// About 70s is the designed steady state — a minute bucket, its grace and the
+// sampling window. A number that keeps climbing past that is a pipeline that
+// has stopped settling.
+func (q *commitQueue) commitLag(now time.Time) time.Duration {
+	if len(q.entries) == 0 {
+		return 0
+	}
+	oldest := q.entries[0].polledAt
+	if oldest.IsZero() || now.Before(oldest) {
+		return 0
+	}
+	return now.Sub(oldest)
+}
 
 // markable turns positions into the map franz-go marks, keeping the highest
 // offset per partition. Kafka commits the *next* offset to read, which is why

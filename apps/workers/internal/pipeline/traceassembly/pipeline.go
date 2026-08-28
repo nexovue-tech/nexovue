@@ -25,6 +25,16 @@ import (
 // not exit gets killed instead of drained.
 const drainTimeout = 15 * time.Second
 
+// heartbeatInterval is how often the pipeline says what it is holding. Without
+// it a healthy worker and a dead one are identical in the logs: one startup
+// line and then nothing. Periodic rather than per-batch, because a batch closes
+// every couple of seconds and a line each would be unreadable under load.
+//
+// Operational logging to stdout, not the self-instrumentation ADR 0053 defers —
+// it is the container-log fallback that ADR's second rule keeps independent of
+// the OTel pipeline, for reading when that pipeline is the broken thing.
+const heartbeatInterval = 30 * time.Second
+
 // Options are the collaborators the pipeline does not own.
 //
 // Both are optional. A worker with no control-plane connection masks with the
@@ -70,6 +80,11 @@ type Pipeline struct {
 	// not ready, however healthy its dependencies look — the failure that taught
 	// us this presented as a green container consuming nothing for nine minutes.
 	running atomic.Bool
+
+	// retimedSpans counts spans whose own timestamp was too far from receive
+	// time to bucket on. A number that climbs names a customer with a broken
+	// clock, and the warning that recorded each batch says which one.
+	retimedSpans uint64
 
 	log      *slog.Logger
 	limits   config.SpanIngest
@@ -189,6 +204,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 
 	var pending []*kgo.Record
 	var flushBy time.Time
+	nextHeartbeat := p.now().Add(heartbeatInterval)
 
 	for {
 		if ctx.Err() != nil {
@@ -225,10 +241,37 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		if err := p.settle(ctx); err != nil {
 			return err
 		}
+		if now := p.now(); !now.Before(nextHeartbeat) {
+			p.heartbeat(ctx, now)
+			nextHeartbeat = now.Add(heartbeatInterval)
+		}
 		// Held since this iteration's poll, so nothing committed above could
 		// have raced a reassignment.
 		p.consumer.AllowRebalance()
 	}
+}
+
+// heartbeat records what the pipeline is holding, at INFO, on a timer.
+//
+// Field names follow the control plane's request log — snake_case, and a
+// duration named `*_ms` and written as an integer — so one query reads the data
+// plane and the control plane together.
+func (p *Pipeline) heartbeat(ctx context.Context, now time.Time) {
+	stats := p.stages.buffer.Stats()
+	p.log.InfoContext(ctx, "ingest heartbeat",
+		slog.String("topic", p.limits.Topic),
+		slog.Int("buffered_traces", stats.OpenTraces),
+		slog.Int("buffered_spans", stats.BufferedSpans),
+		slog.Int("uncommitted_records", p.commits.held()),
+		// The two that show a wedge: commits that stop advancing while the
+		// counter map only grows.
+		slog.Int64("commit_lag_ms", p.commits.commitLag(now).Milliseconds()),
+		slog.Int("counter_series", p.stages.counters.Pending()),
+		slog.Uint64("spans_kept", stats.SpansKept),
+		slog.Uint64("spans_dropped", stats.SpansDropped),
+		slog.Uint64("traces_closed_early", stats.ClosedEarly),
+		slog.Uint64("spans_retimed", p.retimedSpans),
+	)
 }
 
 func (p *Pipeline) batchIsReady(pending []*kgo.Record, flushBy time.Time) bool {
@@ -294,11 +337,13 @@ func (p *Pipeline) absorb(ctx context.Context, records []*kgo.Record) error {
 	now := p.now()
 	entry := pendingCommit{
 		positions:     make([]position, 0, len(records)),
+		polledAt:      now,
 		spansStoredAt: now.Add(p.sampling.Window),
 	}
 
 	p.block.reset()
 	messages, spans := 0, 0
+	var skew skewReport
 	for _, record := range records {
 		entry.positions = append(entry.positions, positionOf(record))
 		// Both watermarks have to be consulted and the in-process one has to be
@@ -315,6 +360,7 @@ func (p *Pipeline) absorb(ctx context.Context, records []*kgo.Record) error {
 		}
 		p.appendRows(result.rows)
 		entry.latestMinute = later(entry.latestMinute, result.latestMinute)
+		skew.merge(result.skew)
 		spans += result.spans
 		messages++
 	}
@@ -323,6 +369,7 @@ func (p *Pipeline) absorb(ctx context.Context, records []*kgo.Record) error {
 		return err
 	}
 	p.commits.hold(entry)
+	p.reportSkew(ctx, skew)
 
 	stats := p.stages.buffer.Stats()
 	p.log.DebugContext(ctx, "batch absorbed",
@@ -337,6 +384,23 @@ func (p *Pipeline) absorb(ctx context.Context, records []*kgo.Record) error {
 		slog.Uint64("traces_closed_early", stats.ClosedEarly),
 	)
 	return nil
+}
+
+// reportSkew says once per batch that a client's clock was too far out to
+// count on, naming the worst offender. Once per batch rather than once per
+// span: a whole fleet with the wrong time would otherwise write a log line per
+// span, and the line is a pointer to go and look, not a census.
+func (p *Pipeline) reportSkew(ctx context.Context, skew skewReport) {
+	if skew.spans == 0 {
+		return
+	}
+	p.retimedSpans += uint64(skew.spans)
+	p.log.WarnContext(ctx, "counted spans at receive time; the client clock is too far out",
+		slog.Int("spans", skew.spans),
+		slog.String("tenant_id", skew.tenantID),
+		slog.String("project_id", skew.projectID),
+		slog.Int64("worst_skew_ms", skew.worst.Milliseconds()),
+	)
 }
 
 // alreadyCounted resolves a polled batch against the durable per-partition
@@ -465,9 +529,15 @@ func (p *Pipeline) commit(ctx context.Context, positions []position) error {
 // park sends an undecodable message to the dead-letter topic. Its offset is
 // only committed with the rest of its batch, so a park that fails is retried by
 // re-consuming rather than silently dropping the message.
+//
+// The message is attributed to the tenant and project the envelope named. That
+// is not decoration: a parked message skipped the mask stage by construction,
+// so the dead-letter topic holds unmasked customer data, and an exposure nobody
+// can attribute is one nobody can disclose or delete.
 func (p *Pipeline) park(ctx context.Context, record *kgo.Record, cause error) error {
+	details := parkContext(cause)
 	if err := p.retryTransient(ctx, "park to dead-letter", func(callCtx context.Context) error {
-		return p.parked.Park(callCtx, record, cause.Error(), dlq.Context{})
+		return p.parked.Park(callCtx, record, cause.Error(), details)
 	}); err != nil {
 		return err
 	}
@@ -476,9 +546,26 @@ func (p *Pipeline) park(ctx context.Context, record *kgo.Record, cause error) er
 		slog.Int("partition", int(record.Partition)),
 		slog.Int64("offset", record.Offset),
 		slog.String("dlq_topic", p.limits.DLQTopic),
+		slog.String("tenant_id", details.TenantID),
+		slog.String("project_id", details.ProjectID),
 		slog.String("error", cause.Error()),
 	)
 	return nil
+}
+
+// parkContext reads the coordinates the decoder established. An error carrying
+// none means the bytes were not our envelope at all, and the parked message is
+// honestly unattributed rather than attributed to a guess.
+func parkContext(cause error) dlq.Context {
+	var decodeErr *rejected
+	if !errors.As(cause, &decodeErr) {
+		return dlq.Context{}
+	}
+	return dlq.Context{
+		IngestID:  decodeErr.ingestID,
+		TenantID:  decodeErr.tenantID,
+		ProjectID: decodeErr.projectID,
+	}
 }
 
 func (p *Pipeline) appendRows(rows []spanRow) {

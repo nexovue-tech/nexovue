@@ -30,8 +30,10 @@ func (r spanRow) endpoint() string {
 // width and immutable, which makes it a map key with no further work.
 func (r spanRow) traceKey() string { return string(r.TraceID) }
 
-// countable is this span as the derive stage sees it.
-func (r spanRow) countable() derive.Span {
+// countable is this span as the derive stage sees it. receivedAt is what the
+// counters judge the client's timestamp against, so it is passed in rather than
+// stored on the row: it belongs to the message, not to the span.
+func (r spanRow) countable(receivedAt time.Time) derive.Span {
 	return derive.Span{
 		TenantID:    r.TenantID,
 		ProjectID:   r.ProjectID,
@@ -39,6 +41,7 @@ func (r spanRow) countable() derive.Span {
 		Endpoint:    r.endpoint(),
 		HTTPMethod:  r.HTTPMethod,
 		Timestamp:   r.Timestamp,
+		ReceivedAt:  receivedAt,
 		DurationMS:  r.DurationMS,
 		Errored:     r.errored(),
 	}
@@ -85,6 +88,38 @@ type absorbed struct {
 	rows         []spanRow
 	latestMinute time.Time
 	spans        int
+	skew         skewReport
+}
+
+// skewReport is what was seen of client clocks too far out to bucket on. It
+// names one offender rather than every one: the log line it becomes is a
+// pointer to go and look, not a census.
+type skewReport struct {
+	spans     int
+	worst     time.Duration
+	tenantID  string
+	projectID string
+}
+
+// observe folds in one span whose timestamp was not trusted.
+func (s *skewReport) observe(span derive.Span, discarded time.Duration) {
+	s.spans++
+	if magnitude := discarded.Abs(); magnitude > s.worst.Abs() {
+		s.worst = discarded
+		s.tenantID, s.projectID = span.TenantID, span.ProjectID
+	}
+}
+
+// merge folds one message's report into a batch's.
+func (s *skewReport) merge(other skewReport) {
+	if other.spans == 0 {
+		return
+	}
+	s.spans += other.spans
+	if other.worst.Abs() > s.worst.Abs() {
+		s.worst = other.worst
+		s.tenantID, s.projectID = other.tenantID, other.projectID
+	}
 }
 
 // absorbMessage runs one Kafka message through every stage.
@@ -101,12 +136,19 @@ func (s *stages) absorbMessage(now time.Time, message []byte, counted bool) (abs
 	// Mask first: from here on no stage can see the original values.
 	s.masker.MaskResourceSpans(payload.envelope.GetProjectId(), payload.request.GetResourceSpans())
 
+	receivedAt := payload.receivedAt(now)
+
 	var result absorbed
 	for _, row := range payload.rows() {
 		// Derive before sample: the counters see every span, whatever the
 		// sampler decides about the trace it belongs to (ADR 0010).
 		if counted {
-			result.latestMinute = later(result.latestMinute, s.counters.Observe(row.countable()))
+			countable := row.countable(receivedAt)
+			minute, discarded := s.counters.Observe(countable)
+			result.latestMinute = later(result.latestMinute, minute)
+			if discarded != 0 {
+				result.skew.observe(countable, discarded)
+			}
 		}
 		result.rows = append(result.rows, s.buffer.Add(now, row.sampleFacts(), row)...)
 		result.spans++

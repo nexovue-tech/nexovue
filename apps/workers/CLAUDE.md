@@ -20,6 +20,11 @@ sampling buffer *and* its counters out of their minute bucket. That is at-least-
 commits up to about 70s behind ingest by design — re-inserting an identical span row changes
 nothing, and `internal/pipeline/dedupe` is what stops a replay being counted twice.
 
+Because of that, **a bucket must always be able to settle**, so `derive` counts on the client's own
+span timestamp only while it is within a minute ahead of, or the broker's retention behind, the
+envelope's `received_at_unix_nano`; outside that it counts at receive time and says so. A client
+clock legitimately ahead of ours therefore adds its skew to the commit lag, up to that minute.
+
 A message that cannot be decoded is parked on `spans-dlq` with its reason and coordinates before
 its offset moves. **Nothing drains the dead-letter topic automatically**: a poison message that
 retries on a timer is an infinite loop with extra steps.

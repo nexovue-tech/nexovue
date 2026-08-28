@@ -38,6 +38,24 @@ const (
 // resolution a dashboard reads and the coarsest that still shows a spike.
 const bucketWidth = time.Minute
 
+// How far a client's own clock may put a span from the moment we received it
+// before we stop bucketing on it. A span timestamp is the customer's clock, and
+// we control neither its accuracy nor its range.
+const (
+	// trustedFutureSkew is one bucket width. A batch's offsets wait for the
+	// newest bucket it fed to settle, so every second of future tolerance is a
+	// second of consumer lag — and a bucket far enough ahead never settles at
+	// all, which stops commits for good. One bucket width is the widest
+	// tolerance that cannot cost more lag than the bucketing already does.
+	trustedFutureSkew = bucketWidth
+
+	// trustedPastSkew is the broker's own retention (deploy/kafka/topics.sh),
+	// because nothing legitimately delivered can be older than the buffer it
+	// was replayed from. Replaying a weekend outage into its real minutes is a
+	// deliberate capability, so the floor must not cut into it.
+	trustedPastSkew = 7 * 24 * time.Hour
+)
+
 // Span is one span as the counters see it. Endpoint is already resolved by the
 // caller, which owns the semantic-convention rules for finding it.
 type Span struct {
@@ -46,9 +64,37 @@ type Span struct {
 	ServiceName string
 	Endpoint    string
 	HTTPMethod  string
-	Timestamp   time.Time
-	DurationMS  float64
-	Errored     bool
+
+	// Timestamp is when the client says the span started.
+	Timestamp time.Time
+
+	// ReceivedAt is when we took the message carrying it — the only clock in
+	// the path we control, and so what Timestamp is judged against. A zero
+	// value leaves Timestamp unjudged; the caller is expected to always set it.
+	ReceivedAt time.Time
+
+	DurationMS float64
+	Errored    bool
+}
+
+// bucketInstant is the moment a span is counted at, and the skew discarded to
+// get there.
+//
+// A timestamp outside the trusted window is attributed to receive time rather
+// than clamped to the edge of the window or rejected. Clamping would still
+// leave a bucket in the future, which is the wedge itself only smaller;
+// rejecting would cost a count, and counts are exact before sampling by
+// invariant (ADR 0010). Receive time is both drainable and the closest thing to
+// the truth we have when the client's clock is not usable.
+func bucketInstant(span Span) (at time.Time, discarded time.Duration) {
+	if span.ReceivedAt.IsZero() {
+		return span.Timestamp, 0
+	}
+	skew := span.Timestamp.Sub(span.ReceivedAt)
+	if skew > trustedFutureSkew || skew < -trustedPastSkew {
+		return span.ReceivedAt, skew
+	}
+	return span.Timestamp, 0
 }
 
 // Point is one row of the `metrics` table.
@@ -104,9 +150,15 @@ func NewCounters(lateGrace time.Duration) *Counters {
 // span is counted exactly once, whatever the sampler later decides about the
 // trace it belongs to; the returned minute is what lets the caller know when
 // this span's counters have reached storage.
-func (c *Counters) Observe(span Span) time.Time {
+//
+// discardedSkew is how far the span's own timestamp sat from receive time when
+// that timestamp was not trusted, and zero when it was. It is returned rather
+// than logged here so the caller can report it once per batch instead of once
+// per span, and can name the tenant whose clock is wrong.
+func (c *Counters) Observe(span Span) (minute time.Time, discardedSkew time.Duration) {
+	at, discarded := bucketInstant(span)
 	key := series{
-		minute:     span.Timestamp.UTC().Truncate(bucketWidth),
+		minute:     at.UTC().Truncate(bucketWidth),
 		tenantID:   span.TenantID,
 		projectID:  span.ProjectID,
 		service:    span.ServiceName,
@@ -123,7 +175,7 @@ func (c *Counters) Observe(span Span) time.Time {
 	if span.Errored {
 		bucket.errors++
 	}
-	return key.minute
+	return key.minute, discarded
 }
 
 // Drained reports whether every counter for a minute has already been written.

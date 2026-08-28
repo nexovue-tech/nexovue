@@ -18,8 +18,10 @@ func span(at time.Time, service, endpoint string, durationMS float64, errored bo
 		Endpoint:    endpoint,
 		HTTPMethod:  "GET",
 		Timestamp:   at,
-		DurationMS:  durationMS,
-		Errored:     errored,
+		// These tests are about bucketing, so the client clock agrees with ours.
+		ReceivedAt: at,
+		DurationMS: durationMS,
+		Errored:    errored,
 	}
 }
 
@@ -145,7 +147,7 @@ func TestDrainAllWritesTheOpenMinute(t *testing.T) {
 // Drained has to agree with Drain about when that is.
 func TestDrainedAgreesWithDrain(t *testing.T) {
 	counters := derive.NewCounters(10 * time.Second)
-	minute := counters.Observe(span(base, "checkout", "/checkout", 1, false))
+	minute, _ := counters.Observe(span(base, "checkout", "/checkout", 1, false))
 
 	if counters.Drained(base.Add(65*time.Second), minute) {
 		t.Error("Drained() said yes while Drain() still holds the minute")

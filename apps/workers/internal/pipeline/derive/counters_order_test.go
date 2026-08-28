@@ -17,7 +17,8 @@ func TestDrainIsByteReproducible(t *testing.T) {
 		for _, service := range []string{"payments", "checkout", "storefront", "cart", "search"} {
 			for _, route := range []string{"/a", "/b", "/c"} {
 				counters.Observe(Span{
-					Timestamp: minute.Add(time.Second), TenantID: "t", ProjectID: "p",
+					Timestamp: minute.Add(time.Second), ReceivedAt: minute.Add(time.Second),
+					TenantID: "t", ProjectID: "p",
 					ServiceName: service, Endpoint: route, DurationMS: 5,
 				})
 			}
