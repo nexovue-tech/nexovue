@@ -1,0 +1,1 @@
+ALTER TABLE service_edges_1m RESET SETTING non_replicated_deduplication_window

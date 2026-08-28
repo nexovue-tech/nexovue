@@ -1,0 +1,14 @@
+-- 000014 created this table without the guard the counters carry, and the
+-- omission is mine. ADR 0060 turned on block deduplication for the metric
+-- tables because a repeated insert into a summing rollup changes the answer,
+-- unlike a repeated span row which is the same row again.
+--
+-- `service_edges_1m` is a summing rollup written directly by the worker, with
+-- its own insert and acknowledgement — so it is exactly ADR 0061's case: the
+-- insert lands, the acknowledgement is lost, the retry writes it again and the
+-- edge counts double.
+--
+-- `endpoint_stats_1m` is deliberately left without it. A materialized view
+-- fills it from `spans`, so it can only double-count if `spans` does, and the
+-- KeeperMap offset guard upstream is what stops that.
+ALTER TABLE service_edges_1m MODIFY SETTING non_replicated_deduplication_window = 1000
