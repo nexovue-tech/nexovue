@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 )
 
 // logsColumns is every column of the `logs` table, in declaration order:
@@ -78,15 +80,15 @@ func testRow() logRow {
 		RetentionDays:   30,
 		TenantID:        "tenant-a",
 		ProjectID:       "project-a",
-		TraceID:         hexID(testTraceID, traceIDHexLen),
-		SpanID:          hexID(testSpanID, spanIDHexLen),
+		TraceID:         otlpvalue.HexID(testTraceID, otlpvalue.TraceIDHexLen),
+		SpanID:          otlpvalue.HexID(testSpanID, otlpvalue.SpanIDHexLen),
 		ServiceName:     "checkout",
 		Severity:        "ERROR",
 		SeverityNumber:  17,
 		Body:            "payment declined",
-		BodyStructured:  emptyJSONObject,
-		ResourceAttrs:   emptyJSONObject,
-		LogAttrs:        emptyJSONObject,
+		BodyStructured:  otlpvalue.EmptyObject,
+		ResourceAttrs:   otlpvalue.EmptyObject,
+		LogAttrs:        otlpvalue.EmptyObject,
 		TimestampSource: timestampSourceEvent,
 	}
 }

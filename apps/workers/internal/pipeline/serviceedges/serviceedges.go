@@ -18,7 +18,11 @@
 // pipeline goroutine owns it, which is how the trace-assembly loop is built.
 package serviceedges
 
-import "time"
+import (
+	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/clocktrust"
+)
 
 // Span kinds, spelled as the flattened span row spells them: the OTLP enum name
 // with its `SPAN_KIND_` prefix removed.
@@ -51,24 +55,8 @@ const UninstrumentedService = "(uninstrumented)"
 // one bucket keeps it visible instead of dropping its dependencies.
 const UnknownService = "(unknown)"
 
-// bucketWidth is the resolution of the rollup, matching `derive`: the finest a
-// dashboard reads and the coarsest that still shows a spike.
-const bucketWidth = time.Minute
-
-// How far a client's own clock may put a span from the moment we received it
-// before we stop bucketing on it. Same rule and same reasoning as
-// `derive.bucketInstant`; both would be better served by one shared clock-trust
-// package, which is a change to `derive` and so not made here.
-const (
-	// trustedFutureSkew is one bucket width: a bucket further ahead than the
-	// bucketing itself costs would add lag for nothing, and a bucket far enough
-	// ahead never settles at all.
-	trustedFutureSkew = bucketWidth
-
-	// trustedPastSkew is the broker's own retention: nothing legitimately
-	// delivered can be older than the buffer it was replayed from.
-	trustedPastSkew = 7 * 24 * time.Hour
-)
+// The bucket width and the clock-trust bounds come from clocktrust, so edges
+// and counters cannot disagree about which clock a row is bucketed on.
 
 // Span is one span as edge derivation sees it. The row type it is mapped from
 // is deliberately not imported: this package pairs spans, and knowing nothing
@@ -156,31 +144,7 @@ func serviceOf(span Span) string {
 	return span.ServiceName
 }
 
-// bucketInstant is the moment a span is counted at, and the skew discarded to
-// get there.
-//
-// A timestamp outside the trusted window is attributed to our own clock rather
-// than clamped or rejected: clamping still leaves a bucket in the future, which
-// is the wedge itself only smaller, and rejecting costs a count that the
-// pre-sampling invariant says must be exact.
-//
-// A span with no ReceivedAt is judged against the moment it is being processed.
-// Leaving it unjudged instead — as an absent receive time invites — would let a
-// wrong client clock open a bucket arbitrarily far ahead, and a bucket that
-// never settles stops offsets committing for good.
-func bucketInstant(span Span, processingAt time.Time) (at time.Time, discarded time.Duration) {
-	reference := span.ReceivedAt
-	if reference.IsZero() {
-		reference = processingAt
-	}
-	skew := span.Timestamp.Sub(reference)
-	if skew > trustedFutureSkew || skew < -trustedPastSkew {
-		return reference, skew
-	}
-	return span.Timestamp, 0
-}
-
-func startOfMinute(at time.Time) time.Time { return at.UTC().Truncate(bucketWidth) }
+func startOfMinute(at time.Time) time.Time { return at.UTC().Truncate(clocktrust.Bucket) }
 
 func later(a, b time.Time) time.Time {
 	if b.After(a) {

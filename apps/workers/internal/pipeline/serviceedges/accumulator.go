@@ -4,6 +4,8 @@ import (
 	"errors"
 	"sort"
 	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/clocktrust"
 )
 
 // Options bound the accumulator. Every limit is required: an unbounded map on
@@ -122,7 +124,7 @@ func New(opts Options) (*Accumulator, error) {
 // than logged so the caller can report it once per batch and name the tenant
 // whose clock is wrong.
 func (a *Accumulator) Observe(now time.Time, span Span) (minute time.Time, discardedSkew time.Duration) {
-	at, discarded := bucketInstant(span, now)
+	at, discarded := clocktrust.Instant(span.Timestamp, span.ReceivedAt, now)
 	for _, resolved := range a.pending.add(observedSpan{span: span, bucketAt: at, arrived: now}) {
 		a.record(resolved)
 	}
@@ -197,7 +199,7 @@ func (a *Accumulator) Drained(now, minute time.Time) bool {
 // has run out, and any span still waiting to pair when it ended has since been
 // settled.
 func (a *Accumulator) closed(now, minute time.Time) bool {
-	settlesAt := minute.Add(bucketWidth + a.opts.PairWindow + a.opts.LateGrace)
+	settlesAt := minute.Add(clocktrust.Bucket + a.opts.PairWindow + a.opts.LateGrace)
 	return !settlesAt.After(now.UTC())
 }
 

@@ -154,7 +154,7 @@ func (s *stages) absorbMessage(now time.Time, message []byte, counted bool) (abs
 		// sampler decides about the trace it belongs to (ADR 0010).
 		if counted {
 			countable := row.countable(receivedAt, derivedDays)
-			minute, discarded := s.counters.Observe(countable)
+			minute, discarded := s.counters.Observe(now, countable)
 			result.latestMinute = later(result.latestMinute, minute)
 			if discarded != 0 {
 				result.skew.observe(countable, discarded)

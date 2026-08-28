@@ -3,6 +3,8 @@ package traceassembly
 import (
 	"testing"
 
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
+
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 )
 
@@ -37,17 +39,17 @@ func TestAttributesJSONRendersEveryOTLPValueShape(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := attributesJSON([]*commonpb.KeyValue{attribute("k", tc.value)})
+			got := otlpvalue.AttributesJSON([]*commonpb.KeyValue{attribute("k", tc.value)})
 			if got != tc.want {
-				t.Errorf("attributesJSON() = %s, want %s", got, tc.want)
+				t.Errorf("otlpvalue.AttributesJSON() = %s, want %s", got, tc.want)
 			}
 		})
 	}
 }
 
 func TestAttributesJSONWithNothingToRenderIsAnEmptyObject(t *testing.T) {
-	if got := attributesJSON(nil); got != emptyJSONObject {
-		t.Errorf("attributesJSON(nil) = %s, want %s", got, emptyJSONObject)
+	if got := otlpvalue.AttributesJSON(nil); got != otlpvalue.EmptyObject {
+		t.Errorf("otlpvalue.AttributesJSON(nil) = %s, want %s", got, otlpvalue.EmptyObject)
 	}
 }
 
@@ -58,8 +60,8 @@ func TestAttributesWithoutAKeyAreDropped(t *testing.T) {
 		attribute("", stringValue("orphan")),
 		attribute("kept", stringValue("v")),
 	}
-	if got := attributesJSON(attributes); got != `{"kept":"v"}` {
-		t.Errorf("attributesJSON() = %s, want {\"kept\":\"v\"}", got)
+	if got := otlpvalue.AttributesJSON(attributes); got != `{"kept":"v"}` {
+		t.Errorf("otlpvalue.AttributesJSON() = %s, want {\"kept\":\"v\"}", got)
 	}
 }
 
@@ -72,17 +74,17 @@ func TestPromotedLookupsIgnoreValuesOfTheWrongType(t *testing.T) {
 		}),
 	}
 
-	if _, ok := stringAttribute(attributes, "as.int"); ok {
+	if _, ok := otlpvalue.String(attributes, "as.int"); ok {
 		t.Error("stringAttribute accepted an int; a promoted string column would hold nonsense")
 	}
-	if _, ok := intAttribute(attributes, "as.string"); ok {
+	if _, ok := otlpvalue.Int(attributes, "as.string"); ok {
 		t.Error("intAttribute accepted a string")
 	}
 	// Some SDKs emit a status as a double; that is still a usable status.
-	if got, ok := intAttribute(attributes, "as.double"); !ok || got != 503 {
-		t.Errorf("intAttribute(as.double) = %d, %v; want 503, true", got, ok)
+	if got, ok := otlpvalue.Int(attributes, "as.double"); !ok || got != 503 {
+		t.Errorf("otlpvalue.Int(as.double) = %d, %v; want 503, true", got, ok)
 	}
-	if _, ok := stringAttribute(attributes, "absent"); ok {
+	if _, ok := otlpvalue.String(attributes, "absent"); ok {
 		t.Error("stringAttribute reported a value for a key that is not there")
 	}
 }

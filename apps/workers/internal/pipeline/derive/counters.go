@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"sort"
 	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/clocktrust"
 )
 
 // The derived metric names. They are a stable contract — a dashboard, an alert
@@ -34,27 +36,9 @@ const (
 	attrHTTPMethod = "http_method"
 )
 
-// bucketWidth is the resolution of the counters. Per-minute is the finest
-// resolution a dashboard reads and the coarsest that still shows a spike.
-const bucketWidth = time.Minute
-
-// How far a client's own clock may put a span from the moment we received it
-// before we stop bucketing on it. A span timestamp is the customer's clock, and
-// we control neither its accuracy nor its range.
-const (
-	// trustedFutureSkew is one bucket width. A batch's offsets wait for the
-	// newest bucket it fed to settle, so every second of future tolerance is a
-	// second of consumer lag — and a bucket far enough ahead never settles at
-	// all, which stops commits for good. One bucket width is the widest
-	// tolerance that cannot cost more lag than the bucketing already does.
-	trustedFutureSkew = bucketWidth
-
-	// trustedPastSkew is the broker's own retention (deploy/kafka/topics.sh),
-	// because nothing legitimately delivered can be older than the buffer it
-	// was replayed from. Replaying a weekend outage into its real minutes is a
-	// deliberate capability, so the floor must not cut into it.
-	trustedPastSkew = 7 * 24 * time.Hour
-)
+// The bucket width and the clock-trust bounds are clocktrust's, so the counters
+// and the edge accumulator cannot end up disagreeing about which clock a row is
+// bucketed on.
 
 // Span is one span as the counters see it. Endpoint is already resolved by the
 // caller, which owns the semantic-convention rules for finding it.
@@ -80,26 +64,6 @@ type Span struct {
 	Errored    bool
 }
 
-// bucketInstant is the moment a span is counted at, and the skew discarded to
-// get there.
-//
-// A timestamp outside the trusted window is attributed to receive time rather
-// than clamped to the edge of the window or rejected. Clamping would still
-// leave a bucket in the future, which is the wedge itself only smaller;
-// rejecting would cost a count, and counts are exact before sampling by
-// invariant (ADR 0010). Receive time is both drainable and the closest thing to
-// the truth we have when the client's clock is not usable.
-func bucketInstant(span Span) (at time.Time, discarded time.Duration) {
-	if span.ReceivedAt.IsZero() {
-		return span.Timestamp, 0
-	}
-	skew := span.Timestamp.Sub(span.ReceivedAt)
-	if skew > trustedFutureSkew || skew < -trustedPastSkew {
-		return span.ReceivedAt, skew
-	}
-	return span.Timestamp, 0
-}
-
 // Point is one row of the `metrics` table.
 type Point struct {
 	Timestamp     time.Time
@@ -116,7 +80,7 @@ type Point struct {
 // and the bucket runs from its own minute to the next. Computed in one place so
 // the inserted row and the read-back that checks for it cannot disagree.
 func (p Point) interval() (start, end time.Time) {
-	return p.Timestamp, p.Timestamp.Add(bucketWidth)
+	return p.Timestamp, p.Timestamp.Add(clocktrust.Bucket)
 }
 
 // intervalEndForQuery is the stored `timestamp` in the text form a query binds.
@@ -175,10 +139,10 @@ func NewCounters(lateGrace time.Duration) *Counters {
 // that timestamp was not trusted, and zero when it was. It is returned rather
 // than logged here so the caller can report it once per batch instead of once
 // per span, and can name the tenant whose clock is wrong.
-func (c *Counters) Observe(span Span) (minute time.Time, discardedSkew time.Duration) {
-	at, discarded := bucketInstant(span)
+func (c *Counters) Observe(now time.Time, span Span) (minute time.Time, discardedSkew time.Duration) {
+	at, discarded := clocktrust.Instant(span.Timestamp, span.ReceivedAt, now)
 	key := series{
-		minute:        at.UTC().Truncate(bucketWidth),
+		minute:        at.UTC().Truncate(clocktrust.Bucket),
 		tenantID:      span.TenantID,
 		projectID:     span.ProjectID,
 		service:       span.ServiceName,
@@ -205,7 +169,7 @@ func (c *Counters) Drained(now, minute time.Time) bool {
 	if minute.IsZero() {
 		return true
 	}
-	return !minute.Add(bucketWidth).After(now.UTC().Add(-c.lateGrace))
+	return !minute.Add(clocktrust.Bucket).After(now.UTC().Add(-c.lateGrace))
 }
 
 // Drain returns rows for every minute that has ended and outlived the grace
@@ -213,7 +177,7 @@ func (c *Counters) Drained(now, minute time.Time) bool {
 func (c *Counters) Drain(now time.Time) []Point {
 	deadline := now.UTC().Add(-c.lateGrace)
 	return c.drain(func(minute time.Time) bool {
-		return !minute.Add(bucketWidth).After(deadline)
+		return !minute.Add(clocktrust.Bucket).After(deadline)
 	})
 }
 

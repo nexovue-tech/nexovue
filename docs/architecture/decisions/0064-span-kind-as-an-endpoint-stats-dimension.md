@@ -3,10 +3,15 @@
 - **Status:** Accepted
 - **Date:** 2026-08-28
 
+
+> **Migration numbers in this record predate the 2026-08-28 squash.** The migrations named
+> here no longer exist as separate files; each table's final shape is now one file, and the
+> links point there. See [0073](0073-migrations-squashed-before-m3.md).
+
 ## Context
 
 The materialized view feeding `endpoint_stats_1m`
-([000009](../../../deploy/clickhouse/migrations/000009_endpoint_stats_1m_mv.up.sql)) had no
+(its view migration, now [000012_endpoint_stats_1m_mv](../../../deploy/clickhouse/migrations/000012_endpoint_stats_1m_mv.up.sql)) had no
 `span_kind` predicate, and the target table had no `span_kind` column. Every span was rolled up as a
 request served — including CLIENT spans, which are calls the service *made*, and INTERNAL spans,
 which are not requests at all.

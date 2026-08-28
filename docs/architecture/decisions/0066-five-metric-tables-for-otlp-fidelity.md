@@ -6,7 +6,7 @@
 
 ## Context
 
-`metrics` ([000003](../../../deploy/clickhouse/migrations/000003_metrics.up.sql), sort key amended by
+`metrics` ([000003](../../../deploy/clickhouse/migrations/000003_metrics_sum.up.sql), sort key amended by
 000007) is one `Float64` per row. OTLP metrics do not fit in it. Missing: aggregation temporality,
 start timestamp, monotonicity, histogram bucket counts and bounds, exponential histogram scale, zero
 count and offsets, summary quantiles, exemplars, and the no-recorded-value flag.

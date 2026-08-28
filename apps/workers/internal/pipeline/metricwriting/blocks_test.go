@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
+
 	"github.com/ClickHouse/ch-go/proto"
 )
 
@@ -205,12 +207,12 @@ func TestExemplarArraysStayInStep(t *testing.T) {
 	block := newGaugeBlock()
 	block.append(gaugeRow{point: point{
 		Timestamp: testTime, StartTimestamp: testTime, ReceivedAt: testTime,
-		Attrs: emptyJSONObject, ResourceAttrs: emptyJSONObject,
+		Attrs: otlpvalue.EmptyObject, ResourceAttrs: otlpvalue.EmptyObject,
 		Exemplars: exemplars{
 			Timestamps: []time.Time{testTime, testTime},
 			Values:     []float64{1, 2},
-			TraceIDs:   [][]byte{hexID(nil, traceIDHexLen), hexID(nil, traceIDHexLen)},
-			SpanIDs:    [][]byte{hexID(nil, spanIDHexLen), hexID(nil, spanIDHexLen)},
+			TraceIDs:   [][]byte{otlpvalue.HexID(nil, otlpvalue.TraceIDHexLen), otlpvalue.HexID(nil, otlpvalue.TraceIDHexLen)},
+			SpanIDs:    [][]byte{otlpvalue.HexID(nil, otlpvalue.SpanIDHexLen), otlpvalue.HexID(nil, otlpvalue.SpanIDHexLen)},
 		},
 	}})
 	block.append(gaugeRow{point: testPoint()}) // No exemplars at all.
@@ -241,8 +243,8 @@ func testPoint() point {
 		ScopeVersion:   "1.44.0",
 		MetricName:     "http.server.duration",
 		MetricUnit:     "ms",
-		ResourceAttrs:  emptyJSONObject,
-		Attrs:          emptyJSONObject,
+		ResourceAttrs:  otlpvalue.EmptyObject,
+		Attrs:          otlpvalue.EmptyObject,
 	}
 }
 

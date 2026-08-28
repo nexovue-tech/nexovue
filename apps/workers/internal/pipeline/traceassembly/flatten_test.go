@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
+
 	tracesvc "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
@@ -268,8 +270,8 @@ func TestFlattenFillsTheIdentityColumns(t *testing.T) {
 func TestRootSpanParentIsTheEmptyFixedStringValue(t *testing.T) {
 	row := flattenOne(t, marshalEnvelope(t, "1.27.0", spanOptions{parentSpanID: nil}))
 
-	if len(row.ParentSpanID) != spanIDHexLen {
-		t.Fatalf("len(ParentSpanID) = %d, want %d", len(row.ParentSpanID), spanIDHexLen)
+	if len(row.ParentSpanID) != otlpvalue.SpanIDHexLen {
+		t.Fatalf("len(ParentSpanID) = %d, want %d", len(row.ParentSpanID), otlpvalue.SpanIDHexLen)
 	}
 	for i, b := range row.ParentSpanID {
 		if b != 0 {
@@ -285,15 +287,15 @@ func TestIDColumnsAreAlwaysExactlyTheirColumnWidth(t *testing.T) {
 		id    []byte
 		width int
 	}{
-		"absent":              {nil, spanIDHexLen},
-		"correct length":      {testSpanID, spanIDHexLen},
-		"shorter than a span": {[]byte{0x01, 0x02}, spanIDHexLen},
-		"longer than a trace": {append(append([]byte{}, testTraceID...), testTraceID...), traceIDHexLen},
+		"absent":              {nil, otlpvalue.SpanIDHexLen},
+		"correct length":      {testSpanID, otlpvalue.SpanIDHexLen},
+		"shorter than a span": {[]byte{0x01, 0x02}, otlpvalue.SpanIDHexLen},
+		"longer than a trace": {append(append([]byte{}, testTraceID...), testTraceID...), otlpvalue.TraceIDHexLen},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := hexID(tc.id, tc.width); len(got) != tc.width {
-				t.Errorf("len(hexID(...)) = %d, want %d", len(got), tc.width)
+			if got := otlpvalue.HexID(tc.id, tc.width); len(got) != tc.width {
+				t.Errorf("len(otlpvalue.HexID(...)) = %d, want %d", len(got), tc.width)
 			}
 		})
 	}
@@ -344,8 +346,8 @@ func TestEmptyAttributesAndEventsStillProduceValidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("flattenEnvelope() = %v, want no error", err)
 	}
-	if got := rows[0].SpanAttrs; got != emptyJSONObject {
-		t.Errorf("SpanAttrs = %q, want %q", got, emptyJSONObject)
+	if got := rows[0].SpanAttrs; got != otlpvalue.EmptyObject {
+		t.Errorf("SpanAttrs = %q, want %q", got, otlpvalue.EmptyObject)
 	}
 	if got := rows[0].Events; got != "[]" {
 		t.Errorf("Events = %q, want []", got)

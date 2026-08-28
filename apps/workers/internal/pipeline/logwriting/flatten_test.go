@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
+
 	logsvc "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
@@ -88,7 +90,7 @@ func TestBodyIsRenderedTextBesideTheTypedMap(t *testing.T) {
 		"a string body is the text itself": {
 			body:           stringValue("payment declined"),
 			wantText:       "payment declined",
-			wantStructured: emptyJSONObject,
+			wantStructured: otlpvalue.EmptyObject,
 		},
 		"a map body is stored both ways": {
 			body: &commonpb.AnyValue{Value: &commonpb.AnyValue_KvlistValue{
@@ -102,7 +104,7 @@ func TestBodyIsRenderedTextBesideTheTypedMap(t *testing.T) {
 		"a number body keeps its JSON text": {
 			body:           &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: 42}},
 			wantText:       "42",
-			wantStructured: emptyJSONObject,
+			wantStructured: otlpvalue.EmptyObject,
 		},
 		"an array body keeps its JSON text": {
 			body: &commonpb.AnyValue{Value: &commonpb.AnyValue_ArrayValue{
@@ -111,12 +113,12 @@ func TestBodyIsRenderedTextBesideTheTypedMap(t *testing.T) {
 				}},
 			}},
 			wantText:       `["a","b"]`,
-			wantStructured: emptyJSONObject,
+			wantStructured: otlpvalue.EmptyObject,
 		},
 		"an absent body is empty rather than null": {
 			body:           nil,
 			wantText:       "",
-			wantStructured: emptyJSONObject,
+			wantStructured: otlpvalue.EmptyObject,
 		},
 	}
 	for name, tc := range cases {
@@ -147,7 +149,7 @@ func TestFlattenSplitsAttributesAndPromotesTheException(t *testing.T) {
 	if row.ResourceAttrs != `{"service.name":"checkout"}` {
 		t.Errorf("resource_attrs = %q, want the resource attributes", row.ResourceAttrs)
 	}
-	if row.LogAttrs == emptyJSONObject || row.ResourceAttrs == row.LogAttrs {
+	if row.LogAttrs == otlpvalue.EmptyObject || row.ResourceAttrs == row.LogAttrs {
 		t.Errorf("log_attrs = %q, want the record's own attributes", row.LogAttrs)
 	}
 	if row.ExceptionType != "ValueError" || row.ExceptionMessage != "bad card" {
@@ -177,9 +179,9 @@ func TestIDsAreHexAtTheDeclaredWidth(t *testing.T) {
 	}
 	row := payload.rows(testStamps())[0]
 
-	if len(row.TraceID) != traceIDHexLen || len(row.SpanID) != spanIDHexLen {
+	if len(row.TraceID) != otlpvalue.TraceIDHexLen || len(row.SpanID) != otlpvalue.SpanIDHexLen {
 		t.Fatalf("id widths = (%d, %d), want (%d, %d)",
-			len(row.TraceID), len(row.SpanID), traceIDHexLen, spanIDHexLen)
+			len(row.TraceID), len(row.SpanID), otlpvalue.TraceIDHexLen, otlpvalue.SpanIDHexLen)
 	}
 	if string(row.TraceID) != hex.EncodeToString(testTraceID) {
 		t.Errorf("trace_id = %q, want the hex of the record's id", row.TraceID)
@@ -190,7 +192,7 @@ func TestIDsAreHexAtTheDeclaredWidth(t *testing.T) {
 		request:  requestWithOneRecord(&logspb.LogRecord{}),
 	}
 	bare := untraced.rows(testStamps())[0]
-	if len(bare.TraceID) != traceIDHexLen || len(bare.SpanID) != spanIDHexLen {
+	if len(bare.TraceID) != otlpvalue.TraceIDHexLen || len(bare.SpanID) != otlpvalue.SpanIDHexLen {
 		t.Errorf("a record with no trace context wrote ids of width (%d, %d)",
 			len(bare.TraceID), len(bare.SpanID))
 	}

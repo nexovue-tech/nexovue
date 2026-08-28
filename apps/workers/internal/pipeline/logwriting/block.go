@@ -2,6 +2,8 @@ package logwriting
 
 import (
 	"github.com/ClickHouse/ch-go/proto"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 )
 
 // logsTable is the insert target, named once so the statement and the column
@@ -40,8 +42,8 @@ func newLogBlock() *logBlock {
 	block := &logBlock{
 		tenantID:        new(proto.ColStr).LowCardinality(),
 		projectID:       new(proto.ColStr).LowCardinality(),
-		traceID:         proto.ColFixedStr{Size: traceIDHexLen},
-		spanID:          proto.ColFixedStr{Size: spanIDHexLen},
+		traceID:         proto.ColFixedStr{Size: otlpvalue.TraceIDHexLen},
+		spanID:          proto.ColFixedStr{Size: otlpvalue.SpanIDHexLen},
 		serviceName:     new(proto.ColStr).LowCardinality(),
 		severity:        new(proto.ColStr).LowCardinality(),
 		exceptionType:   new(proto.ColStr).LowCardinality(),

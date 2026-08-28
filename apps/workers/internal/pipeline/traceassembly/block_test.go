@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 )
 
 // spansColumns is every column of the `spans` table, in declaration order.
@@ -76,9 +78,9 @@ func testRow() spanRow {
 		Timestamp:     time.Unix(0, 1_700_000_000_000_000_000).UTC(),
 		TenantID:      "tenant-a",
 		ProjectID:     "project-a",
-		TraceID:       hexID(testTraceID, traceIDHexLen),
-		SpanID:        hexID(testSpanID, spanIDHexLen),
-		ParentSpanID:  hexID(nil, spanIDHexLen),
+		TraceID:       otlpvalue.HexID(testTraceID, otlpvalue.TraceIDHexLen),
+		SpanID:        otlpvalue.HexID(testSpanID, otlpvalue.SpanIDHexLen),
+		ParentSpanID:  otlpvalue.HexID(nil, otlpvalue.SpanIDHexLen),
 		ServiceName:   "checkout",
 		SpanName:      "GET /orders/:id",
 		SpanKind:      "SERVER",
@@ -87,8 +89,8 @@ func testRow() spanRow {
 		HTTPMethod:    "GET",
 		HTTPRoute:     "/orders/:id",
 		HTTPStatus:    200,
-		ResourceAttrs: emptyJSONObject,
-		SpanAttrs:     emptyJSONObject,
+		ResourceAttrs: otlpvalue.EmptyObject,
+		SpanAttrs:     otlpvalue.EmptyObject,
 		Events:        "[]",
 	}
 }

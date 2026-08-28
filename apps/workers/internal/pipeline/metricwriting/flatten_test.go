@@ -14,6 +14,7 @@ import (
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 )
 
 const (
@@ -250,14 +251,14 @@ func TestExemplarsCarryTheTraceTheyPointAt(t *testing.T) {
 		t.Fatalf("gauge rows = %d, want 1", len(out.gauge))
 	}
 	got := out.gauge[0].Exemplars
-	if len(got.TraceIDs) != 1 || len(got.TraceIDs[0]) != traceIDHexLen {
-		t.Fatalf("exemplar trace ids = %v, want one of %d bytes", got.TraceIDs, traceIDHexLen)
+	if len(got.TraceIDs) != 1 || len(got.TraceIDs[0]) != otlpvalue.TraceIDHexLen {
+		t.Fatalf("exemplar trace ids = %v, want one of %d bytes", got.TraceIDs, otlpvalue.TraceIDHexLen)
 	}
 	if string(got.TraceIDs[0]) != "0102030405060708090a0b0c0d0e0f10" {
 		t.Errorf("trace id = %q, want it hex-encoded", got.TraceIDs[0])
 	}
-	if len(got.SpanIDs[0]) != spanIDHexLen {
-		t.Errorf("span id is %d bytes, want %d", len(got.SpanIDs[0]), spanIDHexLen)
+	if len(got.SpanIDs[0]) != otlpvalue.SpanIDHexLen {
+		t.Errorf("span id is %d bytes, want %d", len(got.SpanIDs[0]), otlpvalue.SpanIDHexLen)
 	}
 	if got.Values[0] != 1.25 {
 		t.Errorf("exemplar value = %v, want 1.25", got.Values[0])

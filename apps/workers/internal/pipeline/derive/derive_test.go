@@ -10,6 +10,10 @@ import (
 
 var base = time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC)
 
+// now is the processing clock. It decides the bucket only for a span carrying
+// no received_at of its own.
+var now = base
+
 func span(at time.Time, service, endpoint string, durationMS float64, errored bool) derive.Span {
 	return derive.Span{
 		TenantID:    "tenant-1",
@@ -38,10 +42,10 @@ func valuesByMetric(points []derive.Point) map[string]float64 {
 func TestCountersTotalEverySpanTheySee(t *testing.T) {
 	counters := derive.NewCounters(0)
 	for range 7 {
-		counters.Observe(span(base, "checkout", "/checkout", 10, false))
+		counters.Observe(now, span(base, "checkout", "/checkout", 10, false))
 	}
 	for range 3 {
-		counters.Observe(span(base, "checkout", "/checkout", 100, true))
+		counters.Observe(now, span(base, "checkout", "/checkout", 100, true))
 	}
 
 	totals := valuesByMetric(counters.Drain(base.Add(2 * time.Minute)))
@@ -59,9 +63,9 @@ func TestCountersTotalEverySpanTheySee(t *testing.T) {
 
 func TestCountersSplitBySeries(t *testing.T) {
 	counters := derive.NewCounters(0)
-	counters.Observe(span(base, "checkout", "/checkout", 1, false))
-	counters.Observe(span(base, "payments", "/charge", 1, false))
-	counters.Observe(span(base.Add(time.Minute), "checkout", "/checkout", 1, false))
+	counters.Observe(now, span(base, "checkout", "/checkout", 1, false))
+	counters.Observe(now, span(base, "payments", "/charge", 1, false))
+	counters.Observe(now, span(base.Add(time.Minute), "checkout", "/checkout", 1, false))
 
 	points := counters.Drain(base.Add(3 * time.Minute))
 	counts := 0
@@ -77,7 +81,7 @@ func TestCountersSplitBySeries(t *testing.T) {
 
 func TestEachRowCarriesTheDimensionsThatAreNotColumns(t *testing.T) {
 	counters := derive.NewCounters(0)
-	counters.Observe(span(base, "checkout", "/checkout", 1, false))
+	counters.Observe(now, span(base, "checkout", "/checkout", 1, false))
 
 	points := counters.Drain(base.Add(2 * time.Minute))
 	if len(points) == 0 {
@@ -104,7 +108,7 @@ func TestEachRowCarriesTheDimensionsThatAreNotColumns(t *testing.T) {
 // that nothing later corrects.
 func TestAnOpenMinuteIsNotDrained(t *testing.T) {
 	counters := derive.NewCounters(10 * time.Second)
-	counters.Observe(span(base, "checkout", "/checkout", 1, false))
+	counters.Observe(now, span(base, "checkout", "/checkout", 1, false))
 
 	if points := counters.Drain(base.Add(65 * time.Second)); len(points) != 0 {
 		t.Errorf("Drain() returned %d points before the grace period, want none", len(points))
@@ -118,10 +122,10 @@ func TestAnOpenMinuteIsNotDrained(t *testing.T) {
 // summed on read, so the second row costs a row and not accuracy.
 func TestALateSpanReopensItsMinuteRatherThanBeingLost(t *testing.T) {
 	counters := derive.NewCounters(0)
-	counters.Observe(span(base, "checkout", "/checkout", 1, false))
+	counters.Observe(now, span(base, "checkout", "/checkout", 1, false))
 	first := valuesByMetric(counters.Drain(base.Add(2 * time.Minute)))
 
-	counters.Observe(span(base, "checkout", "/checkout", 1, false))
+	counters.Observe(now, span(base, "checkout", "/checkout", 1, false))
 	second := valuesByMetric(counters.Drain(base.Add(3 * time.Minute)))
 
 	if total := first[derive.MetricSpanCount] + second[derive.MetricSpanCount]; total != 2 {
@@ -133,7 +137,7 @@ func TestALateSpanReopensItsMinuteRatherThanBeingLost(t *testing.T) {
 // graph that nothing will ever fill.
 func TestDrainAllWritesTheOpenMinute(t *testing.T) {
 	counters := derive.NewCounters(time.Hour)
-	counters.Observe(span(base, "checkout", "/checkout", 1, false))
+	counters.Observe(now, span(base, "checkout", "/checkout", 1, false))
 
 	if totals := valuesByMetric(counters.DrainAll()); totals[derive.MetricSpanCount] != 1 {
 		t.Errorf("DrainAll() counted %v spans, want 1", totals[derive.MetricSpanCount])
@@ -147,7 +151,7 @@ func TestDrainAllWritesTheOpenMinute(t *testing.T) {
 // Drained has to agree with Drain about when that is.
 func TestDrainedAgreesWithDrain(t *testing.T) {
 	counters := derive.NewCounters(10 * time.Second)
-	minute, _ := counters.Observe(span(base, "checkout", "/checkout", 1, false))
+	minute, _ := counters.Observe(now, span(base, "checkout", "/checkout", 1, false))
 
 	if counters.Drained(base.Add(65*time.Second), minute) {
 		t.Error("Drained() said yes while Drain() still holds the minute")

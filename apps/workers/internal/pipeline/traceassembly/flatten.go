@@ -1,12 +1,13 @@
 package traceassembly
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
 	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 
 	tracesvc "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
@@ -16,13 +17,6 @@ import (
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
-)
-
-// Widths of the hex-encoded id columns, which are FixedString in ClickHouse and
-// so must be written at exactly their declared size.
-const (
-	traceIDHexLen = 32
-	spanIDHexLen  = 16
 )
 
 // attrServiceName and attrServiceVersion are the resource attributes behind two
@@ -116,7 +110,7 @@ func flattenRequest(
 	for _, resourceSpans := range request.GetResourceSpans() {
 		resourceAttrs := resourceSpans.GetResource().GetAttributes()
 		shared := resourceFacts{
-			attrsJSON:   attributesJSON(resourceAttrs),
+			attrsJSON:   otlpvalue.AttributesJSON(resourceAttrs),
 			serviceName: attributeOrEmpty(resourceAttrs, attrServiceName),
 			version:     attributeOrEmpty(resourceAttrs, attrServiceVersion),
 		}
@@ -153,9 +147,9 @@ func flattenSpan(
 		Timestamp:         unixNanoTime(span.GetStartTimeUnixNano()),
 		TenantID:          envelope.GetTenantId(),
 		ProjectID:         envelope.GetProjectId(),
-		TraceID:           hexID(span.GetTraceId(), traceIDHexLen),
-		SpanID:            hexID(span.GetSpanId(), spanIDHexLen),
-		ParentSpanID:      hexID(span.GetParentSpanId(), spanIDHexLen),
+		TraceID:           otlpvalue.HexID(span.GetTraceId(), otlpvalue.TraceIDHexLen),
+		SpanID:            otlpvalue.HexID(span.GetSpanId(), otlpvalue.SpanIDHexLen),
+		ParentSpanID:      otlpvalue.HexID(span.GetParentSpanId(), otlpvalue.SpanIDHexLen),
 		ServiceName:       resource.serviceName,
 		SpanName:          span.GetName(),
 		SpanKind:          spanKindName(span.GetKind()),
@@ -167,7 +161,7 @@ func flattenSpan(
 		HTTPStatus:        promoted.status,
 		DeploymentVersion: resource.version,
 		ResourceAttrs:     resource.attrsJSON,
-		SpanAttrs:         attributesJSON(attributes),
+		SpanAttrs:         otlpvalue.AttributesJSON(attributes),
 		Events:            eventsJSON(span.GetEvents()),
 		// Carried for the sampler alone, which reads an explicit `rv` out of it
 		// when a producer upstream has already fixed the trace's randomness. Not
@@ -190,13 +184,13 @@ func promotedHTTP(attributes []*commonpb.KeyValue, names [2]httpAttributeNames) 
 	var promoted promotedValues
 	for _, generation := range names {
 		if promoted.method == "" {
-			promoted.method, _ = stringAttribute(attributes, generation.method)
+			promoted.method, _ = otlpvalue.String(attributes, generation.method)
 		}
 		if promoted.route == "" {
-			promoted.route, _ = stringAttribute(attributes, generation.route)
+			promoted.route, _ = otlpvalue.String(attributes, generation.route)
 		}
 		if promoted.status == 0 {
-			if status, ok := intAttribute(attributes, generation.status); ok {
+			if status, ok := otlpvalue.Int(attributes, generation.status); ok {
 				promoted.status = clampStatus(status)
 			}
 		}
@@ -234,7 +228,7 @@ func eventsJSON(events []*tracepb.Span_Event) string {
 		rendered = append(rendered, spanEvent{
 			Timestamp:  unixNanoTime(event.GetTimeUnixNano()).Format(time.RFC3339Nano),
 			Name:       event.GetName(),
-			Attributes: attributesMap(event.GetAttributes()),
+			Attributes: otlpvalue.AttributesMap(event.GetAttributes()),
 		})
 	}
 	encoded, err := json.Marshal(rendered)
@@ -267,13 +261,6 @@ func durationMS(startUnixNano, endUnixNano uint64) float64 {
 // hexID hex-encodes a binary id into exactly width bytes. A root span's parent
 // is absent, which becomes the FixedString empty value — zero bytes, not null.
 // A malformed id is padded or truncated rather than costing us the whole row.
-func hexID(id []byte, width int) []byte {
-	padded := make([]byte, width)
-	encoded := make([]byte, hex.EncodedLen(len(id)))
-	hex.Encode(encoded, id)
-	copy(padded, encoded)
-	return padded
-}
 
 func spanKindName(kind tracepb.Span_SpanKind) string {
 	return strings.TrimPrefix(kind.String(), "SPAN_KIND_")
@@ -284,7 +271,7 @@ func statusCodeName(code tracepb.Status_StatusCode) string {
 }
 
 func attributeOrEmpty(attributes []*commonpb.KeyValue, key string) string {
-	value, _ := stringAttribute(attributes, key)
+	value, _ := otlpvalue.String(attributes, key)
 	return value
 }
 

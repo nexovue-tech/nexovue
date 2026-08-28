@@ -1,10 +1,11 @@
 package logwriting
 
 import (
-	"encoding/hex"
 	"fmt"
 	"math"
 	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 
 	logsvc "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
@@ -14,13 +15,6 @@ import (
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
-)
-
-// Widths of the hex-encoded id columns, which are FixedString in ClickHouse and
-// so must be written at exactly their declared size.
-const (
-	traceIDHexLen = 32
-	spanIDHexLen  = 16
 )
 
 // attrServiceName is the resource attribute behind the promoted column the log
@@ -116,8 +110,8 @@ func (d decoded) rows(marks stamps) []logRow {
 	for _, resourceLogs := range d.request.GetResourceLogs() {
 		resourceAttrs := resourceLogs.GetResource().GetAttributes()
 		shared := resourceFacts{
-			attrsJSON:   attributesJSON(resourceAttrs),
-			serviceName: stringAttribute(resourceAttrs, attrServiceName),
+			attrsJSON:   otlpvalue.AttributesJSON(resourceAttrs),
+			serviceName: otlpvalue.StringOrEmpty(resourceAttrs, attrServiceName),
 		}
 		for _, scopeLogs := range resourceLogs.GetScopeLogs() {
 			for _, record := range scopeLogs.GetLogRecords() {
@@ -155,17 +149,17 @@ func flattenRecord(
 		RetentionDays:    marks.retentionDays,
 		TenantID:         envelope.GetTenantId(),
 		ProjectID:        envelope.GetProjectId(),
-		TraceID:          hexID(record.GetTraceId(), traceIDHexLen),
-		SpanID:           hexID(record.GetSpanId(), spanIDHexLen),
+		TraceID:          otlpvalue.HexID(record.GetTraceId(), otlpvalue.TraceIDHexLen),
+		SpanID:           otlpvalue.HexID(record.GetSpanId(), otlpvalue.SpanIDHexLen),
 		ServiceName:      resource.serviceName,
 		Severity:         severity,
 		SeverityNumber:   severityNumber,
 		Body:             body,
 		BodyStructured:   structured,
 		ResourceAttrs:    resource.attrsJSON,
-		LogAttrs:         attributesJSON(attributes),
-		ExceptionType:    stringAttribute(attributes, attrExceptionType),
-		ExceptionMessage: stringAttribute(attributes, attrExceptionMessage),
+		LogAttrs:         otlpvalue.AttributesJSON(attributes),
+		ExceptionType:    otlpvalue.StringOrEmpty(attributes, attrExceptionType),
+		ExceptionMessage: otlpvalue.StringOrEmpty(attributes, attrExceptionMessage),
 		TimestampSource:  source,
 	}
 }
@@ -195,19 +189,19 @@ func recordTime(record *logspb.LogRecord, receivedAt time.Time) (time.Time, stri
 // because ClickHouse's JSON type only accepts objects.
 func renderBody(body *commonpb.AnyValue) (text, structured string) {
 	if body == nil || body.GetValue() == nil {
-		return "", emptyJSONObject
+		return "", otlpvalue.EmptyObject
 	}
 	if str, isString := body.GetValue().(*commonpb.AnyValue_StringValue); isString {
-		return str.StringValue, emptyJSONObject
+		return str.StringValue, otlpvalue.EmptyObject
 	}
 	if kvlist, isMap := body.GetValue().(*commonpb.AnyValue_KvlistValue); isMap {
-		rendered := jsonText(attributesMap(kvlist.KvlistValue.GetValues()))
+		rendered := otlpvalue.JSONText(otlpvalue.AttributesMap(kvlist.KvlistValue.GetValues()))
 		if rendered == "" {
-			return "", emptyJSONObject
+			return "", otlpvalue.EmptyObject
 		}
 		return rendered, rendered
 	}
-	return jsonText(anyValue(body)), emptyJSONObject
+	return otlpvalue.JSONText(otlpvalue.Value(body)), otlpvalue.EmptyObject
 }
 
 // unixNanoTime converts an OTLP timestamp to a Go time, reporting whether there
@@ -224,13 +218,6 @@ func unixNanoTime(unixNano uint64) (time.Time, bool) {
 // hexID hex-encodes a binary id into exactly width bytes. A record with no
 // trace context becomes the FixedString empty value — zero bytes, not null. A
 // malformed id is padded or truncated rather than costing us the whole row.
-func hexID(id []byte, width int) []byte {
-	padded := make([]byte, width)
-	encoded := make([]byte, hex.EncodedLen(len(id)))
-	hex.Encode(encoded, id)
-	copy(padded, encoded)
-	return padded
-}
 
 func countRecords(request *logsvc.ExportLogsServiceRequest) int {
 	total := 0

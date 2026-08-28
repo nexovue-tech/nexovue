@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
+
 	"time"
 
 	"github.com/ClickHouse/ch-go"
@@ -79,8 +81,8 @@ func probeBlocks() []blockUnderTest {
 		row.Exemplars = exemplars{
 			Timestamps: []time.Time{testTime, testTime},
 			Values:     []float64{1, 2},
-			TraceIDs:   [][]byte{hexID(nil, traceIDHexLen), hexID(nil, traceIDHexLen)},
-			SpanIDs:    [][]byte{hexID(nil, spanIDHexLen), hexID(nil, spanIDHexLen)},
+			TraceIDs:   [][]byte{otlpvalue.HexID(nil, otlpvalue.TraceIDHexLen), otlpvalue.HexID(nil, otlpvalue.TraceIDHexLen)},
+			SpanIDs:    [][]byte{otlpvalue.HexID(nil, otlpvalue.SpanIDHexLen), otlpvalue.HexID(nil, otlpvalue.SpanIDHexLen)},
 		}
 		gauge.append(gaugeRow{point: row})
 	}

@@ -3,9 +3,14 @@
 - **Status:** Accepted
 - **Date:** 2026-08-28
 
+
+> **Migration numbers in this record predate the 2026-08-28 squash.** The migrations named
+> here no longer exist as separate files; each table's final shape is now one file, and the
+> links point there. See [0073](0073-migrations-squashed-before-m3.md).
+
 ## Context
 
-`span_trace_lookup` ([000004](../../../deploy/clickhouse/migrations/000004_span_trace_lookup.up.sql))
+`span_trace_lookup` (its original migration, now [000009_span_trace_lookup](../../../deploy/clickhouse/migrations/000009_span_trace_lookup.up.sql))
 shipped with a 30-day TTL and no `PARTITION BY`. Those two facts do not coexist.
 
 [0038](0038-per-tenant-retention-via-conditional-ttl.md) set `ttl_only_drop_parts = 1`, which is what

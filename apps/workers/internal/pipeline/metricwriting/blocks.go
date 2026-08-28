@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 )
 
 // Column names shared by more than one of the five blocks. Named once so a
@@ -121,8 +123,8 @@ func newExemplarColumns() *exemplarColumns {
 	return &exemplarColumns{
 		timestamp: timestamps.Array(),
 		value:     new(proto.ColFloat64).Array(),
-		traceID:   (&proto.ColFixedStr{Size: traceIDHexLen}).Array(),
-		spanID:    (&proto.ColFixedStr{Size: spanIDHexLen}).Array(),
+		traceID:   (&proto.ColFixedStr{Size: otlpvalue.TraceIDHexLen}).Array(),
+		spanID:    (&proto.ColFixedStr{Size: otlpvalue.SpanIDHexLen}).Array(),
 	}
 }
 

@@ -2,6 +2,8 @@ package traceassembly
 
 import (
 	"github.com/ClickHouse/ch-go/proto"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 )
 
 // spansTable is the insert target, named once so the statement and the column
@@ -45,9 +47,9 @@ func newSpanBlock() *spanBlock {
 	block := &spanBlock{
 		tenantID:          new(proto.ColStr).LowCardinality(),
 		projectID:         new(proto.ColStr).LowCardinality(),
-		traceID:           proto.ColFixedStr{Size: traceIDHexLen},
-		spanID:            proto.ColFixedStr{Size: spanIDHexLen},
-		parentSpanID:      proto.ColFixedStr{Size: spanIDHexLen},
+		traceID:           proto.ColFixedStr{Size: otlpvalue.TraceIDHexLen},
+		spanID:            proto.ColFixedStr{Size: otlpvalue.SpanIDHexLen},
+		parentSpanID:      proto.ColFixedStr{Size: otlpvalue.SpanIDHexLen},
 		serviceName:       new(proto.ColStr).LowCardinality(),
 		spanName:          new(proto.ColStr).LowCardinality(),
 		spanKind:          new(proto.ColStr).LowCardinality(),

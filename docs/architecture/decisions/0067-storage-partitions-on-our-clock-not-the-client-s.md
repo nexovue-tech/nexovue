@@ -3,6 +3,11 @@
 - **Status:** Accepted
 - **Date:** 2026-08-28
 
+
+> **Migration numbers in this record predate the 2026-08-28 squash.** The migrations named
+> here no longer exist as separate files; each table's final shape is now one file, and the
+> links point there. See [0073](0073-migrations-squashed-before-m3.md).
+
 ## Context
 
 `spans` ([000001](../../../deploy/clickhouse/migrations/000001_spans.up.sql)) partitioned and expired
@@ -77,7 +82,7 @@ query bounded only by `timestamp` scans every partition in the range. The traces
 an API change and the correctness problem was the retention one.
 
 A partition key cannot be altered, so this was a rebuild via `EXCHANGE TABLES`
-([000028](../../../deploy/clickhouse/migrations/000028_spans_received_at_table.up.sql)–[000031](../../../deploy/clickhouse/migrations/000031_spans_received_at_cleanup.up.sql))
+(four migrations, since squashed into [000001_spans](../../../deploy/clickhouse/migrations/000001_spans.up.sql))
 rather than an `ALTER`. It was done while `spans` held 12M rows on one laptop; the same operation
 against a production table is long and needs planning. That it is cheap **now** and expensive later
 is the whole reason it was done now.
@@ -86,17 +91,17 @@ The backfill sets `received_at := timestamp` for existing rows. That is the only
 for them, and it keeps them in the partitions they already occupied.
 
 `logs` carried the same defect and followed in
-[000036](../../../deploy/clickhouse/migrations/000036_logs_received_at.up.sql). It was free there in
+its own migration, now folded into [000002_logs](../../../deploy/clickhouse/migrations/000002_logs.up.sql). It was free there in
 a way it was not here: empty, and with no writer yet, so there was nothing to copy and nothing to
 exchange. P1-28's writer owes the column.
 
 The five metric tables carried it too and followed in
-[000038](../../../deploy/clickhouse/migrations/000038_metrics_gauge_received_at.up.sql)–[000045](../../../deploy/clickhouse/migrations/000045_metrics_sum_received_at_cleanup.up.sql).
+eight migrations, since squashed into the five metric-table files.
 They were missed on the first pass: only `spans` and `span_trace_lookup` were checked, and the
 metric tables had been created hours earlier the same day. Four were empty and replaced outright;
 `metrics_sum` holds the derived counters and was exchanged, which the worker kept writing across.
 For a customer-sent metric `timestamp` is the customer's clock, so the defect was identical.
 
 The rollback path copies the rows back rather than discarding them
-([000029 down](../../../deploy/clickhouse/migrations/000029_spans_received_at_backfill.down.sql)): a
+(the backfill's down copied them back rather than dropping them): a
 rollback that empties the table is not a rollback.

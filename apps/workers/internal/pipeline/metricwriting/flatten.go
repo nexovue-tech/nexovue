@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
+
 	metricsvc "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/protobuf/proto"
@@ -76,8 +78,8 @@ func (d decoded) flatten(marks stamps) (rows, error) {
 			RetentionDays: marks.retentionDays,
 			TenantID:      d.envelope.GetTenantId(),
 			ProjectID:     d.envelope.GetProjectId(),
-			ServiceName:   stringAttribute(resourceAttrs, attrServiceName),
-			ResourceAttrs: attributesJSON(resourceAttrs),
+			ServiceName:   otlpvalue.StringOrEmpty(resourceAttrs, attrServiceName),
+			ResourceAttrs: otlpvalue.AttributesJSON(resourceAttrs),
 		}
 		for _, scopeMetrics := range resourceMetrics.GetScopeMetrics() {
 			scoped := shared
@@ -166,7 +168,7 @@ func appendHistogram(out *rows, described point, histogram *metricspb.Histogram)
 		measured := described
 		measured.Timestamp = unixNanoTime(dataPoint.GetTimeUnixNano())
 		measured.StartTimestamp = unixNanoTime(dataPoint.GetStartTimeUnixNano())
-		measured.Attrs = attributesJSON(dataPoint.GetAttributes())
+		measured.Attrs = otlpvalue.AttributesJSON(dataPoint.GetAttributes())
 		measured.Flags = dataPoint.GetFlags()
 		measured.Exemplars = flattenExemplars(dataPoint.GetExemplars())
 
@@ -196,7 +198,7 @@ func appendExpHistogram(
 		measured := described
 		measured.Timestamp = unixNanoTime(dataPoint.GetTimeUnixNano())
 		measured.StartTimestamp = unixNanoTime(dataPoint.GetStartTimeUnixNano())
-		measured.Attrs = attributesJSON(dataPoint.GetAttributes())
+		measured.Attrs = otlpvalue.AttributesJSON(dataPoint.GetAttributes())
 		measured.Flags = dataPoint.GetFlags()
 		measured.Exemplars = flattenExemplars(dataPoint.GetExemplars())
 
@@ -225,7 +227,7 @@ func appendSummary(out *rows, described point, summary *metricspb.Summary) {
 		measured := described
 		measured.Timestamp = unixNanoTime(dataPoint.GetTimeUnixNano())
 		measured.StartTimestamp = unixNanoTime(dataPoint.GetStartTimeUnixNano())
-		measured.Attrs = attributesJSON(dataPoint.GetAttributes())
+		measured.Attrs = otlpvalue.AttributesJSON(dataPoint.GetAttributes())
 		measured.Flags = dataPoint.GetFlags()
 
 		quantiles, values := flattenQuantiles(dataPoint.GetQuantileValues())
@@ -243,7 +245,7 @@ func appendSummary(out *rows, described point, summary *metricspb.Summary) {
 func numberPoint(described point, dataPoint *metricspb.NumberDataPoint) point {
 	described.Timestamp = unixNanoTime(dataPoint.GetTimeUnixNano())
 	described.StartTimestamp = unixNanoTime(dataPoint.GetStartTimeUnixNano())
-	described.Attrs = attributesJSON(dataPoint.GetAttributes())
+	described.Attrs = otlpvalue.AttributesJSON(dataPoint.GetAttributes())
 	described.Flags = dataPoint.GetFlags()
 	described.Exemplars = flattenExemplars(dataPoint.GetExemplars())
 	return described
@@ -283,9 +285,9 @@ func flattenExemplars(source []*metricspb.Exemplar) exemplars {
 			unixNanoTime(exemplar.GetTimeUnixNano()))
 		flattened.Values = append(flattened.Values, exemplarValue(exemplar))
 		flattened.TraceIDs = append(flattened.TraceIDs,
-			hexID(exemplar.GetTraceId(), traceIDHexLen))
+			otlpvalue.HexID(exemplar.GetTraceId(), otlpvalue.TraceIDHexLen))
 		flattened.SpanIDs = append(flattened.SpanIDs,
-			hexID(exemplar.GetSpanId(), spanIDHexLen))
+			otlpvalue.HexID(exemplar.GetSpanId(), otlpvalue.SpanIDHexLen))
 	}
 	return flattened
 }

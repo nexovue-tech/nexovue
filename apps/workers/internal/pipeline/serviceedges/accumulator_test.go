@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/clocktrust"
 )
 
 func TestOptionsMustBoundTheAccumulator(t *testing.T) {
@@ -113,11 +115,11 @@ func TestAReplayedSpanKeepsItsOwnMinuteButNotItsOwnMarker(t *testing.T) {
 // the offsets behind it never commit.
 func TestEveryMarkerSettlesWithinABoundedTime(t *testing.T) {
 	options := testOptions()
-	horizon := bucketWidth + trustedFutureSkew + options.PairWindow + options.LateGrace + time.Second
+	horizon := clocktrust.Bucket + clocktrust.FutureSkew + options.PairWindow + options.LateGrace + time.Second
 
 	for name, timestamp := range map[string]time.Time{
 		"far future":   baseTime.Add(1000 * time.Hour),
-		"just ahead":   baseTime.Add(trustedFutureSkew - time.Second),
+		"just ahead":   baseTime.Add(clocktrust.FutureSkew - time.Second),
 		"far past":     baseTime.Add(-1000 * time.Hour),
 		"within retry": baseTime.Add(-6 * 24 * time.Hour),
 		"at now":       baseTime,
@@ -142,7 +144,7 @@ func TestAMinuteIsNotDrainedWhileASpanCouldStillJoinIt(t *testing.T) {
 	options := testOptions()
 	// The minute has ended and its grace has run out, but a span that arrived at
 	// the end of it may still be waiting for a partner.
-	tooEarly := startOfMinute(baseTime).Add(bucketWidth + options.LateGrace)
+	tooEarly := startOfMinute(baseTime).Add(clocktrust.Bucket + options.LateGrace)
 	if accumulator.Drained(tooEarly, minute) {
 		t.Fatal("the minute was declared drained before the pairing window closed")
 	}

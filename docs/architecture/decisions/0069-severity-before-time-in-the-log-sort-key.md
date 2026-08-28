@@ -3,13 +3,18 @@
 - **Status:** Accepted
 - **Date:** 2026-08-28
 
+
+> **Migration numbers in this record predate the 2026-08-28 squash.** The migrations named
+> here no longer exist as separate files; each table's final shape is now one file, and the
+> links point there. See [0073](0073-migrations-squashed-before-m3.md).
+
 ## Context
 
 [0057](0057-project-id-in-every-telemetry-sort-key.md) established that a sort key is free while a table is
 empty and a full rebuild once it is not, because ClickHouse cannot alter one in place. `logs` still
 holds zero rows, and P1-28 fills it next.
 
-[000016](../../../deploy/clickhouse/migrations/000016_logs_otlp_fidelity.up.sql) added
+an earlier migration, now folded into [000002_logs](../../../deploy/clickhouse/migrations/000002_logs.up.sql), added
 `severity_number` as a column — SDKs emit `WARN`, `WARNING`, `W` and `warn` for one level, so "warn
 and above" is not expressible against the text — but left the sort key as
 `(tenant_id, project_id, service_name, timestamp)`. Having the column and not ordering by it means
@@ -47,6 +52,6 @@ same comparison that excludes DEBUG, rather than needing a special case.
 P1-28's writer must populate `severity_number` from the text on every record. A writer that leaves
 it at `0` does not merely lose a filter, it puts every row it writes into one sort bucket.
 
-Done as a rebuild ([000035](../../../deploy/clickhouse/migrations/000035_logs_severity_sort_key.up.sql))
+Done as a rebuild ([000002_logs](../../../deploy/clickhouse/migrations/000002_logs.up.sql))
 while the table is empty, which costs nothing. The same change after M3 has been running is a rebuild
 of the busiest table in the system.

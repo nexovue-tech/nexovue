@@ -4,6 +4,11 @@
 - **Date:** 2026-08-28
 - **Supersedes:** [0038](0038-per-tenant-retention-via-conditional-ttl.md)
 
+
+> **Migration numbers in this record predate the 2026-08-28 squash.** The migrations named
+> here no longer exist as separate files; each table's final shape is now one file, and the
+> links point there. See [0073](0073-migrations-squashed-before-m3.md).
+
 ## Context
 
 [0038](0038-per-tenant-retention-via-conditional-ttl.md) decided per-tenant retention would be a
@@ -105,7 +110,7 @@ avoided.
 **A project the refresher has not seen yet takes the deployment default**, not zero. A zero would
 expire its rows on arrival, which is the failure this whole area keeps producing.
 
-**Nine tables were rebuilt** ([000046](../../../deploy/clickhouse/migrations/000046_views_drop_for_retention.up.sql)–[000065](../../../deploy/clickhouse/migrations/000065_metrics_sum_retention_cleanup.up.sql)),
+**Nine tables were rebuilt** across twenty migrations, since squashed into one file per table,
 because a partition key cannot be altered. Done while `spans` held 12M rows and every other table
 was small or empty — the same cheap-now argument as [0067](0067-storage-partitions-on-our-clock-not-the-client-s.md),
 and the last time it will be this cheap.
