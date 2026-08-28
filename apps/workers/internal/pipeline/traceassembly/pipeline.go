@@ -21,6 +21,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/serviceedges"
 )
 
 // Options are the collaborators the pipeline does not own.
@@ -69,6 +70,7 @@ type Pipeline struct {
 
 	stages  *stages
 	metrics *derive.Writer
+	edges   *serviceedges.Writer
 	seen    *dedupe.Offsets
 
 	// ingest is the durable half of `seen`: the per-partition record of what has
@@ -95,6 +97,9 @@ type Pipeline struct {
 type spanStorage struct {
 	spansStoredAt time.Time
 	latestMinute  time.Time
+	// latestEdgeMinute settles later than latestMinute: an edge waits for its
+	// partner span before it exists at all, so offsets wait for it separately.
+	latestEdgeMinute time.Time
 }
 
 // New builds the pipeline and joins the consumer group. The caller owns the
@@ -129,6 +134,7 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		block:    newSpanBlock(),
 		stages:   stages,
 		metrics:  derive.NewWriter(pool),
+		edges:    serviceedges.NewWriter(pool),
 		seen:     dedupe.NewOffsets(),
 		ingest:   ingest,
 		log:      log.With(slog.String("pipeline", string(config.PipelineTraceAssembly))),
@@ -191,6 +197,7 @@ func (p *Pipeline) Describe() []slog.Attr {
 // commits that stop advancing.
 func (p *Pipeline) Holding() []slog.Attr {
 	stats := p.stages.buffer.Stats()
+	edges := p.stages.edges.Stats()
 	return []slog.Attr{
 		slog.Int("buffered_traces", stats.OpenTraces),
 		slog.Int("buffered_spans", stats.BufferedSpans),
@@ -199,6 +206,8 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Uint64("spans_dropped", stats.SpansDropped),
 		slog.Uint64("traces_closed_early", stats.ClosedEarly),
 		slog.Uint64("spans_retimed", p.retimedSpans),
+		slog.Int("edge_pairs_pending", edges.PendingSpans),
+		slog.Int("edge_series", edges.OpenEdges),
 	}
 }
 
@@ -206,7 +215,8 @@ func (p *Pipeline) Holding() []slog.Attr {
 // counters have reached ClickHouse. Until both, its offsets stay uncommitted.
 func (p *Pipeline) Stored(now time.Time, produced spanStorage) bool {
 	return !now.Before(produced.spansStoredAt) &&
-		p.stages.counters.Drained(now, produced.latestMinute)
+		p.stages.counters.Drained(now, produced.latestMinute) &&
+		p.stages.edges.Drained(now, produced.latestEdgeMinute)
 }
 
 // Absorb runs one polled batch through decode, mask, derive and sample, and
@@ -316,14 +326,16 @@ func (p *Pipeline) Settle(ctx context.Context, now time.Time) error {
 		return err
 	}
 
-	// Counters alone, without waiting for the sampling window: a batch's spans
-	// can still be in the buffer while its counters are already exact, and only
-	// the counters are recorded as settled.
-	countersDrained := func(produced spanStorage) bool {
-		return p.stages.counters.Drained(now, produced.latestMinute)
+	// Derived output alone, without waiting for the sampling window: a batch's
+	// spans can still be in the buffer while everything derived from them is
+	// already exact. Both counters and edges must be drained, because both are
+	// summing rollups whose offsets must not move before they reach storage.
+	derivedDrained := func(produced spanStorage) bool {
+		return p.stages.counters.Drained(now, produced.latestMinute) &&
+			p.stages.edges.Drained(now, produced.latestEdgeMinute)
 	}
-	reached := ingeststate.RangesOf(p.loop.Reached(countersDrained))
-	return p.settleCounters(ctx, reached, p.stages.counters.Drain(now))
+	reached := ingeststate.RangesOf(p.loop.Reached(derivedDrained))
+	return p.settleDerived(ctx, reached, p.stages.counters.Drain(now), p.stages.edges.Drain(now))
 }
 
 // settleCounters writes one drain of counters, bracketed by the durable record
@@ -333,10 +345,11 @@ func (p *Pipeline) Settle(ctx context.Context, now time.Time) error {
 // is in flight, AFTER says the store took it, and the Kafka offsets move only
 // after that — so a worker that comes back to a restarted store can tell a
 // finished insert from an interrupted one instead of guessing.
-func (p *Pipeline) settleCounters(
+func (p *Pipeline) settleDerived(
 	ctx context.Context,
 	reached map[ingeststate.Partition]ingeststate.Range,
 	points []derive.Point,
+	edges []serviceedges.Edge,
 ) error {
 	settlement := p.ingest.Advance(reached)
 	if err := p.loop.Retry(ctx, "record counted offsets", func(callCtx context.Context) error {
@@ -345,6 +358,9 @@ func (p *Pipeline) settleCounters(
 		return err
 	}
 	if err := p.insertCounters(ctx, points); err != nil {
+		return err
+	}
+	if err := p.insertEdges(ctx, edges); err != nil {
 		return err
 	}
 	return p.loop.Retry(ctx, "confirm counted offsets", func(callCtx context.Context) error {
@@ -362,11 +378,28 @@ func (p *Pipeline) Drain(ctx context.Context, now time.Time) error {
 	}
 	// Everything held is drained here, so every held offset is counted through.
 	reached := ingeststate.RangesOf(p.loop.Reached(func(spanStorage) bool { return true }))
-	return p.settleCounters(ctx, reached, p.stages.counters.DrainAll())
+	return p.settleDerived(ctx, reached, p.stages.counters.DrainAll(), p.stages.edges.DrainAll())
 }
 
 // insertCounters writes derived counters, retrying without ever writing twice:
 // a block is atomic, so its first point answers for the batch.
+// insertEdges writes derived service edges the same way counters are written:
+// a block is atomic, so its first edge answers for the batch, and the read
+// before the retry is what stops a lost acknowledgement becoming a double count
+// (ADR 0061).
+func (p *Pipeline) insertEdges(ctx context.Context, edges []serviceedges.Edge) error {
+	if len(edges) == 0 {
+		return nil
+	}
+	return p.loop.WriteOnce(ctx, "insert service edges",
+		func(callCtx context.Context) (bool, error) {
+			return p.edges.Applied(callCtx, edges[0])
+		},
+		func(callCtx context.Context) error {
+			return p.edges.Insert(callCtx, edges)
+		})
+}
+
 func (p *Pipeline) insertCounters(ctx context.Context, points []derive.Point) error {
 	if len(points) == 0 {
 		return nil

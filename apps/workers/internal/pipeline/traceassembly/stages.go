@@ -8,6 +8,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/derive"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/serviceedges"
 )
 
 // statusCodeError is the flattened form of OTLP's STATUS_CODE_ERROR, and the
@@ -49,6 +50,26 @@ func (r spanRow) countable(receivedAt time.Time, retentionDays uint16) derive.Sp
 	}
 }
 
+// edgeSpan is this span as edge derivation sees it. The accumulator declares
+// its own input type rather than importing this one, so the two are free to
+// change apart; this is the one place they are mapped.
+func (r spanRow) edgeSpan(receivedAt time.Time, retentionDays uint16) serviceedges.Span {
+	return serviceedges.Span{
+		TenantID:      r.TenantID,
+		ProjectID:     r.ProjectID,
+		RetentionDays: retentionDays,
+		TraceID:       r.TraceID,
+		SpanID:        r.SpanID,
+		ParentSpanID:  r.ParentSpanID,
+		ServiceName:   r.ServiceName,
+		Kind:          r.SpanKind,
+		Timestamp:     r.Timestamp,
+		ReceivedAt:    receivedAt,
+		DurationMS:    r.DurationMS,
+		Errored:       r.errored(),
+	}
+}
+
 // sampleFacts is this span as the sample stage sees it.
 func (r spanRow) sampleFacts() sample.Facts {
 	return sample.Facts{
@@ -68,6 +89,7 @@ func (r spanRow) sampleFacts() sample.Facts {
 type stages struct {
 	masker    *mask.Masker
 	counters  *derive.Counters
+	edges     *serviceedges.Accumulator
 	buffer    *sample.Buffer[spanRow]
 	retention RetentionSource
 }
@@ -77,9 +99,20 @@ func newStages(cfg config.Config, opts Options) (*stages, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Edges pair inside the window the sampler already holds a trace for, so
+	// the two halves of a call are in memory together without a second store.
+	edges, err := serviceedges.New(serviceedges.Options{
+		PairWindow: cfg.Sampling.Window,
+		LateGrace:  cfg.Metrics.LateGrace,
+		MaxPending: cfg.Sampling.MaxSpans,
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &stages{
 		masker:    mask.New(maskingSource(opts)),
 		counters:  derive.NewCounters(cfg.Metrics.LateGrace),
+		edges:     edges,
 		buffer:    buffer,
 		retention: retentionSource(cfg, opts),
 	}, nil
@@ -91,8 +124,12 @@ func newStages(cfg config.Config, opts Options) (*stages, error) {
 type absorbed struct {
 	rows         []spanRow
 	latestMinute time.Time
-	spans        int
-	skew         skewReport
+	// latestEdgeMinute is the newest edge bucket this message fed. Edges settle
+	// later than counters — a pair waits for its partner — so they are tracked
+	// apart rather than folded into one milestone.
+	latestEdgeMinute time.Time
+	spans            int
+	skew             skewReport
 }
 
 // skewReport is what was seen of client clocks too far out to bucket on. It
@@ -159,6 +196,12 @@ func (s *stages) absorbMessage(now time.Time, message []byte, counted bool) (abs
 			if discarded != 0 {
 				result.skew.observe(countable, discarded)
 			}
+
+			// Edges see every span too, and for the same reason: the sampler
+			// keeps about one healthy trace in ten, so an edge rate measured
+			// after it would be a tenth of the truth (ADR 0010).
+			edgeMinute, _ := s.edges.Observe(now, row.edgeSpan(receivedAt, derivedDays))
+			result.latestEdgeMinute = later(result.latestEdgeMinute, edgeMinute)
 		}
 		result.rows = append(result.rows, s.buffer.Add(now, row.sampleFacts(), row)...)
 		result.spans++
