@@ -17,6 +17,10 @@ SPAN_PARTITIONS="${KAFKA_SPAN_PARTITIONS:-12}"
 OTHER_PARTITIONS="${KAFKA_OTHER_PARTITIONS:-4}"
 
 # 7 days of buffer: long enough to replay a full weekend outage into ClickHouse.
+# The worker's trustedPastSkew matches this: nothing legitimately delivered can
+# be older than the buffer it was replayed from. Raise this and raise that with
+# it, or a replayed outage gets counted at receive time instead of its own
+# minutes (apps/workers/internal/pipeline/derive/counters.go).
 RETENTION_MS="${KAFKA_RETENTION_MS:-604800000}"
 
 # One record is one trace's envelope, so this must clear the largest envelope a

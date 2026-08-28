@@ -79,6 +79,8 @@ lint-py:
 
 lint-web:
     pnpm exec biome check .
+    # biome does not typecheck, so without this a type error passes every gate.
+    pnpm -r --if-present run typecheck
 
 test: test-go test-py test-web
 
