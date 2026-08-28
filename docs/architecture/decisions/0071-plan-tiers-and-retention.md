@@ -62,10 +62,56 @@ Stack's 3 and Grafana's 14. Free tenants keep 30 days of derived data so the pro
 
 ### Why `pro` is 30 and not 15
 
-Datadog's 15 days is the number customers complain about. Matching Grafana's 30 costs us almost
-nothing: measured marginal cost is **$0.0017 per million spans** (0056), and spans compress to
-**16.4 bytes** each (0065). Ninety days of a busy tenant is single-digit gigabytes. Retention is not
-where this product's cost lives, so it is a poor place to squeeze.
+Datadog's 15 days is the number customers complain about, and 30 is the number Grafana and Better
+Stack both settled on. For **traces** the extra fortnight is nearly free: spans measure **17.9
+bytes** on disk (0065) and marginal compute is **$0.0017 per million** (0056).
+
+For **logs** it is not free, and the next section does that arithmetic rather than assuming the
+trace economics carry over. They do not — sampling discards most traces and nothing discards logs.
+30 days still holds after that check; 90 does not, without the cold tier.
+
+## What it costs — the arithmetic, and what is missing from it
+
+Measured on the live table today: a span is **17.9 bytes** on disk after codecs, compressing 10.6×.
+A `metrics_sum` row is **5.3 bytes**, and `endpoint_stats_1m` is small enough to ignore — the
+13-month derived retention is close to free, which is what makes the second column of the table
+above affordable.
+
+Storage, per GB-month: **EBS gp3 $0.08**, **S3 Standard $0.023**, **S3 Infrequent $0.0125**. Local
+disk is 3.5× S3 and 6.4× S3-IA.
+
+A mid-size tenant — 20 services, ~500 req/s, 8 spans per request, tail sampling keeping ~15%:
+
+| | per day | 30 days | 90 days |
+|---|---|---|---|
+| spans (measured rate) | 0.93 GB | 28 GB | 84 GB |
+| logs (**estimated**, see below) | ~6 GB | ~180 GB | ~540 GB |
+| **on gp3** | | **$16.60/mo** | **$50/mo** |
+| **on S3 Standard** | | $4.80/mo | **$14.40/mo** |
+
+Against per-service revenue for twenty services, 30 days on local disk is a few percent of the
+bill. **Ninety days on local disk is not** — it is where a tier stops paying for itself, which is a
+second reason `scale` waits for the cold tier rather than only a capacity one.
+
+**The number above that is not measured is the one that dominates.** `logs` holds zero rows, because
+P1-28 has not shipped. The log line above assumes four lines per request at ~35 bytes compressed,
+and on that assumption **logs are roughly 87% of stored bytes** — because tail sampling discards
+most traces and nothing discards logs. Every per-GB price in this market exists because of logs, not
+traces.
+
+So this decision's cost model rests on an estimate for its largest term. **It must be re-checked
+against real numbers once P1-28 ships**, and that is a task, not a note.
+
+## The cost control is the volume allowance, not the retention day count
+
+If measured log volume comes in far above the estimate, the lever to pull is **not** shortening
+retention. [0056](0056-per-service-pricing.md) already priced a volume allowance per service with
+overage above it. That meter targets the tenant actually generating the cost; cutting retention
+degrades the product for every tenant to discipline a few.
+
+Retention is therefore a **product feature** with a cost consequence, and volume is the **meter**.
+Keeping those two jobs separate is what stops retention drifting into a per-GB bill by the back
+door, which 0056 rejected on purpose.
 
 ## Consequences
 

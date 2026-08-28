@@ -129,7 +129,7 @@ nexovue/
 
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
-| P1-28 | Logs pipeline | `/v1/logs` → log-writer → `logs` table. Writer owes severity text → `severity_number`, the resource/record attribute split, a per-record decision on whether the body is a map (ADR 0062), and `received_at` so retention stays on our clock (ADR 0067) | todo |
+| P1-28 | Logs pipeline | `/v1/logs` → log-writer → `logs` table. Writer owes severity text → `severity_number`, the resource/record attribute split, a per-record decision on whether the body is a map (ADR 0062), and `received_at` so retention stays on our clock (ADR 0067). **On landing, measure stored log bytes per row and per request and re-check ADR 0071** — its retention cost model estimates logs at ~87% of stored bytes and that term is unmeasured | todo |
 | P1-29 | Metrics pipeline | `/v1/metrics` → the five OTLP metric tables (ADR 0066); `derive` moves off the old `metrics` table onto `metrics_sum` with temporality, monotonicity and start time, and `metrics` then retires | todo |
 | P1-30 | Error extraction | `exception_type` / `exception_message` promoted to columns; grouping view | todo |
 | P1-31 | Log↔trace correlation | "logs for this trace" query path both directions | todo |
