@@ -1,4 +1,4 @@
-package traceassembly
+package consume
 
 import (
 	"context"
@@ -10,21 +10,21 @@ import (
 // serving a healthy /readyz for nine minutes while ingest was silently lost.
 // Readiness has to answer "is this worker doing its job", not "are its
 // dependencies reachable".
-func TestReadinessFailsWhenThePipelineIsNotRunning(t *testing.T) {
-	var pipeline Pipeline
+func TestReadinessFailsWhenTheLoopIsNotRunning(t *testing.T) {
+	loop := &Loop[bool]{settings: Settings{Name: "trace-assembly"}}
 
-	if err := pipeline.Running(context.Background()); err == nil {
+	if err := loop.Running(context.Background()); err == nil {
 		t.Fatal("a pipeline that has never started reported ready")
 	}
 
-	pipeline.running.Store(true)
-	if err := pipeline.Running(context.Background()); err != nil {
+	loop.running.Store(true)
+	if err := loop.Running(context.Background()); err != nil {
 		t.Fatalf("a running pipeline reported not ready: %v", err)
 	}
 
 	// The case that actually happened: it ran, then stopped.
-	pipeline.running.Store(false)
-	if err := pipeline.Running(context.Background()); err == nil {
+	loop.running.Store(false)
+	if err := loop.Running(context.Background()); err == nil {
 		t.Fatal("a stopped pipeline reported ready; this is the nine-minute outage")
 	}
 }

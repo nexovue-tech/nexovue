@@ -20,6 +20,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 )
 
 // Flag is how far a settlement got.
@@ -54,6 +56,28 @@ func ParseFlag(value string) (Flag, error) {
 type Range struct {
 	Min int64
 	Max int64
+}
+
+// RangesOf bounds the offsets each partition contributes to a set of records.
+//
+// It answers both questions this package is asked: what an incoming batch
+// covers, and how far the counters of the batches already held have been
+// folded in.
+func RangesOf(positions []consume.Position) map[Partition]Range {
+	ranges := make(map[Partition]Range)
+	for _, at := range positions {
+		key := Partition{Topic: at.Topic, ID: at.Partition}
+		offsets, seen := ranges[key]
+		if !seen {
+			ranges[key] = Range{Min: at.Offset, Max: at.Offset}
+			continue
+		}
+		ranges[key] = Range{
+			Min: min(offsets.Min, at.Offset),
+			Max: max(offsets.Max, at.Offset),
+		}
+	}
+	return ranges
 }
 
 // State is one partition's durable record: the offsets of the most recent

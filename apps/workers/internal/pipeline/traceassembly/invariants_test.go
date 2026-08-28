@@ -16,6 +16,7 @@ import (
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/derive"
 )
 
@@ -258,41 +259,48 @@ func TestNoUnmaskedValueReachesARow(t *testing.T) {
 // A batch's offsets may only move once its spans have left the buffer and its
 // counters have been written. Committing early is how a crash turns into a
 // hole in the data.
+//
+// The queue is the loop's; what is asserted here is the answer trace assembly
+// gives it, so the two conditions are set up through the real counters: a batch
+// that fed no bucket is trivially counted, and one that fed the minute it was
+// polled in is not counted until that minute has closed.
 func TestOffsetsWaitForBothTheBufferAndTheCounters(t *testing.T) {
+	pipeline := Pipeline{stages: stagesFor(t, 100)}
 	minute := invariantStart.Truncate(time.Minute)
-	entry := pendingCommit{
-		positions:     fakePositions(2),
-		spansStoredAt: invariantStart.Add(10 * time.Second),
-		latestMinute:  minute,
-	}
 
 	cases := map[string]struct {
-		now            time.Time
-		countersStored bool
-		wantCommitted  int
+		now           time.Time
+		latestMinute  time.Time
+		wantCommitted int
 	}{
 		"spans still buffered": {
-			now: invariantStart.Add(5 * time.Second), countersStored: true, wantCommitted: 0,
+			now: invariantStart.Add(5 * time.Second), wantCommitted: 0,
 		},
 		"counters not yet written": {
-			now: invariantStart.Add(30 * time.Second), countersStored: false, wantCommitted: 0,
+			now: invariantStart.Add(30 * time.Second), latestMinute: minute, wantCommitted: 0,
 		},
 		"both stored": {
-			now: invariantStart.Add(90 * time.Second), countersStored: true, wantCommitted: 2,
+			now: invariantStart.Add(90 * time.Second), latestMinute: minute, wantCommitted: 2,
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			var queue commitQueue
-			queue.hold(entry)
+			var queue consume.Queue[spanStorage]
+			queue.Hold(consume.Batch[spanStorage]{
+				Positions: fakePositions(2),
+				Produced: spanStorage{
+					spansStoredAt: invariantStart.Add(10 * time.Second),
+					latestMinute:  tc.latestMinute,
+				},
+			})
 
-			due := queue.ready(tc.now, func(time.Time) bool { return tc.countersStored })
+			due := queue.Ready(storedAt(&pipeline, tc.now))
 			if len(due) != tc.wantCommitted {
-				t.Errorf("ready() returned %d records, want %d", len(due), tc.wantCommitted)
+				t.Errorf("Ready() returned %d records, want %d", len(due), tc.wantCommitted)
 			}
-			if queue.held() != len(entry.positions)-tc.wantCommitted {
-				t.Errorf("held() = %d, want the uncommitted records still held", queue.held())
+			if queue.Records() != 2-tc.wantCommitted {
+				t.Errorf("Records() = %d, want the uncommitted records still held", queue.Records())
 			}
 		})
 	}
@@ -301,47 +309,38 @@ func TestOffsetsWaitForBothTheBufferAndTheCounters(t *testing.T) {
 // Kafka commits move a partition's offset to a point, so releasing a later
 // batch before an earlier one would declare the earlier one done.
 func TestCommitsAreReleasedInOrder(t *testing.T) {
-	var queue commitQueue
-	queue.hold(pendingCommit{positions: fakePositions(1), spansStoredAt: invariantStart.Add(time.Minute)})
-	queue.hold(pendingCommit{positions: fakePositions(1), spansStoredAt: invariantStart})
+	pipeline := Pipeline{stages: stagesFor(t, 100)}
 
-	if due := queue.ready(invariantStart.Add(time.Second), alwaysStored); len(due) != 0 {
-		t.Errorf("ready() released %d records past a batch that is not stored yet", len(due))
+	var queue consume.Queue[spanStorage]
+	queue.Hold(consume.Batch[spanStorage]{
+		Positions: fakePositions(1),
+		Produced:  spanStorage{spansStoredAt: invariantStart.Add(time.Minute)},
+	})
+	queue.Hold(consume.Batch[spanStorage]{
+		Positions: fakePositions(1),
+		Produced:  spanStorage{spansStoredAt: invariantStart},
+	})
+
+	if due := queue.Ready(storedAt(&pipeline, invariantStart.Add(time.Second))); len(due) != 0 {
+		t.Errorf("Ready() released %d records past a batch that is not stored yet", len(due))
 	}
-	if due := queue.ready(invariantStart.Add(2*time.Minute), alwaysStored); len(due) != 2 {
-		t.Errorf("ready() released %d records once both batches were stored, want 2", len(due))
+	if due := queue.Ready(storedAt(&pipeline, invariantStart.Add(2*time.Minute))); len(due) != 2 {
+		t.Errorf("Ready() released %d records once both batches were stored, want 2", len(due))
 	}
 }
 
-func alwaysStored(time.Time) bool { return true }
+// storedAt asks the pipeline, at one instant, whether a batch's output has
+// reached storage — which is what the loop hands the commit queue.
+func storedAt(pipeline *Pipeline, now time.Time) func(spanStorage) bool {
+	return func(produced spanStorage) bool { return pipeline.Stored(now, produced) }
+}
 
-func fakePositions(count int) []position {
-	positions := make([]position, 0, count)
+func fakePositions(count int) []consume.Position {
+	positions := make([]consume.Position, 0, count)
 	for index := range count {
-		positions = append(positions, positionOf(&kgo.Record{
+		positions = append(positions, consume.PositionOf(&kgo.Record{
 			Topic: "spans-raw", Partition: 0, Offset: int64(index),
 		}))
 	}
 	return positions
-}
-
-// Kafka commits the next offset to read, and one partition may appear in many
-// batches; marking the wrong one either replays or skips.
-func TestMarkableKeepsTheHighestOffsetPerPartition(t *testing.T) {
-	marks := markable([]position{
-		{topic: "spans-raw", partition: 0, offset: 10},
-		{topic: "spans-raw", partition: 0, offset: 42},
-		{topic: "spans-raw", partition: 0, offset: 7},
-		{topic: "spans-raw", partition: 1, offset: 3},
-	})
-
-	if got := marks["spans-raw"][0].Offset; got != 43 {
-		t.Errorf("partition 0 marked at %d, want the highest offset plus one (43)", got)
-	}
-	if got := marks["spans-raw"][1].Offset; got != 4 {
-		t.Errorf("partition 1 marked at %d, want 4", got)
-	}
-	if markable(nil) != nil {
-		t.Error("markable(nil) returned a map; nothing to commit must commit nothing")
-	}
 }

@@ -1,10 +1,3 @@
-// Package traceassembly runs the trace-assembly pipeline: it consumes span
-// envelopes from Kafka, flattens them to rows and writes them to ClickHouse.
-//
-// M1 writes spans through as they arrive rather than buffering a trace in
-// memory. The buffer described in ADR 0009 exists to serve tail sampling, which
-// is M2 work; until then it would add latency against the span-to-queryable
-// budget and buy nothing. See ADR 0054.
 package traceassembly
 
 import (
@@ -21,6 +14,8 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 )
 
 // Widths of the hex-encoded id columns, which are FixedString in ClickHouse and
@@ -91,67 +86,20 @@ type decoded struct {
 	request  *tracesvc.ExportTraceServiceRequest
 }
 
-// rejected is a message the pipeline cannot process, carrying the coordinates
-// established before it was rejected so the parked message can be attributed to
-// a customer. A parked message failed to decode and so also bypassed masking:
-// an unmasked payload nobody can trace is one nobody can disclose or delete.
-//
-// The fields come from the envelope the receiver authenticated, never from the
-// payload, and only once that envelope decoded cleanly — protobuf leaves a
-// message half-populated when it fails, and half-parsed bytes are not an
-// identity.
-type rejected struct {
-	cause     error
-	ingestID  string
-	tenantID  string
-	projectID string
-}
-
-func (r *rejected) Error() string { return r.cause.Error() }
-
-func (r *rejected) Unwrap() error { return r.cause }
-
-// decodeEnvelope unpacks one Kafka message. Every failure is a *rejected, so
-// the caller never has to ask whether it knows who the message belonged to.
+// decodeEnvelope unpacks one Kafka message. Every failure is a
+// *consume.Rejection, so the caller never has to ask whether it knows who the
+// message belonged to.
 func decodeEnvelope(message []byte) (decoded, error) {
-	var envelope nexovuev1.Envelope
-	if err := proto.Unmarshal(message, &envelope); err != nil {
-		// The bytes are not our envelope at all, so there is nothing to
-		// attribute them to.
-		return decoded{}, &rejected{cause: fmt.Errorf("decode envelope: %w", err)}
-	}
-	if envelope.GetSignal() != nexovuev1.Signal_SIGNAL_SPANS {
-		return decoded{}, rejectedBy(&envelope, fmt.Errorf(
-			"envelope carries signal %s, want %s",
-			envelope.GetSignal(), nexovuev1.Signal_SIGNAL_SPANS))
+	envelope, err := consume.DecodeEnvelope(message, nexovuev1.Signal_SIGNAL_SPANS)
+	if err != nil {
+		return decoded{}, err
 	}
 
 	var request tracesvc.ExportTraceServiceRequest
 	if err := proto.Unmarshal(envelope.GetPayload(), &request); err != nil {
-		return decoded{}, rejectedBy(&envelope, fmt.Errorf("decode OTLP payload: %w", err))
+		return decoded{}, consume.RejectedBy(envelope, fmt.Errorf("decode OTLP payload: %w", err))
 	}
-	return decoded{envelope: &envelope, request: &request}, nil
-}
-
-func rejectedBy(envelope *nexovuev1.Envelope, cause error) *rejected {
-	return &rejected{
-		cause:     cause,
-		ingestID:  envelope.GetIngestId(),
-		tenantID:  envelope.GetTenantId(),
-		projectID: envelope.GetProjectId(),
-	}
-}
-
-// receivedAt is when the receiver took this message. It is the reference clock
-// the counters judge a client's span timestamp against, so it must never be
-// zero: a message from before the field was populated falls back to now, which
-// is the closest reading of our own clock available.
-func (d decoded) receivedAt(now time.Time) time.Time {
-	nanos := d.envelope.GetReceivedAtUnixNano()
-	if nanos <= 0 {
-		return now
-	}
-	return time.Unix(0, nanos).UTC()
+	return decoded{envelope: envelope, request: &request}, nil
 }
 
 // rows flattens the decoded payload, which by this point has already been

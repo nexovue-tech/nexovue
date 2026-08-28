@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/derive"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
@@ -142,7 +143,7 @@ func (s *stages) absorbMessage(now time.Time, message []byte, counted bool) (abs
 	// Mask first: from here on no stage can see the original values.
 	s.masker.MaskResourceSpans(payload.envelope.GetProjectId(), payload.request.GetResourceSpans())
 
-	receivedAt := payload.receivedAt(now)
+	receivedAt := consume.ReceivedAt(payload.envelope, now)
 	rawDays, derivedDays := s.retention.Retention(payload.envelope.GetProjectId())
 
 	var result absorbed

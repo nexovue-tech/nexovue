@@ -12,6 +12,7 @@ import (
 
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/derive"
 )
 
@@ -75,20 +76,22 @@ func TestAFutureDatedSpanDoesNotWedgeOffsetCommits(t *testing.T) {
 		t.Fatalf("absorbMessage() = %v, want no error", err)
 	}
 
-	var queue commitQueue
-	queue.hold(pendingCommit{
-		positions:     fakePositions(1),
-		spansStoredAt: receivedAt.Add(10 * time.Second),
-		latestMinute:  absorbed.latestMinute,
-		polledAt:      receivedAt,
+	pipeline := Pipeline{stages: stages}
+	var queue consume.Queue[spanStorage]
+	queue.Hold(consume.Batch[spanStorage]{
+		Positions: fakePositions(1),
+		PolledAt:  receivedAt,
+		Produced: spanStorage{
+			spansStoredAt: receivedAt.Add(10 * time.Second),
+			latestMinute:  absorbed.latestMinute,
+		},
 	})
 
 	// An hour later: long past every deadline this batch could legitimately be
 	// waiting on — the sampling window, the minute, and its grace.
 	settled := receivedAt.Add(time.Hour)
-	drained := func(minute time.Time) bool { return stages.counters.Drained(settled, minute) }
 
-	if due := queue.ready(settled, drained); len(due) != 1 {
+	if due := queue.Ready(storedAt(&pipeline, settled)); len(due) != 1 {
 		t.Errorf("committed %d records an hour after the batch, want 1: one future-dated "+
 			"span holds every offset this worker owns, for good", len(due))
 	}
