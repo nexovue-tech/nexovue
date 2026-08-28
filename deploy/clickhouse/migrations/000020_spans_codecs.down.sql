@@ -1,0 +1,18 @@
+ALTER TABLE spans
+    MODIFY COLUMN timestamp          REMOVE CODEC,
+    MODIFY COLUMN tenant_id          REMOVE CODEC,
+    MODIFY COLUMN project_id         REMOVE CODEC,
+    MODIFY COLUMN trace_id           REMOVE CODEC,
+    MODIFY COLUMN span_id            REMOVE CODEC,
+    MODIFY COLUMN parent_span_id     REMOVE CODEC,
+    MODIFY COLUMN service_name       REMOVE CODEC,
+    MODIFY COLUMN span_name          REMOVE CODEC,
+    MODIFY COLUMN span_kind          REMOVE CODEC,
+    MODIFY COLUMN duration_ms        REMOVE CODEC,
+    MODIFY COLUMN status_code        REMOVE CODEC,
+    MODIFY COLUMN status_message     REMOVE CODEC,
+    MODIFY COLUMN http_method        REMOVE CODEC,
+    MODIFY COLUMN http_route         REMOVE CODEC,
+    MODIFY COLUMN http_status        REMOVE CODEC,
+    MODIFY COLUMN deployment_version REMOVE CODEC,
+    MODIFY COLUMN span_attrs         REMOVE CODEC
