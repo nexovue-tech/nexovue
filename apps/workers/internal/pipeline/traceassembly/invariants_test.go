@@ -306,6 +306,45 @@ func TestOffsetsWaitForBothTheBufferAndTheCounters(t *testing.T) {
 	}
 }
 
+// An edge does not exist until its partner span arrives, so it settles later
+// than the counters for the same minute: a whole PairWindow later. Offsets must
+// wait for it, or a crash between the commit and the drain loses edges that
+// Kafka will never redeliver — the pairing buffer is process memory only.
+//
+// This exists because the gate was written and never connected. The field, the
+// predicate and the value all existed; the line folding the value into the
+// batch's storage record did not, so Drained was asked about a zero minute and
+// answered "already stored" every time. Nothing failed, and the build was green.
+func TestOffsetsWaitForEdgesAsWellAsCounters(t *testing.T) {
+	pipeline := Pipeline{stages: stagesFor(t, 100)}
+	minute := invariantStart.Truncate(time.Minute)
+
+	// Both gates are measured from the bucket, not from the batch. Counters
+	// close at minute+1m; edges close a PairWindow later, which stagesFor sets
+	// to the 10s sampling window. Between the two is where the difference lives.
+	countersClosed := minute.Add(time.Minute + time.Second)
+	edgesClosed := minute.Add(2 * time.Minute)
+
+	var queue consume.Queue[spanStorage]
+	queue.Hold(consume.Batch[spanStorage]{
+		Positions: fakePositions(2),
+		Produced: spanStorage{
+			spansStoredAt:    minute,
+			latestMinute:     minute,
+			latestEdgeMinute: minute,
+		},
+	})
+
+	if due := queue.Ready(storedAt(&pipeline, countersClosed)); len(due) != 0 {
+		t.Errorf("released %d records while the edge minute was still open — the edge gate is "+
+			"not being consulted, and a crash here would lose edges Kafka cannot redeliver", len(due))
+	}
+
+	if due := queue.Ready(storedAt(&pipeline, edgesClosed)); len(due) != 2 {
+		t.Errorf("released %d records once everything was stored, want 2", len(due))
+	}
+}
+
 // Kafka commits move a partition's offset to a point, so releasing a later
 // batch before an earlier one would declare the earlier one done.
 func TestCommitsAreReleasedInOrder(t *testing.T) {

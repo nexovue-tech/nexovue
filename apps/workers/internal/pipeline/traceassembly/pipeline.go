@@ -246,6 +246,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (spanStora
 		}
 		p.appendRows(result.rows)
 		produced.latestMinute = later(produced.latestMinute, result.latestMinute)
+		produced.latestEdgeMinute = later(produced.latestEdgeMinute, result.latestEdgeMinute)
 		skew.merge(result.skew)
 		spans += result.spans
 		messages++

@@ -37,6 +37,16 @@ func maskLogRecord(rules Rules, record *logspb.LogRecord) int {
 	if record == nil {
 		return 0
 	}
-	return maskAttributes(rules, record.GetAttributes()) +
+	masked := maskAttributes(rules, record.GetAttributes()) +
 		maskValueTree(rules, record.GetBody())
+
+	// severity_text is stored, and it is caller-controlled free text — an SDK
+	// writes "INFO", but nothing stops one writing a header into it. The value
+	// rules do not match a severity word, so this costs nothing in the normal
+	// case and closes a path to the store in the abnormal one.
+	if text, changed := rules.maskValue(record.GetSeverityText()); changed {
+		record.SeverityText = text
+		masked++
+	}
+	return masked
 }

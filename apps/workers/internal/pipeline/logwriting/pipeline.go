@@ -76,7 +76,10 @@ type Pipeline struct {
 
 	// Running totals for the heartbeat: what this process has written since it
 	// started, and how many values the mask stage replaced on the way.
-	logsWritten  uint64
+	logsWritten uint64
+	// parked is DLQ depth for this signal, and a privacy signal too: a parked
+	// message failed to decode and so bypassed masking entirely.
+	parked       uint64
 	valuesMasked uint64
 
 	defaultRetentionDays uint16
@@ -149,6 +152,7 @@ func (p *Pipeline) Describe() []slog.Attr {
 func (p *Pipeline) Holding() []slog.Attr {
 	return []slog.Attr{
 		slog.Uint64("logs_written", p.logsWritten),
+		slog.Uint64("messages_parked", p.parked),
 		slog.Uint64("values_masked", p.valuesMasked),
 	}
 }
@@ -168,6 +172,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 			if parkErr := p.loop.Park(ctx, record, err); parkErr != nil {
 				return written{}, parkErr
 			}
+			p.parked++
 			continue
 		}
 		for _, row := range rows {

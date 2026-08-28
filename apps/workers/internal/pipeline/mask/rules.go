@@ -239,8 +239,14 @@ func (r Rules) hashesAnything() bool {
 	return false
 }
 
+// families is every rule family, and every caller of it walks the whole set —
+// so a family added to the struct and missed here is invisible to the hash-key
+// guard rather than merely absent from a list. That happened once already.
 func (r Rules) families() []family {
-	return []family{r.credentialKeys, r.authorizationHeader, r.cookies, r.cardNumbers}
+	return []family{
+		r.credentialKeys, r.authorizationHeader, r.cookies, r.cardNumbers,
+		r.authorizationCredentials,
+	}
 }
 
 // masksKey reports whether an attribute under this key must be replaced whole,

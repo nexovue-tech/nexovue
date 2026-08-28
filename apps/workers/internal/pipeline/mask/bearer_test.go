@@ -29,13 +29,14 @@ func TestCredentialsAfterAnAuthorizationSchemeAreMasked(t *testing.T) {
 			in:   "Bearer eyJhbGci.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4=",
 			want: "Bearer " + Placeholder,
 		},
-		"two on one line": {
-			in:   "old=Bearer aaaaaaaaaaaaaaaaaaaaaaaa new=Bearer bbbbbbbbbbbbbbbbbbbbbbbb",
-			want: "old=Bearer " + Placeholder + " new=Bearer " + Placeholder,
+		"two headers on one line": {
+			in: "authorization=Bearer aaaaaaaaaaaaaaaaaaaaaaaa authorization=Bearer bbbbbbbbbbbbbbbbbbbbbbbb",
+			want: "authorization=Bearer " + Placeholder +
+				" authorization=Bearer " + Placeholder,
 		},
-		"trailing text survives": {
-			in:   "using Bearer aaaaaaaaaaaaaaaaaaaaaaaa to call payments",
-			want: "using Bearer " + Placeholder + " to call payments",
+		"header with trailing punctuation": {
+			in:   `authorization: "Bearer aaaaaaaaaaaaaaaaaaaaaaaa",`,
+			want: `authorization: "Bearer ` + Placeholder + `",`,
 		},
 	}
 
@@ -60,12 +61,35 @@ func TestCredentialsAfterAnAuthorizationSchemeAreMasked(t *testing.T) {
 // silently.
 func TestOrdinaryTextMentioningASchemeIsLeftAlone(t *testing.T) {
 	untouched := []string{
+		// Short enough to fail the length floor.
 		"bearer token missing from request",
 		"Basic auth failed for user 42",
 		"the bearer of this message is unauthenticated",
 		"Bearer",
 		"Bearer short",
 		"switching to basic authentication",
+
+		// Long enough to pass it. Every one of these was destroyed by the first
+		// version of this rule, which had no word boundary and no context
+		// requirement — a path, two dotted identifiers and a compound word are
+		// all made of the same characters a token is.
+		"loaded basic /etc/nexovue/receiver/config.yaml",
+		"basic auth.middleware.verify_request_credentials failed",
+		"applying basic transform_pipeline_stage_normalize",
+		"standard-bearer deployment_manifest_v2.yaml applied",
+		"the flag-bearer service emitted unknown_metric_name_here",
+
+		// Prose that merely begins with the word. Trailing text is what tells
+		// a sentence apart from a header value.
+		"bearer authentication_strategy_selected for tenant acme",
+		"basic transform_pipeline_stage_normalize completed",
+
+		// Compound words *inside* an authorization context. Only the word
+		// boundary refuses these — the context check has already said yes. They
+		// are here because a negative control found no case that failed when
+		// the boundary was removed: the guard was real, the coverage was not.
+		"authorization:xbearer aaaaaaaaaaaaaaaaaaaaaaaa",
+		"authorization: my-bearer deployment_manifest_v2.yaml",
 	}
 
 	for _, text := range untouched {
@@ -86,7 +110,7 @@ func TestOrdinaryTextMentioningASchemeIsLeftAlone(t *testing.T) {
 func TestABearerTokenInALogBodyDoesNotSurviveMasking(t *testing.T) {
 	rules := Defaults()
 	token := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
-	masked, changed := rules.maskValue("calling payments with Bearer " + token)
+	masked, changed := rules.maskValue("POST /charge Authorization: Bearer " + token)
 
 	if !changed {
 		t.Fatal("a bearer token in a message was not masked")
@@ -94,7 +118,7 @@ func TestABearerTokenInALogBodyDoesNotSurviveMasking(t *testing.T) {
 	if contains(masked, token) {
 		t.Errorf("the token survived: %q", masked)
 	}
-	if !contains(masked, "calling payments") {
+	if !contains(masked, "POST /charge") {
 		t.Errorf("the message lost its meaning: %q", masked)
 	}
 }
@@ -103,7 +127,7 @@ func TestABearerTokenInALogBodyDoesNotSurviveMasking(t *testing.T) {
 // must not switch the first one off.
 func TestTheCardRuleStillAppliesAlongsideCredentials(t *testing.T) {
 	rules := Defaults()
-	masked, changed := rules.maskValue("card 4111111111111111 and Bearer aaaaaaaaaaaaaaaaaaaaaaaa")
+	masked, changed := rules.maskValue("card 4111111111111111 authorization=Bearer aaaaaaaaaaaaaaaaaaaaaaaa")
 	if !changed {
 		t.Fatal("nothing masked")
 	}

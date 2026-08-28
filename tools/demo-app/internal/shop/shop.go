@@ -196,7 +196,7 @@ func (s *Service) charge(w http.ResponseWriter, r *http.Request) {
 		// has to catch before it reaches storage.
 		s.log.ErrorContext(ctx, "payment authorization failed",
 			slog.String("provider", "stripe-sandbox"),
-			slog.String("upstream_request", "POST /authorize Bearer sk_test_51HxmpleTokenThatMustNeverBeStored"),
+			slog.String("upstream_request", "POST /authorize Authorization: Bearer sk_test_51HxmpleTokenThatMustNeverBeStored"),
 			slog.String("exception.type", "AuthorizationDeclined"),
 			slog.String("exception.message", err.Error()))
 		s.record(ctx, "declined", started)

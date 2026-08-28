@@ -31,9 +31,11 @@ func (m *Masker) MaskResourceMetrics(projectID string, batches []*metricspb.Reso
 
 // maskMetric reaches every data point of whichever shape this metric is.
 //
-// The switch is exhaustive over OTLP's five point types rather than defaulting,
-// so a sixth shape added upstream fails to compile here instead of silently
-// carrying unmasked attributes to the store.
+// The switch names all five OTLP point types and has no default. That is not a
+// compile-time guarantee — Go does not check a type switch for exhaustiveness,
+// and a sixth shape would fall straight through here unmasked. What actually
+// stops it reaching the store is `metricwriting.appendMetric`, whose own switch
+// *does* default, rejecting the message and parking it. Do not remove that.
 func maskMetric(rules Rules, metric *metricspb.Metric) int {
 	if metric == nil {
 		return 0
