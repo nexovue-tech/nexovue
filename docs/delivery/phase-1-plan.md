@@ -129,8 +129,8 @@ nexovue/
 
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
-| P1-28 | Logs pipeline | `/v1/logs` → log-writer → `logs` table with tokenbf text index | todo |
-| P1-29 | Metrics pipeline | `/v1/metrics` → `metrics` table | todo |
+| P1-28 | Logs pipeline | `/v1/logs` → log-writer → `logs` table. Writer owes severity text → `severity_number`, the resource/record attribute split, and a per-record decision on whether the body is a map (ADR 0062) | todo |
+| P1-29 | Metrics pipeline | `/v1/metrics` → the five OTLP metric tables (ADR 0066); `derive` moves off the old `metrics` table onto `metrics_sum` with temporality, monotonicity and start time, and `metrics` then retires | todo |
 | P1-30 | Error extraction | `exception_type` / `exception_message` promoted to columns; grouping view | todo |
 | P1-31 | Log↔trace correlation | "logs for this trace" query path both directions | todo |
 | P1-32 | Log pattern grouping | Drain-style templating → `pattern_id` on logs *(optional — drop if it delays M4)* | todo |
