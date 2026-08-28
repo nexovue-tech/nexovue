@@ -7,6 +7,8 @@ tenant's key is a 404 rather than a row.
 
 Revocation is a POST to a named action rather than a DELETE. The row is not
 deleted — it is marked withdrawn, and an audit needs to see what was withdrawn.
+It is also the one action here that asks what the caller's role is, because it
+is irreversible and stops a project's ingest.
 """
 
 from __future__ import annotations
@@ -39,6 +41,4 @@ async def list_api_keys(
 async def revoke_api_key(
     identity: CurrentIdentity, db: DbSession, key_id: uuid.UUID
 ) -> ApiKeySummary:
-    return await service.revoke(
-        db, org_id=identity.org_id, actor_user_id=identity.user.id, key_id=key_id
-    )
+    return await service.revoke(db, org_id=identity.org_id, actor=identity.user, key_id=key_id)

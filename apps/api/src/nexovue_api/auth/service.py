@@ -36,8 +36,22 @@ async def authenticate(db: AsyncSession, *, email: str, password: str) -> tuple[
     stored_hash = found[0].password_hash if found is not None else None
     # Always verify, even with no user: see `credentials.verify_password`.
     if not verify_password(stored_hash, password) or found is None:
+        await _record_refusal(db, user=found[0] if found is not None else None)
         raise UnauthenticatedError(INVALID_CREDENTIALS_DETAIL)
     return found
+
+
+async def _record_refusal(db: AsyncSession, *, user: User | None) -> None:
+    """Write the refusal and commit it, before the 401 unwinds the request.
+
+    The one place in this codebase that commits outside the request dependency,
+    and deliberately. Every other entry joins the transaction of the action it
+    records so the two are atomic; a refused sign-in has no action to be atomic
+    with, and the exception that follows would roll the entry back — leaving
+    brute force unrecorded, which is the whole reason to write it.
+    """
+    audit.record_session_denied(db, user=user)
+    await db.commit()
 
 
 async def start_session(db: AsyncSession, sessions: SessionStore, *, user: User) -> str:

@@ -30,10 +30,17 @@ SESSION_CREATED: Final = "session.created"
 SESSION_ENDED: Final = "session.ended"
 API_KEY_CREATED: Final = "api_key.created"
 API_KEY_REVOKED: Final = "api_key.revoked"
+SESSION_DENIED: Final = "session.denied"
 
 ORGANIZATION_TARGET: Final = "organization"
 USER_TARGET: Final = "user"
 API_KEY_TARGET: Final = "api_key"
+
+# A refused sign-in against an address matching no account. The address is not
+# recorded: it belongs to somebody who is not our customer, so storing it would
+# collect personal data on non-users and build a list of addresses somebody
+# once guessed. The row is a count, and counts are what reveal brute force.
+UNKNOWN_ACCOUNT_TARGET: Final = "unknown_account"
 
 
 def record_organization_created(
@@ -95,16 +102,54 @@ def record_api_key_revoked(db: AsyncSession, *, api_key: ApiKey, actor_user_id: 
     )
 
 
+def record_session_denied(db: AsyncSession, *, user: User | None) -> None:
+    """A sign-in was refused.
+
+    `user` is the account the address matched, or None when it matched none.
+    Both are recorded, because repeated failures against one real account and a
+    sweep across addresses that do not exist are different attacks and only the
+    log tells them apart. Neither records the password, and the unknown case
+    records no address at all.
+    """
+    if user is None:
+        _add(
+            db,
+            org_id=None,
+            actor_user_id=None,
+            action=SESSION_DENIED,
+            target=UNKNOWN_ACCOUNT_TARGET,
+        )
+        return
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=SESSION_DENIED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
 def _add(
     db: AsyncSession,
     *,
-    org_id: uuid.UUID,
+    org_id: uuid.UUID | None,
     actor_user_id: uuid.UUID | None,
     action: str,
     target: str,
+    actor_label: str | None = None,
+    impersonation_context: uuid.UUID | None = None,
 ) -> None:
     """Put the entry in the caller's transaction. Nothing is committed here."""
-    db.add(AuditLogEntry(org_id=org_id, actor_user_id=actor_user_id, action=action, target=target))
+    db.add(
+        AuditLogEntry(
+            org_id=org_id,
+            actor_user_id=actor_user_id,
+            actor_label=actor_label,
+            impersonation_context=impersonation_context,
+            action=action,
+            target=target,
+        )
+    )
 
 
 def _target(kind: str, identifier: uuid.UUID) -> str:

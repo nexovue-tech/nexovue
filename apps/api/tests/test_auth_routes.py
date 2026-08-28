@@ -84,6 +84,9 @@ class FakeDbSession:
         """Rows the request wrote — audit entries here."""
         self.written.append(entity)
 
+    async def commit(self) -> None:
+        """A refused sign-in commits its own record before the 401 unwinds."""
+
     async def execute(self, statement: Any) -> Any:
         found = (self._user, self._organization) if self._user is not None else None
         return _FakeResult(found)

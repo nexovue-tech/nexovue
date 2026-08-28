@@ -75,9 +75,15 @@ class RecordingDbSession:
     def __init__(self, identity: tuple[User, Organization] | None = None) -> None:
         self._identity = identity
         self.written: list[Any] = []
+        # Counted because a refused sign-in has to commit before its 401
+        # unwinds the request; see `auth.service._record_refusal`.
+        self.commits = 0
 
     def add(self, entity: Any) -> None:
         self.written.append(entity)
+
+    async def commit(self) -> None:
+        self.commits += 1
 
     async def execute(self, statement: Any) -> Any:
         return _FakeResult(self._identity)
@@ -210,8 +216,10 @@ async def test_signing_in_records_that_a_session_was_created(
     assert entry.org_id == user.org_id
 
 
-async def test_a_refused_sign_in_records_nothing(db: RecordingDbSession, user: User) -> None:
-    """Only what happened is recorded; a rejected password is not a session."""
+async def test_a_refused_sign_in_against_a_real_account_is_recorded(
+    db: RecordingDbSession, user: User
+) -> None:
+    """Repeated failures against one account are what brute force looks like."""
     app = _build_app(db, FakeSessionStore())
 
     async with _client(app) as client:
@@ -220,7 +228,53 @@ async def test_a_refused_sign_in_records_nothing(db: RecordingDbSession, user: U
         )
 
     assert response.status_code == 401
-    assert db.entries == []
+    entry = db.entries[-1]
+    assert entry.action == audit.SESSION_DENIED
+    assert entry.org_id == user.org_id
+    assert entry.actor_user_id == user.id
+    assert "not-the-password" not in entry.target
+
+
+async def test_a_refused_sign_in_against_an_unknown_address_records_no_address() -> None:
+    """The attempt is counted; the address is not kept.
+
+    It belongs to somebody who is not our customer, so storing it would collect
+    personal data on non-users and build a list of guessed addresses.
+    """
+    # No identity: this session finds no account for any address.
+    db = RecordingDbSession()
+    app = _build_app(db, FakeSessionStore())
+    stranger = "nobody@example.invalid"
+
+    async with _client(app) as client:
+        response = await client.post(
+            f"{API_PREFIX}/auth/login", json={"email": stranger, "password": PASSWORD}
+        )
+
+    assert response.status_code == 401
+    entry = db.entries[-1]
+    assert entry.action == audit.SESSION_DENIED
+    assert entry.org_id is None
+    assert entry.actor_user_id is None
+    assert stranger not in entry.target
+    assert entry.target == audit.UNKNOWN_ACCOUNT_TARGET
+
+
+async def test_a_refused_sign_in_survives_the_401(db: RecordingDbSession, user: User) -> None:
+    """The refusal is committed before the exception unwinds the request.
+
+    Without that commit the entry rolls back with the failed request, which
+    would leave every brute-force attempt unrecorded.
+    """
+    app = _build_app(db, FakeSessionStore())
+
+    async with _client(app) as client:
+        await client.post(
+            f"{API_PREFIX}/auth/login",
+            json={"email": user.email, "password": "not-the-password"},
+        )
+
+    assert db.commits >= 1
 
 
 async def test_signing_out_records_the_user_whose_session_ended(

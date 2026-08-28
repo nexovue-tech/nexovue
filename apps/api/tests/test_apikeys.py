@@ -25,7 +25,7 @@ from nexovue_api.auth.dependencies import Identity
 from nexovue_api.auth.dependencies import get_current_identity as current_identity_dependency
 from nexovue_api.data.postgres.models import ApiKey, AuditLogEntry, Organization, Project, User
 from nexovue_api.deps import get_app_settings, get_db_session
-from nexovue_api.errors.exceptions import NotFoundError
+from nexovue_api.errors.exceptions import NotFoundError, PermissionDeniedError
 from nexovue_api.settings import API_PREFIX, Settings
 
 PLAINTEXT_KEY = "nvk_live_secretsecretsecretsec"
@@ -140,7 +140,7 @@ async def test_revoking_a_key_marks_it_revoked(db: FakeControlPlane, acme: Tenan
     summary = await service.revoke(
         db,  # type: ignore[arg-type]
         org_id=acme.organization.id,
-        actor_user_id=acme.user.id,
+        actor=acme.user,
         key_id=acme.key.id,
     )
 
@@ -153,7 +153,7 @@ async def test_revoking_a_key_records_who_revoked_it(db: FakeControlPlane, acme:
     await service.revoke(
         db,  # type: ignore[arg-type]
         org_id=acme.organization.id,
-        actor_user_id=acme.user.id,
+        actor=acme.user,
         key_id=acme.key.id,
     )
 
@@ -173,7 +173,7 @@ async def test_an_organization_cannot_revoke_another_organizations_key(
         await service.revoke(
             db,  # type: ignore[arg-type]
             org_id=acme.organization.id,
-            actor_user_id=acme.user.id,
+            actor=acme.user,
             key_id=globex.key.id,
         )
 
@@ -187,14 +187,14 @@ async def test_a_key_that_never_existed_is_the_same_404(db: FakeControlPlane, ac
         await service.revoke(
             db,  # type: ignore[arg-type]
             org_id=acme.organization.id,
-            actor_user_id=acme.user.id,
+            actor=acme.user,
             key_id=uuid.uuid4(),
         )
     with pytest.raises(NotFoundError) as elsewhere:
         await service.revoke(
             db,  # type: ignore[arg-type]
             org_id=acme.organization.id,
-            actor_user_id=acme.user.id,
+            actor=acme.user,
             key_id=Tenant("initech").key.id,
         )
 
@@ -208,13 +208,13 @@ async def test_revoking_twice_changes_nothing_and_records_once(
     first = await service.revoke(
         db,  # type: ignore[arg-type]
         org_id=acme.organization.id,
-        actor_user_id=acme.user.id,
+        actor=acme.user,
         key_id=acme.key.id,
     )
     second = await service.revoke(
         db,  # type: ignore[arg-type]
         org_id=acme.organization.id,
-        actor_user_id=acme.user.id,
+        actor=acme.user,
         key_id=acme.key.id,
     )
 
@@ -247,6 +247,56 @@ async def test_a_listing_never_carries_the_secret_or_its_lookup_prefix(
     assert PLAINTEXT_KEY not in body
     assert acme.key.key_prefix not in body
     assert acme.key.key_hash not in body
+
+
+async def test_a_listing_shows_only_four_secret_characters(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    """The hint tells one key from another; it does not narrow the secret."""
+    listing = await service.list_for_project(
+        db,  # type: ignore[arg-type]
+        org_id=acme.organization.id,
+        project_id=acme.project.id,
+    )
+
+    hint = listing.api_keys[0].key_hint
+    secret = acme.key.key_prefix.rpartition("_")[2]
+    assert hint.startswith("nvk_live_")
+    assert hint.endswith(secret[-4:])
+    # Every secret character beyond the last four stays undisclosed.
+    assert secret[:-4] not in hint
+
+
+async def test_a_member_may_not_revoke_a_key(db: FakeControlPlane, acme: Tenant) -> None:
+    """Revocation is irreversible and stops ingest, so it is not everyone's."""
+    acme.user.role = "member"
+
+    with pytest.raises(PermissionDeniedError):
+        await service.revoke(
+            db,  # type: ignore[arg-type]
+            org_id=acme.organization.id,
+            actor=acme.user,
+            key_id=acme.key.id,
+        )
+
+    assert acme.key.revoked_at is None
+    assert not [row for row in db.written if isinstance(row, AuditLogEntry)]
+
+
+@pytest.mark.parametrize("role", ["owner", "admin"])
+async def test_an_owner_or_admin_may_revoke_a_key(
+    db: FakeControlPlane, acme: Tenant, role: str
+) -> None:
+    acme.user.role = role
+
+    await service.revoke(
+        db,  # type: ignore[arg-type]
+        org_id=acme.organization.id,
+        actor=acme.user,
+        key_id=acme.key.id,
+    )
+
+    assert acme.key.revoked_at is not None
 
 
 # ------------------------------------------------------------------ the routes

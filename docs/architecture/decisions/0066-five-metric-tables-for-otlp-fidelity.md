@@ -59,6 +59,13 @@ are dropped — the trace it points at carries them.
 [0061](0061-counter-overcount-across-a-store-restart.md) already established that the dedup log does
 not survive a ClickHouse restart and that the KeeperMap offset guard is what actually holds.
 
+## Confirmed scope
+
+"Full fidelity" was read as OTLP's data, not its envelope bookkeeping. `scope_name` and
+`scope_version` are kept; scope attributes, schema URLs and dropped-attribute counts are not, which
+matches what `spans` already stores. Exemplars **are** kept — they are the only link from a metric
+back to a trace, which is the product. Confirmed 2026-08-28.
+
 ## Consequences
 
 A reader has to know which table a metric lives in. That is the honest cost of the split and the

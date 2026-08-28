@@ -161,9 +161,7 @@ async def test_revoking_stops_the_receiver_from_resolving_the_key(db: AsyncSessi
         "the key was not live to begin with"
     )
 
-    await apikeys.revoke(
-        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, key_id=key.id
-    )
+    await apikeys.revoke(db, org_id=tenant.organization.id, actor=tenant.user, key_id=key.id)
     await db.flush()
 
     assert await _receiver_sees(db, key.key_prefix) is None
@@ -173,9 +171,7 @@ async def test_revoking_records_who_did_it_in_the_same_transaction(db: AsyncSess
     tenant = await _new_tenant(db)
     key = await _only_key(db, tenant.organization.id)
 
-    await apikeys.revoke(
-        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, key_id=key.id
-    )
+    await apikeys.revoke(db, org_id=tenant.organization.id, actor=tenant.user, key_id=key.id)
     await db.flush()
 
     revocations = [
@@ -198,7 +194,7 @@ async def test_an_organization_cannot_revoke_another_organizations_key(db: Async
         await apikeys.revoke(
             db,
             org_id=attacker.organization.id,
-            actor_user_id=attacker.user.id,
+            actor=attacker.user,
             key_id=victims_key.id,
         )
     await db.flush()
@@ -217,10 +213,10 @@ async def test_revoking_twice_records_the_event_once(db: AsyncSession) -> None:
     key = await _only_key(db, tenant.organization.id)
 
     first = await apikeys.revoke(
-        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, key_id=key.id
+        db, org_id=tenant.organization.id, actor=tenant.user, key_id=key.id
     )
     second = await apikeys.revoke(
-        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, key_id=key.id
+        db, org_id=tenant.organization.id, actor=tenant.user, key_id=key.id
     )
     await db.flush()
 
@@ -238,9 +234,7 @@ async def test_a_listing_shows_the_revoked_key_rather_than_hiding_it(db: AsyncSe
     tenant = await _new_tenant(db)
     key = await _only_key(db, tenant.organization.id)
 
-    await apikeys.revoke(
-        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, key_id=key.id
-    )
+    await apikeys.revoke(db, org_id=tenant.organization.id, actor=tenant.user, key_id=key.id)
     listing = await apikeys.list_for_project(
         db, org_id=tenant.organization.id, project_id=tenant.project.id
     )

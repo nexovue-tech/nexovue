@@ -60,6 +60,9 @@ DEFAULT_RETENTION_DAYS: Final = 30
 # customer's signup because of someone else's key. Fifteen secret characters remain
 # hidden, which is entropy enough that lengthening the prefix costs nothing.
 API_KEY_PREFIX_LENGTH: Final = 16
+
+# Long enough for an email address, the longest thing an actor label holds.
+ACTOR_LABEL_LENGTH: Final = 320
 SHA256_HEX_LENGTH: Final = 64
 
 # RFC 5321 caps a path at 320 octets.
@@ -327,17 +330,28 @@ class Session(Base):
 
 
 class AuditLogEntry(Base):
-    """Who changed what. `actor_user_id` is null for actions the system took."""
+    """Who changed what.
+
+    `actor_user_id` is null for actions the system took, and for actors who are
+    not rows in `users` — our own staff during an impersonated session, who
+    `actor_label` names instead. `org_id` is null only for a refused sign-in
+    against an address that matches no account, which belongs to no tenant.
+    """
 
     __tablename__ = "audit_log"
 
     id: Mapped[UuidPrimaryKey]
-    org_id: Mapped[uuid.UUID] = mapped_column(
-        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True
     )
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    # Names an actor who is not a row in `users`. Never an address belonging to
+    # someone who is not ours: see `audit.service`.
+    actor_label: Mapped[str | None] = mapped_column(String(ACTOR_LABEL_LENGTH), nullable=True)
+    # The impersonation session an entry was written under, if any (F31).
+    impersonation_context: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
     action: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
     target: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
     at: Mapped[CreatedAt]
