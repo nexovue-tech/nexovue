@@ -74,6 +74,7 @@ services:
       # listening on loopback where no other container can reach it.
       - ../clickhouse/config.d/memory.xml:/etc/clickhouse-server/config.d/memory.xml:ro
       - ../clickhouse/config.d/keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro
+      - ../clickhouse/config.d/backups.xml:/etc/clickhouse-server/config.d/backups.xml:ro
     ulimits:
       nofile:
         soft: 262144

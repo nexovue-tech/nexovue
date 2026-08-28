@@ -1,0 +1,17 @@
+<clickhouse>
+    <!-- A backup destination has to exist before a restore can be rehearsed, and
+         a restore nobody has rehearsed is a hope rather than a plan. Local disk
+         only: this proves the mechanism and the round trip. Where production
+         backups actually land is P1-51's decision, not this file's. -->
+    <storage_configuration>
+        <disks>
+            <backups>
+                <type>local</type>
+                <path>/var/lib/clickhouse/backups/</path>
+            </backups>
+        </disks>
+    </storage_configuration>
+    <backups>
+        <allowed_disk>backups</allowed_disk>
+    </backups>
+</clickhouse>
