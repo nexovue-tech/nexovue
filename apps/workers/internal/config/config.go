@@ -66,9 +66,10 @@ type Config struct {
 
 	// The stages of the trace-assembly pipeline, in the order they run:
 	// decode → mask → derive → sample → sink.
-	Masking  Masking
-	Metrics  Metrics
-	Sampling Sampling
+	Masking   Masking
+	Metrics   Metrics
+	Sampling  Sampling
+	Retention Retention
 
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"30s"`
 }

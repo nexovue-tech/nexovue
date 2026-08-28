@@ -53,25 +53,30 @@ type spanRow struct {
 	Timestamp time.Time
 	// ReceivedAt is our own clock. The stored row partitions and expires on it,
 	// so a client's wrong clock cannot pin a row in storage or delete it early.
-	ReceivedAt        time.Time
-	TenantID          string
-	ProjectID         string
-	TraceID           []byte
-	SpanID            []byte
-	ParentSpanID      []byte
-	ServiceName       string
-	SpanName          string
-	SpanKind          string
-	DurationMS        float64
-	StatusCode        string
-	StatusMessage     string
-	HTTPMethod        string
-	HTTPRoute         string
-	HTTPStatus        uint16
-	DeploymentVersion string
-	ResourceAttrs     string
-	SpanAttrs         string
-	Events            string
+	ReceivedAt time.Time
+	// RetentionDays is this row's own expiry, and DerivedRetentionDays is the
+	// one the rollups built from it use. Both sit in the partition key of the
+	// table they land in, so a part holds one retention and drops whole.
+	RetentionDays        uint16
+	DerivedRetentionDays uint16
+	TenantID             string
+	ProjectID            string
+	TraceID              []byte
+	SpanID               []byte
+	ParentSpanID         []byte
+	ServiceName          string
+	SpanName             string
+	SpanKind             string
+	DurationMS           float64
+	StatusCode           string
+	StatusMessage        string
+	HTTPMethod           string
+	HTTPRoute            string
+	HTTPStatus           uint16
+	DeploymentVersion    string
+	ResourceAttrs        string
+	SpanAttrs            string
+	Events               string
 }
 
 // decoded is one Kafka message unpacked: our envelope and the OTLP request it

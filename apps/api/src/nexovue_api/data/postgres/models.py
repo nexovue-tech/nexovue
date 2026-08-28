@@ -80,10 +80,15 @@ class Organization(Base):
     id: Mapped[UuidPrimaryKey]
     slug: Mapped[str] = mapped_column(String(SLUG_MAX_LENGTH), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
-    # Plan tiers are not decided yet; this holds the name the billing work will
-    # define. Retention and quotas read from `projects`, not from here.
+    # The tier this organization is on (ADR 0071). A foreign key rather than
+    # free text, because a typo here would silently grant whichever retention
+    # the resolver fell back to. What each tier grants lives in `plans`; what a
+    # project actually gets is resolved against it, never taken from here.
     plan: Mapped[str] = mapped_column(
-        String(SHORT_LABEL_LENGTH), nullable=False, server_default=text("'free'")
+        String(SHORT_LABEL_LENGTH),
+        ForeignKey("plans.slug", ondelete="RESTRICT"),
+        nullable=False,
+        server_default=text("'free'"),
     )
     created_at: Mapped[CreatedAt]
     # Soft delete: purging telemetry means dropping ClickHouse partitions and
@@ -120,6 +125,21 @@ class User(Base):
     __table_args__ = (Index("ix_users_org_id", "org_id"),)
 
 
+class Plan(Base):
+    """What a tier grants. Rows, not constants: these are the numbers most
+    likely to change after contact with customers, and changing one should not
+    need a deploy. Seeded from ADR 0071."""
+
+    __tablename__ = "plans"
+
+    slug: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), primary_key=True)
+    name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    # Spans and logs.
+    raw_retention_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Metrics and rollups — small, and what answers "was it always this slow".
+    derived_retention_days: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class Project(Base):
     """A project is an environment — production, staging.
 
@@ -136,6 +156,10 @@ class Project(Base):
     )
     slug: Mapped[str] = mapped_column(String(SLUG_MAX_LENGTH), nullable=False)
     name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    # What this project asks to keep. The plan grants a ceiling and this may sit
+    # below it — staging rarely wants thirty days — but never above it. The
+    # effective value is resolved in `plans.service`, and it is that value the
+    # worker stamps on every row so a part can expire as a whole (ADR 0072).
     retention_days: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text(str(DEFAULT_RETENTION_DAYS))
     )

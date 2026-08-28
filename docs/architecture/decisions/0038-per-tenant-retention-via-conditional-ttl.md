@@ -1,6 +1,6 @@
 # 38. Per-tenant retention via conditional TTL
 
-- **Status:** Accepted
+- **Status:** Superseded by [0072](0072-retention-class-partitioning.md)
 - **Date:** 2026-08-26
 
 ## Context
@@ -20,6 +20,11 @@ Partitioning *by* `tenant_id` is rejected: it would explode part counts across m
 Daily date partitions stay.
 
 ## Consequences
+
+> **Superseded.** The claim below was never tested and is wrong. Measured on 26.3, a conditional TTL
+> makes ClickHouse **rewrite** the part — `ttl_only_drop_parts` cannot drop a part whose rows have
+> not all expired, which is every part when tenants share one. See
+> [0072](0072-retention-class-partitioning.md) for the test and the replacement.
 
 No scheduled delete job, and no mutation load — expiry stays a cheap part drop. The cost is a
 generated DDL expression that grows with the tenant list and has to be regenerated whenever a plan

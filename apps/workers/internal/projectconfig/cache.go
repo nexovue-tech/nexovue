@@ -17,6 +17,10 @@ import (
 type Settings struct {
 	Masking  mask.Rules
 	Sampling sample.Policy
+	// Retention this project's rows are stamped with. Zero means the refresher
+	// has not seen the project yet, and the deployment defaults apply.
+	RawRetentionDays     uint16
+	DerivedRetentionDays uint16
 }
 
 // Cache serves settings to the stages. Reads are lock-free: a refresh swaps a
@@ -78,6 +82,14 @@ func (c *Cache) MaskingRules(projectID string) mask.Rules {
 // SamplingPolicy implements sample.PolicySource.
 func (c *Cache) SamplingPolicy(projectID string) sample.Policy {
 	return c.Settings(projectID).Sampling
+}
+
+// Retention is the days this project's raw signals and derived rollups are
+// kept for. Falls back to the deployment defaults for a project the refresher
+// has not seen, exactly as masking and sampling do.
+func (c *Cache) Retention(projectID string) (raw, derived uint16) {
+	settings := c.Settings(projectID)
+	return settings.RawRetentionDays, settings.DerivedRetentionDays
 }
 
 // Configured reports how many projects the current snapshot names, which is

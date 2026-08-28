@@ -84,6 +84,17 @@ func (s Sampling) validate() error {
 	)
 }
 
+// Retention is what a row is stamped with when the control plane has not said
+// otherwise — a project the refresher has not seen yet, or a deployment with no
+// control plane at all. Every row carries its own retention so a whole part can
+// expire at once instead of being rewritten row by row (ADR 0072).
+type Retention struct {
+	// Spans and logs.
+	RawDays uint16 `env:"WORKERS_RETENTION_RAW_DAYS" envDefault:"30"`
+	// Metrics and rollups.
+	DerivedDays uint16 `env:"WORKERS_RETENTION_DERIVED_DAYS" envDefault:"395"`
+}
+
 // Metrics is the exact-counter stage's settings.
 type Metrics struct {
 	// LateGrace is how long a minute stays open after it ends. A span arriving

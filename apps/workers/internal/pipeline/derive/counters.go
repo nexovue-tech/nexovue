@@ -68,6 +68,9 @@ type Span struct {
 	// Timestamp is when the client says the span started.
 	Timestamp time.Time
 
+	// RetentionDays is the derived-signal retention of the project this span
+	// belongs to. It reaches the counter row so its part can expire whole.
+	RetentionDays uint16
 	// ReceivedAt is when we took the message carrying it — the only clock in
 	// the path we control, and so what Timestamp is judged against. A zero
 	// value leaves Timestamp unjudged; the caller is expected to always set it.
@@ -99,13 +102,14 @@ func bucketInstant(span Span) (at time.Time, discarded time.Duration) {
 
 // Point is one row of the `metrics` table.
 type Point struct {
-	Timestamp   time.Time
-	TenantID    string
-	ProjectID   string
-	MetricName  string
-	Value       float64
-	ServiceName string
-	Attrs       string
+	Timestamp     time.Time
+	RetentionDays uint16
+	TenantID      string
+	ProjectID     string
+	MetricName    string
+	Value         float64
+	ServiceName   string
+	Attrs         string
 }
 
 // interval is the window this point covers: OTLP delta sums carry both ends,
@@ -131,6 +135,9 @@ type series struct {
 	service    string
 	endpoint   string
 	httpMethod string
+	// Constant for a given project, but carried here so the drained point knows
+	// it without a second lookup. Part of the counter table's partition key.
+	retentionDays uint16
 }
 
 type totals struct {
@@ -171,12 +178,13 @@ func NewCounters(lateGrace time.Duration) *Counters {
 func (c *Counters) Observe(span Span) (minute time.Time, discardedSkew time.Duration) {
 	at, discarded := bucketInstant(span)
 	key := series{
-		minute:     at.UTC().Truncate(bucketWidth),
-		tenantID:   span.TenantID,
-		projectID:  span.ProjectID,
-		service:    span.ServiceName,
-		endpoint:   span.Endpoint,
-		httpMethod: span.HTTPMethod,
+		minute:        at.UTC().Truncate(bucketWidth),
+		tenantID:      span.TenantID,
+		projectID:     span.ProjectID,
+		service:       span.ServiceName,
+		endpoint:      span.Endpoint,
+		httpMethod:    span.HTTPMethod,
+		retentionDays: span.RetentionDays,
 	}
 	bucket, ok := c.buckets[key]
 	if !ok {
@@ -263,13 +271,14 @@ func (c *Counters) Pending() int { return len(c.buckets) }
 
 func (s series) point(name string, value float64, attrs string) Point {
 	return Point{
-		Timestamp:   s.minute,
-		TenantID:    s.tenantID,
-		ProjectID:   s.projectID,
-		MetricName:  name,
-		Value:       value,
-		ServiceName: s.service,
-		Attrs:       attrs,
+		Timestamp:     s.minute,
+		RetentionDays: s.retentionDays,
+		TenantID:      s.tenantID,
+		ProjectID:     s.projectID,
+		MetricName:    name,
+		Value:         value,
+		ServiceName:   s.service,
+		Attrs:         attrs,
 	}
 }
 

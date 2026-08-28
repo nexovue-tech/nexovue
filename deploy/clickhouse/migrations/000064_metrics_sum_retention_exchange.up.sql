@@ -1,0 +1,1 @@
+EXCHANGE TABLES metrics_sum AND metrics_sum_rebuild

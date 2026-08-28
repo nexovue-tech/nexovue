@@ -28,16 +28,17 @@ const jsonAsStringSetting = "output_format_native_write_json_as_string"
 // block is one insert's worth of derived points, held column by column. It is
 // reused across flushes: resetting keeps the capacity.
 type block struct {
-	timestamp   proto.ColDateTime64
-	startAt     proto.ColDateTime64
-	tenantID    *proto.ColLowCardinality[string]
-	projectID   *proto.ColLowCardinality[string]
-	metricName  *proto.ColLowCardinality[string]
-	value       proto.ColFloat64
-	serviceName *proto.ColLowCardinality[string]
-	attrs       proto.ColJSONStr
-	temporality *proto.ColLowCardinality[string]
-	monotonic   proto.ColBool
+	timestamp     proto.ColDateTime64
+	startAt       proto.ColDateTime64
+	retentionDays proto.ColUInt16
+	tenantID      *proto.ColLowCardinality[string]
+	projectID     *proto.ColLowCardinality[string]
+	metricName    *proto.ColLowCardinality[string]
+	value         proto.ColFloat64
+	serviceName   *proto.ColLowCardinality[string]
+	attrs         proto.ColJSONStr
+	temporality   *proto.ColLowCardinality[string]
+	monotonic     proto.ColBool
 
 	columns proto.Input
 }
@@ -57,6 +58,7 @@ func newBlock() *block {
 	b.columns = proto.Input{
 		{Name: "timestamp", Data: &b.timestamp},
 		{Name: "start_timestamp", Data: &b.startAt},
+		{Name: "retention_days", Data: &b.retentionDays},
 		{Name: "tenant_id", Data: b.tenantID},
 		{Name: "project_id", Data: b.projectID},
 		{Name: "metric_name", Data: b.metricName},
@@ -73,6 +75,7 @@ func (b *block) append(point Point) {
 	start, end := point.interval()
 	b.timestamp.Append(end)
 	b.startAt.Append(start)
+	b.retentionDays.Append(point.RetentionDays)
 	b.tenantID.Append(point.TenantID)
 	b.projectID.Append(point.ProjectID)
 	b.metricName.Append(point.MetricName)

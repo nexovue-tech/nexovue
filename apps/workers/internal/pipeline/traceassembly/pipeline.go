@@ -41,9 +41,22 @@ const heartbeatInterval = 30 * time.Second
 // compiled-in defaults and samples with the deployment default policy, which is
 // how the stages behave for a project that has configured neither.
 type Options struct {
-	Masking  mask.RulesSource
-	Sampling sample.PolicySource
+	Masking   mask.RulesSource
+	Sampling  sample.PolicySource
+	Retention RetentionSource
 }
+
+// RetentionSource answers how long one project's data is kept. Narrow on
+// purpose, like the two above it: the stages need an answer, not the cache.
+type RetentionSource interface {
+	Retention(projectID string) (raw, derived uint16)
+}
+
+// staticRetention answers the same for every project. The deployment default
+// when nothing has told the worker otherwise.
+type staticRetention struct{ raw, derived uint16 }
+
+func (s staticRetention) Retention(string) (uint16, uint16) { return s.raw, s.derived }
 
 // Pipeline consumes span envelopes and runs them through the stages:
 // decode → mask → derive → sample → sink.
@@ -166,6 +179,13 @@ func samplingSource(cfg config.Config, opts Options) sample.PolicySource {
 	}
 	return sample.StaticPolicy(
 		sample.DefaultPolicy(cfg.Sampling.SlowThreshold, cfg.Sampling.HealthyPercent))
+}
+
+func retentionSource(cfg config.Config, opts Options) RetentionSource {
+	if opts.Retention != nil {
+		return opts.Retention
+	}
+	return staticRetention{raw: cfg.Retention.RawDays, derived: cfg.Retention.DerivedDays}
 }
 
 func maskingSource(opts Options) mask.RulesSource {

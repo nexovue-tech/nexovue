@@ -14,6 +14,8 @@ const spansTable = "spans"
 type spanBlock struct {
 	timestamp         proto.ColDateTime64
 	receivedAt        proto.ColDateTime64
+	retentionDays     proto.ColUInt16
+	derivedRetention  proto.ColUInt16
 	tenantID          *proto.ColLowCardinality[string]
 	projectID         *proto.ColLowCardinality[string]
 	traceID           proto.ColFixedStr
@@ -62,6 +64,8 @@ func newSpanBlock() *spanBlock {
 	block.columns = proto.Input{
 		{Name: "timestamp", Data: &block.timestamp},
 		{Name: "received_at", Data: &block.receivedAt},
+		{Name: "retention_days", Data: &block.retentionDays},
+		{Name: "derived_retention_days", Data: &block.derivedRetention},
 		{Name: "tenant_id", Data: block.tenantID},
 		{Name: "project_id", Data: block.projectID},
 		{Name: "trace_id", Data: &block.traceID},
@@ -87,6 +91,8 @@ func newSpanBlock() *spanBlock {
 func (b *spanBlock) append(row spanRow) {
 	b.timestamp.Append(row.Timestamp)
 	b.receivedAt.Append(row.ReceivedAt)
+	b.retentionDays.Append(row.RetentionDays)
+	b.derivedRetention.Append(row.DerivedRetentionDays)
 	b.tenantID.Append(row.TenantID)
 	b.projectID.Append(row.ProjectID)
 	b.traceID.Append(row.TraceID)

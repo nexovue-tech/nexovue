@@ -16,6 +16,11 @@ type Row struct {
 	ProjectID      string
 	MaskingConfig  []byte
 	SamplingConfig []byte
+	// Days this project's raw signals and derived rollups are kept for. Stamped
+	// on every row written, so a whole part shares one value and can expire as
+	// a unit rather than being rewritten row by row (ADR 0072).
+	RawRetentionDays     uint16
+	DerivedRetentionDays uint16
 }
 
 // Reader loads every project's stored configuration. An interface because the
@@ -112,6 +117,16 @@ func (r *Refresher) parse(ctx context.Context, row Row) Settings {
 			slog.String("project_id", row.ProjectID), slog.String("error", err.Error()))
 	} else {
 		settings.Sampling = policy
+	}
+
+	// Retention is a number the control plane resolved, not a document this
+	// worker parses, so there is nothing here that can be malformed. Zero means
+	// the view had no row and the deployment default stands.
+	if row.RawRetentionDays > 0 {
+		settings.RawRetentionDays = row.RawRetentionDays
+	}
+	if row.DerivedRetentionDays > 0 {
+		settings.DerivedRetentionDays = row.DerivedRetentionDays
 	}
 	return settings
 }

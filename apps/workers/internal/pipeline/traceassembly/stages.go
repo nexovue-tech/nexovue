@@ -33,17 +33,18 @@ func (r spanRow) traceKey() string { return string(r.TraceID) }
 // countable is this span as the derive stage sees it. receivedAt is what the
 // counters judge the client's timestamp against, so it is passed in rather than
 // stored on the row: it belongs to the message, not to the span.
-func (r spanRow) countable(receivedAt time.Time) derive.Span {
+func (r spanRow) countable(receivedAt time.Time, retentionDays uint16) derive.Span {
 	return derive.Span{
-		TenantID:    r.TenantID,
-		ProjectID:   r.ProjectID,
-		ServiceName: r.ServiceName,
-		Endpoint:    r.endpoint(),
-		HTTPMethod:  r.HTTPMethod,
-		Timestamp:   r.Timestamp,
-		ReceivedAt:  receivedAt,
-		DurationMS:  r.DurationMS,
-		Errored:     r.errored(),
+		RetentionDays: retentionDays,
+		TenantID:      r.TenantID,
+		ProjectID:     r.ProjectID,
+		ServiceName:   r.ServiceName,
+		Endpoint:      r.endpoint(),
+		HTTPMethod:    r.HTTPMethod,
+		Timestamp:     r.Timestamp,
+		ReceivedAt:    receivedAt,
+		DurationMS:    r.DurationMS,
+		Errored:       r.errored(),
 	}
 }
 
@@ -64,9 +65,10 @@ func (r spanRow) sampleFacts() sample.Facts {
 // the order between them is an invariant and an invariant needs a test that
 // does not require a running cluster.
 type stages struct {
-	masker   *mask.Masker
-	counters *derive.Counters
-	buffer   *sample.Buffer[spanRow]
+	masker    *mask.Masker
+	counters  *derive.Counters
+	buffer    *sample.Buffer[spanRow]
+	retention RetentionSource
 }
 
 func newStages(cfg config.Config, opts Options) (*stages, error) {
@@ -75,9 +77,10 @@ func newStages(cfg config.Config, opts Options) (*stages, error) {
 		return nil, err
 	}
 	return &stages{
-		masker:   mask.New(maskingSource(opts)),
-		counters: derive.NewCounters(cfg.Metrics.LateGrace),
-		buffer:   buffer,
+		masker:    mask.New(maskingSource(opts)),
+		counters:  derive.NewCounters(cfg.Metrics.LateGrace),
+		buffer:    buffer,
+		retention: retentionSource(cfg, opts),
 	}, nil
 }
 
@@ -140,14 +143,16 @@ func (s *stages) absorbMessage(now time.Time, message []byte, counted bool) (abs
 	s.masker.MaskResourceSpans(payload.envelope.GetProjectId(), payload.request.GetResourceSpans())
 
 	receivedAt := payload.receivedAt(now)
+	rawDays, derivedDays := s.retention.Retention(payload.envelope.GetProjectId())
 
 	var result absorbed
 	for _, row := range payload.rows() {
 		row.ReceivedAt = receivedAt
+		row.RetentionDays, row.DerivedRetentionDays = rawDays, derivedDays
 		// Derive before sample: the counters see every span, whatever the
 		// sampler decides about the trace it belongs to (ADR 0010).
 		if counted {
-			countable := row.countable(receivedAt)
+			countable := row.countable(receivedAt, derivedDays)
 			minute, discarded := s.counters.Observe(countable)
 			result.latestMinute = later(result.latestMinute, minute)
 			if discarded != 0 {

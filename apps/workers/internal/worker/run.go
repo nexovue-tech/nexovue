@@ -244,6 +244,10 @@ func pipelineOptions(
 		Masking: mask.Defaults(),
 		Sampling: sample.DefaultPolicy(
 			cfg.Sampling.SlowThreshold, cfg.Sampling.HealthyPercent),
+		// A project the refresher has not seen yet keeps the deployment
+		// default rather than zero, which would expire its rows on arrival.
+		RawRetentionDays:     cfg.Retention.RawDays,
+		DerivedRetentionDays: cfg.Retention.DerivedDays,
 	}
 	cache := projectconfig.NewCache(defaults)
 	refresher := projectconfig.NewRefresher(
@@ -251,7 +255,7 @@ func pipelineOptions(
 		maskSecret(cfg, log))
 	go refresher.Run(ctx)
 
-	return traceassembly.Options{Masking: cache, Sampling: cache}
+	return traceassembly.Options{Masking: cache, Sampling: cache, Retention: cache}
 }
 
 func clickHouseOptions(cfg config.Config) chpool.Options {
