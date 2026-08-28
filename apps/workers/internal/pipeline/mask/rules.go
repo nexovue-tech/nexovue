@@ -30,6 +30,9 @@ const (
 	RuleCookies = "cookies"
 	// RuleCardNumbers masks digit runs inside a value that pass a Luhn check.
 	RuleCardNumbers = "card_numbers"
+	// RuleAuthorizationCredentials masks the credential after a Bearer or Basic
+	// scheme wherever it appears in free text, including a log message body.
+	RuleAuthorizationCredentials = "authorization_credentials"
 )
 
 // DefaultRuleNames lists every rule that is on without configuration.
@@ -38,6 +41,7 @@ var DefaultRuleNames = []string{
 	RuleAuthorizationHeaders,
 	RuleCookies,
 	RuleCardNumbers,
+	RuleAuthorizationCredentials,
 }
 
 // credentialKeyMarkers are the key substrings the credential rule matches.
@@ -86,10 +90,11 @@ type keyMarker struct {
 // plus whatever extra keys it asked for. It is a value, built once per refresh
 // and read concurrently without a lock.
 type Rules struct {
-	credentialKeys      family
-	authorizationHeader family
-	cookies             family
-	cardNumbers         family
+	credentialKeys           family
+	authorizationHeader      family
+	cookies                  family
+	cardNumbers              family
+	authorizationCredentials family
 
 	// maskKeys are matched whole, maskKeyMarkers as substrings; both are
 	// lower-cased at build time so matching never allocates, and both carry
@@ -110,10 +115,11 @@ type Rules struct {
 func Defaults() Rules {
 	blanking := family{on: true, action: actionBlank}
 	return Rules{
-		credentialKeys:      blanking,
-		authorizationHeader: blanking,
-		cookies:             blanking,
-		cardNumbers:         blanking,
+		credentialKeys:           blanking,
+		authorizationHeader:      blanking,
+		cookies:                  blanking,
+		cardNumbers:              blanking,
+		authorizationCredentials: blanking,
 	}
 }
 
@@ -201,6 +207,8 @@ func (r *Rules) setFamily(name string, change func(*family)) error {
 		change(&r.authorizationHeader)
 	case RuleCookies:
 		change(&r.cookies)
+	case RuleAuthorizationCredentials:
+		change(&r.authorizationCredentials)
 	case RuleCardNumbers:
 		change(&r.cardNumbers)
 	default:
@@ -256,7 +264,7 @@ func (r Rules) masksKey(key string) (action, bool) {
 
 // masksValues reports whether string values need scanning at all, which lets
 // the hot path skip every value when no value rule is on.
-func (r Rules) masksValues() bool { return r.cardNumbers.on }
+func (r Rules) masksValues() bool { return r.cardNumbers.on || r.authorizationCredentials.on }
 
 // allows reports whether a value is one the project named as safe. The
 // allowlist beats every rule, which is the redaction processor's precedence and
@@ -273,10 +281,31 @@ func (r Rules) allows(value string) bool {
 // maskValue returns the value with every masked run replaced, and whether
 // anything changed.
 func (r Rules) maskValue(value string) (string, bool) {
-	if !r.cardNumbers.on || r.allows(value) {
+	if !r.masksValues() || r.allows(value) {
 		return value, false
 	}
-	return maskCardNumbers(value, r.replaceCardRun)
+	changed := false
+	if r.authorizationCredentials.on {
+		var did bool
+		value, did = maskAuthorizationCredentials(value, r.replaceCredential)
+		changed = changed || did
+	}
+	if r.cardNumbers.on {
+		var did bool
+		value, did = maskCardNumbers(value, r.replaceCardRun)
+		changed = changed || did
+	}
+	return value, changed
+}
+
+// replaceCredential is what a matched authorization credential becomes. The
+// allowlist still wins, which is the only remedy an operator has short of
+// switching the rule off.
+func (r Rules) replaceCredential(run string) (string, bool) {
+	if r.allows(run) {
+		return run, false
+	}
+	return r.replace(r.authorizationCredentials.action, run), true
 }
 
 // replaceCardRun is what a matched card run becomes, reporting false for a run

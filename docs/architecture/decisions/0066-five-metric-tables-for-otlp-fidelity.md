@@ -84,3 +84,12 @@ happens the duplication stands. It is recorded as the follow-up rather than left
 
 `Dynamic` and `Variant` were not used anywhere in this design, for the reason in
 [0062](0062-log-body-as-rendered-text-plus-typed-map.md): `ch-go` v0.74.0 cannot write them.
+
+## Corrected 2026-08-28
+
+This record said the derive write path was unchanged and listed moving it to
+`metrics_sum` as an unmade follow-up. Both stopped being true hours later.
+`derive` writes `metrics_sum` with DELTA temporality, both interval ends and
+monotonicity, and the single-Float64 `metrics` table it used to write no longer
+exists. The claim is corrected here rather than edited above, so the sequence
+stays readable.

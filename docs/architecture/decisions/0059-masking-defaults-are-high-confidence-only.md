@@ -44,3 +44,33 @@ the product's job is to make that easy and to say plainly that the defaults do n
 Accepted: key-based matching misses a secret in a value under an innocuous key, and Luhn produces
 occasional false positives on long digit strings. Both are the right trade at this bar — the
 alternative is content scanning every attribute on the hot path, which costs more than it protects.
+
+## Amended 2026-08-28 — `authorization_credentials` joins the defaults
+
+The four rules above cover keys and card numbers. They leave the commonest leak
+in a log untouched: a bearer token printed inside a message. A client logs the
+request it is about to make, or an error handler prints the headers it had, and
+the credential lands in free text where no key rule can see it.
+
+Every current write-up on log hygiene puts API tokens in error messages at the
+top of its risk list, and until now a project could not even opt in — every
+project-level knob here is key-based, deliberately, because a regex loaded from
+the database and run over every value is a performance cliff and a
+denial-of-service vector wearing a configuration field's costume.
+
+The rule is **anchored on the scheme word**, not on what the value looks like:
+the run of token characters after `Bearer ` or `Basic `. That is what lets it be
+on by default. A credential following an authorization scheme is a credential by
+definition, so there is no judgement to get wrong — and it clears this record's
+bar, since a developer can never legitimately need a bearer token's value to
+debug.
+
+**A generic high-entropy rule was rejected.** It would fire on trace ids, build
+hashes and base64 payloads, and this project has already had a value rule eat
+ordinary data: the card rule masked a Luhn-passing nanosecond timestamp and
+mangled a service name, which broke a chaos run. The false-positive guard here
+is a test of ordinary prose that mentions a scheme — *"bearer token missing"*,
+*"Basic auth failed"* — asserting the text comes back byte-identical.
+
+A minimum credential length of twenty keeps it off those phrases; published
+detection patterns settle on the same floor.

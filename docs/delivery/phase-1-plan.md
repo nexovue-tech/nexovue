@@ -328,8 +328,11 @@ the reference implementations rather than only against our own reasoning.
   **Still true and worth saying in customer-facing copy:** a pseudonym is stable and joinable, so
   under GDPR this is pseudonymised personal data — still personal data. ADR 0059's refusal to claim
   compliance stands.
-- **M3 note: the redaction processor supports traces only.** Logs and metrics need the attributes
-  or transform processor. Our masking stage will hit the same split when the log pipeline lands.
+- ~~**M3 note: the redaction processor supports traces only.**~~ **Out of date, and corrected.**
+  Upstream now reports beta for traces and alpha for logs and metrics, and documents appending audit
+  attributes into a map body — so it does reach log bodies. Our own stage covers all three signals as
+  of M3, and its default rule set is *more* protective than upstream's, which ships no default
+  blocked values at all.
 - ~~**`retryTransient` around Kafka calls duplicates franz-go's own retries.**~~ **Withdrawn —
   the evidence contradicts it.** franz-go does retry (`RequestRetries`, default 20, 250ms–2.5s),
   but before our wrapper existed the pipeline *died* on `commit offsets: unable to dial: lookup
