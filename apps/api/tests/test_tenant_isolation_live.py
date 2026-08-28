@@ -35,6 +35,7 @@ from urllib.parse import urlsplit
 import asyncpg  # type: ignore[import-untyped]
 import httpx
 import pytest
+from live import require_stack
 
 from nexovue_api.settings import API_PREFIX
 
@@ -99,12 +100,11 @@ def _reachable(url: str) -> bool:
         return False
 
 
-if not all(_reachable(origin) for origin in (API_ORIGIN, RECEIVER_ORIGIN, POSTGRES_DSN)):
-    pytest.skip(
-        "the dev stack is not running — start it with `just dev` to run the live "
-        "tenant isolation suite",
-        allow_module_level=True,
-    )
+require_stack(
+    reachable=all(_reachable(origin) for origin in (API_ORIGIN, RECEIVER_ORIGIN, POSTGRES_DSN)),
+    suite="the live tenant isolation suite",
+    remedy="the dev stack is not running — start it with `just dev`",
+)
 
 
 # ------------------------------------------------------------------- the stack
@@ -420,7 +420,11 @@ def test_a_cursor_issued_to_one_organization_cannot_page_another_organizations_t
     assert issued.status_code == 200, issued.text
     cursor = issued.json()["next_cursor"]
     if cursor is None:
-        pytest.skip("the seeded organization has no second page to forge a cursor from")
+        pytest.fail(
+            "the seeded organization has only one page of traces, so a forged "
+            "cursor cannot be tested — send some traffic with `just dev-tools` "
+            "or `just load`"
+        )
     theirs = {trace["trace_id"] for trace in issued.json()["traces"]}
 
     replayed = newcomer.client.get(
@@ -441,7 +445,11 @@ def test_a_newcomers_session_cannot_see_the_seeded_organizations_traces(
     assert theirs.status_code == 200, theirs.text
     traces = theirs.json()["traces"]
     if not traces:
-        pytest.skip("the seeded organization has no traces in the default window")
+        pytest.fail(
+            "the seeded organization has no traces in the default window, so "
+            "cross-tenant trace reads cannot be tested — send some traffic with "
+            "`just dev-tools` or `just load`"
+        )
 
     stolen = newcomer.client.get(
         f"/traces/{traces[0]['trace_id']}", params={"project_id": newcomer.project_id}

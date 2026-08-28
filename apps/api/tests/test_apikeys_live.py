@@ -20,6 +20,7 @@ from typing import Any, Final
 from urllib.parse import urlsplit
 
 import pytest
+from live import require_stack
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -56,12 +57,11 @@ def _reachable(dsn: str) -> bool:
         return False
 
 
-if not _reachable(POSTGRES_DSN):
-    pytest.skip(
-        "Postgres is not running — start it with `just dev` to run the live "
-        "audit and revocation suite",
-        allow_module_level=True,
-    )
+require_stack(
+    reachable=_reachable(POSTGRES_DSN),
+    suite="the live audit and revocation suite",
+    remedy="Postgres is not running — start it with `just dev`",
+)
 
 
 @pytest.fixture
