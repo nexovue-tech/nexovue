@@ -13,6 +13,7 @@ const spansTable = "spans"
 // resetting keeps the capacity, so a steady stream stops allocating.
 type spanBlock struct {
 	timestamp         proto.ColDateTime64
+	receivedAt        proto.ColDateTime64
 	tenantID          *proto.ColLowCardinality[string]
 	projectID         *proto.ColLowCardinality[string]
 	traceID           proto.ColFixedStr
@@ -56,9 +57,11 @@ func newSpanBlock() *spanBlock {
 	// The column carries its own precision; without it ch-go cannot encode a
 	// time and the server would be told the wrong type.
 	block.timestamp.WithPrecision(proto.PrecisionNano)
+	block.receivedAt.WithPrecision(proto.PrecisionNano)
 
 	block.columns = proto.Input{
 		{Name: "timestamp", Data: &block.timestamp},
+		{Name: "received_at", Data: &block.receivedAt},
 		{Name: "tenant_id", Data: block.tenantID},
 		{Name: "project_id", Data: block.projectID},
 		{Name: "trace_id", Data: &block.traceID},
@@ -83,6 +86,7 @@ func newSpanBlock() *spanBlock {
 
 func (b *spanBlock) append(row spanRow) {
 	b.timestamp.Append(row.Timestamp)
+	b.receivedAt.Append(row.ReceivedAt)
 	b.tenantID.Append(row.TenantID)
 	b.projectID.Append(row.ProjectID)
 	b.traceID.Append(row.TraceID)

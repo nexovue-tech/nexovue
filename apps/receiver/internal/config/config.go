@@ -106,6 +106,19 @@ func (c Config) MaxRecordBytes() int64 {
 	return c.MaxDecodedBodyBytes + EnvelopeOverheadBytes
 }
 
+// MaxProducerBatchBytes is franz-go's own ceiling on a record batch. Validation
+// holds MaxRecordBytes under it, which is what makes the int32 narrowing below
+// safe rather than merely likely.
+const MaxProducerBatchBytes int64 = 1 << 30
+
+// ProducerBatchMaxBytes is MaxRecordBytes in the width franz-go's option takes.
+func (c Config) ProducerBatchMaxBytes() int32 {
+	if c.MaxRecordBytes() > MaxProducerBatchBytes {
+		return int32(MaxProducerBatchBytes)
+	}
+	return int32(c.MaxRecordBytes()) //nolint:gosec // G115: validate() holds this under MaxProducerBatchBytes
+}
+
 // MaxAPIKeyCacheTTL is the ceiling on RECEIVER_API_KEY_CACHE_TTL. Revoking a key
 // is a security action, so the window in which a withdrawn key still works is
 // capped by the code rather than left to whoever writes the deployment.
@@ -144,6 +157,8 @@ func (c Config) validate() error {
 		atLeastSize("RECEIVER_KAFKA_MAX_BUFFERED_BYTES", c.KafkaMaxBufferedBytes,
 			"RECEIVER_MAX_DECODED_BODY_BYTES plus envelope overhead",
 			c.MaxRecordBytes()),
+		atMostSize("RECEIVER_MAX_DECODED_BODY_BYTES plus envelope overhead",
+			c.MaxRecordBytes(), "the largest batch franz-go accepts", MaxProducerBatchBytes),
 		positiveDuration("RECEIVER_PRODUCE_TIMEOUT", c.ProduceTimeout),
 		positiveDuration("RECEIVER_INGEST_SUMMARY_INTERVAL", c.IngestSummaryInterval),
 		positiveDuration("RECEIVER_API_KEY_CACHE_TTL", c.APIKeyCacheTTL),

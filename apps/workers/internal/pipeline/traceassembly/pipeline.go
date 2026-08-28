@@ -394,9 +394,9 @@ func (p *Pipeline) reportSkew(ctx context.Context, skew skewReport) {
 	if skew.spans == 0 {
 		return
 	}
-	p.retimedSpans += uint64(skew.spans)
+	p.retimedSpans += skew.spans
 	p.log.WarnContext(ctx, "counted spans at receive time; the client clock is too far out",
-		slog.Int("spans", skew.spans),
+		slog.Uint64("spans", skew.spans),
 		slog.String("tenant_id", skew.tenantID),
 		slog.String("project_id", skew.projectID),
 		slog.Int64("worst_skew_ms", skew.worst.Milliseconds()),

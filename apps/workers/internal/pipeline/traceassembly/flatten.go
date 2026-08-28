@@ -50,7 +50,10 @@ type spanRow struct {
 	// theirs instead of being an independent coin flip.
 	TraceState string
 
-	Timestamp         time.Time
+	Timestamp time.Time
+	// ReceivedAt is our own clock. The stored row partitions and expires on it,
+	// so a client's wrong clock cannot pin a row in storage or delete it early.
+	ReceivedAt        time.Time
 	TenantID          string
 	ProjectID         string
 	TraceID           []byte

@@ -105,6 +105,14 @@ func atLeastSize(variable string, value int64, floorVariable string, floor int64
 	return nil
 }
 
+// atMostSize caps a byte limit that something downstream cannot exceed.
+func atMostSize(variable string, value int64, ceilingReason string, ceiling int64) error {
+	if value > ceiling {
+		return invalid(variable, "got %d, want at most %s (%d)", value, ceilingReason, ceiling)
+	}
+	return nil
+}
+
 func atMostDuration(variable string, value, ceiling time.Duration) error {
 	if value > ceiling {
 		return invalid(variable, "got %s, want at most %s", value, ceiling)

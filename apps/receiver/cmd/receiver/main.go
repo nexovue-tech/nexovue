@@ -181,7 +181,7 @@ func dial(ctx context.Context, cfg config.Config) (opened *dependencies, err err
 		// franz-go caps a record batch at Kafka's 1 MiB default, well under what
 		// the door accepts, so a single large trace was refused here and retried
 		// by the sender forever. The producer must carry anything we accepted.
-		kgo.ProducerBatchMaxBytes(int32(cfg.MaxRecordBytes())),
+		kgo.ProducerBatchMaxBytes(cfg.ProducerBatchMaxBytes()),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("kafka client: %w", err)

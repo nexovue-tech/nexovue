@@ -95,7 +95,10 @@ type absorbed struct {
 // names one offender rather than every one: the log line it becomes is a
 // pointer to go and look, not a census.
 type skewReport struct {
-	spans     int
+	// uint64 to match the pipeline's running total: a per-batch count of
+	// retimed spans cannot be negative, and the widths agreeing removes a
+	// conversion that a narrowing check would otherwise have to justify.
+	spans     uint64
 	worst     time.Duration
 	tenantID  string
 	projectID string
@@ -140,6 +143,7 @@ func (s *stages) absorbMessage(now time.Time, message []byte, counted bool) (abs
 
 	var result absorbed
 	for _, row := range payload.rows() {
+		row.ReceivedAt = receivedAt
 		// Derive before sample: the counters see every span, whatever the
 		// sampler decides about the trace it belongs to (ADR 0010).
 		if counted {
