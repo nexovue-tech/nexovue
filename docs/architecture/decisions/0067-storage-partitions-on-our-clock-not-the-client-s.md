@@ -85,6 +85,11 @@ is the whole reason it was done now.
 The backfill sets `received_at := timestamp` for existing rows. That is the only reading available
 for them, and it keeps them in the partitions they already occupied.
 
+`logs` carried the same defect and followed in
+[000036](../../../deploy/clickhouse/migrations/000036_logs_received_at.up.sql). It was free there in
+a way it was not here: empty, and with no writer yet, so there was nothing to copy and nothing to
+exchange. P1-28's writer owes the column.
+
 The rollback path copies the rows back rather than discarding them
 ([000029 down](../../../deploy/clickhouse/migrations/000029_spans_received_at_backfill.down.sql)): a
 rollback that empties the table is not a rollback.
