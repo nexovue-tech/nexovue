@@ -98,16 +98,17 @@ func maskAttributes(rules Rules, attributes []*commonpb.KeyValue) int {
 			masked++
 			continue
 		}
-		if rules.masksValues() {
-			masked += maskValueTree(rules, attribute.Value)
-		}
+		// Descent is unconditional: the keys inside a structured value are
+		// subject to the key rules too, so a project that switched the value
+		// rules off still gets a nested `password` masked.
+		masked += maskValueTree(rules, attribute.Value)
 	}
 	return masked
 }
 
 // maskValueTree scans a value for matched runs, descending into arrays and
-// key-value lists so a card number nested in a structured attribute is not
-// missed.
+// key-value lists so neither a card number nor a credential key nested in a
+// structured value is missed.
 func maskValueTree(rules Rules, value *commonpb.AnyValue) int {
 	if value == nil {
 		return 0
