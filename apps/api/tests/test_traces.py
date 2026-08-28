@@ -48,8 +48,16 @@ class FakeTelemetry:
         if "span_trace_lookup" in sql:
             matches = 1 if owned == bound.get("trace_id") else 0
             return FakeQueryResult(
-                ["matches", "min_nanos", "max_nanos", "received_from_nanos"],
-                [(matches, _START_NANOS, _START_NANOS + 500_000_000, _START_NANOS)],
+                ["matches", "min_nanos", "max_nanos", "received_from_nanos", "received_to_nanos"],
+                [
+                    (
+                        matches,
+                        _START_NANOS,
+                        _START_NANOS + 500_000_000,
+                        _START_NANOS,
+                        _START_NANOS + 500_000_000,
+                    )
+                ],
             )
 
         if "GROUP BY trace_id" in sql:
@@ -199,30 +207,6 @@ def test_a_timestamp_serializes_as_iso_8601_with_milliseconds_and_a_z() -> None:
     )
 
     assert summary.model_dump(mode="json")["start_time"] == "2026-08-27T10:15:04.123Z"
-
-
-# --------------------------------------------------------------------- windows
-
-
-def test_the_default_window_is_the_last_hour() -> None:
-    start, end = service.resolve_window(None, None)
-
-    assert end - start == service.DEFAULT_WINDOW
-
-
-def test_a_window_that_ends_before_it_starts_is_rejected() -> None:
-    start, end = _window()
-
-    with pytest.raises(InvalidRequestError):
-        service.resolve_window(end, start)
-
-
-@pytest.mark.parametrize(
-    ("requested", "expected"),
-    [(None, service.DEFAULT_LIMIT), (10, 10), (1000, service.MAX_LIMIT), (0, 1)],
-)
-def test_the_limit_is_clamped_to_the_documented_range(requested: int | None, expected: int) -> None:
-    assert service.resolve_limit(requested) == expected
 
 
 # ---------------------------------------------------------------------- cursor

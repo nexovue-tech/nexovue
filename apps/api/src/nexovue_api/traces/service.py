@@ -7,12 +7,13 @@ translation from stored encodings to the ones the contract names.
 
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any, Final
 
+from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
+from nexovue_api.errors.exceptions import NotFoundError
 from nexovue_api.traces import queries
 from nexovue_api.traces.cursor import TracePageCursor, decode_cursor
 from nexovue_api.traces.schemas import (
@@ -24,15 +25,6 @@ from nexovue_api.traces.schemas import (
 
 DEFAULT_LIMIT: Final = 50
 MAX_LIMIT: Final = 200
-DEFAULT_WINDOW: Final = timedelta(hours=1)
-
-NANOSECONDS_PER_SECOND: Final = 1_000_000_000
-NANOSECONDS_PER_MICROSECOND: Final = 1_000
-
-# A trace id is 32 hex characters; the column is FixedString(32) and will not
-# compare against anything else, so the shape is checked before the query runs.
-TRACE_ID_LENGTH: Final = 32
-_HEX_DIGITS: Final = frozenset("0123456789abcdefABCDEF")
 
 # Python datetimes carry microseconds and the store carries nanoseconds, so the
 # window derived from `span_trace_lookup` is widened by a second at each end. A day is
@@ -54,19 +46,20 @@ UNKNOWN_STATUS: Final = queries.STATUS_UNSET
 TRACE_NOT_FOUND_DETAIL: Final = "No such trace."
 
 
-def resolve_window(
-    from_time: datetime | None, to_time: datetime | None
-) -> tuple[datetime, datetime]:
-    """The requested window, defaulting to the last hour."""
-    end = to_time or datetime.now(UTC)
-    start = from_time or end - DEFAULT_WINDOW
-    if start >= end:
-        raise InvalidRequestError("`from` must be earlier than `to`.")
-    return start, end
+@dataclass(frozen=True, slots=True)
+class TraceWindow:
+    """When a trace happened, and when it reached us.
 
+    `received_from` and `received_to` are our own clock, which is what every
+    telemetry table is partitioned by (ADR 0067). They are what lets a read
+    keyed on a trace id prune partitions instead of scanning the retention
+    window; the span timestamps cannot, because the customer supplies them.
+    """
 
-def resolve_limit(limit: int | None) -> int:
-    return DEFAULT_LIMIT if limit is None else min(max(1, limit), MAX_LIMIT)
+    span_start: datetime
+    span_end: datetime
+    received_from: datetime
+    received_to: datetime
 
 
 async def list_traces(
@@ -99,22 +92,21 @@ async def get_trace(
     repository: TenantScopedRepository, *, project_id: str, trace_id: str
 ) -> TraceDetailResponse:
     """One trace and its spans, or a 404 that says nothing about other tenants."""
-    if not _is_trace_id(trace_id):
+    if not values.is_trace_id(trace_id):
         raise NotFoundError(TRACE_NOT_FOUND_DETAIL)
 
-    window = await _trace_window(repository, trace_id)
+    window = await trace_window(repository, trace_id)
     if window is None:
         raise NotFoundError(TRACE_NOT_FOUND_DETAIL)
 
-    window_start, window_end, received_from = window
     rows = await repository.query(
         queries.TRACE_SPANS_SQL,
         {
             "project_id": project_id,
             "trace_id": trace_id,
-            "window_start": window_start,
-            "window_end": window_end,
-            "received_from": received_from,
+            "window_start": window.span_start,
+            "window_end": window.span_end,
+            "received_from": window.received_from,
             "limit": MAX_SPANS_PER_TRACE,
         },
     )
@@ -130,7 +122,7 @@ async def get_trace(
     ]
     return TraceDetailResponse(
         trace_id=trace_id,
-        start_time=_nanos_to_datetime(min(starts)),
+        start_time=values.nanos_to_datetime(min(starts)),
         duration_ms=(max(ends) - min(starts)) / queries.NANOSECONDS_PER_MILLISECOND,
         span_count=len(spans),
         error_count=sum(1 for span in spans if span.status_code == queries.STATUS_ERROR),
@@ -138,23 +130,21 @@ async def get_trace(
     )
 
 
-async def _trace_window(
-    repository: TenantScopedRepository, trace_id: str
-) -> tuple[datetime, datetime, datetime] | None:
-    """The span-timestamp range for a trace, and when it first reached us.
+async def trace_window(repository: TenantScopedRepository, trace_id: str) -> TraceWindow | None:
+    """When a trace happened and when it reached us, or None if we never saw it.
 
-    Without this the spans read would have to scan every partition in the
-    retention window, because `spans` is ordered by service and hour, not by id.
-    The third value bounds the partitions themselves: `spans` is partitioned on
-    our receive clock, so a span-timestamp range alone cannot prune one.
+    Without this a read keyed on a trace id would scan every partition in the
+    retention window, because the telemetry tables are ordered by service and
+    time, not by id. Every signal correlated to a trace goes through here.
     """
     bounds = await repository.query_one(queries.TRACE_TIME_BOUNDS_SQL, {"trace_id": trace_id})
     if bounds is None or not bounds["matches"]:
         return None
-    return (
-        _nanos_to_datetime(bounds["min_nanos"]) - WINDOW_SLACK,
-        _nanos_to_datetime(bounds["max_nanos"]) + WINDOW_SLACK,
-        _nanos_to_datetime(bounds["received_from_nanos"]) - WINDOW_SLACK,
+    return TraceWindow(
+        span_start=values.nanos_to_datetime(bounds["min_nanos"]) - WINDOW_SLACK,
+        span_end=values.nanos_to_datetime(bounds["max_nanos"]) + WINDOW_SLACK,
+        received_from=values.nanos_to_datetime(bounds["received_from_nanos"]) - WINDOW_SLACK,
+        received_to=values.nanos_to_datetime(bounds["received_to_nanos"]) + WINDOW_SLACK,
     )
 
 
@@ -170,10 +160,10 @@ def _next_cursor(rows: list[dict[str, Any]], traces: list[TraceSummary], limit: 
 
 def _to_summary(row: dict[str, Any]) -> TraceSummary:
     return TraceSummary(
-        trace_id=_text(row["trace_id"]),
-        root_service=_text(row["root_service"]),
-        root_name=_text(row["root_name"]),
-        start_time=_nanos_to_datetime(row["start_time_nanos"]),
+        trace_id=values.text(row["trace_id"]),
+        root_service=values.text(row["root_service"]),
+        root_name=values.text(row["root_name"]),
+        start_time=values.nanos_to_datetime(row["start_time_nanos"]),
         duration_ms=float(row["duration_ms"]),
         span_count=int(row["span_count"]),
         error_count=int(row["error_count"]),
@@ -183,45 +173,17 @@ def _to_summary(row: dict[str, Any]) -> TraceSummary:
 
 def _to_span(row: dict[str, Any]) -> SpanDetail:
     return SpanDetail(
-        span_id=_text(row["span_id"]),
-        parent_span_id=_text(row["parent_span_id"]),
-        service_name=_text(row["service_name"]),
-        span_name=_text(row["span_name"]),
-        span_kind=_text(row["span_kind"]),
-        start_time=_nanos_to_datetime(row["start_time_nanos"]),
+        span_id=values.text(row["span_id"]),
+        parent_span_id=values.text(row["parent_span_id"]),
+        service_name=values.text(row["service_name"]),
+        span_name=values.text(row["span_name"]),
+        span_kind=values.text(row["span_kind"]),
+        start_time=values.nanos_to_datetime(row["start_time_nanos"]),
         duration_ms=float(row["duration_ms"]),
-        status_code=_text(row["status_code"]),
-        status_message=_text(row["status_message"]),
-        http_method=_text(row["http_method"]),
-        http_route=_text(row["http_route"]),
+        status_code=values.text(row["status_code"]),
+        status_message=values.text(row["status_message"]),
+        http_method=values.text(row["http_method"]),
+        http_route=values.text(row["http_route"]),
         http_status=int(row["http_status"]),
-        attributes=_attributes(row["attributes_json"]),
+        attributes=values.json_object(row["attributes_json"]),
     )
-
-
-def _attributes(raw: object) -> dict[str, Any]:
-    """`span_attrs` arrives as JSON text. Anything unreadable is no attributes."""
-    try:
-        parsed = json.loads(_text(raw))
-    except (ValueError, TypeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _text(value: object) -> str:
-    """FixedString columns arrive as bytes; everything on the wire is text."""
-    if isinstance(value, bytes):
-        return value.rstrip(b"\x00").decode("utf-8", errors="replace")
-    return "" if value is None else str(value)
-
-
-def _nanos_to_datetime(nanos: int) -> datetime:
-    """Nanoseconds since the epoch, without going through a lossy float."""
-    seconds, remainder = divmod(int(nanos), NANOSECONDS_PER_SECOND)
-    return datetime.fromtimestamp(seconds, UTC) + timedelta(
-        microseconds=remainder // NANOSECONDS_PER_MICROSECOND
-    )
-
-
-def _is_trace_id(value: str) -> bool:
-    return len(value) == TRACE_ID_LENGTH and all(character in _HEX_DIGITS for character in value)

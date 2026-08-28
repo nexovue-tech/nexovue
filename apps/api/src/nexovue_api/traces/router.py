@@ -19,6 +19,7 @@ from nexovue_api.deps import DbSession
 from nexovue_api.projects.service import require_project
 from nexovue_api.traces import service
 from nexovue_api.traces.schemas import TraceDetailResponse, TraceListResponse
+from nexovue_api.window import clamp_limit, resolve_window
 
 router = APIRouter(prefix="/traces", tags=["traces"])
 
@@ -37,13 +38,13 @@ async def list_traces(
     cursor: Annotated[str | None, Query()] = None,
 ) -> TraceListResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
-    window_start, window_end = service.resolve_window(from_time, to_time)
+    window_start, window_end = resolve_window(from_time, to_time)
     return await service.list_traces(
         repository,
         project_id=str(project.id),
         from_time=window_start,
         to_time=window_end,
-        limit=service.resolve_limit(limit),
+        limit=clamp_limit(limit, default=service.DEFAULT_LIMIT, maximum=service.MAX_LIMIT),
         cursor=cursor,
     )
 

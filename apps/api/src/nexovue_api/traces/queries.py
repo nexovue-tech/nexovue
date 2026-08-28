@@ -13,13 +13,17 @@ from __future__ import annotations
 
 from typing import Final
 
+from nexovue_api.data.clickhouse import values
+
 # `parent_span_id` is FixedString(16), so it is never zero-length: an absent
 # parent arrives either NUL-padded or as sixteen ASCII zeros depending on how
 # the writer encodes it. Both mean "root".
 _PARENT_CLEANED: Final = "replaceAll(parent_span_id, '\\0', '')"
-ABSENT_PARENT_SENTINEL: Final = "0000000000000000"
+ABSENT_PARENT_SENTINEL: Final = values.ABSENT_SPAN_ID
 
-NANOSECONDS_PER_MILLISECOND: Final = 1_000_000
+# Bound to a module constant because the statements below interpolate it, and
+# only a name of this module may be spliced into SQL here.
+NANOSECONDS_PER_MILLISECOND: Final = values.NANOSECONDS_PER_MILLISECOND
 
 # Worst-status ordering: an error dominates everything, an explicit OK beats a
 # status nobody set. Mapped back to its name in `service.py`.
@@ -108,7 +112,8 @@ SELECT
     -- Our own clock, which is what `spans` is partitioned by (ADR 0067). The
     -- span timestamps above cannot prune a partition, because the client
     -- supplies them and ClickHouse cannot relate the two.
-    toUnixTimestamp64Nano(min(received_at)) AS received_from_nanos
+    toUnixTimestamp64Nano(min(received_at)) AS received_from_nanos,
+    toUnixTimestamp64Nano(max(received_at)) AS received_to_nanos
 FROM span_trace_lookup
 WHERE tenant_id = {tenant_id:String}
   AND trace_id = {trace_id:String}
