@@ -1,0 +1,96 @@
+name: tenant-isolation
+
+# P1-25 is a Phase 1 invariant: tenant isolation enforced at the repository
+# layer. Its live suite skips itself when the stack is unreachable and pytest
+# then exits 0, so "nobody ran it" has always looked exactly like "it passed".
+# This job gives it the stack it asks for and then asserts, from the JUnit
+# report, that it really ran — a skip here fails the build.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # 02:00 UTC daily, so image-tag drift in the stack surfaces without a PR.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  JUNIT_REPORT: tenant-isolation.xml
+  LIVE_SUITE: apps/api/tests/test_tenant_isolation_live.py
+
+jobs:
+  live-suite:
+    name: live suite against the running stack
+    runs-on: ubuntu-24.04
+    # The dev images compile the Go dependency tree on first boot, and the
+    # suite waits on real ingest. Generous, because a timeout here reads as a
+    # failure and should mean one.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: 1.58.0
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: go.work.sum
+
+      # `just migrate-ch` shells out to golang-migrate. Its ClickHouse driver is
+      # behind a build tag, so a default build of the CLI cannot run these.
+      - name: Install golang-migrate
+        run: go install -tags 'clickhouse' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.19.1
+
+      # Only the Python toolchain: the suite is pytest and alembic, and the
+      # services themselves are built by compose.
+      - run: uv sync --all-packages
+
+      - name: Start the stack
+        run: just dev
+
+      - name: Apply migrations and seed the other tenant
+        run: |
+          just migrate
+          just seed
+
+      # Continues on failure so the assertion below always reports, and so the
+      # logs step can explain a genuine failure.
+      - name: Run the live tenant isolation suite
+        id: pytest
+        continue-on-error: true
+        run: uv run pytest "$LIVE_SUITE" --junit-xml="$JUNIT_REPORT" -v
+
+      - name: Assert the suite actually ran
+        run: |
+          uv run python .github/scripts/assert_suite_ran.py \
+            "$JUNIT_REPORT" "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if any isolation test failed
+        if: steps.pytest.outcome == 'failure'
+        run: |
+          echo "the live tenant isolation suite reported a failure" >&2
+          exit 1
+
+      # Not `just logs`: that recipe follows the stream and would never return.
+      - name: Stack logs
+        if: failure()
+        run: docker compose -f deploy/compose/docker-compose.yaml logs --tail 200
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: tenant-isolation-report
+          path: ${{ env.JUNIT_REPORT }}
