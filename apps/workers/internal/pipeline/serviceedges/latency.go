@@ -34,8 +34,10 @@ type weightedLatency struct {
 // weigh derives a sample's weight from the identity of the span it came from.
 func weigh(traceID, spanID []byte) uint64 {
 	digest := fnv.New64a()
-	digest.Write(traceID)
-	digest.Write(spanID)
+	// hash.Hash documents that Write never returns an error, so the results are
+	// discarded explicitly rather than checked into a path that cannot happen.
+	_, _ = digest.Write(traceID)
+	_, _ = digest.Write(spanID)
 	return digest.Sum64()
 }
 

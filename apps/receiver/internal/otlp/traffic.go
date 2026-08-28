@@ -38,6 +38,8 @@ var (
 // door's throughput is queryable by name.
 type Unit string
 
+// The three units, named as OTLP names them so a summary field and a
+// partial_success rejection count read as the same quantity.
 const (
 	Spans      Unit = "spans"
 	LogRecords Unit = "log_records"

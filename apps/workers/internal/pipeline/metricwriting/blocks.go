@@ -6,6 +6,14 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 )
 
+// Column names shared by more than one of the five blocks. Named once so a
+// rename cannot reach four tables and miss the fifth.
+const (
+	columnAggregationTemporality = "aggregation_temporality"
+	columnCount                  = "count"
+	columnSum                    = "sum"
+)
+
 // The insert targets, named once so each statement and its column list cannot
 // drift apart. Five tables because the five OTLP point shapes genuinely do not
 // share a row (ADR 0066).
@@ -185,7 +193,7 @@ func newSumBlock() *sumBlock {
 		block.shared.input(),
 		proto.Input{
 			{Name: "value", Data: &block.value},
-			{Name: "aggregation_temporality", Data: block.temporality},
+			{Name: columnAggregationTemporality, Data: block.temporality},
 			{Name: "is_monotonic", Data: &block.monotonic},
 		},
 		block.exemplars.input(),
@@ -234,13 +242,13 @@ func newHistogramBlock() *histogramBlock {
 	block.columns = joinColumns(
 		block.shared.input(),
 		proto.Input{
-			{Name: "count", Data: &block.count},
-			{Name: "sum", Data: block.sum},
+			{Name: columnCount, Data: &block.count},
+			{Name: columnSum, Data: block.sum},
 			{Name: "bucket_counts", Data: block.bucketCounts},
 			{Name: "explicit_bounds", Data: block.explicitBounds},
 			{Name: "min", Data: block.min},
 			{Name: "max", Data: block.max},
-			{Name: "aggregation_temporality", Data: block.temporality},
+			{Name: columnAggregationTemporality, Data: block.temporality},
 		},
 		block.exemplars.input(),
 	)
@@ -296,8 +304,8 @@ func newExpHistogramBlock() *expHistogramBlock {
 	block.columns = joinColumns(
 		block.shared.input(),
 		proto.Input{
-			{Name: "count", Data: &block.count},
-			{Name: "sum", Data: block.sum},
+			{Name: columnCount, Data: &block.count},
+			{Name: columnSum, Data: block.sum},
 			{Name: "scale", Data: &block.scale},
 			{Name: "zero_count", Data: &block.zeroCount},
 			{Name: "positive_offset", Data: &block.positiveOffset},
@@ -306,7 +314,7 @@ func newExpHistogramBlock() *expHistogramBlock {
 			{Name: "negative_bucket_counts", Data: block.negativeCounts},
 			{Name: "min", Data: block.min},
 			{Name: "max", Data: block.max},
-			{Name: "aggregation_temporality", Data: block.temporality},
+			{Name: columnAggregationTemporality, Data: block.temporality},
 		},
 		block.exemplars.input(),
 	)
@@ -354,8 +362,8 @@ func newSummaryBlock() *summaryBlock {
 	block.columns = joinColumns(
 		block.shared.input(),
 		proto.Input{
-			{Name: "count", Data: &block.count},
-			{Name: "sum", Data: &block.sum},
+			{Name: columnCount, Data: &block.count},
+			{Name: columnSum, Data: &block.sum},
 			{Name: "quantiles.quantile", Data: block.quantiles},
 			{Name: "quantiles.value", Data: block.quantileValues},
 		},

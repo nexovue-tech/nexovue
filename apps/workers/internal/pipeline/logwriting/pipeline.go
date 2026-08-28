@@ -181,8 +181,8 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 	if err := p.insertBounded(ctx); err != nil {
 		return written{}, err
 	}
-	p.logsWritten += uint64(rows)
-	p.valuesMasked += uint64(masked)
+	p.logsWritten += countOf(rows)
+	p.valuesMasked += countOf(masked)
 
 	p.log.DebugContext(ctx, "batch absorbed",
 		slog.Int("messages", messages),
@@ -225,4 +225,15 @@ func (p *Pipeline) insertBounded(ctx context.Context) error {
 	return p.loop.Retry(ctx, "insert logs", func(callCtx context.Context) error {
 		return p.writer.insert(callCtx, p.block)
 	})
+}
+
+// countOf widens a count that cannot be negative. Row and mask counts come back
+// as int from the packages that produce them, and the running totals are uint64
+// because that is what slog logs them as; a negative would mean the producer is
+// broken, so it reads as zero rather than wrapping to an enormous number.
+func countOf(n int) uint64 {
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
 }

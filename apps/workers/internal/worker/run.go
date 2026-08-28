@@ -24,7 +24,9 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/health"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/logging"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/logwriting"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/metricwriting"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/traceassembly"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/projectconfig"
@@ -40,6 +42,8 @@ const (
 	// its dependencies reachable". A pipeline that stops leaves every dependency
 	// probe green while nothing is consumed.
 	checkTraceAssembly = "trace-assembly"
+	checkLogWriting    = "log-writing"
+	checkMetricIngest  = "metric-ingest"
 )
 
 // Main is the whole body of every worker binary: it runs the named worker and
@@ -156,7 +160,56 @@ func startPipelines(
 		go reportFailure(ctx, failures, shutdown, log, config.PipelineTraceAssembly, func() error { return spans.Run(ctx) })
 	}
 
+	// One masker over the same rules trace assembly reads, so a project's
+	// masking means one thing across every signal. Built here rather than per
+	// pipeline: rules are cached per project, and three caches of one answer
+	// are three chances to disagree.
+	masker := mask.New(maskingRules(stageOptions))
+
+	if slices.Contains(cfg.Pipelines, config.PipelineLogWriting) {
+		// Both constructors refuse a nil masker rather than defaulting to a
+		// no-op, so this is the only place that decision is made.
+		logs, err := logwriting.New(cfg, store, log, logwriting.Options{
+			Masking:   masker,
+			Retention: stageOptions.Retention,
+		})
+		if err != nil {
+			stop()
+			return nil, err
+		}
+		started = append(started, logs.Close)
+		registry.Register(health.Check{Name: checkLogWriting, Probe: logs.Running})
+		liveness.Register(health.Check{Name: checkLogWriting, Probe: logs.Running})
+		go reportFailure(ctx, failures, shutdown, log, config.PipelineLogWriting, func() error { return logs.Run(ctx) })
+	}
+
+	if slices.Contains(cfg.Pipelines, config.PipelineMetricIngest) {
+		metrics, err := metricwriting.New(cfg, store, log, metricwriting.Options{
+			Masking:   masker,
+			Retention: stageOptions.Retention,
+		})
+		if err != nil {
+			stop()
+			return nil, err
+		}
+		started = append(started, metrics.Close)
+		registry.Register(health.Check{Name: checkMetricIngest, Probe: metrics.Running})
+		liveness.Register(health.Check{Name: checkMetricIngest, Probe: metrics.Running})
+		go reportFailure(ctx, failures, shutdown, log, config.PipelineMetricIngest, func() error { return metrics.Run(ctx) })
+	}
+
 	return stop, nil
+}
+
+// maskingRules is the rules source every signal masks against — the project
+// config cache in a real deployment, and the shipped defaults when nothing has
+// told the worker otherwise. Mirrors what trace assembly does with the same
+// option, so the three pipelines cannot mask against different rules.
+func maskingRules(opts traceassembly.Options) mask.RulesSource {
+	if opts.Masking != nil {
+		return opts.Masking
+	}
+	return mask.StaticRules(mask.Defaults())
 }
 
 // reportFailure runs a pipeline and hands its ending to the shutdown path.

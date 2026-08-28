@@ -206,7 +206,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 	if err := p.insertBlocks(ctx); err != nil {
 		return stored{}, err
 	}
-	p.written += uint64(written)
+	p.written += countOf(written)
 
 	p.log.DebugContext(ctx, "batch absorbed",
 		slog.Int("messages", messages),
@@ -225,7 +225,7 @@ func (p *Pipeline) absorbMessage(now time.Time, message []byte) (rows, error) {
 
 	// Mask first: from here on no stage can see the original values.
 	projectID := payload.envelope.GetProjectId()
-	p.masked += uint64(p.masker.MaskResourceMetrics(projectID, payload.request.GetResourceMetrics()))
+	p.masked += countOf(p.masker.MaskResourceMetrics(projectID, payload.request.GetResourceMetrics()))
 
 	_, derivedDays := p.retention.Retention(projectID)
 	return payload.flatten(stamps{
@@ -297,4 +297,15 @@ func (p *Pipeline) insertBlocks(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// countOf widens a count that cannot be negative. Row and mask counts come back
+// as int from the packages that produce them, and the running totals are uint64
+// because that is what slog logs them as; a negative would mean the producer is
+// broken, so it reads as zero rather than wrapping to an enormous number.
+func countOf(n int) uint64 {
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
 }
