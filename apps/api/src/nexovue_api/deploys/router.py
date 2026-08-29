@@ -53,6 +53,10 @@ async def receive_deploy(
         project_id=project_id,
         body=await _bounded_body(request),
         signature=request.headers.get(signatures.SIGNATURE_HEADER),
+        # The sender's id for this delivery. GitHub's signature carries no
+        # timestamp, so this is the only thing that makes a captured request
+        # distinguishable from a genuine retry.
+        delivery_id=request.headers.get(signatures.DELIVERY_HEADER),
     )
 
 
@@ -82,6 +86,36 @@ async def read_webhook_secrets(
         org_id=identity.org_id,
         project_id=project_id,
         actor_user_id=identity.user.id,
+    )
+
+
+@router.post(
+    "/webhook-secrets",
+    status_code=status.HTTP_201_CREATED,
+    summary="Mint a deploy secret, leaving existing ones live",
+)
+async def create_webhook_secret(
+    identity: CurrentIdentity,
+    db: DbSession,
+    project_id: uuid.UUID,
+) -> WebhookSecretsResponse:
+    return await service.create_webhook_secret(
+        db, org_id=identity.org_id, project_id=project_id, actor_user_id=identity.user.id
+    )
+
+
+@router.delete(
+    "/webhook-secrets/{secret_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Withdraw a deploy secret",
+)
+async def revoke_webhook_secret(
+    identity: CurrentIdentity,
+    db: DbSession,
+    secret_id: uuid.UUID,
+) -> None:
+    await service.revoke_webhook_secret(
+        db, org_id=identity.org_id, secret_id=secret_id, actor_user_id=identity.user.id
     )
 
 

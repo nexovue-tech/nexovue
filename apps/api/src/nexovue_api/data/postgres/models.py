@@ -315,6 +315,11 @@ class DeployEvent(Base):
     service_name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
     deployed_at: Mapped[RequiredTimestamp]
     source: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    # The sender's own id for this delivery. Unique per project under a partial
+    # index, which is what makes a replayed request fail rather than store a
+    # second deploy — GitHub's signature scheme carries no timestamp, so a
+    # captured request stays valid forever without this.
+    delivery_id: Mapped[str | None] = mapped_column(String(NAME_MAX_LENGTH), nullable=True)
     # `metadata` is taken on a declarative class, so the attribute differs from
     # the column name.
     event_metadata: Mapped[dict[str, Any]] = mapped_column(
@@ -326,6 +331,36 @@ class DeployEvent(Base):
         Index(
             "ix_deploy_events_org_id_project_id_deployed_at", "org_id", "project_id", "deployed_at"
         ),
+    )
+
+
+class ProjectWebhookSecret(Base):
+    """A shared secret CI signs deploy notifications with.
+
+    Its own table rather than derived from an ingest key, because they are
+    different credentials with different lifetimes: revoking a key should not
+    silently stop deploys arriving. Many rows per project, so a rotation can
+    overlap — create the new one, update CI, revoke the old.
+
+    Stored as it will be used. HMAC verification has to recompute the digest CI
+    computed, so there is no hashing here that would still allow that.
+    """
+
+    __tablename__ = "project_webhook_secrets"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[CreatedAt]
+    revoked_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        Index("ix_webhook_secrets_project_id_revoked_at", "project_id", "revoked_at"),
     )
 
 

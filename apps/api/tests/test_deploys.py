@@ -23,13 +23,13 @@ import hashlib
 import hmac
 import json
 import uuid
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Final
 
 import pytest
 
 from nexovue_api.deploys import queries, service, signatures
-from nexovue_api.deploys.queries import WebhookKey
-from nexovue_api.errors.exceptions import InvalidRequestError, UnauthenticatedError
+from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, UnauthenticatedError
 
 ORG_ID = uuid.uuid4()
 OTHER_ORG_ID = uuid.uuid4()
@@ -102,13 +102,15 @@ async def test_listing_deploys_binds_the_organization(session: CapturingSession)
     assert PROJECT_ID in _bound(session)
 
 
-async def test_reading_live_keys_binds_the_organization(session: CapturingSession) -> None:
-    """These rows derive the secrets. Unscoped, they would hand a caller the
-    secret for a project in another organization."""
-    await queries.live_keys(session, org_id=ORG_ID, project_id=PROJECT_ID)  # type: ignore[arg-type]
+async def test_revoking_a_secret_binds_the_organization(session: CapturingSession) -> None:
+    """Unscoped, a revoke by id alone would let any caller withdraw another
+    organization's secret and stop their deploys arriving."""
+    secret_id = uuid.uuid4()
+
+    await queries.revoke_webhook_secret(session, org_id=ORG_ID, secret_id=secret_id)  # type: ignore[arg-type]
 
     assert ORG_ID in _bound(session)
-    assert PROJECT_ID in _bound(session)
+    assert secret_id in _bound(session)
 
 
 async def test_the_webhook_lookup_binds_the_project_it_was_given(
@@ -116,7 +118,7 @@ async def test_the_webhook_lookup_binds_the_project_it_was_given(
 ) -> None:
     """The public caller has no organization, so the project row is what supplies
     one. It must at least be the project the URL named."""
-    await queries.webhook_keys(session, project_id=PROJECT_ID)  # type: ignore[arg-type]
+    await queries.live_webhook_secrets(session, project_id=PROJECT_ID)  # type: ignore[arg-type]
 
     assert PROJECT_ID in _bound(session)
 
@@ -137,7 +139,7 @@ class TestSignatureVerification:
     """The header, on its own. Everything the endpoint decides starts here."""
 
     def test_a_signature_over_these_bytes_is_accepted(self) -> None:
-        secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+        secret = LIVE_SECRET
 
         assert signatures.signature_matches(
             body=BODY, header_value=sign(BODY, secret), secrets=[secret]
@@ -145,23 +147,25 @@ class TestSignatureVerification:
 
     def test_an_uppercase_digest_is_accepted(self) -> None:
         """Hex is case-insensitive; a client that upper-cases it is not a forgery."""
-        secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+        secret = LIVE_SECRET
 
         assert signatures.signature_matches(
             body=BODY, header_value=sign(BODY, secret).upper(), secrets=[secret]
         )
 
     def test_any_of_a_projects_live_secrets_is_accepted(self) -> None:
-        """Rotating an ingest key must not break a webhook signed with the other."""
-        first = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
-        second = signatures.derive_secret(key_hash=OTHER_KEY_HASH, project_id=PROJECT_ID)
+        """A rotation overlaps: the new secret is minted, CI is updated, and only
+        then is the old one revoked. Both are live in between, so a delivery
+        signed with either has to be accepted."""
+        first = signatures.new_secret()
+        second = signatures.new_secret()
 
         assert signatures.signature_matches(
             body=BODY, header_value=sign(BODY, second), secrets=[first, second]
         )
 
     def test_a_missing_signature_is_refused(self) -> None:
-        secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+        secret = LIVE_SECRET
 
         assert not signatures.signature_matches(body=BODY, header_value=None, secrets=[secret])
 
@@ -178,7 +182,7 @@ class TestSignatureVerification:
         ],
     )
     def test_a_wrong_or_malformed_signature_is_refused(self, header_value: str) -> None:
-        secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+        secret = LIVE_SECRET
 
         assert not signatures.signature_matches(
             body=BODY, header_value=header_value, secrets=[secret]
@@ -186,7 +190,7 @@ class TestSignatureVerification:
 
     def test_a_body_altered_after_signing_is_refused(self) -> None:
         """The whole point: the signature covers the bytes, not the intent."""
-        secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+        secret = LIVE_SECRET
         header_value = sign(BODY, secret)
         tampered = BODY.replace(b"1.4.2", b"6.6.6")
 
@@ -196,41 +200,86 @@ class TestSignatureVerification:
         )
 
     def test_a_project_with_no_live_key_accepts_nothing(self) -> None:
-        secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+        secret = LIVE_SECRET
 
         assert not signatures.signature_matches(
             body=BODY, header_value=sign(BODY, secret), secrets=[]
         )
 
 
-class TestSecretDerivation:
+async def test_a_replayed_delivery_is_refused(
+    store: RecordingSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A correctly signed request stays valid forever, because the scheme has no
+    timestamp. The delivery id is the only thing that tells a captured request
+    apart from a genuine one, so a second arrival of the same id is refused
+    rather than stored twice."""
+    monkeypatch.setattr(queries, "delivery_already_recorded", _seen(True))
+
+    with pytest.raises(ConflictError):
+        await service.record_from_webhook(
+            store,  # type: ignore[arg-type]
+            project_id=PROJECT_ID,
+            body=BODY,
+            signature=sign(BODY, LIVE_SECRET),
+            delivery_id="a-delivery-seen-before",
+        )
+
+    assert _deploys(store) == [], "a replay must write nothing"
+
+
+async def test_a_delivery_id_is_stored_so_the_next_replay_can_be_caught(
+    store: RecordingSession,
+) -> None:
+    await service.record_from_webhook(
+        store,  # type: ignore[arg-type]
+        project_id=PROJECT_ID,
+        body=BODY,
+        signature=sign(BODY, LIVE_SECRET),
+        delivery_id="delivery-1",
+    )
+
+    assert _deploys(store)[0].delivery_id == "delivery-1"
+
+
+async def test_a_sender_without_a_delivery_id_still_works(store: RecordingSession) -> None:
+    """Not every CI system sends one. It gets no replay protection, which the
+    service says out loud rather than silently refusing the deploy."""
+    await service.record_from_webhook(
+        store,  # type: ignore[arg-type]
+        project_id=PROJECT_ID,
+        body=BODY,
+        signature=sign(BODY, LIVE_SECRET),
+    )
+
+    assert _deploys(store)[0].delivery_id is None
+
+
+class TestMintedSecrets:
     """A shared secret would let any customer forge any other's deploys."""
 
-    def test_two_projects_on_the_same_key_get_different_secrets(self) -> None:
-        assert signatures.derive_secret(
-            key_hash=KEY_HASH, project_id=PROJECT_ID
-        ) != signatures.derive_secret(key_hash=KEY_HASH, project_id=OTHER_PROJECT_ID)
+    def test_every_secret_is_unique(self) -> None:
+        """They come from the OS entropy source, so a collision is not a thing
+        that happens — but the property is what the whole scheme rests on."""
+        minted = {signatures.new_secret() for _ in range(64)}
 
-    def test_two_keys_on_the_same_project_get_different_secrets(self) -> None:
-        assert signatures.derive_secret(
-            key_hash=KEY_HASH, project_id=PROJECT_ID
-        ) != signatures.derive_secret(key_hash=OTHER_KEY_HASH, project_id=PROJECT_ID)
+        assert len(minted) == 64
+
+    def test_a_secret_is_recognisable_and_long_enough_to_be_a_key(self) -> None:
+        secret = LIVE_SECRET
+
+        assert secret.startswith(signatures.SECRET_PREFIX)
+        # 32 bytes of entropy, url-safe encoded. An HMAC key shorter than its
+        # digest buys nothing.
+        assert len(secret) - len(signatures.SECRET_PREFIX) >= 40
 
     def test_another_projects_secret_does_not_sign_this_projects_webhook(self) -> None:
         """The forgery this endpoint exists to refuse."""
-        theirs = signatures.derive_secret(key_hash=OTHER_KEY_HASH, project_id=OTHER_PROJECT_ID)
-        ours = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+        theirs, ours = signatures.new_secret(), signatures.new_secret()
 
         assert not signatures.signature_matches(
             body=BODY, header_value=sign(BODY, theirs), secrets=[ours]
         )
-
-    def test_the_secret_is_recognisable_as_ours(self) -> None:
-        """A leaked secret in a log or a paste should be identifiable on sight."""
-        secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
-
-        assert secret.startswith(signatures.SECRET_PREFIX)
-        assert KEY_HASH not in secret  # the derivation is one-way
 
 
 # ------------------------------------------------------------------ the service
@@ -255,22 +304,45 @@ class RecordingSession:
                 instance.id = uuid.uuid4()
 
 
+# The one secret the stubbed project accepts. Shared by the fixture and the
+# tests that sign with it, because a test signing with a different secret than
+# the store holds would be asserting nothing about the signature check.
+LIVE_SECRET: Final = signatures.new_secret()
+
+
+@dataclass(frozen=True)
+class StoredSecret:
+    """Stands in for a `project_webhook_secrets` row."""
+
+    org_id: uuid.UUID
+    secret: str
+
+
 @pytest.fixture
 def store(monkeypatch: pytest.MonkeyPatch) -> RecordingSession:
-    """A session whose project has exactly one live ingest key."""
+    """A session whose project has exactly one live webhook secret."""
     monkeypatch.setattr(
         queries,
-        "webhook_keys",
-        _keys_returning([WebhookKey(org_id=ORG_ID, key_hash=KEY_HASH)]),
+        "live_webhook_secrets",
+        _keys_returning([StoredSecret(org_id=ORG_ID, secret=LIVE_SECRET)]),
     )
+    # No delivery has been seen before, unless a test says otherwise.
+    monkeypatch.setattr(queries, "delivery_already_recorded", _seen(False))
     return RecordingSession()
 
 
-def _keys_returning(keys: list[WebhookKey]) -> Any:
-    async def _webhook_keys(session: Any, *, project_id: uuid.UUID) -> list[WebhookKey]:
-        return keys
+def _keys_returning(secrets_: list[Any]) -> Any:
+    async def _live_secrets(session: Any, *, project_id: uuid.UUID) -> list[Any]:
+        return secrets_
 
-    return _webhook_keys
+    return _live_secrets
+
+
+def _seen(answer: bool) -> Any:
+    async def _already(session: Any, *, project_id: uuid.UUID, delivery_id: str) -> bool:
+        return answer
+
+    return _already
 
 
 def _deploys(store: RecordingSession) -> list[Any]:
@@ -282,7 +354,7 @@ def _audit_actions(store: RecordingSession) -> list[str]:
 
 
 async def test_a_correctly_signed_deploy_is_stored(store: RecordingSession) -> None:
-    secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+    secret = LIVE_SECRET
 
     summary = await service.record_from_webhook(
         store,  # type: ignore[arg-type]
@@ -325,7 +397,7 @@ async def test_an_unsigned_or_wrongly_signed_deploy_writes_nothing(
 
 async def test_a_body_altered_after_signing_writes_nothing(store: RecordingSession) -> None:
     """A proxy, or an attacker, changing the version between signing and arrival."""
-    secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+    secret = LIVE_SECRET
     header_value = sign(BODY, secret)
     tampered = BODY.replace(b"checkout", b"payments")
 
@@ -345,7 +417,7 @@ async def test_another_projects_secret_cannot_sign_this_projects_deploy(
 ) -> None:
     """A customer holding their own secret must not be able to forge somebody
     else's deploy — the reason the secret is per project rather than global."""
-    theirs = signatures.derive_secret(key_hash=OTHER_KEY_HASH, project_id=OTHER_PROJECT_ID)
+    theirs = signatures.new_secret()
 
     with pytest.raises(UnauthenticatedError):
         await service.record_from_webhook(
@@ -362,9 +434,9 @@ async def test_an_unknown_project_is_refused_in_the_same_words_as_a_bad_signatur
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Otherwise the endpoint answers "is this project id real?" for anyone."""
-    monkeypatch.setattr(queries, "webhook_keys", _keys_returning([]))
+    monkeypatch.setattr(queries, "live_webhook_secrets", _keys_returning([]))
     store = RecordingSession()
-    secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+    secret = LIVE_SECRET
 
     with pytest.raises(UnauthenticatedError) as unknown_project:
         await service.record_from_webhook(
@@ -382,7 +454,7 @@ async def test_a_signed_body_that_is_not_a_deploy_is_refused_after_the_signature
     store: RecordingSession,
 ) -> None:
     """Parsing happens after verification, so this is a 400 and not a 401."""
-    secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+    secret = LIVE_SECRET
     body = json.dumps({"version": "  "}).encode()
 
     with pytest.raises(InvalidRequestError):
@@ -398,7 +470,7 @@ async def test_a_signed_body_that_is_not_a_deploy_is_refused_after_the_signature
 
 async def test_a_deploy_without_a_time_is_stamped_on_arrival(store: RecordingSession) -> None:
     """CI that does not send one still produces an orderable event."""
-    secret = signatures.derive_secret(key_hash=KEY_HASH, project_id=PROJECT_ID)
+    secret = LIVE_SECRET
 
     summary = await service.record_from_webhook(
         store,  # type: ignore[arg-type]

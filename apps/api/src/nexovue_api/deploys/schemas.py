@@ -61,15 +61,12 @@ class DeployEventListResponse(BaseModel):
 
 
 class WebhookSecret(BaseModel):
-    """One usable secret, named by the ingest key it is derived from.
+    """One live secret. Its own row, so it can be rotated and revoked without
+    touching the ingest keys."""
 
-    Named rather than anonymous because revoking that key withdraws this secret:
-    the customer has to be able to see which of their keys a webhook depends on.
-    """
-
-    api_key_id: uuid.UUID
-    api_key_name: str
+    id: uuid.UUID
     secret: str
+    created_at: datetime
 
 
 class WebhookSecretsResponse(BaseModel):

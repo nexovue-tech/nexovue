@@ -36,6 +36,8 @@ from nexovue_api.data.postgres.models import (
 ORGANIZATION_CREATED: Final = "organization.created"
 SESSION_CREATED: Final = "session.created"
 SESSION_ENDED: Final = "session.ended"
+DEPLOY_WEBHOOK_SECRET_CREATED: Final = "deploy.webhook_secret_created"
+DEPLOY_WEBHOOK_SECRET_REVOKED: Final = "deploy.webhook_secret_revoked"
 INTEGRATION_CREATED: Final = "integration.created"
 INTEGRATION_DELETED: Final = "integration.deleted"
 CHECK_CREATED: Final = "check.created"
@@ -52,6 +54,7 @@ USER_TARGET: Final = "user"
 API_KEY_TARGET: Final = "api_key"
 CHECK_TARGET: Final = "check"
 INTEGRATION_TARGET: Final = "integration"
+WEBHOOK_SECRET_TARGET: Final = "webhook_secret"
 DEPLOY_TARGET: Final = "deploy"
 PROJECT_TARGET: Final = "project"
 
@@ -145,6 +148,33 @@ def record_session_denied(db: AsyncSession, *, user: User | None) -> None:
         actor_user_id=user.id,
         action=SESSION_DENIED,
         target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_deploy_webhook_secret_created(
+    db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """A new signing secret exists. The value is never recorded — only that one
+    was minted, and by whom."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=DEPLOY_WEBHOOK_SECRET_CREATED,
+        target=_target(PROJECT_TARGET, project_id),
+    )
+
+
+def record_deploy_webhook_secret_revoked(
+    db: AsyncSession, *, org_id: uuid.UUID, secret_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """A secret was withdrawn. Named by its row id, which discloses nothing."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=DEPLOY_WEBHOOK_SECRET_REVOKED,
+        target=_target(WEBHOOK_SECRET_TARGET, secret_id),
     )
 
 

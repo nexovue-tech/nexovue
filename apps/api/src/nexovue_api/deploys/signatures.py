@@ -11,7 +11,8 @@ body>``, hex digest, secret as the key. The legacy ``X-Hub-Signature`` header is
 SHA-1 and is deliberately not accepted — GitHub keeps it only for old
 integrations, and accepting it would mean accepting the weaker of the two.
 
-The secret itself is *derived*, never stored: see :func:`derive_secret`.
+Secrets live in `project_webhook_secrets`, one row each, so that a rotation
+can overlap and revoking an ingest key does not silently stop deploys.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
-import uuid
+import secrets
 from collections.abc import Sequence
 from typing import Final
 
@@ -33,24 +34,23 @@ DERIVATION_LABEL: Final = "nexovue.deploy.webhook.v1"
 # Scheme prefix, so a leaked secret is recognisable as ours in a log or a paste.
 SECRET_PREFIX: Final = "nvdw_"
 
+# GitHub sends a unique id per delivery. It is what makes a replay detectable,
+# since the signature scheme itself carries no timestamp.
+DELIVERY_HEADER: Final = "X-GitHub-Delivery"
+
 _HEX_DIGEST_LENGTH: Final = 64
 _IS_HEX: Final = re.compile(r"[0-9a-fA-F]+")
 
 
-def derive_secret(*, key_hash: str, project_id: uuid.UUID) -> str:
-    """The secret a customer configures in GitHub, for one project.
+def new_secret() -> str:
+    """A fresh webhook secret.
 
-    Derived rather than stored because no column holds one yet. Keying the
-    derivation on an ingest key's hash gives the two properties that matter: a
-    project's secret cannot be computed from another project's, and it cannot be
-    computed at all without a row from ``api_keys``.
+    `token_urlsafe(32)` is 256 bits from the OS entropy source, which is what
+    `secrets` exists to provide — an HMAC key is only as unguessable as this.
+    The prefix makes one recognisable in a CI settings page, the way an ingest
+    key is.
     """
-    digest = hmac.new(
-        key_hash.encode("utf-8"),
-        f"{DERIVATION_LABEL}:{project_id}".encode(),
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{SECRET_PREFIX}{digest}"
+    return f"{SECRET_PREFIX}{secrets.token_urlsafe(32)}"
 
 
 def signature_matches(*, body: bytes, header_value: str | None, secrets: Sequence[str]) -> bool:

@@ -25,8 +25,10 @@ from nexovue_api.data.postgres.models import (
     ApiKey,
     Organization,
     Project,
+    ProjectWebhookSecret,
     User,
 )
+from nexovue_api.deploys.signatures import new_secret
 from nexovue_api.errors.exceptions import ConflictError, InternalError, InvalidRequestError
 from nexovue_api.signup import queries
 from nexovue_api.signup.apikeys import generate_api_key, hash_api_key
@@ -104,7 +106,13 @@ async def provision_tenant(
         key_prefix=plaintext_key[:API_KEY_PREFIX_LENGTH],
         key_hash=hash_api_key(plaintext_key),
     )
-    session.add(minted_key)
+    # A project can receive deploy notifications from the moment it exists.
+    # Without this the webhook would be configured but reject everything, which
+    # reads as broken rather than as unconfigured.
+    webhook_secret = ProjectWebhookSecret(
+        org_id=organization.id, project_id=project.id, secret=new_secret()
+    )
+    session.add_all([minted_key, webhook_secret])
     await _flush(session)
 
     # Written here rather than in the router, so the seed and any later caller
