@@ -56,6 +56,29 @@ class Settings(BaseSettings):
     task_soft_time_limit_seconds: Annotated[int, Field(gt=0)] = 30
     task_hard_time_limit_seconds: Annotated[int, Field(gt=0)] = 60
 
+    # --- beat leadership ----------------------------------------------------
+    # More than one beat process runs, so that a dead one does not stop every
+    # customer's checks. Only the holder of this lock schedules; the others wait
+    # and take over. Two beats scheduling at once would double every check,
+    # which is the failure this exists to prevent.
+    beat_leader_key: str = "nexovue:scheduler:beat-leader"
+
+    # How long the lock survives without a refresh. This is the longest a check
+    # can be delayed by a leader dying: the successor cannot know the holder is
+    # gone until the key expires. Short enough to bound that gap, long enough to
+    # outlive a slow tick.
+    beat_leader_ttl_seconds: Annotated[int, Field(gt=0)] = 30
+
+    # How often a follower asks whether the lock is free. It is also how often
+    # the leader refreshes, and must stay well under the TTL or the leader will
+    # expire itself while still running.
+    beat_leader_poll_seconds: Annotated[int, Field(gt=0)] = 5
+
+    # How often the schedule is re-read from Postgres. This is the delay between
+    # a customer saving a check in the UI and it running, which is the whole
+    # reason the schedule lives in a table rather than in code.
+    beat_refresh_seconds: Annotated[int, Field(gt=0)] = 30
+
     @field_validator("kafka_brokers", mode="before")
     @classmethod
     def _split_broker_list(cls, value: object) -> object:

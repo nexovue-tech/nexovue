@@ -53,12 +53,24 @@ warn_unreachable = true
 disallow_any_explicit = false          # Map-typed telemetry attributes are legitimately dynamic
 plugins = ["pydantic.mypy"]
 exclude = ["packages/contracts/gen/"]  # generated code is not ours to type
-mypy_path = ["packages/contracts/gen/python"]  # ...but it must still resolve
+# tests/helpers holds `live`, the shared "fail rather than skip" guard.
+mypy_path = ["packages/contracts/gen/python", "tests/helpers"]  # ...but it must still resolve
 
 [[tool.mypy.overrides]]
 module = ["clickhouse_connect.*", "celery.*"]
 ignore_missing_imports = true
 
+# Celery ships no type information, so `celery.beat.Scheduler` is Any and strict
+# mode refuses the subclass. The subclass is the documented extension point --
+# compose names it as beat's --scheduler -- so the rule is relaxed for this
+# module alone rather than globally.
+[[tool.mypy.overrides]]
+module = ["nexovue_scheduler.beat"]
+disallow_subclassing_any = false
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# tests/helpers holds `live`, the shared "a live suite fails rather than skips"
+# guard. It sits above the apps because the API and the scheduler both need it.
+pythonpath = ["tests/helpers"]
 testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests"]

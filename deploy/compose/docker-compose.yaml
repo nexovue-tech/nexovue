@@ -250,6 +250,12 @@ services:
       redis:
         condition: service_healthy
     deploy:
+      # Two, deliberately. One beat is a single point of failure, and the thing
+      # it decides is when every customer's checks run — losing it stops all
+      # monitoring with nothing to say so. They share a Redis lock and only the
+      # holder schedules, so this does not double every check; see
+      # nexovue_scheduler.leader.
+      replicas: 2
       resources:
         limits:
           memory: 256M
