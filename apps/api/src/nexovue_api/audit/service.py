@@ -21,13 +21,22 @@ from typing import Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexovue_api.data.postgres.models import ApiKey, AuditLogEntry, Organization, User
+from nexovue_api.data.postgres.models import (
+    ApiKey,
+    AuditLogEntry,
+    Check,
+    Organization,
+    User,
+)
 
 # `<entity>.<past tense>`, so a prefix match selects every event about one kind
 # of thing. These strings are stored, so changing one is a migration.
 ORGANIZATION_CREATED: Final = "organization.created"
 SESSION_CREATED: Final = "session.created"
 SESSION_ENDED: Final = "session.ended"
+CHECK_CREATED: Final = "check.created"
+CHECK_UPDATED: Final = "check.updated"
+CHECK_DELETED: Final = "check.deleted"
 API_KEY_CREATED: Final = "api_key.created"
 API_KEY_REVOKED: Final = "api_key.revoked"
 SESSION_DENIED: Final = "session.denied"
@@ -35,6 +44,7 @@ SESSION_DENIED: Final = "session.denied"
 ORGANIZATION_TARGET: Final = "organization"
 USER_TARGET: Final = "user"
 API_KEY_TARGET: Final = "api_key"
+CHECK_TARGET: Final = "check"
 
 # A refused sign-in against an address matching no account. The address is not
 # recorded: it belongs to somebody who is not our customer, so storing it would
@@ -126,6 +136,45 @@ def record_session_denied(db: AsyncSession, *, user: User | None) -> None:
         actor_user_id=user.id,
         action=SESSION_DENIED,
         target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_check_created(db: AsyncSession, *, check: Check, actor_user_id: uuid.UUID) -> None:
+    """A new check exists, so our infrastructure will now fetch a URL somebody
+    chose. That is worth a trail even though the check itself holds no secret:
+    the request goes out under our addresses and our name."""
+    _add(
+        db,
+        org_id=check.org_id,
+        actor_user_id=actor_user_id,
+        action=CHECK_CREATED,
+        target=_target(CHECK_TARGET, check.id),
+    )
+
+
+def record_check_updated(db: AsyncSession, *, check: Check, actor_user_id: uuid.UUID) -> None:
+    """An existing check changed. Editing a target is how a benign check becomes
+    a request at something else, so an edit is as worth recording as a create."""
+    _add(
+        db,
+        org_id=check.org_id,
+        actor_user_id=actor_user_id,
+        action=CHECK_UPDATED,
+        target=_target(CHECK_TARGET, check.id),
+    )
+
+
+def record_check_deleted(
+    db: AsyncSession, *, org_id: uuid.UUID, check_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """A check is gone. The row is taken by id rather than by object, because by
+    the time this is called there is no row left to read one from."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=CHECK_DELETED,
+        target=_target(CHECK_TARGET, check_id),
     )
 
 

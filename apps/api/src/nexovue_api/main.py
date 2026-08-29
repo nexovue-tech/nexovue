@@ -17,6 +17,7 @@ from starlette.middleware.cors import CORSMiddleware
 from nexovue_api.apikeys import router as apikeys_router
 from nexovue_api.auth import router as auth_router
 from nexovue_api.buildinfo import SERVICE_NAME
+from nexovue_api.checks import router as checks_router
 from nexovue_api.errorgroups import router as error_groups_router
 from nexovue_api.errors.handlers import install_error_handlers
 from nexovue_api.health import router as health_router
@@ -96,6 +97,7 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(auth_router.router)
     versioned.include_router(projects_router.router)
     versioned.include_router(apikeys_router.router)
+    versioned.include_router(checks_router.router)
     versioned.include_router(traces_router.router)
     versioned.include_router(logs_router.router)
     versioned.include_router(error_groups_router.router)

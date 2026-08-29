@@ -63,7 +63,7 @@ Two kinds, both required for anything touching tenancy:
   transaction that rolls back.
 
 A live suite must **fail** when the stack is down, never skip. Use
-`require_stack` from `tests/live.py`.
+`require_stack` from `tests/helpers/live.py`.
 
 ## Before finishing
 
