@@ -22,6 +22,7 @@ from nexovue_api.deploys import router as deploys_router
 from nexovue_api.errorgroups import router as error_groups_router
 from nexovue_api.errors.handlers import install_error_handlers
 from nexovue_api.health import router as health_router
+from nexovue_api.integrations import router as integrations_router
 from nexovue_api.lifespan import build_lifespan
 from nexovue_api.logs import router as logs_router
 from nexovue_api.middleware.correlation import CorrelationIdMiddleware
@@ -100,6 +101,7 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(apikeys_router.router)
     versioned.include_router(checks_router.router)
     versioned.include_router(deploys_router.router)
+    versioned.include_router(integrations_router.router)
     versioned.include_router(traces_router.router)
     versioned.include_router(logs_router.router)
     versioned.include_router(error_groups_router.router)

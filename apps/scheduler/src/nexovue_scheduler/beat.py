@@ -34,6 +34,11 @@ from nexovue_scheduler.telemetry.logging import get_logger
 # beat does not pull in pycurl and Playwright to schedule work it never runs.
 PROBE_TASK = "nexovue_scheduler.probes.run_check"
 
+# A browser flow is a different task purely so that its name routes it to the
+# browser worker; Playwright is not installed on the light one.
+BROWSER_TASK = "nexovue_scheduler.probes.browser.run_flow"
+BROWSER_CHECK_TYPE = "browser"
+
 # Door 4b. Named as strings for the same reason: beat dispatches these and never
 # calls them, so it has no business importing boto3 to schedule a poll.
 POLL_TASKS = {
@@ -42,6 +47,16 @@ POLL_TASKS = {
 }
 
 logger = get_logger(__name__)
+
+
+def _unchanged(existing: ScheduleEntry | None, interval: Any, arguments: dict[str, Any]) -> bool:
+    """Whether a running entry still matches the row it was built from.
+
+    Both halves matter. The interval decides when it fires; the kwargs are the
+    settings it fires with, and comparing only the first meant an edit to a
+    target or a config was invisible until the interval happened to change too.
+    """
+    return existing is not None and existing.schedule == interval and existing.kwargs == arguments
 
 
 class PostgresScheduler(Scheduler):
@@ -165,33 +180,39 @@ class PostgresScheduler(Scheduler):
         An unchanged check keeps its existing entry so that a refresh does not
         reset its interval — otherwise a refresh every 30s would stop a 60s
         check from ever coming due.
+
+        "Unchanged" has to mean the whole definition, not just the interval. An
+        entry carries the check's settings in its kwargs, so keeping it because
+        the interval matched meant an edited target or config never reached the
+        worker — the one thing this table exists to make possible.
         """
         entries: dict[str, ScheduleEntry] = {}
         for check in checks:
             name = check.schedule_name
             existing = self._entries.get(name)
             interval = run_every(run_every=timedelta(seconds=check.interval_seconds))
+            arguments = {
+                "check_id": str(check.id),
+                "org_id": str(check.org_id),
+                "project_id": str(check.project_id),
+                "check_type": check.type,
+                "target": check.target,
+                "config": check.config,
+            }
 
-            if existing is not None and existing.schedule == interval:
-                entries[name] = existing
+            if _unchanged(existing, interval, arguments):
+                entries[name] = existing  # _unchanged proves it is not None
                 continue
 
             entries[name] = ScheduleEntry(
                 name=name,
-                task=PROBE_TASK,
+                task=BROWSER_TASK if check.type == BROWSER_CHECK_TYPE else PROBE_TASK,
                 schedule=interval,
                 # The whole definition travels with the task, so the probe
                 # worker needs no database. A check edited in the UI therefore
                 # runs with its previous settings until the next refresh, which
                 # is the trade `probes/__init__.py` documents.
-                kwargs={
-                    "check_id": str(check.id),
-                    "org_id": str(check.org_id),
-                    "project_id": str(check.project_id),
-                    "check_type": check.type,
-                    "target": check.target,
-                    "config": check.config,
-                },
+                kwargs=arguments,
                 app=self.app,
             )
         return entries
@@ -214,20 +235,24 @@ class PostgresScheduler(Scheduler):
             interval = run_every(run_every=timedelta(seconds=integration.interval_seconds))
 
             existing = self._entries.get(name)
-            if existing is not None and existing.schedule == interval:
-                entries[name] = existing
+            arguments = {
+                "integration_id": str(integration.id),
+                "org_id": str(integration.org_id),
+                "project_id": str(integration.project_id),
+                "config": integration.config,
+                # Sent alongside rather than inside `config`: it is ours,
+                # not the customer's, and the loader skips a row without one.
+                "external_id": str(integration.external_id),
+            }
+            if _unchanged(existing, interval, arguments):
+                entries[name] = existing  # _unchanged proves it is not None
                 continue
 
             entries[name] = ScheduleEntry(
                 name=name,
                 task=task,
                 schedule=interval,
-                kwargs={
-                    "integration_id": str(integration.id),
-                    "org_id": str(integration.org_id),
-                    "project_id": str(integration.project_id),
-                    "config": integration.config,
-                },
+                kwargs=arguments,
                 options={"queue": QUEUE_LIGHT},
                 app=self.app,
             )

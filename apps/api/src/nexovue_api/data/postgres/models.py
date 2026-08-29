@@ -27,7 +27,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -261,8 +260,11 @@ class Check(Base):
 
 
 class Integration(Base):
-    """A door 4b connector. Customer credentials are encrypted at rest and the
-    key never lives in this table."""
+    """A door 4b connector.
+
+    Holds no credential. The customer grants a role our account may assume and
+    we keep its ARN plus an ExternalId we generated — neither is secret, so
+    there is nothing here to encrypt (ADR 0076)."""
 
     __tablename__ = "integrations"
 
@@ -274,7 +276,19 @@ class Integration(Base):
         UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
     kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
-    config_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Plain JSON, and named for what it is. It held no ciphertext even when it
+    # was called `config_encrypted`, and ADR 0076 removed the reason it would
+    # ever need to: a role ARN and an ExternalId are not secrets.
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # Ours to generate, never the customer's to choose. AWS requires it to be
+    # unguessable, which is the whole of its value: it is what stops someone
+    # else persuading us to assume a role on their behalf.
+    external_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    interval_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("300")
+    )
     status: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
     last_sync_at: Mapped[OptionalTimestamp]
     created_at: Mapped[CreatedAt]

@@ -11,7 +11,6 @@ credential or a network.
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Final
@@ -98,23 +97,6 @@ def test_a_stored_integration_holds_no_secret() -> None:
             assert "access_key" not in key
 
 
-def test_the_config_column_round_trips_as_plain_json() -> None:
-    """`config_encrypted` holds UTF-8 JSON. The column name predates ADR 0076
-    and is now misleading; nothing in it is encrypted because nothing in it
-    needs to be."""
-    stored = json.dumps(_cloudwatch_config()).encode("utf-8")
-    assert integrations._decode_config(stored) == _cloudwatch_config()
-
-
-def test_an_unparseable_config_is_rejected_not_guessed() -> None:
-    with pytest.raises(integrations.IntegrationConfigError):
-        integrations._decode_config(b"not json")
-    with pytest.raises(integrations.IntegrationConfigError):
-        integrations._decode_config(b"[]")
-    with pytest.raises(integrations.IntegrationConfigError):
-        integrations._decode_config(b"")
-
-
 def test_a_cloudwatch_config_must_name_its_instances() -> None:
     """Named explicitly rather than discovered: a poller that expands to every
     instance in an account bills the customer for metrics they never asked for."""
@@ -124,32 +106,46 @@ def test_a_cloudwatch_config_must_name_its_instances() -> None:
         integrations.rds_instances_from(config)
 
 
-def test_an_aws_config_without_an_external_id_will_not_load() -> None:
-    config = _cloudwatch_config()
-    del config["external_id"]
+def test_an_integration_without_an_external_id_will_not_load() -> None:
+    """The ExternalId is what stops someone else persuading us to assume a role
+    on their behalf, so a connector missing one cannot be polled at all."""
     with pytest.raises(integrations.IntegrationConfigError):
-        integrations.role_grant_from(config)
+        integrations.role_grant_from(_cloudwatch_config(), None)
 
 
-def test_the_poll_interval_defaults_rather_than_crashing() -> None:
-    """`integrations` has no interval column, so it comes from the config.
-    A nonsense value falls back rather than stopping this customer's polls."""
+def test_the_external_id_is_not_read_from_customer_supplied_config() -> None:
+    """It lives in its own column precisely so the customer cannot choose it.
+
+    A config key would be a value they submit, and AWS is explicit that an
+    ExternalId the caller can set defeats the purpose of having one.
+    """
+    config = _cloudwatch_config() | {"external_id": "chosen-by-the-customer"}
+    grant = integrations.role_grant_from(config, "01a04e00-0000-7000-8000-000000000001")
+
+    assert grant.external_id == "01a04e00-0000-7000-8000-000000000001"
+
+
+def test_a_connector_is_scheduled_under_its_own_row_id() -> None:
+    """One project may connect two AWS accounts, and a name collision would
+    silently drop one of them."""
     definition = integrations.IntegrationDefinition(
         id=uuid.UUID(INTEGRATION_ID),
         org_id=uuid.uuid4(),
         project_id=uuid.uuid4(),
         kind=integrations.KIND_CLOUDWATCH,
-        config={"interval_seconds": "not a number"},
+        config=_cloudwatch_config(),
+        external_id=uuid.uuid4(),
+        interval_seconds=300,
     )
-    assert definition.interval_seconds == integrations.DEFAULT_INTERVAL_SECONDS
     assert definition.schedule_name == f"integration:{INTEGRATION_ID}"
+    assert definition.interval_seconds == 300
 
 
 # --- how a database connection is authenticated -----------------------------
 
 
 def test_a_database_target_defaults_to_iam_authentication() -> None:
-    target = integrations.database_target_from(_postgres_config())
+    target = integrations.database_target_from(_postgres_config(), EXTERNAL_ID)
     assert target.auth == AUTH_RDS_IAM
     assert target.grant == RoleGrant(role_arn=ROLE_ARN, external_id=EXTERNAL_ID)
 
@@ -186,7 +182,7 @@ def test_the_database_password_is_minted_per_poll_from_the_customer_s_role() -> 
     """The only "password" in this path is an RDS auth token signed inside the
     customer's account, valid for fifteen minutes, and never stored."""
     sts = boto3.client("sts", region_name=REGION, aws_access_key_id="x", aws_secret_access_key="y")
-    target = integrations.database_target_from(_postgres_config())
+    target = integrations.database_target_from(_postgres_config(), EXTERNAL_ID)
 
     with Stubber(sts) as stub:
         stub.add_response(

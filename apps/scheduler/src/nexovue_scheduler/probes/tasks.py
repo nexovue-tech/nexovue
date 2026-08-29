@@ -26,6 +26,9 @@ logger = get_logger(__name__)
 
 # Per-check override, read from the `config` column. Bounded below by the task's
 # own limits, so a check cannot ask to outlive the worker slot it occupies.
+# Its own name, because the name is what Celery routes on. See run_browser_flow.
+BROWSER_TASK: Final = "nexovue_scheduler.probes.browser.run_flow"
+
 CONFIG_TIMEOUT_SECONDS: Final = "timeout_seconds"
 DEFAULT_TIMEOUT_SECONDS: Final = 10
 
@@ -69,20 +72,6 @@ def run_check(
     timeout = _timeout_for(config or {}, settings.task_soft_time_limit_seconds)
     observed_at = time.time_ns()
 
-    if check_type == browser.CHECK_TYPE_BROWSER:
-        _run_browser_flow(
-            self,
-            check_id=check_id,
-            org_id=org_id,
-            project_id=project_id,
-            target=target,
-            timeout=timeout,
-            config=config or {},
-            observed_at=observed_at,
-            settings=settings,
-        )
-        return
-
     result = _probe(check_id, check_type, target, timeout)
     logger.info(
         "check completed",
@@ -109,25 +98,35 @@ def run_check(
     )
 
 
-def _run_browser_flow(
-    task: Any,
+@app.task(name=BROWSER_TASK, bind=True, max_retries=2)
+def run_browser_flow(
+    self: Any,
     *,
     check_id: str,
     org_id: str,
     project_id: str,
+    check_type: str = browser.CHECK_TYPE_BROWSER,
     target: str,
-    timeout: int,
-    config: dict[str, Any],
-    observed_at: int,
-    settings: Any,
+    config: dict[str, Any] | None = None,
 ) -> None:
-    """A browser flow, which reports as logs rather than metrics.
+    """A browser flow, which is a separate task so that it lands on its own queue.
 
-    A flow's result is a narrative — which step failed, and why — so the frozen
-    contract for this door carries SIGNAL_LOGS. That is the only reason it does
-    not share the path above.
+    The name is what routes it: `task_routes` sends
+    `nexovue_scheduler.probes.browser.*` to the browser worker, and everything
+    else under `probes.*` to the light one. Dispatching both check types through
+    a single task name put browser flows on the light queue, where Playwright is
+    deliberately not installed — so every flow failed on an import, and the two
+    queues that exist to keep a slow browser away from sub-second checks were
+    doing nothing.
+
+    It also reports as logs rather than metrics: a flow's result is a narrative
+    of steps, which is what the frozen contract for this door carries.
     """
-    flow = browser.perform(check_id, target, timeout, config)
+    settings = get_settings()
+    timeout = _timeout_for(config or {}, settings.task_soft_time_limit_seconds)
+    observed_at = time.time_ns()
+
+    flow = browser.perform(check_id, target, timeout, config or {})
     logger.info(
         "browser flow completed",
         check_id=check_id,
@@ -138,7 +137,7 @@ def _run_browser_flow(
         failed_step=flow.failure.name if flow.failure else None,
     )
     _publish_or_retry(
-        task,
+        self,
         browser.build_envelope(
             flow,
             org_id=org_id,

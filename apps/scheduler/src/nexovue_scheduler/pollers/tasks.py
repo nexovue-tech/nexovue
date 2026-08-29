@@ -58,6 +58,7 @@ def poll_cloudwatch(
     org_id: str,
     project_id: str,
     config: dict[str, Any],
+    external_id: str | None = None,
 ) -> None:
     """Read one AWS account's RDS metrics and publish them.
 
@@ -65,7 +66,7 @@ def poll_cloudwatch(
     this function and die with it. Nothing in `config` is a secret.
     """
     settings = get_settings()
-    grant = integrations.role_grant_from(config)
+    grant = integrations.role_grant_from(config, external_id)
     region = str(config.get(CONFIG_REGION, settings.aws_region))
     window = PollWindow.ending_now(seconds=LOOKBACK_SECONDS)
 
@@ -108,10 +109,11 @@ def poll_postgres(
     org_id: str,
     project_id: str,
     config: dict[str, Any],
+    external_id: str | None = None,
 ) -> None:
     """Read one database's statement and connection statistics and publish them."""
     settings = get_settings()
-    target = integrations.database_target_from(config)
+    target = integrations.database_target_from(config, external_id)
     region = str(config.get(CONFIG_REGION, settings.aws_region))
     window = PollWindow.ending_now(seconds=LOOKBACK_SECONDS)
 

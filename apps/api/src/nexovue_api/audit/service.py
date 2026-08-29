@@ -26,6 +26,7 @@ from nexovue_api.data.postgres.models import (
     AuditLogEntry,
     Check,
     DeployEvent,
+    Integration,
     Organization,
     User,
 )
@@ -35,6 +36,8 @@ from nexovue_api.data.postgres.models import (
 ORGANIZATION_CREATED: Final = "organization.created"
 SESSION_CREATED: Final = "session.created"
 SESSION_ENDED: Final = "session.ended"
+INTEGRATION_CREATED: Final = "integration.created"
+INTEGRATION_DELETED: Final = "integration.deleted"
 CHECK_CREATED: Final = "check.created"
 CHECK_UPDATED: Final = "check.updated"
 CHECK_DELETED: Final = "check.deleted"
@@ -48,6 +51,7 @@ ORGANIZATION_TARGET: Final = "organization"
 USER_TARGET: Final = "user"
 API_KEY_TARGET: Final = "api_key"
 CHECK_TARGET: Final = "check"
+INTEGRATION_TARGET: Final = "integration"
 DEPLOY_TARGET: Final = "deploy"
 PROJECT_TARGET: Final = "project"
 
@@ -141,6 +145,35 @@ def record_session_denied(db: AsyncSession, *, user: User | None) -> None:
         actor_user_id=user.id,
         action=SESSION_DENIED,
         target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_integration_created(
+    db: AsyncSession, *, integration: Integration, actor_user_id: uuid.UUID
+) -> None:
+    """A connector now exists, so we will assume a role in somebody's cloud
+    account on a timer. The grant itself lives in their account, but who asked
+    for it is ours to record."""
+    _add(
+        db,
+        org_id=integration.org_id,
+        actor_user_id=actor_user_id,
+        action=INTEGRATION_CREATED,
+        target=_target(INTEGRATION_TARGET, integration.id),
+    )
+
+
+def record_integration_deleted(
+    db: AsyncSession, *, org_id: uuid.UUID, integration_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """Taken by id rather than by object: by the time this is called there is no
+    row left to read one from."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=INTEGRATION_DELETED,
+        target=_target(INTEGRATION_TARGET, integration_id),
     )
 
 
