@@ -32,7 +32,7 @@ from http import HTTPStatus
 from typing import Any, Final
 from urllib.parse import urlsplit
 
-import asyncpg  # type: ignore[import-untyped]
+import asyncpg
 import httpx
 import pytest
 from live import require_stack

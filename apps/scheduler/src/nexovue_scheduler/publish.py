@@ -29,6 +29,13 @@ from nexovue_scheduler.settings import Settings
 
 # Frozen with the fixture. Changing it is a contract change, not a detail.
 SEMCONV_VERSION: Final = "1.44.0"
+
+# The semantic-convention schema every door 2 and 4b payload declares, on both
+# the resource and the scope. A reader uses it to know how to interpret the
+# attribute names; without it a consumer has to guess which version's meanings
+# apply. Omitted here until a subagent noticed the frozen fixture carries it and
+# this did not — the test compared attribute *keys* and never looked.
+SCHEMA_URL: Final = f"https://opentelemetry.io/schemas/{SEMCONV_VERSION}"
 PROBER_SERVICE_NAME: Final = "nexovue-prober"
 PROBER_VERSION: Final = "0.1.0"
 
@@ -73,8 +80,8 @@ class PublishError(RuntimeError):
 def wrap_envelope(
     payload: bytes,
     *,
-    door: int,
-    signal: int,
+    door: envelope_pb2.Door,
+    signal: envelope_pb2.Signal,
     org_id: str,
     project_id: str,
     observed_at_unix_nano: int,
@@ -144,6 +151,7 @@ def build_envelope(
     """Encode one HTTP check result as a serialized `nexovue.v1.Envelope`."""
     request = metrics_service_pb2.ExportMetricsServiceRequest()
     resource_metrics = request.resource_metrics.add()
+    resource_metrics.schema_url = SCHEMA_URL
     resource_metrics.resource.CopyFrom(
         prober_resource(
             check_id=result.check_id,
@@ -154,6 +162,7 @@ def build_envelope(
     )
 
     scope_metrics = resource_metrics.scope_metrics.add()
+    scope_metrics.schema_url = SCHEMA_URL
     scope_metrics.scope.name = f"nexovue.scheduler.checks.{result.check_type}"
     scope_metrics.scope.version = PROBER_VERSION
     _add_metrics(scope_metrics, result, observed_at_unix_nano)

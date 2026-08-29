@@ -1,0 +1,217 @@
+"""We hold no customer credential we can avoid holding (P1-37, ADR 0076).
+
+The claim these tests defend is a negative one — that no code path stores or
+requires a customer's AWS access key or database password — so most of them
+assert that something is *refused*. A negative claim with no test is a comment.
+
+AWS is never called: `botocore.stub.Stubber` answers STS and RDS from the
+service model, so parameters are validated against AWS's own shapes without a
+credential or a network.
+"""
+
+from __future__ import annotations
+
+import json
+import uuid
+from datetime import UTC, datetime
+from typing import Any, Final
+
+import boto3
+import pytest
+from botocore.stub import Stubber
+
+from nexovue_scheduler.pollers import integrations
+from nexovue_scheduler.pollers.aws import RoleGrant, session_name_for
+from nexovue_scheduler.pollers.postgres_connect import (
+    AUTH_PASSWORD,
+    AUTH_RDS_IAM,
+    RDS_SSL_MODE,
+    READ_ONLY_SESSION,
+    DatabaseAuthError,
+    DatabaseTarget,
+    rds_auth_token,
+)
+
+ACCOUNT_ID: Final = "123456789012"
+ROLE_ARN: Final = f"arn:aws:iam::{ACCOUNT_ID}:role/NexovueReadOnly"
+EXTERNAL_ID: Final = "9f3d1c7a-6b48-4a2e-9d51-0c7e2b4f8a13"
+REGION: Final = "eu-west-1"
+INTEGRATION_ID: Final = "01996d5e-9a40-7e02-a000-000000000202"
+
+
+def _sts_response() -> dict[str, Any]:
+    return {
+        "Credentials": {
+            "AccessKeyId": "ASIAEXAMPLEEXAMPLE00",
+            "SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "SessionToken": "FQoGZXIvYXdzEExampleSessionToken",
+            "Expiration": datetime(2026, 5, 21, 12, 51, tzinfo=UTC),
+        }
+    }
+
+
+def _cloudwatch_config() -> dict[str, Any]:
+    return {
+        "role_arn": ROLE_ARN,
+        "external_id": EXTERNAL_ID,
+        "region": REGION,
+        "db_instance_identifiers": ["acme-orders-prod"],
+    }
+
+
+def _postgres_config() -> dict[str, Any]:
+    return {
+        "role_arn": ROLE_ARN,
+        "external_id": EXTERNAL_ID,
+        "host": "orders-db.internal",
+        "port": 5432,
+        "database": "shop",
+        "user": "nexovue_readonly",
+        "auth": AUTH_RDS_IAM,
+    }
+
+
+# --- what an integration is allowed to store --------------------------------
+
+
+def test_a_stored_integration_holds_no_secret() -> None:
+    """Both stored values are public: an ARN the customer will paste into a
+    ticket, and an id whose only job is to be unguessable to a *third* party.
+    Neither grants access on its own — the trust policy in the customer's
+    account does, and they can revoke it without telling us."""
+    for config in (_cloudwatch_config(), _postgres_config()):
+        assert set(config) <= {
+            "role_arn",
+            "external_id",
+            "region",
+            "db_instance_identifiers",
+            "host",
+            "port",
+            "database",
+            "user",
+            "auth",
+            "interval_seconds",
+        }
+        for key in config:
+            assert "password" not in key
+            assert "secret" not in key
+            assert "access_key" not in key
+
+
+def test_the_config_column_round_trips_as_plain_json() -> None:
+    """`config_encrypted` holds UTF-8 JSON. The column name predates ADR 0076
+    and is now misleading; nothing in it is encrypted because nothing in it
+    needs to be."""
+    stored = json.dumps(_cloudwatch_config()).encode("utf-8")
+    assert integrations._decode_config(stored) == _cloudwatch_config()
+
+
+def test_an_unparseable_config_is_rejected_not_guessed() -> None:
+    with pytest.raises(integrations.IntegrationConfigError):
+        integrations._decode_config(b"not json")
+    with pytest.raises(integrations.IntegrationConfigError):
+        integrations._decode_config(b"[]")
+    with pytest.raises(integrations.IntegrationConfigError):
+        integrations._decode_config(b"")
+
+
+def test_a_cloudwatch_config_must_name_its_instances() -> None:
+    """Named explicitly rather than discovered: a poller that expands to every
+    instance in an account bills the customer for metrics they never asked for."""
+    config = _cloudwatch_config()
+    del config["db_instance_identifiers"]
+    with pytest.raises(integrations.IntegrationConfigError):
+        integrations.rds_instances_from(config)
+
+
+def test_an_aws_config_without_an_external_id_will_not_load() -> None:
+    config = _cloudwatch_config()
+    del config["external_id"]
+    with pytest.raises(integrations.IntegrationConfigError):
+        integrations.role_grant_from(config)
+
+
+def test_the_poll_interval_defaults_rather_than_crashing() -> None:
+    """`integrations` has no interval column, so it comes from the config.
+    A nonsense value falls back rather than stopping this customer's polls."""
+    definition = integrations.IntegrationDefinition(
+        id=uuid.UUID(INTEGRATION_ID),
+        org_id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        kind=integrations.KIND_CLOUDWATCH,
+        config={"interval_seconds": "not a number"},
+    )
+    assert definition.interval_seconds == integrations.DEFAULT_INTERVAL_SECONDS
+    assert definition.schedule_name == f"integration:{INTEGRATION_ID}"
+
+
+# --- how a database connection is authenticated -----------------------------
+
+
+def test_a_database_target_defaults_to_iam_authentication() -> None:
+    target = integrations.database_target_from(_postgres_config())
+    assert target.auth == AUTH_RDS_IAM
+    assert target.grant == RoleGrant(role_arn=ROLE_ARN, external_id=EXTERNAL_ID)
+
+
+def test_self_hosted_password_auth_is_refused_with_a_reason() -> None:
+    """Deliberately not implemented. Storing a customer's database password
+    needs envelope encryption and a key-management scheme this project has not
+    decided on, and inventing one badly is worse than the feature being absent.
+    Refused loudly here rather than falling back to something weaker."""
+    config = _postgres_config() | {"auth": AUTH_PASSWORD}
+    with pytest.raises(DatabaseAuthError) as refusal:
+        integrations.database_target_from(config)
+    assert "not implemented" in str(refusal.value)
+
+
+def test_an_unknown_auth_mode_is_refused() -> None:
+    with pytest.raises(DatabaseAuthError):
+        integrations.database_target_from(_postgres_config() | {"auth": "trust"})
+
+
+def test_iam_authentication_without_a_role_is_refused() -> None:
+    with pytest.raises(DatabaseAuthError):
+        DatabaseTarget(
+            host="orders-db.internal",
+            port=5432,
+            database="shop",
+            user="nexovue_readonly",
+            auth=AUTH_RDS_IAM,
+            grant=None,
+        )
+
+
+def test_the_database_password_is_minted_per_poll_from_the_customer_s_role() -> None:
+    """The only "password" in this path is an RDS auth token signed inside the
+    customer's account, valid for fifteen minutes, and never stored."""
+    sts = boto3.client("sts", region_name=REGION, aws_access_key_id="x", aws_secret_access_key="y")
+    target = integrations.database_target_from(_postgres_config())
+
+    with Stubber(sts) as stub:
+        stub.add_response(
+            "assume_role",
+            _sts_response(),
+            {
+                "RoleArn": ROLE_ARN,
+                "RoleSessionName": session_name_for(INTEGRATION_ID),
+                "ExternalId": EXTERNAL_ID,
+                "DurationSeconds": 900,
+            },
+        )
+        token = rds_auth_token(target, integration_id=INTEGRATION_ID, region=REGION, sts_client=sts)
+        stub.assert_no_pending_responses()
+
+    # generate_db_auth_token is a local SigV4 presign, not an API call, so this
+    # is the real token shape rather than a stub's echo.
+    assert token.startswith(f"orders-db.internal:5432/?Action=connect&DBUser={target.user}")
+    assert "X-Amz-Security-Token=" in token, "the token must be signed by the assumed role"
+    assert "X-Amz-Expires=900" in token
+
+
+def test_the_monitoring_session_cannot_write_and_must_use_tls() -> None:
+    """Read-only is enforced on the session, not only requested of the customer:
+    a monitoring connection that can write is one that eventually will. TLS is
+    not optional either — RDS rejects an IAM token over a plaintext connection."""
+    assert READ_ONLY_SESSION == {"default_transaction_read_only": "on"}
+    assert RDS_SSL_MODE == "require"

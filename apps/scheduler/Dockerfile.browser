@@ -3,20 +3,44 @@
 FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
 COPY --from=ghcr.io/astral-sh/uv:0.12.6 /uv /usr/local/bin/uv
 
+# This base image's own Python is older than the project requires, so uv
+# downloads one. It must land outside /root, which is mode 0700: the venv's
+# `bin/python` is only a symlink to it, and the `pwuser` this image runs as
+# cannot follow a symlink into /root. The interpreter then falls back to a build
+# whose stdlib prefix does not exist here, and the container dies at boot with
+# `ModuleNotFoundError: No module named 'encodings'` rather than anything that
+# names a permission.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy PYTHONUNBUFFERED=1
 WORKDIR /app
 
+# Dependencies resolve from the lockfile before any source is copied, so editing
+# code does not re-resolve the environment. `--extra browser` is what separates
+# this image from the light one: Playwright is an optional group precisely so
+# the light image does not carry it.
 COPY pyproject.toml uv.lock ./
 COPY apps/api/pyproject.toml apps/api/
 COPY apps/scheduler/pyproject.toml apps/scheduler/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-workspace --package nexovue-scheduler
+    uv sync --frozen --no-dev --no-install-workspace --package nexovue-scheduler --extra browser
 
 COPY apps/scheduler apps/scheduler
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --package nexovue-scheduler
+# The envelope bindings are generated output rather than an installed package,
+# and unlike the other scheduler services this image does not mount the repo.
+# Without them a flow can be measured but its result cannot be encoded.
+COPY packages/contracts/gen/python packages/contracts/gen/python
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --package nexovue-scheduler --extra browser
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Playwright's image already provides a non-root `pwuser` with the browsers
-# installed under its home; using it avoids re-downloading them.
+# The bindings join the path through site-packages rather than PYTHONPATH.
+# Compose sets PYTHONPATH for every scheduler service at once, and an image that
+# only works when an outside variable happens to be right is an image that
+# breaks quietly.
+RUN printf '/app/packages/contracts/gen/python\n' \
+    > "$(/app/.venv/bin/python -c 'import site; print(site.getsitepackages()[0])')/nexovue-contracts.pth"
+
+# Playwright's image already provides a non-root `pwuser`, and the browsers it
+# ships are installed globally under /ms-playwright, so nothing is re-downloaded.
 USER pwuser
 CMD ["celery", "-A", "nexovue_scheduler.celery_app", "worker", "--queues", "browser", "--concurrency", "1"]

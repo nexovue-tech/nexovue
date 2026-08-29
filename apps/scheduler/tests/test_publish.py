@@ -116,6 +116,24 @@ def test_the_metrics_match_the_names_and_units_the_contract_froze(
     assert _names_and_units(_metrics_of(built)) == _names_and_units(contract)
 
 
+def test_the_schema_url_matches_the_contract_on_both_levels(
+    built: bytes, contract: metrics_service_pb2.ExportMetricsServiceRequest
+) -> None:
+    """The version whose attribute meanings this payload is written against.
+
+    Compared explicitly because the key-set assertions above cannot see it —
+    they passed for a payload that declared no schema at all, which is how this
+    was missed in the first place.
+    """
+    mine, theirs = _metrics_of(built), contract
+    assert [rm.schema_url for rm in mine.resource_metrics] == [
+        rm.schema_url for rm in theirs.resource_metrics
+    ]
+    assert [sm.schema_url for rm in mine.resource_metrics for sm in rm.scope_metrics] == [
+        sm.schema_url for rm in theirs.resource_metrics for sm in rm.scope_metrics
+    ]
+
+
 def test_the_resource_says_who_measured_and_from_where(
     built: bytes, contract: metrics_service_pb2.ExportMetricsServiceRequest
 ) -> None:

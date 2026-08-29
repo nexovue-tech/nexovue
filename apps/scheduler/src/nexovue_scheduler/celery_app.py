@@ -46,7 +46,7 @@ app.conf.update(
     # Workers must import the task modules to register them. Beat imports this
     # app too and so imports them as well, which is harmless: it dispatches by
     # name and never calls them.
-    imports=("nexovue_scheduler.probes.tasks",),
+    imports=("nexovue_scheduler.probes.tasks", "nexovue_scheduler.pollers.tasks"),
 )
 
 # Routing lives here rather than on each task, so the queue a task lands on is

@@ -25,6 +25,7 @@ from nexovue_api.data.postgres.models import (
     ApiKey,
     AuditLogEntry,
     Check,
+    DeployEvent,
     Organization,
     User,
 )
@@ -40,11 +41,15 @@ CHECK_DELETED: Final = "check.deleted"
 API_KEY_CREATED: Final = "api_key.created"
 API_KEY_REVOKED: Final = "api_key.revoked"
 SESSION_DENIED: Final = "session.denied"
+DEPLOY_RECORDED: Final = "deploy.recorded"
+DEPLOY_WEBHOOK_SECRET_VIEWED: Final = "deploy.webhook_secret_viewed"
 
 ORGANIZATION_TARGET: Final = "organization"
 USER_TARGET: Final = "user"
 API_KEY_TARGET: Final = "api_key"
 CHECK_TARGET: Final = "check"
+DEPLOY_TARGET: Final = "deploy"
+PROJECT_TARGET: Final = "project"
 
 # A refused sign-in against an address matching no account. The address is not
 # recorded: it belongs to somebody who is not our customer, so storing it would
@@ -175,6 +180,44 @@ def record_check_deleted(
         actor_user_id=actor_user_id,
         action=CHECK_DELETED,
         target=_target(CHECK_TARGET, check_id),
+    )
+
+
+def record_deploy_recorded(db: AsyncSession, *, event: DeployEvent) -> None:
+    """A deploy arrived over the public webhook.
+
+    No actor: the caller proved it holds the project's deploy secret, which says
+    the request came from that project's CI and nothing at all about which
+    person is behind it. Recorded anyway, because this is the one write in the
+    control plane the internet can reach, and a burst of them is worth seeing.
+
+    Only refused notifications are absent from this log: writing a row for every
+    unsigned POST would let anyone fill the table from outside.
+    """
+    _add(
+        db,
+        org_id=event.org_id,
+        actor_user_id=None,
+        action=DEPLOY_RECORDED,
+        target=_target(DEPLOY_TARGET, event.id),
+    )
+
+
+def record_deploy_webhook_secret_viewed(
+    db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """Somebody read a project's deploy secrets.
+
+    Reading a credential is worth a trail even though it changes nothing: it is
+    what an account takeover does before it starts forging deploys. The target
+    is the project — the secret itself is never recorded.
+    """
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=DEPLOY_WEBHOOK_SECRET_VIEWED,
+        target=_target(PROJECT_TARGET, project_id),
     )
 
 

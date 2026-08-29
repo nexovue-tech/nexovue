@@ -26,12 +26,20 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from nexovue_scheduler.checks import CheckDefinition, load_enabled_checks
 from nexovue_scheduler.leader import LeaderLock
-from nexovue_scheduler.settings import Settings, get_settings
+from nexovue_scheduler.pollers.integrations import IntegrationDefinition, load_active_integrations
+from nexovue_scheduler.settings import QUEUE_LIGHT, Settings, get_settings
 from nexovue_scheduler.telemetry.logging import get_logger
 
 # The task every check dispatches to. Named as a string rather than imported so
 # beat does not pull in pycurl and Playwright to schedule work it never runs.
 PROBE_TASK = "nexovue_scheduler.probes.run_check"
+
+# Door 4b. Named as strings for the same reason: beat dispatches these and never
+# calls them, so it has no business importing boto3 to schedule a poll.
+POLL_TASKS = {
+    "cloudwatch": "nexovue_scheduler.pollers.poll_cloudwatch",
+    "postgres": "nexovue_scheduler.pollers.poll_postgres",
+}
 
 logger = get_logger(__name__)
 
@@ -109,10 +117,25 @@ class PostgresScheduler(Scheduler):
         try:
             self._leader.release()
         finally:
-            if self._engine is not None:
-                self._loop.run_until_complete(self._engine.dispose())
-            self._loop.close()
+            self._shut_down_engine()
             super().close()
+
+    def _shut_down_engine(self) -> None:
+        """Dispose the engine and its loop, exactly once.
+
+        Celery calls `close()` more than once on the way down — `sync()` does,
+        and so does the beat service around it. Without this guard the second
+        call ran a coroutine on the loop the first had already closed, and beat
+        died with `RuntimeError: Event loop is closed` while it was shutting
+        down anyway. Harmless in itself, but it buried the real reason for the
+        shutdown under a stack trace that had nothing to do with it.
+        """
+        if self._loop.is_closed():
+            return
+        if self._engine is not None:
+            self._loop.run_until_complete(self._engine.dispose())
+            self._engine = None
+        self._loop.close()
 
     # --- schedule maintenance ----------------------------------------------
 
@@ -124,15 +147,17 @@ class PostgresScheduler(Scheduler):
         self._refresh_due_at = now + self._settings.beat_refresh_seconds
 
         try:
-            checks = self._loop.run_until_complete(load_enabled_checks(self._engine_or_create()))
+            engine = self._engine_or_create()
+            checks = self._loop.run_until_complete(load_enabled_checks(engine))
+            integrations = self._loop.run_until_complete(load_active_integrations(engine))
         except Exception:
             # Postgres being briefly unreachable must not empty the schedule:
             # the entries we already hold are still correct, and dropping them
             # would stop every check until it came back.
-            logger.exception("beat could not read checks; keeping the current schedule")
+            logger.exception("beat could not read the schedule; keeping the current one")
             return
 
-        self._entries = self._entries_for(checks)
+        self._entries = self._entries_for(checks) | self._poll_entries_for(integrations)
 
     def _entries_for(self, checks: list[CheckDefinition]) -> dict[str, ScheduleEntry]:
         """Build schedule entries, preserving the timing of ones already running.
@@ -167,6 +192,43 @@ class PostgresScheduler(Scheduler):
                     "target": check.target,
                     "config": check.config,
                 },
+                app=self.app,
+            )
+        return entries
+
+    def _poll_entries_for(
+        self, integrations: list[IntegrationDefinition]
+    ) -> dict[str, ScheduleEntry]:
+        """Schedule entries for door 4b, alongside the checks.
+
+        An integration whose kind has no poller is skipped rather than raising:
+        one unrecognised row must not stop every other customer's polls, and a
+        kind can exist in the control plane before this service can run it.
+        """
+        entries: dict[str, ScheduleEntry] = {}
+        for integration in integrations:
+            task = POLL_TASKS.get(integration.kind)
+            if task is None:
+                continue
+            name = integration.schedule_name
+            interval = run_every(run_every=timedelta(seconds=integration.interval_seconds))
+
+            existing = self._entries.get(name)
+            if existing is not None and existing.schedule == interval:
+                entries[name] = existing
+                continue
+
+            entries[name] = ScheduleEntry(
+                name=name,
+                task=task,
+                schedule=interval,
+                kwargs={
+                    "integration_id": str(integration.id),
+                    "org_id": str(integration.org_id),
+                    "project_id": str(integration.project_id),
+                    "config": integration.config,
+                },
+                options={"queue": QUEUE_LIGHT},
                 app=self.app,
             )
         return entries

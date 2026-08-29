@@ -16,7 +16,7 @@ import time
 from typing import Any, Final
 
 from nexovue_scheduler.celery_app import app
-from nexovue_scheduler.probes import http_check
+from nexovue_scheduler.probes import browser, http_check
 from nexovue_scheduler.probes.result import ProbeResult
 from nexovue_scheduler.publish import ResultPublisher, build_envelope
 from nexovue_scheduler.settings import get_settings
@@ -67,6 +67,21 @@ def run_check(
     """
     settings = get_settings()
     timeout = _timeout_for(config or {}, settings.task_soft_time_limit_seconds)
+    observed_at = time.time_ns()
+
+    if check_type == browser.CHECK_TYPE_BROWSER:
+        _run_browser_flow(
+            self,
+            check_id=check_id,
+            org_id=org_id,
+            project_id=project_id,
+            target=target,
+            timeout=timeout,
+            config=config or {},
+            observed_at=observed_at,
+            settings=settings,
+        )
+        return
 
     result = _probe(check_id, check_type, target, timeout)
     logger.info(
@@ -79,19 +94,78 @@ def run_check(
         error=result.error,
     )
 
-    envelope = build_envelope(
-        result,
+    _publish_or_retry(
+        self,
+        build_envelope(
+            result,
+            org_id=org_id,
+            project_id=project_id,
+            observed_at_unix_nano=observed_at,
+            environment=settings.env,
+            region=settings.prober_region,
+        ),
         org_id=org_id,
-        project_id=project_id,
-        observed_at_unix_nano=time.time_ns(),
-        environment=settings.env,
-        region=settings.prober_region,
+        check_id=check_id,
     )
+
+
+def _run_browser_flow(
+    task: Any,
+    *,
+    check_id: str,
+    org_id: str,
+    project_id: str,
+    target: str,
+    timeout: int,
+    config: dict[str, Any],
+    observed_at: int,
+    settings: Any,
+) -> None:
+    """A browser flow, which reports as logs rather than metrics.
+
+    A flow's result is a narrative — which step failed, and why — so the frozen
+    contract for this door carries SIGNAL_LOGS. That is the only reason it does
+    not share the path above.
+    """
+    flow = browser.perform(check_id, target, timeout, config)
+    logger.info(
+        "browser flow completed",
+        check_id=check_id,
+        up=flow.up,
+        steps_passed=flow.steps_passed,
+        steps_total=flow.steps_total,
+        duration_seconds=round(flow.total_seconds, 4),
+        failed_step=flow.failure.name if flow.failure else None,
+    )
+    _publish_or_retry(
+        task,
+        browser.build_envelope(
+            flow,
+            org_id=org_id,
+            project_id=project_id,
+            observed_at_unix_nano=observed_at,
+            environment=settings.env,
+            region=settings.prober_region,
+        ),
+        org_id=org_id,
+        check_id=check_id,
+        topic=settings.kafka_logs_topic,
+    )
+
+
+def _publish_or_retry(
+    task: Any, envelope: bytes, *, org_id: str, check_id: str, topic: str | None = None
+) -> None:
+    """Deliver a result, or retry until it lands.
+
+    A measurement that never reached the broker is indistinguishable from a
+    check that never ran, so this is the one failure the task does not swallow.
+    """
     try:
-        _publisher_for_process().publish(envelope, org_id=org_id)
+        _publisher_for_process().publish(envelope, org_id=org_id, topic=topic)
     except Exception as failure:
         logger.warning("publishing a check result failed; retrying", check_id=check_id)
-        raise self.retry(exc=failure, countdown=5) from failure
+        raise task.retry(exc=failure, countdown=5) from failure
 
 
 def _probe(check_id: str, check_type: str, target: str, timeout: int) -> ProbeResult:
