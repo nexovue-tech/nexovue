@@ -1,0 +1,275 @@
+"""Service overview reads against the running stack.
+
+The offline suite proves the code cannot construct a cross-tenant read. This one
+proves the statements are ones ClickHouse actually accepts and answers: the
+merge functions, the parameter types and the column names are all things a fake
+store cannot check, and all three are easy to get plausibly wrong.
+
+It fails when the stack is not up, because a skip here is indistinguishable from
+a pass — `live.require_stack` is that rule, and `NEXOVUE_SKIP_LIVE_TESTS=1` is
+the deliberate way out.
+
+It reads only. Nothing is written, so nothing is cleaned up.
+"""
+
+from __future__ import annotations
+
+import os
+import socket
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Final
+from urllib.parse import urlsplit
+
+import clickhouse_connect
+import pytest_asyncio
+from clickhouse_connect.driver.asyncclient import AsyncClient
+from live import require_stack
+
+from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.services import service
+
+CLICKHOUSE_DSN: Final = os.environ.get(
+    "NEXOVUE_CLICKHOUSE_DSN", "clickhouse://nexovue:nexovue_dev@localhost:18123/nexovue"
+)
+
+REACHABILITY_TIMEOUT_SECONDS: Final = 1.0
+
+# A tenant this deployment cannot have issued. Reading as it must return nothing
+# whatever the table holds.
+TENANT_THAT_NEVER_EXISTED: Final = "00000000-0000-0000-0000-000000000000"
+
+# The rollup buckets by minute, so the window has to include the last bucket.
+LAST_BUCKET_SLACK: Final = timedelta(minutes=1)
+
+
+def _reachable(dsn: str) -> bool:
+    parts = urlsplit(dsn)
+    try:
+        with socket.create_connection(
+            (parts.hostname or "localhost", parts.port or 8123), REACHABILITY_TIMEOUT_SECONDS
+        ):
+            return True
+    except OSError:
+        return False
+
+
+require_stack(
+    reachable=_reachable(CLICKHOUSE_DSN),
+    suite="the live service overview suite",
+    remedy="ClickHouse is not running — start the dev stack with `just dev`",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class BusiestProject:
+    """The tenant and project with the most rollup rows, and the window holding them.
+
+    Chosen rather than fixed, so the suite runs against whatever the load
+    generator last produced instead of against an id someone has to maintain.
+    """
+
+    tenant_id: str
+    project_id: str
+    window_start: datetime
+    window_end: datetime
+
+
+@pytest_asyncio.fixture
+async def clickhouse() -> AsyncIterator[AsyncClient]:
+    parts = urlsplit(CLICKHOUSE_DSN)
+    client = await clickhouse_connect.get_async_client(
+        host=parts.hostname or "localhost",
+        port=parts.port or 8123,
+        username=parts.username or "",
+        password=parts.password or "",
+        database=(parts.path or "/").lstrip("/"),
+    )
+    try:
+        yield client
+    finally:
+        await client.close()
+
+
+@pytest_asyncio.fixture
+async def busiest(clickhouse: AsyncClient) -> BusiestProject:
+    """The project with real traffic in it, and the window that contains it."""
+    result = await clickhouse.query(
+        "SELECT tenant_id, project_id, min(minute) AS first_minute, max(minute) AS last_minute "
+        "FROM endpoint_stats_1m GROUP BY tenant_id, project_id "
+        "ORDER BY sum(request_count) DESC LIMIT 1"
+    )
+    assert result.result_rows, (
+        "endpoint_stats_1m is empty — this suite would prove nothing. "
+        "Run the load generator, or check that the trace pipeline is writing."
+    )
+
+    tenant_id, project_id, first_minute, last_minute = result.result_rows[0]
+    return BusiestProject(
+        tenant_id=str(tenant_id),
+        project_id=str(project_id),
+        window_start=first_minute,
+        window_end=last_minute + LAST_BUCKET_SLACK,
+    )
+
+
+def _repository(client: AsyncClient, tenant_id: str) -> TenantScopedRepository:
+    return TenantScopedRepository(client, tenant_id=tenant_id)
+
+
+# ----------------------------------------------------------- the query answers
+
+
+async def test_the_service_list_comes_back_with_rows_and_readable_latencies(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    """Proves the merge functions and parameter types are ones the server accepts."""
+    page = await service.list_services(
+        _repository(clickhouse, busiest.tenant_id),
+        project_id=busiest.project_id,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+        limit=service.DEFAULT_SERVICE_LIMIT,
+    )
+
+    assert page.services, "the busiest project returned no services"
+    for row in page.services:
+        assert row.service_name
+        assert row.request_count > 0
+        assert row.requests_per_minute > 0
+        assert 0.0 <= row.error_rate <= 1.0
+        # A merged state that was read as a raw blob would not be ordered.
+        assert row.p50_ms <= row.p95_ms <= row.p99_ms
+
+
+async def test_the_endpoint_list_ranks_the_endpoint_with_the_most_failures_first(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    page = await service.list_endpoints(
+        _repository(clickhouse, busiest.tenant_id),
+        project_id=busiest.project_id,
+        service_name=None,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+        limit=service.DEFAULT_ENDPOINT_LIMIT,
+    )
+
+    assert page.endpoints, "the busiest project returned no endpoints"
+    failures = [row.error_count for row in page.endpoints]
+    assert failures == sorted(failures, reverse=True)
+
+
+async def test_naming_a_service_returns_that_service_and_no_other(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    every = await service.list_services(
+        _repository(clickhouse, busiest.tenant_id),
+        project_id=busiest.project_id,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+        limit=service.DEFAULT_SERVICE_LIMIT,
+    )
+    named = every.services[0].service_name
+
+    page = await service.list_endpoints(
+        _repository(clickhouse, busiest.tenant_id),
+        project_id=busiest.project_id,
+        service_name=named,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+        limit=service.DEFAULT_ENDPOINT_LIMIT,
+    )
+
+    assert page.endpoints
+    assert {row.service_name for row in page.endpoints} == {named}
+
+
+async def test_the_service_totals_are_the_endpoint_totals_of_the_same_window(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    """Both readings come from one table, so a disagreement is a query bug."""
+    services = await service.list_services(
+        _repository(clickhouse, busiest.tenant_id),
+        project_id=busiest.project_id,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+        limit=service.MAX_SERVICE_LIMIT,
+    )
+    endpoints = await service.list_endpoints(
+        _repository(clickhouse, busiest.tenant_id),
+        project_id=busiest.project_id,
+        service_name=None,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+        limit=service.MAX_ENDPOINT_LIMIT,
+    )
+
+    assert sum(row.request_count for row in services.services) == sum(
+        row.request_count for row in endpoints.endpoints
+    )
+    assert sum(row.error_count for row in services.services) == sum(
+        row.error_count for row in endpoints.endpoints
+    )
+
+
+# ------------------------------------------------------------------- isolation
+
+
+async def test_another_tenants_project_reads_as_empty_against_real_data(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    """The same project id, a different session tenant, and nothing comes back."""
+    page = await service.list_services(
+        _repository(clickhouse, TENANT_THAT_NEVER_EXISTED),
+        project_id=busiest.project_id,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+        limit=service.DEFAULT_SERVICE_LIMIT,
+    )
+
+    assert page.services == []
+
+
+async def test_a_window_before_any_telemetry_is_an_empty_list_not_an_error(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    """The rollup's own retention starts somewhere; asking earlier is not a fault."""
+    page = await service.list_services(
+        _repository(clickhouse, busiest.tenant_id),
+        project_id=busiest.project_id,
+        from_time=busiest.window_start - timedelta(days=365),
+        to_time=busiest.window_start - timedelta(days=364),
+        limit=service.DEFAULT_SERVICE_LIMIT,
+    )
+
+    assert page.services == []
+
+
+async def test_the_rows_this_tenant_reads_are_the_rows_the_table_holds_for_it(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    """Counted independently of the query under test, so an over-broad read shows."""
+    expected = await clickhouse.query(
+        "SELECT sum(request_count) FROM endpoint_stats_1m "
+        "WHERE tenant_id = {tenant_id:String} AND project_id = {project_id:String} "
+        "AND minute >= {from_time:DateTime} AND minute < {to_time:DateTime}",
+        parameters={
+            "tenant_id": busiest.tenant_id,
+            "project_id": busiest.project_id,
+            "from_time": busiest.window_start,
+            "to_time": busiest.window_end,
+        },
+    )
+    total_in_table = int(expected.result_rows[0][0])
+
+    page = await service.list_services(
+        _repository(clickhouse, busiest.tenant_id),
+        project_id=busiest.project_id,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+        limit=service.MAX_SERVICE_LIMIT,
+    )
+
+    assert total_in_table > 0
+    assert sum(row.request_count for row in page.services) == total_in_table

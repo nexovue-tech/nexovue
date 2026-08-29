@@ -18,10 +18,12 @@ from nexovue_api.apikeys import router as apikeys_router
 from nexovue_api.auth import router as auth_router
 from nexovue_api.buildinfo import SERVICE_NAME
 from nexovue_api.checks import router as checks_router
+from nexovue_api.dbstats import router as dbstats_router
 from nexovue_api.deploys import router as deploys_router
 from nexovue_api.errorgroups import router as error_groups_router
 from nexovue_api.errors.handlers import install_error_handlers
 from nexovue_api.health import router as health_router
+from nexovue_api.infrastructure import router as infrastructure_router
 from nexovue_api.integrations import router as integrations_router
 from nexovue_api.lifespan import build_lifespan
 from nexovue_api.logs import router as logs_router
@@ -30,11 +32,15 @@ from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
 from nexovue_api.middleware.ratelimit import RateLimitMiddleware
 from nexovue_api.middleware.request_log import RequestLogMiddleware
 from nexovue_api.projects import router as projects_router
+from nexovue_api.servicemap import router as service_map_router
+from nexovue_api.services import router as services_router
 from nexovue_api.settings import API_PREFIX, Settings, load_settings_or_exit
 from nexovue_api.signup import router as signup_router
+from nexovue_api.synthetics import router as synthetics_router
 from nexovue_api.system import router as system_router
 from nexovue_api.telemetry.logging import configure_logging
 from nexovue_api.traces import router as traces_router
+from nexovue_api.usage import router as usage_router
 
 API_TITLE = "nexovue API"
 
@@ -102,6 +108,12 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(checks_router.router)
     versioned.include_router(deploys_router.router)
     versioned.include_router(integrations_router.router)
+    versioned.include_router(services_router.router)
+    versioned.include_router(service_map_router.router)
+    versioned.include_router(synthetics_router.router)
+    versioned.include_router(dbstats_router.router)
+    versioned.include_router(infrastructure_router.router)
+    versioned.include_router(usage_router.router)
     versioned.include_router(traces_router.router)
     versioned.include_router(logs_router.router)
     versioned.include_router(error_groups_router.router)
