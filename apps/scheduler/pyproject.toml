@@ -22,7 +22,15 @@ dependencies = [
     # distributable package and are imported from the tree; see settings.
     "protobuf>=5.28",
     "opentelemetry-proto>=1.28",
+    # Assuming a customer's role and reading CloudWatch. boto3 is AWS's own
+    # client and is the only thing that speaks STS's signing.
+    "boto3>=1.35",
 ]
+
+[project.optional-dependencies]
+# Only the browser image installs these. Chromium and its dependencies are
+# ~1.5GB the light queue has no use for, which is why that image is separate.
+browser = ["playwright>=1.62"]
 
 [build-system]
 requires = ["uv_build>=0.12"]

@@ -70,43 +70,45 @@ class PublishError(RuntimeError):
     """The broker did not accept the result, so the check did not really run."""
 
 
-def build_envelope(
-    result: ProbeResult,
+def wrap_envelope(
+    payload: bytes,
     *,
+    door: int,
+    signal: int,
     org_id: str,
     project_id: str,
     observed_at_unix_nano: int,
-    environment: str,
-    region: str,
 ) -> bytes:
-    """Encode one probe result as a serialized `nexovue.v1.Envelope`."""
-    request = metrics_service_pb2.ExportMetricsServiceRequest()
-    resource_metrics = request.resource_metrics.add()
-    resource_metrics.resource.CopyFrom(_resource(result, environment, region))
+    """Put an encoded OTLP payload inside the envelope every door produces.
 
-    scope_metrics = resource_metrics.scope_metrics.add()
-    scope_metrics.scope.name = f"nexovue.scheduler.checks.{result.check_type}"
-    scope_metrics.scope.version = PROBER_VERSION
-    _add_metrics(scope_metrics, result, observed_at_unix_nano)
-
+    Shared by every door this service serves — HTTP checks, browser flows and
+    pollers — because the invariant is that they all reach the broker in the
+    same shape. A second copy of this would be a second definition of that
+    shape, which is how doors drift apart.
+    """
     envelope = envelope_pb2.Envelope(
         tenant_id=org_id,
         project_id=project_id,
-        door=envelope_pb2.DOOR_SYNTHETIC,
-        signal=envelope_pb2.SIGNAL_METRICS,
+        door=door,
+        signal=signal,
         received_at_unix_nano=observed_at_unix_nano,
         # The receiver stamps a UUIDv7 here. Python's uuid module has no v7
         # before 3.14, and nothing downstream orders on this value — it
         # identifies a batch in a log line — so v4 is enough.
         ingest_id=str(uuid.uuid4()),
         semconv_version=SEMCONV_VERSION,
-        payload=request.SerializeToString(),
+        payload=payload,
     )
     return envelope.SerializeToString()
 
 
-def _resource(result: ProbeResult, environment: str, region: str) -> resource_pb2.Resource:
-    """Who took the measurement, and from where.
+def prober_resource(
+    *, check_id: str, check_type: str, environment: str, region: str
+) -> resource_pb2.Resource:
+    """Who took a measurement, and from where.
+
+    Every door 2 signal carries this, metrics and logs alike, and the frozen
+    fixtures for both use the same keys.
 
     `cloud.region` is part of the reading, not deployment trivia: the same check
     answers differently from different places, and two readings cannot be
@@ -120,14 +122,50 @@ def _resource(result: ProbeResult, environment: str, region: str) -> resource_pb
         ("telemetry.sdk.name", "opentelemetry"),
         ("telemetry.sdk.language", "python"),
         ("telemetry.sdk.version", OTLP_PROTO_VERSION),
-        ("synthetic.check.id", result.check_id),
-        ("synthetic.check.type", result.check_type),
+        ("synthetic.check.id", check_id),
+        ("synthetic.check.type", check_type),
         ("cloud.region", region),
     ):
         resource.attributes.append(
             common_pb2.KeyValue(key=key, value=common_pb2.AnyValue(string_value=value))
         )
     return resource
+
+
+def build_envelope(
+    result: ProbeResult,
+    *,
+    org_id: str,
+    project_id: str,
+    observed_at_unix_nano: int,
+    environment: str,
+    region: str,
+) -> bytes:
+    """Encode one HTTP check result as a serialized `nexovue.v1.Envelope`."""
+    request = metrics_service_pb2.ExportMetricsServiceRequest()
+    resource_metrics = request.resource_metrics.add()
+    resource_metrics.resource.CopyFrom(
+        prober_resource(
+            check_id=result.check_id,
+            check_type=result.check_type,
+            environment=environment,
+            region=region,
+        )
+    )
+
+    scope_metrics = resource_metrics.scope_metrics.add()
+    scope_metrics.scope.name = f"nexovue.scheduler.checks.{result.check_type}"
+    scope_metrics.scope.version = PROBER_VERSION
+    _add_metrics(scope_metrics, result, observed_at_unix_nano)
+
+    return wrap_envelope(
+        request.SerializeToString(),
+        door=envelope_pb2.DOOR_SYNTHETIC,
+        signal=envelope_pb2.SIGNAL_METRICS,
+        org_id=org_id,
+        project_id=project_id,
+        observed_at_unix_nano=observed_at_unix_nano,
+    )
 
 
 def _add_metrics(
@@ -201,7 +239,7 @@ class ResultPublisher:
             }
         )
 
-    def publish(self, envelope: bytes, *, org_id: str) -> None:
+    def publish(self, envelope: bytes, *, org_id: str, topic: str | None = None) -> None:
         """Send one envelope and wait for the broker to confirm it.
 
         Keyed by organization, matching how the receiver keys logs and metrics,
@@ -211,10 +249,11 @@ class ResultPublisher:
         its result sat undelivered in a buffer would be reporting that a check
         ran when nothing can see the result.
         """
-        self._producer.produce(self._settings.kafka_metrics_topic, key=org_id, value=envelope)
+        destination = topic or self._settings.kafka_metrics_topic
+        self._producer.produce(destination, key=org_id, value=envelope)
         undelivered = self._producer.flush(DELIVERY_TIMEOUT_SECONDS)
         if undelivered:
             raise PublishError(
                 f"{undelivered} probe result(s) not acknowledged by "
-                f"{self._settings.kafka_metrics_topic} within {DELIVERY_TIMEOUT_SECONDS}s"
+                f"{destination} within {DELIVERY_TIMEOUT_SECONDS}s"
             )

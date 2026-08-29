@@ -61,12 +61,27 @@ class Settings(BaseSettings):
     # each name their own: one service's topic configuration should not be able
     # to move another's.
     kafka_metrics_topic: str = "metrics-raw"
+    # Browser flows are logs, not metrics — the frozen fixture for that door
+    # carries SIGNAL_LOGS, because a flow's result is a narrative of steps with
+    # a failure message, not a number.
+    kafka_logs_topic: str = "logs-raw"
 
     # Stamped on every probe result as `cloud.region`. A check answers
     # differently from different places, and a reading with no location cannot
     # be compared with one taken elsewhere — so this is part of the measurement,
     # not deployment trivia.
     prober_region: str = "local"
+
+    # Where a browser flow's screenshot is kept. The log record carries a
+    # reference rather than the image, because a screenshot is megabytes and a
+    # log record that size would be refused long before it reached storage.
+    synthetics_bucket: str = "nexovue-synthetics"
+    synthetics_endpoint_url: str = "http://seaweedfs:8333"
+
+    # Which region's API to call when assuming a customer's role. Not a
+    # credential: customers grant us a role to assume rather than handing over
+    # keys, so there is nothing secret in this service's configuration.
+    aws_region: str = "eu-west-1"
 
     # --- beat leadership ----------------------------------------------------
     # More than one beat process runs, so that a dead one does not stop every
