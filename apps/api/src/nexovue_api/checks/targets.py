@@ -20,7 +20,7 @@ an internal address, and that is a known gap rather than an oversight.
 from __future__ import annotations
 
 import ipaddress
-from typing import Final
+from typing import Any, Final
 from urllib.parse import urlsplit
 
 from nexovue_api.errors.exceptions import InvalidRequestError
@@ -58,6 +58,35 @@ def validate_target(raw: str) -> str:
 
     _refuse_private_address(host)
     return target
+
+
+def validate_step_urls(config: dict[str, Any]) -> None:
+    """Every URL a browser flow will navigate to, not just the check's target.
+
+    A browser check carries its own step list, and each `goto` step names a URL.
+    Validating only `target` left those unchecked — so a check whose target was
+    a public site could still walk our prober to the metadata endpoint, with
+    `expect_text` reporting back whether a given string was present. That is the
+    same request-forgery hole this module exists to close, reached by a second
+    door I had not looked at.
+    """
+    steps = config.get("steps")
+    if steps is None:
+        return
+    if not isinstance(steps, list):
+        raise InvalidRequestError("A check's steps must be a list.")
+
+    for position, step in enumerate(steps, start=1):
+        if not isinstance(step, dict):
+            raise InvalidRequestError(f"Step {position} is not a step.")
+        url = step.get("url")
+        if url is None:
+            continue
+        if not isinstance(url, str):
+            raise InvalidRequestError(f"Step {position} has a url that is not text.")
+        # Same rules as the target. A step is a request we make on our own
+        # infrastructure exactly as the target is.
+        validate_target(url)
 
 
 def _refuse_private_address(host: str) -> None:

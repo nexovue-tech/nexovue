@@ -150,6 +150,46 @@ class TestTargetsWeRefuseToFetch:
     def test_a_public_target_is_accepted(self, target: str) -> None:
         assert targets.validate_target(target) == target.strip()
 
+    @pytest.mark.parametrize(
+        "step_url",
+        [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://127.0.0.1:8080/",
+            "http://postgres:5432/",
+            "file:///etc/passwd",
+        ],
+    )
+    def test_a_browser_step_cannot_reach_where_a_target_cannot(self, step_url: str) -> None:
+        """The second door into a request, which the first version left open.
+
+        A browser check carries its own step list, and each `goto` names a URL.
+        Validating only the target meant a check pointed at a public site could
+        still walk the prober to the metadata endpoint, with `expect_text`
+        reporting whether a given string came back.
+        """
+        with pytest.raises(InvalidRequestError):
+            targets.validate_step_urls({"steps": [{"action": "goto", "url": step_url}]})
+
+    def test_a_flow_of_public_steps_is_accepted(self) -> None:
+        targets.validate_step_urls(
+            {
+                "steps": [
+                    {"action": "goto", "url": "https://shop.acme.example/"},
+                    {"action": "expect_text", "selector": "h1", "text": "Shop"},
+                ]
+            }
+        )
+
+    def test_a_malformed_step_list_is_refused_rather_than_ignored(self) -> None:
+        """Silently skipping something we cannot read is how a check gets stored
+        that nobody validated."""
+        with pytest.raises(InvalidRequestError):
+            targets.validate_step_urls({"steps": "not a list"})
+        with pytest.raises(InvalidRequestError):
+            targets.validate_step_urls({"steps": ["not a step"]})
+        with pytest.raises(InvalidRequestError):
+            targets.validate_step_urls({"steps": [{"action": "goto", "url": 42}]})
+
     def test_an_overlong_target_is_refused(self) -> None:
         """Bounded so the column and every log line that quotes it stay sane."""
         with pytest.raises(InvalidRequestError):

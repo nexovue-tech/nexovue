@@ -53,6 +53,8 @@ async def create(
     """
     project = await projects.require_project(session, org_id=org_id, project_id=request.project_id)
 
+    # Both doors into a request: the target, and any url inside the step list.
+    targets.validate_step_urls(request.config)
     check = Check(
         org_id=org_id,
         project_id=project.id,
@@ -91,6 +93,9 @@ async def update(
     if request.enabled is not None:
         check.enabled = request.enabled
     if request.config is not None:
+        # Re-validated on every edit, for the same reason the target is: a step
+        # list that was harmless yesterday is not evidence about this one.
+        targets.validate_step_urls(request.config)
         check.config = request.config
 
     audit.record_check_updated(session, check=check, actor_user_id=actor_user_id)
