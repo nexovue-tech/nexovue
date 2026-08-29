@@ -382,36 +382,32 @@ func (p *Pipeline) Drain(ctx context.Context, now time.Time) error {
 	return p.settleDerived(ctx, reached, p.stages.counters.DrainAll(), p.stages.edges.DrainAll())
 }
 
-// insertCounters writes derived counters, retrying without ever writing twice:
-// a block is atomic, so its first point answers for the batch.
-// insertEdges writes derived service edges the same way counters are written:
-// a block is atomic, so its first edge answers for the batch, and the read
-// before the retry is what stops a lost acknowledgement becoming a double count
-// (ADR 0061).
+// insertEdges writes derived service edges, retrying on a store outage.
+//
+// A lost acknowledgement is what makes a retry dangerous for a summing rollup,
+// and the store settles it: `service_edges_1m` carries a deduplication window,
+// and the drain sorts its rows so a re-derived block is byte-identical. This
+// used to read the table back first as well, which could not tell a retry from
+// a minute legitimately reopened by late data, and dropped the late row
+// (ADR 0075).
 func (p *Pipeline) insertEdges(ctx context.Context, edges []serviceedges.Edge) error {
 	if len(edges) == 0 {
 		return nil
 	}
-	return p.loop.WriteOnce(ctx, "insert service edges",
-		func(callCtx context.Context) (bool, error) {
-			return p.edges.Applied(callCtx, edges[0])
-		},
-		func(callCtx context.Context) error {
-			return p.edges.Insert(callCtx, edges)
-		})
+	return p.loop.Retry(ctx, "insert service edges", func(callCtx context.Context) error {
+		return p.edges.Insert(callCtx, edges)
+	})
 }
 
+// insertCounters writes derived counters, guarded the same way and for the same
+// reason: `metrics_sum` has its own deduplication window and the drain sorts.
 func (p *Pipeline) insertCounters(ctx context.Context, points []derive.Point) error {
 	if len(points) == 0 {
 		return nil
 	}
-	return p.loop.WriteOnce(ctx, "insert counters",
-		func(callCtx context.Context) (bool, error) {
-			return p.metrics.Applied(callCtx, points[0])
-		},
-		func(callCtx context.Context) error {
-			return p.metrics.Insert(callCtx, points)
-		})
+	return p.loop.Retry(ctx, "insert counters", func(callCtx context.Context) error {
+		return p.metrics.Insert(callCtx, points)
+	})
 }
 
 // insertBounded writes the accumulated block under a deadline.

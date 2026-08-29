@@ -125,34 +125,3 @@ func (w *Writer) Insert(ctx context.Context, points []Point) error {
 	}
 	return nil
 }
-
-// Applied reports whether a batch that may already have been written is present.
-//
-// It exists for one narrow case that ADR 0061 left open. If an insert lands and
-// only its acknowledgement is lost, the retry writes the identical block again.
-// ClickHouse would normally recognise the repeat and drop it, but that
-// deduplication log does not survive a restart of ClickHouse — and a restart is
-// exactly what tends to break the acknowledgement in the first place.
-//
-// A block is written atomically, so one point answers for the whole batch.
-func (w *Writer) Applied(ctx context.Context, point Point) (bool, error) {
-	var found proto.ColUInt64
-	query := ch.Query{
-		Body: "SELECT count() FROM " + metricsTable + " WHERE " +
-			"timestamp = toDateTime64({minute:String}, 3) " +
-			"AND tenant_id = {tenant:String} AND project_id = {project:String} " +
-			"AND metric_name = {metric:String} AND service_name = {service:String}",
-		Parameters: ch.Parameters(map[string]any{
-			"minute":  point.intervalEndForQuery(),
-			"tenant":  point.TenantID,
-			"project": point.ProjectID,
-			"metric":  point.MetricName,
-			"service": point.ServiceName,
-		}),
-		Result: proto.Results{{Name: "count()", Data: &found}},
-	}
-	if err := w.pool.Do(ctx, query); err != nil {
-		return false, fmt.Errorf("checking whether metric points landed: %w", err)
-	}
-	return found.Row(0) > 0, nil
-}

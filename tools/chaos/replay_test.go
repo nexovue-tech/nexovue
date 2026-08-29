@@ -42,7 +42,7 @@ func TestReplayedOffsetsAreNotCountedTwice(t *testing.T) {
 	// Restarting the store is what makes this a real test of the durable state:
 	// it discards the in-memory deduplication log that would otherwise catch a
 	// replayed block and hide whether the state machine works at all.
-	t.Log("restarting clickhouse to discard its insert-deduplication log")
+	t.Log("restarting clickhouse (which does NOT discard its deduplication log — measured, ADR 0075; the rewind below is what removes that protection)")
 	compose(t, "restart", "clickhouse")
 	waitForStore(t)
 

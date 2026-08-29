@@ -56,9 +56,12 @@ const (
 // apps/workers/internal/config. Metrics have a group of their own; logs share
 // the span group, so the log topic has to be named to read its lag alone.
 const (
-	logsTopic       = "logs-raw"
-	logsDLQTopic    = "logs-dlq"
-	logsGroup       = "nexovue-workers"
+	logsTopic    = "logs-raw"
+	logsDLQTopic = "logs-dlq"
+	// Its own group since ADR 0075's sibling change: logs used to share the span
+	// group, and a lag read against that one now never drains, because those
+	// offsets are frozen where the pipeline left them.
+	logsGroup       = "nexovue-workers-logs"
 	metricsTopic    = "metrics-raw"
 	metricsDLQTopic = "metrics-dlq"
 	metricsGroup    = "nexovue-workers-metrics"

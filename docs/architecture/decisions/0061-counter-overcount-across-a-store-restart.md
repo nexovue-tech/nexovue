@@ -1,8 +1,14 @@
 # 0061 — Insert deduplication does not survive a ClickHouse restart
 
-- **Status:** Accepted 2026-08-27 — remedy implemented and proven
+- **Status:** Accepted 2026-08-27 — remedy implemented and proven. **Title claim withdrawn 2026-08-29**, see below; the decision and its remedy stand.
 - **Supersedes in part:** [0060](0060-counter-idempotency-via-clickhouse-dedup.md) — its stated limit, now measured
 - **Date:** 2026-08-27
+
+> **Correction, 2026-08-29 ([0075](0075-block-deduplication-replaces-the-read-before-retry.md)).** The claim in this record's title — and in the sentence below beginning *"the deduplication log that would have recognised it did not survive the restart"* — is **withdrawn**. It was inferred from the chaos observation, not measured. Measured since, on the pinned `clickhouse:26.3.20.7`: an identical block re-inserted after a graceful restart, and again after a `SIGKILL`, was dropped both times — the sum stayed at 100 rather than doubling to 200, with `uptime()` confirming 13s and 2s respectively. The deduplication log survives both.
+>
+> The 512 double-counted spans below were real. Their cause is unexplained by this record and is most likely that the re-derived block was not byte-identical — a rebuilt minute can legitimately contain late spans the first did not, which changes the checksum. That was not tested.
+>
+> **The decision is unaffected.** `KeeperMap` remains the remedy and is what `TestReplayedOffsetsAreNotCountedTwice` proves. Only the stated reason deduplication could not be relied on is wrong.
 
 ## Context
 

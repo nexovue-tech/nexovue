@@ -88,37 +88,3 @@ func (l *Loop[S]) Retry(ctx context.Context, what string, op func(context.Contex
 		}
 	}
 }
-
-// WriteOnce runs a write that must not be applied twice, retrying it without
-// ever sending it twice.
-//
-// The retry is what makes a brief store outage survivable, and it is also the
-// only way left to write something twice: if a write lands and only its
-// acknowledgement is lost, sending it again duplicates it. ClickHouse normally
-// catches that, but not across the restart that tends to cause it (ADR 0061).
-//
-// So every attempt after the first asks `landed` whether the write already
-// happened. A block is atomic, so one representative row answers for the batch.
-func (l *Loop[S]) WriteOnce(
-	ctx context.Context,
-	what string,
-	landed func(context.Context) (bool, error),
-	write func(context.Context) error,
-) error {
-	attempted := false
-	return l.Retry(ctx, what, func(callCtx context.Context) error {
-		if attempted {
-			applied, err := landed(callCtx)
-			if err != nil {
-				return err // The store is still unreachable; retry the check.
-			}
-			if applied {
-				l.log.InfoContext(callCtx, "the write had already landed; not sending it again",
-					slog.String("operation", what))
-				return nil
-			}
-		}
-		attempted = true
-		return write(callCtx)
-	})
-}

@@ -115,34 +115,3 @@ func (w *Writer) Insert(ctx context.Context, edges []Edge) error {
 	}
 	return nil
 }
-
-// Applied reports whether a batch that may already have been written is present.
-//
-// It exists for the case ADR 0061 left open: if an insert lands and only its
-// acknowledgement is lost, the retry writes the identical block again, and the
-// store's deduplication log does not survive a restart of ClickHouse — which is
-// exactly what tends to break the acknowledgement in the first place.
-//
-// A block is written atomically, so one edge answers for the whole batch.
-func (w *Writer) Applied(ctx context.Context, edge Edge) (bool, error) {
-	var found proto.ColUInt64
-	query := ch.Query{
-		Body: "SELECT count() FROM " + edgesTable + " WHERE minute = toDateTime({minute:String}) " +
-			"AND tenant_id = {tenant:String} AND project_id = {project:String} " +
-			"AND client_service = {client:String} AND server_service = {server:String} " +
-			"AND edge_kind = {kind:String}",
-		Parameters: ch.Parameters(map[string]any{
-			"minute":  edge.Minute.UTC().Format("2006-01-02 15:04:05"),
-			"tenant":  edge.TenantID,
-			"project": edge.ProjectID,
-			"client":  edge.ClientService,
-			"server":  edge.ServerService,
-			"kind":    edge.Kind,
-		}),
-		Result: proto.Results{{Name: "count()", Data: &found}},
-	}
-	if err := w.pool.Do(ctx, query); err != nil {
-		return false, fmt.Errorf("checking whether service edges landed: %w", err)
-	}
-	return found.Row(0) > 0, nil
-}
