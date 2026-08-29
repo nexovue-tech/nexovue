@@ -26,7 +26,9 @@ The risk is never the library — it is the default look, which is the recogniza
 
 1. Initialize with Base UI, then delete the default theme before the first screen is written.
 2. `shadcn add` output is a **first draft**. It is re-tokened before landing in `packages/ui`, never committed as generated.
-3. **Lint gate:** default Tailwind palette names (`slate-*`, `zinc-*`, `gray-*`, `blue-500`, …) fail CI anywhere in the repo. Only our token classes exist. This is what stops defaults creeping back over months of adding components.
+3. **Lint gate:** default Tailwind palette names (`slate-*`, `zinc-*`, `gray-*`, `blue-500`, …) fail CI anywhere in the repo, as does a raw hex or `rgb()` written into a component. Only our token classes exist. This is what stops defaults creeping back over months of adding components.
+
+   `packages/ui/scripts/verify-tokens.js`, run by `just test-web`. It was documented here for months before it existed — a probe of `bg-slate-500 text-gray-300` passed every gate, with the only complaint being about formatting. Written 2026-08-29 and negative-controlled against both a default class and a raw hex.
 4. Waterfall, log viewer, service map, and sparkline are ours from scratch — no registry provides them.
 
 ---

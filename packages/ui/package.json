@@ -14,7 +14,7 @@
   "scripts": {
     "fonts:sync": "node scripts/sync-fonts.js",
     "verify:contrast": "node scripts/verify-contrast.js",
-    "test": "node scripts/verify-contrast.js"
+    "test": "node scripts/verify-contrast.js && node scripts/verify-tokens.js"
   },
   "devDependencies": {
     "@fontsource/ibm-plex-mono": "5.3.0",
