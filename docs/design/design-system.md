@@ -1,6 +1,8 @@
 # Design System
 
-> **Type:** Design reference · **Status:** Decided, not yet implemented (P1-08 builds the token layer)
+> **Type:** Design reference · **Status:** Implemented and enforced. `packages/ui/tokens.css` is the token layer;
+> `verify-contrast.js` holds it to the APCA targets below and `verify-tokens.js` refuses any colour outside it.
+> Both run in `just check`. Updated 2026-08-29, when the component-library section was withdrawn as never-built.
 > **Companion docs:** `../architecture/repository-structure.md` (where it lives) · `../architecture/technology-choices.md` (licences and sources)
 
 ## Thesis
@@ -14,22 +16,76 @@ Consequences that follow from that, not from taste: typography-led rather than c
 | Layer | Choice | Note |
 |---|---|---|
 | Styling | **Tailwind v4** | CSS-first config on custom properties, OKLCH native. Our tokens *are* the framework's tokens |
-| Primitives | **Base UI** | Built by the original Radix engineers, now at MUI. npm latest is `1.0.0-rc.0` as of 2026-08-26 — still a release candidate, so **no primitives are adopted yet**; revisit when it ships stable |
-| Scaffolding | **shadcn/ui** | A code distribution registry built on Base UI, not a dependency — the CLI copies source we then own and restyle |
-| Charts | **uPlot** | Time series |
+| Primitives | **None — the platform** | See below. No component library is installed and none is planned |
+| Charts | **uPlot** | Time series. In a 2026 benchmark of nine libraries it drew 100k points in 9ms at ~50KB, faster than every alternative; the cost is sparse documentation |
 | Graphs | **React Flow** | Service map |
 | Virtualization | **TanStack Virtual** | Log viewer and trace waterfall render 100k rows with ~60 in the DOM |
 
-### Rules for using shadcn
+These last three are specialised engines, not component libraries. Nothing native
+replaces a force-directed graph or a 100k-point time series, which is why they are
+the only UI dependencies.
 
-The risk is never the library — it is the default look, which is the recognizable AI-generated signature. Because the code is copied into our repo, we control both:
+## No component library
 
-1. Initialize with Base UI, then delete the default theme before the first screen is written.
-2. `shadcn add` output is a **first draft**. It is re-tokened before landing in `packages/ui`, never committed as generated.
-3. **Lint gate:** default Tailwind palette names (`slate-*`, `zinc-*`, `gray-*`, `blue-500`, …) fail CI anywhere in the repo, as does a raw hex or `rgb()` written into a component. Only our token classes exist. This is what stops defaults creeping back over months of adding components.
+> **Withdrawn 2026-08-29.** This section previously named **Base UI** as the
+> primitive layer and **shadcn/ui** as the scaffolding that generated first drafts
+> from it, with four rules for using the latter. Neither was ever installed —
+> `pnpm-lock.yaml` mentions Base UI zero times and shadcn's `components.json` does
+> not exist anywhere — so the section described an intention rather than the code.
+> Withdrawn rather than deleted, so a future reader knows the decision was made and
+> not merely forgotten.
 
-   `packages/ui/scripts/verify-tokens.js`, run by `just test-web`. It was documented here for months before it existed — a probe of `bg-slate-500 text-gray-300` passed every gate, with the only complaint being about formatting. Written 2026-08-29 and negative-controlled against both a default class and a raw hex.
-4. Waterfall, log viewer, service map, and sparkline are ours from scratch — no registry provides them.
+**Every component is hand-written: 599 lines for the entire shared set.** That is
+not an omission to be corrected later. It is a large part of why this product does
+not look generated, and two things make it sustainable.
+
+**Native elements first.** `SelectField` stays a native `<select>`, with the reason
+in the file: a custom listbox means rebuilding keyboard navigation, focus handling
+and typeahead, for nothing a user can see. A hand-styled native element beats a
+hand-built imitation of one.
+
+**The platform now supplies what headless libraries were for.** They existed
+because HTML had no positioned overlay, no modal focus handling and no dismissal.
+It does now — confirmed by running feature detection in Chrome 148 rather than
+reading a support table:
+
+| | |
+|---|---|
+| Popover API | ✅ |
+| CSS anchor positioning | ✅ |
+| `position-area` | ✅ |
+| `<dialog>` / `showModal` | ✅ |
+| `@starting-style` transitions | ✅ |
+| Invoker commands (`commandfor`) | ✅ |
+
+Tooltips, menus and dialogs are therefore HTML and CSS, with no dependency and no
+positioning library.
+
+**Where a library would still earn its place**, stated so the decision can be
+revisited honestly: deeply nested modal flows, and a combobox with typeahead, which
+no native element provides. This product has exactly one — the command palette —
+and it already exists in 64 lines. Revisit when a specific control proves genuinely
+hard, never on principle.
+
+## What stops the generated look
+
+The risk was never a library. It is the default palette, which arrives one
+defensible component at a time over months.
+
+**Lint gate:** default Tailwind palette names (`slate-*`, `zinc-*`, `gray-*`,
+`blue-500`, …) fail CI anywhere in the repo, as does a raw hex, `rgb()` or `hsl()`
+written into a component. Only our token classes exist.
+
+`packages/ui/scripts/verify-tokens.js`, run by `just test-web`. It was documented
+here for months before it existed — a probe of `bg-slate-500 text-gray-300` passed
+every gate, with the only complaint being about formatting. Written 2026-08-29 and
+negative-controlled against both a default class and a raw hex. The existing code
+passed it on the first run, which is worth recording: the palette had been followed
+by hand across every screen built so far.
+
+**Waterfall, log viewer, service map and sparkline are ours from scratch.** No
+registry provides them, which was true when a registry was planned and is trivially
+true now.
 
 ---
 
