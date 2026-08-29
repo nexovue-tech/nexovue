@@ -43,6 +43,10 @@ app.conf.update(
     broker_transport_options={"visibility_timeout": _settings.task_hard_time_limit_seconds * 2},
     timezone="UTC",
     enable_utc=True,
+    # Workers must import the task modules to register them. Beat imports this
+    # app too and so imports them as well, which is harmless: it dispatches by
+    # name and never calls them.
+    imports=("nexovue_scheduler.probes.tasks",),
 )
 
 # Routing lives here rather than on each task, so the queue a task lands on is

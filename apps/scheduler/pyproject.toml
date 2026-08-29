@@ -10,7 +10,18 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.30",
     "structlog>=24.4",
-    "httpx>=0.28",
+    # libcurl reports each phase of a request separately — DNS, connect, TLS
+    # handshake, first byte. That breakdown is the deliverable for P1-34, and
+    # httpx (which this replaces) exposes only a total.
+    "pycurl>=7.45",
+    # The librdkafka wrapper, which is what Confluent and the wider ecosystem
+    # recommend for production over the pure-Python clients. A probe publishes
+    # its own result, so the producer lives here rather than behind an API.
+    "confluent-kafka>=2.6",
+    # The envelope and OTLP messages. The generated nexovue bindings are not a
+    # distributable package and are imported from the tree; see settings.
+    "protobuf>=5.28",
+    "opentelemetry-proto>=1.28",
 ]
 
 [build-system]

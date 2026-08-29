@@ -19,6 +19,10 @@ dev = [
     "mypy>=1.13",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    # The API's tests and FastAPI's TestClient both drive httpx directly. It was
+    # undeclared until now and arrived only as a transitive dependency of the
+    # scheduler, so removing it there broke a suite that never named it.
+    "httpx>=0.28",
 ]
 
 [tool.ruff]
@@ -57,7 +61,7 @@ exclude = ["packages/contracts/gen/"]  # generated code is not ours to type
 mypy_path = ["packages/contracts/gen/python", "tests/helpers"]  # ...but it must still resolve
 
 [[tool.mypy.overrides]]
-module = ["clickhouse_connect.*", "celery.*"]
+module = ["clickhouse_connect.*", "celery.*", "pycurl.*", "confluent_kafka.*"]
 ignore_missing_imports = true
 
 # Celery ships no type information, so `celery.beat.Scheduler` is Any and strict
@@ -68,9 +72,16 @@ ignore_missing_imports = true
 module = ["nexovue_scheduler.beat"]
 disallow_subclassing_any = false
 
+# Celery's @app.task is untyped for the same reason, and decorating with it
+# would otherwise make every task untyped. Scoped to the task module so the rule
+# still applies everywhere else.
+[[tool.mypy.overrides]]
+module = ["nexovue_scheduler.probes.tasks"]
+disallow_untyped_decorators = false
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 # tests/helpers holds `live`, the shared "a live suite fails rather than skips"
 # guard. It sits above the apps because the API and the scheduler both need it.
-pythonpath = ["tests/helpers"]
+pythonpath = ["tests/helpers", "packages/contracts/gen/python"]
 testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests"]

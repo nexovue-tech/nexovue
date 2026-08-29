@@ -56,6 +56,18 @@ class Settings(BaseSettings):
     task_soft_time_limit_seconds: Annotated[int, Field(gt=0)] = 30
     task_hard_time_limit_seconds: Annotated[int, Field(gt=0)] = 60
 
+    # --- publishing ---------------------------------------------------------
+    # Named here rather than shared, the same way the receiver and the worker
+    # each name their own: one service's topic configuration should not be able
+    # to move another's.
+    kafka_metrics_topic: str = "metrics-raw"
+
+    # Stamped on every probe result as `cloud.region`. A check answers
+    # differently from different places, and a reading with no location cannot
+    # be compared with one taken elsewhere — so this is part of the measurement,
+    # not deployment trivia.
+    prober_region: str = "local"
+
     # --- beat leadership ----------------------------------------------------
     # More than one beat process runs, so that a dead one does not stop every
     # customer's checks. Only the holder of this lock schedules; the others wait

@@ -155,7 +155,18 @@ class PostgresScheduler(Scheduler):
                 name=name,
                 task=PROBE_TASK,
                 schedule=interval,
-                kwargs={"check_id": str(check.id)},
+                # The whole definition travels with the task, so the probe
+                # worker needs no database. A check edited in the UI therefore
+                # runs with its previous settings until the next refresh, which
+                # is the trade `probes/__init__.py` documents.
+                kwargs={
+                    "check_id": str(check.id),
+                    "org_id": str(check.org_id),
+                    "project_id": str(check.project_id),
+                    "check_type": check.type,
+                    "target": check.target,
+                    "config": check.config,
+                },
                 app=self.app,
             )
         return entries

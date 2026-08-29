@@ -244,6 +244,9 @@ services:
       # Database 1 keeps probe queues out of the rate-limit counters on 0.
       REDIS_URL: redis://redis:6379/1
       KAFKA_BROKERS: kafka:9092
+      # The envelope bindings are generated output, not an installed package,
+      # so every Python service that speaks the envelope adds them itself.
+      PYTHONPATH: /workspace/packages/contracts/gen/python
     depends_on:
       postgres:
         condition: service_healthy
@@ -282,7 +285,12 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          # Eight prefork children, each a full interpreter now holding
+          # librdkafka, libcurl and protobuf. At 256M -- the figure from before
+          # this service had any C extensions -- the children were OOM-killed
+          # during pool startup and the queue never drained, with the only
+          # symptom a BrokenPipeError from Celery's own bootstrap.
+          memory: 768M
 
   scheduler-browser:
     profiles: ["doors"]
