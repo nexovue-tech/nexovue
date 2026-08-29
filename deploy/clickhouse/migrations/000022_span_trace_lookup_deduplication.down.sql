@@ -1,0 +1,1 @@
+ALTER TABLE span_trace_lookup RESET SETTING non_replicated_deduplication_window

@@ -26,7 +26,9 @@ Raised by Raj asking why the system needs twelve containers when the design read
 
 **One `worker` binary running every pipeline, with `WORKER_PIPELINES` selecting a subset.**
 
-Pipelines keep their names — `trace-assembly`, `log-writing`, `metric-derivation`, `service-edges` — because the names are what make splitting a deployment change rather than a rewrite. An unknown name fails at boot rather than silently not running.
+Pipelines keep their names — `trace-assembly`, `log-writing`, `metric-ingest` — because the names are what make splitting a deployment change rather than a rewrite. An unknown name fails at boot rather than silently not running.
+
+**Amended 2026-08-29.** This record originally listed `metric-derivation` and `service-edges` as names too. Nothing ever started them: they were accepted by `WORKER_PIPELINES`, reported at boot as running, and referenced by no code outside their own constant block. A process asked for `metric-derivation` alone ran nothing and said it had. Both are stages inside `trace-assembly` and cannot be deployed apart from it today, so the names were removed rather than left claiming an affordance that did not exist. `metric-ingest`, added later for customer-sent OTLP metrics, does start a pipeline and is listed above.
 
 One container in development. In production the same image runs as many times as needed with different selections, **when measurement justifies it**.
 

@@ -10,19 +10,25 @@ import (
 //
 // They are separate names rather than one loop because they scale on different
 // axes: trace assembly is memory-bound and grows with concurrent traces, log
-// writing is I/O-bound, and metric derivation must see every trace even when
-// sampling discards most of them. Running them in one process is right until
-// measurement says otherwise; the names are what make splitting later a
-// deployment change rather than a rewrite.
+// writing is I/O-bound, and metric ingest is a straight decode-and-write.
+// Running them in one process is right until measurement says otherwise; the
+// names are what make splitting later a deployment change rather than a
+// rewrite.
+//
+// A name earns its place here only by starting something. Two did not and were
+// removed.
 type Pipeline string
 
 // The pipelines a worker can run. The names are the values of
 // WORKER_PIPELINES, so changing one is a deployment-visible change.
 const (
-	PipelineTraceAssembly    Pipeline = "trace-assembly"
-	PipelineLogWriting       Pipeline = "log-writing"
-	PipelineMetricDerivation Pipeline = "metric-derivation"
-	PipelineServiceEdges     Pipeline = "service-edges"
+	// PipelineTraceAssembly also derives the pre-sampling counters and the
+	// service-edge rollup. Those were once separate names here, but nothing
+	// started them: a process asked for `metric-derivation` alone ran no
+	// pipeline at all and said at boot that it had. A name that cannot be
+	// deployed on its own is not an affordance, it is a lie about one.
+	PipelineTraceAssembly Pipeline = "trace-assembly"
+	PipelineLogWriting    Pipeline = "log-writing"
 
 	// PipelineMetricIngest writes customer-sent OTLP metrics. Distinct from
 	// metric-derivation, which computes our own counters from traces: one reads
@@ -34,8 +40,6 @@ const (
 var AllPipelines = []Pipeline{
 	PipelineTraceAssembly,
 	PipelineLogWriting,
-	PipelineMetricDerivation,
-	PipelineServiceEdges,
 	PipelineMetricIngest,
 }
 

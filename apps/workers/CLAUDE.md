@@ -1,9 +1,11 @@
 # workers — the processing pipeline (Go)
 
 **One binary.** `WORKER_PIPELINES` selects which pipelines a process runs — `trace-assembly`,
-`log-writing`, `metric-derivation`, `service-edges` (ADR 0050). An unknown name fails at boot rather
-than silently not running. The names are load-bearing: splitting a deployment is a config change,
-not a rewrite.
+`log-writing`, `metric-ingest` (ADR 0050). An unknown name fails at boot rather than silently not
+running. The names are load-bearing: splitting a deployment is a config change, not a rewrite.
+
+Counter derivation and the service-edge rollup are stages **inside** `trace-assembly`, not names of
+their own. They had names once and started nothing.
 
 Pipeline order is **decode → mask → derive → sample → sink**, and it carries two invariants:
 - **`derive` runs before `sample`** — metrics are computed from all traces, so counts stay exact

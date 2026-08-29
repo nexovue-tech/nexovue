@@ -12,6 +12,17 @@ import (
 // JSON document per row, which is the shape ch-go's ColJSONStr encodes.
 const jsonAsStringSetting = "output_format_native_write_json_as_string"
 
+// dependentViewDeduplicationSetting pins the server default that lets a
+// retried insert be deduplicated in the materialized views reading this table,
+// rather than only in the table itself.
+//
+// It is set explicitly because we depend on it and a profile could turn it off
+// without anything failing: the insert would still succeed and
+// `endpoint_stats_1m` would quietly start double-counting retries. What
+// actually does the deduplicating is the window on each view's target table
+// (000021, 000022) — measured, and the reason those migrations exist.
+const dependentViewDeduplicationSetting = "deduplicate_blocks_in_dependent_materialized_views"
+
 // spanWriter inserts blocks of spans into ClickHouse.
 type spanWriter struct {
 	pool *chpool.Pool
@@ -33,6 +44,7 @@ func (w *spanWriter) insert(ctx context.Context, block *spanBlock) error {
 		Input: block.columns,
 		Settings: []ch.Setting{
 			{Key: jsonAsStringSetting, Value: "1"},
+			{Key: dependentViewDeduplicationSetting, Value: "1"},
 		},
 	}
 	if err := w.pool.Do(ctx, query); err != nil {

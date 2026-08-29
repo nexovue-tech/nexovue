@@ -1,0 +1,1 @@
+ALTER TABLE endpoint_stats_1m RESET SETTING non_replicated_deduplication_window

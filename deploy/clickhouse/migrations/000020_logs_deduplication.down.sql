@@ -1,0 +1,1 @@
+ALTER TABLE logs RESET SETTING non_replicated_deduplication_window

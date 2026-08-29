@@ -1,0 +1,18 @@
+-- A retried insert re-fires every materialized view on this table.
+--
+-- `insert spans` retries through consume.Retry, which has no landed-check: a
+-- lost acknowledgement sends the same block again. Without a window the block
+-- is accepted twice, and `endpoint_stats_1m` — an AggregatingMergeTree fed from
+-- here — counts it twice. Measured on this schema before the change: the same
+-- block inserted twice produced 8 requests where 4 was correct.
+--
+-- This is the guard ADR 0060 gave the metric tables and 000016 gave
+-- `service_edges_1m`. Spans were missed. The checksum is taken from the formed
+-- part with defaults expanded, and every default on this table is a constant or
+-- a copy of another column, so it is deterministic.
+--
+-- This alone does NOT stop the views double-counting: deduplication here drops
+-- the duplicate part on this table, but a view has already processed the block.
+-- 000021 and 000022 give the view targets their own windows, which is what
+-- actually stops it. See ADR 0074.
+ALTER TABLE spans MODIFY SETTING non_replicated_deduplication_window = 1000

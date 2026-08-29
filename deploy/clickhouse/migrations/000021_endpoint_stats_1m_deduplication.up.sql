@@ -1,0 +1,17 @@
+-- 000016 said this table was "deliberately left without it" because a
+-- materialized view fills it from `spans`, so it "can only double-count if
+-- `spans` does". Both halves were wrong, and the code is the authority
+-- (CLAUDE.md rule 4).
+--
+-- `spans` had no guard at all until 000019. And a window on the source does not
+-- reach the view: deduplication drops the duplicate part on `spans`, but the
+-- view has already processed the block. Measured — source deduplicated to one
+-- row while this rollup still read double.
+--
+-- A dependent view is deduplicated only when its own target carries a window.
+-- Measured on this server, holding everything else equal: target window 0 gave
+-- a doubled rollup, target window 1000 gave the correct one. That is what this
+-- file is. deduplicate_blocks_in_dependent_materialized_views already defaults
+-- to 1 here; the worker sets it explicitly so a profile cannot turn it off
+-- without the insert failing loudly rather than quietly double-counting.
+ALTER TABLE endpoint_stats_1m MODIFY SETTING non_replicated_deduplication_window = 1000
