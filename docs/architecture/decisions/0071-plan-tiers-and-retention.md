@@ -102,6 +102,27 @@ traces.
 So this decision's cost model rests on an estimate for its largest term. **It must be re-checked
 against real numbers once P1-28 ships**, and that is a task, not a note.
 
+> **Re-checked 2026-08-29, P1-28 having shipped.** Measured from `system.parts` on the dev
+> database — 297,455 log rows and 12,370,041 span rows:
+>
+> | | assumed above | measured on disk |
+> |---|---|---|
+> | bytes per log row | ~35 | **10.1** |
+> | bytes per span row | — | **18.1** |
+>
+> **The per-line estimate is 3.5× too high, so absolute storage cost here is overstated by
+> roughly that factor.** The 87% conclusion nevertheless holds: substituting the measured
+> numbers into this record's own volume assumptions — four log lines per request, five spans
+> per trace, tail sampling keeping about one in ten — gives 40.4 bytes of logs against 9.1 of
+> spans, or **82% logs**. The share is driven by sampling discarding traces while nothing
+> discards logs, exactly as argued; row size barely moves it.
+>
+> **What is still unmeasured is the volume mix**, and dev traffic cannot settle it. Our load
+> generator is synthetic and almost entirely spans, which put logs at 0.9% of stored bytes
+> here — a fact about the generator, not about customers. Four log lines per request remains
+> an assumption, and it is the term the price depends on. Real usage is the only thing that
+> will settle it, so this stays open into Phase 2 rather than being closed by this note.
+
 ### First measurement, 2026-08-28
 
 The log pipeline shipped and the demo app now emits logs, so the estimate has a
