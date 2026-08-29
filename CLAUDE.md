@@ -39,6 +39,13 @@ from a suite that skipped itself. Read the output and check the count. Never rec
 — in an ADR, a report or a commit message — without having run the thing that proves it. If it was
 not run, say so.
 
+**13. Explain at Raj's level.** Lead with what a change means and what breaks without it, then
+the detail. Define production vocabulary the first time it appears in a reply — partition, consumer
+group, p95, rollup, DNS rebinding, e2e — in one clause, then use it normally. This is not
+simplification of the engineering: keep every measurement, and never soften a real problem to make
+it easier to say. It lapses specifically in status reports, findings lists and "what's next", which
+is where it has had to be corrected twice — so check those before sending.
+
 ## Invariants (Phase 1)
 
 Tenant isolation enforced at the repository layer · no data loss between receiver and storage · metrics derived from all traces **before** sampling · every door normalizes to one internal envelope before the broker · performance budgets in `docs/delivery/phase-1-plan.md` §4 measured, not estimated.
