@@ -98,7 +98,13 @@ def run_check(
     )
 
 
-@app.task(name=BROWSER_TASK, bind=True, max_retries=2)
+@app.task(
+    name=BROWSER_TASK,
+    bind=True,
+    max_retries=2,
+    soft_time_limit=get_settings().browser_task_soft_time_limit_seconds,
+    time_limit=get_settings().browser_task_hard_time_limit_seconds,
+)
 def run_browser_flow(
     self: Any,
     *,
@@ -123,7 +129,10 @@ def run_browser_flow(
     of steps, which is what the frozen contract for this door carries.
     """
     settings = get_settings()
-    timeout = _timeout_for(config or {}, settings.task_soft_time_limit_seconds)
+    # Divided across the steps rather than applied to each, so the whole flow
+    # fits inside the task's own limit. A per-step timeout that ignores how many
+    # steps there are is how a flow gets killed mid-run.
+    timeout = _step_budget(config or {}, settings.browser_task_soft_time_limit_seconds)
     observed_at = time.time_ns()
 
     flow = browser.perform(check_id, target, timeout, config or {})
@@ -176,6 +185,20 @@ def _probe(check_id: str, check_type: str, target: str, timeout: int) -> ProbeRe
     if check_type == http_check.CHECK_TYPE_HTTP:
         return http_check.perform(check_id, target, timeout)
     raise ValueError(f"check {check_id}: no prober for type {check_type!r}")
+
+
+def _step_budget(config: dict[str, Any], flow_budget_seconds: int) -> int:
+    """How long any one step may take, so the whole flow fits its task limit.
+
+    The budget is shared: ten steps get a tenth each. A step still cannot exceed
+    what the customer asked for, and never gets less than a second — a timeout
+    of zero would fail every step instantly and report the site as down.
+    """
+    steps = config.get("steps")
+    count = len(steps) if isinstance(steps, list) and steps else 1
+    # Leave a little of the budget for starting the browser and publishing.
+    share = int(flow_budget_seconds * 0.8) // count
+    return max(1, min(share, _timeout_for(config, flow_budget_seconds)))
 
 
 def _timeout_for(config: dict[str, Any], ceiling: int) -> int:

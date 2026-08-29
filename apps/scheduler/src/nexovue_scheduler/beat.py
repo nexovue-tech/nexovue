@@ -83,6 +83,14 @@ class PostgresScheduler(Scheduler):
         self._entries: dict[str, ScheduleEntry] = {}
         self._refresh_due_at = 0.0
 
+        # What the heartbeat reports. Counters rather than gauges, because the
+        # question that matters is "is it still moving", and a number that has
+        # not changed since the last line answers it.
+        self._heartbeat_due_at = 0.0
+        self._refreshes = 0
+        self._refresh_failures = 0
+        self._ticks = 0
+
         super().__init__(*args, **kwargs)
         # Never sleep past the point where leadership needs renewing, or a
         # leader would let its own lock expire while idling between checks.
@@ -120,6 +128,8 @@ class PostgresScheduler(Scheduler):
             self._refresh_due_at = 0.0  # force an immediate load
 
         self._refresh_if_due()
+        self._ticks += 1
+        self._heartbeat_if_due()
         # Celery ships no type information, so the base class is untyped here.
         return float(super().tick(*args, **kwargs))
 
@@ -152,6 +162,31 @@ class PostgresScheduler(Scheduler):
             self._engine = None
         self._loop.close()
 
+    def _heartbeat_if_due(self) -> None:
+        """Say what the scheduler is holding, on a timer.
+
+        Emitted only by the leader — a follower holds nothing and would report
+        zeros that read as a fault. The counters are what show movement: ticks
+        that stop rising mean beat is wedged even though the process is up,
+        which is exactly the state that went unnoticed for six minutes once.
+        """
+        now = self._monotonic()
+        if now < self._heartbeat_due_at:
+            return
+        self._heartbeat_due_at = now + self._settings.beat_heartbeat_seconds
+
+        checks = sum(1 for name in self._entries if name.startswith("check:"))
+        polls = sum(1 for name in self._entries if name.startswith("integration:"))
+        logger.info(
+            "beat heartbeat",
+            leader=True,
+            ticks=self._ticks,
+            scheduled_checks=checks,
+            scheduled_polls=polls,
+            schedule_refreshes=self._refreshes,
+            refresh_failures=self._refresh_failures,
+        )
+
     # --- schedule maintenance ----------------------------------------------
 
     def _refresh_if_due(self) -> None:
@@ -169,8 +204,11 @@ class PostgresScheduler(Scheduler):
             # Postgres being briefly unreachable must not empty the schedule:
             # the entries we already hold are still correct, and dropping them
             # would stop every check until it came back.
+            self._refresh_failures += 1
             logger.exception("beat could not read the schedule; keeping the current one")
             return
+
+        self._refreshes += 1
 
         self._entries = self._entries_for(checks) | self._poll_entries_for(integrations)
 

@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     task_soft_time_limit_seconds: Annotated[int, Field(gt=0)] = 30
     task_hard_time_limit_seconds: Annotated[int, Field(gt=0)] = 60
 
+    # A browser flow is many steps, each of which may wait on a page. Sharing
+    # the limits above meant a multi-step flow was killed part way through and
+    # reported as the customer's site failing when it was our clock that ran
+    # out. Per-step timeouts are divided out of this budget, so a flow always
+    # finishes inside it.
+    browser_task_soft_time_limit_seconds: Annotated[int, Field(gt=0)] = 180
+    browser_task_hard_time_limit_seconds: Annotated[int, Field(gt=0)] = 240
+
     # --- publishing ---------------------------------------------------------
     # Named here rather than shared, the same way the receiver and the worker
     # each name their own: one service's topic configuration should not be able
@@ -105,6 +113,12 @@ class Settings(BaseSettings):
     # a customer saving a check in the UI and it running, which is the whole
     # reason the schedule lives in a table rather than in code.
     beat_refresh_seconds: Annotated[int, Field(gt=0)] = 30
+
+    # How often beat says what it is doing. The Go workers have had an ingest
+    # heartbeat since M1; the scheduler had nothing, so a beat that had stopped
+    # scheduling looked exactly like one with nothing due. For an uptime product
+    # that is the worst blind spot there is — the checker failing silently.
+    beat_heartbeat_seconds: Annotated[int, Field(gt=0)] = 60
 
     @field_validator("kafka_brokers", mode="before")
     @classmethod

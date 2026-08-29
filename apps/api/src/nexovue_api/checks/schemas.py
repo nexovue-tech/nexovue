@@ -15,6 +15,15 @@ CheckType = Literal["http", "browser"]
 
 # One a minute is the floor. Below that the cost to us and to the customer's
 # server stops being proportionate to what a slower interval would miss.
+# One browser worker serves every tenant at concurrency 1, so an unbounded flow
+# is an unbounded share of a queue everybody else is waiting in.
+MAX_STEPS_PER_FLOW: Final = 20
+
+# Bounded per project because each check is a request we make on a timer,
+# forever, at our own cost. Not yet tied to the plan tier — that belongs with
+# billing, and a constant that is too generous is safer than no ceiling at all.
+MAX_CHECKS_PER_PROJECT: Final = 100
+
 MIN_INTERVAL_SECONDS: Final = 60
 MAX_INTERVAL_SECONDS: Final = 86_400
 

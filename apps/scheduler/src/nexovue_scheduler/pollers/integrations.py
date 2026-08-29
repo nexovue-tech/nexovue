@@ -28,6 +28,26 @@ KIND_CLOUDWATCH: Final = "cloudwatch"
 KIND_POSTGRES: Final = "postgres"
 
 STATUS_ACTIVE: Final = "active"
+# Set when a poll fails. The row stays scheduled — a trust policy is fixed in
+# the customer's account, and we cannot know when — but the status is what lets
+# them see it is broken instead of wondering why a graph is empty.
+STATUS_FAILING: Final = "failing"
+
+_RECORD_SUCCESS: Final = text(
+    """
+    UPDATE integrations
+    SET last_sync_at = now(), status = :status, last_error = NULL
+    WHERE id = :id
+    """
+)
+
+_RECORD_FAILURE: Final = text(
+    """
+    UPDATE integrations
+    SET status = :status, last_error = :reason
+    WHERE id = :id
+    """
+)
 
 _ACTIVE_INTEGRATIONS: Final = text(
     """
@@ -37,6 +57,11 @@ _ACTIVE_INTEGRATIONS: Final = text(
     ORDER BY id
     """
 )
+
+
+# Long enough for AWS's own message, short enough that a hostile one cannot fill
+# the column.
+MAX_ERROR_LENGTH: Final = 500
 
 
 class IntegrationConfigError(ValueError):
@@ -104,6 +129,31 @@ async def load_active_integrations(engine: AsyncEngine) -> list[IntegrationDefin
             )
         )
     return definitions
+
+
+async def record_poll_succeeded(engine: AsyncEngine, integration_id: uuid.UUID) -> None:
+    """Say when this connector last worked.
+
+    Without this the column is always NULL and a customer cannot tell a healthy
+    integration from one that has never once succeeded.
+    """
+    async with engine.begin() as connection:
+        await connection.execute(_RECORD_SUCCESS, {"id": integration_id, "status": STATUS_ACTIVE})
+
+
+async def record_poll_failed(engine: AsyncEngine, integration_id: uuid.UUID, reason: str) -> None:
+    """Say that this connector is broken, and why.
+
+    The reason is the exception's text, truncated. It comes from AWS and names
+    what went wrong — a trust policy that does not allow us, an ExternalId that
+    does not match — which is exactly what the customer needs to fix it. It
+    carries no credential: the whole point of ADR 0076 is that we hold none.
+    """
+    async with engine.begin() as connection:
+        await connection.execute(
+            _RECORD_FAILURE,
+            {"id": integration_id, "status": STATUS_FAILING, "reason": reason[:MAX_ERROR_LENGTH]},
+        )
 
 
 def role_grant_from(config: dict[str, Any], external_id: str | None) -> RoleGrant:

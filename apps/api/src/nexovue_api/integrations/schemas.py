@@ -30,6 +30,10 @@ class IntegrationSummary(BaseModel):
     external_id: uuid.UUID | None
     interval_seconds: int
     status: str
+    # Empty while healthy. This is what turns "no data" into "your trust policy
+    # does not name our account", which is the difference between a customer
+    # who can fix it and one who files a ticket.
+    last_error: str | None
     last_sync_at: datetime | None
     created_at: datetime
 

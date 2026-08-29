@@ -147,30 +147,29 @@ nexovue/
 | P1-36 | Deploy webhooks | GitHub/CI → `deploy_events` in Postgres (Phase 2 correlation hook) | **done** — `POST /deploys/webhook/{project_id}`, HMAC-SHA256 over the raw body, `hmac.compare_digest`, raw stream read so a forgery cannot be answered 422 before its signature is checked. Verified live: signed 201, forged 401, unsigned 401. **Deferred, needs a migration:** independent rotation of the deploy secret (today it rides on the ingest key) and replay rejection (needs a delivery-id column) |
 | P1-37 | Cloud + DB pollers | CloudWatch metrics; `pg_stat_statements` read-only; credentials encrypted at rest | **done, untested against real AWS** — ADR 0076: hold no credential we can avoid holding. The customer grants a role and we store its ARN plus an ExternalId we generate; each poll mints 900-second STS credentials. RDS uses IAM auth, so no password either. Self-hosted Postgres is refused rather than given an invented key scheme. Stubbed with `botocore.stub.Stubber` — **no real AWS call has ever been made**, so the end-to-end claim rests on documentation |
 
-#### M4 follow-ups — what "production grade" still needs
+#### M4 follow-ups — reviewed and closed 2026-08-29
 
-Reviewed 2026-08-29 after M4 closed. Each item was found by asking what would
-happen with real customers and an adversary, not by a failing test — the suite
-was green throughout.
+Eight findings from reviewing M4 against real customers and an adversary rather
+than against the suite, which was green throughout. Seven are fixed; the eighth
+cannot be fixed by writing code.
 
-| # | Finding | Why it matters |
+| # | Finding | Outcome |
 |---|---|---|
-| 1 | **A broken connector is silent.** `integrations.last_sync_at` and `status` are never written, and `assume_customer_role` has no error handling. A customer whose trust policy is wrong gets a task that throws every 5 minutes forever and nothing they can see | They cannot tell a working integration from a dead one |
-| 2 | **Nothing monitors the monitor.** The scheduler emits no telemetry about itself — no count of checks that failed to dispatch, polls that errored, or flows killed by the time limit | Silent failure of the checker is the worst failure an uptime product has, and nothing would detect it |
-| 3 | **No tenant fairness or quota.** Checks per project are unbounded, steps per flow are unbounded, and every tenant's browser flows queue behind one worker at concurrency 1 | One customer with fifty browser checks starves every other customer's |
-| 4 | **Browser timeouts exceed the task limit.** A multi-step flow can run past `task_hard_time_limit_seconds` (60s) and be killed mid-flow | The customer is shown a failure that is ours, not theirs. The browser queue needs its own limits |
-| 5 | **Postgres tables have no structural tenancy guard.** `test_tenant_chokepoint_structure` derives its table list from the *ClickHouse* migrations only | A future Postgres table added without a tenant filter is caught by nobody |
-| 6 | **The public webhook shares the default rate-limit tier** (300/min) with authenticated control-plane traffic | An unauthenticated endpoint can consume quota legitimate users need |
-| 7 | **Deploy secrets cannot rotate**, and replays are not rejected. The secret is derived from the ingest key because no column exists | Revoking an ingest key silently withdraws the deploy secret; a captured signed request is replayable forever |
-| 8 | **Door 4b has never touched real AWS.** Stubbed only — no trust policy has accepted our AssumeRole, no RDS token has opened a connection ([0076](../architecture/decisions/0076-door-4b-holds-no-customer-credential-it-can-avoid-holding.md)) | The end-to-end claim rests on documentation, not evidence |
+| 1 | A broken connector was silent — `last_sync_at` and `status` never written, no error handling around `assume_customer_role` | **Fixed.** A poll records its outcome, and `last_error` carries AWS's own words. Verified live: a connector with an unusable role now reads `failing / Unable to locate credentials` |
+| 2 | Nothing monitored the monitor | **Fixed.** Beat emits a heartbeat with ticks, scheduled checks and polls, and refresh failures — the counters that show movement. Live: `scheduled_checks=3 scheduled_polls=1 ticks=678` |
+| 3 | No tenant fairness or quota | **Partly fixed.** 100 checks per project, 20 steps per flow. *Still open:* every tenant's browser flows share one worker at concurrency 1, so fairness needs per-tenant queues or more workers |
+| 4 | Browser timeouts exceeded the task limit | **Fixed.** The browser queue has its own limits (180s/240s) and the per-step timeout is divided out of that budget, so a flow always finishes inside it |
+| 5 | Postgres tables had no structural tenancy guard | **Fixed.** `test_postgres_tenancy_structure.py` derives tenant-scoped models from the models module and asserts every select/delete/update against one names `org_id` *inside the statement*. Four exemptions, each with its reason |
+| 6 | The public webhook shared the default rate-limit tier | **Fixed.** Its own tier at 60/min |
+| 7 | Deploy secrets could not rotate; replays were not rejected | **Fixed.** Migration 0007: secrets get their own table, provisioned at signup, many per project so a rotation overlaps. Deliveries carry an id under a partial unique index. Verified live: replay 409, both secrets accepted mid-rotation, revoked secret 401 |
+| 8 | Door 4b has never touched real AWS | **Cannot be fixed here.** It needs an AWS account and a role created with our account in its trust policy. No code makes that evidence exist. Stays open |
 
-Closed during the same review: an SSRF bypass where a browser check's step URLs
-were stored unvalidated, so a check with a public target could still walk the
-prober to the cloud metadata endpoint.
+The SSRF bypass found during the same review — browser step URLs stored
+unvalidated — is closed and tested.
 
-Known and accepted for now: DNS rebinding defeats target validation, because the
-check is validated in the API and fetched minutes later elsewhere. Closing it
-needs the prober to check the address it actually connected to.
+Known and accepted: DNS rebinding defeats target validation, because a check is
+validated in the API and fetched minutes later elsewhere. Closing it needs the
+prober to check the address it actually connected to.
 
 ### M5 — Door 3 (browser / RUM)
 *Exit: real user data from a script tag, correlated to backend traces.*

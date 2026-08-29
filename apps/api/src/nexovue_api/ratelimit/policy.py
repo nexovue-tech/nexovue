@@ -55,6 +55,13 @@ TELEMETRY_TIER: Final = Tier(
 )
 DEFAULT_TIER: Final = Tier(quota=Quota(name="default", limit=300, window_seconds=60))
 
+# The one unauthenticated write in the control plane. It shared the default tier,
+# which meant anything on the internet could consume the quota signed-in users
+# need. Its own, tighter allowance: a deploy is an occasional event, and no CI
+# system pushes sixty a minute.
+WEBHOOK_PREFIX: Final = "/api/v1/deploys/webhook/"
+WEBHOOK_TIER: Final = Tier(quota=Quota(name="deploy-webhook", limit=60, window_seconds=60))
+
 # Ordered longest-prefix-first so a more specific rule cannot be shadowed.
 AUTH_PATHS: Final = (
     f"{API_PREFIX}/auth/login",
@@ -84,6 +91,8 @@ EXEMPT_PATHS: Final = ("/healthz", "/readyz")
 
 def tier_for_path(path: str) -> Tier | None:
     """The tier a request path falls into, or None when it is exempt."""
+    if path.startswith(WEBHOOK_PREFIX):
+        return WEBHOOK_TIER
     if path in EXEMPT_PATHS:
         return None
     if path.startswith(AUTH_PATHS):

@@ -23,6 +23,7 @@ import ipaddress
 from typing import Any, Final
 from urllib.parse import urlsplit
 
+from nexovue_api.checks.schemas import MAX_STEPS_PER_FLOW
 from nexovue_api.errors.exceptions import InvalidRequestError
 
 ALLOWED_SCHEMES: Final = frozenset({"http", "https"})
@@ -75,6 +76,8 @@ def validate_step_urls(config: dict[str, Any]) -> None:
         return
     if not isinstance(steps, list):
         raise InvalidRequestError("A check's steps must be a list.")
+    if len(steps) > MAX_STEPS_PER_FLOW:
+        raise InvalidRequestError(f"A flow may have at most {MAX_STEPS_PER_FLOW} steps.")
 
     for position, step in enumerate(steps, start=1):
         if not isinstance(step, dict):

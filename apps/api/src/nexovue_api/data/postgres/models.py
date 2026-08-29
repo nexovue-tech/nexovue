@@ -290,6 +290,9 @@ class Integration(Base):
         Integer, nullable=False, server_default=text("300")
     )
     status: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    # Why the last poll failed, in AWS's own words. `status` alone cannot tell a
+    # customer that their trust policy is missing our account.
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     last_sync_at: Mapped[OptionalTimestamp]
     created_at: Mapped[CreatedAt]
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import Check
@@ -36,6 +36,16 @@ async def find_check(
     statement = select(Check).where(Check.id == check_id, Check.org_id == org_id)
     check: Check | None = await session.scalar(statement)
     return check
+
+
+async def count_checks(session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID) -> int:
+    """How many checks this project already has, for the per-project ceiling."""
+    statement = (
+        select(func.count())
+        .select_from(Check)
+        .where(Check.org_id == org_id, Check.project_id == project_id)
+    )
+    return int(await session.scalar(statement) or 0)
 
 
 def add_check(session: AsyncSession, check: Check) -> None:

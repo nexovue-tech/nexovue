@@ -107,6 +107,7 @@ def _summary(integration: Integration) -> IntegrationSummary:
         external_id=integration.external_id,
         interval_seconds=integration.interval_seconds,
         status=integration.status,
+        last_error=integration.last_error,
         last_sync_at=integration.last_sync_at,
         created_at=integration.created_at,
     )

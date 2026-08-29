@@ -18,6 +18,7 @@ from nexovue_scheduler.celery_app import app
 from nexovue_scheduler.pollers import cloudwatch, integrations, postgres_connect, postgres_stats
 from nexovue_scheduler.pollers.aws import assume_customer_role, session_name_for
 from nexovue_scheduler.pollers.envelope import build_cloudwatch_envelope, build_postgres_envelope
+from nexovue_scheduler.pollers.health import report_failure, report_success
 from nexovue_scheduler.pollers.window import PollWindow
 from nexovue_scheduler.publish import ResultPublisher
 from nexovue_scheduler.settings import get_settings
@@ -66,6 +67,27 @@ def poll_cloudwatch(
     this function and die with it. Nothing in `config` is a secret.
     """
     settings = get_settings()
+    try:
+        _poll_cloudwatch(settings, integration_id, org_id, project_id, config, external_id, self)
+    except Exception as failure:
+        # Recorded before re-raising, so the customer sees why. Assuming a role
+        # is where this fails in practice, and both causes — a trust policy that
+        # does not name us, an ExternalId that does not match — are theirs to fix.
+        report_failure(settings, integration_id, str(failure))
+        raise
+    report_success(settings, integration_id)
+
+
+def _poll_cloudwatch(
+    settings: Any,
+    integration_id: str,
+    org_id: str,
+    project_id: str,
+    config: dict[str, Any],
+    external_id: str | None,
+    task: Any,
+) -> None:
+    """The poll itself, so the task above is only about reporting the outcome."""
     grant = integrations.role_grant_from(config, external_id)
     region = str(config.get(CONFIG_REGION, settings.aws_region))
     window = PollWindow.ending_now(seconds=LOOKBACK_SECONDS)
@@ -98,7 +120,7 @@ def poll_cloudwatch(
         account_id=grant.account_id,
         window=window,
     )
-    _publish_or_retry(self, envelope, org_id=org_id, integration_id=integration_id)
+    _publish_or_retry(task, envelope, org_id=org_id, integration_id=integration_id)
 
 
 @app.task(name=POSTGRES_TASK, bind=True, max_retries=2)
@@ -113,6 +135,24 @@ def poll_postgres(
 ) -> None:
     """Read one database's statement and connection statistics and publish them."""
     settings = get_settings()
+    try:
+        _poll_postgres(settings, integration_id, org_id, project_id, config, external_id, self)
+    except Exception as failure:
+        report_failure(settings, integration_id, str(failure))
+        raise
+    report_success(settings, integration_id)
+
+
+def _poll_postgres(
+    settings: Any,
+    integration_id: str,
+    org_id: str,
+    project_id: str,
+    config: dict[str, Any],
+    external_id: str | None,
+    task: Any,
+) -> None:
+    """The poll itself, so the task above is only about reporting the outcome."""
     target = integrations.database_target_from(config, external_id)
     region = str(config.get(CONFIG_REGION, settings.aws_region))
     window = PollWindow.ending_now(seconds=LOOKBACK_SECONDS)
@@ -135,7 +175,7 @@ def poll_postgres(
         server_port=target.port,
         window=window,
     )
-    _publish_or_retry(self, envelope, org_id=org_id, integration_id=integration_id)
+    _publish_or_retry(task, envelope, org_id=org_id, integration_id=integration_id)
 
 
 async def _read_database(

@@ -20,13 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexovue_api.audit import service as audit
 from nexovue_api.checks import queries, targets
 from nexovue_api.checks.schemas import (
+    MAX_CHECKS_PER_PROJECT,
     CheckListResponse,
     CheckSummary,
     CreateCheckRequest,
     UpdateCheckRequest,
 )
 from nexovue_api.data.postgres.models import Check
-from nexovue_api.errors.exceptions import NotFoundError
+from nexovue_api.errors.exceptions import ConflictError, NotFoundError
 from nexovue_api.projects import service as projects
 
 
@@ -52,6 +53,12 @@ async def create(
     created it commit together or neither does.
     """
     project = await projects.require_project(session, org_id=org_id, project_id=request.project_id)
+
+    existing = await queries.count_checks(session, org_id=org_id, project_id=project.id)
+    if existing >= MAX_CHECKS_PER_PROJECT:
+        raise ConflictError(
+            f"This project already has {MAX_CHECKS_PER_PROJECT} checks, which is the limit."
+        )
 
     # Both doors into a request: the target, and any url inside the step list.
     targets.validate_step_urls(request.config)
