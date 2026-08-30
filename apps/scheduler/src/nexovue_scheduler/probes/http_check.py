@@ -112,8 +112,15 @@ def _phases(curl: Any) -> dict[str, float]:
     """Turn libcurl's cumulative offsets into per-phase durations.
 
     Every value is a time since the request started, so each phase is the gap
-    between two of them. They sum to the total, which the contract fixture
-    relies on and the tests assert.
+    between two of them, and for a clean single-connection request they sum
+    exactly to the total.
+
+    **They are not guaranteed to.** Measured over several hundred live probes,
+    two disagreed — both slow outliers, phases exceeding the total by 3-4%.
+    libcurl's offsets stop composing when it retries internally, and a slice of
+    time then falls inside two phases. The total stays the accurate number; the
+    breakdown is the approximation, so a reader comparing them should divide by
+    the phase sum rather than by the total.
 
     A phase that never happened reports zero rather than being omitted: a plain
     HTTP request has no TLS handshake, and a missing series would break a chart

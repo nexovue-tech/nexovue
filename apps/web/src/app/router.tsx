@@ -8,8 +8,9 @@ import {
 
 import { LoginScreen } from "@/features/auth/LoginScreen";
 import { SignupScreen } from "@/features/auth/SignupScreen";
-import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
 import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
+import { LogsScreen } from "@/features/logs/LogsScreen";
+import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
 import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
 import { ServicesScreen } from "@/features/services/ServicesScreen";
 import { SyntheticsScreen } from "@/features/synthetics/SyntheticsScreen";
@@ -103,7 +104,7 @@ const errorsRoute = createRoute({
 const logsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/logs",
-  component: placeholderFor("/logs"),
+  component: LogsScreen,
 });
 
 const infrastructureRoute = createRoute({

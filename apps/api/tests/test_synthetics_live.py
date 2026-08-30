@@ -44,7 +44,12 @@ LOOKBACK: Final = timedelta(days=2)
 
 # The prober publishes seconds with microsecond detail; the sum of five of them
 # against the total it reported differs only by float addition order.
-PHASE_SUM_TOLERANCE: Final = 0.01
+# Wide on purpose. libcurl's cumulative offsets stop composing when it retries
+# inside a request, and the phases then overlap: of several hundred live probes
+# two disagreed, both slow outliers, by 3-4%. An equality assertion failed on
+# real data that was not wrong. What this still catches is a breakdown measuring
+# a different request from the total beside it, or phases silently zero.
+PHASE_SUM_TOLERANCE: Final = 0.10
 
 
 def _parts() -> tuple[str, int, str, str, str]:

@@ -29,6 +29,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/metricwriting"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/traceassembly"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/usage"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/projectconfig"
 )
 
@@ -118,7 +119,8 @@ func run(serviceName string) error {
 	// Buffered so the first failure is recorded even if nothing is selecting
 	// on it yet, and so reporting one never blocks a pipeline's exit.
 	failures := make(chan error, 1)
-	stopPipelines, err := startPipelines(ctx, cfg, store, log, stageOptions, registry, liveness, failures, stop)
+	stopPipelines, err := startPipelines(
+		ctx, cfg, store, control, log, stageOptions, registry, liveness, failures, stop)
 	if err != nil {
 		return err
 	}
@@ -133,6 +135,7 @@ func startPipelines(
 	ctx context.Context,
 	cfg config.Config,
 	store *chpool.Pool,
+	control *pgxpool.Pool,
 	log *slog.Logger,
 	stageOptions traceassembly.Options,
 	registry *health.Registry,
@@ -157,7 +160,7 @@ func startPipelines(
 		// Both: a stopped pipeline means restart me, and also means not ready.
 		registry.Register(health.Check{Name: checkTraceAssembly, Probe: spans.Running})
 		liveness.Register(health.Check{Name: checkTraceAssembly, Probe: spans.Running})
-		go reportFailure(ctx, failures, shutdown, log, config.PipelineTraceAssembly, func() error { return spans.Run(ctx) })
+		go reportFailure(ctx, failures, shutdown, log, string(config.PipelineTraceAssembly), func() error { return spans.Run(ctx) })
 	}
 
 	// One masker over the same rules trace assembly reads, so a project's
@@ -180,7 +183,7 @@ func startPipelines(
 		started = append(started, logs.Close)
 		registry.Register(health.Check{Name: checkLogWriting, Probe: logs.Running})
 		liveness.Register(health.Check{Name: checkLogWriting, Probe: logs.Running})
-		go reportFailure(ctx, failures, shutdown, log, config.PipelineLogWriting, func() error { return logs.Run(ctx) })
+		go reportFailure(ctx, failures, shutdown, log, string(config.PipelineLogWriting), func() error { return logs.Run(ctx) })
 	}
 
 	if slices.Contains(cfg.Pipelines, config.PipelineMetricIngest) {
@@ -195,10 +198,111 @@ func startPipelines(
 		started = append(started, metrics.Close)
 		registry.Register(health.Check{Name: checkMetricIngest, Probe: metrics.Running})
 		liveness.Register(health.Check{Name: checkMetricIngest, Probe: metrics.Running})
-		go reportFailure(ctx, failures, shutdown, log, config.PipelineMetricIngest, func() error { return metrics.Run(ctx) })
+		go reportFailure(ctx, failures, shutdown, log, string(config.PipelineMetricIngest), func() error { return metrics.Run(ctx) })
+	}
+
+	// Appended before the error is checked: a meter that started before a later
+	// one failed still has to be released.
+	meters, err := startUsageCounting(ctx, cfg, control, log, registry, liveness, failures, shutdown)
+	started = append(started, meters...)
+	if err != nil {
+		stop()
+		return nil, err
 	}
 
 	return stop, nil
+}
+
+// startUsageCounting launches the per-day ingestion counters — one consumer per
+// signal this process ingests — and returns what releases them.
+//
+// A process meters what it ingests, so splitting the pipelines across
+// deployments splits the metering with them and every signal is still counted
+// exactly once. They are separate consumer groups rather than stages inside the
+// three write pipelines, so a slow control plane cannot slow ingest.
+//
+// Without a control-plane connection there is nowhere to write them, which is
+// said out loud rather than left as a table of zeros nobody can explain.
+func startUsageCounting(
+	ctx context.Context,
+	cfg config.Config,
+	control *pgxpool.Pool,
+	log *slog.Logger,
+	registry *health.Registry,
+	liveness *health.Registry,
+	failures chan<- error,
+	shutdown context.CancelFunc,
+) ([]func(), error) {
+	signals := usageSignals(cfg.Pipelines)
+	if len(signals) == 0 {
+		return nil, nil
+	}
+	if control == nil {
+		log.WarnContext(ctx, "no control-plane connection: ingestion is not metered, "+
+			"so usage_daily stays empty and no bill has a basis",
+			slog.String("variable", "POSTGRES_DSN"))
+		return nil, nil
+	}
+
+	var started []func()
+	for _, signal := range signals {
+		meter, err := usage.New(cfg, signal, log, usage.Options{
+			Store: usage.NewPostgresStore(control, signal.Topic(cfg)),
+		})
+		if err != nil {
+			return started, err
+		}
+		started = append(started, meter.Close)
+		// Readiness only, deliberately — see reportMeterFailure. A stopped meter
+		// means this process should not be called ready, and does not mean it
+		// should be restarted.
+		registry.Register(health.Check{Name: signal.Name, Probe: meter.Running})
+		go reportMeterFailure(ctx, log, signal.Name, func() error { return meter.Run(ctx) })
+	}
+	return started, nil
+}
+
+// reportMeterFailure stops a metering job without stopping the worker.
+//
+// Every write pipeline uses reportFailure, which cancels the shared context: a
+// pipeline that cannot store telemetry has lost data, and continuing quietly is
+// worse than exiting loudly. **Metering is not that.** A meter that cannot
+// reach Postgres costs an undercounted bill, which is recoverable — Kafka still
+// holds the messages and the offsets never advanced, so the counts arrive when
+// it comes back. Taking ingest down with it would turn a billing problem into
+// customer data loss, which is the more expensive failure by a wide margin.
+//
+// It is loud rather than silent: the error is logged, and readiness stays false
+// for as long as the meter is down, so an orchestrator and a dashboard both see
+// it. What it does not do is kill the three pipelines around it.
+func reportMeterFailure(ctx context.Context, log *slog.Logger, name string, run func() error) {
+	if err := run(); err != nil && !errors.Is(err, context.Canceled) {
+		log.ErrorContext(ctx, "usage metering stopped; ingest continues and this signal "+
+			"is no longer metered until the worker restarts",
+			slog.String("meter", name), slog.Any("error", err))
+		return
+	}
+	log.InfoContext(ctx, "usage metering stopped", slog.String("meter", name))
+}
+
+// usageSignals is what this process meters: the signal behind every pipeline it
+// runs. Deriving it from the pipeline selection rather than from its own
+// variable is what keeps the two from disagreeing — a worker that ingests a
+// signal and does not meter it would bill nothing for it.
+func usageSignals(pipelines []config.Pipeline) []usage.Signal {
+	metered := map[config.Pipeline]usage.Signal{
+		config.PipelineTraceAssembly: usage.Spans,
+		config.PipelineLogWriting:    usage.Logs,
+		config.PipelineMetricIngest:  usage.Metrics,
+	}
+
+	var signals []usage.Signal
+	for _, pipeline := range config.AllPipelines {
+		if slices.Contains(pipelines, pipeline) {
+			signals = append(signals, metered[pipeline])
+		}
+	}
+	return signals
 }
 
 // maskingRules is the rules source every signal masks against — the project
@@ -228,7 +332,7 @@ func reportFailure(
 	failures chan<- error,
 	shutdown context.CancelFunc,
 	log *slog.Logger,
-	name config.Pipeline,
+	name string,
 	run func() error,
 ) {
 	err := run()
@@ -241,7 +345,7 @@ func reportFailure(
 
 	// Said out loud, because this is the line that explains a restart.
 	log.Error("pipeline ended; the worker cannot continue",
-		slog.String("pipeline", string(name)),
+		slog.String("pipeline", name),
 		slog.String("error", err.Error()),
 	)
 

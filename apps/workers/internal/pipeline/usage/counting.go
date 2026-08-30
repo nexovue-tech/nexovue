@@ -51,14 +51,16 @@ type counting struct {
 	totals totals
 }
 
-// totals are the running numbers the heartbeat reports.
+// totals are the running numbers the heartbeat reports. int64 throughout,
+// which is what the counters themselves are and what slog logs them as, so no
+// count is widened on its way to a log line.
 type totals struct {
 	counters      Counts
-	messages      uint64
-	replayed      uint64
-	undecodable   uint64
-	rowsWritten   uint64
-	rowsUnmatched uint64
+	messages      int64
+	replayed      int64
+	undecodable   int64
+	rowsWritten   int64
+	rowsUnmatched int64
 }
 
 func newCounting(signal Signal, store Store, retry retrier, log *slog.Logger) *counting {
@@ -134,8 +136,8 @@ func (c *counting) flush(ctx context.Context) error {
 
 	c.markCounted(offsets)
 	c.flushes++
-	c.totals.rowsWritten += uint64(applied.Written)
-	c.totals.rowsUnmatched += uint64(applied.Unattributed)
+	c.totals.rowsWritten += int64(applied.Written)
+	c.totals.rowsUnmatched += int64(applied.Unattributed)
 
 	if applied.AlreadyCounted {
 		// The transaction had committed and its acknowledgement was lost, so

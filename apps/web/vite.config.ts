@@ -58,6 +58,10 @@ export default defineConfig({
       "/api": {
         target: process.env.NEXOVUE_API_ORIGIN ?? "http://localhost:18000",
         changeOrigin: true,
+        // The log tail is a WebSocket under /api. Without this the upgrade request
+        // is answered by the dev server instead of forwarded, and the handshake
+        // times out with nothing in the console to say why.
+        ws: true,
       },
     },
   },

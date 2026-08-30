@@ -114,15 +114,15 @@ func (p *Pipeline) Holding() []slog.Attr {
 	totals := p.counting.totals
 	return []slog.Attr{
 		slog.Int("tenant_days_pending", p.counting.meter.Pending()),
-		slog.Uint64("messages_metered", totals.messages),
-		slog.Uint64("messages_replayed", totals.replayed),
-		slog.Uint64("messages_undecodable", totals.undecodable),
+		slog.Int64("messages_metered", totals.messages),
+		slog.Int64("messages_replayed", totals.replayed),
+		slog.Int64("messages_undecodable", totals.undecodable),
 		slog.Int64("spans_metered", totals.counters.Spans),
 		slog.Int64("logs_metered", totals.counters.Logs),
 		slog.Int64("metric_points_metered", totals.counters.MetricPoints),
 		slog.Int64("bytes_metered", totals.counters.Bytes),
-		slog.Uint64("usage_rows_written", totals.rowsWritten),
-		slog.Uint64("usage_rows_unattributed", totals.rowsUnmatched),
+		slog.Int64("usage_rows_written", totals.rowsWritten),
+		slog.Int64("usage_rows_unattributed", totals.rowsUnmatched),
 	}
 }
 

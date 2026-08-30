@@ -69,8 +69,8 @@ const offsetsTable = "usage_ingest_offsets"
 // rebalance serialize rather than both counting.
 const advanceOffsets = `
 	INSERT INTO ` + offsetsTable + ` AS settled (topic, partition_id, counted_through, updated_at)
-	SELECT $1, position.partition_id, position.counted_through, now()
-	FROM unnest($2::int[], $3::bigint[]) AS position(partition_id, counted_through)
+	SELECT $1, incoming.partition_id, incoming.counted_through, now()
+	FROM unnest($2::int[], $3::bigint[]) AS incoming(partition_id, counted_through)
 	ON CONFLICT (topic, partition_id) DO UPDATE
 	SET counted_through = excluded.counted_through, updated_at = now()
 	WHERE settled.counted_through < excluded.counted_through`
