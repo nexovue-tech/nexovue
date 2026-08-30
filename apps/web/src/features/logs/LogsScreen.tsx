@@ -14,7 +14,7 @@ import { useLogFacets, useLogSearch } from "./api";
 import type { LogLine, LogRow, TailNarration } from "./log-feed";
 import { buildLogRows, describeLogs } from "./log-feed";
 import { SEVERITY_FILTERS, severityFilterById, severityStyle } from "./severity";
-import type { TailStatus } from "./use-log-tail";
+import type { LogTail, TailStatus } from "./use-log-tail";
 import { useLogTail } from "./use-log-tail";
 
 const LINE_HEIGHT = 26;
@@ -113,13 +113,7 @@ interface LogsViewProps {
   hasOlder: boolean;
   isLoadingOlder: boolean;
   onLoadOlder: () => void;
-  tail: {
-    status: TailStatus;
-    buffer: Parameters<typeof buildLogRows>[0];
-    failure?: string;
-    pause: () => void;
-    resume: () => void;
-  };
+  tail: LogTail;
   expanded?: string;
   onToggleLine: (key: string) => void;
 }
