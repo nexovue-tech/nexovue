@@ -4,10 +4,19 @@ Every statement here names `{tenant_id:String}`; the repository refuses one that
 does not, and the value is bound there from the session rather than passed in.
 
 **One table, read two ways.** `endpoint_stats_1m` holds one row per
-(service, span kind, span name, minute), already aggregated by a materialized
-view over `spans`. Grouping it by service answers "how is each service doing";
-grouping it by endpoint answers "which endpoint is hurting". Both read the same
-counters, so the two can never disagree.
+(service, span kind, span name, minute), already aggregated. Grouping it by
+service answers "how is each service doing"; grouping it by endpoint answers
+"which endpoint is hurting". Both read the same counters, so the two can never
+disagree.
+
+**The rows are counted before sampling.** The trace pipeline's `derive` stage
+fills this table itself, over every span of every trace, and the sampler runs
+after it (ADR 0010). Until 000024 a materialized view over `spans` filled it
+instead, which put it *downstream* of tail sampling — so these statements
+returned about a tenth of the real request rate at about ten times the real
+error rate, because the sampler keeps every failed and every slow trace but
+only one healthy trace in ten. Nothing here changed to fix that; the source
+did.
 
 **Partition pruning.** Unlike `spans`, this table is partitioned on `minute` —
 the bucket itself — so a bound on `minute` prunes directly and there is no

@@ -1,6 +1,10 @@
-// Package usage counts what each tenant ingested, per day, into the control
-// plane's `usage_daily` table. Nothing else writes that table, so without this
-// the usage screen reports zeros and no bill has a basis.
+// Package usage meters what each tenant ingested, per day, into the control
+// plane. Two tables, because a bill and a guardrail are different numbers:
+// `usage_daily` holds the counters — spans, logs, points, bytes — and
+// `usage_daily_services` holds the billing unit ADR 0056 chose, the distinct
+// `service.name` a project sent something for on a day. Nothing else writes
+// either, so without this the usage screen reports zeros and no bill has a
+// basis.
 //
 // It counts what ARRIVED, not what was stored. The job consumes the ingestion
 // topics themselves, which sit before tail sampling, so a tenant whose healthy
@@ -20,17 +24,20 @@ package usage
 import (
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	logsvc "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	metricsvc "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	tracesvc "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/protobuf/proto"
 
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 )
 
 // Counts is what one message carried, in the four units `usage_daily` records.
@@ -60,6 +67,70 @@ func (c Counts) empty() bool {
 	return c.Spans == 0 && c.Logs == 0 && c.MetricPoints == 0 && c.Bytes == 0
 }
 
+// Metered is one message: the four guardrail counters, and the services that
+// carried them. The services are the bill — ADR 0056 prices per service
+// monitored — and the counters are what shows the volume behind it.
+type Metered struct {
+	Counts
+
+	// Services is the distinct `service.name` of every resource in this payload
+	// that carried at least one span, log or point. A slice rather than a map:
+	// a payload holds a handful of resources, and a map per message would
+	// allocate on the hottest path this job has.
+	Services []string
+}
+
+// UnnamedService is the service a resource carrying no `service.name` is billed
+// as. Every one of them folds into this single bucket, so a sender that omits
+// the attribute is one service rather than one per message — and parentheses
+// are impossible in a real `service.name`, so it cannot collide with one. Same
+// spelling as serviceedges.UnknownService, for the same reason.
+const UnnamedService = "(unknown)"
+
+// attrServiceName is the OTLP resource attribute the billing unit is counted
+// from. Same key metricwriting promotes to its `service_name` column.
+const attrServiceName = "service.name"
+
+// maxServiceNameChars matches `usage_daily_services.service_name`, which is a
+// varchar(255) — characters, not bytes, which is why the truncation below
+// counts runes. OTLP puts no limit on an attribute value, so something has to.
+const maxServiceNameChars = 255
+
+// record adds a service to the set this message carried, ignoring one already
+// there. Linear because the set is tiny; see the note on Services.
+func (m *Metered) record(name string) {
+	for _, seen := range m.Services {
+		if seen == name {
+			return
+		}
+	}
+	m.Services = append(m.Services, name)
+}
+
+// attribute records a resource's service, but only if that resource actually
+// carried something. A resource block with no spans in it is an empty export,
+// not a service the customer ran: billing for one would charge for silence.
+func (m *Metered) attribute(resource *resourcepb.Resource, carried int64) {
+	if carried == 0 {
+		return
+	}
+	m.record(serviceNameOf(resource))
+}
+
+// serviceNameOf is the billable name of one resource: its `service.name`,
+// folded into UnnamedService when absent and truncated to what the column
+// holds.
+func serviceNameOf(resource *resourcepb.Resource) string {
+	name := otlpvalue.StringOrEmpty(resource.GetAttributes(), attrServiceName)
+	if name == "" {
+		return UnnamedService
+	}
+	if utf8.RuneCountInString(name) > maxServiceNameChars {
+		return string([]rune(name)[:maxServiceNameChars])
+	}
+	return name
+}
+
 // Signal is one ingestion topic this job meters: which envelope it accepts,
 // which counter the payload feeds, and where the topic's settings live.
 //
@@ -71,7 +142,7 @@ type Signal struct {
 
 	wire     nexovuev1.Signal
 	topic    func(config.Config) topic
-	countOne func(payload []byte) (Counts, error)
+	countOne func(payload []byte) (Metered, error)
 }
 
 // topic is one signal's broker settings, read from the shared worker config.
@@ -154,48 +225,56 @@ func (s Signal) Topic(cfg config.Config) string { return s.topic(cfg).name }
 // meter decodes one message and returns who it belonged to and what it carried.
 // Every failure is a *consume.Rejection, so a caller reporting one always knows
 // which tenant's message it could not read.
-func (s Signal) meter(message []byte) (*nexovuev1.Envelope, Counts, error) {
+func (s Signal) meter(message []byte) (*nexovuev1.Envelope, Metered, error) {
 	envelope, err := consume.DecodeEnvelope(message, s.wire)
 	if err != nil {
-		return nil, Counts{}, err
+		return nil, Metered{}, err
 	}
-	counts, err := s.countOne(envelope.GetPayload())
+	metered, err := s.countOne(envelope.GetPayload())
 	if err != nil {
-		return nil, Counts{}, consume.RejectedBy(envelope, err)
+		return nil, Metered{}, consume.RejectedBy(envelope, err)
 	}
-	return envelope, counts, nil
+	return envelope, metered, nil
 }
 
-// countSpans counts the spans in one OTLP trace export.
-func countSpans(payload []byte) (Counts, error) {
+// countSpans counts the spans in one OTLP trace export, and the services they
+// came from.
+func countSpans(payload []byte) (Metered, error) {
 	var request tracesvc.ExportTraceServiceRequest
 	if err := proto.Unmarshal(payload, &request); err != nil {
-		return Counts{}, fmt.Errorf("decode OTLP payload: %w", err)
+		return Metered{}, fmt.Errorf("decode OTLP payload: %w", err)
 	}
 
-	counts := Counts{Bytes: int64(len(payload))}
+	metered := Metered{Counts: Counts{Bytes: int64(len(payload))}}
 	for _, resource := range request.GetResourceSpans() {
+		var spans int64
 		for _, scope := range resource.GetScopeSpans() {
-			counts.Spans += int64(len(scope.GetSpans()))
+			spans += int64(len(scope.GetSpans()))
 		}
+		metered.Spans += spans
+		metered.attribute(resource.GetResource(), spans)
 	}
-	return counts, nil
+	return metered, nil
 }
 
-// countLogs counts the log records in one OTLP log export.
-func countLogs(payload []byte) (Counts, error) {
+// countLogs counts the log records in one OTLP log export, and the services
+// they came from. A service that only ever logs is still a service monitored.
+func countLogs(payload []byte) (Metered, error) {
 	var request logsvc.ExportLogsServiceRequest
 	if err := proto.Unmarshal(payload, &request); err != nil {
-		return Counts{}, fmt.Errorf("decode OTLP payload: %w", err)
+		return Metered{}, fmt.Errorf("decode OTLP payload: %w", err)
 	}
 
-	counts := Counts{Bytes: int64(len(payload))}
+	metered := Metered{Counts: Counts{Bytes: int64(len(payload))}}
 	for _, resource := range request.GetResourceLogs() {
+		var records int64
 		for _, scope := range resource.GetScopeLogs() {
-			counts.Logs += int64(len(scope.GetLogRecords()))
+			records += int64(len(scope.GetLogRecords()))
 		}
+		metered.Logs += records
+		metered.attribute(resource.GetResource(), records)
 	}
-	return counts, nil
+	return metered, nil
 }
 
 // countMetricPoints counts the data points in one OTLP metric export.
@@ -203,21 +282,24 @@ func countLogs(payload []byte) (Counts, error) {
 // A point, not a metric: one metric carries a point per attribute combination,
 // and the point is what becomes a stored row. Counting metrics instead would
 // meter a thousand-series histogram the same as a single gauge.
-func countMetricPoints(payload []byte) (Counts, error) {
+func countMetricPoints(payload []byte) (Metered, error) {
 	var request metricsvc.ExportMetricsServiceRequest
 	if err := proto.Unmarshal(payload, &request); err != nil {
-		return Counts{}, fmt.Errorf("decode OTLP payload: %w", err)
+		return Metered{}, fmt.Errorf("decode OTLP payload: %w", err)
 	}
 
-	counts := Counts{Bytes: int64(len(payload))}
+	metered := Metered{Counts: Counts{Bytes: int64(len(payload))}}
 	for _, resource := range request.GetResourceMetrics() {
+		var points int64
 		for _, scope := range resource.GetScopeMetrics() {
 			for _, metric := range scope.GetMetrics() {
-				counts.MetricPoints += pointsIn(metric)
+				points += pointsIn(metric)
 			}
 		}
+		metered.MetricPoints += points
+		metered.attribute(resource.GetResource(), points)
 	}
-	return counts, nil
+	return metered, nil
 }
 
 // pointsIn counts one metric's data points across every OTLP shape. An unknown

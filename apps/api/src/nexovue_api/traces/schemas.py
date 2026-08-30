@@ -46,6 +46,11 @@ class SpanDetail(BaseModel):
     http_method: str
     http_route: str
     http_status: int
+    # Empty on an HTTP span, and the HTTP three are empty on an RPC one. The
+    # two code spaces are kept apart: a gRPC status is 0-16, not 200-599.
+    rpc_system: str
+    rpc_method: str
+    rpc_status: str
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -21,6 +21,19 @@ type Policy struct {
 	KeepErrors     bool
 	SlowThreshold  time.Duration
 	HealthyPercent int
+
+	// KeepingFirstTraces is true while a project is still storing the first
+	// traces it has ever sent, which are kept whatever the percentage says.
+	//
+	// A customer's first span is a hello-world request that worked — healthy and
+	// fast — so at the default 10% it had a nine in ten chance of being dropped,
+	// and the onboarding screen, which reads storage, waited for something that
+	// was never written.
+	//
+	// The zero value is the safe one: only a source that can count what a
+	// project has stored may set it, because a carve-out nothing can close would
+	// store every trace for ever.
+	KeepingFirstTraces bool
 }
 
 // DefaultPolicy is ADR 0010's default: every error, every trace slower than the
@@ -77,6 +90,9 @@ func PolicyFromJSON(document []byte, fallback Policy) (Policy, error) {
 
 // keeps decides one assembled trace.
 func (p Policy) keeps(trace traceFacts) bool {
+	if p.KeepingFirstTraces {
+		return true
+	}
 	if p.KeepErrors && trace.errored {
 		return true
 	}
@@ -95,14 +111,34 @@ func keepsHealthy(trace traceFacts, percent int) bool {
 	return traceRandomness(trace) >= rejectionThreshold(percent)
 }
 
-// PolicySource supplies the policy for a project.
+// PolicySource supplies the policy for a project and counts the traces the
+// first-traces carve-out keeps for it.
+//
+// firstTraces — how many traces that carve-out covers — is asked rather than
+// known, because the two halves of the question live apart: the deployment sets
+// the size of the carve-out, the control plane knows how far a project has got
+// through it, and neither one knows both.
 type PolicySource interface {
-	SamplingPolicy(projectID string) Policy
+	SamplingPolicy(projectID string, firstTraces int) Policy
+
+	// RecordStoredTrace says the carve-out kept one more trace for this project.
+	// It is what makes the count shared: a project's first traces are its first
+	// ones across the fleet, not its first ones in each worker process.
+	RecordStoredTrace(projectID string)
 }
 
 // StaticPolicy is a PolicySource answering with one policy for every project,
 // which is what a worker runs on with no control-plane connection configured.
 type StaticPolicy Policy
 
-// SamplingPolicy implements PolicySource.
-func (s StaticPolicy) SamplingPolicy(string) Policy { return Policy(s) }
+// SamplingPolicy implements PolicySource. The carve-out stays off whatever the
+// deployment asked for: nothing here can count what a project has stored, and a
+// carve-out that can never close would store every trace for ever.
+func (s StaticPolicy) SamplingPolicy(string, int) Policy {
+	policy := Policy(s)
+	policy.KeepingFirstTraces = false
+	return policy
+}
+
+// RecordStoredTrace implements PolicySource. There is nowhere to count.
+func (StaticPolicy) RecordStoredTrace(string) {}

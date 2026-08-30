@@ -70,6 +70,14 @@ SLUG_MAX_LENGTH: Final = 63
 NAME_MAX_LENGTH: Final = 200
 SHORT_LABEL_LENGTH: Final = 64
 
+# `service.name` is a resource attribute OTLP puts no length limit on. The meter
+# truncates to this before writing, so an absurd name is stored as a service
+# rather than failing the flush that carried it.
+SERVICE_NAME_LENGTH: Final = 255
+
+# ISO 4217.
+CURRENCY_CODE_LENGTH: Final = 3
+
 
 class Organization(Base):
     """The tenant. Billing, membership and isolation boundary; one per company."""
@@ -368,8 +376,9 @@ class ProjectWebhookSecret(Base):
 
 
 class UsageDaily(Base):
-    """Ingestion counters rolled up per day. Feeds the in-product cost view, so
-    a customer is never surprised by a bill."""
+    """Ingestion counters rolled up per day. The guardrail meter, not the bill:
+    ADR 0056 prices per service, and these four are what shows a customer the
+    volume behind that — so nobody is surprised by either number."""
 
     __tablename__ = "usage_daily"
 
@@ -384,6 +393,76 @@ class UsageDaily(Base):
     logs: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     metric_points: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+
+
+class UsageDailyService(Base):
+    """One service a project sent something for, on one day: the billing unit.
+
+    A set, not a counter. Distinct services cannot be accumulated by adding, and
+    the meter is at-least-once — inserting the same name twice leaves the same
+    set, which is what makes a replay harmless here without any watermark at
+    all. The billable quantity is `count(*)` over these rows.
+    """
+
+    __tablename__ = "usage_daily_services"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    service_name: Mapped[str] = mapped_column(String(SERVICE_NAME_LENGTH), primary_key=True)
+    first_seen_at: Mapped[CreatedAt]
+
+
+class UsageIngestOffset(Base):
+    """How far the usage meter has counted each ingestion partition.
+
+    Written by the worker, in the same transaction as the counters (ADR 0060's
+    problem, solved by a transaction Postgres has and ClickHouse does not). The
+    control plane reads one thing from it: `counted_through_received_at`, which
+    is how far the meter has reached in *receive* time and therefore which days
+    are finished. A null means a partition nothing has metered yet, which is why
+    no day can be called settled while one exists.
+    """
+
+    __tablename__ = "usage_ingest_offsets"
+
+    topic: Mapped[str] = mapped_column(Text, primary_key=True)
+    partition_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    counted_through: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    counted_through_received_at: Mapped[OptionalTimestamp]
+    updated_at: Mapped[CreatedAt]
+
+
+class PlanPrice(Base):
+    """What a tier costs, from a day onwards.
+
+    Its own table rather than a column on `plans` because a price is temporal:
+    editing a column would restate what every past invoice was computed from,
+    while a row appended with a later `effective_from` leaves history alone. The
+    price in force on a day is the latest row not after it.
+
+    **Empty on purpose.** ADR 0056 fixed the unit — one service monitored, with
+    a ceiling on the service-count component — and did not fix the amounts. They
+    are rows for a person to insert, not constants for us to invent.
+    """
+
+    __tablename__ = "plan_prices"
+
+    plan_slug: Mapped[str] = mapped_column(
+        String(SHORT_LABEL_LENGTH),
+        ForeignKey("plans.slug", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    effective_from: Mapped[date] = mapped_column(Date, primary_key=True)
+    currency: Mapped[str] = mapped_column(String(CURRENCY_CODE_LENGTH), nullable=False)
+    price_per_service_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # NULL is uncapped, which is not the same statement as a cap of zero.
+    max_billed_services: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[CreatedAt]
 
 
 class Session(Base):

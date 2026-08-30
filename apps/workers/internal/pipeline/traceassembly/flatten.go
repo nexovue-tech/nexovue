@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,6 +63,9 @@ type spanRow struct {
 	HTTPMethod           string
 	HTTPRoute            string
 	HTTPStatus           uint16
+	RPCSystem            string
+	RPCMethod            string
+	RPCStatus            string
 	DeploymentVersion    string
 	ResourceAttrs        string
 	SpanAttrs            string
@@ -142,6 +146,7 @@ func flattenSpan(
 ) spanRow {
 	attributes := span.GetAttributes()
 	promoted := promotedHTTP(attributes, httpNames)
+	rpc := promotedRPC(attributes)
 
 	return spanRow{
 		Timestamp:         unixNanoTime(span.GetStartTimeUnixNano()),
@@ -159,6 +164,9 @@ func flattenSpan(
 		HTTPMethod:        promoted.method,
 		HTTPRoute:         promoted.route,
 		HTTPStatus:        promoted.status,
+		RPCSystem:         rpc.system,
+		RPCMethod:         rpc.method,
+		RPCStatus:         rpc.status,
 		DeploymentVersion: resource.version,
 		ResourceAttrs:     resource.attrsJSON,
 		SpanAttrs:         otlpvalue.AttributesJSON(attributes),
@@ -196,6 +204,50 @@ func promotedHTTP(attributes []*commonpb.KeyValue, names [2]httpAttributeNames) 
 		}
 	}
 	return promoted
+}
+
+// rpcValues are the RPC columns lifted out of the attribute map, already
+// normalized onto the current convention's vocabulary.
+type rpcValues struct {
+	system string
+	method string
+	status string
+}
+
+// promotedRPC reads the RPC columns, taking the current spelling of each where
+// it is present and the legacy one otherwise.
+func promotedRPC(attributes []*commonpb.KeyValue) rpcValues {
+	system := otlpvalue.StringOrEmpty(attributes, attrRPCSystemCurrent)
+	if system == "" {
+		system = otlpvalue.StringOrEmpty(attributes, attrRPCSystemLegacy)
+	}
+	return rpcValues{
+		system: canonicalRPCSystem(system),
+		method: qualifiedRPCMethod(
+			otlpvalue.StringOrEmpty(attributes, attrRPCServiceLegacy),
+			otlpvalue.StringOrEmpty(attributes, attrRPCMethod),
+		),
+		status: rpcStatusText(attributes),
+	}
+}
+
+// rpcStatusText is the call's outcome as the current convention spells it. The
+// legacy codes are each read in the type they were defined with — gRPC's is an
+// integer over a named enum, Connect RPC's a string, JSON-RPC's a bare number.
+func rpcStatusText(attributes []*commonpb.KeyValue) string {
+	if status := otlpvalue.StringOrEmpty(attributes, attrRPCStatusCurrent); status != "" {
+		return status
+	}
+	if code, ok := otlpvalue.Int(attributes, attrRPCStatusGRPCLegacy); ok {
+		return grpcStatusName(code)
+	}
+	if code := otlpvalue.StringOrEmpty(attributes, attrRPCStatusConnectLegacy); code != "" {
+		return code
+	}
+	if code, ok := otlpvalue.Int(attributes, attrRPCStatusJSONRPCLegacy); ok {
+		return strconv.FormatInt(code, 10)
+	}
+	return ""
 }
 
 // clampStatus keeps a nonsensical status out of the UInt16 column, where it

@@ -7,6 +7,7 @@
 package projectconfig
 
 import (
+	"sync"
 	"sync/atomic"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
@@ -21,6 +22,12 @@ type Settings struct {
 	// has not seen the project yet, and the deployment defaults apply.
 	RawRetentionDays     uint16
 	DerivedRetentionDays uint16
+
+	// FirstTracesStored is how many traces this project's first-traces carve-out
+	// has already kept, as the control plane last reported it. Zero — which is
+	// what a project no refresh has seen yet gets — leaves the carve-out fully
+	// open, and a project that has just been created is exactly that project.
+	FirstTracesStored int64
 }
 
 // Cache serves settings to the stages. Reads are lock-free: a refresh swaps a
@@ -28,12 +35,23 @@ type Settings struct {
 type Cache struct {
 	defaults Settings
 	snapshot atomic.Pointer[map[string]Settings]
+
+	// storedSinceFlush is what this process has added to a project's
+	// first-traces count and not yet written. It is counted into the decision as
+	// well as flushed: without it a worker would go on keeping every trace for a
+	// whole refresh interval after the carve-out was already full.
+	//
+	// unflushedProjects mirrors its size, so the steady state — every project
+	// long past its carve-out — costs an atomic load rather than the lock.
+	unflushed         sync.Mutex
+	storedSinceFlush  map[string]int64
+	unflushedProjects atomic.Int64
 }
 
 // NewCache returns a cache holding nothing but the deployment defaults, which
 // is what every project gets until the first refresh succeeds.
 func NewCache(defaults Settings) *Cache {
-	cache := &Cache{defaults: defaults}
+	cache := &Cache{defaults: defaults, storedSinceFlush: map[string]int64{}}
 	cache.Replace(nil)
 	return cache
 }
@@ -79,9 +97,66 @@ func (c *Cache) MaskingRules(projectID string) mask.Rules {
 	return c.Settings(projectID).Masking
 }
 
-// SamplingPolicy implements sample.PolicySource.
-func (c *Cache) SamplingPolicy(projectID string) sample.Policy {
-	return c.Settings(projectID).Sampling
+// SamplingPolicy implements sample.PolicySource. firstTraces is the size of the
+// carve-out the deployment asked for; the count it is measured against is the
+// control plane's, plus whatever this process has stored since its last flush.
+func (c *Cache) SamplingPolicy(projectID string, firstTraces int) sample.Policy {
+	settings := c.Settings(projectID)
+	policy := settings.Sampling
+	policy.KeepingFirstTraces = firstTraces > 0 &&
+		c.firstTracesStored(projectID, settings.FirstTracesStored) < int64(firstTraces)
+	return policy
+}
+
+// firstTracesStored is what the control plane reported plus what has not
+// reached it yet. Reading the unflushed half is what keeps one worker from
+// storing a carve-out's worth of traces again on every refresh interval.
+func (c *Cache) firstTracesStored(projectID string, reported int64) int64 {
+	if c.unflushedProjects.Load() == 0 {
+		return reported
+	}
+	c.unflushed.Lock()
+	defer c.unflushed.Unlock()
+	return reported + c.storedSinceFlush[projectID]
+}
+
+// RecordStoredTrace implements sample.PolicySource.
+func (c *Cache) RecordStoredTrace(projectID string) {
+	c.unflushed.Lock()
+	defer c.unflushed.Unlock()
+	if _, counted := c.storedSinceFlush[projectID]; !counted {
+		c.unflushedProjects.Add(1)
+	}
+	c.storedSinceFlush[projectID]++
+}
+
+// takeStoredTraces removes what has been stored since the last flush, for the
+// refresher to write. Whatever it cannot write must be handed back.
+func (c *Cache) takeStoredTraces() map[string]int64 {
+	c.unflushed.Lock()
+	defer c.unflushed.Unlock()
+	if len(c.storedSinceFlush) == 0 {
+		return nil
+	}
+	taken := c.storedSinceFlush
+	c.storedSinceFlush = make(map[string]int64, len(taken))
+	c.unflushedProjects.Store(0)
+	return taken
+}
+
+// returnStoredTraces puts back counts a failed flush could not write, adding to
+// whatever arrived in the meantime. Losing them instead would only shorten a
+// carve-out that has not been paid for yet, so this errs towards counting twice
+// being impossible rather than towards never undercounting.
+func (c *Cache) returnStoredTraces(counts map[string]int64) {
+	c.unflushed.Lock()
+	defer c.unflushed.Unlock()
+	for projectID, stored := range counts {
+		if _, counted := c.storedSinceFlush[projectID]; !counted {
+			c.unflushedProjects.Add(1)
+		}
+		c.storedSinceFlush[projectID] += stored
+	}
 }
 
 // Retention is the days this project's raw signals and derived rollups are

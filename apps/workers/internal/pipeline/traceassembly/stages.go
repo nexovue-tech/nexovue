@@ -43,10 +43,16 @@ func (r spanRow) countable(receivedAt time.Time, retentionDays uint16) derive.Sp
 		ServiceName:   r.ServiceName,
 		Endpoint:      r.endpoint(),
 		HTTPMethod:    r.HTTPMethod,
-		Timestamp:     r.Timestamp,
-		ReceivedAt:    receivedAt,
-		DurationMS:    r.DurationMS,
-		Errored:       r.errored(),
+		// The endpoint rollup's own dimensions, and the identity that weights
+		// this span's duration in its latency sample.
+		SpanKind:   r.SpanKind,
+		SpanName:   r.SpanName,
+		TraceID:    r.TraceID,
+		SpanID:     r.SpanID,
+		Timestamp:  r.Timestamp,
+		ReceivedAt: receivedAt,
+		DurationMS: r.DurationMS,
+		Errored:    r.errored(),
 	}
 }
 
@@ -187,8 +193,9 @@ func (s *stages) absorbMessage(now time.Time, message []byte, counted bool) (abs
 	for _, row := range payload.rows() {
 		row.ReceivedAt = receivedAt
 		row.RetentionDays, row.DerivedRetentionDays = rawDays, derivedDays
-		// Derive before sample: the counters see every span, whatever the
-		// sampler decides about the trace it belongs to (ADR 0010).
+		// Derive before sample: the counters and the endpoint rollup see every
+		// span, whatever the sampler decides about the trace it belongs to
+		// (ADR 0010).
 		if counted {
 			countable := row.countable(receivedAt, derivedDays)
 			minute, discarded := s.counters.Observe(now, countable)

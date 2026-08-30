@@ -1,9 +1,9 @@
-"""What this organization has ingested, per day.
+"""What this organization has ingested, per day, and what it is billable for.
 
-Read from `usage_daily` in Postgres, not from ClickHouse: the counters are the
-control plane's own record of what was accepted, and re-counting telemetry to
-answer a billing question would report what survived sampling and retention
-rather than what arrived.
+Read from `usage_daily` and `usage_daily_services` in Postgres, not from
+ClickHouse: these are the control plane's own record of what was accepted, and
+re-counting telemetry to answer a billing question would report what survived
+sampling and retention rather than what arrived.
 
 The organization comes from the session. `project_id` is optional and, being a
 value the caller chose, is proved to belong to that organization before it

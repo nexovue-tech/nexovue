@@ -95,7 +95,7 @@ func TestAFutureDatedSpanDoesNotWedgeOffsetCommits(t *testing.T) {
 		t.Errorf("committed %d records an hour after the batch, want 1: one future-dated "+
 			"span holds every offset this worker owns, for good", len(due))
 	}
-	if points := stages.counters.Drain(settled); len(points) == 0 {
+	if points := stages.counters.Drain(settled).Points; len(points) == 0 {
 		t.Error("the counter bucket never drained; it is held forever and the map only grows")
 	}
 	if held := stages.counters.Pending(); held != 0 {
@@ -129,7 +129,7 @@ func TestAnUntrustedSpanTimestampIsCountedAtReceiveTime(t *testing.T) {
 	}
 
 	receiveMinute := receivedAt.Truncate(time.Minute)
-	for _, point := range points {
+	for _, point := range points.Points {
 		if !point.Timestamp.Equal(receiveMinute) {
 			t.Errorf("counted %s at %s, want the minute we received it (%s)",
 				point.MetricName, point.Timestamp, receiveMinute)

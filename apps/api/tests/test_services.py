@@ -369,3 +369,34 @@ def test_every_column_the_statements_name_exists_in_the_table(column: str) -> No
 
     assert declaration.search(_migration_text()), f"{column} is not a column of endpoint_stats_1m"
     assert column in queries.SERVICES_SQL or column in queries.endpoints_sql(one_service=True)
+
+
+# ------------------------------------ the rows must be counted before sampling
+
+
+def test_no_live_materialized_view_fills_the_table_these_statements_read() -> None:
+    """The whole screen is wrong by roughly ten times if one ever does again.
+
+    A materialized view over `spans` sits *downstream* of tail sampling, which
+    keeps every failed trace, every slow trace and one healthy trace in ten. The
+    rollup is filled by the worker's `derive` stage instead, before the sampler
+    (ADR 0010). Recreating a view over `spans` would silently restore the defect
+    — the numbers would still look plausible — so nothing may create one that a
+    later migration does not drop.
+    """
+    creates = {
+        path.name
+        for path in sorted(_MIGRATIONS.glob("*.up.sql"))
+        if re.search(r"MATERIALIZED VIEW.*?TO\s+endpoint_stats_1m\b", path.read_text("utf-8"), re.S)
+    }
+    drops = {
+        path.name
+        for path in sorted(_MIGRATIONS.glob("*.up.sql"))
+        if re.search(r"DROP VIEW.*endpoint_stats_1m_mv", path.read_text("utf-8"), re.S)
+    }
+
+    assert creates == {"000012_endpoint_stats_1m_mv.up.sql"}, (
+        "a migration creates a materialized view into endpoint_stats_1m; the rollup is "
+        "derived before the sampler and a view over `spans` is not"
+    )
+    assert drops, "000024 must drop endpoint_stats_1m_mv, or the rollup is fed twice"

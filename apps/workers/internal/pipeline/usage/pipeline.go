@@ -123,6 +123,7 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Int64("bytes_metered", totals.counters.Bytes),
 		slog.Int64("usage_rows_written", totals.rowsWritten),
 		slog.Int64("usage_rows_unattributed", totals.rowsUnmatched),
+		slog.Int64("services_recorded", totals.servicesFound),
 	}
 }
 

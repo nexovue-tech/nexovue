@@ -29,6 +29,23 @@ export default defineConfig({
   expect: { timeout: ASSERTION_TIMEOUT_MS },
 
   fullyParallel: true,
+
+  /**
+   * How many browsers the API will carry, not how many this machine could drive.
+   *
+   * Every browser reaches the API through the web container's proxy, so the API sees one
+   * caller for the whole suite and holds it to the telemetry tier: 60 ClickHouse-backed
+   * reads a minute and 4 in flight at once. A screen refetches every ten seconds and the
+   * logs screen costs two reads a tick, so a browser is worth roughly 13 reads a minute.
+   * Measured at Playwright's default of 6 workers on this machine: 80 reads in the
+   * busiest minute against a limit of 60, and the API refusing the excess — which the
+   * screens render as "could not be loaded" and the specs correctly fail on.
+   *
+   * Four browsers is about 53 a minute, inside the limit with a little left for whoever
+   * else has the dev app open. Adding screens should make this suite slower, not flakier.
+   */
+  workers: 4,
+
   forbidOnly: !!process.env.CI,
   // One retry on CI covers infrastructure noise. Locally a flake must be visible as one.
   retries: process.env.CI ? 1 : 0,

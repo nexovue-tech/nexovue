@@ -7,7 +7,9 @@ import (
 
 type fixedPolicy struct{ p Policy }
 
-func (f fixedPolicy) SamplingPolicy(string) Policy { return f.p }
+func (f fixedPolicy) SamplingPolicy(string, int) Policy { return f.p }
+
+func (fixedPolicy) RecordStoredTrace(string) {}
 
 func newTestBuffer(t *testing.T) *Buffer[string] {
 	t.Helper()

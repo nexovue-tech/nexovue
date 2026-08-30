@@ -45,6 +45,11 @@ type Options struct {
 	// is a worse sample than waiting but is never lost data.
 	MaxTraces int
 	MaxSpans  int
+
+	// FirstTraces is how many traces a project stores whole before the
+	// percentage applies to it at all, so a new customer's first span is never
+	// the one the sampler dropped. Zero switches the carve-out off.
+	FirstTraces int
 }
 
 func (o Options) validate() error {
@@ -57,6 +62,8 @@ func (o Options) validate() error {
 		return errors.New("sample: MaxTraces must be positive")
 	case o.MaxSpans <= 0:
 		return errors.New("sample: MaxSpans must be positive")
+	case o.FirstTraces < 0:
+		return errors.New("sample: FirstTraces must not be negative")
 	}
 	return nil
 }
@@ -72,6 +79,11 @@ type Stats struct {
 	// ClosedEarly counts traces decided before their window ran out because the
 	// buffer was full. A number that keeps climbing means the limits are wrong.
 	ClosedEarly uint64
+	// FirstTracesKept counts traces this process kept because their project was
+	// still inside its first-traces carve-out. It should be a small number that
+	// stops growing; one that climbs steadily means carve-outs are not closing,
+	// which is the count failing to reach the control plane.
+	FirstTracesKept uint64
 }
 
 // Buffer holds spans by trace until the trace can be judged whole.
@@ -253,7 +265,15 @@ func (b *Buffer[T]) enforceLimits() []T {
 
 // close takes the verdict for one trace, remembers it and releases its rows.
 func (b *Buffer[T]) close(now time.Time, key traceKey, trace *openTrace[T], release []T) []T {
-	keep := b.policies.SamplingPolicy(trace.project).keeps(trace.facts)
+	policy := b.policies.SamplingPolicy(trace.project, b.options.FirstTraces)
+	keep := policy.keeps(trace.facts)
+
+	// Only the carve-out's own traces are counted, so the count is what it has
+	// stored and it stops moving the moment the carve-out closes.
+	if keep && policy.KeepingFirstTraces {
+		b.policies.RecordStoredTrace(trace.project)
+		b.stats.FirstTracesKept++
+	}
 
 	delete(b.open, key)
 	b.spans -= len(trace.rows)

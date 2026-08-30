@@ -2,14 +2,19 @@ package usage
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	logsvc "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	metricsvc "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	tracesvc "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
 
@@ -90,6 +95,72 @@ func metricPayload(t *testing.T) []byte {
 			{ScopeMetrics: []*metricspb.ScopeMetrics{{Metrics: metrics}}},
 		},
 	})
+}
+
+// resourceWith is an OTLP resource carrying one service name, or none at all
+// when the name is empty — the sender that assembled a resource by hand and
+// left `service.name` out.
+func resourceWith(service string) *resourcepb.Resource {
+	if service == "" {
+		return &resourcepb.Resource{}
+	}
+	return &resourcepb.Resource{Attributes: []*commonpb.KeyValue{{
+		Key: attrServiceName,
+		Value: &commonpb.AnyValue{
+			Value: &commonpb.AnyValue_StringValue{StringValue: service},
+		},
+	}}}
+}
+
+// spansFrom is a trace export with one resource per named service, each
+// carrying spansEach spans. One export can carry several services — a
+// collector forwarding for a fleet does exactly this.
+func spansFrom(t *testing.T, spansEach int, servicesNamed ...string) []byte {
+	t.Helper()
+
+	request := &tracesvc.ExportTraceServiceRequest{}
+	for _, service := range servicesNamed {
+		request.ResourceSpans = append(request.ResourceSpans, &tracepb.ResourceSpans{
+			Resource:   resourceWith(service),
+			ScopeSpans: []*tracepb.ScopeSpans{{Spans: make([]*tracepb.Span, spansEach)}},
+		})
+	}
+	return marshal(t, request)
+}
+
+// logsFrom is the same for logs, so a service that only ever logs is proved to
+// be metered as a service.
+func logsFrom(t *testing.T, recordsEach int, servicesNamed ...string) []byte {
+	t.Helper()
+
+	request := &logsvc.ExportLogsServiceRequest{}
+	for _, service := range servicesNamed {
+		request.ResourceLogs = append(request.ResourceLogs, &logspb.ResourceLogs{
+			Resource: resourceWith(service),
+			ScopeLogs: []*logspb.ScopeLogs{
+				{LogRecords: make([]*logspb.LogRecord, recordsEach)},
+			},
+		})
+	}
+	return marshal(t, request)
+}
+
+// metricsFrom is the same for metric points.
+func metricsFrom(t *testing.T, pointsEach int, servicesNamed ...string) []byte {
+	t.Helper()
+
+	request := &metricsvc.ExportMetricsServiceRequest{}
+	for _, service := range servicesNamed {
+		request.ResourceMetrics = append(request.ResourceMetrics, &metricspb.ResourceMetrics{
+			Resource: resourceWith(service),
+			ScopeMetrics: []*metricspb.ScopeMetrics{{Metrics: []*metricspb.Metric{
+				{Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+					DataPoints: make([]*metricspb.NumberDataPoint, pointsEach),
+				}}},
+			}}},
+		})
+	}
+	return marshal(t, request)
 }
 
 // envelope wraps a payload the way every door does before the broker.
@@ -183,4 +254,107 @@ func TestAnUndecodableMessageIsRejectedWithItsTenant(t *testing.T) {
 			"attribute is one nobody can chase",
 			rejection.TenantID, rejection.ProjectID, testOrg, testProject)
 	}
+}
+
+// ------------------------------------------------------ the billing unit
+
+// The unit ADR 0056 prices on. One export can carry several services, and each
+// one of them is billable.
+func TestEveryServiceInATraceExportIsMetered(t *testing.T) {
+	metered, err := countSpans(spansFrom(t, 2, "checkout", "payments"))
+	if err != nil {
+		t.Fatalf("counting spans: %v", err)
+	}
+	if got := metered.Services; !equalNames(got, []string{"checkout", "payments"}) {
+		t.Errorf("services = %v, want checkout and payments", got)
+	}
+	if metered.Spans != 4 {
+		t.Errorf("spans = %d, want 4", metered.Spans)
+	}
+}
+
+// A service repeated across resources is one service, not two: the bill counts
+// distinct names.
+func TestTheSameServiceTwiceInOneExportIsOneService(t *testing.T) {
+	metered, err := countSpans(spansFrom(t, 1, "checkout", "checkout"))
+	if err != nil {
+		t.Fatalf("counting spans: %v", err)
+	}
+	if len(metered.Services) != 1 {
+		t.Errorf("services = %v, want one", metered.Services)
+	}
+}
+
+// An SDK sending an empty resource block is not a service the customer ran.
+// Billing for it would charge for silence.
+func TestAResourceCarryingNothingIsNotABillableService(t *testing.T) {
+	metered, err := countSpans(spansFrom(t, 0, "checkout"))
+	if err != nil {
+		t.Fatalf("counting spans: %v", err)
+	}
+	if len(metered.Services) != 0 {
+		t.Errorf("services = %v, want none: the resource carried no spans", metered.Services)
+	}
+}
+
+// Every resource with no `service.name` folds into one bucket, so a sender that
+// omits the attribute is one service rather than one per message.
+func TestResourcesWithNoServiceNameAreOneBucket(t *testing.T) {
+	metered, err := countSpans(spansFrom(t, 1, "", ""))
+	if err != nil {
+		t.Fatalf("counting spans: %v", err)
+	}
+	if !equalNames(metered.Services, []string{UnnamedService}) {
+		t.Errorf("services = %v, want the single %s bucket", metered.Services, UnnamedService)
+	}
+}
+
+// OTLP puts no limit on an attribute value and the column is varchar(255). The
+// truncation counts runes, not bytes, or a multi-byte name would be cut through
+// a character and stored as broken UTF-8.
+func TestAnOverlongServiceNameIsTruncatedOnARuneBoundary(t *testing.T) {
+	name := strings.Repeat("é", maxServiceNameChars+10)
+
+	metered, err := countSpans(spansFrom(t, 1, name))
+	if err != nil {
+		t.Fatalf("counting spans: %v", err)
+	}
+	stored := metered.Services[0]
+	if got := utf8.RuneCountInString(stored); got != maxServiceNameChars {
+		t.Errorf("stored name is %d runes, want %d", got, maxServiceNameChars)
+	}
+	if !utf8.ValidString(stored) {
+		t.Error("truncation cut through a character and produced invalid UTF-8")
+	}
+}
+
+// A service that only logs is still a service monitored, and so is one that
+// only reports metrics. All three signals feed the same set.
+func TestLogsAndMetricsAlsoMeterTheirServices(t *testing.T) {
+	logged, err := countLogs(logsFrom(t, 3, "billing"))
+	if err != nil {
+		t.Fatalf("counting logs: %v", err)
+	}
+	if !equalNames(logged.Services, []string{"billing"}) {
+		t.Errorf("log services = %v, want billing", logged.Services)
+	}
+
+	measured, err := countMetricPoints(metricsFrom(t, 2, "ledger"))
+	if err != nil {
+		t.Fatalf("counting metric points: %v", err)
+	}
+	if !equalNames(measured.Services, []string{"ledger"}) {
+		t.Errorf("metric services = %v, want ledger", measured.Services)
+	}
+}
+
+// equalNames compares two name sets regardless of order.
+func equalNames(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	left, right := slices.Clone(got), slices.Clone(want)
+	slices.Sort(left)
+	slices.Sort(right)
+	return slices.Equal(left, right)
 }

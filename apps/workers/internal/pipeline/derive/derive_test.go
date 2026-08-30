@@ -31,9 +31,9 @@ func span(at time.Time, service, endpoint string, durationMS float64, errored bo
 
 // valuesByMetric totals every point per metric name, which is how a dashboard
 // reads the table.
-func valuesByMetric(points []derive.Point) map[string]float64 {
+func valuesByMetric(drained derive.Derived) map[string]float64 {
 	totals := make(map[string]float64)
-	for _, point := range points {
+	for _, point := range drained.Points {
 		totals[point.MetricName] += point.Value
 	}
 	return totals
@@ -67,7 +67,7 @@ func TestCountersSplitBySeries(t *testing.T) {
 	counters.Observe(now, span(base, "payments", "/charge", 1, false))
 	counters.Observe(now, span(base.Add(time.Minute), "checkout", "/checkout", 1, false))
 
-	points := counters.Drain(base.Add(3 * time.Minute))
+	points := counters.Drain(base.Add(3 * time.Minute)).Points
 	counts := 0
 	for _, point := range points {
 		if point.MetricName == derive.MetricSpanCount {
@@ -83,7 +83,7 @@ func TestEachRowCarriesTheDimensionsThatAreNotColumns(t *testing.T) {
 	counters := derive.NewCounters(0)
 	counters.Observe(now, span(base, "checkout", "/checkout", 1, false))
 
-	points := counters.Drain(base.Add(2 * time.Minute))
+	points := counters.Drain(base.Add(2 * time.Minute)).Points
 	if len(points) == 0 {
 		t.Fatal("Drain() returned nothing")
 	}
@@ -110,10 +110,10 @@ func TestAnOpenMinuteIsNotDrained(t *testing.T) {
 	counters := derive.NewCounters(10 * time.Second)
 	counters.Observe(now, span(base, "checkout", "/checkout", 1, false))
 
-	if points := counters.Drain(base.Add(65 * time.Second)); len(points) != 0 {
+	if points := counters.Drain(base.Add(65 * time.Second)).Points; len(points) != 0 {
 		t.Errorf("Drain() returned %d points before the grace period, want none", len(points))
 	}
-	if points := counters.Drain(base.Add(71 * time.Second)); len(points) == 0 {
+	if points := counters.Drain(base.Add(71 * time.Second)).Points; len(points) == 0 {
 		t.Error("Drain() returned nothing once the minute and its grace had passed")
 	}
 }

@@ -1,0 +1,25 @@
+-- The Services screen was reading roughly a tenth of the traffic at roughly ten
+-- times the error rate, and this view is why.
+--
+-- Tail sampling keeps every failed trace, every trace over the slow threshold,
+-- and one healthy trace in ten. It writes the survivors to `spans`. This view
+-- reads `spans`, so the rollup the screen is built on sat *downstream* of the
+-- sampler. Measured by exporting 30 healthy, 30 slow and 30 failed traces:
+-- 5 / 30 / 30 rows reached the rollup. A service with a true 1% error rate
+-- displayed about 9%.
+--
+-- That breaks the Phase 1 invariant "metrics derived from all traces before
+-- sampling" (ADR 0010), which the counter points in `metrics_sum` and
+-- `service_edges_1m` have always honoured because the worker derives them in
+-- the pipeline, before the sampler, and inserts them itself.
+--
+-- So `endpoint_stats_1m` is now filled the same way, by the `derive` stage —
+-- including its `latency_quantiles`, whose durations travel as an array and are
+-- folded into the state by the server on the way in. Nothing reads this view
+-- any more, and leaving it would double every row.
+--
+-- The deduplication window 000021 put on `endpoint_stats_1m` stays, and is now
+-- load-bearing for the reason `service_edges_1m` carries one: a direct insert
+-- whose acknowledgement is lost is retried, and a summing rollup that takes the
+-- retry twice is wrong for good.
+DROP VIEW IF EXISTS endpoint_stats_1m_mv

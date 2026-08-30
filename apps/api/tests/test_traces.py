@@ -22,6 +22,65 @@ TRACE_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 _START_NANOS = 1_787_825_704_123_000_000
 
+_SPAN_COLUMNS = [
+    "span_id",
+    "parent_span_id",
+    "service_name",
+    "span_name",
+    "span_kind",
+    "start_time_nanos",
+    "duration_ms",
+    "status_code",
+    "status_message",
+    "http_method",
+    "http_route",
+    "http_status",
+    "rpc_system",
+    "rpc_method",
+    "rpc_status",
+    "attributes_json",
+]
+
+# The two shapes a span comes in. An HTTP span leaves the RPC columns empty and
+# a gRPC span leaves the HTTP ones empty; neither is a null.
+_HTTP_SPAN_ROW = (
+    b"00f067aa0ba902b7",
+    "",
+    "storefront",
+    "GET /checkout",
+    "SERVER",
+    _START_NANOS,
+    412.7,
+    "ERROR",
+    "boom",
+    "GET",
+    "/checkout",
+    500,
+    "",
+    "",
+    "",
+    '{"tier":"gold"}',
+)
+
+_GRPC_SPAN_ROW = (
+    b"00f067aa0ba902b7",
+    "",
+    "product-catalog",
+    "oteldemo.ProductCatalogService/ListProducts",
+    "SERVER",
+    _START_NANOS,
+    412.7,
+    "ERROR",
+    "boom",
+    "",
+    "",
+    0,
+    "grpc",
+    "oteldemo.ProductCatalogService/ListProducts",
+    "UNAVAILABLE",
+    "{}",
+)
+
 
 class FakeQueryResult:
     def __init__(self, column_names: list[str], result_rows: list[tuple[Any, ...]]) -> None:
@@ -32,9 +91,10 @@ class FakeQueryResult:
 class FakeTelemetry:
     """Serves trace rows, honouring the tenant the repository bound."""
 
-    def __init__(self, traces: dict[str, str]) -> None:
+    def __init__(self, traces: dict[str, str], span_row: tuple[Any, ...] = _HTTP_SPAN_ROW) -> None:
         # tenant -> the one trace id that tenant owns
         self._traces = traces
+        self._span_row = span_row
 
     async def query(
         self,
@@ -79,44 +139,11 @@ class FakeTelemetry:
 
         if owned != bound.get("trace_id"):
             return FakeQueryResult([], [])
-        return FakeQueryResult(
-            [
-                "span_id",
-                "parent_span_id",
-                "service_name",
-                "span_name",
-                "span_kind",
-                "start_time_nanos",
-                "duration_ms",
-                "status_code",
-                "status_message",
-                "http_method",
-                "http_route",
-                "http_status",
-                "attributes_json",
-            ],
-            [
-                (
-                    b"00f067aa0ba902b7",
-                    "",
-                    "storefront",
-                    "GET /checkout",
-                    "SERVER",
-                    _START_NANOS,
-                    412.7,
-                    "ERROR",
-                    "boom",
-                    "GET",
-                    "/checkout",
-                    500,
-                    '{"tier":"gold"}',
-                )
-            ],
-        )
+        return FakeQueryResult(_SPAN_COLUMNS, [self._span_row])
 
 
-def _repository(tenant: str) -> TenantScopedRepository:
-    store = FakeTelemetry({TENANT_A: TRACE_A, TENANT_B: TRACE_B})
+def _repository(tenant: str, span_row: tuple[Any, ...] = _HTTP_SPAN_ROW) -> TenantScopedRepository:
+    store = FakeTelemetry({TENANT_A: TRACE_A, TENANT_B: TRACE_B}, span_row)
     return TenantScopedRepository(store, tenant_id=tenant)  # type: ignore[arg-type]
 
 
@@ -180,6 +207,29 @@ async def test_the_detail_response_reports_the_trace_as_the_contract_names_it() 
     assert detail.spans[0].span_id == "00f067aa0ba902b7"
     assert detail.spans[0].parent_span_id == "", "a root span carries an empty string, never null"
     assert detail.spans[0].attributes == {"tier": "gold"}
+
+
+async def test_a_grpc_span_reports_its_rpc_identity_and_not_an_http_one() -> None:
+    """Five of the demo's twelve services emit no HTTP attributes at all."""
+    detail = await service.get_trace(
+        _repository(TENANT_A, _GRPC_SPAN_ROW), project_id=PROJECT, trace_id=TRACE_A
+    )
+    span = detail.spans[0]
+
+    assert span.rpc_system == "grpc"
+    assert span.rpc_method == "oteldemo.ProductCatalogService/ListProducts"
+    assert span.rpc_status == "UNAVAILABLE"
+    assert (span.http_method, span.http_route, span.http_status) == ("", "", 0), (
+        "an RPC status must never be reported as an HTTP one"
+    )
+
+
+async def test_an_http_span_reports_no_rpc_identity() -> None:
+    detail = await service.get_trace(_repository(TENANT_A), project_id=PROJECT, trace_id=TRACE_A)
+    span = detail.spans[0]
+
+    assert (span.rpc_system, span.rpc_method, span.rpc_status) == ("", "", "")
+    assert span.http_status == 500
 
 
 async def test_an_empty_window_is_an_empty_list_and_not_a_404() -> None:

@@ -7,6 +7,8 @@ import (
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/chpool"
 	"github.com/ClickHouse/ch-go/proto"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/insertdedup"
 )
 
 // edgesTable is the insert target, named once so the statement and the column
@@ -86,6 +88,21 @@ func (b *block) rows() int { return b.tenantID.Rows() }
 
 func (b *block) reset() { b.columns.Reset() }
 
+// deduplicationToken is what makes a retried insert recognisable as one. 000016
+// added a deduplication window for this table believing the store would hash
+// the block; it does not for an insert that reads from `input()`, so without
+// the token a retry after a lost acknowledgement doubled every edge it carried.
+// Measured — see the insertdedup package.
+func deduplicationToken(edges []Edge) string {
+	digest := insertdedup.NewDigest()
+	for _, edge := range edges {
+		digest.AddRow(edge.Minute.UTC(), edge.TenantID, edge.ProjectID, edge.RetentionDays,
+			edge.ClientService, edge.ServerService, edge.Kind,
+			edge.CallCount, edge.ErrorCount, edge.LatencyMS)
+	}
+	return digest.Token()
+}
+
 // Writer inserts derived edges into ClickHouse.
 type Writer struct {
 	pool  *chpool.Pool
@@ -109,7 +126,11 @@ func (w *Writer) Insert(ctx context.Context, edges []Edge) error {
 		w.block.append(edge)
 	}
 
-	query := ch.Query{Body: insertStatement, Input: w.block.columns}
+	query := ch.Query{
+		Body:     insertStatement,
+		Input:    w.block.columns,
+		Settings: []ch.Setting{{Key: insertdedup.Setting, Value: deduplicationToken(edges)}},
+	}
 	if err := w.pool.Do(ctx, query); err != nil {
 		return fmt.Errorf("insert %d service edges: %w", w.block.rows(), err)
 	}

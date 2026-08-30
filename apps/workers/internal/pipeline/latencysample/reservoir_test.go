@@ -1,4 +1,4 @@
-package serviceedges
+package latencysample
 
 import (
 	"encoding/binary"
@@ -12,13 +12,13 @@ func spanIDOf(n int) []byte {
 	return id
 }
 
-func TestLatencySamplesKeepEverythingUnderTheCap(t *testing.T) {
-	var samples latencySamples
+func TestReservoirKeepsEverythingUnderTheCap(t *testing.T) {
+	var samples Reservoir
 	for n := 0; n < 100; n++ {
-		samples.observe(weigh(nil, spanIDOf(n)), float64(100-n))
+		samples.Observe(Weigh(nil, spanIDOf(n)), float64(100-n))
 	}
 
-	values := samples.values()
+	values := samples.Values()
 	if len(values) != 100 {
 		t.Fatalf("expected all 100 durations kept, got %d", len(values))
 	}
@@ -30,22 +30,22 @@ func TestLatencySamplesKeepEverythingUnderTheCap(t *testing.T) {
 // Above the cap the sample is the lowest-weighted durations — a fixed subset of
 // the spans, not a random one, so the same minute re-derived produces the same
 // block.
-func TestLatencySamplesKeepTheLowestWeightedDurations(t *testing.T) {
-	const observed = maxLatencySamples * 3
+func TestReservoirKeepsTheLowestWeightedDurations(t *testing.T) {
+	const observed = MaxSamples * 3
 
 	weights := make([]uint64, 0, observed)
-	var samples latencySamples
+	var samples Reservoir
 	for n := 0; n < observed; n++ {
-		weight := weigh(nil, spanIDOf(n))
+		weight := Weigh(nil, spanIDOf(n))
 		weights = append(weights, weight)
-		samples.observe(weight, float64(n))
+		samples.Observe(weight, float64(n))
 	}
-	if got := len(samples.values()); got != maxLatencySamples {
-		t.Fatalf("expected the sample capped at %d, got %d", maxLatencySamples, got)
+	if got := len(samples.Values()); got != MaxSamples {
+		t.Fatalf("expected the sample capped at %d, got %d", MaxSamples, got)
 	}
 
 	sort.Slice(weights, func(i, j int) bool { return weights[i] < weights[j] })
-	cutoff := weights[maxLatencySamples-1]
+	cutoff := weights[MaxSamples-1]
 	for _, kept := range samples.kept {
 		if kept.weight > cutoff {
 			t.Fatalf("kept weight %d above the cutoff %d", kept.weight, cutoff)
@@ -55,19 +55,19 @@ func TestLatencySamplesKeepTheLowestWeightedDurations(t *testing.T) {
 
 // Arrival order must not change the sample: a replay reads the same offsets but
 // a rebalance can reorder what a single batch holds.
-func TestLatencySamplesDoNotDependOnArrivalOrder(t *testing.T) {
-	const observed = maxLatencySamples * 2
+func TestReservoirDoesNotDependOnArrivalOrder(t *testing.T) {
+	const observed = MaxSamples * 2
 
-	forward := &latencySamples{}
-	backward := &latencySamples{}
+	forward := &Reservoir{}
+	backward := &Reservoir{}
 	for n := 0; n < observed; n++ {
-		forward.observe(weigh(nil, spanIDOf(n)), float64(n))
+		forward.Observe(Weigh(nil, spanIDOf(n)), float64(n))
 	}
 	for n := observed - 1; n >= 0; n-- {
-		backward.observe(weigh(nil, spanIDOf(n)), float64(n))
+		backward.Observe(Weigh(nil, spanIDOf(n)), float64(n))
 	}
 
-	first, second := forward.values(), backward.values()
+	first, second := forward.Values(), backward.Values()
 	if len(first) != len(second) {
 		t.Fatalf("different sample sizes: %d and %d", len(first), len(second))
 	}

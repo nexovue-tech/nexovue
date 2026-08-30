@@ -185,5 +185,8 @@ def _to_span(row: dict[str, Any]) -> SpanDetail:
         http_method=values.text(row["http_method"]),
         http_route=values.text(row["http_route"]),
         http_status=int(row["http_status"]),
+        rpc_system=values.text(row["rpc_system"]),
+        rpc_method=values.text(row["rpc_method"]),
+        rpc_status=values.text(row["rpc_status"]),
         attributes=values.json_object(row["attributes_json"]),
     )

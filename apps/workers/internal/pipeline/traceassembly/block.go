@@ -32,6 +32,9 @@ type spanBlock struct {
 	httpMethod        *proto.ColLowCardinality[string]
 	httpRoute         *proto.ColLowCardinality[string]
 	httpStatus        proto.ColUInt16
+	rpcSystem         *proto.ColLowCardinality[string]
+	rpcMethod         *proto.ColLowCardinality[string]
+	rpcStatus         *proto.ColLowCardinality[string]
 	deploymentVersion *proto.ColLowCardinality[string]
 	resourceAttrs     proto.ColJSONStr
 	spanAttrs         proto.ColJSONStr
@@ -56,6 +59,9 @@ func newSpanBlock() *spanBlock {
 		statusCode:        new(proto.ColStr).LowCardinality(),
 		httpMethod:        new(proto.ColStr).LowCardinality(),
 		httpRoute:         new(proto.ColStr).LowCardinality(),
+		rpcSystem:         new(proto.ColStr).LowCardinality(),
+		rpcMethod:         new(proto.ColStr).LowCardinality(),
+		rpcStatus:         new(proto.ColStr).LowCardinality(),
 		deploymentVersion: new(proto.ColStr).LowCardinality(),
 	}
 	// The column carries its own precision; without it ch-go cannot encode a
@@ -82,6 +88,9 @@ func newSpanBlock() *spanBlock {
 		{Name: "http_method", Data: block.httpMethod},
 		{Name: "http_route", Data: block.httpRoute},
 		{Name: "http_status", Data: &block.httpStatus},
+		{Name: "rpc_system", Data: block.rpcSystem},
+		{Name: "rpc_method", Data: block.rpcMethod},
+		{Name: "rpc_status", Data: block.rpcStatus},
 		{Name: "deployment_version", Data: block.deploymentVersion},
 		{Name: "resource_attrs", Data: &block.resourceAttrs},
 		{Name: "span_attrs", Data: &block.spanAttrs},
@@ -109,6 +118,9 @@ func (b *spanBlock) append(row spanRow) {
 	b.httpMethod.Append(row.HTTPMethod)
 	b.httpRoute.Append(row.HTTPRoute)
 	b.httpStatus.Append(row.HTTPStatus)
+	b.rpcSystem.Append(row.RPCSystem)
+	b.rpcMethod.Append(row.RPCMethod)
+	b.rpcStatus.Append(row.RPCStatus)
 	b.deploymentVersion.Append(row.DeploymentVersion)
 	b.resourceAttrs.Append(row.ResourceAttrs)
 	b.spanAttrs.Append(row.SpanAttrs)

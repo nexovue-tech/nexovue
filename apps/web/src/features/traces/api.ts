@@ -62,6 +62,14 @@ export interface Span {
   http_method?: string;
   http_route?: string;
   http_status?: number;
+  /**
+   * A gRPC span carries none of the three above. Its status is the RPC status
+   * name — "OK", "UNAVAILABLE" — never an HTTP code, which is why it is a
+   * separate field rather than a second meaning for `http_status`.
+   */
+  rpc_system?: string;
+  rpc_method?: string;
+  rpc_status?: string;
   attributes: Record<string, unknown>;
 }
 

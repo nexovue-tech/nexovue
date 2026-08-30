@@ -7,8 +7,9 @@
  * the dev stack pointed at the seed, not of the product.
  */
 
-import { expect, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
+import { signIn } from "./support/accounts";
 import { SEEDED_USER, TRACE_LIST_COLUMNS } from "./support/stack";
 
 const NOTHING_ARRIVING =
@@ -34,10 +35,3 @@ test("a wrong password is answered on the form, not by navigating away", async (
   );
   await expect(page).toHaveURL(/\/login$/);
 });
-
-async function signIn(page: Page, email: string, password: string): Promise<void> {
-  await page.goto("/login");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-}

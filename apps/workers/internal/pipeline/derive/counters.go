@@ -1,10 +1,16 @@
-// Package derive computes the exact per-minute counters that dashboards and
-// anomaly detection read.
+// Package derive computes the exact per-minute aggregates that the screens,
+// the dashboards and anomaly detection read: the counter points of
+// `metrics_sum`, and the endpoint rollup `endpoint_stats_1m`.
 //
 // It runs before the sampler, over every span of every trace. That order is the
 // whole point (ADR 0010): storage can drop nine healthy traces in ten and the
 // counts, error rates and totals stay exact, because they were computed before
-// anything was dropped.
+// anything was dropped. `endpoint_stats_1m` was filled by a materialized view
+// over `spans` until 000024, which put it *downstream* of the sampler and made
+// the service overview read a tenth of the traffic at ten times the error rate.
+//
+// Both outputs come out of one Observe and one drain, so a row of the rollup
+// and the counters beside it can never disagree about the same span.
 package derive
 
 import (
@@ -24,8 +30,8 @@ const (
 	// MetricSpanErrors counts spans whose status is ERROR, before sampling.
 	MetricSpanErrors = "nexovue.spans.error.count"
 	// MetricSpanDurationSum totals span durations in milliseconds, before
-	// sampling. With the count it gives an exact mean; percentiles need the
-	// stored spans and are therefore only as exact as the sample.
+	// sampling. With the count it gives an exact mean; percentiles are in
+	// `endpoint_stats_1m`, which this stage also fills.
 	MetricSpanDurationSum = "nexovue.spans.duration_ms.sum"
 )
 
@@ -48,6 +54,20 @@ type Span struct {
 	ServiceName string
 	Endpoint    string
 	HTTPMethod  string
+
+	// SpanKind and SpanName are the endpoint rollup's own dimensions, and are
+	// the table's rather than this stage's: an HTTP route and a queue handler
+	// can share a name and are not the same endpoint. Only SERVER and CONSUMER
+	// spans reach it.
+	SpanKind string
+	SpanName string
+
+	// TraceID and SpanID identify the span, and are what weights its duration
+	// in the rollup's latency sample. A span id is unique only within a trace,
+	// so both are needed: a broken SDK emitting a constant id would otherwise
+	// weight every one of its spans the same.
+	TraceID []byte
+	SpanID  []byte
 
 	// Timestamp is when the client says the span started.
 	Timestamp time.Time
@@ -110,9 +130,26 @@ type totals struct {
 // It is not safe for concurrent use: one pipeline goroutine owns it, which is
 // how the trace-assembly loop is built.
 type Counters struct {
-	buckets   map[series]*totals
+	buckets map[series]*totals
+	// endpoints is the second output, at the endpoint rollup's own grain. It is
+	// a separate map rather than a wider key because `metrics_sum` covers every
+	// span kind, and folding span_name into its series would multiply that
+	// table by a dimension only this rollup reads.
+	endpoints map[endpointKey]*endpointTotals
 	lateGrace time.Duration
 }
+
+// Derived is one drain: the counter points and the endpoint rollup rows for the
+// same minutes. They are handed out together because they are the same spans
+// counted twice over, and a caller that wrote one without the other would leave
+// the two disagreeing until the next restart.
+type Derived struct {
+	Points    []Point
+	Endpoints []EndpointStat
+}
+
+// Empty reports whether a drain produced nothing at all.
+func (d Derived) Empty() bool { return len(d.Points) == 0 && len(d.Endpoints) == 0 }
 
 // NewCounters returns counters that hold a minute open for lateGrace after it
 // ends, so spans that arrive a little late still land in their own minute.
@@ -121,7 +158,11 @@ type Counters struct {
 // for it. The table is summed on read, so two rows for one minute total the
 // same as one — late data costs a row, never accuracy.
 func NewCounters(lateGrace time.Duration) *Counters {
-	return &Counters{buckets: make(map[series]*totals), lateGrace: lateGrace}
+	return &Counters{
+		buckets:   make(map[series]*totals),
+		endpoints: make(map[endpointKey]*endpointTotals),
+		lateGrace: lateGrace,
+	}
 }
 
 // Observe counts one span and returns the minute bucket it landed in. Every
@@ -154,10 +195,14 @@ func (c *Counters) Observe(now time.Time, span Span) (minute time.Time, discarde
 	if span.Errored {
 		bucket.errors++
 	}
+	c.observeEndpoint(key.minute, span)
 	return key.minute, discarded
 }
 
-// Drained reports whether every counter for a minute has already been written.
+// Drained reports whether everything derived for a minute has already been
+// written. One answer covers both outputs: they share the bucket and the grace,
+// and they are drained in the same call.
+//
 // A zero minute means nothing was counted, which is trivially drained.
 func (c *Counters) Drained(now, minute time.Time) bool {
 	if minute.IsZero() {
@@ -168,7 +213,7 @@ func (c *Counters) Drained(now, minute time.Time) bool {
 
 // Drain returns rows for every minute that has ended and outlived the grace
 // period, removing them from memory. Minutes still open are left alone.
-func (c *Counters) Drain(now time.Time) []Point {
+func (c *Counters) Drain(now time.Time) Derived {
 	deadline := now.UTC().Add(-c.lateGrace)
 	return c.drain(func(minute time.Time) bool {
 		return !minute.Add(clocktrust.Bucket).After(deadline)
@@ -177,11 +222,11 @@ func (c *Counters) Drain(now time.Time) []Point {
 
 // DrainAll returns rows for every minute held, complete or not. Shutdown calls
 // it: an unwritten counter is a hole in a graph that nothing will ever fill.
-func (c *Counters) DrainAll() []Point {
+func (c *Counters) DrainAll() Derived {
 	return c.drain(func(time.Time) bool { return true })
 }
 
-func (c *Counters) drain(closed func(minute time.Time) bool) []Point {
+func (c *Counters) drain(closed func(minute time.Time) bool) Derived {
 	points := make([]Point, 0, len(c.buckets)*3)
 	for key, bucket := range c.buckets {
 		if !closed(key.minute) {
@@ -202,7 +247,7 @@ func (c *Counters) drain(closed func(minute time.Time) bool) []Point {
 	// Go randomises map iteration, so without this the same counts produce a
 	// different block every time and every replay double-counts.
 	sort.Slice(points, func(i, j int) bool { return points[i].less(points[j]) })
-	return points
+	return Derived{Points: points, Endpoints: c.drainEndpoints(closed)}
 }
 
 // less orders points totally, so a drain is reproducible.
@@ -223,9 +268,15 @@ func (p Point) less(other Point) bool {
 	}
 }
 
-// Pending reports how many series are held, which is what the pipeline logs and
-// what shows a leak if one ever appears.
+// Pending reports how many counter series are held, which is what the pipeline
+// logs and what shows a leak if one ever appears.
 func (c *Counters) Pending() int { return len(c.buckets) }
+
+// PendingEndpoints reports how many endpoint-minutes are held. Logged
+// separately because it is the map that can grow with a customer's span-name
+// cardinality, and each of its buckets holds a latency sample rather than three
+// floats.
+func (c *Counters) PendingEndpoints() int { return len(c.endpoints) }
 
 func (s series) point(name string, value float64, attrs string) Point {
 	return Point{

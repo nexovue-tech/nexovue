@@ -8,14 +8,17 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 )
 
-// spansColumns is every column of the `spans` table, in declaration order.
-// Migration 000046 rebuilt the table and is now the source; a column added
-// there must be added here.
+// spansColumns is every column of the `spans` table this writer fills, in
+// declaration order. `000001_spans.up.sql` declares the table and the numbered
+// migrations after it add columns; one that this writer must fill belongs here
+// too. `exception_type` and `exception_message` (000013) are deliberately
+// absent — nothing writes them yet.
 var spansColumns = []string{
 	"timestamp", "received_at", "retention_days", "derived_retention_days",
 	"tenant_id", "project_id", "trace_id", "span_id", "parent_span_id",
 	"service_name", "span_name", "span_kind", "duration_ms", "status_code",
 	"status_message", "http_method", "http_route", "http_status",
+	"rpc_system", "rpc_method", "rpc_status",
 	"deployment_version", "resource_attrs", "span_attrs", "events",
 }
 

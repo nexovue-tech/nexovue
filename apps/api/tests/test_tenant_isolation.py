@@ -228,6 +228,9 @@ class RecordingTelemetryStore:
                 "http_method",
                 "http_route",
                 "http_status",
+                "rpc_system",
+                "rpc_method",
+                "rpc_status",
                 "attributes_json",
             ],
             [
@@ -244,6 +247,9 @@ class RecordingTelemetryStore:
                     "GET",
                     "/checkout",
                     200,
+                    "",
+                    "",
+                    "",
                     "{}",
                 )
                 for _ in rows

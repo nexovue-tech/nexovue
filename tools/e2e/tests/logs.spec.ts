@@ -54,7 +54,8 @@ test("searching narrows the stored lines, and severity narrows them again", asyn
   const { endpoint, apiKey } = await readExportSettings(page);
 
   // The empty state is asserted here rather than in a test of its own: a second test
-  // would mean a second organisation, and the suite's signups share one rate limit.
+  // would mean a second organisation, and organisations are paced one at a time against
+  // the auth allowance (support/auth-quota.ts). Same org, same moment, so it is honest.
   await page.goto("/logs");
   await expect(page.getByRole("heading", { name: "No log lines match" })).toBeVisible();
   await expect(page.getByText("Logs could not be loaded")).toHaveCount(0);

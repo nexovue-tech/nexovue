@@ -38,6 +38,12 @@ type counting struct {
 	counted map[int32]int64
 	reached map[int32]int64
 
+	// receivedThrough is the latest receive time counted on each partition
+	// since this assignment. It is what tells the control plane a day has
+	// finished being counted; offsets alone cannot, because a meter hours
+	// behind is still advancing them.
+	receivedThrough map[int32]time.Time
+
 	// stale is set from the consumer group's assignment callback, on another
 	// goroutine, so it is atomic. A partition can arrive from a worker whose
 	// flushes this process never saw.
@@ -61,18 +67,20 @@ type totals struct {
 	undecodable   int64
 	rowsWritten   int64
 	rowsUnmatched int64
+	servicesFound int64
 }
 
 func newCounting(signal Signal, store Store, retry retrier, log *slog.Logger) *counting {
 	c := &counting{
-		signal:  signal,
-		store:   store,
-		retry:   retry,
-		log:     log,
-		meter:   NewMeter(),
-		seen:    dedupe.NewOffsets(),
-		counted: make(map[int32]int64),
-		reached: make(map[int32]int64),
+		signal:          signal,
+		store:           store,
+		retry:           retry,
+		log:             log,
+		meter:           NewMeter(),
+		seen:            dedupe.NewOffsets(),
+		counted:         make(map[int32]int64),
+		reached:         make(map[int32]int64),
+		receivedThrough: make(map[int32]time.Time),
 	}
 	c.stale.Store(true)
 	return c
@@ -98,18 +106,15 @@ func (c *counting) absorb(ctx context.Context, records []*kgo.Record, at time.Ti
 			continue
 		}
 
-		envelope, counts, err := c.signal.meter(record.Value)
+		envelope, metered, err := c.signal.meter(record.Value)
 		if err != nil {
 			c.reportUndecodable(ctx, record, err)
 			continue
 		}
-		c.meter.Observe(
-			envelope.GetTenantId(),
-			envelope.GetProjectId(),
-			consume.ReceivedAt(envelope, at),
-			counts,
-		)
-		c.totals.counters.add(counts)
+		receivedAt := consume.ReceivedAt(envelope, at)
+		c.meter.Observe(envelope.GetTenantId(), envelope.GetProjectId(), receivedAt, metered)
+		c.advanceReceived(record.Partition, receivedAt)
+		c.totals.counters.add(metered.Counts)
 		c.totals.messages++
 	}
 	return nil
@@ -119,8 +124,8 @@ func (c *counting) absorb(ctx context.Context, records []*kgo.Record, at time.Ti
 // exact. The store applies both or neither, so replaying these records cannot
 // add them a second time.
 func (c *counting) flush(ctx context.Context) error {
-	offsets := c.unflushedOffsets()
-	if len(offsets) == 0 {
+	progress := c.unflushedProgress()
+	if len(progress) == 0 {
 		return nil
 	}
 	rows := c.meter.Drain()
@@ -128,16 +133,17 @@ func (c *counting) flush(ctx context.Context) error {
 	var applied Applied
 	if err := c.retry(ctx, "write usage counters", func(callCtx context.Context) error {
 		var err error
-		applied, err = c.store.Apply(callCtx, rows, offsets)
+		applied, err = c.store.Apply(callCtx, rows, progress)
 		return err
 	}); err != nil {
 		return err
 	}
 
-	c.markCounted(offsets)
+	c.markCounted(progress)
 	c.flushes++
 	c.totals.rowsWritten += int64(applied.Written)
 	c.totals.rowsUnmatched += int64(applied.Unattributed)
+	c.totals.servicesFound += int64(applied.Services)
 
 	if applied.AlreadyCounted {
 		// The transaction had committed and its acknowledgement was lost, so
@@ -145,7 +151,7 @@ func (c *counting) flush(ctx context.Context) error {
 		// out loud, because it is the case this design exists for.
 		c.log.InfoContext(ctx, "usage flush had already been applied; counters left alone",
 			slog.Int("tenant_days", len(rows)),
-			slog.Int("partitions", len(offsets)),
+			slog.Int("partitions", len(progress)),
 		)
 		return nil
 	}
@@ -157,7 +163,8 @@ func (c *counting) flush(ctx context.Context) error {
 	}
 	c.log.DebugContext(ctx, "usage flushed",
 		slog.Int("tenant_days", applied.Written),
-		slog.Int("partitions", len(offsets)),
+		slog.Int("services_new", applied.Services),
+		slog.Int("partitions", len(progress)),
 	)
 	return nil
 }
@@ -183,6 +190,7 @@ func (c *counting) refresh(ctx context.Context) error {
 	// committed it, so a read returns this worker's own writes or those of the
 	// worker that held the partition before it.
 	c.counted, c.reached = counted, make(map[int32]int64)
+	c.receivedThrough = make(map[int32]time.Time)
 	c.stale.Store(false)
 	c.log.InfoContext(ctx, "read the counted offsets for this assignment",
 		slog.Int("partitions", len(counted)))
@@ -205,23 +213,37 @@ func (c *counting) advanceReached(partition int32, offset int64) {
 	c.reached[partition] = offset
 }
 
-// unflushedOffsets is what this flush would make exact: the partitions whose
-// absorbed offsets are past what the store has recorded.
-func (c *counting) unflushedOffsets() map[int32]int64 {
-	offsets := make(map[int32]int64, len(c.reached))
+// advanceReceived remembers the latest receive time counted on a partition.
+// Only decoded messages reach it, so the frontier it feeds lags rather than
+// overstates — the safe direction for a claim that a day is finished.
+func (c *counting) advanceReceived(partition int32, receivedAt time.Time) {
+	if latest, seen := c.receivedThrough[partition]; seen && !receivedAt.After(latest) {
+		return
+	}
+	c.receivedThrough[partition] = receivedAt
+}
+
+// unflushedProgress is what this flush would make exact: the partitions whose
+// absorbed offsets are past what the store has recorded, each with the receive
+// time counted through on it.
+func (c *counting) unflushedProgress() map[int32]Progress {
+	progress := make(map[int32]Progress, len(c.reached))
 	for partition, offset := range c.reached {
 		if counted, known := c.counted[partition]; known && offset <= counted {
 			continue
 		}
-		offsets[partition] = offset
+		progress[partition] = Progress{
+			Offset:          offset,
+			ReceivedThrough: c.receivedThrough[partition],
+		}
 	}
-	return offsets
+	return progress
 }
 
 // markCounted moves the in-process watermark to what the store just accepted.
-func (c *counting) markCounted(offsets map[int32]int64) {
-	for partition, offset := range offsets {
-		c.counted[partition] = offset
+func (c *counting) markCounted(progress map[int32]Progress) {
+	for partition, reached := range progress {
+		c.counted[partition] = reached.Offset
 	}
 }
 

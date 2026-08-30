@@ -31,6 +31,7 @@ func applyEnvironment(t *testing.T, values map[string]string) {
 		"WORKERS_POSTGRES_MIN_CONNS", "WORKERS_PROJECT_CONFIG_REFRESH",
 		"WORKERS_SAMPLING_WINDOW", "WORKERS_SAMPLING_DECISION_TTL",
 		"WORKERS_SAMPLING_SLOW_THRESHOLD", "WORKERS_SAMPLING_HEALTHY_PERCENT",
+		"WORKERS_SAMPLING_FIRST_TRACES",
 		"WORKERS_SAMPLING_MAX_TRACES", "WORKERS_SAMPLING_MAX_SPANS",
 		"WORKERS_METRICS_LATE_GRACE",
 	}
@@ -111,6 +112,7 @@ func TestLoadRejectsMalformedValues(t *testing.T) {
 		"zero slow threshold":           {"WORKERS_SAMPLING_SLOW_THRESHOLD", "0s"},
 		"percentage above a hundred":    {"WORKERS_SAMPLING_HEALTHY_PERCENT", "101"},
 		"negative percentage":           {"WORKERS_SAMPLING_HEALTHY_PERCENT", "-1"},
+		"negative first traces":         {"WORKERS_SAMPLING_FIRST_TRACES", "-1"},
 		"unbounded trace buffer":        {"WORKERS_SAMPLING_MAX_TRACES", "0"},
 		"unbounded span buffer":         {"WORKERS_SAMPLING_MAX_SPANS", "0"},
 		"zero config refresh":           {"WORKERS_PROJECT_CONFIG_REFRESH", "0s"},
@@ -194,6 +196,10 @@ func TestPipelineStageDefaultsMatchTheRecordedDecisions(t *testing.T) {
 	}
 	if cfg.Sampling.SlowThreshold != 2*time.Second {
 		t.Errorf("Sampling.SlowThreshold = %s, want ADR 0010's 2s", cfg.Sampling.SlowThreshold)
+	}
+	// The carve-out that keeps a new customer's first span out of the 10%.
+	if cfg.Sampling.FirstTraces != 100 {
+		t.Errorf("Sampling.FirstTraces = %d, want 100", cfg.Sampling.FirstTraces)
 	}
 	if cfg.Sampling.MaxTraces <= 0 || cfg.Sampling.MaxSpans <= 0 {
 		t.Error("the sampling buffer has no default bound; an unbounded map is an outage waiting")

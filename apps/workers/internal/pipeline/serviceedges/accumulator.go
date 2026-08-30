@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/clocktrust"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/latencysample"
 )
 
 // Options bound the accumulator. Every limit is required: an unbounded map on
@@ -80,7 +81,7 @@ type edgeKey struct {
 type edgeTotals struct {
 	calls   uint64
 	errors  uint64
-	latency latencySamples
+	latency latencysample.Reservoir
 }
 
 // Accumulator pairs spans into edges and accumulates them per minute, handing
@@ -183,7 +184,7 @@ func (a *Accumulator) record(resolved resolution) {
 	}
 	// Latency is the caller's own duration: what the caller experienced,
 	// network included. The callee's view of itself is in `endpoint_stats_1m`.
-	totals.latency.observe(weigh(caller.TraceID, caller.SpanID), caller.DurationMS)
+	totals.latency.Observe(latencysample.Weigh(caller.TraceID, caller.SpanID), caller.DurationMS)
 }
 
 // Drained reports whether every edge for a minute has already been written. A
@@ -242,7 +243,7 @@ func (a *Accumulator) drain(closed func(minute time.Time) bool) []Edge {
 			Kind:          key.edgeKind,
 			CallCount:     totals.calls,
 			ErrorCount:    totals.errors,
-			LatencyMS:     totals.latency.values(),
+			LatencyMS:     totals.latency.Values(),
 		})
 		delete(a.buckets, key)
 	}

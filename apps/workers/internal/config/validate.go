@@ -65,6 +65,14 @@ func positiveCount(variable string, value int) error {
 	return nil
 }
 
+// nonNegativeCount is for a count whose zero means "off" rather than "unset".
+func nonNegativeCount(variable string, value int) error {
+	if value < 0 {
+		return invalid(variable, "got %d, want zero or a positive count", value)
+	}
+	return nil
+}
+
 func notBlank(variable, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return invalid(variable, "must not be blank")

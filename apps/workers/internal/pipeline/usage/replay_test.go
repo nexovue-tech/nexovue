@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+
+	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 )
 
 const testTopic = "spans-raw"
@@ -22,8 +24,14 @@ const testTopic = "spans-raw"
 // below are about the protocol between the pipeline and that transaction, and
 // the SQL itself is proved against the running Postgres.
 type recordedStore struct {
-	counted map[int32]int64
-	rows    map[string]Counts
+	counted  map[int32]int64
+	received map[int32]time.Time
+	rows     map[string]Counts
+
+	// services is the set table: one entry per tenant-day, holding the names
+	// recorded for it. Inserting a name already there changes nothing, which is
+	// `ON CONFLICT DO NOTHING` and the reason a replayed service is harmless.
+	services map[string]map[string]struct{}
 
 	// transactions counts committed transactions, so a test can tell "applied
 	// twice, added once" from "applied once".
@@ -35,7 +43,12 @@ type recordedStore struct {
 }
 
 func newRecordedStore() *recordedStore {
-	return &recordedStore{counted: make(map[int32]int64), rows: make(map[string]Counts)}
+	return &recordedStore{
+		counted:  make(map[int32]int64),
+		received: make(map[int32]time.Time),
+		rows:     make(map[string]Counts),
+		services: make(map[string]map[string]struct{}),
+	}
 }
 
 func (s *recordedStore) CountedThrough(context.Context) (map[int32]int64, error) {
@@ -46,24 +59,46 @@ func (s *recordedStore) CountedThrough(context.Context) (map[int32]int64, error)
 	return counted, nil
 }
 
-func (s *recordedStore) Apply(_ context.Context, rows []Row, offsets map[int32]int64) (Applied, error) {
+func (s *recordedStore) Apply(
+	_ context.Context,
+	rows []Row,
+	progress map[int32]Progress,
+) (Applied, error) {
 	advanced := 0
-	for partition, offset := range offsets {
-		if counted, known := s.counted[partition]; known && offset <= counted {
+	for partition, reached := range progress {
+		if counted, known := s.counted[partition]; known && reached.Offset <= counted {
 			continue
 		}
-		s.counted[partition] = offset
+		s.counted[partition] = reached.Offset
+		// GREATEST, ignoring the null a flush that read nothing new sends.
+		if reached.ReceivedThrough.After(s.received[partition]) {
+			s.received[partition] = reached.ReceivedThrough
+		}
 		advanced++
 	}
 	if advanced == 0 {
 		return Applied{AlreadyCounted: true}, nil
 	}
 
+	newServices := 0
 	for _, row := range rows {
-		key := fmt.Sprintf("%s/%s/%s", row.OrgID, row.ProjectID, row.Day.Format(time.DateOnly))
+		key := tenantDayKey(row)
 		total := s.rows[key]
 		total.add(row.Counts)
 		s.rows[key] = total
+
+		recorded, held := s.services[key]
+		if !held {
+			recorded = make(map[string]struct{})
+			s.services[key] = recorded
+		}
+		for _, name := range row.Services {
+			if _, already := recorded[name]; already {
+				continue
+			}
+			recorded[name] = struct{}{}
+			newServices++
+		}
 	}
 	s.transactions++
 
@@ -71,13 +106,26 @@ func (s *recordedStore) Apply(_ context.Context, rows []Row, offsets map[int32]i
 		s.loseAcknowledgement = false
 		return Applied{}, errors.New("connection lost after the commit")
 	}
-	return Applied{Written: len(rows)}, nil
+	return Applied{Written: len(rows), Services: newServices}, nil
+}
+
+func tenantDayKey(row Row) string {
+	return fmt.Sprintf("%s/%s/%s", row.OrgID, row.ProjectID, row.Day.Format(time.DateOnly))
 }
 
 // spans reads back what the store holds for the day under test.
 func (s *recordedStore) spans() int64 {
-	key := fmt.Sprintf("%s/%s/%s", testOrg, testProject, testReceivedAt.Format(time.DateOnly))
-	return s.rows[key].Spans
+	return s.rows[testDayKey()].Spans
+}
+
+// billableServices is the number a customer would be invoiced on for the day
+// under test: the size of the set, not a sum of anything.
+func (s *recordedStore) billableServices() int {
+	return len(s.services[testDayKey()])
+}
+
+func testDayKey() string {
+	return fmt.Sprintf("%s/%s/%s", testOrg, testProject, testReceivedAt.Format(time.DateOnly))
 }
 
 // retryTwice is the consume loop's retry budget in miniature: enough attempts
@@ -109,6 +157,26 @@ func batch(t *testing.T, partition int32, offset int64, spansEach ...int) []*kgo
 		})
 	}
 	return records
+}
+
+// servicesBatch is one poll's worth of records carrying named services, one
+// span each, so a test can watch the set rather than the counters.
+func servicesBatch(
+	t *testing.T,
+	partition int32,
+	offset int64,
+	receivedAt time.Time,
+	servicesNamed ...string,
+) []*kgo.Record {
+	t.Helper()
+
+	return []*kgo.Record{{
+		Topic:     testTopic,
+		Partition: partition,
+		Offset:    offset,
+		Value: envelope(t, nexovuev1.Signal_SIGNAL_SPANS,
+			spansFrom(t, 1, servicesNamed...), receivedAt),
+	}}
 }
 
 func absorbAndFlush(t *testing.T, counter *counting, records []*kgo.Record) {
@@ -277,5 +345,99 @@ func TestOffsetsAreHeldUntilTheCountersAreWritten(t *testing.T) {
 	}
 	if counter.flushes <= held {
 		t.Error("a committed flush did not release the batch's offsets")
+	}
+}
+
+// ------------------------------------------------- the billing unit, replayed
+
+// The counters need the offset guard to survive a replay. The set does not: the
+// same names arriving again leave it where it was. Both halves are proved here
+// because the bill rests on the second one.
+func TestAReplayedBatchLeavesTheServiceSetWhereItWas(t *testing.T) {
+	store := newRecordedStore()
+	counter := testCounting(store)
+	records := servicesBatch(t, 0, 100, testReceivedAt, "checkout", "payments")
+
+	absorbAndFlush(t, counter, records)
+	absorbAndFlush(t, counter, records)
+	// A new process, its in-memory watermark empty, replaying from the broker.
+	absorbAndFlush(t, testCounting(store), records)
+
+	if got := store.billableServices(); got != 2 {
+		t.Errorf("billable services = %d, want 2: a replay changed the bill", got)
+	}
+}
+
+// The same services report again every ten seconds all day. The set must not
+// grow with the traffic — this is the case a counter would get wrong on the
+// first flush, long before any replay.
+func TestServicesSeenAgainOnNewRecordsDoNotGrowTheSet(t *testing.T) {
+	store := newRecordedStore()
+	counter := testCounting(store)
+
+	absorbAndFlush(t, counter, servicesBatch(t, 0, 100, testReceivedAt, "checkout", "payments"))
+	absorbAndFlush(t, counter, servicesBatch(t, 0, 101, testReceivedAt, "checkout", "payments"))
+	absorbAndFlush(t, counter, servicesBatch(t, 0, 102, testReceivedAt, "checkout", "ledger"))
+
+	if got := store.billableServices(); got != 3 {
+		t.Errorf("billable services = %d, want 3 (checkout, payments, ledger)", got)
+	}
+}
+
+// A day's set is its own. A service that ran yesterday and not today is not
+// billable today.
+func TestEachDayHasItsOwnServiceSet(t *testing.T) {
+	store := newRecordedStore()
+	counter := testCounting(store)
+	nextDay := testReceivedAt.Add(24 * time.Hour)
+
+	absorbAndFlush(t, counter, servicesBatch(t, 0, 100, testReceivedAt, "checkout", "payments"))
+	absorbAndFlush(t, counter, servicesBatch(t, 0, 101, nextDay, "checkout"))
+
+	if got := store.billableServices(); got != 2 {
+		t.Errorf("first day services = %d, want 2", got)
+	}
+	tomorrow := Row{OrgID: testOrg, ProjectID: testProject, Day: nextDay.UTC().Truncate(day)}
+	if got := len(store.services[tenantDayKey(tomorrow)]); got != 1 {
+		t.Errorf("second day services = %d, want 1", got)
+	}
+}
+
+// -------------------------------------------------- how far the meter counted
+
+// The receive-time frontier is what says a day has finished being counted.
+// Offsets cannot: a meter hours behind is still advancing them.
+func TestTheFlushRecordsHowFarTheMeterCountedInReceiveTime(t *testing.T) {
+	store := newRecordedStore()
+	counter := testCounting(store)
+	later := testReceivedAt.Add(2 * time.Hour)
+
+	absorbAndFlush(t, counter, servicesBatch(t, 0, 100, testReceivedAt, "checkout"))
+	absorbAndFlush(t, counter, servicesBatch(t, 0, 101, later, "checkout"))
+
+	if got := store.received[0]; !got.Equal(later) {
+		t.Errorf("counted through %s, want %s", got, later)
+	}
+}
+
+// A flush carrying only replays reports no receive time at all, and the stored
+// frontier is kept rather than walked back to nothing.
+func TestAFlushOfOnlyReplaysDoesNotMoveTheFrontierBack(t *testing.T) {
+	store := newRecordedStore()
+	counter := testCounting(store)
+
+	absorbAndFlush(t, counter, servicesBatch(t, 0, 100, testReceivedAt, "checkout"))
+	// A new process replays offset 100 and reads one new, undecodable record.
+	replayed := servicesBatch(t, 0, 100, testReceivedAt, "checkout")
+	replayed = append(replayed, &kgo.Record{
+		Topic: testTopic, Partition: 0, Offset: 101, Value: []byte("not an envelope"),
+	})
+	absorbAndFlush(t, testCounting(store), replayed)
+
+	if got := store.received[0]; !got.Equal(testReceivedAt) {
+		t.Errorf("frontier = %s, want it held at %s", got, testReceivedAt)
+	}
+	if got := store.counted[0]; got != 101 {
+		t.Errorf("counted through offset %d, want 101", got)
 	}
 }

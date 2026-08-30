@@ -135,6 +135,11 @@ SELECT
     http_method,
     http_route,
     http_status,
+    -- A gRPC span carries none of the three above: its identity is the RPC
+    -- method and its outcome the RPC status (migration 000023).
+    rpc_system,
+    rpc_method,
+    rpc_status,
     toJSONString(span_attrs) AS attributes_json
 FROM spans
 WHERE tenant_id = {{tenant_id:String}}

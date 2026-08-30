@@ -69,6 +69,17 @@ type Sampling struct {
 	// sets while it is still small enough not to care.
 	HealthyPercent int `env:"WORKERS_SAMPLING_HEALTHY_PERCENT" envDefault:"10"`
 
+	// FirstTraces is how many traces a project stores whole before
+	// HealthyPercent applies to it at all.
+	//
+	// A customer's first span is a hello-world request that worked, so at 10% it
+	// had a nine in ten chance of being dropped and the onboarding screen waited
+	// for a trace that was never written. The count is kept per project in the
+	// control plane, so it is the project's first traces and not each worker's.
+	// Zero switches the carve-out off, which is also what a worker with no
+	// control-plane connection runs on: nothing there can count.
+	FirstTraces int `env:"WORKERS_SAMPLING_FIRST_TRACES" envDefault:"100"`
+
 	MaxTraces int `env:"WORKERS_SAMPLING_MAX_TRACES" envDefault:"50000"`
 	MaxSpans  int `env:"WORKERS_SAMPLING_MAX_SPANS" envDefault:"500000"`
 }
@@ -79,6 +90,7 @@ func (s Sampling) validate() error {
 		positiveDuration("WORKERS_SAMPLING_DECISION_TTL", s.DecisionTTL),
 		positiveDuration("WORKERS_SAMPLING_SLOW_THRESHOLD", s.SlowThreshold),
 		percentage("WORKERS_SAMPLING_HEALTHY_PERCENT", s.HealthyPercent),
+		nonNegativeCount("WORKERS_SAMPLING_FIRST_TRACES", s.FirstTraces),
 		positiveCount("WORKERS_SAMPLING_MAX_TRACES", s.MaxTraces),
 		positiveCount("WORKERS_SAMPLING_MAX_SPANS", s.MaxSpans),
 	)

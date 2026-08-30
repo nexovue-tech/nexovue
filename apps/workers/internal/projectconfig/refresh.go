@@ -21,19 +21,31 @@ type Row struct {
 	// a unit rather than being rewritten row by row (ADR 0072).
 	RawRetentionDays     uint16
 	DerivedRetentionDays uint16
+
+	// FirstTracesStored is how many traces this project's first-traces carve-out
+	// has kept, summed over every worker that has ever reported one.
+	FirstTracesStored int64
 }
 
-// Reader loads every project's stored configuration. An interface because the
-// refresher's behaviour — what it does with a malformed row, what it does when
-// the store is unreachable — is the part worth testing, and neither needs a
-// database.
-type Reader interface {
+// Store is the control plane as the refresher uses it: every project's stored
+// configuration, and the running count of the traces each project's first-traces
+// carve-out has kept. An interface because the refresher's behaviour — what it
+// does with a malformed row, what it does when the store is unreachable — is the
+// part worth testing, and none of it needs a database.
+//
+// Reading and writing are one interface because they are one round trip each,
+// taken by the same goroutine on the same tick.
+type Store interface {
 	ReadProjects(ctx context.Context) ([]Row, error)
+
+	// AddFirstTracesStored adds each project's newly stored traces to the count
+	// already recorded. Adding, not setting: every worker counts its own.
+	AddFirstTracesStored(ctx context.Context, stored map[string]int64) error
 }
 
 // Refresher keeps a Cache in step with the store.
 type Refresher struct {
-	reader   Reader
+	store    Store
 	cache    *Cache
 	defaults Settings
 	interval time.Duration
@@ -48,7 +60,7 @@ type Refresher struct {
 // NewRefresher returns a refresher that replaces cache's snapshot every
 // interval.
 func NewRefresher(
-	reader Reader,
+	store Store,
 	cache *Cache,
 	defaults Settings,
 	interval time.Duration,
@@ -56,7 +68,7 @@ func NewRefresher(
 	maskSecret []byte,
 ) *Refresher {
 	return &Refresher{
-		reader:     reader,
+		store:      store,
 		cache:      cache,
 		defaults:   defaults,
 		interval:   interval,
@@ -65,13 +77,20 @@ func NewRefresher(
 	}
 }
 
-// Refresh loads every project and installs the result.
+// Refresh writes what this process stored under the first-traces carve-out,
+// then loads every project and installs the result.
+//
+// The write comes first so the read that follows it reports totals this
+// worker's own traces are already in; the other way round, every worker would
+// spend a full interval believing a carve-out was emptier than it is.
 //
 // A failure leaves the previous snapshot in place. That is the safe direction:
 // the alternative — emptying the cache when the control plane is unreachable —
 // would silently turn a project's extra masking rules off during an outage.
 func (r *Refresher) Refresh(ctx context.Context) error {
-	rows, err := r.reader.ReadProjects(ctx)
+	r.recordFirstTraces(ctx)
+
+	rows, err := r.store.ReadProjects(ctx)
 	if err != nil {
 		return err
 	}
@@ -128,7 +147,34 @@ func (r *Refresher) parse(ctx context.Context, row Row) Settings {
 	if row.DerivedRetentionDays > 0 {
 		settings.DerivedRetentionDays = row.DerivedRetentionDays
 	}
+	// Zero is a real value here, not an absent one: it says this project has
+	// stored nothing yet, which is what leaves its carve-out open.
+	settings.FirstTracesStored = row.FirstTracesStored
 	return settings
+}
+
+// recordFirstTraces writes what the carve-out has kept in this process since the
+// last refresh.
+//
+// A write that fails is not a refresh that fails: the counts go back into the
+// cache and the only consequence is a carve-out that stays open a little
+// longer, which is the direction that cannot lose a customer's first span.
+func (r *Refresher) recordFirstTraces(ctx context.Context) {
+	stored := r.cache.takeStoredTraces()
+	if len(stored) == 0 {
+		return
+	}
+	if err := r.store.AddFirstTracesStored(ctx, stored); err != nil {
+		r.cache.returnStoredTraces(stored)
+		if ctx.Err() != nil {
+			return
+		}
+		r.log.WarnContext(ctx, "could not record first-traces progress, keeping it for the next refresh",
+			slog.Int("projects", len(stored)), slog.String("error", err.Error()))
+		return
+	}
+	r.log.DebugContext(ctx, "recorded first-traces progress",
+		slog.Int("projects", len(stored)))
 }
 
 // Run refreshes on a timer until ctx is cancelled. The first load happens

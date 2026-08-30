@@ -1,0 +1,143 @@
+package derive
+
+import (
+	"sort"
+	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/latencysample"
+)
+
+// Span kinds, spelled as the flattened span row spells them: the OTLP enum name
+// with its `SPAN_KIND_` prefix removed.
+const (
+	KindServer   = "SERVER"
+	KindConsumer = "CONSUMER"
+)
+
+// EndpointStat is one row of `endpoint_stats_1m`: what one endpoint of one
+// service did in one minute, counted over every span rather than the sampled
+// ones.
+type EndpointStat struct {
+	Minute        time.Time
+	TenantID      string
+	ProjectID     string
+	RetentionDays uint16
+	ServiceName   string
+	SpanKind      string
+	SpanName      string
+	RequestCount  uint64
+	ErrorCount    uint64
+	// LatencyMS are the durations behind this row, sorted ascending and capped.
+	// The store folds them into the row's quantile state; no client builds an
+	// AggregateFunction, so the serialised form stays the server's.
+	LatencyMS []float64
+}
+
+// endpointKey identifies one row of `endpoint_stats_1m`. It is the table's own
+// sort key, so a bucket and a row are the same thing, and it is a comparable
+// struct so it can key a map without formatting a string per span.
+type endpointKey struct {
+	minute      time.Time
+	tenantID    string
+	projectID   string
+	serviceName string
+	spanKind    string
+	spanName    string
+	// Constant for a given project, but carried here because it sits in the
+	// target table's partition key.
+	retentionDays uint16
+}
+
+type endpointTotals struct {
+	requests uint64
+	errors   uint64
+	latency  latencysample.Reservoir
+}
+
+// inbound reports whether a span is a request this service served. The rollup
+// answers "how is each service doing", so it holds the two kinds that mean
+// somebody called us — a CLIENT span is our call to someone else and is already
+// counted as their SERVER span, or as an edge.
+func inbound(spanKind string) bool {
+	return spanKind == KindServer || spanKind == KindConsumer
+}
+
+// observeEndpoint folds one span into its endpoint-minute. minute is the bucket
+// Observe already decided, so the rollup and the counters beside it cannot
+// disagree about which clock the span was bucketed on.
+func (c *Counters) observeEndpoint(minute time.Time, span Span) {
+	if !inbound(span.SpanKind) {
+		return
+	}
+	key := endpointKey{
+		minute:        minute,
+		tenantID:      span.TenantID,
+		projectID:     span.ProjectID,
+		serviceName:   span.ServiceName,
+		spanKind:      span.SpanKind,
+		spanName:      span.SpanName,
+		retentionDays: span.RetentionDays,
+	}
+	totals, ok := c.endpoints[key]
+	if !ok {
+		totals = &endpointTotals{}
+		c.endpoints[key] = totals
+	}
+	totals.requests++
+	if span.Errored {
+		totals.errors++
+	}
+	totals.latency.Observe(latencysample.Weigh(span.TraceID, span.SpanID), span.DurationMS)
+}
+
+// drainEndpoints hands out the rows for every minute the caller calls closed,
+// removing them from memory.
+func (c *Counters) drainEndpoints(closed func(minute time.Time) bool) []EndpointStat {
+	stats := make([]EndpointStat, 0, len(c.endpoints))
+	for key, totals := range c.endpoints {
+		if !closed(key.minute) {
+			continue
+		}
+		stats = append(stats, EndpointStat{
+			Minute:        key.minute,
+			TenantID:      key.tenantID,
+			ProjectID:     key.projectID,
+			RetentionDays: key.retentionDays,
+			ServiceName:   key.serviceName,
+			SpanKind:      key.spanKind,
+			SpanName:      key.spanName,
+			RequestCount:  totals.requests,
+			ErrorCount:    totals.errors,
+			LatencyMS:     totals.latency.Values(),
+		})
+		delete(c.endpoints, key)
+	}
+
+	// Sorted for the same reason the counter points are: the block ClickHouse
+	// receives must be byte-identical when a restart re-derives the same minute
+	// from the same offsets, or its insert deduplication cannot recognise the
+	// retry and the rollup double-counts.
+	sort.Slice(stats, func(i, j int) bool { return stats[i].less(stats[j]) })
+	return stats
+}
+
+// less orders endpoint rows totally, so a drain is reproducible. The fields are
+// the whole key: any pair left tied would order at the map's whim.
+func (s EndpointStat) less(other EndpointStat) bool {
+	switch {
+	case !s.Minute.Equal(other.Minute):
+		return s.Minute.Before(other.Minute)
+	case s.TenantID != other.TenantID:
+		return s.TenantID < other.TenantID
+	case s.ProjectID != other.ProjectID:
+		return s.ProjectID < other.ProjectID
+	case s.ServiceName != other.ServiceName:
+		return s.ServiceName < other.ServiceName
+	case s.SpanKind != other.SpanKind:
+		return s.SpanKind < other.SpanKind
+	case s.SpanName != other.SpanName:
+		return s.SpanName < other.SpanName
+	default:
+		return s.RetentionDays < other.RetentionDays
+	}
+}

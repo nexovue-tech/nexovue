@@ -70,8 +70,13 @@ type Pipeline struct {
 
 	stages  *stages
 	metrics *derive.Writer
-	edges   *serviceedges.Writer
-	seen    *dedupe.Offsets
+	// endpoints writes `endpoint_stats_1m`. It is filled here rather than by a
+	// materialized view over `spans` (dropped in 000024): a view is downstream
+	// of the sampler, so the service overview read a tenth of the traffic at
+	// ten times the error rate.
+	endpoints *derive.EndpointWriter
+	edges     *serviceedges.Writer
+	seen      *dedupe.Offsets
 
 	// ingest is the durable half of `seen`: the per-partition record of what has
 	// already been counted, which unlike the in-process watermark survives both
@@ -129,16 +134,17 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 	}
 
 	return &Pipeline{
-		loop:     loop,
-		writer:   newSpanWriter(pool),
-		block:    newSpanBlock(),
-		stages:   stages,
-		metrics:  derive.NewWriter(pool),
-		edges:    serviceedges.NewWriter(pool),
-		seen:     dedupe.NewOffsets(),
-		ingest:   ingest,
-		log:      log.With(slog.String("pipeline", string(config.PipelineTraceAssembly))),
-		sampling: cfg.Sampling,
+		loop:      loop,
+		writer:    newSpanWriter(pool),
+		block:     newSpanBlock(),
+		stages:    stages,
+		metrics:   derive.NewWriter(pool),
+		endpoints: derive.NewEndpointWriter(pool),
+		edges:     serviceedges.NewWriter(pool),
+		seen:      dedupe.NewOffsets(),
+		ingest:    ingest,
+		log:       log.With(slog.String("pipeline", string(config.PipelineTraceAssembly))),
+		sampling:  cfg.Sampling,
 	}, nil
 }
 
@@ -148,6 +154,7 @@ func samplingOptions(cfg config.Sampling) sample.Options {
 		DecisionTTL: cfg.DecisionTTL,
 		MaxTraces:   cfg.MaxTraces,
 		MaxSpans:    cfg.MaxSpans,
+		FirstTraces: cfg.FirstTraces,
 	}
 }
 
@@ -202,6 +209,7 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Int("buffered_traces", stats.OpenTraces),
 		slog.Int("buffered_spans", stats.BufferedSpans),
 		slog.Int("counter_series", p.stages.counters.Pending()),
+		slog.Int("endpoint_series", p.stages.counters.PendingEndpoints()),
 		slog.Uint64("spans_kept", stats.SpansKept),
 		slog.Uint64("spans_dropped", stats.SpansDropped),
 		slog.Uint64("traces_closed_early", stats.ClosedEarly),
@@ -211,8 +219,9 @@ func (p *Pipeline) Holding() []slog.Attr {
 	}
 }
 
-// Stored reports whether a batch's spans have left the sampling buffer and its
-// counters have reached ClickHouse. Until both, its offsets stay uncommitted.
+// Stored reports whether a batch's spans have left the sampling buffer and
+// everything derived from them has reached ClickHouse. Until both, its offsets
+// stay uncommitted.
 func (p *Pipeline) Stored(now time.Time, produced spanStorage) bool {
 	return !now.Before(produced.spansStoredAt) &&
 		p.stages.counters.Drained(now, produced.latestMinute) &&
@@ -349,7 +358,7 @@ func (p *Pipeline) Settle(ctx context.Context, now time.Time) error {
 func (p *Pipeline) settleDerived(
 	ctx context.Context,
 	reached map[ingeststate.Partition]ingeststate.Range,
-	points []derive.Point,
+	derived derive.Derived,
 	edges []serviceedges.Edge,
 ) error {
 	settlement := p.ingest.Advance(reached)
@@ -358,7 +367,10 @@ func (p *Pipeline) settleDerived(
 	}); err != nil {
 		return err
 	}
-	if err := p.insertCounters(ctx, points); err != nil {
+	if err := p.insertCounters(ctx, derived.Points); err != nil {
+		return err
+	}
+	if err := p.insertEndpoints(ctx, derived.Endpoints); err != nil {
 		return err
 	}
 	if err := p.insertEdges(ctx, edges); err != nil {
@@ -407,6 +419,19 @@ func (p *Pipeline) insertCounters(ctx context.Context, points []derive.Point) er
 	}
 	return p.loop.Retry(ctx, "insert counters", func(callCtx context.Context) error {
 		return p.metrics.Insert(callCtx, points)
+	})
+}
+
+// insertEndpoints writes the derived endpoint rollup, guarded the same way and
+// for the same reason: `endpoint_stats_1m` carries its own deduplication window
+// (000021) and the drain sorts, so a retry after a lost acknowledgement is
+// recognised as the repeat it is rather than summed in twice.
+func (p *Pipeline) insertEndpoints(ctx context.Context, stats []derive.EndpointStat) error {
+	if len(stats) == 0 {
+		return nil
+	}
+	return p.loop.Retry(ctx, "insert endpoint rollup", func(callCtx context.Context) error {
+		return p.endpoints.Insert(callCtx, stats)
 	})
 }
 

@@ -1,14 +1,15 @@
 package usage
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
 
 func TestOneTenantDayIsOneRow(t *testing.T) {
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, testReceivedAt, Counts{Spans: 3, Bytes: 100})
-	meter.Observe(testOrg, testProject, testReceivedAt.Add(time.Hour), Counts{Spans: 4, Bytes: 200})
+	meter.Observe(testOrg, testProject, testReceivedAt, Metered{Counts: Counts{Spans: 3, Bytes: 100}})
+	meter.Observe(testOrg, testProject, testReceivedAt.Add(time.Hour), Metered{Counts: Counts{Spans: 4, Bytes: 200}})
 
 	rows := meter.Drain()
 	if len(rows) != 1 {
@@ -26,8 +27,8 @@ func TestTheDayIsAUTCDay(t *testing.T) {
 	justAfter := lateNight.Add(2 * time.Minute)
 
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, lateNight, Counts{Spans: 1})
-	meter.Observe(testOrg, testProject, justAfter, Counts{Spans: 1})
+	meter.Observe(testOrg, testProject, lateNight, Metered{Counts: Counts{Spans: 1}})
+	meter.Observe(testOrg, testProject, justAfter, Metered{Counts: Counts{Spans: 1}})
 
 	rows := meter.Drain()
 	if len(rows) != 2 {
@@ -49,7 +50,7 @@ func TestTheDayDoesNotFollowTheWorkersTimezone(t *testing.T) {
 	local := time.Date(2026, 8, 31, 1, 30, 0, 0, istanbul)
 
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, local, Counts{Spans: 1})
+	meter.Observe(testOrg, testProject, local, Metered{Counts: Counts{Spans: 1}})
 
 	rows := meter.Drain()
 	if want := time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC); !rows[0].Day.Equal(want) {
@@ -59,9 +60,9 @@ func TestTheDayDoesNotFollowTheWorkersTimezone(t *testing.T) {
 
 func TestTenantsAreMeteredApart(t *testing.T) {
 	meter := NewMeter()
-	meter.Observe("org-a", "project-a", testReceivedAt, Counts{Spans: 1})
-	meter.Observe("org-b", "project-b", testReceivedAt, Counts{Spans: 2})
-	meter.Observe("org-a", "project-other", testReceivedAt, Counts{Spans: 4})
+	meter.Observe("org-a", "project-a", testReceivedAt, Metered{Counts: Counts{Spans: 1}})
+	meter.Observe("org-b", "project-b", testReceivedAt, Metered{Counts: Counts{Spans: 2}})
+	meter.Observe("org-a", "project-other", testReceivedAt, Metered{Counts: Counts{Spans: 4}})
 
 	rows := meter.Drain()
 	if len(rows) != 3 {
@@ -78,7 +79,7 @@ func TestTenantsAreMeteredApart(t *testing.T) {
 // row of zeros against a tenant.
 func TestAnEmptyMessageIsNotMetered(t *testing.T) {
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, testReceivedAt, Counts{})
+	meter.Observe(testOrg, testProject, testReceivedAt, Metered{})
 
 	if meter.Pending() != 0 {
 		t.Errorf("pending = %d, want 0", meter.Pending())
@@ -90,7 +91,7 @@ func TestAnEmptyMessageIsNotMetered(t *testing.T) {
 
 func TestDrainEmptiesTheMeter(t *testing.T) {
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, testReceivedAt, Counts{Spans: 1})
+	meter.Observe(testOrg, testProject, testReceivedAt, Metered{Counts: Counts{Spans: 1}})
 
 	if rows := meter.Drain(); len(rows) != 1 {
 		t.Fatalf("first drain returned %d rows, want 1", len(rows))
@@ -106,7 +107,7 @@ func TestDrainEmptiesTheMeter(t *testing.T) {
 func TestDrainOrdersRowsForAStableWrite(t *testing.T) {
 	meter := NewMeter()
 	for _, org := range []string{"org-c", "org-a", "org-b"} {
-		meter.Observe(org, testProject, testReceivedAt, Counts{Spans: 1})
+		meter.Observe(org, testProject, testReceivedAt, Metered{Counts: Counts{Spans: 1}})
 	}
 
 	rows := meter.Drain()
@@ -114,5 +115,95 @@ func TestDrainOrdersRowsForAStableWrite(t *testing.T) {
 		if rows[i-1].OrgID > rows[i].OrgID {
 			t.Fatalf("rows are unordered: %s came before %s", rows[i-1].OrgID, rows[i].OrgID)
 		}
+	}
+}
+
+// The billing unit accumulates as a set: the same service seen in fifty
+// messages is one service on the day, which is exactly what a counter could not
+// do.
+func TestServicesAccumulateAsASetPerTenantDay(t *testing.T) {
+	meter := NewMeter()
+	for range 50 {
+		meter.Observe(testOrg, testProject, testReceivedAt, Metered{
+			Counts:   Counts{Spans: 1},
+			Services: []string{"checkout", "payments"},
+		})
+	}
+	meter.Observe(testOrg, testProject, testReceivedAt, Metered{
+		Counts:   Counts{Spans: 1},
+		Services: []string{"ledger"},
+	})
+
+	rows := meter.Drain()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if got := rows[0].Services; !equalNames(got, []string{"checkout", "ledger", "payments"}) {
+		t.Errorf("services = %v, want the three distinct names", got)
+	}
+	if rows[0].Spans != 51 {
+		t.Errorf("spans = %d, want 51: the counters still add while the set does not", rows[0].Spans)
+	}
+}
+
+// A service is billable on the day it sent something, so the two sides of
+// midnight hold their own sets.
+func TestAServiceIsCountedOnEachDayItSent(t *testing.T) {
+	lateNight := time.Date(2026, 8, 30, 23, 59, 0, 0, time.UTC)
+
+	meter := NewMeter()
+	meter.Observe(testOrg, testProject, lateNight, Metered{
+		Counts: Counts{Spans: 1}, Services: []string{"checkout"},
+	})
+	meter.Observe(testOrg, testProject, lateNight.Add(2*time.Minute), Metered{
+		Counts: Counts{Spans: 1}, Services: []string{"checkout", "payments"},
+	})
+
+	rows := meter.Drain()
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if !equalNames(rows[0].Services, []string{"checkout"}) {
+		t.Errorf("first day services = %v, want checkout alone", rows[0].Services)
+	}
+	if !equalNames(rows[1].Services, []string{"checkout", "payments"}) {
+		t.Errorf("second day services = %v, want both", rows[1].Services)
+	}
+}
+
+// Two tenants sending a service of the same name are two billable services, one
+// each. Nothing about the set may cross a tenant.
+func TestTheSameServiceNameInTwoTenantsIsTwoServices(t *testing.T) {
+	meter := NewMeter()
+	meter.Observe("org-a", "project-a", testReceivedAt, Metered{
+		Counts: Counts{Spans: 1}, Services: []string{"checkout"},
+	})
+	meter.Observe("org-b", "project-b", testReceivedAt, Metered{
+		Counts: Counts{Spans: 1}, Services: []string{"checkout"},
+	})
+
+	rows := meter.Drain()
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	for _, row := range rows {
+		if !equalNames(row.Services, []string{"checkout"}) {
+			t.Errorf("%s services = %v, want checkout", row.OrgID, row.Services)
+		}
+	}
+}
+
+// The names are written as an array in one statement; an unstable order is a
+// deadlock between two workers writing the same tenant.
+func TestDrainOrdersServiceNames(t *testing.T) {
+	meter := NewMeter()
+	meter.Observe(testOrg, testProject, testReceivedAt, Metered{
+		Counts:   Counts{Spans: 1},
+		Services: []string{"payments", "checkout", "ledger"},
+	})
+
+	rows := meter.Drain()
+	if got := rows[0].Services; !slices.IsSorted(got) {
+		t.Errorf("services = %v, want them sorted", got)
 	}
 }

@@ -11,7 +11,8 @@ import type { WaterfallRow } from "./trace-tree";
  * Everything about one span that a row has no room for.
  *
  * The row answers "where did the time go"; this answers "what actually happened" —
- * which is the status message, the HTTP detail and the attributes the service attached.
+ * which is the status message, the HTTP or RPC detail, and the attributes the service
+ * attached. A span has one of those two, never both.
  */
 export function SpanDetail({ row, onClose }: { row: WaterfallRow; onClose: () => void }) {
   const { span } = row;
@@ -77,6 +78,16 @@ export function SpanDetail({ row, onClose }: { row: WaterfallRow; onClose: () =>
             {httpStatus !== undefined ? (
               <Entry term="Status" value={String(httpStatus)} mono />
             ) : null}
+          </Section>
+        ) : null}
+
+        {span.rpc_method || span.rpc_status || span.rpc_system ? (
+          <Section title="RPC">
+            {span.rpc_method ? (
+              <Entry term="Method" value={span.rpc_method} mono selectable />
+            ) : null}
+            {span.rpc_status ? <Entry term="Status" value={span.rpc_status} mono /> : null}
+            {span.rpc_system ? <Entry term="System" value={span.rpc_system} mono /> : null}
           </Section>
         ) : null}
 
