@@ -21,7 +21,11 @@ from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
 from nexovue_api.deps import DbSession
 from nexovue_api.projects.service import require_project
 from nexovue_api.services import service
-from nexovue_api.services.schemas import EndpointListResponse, ServiceListResponse
+from nexovue_api.services.schemas import (
+    EndpointListResponse,
+    ServiceListResponse,
+    ServiceTrendResponse,
+)
 from nexovue_api.window import clamp_limit, resolve_window
 
 router = APIRouter(prefix="/services", tags=["services"])
@@ -51,6 +55,33 @@ async def list_services(
         limit=clamp_limit(
             limit, default=service.DEFAULT_SERVICE_LIMIT, maximum=service.MAX_SERVICE_LIMIT
         ),
+    )
+
+
+@router.get("/trend", summary="Each service's history across the window")
+async def service_trend(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+    service_name: Annotated[str | None, Query()] = None,
+) -> ServiceTrendResponse:
+    """What the sparkline in a service's row is drawn from.
+
+    Separate from the list rather than nested in it: a row is readable without
+    its trend, and a hundred services should not carry six thousand points to
+    render one screen.
+    """
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.service_trend(
+        repository,
+        project_id=str(project.id),
+        service_name=service_name,
+        from_time=window_start,
+        to_time=window_end,
     )
 
 

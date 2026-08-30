@@ -94,6 +94,33 @@ LIMIT {{limit:UInt32}}
 """
 
 
+# The trend behind each service's row. Same source and same window clause as the
+# aggregate above — the difference is that the minutes are kept rather than
+# collapsed, which is all a sparkline needs.
+#
+# The bucket is a parameter rather than a fixed minute: an hour of minutes is 60
+# points, a week is over 10,000, and a sparkline drawn from 10,000 points is a
+# smear that costs a large response to produce. The caller picks a bucket that
+# bounds the count; `trend_bucket_seconds` below is that arithmetic.
+TREND_SQL: Final = f"""
+SELECT
+    service_name,
+    toStartOfInterval(minute, INTERVAL {{bucket_seconds:UInt32}} SECOND) AS bucket,
+    sum(request_count) AS request_count,
+    sum(error_count) AS error_count,
+    {_LATENCY_MS}
+{_ENDPOINT_STATS_IN_WINDOW}
+  {_ONE_SERVICE_PLACEHOLDER}
+GROUP BY service_name, bucket
+ORDER BY service_name, bucket
+"""
+
+
+def trend_sql(*, one_service: bool) -> str:
+    """The trend statement, narrowed to one service when one is named."""
+    return TREND_SQL.replace(_ONE_SERVICE_PLACEHOLDER, ONE_SERVICE_CLAUSE if one_service else "")
+
+
 def endpoints_sql(*, one_service: bool) -> str:
     """The endpoint statement, narrowed to one service when one is named."""
     return _ENDPOINTS_TEMPLATE.replace(

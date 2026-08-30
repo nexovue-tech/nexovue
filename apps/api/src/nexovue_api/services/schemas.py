@@ -39,6 +39,40 @@ class EndpointHealth(BaseModel):
     p99_ms: float
 
 
+class TrendPoint(BaseModel):
+    """One bucket of a service's history.
+
+    The same three numbers the aggregate carries, so the sparkline and the row
+    it sits in cannot disagree about what they are showing.
+    """
+
+    bucket: IsoTimestamp
+    requests_per_minute: float
+    error_rate: float
+    p95_ms: float
+
+
+class ServiceTrend(BaseModel):
+    """One service's history across the window, oldest first."""
+
+    service_name: str
+    points: list[TrendPoint]
+
+
+class ServiceTrendResponse(BaseModel):
+    """What a row's sparkline is drawn from.
+
+    `bucket_seconds` is returned rather than assumed: the server chooses it from
+    the window length, so a client that plotted against a minute would silently
+    mis-scale its own x axis on any window wider than a few hours.
+    """
+
+    window_start: IsoTimestamp
+    window_end: IsoTimestamp
+    bucket_seconds: int
+    services: list[ServiceTrend]
+
+
 class ServiceListResponse(BaseModel):
     # The window is echoed because the caller may have sent none and taken the
     # default; every rate below is per minute of exactly this window.

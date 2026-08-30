@@ -19,12 +19,17 @@ from fastapi import APIRouter, Query
 
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
 from nexovue_api.deps import DbSession
-from nexovue_api.logs import service
+from nexovue_api.logs import search, service, tail
 from nexovue_api.logs.schemas import LogsForTraceResponse
 from nexovue_api.projects.service import require_project
 from nexovue_api.window import clamp_limit, resolve_window
 
 router = APIRouter(prefix="/logs", tags=["logs"])
+
+# Search and the live tail answer the other question a log screen asks and carry
+# their own routes; both are mounted here so `/logs` has one door in main.py.
+router.include_router(search.router)
+router.include_router(tail.router)
 
 ProjectId = Annotated[uuid.UUID, Query(description="Project to read logs from")]
 

@@ -9,6 +9,7 @@ import {
 import { LoginScreen } from "@/features/auth/LoginScreen";
 import { SignupScreen } from "@/features/auth/SignupScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
+import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
 import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
 import { ServicesScreen } from "@/features/services/ServicesScreen";
 import { SyntheticsScreen } from "@/features/synthetics/SyntheticsScreen";
@@ -96,7 +97,7 @@ function TraceWaterfallScreen() {
 const errorsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/errors",
-  component: placeholderFor("/errors"),
+  component: ErrorsScreen,
 });
 
 const logsRoute = createRoute({

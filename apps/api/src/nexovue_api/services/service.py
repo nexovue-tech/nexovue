@@ -7,7 +7,9 @@ and the unpacking of the stored quantile state.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
+from math import ceil
 from typing import Any, Final
 
 from nexovue_api import rollup
@@ -19,6 +21,9 @@ from nexovue_api.services.schemas import (
     EndpointListResponse,
     ServiceHealth,
     ServiceListResponse,
+    ServiceTrend,
+    ServiceTrendResponse,
+    TrendPoint,
 )
 
 # A project with more services than this is not a list a person reads; the cap
@@ -29,6 +34,79 @@ MAX_SERVICE_LIMIT: Final = 500
 # Endpoints outnumber services by a route table, so the page is larger.
 DEFAULT_ENDPOINT_LIMIT: Final = 100
 MAX_ENDPOINT_LIMIT: Final = 1_000
+
+# How many points a sparkline is drawn from. Enough that a shape is visible,
+# few enough that the response stays small and the line does not become a smear
+# — a row-height chart cannot show more than this anyway.
+TREND_POINTS: Final = 60
+
+# The rollup's own resolution. No bucket smaller than this exists, so asking for
+# one would return the same minutes under a different name.
+MIN_BUCKET_SECONDS: Final = 60
+
+
+def trend_bucket_seconds(from_time: datetime, to_time: datetime) -> int:
+    """A bucket that keeps the point count near TREND_POINTS.
+
+    An hour of minutes is 60 points and needs no bucketing; a week is over
+    10,000, which is a large response drawn as a smear. Rounded up to a whole
+    minute because that is the grain the table stores.
+    """
+    span = max((to_time - from_time).total_seconds(), MIN_BUCKET_SECONDS)
+    wanted = span / TREND_POINTS
+    minutes = max(1, ceil(wanted / MIN_BUCKET_SECONDS))
+    return minutes * MIN_BUCKET_SECONDS
+
+
+async def service_trend(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    service_name: str | None,
+    from_time: datetime,
+    to_time: datetime,
+) -> ServiceTrendResponse:
+    """Each service's history across the window, for the sparkline in its row.
+
+    Same source and same window as the aggregate beside it, so a row and its
+    trend can never disagree about what they are describing.
+    """
+    bucket_seconds = trend_bucket_seconds(from_time, to_time)
+    parameters = _window_parameters(project_id, from_time, to_time) | {
+        "bucket_seconds": bucket_seconds
+    }
+    if service_name is not None:
+        parameters["service_name"] = service_name
+
+    rows = await repository.query(
+        queries.trend_sql(one_service=service_name is not None), parameters
+    )
+
+    # Each bucket is its own small window, so a rate is against the bucket
+    # rather than the whole span — otherwise a quiet minute inside a busy hour
+    # would read as the hour's average and the line would be flat.
+    bucket_minutes = bucket_seconds / MIN_BUCKET_SECONDS
+    by_service: dict[str, list[TrendPoint]] = defaultdict(list)
+    for row in rows:
+        latency = rollup.Latency(row["latency_ms"])
+        by_service[row["service_name"]].append(
+            TrendPoint(
+                bucket=row["bucket"],
+                requests_per_minute=rollup.per_minute(row["request_count"], bucket_minutes),
+                error_rate=rollup.failure_ratio(row["error_count"], row["request_count"]),
+                p95_ms=latency.p95_ms,
+            )
+        )
+
+    return ServiceTrendResponse(
+        window_start=from_time,
+        window_end=to_time,
+        bucket_seconds=bucket_seconds,
+        services=[
+            ServiceTrend(service_name=name, points=points)
+            for name, points in sorted(by_service.items())
+        ],
+    )
 
 
 async def list_services(
