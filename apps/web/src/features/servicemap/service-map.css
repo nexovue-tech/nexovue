@@ -1,0 +1,62 @@
+/* Undoing React Flow's look.
+   `base.css` is imported rather than `style.css` — it carries the positioning and
+   transform rules the renderer cannot work without, and none of the visual theme.
+   What remains is a handful of `--xy-*` defaults, which React Flow 12 documents as
+   the theming surface, plus the handle and attribution chrome below.
+   https://reactflow.dev/learn/customization/theming
+   Scoped to .service-map so nothing here is a global rule about a class we don't own. */
+
+.service-map .react-flow {
+  --xy-background-color: var(--color-page);
+  --xy-edge-stroke: var(--color-line);
+  --xy-edge-stroke-selected: var(--color-line-strong);
+  --xy-edge-stroke-width: 1;
+  --xy-handle-background-color: transparent;
+  --xy-attribution-background-color: transparent;
+  --xy-node-border: none;
+  --xy-node-background-color: transparent;
+}
+
+/* Handles exist so the renderer knows where an arrow starts and ends. Nothing about
+   them is for a person: this graph is read, not wired. */
+.service-map .react-flow__handle {
+  width: 1px;
+  height: 1px;
+  min-width: 1px;
+  min-height: 1px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  opacity: 0;
+}
+
+/* MIT requires attribution, so it stays; it does not have to arrive in another
+   product's grey chip. */
+.service-map .react-flow__attribution {
+  margin: 0 6px 4px 0;
+  padding: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.service-map .react-flow__attribution a {
+  color: var(--color-ink-dim);
+  opacity: 0.6;
+}
+
+/* A node is a link or nothing; the pointer says which. */
+.service-map .react-flow__node {
+  cursor: default;
+}
+
+.service-map .react-flow__node:has(a) {
+  cursor: pointer;
+}
+
+/* Selection is not a concept on this screen — an edge is evidence, not a thing to pick. */
+.service-map .react-flow__edge.selected .react-flow__edge-path,
+.service-map .react-flow__edge:focus .react-flow__edge-path,
+.service-map .react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke: inherit;
+}

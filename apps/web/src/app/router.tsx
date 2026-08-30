@@ -9,6 +9,9 @@ import {
 import { LoginScreen } from "@/features/auth/LoginScreen";
 import { SignupScreen } from "@/features/auth/SignupScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
+import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
+import { ServicesScreen } from "@/features/services/ServicesScreen";
+import { SyntheticsScreen } from "@/features/synthetics/SyntheticsScreen";
 import { TraceListScreen } from "@/features/traces/TraceListScreen";
 import { TraceScreen } from "@/features/traces/TraceScreen";
 import { ErrorScreen } from "@/shared/components/ErrorScreen";
@@ -57,7 +60,7 @@ const findingsRoute = createRoute({
 const servicesRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/services",
-  component: placeholderFor("/services"),
+  component: ServicesScreen,
 });
 
 const serviceRoute = createRoute({
@@ -69,7 +72,7 @@ const serviceRoute = createRoute({
 const serviceMapRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/service-map",
-  component: placeholderFor("/service-map"),
+  component: ServiceMapScreen,
 });
 
 const tracesRoute = createRoute({
@@ -111,7 +114,7 @@ const infrastructureRoute = createRoute({
 const syntheticsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/synthetics",
-  component: placeholderFor("/synthetics"),
+  component: SyntheticsScreen,
 });
 
 const databaseRoute = createRoute({

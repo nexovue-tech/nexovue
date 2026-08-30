@@ -1,0 +1,15 @@
+/* uPlot draws its crosshair from its own stylesheet, in a colour we did not choose.
+   `currentcolor` hands it back to the token class on the host element, so the line
+   follows the theme without a colour being written here. */
+
+.nv-phase-chart .u-hz .u-cursor-x {
+  border-right-color: currentcolor;
+  border-right-style: solid;
+}
+
+/* The library shrink-wraps its root, which would collapse the chart inside a flex
+   column. The wrapper inside it is sized in pixels by setSize, so this only stops
+   the outer element from being narrower than what it contains. */
+.nv-phase-chart .uplot {
+  width: 100%;
+}
