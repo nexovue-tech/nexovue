@@ -215,17 +215,17 @@ effective dates so a repricing does not rewrite what was already charged.
 
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
-| P1-40 | Service overview | request rate, error rate, p95 trend; endpoints ranked by slowness/errors | todo |
+| P1-40 | Service overview | request rate, error rate, p95 trend; endpoints ranked by slowness/errors | ✅ done |
 | P1-41 | Trace explorer | search + filters over the M1 waterfall | todo |
-| P1-56 | Service map | dependency graph from P1-55 edges; edge call rate/error/latency; click-through to a service | todo |
-| P1-42 | Errors screen | grouped exceptions, counts, first/last seen, stack traces | todo |
-| P1-43 | Logs screen | search, filters, **live tail** via WebSocket ← Kafka/Redis pub-sub | todo |
+| P1-56 | Service map | dependency graph from P1-55 edges; edge call rate/error/latency; click-through to a service | ✅ done |
+| P1-42 | Errors screen | grouped exceptions, counts, first/last seen, stack traces | ✅ done |
+| P1-43 | Logs screen | search, filters, **live tail** via WebSocket. Fed by a cursored ClickHouse poll per project, not a broker: nothing publishes log records to Redis today, and pub/sub loses whatever arrived while a viewer was reconnecting. A publish step in the Go log writer is the root fix and is not done | ✅ done |
 | P1-44 | Infrastructure screen | hosts/containers: CPU, memory, disk, network. K8s metrics are ingested and queryable, but pod/node/namespace views are Phase 2 | todo |
-| P1-45 | Synthetics screen | check list, status, latency trends, failure detail with screenshot | todo |
+| P1-45 | Synthetics screen | check list, status, latency trends, failure detail with screenshot | ✅ done |
 | P1-46 | Database screen | slow queries, mean time, calls, connection health | todo |
 | P1-47 | RUM screen | Core Web Vitals by page/geo/device; JS errors | todo |
 | P1-48 | Usage & cost view | per-tenant ingestion counters → usage table → projected cost in-product | todo |
-| P1-61 | E2E screen coverage | Critical path per screen against the running stack; part of `just check` | todo |
+| P1-61 | E2E screen coverage | Critical path per screen against the running stack, run by `just e2e`. **Not** `just check` — P1-60 settled that, and the justfile follows it: the commit gate must not require docker | todo |
 | P1-62 | **OTel Demo realism gate** | Run the OpenTelemetry Demo (18 services, ~10 languages) against our receiver and confirm the screens hold: service map readable at 18 nodes, trace search survives real attribute cardinality, promoted columns survive semconv variation across languages. Not a daily dependency — needs 4–8 GB, so optional services stop and the Docker allocation is raised | todo |
 
 ### M7 — Phase 1 exit
