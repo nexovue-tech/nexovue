@@ -11,8 +11,8 @@ import "strings"
 //
 //   - The scheme must sit on a **word boundary**. Without it `standard-bearer`
 //     matched, and everything after it was blanked.
-//   - The scheme must sit in an **authorization context** — just after the word
-//     `authorization`, or as the whole value with nothing trailing. Without it
+//   - The scheme must sit in an **authorization context** — just after a word
+//     beginning `auth`, or as the whole value with nothing trailing. Without it
 //     "loaded basic /etc/nexovue/receiver/config.yaml" and "applying basic
 //     transform_pipeline_stage_normalize" were both destroyed, because a path
 //     and a dotted identifier are made of the same characters a token is.
@@ -35,7 +35,16 @@ const (
 
 	// authorizationMarker is what puts a scheme in a credentials position when
 	// it is not at the start of the value.
-	authorizationMarker = "authorization"
+	//
+	// The stem, not the whole word. Matching `authorization` exactly missed
+	// `POST /authorize Bearer <token>` by four letters, and a real credential
+	// was written to storage in the clear as a result. `auth` covers the header
+	// however it is spelled, the route that handles it, and `auth:`.
+	//
+	// It also admits `author` and `authority`. That is the accepted cost: a word
+	// beginning with auth, immediately before a bearer scheme and a token-shaped
+	// run, is a credential far more often than it is prose.
+	authorizationMarker = "auth"
 
 	// authorizationReach is how far after that marker a scheme still counts as
 	// being in its context. Enough for `Authorization: `, `"authorization":"`

@@ -1,6 +1,9 @@
 package mask
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func blankCredential(run string) (string, bool) { return Placeholder, true }
 
@@ -150,4 +153,28 @@ func indexOf(haystack, needle string) int {
 		}
 	}
 	return -1
+}
+
+// TestTheValueFoundStoredInTheClearIsMasked pins a real regression.
+//
+// The first version of this rule masked it. The narrowing that followed matched
+// the literal word `authorization`, and this line says `authorize` — so the
+// credential was written to ClickHouse in the clear, 158 times, and sat beside
+// a masked copy of the same record written before the narrowing landed.
+//
+// The value is the one that was actually in storage, not a constructed example.
+func TestTheValueFoundStoredInTheClearIsMasked(t *testing.T) {
+	const stored = "POST /authorize Bearer sk_test_51HxmpleTokenThatMustNeverBeStored"
+
+	got, changed := Defaults().maskValue(stored)
+
+	if !changed {
+		t.Fatalf("the credential was left in the clear: %q", got)
+	}
+	if strings.Contains(got, "sk_test_") {
+		t.Fatalf("the credential survived masking: %q", got)
+	}
+	if want := "POST /authorize Bearer [masked]"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
 }
