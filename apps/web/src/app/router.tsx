@@ -8,14 +8,18 @@ import {
 
 import { LoginScreen } from "@/features/auth/LoginScreen";
 import { SignupScreen } from "@/features/auth/SignupScreen";
+import { DatabaseScreen } from "@/features/database/DatabaseScreen";
 import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
+import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
 import { LogsScreen } from "@/features/logs/LogsScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
 import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
 import { ServicesScreen } from "@/features/services/ServicesScreen";
 import { SyntheticsScreen } from "@/features/synthetics/SyntheticsScreen";
+import { parseTraceFilters, toSearchParams } from "@/features/traces/filters";
 import { TraceListScreen } from "@/features/traces/TraceListScreen";
 import { TraceScreen } from "@/features/traces/TraceScreen";
+import { UsageScreen } from "@/features/usage/UsageScreen";
 import { ErrorScreen } from "@/shared/components/ErrorScreen";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 
@@ -77,10 +81,16 @@ const serviceMapRoute = createRoute({
   component: ServiceMapScreen,
 });
 
+/**
+ * The only route with search params: the trace filters live in the URL so a person
+ * can share the view they found. The schema is the feature's, not the router's —
+ * this route only declares that it has one.
+ */
 const tracesRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/traces",
   component: TraceListScreen,
+  validateSearch: (search: Record<string, unknown>) => toSearchParams(parseTraceFilters(search)),
 });
 
 const traceRoute = createRoute({
@@ -110,7 +120,7 @@ const logsRoute = createRoute({
 const infrastructureRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/infrastructure",
-  component: placeholderFor("/infrastructure"),
+  component: InfrastructureScreen,
 });
 
 const syntheticsRoute = createRoute({
@@ -122,7 +132,7 @@ const syntheticsRoute = createRoute({
 const databaseRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/database",
-  component: placeholderFor("/database"),
+  component: DatabaseScreen,
 });
 
 const rumRoute = createRoute({
@@ -134,7 +144,7 @@ const rumRoute = createRoute({
 const usageRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/usage",
-  component: placeholderFor("/usage"),
+  component: UsageScreen,
 });
 
 const settingsProjectRoute = createRoute({

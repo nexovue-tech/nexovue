@@ -158,7 +158,7 @@ func TestCountersStayExactWhileStorageIsSampledAtTenPercent(t *testing.T) {
 		if isError {
 			errored++
 		}
-		result, err := stages.absorbMessage(invariantStart, traceMessage(t, index, isError), true)
+		result, err := stages.absorbMessage(invariantStart, traceMessage(t, index, isError), handling{count: true, store: true})
 		if err != nil {
 			t.Fatalf("absorbMessage() = %v, want no error", err)
 		}
@@ -210,7 +210,7 @@ func TestTheSamplingRateDoesNotChangeTheCounters(t *testing.T) {
 		stages := stagesFor(t, percent)
 		for index := range traces {
 			if _, err := stages.absorbMessage(
-				invariantStart, traceMessage(t, index, index%20 == 0), true); err != nil {
+				invariantStart, traceMessage(t, index, index%20 == 0), handling{count: true, store: true}); err != nil {
 				t.Fatalf("absorbMessage() = %v, want no error", err)
 			}
 		}
@@ -252,7 +252,7 @@ func TestTheEndpointRollupCountsSampledAwayTracesTheScreenWouldNeverSee(t *testi
 	absorb := func(errored bool, duration time.Duration) {
 		t.Helper()
 		result, err := stages.absorbMessage(
-			invariantStart, traceMessageLasting(t, index, errored, duration), true)
+			invariantStart, traceMessageLasting(t, index, errored, duration), handling{count: true, store: true})
 		if err != nil {
 			t.Fatalf("absorbMessage() = %v, want no error", err)
 		}
@@ -294,24 +294,32 @@ func TestTheEndpointRollupCountsSampledAwayTracesTheScreenWouldNeverSee(t *testi
 	}
 }
 
-// A redelivered message must not be counted twice, or a rebalance quietly
-// inflates every count it touched.
-func TestARedeliveredMessageIsWrittenAgainButNotCountedAgain(t *testing.T) {
+// A redelivery past both watermarks must produce nothing at all.
+//
+// This test used to assert the opposite for the rows — "written again" — on the
+// grounds that an identical span row is idempotent. It is not: `spans` is a
+// plain MergeTree and nothing deduplicates it on read, so the second copy is a
+// span the customer sees twice in their trace. Measured over six hours before
+// the fix, 6135 of 14980 distinct spans had more than one copy.
+func TestARedeliveryPastBothWatermarksIsNeitherWrittenNorCounted(t *testing.T) {
 	stages := stagesFor(t, 100)
 	message := traceMessage(t, 1, false)
 
-	first, err := stages.absorbMessage(invariantStart, message, true)
+	first, err := stages.absorbMessage(invariantStart, message, handling{count: true, store: true})
 	if err != nil {
 		t.Fatalf("absorbMessage() = %v, want no error", err)
 	}
-	replay, err := stages.absorbMessage(invariantStart, message, false)
+	replay, err := stages.absorbMessage(invariantStart, message, handling{})
 	if err != nil {
 		t.Fatalf("absorbMessage() on the replay = %v, want no error", err)
 	}
 
+	if len(replay.rows) != 0 {
+		t.Errorf("the replay released %d rows, want none", len(replay.rows))
+	}
 	if got := len(first.rows) + len(replay.rows) +
-		len(stages.buffer.Expire(invariantStart.Add(time.Minute))); got != spansPerTrace*2 {
-		t.Errorf("storage saw %d rows, want the replay written again (%d)", got, spansPerTrace*2)
+		len(stages.buffer.Expire(invariantStart.Add(time.Minute))); got != spansPerTrace {
+		t.Errorf("storage saw %d rows, want the trace once (%d)", got, spansPerTrace)
 	}
 	drained := stages.counters.DrainAll()
 	counted := totalsByMetric(drained)
@@ -322,6 +330,29 @@ func TestARedeliveredMessageIsWrittenAgainButNotCountedAgain(t *testing.T) {
 	if requests, _, _ := rollupTotals(drained); requests != spansPerTrace {
 		t.Errorf("the endpoint rollup counted %d requests, want %d: the replay must not "+
 			"be counted twice there either", requests, spansPerTrace)
+	}
+}
+
+// The band a restart actually lands in: the spans are already in ClickHouse
+// while the counters for the same offsets are not yet exact. Measured on this
+// deployment that band is most of the replay — commit lag p50 43s against a 10s
+// sampling window — so it is the case the whole watermark exists for.
+func TestAReplayInTheBandIsCountedButNotWritten(t *testing.T) {
+	stages := stagesFor(t, 100)
+	message := traceMessage(t, 1, false)
+
+	replay, err := stages.absorbMessage(invariantStart, message, handling{count: true})
+	if err != nil {
+		t.Fatalf("absorbMessage() = %v, want no error", err)
+	}
+
+	released := len(replay.rows) + len(stages.buffer.Expire(invariantStart.Add(time.Minute)))
+	if released != 0 {
+		t.Errorf("storage saw %d rows, want none: those spans are already stored", released)
+	}
+	if counted := totalsByMetric(stages.counters.DrainAll()); counted[derive.MetricSpanCount] != spansPerTrace {
+		t.Errorf("%s = %v, want %d: the counters were not yet exact for these offsets",
+			derive.MetricSpanCount, counted[derive.MetricSpanCount], spansPerTrace)
 	}
 }
 
@@ -343,7 +374,7 @@ func TestNoUnmaskedValueReachesARow(t *testing.T) {
 		attribute("http.route", stringValue("/checkout")),
 	)
 
-	result, err := stages.absorbMessage(invariantStart, message, true)
+	result, err := stages.absorbMessage(invariantStart, message, handling{count: true, store: true})
 	if err != nil {
 		t.Fatalf("absorbMessage() = %v, want no error", err)
 	}

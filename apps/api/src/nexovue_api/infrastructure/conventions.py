@@ -1,23 +1,37 @@
 """The OpenTelemetry metric names an infrastructure screen is built from.
 
 We do not invent names. A host reports through the collector's `hostmetrics`
-receiver and a container through `docker_stats`, and both follow the semantic
-conventions — so the only names this package recognises are the ones those
-conventions define. Anything else is application telemetry and belongs on a
-different screen.
+receiver or an SDK's system-metrics instrumentation, and the *metric names* both
+send are the semantic conventions' — so those are the only names read here.
+Anything else is application telemetry and belongs on a different screen.
 
-Names and instrument kinds checked against the specification on 2026-08-30:
-`system.*` in semconv/system/system-metrics, `container.*` in
-semconv/system/container-metrics. Every one of them is still marked
-*Development* upstream, which is why they are listed here rather than assumed:
-when a name changes, this module is the one file that changes with it.
+**Attribute keys are a different matter, and this is where reading only the
+specification produced a wrong answer.** Semconv v1.27.0 renamed
+`system.cpu.state` to `cpu.mode` and moved the sibling keys under namespaces,
+but no producer followed: the Collector's `hostmetrics` cpuscraper and the
+OpenTelemetry Python `SystemMetricsInstrumentor` both still emit a flat `state`,
+a flat `cpu`, and flat `device`/`direction` (sources in
+`docs/architecture/decisions` and verified against our own store below). Reading
+only the namespaced spelling matched *no real traffic*, so every attribute below
+is a tuple: the spelling producers actually send, then the spec's, then the
+superseded one. First match wins.
 
-**No such metric has ever reached our ClickHouse.** A distinct on `metric_name`
-across all five metric tables on 2026-08-30 returned only synthetic-check,
-demo-app and our own derived counters — nothing `system.*`, `container.*`,
-`host.*` or `process.*`, and no resource carried a `host.name`. The endpoints
-therefore return an empty list today. That is the correct answer to "which hosts
-are reporting", not an error and not fabricated rows.
+**What our ClickHouse actually holds, checked 2026-08-30.** The
+OpenTelemetry Demo run (P1-62) landed genuine host metrics under project
+`01a051fa-…1018`: `system.cpu.utilization` (672 points, 48 series),
+`system.memory.usage`, `system.memory.utilization`, `system.disk.io` and
+`system.network.io`. Their attributes are `{"cpu": 3, "state": "idle"}`,
+`{"state": "used"}` and `{"device": …, "direction": …}` — the flat spellings.
+No resource carried a `host.name`, so they roll up as one unnamed node.
+
+**Container names here are unverified.** `docker_stats` does not emit the
+`container.*` semconv names at all — it sends `container.cpu.utilization`,
+`container.memory.usage.total`, `container.blockio.*` and
+`container.network.io.usage.*`, which are different metrics rather than
+different spellings. The names below are the specification's, no container
+metric has ever reached our store, and which producer we intend to support is an
+open decision. They are kept because they are the spec's and cost nothing to
+read; they should not be trusted until a container actually reports.
 
 Kubernetes pod and node views are Phase 2 and deliberately absent.
 """
@@ -90,19 +104,31 @@ CUMULATIVE_BYTE_COUNTERS: Final = frozenset(
 
 # ------------------------------------------------------------ attribute names
 
-# Which slice of CPU time a point measures. Renamed upstream from
-# `system.cpu.state`; both spellings are read, because an older collector in a
-# customer's cluster still sends the old one and reading only the new one would
-# report every such host as idle.
-CPU_MODE_ATTRIBUTE: Final = "cpu.mode"
-LEGACY_CPU_STATE_ATTRIBUTE: Final = "system.cpu.state"
+# Each of these is an ordered list of spellings for one attribute, most likely
+# first: what producers send, then what the specification says, then what the
+# specification used to say. The first key a row carries wins.
+#
+# The order is deliberate and was wrong in the other direction until real host
+# metrics arrived. A CPU point reads `{"cpu": 3, "state": "idle"}`, and against
+# the spec-only spelling every mode came back unnamed — which made an idle host
+# report as fully busy. The producer's spelling leads because the producer is
+# what we receive.
+
+# Which slice of CPU time a point measures.
+CPU_MODE_ATTRIBUTES: Final[tuple[str, ...]] = ("state", "cpu.mode", "system.cpu.state")
 CPU_IDLE_MODE: Final = "idle"
 
-# Which logical CPU a point belongs to. Absent when the collector aggregates.
-CPU_NUMBER_ATTRIBUTE: Final = "cpu.logical_number"
+# Which logical CPU a point belongs to. Absent when the producer aggregates.
+# Not comparable across producers: the Collector numbers from 0, the Python SDK
+# from 1. That only matters for grouping, which needs distinctness and not order.
+CPU_NUMBER_ATTRIBUTES: Final[tuple[str, ...]] = (
+    "cpu",
+    "cpu.logical_number",
+    "system.cpu.logical_number",
+)
 
-MEMORY_STATE_ATTRIBUTE: Final = "system.memory.state"
+MEMORY_STATE_ATTRIBUTES: Final[tuple[str, ...]] = ("state", "system.memory.state")
 MEMORY_USED_STATE: Final = "used"
 
-FILESYSTEM_STATE_ATTRIBUTE: Final = "system.filesystem.state"
+FILESYSTEM_STATE_ATTRIBUTES: Final[tuple[str, ...]] = ("state", "system.filesystem.state")
 FILESYSTEM_USED_STATE: Final = "used"

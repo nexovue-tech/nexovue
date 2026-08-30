@@ -67,6 +67,7 @@ func (r spanRow) edgeSpan(receivedAt time.Time, retentionDays uint16) serviceedg
 		TraceID:       r.TraceID,
 		SpanID:        r.SpanID,
 		ParentSpanID:  r.ParentSpanID,
+		Links:         r.edgeLinks(),
 		ServiceName:   r.ServiceName,
 		Kind:          r.SpanKind,
 		Timestamp:     r.Timestamp,
@@ -74,6 +75,19 @@ func (r spanRow) edgeSpan(receivedAt time.Time, retentionDays uint16) serviceedg
 		DurationMS:    r.DurationMS,
 		Errored:       r.errored(),
 	}
+}
+
+// edgeLinks is the identity half of this span's links — who it says caused it.
+// The attributes stay behind: edge derivation pairs on ids alone.
+func (r spanRow) edgeLinks() []serviceedges.SpanLink {
+	if len(r.Links) == 0 {
+		return nil
+	}
+	links := make([]serviceedges.SpanLink, 0, len(r.Links))
+	for _, link := range r.Links {
+		links = append(links, serviceedges.SpanLink{TraceID: link.TraceID, SpanID: link.SpanID})
+	}
+	return links
 }
 
 // sampleFacts is this span as the sample stage sees it.
@@ -172,12 +186,27 @@ func (s *skewReport) merge(other skewReport) {
 	}
 }
 
-// absorbMessage runs one Kafka message through every stage.
+// handling is which stages one record still has to run through, resolved
+// against the durable per-partition watermarks before the batch is absorbed.
 //
-// counted is false for a redelivery: its spans still travel — re-inserting an
-// identical row changes nothing — but they must not be added to a counter
-// twice.
-func (s *stages) absorbMessage(now time.Time, message []byte, counted bool) (absorbed, error) {
+// Two flags rather than one because the two watermarks move at different
+// speeds: spans are stored a sampling window after they arrive, counters a
+// minute bucket and its late grace after that. A replayed record therefore
+// normally has to be counted and not stored, which is neither "new" nor
+// "already seen".
+type handling struct {
+	// count adds this record's spans to the counters and the edge rollup.
+	count bool
+	// store lets its spans into the sampling buffer, and so to ClickHouse.
+	store bool
+}
+
+// absorbMessage runs one Kafka message through every stage its handling still
+// calls for.
+//
+// A record that is neither counted nor stored is a pure replay: it is decoded
+// and masked so a malformed one is still parked, and then it produces nothing.
+func (s *stages) absorbMessage(now time.Time, message []byte, run handling) (absorbed, error) {
 	payload, err := decodeEnvelope(message)
 	if err != nil {
 		return absorbed{}, err
@@ -196,7 +225,7 @@ func (s *stages) absorbMessage(now time.Time, message []byte, counted bool) (abs
 		// Derive before sample: the counters and the endpoint rollup see every
 		// span, whatever the sampler decides about the trace it belongs to
 		// (ADR 0010).
-		if counted {
+		if run.count {
 			countable := row.countable(receivedAt, derivedDays)
 			minute, discarded := s.counters.Observe(now, countable)
 			result.latestMinute = later(result.latestMinute, minute)
@@ -210,7 +239,12 @@ func (s *stages) absorbMessage(now time.Time, message []byte, counted bool) (abs
 			edgeMinute, _ := s.edges.Observe(now, row.edgeSpan(receivedAt, derivedDays))
 			result.latestEdgeMinute = later(result.latestEdgeMinute, edgeMinute)
 		}
-		result.rows = append(result.rows, s.buffer.Add(now, row.sampleFacts(), row)...)
+		// Offered to the buffer only when its spans are not already stored.
+		// A replay must not re-enter the buffer: the trace would be released a
+		// second time and every row in it written again.
+		if run.store {
+			result.rows = append(result.rows, s.buffer.Add(now, row.sampleFacts(), row)...)
+		}
 		result.spans++
 	}
 	return result, nil

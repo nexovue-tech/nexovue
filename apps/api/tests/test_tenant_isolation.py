@@ -155,6 +155,11 @@ class RecordingTelemetryStore:
 
         if "span_trace_lookup" in sql:
             return self._trace_bounds(sql, bound)
+        # The list is two statements: the page of trace ids, then the root span
+        # of each id on that page. The second is recognised by the array it
+        # binds, and must be checked first — both group by `trace_id`.
+        if "{trace_ids:Array(String)}" in sql:
+            return self._trace_roots(sql, bound)
         if "GROUP BY trace_id" in sql:
             return self._trace_list(sql, bound)
         return self._trace_spans(sql, bound)
@@ -189,26 +194,25 @@ class RecordingTelemetryStore:
         return FakeQueryResult(
             [
                 "trace_id",
-                "root_service",
-                "root_name",
                 "start_time_nanos",
                 "duration_ms",
                 "span_count",
                 "error_count",
                 "worst_severity",
             ],
+            [(row.trace_id, _START_NANOS, _SPAN_DURATION_MS, 1, 0, 1) for row in rows],
+        )
+
+    def _trace_roots(self, sql: str, bound: dict[str, Any]) -> FakeQueryResult:
+        """The root span of each id on the page, scoped exactly as the statement is."""
+        rows = self._matching(sql, bound, by_project=True)
+        wanted = set(bound.get("trace_ids", []))
+        return FakeQueryResult(
+            ["trace_id", "root_service", "root_name"],
             [
-                (
-                    row.trace_id,
-                    "storefront",
-                    "GET /checkout",
-                    _START_NANOS,
-                    _SPAN_DURATION_MS,
-                    1,
-                    0,
-                    1,
-                )
+                (row.trace_id, "storefront", "GET /checkout")
                 for row in rows
+                if row.trace_id in wanted
             ],
         )
 
@@ -643,10 +647,15 @@ async def test_a_cursor_forged_from_another_tenants_row_cannot_cross_the_boundar
     assert response.status_code == 200
     assert [trace["trace_id"] for trace in response.json()["traces"]] == [tenant_a.trace_id]
 
-    sql, bound = stack.telemetry.calls[-1]
+    paged = [call for call in stack.telemetry.calls if "cursor_trace_id" in call[1]]
+    assert len(paged) == 1, "the keyset predicate did not reach exactly one statement"
+    sql, bound = paged[0]
     assert bound["tenant_id"] == str(tenant_a.org_id)
     assert bound["cursor_trace_id"] == tenant_b.trace_id, "the forged id was not the one bound"
-    assert tenant_b.trace_id not in sql, "a cursor value was spliced into the statement text"
+    assert all(tenant_b.trace_id not in text for text, _ in stack.telemetry.calls), (
+        "a cursor value was spliced into a statement's text"
+    )
+    assert tenant_b.trace_id not in sql
 
 
 async def test_a_cursor_cannot_widen_the_page_beyond_the_projects_own_rows(

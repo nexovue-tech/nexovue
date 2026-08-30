@@ -19,8 +19,12 @@ individually once that is forgotten — ClickHouse joins them at read time.
 
 Offsets commit only after everything a batch produced has been stored: its spans out of the
 sampling buffer *and* its counters out of their minute bucket. That is at-least-once, and it puts
-commits up to about 70s behind ingest by design — re-inserting an identical span row changes
-nothing, and `internal/pipeline/dedupe` is what stops a replay being counted twice.
+commits up to about 70s behind ingest by design (measured: p50 43s, p90 72s). A replay must
+therefore be recognised on **both** counts — re-inserting an identical span row does *not* change
+nothing, because `spans` is a plain MergeTree and nothing deduplicates it on read.
+`internal/pipeline/dedupe` catches a redelivery inside one process; `internal/pipeline/ingeststate`
+catches one across a restart, keeping both watermarks in Keeper — counted-through (ADR 0061) and
+written-through (migration `000026`).
 
 Because of that, **a bucket must always be able to settle**, so `derive` counts on the client's own
 span timestamp only while it is within a minute ahead of, or the broker's retention behind, the

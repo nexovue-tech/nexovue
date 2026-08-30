@@ -216,7 +216,7 @@ effective dates so a repricing does not rewrite what was already charged.
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
 | P1-40 | Service overview | request rate, error rate, p95 trend; endpoints ranked by slowness/errors | ✅ done |
-| P1-41 | Trace explorer | search + filters over the M1 waterfall | todo |
+| P1-41 | Trace explorer | search + filters over the M1 waterfall | ✅ done |
 | P1-56 | Service map | dependency graph from P1-55 edges; edge call rate/error/latency; click-through to a service | ✅ done |
 | P1-42 | Errors screen | grouped exceptions, counts, first/last seen, stack traces | ✅ done |
 | P1-43 | Logs screen | search, filters, **live tail** via WebSocket. Fed by a cursored ClickHouse poll per project, not a broker: nothing publishes log records to Redis today, and pub/sub loses whatever arrived while a viewer was reconnecting. A publish step in the Go log writer is the root fix and is not done | ✅ done |
@@ -344,7 +344,27 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 - **The receiver's rate limiter fails open** when Valkey is unreachable, on the reasoning that losing telemetry costs more than briefly losing the limit, with body caps and the broker still bounding damage. Deliberate, and worth revisiting once a paying tenant can be harmed by it.
 - **The receiver exposes no profile endpoint**, which is what blocks the trace-split re-encode budget (§4) — permanently, not just today. `net/http/pprof` on the existing admin listener would settle it, but exposing profiles needs a deliberate decision about who can reach that port.
 - **`resolveWindow` rounded the live window's end *down* to a bucket**, so the trace list silently omitted the newest 0–10 seconds, and `TraceListScreen` then froze that window at mount. Together they broke M1's exit condition at the last hop: onboarding said the first span had arrived, and the list it linked to was empty. Fixed in M1; noted because the shape recurs — a cache-stability trick that quietly changes what the query means.
-- **The trace list groups over `spans` on every request.** Correct and cheap at M1 volume because the time window is bounded by the sort key, but it is a full group-by, and P1-41 (trace explorer, M6) is where it needs a real look.
+- ~~**The trace list groups over `spans` on every request.**~~ **Looked at in P1-41, and it
+  was worse than "not cheap": it failed.** Measured against 12.45M spans / 2.73M traces in the
+  dev store, a 7-day window — a range the screen offers — needed **1.8 GiB** of aggregation
+  state and ClickHouse killed it at the 2.5 GiB server cap. Not slow: a 500.
+  The cause was naming each trace after its root span with `argMin` over two strings *inside*
+  the group, which put those strings in every one of 2.73M entries. The group now holds only
+  fixed-width numbers (**640 MiB**, 350 ms) and the two root strings are read for the fifty
+  traces the page returns, which the `trace_id` bloom filter makes a 16 ms second query. The
+  statement also carries `max_bytes_before_external_group_by = 256 MiB`, so a window large
+  enough to threaten the server spills to disk (288 MiB, 770 ms) instead of failing; an hour
+  never reaches the threshold and is unchanged.
+  **Still open, and this is the real fix.** The cost is one hash-table entry per trace *in the
+  window*, filtered or not — it grows with traffic, not with the page, so 640 MiB is a
+  per-request figure that ten concurrent readers multiply. Bounding it properly needs a
+  per-trace summary row maintained on ingest, keyed so "newest first" can be answered without
+  aggregating the window. That is a schema change with a real alternative (adaptively narrowing
+  the scanned slice and refining over the candidates, which is correct but is three round trips
+  and a widening heuristic), so it wants an ADR and a decision rather than being folded into a
+  screen task. **Nothing else in the API has this shape**: every other `GROUP BY` in
+  `apps/api/src` keys on a service, endpoint, host, query hash or time bucket, all bounded by
+  what a customer has rather than by how much traffic they send.
 
 ## 7d. Follow-ups surfaced while building M2
 

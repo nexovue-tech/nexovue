@@ -1,6 +1,8 @@
 # 0056 — Pricing unit is the service, not the gigabyte
 
-- **Status:** Accepted
+- **Status:** Accepted — the *Schema follows* paragraph is discharged by
+  [0077](0077-the-billing-unit-is-a-table-and-the-price-is-a-dated-row.md), which also settles where
+  a price lives. The unit, the allowance and the ceiling stand unchanged.
 - **Date:** 2026-08-27
 
 ## Context

@@ -71,7 +71,7 @@ func TestAFutureDatedSpanDoesNotWedgeOffsetCommits(t *testing.T) {
 	receivedAt := invariantStart
 
 	absorbed, err := stages.absorbMessage(
-		receivedAt, skewedMessage(t, receivedAt.Add(clientClockAhead), receivedAt), true)
+		receivedAt, skewedMessage(t, receivedAt.Add(clientClockAhead), receivedAt), handling{count: true, store: true})
 	if err != nil {
 		t.Fatalf("absorbMessage() = %v, want no error", err)
 	}
@@ -116,7 +116,7 @@ func TestAnUntrustedSpanTimestampIsCountedAtReceiveTime(t *testing.T) {
 		"the epoch":     time.Unix(0, 0).UTC(),
 	} {
 		if _, err := stages.absorbMessage(
-			receivedAt, skewedMessage(t, clientClock, receivedAt), true); err != nil {
+			receivedAt, skewedMessage(t, clientClock, receivedAt), handling{count: true, store: true}); err != nil {
 			t.Fatalf("absorbMessage() = %v, want no error", err)
 		}
 	}
@@ -144,7 +144,7 @@ func TestRetimingASpanIsReported(t *testing.T) {
 	receivedAt := invariantStart
 
 	trusted, err := stages.absorbMessage(
-		receivedAt, skewedMessage(t, receivedAt.Add(-time.Second), receivedAt), true)
+		receivedAt, skewedMessage(t, receivedAt.Add(-time.Second), receivedAt), handling{count: true, store: true})
 	if err != nil {
 		t.Fatalf("absorbMessage() = %v, want no error", err)
 	}
@@ -153,7 +153,7 @@ func TestRetimingASpanIsReported(t *testing.T) {
 	}
 
 	skewed, err := stages.absorbMessage(
-		receivedAt, skewedMessage(t, receivedAt.AddDate(1, 0, 0), receivedAt), true)
+		receivedAt, skewedMessage(t, receivedAt.AddDate(1, 0, 0), receivedAt), handling{count: true, store: true})
 	if err != nil {
 		t.Fatalf("absorbMessage() = %v, want no error", err)
 	}

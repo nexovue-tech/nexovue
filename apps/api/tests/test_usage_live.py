@@ -23,7 +23,7 @@ import pytest
 from live import require_stack
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from nexovue_api.data.postgres.models import UsageDaily
+from nexovue_api.data.postgres.models import Project, UsageDaily, UsageDailyService
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 from nexovue_api.usage import service
 from nexovue_api.usage.schemas import UsageResponse
@@ -173,3 +173,78 @@ async def test_the_plan_a_new_tenant_lands_on_is_read_from_the_plans_table(
     assert answer.plan.slug == tenant.organization.plan
     assert answer.plan.raw_retention_days > 0
     assert answer.plan.derived_retention_days > 0
+
+
+# ------------------------------------------------ the billable count, in real SQL
+
+
+async def _record_service(
+    db: AsyncSession,
+    tenant: ProvisionedTenant,
+    *,
+    day: date,
+    name: str,
+    project_id: uuid.UUID | None = None,
+) -> None:
+    db.add(
+        UsageDailyService(
+            org_id=tenant.organization.id,
+            project_id=project_id or tenant.project.id,
+            day=day,
+            service_name=name,
+        )
+    )
+    await db.flush()
+
+
+async def _second_project(db: AsyncSession, tenant: ProvisionedTenant) -> Project:
+    project = Project(org_id=tenant.organization.id, slug="staging", name="Staging")
+    db.add(project)
+    await db.flush()
+    return project
+
+
+async def test_a_service_reporting_every_day_is_one_service_for_the_range(
+    db: AsyncSession,
+) -> None:
+    """The union is computed by Postgres, so this is where it is proved.
+
+    The offline suite asserts the statement asks for a distinct count, because a
+    fake that dedupes in Python would stay green without one. This asserts the
+    database agrees: seven rows, one service, and a bill that would otherwise be
+    seven times too large.
+    """
+    tenant = await _new_tenant(db)
+    for offset in range(7):
+        await _record_service(db, tenant, day=FROM_DAY + timedelta(days=offset), name="checkout")
+
+    answer = await _read(db, tenant)
+
+    assert answer.totals.services == 1
+
+
+async def test_the_same_service_name_in_two_projects_is_two_services(db: AsyncSession) -> None:
+    """Two teams each running a `checkout` are running two of them."""
+    tenant = await _new_tenant(db)
+    staging = await _second_project(db, tenant)
+    await _record_service(db, tenant, day=TO_DAY, name="checkout")
+    await _record_service(db, tenant, day=TO_DAY, name="checkout", project_id=staging.id)
+
+    answer = await _read(db, tenant)
+
+    assert answer.totals.services == 2
+
+
+async def test_another_organizations_services_are_never_counted(db: AsyncSession) -> None:
+    owner, stranger = await _new_tenant(db), await _new_tenant(db)
+    await _record_service(db, owner, day=TO_DAY, name="checkout")
+
+    assert (await _read(db, stranger)).totals.services == 0
+    assert (await _read(db, owner)).totals.services == 1
+
+
+async def test_a_tier_with_no_price_row_reports_no_price_at_all(db: AsyncSession) -> None:
+    """`plan_prices` ships empty on purpose: a zero would read as free."""
+    tenant = await _new_tenant(db)
+
+    assert (await _read(db, tenant)).price is None

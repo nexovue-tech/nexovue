@@ -5,10 +5,15 @@ statement text, so a query that lost its tenant predicate finds nothing and the
 isolation tests below fail rather than quietly passing. The same technique as
 `test_errorgroups.py`, for the same reason.
 
-The roll-up tests carry the weight here for a second reason: **no host has ever
-sent a `system.*` metric to our ClickHouse**, so the shaping cannot be checked
-against production rows. Each rule is therefore stated as a reading of the
-semantic conventions and tested against rows written to match them.
+The roll-up tests carry the weight here, and their rows are now written in the
+shape a producer actually sends rather than the shape the specification
+describes. The two differ, and taking the specification's word for it was a real
+defect: the OpenTelemetry Demo's host metrics arrive with flat `state` and `cpu`
+attributes, which the spec-only reading could not name, and an unnamed mode was
+being counted as work — reporting a 23%-busy host at 1124%.
+
+Both spellings are tested: the flat one because it is what we receive, the
+namespaced one because it is what the specification will make producers send.
 """
 
 from __future__ import annotations
@@ -210,7 +215,7 @@ async def test_the_tenant_bound_is_the_repositorys_and_never_a_parameter() -> No
 
 
 async def test_a_project_with_no_host_metrics_gets_an_empty_list_not_an_error() -> None:
-    """The state every project is in today: no `system.*` metric has ever arrived."""
+    """The state most projects are in: nothing is scraping their hosts."""
     store = FakeMetricStore({TENANT_A: []})
 
     answer = await _nodes(TENANT_A, store)
@@ -310,6 +315,94 @@ async def test_the_superseded_cpu_state_attribute_is_still_understood() -> None:
 
     assert node.cpu_utilization is not None
     assert round(node.cpu_utilization, 6) == 0.35
+
+
+async def test_the_flat_attribute_spelling_producers_actually_send_is_read() -> None:
+    """The shape our own ClickHouse holds: `{"cpu": 0, "state": "idle"}`.
+
+    Semconv v1.27.0 renamed these keys, but neither the Collector's hostmetrics
+    cpuscraper nor the Python `SystemMetricsInstrumentor` followed, so reading
+    only the specification's spelling matched no real traffic at all. Note the
+    CPU number is a JSON integer here, not a string — reading only strings
+    collapses every CPU of a host into one group.
+    """
+    node = await _one_node(
+        [
+            series(
+                conventions.SYSTEM_CPU_UTILIZATION,
+                attributes={"cpu": 0, "state": "idle"},
+                latest=0.70,
+            ),
+            series(
+                conventions.SYSTEM_CPU_UTILIZATION,
+                attributes={"cpu": 0, "state": "user"},
+                latest=0.30,
+            ),
+            series(
+                conventions.SYSTEM_CPU_UTILIZATION,
+                attributes={"cpu": 1, "state": "idle"},
+                latest=0.90,
+            ),
+            series(
+                conventions.SYSTEM_CPU_UTILIZATION,
+                attributes={"cpu": 1, "state": "user"},
+                latest=0.10,
+            ),
+        ]
+    )
+
+    # Two CPUs at 30% and 10%, so the host is at 20% — not at 40%.
+    assert node.cpu_utilization is not None
+    assert round(node.cpu_utilization, 6) == 0.2
+
+
+async def test_a_cpu_mode_we_cannot_name_is_not_counted_as_work() -> None:
+    """The defect this replaced reported an idle host as saturated.
+
+    Every mode of one CPU sums to 1 and idle is most of it, so adding an
+    uninterpretable point to the busy side is not a cautious default — it is an
+    invented measurement. Against real rows it turned a 23%-busy host into
+    1124%. "Not measured" is the only honest reading of a point we cannot name.
+    """
+    node = await _one_node(
+        [
+            series(
+                conventions.SYSTEM_CPU_UTILIZATION,
+                attributes={"cpu": 0, "mood": "idle"},
+                latest=0.97,
+            ),
+            series(
+                conventions.SYSTEM_CPU_UTILIZATION,
+                attributes={"cpu": 0, "mood": "user"},
+                latest=0.03,
+            ),
+        ]
+    )
+
+    assert node.cpu_utilization is None
+
+
+async def test_memory_states_are_read_under_the_flat_spelling_too() -> None:
+    """Both producers send `state`, not `system.memory.state`."""
+    node = await _one_node(
+        [
+            series(
+                conventions.SYSTEM_MEMORY_USAGE,
+                unit="By",
+                attributes={"state": "used"},
+                latest=6_000_000_000,
+            ),
+            series(
+                conventions.SYSTEM_MEMORY_USAGE,
+                unit="By",
+                attributes={"state": "free"},
+                latest=4_000_000_000,
+            ),
+        ]
+    )
+
+    assert node.memory_used_bytes == 6_000_000_000
+    assert node.memory_limit_bytes == 10_000_000_000
 
 
 async def test_memory_total_is_reconstructed_from_the_states_when_no_limit_is_sent() -> None:

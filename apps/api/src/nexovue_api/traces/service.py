@@ -2,29 +2,40 @@
 
 No SQL text and no HTTP. What lives here is the arithmetic ClickHouse should
 not be asked to do twice — the time window, the page boundary, and the
-translation from stored encodings to the ones the contract names.
+translation from stored encodings to the ones the contract names — plus the
+decisions behind a filter: what a caller may ask for, and which column answers
+it.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Final
 
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.errors.exceptions import NotFoundError
+from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
 from nexovue_api.traces import queries
 from nexovue_api.traces.cursor import TracePageCursor, decode_cursor
+from nexovue_api.traces.queries import TraceFilters
 from nexovue_api.traces.schemas import (
+    OperationFacet,
+    ServiceFacet,
     SpanDetail,
     TraceDetailResponse,
+    TraceFacetsResponse,
     TraceListResponse,
     TraceSummary,
 )
 
 DEFAULT_LIMIT: Final = 50
 MAX_LIMIT: Final = 200
+
+# One facet list is a set of filter options, not a report. Past a few hundred
+# entries the control is unusable anyway, and the cap keeps the group-by cheap.
+MAX_FACET_ROWS: Final = 500
 
 # Python datetimes carry microseconds and the store carries nanoseconds, so the
 # window derived from `span_trace_lookup` is widened by a second at each end. A day is
@@ -36,6 +47,17 @@ WINDOW_SLACK: Final = timedelta(seconds=1)
 # response long before the repository's own row cap would.
 MAX_SPANS_PER_TRACE: Final = 10_000
 
+# What a filter value may be. Long enough for a fully-qualified RPC method or a
+# URL template, short enough that nothing pathological reaches the store.
+MAX_FILTER_VALUE_LENGTH: Final = 512
+
+# An OTLP attribute key is a dotted name. Anything else is a typo or a probe,
+# and answering it costs a scan — so it is refused before the query runs. The
+# path is a bound parameter either way and could never be SQL.
+_ATTRIBUTE_PATH: Final = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./:-]{0,254}$")
+
+STATUS_FILTERS: Final = (queries.STATUS_ERROR, queries.STATUS_OK)
+
 _SEVERITY_NAMES: Final[dict[int, str]] = {
     queries.SEVERITY_ERROR: queries.STATUS_ERROR,
     queries.SEVERITY_OK: queries.STATUS_OK,
@@ -44,6 +66,13 @@ _SEVERITY_NAMES: Final[dict[int, str]] = {
 UNKNOWN_STATUS: Final = queries.STATUS_UNSET
 
 TRACE_NOT_FOUND_DETAIL: Final = "No such trace."
+MALFORMED_ATTRIBUTE_PATH: Final = (
+    "`attr` must be an attribute name such as `db.system` — letters, digits and `_ . / : -`."
+)
+ATTRIBUTE_NEEDS_A_VALUE: Final = "`attr` filters on a value, so `attr_value` is required with it."
+UNKNOWN_STATUS_FILTER: Final = f"`status` must be one of {', '.join(STATUS_FILTERS)}."
+DURATION_RANGE_INVERTED: Final = "`min_duration_ms` must not be greater than `max_duration_ms`."
+NEGATIVE_DURATION: Final = "A duration filter must not be negative."
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,30 +91,202 @@ class TraceWindow:
     received_to: datetime
 
 
+def build_filters(
+    *,
+    service_name: str | None,
+    operation: str | None,
+    status: str | None,
+    min_duration_ms: float | None,
+    max_duration_ms: float | None,
+    attribute_path: str | None,
+    attribute_value: str | None,
+) -> TraceFilters:
+    """The filters a caller asked for, or a refusal naming the one that is wrong.
+
+    Every value here was chosen by the caller and is bound as a parameter, so
+    none of this is about SQL safety. It is about answering a malformed filter
+    with a sentence instead of an empty page that looks like real data.
+    """
+    if status is not None and status not in STATUS_FILTERS:
+        raise InvalidRequestError(UNKNOWN_STATUS_FILTER)
+
+    for duration in (min_duration_ms, max_duration_ms):
+        if duration is not None and duration < 0:
+            raise InvalidRequestError(NEGATIVE_DURATION)
+    if (
+        min_duration_ms is not None
+        and max_duration_ms is not None
+        and min_duration_ms > max_duration_ms
+    ):
+        raise InvalidRequestError(DURATION_RANGE_INVERTED)
+
+    path = _clean(attribute_path)
+    value = _clean(attribute_value)
+    if path is not None:
+        if not _ATTRIBUTE_PATH.match(path):
+            raise InvalidRequestError(MALFORMED_ATTRIBUTE_PATH)
+        if value is None:
+            raise InvalidRequestError(ATTRIBUTE_NEEDS_A_VALUE)
+
+    return TraceFilters(
+        service_name=_clean(service_name),
+        operation=_clean(operation),
+        attribute_path=path,
+        attribute_value=value,
+        status=status,
+        min_duration_ms=min_duration_ms,
+        max_duration_ms=max_duration_ms,
+    )
+
+
+def _clean(value: str | None) -> str | None:
+    """A filter value, or None. Whitespace and over-long input are not filters."""
+    if value is None:
+        return None
+    trimmed = value.strip()[:MAX_FILTER_VALUE_LENGTH]
+    return trimmed or None
+
+
 async def list_traces(
     repository: TenantScopedRepository,
     *,
     project_id: str,
     from_time: datetime,
     to_time: datetime,
+    filters: TraceFilters,
     limit: int,
     cursor: str | None,
 ) -> TraceListResponse:
-    """One page of traces, newest first."""
+    """One page of traces, newest first.
+
+    Two reads, deliberately: the group-by over the window holds only numbers,
+    and the root service and name — the two strings that made it too heavy to
+    run over a week — are fetched for this page alone. See `queries`.
+    """
     page = decode_cursor(cursor) if cursor else None
     parameters: dict[str, Any] = {
         "project_id": project_id,
         "from_time": from_time,
         "to_time": to_time,
         "limit": limit,
+        **_filter_parameters(filters),
     }
     if page is not None:
         parameters["cursor_nanos"] = page.start_time_nanos
         parameters["cursor_trace_id"] = page.trace_id
 
-    rows = await repository.query(queries.list_traces_sql(with_cursor=page is not None), parameters)
-    traces = [_to_summary(row) for row in rows]
+    rows = await repository.query(
+        queries.list_traces_sql(filters, with_cursor=page is not None), parameters
+    )
+    roots = await _root_spans(
+        repository,
+        project_id=project_id,
+        from_time=from_time,
+        to_time=to_time,
+        trace_ids=[values.text(row["trace_id"]) for row in rows],
+    )
+
+    traces = [_to_summary(row, roots) for row in rows]
     return TraceListResponse(traces=traces, next_cursor=_next_cursor(rows, traces, limit))
+
+
+def _filter_parameters(filters: TraceFilters) -> dict[str, Any]:
+    """Only the values the spliced predicates name, so an unused one is unbound."""
+    bound: dict[str, Any] = {}
+    if filters.service_name:
+        bound["service_name"] = filters.service_name
+    if filters.operation:
+        bound["operation"] = filters.operation
+    if filters.attribute_path:
+        bound["attr_path"] = filters.attribute_path
+        bound["attr_value"] = filters.attribute_value
+    if filters.min_duration_ms is not None:
+        bound["min_duration_ms"] = filters.min_duration_ms
+    if filters.max_duration_ms is not None:
+        bound["max_duration_ms"] = filters.max_duration_ms
+    return bound
+
+
+async def _root_spans(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    from_time: datetime,
+    to_time: datetime,
+    trace_ids: list[str],
+) -> dict[str, tuple[str, str]]:
+    """The service and name each trace on this page is known by."""
+    if not trace_ids:
+        return {}
+
+    rows = await repository.query(
+        queries.TRACE_ROOTS_SQL,
+        {
+            "project_id": project_id,
+            "from_time": from_time,
+            "to_time": to_time,
+            "trace_ids": trace_ids,
+        },
+    )
+    return {
+        values.text(row["trace_id"]): (
+            values.text(row["root_service"]),
+            values.text(row["root_name"]),
+        )
+        for row in rows
+    }
+
+
+async def trace_facets(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> TraceFacetsResponse:
+    """Which services and operations this window holds, so the filters offer only those."""
+    rows = await repository.query(
+        queries.TRACE_FACETS_SQL,
+        {
+            "project_id": project_id,
+            "from_time": from_time,
+            "to_time": to_time,
+            "limit": MAX_FACET_ROWS,
+        },
+    )
+    return TraceFacetsResponse(services=_service_facets(rows), operations=_operation_facets(rows))
+
+
+def _service_facets(rows: list[dict[str, Any]]) -> list[ServiceFacet]:
+    """One row per service, folded up from the (service, operation) grid.
+
+    Trace counts are summed rather than re-counted: a trace crossing two
+    operations of one service is counted twice, which overstates a busy
+    service. It ranks a dropdown, and ranking is all it is used for.
+    """
+    spans: dict[str, int] = {}
+    traces: dict[str, int] = {}
+    for row in rows:
+        name = values.text(row["service_name"])
+        spans[name] = spans.get(name, 0) + int(row["spans"])
+        traces[name] = traces.get(name, 0) + int(row["traces"])
+
+    ranked = sorted(spans.items(), key=lambda entry: (-entry[1], entry[0]))
+    return [
+        ServiceFacet(service_name=name, spans=count, traces=traces[name]) for name, count in ranked
+    ]
+
+
+def _operation_facets(rows: list[dict[str, Any]]) -> list[OperationFacet]:
+    return [
+        OperationFacet(
+            service_name=values.text(row["service_name"]),
+            operation=values.text(row["span_name"]),
+            spans=int(row["spans"]),
+            traces=int(row["traces"]),
+        )
+        for row in rows
+    ]
 
 
 async def get_trace(
@@ -158,11 +359,16 @@ def _next_cursor(rows: list[dict[str, Any]], traces: list[TraceSummary], limit: 
     ).encode()
 
 
-def _to_summary(row: dict[str, Any]) -> TraceSummary:
+def _to_summary(row: dict[str, Any], roots: dict[str, tuple[str, str]]) -> TraceSummary:
+    trace_id = values.text(row["trace_id"])
+    # Both reads cover the same window for the same tenant, so a page trace
+    # always has a root here. Empty rather than absent if that ever stops being
+    # true: a trace with no name still has a duration worth showing.
+    root_service, root_name = roots.get(trace_id, ("", ""))
     return TraceSummary(
-        trace_id=values.text(row["trace_id"]),
-        root_service=values.text(row["root_service"]),
-        root_name=values.text(row["root_name"]),
+        trace_id=trace_id,
+        root_service=root_service,
+        root_name=root_name,
         start_time=values.nanos_to_datetime(row["start_time_nanos"]),
         duration_ms=float(row["duration_ms"]),
         span_count=int(row["span_count"]),

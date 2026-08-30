@@ -1,0 +1,105 @@
+import { useQuery } from "@tanstack/react-query";
+
+import { apiClient } from "@/shared/api-client";
+import type { TimeWindow } from "@/shared/selection";
+
+/**
+ * Hosts and containers, read from the metrics a customer's collector sends.
+ *
+ * **Every measurement is nullable, and null means "not reported" — never zero.** A
+ * collector runs only the scrapers it was configured with, so a host sending CPU and
+ * nothing else is ordinary, and a zero in the memory column would read as "idle" when
+ * the truth is "not measured". `signals` names what the node actually sent, which is how
+ * the screen tells a missing scraper from a missing reading.
+ *
+ * Kubernetes pod and node views are Phase 2. The metrics are ingested and queryable;
+ * nothing here reads them.
+ */
+
+export type NodeKind = "host" | "container";
+
+export interface NodeSummary {
+  kind: NodeKind;
+  /** Empty when the resource carried no `host.name`. */
+  host: string;
+  container: string;
+
+  /** Fraction of the node's CPUs in use, 0 to 1. Hosts only. */
+  cpu_utilization: number | null;
+  /** Cores consumed. Containers only — a different quantity from the fraction above. */
+  cpu_cores_used: number | null;
+
+  memory_used_bytes: number | null;
+  memory_limit_bytes: number | null;
+  memory_utilization: number | null;
+
+  filesystem_used_bytes: number | null;
+  filesystem_limit_bytes: number | null;
+  filesystem_utilization: number | null;
+
+  /** Rates: the underlying metrics are counters that only rise, so a level says nothing. */
+  disk_bytes_per_second: number | null;
+  network_bytes_per_second: number | null;
+
+  first_seen: string;
+  last_seen: string;
+  /** The metric names this node sent inside the window, in name order. */
+  signals: string[];
+}
+
+export interface NodeListResponse {
+  nodes: NodeSummary[];
+  /** True when the read hit its series ceiling: a prefix of the fleet, not the fleet. */
+  truncated: boolean;
+}
+
+export interface SignalSummary {
+  metric_name: string;
+  unit: string;
+  points: number;
+  series: number;
+  nodes: number;
+  last_seen: string;
+}
+
+interface SignalListResponse {
+  signals: SignalSummary[];
+}
+
+export const nodesQueryKey = (projectId: string, timeWindow: TimeWindow) =>
+  ["infrastructure", "hosts", projectId, timeWindow.from, timeWindow.to] as const;
+
+export const signalsQueryKey = (projectId: string, timeWindow: TimeWindow) =>
+  ["infrastructure", "signals", projectId, timeWindow.from, timeWindow.to] as const;
+
+export function useNodes(projectId: string | undefined, timeWindow: TimeWindow) {
+  return useQuery({
+    queryKey: nodesQueryKey(projectId ?? "", timeWindow),
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<NodeListResponse>("infrastructure/hosts", {
+        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        signal,
+      }),
+  });
+}
+
+/**
+ * Which infrastructure metrics arrived at all.
+ *
+ * Read alongside the node list rather than instead of it: the node list says what the
+ * fleet looks like, this says which scrapers are switched on. A fleet with CPU and no
+ * memory is a collector configuration, not a set of hosts that lost their memory.
+ */
+export function useSignals(projectId: string | undefined, timeWindow: TimeWindow) {
+  return useQuery({
+    queryKey: signalsQueryKey(projectId ?? "", timeWindow),
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<SignalListResponse>("infrastructure/signals", {
+        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        signal,
+      }),
+    select: (response) => response.signals,
+  });
+}

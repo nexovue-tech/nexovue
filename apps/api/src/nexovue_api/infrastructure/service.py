@@ -79,8 +79,13 @@ class Reading:
     first_seen: datetime
     last_seen: datetime
 
-    def attribute(self, key: str) -> str:
-        return values.attribute(self.attributes, key)
+    def attribute(self, keys: Sequence[str]) -> str:
+        """The first of these attribute spellings this series carries."""
+        for key in keys:
+            found = _attribute_text(self.attributes, key)
+            if found:
+                return found
+        return ""
 
     @property
     def elapsed_seconds(self) -> float:
@@ -150,6 +155,29 @@ def _read_parameters(project_id: str, from_time: datetime, to_time: datetime) ->
     }
 
 
+def _attribute_text(attributes: dict[str, Any], key: str) -> str:
+    """One attribute as text — flat or nested, string or number.
+
+    Two shapes have to be handled and `values.attribute` handles neither alone.
+    ClickHouse's JSON type reads a dot as a path separator, so a dotted OTLP key
+    comes back nested; and a logical CPU number arrives as a JSON integer, which
+    a string-only read drops — collapsing a twelve-CPU host into one group whose
+    modes sum to twelve rather than to one.
+    """
+    found: Any = attributes.get(key)
+    if found is None:
+        found = attributes
+        for part in key.split("."):
+            if not isinstance(found, dict):
+                return ""
+            found = found.get(part)
+
+    # `bool` is an `int` in Python, and "True" is not an attribute value.
+    if found is None or isinstance(found, bool) or not isinstance(found, str | int | float):
+        return ""
+    return str(found)
+
+
 def _node_key(row: dict[str, Any]) -> NodeKey:
     return NodeKey(host=values.text(row["host"]), container=values.text(row["container"]))
 
@@ -212,7 +240,7 @@ def _cpu_utilization(readings: Sequence[Reading]) -> float | None:
     """The fraction of this node's CPUs in use, averaged over logical CPUs."""
     per_cpu: dict[str, list[Reading]] = defaultdict(list)
     for reading in _named(readings, conventions.SYSTEM_CPU_UTILIZATION):
-        per_cpu[reading.attribute(conventions.CPU_NUMBER_ATTRIBUTE)].append(reading)
+        per_cpu[reading.attribute(conventions.CPU_NUMBER_ATTRIBUTES)].append(reading)
 
     busy = [_busy_fraction(group) for group in per_cpu.values()]
     measured = [fraction for fraction in busy if fraction is not None]
@@ -223,29 +251,34 @@ def _busy_fraction(one_cpu: Sequence[Reading]) -> float | None:
     """How much of one logical CPU is not idle.
 
     The modes of a CPU sum to 1, so the busy modes are the answer directly. A
-    collector reporting only `idle` is answered by its complement instead.
+    producer reporting only `idle` is answered by its complement instead.
+
+    **A reading whose mode we cannot name counts for nothing.** Treating an
+    unnamed mode as busy is not a conservative default, it is a fabricated one:
+    idle is most of the 1.0 the modes sum to, so counting it as work reported a
+    3%-busy host as fully saturated. Answering "not measured" is the only honest
+    reading of a point we cannot interpret.
     """
+    named = [(reading, _cpu_mode(reading)) for reading in one_cpu]
+    interpreted = [(reading, mode) for reading, mode in named if mode]
+    if not interpreted:
+        return None
+
     working = [
-        reading.latest_value
-        for reading in one_cpu
-        if _cpu_mode(reading) != conventions.CPU_IDLE_MODE
+        reading.latest_value for reading, mode in interpreted if mode != conventions.CPU_IDLE_MODE
     ]
     if working:
         return sum(working)
 
     idle = [
-        reading.latest_value
-        for reading in one_cpu
-        if _cpu_mode(reading) == conventions.CPU_IDLE_MODE
+        reading.latest_value for reading, mode in interpreted if mode == conventions.CPU_IDLE_MODE
     ]
-    return 1.0 - sum(idle) if idle else None
+    return 1.0 - sum(idle)
 
 
 def _cpu_mode(reading: Reading) -> str:
-    """Which slice of CPU time a point measures, under either spelling."""
-    return reading.attribute(conventions.CPU_MODE_ATTRIBUTE) or reading.attribute(
-        conventions.LEGACY_CPU_STATE_ATTRIBUTE
-    )
+    """Which slice of CPU time a point measures, under any known spelling."""
+    return reading.attribute(conventions.CPU_MODE_ATTRIBUTES)
 
 
 def _memory_used_bytes(readings: Sequence[Reading]) -> float | None:
@@ -293,12 +326,12 @@ def _filesystem_limit_bytes(readings: Sequence[Reading]) -> float | None:
 
 
 def _used_memory(reading: Reading) -> bool:
-    return reading.attribute(conventions.MEMORY_STATE_ATTRIBUTE) == conventions.MEMORY_USED_STATE
+    return reading.attribute(conventions.MEMORY_STATE_ATTRIBUTES) == conventions.MEMORY_USED_STATE
 
 
 def _used_filesystem(reading: Reading) -> bool:
     return (
-        reading.attribute(conventions.FILESYSTEM_STATE_ATTRIBUTE)
+        reading.attribute(conventions.FILESYSTEM_STATE_ATTRIBUTES)
         == conventions.FILESYSTEM_USED_STATE
     )
 

@@ -92,6 +92,11 @@ class UsageResponse(BaseModel):
     price: PlanPriceSummary | None = None
     from_day: date
     to_day: date
+    # False while any part of the range could still be counted. Distinct from
+    # the per-day flag, which can only speak for the days that already have a
+    # row: a day the meter has not reached yet is absent from `days` entirely,
+    # so nothing in that list can say the totals have stopped growing.
+    settled: bool = False
     totals: UsageTotals
     # Day order, then project. A day with no ingestion is absent rather than
     # zero-filled: nothing writes a zero row, so a gap means "no data recorded",

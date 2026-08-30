@@ -1,12 +1,21 @@
 // Package serviceedges derives the service dependency graph — one row of
 // `service_edges_1m` per caller→callee pair per minute — from spans.
 //
-// An edge is a CLIENT span whose child is a SERVER span, or a PRODUCER whose
-// child is a CONSUMER. That is the pairing the OpenTelemetry service graph
-// connector uses, and it is the only evidence a span carries about who called
-// whom: the callee's span names the callee, the caller's parent link names the
-// caller. Spans arrive in either order, so each side waits a bounded time for
-// its partner.
+// An edge is a CLIENT span answered by a SERVER span, or a PRODUCER whose
+// message reached a CONSUMER. A call's two spans are parent and child, which is
+// the pairing the OpenTelemetry service graph connector uses. A queue hop's are
+// not: messaging instrumentation starts the consumer in its own trace and
+// *links* back to the producer, because a span has one parent and a batch
+// consume has many producers — so a consumer's producer is found in its links.
+// Pairing on the parent alone is why this package had never produced a queue
+// edge. Spans arrive in either order, so each side waits a bounded time for its
+// partner.
+//
+// A queue hop crosses traces, and the receiver keys Kafka by trace id, so the
+// producer and the consumer can land on different partitions. They pair only
+// while one worker process holds both — with the pipeline replicated, the
+// fraction of queue edges that span two workers is lost. A call never has this
+// problem: both its spans are in one trace, on one partition.
 //
 // It runs before the sampler, over every span of every trace, for the same
 // reason the counters do (ADR 0010): tail sampling keeps roughly one healthy
@@ -73,10 +82,16 @@ type Span struct {
 	// id that repeats — a broken SDK emitting a constant, a zeroed field — would
 	// otherwise pair spans that have nothing to do with each other.
 	TraceID []byte
-	// SpanID and ParentSpanID are the raw 8-byte ids. A span with no SpanID
-	// cannot be paired from either side and takes no part in the graph.
+	// SpanID and ParentSpanID are the span's own id and its parent's. A span
+	// with no usable SpanID cannot be paired from either side and takes no part
+	// in the graph.
 	SpanID       []byte
 	ParentSpanID []byte
+	// Links are the spans this one names as its causes. A CONSUMER's producer
+	// is here and nowhere else: messaging instrumentation starts the consumer in
+	// its own trace and links back, because a span has one parent and a batch
+	// consume has many producers.
+	Links []SpanLink
 
 	// ServiceName is `service.name` from the span's resource, already resolved.
 	ServiceName string
@@ -93,6 +108,29 @@ type Span struct {
 	// the caller experienced, network included, which is what the edge records.
 	DurationMS float64
 	Errored    bool
+}
+
+// SpanLink is one span a span links to: the identity of a cause, in the trace
+// that cause belongs to.
+type SpanLink struct {
+	TraceID []byte
+	SpanID  []byte
+}
+
+// usableID reports whether an id names anything.
+//
+// Ids reach this package hex-encoded into fixed-width columns, so an absent one
+// is not an empty slice: it is the column's width in NUL bytes, and an
+// all-zeroes id encodes to the same width in ASCII zeroes. Both mean "no span",
+// and a length check alone would take either for a real id — which is why a
+// root span used to park in the buffer waiting for a parent that cannot exist.
+func usableID(id []byte) bool {
+	for _, b := range id {
+		if b != 0x00 && b != '0' {
+			return true
+		}
+	}
+	return false
 }
 
 // Edge is one row of `service_edges_1m`.

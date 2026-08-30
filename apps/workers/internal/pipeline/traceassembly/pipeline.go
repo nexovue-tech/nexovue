@@ -59,9 +59,10 @@ func (s staticRetention) Retention(string) (uint16, uint16) { return s.raw, s.de
 //
 // Offsets commit only after everything a batch produced has been stored —
 // spans out of the sampling buffer, counters out of their minute bucket, which
-// is what spanStorage remembers — making delivery at-least-once. Re-inserting
-// an identical span row is harmless; re-counting one is not, which is what the
-// dedupe stage is for.
+// is what spanStorage remembers — making delivery at-least-once. A replay must
+// therefore be recognised twice over: re-counting a span is a wrong number, and
+// re-inserting one is a row a customer sees twice in their trace. `seen` covers
+// a redelivery inside this process and `ingest` covers one across a restart.
 type Pipeline struct {
 	loop *consume.Loop[spanStorage]
 
@@ -79,9 +80,20 @@ type Pipeline struct {
 	seen      *dedupe.Offsets
 
 	// ingest is the durable half of `seen`: the per-partition record of what has
-	// already been counted, which unlike the in-process watermark survives both
-	// this process and the store restarting (ADR 0061).
+	// already been counted and what has already been written, which unlike the
+	// in-process watermark survives both this process and the store restarting
+	// (ADR 0061).
 	ingest *ingeststate.Guard
+
+	// alreadyStoredSpans counts spans a replay did not write because the
+	// durable watermark says ClickHouse already has them. It climbs in a step
+	// after every restart and is flat otherwise; before this existed, every one
+	// of those spans became a second copy in the customer's trace.
+	//
+	// int, unlike the running totals beside it, because that is the width the
+	// per-batch span count already has: agreeing removes a conversion rather
+	// than adding a bounds check to justify one.
+	alreadyStoredSpans int
 
 	// retimedSpans counts spans whose own timestamp was too far from receive
 	// time to bucket on. A number that climbs names a customer with a broken
@@ -214,6 +226,7 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Uint64("spans_dropped", stats.SpansDropped),
 		slog.Uint64("traces_closed_early", stats.ClosedEarly),
 		slog.Uint64("spans_retimed", p.retimedSpans),
+		slog.Int("spans_already_stored", p.alreadyStoredSpans),
 		slog.Int("edge_pairs_pending", edges.PendingSpans),
 		slog.Int("edge_series", edges.OpenEdges),
 	}
@@ -231,7 +244,7 @@ func (p *Pipeline) Stored(now time.Time, produced spanStorage) bool {
 // Absorb runs one polled batch through decode, mask, derive and sample, and
 // writes whatever the sampler released.
 func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (spanStorage, error) {
-	counting, err := p.alreadyCounted(ctx, polled.Positions)
+	counting, err := p.alreadySettled(ctx, polled.Positions)
 	if err != nil {
 		return spanStorage{}, err
 	}
@@ -245,13 +258,19 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (spanStora
 		// updated either way, so neither call may be short-circuited away.
 		firstDelivery := p.seen.FirstDelivery(record.Topic, record.Partition, record.Offset)
 		partition := ingeststate.Partition{Topic: record.Topic, ID: record.Partition}
-		counted := firstDelivery && counting.Counts(partition, record.Offset)
-		result, err := p.stages.absorbMessage(polled.At, record.Value, counted)
+		run := handling{
+			count: firstDelivery && counting.Counts(partition, record.Offset),
+			store: firstDelivery && counting.Stores(partition, record.Offset),
+		}
+		result, err := p.stages.absorbMessage(polled.At, record.Value, run)
 		if err != nil {
 			if parkErr := p.loop.Park(ctx, record, err); parkErr != nil {
 				return spanStorage{}, parkErr
 			}
 			continue
+		}
+		if !run.store {
+			p.alreadyStoredSpans += result.spans
 		}
 		p.appendRows(result.rows)
 		produced.latestMinute = later(produced.latestMinute, result.latestMinute)
@@ -297,11 +316,13 @@ func (p *Pipeline) reportSkew(ctx context.Context, skew skewReport) {
 	)
 }
 
-// alreadyCounted resolves a polled batch against the durable per-partition
-// state, so a replay of offsets whose counters are already stored is not
-// counted a second time. Its spans still travel — an identical span row is
-// idempotent — and only the counters are held back.
-func (p *Pipeline) alreadyCounted(
+// alreadySettled resolves a polled batch against the durable per-partition
+// state, so a replay is neither counted nor written a second time.
+//
+// The read is free: the guard's cache is already in memory and is only re-read
+// when a rebalance invalidates it, which is the same Refresh the counters have
+// always done.
+func (p *Pipeline) alreadySettled(
 	ctx context.Context,
 	positions []consume.Position,
 ) (ingeststate.Decisions, error) {
@@ -309,22 +330,36 @@ func (p *Pipeline) alreadyCounted(
 		return nil, err
 	}
 
-	decisions := p.ingest.Counting(ingeststate.RangesOf(positions))
+	incoming := ingeststate.RangesOf(positions)
+	decisions := p.ingest.Counting(incoming)
 	for partition, decision := range decisions {
-		if decision.Scenario == ingeststate.New && !decision.Ambiguous {
+		if !holdsAnythingBack(decision, incoming[partition]) {
 			continue
 		}
-		p.log.InfoContext(ctx, "resolving a replayed batch against the counted offsets",
+		p.log.InfoContext(ctx, "resolving a replayed batch against the settled offsets",
 			slog.String("topic", partition.Topic),
 			slog.Int("partition", int(partition.ID)),
 			slog.String("scenario", string(decision.Scenario)),
 			slog.Int64("count_from", decision.CountFrom),
+			// The band between the two is the replay this skips writing: spans
+			// already in ClickHouse whose counters are not yet exact. It is the
+			// common case after a restart, and the counter scenario alone reads
+			// "new" throughout it — which is why this line watches both.
+			slog.Int64("store_from", decision.StoreFrom),
+			slog.Int64("batch_from", incoming[partition].Min),
 			// True only when the previous settlement never confirmed, so the
 			// store's own deduplication is all that stops a duplicate here.
 			slog.Bool("ambiguous", decision.Ambiguous),
 		)
 	}
 	return decisions, nil
+}
+
+// holdsAnythingBack reports whether a decision actually withholds part of this
+// batch from a stage, which is what makes it worth a log line.
+func holdsAnythingBack(decision ingeststate.Decision, batch ingeststate.Range) bool {
+	replayedCounters := decision.Scenario != ingeststate.New || decision.Ambiguous
+	return replayedCounters || decision.StoreFrom > batch.Min
 }
 
 // Settle releases the traces whose window has closed and writes the counters
@@ -345,25 +380,55 @@ func (p *Pipeline) Settle(ctx context.Context, now time.Time) error {
 			p.stages.edges.Drained(now, produced.latestEdgeMinute)
 	}
 	reached := ingeststate.RangesOf(p.loop.Reached(derivedDrained))
-	return p.settleDerived(ctx, reached, p.stages.counters.Drain(now), p.stages.edges.Drain(now))
+	return p.settleDerived(ctx, p.spansWritten(now), reached,
+		p.stages.counters.Drain(now), p.stages.edges.Drain(now))
 }
 
-// settleCounters writes one drain of counters, bracketed by the durable record
-// of the offsets it makes exact.
+// spansWritten is how far each partition's spans have certainly reached
+// ClickHouse: the prefix of held batches whose sampling window has closed.
+//
+// It is computed after Settle's insert, never before. Every trace a record
+// touched opened at or before the record was absorbed, so all of them are
+// decided by that instant plus the window, and the rows they released are in
+// the block the caller has just written.
+//
+// This runs a sampling window behind ingest while the offsets themselves run a
+// minute bucket behind it, which is the whole value of the watermark: the band
+// between the two is the part of a replay that is already stored.
+func (p *Pipeline) spansWritten(now time.Time) ingeststate.Written {
+	return p.ingest.Writing(ingeststate.RangesOf(p.loop.Reached(spansStored(now))))
+}
+
+// spansStored reports whether every span a batch carried has left the sampling
+// buffer. A trace closes one window after the record that opened it was
+// absorbed, and spanStorage records that instant per batch.
+func spansStored(now time.Time) func(spanStorage) bool {
+	return func(produced spanStorage) bool { return !now.Before(produced.spansStoredAt) }
+}
+
+// settleDerived writes one drain of counters, bracketed by the durable record
+// of the offsets it makes exact, and records how far the spans are written.
 //
 // The order is the whole point (ADR 0061): BEFORE says an insert of this range
 // is in flight, AFTER says the store took it, and the Kafka offsets move only
 // after that — so a worker that comes back to a restarted store can tell a
 // finished insert from an interrupted one instead of guessing.
+//
+// The span watermark obeys the same rule in its simpler form. It is written
+// after ClickHouse has acknowledged the spans and before the loop commits the
+// offsets, in that order and no other: recorded early, a failed insert would
+// leave the replay skipping spans nothing ever stored, and a hole cannot be
+// repaired where a duplicate row can.
 func (p *Pipeline) settleDerived(
 	ctx context.Context,
+	written ingeststate.Written,
 	reached map[ingeststate.Partition]ingeststate.Range,
 	derived derive.Derived,
 	edges []serviceedges.Edge,
 ) error {
 	settlement := p.ingest.Advance(reached)
-	if err := p.loop.Retry(ctx, "record counted offsets", func(callCtx context.Context) error {
-		return p.ingest.Begin(callCtx, settlement)
+	if err := p.loop.Retry(ctx, "record settled offsets", func(callCtx context.Context) error {
+		return p.ingest.Begin(callCtx, settlement, written)
 	}); err != nil {
 		return err
 	}
@@ -389,9 +454,13 @@ func (p *Pipeline) Drain(ctx context.Context, now time.Time) error {
 	if err := p.writer.insert(ctx, p.block); err != nil {
 		return err
 	}
-	// Everything held is drained here, so every held offset is counted through.
-	reached := ingeststate.RangesOf(p.loop.Reached(func(spanStorage) bool { return true }))
-	return p.settleDerived(ctx, reached, p.stages.counters.DrainAll(), p.stages.edges.DrainAll())
+	// Everything held is drained here, so every held offset is both counted
+	// through and written through.
+	everything := func(spanStorage) bool { return true }
+	reached := ingeststate.RangesOf(p.loop.Reached(everything))
+	written := p.ingest.Writing(reached)
+	return p.settleDerived(ctx, written, reached,
+		p.stages.counters.DrainAll(), p.stages.edges.DrainAll())
 }
 
 // insertEdges writes derived service edges, retrying on a store outage.

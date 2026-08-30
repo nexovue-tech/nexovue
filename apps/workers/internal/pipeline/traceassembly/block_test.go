@@ -20,6 +20,9 @@ var spansColumns = []string{
 	"status_message", "http_method", "http_route", "http_status",
 	"rpc_system", "rpc_method", "rpc_status",
 	"deployment_version", "resource_attrs", "span_attrs", "events",
+	// The `links` Nested column (000025), which the server stores — and so the
+	// writer fills — as the three arrays it flattens into.
+	"links.trace_id", "links.span_id", "links.attributes",
 }
 
 func TestBlockCoversEveryColumnOfTheTable(t *testing.T) {

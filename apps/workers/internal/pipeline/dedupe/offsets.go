@@ -1,10 +1,11 @@
-// Package dedupe makes a redelivered Kafka record harmless to the stages that
-// aggregate.
+// Package dedupe makes a redelivered Kafka record harmless.
 //
 // Delivery is at-least-once by design: offsets commit only after the write
-// returns, so a crash or a rebalance between the two replays the batch. Writing
-// the same span row twice changes nothing, but adding the same span to a
-// counter twice does — so the counters consume a deduplicated stream.
+// returns, so a crash or a rebalance between the two replays the batch. Adding
+// the same span to a counter twice is a wrong number, and writing the same span
+// row twice is a row the customer sees twice in their trace — `spans` is a
+// plain MergeTree and nothing deduplicates it on read. Both stages therefore
+// consume a deduplicated stream.
 //
 // The identity of a delivery is (topic, partition, offset). A redelivery is
 // literally the same offset, which makes the check exact and the state one
@@ -19,8 +20,13 @@ import "sync"
 // It covers redelivery within one process — a retried flush, a rebalance that
 // returns a partition, a poll replay. It cannot cover a restart: the watermark
 // dies with the process, and the records between the last commit and the crash
-// are counted again. Closing that gap needs durable state, and the shape it
-// should take is an open question rather than a silent assumption.
+// would be replayed with nothing to recognise them.
+//
+// That gap is closed by internal/pipeline/ingeststate, which keeps the same two
+// facts durably in Keeper: how far each partition is counted (ADR 0061) and how
+// far its spans are written (migration 000026). This type remains the cheap
+// in-process half — a map lookup rather than a cache of a remote table — and
+// both are consulted, because either alone leaves a hole.
 type Offsets struct {
 	mu        sync.Mutex
 	watermark map[partition]int64

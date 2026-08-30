@@ -204,3 +204,60 @@ func TestMalformedStoredValuesAreRefused(t *testing.T) {
 		}
 	}
 }
+
+// The zero-value trap: a partition nothing is known about must write every
+// offset, including offset zero. Kafka offsets start at zero, so a watermark
+// left at Go's zero value would claim the first record was already stored.
+func TestAPartitionWithNoStateWritesEveryOffset(t *testing.T) {
+	decision := ingeststate.Resolve(nil, ingeststate.Range{Min: 0, Max: 99})
+	for _, offset := range []int64{0, 1, 99} {
+		if !decision.Stores(offset) {
+			t.Errorf("offset %d was skipped although nothing is known about the partition", offset)
+		}
+	}
+}
+
+// NothingWritten is the value below the first offset, so a partition recorded
+// as having stored nothing still writes offset zero.
+func TestNothingWrittenStillWritesTheFirstOffset(t *testing.T) {
+	settled := ingeststate.State{
+		Range:          ingeststate.Range{Min: 0, Max: 99},
+		Flag:           ingeststate.After,
+		WrittenThrough: ingeststate.NothingWritten,
+	}
+	if !ingeststate.Resolve(&settled, ingeststate.Range{Min: 0, Max: 99}).Stores(0) {
+		t.Error("offset 0 was skipped although no span had been written")
+	}
+}
+
+// An unconfirmed counter settlement says nothing about the spans. The BEFORE
+// flag re-counts, because a counter insert may or may not have landed; the span
+// watermark is only ever written after its insert was acknowledged, so it is
+// believed as it stands.
+func TestAnUnconfirmedSettlementStillTrustsTheSpanWatermark(t *testing.T) {
+	settled := ingeststate.State{
+		Range:          ingeststate.Range{Min: 50, Max: 99},
+		Flag:           ingeststate.Before,
+		WrittenThrough: 120,
+	}
+	decision := ingeststate.Resolve(&settled, ingeststate.Range{Min: 50, Max: 199})
+
+	if !decision.Ambiguous || decision.CountFrom != 50 {
+		t.Fatalf("counter half = %+v, want the unconfirmed range recounted from 50", decision)
+	}
+	if decision.Stores(120) {
+		t.Error("offset 120 was written again although the store acknowledged it")
+	}
+	if !decision.Stores(121) {
+		t.Error("offset 121 was skipped although nothing had written it")
+	}
+}
+
+// A partition no decision covers is written, for the same reason it is counted.
+func TestDecisionsWriteAPartitionNothingIsKnownAbout(t *testing.T) {
+	unknown := ingeststate.Partition{Topic: "spans-raw", ID: 7}
+	var none ingeststate.Decisions
+	if !none.Stores(unknown, 0) {
+		t.Error("an unrecognised partition was skipped; a missing span cannot be repaired")
+	}
+}

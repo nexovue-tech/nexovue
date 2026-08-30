@@ -31,6 +31,7 @@ from nexovue_api.data.postgres.models import (
 )
 from nexovue_api.errors.exceptions import InternalError, InvalidRequestError
 from nexovue_api.usage import queries, service
+from nexovue_api.usage.queries import MeteringFrontier
 from nexovue_api.usage.schemas import UsageResponse
 
 ORG_ID: Final = uuid.uuid4()
@@ -123,12 +124,14 @@ class FakeUsageStore:
         services: Sequence[UsageDailyService] = (),
         prices: Sequence[PlanPrice] = (),
         counted_through: datetime | None = None,
+        unknown_partitions: int = 0,
     ) -> None:
         self._rows = rows
         self._plans = plans
         self._service_rows = list(services)
         self._prices = prices
         self._counted_through = counted_through
+        self._unknown_partitions = unknown_partitions
 
     async def scalars(self, statement: Any) -> Any:
         bound = set(statement.compile().params.values())
@@ -155,7 +158,7 @@ class FakeUsageStore:
     async def execute(self, statement: Any) -> Any:
         bound = set(statement.compile().params.values())
         if _reads(statement) == "usage_ingest_offsets":
-            return _One((self._counted_through, 0))
+            return _One((self._counted_through, self._unknown_partitions))
         counts: dict[tuple[uuid.UUID, date], int] = {}
         for row in self._services(bound):
             counts[(row.project_id, row.day)] = counts.get((row.project_id, row.day), 0) + 1
@@ -464,3 +467,85 @@ async def test_another_organizations_services_are_never_counted() -> None:
     )
 
     assert response.totals.services == 1
+
+
+# ---------------------------------------------------- what is still being counted
+
+
+def _frontier(counted_through: datetime | None, unknown: int = 0) -> MeteringFrontier:
+    return MeteringFrontier(counted_through=counted_through, unknown_partitions=unknown)
+
+
+def test_a_day_the_meter_has_not_finished_is_not_settled() -> None:
+    """Half of a day counted is a number that will still grow."""
+    midday = datetime(2026, 8, 10, 12, tzinfo=UTC)
+
+    assert not service.is_settled(date(2026, 8, 10), _frontier(midday))
+
+
+def test_a_day_the_meter_has_passed_the_end_of_is_settled() -> None:
+    """Settled means counted past the last instant of the day, not "yesterday"."""
+    midnight_after = datetime(2026, 8, 11, tzinfo=UTC)
+
+    assert service.is_settled(date(2026, 8, 10), _frontier(midnight_after))
+    assert not service.is_settled(date(2026, 8, 11), _frontier(midnight_after))
+
+
+def test_an_unmetered_partition_leaves_every_day_unsettled() -> None:
+    """One partition nobody has read could hold a whole day's traffic, however
+    far ahead the others have run."""
+    far_ahead = datetime(2027, 1, 1, tzinfo=UTC)
+
+    assert not service.is_settled(date(2026, 8, 10), _frontier(far_ahead, unknown=1))
+
+
+def test_nothing_metered_at_all_leaves_every_day_unsettled() -> None:
+    assert not service.is_settled(date(2026, 8, 10), _frontier(None))
+
+
+async def _metered(counted_through: datetime | None, unknown: int = 0) -> UsageResponse:
+    store = FakeUsageStore(
+        _ROWS, [PRO_PLAN], counted_through=counted_through, unknown_partitions=unknown
+    )
+    return await service.usage_for_organization(
+        store,  # type: ignore[arg-type]
+        organization=_organization(ORG_ID),
+        from_day=FROM_DAY,
+        to_day=TO_DAY,
+    )
+
+
+async def test_each_day_carries_whether_it_finished_being_counted() -> None:
+    """The rows are 10 and 11 August; the meter stopped inside the 11th."""
+    response = await _metered(datetime(2026, 8, 11, 6, tzinfo=UTC))
+
+    assert [(day.day, day.settled) for day in response.days] == [
+        (date(2026, 8, 10), True),
+        (date(2026, 8, 11), False),
+    ]
+
+
+async def test_the_range_is_unsettled_even_when_every_day_it_lists_is_settled() -> None:
+    """The days cannot speak for the days that have no row yet.
+
+    Both rows are settled here and the range still has three weeks the meter has
+    not reached — days that could add services to a total a customer would read
+    as final. Deriving the range flag from the day list would report the
+    opposite, which is why this is the test that would catch it.
+    """
+    response = await _metered(datetime(2026, 8, 12, tzinfo=UTC))
+
+    assert all(day.settled for day in response.days)
+    assert response.settled is False
+
+
+async def test_the_range_is_settled_once_the_meter_has_passed_its_last_day() -> None:
+    response = await _metered(datetime(2026, 9, 1, tzinfo=UTC))
+
+    assert response.settled is True
+
+
+async def test_an_unmetered_partition_leaves_the_range_unsettled() -> None:
+    response = await _metered(datetime(2026, 9, 1, tzinfo=UTC), unknown=1)
+
+    assert response.settled is False

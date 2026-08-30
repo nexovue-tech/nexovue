@@ -70,6 +70,20 @@ type spanRow struct {
 	ResourceAttrs        string
 	SpanAttrs            string
 	Events               string
+	// Links are the spans this one names as its causes. Across a queue they are
+	// the only evidence of who published the message: the consumer starts its
+	// own trace and links back, so `parent_span_id` names nothing.
+	Links []spanLink
+}
+
+// spanLink is one entry of the `links` Nested column, and one candidate caller
+// for edge derivation. Ids arrive hex-encoded and padded, like the id columns
+// they point at, so a link compares against them without conversion.
+type spanLink struct {
+	TraceID []byte
+	SpanID  []byte
+	// Attributes is a JSON object, serialized like the span's own attributes.
+	Attributes string
 }
 
 // decoded is one Kafka message unpacked: our envelope and the OTLP request it
@@ -171,6 +185,7 @@ func flattenSpan(
 		ResourceAttrs:     resource.attrsJSON,
 		SpanAttrs:         otlpvalue.AttributesJSON(attributes),
 		Events:            eventsJSON(span.GetEvents()),
+		Links:             spanLinks(span.GetLinks()),
 		// Carried for the sampler alone, which reads an explicit `rv` out of it
 		// when a producer upstream has already fixed the trace's randomness. Not
 		// stored: nothing queries it.
@@ -257,6 +272,28 @@ func clampStatus(status int64) uint16 {
 		return 0
 	}
 	return uint16(status)
+}
+
+// spanLinks converts a span's OTLP links into the rows of the `links` column.
+//
+// A link with no trace id or no span id names no span, so it is dropped rather
+// than stored as an id of zeros that reads like a real one.
+func spanLinks(links []*tracepb.Span_Link) []spanLink {
+	if len(links) == 0 {
+		return nil
+	}
+	converted := make([]spanLink, 0, len(links))
+	for _, link := range links {
+		if len(link.GetTraceId()) == 0 || len(link.GetSpanId()) == 0 {
+			continue
+		}
+		converted = append(converted, spanLink{
+			TraceID:    otlpvalue.HexID(link.GetTraceId(), otlpvalue.TraceIDHexLen),
+			SpanID:     otlpvalue.HexID(link.GetSpanId(), otlpvalue.SpanIDHexLen),
+			Attributes: otlpvalue.AttributesJSON(link.GetAttributes()),
+		})
+	}
+	return converted
 }
 
 // spanEvent is the shape serialized into the `events` String column.

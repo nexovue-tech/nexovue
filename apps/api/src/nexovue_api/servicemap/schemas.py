@@ -29,7 +29,11 @@ class ServiceEdge(BaseModel):
     calls_per_minute: float
     # A fraction, not a percentage: 0.05 is one call in twenty.
     error_rate: float
-    # The caller's view, network included.
+    # The caller's own span duration, in both kinds of edge. On a `call` that is
+    # the request the caller waited on, network included. On a `queue` it is the
+    # publish — how long sending the message took — and *not* the delivery lag,
+    # which would have to be measured across the producer's clock and the
+    # consumer's.
     p50_ms: float
     p95_ms: float
     p99_ms: float

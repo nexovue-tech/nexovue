@@ -3,6 +3,9 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
 
+import type { TraceFilters } from "./filters";
+import { toSearchParams } from "./filters";
+
 /** The trace half of the M1 contract. Field names are the API's, unchanged. */
 
 /** The short OTel form, which is what storage holds and what the API returns. */
@@ -87,10 +90,35 @@ interface TraceListResponse {
   next_cursor: string | null;
 }
 
+export interface ServiceFacet {
+  service_name: string;
+  spans: number;
+  traces: number;
+}
+
+export interface OperationFacet {
+  service_name: string;
+  operation: string;
+  spans: number;
+  traces: number;
+}
+
+/** What the window holds, counted with no filters — see `explainEmptyResult`. */
+export interface TraceFacetsResponse {
+  services: ServiceFacet[];
+  operations: OperationFacet[];
+}
+
 const PAGE_SIZE = 100;
 
-export const traceListQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["traces", projectId, timeWindow.from, timeWindow.to] as const;
+export const traceListQueryKey = (
+  projectId: string,
+  timeWindow: TimeWindow,
+  filters: TraceFilters,
+) => ["traces", projectId, timeWindow.from, timeWindow.to, toSearchParams(filters)] as const;
+
+export const traceFacetsQueryKey = (projectId: string, timeWindow: TimeWindow) =>
+  ["trace-facets", projectId, timeWindow.from, timeWindow.to] as const;
 
 export const traceQueryKey = (projectId: string, traceId: string) =>
   ["trace", projectId, traceId] as const;
@@ -98,10 +126,18 @@ export const traceQueryKey = (projectId: string, traceId: string) =>
 /**
  * Newest first, one page at a time. The cursor is opaque — the only thing the browser
  * may do with it is hand it back.
+ *
+ * The filters are part of the key, so changing one is a different query rather than a
+ * refetch of the same one: the previous page's rows never briefly show under the new
+ * filter, which would read as the filter not working.
  */
-export function useTraceList(projectId: string | undefined, timeWindow: TimeWindow) {
+export function useTraceList(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+  filters: TraceFilters,
+) {
   return useInfiniteQuery({
-    queryKey: traceListQueryKey(projectId ?? "", timeWindow),
+    queryKey: traceListQueryKey(projectId ?? "", timeWindow, filters),
     enabled: projectId !== undefined,
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam, signal }) =>
@@ -112,6 +148,7 @@ export function useTraceList(projectId: string | undefined, timeWindow: TimeWind
           to: timeWindow.to,
           limit: PAGE_SIZE,
           cursor: pageParam,
+          ...toSearchParams(filters),
         },
         signal,
       }),
@@ -120,6 +157,22 @@ export function useTraceList(projectId: string | undefined, timeWindow: TimeWind
       traces: data.pages.flatMap((page) => page.traces),
       pageCount: data.pages.length,
     }),
+  });
+}
+
+/**
+ * The filter options this window holds. Deliberately unfiltered: it is what lets an
+ * empty result say which filter emptied it rather than only that it is empty.
+ */
+export function useTraceFacets(projectId: string | undefined, timeWindow: TimeWindow) {
+  return useQuery({
+    queryKey: traceFacetsQueryKey(projectId ?? "", timeWindow),
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<TraceFacetsResponse>("traces/facets", {
+        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        signal,
+      }),
   });
 }
 

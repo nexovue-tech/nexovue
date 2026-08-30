@@ -1,5 +1,6 @@
-// Package ingeststate makes the exact per-minute counters idempotent across a
-// ClickHouse restart.
+// Package ingeststate makes trace assembly idempotent across a restart. One
+// row per partition carries both watermarks: how far its counters are exact,
+// and how far its span rows are in the store.
 //
 // ADR 0060 leaned on ClickHouse's own insert deduplication to recognise a
 // replayed counter block. ADR 0061 measured what that misses: the deduplication
@@ -7,12 +8,19 @@
 // causes the replay. Keeper does survive it, so the record of what each
 // partition has already counted lives in a KeeperMap table.
 //
-// The protocol is ClickHouse's own, from the design of their Kafka connector
+// The counter protocol is ClickHouse's own, from the design of their Kafka
+// connector
 // (https://github.com/ClickHouse/clickhouse-kafka-connect/blob/main/docs/DESIGN.md):
 // a per-partition offset range is written BEFORE the insert and again AFTER the
 // store acknowledges it, and an incoming batch is classified against that range
 // as Same, Overlapping, Contains or New. One deliberate deviation from the
 // connector is recorded on Resolve.
+//
+// The span watermark needs no such bracket, and that difference is the point.
+// A counter re-applied is a wrong number; a span row re-applied is a duplicate
+// row, so the watermark is a single offset recorded once the store has
+// acknowledged the insert. Losing that write costs a duplicate on the next
+// replay, which is what happened before it existed — never a hole.
 package ingeststate
 
 import (
@@ -80,12 +88,30 @@ func RangesOf(positions []consume.Position) map[Partition]Range {
 	return ranges
 }
 
+// NothingWritten is the span watermark of a partition none of whose spans have
+// reached the store. Kafka offsets start at zero, so the value below all of
+// them is minus one; zero would claim offset zero was written and skip it.
+const NothingWritten int64 = -1
+
 // State is one partition's durable record: the offsets of the most recent
-// settlement and how far that settlement got.
+// counter settlement, how far that settlement got, and the offset whose spans
+// are certainly in the store.
+//
+// The two watermarks move at different speeds and are read by different
+// stages. WrittenThrough advances one sampling window after a batch arrives;
+// the counter range advances a minute bucket and its late grace after that, so
+// WrittenThrough normally runs well ahead of Max.
 type State struct {
 	Range
 	Flag Flag
+
+	// WrittenThrough is the highest offset whose span rows the store has
+	// acknowledged. NothingWritten when none have.
+	WrittenThrough int64
 }
+
+// storeFrom is the lowest offset whose spans still have to be written.
+func (s State) storeFrom() int64 { return s.WrittenThrough + 1 }
 
 // Partition names one partition of one topic, and is the KeeperMap primary key.
 type Partition struct {
@@ -155,19 +181,30 @@ func Classify(settled, incoming Range) Scenario {
 const firstOffset = math.MinInt64
 
 // Decision is what to do with an incoming batch: count every offset at or above
-// CountFrom, and none below it.
+// CountFrom, write the spans of every offset at or above StoreFrom, and do
+// neither below them.
+//
+// The two thresholds are independent because the two watermarks are. A replay
+// normally lands between them — its counters are already exact while its spans
+// are already stored — and that band is most of what a restart re-reads.
 type Decision struct {
 	Scenario Scenario
 	// CountFrom is the lowest offset that still has to reach a counter.
 	CountFrom int64
-	// Ambiguous marks the one case a duplicate is still possible: the settled
-	// range was left at BEFORE, so it is counted again and ADR 0060's insert
-	// deduplication is what drops the copy when the store stayed up.
+	// StoreFrom is the lowest offset whose spans still have to be written.
+	StoreFrom int64
+	// Ambiguous marks the one case a duplicate counter is still possible: the
+	// settled range was left at BEFORE, so it is counted again and ADR 0060's
+	// insert deduplication is what drops the copy when the store stayed up. It
+	// says nothing about StoreFrom, which is never written before its insert.
 	Ambiguous bool
 }
 
 // Counts reports whether this offset still has to be counted.
 func (d Decision) Counts(offset int64) bool { return offset >= d.CountFrom }
+
+// Stores reports whether this offset's spans still have to be written.
+func (d Decision) Stores(offset int64) bool { return offset >= d.StoreFrom }
 
 // Resolve decides which offsets of an incoming batch still have to be counted.
 //
@@ -185,13 +222,15 @@ func (d Decision) Counts(offset int64) bool { return offset >= d.CountFrom }
 // product.
 func Resolve(settled *State, incoming Range) Decision {
 	if settled == nil {
-		return Decision{Scenario: New, CountFrom: firstOffset}
+		return Decision{Scenario: New, CountFrom: firstOffset, StoreFrom: firstOffset}
 	}
-	scenario := Classify(settled.Range, incoming)
-	if scenario == New || settled.Flag == After {
-		return Decision{Scenario: scenario, CountFrom: settled.Max + 1}
+	decision := Decision{Scenario: Classify(settled.Range, incoming), StoreFrom: settled.storeFrom()}
+	if decision.Scenario == New || settled.Flag == After {
+		decision.CountFrom = settled.Max + 1
+		return decision
 	}
-	return Decision{Scenario: scenario, CountFrom: settled.Min, Ambiguous: true}
+	decision.CountFrom, decision.Ambiguous = settled.Min, true
+	return decision
 }
 
 // Decisions is one Decision per partition of an incoming batch.
@@ -205,14 +244,18 @@ func (d Decisions) Counts(partition Partition, offset int64) bool {
 	return !known || decision.Counts(offset)
 }
 
+// Stores reports whether this offset's spans still have to be written. A
+// partition with no decision is written, for the same reason it is counted: an
+// unrecognised partition is one nothing is known about, and a duplicate row is
+// recoverable where a missing span is not.
+func (d Decisions) Stores(partition Partition, offset int64) bool {
+	decision, known := d[partition]
+	return !known || decision.Stores(offset)
+}
+
 // Settlement is the offsets one counter insert makes exact, per partition.
 type Settlement map[Partition]Range
 
-// states renders a settlement as the rows to store under one flag.
-func (s Settlement) states(flag Flag) map[Partition]State {
-	rows := make(map[Partition]State, len(s))
-	for partition, offsets := range s {
-		rows[partition] = State{Range: offsets, Flag: flag}
-	}
-	return rows
-}
+// Written is the highest offset per partition whose spans the store has
+// acknowledged, for the partitions where that has moved.
+type Written map[Partition]int64

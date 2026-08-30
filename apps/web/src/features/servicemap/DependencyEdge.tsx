@@ -64,9 +64,13 @@ export function DependencyEdge({
     : throughGeometry({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
 
   const health = data.health;
+  // What the latency measures differs by kind, so the label says which. On a
+  // queue it is the publish — how long sending took — because the delivery lag
+  // would have to be measured across two machines' clocks.
+  const latencyLabel = data.queued ? "publish p95" : "p95";
   const summary = [
     `${formatRate(data.callsPerMinute)}/min`,
-    `p95 ${formatDuration(data.p95Ms)}`,
+    `${latencyLabel} ${formatDuration(data.p95Ms)}`,
     data.errorCount > 0 ? `${data.errorCount} failed (${formatErrorRate(data.errorRate)})` : "",
     data.queued ? "queued" : "direct call",
   ]
@@ -102,7 +106,7 @@ export function DependencyEdge({
           <span className="rounded-xs bg-page px-1 text-center font-mono text-2xs text-ink-dim leading-tight">
             {formatRate(data.callsPerMinute)}/min
             <br />
-            p95 {formatDuration(data.p95Ms)}
+            {latencyLabel} {formatDuration(data.p95Ms)}
           </span>
           {data.errorCount > 0 ? (
             <span

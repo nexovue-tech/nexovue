@@ -39,6 +39,11 @@ type spanBlock struct {
 	resourceAttrs     proto.ColJSONStr
 	spanAttrs         proto.ColJSONStr
 	events            proto.ColStr
+	// The three arrays the `links` Nested column flattened into. They are
+	// written as separate columns because that is what the server stores.
+	linkTraceIDs   *proto.ColArr[[]byte]
+	linkSpanIDs    *proto.ColArr[[]byte]
+	linkAttributes *proto.ColArr[string]
 
 	// columns names each column exactly as the table declares it, so the server
 	// matches on name rather than on position. Built once; it is also the
@@ -63,6 +68,9 @@ func newSpanBlock() *spanBlock {
 		rpcMethod:         new(proto.ColStr).LowCardinality(),
 		rpcStatus:         new(proto.ColStr).LowCardinality(),
 		deploymentVersion: new(proto.ColStr).LowCardinality(),
+		linkTraceIDs:      proto.NewArray[[]byte](&proto.ColFixedStr{Size: otlpvalue.TraceIDHexLen}),
+		linkSpanIDs:       proto.NewArray[[]byte](&proto.ColFixedStr{Size: otlpvalue.SpanIDHexLen}),
+		linkAttributes:    proto.NewArray[string](new(proto.ColStr)),
 	}
 	// The column carries its own precision; without it ch-go cannot encode a
 	// time and the server would be told the wrong type.
@@ -95,6 +103,9 @@ func newSpanBlock() *spanBlock {
 		{Name: "resource_attrs", Data: &block.resourceAttrs},
 		{Name: "span_attrs", Data: &block.spanAttrs},
 		{Name: "events", Data: &block.events},
+		{Name: "links.trace_id", Data: block.linkTraceIDs},
+		{Name: "links.span_id", Data: block.linkSpanIDs},
+		{Name: "links.attributes", Data: block.linkAttributes},
 	}
 	return block
 }
@@ -125,6 +136,23 @@ func (b *spanBlock) append(row spanRow) {
 	b.resourceAttrs.Append(row.ResourceAttrs)
 	b.spanAttrs.Append(row.SpanAttrs)
 	b.events.Append(row.Events)
+	b.appendLinks(row.Links)
+}
+
+// appendLinks writes one row's links across the three parallel arrays, which
+// must stay the same length: the server reads them back as one Nested value.
+func (b *spanBlock) appendLinks(links []spanLink) {
+	traceIDs := make([][]byte, 0, len(links))
+	spanIDs := make([][]byte, 0, len(links))
+	attributes := make([]string, 0, len(links))
+	for _, link := range links {
+		traceIDs = append(traceIDs, link.TraceID)
+		spanIDs = append(spanIDs, link.SpanID)
+		attributes = append(attributes, link.Attributes)
+	}
+	b.linkTraceIDs.Append(traceIDs)
+	b.linkSpanIDs.Append(spanIDs)
+	b.linkAttributes.Append(attributes)
 }
 
 func (b *spanBlock) rows() int { return b.timestamp.Rows() }

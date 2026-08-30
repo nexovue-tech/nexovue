@@ -95,6 +95,10 @@ async def usage_for_organization(
         ),
         from_day=from_day,
         to_day=to_day,
+        # The frontier only moves forwards, so the whole range is finished
+        # exactly when its last day is — and while it is not, a day the meter
+        # has not reached has no row to carry the caveat itself.
+        settled=is_settled(to_day, frontier),
         totals=_totals(
             rows,
             services=await queries.services_in_range(

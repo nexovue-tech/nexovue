@@ -30,6 +30,35 @@ class TraceListResponse(BaseModel):
     next_cursor: str | None = None
 
 
+class ServiceFacet(BaseModel):
+    """One service that sent something in the window, and how much."""
+
+    service_name: str
+    spans: int
+    traces: int
+
+
+class OperationFacet(BaseModel):
+    """One span name, kept with its service: `GET /` means nothing alone."""
+
+    service_name: str
+    operation: str
+    spans: int
+    traces: int
+
+
+class TraceFacetsResponse(BaseModel):
+    """The filter options this window actually contains, busiest first.
+
+    Counted with no filters applied, which is what lets a screen tell "you
+    filtered everything out" apart from "nothing was sent here at all" — and
+    name which filter did it.
+    """
+
+    services: list[ServiceFacet] = Field(default_factory=list)
+    operations: list[OperationFacet] = Field(default_factory=list)
+
+
 class SpanDetail(BaseModel):
     """One span, flat. The browser builds the tree; the API does not nest."""
 

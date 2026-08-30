@@ -31,7 +31,11 @@ export interface ServiceEdge {
   calls_per_minute: number;
   /** A fraction, not a percentage: 0.05 is one call in twenty. */
   error_rate: number;
-  /** The caller's view, network included. */
+  /**
+   * The caller's own span. On a `call` that is the request it waited on, network
+   * included; on a `queue` it is the publish, not the delivery lag — the producer
+   * and the consumer keep different clocks.
+   */
   p50_ms: number;
   p95_ms: number;
   p99_ms: number;

@@ -9,9 +9,12 @@ a tenth of it. It is shaped exactly like `endpoint_stats_1m`: summed counters an
 one `quantiles(…)` state, partitioned on `minute`, so a bound on `minute` prunes
 directly and the latency has to be merged rather than read.
 
-The latency on an edge is the *caller's* view — measured on the client span, so
-it includes the network. The callee's own view of the same work is in
-`endpoint_stats_1m`, and the gap between them is where a network problem shows.
+The latency on an edge is the *caller's* view — measured on the caller's own
+span. On a `call` edge that is the request, network included; the callee's own
+view of the same work is in `endpoint_stats_1m`, and the gap between them is
+where a network problem shows. On a `queue` edge it is the publish, not the
+delivery lag: the producer and the consumer run on different machines, and the
+gap between their clocks is not something this system trusts.
 """
 
 from __future__ import annotations

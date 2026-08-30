@@ -475,3 +475,49 @@ func TestOutOfRangeTimestampBecomesTheEpoch(t *testing.T) {
 		})
 	}
 }
+
+// A consumer's producer is named by a link and by nothing else, so a link that
+// does not survive flattening is a queue edge that can never be drawn.
+func TestSpanLinksAreFlattened(t *testing.T) {
+	linkedTraceID := []byte{0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
+		0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40}
+	linkedSpanID := []byte{0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48}
+
+	rows := flattenRequest(
+		&nexovuev1.Envelope{TenantId: "tenant-a", ProjectId: "project-a"},
+		&tracesvc.ExportTraceServiceRequest{ResourceSpans: []*tracepb.ResourceSpans{{
+			ScopeSpans: []*tracepb.ScopeSpans{{Spans: []*tracepb.Span{{
+				TraceId: testTraceID,
+				SpanId:  testSpanID,
+				Kind:    tracepb.Span_SPAN_KIND_CONSUMER,
+				Links: []*tracepb.Span_Link{
+					{
+						TraceId:    linkedTraceID,
+						SpanId:     linkedSpanID,
+						Attributes: []*commonpb.KeyValue{attribute("messaging.batch", intValue(3))},
+					},
+					// Names no span: it cannot be paired and must not be stored
+					// as an id of zeroes that reads like a real one.
+					{SpanId: linkedSpanID},
+				},
+			}}}},
+		}}},
+	)
+
+	if len(rows) != 1 {
+		t.Fatalf("expected one row, got %d", len(rows))
+	}
+	links := rows[0].Links
+	if len(links) != 1 {
+		t.Fatalf("expected the one usable link, got %d: %+v", len(links), links)
+	}
+	if got := string(links[0].TraceID); got != "3132333435363738393a3b3c3d3e3f40" {
+		t.Errorf("link trace id = %q", got)
+	}
+	if got := string(links[0].SpanID); got != "4142434445464748" {
+		t.Errorf("link span id = %q", got)
+	}
+	if !strings.Contains(links[0].Attributes, `"batch":3`) {
+		t.Errorf("link attributes = %q, want the batch size", links[0].Attributes)
+	}
+}

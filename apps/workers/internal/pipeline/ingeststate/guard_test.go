@@ -15,6 +15,7 @@ var partition = ingeststate.Partition{Topic: "spans-raw", ID: 0}
 type fakeStore struct {
 	rows     map[ingeststate.Partition]ingeststate.State
 	loads    int
+	writes   int
 	failLoad error
 	failSave error
 }
@@ -40,7 +41,29 @@ func (s *fakeStore) Save(_ context.Context, states map[ingeststate.Partition]ing
 		return s.failSave
 	}
 	for key, state := range states {
+		// The counter table holds no span watermark, so a reload of this row
+		// alone would forget it. Keeping the stored one models the two tables.
+		state.WrittenThrough = s.rows[key].WrittenThrough
 		s.rows[key] = state
+	}
+	return nil
+}
+
+func (s *fakeStore) SaveWritten(_ context.Context, written ingeststate.Written) error {
+	if s.failSave != nil {
+		return s.failSave
+	}
+	s.writes++
+	for key, offset := range written {
+		row, known := s.rows[key]
+		if !known {
+			row = ingeststate.State{
+				Range: ingeststate.Range{Min: 0, Max: -1},
+				Flag:  ingeststate.After,
+			}
+		}
+		row.WrittenThrough = offset
+		s.rows[key] = row
 	}
 	return nil
 }
@@ -49,7 +72,7 @@ func (s *fakeStore) Save(_ context.Context, states map[ingeststate.Partition]ing
 func settleGuard(t *testing.T, guard *ingeststate.Guard, reached ingeststate.Range) {
 	t.Helper()
 	settlement := guard.Advance(map[ingeststate.Partition]ingeststate.Range{partition: reached})
-	if err := guard.Begin(t.Context(), settlement); err != nil {
+	if err := guard.Begin(t.Context(), settlement, nil); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 	if err := guard.Complete(t.Context(), settlement); err != nil {
@@ -106,7 +129,7 @@ func TestAnInterruptedSettlementIsCountedAgain(t *testing.T) {
 	settlement := before.Advance(map[ingeststate.Partition]ingeststate.Range{
 		partition: {Min: 0, Max: 99},
 	})
-	if err := before.Begin(t.Context(), settlement); err != nil {
+	if err := before.Begin(t.Context(), settlement, nil); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
 
@@ -229,7 +252,7 @@ func TestAFailedWriteLeavesTheCacheAlone(t *testing.T) {
 	settlement := guard.Advance(map[ingeststate.Partition]ingeststate.Range{
 		partition: {Min: 0, Max: 99},
 	})
-	if err := guard.Begin(t.Context(), settlement); err == nil {
+	if err := guard.Begin(t.Context(), settlement, nil); err == nil {
 		t.Fatal("Begin succeeded although the store refused the write")
 	}
 	if _, known := guard.Settled(partition); known {
@@ -258,10 +281,129 @@ func TestAnEmptySettlementCostsNoWrite(t *testing.T) {
 	guard := ingeststate.NewGuard(store)
 	refresh(t, guard)
 
-	if err := guard.Begin(t.Context(), ingeststate.Settlement{}); err != nil {
+	if err := guard.Begin(t.Context(), ingeststate.Settlement{}, nil); err != nil {
 		t.Errorf("Begin on an empty settlement: %v", err)
 	}
 	if err := guard.Complete(t.Context(), nil); err != nil {
 		t.Errorf("Complete on an empty settlement: %v", err)
+	}
+}
+
+// storing runs one span-watermark write and fails the test if it does.
+func storing(t *testing.T, guard *ingeststate.Guard, reached ingeststate.Range) {
+	t.Helper()
+	written := guard.Writing(map[ingeststate.Partition]ingeststate.Range{partition: reached})
+	if err := guard.Begin(t.Context(), nil, written); err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+}
+
+func decide(guard *ingeststate.Guard, incoming ingeststate.Range) ingeststate.Decision {
+	return guard.Counting(map[ingeststate.Partition]ingeststate.Range{partition: incoming})[partition]
+}
+
+// The defect this package was extended for: the spans reach ClickHouse, the
+// offsets never commit, and the replay after the restart must not write them
+// again. Measured before the fix, 6135 of 14980 distinct spans over six hours
+// had more than one copy.
+func TestSpansWrittenBeforeARestartAreNotWrittenAgain(t *testing.T) {
+	store := newFakeStore()
+
+	before := ingeststate.NewGuard(store)
+	refresh(t, before)
+	storing(t, before, ingeststate.Range{Min: 0, Max: 99})
+
+	// The worker restarts; only what Keeper holds is left.
+	after := ingeststate.NewGuard(store)
+	refresh(t, after)
+	decision := decide(after, ingeststate.Range{Min: 0, Max: 149})
+
+	for _, offset := range []int64{0, 50, 99} {
+		if decision.Stores(offset) {
+			t.Errorf("offset %d was written twice across the restart", offset)
+		}
+	}
+	for _, offset := range []int64{100, 149} {
+		if !decision.Stores(offset) {
+			t.Errorf("offset %d was never written and the replay skipped it", offset)
+		}
+	}
+}
+
+// The band the watermark exists for: spans already stored, counters not yet
+// exact. Both answers have to come out of the same decision.
+func TestAReplayCanBeCountedAndNotWritten(t *testing.T) {
+	store := newFakeStore()
+	guard := ingeststate.NewGuard(store)
+	refresh(t, guard)
+
+	settleGuard(t, guard, ingeststate.Range{Min: 0, Max: 49})
+	storing(t, guard, ingeststate.Range{Min: 0, Max: 99})
+
+	reopened := ingeststate.NewGuard(store)
+	refresh(t, reopened)
+	decision := decide(reopened, ingeststate.Range{Min: 0, Max: 149})
+
+	if decision.Stores(75) {
+		t.Error("offset 75 was written again although its spans are stored")
+	}
+	if !decision.Counts(75) {
+		t.Error("offset 75 was not counted although its counters are not yet exact")
+	}
+}
+
+// A counter settlement writes the other table. It must not walk the span
+// watermark back to "nothing written", which would duplicate the next replay.
+func TestASettlementDoesNotForgetTheSpanWatermark(t *testing.T) {
+	store := newFakeStore()
+	guard := ingeststate.NewGuard(store)
+	refresh(t, guard)
+
+	storing(t, guard, ingeststate.Range{Min: 0, Max: 99})
+	settleGuard(t, guard, ingeststate.Range{Min: 0, Max: 49})
+
+	if decide(guard, ingeststate.Range{Min: 0, Max: 149}).Stores(50) {
+		t.Error("the settlement forgot the span watermark held in the same cache entry")
+	}
+	reopened := ingeststate.NewGuard(store)
+	refresh(t, reopened)
+	if decide(reopened, ingeststate.Range{Min: 0, Max: 149}).Stores(50) {
+		t.Error("the settlement forgot the span watermark in the store")
+	}
+}
+
+// A watermark that has not moved must cost no write. This is the hot path: it
+// runs every turn of the consume loop.
+func TestAnUnmovedSpanWatermarkCostsNoWrite(t *testing.T) {
+	store := newFakeStore()
+	guard := ingeststate.NewGuard(store)
+	refresh(t, guard)
+
+	storing(t, guard, ingeststate.Range{Min: 0, Max: 99})
+	if store.writes != 1 {
+		t.Fatalf("writes = %d, want the first watermark stored", store.writes)
+	}
+	storing(t, guard, ingeststate.Range{Min: 40, Max: 99})
+	if store.writes != 1 {
+		t.Errorf("writes = %d, want a watermark that did not move to write nothing", store.writes)
+	}
+}
+
+// Nothing may be cached that the store did not accept: a span watermark ahead
+// of Keeper would skip spans no one ever wrote.
+func TestAFailedWatermarkWriteLeavesTheCacheAlone(t *testing.T) {
+	store := newFakeStore()
+	store.failSave = errors.New("clickhouse is down")
+	guard := ingeststate.NewGuard(store)
+	refresh(t, guard)
+
+	written := guard.Writing(map[ingeststate.Partition]ingeststate.Range{
+		partition: {Min: 0, Max: 99},
+	})
+	if err := guard.Begin(t.Context(), nil, written); err == nil {
+		t.Fatal("Begin succeeded although the store refused the write")
+	}
+	if decide(guard, ingeststate.Range{Min: 0, Max: 149}).Stores(50) == false {
+		t.Error("a refused watermark write was cached anyway, and offset 50 would be skipped")
 	}
 }

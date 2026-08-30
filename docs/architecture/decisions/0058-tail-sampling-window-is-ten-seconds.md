@@ -42,3 +42,12 @@ at.
 A worker restart still loses its in-flight buffer. That was true of [0009](0009-trace-assembly-in-worker-memory.md)'s
 design too and the query-time join covers it; the exposure is now ten seconds of traces rather than
 thirty.
+
+**Correction, 2026-08-30.** The paragraph above is wrong about what a restart costs. The buffer is
+lost, but the offsets that filled it were never committed, so the broker replays those records and
+nothing is lost — the cost is the opposite one. Every span already written from the replayed range
+was written *again*: measured over six hours, 6135 of 14980 distinct spans held more than one copy,
+up to six, every copy sharing `received_at` to the nanosecond. The exposure was never the ten-second
+window either; offsets wait on the counters' minute bucket as well, so the replayed range ran 43s at
+p50 and 72s at p90. ClickHouse migration `000026` records how far each partition's spans are written
+and skips them on replay.

@@ -53,7 +53,8 @@ type Stats struct {
 	Paired uint64
 	// Expired counts spans settled because their partner did not arrive in time,
 	// Evicted those settled because the buffer was full, and Displaced those
-	// that found their slot held by a span they could not pair with.
+	// caller-side spans that found their own identity already parked — a
+	// repeated span id, which is a broken sender rather than a hop.
 	Expired   uint64
 	Evicted   uint64
 	Displaced uint64
@@ -138,14 +139,14 @@ func (a *Accumulator) Observe(now time.Time, span Span) (minute time.Time, disca
 // participates reports whether a span can contribute to the graph at all, which
 // is what decides whether it gets a settlement minute.
 func participates(span Span) bool {
-	if len(span.SpanID) == 0 {
+	if !usableID(span.SpanID) {
 		return false
 	}
 	if _, isCaller := callerKind(span.Kind); isCaller {
 		return true
 	}
-	_, isCallee := calleeKind(span.Kind)
-	return isCallee && len(span.ParentSpanID) > 0
+	edgeKind, isCallee := calleeKind(span.Kind)
+	return isCallee && len(callerKeysOf(span, edgeKind)) > 0
 }
 
 // record folds one settled caller — with the callee that answered it, or
