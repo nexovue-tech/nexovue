@@ -230,12 +230,25 @@ this problem — both spans are in one trace, on one partition, by construction.
 under replication needs durable producer identity (KeeperMap, Valkey, or a store), not a bigger
 in-memory buffer.
 
-**Some instrumentation makes an edge underivable by anyone.** The demo's `accounting` service emits
-`orders receive` with neither a link nor the producer's propagated context — its trace holds only its
-own two spans. `checkout → accounting` cannot be derived from that by us, by the upstream connector,
-or by any other tool, because the evidence is not in the telemetry. `fraud-detection`, on the Java
-agent, does link and is derivable. **The absence of an edge for a service like `accounting` is not a
-bug in this pipeline**, and should not be read as one.
+**A consumer that neither links nor carries the producer's context makes its edge underivable by
+anyone** — not by us, not by the upstream connector, not by any tool, because the evidence is not in
+the telemetry. **The absence of an edge for such a service is not a bug in this pipeline**, and
+should not be read as one.
+
+How often that happens here is **not established.** Of the three `accounting` `orders receive` spans
+stored after the column existed, **two carried a link and one did not**; the demo's `checkout` was
+being OOM-killed throughout the run, so a message published by a restarting producer plausibly went
+out without a `traceparent` header — but that is a hypothesis, not a measurement, and no run has been
+made with a healthy `checkout` to test it.
+
+> An earlier draft of this record asserted that `accounting` carries neither a link nor the
+> producer's context, and that `checkout → accounting` was therefore underivable. **That was wrong.**
+> It rested on a single `accounting` span whose `links` array was empty — a row received at
+> `13:46:09`, thirty-eight seconds *before* the writer that populates the column started at
+> `13:46:47`. Its empty `links` meant "we were not storing links yet", not "the span carried none".
+> The contradicting evidence: `accounting`'s span in trace `15950a71…` links to
+> `(c32718077f0b8737…, ba34205b91e6a31b)`, which is `checkout`'s `orders publish` — quoted in the
+> Context above, and read from the same table.
 
 ### Left in the dev database
 
