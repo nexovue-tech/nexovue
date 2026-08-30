@@ -9,12 +9,20 @@ be probed from inside our network with the result handed back to whoever asked.
 So a target must be a public HTTP or HTTPS address. Everything else is refused
 at creation, with a message that says why rather than a generic rejection.
 
-**This is a floor, not a ceiling.** Validation happens here, and the fetch
-happens minutes later in another service — so a hostname that resolves publicly
-now can resolve to a private address then, which is DNS rebinding and this
-cannot see it. Closing that needs the prober to check the address it actually
-connected to, at connect time. Until then a determined customer can still reach
-an internal address, and that is a known gap rather than an oversight.
+**This is not the security boundary, and it cannot be.** Validation happens
+here and the fetch happens minutes later in another service, so a hostname that
+resolves publicly now can resolve to a private address then — DNS rebinding,
+which nothing decided at creation time can see.
+
+The boundary is `nexovue_scheduler.probes.addresses`, which refuses the socket
+at the moment libcurl has resolved an address and is about to connect to it.
+That is the only point where the address cannot change again.
+
+What stays here is a fast, specific rejection: a customer who pastes a loopback
+URL is told so while they are looking at the form, rather than waiting for a
+check that fails for a reason they have to go and read. So these two rules may
+drift without opening a hole — this one being more permissive costs a worse
+error message, and being stricter costs nothing.
 """
 
 from __future__ import annotations

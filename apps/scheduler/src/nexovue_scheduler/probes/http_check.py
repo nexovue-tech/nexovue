@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 
 import pycurl
 
+from nexovue_scheduler.probes.addresses import ConnectGuard
 from nexovue_scheduler.probes.result import (
     PHASE_DNS,
     PHASE_TCP,
@@ -53,15 +54,21 @@ def perform(check_id: str, target: str, timeout_seconds: int) -> ProbeResult:
     """
     body = io.BytesIO()
     curl = pycurl.Curl()
+    guard = ConnectGuard()
     try:
-        _configure(curl, target, timeout_seconds, body)
+        _configure(curl, target, timeout_seconds, body, guard)
         try:
             curl.perform()
         except pycurl.error as failure:
             # Down, refused, timed out, TLS rejected. The timings up to the
             # point of failure are still true and are still published: knowing
             # DNS resolved before the connection was refused is the diagnosis.
+            #
+            # When we are the ones who refused, libcurl reports a plain "could
+            # not connect", which would read as the target being down. Our own
+            # reason replaces it so a rebinding attempt is visible as one.
             phases = _phases(curl)
+            reason = guard.refusal_reason() or str(failure)
             return ProbeResult(
                 check_id=check_id,
                 check_type=CHECK_TYPE_HTTP,
@@ -70,7 +77,7 @@ def perform(check_id: str, target: str, timeout_seconds: int) -> ProbeResult:
                 status_code=None,
                 total_seconds=_total(curl, phases),
                 phases=phases,
-                error=str(failure),
+                error=reason,
             )
 
         status = int(curl.getinfo(pycurl.RESPONSE_CODE))
@@ -89,8 +96,13 @@ def perform(check_id: str, target: str, timeout_seconds: int) -> ProbeResult:
         curl.close()
 
 
-def _configure(curl: Any, target: str, timeout_seconds: int, body: io.BytesIO) -> None:
+def _configure(
+    curl: Any, target: str, timeout_seconds: int, body: io.BytesIO, guard: ConnectGuard
+) -> None:
     curl.setopt(pycurl.URL, target)
+    # The only place the address is fixed and cannot be re-resolved behind us.
+    # Redirects are followed below, so this judges every hop, not just the first.
+    curl.setopt(pycurl.OPENSOCKETFUNCTION, guard.open_socket)
     curl.setopt(pycurl.USERAGENT, USER_AGENT)
     curl.setopt(pycurl.TIMEOUT, timeout_seconds)
     # Redirects are followed because a customer checking a site expects the
