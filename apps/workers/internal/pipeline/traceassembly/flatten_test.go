@@ -317,14 +317,14 @@ func TestFlattenSerializesAttributesAndEvents(t *testing.T) {
 	if err := json.Unmarshal([]byte(row.ResourceAttrs), &resource); err != nil {
 		t.Fatalf("resource_attrs is not JSON: %v (%q)", err, row.ResourceAttrs)
 	}
-	if resource[attrServiceName] != "checkout" {
-		t.Errorf("resource_attrs[%s] = %v, want checkout", attrServiceName, resource[attrServiceName])
+	if otlpvalue.AttributeAt(resource, attrServiceName) != "checkout" {
+		t.Errorf("resource_attrs[%s] = %v, want checkout", attrServiceName, otlpvalue.AttributeAt(resource, attrServiceName))
 	}
 	if err := json.Unmarshal([]byte(row.SpanAttrs), &span); err != nil {
 		t.Fatalf("span_attrs is not JSON: %v (%q)", err, row.SpanAttrs)
 	}
-	if span["db.system"] != "postgresql" {
-		t.Errorf("span_attrs[db.system] = %v, want postgresql", span["db.system"])
+	if otlpvalue.AttributeAt(span, "db.system") != "postgresql" {
+		t.Errorf("span_attrs[db.system] = %v, want postgresql", otlpvalue.AttributeAt(span, "db.system"))
 	}
 
 	var events []spanEvent
@@ -334,7 +334,7 @@ func TestFlattenSerializesAttributesAndEvents(t *testing.T) {
 	if len(events) != 1 || events[0].Name != "exception" {
 		t.Fatalf("events = %+v, want one exception event", events)
 	}
-	if events[0].Attributes["exception.type"] != "TimeoutError" {
+	if otlpvalue.AttributeAt(events[0].Attributes, "exception.type") != "TimeoutError" {
 		t.Errorf("event attributes = %v, want exception.type TimeoutError", events[0].Attributes)
 	}
 }

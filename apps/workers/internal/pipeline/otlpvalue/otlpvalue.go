@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 )
@@ -48,17 +49,100 @@ func JSONText(value any) string {
 	return string(encoded)
 }
 
-// AttributesMap converts OTLP attributes to a plain map. An attribute with no
-// key is skipped: it cannot be addressed as a subcolumn.
+// DroppedAttributesKey names the attributes a record lost to a path collision.
+//
+// The loss is written into the record rather than only logged, so the person
+// reading the line can see that something was there. A silent drop would be
+// indistinguishable from the sender never having set it.
+const DroppedAttributesKey = "nexovue.dropped_attributes"
+
+// AttributesMap converts OTLP attributes to the nested shape ClickHouse stores.
+//
+// A dot in an attribute key is a literal character to OTLP and a path separator
+// to ClickHouse, so `http.request.method` and a nested object reach the same
+// subcolumn — measured: both store as {"http":{"request":{"method":...}}} and
+// both answer `.http.request.method`. Building that shape here rather than
+// leaving it to the database changes nothing about what is stored, and is what
+// makes a collision visible to us first.
+//
+// It has to be visible, because ClickHouse cannot represent one. A sender that
+// sets both `context` (an object holding `total`) and `context.total` names one
+// path twice, and the insert is refused outright — INCORRECT_DATA, which is
+// permanent. That took every pipeline down for an hour: the demo's PHP service
+// logs exactly that shape. Neither escape hatch works — backticks are stored as
+// literal characters, and `type_json_skip_duplicated_paths` drops a value with
+// no trace. So the collision is resolved here, first writer winning, and the
+// keys that lost are recorded under DroppedAttributesKey.
+//
+// An attribute with no key is skipped: it cannot be addressed as a subcolumn.
 func AttributesMap(attributes []*commonpb.KeyValue) map[string]any {
 	values := make(map[string]any, len(attributes))
+	var dropped []string
+
 	for _, attribute := range attributes {
 		if attribute == nil || attribute.GetKey() == "" {
 			continue
 		}
-		values[attribute.GetKey()] = Value(attribute.GetValue())
+		if !insertAtPath(values, splitPath(attribute.GetKey()), Value(attribute.GetValue())) {
+			dropped = append(dropped, attribute.GetKey())
+		}
+	}
+
+	if dropped != nil {
+		// Recorded through the same path logic, so it cannot itself collide
+		// with a real attribute and take the record down.
+		insertAtPath(values, splitPath(DroppedAttributesKey), dropped)
 	}
 	return values
+}
+
+// AttributeAt reads an attribute back out of the nested shape by its OTLP key,
+// which is how a caller asks for `service.name` without knowing it is stored two
+// levels down. Returns nil when the key is not there.
+func AttributeAt(values map[string]any, key string) any {
+	path := splitPath(key)
+	for _, step := range path[:len(path)-1] {
+		nested, ok := values[step].(map[string]any)
+		if !ok {
+			return nil
+		}
+		values = nested
+	}
+	return values[path[len(path)-1]]
+}
+
+// splitPath turns an attribute key into the subcolumn path ClickHouse gives it.
+func splitPath(key string) []string {
+	return strings.Split(key, ".")
+}
+
+// insertAtPath places a value at path, reporting whether it fitted.
+//
+// It fails rather than overwrites, because the first writer holds the path and
+// a later arrival must not silently replace it. Two ways to not fit: the path
+// is already taken, or a step along the way is a leaf that would have to be
+// destroyed to descend through it.
+func insertAtPath(values map[string]any, path []string, value any) bool {
+	parent := values
+	for _, step := range path[:len(path)-1] {
+		switch existing := parent[step].(type) {
+		case nil:
+			created := map[string]any{}
+			parent[step] = created
+			parent = created
+		case map[string]any:
+			parent = existing
+		default:
+			return false // a leaf sits where this key needs an object
+		}
+	}
+
+	leaf := path[len(path)-1]
+	if _, taken := parent[leaf]; taken {
+		return false
+	}
+	parent[leaf] = value
+	return true
 }
 
 // Value converts one OTLP value to its JSON equivalent. An unset or

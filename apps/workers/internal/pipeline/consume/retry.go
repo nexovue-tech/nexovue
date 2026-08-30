@@ -68,6 +68,12 @@ func (l *Loop[S]) Retry(ctx context.Context, what string, op func(context.Contex
 		if ctx.Err() != nil {
 			return err
 		}
+		// A store that refused the data will refuse it again. Spending the
+		// budget on it only delays the answer and takes the worker down at the
+		// end of it.
+		if IsPermanent(err) {
+			return err
+		}
 		if !l.now().Add(delay).Before(deadline) {
 			return fmt.Errorf("%s failed for %s: %w", what, retryBudget, err)
 		}

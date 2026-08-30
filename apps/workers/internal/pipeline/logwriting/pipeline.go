@@ -184,7 +184,18 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 
 	rows := p.block.rows()
 	if err := p.insertBounded(ctx); err != nil {
-		return written{}, err
+		if !consume.IsPermanent(err) {
+			return written{}, err
+		}
+		// ClickHouse refused these rows and will refuse them again, so the
+		// partition can never advance past them on its own. Park the batch:
+		// the records are kept on the dead-letter topic rather than dropped,
+		// and every other tenant's ingest keeps running. Before this, one
+		// malformed record stopped every signal for every tenant for an hour.
+		if parkErr := p.parkRefusedBatch(ctx, polled, err); parkErr != nil {
+			return written{}, parkErr
+		}
+		return written{}, nil
 	}
 	p.logsWritten += countOf(rows)
 	p.valuesMasked += countOf(masked)
@@ -224,6 +235,26 @@ func (p *Pipeline) Settle(context.Context, time.Time) error { return nil }
 // absorbed is simply not committed, and the next owner of the partition reads
 // it again.
 func (p *Pipeline) Drain(context.Context, time.Time) error { return nil }
+
+// parkRefusedBatch moves a whole batch aside after the store refused it.
+//
+// The batch, not the offending record: the insert reports which *rows* it
+// rejected only by message, and one bad record is carried in a block with up to
+// several thousand good ones. Parking all of them keeps every record — the DLQ
+// topic holds them for reprocessing — and is what lets the offset move.
+func (p *Pipeline) parkRefusedBatch(ctx context.Context, polled consume.Polled, cause error) error {
+	for _, record := range polled.Records {
+		if err := p.loop.Park(ctx, record, cause); err != nil {
+			return err
+		}
+		p.parked++
+	}
+	p.log.ErrorContext(ctx, "the store refused a batch; parked rather than retried",
+		slog.Int("messages", len(polled.Records)),
+		slog.String("error", cause.Error()),
+	)
+	return nil
+}
 
 // insertBounded writes the accumulated block under a deadline.
 func (p *Pipeline) insertBounded(ctx context.Context) error {

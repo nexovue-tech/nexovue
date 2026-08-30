@@ -2,6 +2,7 @@ package logwriting
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -146,8 +147,14 @@ func TestFlattenSplitsAttributesAndPromotesTheException(t *testing.T) {
 	}
 	row := rows[0]
 
-	if row.ResourceAttrs != `{"service.name":"checkout"}` {
-		t.Errorf("resource_attrs = %q, want the resource attributes", row.ResourceAttrs)
+	// Attributes are stored in the nested shape ClickHouse gives them, so the
+	// assertion is on the path rather than on the text.
+	var resource map[string]any
+	if err := json.Unmarshal([]byte(row.ResourceAttrs), &resource); err != nil {
+		t.Fatalf("resource_attrs is not JSON: %v (%q)", err, row.ResourceAttrs)
+	}
+	if otlpvalue.AttributeAt(resource, "service.name") != "checkout" {
+		t.Errorf("resource_attrs = %q, want service.name checkout", row.ResourceAttrs)
 	}
 	if row.LogAttrs == otlpvalue.EmptyObject || row.ResourceAttrs == row.LogAttrs {
 		t.Errorf("log_attrs = %q, want the record's own attributes", row.LogAttrs)
