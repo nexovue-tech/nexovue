@@ -61,7 +61,8 @@ export function ServiceNode({ data }: NodeProps<ServiceNodeShape>) {
 /** The full sentence the node abbreviates, for the hover the abbreviation earns. */
 function describe(data: ServiceNodeShape["data"]): string {
   if (!data.instrumented) {
-    return `${data.name} — something calls this, and it sends us no telemetry of its own.`;
+    const named = data.peerKind ? ` A caller reached it over ${data.peerKind}.` : "";
+    return `${data.name} — something calls this, and it sends us no telemetry of its own.${named}`;
   }
 
   const traffic =
@@ -99,7 +100,9 @@ function ServiceNodeBody({ data }: { data: ServiceNodeShape["data"] }) {
             {data.flow === "serves" ? "in" : "out"} {formatRate(data.callsPerMinute)}/min
           </span>
         ) : (
-          <span className="truncate">no telemetry</span>
+          // The technology is the new information, so it leads. `no telemetry` stays
+          // because a name in parentheses is our word for the peer, not its own.
+          <span className="truncate">{data.peerKind ? `${data.peerKind} · ` : ""}no telemetry</span>
         )}
         {data.errorCount > 0 ? (
           <span className={`shrink-0 ${HEALTH_LABEL[data.health]}`}>

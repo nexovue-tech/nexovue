@@ -61,7 +61,10 @@ export function DependencyEdge({
 
   const geometry = data.selfCall
     ? selfCallGeometry(sourceX, sourceY, targetX, targetY)
-    : throughGeometry({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
+    : throughGeometry(
+        { sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition },
+        data.laneOffset,
+      );
 
   const health = data.health;
   // What the latency measures differs by kind, so the label says which. On a
@@ -94,8 +97,11 @@ export function DependencyEdge({
       />
 
       <EdgeLabelRenderer>
+        {/* The background is on the container, not on the lines inside it: a gap
+            between two backgrounds is a stripe of whatever the label is standing on,
+            and on this screen that is an edge running through the text. */}
         <div
-          className="pointer-events-auto absolute flex flex-col items-center gap-0.5"
+          className="pointer-events-auto absolute flex flex-col items-center gap-0.5 rounded-xs bg-page px-1 py-0.5"
           style={{
             transform: `translate(-50%, -50%) translate(${geometry.labelX}px, ${geometry.labelY}px)`,
           }}
@@ -103,7 +109,7 @@ export function DependencyEdge({
         >
           {/* Stacked, not strung out: the label has to live in the gap between two
               columns, and a wide one forces the whole map to be zoomed out to fit. */}
-          <span className="rounded-xs bg-page px-1 text-center font-mono text-2xs text-ink-dim leading-tight">
+          <span className="text-center font-mono text-2xs text-ink-dim leading-tight">
             {formatRate(data.callsPerMinute)}/min
             <br />
             {latencyLabel} {formatDuration(data.p95Ms)}
@@ -131,12 +137,22 @@ interface EdgeGeometry {
   labelY: number;
 }
 
-function throughGeometry(parameters: Parameters<typeof getSmoothStepPath>[0]): EdgeGeometry {
+/**
+ * `laneOffset` moves where the line makes its vertical step, and the label rides with
+ * it. Left at the default every edge between the same two columns steps at the same x,
+ * which piles their labels into one vertical corridor with a line through each.
+ */
+function throughGeometry(
+  parameters: Parameters<typeof getSmoothStepPath>[0],
+  laneOffset: number,
+): EdgeGeometry {
+  const tip = parameters.targetX - ARROW_LENGTH;
   const [path, labelX, labelY] = getSmoothStepPath({
     ...parameters,
     borderRadius: EDGE_CORNER_RADIUS,
     // The arrowhead is drawn at the handle, so the line stops short of it.
-    targetX: parameters.targetX - ARROW_LENGTH,
+    targetX: tip,
+    centerX: (parameters.sourceX + tip) / 2 + laneOffset,
   });
   return { path, labelX, labelY };
 }

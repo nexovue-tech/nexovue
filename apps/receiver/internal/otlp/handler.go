@@ -80,16 +80,18 @@ func Handler(opts Options) http.Handler {
 // the only method OTLP/HTTP defines.
 func route[Request proto.Message](mux *http.ServeMux, opts Options, door signalDoor[Request]) {
 	mux.Handle("POST "+door.httpPath,
-		timed(authenticate(opts, door.endpoint,
+		stamped(authenticate(opts, door.endpoint,
 			throttle(opts, door.endpoint,
 				export(opts, door)))))
 }
 
-// timed stamps when the request entered the door, so every gate below reports
-// the same whole-request duration.
-func timed(next http.Handler) http.Handler {
+// stamped records when the request entered the door and who sent it, so every
+// gate below reports the same whole-request duration and names the same caller —
+// including the gates that answer before there is a tenant to name.
+func stamped(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r.WithContext(withStart(r.Context(), time.Now())))
+		ctx := withCaller(withStart(r.Context(), time.Now()), callerOf(r))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

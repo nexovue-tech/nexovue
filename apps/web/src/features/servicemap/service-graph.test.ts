@@ -7,12 +7,13 @@ import { buildServiceGraph, edgeWeight, healthOf, type ServiceNodeData } from ".
 function wireEdge(
   caller: string,
   callee: string,
-  { calls = 100, errors = 0, kind = "call" } = {},
+  { calls = 100, errors = 0, kind = "call", calleeKind = "" } = {},
 ): ServiceEdge {
   return {
     caller,
     callee,
     edge_kind: kind,
+    callee_kind: calleeKind,
     call_count: calls,
     error_count: errors,
     calls_per_minute: calls / 60,
@@ -40,6 +41,9 @@ const DEMO = response([
   wireEdge("demo-checkout", "demo-payments", { calls: 20_543, errors: 158 }),
   wireEdge("demo-storefront", "demo-checkout", { calls: 20_536, errors: 158 }),
   wireEdge("demo-payments", "(uninstrumented)", { calls: 1_204 }),
+  // A callee that never reported for itself but said what it was: the fix for one
+  // node having held every unanswered call at once.
+  wireEdge("demo-checkout", "(valkey-cart)", { calls: 4_100, calleeKind: "redis" }),
   wireEdge("demo-checkout", "demo-shipping", { calls: 900, kind: "queue" }),
 ]);
 
@@ -95,6 +99,7 @@ describe("buildServiceGraph", () => {
     const graph = buildServiceGraph(DEMO);
     expect(graph.nodes.map((node) => node.id).sort()).toEqual([
       "(uninstrumented)",
+      "(valkey-cart)",
       "demo-checkout",
       "demo-payments",
       "demo-shipping",
@@ -105,7 +110,7 @@ describe("buildServiceGraph", () => {
 
   it("keeps one edge per row, including the self-call", () => {
     const graph = buildServiceGraph(DEMO);
-    expect(graph.edges).toHaveLength(5);
+    expect(graph.edges).toHaveLength(6);
     expect(graph.edges.filter((edge) => edge.data?.selfCall).map((edge) => edge.source)).toEqual([
       "loadgen",
     ]);
@@ -189,6 +194,58 @@ describe("buildServiceGraph", () => {
     for (const edge of graph.edges) {
       expect(ids.has(edge.source)).toBe(true);
       expect(ids.has(edge.target)).toBe(true);
+    }
+  });
+});
+
+describe("callees that never reported for themselves", () => {
+  it("keeps two unrelated peers as two nodes, which is the whole fix", () => {
+    const graph = buildServiceGraph(DEMO);
+
+    expect(graph.nodes.map((node) => node.id)).toContain("(valkey-cart)");
+    expect(graph.nodes.map((node) => node.id)).toContain("(uninstrumented)");
+  });
+
+  it("labels a peer with the technology a caller says it reached it over", () => {
+    expect(dataFor("(valkey-cart)").peerKind).toBe("redis");
+    expect(dataFor("(uninstrumented)").peerKind).toBeUndefined();
+  });
+
+  it("treats any parenthesised name as ours, because the set of them is open", () => {
+    expect(dataFor("(valkey-cart)").instrumented).toBe(false);
+    expect(dataFor("demo-checkout").instrumented).toBe(true);
+  });
+
+  it("gives it no categorical colour: a gap in the picture is not a service", () => {
+    expect(dataFor("(valkey-cart)").seriesIndex).toBeUndefined();
+  });
+});
+
+describe("edge lanes", () => {
+  it("separates edges that cross the same pair of columns, so labels stop stacking", () => {
+    const graph = buildServiceGraph(DEMO);
+    const crossing = graph.edges.filter((edge) => edge.source === "demo-checkout");
+    const lanes = crossing.map((edge) => edge.data?.laneOffset);
+
+    expect(lanes.length).toBeGreaterThan(1);
+    expect(new Set(lanes).size).toBe(lanes.length);
+  });
+
+  it("keeps a lone edge on the straight route between its two nodes", () => {
+    const graph = buildServiceGraph(
+      response([wireEdge("only-caller", "only-callee", { calls: 10 })]),
+    );
+
+    expect(graph.edges[0].data?.laneOffset).toBe(0);
+  });
+
+  it("never pushes a lane far enough to reach the next column of nodes", () => {
+    const many = response(
+      Array.from({ length: 40 }, (_, index) => wireEdge(`caller-${index}`, "one-callee")),
+    );
+
+    for (const edge of buildServiceGraph(many).edges) {
+      expect(Math.abs(edge.data?.laneOffset ?? 0)).toBeLessThanOrEqual(56);
     }
   });
 });

@@ -80,7 +80,7 @@ func runExport[Request proto.Message](
 	request Request,
 ) error {
 	receivedAt := time.Now()
-	ctx = withStart(ctx, receivedAt)
+	ctx = withCaller(withStart(ctx, receivedAt), callerOfRPC(ctx))
 
 	ctx, refused := opts.authenticate(ctx, presentedKey(ctx))
 	if refused != nil {
@@ -150,7 +150,8 @@ func serviceDesc[Request proto.Message](
 		if err := decode(request); err != nil {
 			// Our own wording, not grpc-go's, which quotes our internals back.
 			refused := refuse(code.Code_INVALID_ARGUMENT, door.malformedMessage).because(err)
-			opts.record(withStart(ctx, time.Now()), door.grpcPath, door.unit, itemsNotRead, refused)
+			stamped := withCaller(withStart(ctx, time.Now()), callerOfRPC(ctx))
+			opts.record(stamped, door.grpcPath, door.unit, itemsNotRead, refused)
 			return nil, refused.grpcError()
 		}
 

@@ -18,6 +18,7 @@ import (
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/serviceedges"
 )
 
 // attrServiceName and attrServiceVersion are the resource attributes behind two
@@ -74,6 +75,10 @@ type spanRow struct {
 	// the only evidence of who published the message: the consumer starts its
 	// own trace and links back, so `parent_span_id` names nothing.
 	Links []spanLink
+	// Peer is what a caller-side span says about what it called. Carried for
+	// edge derivation and never written: it is only ever read to name a callee
+	// that sent us nothing of its own.
+	Peer serviceedges.Peer
 }
 
 // spanLink is one entry of the `links` Nested column, and one candidate caller
@@ -186,6 +191,7 @@ func flattenSpan(
 		SpanAttrs:         otlpvalue.AttributesJSON(attributes),
 		Events:            eventsJSON(span.GetEvents()),
 		Links:             spanLinks(span.GetLinks()),
+		Peer:              peerOf(attributes, rpc.system),
 		// Carried for the sampler alone, which reads an explicit `rv` out of it
 		// when a producer upstream has already fixed the trace's randomness. Not
 		// stored: nothing queries it.
@@ -261,6 +267,43 @@ func rpcStatusText(attributes []*commonpb.KeyValue) string {
 	}
 	if code, ok := otlpvalue.Int(attributes, attrRPCStatusJSONRPCLegacy); ok {
 		return strconv.FormatInt(code, 10)
+	}
+	return ""
+}
+
+// peerOf reads what this span says about the thing it called, taking the
+// current spelling of each attribute where it is present and the legacy one
+// otherwise. rpcSystem is passed in rather than read again: promotedRPC has
+// already resolved both of its generations.
+//
+// Every span is read, not only the caller-side ones. Which kinds can open an
+// edge is the graph's business, and this file's job is to say what arrived.
+func peerOf(attributes []*commonpb.KeyValue, rpcSystem string) serviceedges.Peer {
+	return serviceedges.Peer{
+		Service:   firstPresent(attributes, attrPeerServiceCurrent, attrPeerServiceLegacy),
+		Address:   otlpvalue.StringOrEmpty(attributes, attrServerAddress),
+		System:    peerSystem(attributes),
+		Transport: rpcSystem,
+	}
+}
+
+// peerSystem is the datastore or broker the span says it reached. A span
+// carries at most one: an instrumentation calling a database does not also
+// claim a broker.
+func peerSystem(attributes []*commonpb.KeyValue) string {
+	if system := firstPresent(attributes, attrDBSystemCurrent, attrDBSystemLegacy); system != "" {
+		return canonicalDBSystem(system)
+	}
+	// Taken as it arrives: messaging.system was never respelled between
+	// generations the way db.system and rpc.system were.
+	return otlpvalue.StringOrEmpty(attributes, attrMessagingSystem)
+}
+
+func firstPresent(attributes []*commonpb.KeyValue, keys ...string) string {
+	for _, key := range keys {
+		if value := otlpvalue.StringOrEmpty(attributes, key); value != "" {
+			return value
+		}
 	}
 	return ""
 }

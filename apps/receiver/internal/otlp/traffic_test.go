@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/otlp"
 )
 
@@ -193,5 +194,58 @@ func TestRefusalLineUsesTheSharedFieldNames(t *testing.T) {
 	}
 	if line["level"] != slog.LevelError.String() {
 		t.Errorf("level = %v, want ERROR: an unreachable control plane is our fault", line["level"])
+	}
+}
+
+// A refusal has no tenant to name it by, so without these two a window reporting
+// `refused_unauthenticated=18` says only that eighteen exports were turned away.
+// That is exactly the window an exporter configured in its own config file — an
+// nginx or an Envoy that cannot read OTEL_EXPORTER_OTLP_HEADERS — produces.
+func TestRefusalLineNamesTheSenderItTurnedAway(t *testing.T) {
+	written := &bytes.Buffer{}
+	d := newDoor(t, doorOptions{log: slog.New(slog.NewJSONHandler(written, nil))})
+
+	post(t, d, encodedRequest(t, exportRequest(traceID(0x11))), map[string]string{
+		auth.HeaderName: "nvk_live_absentabsentabsentabse",
+		"User-Agent":    "ngx_otel_module/0.1.2",
+	})
+
+	lines := recordedLines(t, written)
+	if len(lines) == 0 {
+		t.Fatal("a refused export produced no log line at all")
+	}
+	line := lines[len(lines)-1]
+
+	if line["peer_address"] == nil || line["peer_address"] == "" {
+		t.Error("no peer_address; a refusal that names no sender cannot be diagnosed")
+	}
+	if line["user_agent"] != "ngx_otel_module/0.1.2" {
+		t.Errorf("user_agent = %v, want the agent the sender announced", line["user_agent"])
+	}
+}
+
+// The gRPC door reads the same two out of the call rather than the request, so
+// one query over the receiver's logs covers both transports.
+func TestGRPCRefusalLineNamesTheSenderItTurnedAway(t *testing.T) {
+	written := &bytes.Buffer{}
+	d := newGRPCDoor(t, doorOptions{log: slog.New(slog.NewJSONHandler(written, nil))})
+
+	_, err := d.client.Export(callContext(t, "nvk_live_absentabsentabsentabse"), exportRequest(traceID(0x11)))
+	if err == nil {
+		t.Fatal("an unknown key was accepted")
+	}
+
+	lines := recordedLines(t, written)
+	if len(lines) == 0 {
+		t.Fatal("a refused export produced no log line at all")
+	}
+	line := lines[len(lines)-1]
+
+	if line["peer_address"] == nil || line["peer_address"] == "" {
+		t.Error("no peer_address; a refusal that names no sender cannot be diagnosed")
+	}
+	agent, _ := line["user_agent"].(string)
+	if !strings.HasPrefix(agent, "grpc-go/") {
+		t.Errorf("user_agent = %q, want the gRPC client's own agent", agent)
 	}
 }

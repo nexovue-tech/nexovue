@@ -37,6 +37,11 @@ readonly PROJECT_NAME="otel-demo"
 : "${NEXOVUE_OTLP_HTTP_URL:=http://localhost:14318}"
 export NEXOVUE_INGEST_KEY
 
+# Where the patched proxy config files live. Exported because compose resolves a
+# relative host path against --project-directory, which is the upstream clone.
+NEXOVUE_OVERLAY_DIR="${HERE}"
+export NEXOVUE_OVERLAY_DIR
+
 # Everything upstream's core and full compose files define, minus three.
 #
 #   otel-collector   we are the backend; its only job here was to be one

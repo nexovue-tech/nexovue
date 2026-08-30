@@ -229,6 +229,10 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Int("spans_already_stored", p.alreadyStoredSpans),
 		slog.Int("edge_pairs_pending", edges.PendingSpans),
 		slog.Int("edge_series", edges.OpenEdges),
+		// The gap between these two is how many unanswered calls the caller's
+		// own peer attributes were able to name.
+		slog.Uint64("edges_unanswered", edges.Unanswered),
+		slog.Uint64("edges_unidentified", edges.Unidentified),
 	}
 }
 

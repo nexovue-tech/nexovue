@@ -11,10 +11,22 @@ from nexovue_api.wire import IsoTimestamp
 EDGE_CALL: str = "call"
 EDGE_QUEUE: str = "queue"
 
-# Reserved callee and caller names the pipeline writes rather than inventing a
-# service. A real `service.name` cannot contain parentheses, so neither collides.
+# Reserved caller and callee names the pipeline writes rather than inventing a
+# service. A real `service.name` cannot contain parentheses, so none collides.
+#
+# `(uninstrumented)` is now the *last* of these, not the only one: a callee that
+# never reported for itself is named from what the caller's own span said about
+# its peer — `(valkey-cart)`, `(postgresql)`, `(kafka)` — and falls back to
+# `(uninstrumented)` only when the span said nothing at all. Every reserved name
+# is recognised by its parentheses rather than by this list, which is what stops
+# the six unrelated dependencies that once shared one node from sharing one node.
 UNINSTRUMENTED_SERVICE: str = "(uninstrumented)"
 UNKNOWN_SERVICE: str = "(unknown)"
+
+
+def is_reserved_service(name: str) -> bool:
+    """Whether this name was written by us rather than reported by a service."""
+    return name.startswith("(") and name.endswith(")")
 
 
 class ServiceEdge(BaseModel):
@@ -24,6 +36,11 @@ class ServiceEdge(BaseModel):
     callee: str
     # "call" or "queue".
     edge_kind: str
+    # The technology the caller says it reached this callee over — `redis`,
+    # `postgresql`, `kafka`, `grpc`. Empty whenever the callee reported for
+    # itself: a service that names itself needs no label, and what the caller
+    # believed about it is not evidence about the callee.
+    callee_kind: str = ""
     call_count: int
     error_count: int
     calls_per_minute: float

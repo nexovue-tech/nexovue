@@ -1,0 +1,34 @@
+-- What a callee that never reported for itself was reached over.
+--
+-- Until now every unanswered CLIENT span drew its edge to one reserved callee,
+-- `(uninstrumented)`. Measured against the OpenTelemetry Demo that single node
+-- absorbed cart→Redis, product-catalog→Postgres, load-generator→frontend and
+-- three more, and drew them as one hub — the most visually dominant thing on a
+-- dependency graph, so it did not merely lose detail, it asserted an
+-- architecture the customer does not have.
+--
+-- The pipeline now names such a callee from what the caller's own span says
+-- about its peer: `peer.service` / `service.peer.name`, else `server.address`,
+-- else the technology from `db.system(.name)`, `messaging.system` or
+-- `rpc.system(.name)`. Nothing is invented — each is a value the caller put on
+-- the span — and the name keeps the parentheses that mark it as one we were
+-- told rather than one that reported for itself.
+--
+-- This column carries the technology beside that name, so a node reads
+-- `(valkey-cart)` labelled `redis` rather than making a reader guess from a
+-- hostname. It is empty whenever the callee reported for itself: a service that
+-- names itself needs no label, and what the caller *believed* about it is not
+-- evidence about the callee.
+--
+-- Deliberately not in the sorting key. One callee is reached more than one way
+-- — measured, `cart` calls `flagd` over both plain HTTP and gRPC — so the kind
+-- is a property of the call, not of the pair, and keying on it would split one
+-- dependency into two edges that a graph then has to merge back. Outside the
+-- key, rows that differ only here merge and their counts still sum, which is
+-- the answer the map asks for; the read picks one kind per edge with `max`, so
+-- the badge is reproducible rather than whichever row a merge happened to keep.
+--
+-- ADD COLUMN is metadata only: no rewrite. Empty string is what an existing row
+-- means, and it is also what a paired edge means.
+ALTER TABLE service_edges_1m
+    ADD COLUMN IF NOT EXISTS server_peer_kind LowCardinality(String) CODEC(ZSTD(1))

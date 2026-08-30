@@ -64,6 +64,11 @@ const (
 	fieldReason           = "reason"
 	fieldError            = "error"
 
+	// Who sent it. A refusal is turned away before it has a tenant, so without
+	// these two a window of them names no sender at all.
+	fieldPeerAddress = "peer_address"
+	fieldUserAgent   = "user_agent"
+
 	// fieldItems is the telemetry count on one event line. The line's path says
 	// which door it came from, so the field itself stays signal-neutral and one
 	// query reads every door.

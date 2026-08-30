@@ -19,7 +19,7 @@ import pytest
 
 from nexovue_api import rollup
 from nexovue_api.data.clickhouse.base import TenantScopedRepository, binds_tenant
-from nexovue_api.servicemap import queries, service
+from nexovue_api.servicemap import queries, schemas, service
 
 TENANT_A: Final = "org-a"
 TENANT_B: Final = "org-b"
@@ -27,7 +27,12 @@ OTHER_TENANT: Final = "org-nobody"
 PROJECT: Final = "project-1"
 
 _MIGRATIONS: Final = Path(__file__).resolve().parents[3] / "deploy" / "clickhouse" / "migrations"
-SERVICE_EDGES_MIGRATION: Final = _MIGRATIONS / "000014_service_edges_1m.up.sql"
+# Every migration that shapes the table, in order. A column added later is still
+# a column of the table, so checking only the CREATE would miss it.
+SERVICE_EDGES_MIGRATIONS: Final = [
+    _MIGRATIONS / "000014_service_edges_1m.up.sql",
+    _MIGRATIONS / "000027_service_edges_peer_kind.up.sql",
+]
 
 WINDOW_MINUTES: Final = 60.0
 
@@ -35,6 +40,7 @@ EDGE_COLUMNS: Final = [
     "client_service",
     "server_service",
     "edge_kind",
+    "server_peer_kind",
     "call_count",
     "error_count",
     "latency_ms",
@@ -43,10 +49,13 @@ EDGE_COLUMNS: Final = [
 # tenant -> the edges that tenant owns
 _EDGES: Final[dict[str, list[tuple[Any, ...]]]] = {
     TENANT_A: [
-        ("storefront", "checkout", "call", 1200, 60, [12.5, 61.8, 99.0]),
-        ("checkout", "payments", "call", 600, 0, [8.0, 20.0, 30.0]),
+        ("storefront", "checkout", "call", "", 1200, 60, [12.5, 61.8, 99.0]),
+        ("checkout", "payments", "call", "", 600, 0, [8.0, 20.0, 30.0]),
+        # A callee that never reported for itself, named from the caller's own
+        # `server.address` and labelled with the technology it said it spoke.
+        ("checkout", "(valkey-cart)", "call", "redis", 300, 0, [0.4, 1.1, 2.0]),
     ],
-    TENANT_B: [("ledger", "ledger-worker", "queue", 40, 4, [1.0, 2.0, 3.0])],
+    TENANT_B: [("ledger", "ledger-worker", "queue", "", 40, 4, [1.0, 2.0, 3.0])],
 }
 
 
@@ -143,6 +152,7 @@ async def test_two_organizations_cannot_read_each_others_dependencies() -> None:
     assert [(edge.caller, edge.callee) for edge in for_a.edges] == [
         ("storefront", "checkout"),
         ("checkout", "payments"),
+        ("checkout", "(valkey-cart)"),
     ]
     assert [(edge.caller, edge.callee) for edge in for_b.edges] == [("ledger", "ledger-worker")]
 
@@ -186,7 +196,26 @@ async def test_the_nodes_are_exactly_the_services_the_edges_name(
     """Querying nodes separately could list a node no edge reaches, or miss one."""
     graph = await _map(client, TENANT_A)
 
-    assert graph.services == ["checkout", "payments", "storefront"]
+    assert graph.services == ["(valkey-cart)", "checkout", "payments", "storefront"]
+
+
+async def test_a_callee_that_never_reported_carries_the_technology_it_was_reached_over(
+    client: CapturingClient,
+) -> None:
+    """The one node that used to absorb every unanswered call is now six nodes."""
+    graph = await _map(client, TENANT_A)
+
+    peer = next(edge for edge in graph.edges if edge.callee == "(valkey-cart)")
+    assert peer.callee_kind == "redis"
+    assert all(edge.callee_kind == "" for edge in graph.edges if edge.callee != "(valkey-cart)")
+
+
+def test_a_name_we_wrote_is_told_apart_from_one_a_service_reported() -> None:
+    """A real `service.name` cannot carry parentheses, which is the whole test."""
+    assert schemas.is_reserved_service(schemas.UNINSTRUMENTED_SERVICE)
+    assert schemas.is_reserved_service(schemas.UNKNOWN_SERVICE)
+    assert schemas.is_reserved_service("(valkey-cart)")
+    assert not schemas.is_reserved_service("valkey-cart")
 
 
 async def test_a_service_on_both_ends_of_the_graph_is_listed_once(
@@ -210,12 +239,13 @@ def test_the_graph_is_truncated_by_traffic_so_a_limit_keeps_its_backbone() -> No
 
 
 def _migration_text() -> str:
-    return SERVICE_EDGES_MIGRATION.read_text(encoding="utf-8")
+    return "\n".join(path.read_text(encoding="utf-8") for path in SERVICE_EDGES_MIGRATIONS)
 
 
-def test_the_migration_this_suite_checks_against_is_there() -> None:
+@pytest.mark.parametrize("path", SERVICE_EDGES_MIGRATIONS, ids=lambda path: path.name)
+def test_the_migrations_this_suite_checks_against_are_there(path: Path) -> None:
     """A missing file must break this, not silently prove nothing."""
-    assert SERVICE_EDGES_MIGRATION.is_file(), SERVICE_EDGES_MIGRATION
+    assert path.is_file(), path
 
 
 def test_the_merge_asks_for_exactly_the_quantile_levels_the_column_stores() -> None:
@@ -236,6 +266,7 @@ def test_the_merge_asks_for_exactly_the_quantile_levels_the_column_stores() -> N
         "client_service",
         "server_service",
         "edge_kind",
+        "server_peer_kind",
         "minute",
         "call_count",
         "error_count",
@@ -244,7 +275,10 @@ def test_the_merge_asks_for_exactly_the_quantile_levels_the_column_stores() -> N
 )
 def test_every_column_the_statement_names_exists_in_the_table(column: str) -> None:
     """Column names here were read from the DDL, not guessed; this keeps it true."""
-    declaration = re.compile(rf"^\s+`?{column}`?\s", re.MULTILINE)
+    # Either a line of the CREATE, or a column a later ALTER added.
+    declaration = re.compile(
+        rf"(?:^\s+|ADD COLUMN (?:IF NOT EXISTS )?)`?{column}`?\s", re.MULTILINE
+    )
 
     assert declaration.search(_migration_text()), f"{column} is not a column of service_edges_1m"
     assert column in queries.SERVICE_EDGES_SQL

@@ -70,6 +70,7 @@ func (r spanRow) edgeSpan(receivedAt time.Time, retentionDays uint16) serviceedg
 		Links:         r.edgeLinks(),
 		ServiceName:   r.ServiceName,
 		Kind:          r.SpanKind,
+		Peer:          r.Peer,
 		Timestamp:     r.Timestamp,
 		ReceivedAt:    receivedAt,
 		DurationMS:    r.DurationMS,

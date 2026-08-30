@@ -61,8 +61,12 @@ type Stats struct {
 	// Ignored counts spans that can take no part in a graph: an unusable span
 	// id, a root span, or a kind that is neither end of a call.
 	Ignored uint64
-	// Uninstrumented counts edges drawn to UninstrumentedService.
-	Uninstrumented uint64
+	// Unanswered counts edges whose callee never reported for itself, and
+	// Unidentified the ones among those that also said nothing about their peer
+	// and so landed on UninstrumentedService. The gap between the two is how
+	// much of the graph the peer attributes recovered.
+	Unanswered   uint64
+	Unidentified uint64
 }
 
 // edgeKey identifies one row of `service_edges_1m`. It is a comparable struct so
@@ -73,7 +77,14 @@ type edgeKey struct {
 	projectID     string
 	clientService string
 	serverService string
-	edgeKind      string
+	// serverPeerKind is the technology a callee that never reported was reached
+	// over. It is part of the key, not a decoration on the totals: one callee is
+	// reached more than one way, and if the kind rode along beside the counters
+	// then whichever span landed in the bucket first would set it — the same
+	// offsets would produce a different block on replay, and the store's insert
+	// deduplication would stop recognising a retry.
+	serverPeerKind string
+	edgeKind       string
 	// Constant for a given project, but carried here because it sits in the
 	// target table's partition key.
 	retentionDays uint16
@@ -153,25 +164,33 @@ func participates(span Span) bool {
 // without — into its minute bucket.
 func (a *Accumulator) record(resolved resolution) {
 	caller := resolved.caller.span
-	serverService := UninstrumentedService
+	var serverService, serverPeerKind string
 	errored := caller.Errored
 	if resolved.paired {
+		// A callee that reported for itself names itself; what the caller
+		// believed about it is not needed and could disagree.
 		serverService = serviceOf(resolved.callee)
 		// Either end is enough to call the request failed: an SDK that maps a
 		// 500 to an unset client status still made a call that did not work.
 		errored = errored || resolved.callee.Errored
 	} else {
-		a.stats.Uninstrumented++
+		serverService = calleeOf(caller.Peer)
+		serverPeerKind = caller.Peer.Kind()
+		a.stats.Unanswered++
+		if serverService == UninstrumentedService {
+			a.stats.Unidentified++
+		}
 	}
 
 	key := edgeKey{
-		minute:        startOfMinute(resolved.caller.bucketAt),
-		tenantID:      caller.TenantID,
-		projectID:     caller.ProjectID,
-		clientService: serviceOf(caller),
-		serverService: serverService,
-		edgeKind:      resolved.edgeKind,
-		retentionDays: caller.RetentionDays,
+		minute:         startOfMinute(resolved.caller.bucketAt),
+		tenantID:       caller.TenantID,
+		projectID:      caller.ProjectID,
+		clientService:  serviceOf(caller),
+		serverService:  serverService,
+		serverPeerKind: serverPeerKind,
+		edgeKind:       resolved.edgeKind,
+		retentionDays:  caller.RetentionDays,
 	}
 
 	totals, ok := a.buckets[key]
@@ -235,16 +254,17 @@ func (a *Accumulator) drain(closed func(minute time.Time) bool) []Edge {
 			continue
 		}
 		edges = append(edges, Edge{
-			Minute:        key.minute,
-			TenantID:      key.tenantID,
-			ProjectID:     key.projectID,
-			RetentionDays: key.retentionDays,
-			ClientService: key.clientService,
-			ServerService: key.serverService,
-			Kind:          key.edgeKind,
-			CallCount:     totals.calls,
-			ErrorCount:    totals.errors,
-			LatencyMS:     totals.latency.Values(),
+			Minute:         key.minute,
+			TenantID:       key.tenantID,
+			ProjectID:      key.projectID,
+			RetentionDays:  key.retentionDays,
+			ClientService:  key.clientService,
+			ServerService:  key.serverService,
+			ServerPeerKind: key.serverPeerKind,
+			Kind:           key.edgeKind,
+			CallCount:      totals.calls,
+			ErrorCount:     totals.errors,
+			LatencyMS:      totals.latency.Values(),
 		})
 		delete(a.buckets, key)
 	}
@@ -271,6 +291,8 @@ func (e Edge) less(other Edge) bool {
 		return e.ClientService < other.ClientService
 	case e.ServerService != other.ServerService:
 		return e.ServerService < other.ServerService
+	case e.ServerPeerKind != other.ServerPeerKind:
+		return e.ServerPeerKind < other.ServerPeerKind
 	default:
 		return e.Kind < other.Kind
 	}

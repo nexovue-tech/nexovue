@@ -15,8 +15,14 @@ export const EDGE_QUEUE = "queue";
 
 /**
  * Reserved names the pipeline writes rather than inventing a service. A real
- * `service.name` cannot contain parentheses, so neither can collide with one — which
- * is also why they are safe to test for by string.
+ * `service.name` cannot contain parentheses, so none can collide with one — which is
+ * also why they are safe to test for by string.
+ *
+ * `(uninstrumented)` is now the last resort, not the only one. A callee that never
+ * reported for itself is named from what the caller's own span said about its peer —
+ * `(valkey-cart)`, `(postgresql)`, `(kafka)` — and only a span that said nothing at
+ * all lands here. That is why the test below is the parentheses, not this pair: the
+ * set of reserved names is open.
  */
 export const UNINSTRUMENTED_SERVICE = "(uninstrumented)";
 export const UNKNOWN_SERVICE = "(unknown)";
@@ -26,6 +32,11 @@ export interface ServiceEdge {
   callee: string;
   /** `call` or `queue`; anything else is drawn as a call. */
   edge_kind: string;
+  /**
+   * The technology the caller says it reached this callee over — `redis`,
+   * `postgresql`, `kafka`, `grpc`. Empty whenever the callee reported for itself.
+   */
+  callee_kind: string;
   call_count: number;
   error_count: number;
   calls_per_minute: number;
@@ -51,7 +62,7 @@ export interface ServiceMapResponse {
 
 /** A service we can only see from the outside: something calls it, it sends us nothing. */
 export function isPlaceholderService(name: string): boolean {
-  return name === UNINSTRUMENTED_SERVICE || name === UNKNOWN_SERVICE;
+  return name.startsWith("(") && name.endsWith(")");
 }
 
 export const serviceMapQueryKey = (projectId: string, timeWindow: TimeWindow) =>

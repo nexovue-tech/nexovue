@@ -49,8 +49,13 @@ export interface ServiceNodeData extends Record<string, unknown> {
   /** Failed calls *into* this service — the callee is where the failure showed up. */
   errorCount: number;
   health: Health;
-  /** False for `(uninstrumented)` and `(unknown)`: named by a caller, silent to us. */
+  /** False for any reserved name: this callee was named by a caller, not by itself. */
   instrumented: boolean;
+  /**
+   * The technology this node was reached over — `redis`, `postgresql`, `grpc`. Only a
+   * node that never reported for itself has one, and only when a caller said so.
+   */
+  peerKind?: string;
   /** 0-based index into the categorical palette. Placeholders get none. */
   seriesIndex?: number;
 }
@@ -65,6 +70,14 @@ export interface DependencyEdgeData extends Record<string, unknown> {
   selfCall: boolean;
   /** 0 (quietest) to 1 (busiest edge on this map), on a log scale. */
   weight: number;
+  /**
+   * How far this edge's vertical segment — and so its label — is moved off the middle
+   * of the column gap, in pixels. Every edge between the same two columns steps at the
+   * same x by default, which stacks their labels into one vertical corridor and runs
+   * a line straight through the text of each. Giving each its own lane is what stops
+   * both, and it is assigned here so it is stable across renders.
+   */
+  laneOffset: number;
 }
 
 export type ServiceNode = Node<ServiceNodeData>;
@@ -87,16 +100,18 @@ export function buildServiceGraph(map: ServiceMapResponse | undefined): ServiceG
     map.edges.map((edge) => ({ from: edge.caller, to: edge.callee })),
   );
   const traffic = trafficByService(map.edges);
+  const lanes = laneOffsets(map.edges, layout.placements);
   const busiest = Math.max(...map.edges.map((edge) => edge.calls_per_minute));
   const palette = seriesIndexes([...layout.placements.keys()]);
 
+  const kinds = peerKinds(map.edges);
   const nodes = [...layout.placements.entries()].map(([name, placement]) =>
-    toNode(name, placement, traffic.get(name), palette.get(name)),
+    toNode(name, placement, traffic.get(name), palette.get(name), kinds.get(name)),
   );
 
   return {
     nodes,
-    edges: map.edges.map((edge) => toEdge(edge, busiest)),
+    edges: map.edges.map((edge, index) => toEdge(edge, busiest, lanes[index])),
     failingEdgeCount: map.edges.filter((edge) => edge.error_count > 0).length,
   };
 }
@@ -147,11 +162,27 @@ function seriesIndexes(names: readonly string[]): Map<string, number> {
   return indexes;
 }
 
+/**
+ * The technology each un-reporting callee was reached over, taken from the edges into
+ * it. Sorted rather than first-seen: one callee reached both over plain HTTP and over
+ * gRPC must not change its label when the edge order changes.
+ */
+function peerKinds(edges: readonly ServiceEdge[]): Map<string, string> {
+  const kinds = new Map<string, string>();
+  for (const edge of edges) {
+    if (!edge.callee_kind) continue;
+    const held = kinds.get(edge.callee);
+    if (held === undefined || edge.callee_kind < held) kinds.set(edge.callee, edge.callee_kind);
+  }
+  return kinds;
+}
+
 function toNode(
   name: string,
   placement: { x: number; y: number },
   traffic: ServiceTraffic | undefined,
   seriesIndex: number | undefined,
+  peerKind: string | undefined,
 ): ServiceNode {
   const inbound = traffic?.inboundPerMinute ?? 0;
   const serves = inbound > 0;
@@ -177,12 +208,58 @@ function toNode(
       errorCount,
       health: healthOf(errorCount, errorRate),
       instrumented: !isPlaceholderService(name),
+      peerKind,
       seriesIndex,
     },
   };
 }
 
-function toEdge(edge: ServiceEdge, busiestPerMinute: number): DependencyEdge {
+/**
+ * Spacing between two edges' vertical segments, and the furthest either may move.
+ *
+ * The bound is the layout's own column gap: a segment pushed past it would cross into
+ * a column of nodes and read as an arrow into the wrong one. Beyond that many edges in
+ * one corridor the lanes repeat, which is crowded but never wrong.
+ */
+const LANE_PITCH = 26;
+const LANE_LIMIT = 56;
+
+/**
+ * A lane for each edge, in the order the API gave them — busiest first, so the edges
+ * that matter most keep the same lane while quieter ones come and go.
+ *
+ * Edges are laned per *corridor*: the pair of columns they cross. Two edges that never
+ * share a stretch of canvas cannot collide, so laning them apart would only push them
+ * off their own shortest route.
+ */
+function laneOffsets(
+  edges: readonly ServiceEdge[],
+  placements: ReadonlyMap<string, { layer: number }>,
+): number[] {
+  const corridors = new Map<string, number[]>();
+  edges.forEach((edge, index) => {
+    if (edge.caller === edge.callee) return; // drawn as a loop above its node
+    const from = placements.get(edge.caller)?.layer ?? 0;
+    const to = placements.get(edge.callee)?.layer ?? 0;
+    const corridor = `${from}:${to}`;
+    corridors.set(corridor, [...(corridors.get(corridor) ?? []), index]);
+  });
+
+  const offsets = new Array<number>(edges.length).fill(0);
+  for (const members of corridors.values()) {
+    members.forEach((index, position) => {
+      const centred = position - (members.length - 1) / 2;
+      offsets[index] = clamp(centred * LANE_PITCH, -LANE_LIMIT, LANE_LIMIT);
+    });
+  }
+  return offsets;
+}
+
+function clamp(value: number, lowest: number, highest: number): number {
+  return Math.min(highest, Math.max(lowest, value));
+}
+
+function toEdge(edge: ServiceEdge, busiestPerMinute: number, laneOffset: number): DependencyEdge {
   return {
     // Kind is in the id because a service can both call and enqueue to the same peer,
     // and two edges sharing an id silently become one.
@@ -200,6 +277,7 @@ function toEdge(edge: ServiceEdge, busiestPerMinute: number): DependencyEdge {
       queued: edge.edge_kind === EDGE_QUEUE,
       selfCall: edge.caller === edge.callee,
       weight: edgeWeight(edge.calls_per_minute, busiestPerMinute),
+      laneOffset,
     },
   };
 }

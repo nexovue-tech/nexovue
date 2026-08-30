@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"google.golang.org/genproto/googleapis/rpc/code"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/logging"
@@ -118,6 +120,7 @@ func (o Options) record(ctx context.Context, path string, unit Unit, items int, 
 		slog.Int(fieldItems, items),
 		slog.Int64(fieldDurationMillis, time.Since(startedAt(ctx)).Milliseconds()),
 	}
+	attrs = append(attrs, callerFrom(ctx).attrs()...)
 
 	if refused == nil {
 		o.Traffic.Accepted(unit, items)
@@ -149,6 +152,82 @@ type startedKey struct{}
 
 func withStart(ctx context.Context, at time.Time) context.Context {
 	return context.WithValue(ctx, startedKey{}, at)
+}
+
+// caller is the little the door knows about a sender it has not authenticated:
+// the socket address it dialled from, and the agent string it announced.
+//
+// Both are on the refusal line because a refusal has no tenant to name it by. A
+// window reporting refused_unauthenticated=18 otherwise says only that eighteen
+// exports were turned away, which is no help at all to someone onboarding a
+// fleet — and an exporter configured in its own file, like nginx's or Envoy's,
+// is exactly what produces that window.
+type caller struct {
+	address   string
+	userAgent string
+}
+
+// maxUserAgentBytes bounds a header the sender chooses. A log line is not the
+// place to find out how long a stranger's string can be.
+const maxUserAgentBytes = 128
+
+// headerUserAgent is the agent's name as gRPC metadata spells it: metadata keys
+// are lower-cased, so the HTTP spelling would never match.
+const headerUserAgent = "user-agent"
+
+// callerOf reads the caller out of an HTTP request. RemoteAddr is the socket's
+// own peer, never a forwarded-for header: a header can be set to anything by
+// whoever set it, and an address that can be chosen names nobody.
+func callerOf(r *http.Request) caller {
+	return caller{address: r.RemoteAddr, userAgent: truncate(r.UserAgent())}
+}
+
+// callerOfRPC reads the caller out of a gRPC call. grpc-go puts the agent in
+// metadata under the same name HTTP spells it.
+func callerOfRPC(ctx context.Context) caller {
+	from := caller{}
+	if remote, ok := peer.FromContext(ctx); ok && remote.Addr != nil {
+		from.address = remote.Addr.String()
+	}
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if agents := md.Get(headerUserAgent); len(agents) > 0 {
+			from.userAgent = truncate(agents[0])
+		}
+	}
+	return from
+}
+
+func truncate(value string) string {
+	if len(value) <= maxUserAgentBytes {
+		return value
+	}
+	return value[:maxUserAgentBytes]
+}
+
+// attrs are the caller's fields for a log line, omitting what the transport did
+// not give us rather than logging a blank.
+func (c caller) attrs() []any {
+	var attrs []any
+	if c.address != "" {
+		attrs = append(attrs, slog.String(fieldPeerAddress, c.address))
+	}
+	if c.userAgent != "" {
+		attrs = append(attrs, slog.String(fieldUserAgent, c.userAgent))
+	}
+	return attrs
+}
+
+type callerKey struct{}
+
+func withCaller(ctx context.Context, from caller) context.Context {
+	return context.WithValue(ctx, callerKey{}, from)
+}
+
+// callerFrom returns what the door recorded about the sender, or the zero value
+// if the transport never stamped it — which logs no caller rather than a wrong one.
+func callerFrom(ctx context.Context) caller {
+	from, _ := ctx.Value(callerKey{}).(caller)
+	return from
 }
 
 // startedAt falls back to now, which reports a zero duration rather than an

@@ -47,11 +47,20 @@ WHERE tenant_id = {tenant_id:String}
   AND minute < {to_time:DateTime}
 """
 
+# `server_peer_kind` is the technology a callee that never reported for itself
+# was reached over, and it is empty on every edge whose callee did. It is not
+# grouped on: one callee is reached more than one way — `cart` calls `flagd`
+# over both plain HTTP and gRPC — and grouping would split one dependency into
+# two edges the graph would have to merge back. `max` picks one, which puts a
+# named technology ahead of the empty string and gives the same answer twice.
+_PEER_KIND: Final = "max(server_peer_kind) AS server_peer_kind"
+
 SERVICE_EDGES_SQL: Final = f"""
 SELECT
     client_service,
     server_service,
     edge_kind,
+    {_PEER_KIND},
     sum(call_count) AS call_count,
     sum(error_count) AS error_count,
     {_LATENCY_MS}

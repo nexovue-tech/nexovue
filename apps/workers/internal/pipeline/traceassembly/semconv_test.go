@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/serviceedges"
 )
 
 // doubleValue is how a JSON-encoded exporter carries a number: it has no
@@ -255,5 +257,88 @@ func TestTheTwoSetsOfColumnsStayApart(t *testing.T) {
 	if grpcSpan.HTTPMethod != "" || grpcSpan.HTTPRoute != "" || grpcSpan.HTTPStatus != 0 {
 		t.Errorf("a gRPC span filled the HTTP columns: %q %q %d",
 			grpcSpan.HTTPMethod, grpcSpan.HTTPRoute, grpcSpan.HTTPStatus)
+	}
+}
+
+// What a caller says about its peer, read off the wire. The trap this guards is
+// the one HTTP and RPC already hit twice: the spec respelled `db.system` to
+// `db.system.name` in 1.33.0, and real producers still emit the old one — the
+// OpenTelemetry Demo emits both at once, `cart` writing db.system="redis" while
+// `accounting` writes db.system.name="postgresql".
+func TestPeerAttributesAreReadInBothGenerations(t *testing.T) {
+	cases := map[string]struct {
+		attributes []*commonpb.KeyValue
+		want       serviceedges.Peer
+	}{
+		"legacy database spelling": {
+			attributes: []*commonpb.KeyValue{
+				attribute("db.system", stringValue("redis")),
+				attribute("server.address", stringValue("valkey-cart")),
+			},
+			want: serviceedges.Peer{Address: "valkey-cart", System: "redis"},
+		},
+		"current database spelling": {
+			attributes: []*commonpb.KeyValue{
+				attribute("db.system.name", stringValue("postgresql")),
+				attribute("server.address", stringValue("astronomy-db")),
+			},
+			want: serviceedges.Peer{Address: "astronomy-db", System: "postgresql"},
+		},
+		"an SDK mid-migration emits both, and the current one wins": {
+			attributes: []*commonpb.KeyValue{
+				attribute("db.system", stringValue("mssql")),
+				attribute("db.system.name", stringValue("microsoft.sql_server")),
+			},
+			want: serviceedges.Peer{System: "microsoft.sql_server"},
+		},
+		"a legacy value the spec respelled is stored under one vocabulary": {
+			attributes: []*commonpb.KeyValue{attribute("db.system", stringValue("mssql"))},
+			want:       serviceedges.Peer{System: "microsoft.sql_server"},
+		},
+		"legacy peer service spelling": {
+			attributes: []*commonpb.KeyValue{attribute("peer.service", stringValue("AuthTokenCache"))},
+			want:       serviceedges.Peer{Service: "AuthTokenCache"},
+		},
+		"current peer service spelling": {
+			attributes: []*commonpb.KeyValue{
+				attribute("service.peer.name", stringValue("AuthTokenCache")),
+			},
+			want: serviceedges.Peer{Service: "AuthTokenCache"},
+		},
+		"a broker is a system, not a transport": {
+			attributes: []*commonpb.KeyValue{
+				attribute("messaging.system", stringValue("kafka")),
+				attribute("server.address", stringValue("kafka:9092")),
+			},
+			want: serviceedges.Peer{Address: "kafka:9092", System: "kafka"},
+		},
+		"an RPC system is a transport, never a system": {
+			attributes: []*commonpb.KeyValue{attribute("rpc.system", stringValue("grpc"))},
+			want:       serviceedges.Peer{Transport: "grpc"},
+		},
+		"a span that says nothing about its peer": {
+			attributes: []*commonpb.KeyValue{attribute("http.request.method", stringValue("GET"))},
+			want:       serviceedges.Peer{},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			row := flattenOne(t, marshalEnvelope(t, "", spanOptions{attributes: tc.attributes}))
+			if row.Peer != tc.want {
+				t.Fatalf("peer = %+v, want %+v", row.Peer, tc.want)
+			}
+		})
+	}
+}
+
+// The socket's own peer is deliberately never read: an IP is not an identity
+// that survives a restart, so a node named by one would be a new node tomorrow.
+func TestTheSocketPeerAddressIsNeverTheCalleesName(t *testing.T) {
+	row := flattenOne(t, marshalEnvelope(t, "", spanOptions{attributes: []*commonpb.KeyValue{
+		attribute("network.peer.address", stringValue("10.0.0.4")),
+	}}))
+
+	if row.Peer != (serviceedges.Peer{}) {
+		t.Fatalf("peer = %+v, want nothing read", row.Peer)
 	}
 }

@@ -51,11 +51,81 @@ const (
 )
 
 // UninstrumentedService is the callee written for a CLIENT span whose SERVER
-// partner never arrived. The call is evidence: something answered it and the
-// caller waited. Naming the callee would be an invention, so the edge points at
-// a reserved name instead — a real `service.name` is a resource attribute and
-// does not carry parentheses.
+// partner never arrived and which said nothing about what it called. The call
+// is evidence: something answered it and the caller waited. Naming that callee
+// would be an invention, so the edge points at a reserved name instead — a real
+// `service.name` is a resource attribute and does not carry parentheses.
+//
+// It used to be the callee for *every* unanswered call, and that was wrong in a
+// way one node hides: measured against the OpenTelemetry Demo, this single node
+// absorbed cart→Redis, product-catalog→Postgres, load-generator→frontend and
+// three more, and drew them as one hub the customer does not have. A hub is the
+// most visually dominant thing on a dependency graph, so merging six unrelated
+// dependencies into one did not merely lose detail — it asserted an architecture.
+// What a caller does say about its peer is in Peer, and calleeOf uses it.
 const UninstrumentedService = "(uninstrumented)"
+
+// Peer is what a caller-side span says about the thing it called, in the
+// OpenTelemetry conventions' own terms. It is evidence, not a service: nothing
+// here was reported by the callee, so nothing here is a `service.name`.
+//
+// What is deliberately absent is `network.peer.address`. The conventions define
+// it as the socket's own peer — an IP — and an IP is not an identity that
+// survives a restart, so a dependency named by one would become a new node
+// tomorrow and its history would be unqueryable across the retention window.
+type Peer struct {
+	// Service is the peer's name as the caller declares it: `peer.service`, now
+	// `service.peer.name`. The conventions say it SHOULD equal the remote's own
+	// `service.name`, which makes it the closest thing to an answer we can get
+	// without one.
+	Service string
+	// Address is the host the caller dialled: `server.address`.
+	Address string
+	// System is the datastore or broker the caller says it reached —
+	// `redis`, `postgresql`, `kafka` — from `db.system(.name)` or
+	// `messaging.system`, already on one generation's vocabulary. A database and
+	// a broker are dependencies in their own right, so this can name a node.
+	System string
+	// Transport is how the call travelled: `rpc.system(.name)`, so `grpc` or
+	// `connectrpc`. It never names a node. Measured against the OpenTelemetry
+	// Demo, letting it do so drew one `(grpc)` node holding frontend's calls and
+	// recommendation's — which is the same false hub `(uninstrumented)` was,
+	// under a new name. Nobody depends on gRPC; they depend on what is behind it.
+	Transport string
+}
+
+// Kind is the technology an edge to this peer was reached over, most telling
+// first: what it is beats how the call travelled.
+func (p Peer) Kind() string {
+	if p.System != "" {
+		return p.System
+	}
+	return p.Transport
+}
+
+// calleeOf names the callee of a caller-side span nothing answered.
+//
+// Nothing here is invented: every branch is a value the caller itself put on
+// the span, and the parentheses mark it as a name we were told rather than one
+// that reported for itself. The order is most specific first — a declared peer
+// name beats the host it was dialled at, which beats the datastore it reached —
+// so two databases behind one technology stay two nodes.
+func calleeOf(peer Peer) string {
+	switch {
+	case peer.Service != "":
+		return reservedName(peer.Service)
+	case peer.Address != "":
+		return reservedName(peer.Address)
+	case peer.System != "":
+		return reservedName(peer.System)
+	}
+	return UninstrumentedService
+}
+
+// reservedName marks a name as one we were told rather than one that reported
+// for itself. A real `service.name` cannot collide with it: the reserved names
+// this package writes are the only ones carrying parentheses.
+func reservedName(name string) string { return "(" + name + ")" }
 
 // UnknownService is the caller written for a service whose spans carry no
 // `service.name`. The OpenTelemetry SDKs default that attribute to
@@ -97,6 +167,9 @@ type Span struct {
 	ServiceName string
 	// Kind is one of the Kind* constants. Anything else is not an edge.
 	Kind string
+	// Peer is what this span says about what it called. Read only when the
+	// partner never arrives: a callee that reported for itself names itself.
+	Peer Peer
 
 	// Timestamp is when the client says the span started; ReceivedAt is when we
 	// took the message carrying it, which is the only clock in the path we
@@ -141,9 +214,14 @@ type Edge struct {
 	RetentionDays uint16
 	ClientService string
 	ServerService string
-	Kind          string
-	CallCount     uint64
-	ErrorCount    uint64
+	// ServerPeerKind is the technology the callee was reached over — `redis`,
+	// `kafka`, `grpc` — and is empty whenever the callee reported for itself:
+	// a service that names itself needs no label, and what the *caller*
+	// believed it was talking to is not evidence about the callee.
+	ServerPeerKind string
+	Kind           string
+	CallCount      uint64
+	ErrorCount     uint64
 	// LatencyMS are client-side durations, sorted ascending and capped. The
 	// store turns them into the row's quantile state.
 	LatencyMS []float64

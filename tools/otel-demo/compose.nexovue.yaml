@@ -10,19 +10,12 @@
 #      `x-nexovue-key` header, and upstream wires no header anywhere — so each
 #      SDK service gets OTEL_EXPORTER_OTLP_HEADERS here.
 #
-# Two upstream services are absent from this file, and their spans are refused
-# at our door with 401 as a result: `frontend-proxy` (Envoy) and
-# `image-provider` (nginx + ngx_otel_module). Neither reads
-# OTEL_EXPORTER_OTLP_HEADERS — both configure their exporter in their own config
-# file, which upstream renders from OTEL_COLLECTOR_HOST and nothing else.
-#
-# Both formats *can* carry the key: nginx has `header name value;` inside
-# `otel_exporter` (ngx_otel_module 0.1.2+), Envoy has `initial_metadata` on the
-# tracer's `grpc_service`. Wiring it means bind-mounting a patched
-# src/image-provider/nginx.conf.template and src/frontend-proxy/envoy.tmpl.yaml
-# over the upstream clone's, which this gate does not do yet — so it runs today
-# with 16 of the 18 services reporting, and the two proxies visible only as the
-# callee of something that is instrumented.
+# Two services do not read OTEL_EXPORTER_OTLP_HEADERS, because they are not SDKs:
+# `frontend-proxy` (Envoy) and `image-provider` (nginx + ngx_otel_module)
+# configure their exporter in their own config file. Both got the key by having a
+# patched copy of that file bind-mounted over the clone's — the clone is pinned
+# and gitignored, so it is never edited in place. The patched copies live beside
+# this file; each says what it changed and against which tag.
 
 services:
   ad:
@@ -81,3 +74,26 @@ services:
 
   kafka:
     environment: *nexovue-key
+
+  # The two non-SDK exporters. Neither reads OTEL_EXPORTER_OTLP_HEADERS, so each
+  # gets the key through its own config file — mounted from here over the one
+  # baked into the image. NEXOVUE_OVERLAY_DIR is exported by otel-demo.sh: a
+  # relative host path would resolve against the *upstream* project directory.
+  image-provider:
+    environment:
+      - NEXOVUE_INGEST_KEY=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
+    volumes:
+      - ${NEXOVUE_OVERLAY_DIR:?set by otel-demo.sh}/image-provider-nginx.conf.template:/nginx.conf.template:ro
+    # Upstream's own CMD, with NEXOVUE_INGEST_KEY added to the envsubst list —
+    # envsubst substitutes only the names it is given — and with upstream's
+    # `cat /etc/nginx/nginx.conf` dropped, which would print the key to the log.
+    command:
+      - /bin/sh
+      - -c
+      - envsubst '$$OTEL_COLLECTOR_HOST $$IMAGE_PROVIDER_PORT $$OTEL_COLLECTOR_PORT_GRPC $$OTEL_SERVICE_NAME $$NEXOVUE_INGEST_KEY' < /nginx.conf.template > /etc/nginx/nginx.conf && exec nginx -g 'daemon off;'
+
+  frontend-proxy:
+    environment:
+      - NEXOVUE_INGEST_KEY=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
+    volumes:
+      - ${NEXOVUE_OVERLAY_DIR:?set by otel-demo.sh}/frontend-proxy-envoy.tmpl.yaml:/home/envoy/envoy.tmpl.yaml:ro

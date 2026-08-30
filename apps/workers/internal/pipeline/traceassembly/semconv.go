@@ -133,6 +133,68 @@ func grpcStatusName(code int64) string {
 	return grpcStatusNames[code]
 }
 
+// What a caller-side span says about the thing it called. These are read only
+// to name a callee that never answered for itself, so nothing here is stored as
+// a column of `spans` — see serviceedges.Peer for what is done with them.
+//
+// Two of the three were respelled and real fleets emit both generations, so
+// both are read. Unlike HTTP the envelope's semconv_version is not consulted:
+// each generation has a key of its own, so the payload disambiguates itself.
+const (
+	// db.system became db.system.name in semconv 1.33.0. Measured against the
+	// OpenTelemetry Demo, one image emits each: `cart` writes db.system=redis
+	// while `accounting` writes db.system.name=postgresql.
+	attrDBSystemCurrent = "db.system.name"
+	attrDBSystemLegacy  = "db.system"
+
+	// peer.service became service.peer.name. The conventions say either SHOULD
+	// equal the remote's own `service.name`, which makes it the best thing a
+	// caller can say about a peer that is not reporting.
+	attrPeerServiceCurrent = "service.peer.name"
+	attrPeerServiceLegacy  = "peer.service"
+
+	// Never respelled. server.address is the host the caller dialled;
+	// messaging.system is the broker technology it published to.
+	attrServerAddress   = "server.address"
+	attrMessagingSystem = "messaging.system"
+)
+
+// dbSystemRenames are the db.system values 1.33.0 respelled, from the spec's own
+// migration table. Applying them here means one stored vocabulary, so a graph
+// does not draw two nodes for one database because half the fleet has migrated.
+//
+// The values that table lists as removed are not here: they have no current
+// spelling, and keeping them as they arrived says what the caller said.
+// https://opentelemetry.io/docs/specs/semconv/non-normative/db-migration/
+var dbSystemRenames = map[string]string{
+	"adabas":             "softwareag.adabas",
+	"intersystems_cache": "intersystems.cache",
+	"cosmosdb":           "azure.cosmosdb",
+	"db2":                "ibm.db2",
+	"dynamodb":           "aws.dynamodb",
+	"firebird":           "firebirdsql",
+	"h2":                 "h2database",
+	"hanadb":             "sap.hana",
+	"informix":           "ibm.informix",
+	"ingres":             "actian.ingres",
+	"maxdb":              "sap.maxdb",
+	"mssql":              "microsoft.sql_server",
+	"netezza":            "ibm.netezza",
+	"oracle":             "oracle.db",
+	"redshift":           "aws.redshift",
+	"spanner":            "gcp.spanner",
+}
+
+// canonicalDBSystem is the current spelling of a database system name. A value
+// outside the table is kept as it arrived: either it never changed, or it is one
+// the spec removed and we have nothing truer to call it.
+func canonicalDBSystem(system string) string {
+	if renamed, ok := dbSystemRenames[system]; ok {
+		return renamed
+	}
+	return system
+}
+
 // semconvVersion is a semantic-convention release, compared on major and minor
 // only — patch releases never rename an attribute.
 type semconvVersion struct {

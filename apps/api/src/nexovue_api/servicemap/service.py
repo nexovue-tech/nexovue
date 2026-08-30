@@ -63,6 +63,7 @@ def _to_edge(row: dict[str, Any], minutes: float) -> ServiceEdge:
         caller=values.text(row["client_service"]),
         callee=values.text(row["server_service"]),
         edge_kind=values.text(row["edge_kind"]),
+        callee_kind=values.text(row["server_peer_kind"]),
         call_count=calls,
         error_count=errors,
         calls_per_minute=rollup.per_minute(calls, minutes),

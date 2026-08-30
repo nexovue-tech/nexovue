@@ -117,8 +117,10 @@ func TestUnpairedClientReportsAnUninstrumentedCallee(t *testing.T) {
 	if edges[0].CallCount != 1 {
 		t.Fatalf("expected one call, got %d", edges[0].CallCount)
 	}
-	if got := accumulator.Stats().Uninstrumented; got != 1 {
-		t.Fatalf("expected one uninstrumented edge counted, got %d", got)
+	stats := accumulator.Stats()
+	if stats.Unanswered != 1 || stats.Unidentified != 1 {
+		t.Fatalf("expected one unanswered and unidentified edge, got %d and %d",
+			stats.Unanswered, stats.Unidentified)
 	}
 }
 
