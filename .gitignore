@@ -35,3 +35,9 @@ deploy/data/
 
 # Agent worktrees: a full repo copy, never part of the tree.
 .claude/worktrees/
+
+# P1-62 pins its own clone of the OpenTelemetry Demo; it is upstream, not ours.
+tools/otel-demo/upstream/
+
+# Playwright MCP writes screenshots and page snapshots here.
+.playwright-mcp/

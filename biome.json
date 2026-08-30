@@ -8,6 +8,7 @@
       "!**/dist",
       "!**/.venv",
       "!packages/contracts/gen",
+      "!tools/otel-demo/upstream",
       "!**/*.css"
     ]
   },

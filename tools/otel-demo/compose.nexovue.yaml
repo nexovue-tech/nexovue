@@ -1,0 +1,83 @@
+# P1-62 — the OpenTelemetry Demo, pointed at our receiver.
+#
+# Layered over the upstream `compose.yaml` with `-f`, so this file only says
+# what differs. Two things differ:
+#
+#   1. Where telemetry goes. Upstream keys every exporter off OTEL_COLLECTOR_HOST
+#      and the two port variables, so `nexovue.env` moves all of them at once and
+#      nothing here has to repeat an endpoint.
+#   2. Who it says it is. Our receiver authenticates every OTLP request by the
+#      `x-nexovue-key` header, and upstream wires no header anywhere — so each
+#      SDK service gets OTEL_EXPORTER_OTLP_HEADERS here.
+#
+# Two upstream services are absent from this file, and their spans are refused
+# at our door with 401 as a result: `frontend-proxy` (Envoy) and
+# `image-provider` (nginx + ngx_otel_module). Neither reads
+# OTEL_EXPORTER_OTLP_HEADERS — both configure their exporter in their own config
+# file, which upstream renders from OTEL_COLLECTOR_HOST and nothing else.
+#
+# Both formats *can* carry the key: nginx has `header name value;` inside
+# `otel_exporter` (ngx_otel_module 0.1.2+), Envoy has `initial_metadata` on the
+# tracer's `grpc_service`. Wiring it means bind-mounting a patched
+# src/image-provider/nginx.conf.template and src/frontend-proxy/envoy.tmpl.yaml
+# over the upstream clone's, which this gate does not do yet — so it runs today
+# with 16 of the 18 services reporting, and the two proxies visible only as the
+# callee of something that is instrumented.
+
+services:
+  ad:
+    environment: &nexovue-key
+      - OTEL_EXPORTER_OTLP_HEADERS=x-nexovue-key=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
+
+  cart:
+    environment: *nexovue-key
+
+  checkout:
+    environment: *nexovue-key
+
+  currency:
+    environment: *nexovue-key
+
+  email:
+    environment: *nexovue-key
+
+  frontend:
+    environment: *nexovue-key
+
+  flagd:
+    environment: *nexovue-key
+
+  payment:
+    environment: *nexovue-key
+
+  product-catalog:
+    environment: *nexovue-key
+
+  quote:
+    environment: *nexovue-key
+
+  recommendation:
+    environment: *nexovue-key
+
+  shipping:
+    environment: *nexovue-key
+
+  load-generator:
+    environment:
+      - OTEL_EXPORTER_OTLP_HEADERS=x-nexovue-key=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
+      # k6's browser mode starts a headless Chromium per virtual user. It costs
+      # more memory than every application service put together and adds one
+      # more node to the map, not one more language.
+      - K6_BROWSER_ENABLED=false
+
+  # From upstream's `compose.full.yaml`. They are the only queue hop in the demo
+  # — checkout produces an order, these two consume it — so they are the only
+  # services that exercise the `queue` edge kind at all.
+  accounting:
+    environment: *nexovue-key
+
+  fraud-detection:
+    environment: *nexovue-key
+
+  kafka:
+    environment: *nexovue-key

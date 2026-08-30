@@ -111,6 +111,13 @@ e2e:
 e2e-headed:
     pnpm --filter @nexovue/e2e test --headed
 
+# The OpenTelemetry Demo — 16 services, 10 languages — against our receiver (P1-62).
+# Never part of `just check` or `just e2e`: it wants ~2.5 GB and several minutes,
+# and it is a realism gate run deliberately, not a dependency of anything.
+# Bring the stack up first. `just otel-demo down` stops only the demo.
+otel-demo command="up":
+    ./tools/otel-demo/otel-demo.sh {{command}}
+
 # Destructive by design, and never part of `just check`.
 # Kill the broker and the store under load; assert nothing acknowledged was lost (P1-27).
 # -count=1 is load-bearing, not a habit: without it Go serves a cached pass and

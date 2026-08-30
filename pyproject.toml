@@ -56,7 +56,10 @@ strict = true
 warn_unreachable = true
 disallow_any_explicit = false          # Map-typed telemetry attributes are legitimately dynamic
 plugins = ["pydantic.mypy"]
-exclude = ["packages/contracts/gen/"]  # generated code is not ours to type
+exclude = [
+    "packages/contracts/gen/",   # generated code is not ours to type
+    "tools/otel-demo/upstream/", # P1-62 pins a clone of the OTel Demo; upstream code, not ours
+]
 # tests/helpers holds `live`, the shared "fail rather than skip" guard.
 mypy_path = ["packages/contracts/gen/python", "tests/helpers"]  # ...but it must still resolve
 

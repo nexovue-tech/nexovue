@@ -15,7 +15,9 @@ const NS_PER_MS = 1_000_000;
 
 /** OTLP enum values, from opentelemetry/proto/trace/v1/trace.proto. */
 const SPAN_KIND_SERVER = 2;
+const SPAN_KIND_CLIENT = 3;
 const STATUS_CODE_OK = 1;
+const STATUS_CODE_ERROR = 2;
 
 /** How long the request took, and how much of it the callee was responsible for. */
 const ROOT_DURATION_MS = 240;
@@ -97,23 +99,148 @@ export function crossServiceTrace(caller: ReportedSpan, callee: ReportedSpan): C
     status: { code: STATUS_CODE_OK },
   });
 
-  const resource = (service: string, spans: WireSpan[]): WireResourceSpans => ({
-    resource: { attributes: [{ key: "service.name", value: { stringValue: service } }] },
-    scopeSpans: [{ scope: { name: "nexovue-e2e" }, spans }],
-  });
-
   return {
     traceId: traceId.toString("hex"),
     caller,
     callee,
     batch: {
       resourceSpans: [
-        resource(caller.service, [span(rootSpanId, caller.name, 0, ROOT_DURATION_MS)]),
-        resource(callee.service, [
+        resourceSpans(caller.service, [span(rootSpanId, caller.name, 0, ROOT_DURATION_MS)]),
+        resourceSpans(callee.service, [
           span(childSpanId, callee.name, CHILD_OFFSET_MS, CHILD_DURATION_MS, rootSpanId),
         ]),
       ],
     },
+  };
+}
+
+/** How many calls to send, and how many of them failed at both ends. */
+export interface DependencyLoad {
+  calls: number;
+  failures: number;
+}
+
+export interface DependencyTraffic {
+  batch: ExportBatch;
+  /** Every call took exactly this long, so the edge's p95 is this value, not near it. */
+  callDurationMs: number;
+}
+
+/**
+ * The traffic that draws one edge on the service map: `load.calls` calls from `caller`
+ * to `callee`, `load.failures` of them failing.
+ *
+ * An edge is derived from a CLIENT span paired with the SERVER span beneath it — one
+ * call seen from both ends — so `crossServiceTrace` above, whose two spans are both
+ * SERVER, draws a waterfall but no edge at all. Each call is its own trace, because the
+ * rate the map reports counts calls and not traces.
+ */
+export function serviceDependency(
+  caller: ReportedSpan,
+  callee: ReportedSpan,
+  load: DependencyLoad,
+): DependencyTraffic {
+  if (load.calls <= 0) throw new Error("a dependency needs at least one call");
+  if (load.failures < 0 || load.failures > load.calls) {
+    throw new Error(`${load.failures} failures is impossible in ${load.calls} calls`);
+  }
+
+  const startedAtMs = Date.now() - BACKDATE_MS;
+  const clientSpans: WireSpan[] = [];
+  const serverSpans: WireSpan[] = [];
+
+  for (let call = 0; call < load.calls; call += 1) {
+    const traceId = randomBytes(16);
+    const clientSpanId = randomBytes(8);
+    // Both ends of a failed call report the failure, the way an SDK that saw the
+    // callee's 500 would.
+    const status = { code: call < load.failures ? STATUS_CODE_ERROR : STATUS_CODE_OK };
+    const timing = {
+      traceId: toWireId(traceId),
+      startTimeUnixNano: String(startedAtMs * NS_PER_MS),
+      endTimeUnixNano: String((startedAtMs + ROOT_DURATION_MS) * NS_PER_MS),
+      status,
+    };
+
+    clientSpans.push({
+      ...timing,
+      spanId: toWireId(clientSpanId),
+      name: caller.name,
+      kind: SPAN_KIND_CLIENT,
+    });
+    serverSpans.push({
+      ...timing,
+      spanId: toWireId(randomBytes(8)),
+      parentSpanId: toWireId(clientSpanId),
+      name: callee.name,
+      kind: SPAN_KIND_SERVER,
+    });
+  }
+
+  return {
+    batch: {
+      resourceSpans: [
+        resourceSpans(caller.service, clientSpans),
+        resourceSpans(callee.service, serverSpans),
+      ],
+    },
+    // The edge's latency is the caller's own duration, and every call here is the
+    // same length, so every quantile of it is that length.
+    callDurationMs: ROOT_DURATION_MS,
+  };
+}
+
+/** How many requests hit one endpoint, and how long each of them took. */
+export interface EndpointLoad {
+  count: number;
+  durationMs: number;
+}
+
+/**
+ * The traffic behind one row of the services overview: `succeeded.count` requests that
+ * returned and `failed.count` that did not, all on the same endpoint of one service.
+ *
+ * Each request is its own single-span trace, because the per-minute rollup counts
+ * requests rather than traces. Both groups are given explicit durations so the caller
+ * can state the quantiles it expects: with two distinct values the p50 and the tail are
+ * different numbers, which a single duration could never prove.
+ */
+export function endpointTraffic(options: {
+  service: string;
+  endpoint: string;
+  succeeded: EndpointLoad;
+  failed: EndpointLoad;
+}): ExportBatch {
+  const startedAtMs = Date.now() - BACKDATE_MS;
+
+  const requests = (load: EndpointLoad, statusCode: number): WireSpan[] =>
+    Array.from({ length: load.count }, () => ({
+      traceId: toWireId(randomBytes(16)),
+      spanId: toWireId(randomBytes(8)),
+      name: options.endpoint,
+      // SERVER, because the rollup behind the overview counts only the kinds that
+      // are an endpoint someone called: SERVER and CONSUMER.
+      kind: SPAN_KIND_SERVER,
+      startTimeUnixNano: String(startedAtMs * NS_PER_MS),
+      endTimeUnixNano: String((startedAtMs + load.durationMs) * NS_PER_MS),
+      status: { code: statusCode },
+    }));
+
+  return {
+    resourceSpans: [
+      resourceSpans(options.service, [
+        ...requests(options.succeeded, STATUS_CODE_OK),
+        ...requests(options.failed, STATUS_CODE_ERROR),
+      ]),
+    ],
+  };
+}
+
+/** One service's spans, tagged with the `service.name` the map names it by. */
+function resourceSpans(service: string, spans: WireSpan[]): WireResourceSpans {
+  return {
+    resource: { attributes: [{ key: "service.name", value: { stringValue: service } }] },
+    scopeSpans: [{ scope: { name: "nexovue-e2e" }, spans }],
   };
 }
 
@@ -125,9 +252,120 @@ export async function exportTrace(
   request: APIRequestContext,
   options: { endpoint: string; apiKey: string; batch: ExportBatch },
 ): Promise<void> {
-  const response = await request.post(new URL("/v1/traces", options.endpoint).toString(), {
-    headers: { "content-type": "application/json", "x-nexovue-key": options.apiKey },
-    data: options.batch,
+  await postSignal(request, "/v1/traces", options, options.batch);
+}
+
+/* ------------------------------------------------------------------ log records
+ *
+ * Door 2, for the logs and errors screens. An exception reaches the error grouping
+ * as a log record carrying `exception.type` / `exception.message` — the writer that
+ * promotes those two columns is the log one, and only the log one (P1-30).
+ */
+
+/** OTLP severity numbers, from opentelemetry/proto/logs/v1/logs.proto. */
+export const SEVERITY_INFO = 9;
+export const SEVERITY_ERROR = 17;
+
+/** A log record as a test talks about it: what it said, how loudly, and when. */
+export interface ReportedLog {
+  body: string;
+  severityNumber: number;
+  severityText: string;
+  /** Flat OTLP names, e.g. `exception.type`. The store nests them; we do not. */
+  attributes?: Record<string, string>;
+  /** How long before now the record claims to have been written. */
+  agoMs?: number;
+}
+
+interface WireLogRecord {
+  timeUnixNano: string;
+  observedTimeUnixNano: string;
+  severityNumber: number;
+  severityText: string;
+  body: { stringValue: string };
+  attributes: Array<{ key: string; value: { stringValue: string } }>;
+}
+
+interface WireResourceLogs {
+  resource: { attributes: Array<{ key: string; value: { stringValue: string } }> };
+  scopeLogs: Array<{ scope: { name: string }; logRecords: WireLogRecord[] }>;
+}
+
+export interface LogExportBatch {
+  resourceLogs: WireResourceLogs[];
+}
+
+export interface LogExport {
+  batch: LogExportBatch;
+  /** What each record claims as its own clock, in the order they were given. */
+  writtenAt: string[];
+}
+
+/** One service's worth of records, each stamped as far back as it asked to be. */
+export function logBatch(service: string, records: readonly ReportedLog[]): LogExport {
+  const now = Date.now();
+  const stamped = records.map((record) => now - (record.agoMs ?? BACKDATE_MS));
+
+  return {
+    writtenAt: stamped.map((instant) => new Date(instant).toISOString()),
+    batch: {
+      resourceLogs: [
+        {
+          resource: { attributes: [attribute("service.name", service)] },
+          scopeLogs: [
+            {
+              scope: { name: "nexovue-e2e" },
+              logRecords: records.map((record, index) => toWireRecord(record, stamped[index], now)),
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+function toWireRecord(
+  record: ReportedLog,
+  writtenAtMs: number,
+  observedAtMs: number,
+): WireLogRecord {
+  return {
+    timeUnixNano: String(Math.round(writtenAtMs * NS_PER_MS)),
+    observedTimeUnixNano: String(Math.round(observedAtMs * NS_PER_MS)),
+    severityNumber: record.severityNumber,
+    severityText: record.severityText,
+    body: { stringValue: record.body },
+    attributes: Object.entries(record.attributes ?? {}).map(([key, value]) =>
+      attribute(key, value),
+    ),
+  };
+}
+
+function attribute(key: string, value: string): { key: string; value: { stringValue: string } } {
+  return { key, value: { stringValue: value } };
+}
+
+/** Exports the records and asserts the receiver accepted every one of them. */
+export async function exportLogs(
+  request: APIRequestContext,
+  options: { endpoint: string; apiKey: string; batch: LogExportBatch },
+): Promise<void> {
+  await postSignal(request, "/v1/logs", options, options.batch);
+}
+
+/**
+ * One OTLP/HTTP export, checked. An empty response body is OTLP's "all of it,
+ * nothing partial" — a partial success would name what it dropped.
+ */
+async function postSignal(
+  request: APIRequestContext,
+  path: string,
+  credentials: { endpoint: string; apiKey: string },
+  payload: unknown,
+): Promise<void> {
+  const response = await request.post(new URL(path, credentials.endpoint).toString(), {
+    headers: { "content-type": "application/json", "x-nexovue-key": credentials.apiKey },
+    data: payload,
   });
 
   const body = await response.text();
