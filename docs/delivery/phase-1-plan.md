@@ -441,4 +441,136 @@ the reference implementations rather than only against our own reasoning.
 - **Network monitoring (category 10)** has no home in any phase. It needs eBPF kernel agents, which contradicts the standing decision not to build collection agents. Park it explicitly, or accept the contradiction deliberately?
 - **SIEM / security (category 11)** is marked "evaluate later" in the vision doc and appears in no plan. Same call needed.
 
+## 9. Scoping note — the four settings screens. **No decision taken; these are not committed tasks.**
+
+`/settings/project`, `/settings/api-keys`, `/settings/members` and `/settings/data` are routes
+that render a placeholder. **No task in this plan delivers any of them.** Building them means
+deciding roles, invitations, key lifecycle and what a retention change does to stored data — product
+decisions that have not been made, so this is a note to decide from, not a design and not a
+commitment. Written 2026-08-30 by reading the code, not the docs.
+
+**The whole of what the control plane can change today.** Every other endpoint is a read.
+
+`POST /signup` · `POST /auth/login` · `POST /auth/logout` · `POST /api-keys/{id}/revoke` ·
+`POST|PATCH|DELETE /checks` · `POST|DELETE /integrations` · `POST /deploys` and its webhook-secret
+create/rotate/delete.
+
+And one fact that shapes all four screens: **`signup/service.py` is the only code in the
+application that creates a `User`, a `Project` or an `ApiKey` row.** Everything else is a hand-written
+`INSERT`.
+
+### `/settings/project`
+
+**Served today:** `GET /projects` — the org's projects, for the top-bar selector. That is all.
+
+**Not served at all:** create a project, rename one, change its slug, soft-delete one, or write
+`retention_days`, `sampling_config` or `masking_config`.
+
+**What a customer cannot do:** *create a second project.* Signup mints exactly one, `production`.
+The model's own docstring says "a project is an environment — production, staging", and staging has
+nowhere to go. They also cannot tune sampling: `apps/workers/internal/pipeline/sample/policy.go`
+layers `projects.sampling_config` over the deployment default on every refresh, and nothing in the
+API ever writes that column — so changing a sampling rate is a SQL `UPDATE` by us.
+
+**Decisions it forces:** is more than one project in Phase 1 at all, or is one-per-org the Phase 1
+shape · who may create, rename or delete a project · what deleting one does to telemetry already in
+ClickHouse (`projects.deleted_at` exists; nothing drops partitions) · whether sampling is a customer
+control or a support action · same question for masking, which is irreversible on data already
+written.
+
+**Size:** medium-to-large, and **needs API work** — create, patch, soft-delete, plus separate writes
+for the two config documents if those are in scope. The largest of the four if they are.
+
+### `/settings/api-keys`
+
+**Served today:** `GET /api-keys?project_id` — id, name, `key_hint` (scheme plus four characters),
+created, last used, revoked. `POST /api-keys/{id}/revoke` — owner or admin only, one-way by design,
+and audited in the same transaction.
+
+**Not served at all: creating a key.** There is no `POST /api-keys`. Keys exist only because signup
+minted one.
+
+**What a customer cannot do:** *replace a leaked key.* Revocation works and is correctly
+irreversible — the module says so, and un-revoking would return a credential someone else holds to
+service. But the replacement for a revoked key is a new key, and there is no way to make one. So a
+customer with a leaked key chooses between stopping their own ingest and leaving the leak live,
+until we run an `INSERT` for them. This is the sharpest gap of the four, and it is a security gap
+rather than a convenience one.
+
+**Decisions it forces:** who may create a key — the same owner/admin gate as revoke, or anyone ·
+whether the secret is shown once (what the schema assumes: only a hash and a prefix are stored) or
+re-revealable, which would need a schema change · whether "rotate" is its own action with an overlap
+window, or just create-then-revoke by hand · whether live keys per project are capped · whether
+revoking the last live key needs a confirmation, given that it stops ingest and the service
+deliberately allows it.
+
+**Size:** small screen, **one endpoint** (`POST /api-keys`) — more if rotation-with-overlap is
+wanted. Cannot ship screen-only.
+
+### `/settings/members`
+
+**Served today:** nothing. No list, no invite, no role change, no removal. `GET /auth/me` returns the
+one signed-in user and their organization.
+
+**The schema is ready and unused:** `users.role` is an enum of `owner`/`admin`/`member`/`viewer`,
+and `invited_by` and `invited_at` exist. No endpoint writes any of them except signup, for the owner.
+
+**What a customer cannot do:** *add a second person to their organization, at all.* A five-person
+team today means five organizations with five isolated data sets, which cannot see each other's
+telemetry. Related: a role is read in exactly one place in the whole API — the revoke gate — and its
+comment says broader enforcement is F26, in Phase 2. A members screen with a role picker would be
+offering a setting that almost nothing reads.
+
+**Decisions it forces:** whether Phase 1 is multi-user at all or deliberately single-operator ·
+invitation by email (which needs an email sender this system does not have) or an admin-set password
+· what each of the four roles actually gates, and whether shipping the picker before F26 enforces it
+is a promise we would be breaking · whether a member may remove themselves, and what protects the
+last owner · whether removing a member ends their live sessions.
+
+**Size:** the largest by dependency rather than by screen. It needs an invite flow, probably email
+delivery, and it forces the role-enforcement question a phase earlier than planned. **Not
+screen-only.**
+
+### `/settings/data`
+
+**Served today:** `GET /usage` carries the organization's plan, including `raw_retention_days` and
+`derived_retention_days` — read-only, and the *plan's ceiling* rather than the project's own number.
+
+**Not served at all:** any write to `projects.retention_days` or `masking_config`; any export; any
+"delete my data".
+
+**How retention actually behaves today** — worth stating, because the decision turns on it. The
+`project_retention` view resolves `LEAST(projects.retention_days, plans.raw_retention_days)`; the
+worker stamps that number into a `retention_days` column on every row it writes; every ClickHouse
+table's TTL is `received_at + toIntervalDay(retention_days)`. **Retention is therefore per row and
+fixed at the moment of writing.** This narrows what P1-68 leaves as "todo": the stamp is live, and
+what is deferred is regenerating the TTL for parts already on disk.
+
+**The consequence, which is the decision:** a retention change made on this screen would apply only
+to rows written after it. Shortening would not remove anything already stored; lengthening would not
+bring anything back. A screen reading "retention: 7 days" while three-week-old spans are still
+queryable is untrue unless the copy says which of the two it means.
+
+**What a customer cannot do:** shorten retention after ingesting something they should not have,
+and change the masking rules that would have prevented it. Both are SQL `UPDATE`s today.
+
+**Decisions it forces:** whether a retention change is forward-only (cheap and honest, needs careful
+copy) or retroactive (that is P1-68, and shortening a TTL drops parts with no undo) · whether a
+project may ask for less than its plan grants, which the view already supports · whether masking is
+editable in product at all, given that it is irreversible on data already written and that a
+malformed document has already once silently stopped masking a project's custom keys (§7) · whether
+there is a "delete everything in this project", and who may press it · whether the audit trail —
+which already records key creation and revocation, sessions, integrations, checks and deploys — is
+surfaced here, since **no endpoint reads it anywhere in the product**.
+
+**Size:** the screen is small; the honest version needs `PATCH /projects/{id}` and settled copy.
+Retroactive retention is P1-68 and is not small.
+
+### Open questions this note cannot answer
+
+1. Does Phase 1 ship any of these four, and if not, what does a customer do about a leaked key?
+2. Is Phase 1 single-operator? Every other question about roles depends on that one.
+3. Is a retention change forward-only, or does P1-68 come forward to make it retroactive?
+4. Are sampling and masking customer controls, or support actions?
+
 *Update log: plan created 2026-08-25. Scope decisions folded in 2026-08-25 (D9–D12; tasks P1-55 → P1-58). Next action: P1-01 → P1-09 (M0).*

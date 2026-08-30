@@ -13,6 +13,7 @@ import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
 import { LogsScreen } from "@/features/logs/LogsScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
+import { ServiceDetailScreen } from "@/features/servicedetail/ServiceDetailScreen";
 import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
 import { ServicesScreen } from "@/features/services/ServicesScreen";
 import { SyntheticsScreen } from "@/features/synthetics/SyntheticsScreen";
@@ -72,8 +73,14 @@ const servicesRoute = createRoute({
 const serviceRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/services/$name",
-  component: placeholderFor("/services/$name"),
+  component: ServiceDetailRoute,
 });
+
+/** The route owns the parameter; the screen owns everything after it. */
+function ServiceDetailRoute() {
+  const { name } = serviceRoute.useParams();
+  return <ServiceDetailScreen serviceName={name} />;
+}
 
 const serviceMapRoute = createRoute({
   getParentRoute: () => shellRoute,
