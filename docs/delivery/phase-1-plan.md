@@ -220,11 +220,11 @@ effective dates so a repricing does not rewrite what was already charged.
 | P1-56 | Service map | dependency graph from P1-55 edges; edge call rate/error/latency; click-through to a service | ✅ done |
 | P1-42 | Errors screen | grouped exceptions, counts, first/last seen, stack traces | ✅ done |
 | P1-43 | Logs screen | search, filters, **live tail** via WebSocket. Fed by a cursored ClickHouse poll per project, not a broker: nothing publishes log records to Redis today, and pub/sub loses whatever arrived while a viewer was reconnecting. A publish step in the Go log writer is the root fix and is not done | ✅ done |
-| P1-44 | Infrastructure screen | hosts/containers: CPU, memory, disk, network. K8s metrics are ingested and queryable, but pod/node/namespace views are Phase 2 | todo |
+| P1-44 | Infrastructure screen | hosts/containers: CPU, memory, disk, network. K8s metrics are ingested and queryable, but pod/node/namespace views are Phase 2 | ✅ done |
 | P1-45 | Synthetics screen | check list, status, latency trends, failure detail with screenshot | ✅ done |
-| P1-46 | Database screen | slow queries, mean time, calls, connection health | todo |
+| P1-46 | Database screen | slow queries, mean time, calls, connection health | ✅ done |
 | P1-47 | RUM screen | Core Web Vitals by page/geo/device; JS errors | todo |
-| P1-48 | Usage & cost view | per-tenant ingestion counters → usage table → projected cost in-product | todo |
+| P1-48 | Usage & cost view | per-tenant ingestion counters → usage table → projected cost in-product | ✅ done |
 | P1-61 | E2E screen coverage | Critical path per screen against the running stack, run by `just e2e`. **Not** `just check` — P1-60 settled that, and the justfile follows it: the commit gate must not require docker | ✅ done |
 | P1-62 | **OTel Demo realism gate** | `just otel-demo up` runs the OpenTelemetry Demo (18 services, ~10 languages) against our receiver. Trimmed to twenty containers it needs **1641 MiB**, not the 4–8 GB estimated, because the demo's declared limits are ceilings rather than reservations — no Docker allocation change was needed. Not a daily dependency. **What it found is the deliverable**: one malformed log record stopped ingest for every tenant for 41 minutes; five of twelve services had three blank promoted columns; the `queue` edge kind has never produced a row; span re-consumption after a crash duplicates rows | ✅ done |
 
