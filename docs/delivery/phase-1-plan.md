@@ -171,6 +171,34 @@ Known and accepted: DNS rebinding defeats target validation, because a check is
 validated in the API and fetched minutes later elsewhere. Closing it needs the
 prober to check the address it actually connected to.
 
+#### M6 decisions, taken 2026-08-30
+
+**Infrastructure and Usage screens are deferred, not dropped.** Both endpoints
+are built and tested; neither has data. A distinct across all five metric tables
+returns zero rows matching `system.*`, `container.*`, `host.*`, `process.*` or
+`k8s.*`, and no resource carries a `host` key — nobody is running a collector's
+hostmetrics receiver against us. `usage_daily` is empty because **no code writes
+it**: not the worker, not the scheduler, not the receiver. The screens are a
+day's work once something feeds them.
+
+**That leaves a job nobody had noticed:** counting ingestion into `usage_daily`.
+It belongs in the worker or the scheduler and is a prerequisite for both the
+usage screen and any billing.
+
+**Endpoint ranking: failures first, then latency.** Already what
+`services/queries.WORST_FIRST` does — `error_count DESC, p95 DESC,
+request_count DESC`. No magic slow-threshold, because a report export is
+legitimately slow and would sit at the top of every list forever. The screen
+offers a "sort by slowest" toggle for the other question. A per-endpoint latency
+objective is the proper answer and is deferred: it needs a column, an editing
+surface, and a decision about endpoints nobody has set one for.
+
+**Screen order: Services, Synthetics, Service map**, then Errors and Logs.
+
+**Still open:** where a price lives — a column on `plans`, or a table with
+effective dates so a repricing does not rewrite what was already charged.
+`plans` holds no money at all today, and a test fails the day that changes.
+
 ### M5 — Door 3 (browser / RUM)
 *Exit: real user data from a script tag, correlated to backend traces.*
 
