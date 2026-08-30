@@ -148,7 +148,12 @@ migrate-pg:
 migrate-ch:
     migrate -path deploy/clickhouse/migrations -database "{{clickhouse_migrate_dsn}}" up
 
-# Roll both back one step, to prove the migrations are reversible
+# Roll both back one step, to prove the migrations are reversible.
+#
+# It rolls back BOTH stores. Proving one ClickHouse migration reversible also
+# takes Postgres down a version and back, which recreates whatever tables that
+# migration owns and loses their rows — it has caught two people (ADR 0079).
+# Run the single-store line you actually need instead.
 migrate-down:
     POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api alembic -c apps/api/alembic.ini downgrade -1
     migrate -path deploy/clickhouse/migrations -database "{{clickhouse_migrate_dsn}}" down 1
