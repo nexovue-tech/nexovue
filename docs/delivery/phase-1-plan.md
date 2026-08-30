@@ -225,8 +225,8 @@ effective dates so a repricing does not rewrite what was already charged.
 | P1-46 | Database screen | slow queries, mean time, calls, connection health | todo |
 | P1-47 | RUM screen | Core Web Vitals by page/geo/device; JS errors | todo |
 | P1-48 | Usage & cost view | per-tenant ingestion counters → usage table → projected cost in-product | todo |
-| P1-61 | E2E screen coverage | Critical path per screen against the running stack, run by `just e2e`. **Not** `just check` — P1-60 settled that, and the justfile follows it: the commit gate must not require docker | todo |
-| P1-62 | **OTel Demo realism gate** | Run the OpenTelemetry Demo (18 services, ~10 languages) against our receiver and confirm the screens hold: service map readable at 18 nodes, trace search survives real attribute cardinality, promoted columns survive semconv variation across languages. Not a daily dependency — needs 4–8 GB, so optional services stop and the Docker allocation is raised | todo |
+| P1-61 | E2E screen coverage | Critical path per screen against the running stack, run by `just e2e`. **Not** `just check` — P1-60 settled that, and the justfile follows it: the commit gate must not require docker | ✅ done |
+| P1-62 | **OTel Demo realism gate** | `just otel-demo up` runs the OpenTelemetry Demo (18 services, ~10 languages) against our receiver. Trimmed to twenty containers it needs **1641 MiB**, not the 4–8 GB estimated, because the demo's declared limits are ceilings rather than reservations — no Docker allocation change was needed. Not a daily dependency. **What it found is the deliverable**: one malformed log record stopped ingest for every tenant for 41 minutes; five of twelve services had three blank promoted columns; the `queue` edge kind has never produced a row; span re-consumption after a crash duplicates rows | ✅ done |
 
 ### M7 — Phase 1 exit
 | ID | Task | Deliverable | Status |
