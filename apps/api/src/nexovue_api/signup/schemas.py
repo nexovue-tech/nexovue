@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr, field_serializer
 
 from nexovue_api.auth.schemas import EmailAddress, OrganizationSummary, Password
 from nexovue_api.data.postgres.models import NAME_MAX_LENGTH
@@ -28,9 +28,19 @@ class SignupResponse(BaseModel):
 
     `api_key` is the only time the plaintext key exists outside the caller's
     request: what is stored is a hash, so this response cannot be reissued.
+
+    A `SecretStr`, so the redaction travels with the value — repr, str and
+    `model_dump()` render `**********`, and only the serializer below discloses
+    it. See `apikeys.schemas.ApiKeyCreated`, which does the same for the key a
+    rotation mints.
     """
 
     organization: OrganizationSummary
     project: ProjectSummary
-    api_key: str
+    api_key: SecretStr
     otlp_endpoint: str
+
+    @field_serializer("api_key", when_used="json")
+    def _disclose_key_on_the_wire(self, api_key: SecretStr) -> str:
+        """The one sanctioned disclosure: the signup response body, once."""
+        return api_key.get_secret_value()

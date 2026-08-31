@@ -26,6 +26,10 @@ PROJECT = "project-1"
 GROUP_A = "1111aaaa1111aaaa"
 GROUP_B = "2222bbbb2222bbbb"
 
+# The services the one fake group happens in. A name outside this set reads as silent.
+GROUP_SERVICES = ("checkout", "payments")
+SILENT_SERVICE = "never-deployed"
+
 TRACE_A = "aa" * 16
 SPAN_A = "bb" * 8
 
@@ -91,6 +95,7 @@ class FakeErrorStore:
     def __init__(self, groups: dict[str, str]) -> None:
         # tenant -> the one group id that tenant owns
         self._groups = groups
+        self.last_sql = ""
         self.last_parameters: dict[str, Any] = {}
 
     async def query(
@@ -100,6 +105,7 @@ class FakeErrorStore:
         settings: dict[str, Any] | None = None,
     ) -> FakeQueryResult:
         bound = dict(parameters or {})
+        self.last_sql = sql
         self.last_parameters = bound
         owned = self._groups.get(bound["tenant_id"])
         if owned is None:
@@ -107,6 +113,10 @@ class FakeErrorStore:
 
         asked_for = bound.get("group_id")
         if asked_for is not None and asked_for != owned:
+            return FakeQueryResult([], [])
+
+        named = bound.get("service_name")
+        if named is not None and named not in GROUP_SERVICES:
             return FakeQueryResult([], [])
 
         if "GROUP BY group_id" in sql:
@@ -173,10 +183,20 @@ async def test_two_organizations_cannot_read_each_others_error_groups() -> None:
     start, end = _window()
 
     for_a = await service.list_error_groups(
-        _repository(TENANT_A), project_id=PROJECT, from_time=start, to_time=end, limit=50
+        _repository(TENANT_A),
+        project_id=PROJECT,
+        service_name=None,
+        from_time=start,
+        to_time=end,
+        limit=50,
     )
     for_b = await service.list_error_groups(
-        _repository(TENANT_B), project_id=PROJECT, from_time=start, to_time=end, limit=50
+        _repository(TENANT_B),
+        project_id=PROJECT,
+        service_name=None,
+        from_time=start,
+        to_time=end,
+        limit=50,
     )
 
     assert [group.group_id for group in for_a.groups] == [GROUP_A]
@@ -211,7 +231,12 @@ async def test_an_organization_with_no_errors_gets_an_empty_list_and_not_a_404()
     empty = TenantScopedRepository(FakeErrorStore({}), tenant_id="org-with-nothing")  # type: ignore[arg-type]
 
     page = await service.list_error_groups(
-        empty, project_id=PROJECT, from_time=start, to_time=end, limit=50
+        empty,
+        project_id=PROJECT,
+        service_name=None,
+        from_time=start,
+        to_time=end,
+        limit=50,
     )
 
     assert page.groups == []
@@ -220,16 +245,101 @@ async def test_an_organization_with_no_errors_gets_an_empty_list_and_not_a_404()
 def test_every_error_grouping_query_carries_the_tenant_binding() -> None:
     """The repository would refuse these, but failing here names the culprit."""
     for sql in (
-        queries.error_groups_sql(one_group=False),
-        queries.error_groups_sql(one_group=True),
+        queries.error_groups_sql(one_group=False, one_service=False),
+        queries.error_groups_sql(one_group=True, one_service=False),
         queries.GROUP_OCCURRENCES_SQL,
     ):
         assert TENANT_BINDING in sql
 
 
+# -------------------------------------------------------------- narrowing to one
+
+
+async def test_naming_a_service_narrows_the_statement_rather_than_the_result() -> None:
+    """Filtering a capped page in Python would silently drop a quiet service's groups."""
+    start, end = _window()
+    store = FakeErrorStore({TENANT_A: GROUP_A})
+
+    await service.list_error_groups(
+        TenantScopedRepository(store, tenant_id=TENANT_A),  # type: ignore[arg-type]
+        project_id=PROJECT,
+        service_name=GROUP_SERVICES[0],
+        from_time=start,
+        to_time=end,
+        limit=50,
+    )
+
+    assert queries.ONE_SERVICE_CLAUSE in store.last_sql
+    assert store.last_parameters["service_name"] == GROUP_SERVICES[0]
+
+
+def test_the_service_filter_reaches_both_signals_and_not_only_the_spans() -> None:
+    """An exception arrives as a span event or as a log record; one filter misses half."""
+    narrowed = queries.error_groups_sql(one_group=False, one_service=True)
+
+    assert narrowed.count(queries.ONE_SERVICE_CLAUSE) == 2
+
+
+def test_the_service_name_is_bound_and_never_spliced_into_the_statement() -> None:
+    """A name is a caller value: it narrows a read, and can never widen a tenant scope."""
+    assert queries.ONE_SERVICE_CLAUSE == "AND service_name = {service_name:String}"
+
+
+async def test_asking_for_every_service_binds_no_service_name() -> None:
+    start, end = _window()
+    store = FakeErrorStore({TENANT_A: GROUP_A})
+
+    await service.list_error_groups(
+        TenantScopedRepository(store, tenant_id=TENANT_A),  # type: ignore[arg-type]
+        project_id=PROJECT,
+        service_name=None,
+        from_time=start,
+        to_time=end,
+        limit=50,
+    )
+
+    assert queries.ONE_SERVICE_CLAUSE not in store.last_sql
+    assert "service_name" not in store.last_parameters
+
+
+async def test_a_service_that_threw_nothing_is_an_empty_list_and_not_a_404() -> None:
+    """Silent in this window is not the same fact as no such service."""
+    start, end = _window()
+
+    page = await service.list_error_groups(
+        _repository(TENANT_A),
+        project_id=PROJECT,
+        service_name=SILENT_SERVICE,
+        from_time=start,
+        to_time=end,
+        limit=50,
+    )
+
+    assert page.groups == []
+
+
+async def test_the_group_detail_is_never_narrowed_to_one_service() -> None:
+    """The other services a group happens in are the point of opening it."""
+    start, end = _window()
+    store = FakeErrorStore({TENANT_A: GROUP_A})
+
+    await service.get_error_group(
+        TenantScopedRepository(store, tenant_id=TENANT_A),  # type: ignore[arg-type]
+        project_id=PROJECT,
+        group_id=GROUP_A,
+        from_time=start,
+        to_time=end,
+    )
+
+    assert queries.ONE_SERVICE_CLAUSE not in queries.GROUP_OCCURRENCES_SQL
+    # The marker is spliced, so a statement that still carries one was never built.
+    assert queries._ONE_SERVICE_PLACEHOLDER not in queries.GROUP_OCCURRENCES_SQL
+    assert "service_name" not in store.last_parameters
+
+
 def test_both_signals_are_read_because_an_exception_arrives_either_way() -> None:
     """Span events are being deprecated in favour of log records; both persist."""
-    sql = queries.error_groups_sql(one_group=False)
+    sql = queries.error_groups_sql(one_group=False, one_service=False)
 
     assert "FROM spans" in sql
     assert "FROM logs" in sql
@@ -242,7 +352,12 @@ async def test_the_group_reports_the_template_the_grouping_was_done_on() -> None
     start, end = _window()
 
     page = await service.list_error_groups(
-        _repository(TENANT_A), project_id=PROJECT, from_time=start, to_time=end, limit=50
+        _repository(TENANT_A),
+        project_id=PROJECT,
+        service_name=None,
+        from_time=start,
+        to_time=end,
+        limit=50,
     )
     group = page.groups[0]
 
@@ -271,6 +386,7 @@ async def test_a_group_the_sdk_named_says_so() -> None:
     page = await service.list_error_groups(
         TenantScopedRepository(store, tenant_id=TENANT_A),  # type: ignore[arg-type]
         project_id=PROJECT,
+        service_name=None,
         from_time=start,
         to_time=end,
         limit=50,
@@ -340,6 +456,7 @@ async def test_the_query_is_bounded_on_our_receive_clock_as_well_as_the_customer
     await service.list_error_groups(
         TenantScopedRepository(store, tenant_id=TENANT_A),  # type: ignore[arg-type]
         project_id=PROJECT,
+        service_name=None,
         from_time=start,
         to_time=end,
         limit=50,

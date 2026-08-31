@@ -20,6 +20,7 @@ from nexovue_api.services.schemas import (
     EndpointHealth,
     EndpointListResponse,
     ServiceHealth,
+    ServiceHealthResponse,
     ServiceListResponse,
     ServiceTrend,
     ServiceTrendResponse,
@@ -30,6 +31,10 @@ from nexovue_api.services.schemas import (
 # exists so one request cannot become an unbounded response.
 DEFAULT_SERVICE_LIMIT: Final = 100
 MAX_SERVICE_LIMIT: Final = 500
+
+# Grouping by `service_name` with one name bound can only produce one row; the limit
+# says so to ClickHouse rather than trusting the shape.
+ONE_SERVICE_LIMIT: Final = 1
 
 # Endpoints outnumber services by a route table, so the page is larger.
 DEFAULT_ENDPOINT_LIMIT: Final = 100
@@ -118,16 +123,72 @@ async def list_services(
     limit: int,
 ) -> ServiceListResponse:
     """Every service that reported in the window, worst first."""
-    rows = await repository.query(
-        queries.SERVICES_SQL,
-        _window_parameters(project_id, from_time, to_time) | {"limit": limit},
-    )
-    minutes = rollup.window_minutes(from_time, to_time)
     return ServiceListResponse(
         window_start=from_time,
         window_end=to_time,
-        services=[_to_service(row, minutes) for row in rows],
+        services=await _read_services(
+            repository,
+            project_id=project_id,
+            service_name=None,
+            from_time=from_time,
+            to_time=to_time,
+            limit=limit,
+        ),
     )
+
+
+async def get_service(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    service_name: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> ServiceHealthResponse:
+    """One service's aggregate over the window, or nothing when it was silent.
+
+    An unknown name is an empty answer rather than a 404, for the same reason
+    `list_endpoints` gives: the rollup only knows which services reported in *this*
+    window, so "no rows" means "silent here", which is not "does not exist".
+    """
+    found = await _read_services(
+        repository,
+        project_id=project_id,
+        service_name=service_name,
+        from_time=from_time,
+        to_time=to_time,
+        limit=ONE_SERVICE_LIMIT,
+    )
+    return ServiceHealthResponse(
+        window_start=from_time,
+        window_end=to_time,
+        service=found[0] if found else None,
+    )
+
+
+async def _read_services(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    service_name: str | None,
+    from_time: datetime,
+    to_time: datetime,
+    limit: int,
+) -> list[ServiceHealth]:
+    """The ranking, for the whole project or for one named service.
+
+    One statement either way. The detail screen and the overview therefore show the
+    same numbers for the same service, because they are the same read.
+    """
+    parameters = _window_parameters(project_id, from_time, to_time) | {"limit": limit}
+    if service_name is not None:
+        parameters["service_name"] = service_name
+
+    rows = await repository.query(
+        queries.services_sql(one_service=service_name is not None), parameters
+    )
+    minutes = rollup.window_minutes(from_time, to_time)
+    return [_to_service(row, minutes) for row in rows]
 
 
 async def list_endpoints(

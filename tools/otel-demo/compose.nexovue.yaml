@@ -25,8 +25,41 @@ services:
   cart:
     environment: *nexovue-key
 
+  # Two of upstream's memory limits are too tight for this platform, and both
+  # services die on them rather than degrade: exit 137 in a restart loop.
+  # A crash-looping service is not the telemetry this gate exists to judge, so
+  # the limits are raised here rather than in the pinned clone.
+  #
+  # Both also carry GOMEMLIMIT=16MiB upstream, sized to the 20 MiB container.
+  # Raising only the container limit stops the kill but leaves the Go runtime
+  # collecting against a 16 MiB target, which trades OOM kills for GC thrash —
+  # so both numbers move together. YAML cannot append to an aliased sequence, so
+  # these two spell the key line out instead of using the anchor above.
+  #
+  # checkout: measured 62 OOM kills in one run. It is also the only Kafka
+  # producer in the demo, so its crash loop takes the queue edge with it. It
+  # settles at 20.2 MiB resident, i.e. exactly on the upstream limit, which is
+  # why it died rather than ran slow.
   checkout:
-    environment: *nexovue-key
+    environment:
+      - OTEL_EXPORTER_OTLP_HEADERS=x-nexovue-key=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
+      - GOMEMLIMIT=96MiB
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # product-catalog: measured 22 OOM kills in ten minutes. cart, checkout,
+  # recommendation and frontend all call it, so its restarts show up as
+  # timeouts across most of the map.
+  product-catalog:
+    environment:
+      - OTEL_EXPORTER_OTLP_HEADERS=x-nexovue-key=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
+      - GOMEMLIMIT=96MiB
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   currency:
     environment: *nexovue-key
@@ -41,9 +74,6 @@ services:
     environment: *nexovue-key
 
   payment:
-    environment: *nexovue-key
-
-  product-catalog:
     environment: *nexovue-key
 
   quote:

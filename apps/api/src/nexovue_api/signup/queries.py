@@ -10,7 +10,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexovue_api.data.postgres.models import ApiKey, Organization, User
+from nexovue_api.data.postgres.models import Organization, User
 
 
 async def email_is_taken(session: AsyncSession, email: str) -> bool:
@@ -23,8 +23,3 @@ async def taken_slugs(session: AsyncSession, base: str) -> set[str]:
     """Every slug that could collide with `base` or one of its suffixed forms."""
     statement = select(Organization.slug).where(Organization.slug.startswith(base))
     return set((await session.scalars(statement)).all())
-
-
-async def key_prefix_is_taken(session: AsyncSession, key_prefix: str) -> bool:
-    statement = select(ApiKey.id).where(ApiKey.key_prefix == key_prefix).limit(1)
-    return await session.scalar(statement) is not None

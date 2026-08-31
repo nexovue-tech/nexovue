@@ -60,6 +60,14 @@ export function ServiceNode({ data }: NodeProps<ServiceNodeShape>) {
 
 /** The full sentence the node abbreviates, for the hover the abbreviation earns. */
 function describe(data: ServiceNodeShape["data"]): string {
+  const addresses = data.addresses ?? [];
+  if (addresses.length > 0) {
+    const over = data.peerKind ? ` over ${data.peerKind}` : "";
+    // The addresses themselves: the node aggregates, and the hover gives the detail
+    // back, because the stored rows kept every one of them.
+    return `${addresses.length} ${addresses.length === 1 ? "host" : "hosts"} reached${over} by address, with no telemetry of their own — ${addresses.join(", ")}. Addresses change on restart, so they are drawn as one dependency rather than one node each.`;
+  }
+
   if (!data.instrumented) {
     const named = data.peerKind ? ` A caller reached it over ${data.peerKind}.` : "";
     return `${data.name} — something calls this, and it sends us no telemetry of its own.${named}`;
@@ -71,6 +79,17 @@ function describe(data: ServiceNodeShape["data"]): string {
       : `sends ${formatRate(data.callsPerMinute)} calls a minute`;
   const failures = data.errorCount > 0 ? `, ${data.errorCount} of them failing` : "";
   return `${data.name} ${traffic}${failures}.`;
+}
+
+/**
+ * The second line of a peer node: how many machines it stands for, or that we have
+ * nothing from it. `no telemetry` stays for a single named peer because a name in
+ * parentheses is our word for it, not its own.
+ */
+function describeInstances(addresses: readonly string[] | undefined): string {
+  const count = addresses?.length ?? 0;
+  if (count === 0) return "no telemetry";
+  return `${count} ${count === 1 ? "instance" : "instances"}`;
 }
 
 function ServiceNodeBody({ data }: { data: ServiceNodeShape["data"] }) {
@@ -100,9 +119,13 @@ function ServiceNodeBody({ data }: { data: ServiceNodeShape["data"] }) {
             {data.flow === "serves" ? "in" : "out"} {formatRate(data.callsPerMinute)}/min
           </span>
         ) : (
-          // The technology is the new information, so it leads. `no telemetry` stays
-          // because a name in parentheses is our word for the peer, not its own.
-          <span className="truncate">{data.peerKind ? `${data.peerKind} · ` : ""}no telemetry</span>
+          // The technology is the new information, so it leads. For a group of
+          // addresses the instance count replaces `no telemetry`, because how many
+          // there are is the fact the collapsed node would otherwise have hidden.
+          <span className="truncate">
+            {data.peerKind ? `${data.peerKind} · ` : ""}
+            {describeInstances(data.addresses)}
+          </span>
         )}
         {data.errorCount > 0 ? (
           <span className={`shrink-0 ${HEALTH_LABEL[data.health]}`}>

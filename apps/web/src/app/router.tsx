@@ -16,6 +16,7 @@ import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
 import { ServiceDetailScreen } from "@/features/servicedetail/ServiceDetailScreen";
 import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
 import { ServicesScreen } from "@/features/services/ServicesScreen";
+import { ApiKeysScreen } from "@/features/settings/ApiKeysScreen";
 import { SyntheticsScreen } from "@/features/synthetics/SyntheticsScreen";
 import { parseTraceFilters, toSearchParams } from "@/features/traces/filters";
 import { TraceListScreen } from "@/features/traces/TraceListScreen";
@@ -163,7 +164,7 @@ const settingsProjectRoute = createRoute({
 const settingsApiKeysRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/api-keys",
-  component: placeholderFor("/settings/api-keys"),
+  component: ApiKeysScreen,
 });
 
 const settingsMembersRoute = createRoute({

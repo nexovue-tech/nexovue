@@ -36,12 +36,30 @@ function day(dayString: string, projectId: string, overrides: Partial<ProjectDay
 }
 
 /**
+ * The month is deliberately not the range: four services in the browsed thirty days,
+ * seven over August. A cost computed from the number on the screen would be wrong,
+ * which is what the money tests below check for.
+ */
+const PERIOD: UsageResponse["period"] = {
+  first_day: "2026-08-01",
+  last_day: "2026-08-31",
+  settled: true,
+  services: 7,
+  billed_services: 7,
+  bytes_ingested: 90_000_000_000,
+  service_cost_minor_units: null,
+  currency: null,
+  included_bytes: null,
+};
+
+/**
  * Two projects running three services each, every day of the range — and four
  * distinct services between them, because they share one name.
  */
 const USAGE: UsageResponse = {
   plan: { slug: "pro", name: "Pro", raw_retention_days: 30, derived_retention_days: 395 },
   price: null,
+  period: PERIOD,
   from_day: RANGE.from,
   to_day: RANGE.to,
   settled: true,
@@ -53,13 +71,22 @@ const USAGE: UsageResponse = {
     services: 4,
   },
   days: [day("2026-08-29", PRODUCTION), day("2026-08-29", STAGING)],
+  cardinality: [],
 };
 
 const PRICED: UsageResponse["price"] = {
   effective_from: "2026-01-01",
   currency: "USD",
-  price_per_service_cents: 1_000,
+  price_per_service_minor_units: 1_000,
   max_billed_services: 120,
+  included_bytes_per_service: null,
+};
+
+/** The same month, priced: seven services at $10 is $70. */
+const COSTED: UsageResponse["period"] = {
+  ...PERIOD,
+  service_cost_minor_units: 7_000,
+  currency: "USD",
 };
 
 const VIEWPORT_HEIGHT = 800;
@@ -169,21 +196,126 @@ describe("UsageView", () => {
     const rendered = readable(render());
 
     expect(rendered).toContain("Not priced");
+    expect(rendered).toContain("No cost shown");
     expect(rendered).toContain("No price is recorded for the Pro plan");
     expect(rendered).not.toContain("$");
     expect(rendered).not.toContain("0.00");
   });
 
-  it("shows the rate beside the quantity and never multiplies them", () => {
+  it("costs the month, not the range of days on the screen", () => {
+    // Seven services in August at $10; the table beside it shows four for the
+    // browsed thirty days. Multiplying the visible number gives $40, and that
+    // is the mistake this test exists to catch.
+    const rendered = readable(render({ usage: { ...USAGE, price: PRICED, period: COSTED } }));
+
+    expect(rendered).toContain("$70.00");
+    expect(rendered).toContain("7 services in August 2026, at the rate in force.");
+    expect(rendered).not.toContain("$40");
+  });
+
+  it("says what the cost leaves out", () => {
+    const rendered = readable(render({ usage: { ...USAGE, price: PRICED, period: COSTED } }));
+
+    expect(rendered).toContain("covers the services only");
+    expect(rendered).toContain("volume above the included allowance");
+  });
+
+  it("shows the rate beside the quantity it is charged on", () => {
     const rendered = readable(render({ usage: { ...USAGE, price: PRICED } }));
 
     expect(rendered).toContain("$10.00 per service");
     expect(rendered).toContain("In force since Jan 1, 2026.");
     expect(rendered).toContain("At most 120 services are billed.");
-    expect(rendered).toContain("Nothing here is an invoice.");
-    // $10.00 × 4 services. A projected cost is not a number the API returns, and
-    // inventing one here is the failure this test exists to catch.
-    expect(rendered).not.toContain("$40");
+  });
+
+  it("marks a month still being metered rather than showing a quiet small number", () => {
+    const metering = { ...COSTED, settled: false };
+    const container = render({ usage: { ...USAGE, price: PRICED, period: metering } });
+    const rendered = readable(container);
+
+    expect(rendered).toContain("$70.00");
+    expect(rendered).toContain("still metering");
+    expect(rendered).toContain("August 2026 is still being metered, so this will grow.");
+    expect(container.innerHTML).toContain("text-warning-text");
+  });
+
+  it("shows the volume allowance only when one is recorded", () => {
+    expect(readable(render())).not.toContain("included");
+
+    const withAllowance = readable(
+      render({
+        usage: {
+          ...USAGE,
+          price: PRICED,
+          period: { ...COSTED, included_bytes: 100_000_000_000 },
+        },
+      }),
+    );
+    expect(withAllowance).toContain("90.0 GB of 100.0 GB included");
+  });
+
+  /* -------------------------------------------------------------- cardinality */
+
+  it("shows a project's service count change, and the names behind it", () => {
+    const rendered = readable(
+      render({
+        usage: {
+          ...USAGE,
+          cardinality: [
+            {
+              project_id: PRODUCTION,
+              services_now: 12,
+              services_before: 3,
+              window_days: 7,
+              families: [
+                {
+                  stem: "checkout",
+                  kind: "kubernetes-pod",
+                  members: 9,
+                  examples: ["checkout-7d9f8b6c4d-x2k9p"],
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(rendered).toContain("production");
+    expect(rendered).toContain("12 services, up from 3 in the 7 days before.");
+    expect(rendered).toContain("a Kubernetes pod suffix");
+    expect(rendered).toContain("checkout-7d9f8b6c4d-x2k9p");
+    expect(rendered).toContain("service.instance.id");
+  });
+
+  it("shows the change without an accusation when no cause was found", () => {
+    const rendered = readable(
+      render({
+        usage: {
+          ...USAGE,
+          cardinality: [
+            {
+              project_id: PRODUCTION,
+              services_now: 12,
+              services_before: 3,
+              window_days: 7,
+              families: [],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(rendered).toContain("12 services, up from 3 in the 7 days before.");
+    expect(rendered).not.toContain("service.instance.id");
+    expect(rendered).not.toContain("billed as its own service");
+  });
+
+  it("says nothing at all when no project's names look wrong", () => {
+    const rendered = readable(render());
+
+    expect(rendered).not.toContain("up from");
+    expect(rendered).not.toContain("service.instance.id");
   });
 
   it("reports the range total the API sent, never the sum of the days", () => {

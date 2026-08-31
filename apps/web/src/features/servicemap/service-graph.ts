@@ -12,6 +12,7 @@ import { Position } from "@xyflow/react";
 
 import { EDGE_QUEUE, isPlaceholderService, type ServiceEdge, type ServiceMapResponse } from "./api";
 import { layoutServiceGraph, NODE_HEIGHT, NODE_WIDTH } from "./graph-layout";
+import { collapseAddressPeers, type HostGroup } from "./peer-hosts";
 
 export const SERVICE_NODE_TYPE = "service";
 export const DEPENDENCY_EDGE_TYPE = "dependency";
@@ -56,6 +57,11 @@ export interface ServiceNodeData extends Record<string, unknown> {
    * node that never reported for itself has one, and only when a caller said so.
    */
   peerKind?: string;
+  /**
+   * The addresses this node stands for, when it is a group of peers the callers could
+   * only name by address. Sorted, and empty for every other node.
+   */
+  addresses?: readonly string[];
   /** 0-based index into the categorical palette. Placeholders get none. */
   seriesIndex?: number;
 }
@@ -95,25 +101,55 @@ const EMPTY_GRAPH: ServiceGraph = { nodes: [], edges: [], failingEdgeCount: 0 };
 export function buildServiceGraph(map: ServiceMapResponse | undefined): ServiceGraph {
   if (!map || map.edges.length === 0) return EMPTY_GRAPH;
 
+  // Peers the callers could only name by address become one node per technology before
+  // anything is laid out, so the layout, the palette and the lanes all see the graph
+  // that is actually drawn. The API's own answer keeps every address.
+  const { edges, groups } = collapseAddressPeers(map.edges);
+  if (edges.length === 0) return EMPTY_GRAPH;
+
+  const named = map.services.filter((name) => !groups.has(name) && !isCollapsed(name, groups));
   const layout = layoutServiceGraph(
-    map.services,
-    map.edges.map((edge) => ({ from: edge.caller, to: edge.callee })),
+    named,
+    edges.map((edge) => ({ from: edge.caller, to: edge.callee })),
   );
-  const traffic = trafficByService(map.edges);
-  const lanes = laneOffsets(map.edges, layout.placements);
-  const busiest = Math.max(...map.edges.map((edge) => edge.calls_per_minute));
+  const traffic = trafficByService(edges);
+  const lanes = laneOffsets(edges, layout.placements);
+  const busiest = Math.max(...edges.map((edge) => edge.calls_per_minute));
   const palette = seriesIndexes([...layout.placements.keys()]);
 
-  const kinds = peerKinds(map.edges);
+  const kinds = peerKinds(edges);
   const nodes = [...layout.placements.entries()].map(([name, placement]) =>
-    toNode(name, placement, traffic.get(name), palette.get(name), kinds.get(name)),
+    toNode(
+      name,
+      placement,
+      traffic.get(name),
+      palette.get(name),
+      kinds.get(name),
+      groups.get(name),
+    ),
   );
 
   return {
     nodes,
-    edges: map.edges.map((edge, index) => toEdge(edge, busiest, lanes[index])),
-    failingEdgeCount: map.edges.filter((edge) => edge.error_count > 0).length,
+    edges: edges.map((edge, index) => toEdge(edge, busiest, lanes[index])),
+    failingEdgeCount: edges.filter((edge) => edge.error_count > 0).length,
   };
+}
+
+/**
+ * Whether the API's node list names a peer that has been folded into a group.
+ *
+ * The list is derived from the uncollapsed edges, so it still carries every address.
+ * Passing one through would place a node with no edge left to it — an entry point that
+ * is really a Redis host, drawn in the left-hand column where the eye starts.
+ */
+function isCollapsed(name: string, groups: ReadonlyMap<string, HostGroup>): boolean {
+  if (!isPlaceholderService(name)) return false;
+  const inner = name.slice(1, -1);
+  for (const group of groups.values()) {
+    if (group.addresses.includes(inner)) return true;
+  }
+  return false;
 }
 
 /* ----------------------------------------------------------------------- internals */
@@ -183,6 +219,7 @@ function toNode(
   traffic: ServiceTraffic | undefined,
   seriesIndex: number | undefined,
   peerKind: string | undefined,
+  hosts: HostGroup | undefined,
 ): ServiceNode {
   const inbound = traffic?.inboundPerMinute ?? 0;
   const serves = inbound > 0;
@@ -209,6 +246,7 @@ function toNode(
       health: healthOf(errorCount, errorRate),
       instrumented: !isPlaceholderService(name),
       peerKind,
+      addresses: hosts?.addresses,
       seriesIndex,
     },
   };

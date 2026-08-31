@@ -150,8 +150,9 @@ type topic struct {
 	name          string
 	consumerGroup string
 	dlqTopic      string
-	maxRows       int
-	maxDelay      time.Duration
+	// Messages, not rows: a meter counts what arrived, not what was stored.
+	maxMessages int
+	maxDelay    time.Duration
 }
 
 // usageGroupSuffix keeps this job's consumer group distinct from the group that
@@ -172,7 +173,7 @@ var (
 				name:          cfg.Spans.Topic,
 				consumerGroup: cfg.Spans.ConsumerGroup + usageGroupSuffix,
 				dlqTopic:      cfg.Spans.DLQTopic,
-				maxRows:       cfg.Spans.MaxRows,
+				maxMessages:   cfg.Spans.MaxMessages,
 				maxDelay:      cfg.Spans.MaxDelay,
 			}
 		},
@@ -190,7 +191,7 @@ var (
 				name:          cfg.Logs.Topic,
 				consumerGroup: cfg.Logs.ConsumerGroup + usageGroupSuffix,
 				dlqTopic:      cfg.Logs.DLQTopic,
-				maxRows:       cfg.Logs.MaxRows,
+				maxMessages:   cfg.Logs.MaxMessages,
 				maxDelay:      cfg.Logs.MaxDelay,
 			}
 		},
@@ -207,7 +208,7 @@ var (
 				name:          cfg.MetricIngest.Topic,
 				consumerGroup: cfg.MetricIngest.ConsumerGroup + usageGroupSuffix,
 				dlqTopic:      cfg.MetricIngest.DLQTopic,
-				maxRows:       cfg.MetricIngest.MaxRows,
+				maxMessages:   cfg.MetricIngest.MaxMessages,
 				maxDelay:      cfg.MetricIngest.MaxDelay,
 			}
 		},

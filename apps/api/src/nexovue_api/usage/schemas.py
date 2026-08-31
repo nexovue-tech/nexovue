@@ -72,24 +72,99 @@ class PlanPriceSummary(BaseModel):
 
     effective_from: date
     currency: str
-    price_per_service_cents: int
+    # Minor units of `currency`, and named as such: the yen's minor unit is the
+    # yen, so anything dividing by a hardcoded hundred misquotes a yen bill.
+    price_per_service_minor_units: int
     # Null is uncapped. ADR 0056's ceiling applies to the service-count
     # component of the bill.
     max_billed_services: int | None = None
+    # Ingested bytes each billed service brings, per calendar month, pooled
+    # across the organization. Null is "no allowance recorded", which is not an
+    # allowance of zero.
+    included_bytes_per_service: int | None = None
+
+
+class BillingPeriodUsage(BaseModel):
+    """The calendar month the bill covers, and what it comes to so far.
+
+    Always the whole organization, even when the request narrowed the day table
+    to one project: the bill is the organization's, and a narrowed cost would be
+    a number nobody is ever charged.
+    """
+
+    first_day: date
+    last_day: date
+
+    # False until the meter has counted past the last instant of the month, so
+    # a month in progress is labelled rather than read as a small bill.
+    settled: bool = False
+
+    # The union of distinct services over the month — a service running all
+    # month is one service.
+    services: int = 0
+    # The same number after the plan's ceiling. Equal to `services` when the
+    # tier is uncapped or unpriced.
+    billed_services: int = 0
+    bytes_ingested: int = 0
+
+    # The service-count component of the bill, in minor units of `currency`.
+    # Null when no price is recorded: absent, never zero, because zero reads as
+    # free.
+    service_cost_minor_units: int | None = None
+    currency: str | None = None
+
+    # The month's pooled volume allowance in bytes, null when the rate records
+    # none. Overage above it is deliberately not priced — see `service`.
+    included_bytes: int | None = None
+
+
+class ServiceNameFamily(BaseModel):
+    """Service names differing only by a trailing identifier."""
+
+    # The name they would share if the identifier were moved off it.
+    stem: str
+    # Which shape the identifiers matched: a uuid, a hex run, a Kubernetes pod
+    # suffix, or an ordinal.
+    kind: str
+    members: int
+    examples: list[str] = Field(default_factory=list)
+
+
+class CardinalityWarning(BaseModel):
+    """A project whose distinct service count jumped, and why it may have.
+
+    The billing unit is distinct service names, so a name carrying a pod id
+    bills once per pod. Nothing is capped on the strength of this: dropping a
+    customer's telemetry to hold their bill down would leave them debugging an
+    outage without it.
+    """
+
+    project_id: uuid.UUID
+    # Distinct services in the last `window_days`, and in the equal window
+    # before it.
+    services_now: int
+    services_before: int
+    window_days: int
+    # Empty when no family was found. A count that jumped for an honest reason
+    # says so by having nothing here — a wrong accusation is worse than silence.
+    families: list[ServiceNameFamily] = Field(default_factory=list)
 
 
 class UsageResponse(BaseModel):
-    """Ingestion counters and billable services for one organization.
+    """Ingestion counters, billable services, and what the month costs so far.
 
-    **There is still no cost field**, and now for a narrower reason than before:
-    the rate is a row rather than a missing column, but what a period costs also
-    needs the billing period and the volume allowance, neither of which is
-    decided. See `service`.
+    The cost is the service-count component only: the union of services over the
+    calendar month, held down by the plan's ceiling, at the recorded rate. What
+    volume above the allowance costs is not in it, because neither the allowance
+    amount nor what happens above it has been decided. See `service`.
     """
 
     plan: PlanSummary
     # The rate that applied on `to_day`. Null until a price row exists.
     price: PlanPriceSummary | None = None
+    # The calendar month containing `to_day` — the period a bill covers,
+    # whatever range of days the caller asked to look at.
+    period: BillingPeriodUsage
     from_day: date
     to_day: date
     # False while any part of the range could still be counted. Distinct from
@@ -102,3 +177,6 @@ class UsageResponse(BaseModel):
     # zero-filled: nothing writes a zero row, so a gap means "no data recorded",
     # which is not the same claim as "nothing was ingested".
     days: list[ProjectDayUsage] = Field(default_factory=list)
+    # Projects whose service count jumped, and any name families behind it.
+    # Empty for almost every organization, which is the intended state.
+    cardinality: list[CardinalityWarning] = Field(default_factory=list)

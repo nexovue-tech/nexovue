@@ -1,6 +1,10 @@
 # 0077 — The billing unit is a table, and the price is a dated row beside it
 
-- **Status:** Accepted
+- **Status:** Accepted — **superseded in part** by
+  [0083](0083-the-period-is-the-month-and-the-allowance-is-bytes.md), which settles the three
+  questions section 4 refused to invent answers to and therefore replaces *§4 — No cost is
+  computed*. Everything else here stands: the three schema objects, the rejection of a price column
+  on `plans`, the refusal to count services from ClickHouse, and the settled-flag design.
 - **Amends:** [0056](0056-per-service-pricing.md) — its closing *Schema follows* paragraph, and the
   question of where a price lives, which 0056 did not answer
 - **Date:** 2026-08-30

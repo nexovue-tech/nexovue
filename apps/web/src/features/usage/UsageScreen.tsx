@@ -6,28 +6,39 @@ import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { useProjects } from "@/shared/projects";
 
-import type { PlanPrice, UsageResponse } from "./api";
+import type { BillingPeriod, CardinalityWarning, PlanPrice, UsageResponse } from "./api";
 import { useUsage } from "./api";
 import {
+  CARDINALITY_REMEDY,
+  COST_EXCLUDES_OVERAGE,
   DAY_TABLE_CAPTION,
+  describeAllowance,
   describeCeiling,
+  describeCostBasis,
   describeCounting,
+  describeFamily,
   describeNoPrice,
+  describePeriodProgress,
   describeRateStart,
   describeScope,
+  describeServiceChange,
   formatBytes,
   formatCount,
   formatDay,
+  formatPeriod,
+  formatPeriodCost,
   formatRate,
-  NO_COST_NOTE,
+  NO_COST_LABEL,
+  NO_COST_REASON,
   NO_PRICE_LABEL,
+  NOTHING_IS_CAPPED,
   STILL_COUNTING,
   UNION_CAPTION,
 } from "./usage-format";
 import type { DayRange } from "./usage-range";
 import { DEFAULT_RANGE_DAYS, RANGE_OPTIONS, usageRange } from "./usage-range";
 import type { UsageRow } from "./usage-rows";
-import { buildUsageRows, ROW_HEIGHT, unsettledDayCount } from "./usage-rows";
+import { buildUsageRows, projectLabel, ROW_HEIGHT, unsettledDayCount } from "./usage-rows";
 
 const OVERSCAN_ROWS = 10;
 
@@ -111,6 +122,7 @@ export function UsageView({
       ) : (
         <>
           <Summary usage={usage} />
+          <CardinalityNotices warnings={usage.cardinality} projectNames={projectNames} />
           {usage.days.length === 0 ? (
             <EmptyState
               title="Nothing metered in this range"
@@ -156,19 +168,27 @@ function RangeToggle({
 }
 
 /**
- * The three things a customer came for — how many services, at what rate, on what plan
- * — and the volume behind them.
+ * The four things a customer came for — what this month costs, how many services, at
+ * what rate, on what plan — and the volume behind them.
  *
- * The rate and the quantity are never multiplied here. Which period is billed, which
- * quantity that period bills, and what allowance each service carries are all undecided
- * (ADR 0056, ADR 0077), so a number in that shape would be invented rather than read.
+ * The multiplication is done by the API and read here, never recomputed: the quantity
+ * it uses is the month's, and the range in the table below is a different number.
+ * Everything the figure does not cover is written next to it.
  */
 function Summary({ usage }: { usage: UsageResponse }) {
   const unsettledDays = unsettledDayCount(usage.days);
+  const allowance = describeAllowance(usage.period);
 
   return (
     <section className="shrink-0 border-line-subtle border-b px-4 pb-4">
-      <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+      <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <Term>{formatPeriod(usage.period)}</Term>
+          <dd>
+            <Cost period={usage.period} />
+          </dd>
+        </div>
+
         <div>
           <Term>Billable services</Term>
           {/* The term names the figure, so it is not a bare number to a screen reader. */}
@@ -204,6 +224,7 @@ function Summary({ usage }: { usage: UsageResponse }) {
         <Ingested term="Logs" value={formatCount(usage.totals.logs)} />
         <Ingested term="Metric points" value={formatCount(usage.totals.metric_points)} />
         <Ingested term="Bytes" value={formatBytes(usage.totals.bytes_ingested)} />
+        {allowance ? <Ingested term="Included volume" value={allowance} /> : null}
       </dl>
 
       <p
@@ -215,6 +236,94 @@ function Summary({ usage }: { usage: UsageResponse }) {
       >
         {describeCounting(usage.settled, unsettledDays)}
       </p>
+    </section>
+  );
+}
+
+/**
+ * What the month's services cost, or the fact that nothing can be said.
+ *
+ * A month still being metered is marked as one. The alternative — a quiet, small,
+ * final-looking number — is the failure this screen exists to avoid, and it is the
+ * same rule the day rows already follow.
+ */
+function Cost({ period }: { period: BillingPeriod }) {
+  const amount = formatPeriodCost(period);
+
+  if (amount === undefined) {
+    return (
+      <>
+        <p className="text-base text-ink">{NO_COST_LABEL}</p>
+        <p className="mt-1 text-ink-dim text-sm leading-relaxed">{NO_COST_REASON}</p>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <p className="flex items-baseline gap-2">
+        <span className="font-semibold font-serif text-2xl text-ink tracking-tight">{amount}</span>
+        {period.settled ? null : <StillMetering />}
+      </p>
+      <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+        {describeCostBasis(period)} {describePeriodProgress(period)} {COST_EXCLUDES_OVERAGE}
+      </p>
+    </>
+  );
+}
+
+/** The month is not over, so neither is the number beside this. */
+function StillMetering() {
+  return (
+    <span className="shrink-0 rounded-sm border border-warning-border bg-warning-subtle px-1.5 py-0.5 font-mono text-2xs text-warning-text uppercase tracking-caps">
+      still metering
+    </span>
+  );
+}
+
+/**
+ * Projects billing for more services than they run, and why.
+ *
+ * A warning, never a cap: capping would drop the customer's telemetry, and they
+ * would then be debugging an outage with data we threw away. When the API could not
+ * name a cause, only the change is shown — an accusation nobody can act on is worse
+ * than saying nothing.
+ */
+function CardinalityNotices({
+  warnings,
+  projectNames,
+}: {
+  warnings: readonly CardinalityWarning[];
+  projectNames: ReadonlyMap<string, string>;
+}) {
+  if (warnings.length === 0) return null;
+
+  return (
+    <section className="shrink-0 border-line-subtle border-b px-4 py-3">
+      <ul className="flex flex-col gap-3">
+        {warnings.map((warning) => (
+          <li
+            key={warning.project_id}
+            className="border-warning-solid border-l-2 py-0.5 pl-3 text-sm"
+          >
+            <p className="text-ink">
+              <span className="font-medium">{projectLabel(warning.project_id, projectNames)}</span>{" "}
+              <span className="text-ink-dim">{describeServiceChange(warning)}</span>
+            </p>
+            {warning.families.map((family) => (
+              <p key={`${family.stem}:${family.kind}`} className="mt-1 text-warning-text">
+                {describeFamily(family)}{" "}
+                <span className="font-mono text-2xs">{family.examples.join(", ")}</span>
+              </p>
+            ))}
+            {warning.families.length > 0 ? (
+              <p className="mt-1 text-ink-dim leading-relaxed">
+                {CARDINALITY_REMEDY} {NOTHING_IS_CAPPED}
+              </p>
+            ) : null}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -256,7 +365,7 @@ function Rate({ price, planName }: { price: PlanPrice | null; planName: string }
       <p className="text-base text-ink">{formatRate(price)}</p>
       <p className="mt-1 text-ink-dim text-sm leading-relaxed">
         {describeRateStart(price)}
-        {ceiling ? ` ${ceiling}` : ""} {NO_COST_NOTE}
+        {ceiling ? ` ${ceiling}` : ""}
       </p>
     </>
   );

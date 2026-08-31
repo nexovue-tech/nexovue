@@ -66,23 +66,26 @@ WHERE tenant_id = {tenant_id:String}
   AND minute < {to_time:DateTime}
 """
 
-SERVICES_SQL: Final = f"""
+# ClickHouse's own parameter syntax is braces, so the single-service predicate is
+# spliced on a comment marker rather than with str.format.
+_ONE_SERVICE_PLACEHOLDER: Final = "/* one service */"
+
+ONE_SERVICE_CLAUSE: Final = "AND service_name = {service_name:String}"
+
+# One service's row and the whole ranking are the same read: the detail screen shows
+# exactly the numbers its row on the overview shows, so they cannot disagree.
+_SERVICES_TEMPLATE: Final = f"""
 SELECT
     service_name,
     sum(request_count) AS request_count,
     sum(error_count) AS error_count,
     {_LATENCY_MS}
 {_ENDPOINT_STATS_IN_WINDOW}
+  {_ONE_SERVICE_PLACEHOLDER}
 GROUP BY service_name
 ORDER BY {WORST_FIRST}, service_name
 LIMIT {{limit:UInt32}}
 """
-
-# ClickHouse's own parameter syntax is braces, so the single-service predicate is
-# spliced on a comment marker rather than with str.format.
-_ONE_SERVICE_PLACEHOLDER: Final = "/* one service */"
-
-ONE_SERVICE_CLAUSE: Final = "AND service_name = {service_name:String}"
 
 # An endpoint is (service, kind, name). `span_kind` stays in the key because the
 # rollup holds SERVER and CONSUMER rows: an HTTP route and a queue handler can
@@ -125,13 +128,20 @@ ORDER BY service_name, bucket
 """
 
 
+def _narrowed(template: str, *, one_service: bool) -> str:
+    return template.replace(_ONE_SERVICE_PLACEHOLDER, ONE_SERVICE_CLAUSE if one_service else "")
+
+
+def services_sql(*, one_service: bool) -> str:
+    """The service statement, narrowed to one service when one is named."""
+    return _narrowed(_SERVICES_TEMPLATE, one_service=one_service)
+
+
 def trend_sql(*, one_service: bool) -> str:
     """The trend statement, narrowed to one service when one is named."""
-    return TREND_SQL.replace(_ONE_SERVICE_PLACEHOLDER, ONE_SERVICE_CLAUSE if one_service else "")
+    return _narrowed(TREND_SQL, one_service=one_service)
 
 
 def endpoints_sql(*, one_service: bool) -> str:
     """The endpoint statement, narrowed to one service when one is named."""
-    return _ENDPOINTS_TEMPLATE.replace(
-        _ONE_SERVICE_PLACEHOLDER, ONE_SERVICE_CLAUSE if one_service else ""
-    )
+    return _narrowed(_ENDPOINTS_TEMPLATE, one_service=one_service)

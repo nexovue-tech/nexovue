@@ -185,6 +185,58 @@ async def test_naming_a_service_returns_that_service_and_no_other(
     assert {row.service_name for row in page.endpoints} == {named}
 
 
+async def test_one_service_counts_exactly_as_its_row_in_the_ranking(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    """Against real rollup rows, not a fake that could reimplement the narrowing.
+
+    Counts only. `quantiles` is reservoir sampling with a random number generator, so
+    `quantilesMerge` over the same states is *not* reproducible between two reads —
+    measured live on this stack at p95 4000.8ms then 3412.6ms for one service. Latency
+    is checked for presence and ordering instead; asserting equality would make this
+    suite flap for a reason that has nothing to do with the narrowing under test.
+    """
+    page = await service.list_services(
+        _repository(clickhouse, busiest.tenant_id),
+        project_id=busiest.project_id,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+        limit=service.MAX_SERVICE_LIMIT,
+    )
+    assert page.services, "the busiest project returned no services"
+
+    for expected in page.services:
+        answer = await service.get_service(
+            _repository(clickhouse, busiest.tenant_id),
+            project_id=busiest.project_id,
+            service_name=expected.service_name,
+            from_time=busiest.window_start,
+            to_time=busiest.window_end,
+        )
+        one = answer.service
+        assert one is not None, f"{expected.service_name} is in the ranking but reads as silent"
+        assert one.service_name == expected.service_name
+        assert one.request_count == expected.request_count
+        assert one.error_count == expected.error_count
+        assert one.requests_per_minute == expected.requests_per_minute
+        assert one.error_rate == expected.error_rate
+        assert one.p50_ms <= one.p95_ms <= one.p99_ms
+
+
+async def test_a_service_name_nobody_ever_reported_is_silent_rather_than_an_error(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    answer = await service.get_service(
+        _repository(clickhouse, busiest.tenant_id),
+        project_id=busiest.project_id,
+        service_name="a-service-that-never-reported",
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+    )
+
+    assert answer.service is None
+
+
 async def test_the_service_totals_are_the_endpoint_totals_of_the_same_window(
     clickhouse: AsyncClient, busiest: BusiestProject
 ) -> None:

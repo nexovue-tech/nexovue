@@ -15,9 +15,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+from pydantic import SecretStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexovue_api.apikeys.service import allocate_unused_key
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.credentials import hash_password, is_valid_email, normalize_email
 from nexovue_api.data.postgres.models import (
@@ -29,9 +31,9 @@ from nexovue_api.data.postgres.models import (
     User,
 )
 from nexovue_api.deploys.signatures import new_secret
-from nexovue_api.errors.exceptions import ConflictError, InternalError, InvalidRequestError
+from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError
 from nexovue_api.signup import queries
-from nexovue_api.signup.apikeys import generate_api_key, hash_api_key
+from nexovue_api.signup.apikeys import hash_api_key
 from nexovue_api.signup.slugs import disambiguate, slugify
 
 # The first project every tenant gets. Named for the environment it stands for,
@@ -46,20 +48,25 @@ OWNER_ROLE: Final = "owner"
 EMAIL_TAKEN_DETAIL: Final = "An account already exists for that email address."
 EMAIL_INVALID_DETAIL: Final = "That email address is not valid."
 
-# Bounded so a pathological name or an exhausted keyspace fails loudly instead
-# of spinning. Both bounds are far beyond what a real signup ever needs.
+# Bounded so a pathological name fails loudly instead of spinning; far beyond
+# what a real signup ever needs. The matching bound on key minting lives with the
+# minting, in `apikeys.service`.
 MAX_SLUG_ATTEMPTS: Final = 100
-MAX_KEY_ATTEMPTS: Final = 10
 
 
 @dataclass(frozen=True, slots=True)
 class ProvisionedTenant:
-    """The four rows, plus the one plaintext key that is never stored."""
+    """The four rows, plus the one plaintext key that is never stored.
+
+    `api_key` is a `SecretStr` so the redaction travels with the value. A plain
+    `str` here put a working key into this dataclass's own repr, which is what
+    pytest prints on any failing assertion that holds one.
+    """
 
     organization: Organization
     user: User
     project: Project
-    api_key: str
+    api_key: SecretStr
 
 
 async def provision_tenant(
@@ -81,7 +88,7 @@ async def provision_tenant(
         raise ConflictError(EMAIL_TAKEN_DETAIL)
 
     slug = organization_slug or await _available_slug(session, slugify(organization_name))
-    plaintext_key = api_key or await _unused_api_key(session)
+    plaintext_key = api_key or await allocate_unused_key(session)
 
     organization = Organization(slug=slug, name=organization_name)
     session.add(organization)
@@ -122,7 +129,7 @@ async def provision_tenant(
     await _flush(session)
 
     return ProvisionedTenant(
-        organization=organization, user=user, project=project, api_key=plaintext_key
+        organization=organization, user=user, project=project, api_key=SecretStr(plaintext_key)
     )
 
 
@@ -150,16 +157,3 @@ async def _available_slug(session: AsyncSession, base: str) -> str:
         if candidate not in taken:
             return candidate
     raise ConflictError("Too many organizations share that name. Choose another.")
-
-
-async def _unused_api_key(session: AsyncSession) -> str:
-    """A key whose lookup prefix is not already claimed.
-
-    `api_keys.key_prefix` is unique over only twelve characters, so a fresh key
-    can genuinely collide; this retries rather than surfacing that to a customer.
-    """
-    for _ in range(MAX_KEY_ATTEMPTS):
-        candidate = generate_api_key()
-        if not await queries.key_prefix_is_taken(session, candidate[:API_KEY_PREFIX_LENGTH]):
-            return candidate
-    raise InternalError("Could not allocate an API key. Report this with the correlation id.")

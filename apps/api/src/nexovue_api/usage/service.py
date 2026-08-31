@@ -1,4 +1,4 @@
-"""Ingestion counters, the billable quantity, and the rate they meet.
+"""Ingestion counters, the billable quantity, and what they cost this month.
 
 No SQL text and no HTTP.
 
@@ -8,22 +8,20 @@ something for on a day. The count here is `count(*)` over that set, and the
 range total is a union rather than a sum, because a service running all month is
 one service that month.
 
-**Why there is still no projected cost.** `plan_prices` now holds a rate, so the
-old reason — that no price existed anywhere — is gone. Three things are still
-missing, and each of them would have to be invented to produce a number a
-customer would read as a bill:
+**The cost.** The period is the calendar month, the quantity is the union of
+services over it, and the rate is the row in force — so the cost is one
+multiplication, and `billing` is where it happens. Four refusals survive it:
 
-- **the billing period.** A calendar month, or an anniversary of signup? The
-  quantity differs by which, and so does the invoice.
-- **which quantity the period bills.** The union of services over the period,
-  the peak day, or an average. This service reports the union and the days it is
-  made of; it does not choose between them.
-- **the volume allowance per service**, which ADR 0056 requires and does not
-  give a unit for — spans, bytes, or all signals together — and which is what
-  overage is measured against.
-
-The rate is therefore returned beside the quantity, and the arithmetic between
-them waits for those three answers.
+- **no price recorded, no cost shown.** Never a zero: an unpriced tier is not a
+  free one, and the absence is carried to the browser as an absence.
+- **a month still being metered is labelled**, not quietly shown as a small
+  number. The frontier says which, exactly as it does per day.
+- **the cost is the service-count component only.** Volume above the allowance
+  is not in it, because neither the allowance amount nor what happens above it
+  is decided — ADR 0056 promises "block and say so" in one paragraph and "stays
+  live, so growth still pays" in another.
+- **it is the organization's**, even when the day table is narrowed to one
+  project. A narrowed cost is a number nobody is ever charged.
 """
 
 from __future__ import annotations
@@ -37,12 +35,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import Organization, PlanPrice, UsageDaily
 from nexovue_api.errors.exceptions import InternalError, InvalidRequestError
-from nexovue_api.usage import queries
+from nexovue_api.usage import billing, cardinality, queries
+from nexovue_api.usage.cardinality import ProjectServiceCounts
 from nexovue_api.usage.queries import MeteringFrontier
 from nexovue_api.usage.schemas import (
+    BillingPeriodUsage,
+    CardinalityWarning,
     PlanPriceSummary,
     PlanSummary,
     ProjectDayUsage,
+    ServiceNameFamily,
     UsageResponse,
     UsageTotals,
 )
@@ -87,12 +89,18 @@ async def usage_for_organization(
         (row.project_id, row.day): row.services for row in counted
     }
     frontier = await queries.metering_frontier(session)
+    # The rate in force on the day being read, not on the month's last day: a
+    # repricing that starts later this month must not price a month that has
+    # not reached it.
+    price = await queries.find_effective_price(session, plan_slug=organization.plan, on_day=to_day)
 
     return UsageResponse(
         plan=await _plan_of(session, organization),
-        price=_price_summary(
-            await queries.find_effective_price(session, plan_slug=organization.plan, on_day=to_day)
+        price=_price_summary(price),
+        period=await _billing_period(
+            session, org_id=organization.id, to_day=to_day, price=price, frontier=frontier
         ),
+        cardinality=await _cardinality_warnings(session, org_id=organization.id, to_day=to_day),
         from_day=from_day,
         to_day=to_day,
         # The frontier only moves forwards, so the whole range is finished
@@ -166,8 +174,114 @@ def _price_summary(price: PlanPrice | None) -> PlanPriceSummary | None:
     return PlanPriceSummary(
         effective_from=price.effective_from,
         currency=price.currency,
-        price_per_service_cents=price.price_per_service_cents,
+        price_per_service_minor_units=price.price_per_service_minor_units,
         max_billed_services=price.max_billed_services,
+        included_bytes_per_service=price.included_bytes_per_service,
+    )
+
+
+async def _billing_period(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    to_day: date,
+    price: PlanPrice | None,
+    frontier: MeteringFrontier,
+) -> BillingPeriodUsage:
+    """The calendar month around `to_day`, and what it has come to.
+
+    Read for the whole organization on purpose: the bill is the organization's,
+    so narrowing the day table below must not narrow this.
+    """
+    period = billing.calendar_month_of(to_day)
+    services = await queries.services_in_range(
+        session, org_id=org_id, from_day=period.first_day, to_day=period.last_day
+    )
+    ingested = await queries.bytes_in_range(
+        session, org_id=org_id, from_day=period.first_day, to_day=period.last_day
+    )
+    cost = billing.service_cost_minor_units(services, price)
+
+    return BillingPeriodUsage(
+        first_day=period.first_day,
+        last_day=period.last_day,
+        # A month is finished only when the meter has passed its last instant,
+        # which is never true of the month in progress.
+        settled=is_settled(period.last_day, frontier),
+        services=services,
+        billed_services=billing.billed_services(services, price),
+        bytes_ingested=ingested,
+        service_cost_minor_units=cost,
+        # The currency belongs to the amount; without one there is nothing to
+        # denominate.
+        currency=price.currency if cost is not None and price is not None else None,
+        included_bytes=billing.included_bytes(services, price),
+    )
+
+
+async def _cardinality_warnings(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    to_day: date,
+) -> list[CardinalityWarning]:
+    """Projects whose service count jumped, and the name families behind it.
+
+    Two reads, and the second only for projects big enough to be the cause. A
+    warning is emitted when the count jumped or when a family was found — the
+    jump is the change worth showing, the family is the reason, and neither
+    implies the other.
+    """
+    window = timedelta(days=cardinality.RECENT_WINDOW_DAYS)
+    recent_from = to_day - window + timedelta(days=1)
+    counted = await queries.service_counts_by_project(
+        session,
+        org_id=org_id,
+        previous_from=recent_from - window,
+        recent_from=recent_from,
+        to_day=to_day,
+    )
+    counts = [
+        ProjectServiceCounts(project_id=row.project_id, recent=row.recent, previous=row.previous)
+        for row in counted
+    ]
+
+    examined = [count for count in counts if cardinality.worth_examining(count)]
+    names = await queries.service_names(
+        session,
+        org_id=org_id,
+        project_ids=[count.project_id for count in examined],
+        from_day=recent_from,
+        to_day=to_day,
+        limit_per_project=cardinality.MAX_NAMES_EXAMINED,
+    )
+    by_project: dict[uuid.UUID, list[str]] = {}
+    for row in names:
+        by_project.setdefault(row.project_id, []).append(row.service_name)
+
+    warnings = []
+    for count in examined:
+        families = cardinality.identifier_families(by_project.get(count.project_id, []))
+        if not families and not cardinality.has_jumped(count):
+            continue
+        warnings.append(
+            CardinalityWarning(
+                project_id=count.project_id,
+                services_now=count.recent,
+                services_before=count.previous,
+                window_days=cardinality.RECENT_WINDOW_DAYS,
+                families=[_family_summary(family) for family in families],
+            )
+        )
+    return warnings
+
+
+def _family_summary(family: cardinality.ServiceFamily) -> ServiceNameFamily:
+    return ServiceNameFamily(
+        stem=family.stem,
+        kind=family.kind,
+        members=len(family.members),
+        examples=list(cardinality.examples_of(family)),
     )
 
 

@@ -1,4 +1,10 @@
-"""API key reads. Every statement filters `org_id` — there is no unscoped variant."""
+"""API key reads.
+
+Every statement filters `org_id`, with one named exception: `key_prefix_is_taken`
+asks a question about the whole system, because the prefix is unique across every
+tenant. `tests/test_postgres_tenancy_structure.py` carries it in EXEMPT with that
+reason, so the exception is a recorded decision rather than an omission.
+"""
 
 from __future__ import annotations
 
@@ -33,3 +39,10 @@ async def lock_key(session: AsyncSession, *, org_id: uuid.UUID, key_id: uuid.UUI
     statement = select(ApiKey).where(ApiKey.id == key_id, ApiKey.org_id == org_id).with_for_update()
     key: ApiKey | None = await session.scalar(statement)
     return key
+
+
+async def key_prefix_is_taken(session: AsyncSession, key_prefix: str) -> bool:
+    """Deliberately unscoped: `uq_api_keys_key_prefix` is global, so scoping this
+    would let two organizations claim one prefix and make the lookup ambiguous."""
+    statement = select(ApiKey.id).where(ApiKey.key_prefix == key_prefix).limit(1)
+    return await session.scalar(statement) is not None

@@ -98,15 +98,24 @@ _SPAN_COLUMNS: Final = f"""
     replaceAll(span_id, '\\0', '') AS span_ref
 """
 
-_SPAN_ERRORS: Final = """
+# ClickHouse's own parameter syntax is braces, so the single-service predicate is
+# spliced on a comment marker rather than with str.format. It sits in both source
+# tables rather than after the grouping: filtering a capped list afterwards would
+# under-report a service's exceptions, and filtering here prunes before the UNION.
+_ONE_SERVICE_PLACEHOLDER: Final = "/* one service */"
+
+ONE_SERVICE_CLAUSE: Final = "AND service_name = {service_name:String}"
+
+_SPAN_ERRORS: Final = f"""
 FROM spans
-WHERE tenant_id = {tenant_id:String}
-  AND project_id = {project_id:String}
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
   AND exception_type != ''
-  AND timestamp >= {from_time:DateTime64(9)}
-  AND timestamp < {to_time:DateTime64(9)}
-  AND received_at >= {received_from:DateTime64(9)}
-  AND received_at < {received_to:DateTime64(9)}
+  AND timestamp >= {{from_time:DateTime64(9)}}
+  AND timestamp < {{to_time:DateTime64(9)}}
+  AND received_at >= {{received_from:DateTime64(9)}}
+  AND received_at < {{received_to:DateTime64(9)}}
+  {_ONE_SERVICE_PLACEHOLDER}
 """
 
 _LOG_COLUMNS: Final = f"""
@@ -120,15 +129,16 @@ _LOG_COLUMNS: Final = f"""
     replaceAll(span_id, '\\0', '') AS span_ref
 """
 
-_LOG_ERRORS: Final = """
+_LOG_ERRORS: Final = f"""
 FROM logs
-WHERE tenant_id = {tenant_id:String}
-  AND project_id = {project_id:String}
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
   AND exception_type != ''
-  AND timestamp >= {from_time:DateTime64(9)}
-  AND timestamp < {to_time:DateTime64(9)}
-  AND received_at >= {received_from:DateTime64(9)}
-  AND received_at < {received_to:DateTime64(9)}
+  AND timestamp >= {{from_time:DateTime64(9)}}
+  AND timestamp < {{to_time:DateTime64(9)}}
+  AND received_at >= {{received_from:DateTime64(9)}}
+  AND received_at < {{received_to:DateTime64(9)}}
+  {_ONE_SERVICE_PLACEHOLDER}
 """
 
 # The stacktrace is not a column: on a span it stays inside the `events` JSON
@@ -215,14 +225,31 @@ LIMIT {{limit:UInt32}}
 """
 
 
-def error_groups_sql(*, one_group: bool) -> str:
-    """The grouping statement, narrowed to a single group when one is asked for."""
-    return _ERROR_GROUPS_TEMPLATE.replace(_GROUP_PLACEHOLDER, ONE_GROUP_CLAUSE if one_group else "")
+def _narrowed_to_service(sql: str, *, one_service: bool) -> str:
+    return sql.replace(_ONE_SERVICE_PLACEHOLDER, ONE_SERVICE_CLAUSE if one_service else "")
+
+
+def error_groups_sql(*, one_group: bool, one_service: bool) -> str:
+    """The grouping statement, narrowed to a single group and to one service.
+
+    Narrowed to a service, every number the statement returns is that service's:
+    `occurrences` counts only its instances and `services` names only it. The
+    `group_id` stays the project-wide one, so the detail view still opens the whole
+    group.
+    """
+    grouped = _ERROR_GROUPS_TEMPLATE.replace(
+        _GROUP_PLACEHOLDER, ONE_GROUP_CLAUSE if one_group else ""
+    )
+    return _narrowed_to_service(grouped, one_service=one_service)
 
 
 # The instances behind one group, newest first, carrying what a detail view
 # needs to render a stacktrace and open the trace it came from.
-GROUP_OCCURRENCES_SQL: Final = f"""
+#
+# Deliberately never narrowed to a service: arriving from a service's own screen, the
+# other services a group also happens in are the useful part of opening it.
+GROUP_OCCURRENCES_SQL: Final = _narrowed_to_service(
+    f"""
 SELECT
     source,
     service_name,
@@ -236,4 +263,6 @@ FROM ({_GROUPED_WITH_DETAIL})
 WHERE group_id = {{group_id:String}}
 ORDER BY occurred_nanos DESC
 LIMIT {{limit:UInt32}}
-"""
+""",
+    one_service=False,
+)

@@ -87,7 +87,9 @@ test: test-go test-py test-web
 test-go:
     #!/usr/bin/env bash
     set -euo pipefail
-    for m in {{go_modules}}; do (cd "$m" && go test ./...); done
+    # -count=1 because a cached "ok" is not evidence a test ran, and this gate
+    # has twice reported green on a suite that executed nothing (rule 12).
+    for m in {{go_modules}}; do (cd "$m" && go test -count=1 ./...); done
 
 test-py:
     #!/usr/bin/env bash
@@ -148,14 +150,18 @@ migrate-pg:
 migrate-ch:
     migrate -path deploy/clickhouse/migrations -database "{{clickhouse_migrate_dsn}}" up
 
-# Roll both back one step, to prove the migrations are reversible.
+# Roll ONE store back one step, to prove that store's migrations are reversible.
 #
-# It rolls back BOTH stores. Proving one ClickHouse migration reversible also
-# takes Postgres down a version and back, which recreates whatever tables that
-# migration owns and loses their rows — it has caught two people (ADR 0079).
-# Run the single-store line you actually need instead.
-migrate-down:
+# There is deliberately no combined `migrate-down`. A migration belongs to one
+# store, so "one step back in each" is never a coherent operation — it just took
+# the other store down a version and back, recreating whatever tables that
+# migration owns and losing their rows. It caught two people and cost
+# `project_first_traces` its rows (ADR 0079). Name the store you mean.
+
+migrate-down-pg:
     POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api alembic -c apps/api/alembic.ini downgrade -1
+
+migrate-down-ch:
     migrate -path deploy/clickhouse/migrations -database "{{clickhouse_migrate_dsn}}" down 1
 
 # Create one org, one owner, a production project and a known dev API key

@@ -7,16 +7,24 @@ import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatDuration } from "@/shared/format/duration";
+import { formatRelativeTime } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
-import type { EndpointHealth, HealthMetrics, ServiceEdge, ServiceHealth, TrendPoint } from "./api";
+import type {
+  EndpointHealth,
+  ErrorGroupSummary,
+  HealthMetrics,
+  ServiceEdge,
+  ServiceHealth,
+  TrendPoint,
+} from "./api";
 import {
   EDGE_QUEUE,
   isPlaceholderService,
-  RANKED_PAGE_LIMIT,
-  useRankedServices,
+  useService,
   useServiceDependencies,
   useServiceEndpoints,
+  useServiceErrors,
   useServiceTrend,
 } from "./api";
 import { formatCount, formatErrorRate, formatErrors, formatRatePerMinute } from "./health-format";
@@ -25,9 +33,9 @@ import {
   dependencyKey,
   describeEndpoints,
   describeService,
+  describeServiceErrors,
   describeSilence,
   detailState,
-  findRankedService,
   neighboursOf,
 } from "./service-detail";
 import { CHART_HEIGHT, TrendChart } from "./TrendChart";
@@ -68,21 +76,22 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
   const { projectId, rangeId } = useSelection();
   const timeWindow = useLiveWindow(rangeId);
 
-  const ranked = useRankedServices(projectId, timeWindow);
+  const aggregate = useService(projectId, serviceName, timeWindow);
   const trend = useServiceTrend(projectId, serviceName, timeWindow);
   const endpoints = useServiceEndpoints(projectId, serviceName, timeWindow);
   const dependencies = useServiceDependencies(projectId, timeWindow);
+  const errors = useServiceErrors(projectId, serviceName, timeWindow);
 
   const points = trend.data?.points ?? [];
   const endpointRows = endpoints.data?.endpoints ?? [];
-  const row = findRankedService(ranked.data?.services ?? [], serviceName);
+  const row = aggregate.data;
 
   const state = detailState({
-    isPending: ranked.isPending || trend.isPending || endpoints.isPending,
-    isError: ranked.isError || trend.isError || endpoints.isError,
+    isPending: aggregate.isPending || trend.isPending || endpoints.isPending,
+    isError: aggregate.isError || trend.isError || endpoints.isError,
     hasTrend: points.length > 0,
     hasEndpoints: endpointRows.length > 0,
-    hasRankedRow: row !== undefined,
+    hasAggregate: row !== undefined,
   });
 
   return (
@@ -90,9 +99,9 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
       serviceName={serviceName}
       windowLabel={timeRangeById(rangeId).label}
       state={state}
-      error={ranked.error ?? trend.error ?? endpoints.error}
+      error={aggregate.error ?? trend.error ?? endpoints.error}
       onRetry={() => {
-        void ranked.refetch();
+        void aggregate.refetch();
         void trend.refetch();
         void endpoints.refetch();
       }}
@@ -100,21 +109,38 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
       points={points}
       endpoints={endpointRows}
       dependencies={{
-        status: dependencies.isPending ? "pending" : dependencies.isError ? "error" : "success",
-        edges: dependencies.data?.edges ?? [],
+        status: panelStatus(dependencies),
+        data: dependencies.data?.edges ?? [],
         error: dependencies.error,
         onRetry: () => void dependencies.refetch(),
+      }}
+      errors={{
+        status: panelStatus(errors),
+        data: errors.data?.groups ?? [],
+        error: errors.error,
+        onRetry: () => void errors.refetch(),
       }}
     />
   );
 }
 
-/** The dependency panel loads on its own clock; its failure is not the screen's. */
-export interface DependencySource {
+/**
+ * A panel that loads on its own clock. Its failure is not the screen's: losing the
+ * dependencies or the errors must not blank the numbers a person came for.
+ */
+export interface PanelSource<T> {
   status: "pending" | "error" | "success";
-  edges: readonly ServiceEdge[];
+  data: readonly T[];
   error?: unknown;
   onRetry: () => void;
+}
+
+function panelStatus(query: {
+  isPending: boolean;
+  isError: boolean;
+}): PanelSource<never>["status"] {
+  if (query.isPending) return "pending";
+  return query.isError ? "error" : "success";
 }
 
 export interface ServiceDetailViewProps {
@@ -127,7 +153,8 @@ export interface ServiceDetailViewProps {
   row?: ServiceHealth;
   points: readonly TrendPoint[];
   endpoints: readonly EndpointHealth[];
-  dependencies: DependencySource;
+  dependencies: PanelSource<ServiceEdge>;
+  errors: PanelSource<ErrorGroupSummary>;
 }
 
 /** Everything the screen shows, with no query client and no clock behind it. */
@@ -141,6 +168,7 @@ export function ServiceDetailView({
   points,
   endpoints,
   dependencies,
+  errors,
 }: ServiceDetailViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -176,8 +204,8 @@ export function ServiceDetailView({
 
   const plots = useMemo(() => buildTrendPlots(points), [points]);
   const neighbours = useMemo(
-    () => neighboursOf(dependencies.edges, serviceName),
-    [dependencies.edges, serviceName],
+    () => neighboursOf(dependencies.data, serviceName),
+    [dependencies.data, serviceName],
   );
 
   return (
@@ -214,6 +242,8 @@ export function ServiceDetailView({
               callers={neighbours.callers}
               callees={neighbours.callees}
             />
+
+            <ErrorSection serviceName={serviceName} source={errors} />
 
             <SectionHeading title="Endpoints" caption={describeEndpoints(endpoints)} />
 
@@ -297,7 +327,7 @@ function ServiceHeader({
 
       <p className="mt-1 text-ink-dim text-sm">
         {state === "ready"
-          ? describeService(row, windowLabel, RANKED_PAGE_LIMIT)
+          ? describeService(row, windowLabel)
           : `What ${serviceName} did over the last ${windowLabel}.`}
       </p>
     </header>
@@ -410,7 +440,7 @@ function DependencySection({
   callees,
 }: {
   serviceName: string;
-  source: DependencySource;
+  source: PanelSource<ServiceEdge>;
   callers: readonly Dependency[];
   callees: readonly Dependency[];
 }) {
@@ -454,7 +484,7 @@ function DependencySection({
 }
 
 function describeDependencies(
-  source: DependencySource,
+  source: PanelSource<ServiceEdge>,
   callerCount: number,
   calleeCount: number,
 ): string {
@@ -539,6 +569,96 @@ function DependencyLine({ dependency }: { dependency: Dependency }) {
       </span>
       <span className={`${LATENCY_COLUMN} font-mono text-2xs text-ink`}>
         {formatDuration(edge.p95_ms)}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * How many error groups the panel draws. The caption carries the true totals, so the
+ * cap costs no information — it stops one noisy service pushing the endpoint table,
+ * which is the other half of this screen, off the bottom of the page.
+ */
+const ERRORS_SHOWN = 5;
+
+const OCCURRENCES_COLUMN = "w-20 shrink-0 text-right";
+const LAST_SEEN_COLUMN = "w-24 shrink-0 text-right";
+
+/**
+ * The exceptions thrown in this service, most frequent first.
+ *
+ * Server-narrowed by name. Filtering the project-wide list here would under-report,
+ * because that list is capped and a quiet service's groups fall off the end of it —
+ * which is worse than showing nothing, because nothing looks like nothing happened.
+ */
+function ErrorSection({
+  serviceName,
+  source,
+}: {
+  serviceName: string;
+  source: PanelSource<ErrorGroupSummary>;
+}) {
+  const shown = source.data.slice(0, ERRORS_SHOWN);
+  const hidden = source.data.length - shown.length;
+
+  return (
+    <>
+      <SectionHeading title="Errors" caption={describeErrorPanel(source)} />
+
+      {source.status === "error" ? (
+        <div className="px-4">
+          <InlineFailure
+            title="Errors could not be loaded"
+            error={source.error}
+            onRetry={source.onRetry}
+          />
+        </div>
+      ) : source.status === "pending" ? (
+        <div className="px-4">
+          <SkeletonRows rows={3} label={`Loading errors in ${serviceName}`} />
+        </div>
+      ) : shown.length === 0 ? null : (
+        <div className="px-4">
+          <ul>
+            {shown.map((group) => (
+              <li key={group.group_id}>
+                <ErrorLine group={group} />
+              </li>
+            ))}
+          </ul>
+          {hidden > 0 ? (
+            <p className="py-2 text-ink-dim text-sm">
+              {hidden} less frequent {hidden === 1 ? "error is" : "errors are"} not shown. The
+              Errors screen has every one.
+            </p>
+          ) : null}
+        </div>
+      )}
+    </>
+  );
+}
+
+function describeErrorPanel(source: PanelSource<ErrorGroupSummary>): string {
+  if (source.status === "pending") return "Reading this service's exceptions.";
+  if (source.status === "error") return "This service's exceptions could not be read.";
+  return describeServiceErrors(source.data);
+}
+
+function ErrorLine({ group }: { group: ErrorGroupSummary }) {
+  return (
+    <div className="flex items-center gap-3 border-line-subtle border-b py-1.5 text-sm">
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="truncate font-medium text-ink">{group.exception_type}</span>
+        {/* The template, not the latest message: the template is what the group *is*. */}
+        <span className="truncate text-ink-dim text-xs" title={group.message_template}>
+          {group.message_template}
+        </span>
+      </span>
+      <span className={`${OCCURRENCES_COLUMN} font-mono text-2xs text-ink`}>
+        {formatCount(group.occurrences)}
+      </span>
+      <span className={`${LAST_SEEN_COLUMN} font-mono text-2xs text-ink-dim`}>
+        {formatRelativeTime(group.last_seen)}
       </span>
     </div>
   );

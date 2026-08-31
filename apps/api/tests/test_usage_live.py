@@ -23,9 +23,9 @@ import pytest
 from live import require_stack
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from nexovue_api.data.postgres.models import Project, UsageDaily, UsageDailyService
+from nexovue_api.data.postgres.models import PlanPrice, Project, UsageDaily, UsageDailyService
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
-from nexovue_api.usage import service
+from nexovue_api.usage import queries, service
 from nexovue_api.usage.schemas import UsageResponse
 
 POSTGRES_DSN: Final = os.environ.get(
@@ -248,3 +248,230 @@ async def test_a_tier_with_no_price_row_reports_no_price_at_all(db: AsyncSession
     tenant = await _new_tenant(db)
 
     assert (await _read(db, tenant)).price is None
+
+
+# ------------------------------------------------ the month, its cost, and its allowance
+
+
+async def _record_price(
+    db: AsyncSession,
+    tenant: ProvisionedTenant,
+    *,
+    minor_units: int,
+    currency: str = "USD",
+    ceiling: int | None = None,
+    included_bytes: int | None = None,
+) -> None:
+    """A real price row, in the transaction this suite rolls back.
+
+    ADR 0077 shipped `plan_prices` empty and recorded that no rate had ever been
+    read from real Postgres. These are the tests that read one.
+    """
+    db.add(
+        PlanPrice(
+            plan_slug=tenant.organization.plan,
+            effective_from=TO_DAY - timedelta(days=30),
+            currency=currency,
+            price_per_service_minor_units=minor_units,
+            max_billed_services=ceiling,
+            included_bytes_per_service=included_bytes,
+        )
+    )
+    await db.flush()
+
+
+async def test_the_period_is_the_calendar_month_around_the_last_day(db: AsyncSession) -> None:
+    tenant = await _new_tenant(db)
+
+    answer = await _read(db, tenant)
+
+    assert (answer.period.first_day, answer.period.last_day) == (date(2026, 8, 1), TO_DAY)
+
+
+async def test_the_month_is_priced_from_a_row_real_postgres_returned(db: AsyncSession) -> None:
+    """Two services in the month, one of them outside the browsed range.
+
+    The range shows one service and the month bills two, so a cost computed
+    from whichever number the screen happens to be showing is wrong by half.
+    """
+    tenant = await _new_tenant(db)
+    await _record_price(db, tenant, minor_units=1_000)
+    await _record_service(db, tenant, day=date(2026, 8, 2), name="checkout")
+    await _record_service(db, tenant, day=TO_DAY, name="payments")
+
+    answer = await _read(db, tenant)
+
+    assert answer.totals.services == 1
+    assert answer.period.services == 2
+    assert answer.period.service_cost_minor_units == 2_000
+    assert answer.period.currency == "USD"
+
+
+async def test_a_service_reporting_all_month_is_billed_once_by_postgres(
+    db: AsyncSession,
+) -> None:
+    """The union again, this time behind the multiplication.
+
+    Twenty-eight rows, one service, one service's worth of money. Without the
+    distinct count the bill is twenty-eight times too large.
+    """
+    tenant = await _new_tenant(db)
+    await _record_price(db, tenant, minor_units=1_000)
+    for offset in range(28):
+        await _record_service(
+            db, tenant, day=date(2026, 8, 1) + timedelta(days=offset), name="checkout"
+        )
+
+    answer = await _read(db, tenant)
+
+    assert answer.period.services == 1
+    assert answer.period.service_cost_minor_units == 1_000
+
+
+async def test_the_ceiling_in_a_real_row_holds_the_bill_down(db: AsyncSession) -> None:
+    tenant = await _new_tenant(db)
+    await _record_price(db, tenant, minor_units=1_000, ceiling=2)
+    for index in range(5):
+        await _record_service(db, tenant, day=TO_DAY, name=f"api-{index}-service")
+
+    answer = await _read(db, tenant)
+
+    assert answer.period.services == 5
+    assert answer.period.billed_services == 2
+    assert answer.period.service_cost_minor_units == 2_000
+
+
+async def test_the_allowance_is_read_from_the_row_and_pooled(db: AsyncSession) -> None:
+    tenant = await _new_tenant(db)
+    await _record_price(db, tenant, minor_units=1_000, included_bytes=1_000_000)
+    await _record_service(db, tenant, day=TO_DAY, name="checkout")
+    await _record_service(db, tenant, day=TO_DAY, name="payments")
+    await _record(db, tenant, day=TO_DAY, spans=10, byte_count=2_500)
+
+    answer = await _read(db, tenant)
+
+    assert answer.period.included_bytes == 2_000_000
+    assert answer.period.bytes_ingested == 2_500
+
+
+async def test_a_price_row_with_no_allowance_reports_none_rather_than_zero(
+    db: AsyncSession,
+) -> None:
+    """Zero would report every byte ingested as overage."""
+    tenant = await _new_tenant(db)
+    await _record_price(db, tenant, minor_units=1_000)
+    await _record_service(db, tenant, day=TO_DAY, name="checkout")
+
+    assert (await _read(db, tenant)).period.included_bytes is None
+
+
+async def test_the_months_bytes_stop_at_the_month(db: AsyncSession) -> None:
+    """A day in July is not in August's bill."""
+    tenant = await _new_tenant(db)
+    await _record(db, tenant, day=TO_DAY, spans=10, byte_count=1_000)
+    await _record(db, tenant, day=date(2026, 7, 31), spans=10, byte_count=9_999)
+
+    assert (await _read(db, tenant)).period.bytes_ingested == 1_000
+
+
+async def test_another_organizations_month_is_never_in_this_ones_bill(db: AsyncSession) -> None:
+    owner, stranger = await _new_tenant(db), await _new_tenant(db)
+    await _record_price(db, owner, minor_units=1_000)
+    await _record_service(db, owner, day=TO_DAY, name="checkout")
+    await _record(db, owner, day=TO_DAY, spans=10, byte_count=1_000)
+
+    theirs = await _read(db, stranger)
+
+    assert theirs.period.services == 0
+    assert theirs.period.bytes_ingested == 0
+
+
+# ---------------------------------------------------------- cardinality, in real SQL
+
+
+async def test_the_windowed_counts_are_distinct_in_postgres(db: AsyncSession) -> None:
+    """Seven days of one service is one service in the window, not seven.
+
+    The offline suite answers through a Python set, which would dedupe whether
+    or not the statement asked it to. This is the layer that actually holds the
+    guarantee: without `distinct` here a steady project reads as an exploding
+    one and gets warned at for nothing.
+    """
+    tenant = await _new_tenant(db)
+    for offset in range(7):
+        await _record_service(db, tenant, day=FROM_DAY + timedelta(days=offset), name="checkout")
+
+    counted = await queries.service_counts_by_project(
+        db,
+        org_id=tenant.organization.id,
+        previous_from=FROM_DAY - timedelta(days=7),
+        recent_from=FROM_DAY,
+        to_day=TO_DAY,
+    )
+
+    assert [(row.recent, row.previous) for row in counted] == [(1, 0)]
+
+
+async def test_the_name_cap_is_applied_per_project_not_across_them(db: AsyncSession) -> None:
+    """One project exploding must not crowd another out of the answer.
+
+    The cap is a window function partitioned by project, and a plain LIMIT
+    would return two names from the first project and none from the second.
+    """
+    tenant = await _new_tenant(db)
+    staging = await _second_project(db, tenant)
+    for index in range(3):
+        await _record_service(db, tenant, day=TO_DAY, name=f"noisy-{index}-service")
+    await _record_service(db, tenant, day=TO_DAY, name="quiet", project_id=staging.id)
+
+    names = await queries.service_names(
+        db,
+        org_id=tenant.organization.id,
+        project_ids=[tenant.project.id, staging.id],
+        from_day=FROM_DAY,
+        to_day=TO_DAY,
+        limit_per_project=2,
+    )
+
+    by_project: dict[uuid.UUID, list[str]] = {}
+    for row in names:
+        by_project.setdefault(row.project_id, []).append(row.service_name)
+    assert len(by_project[tenant.project.id]) == 2
+    assert by_project[staging.id] == ["quiet"]
+
+
+async def test_pod_names_are_warned_about_end_to_end(db: AsyncSession) -> None:
+    """The whole path: real rows, real SQL, the family named in the response."""
+    tenant = await _new_tenant(db)
+    for suffix in ("x2k9p", "m4rt7", "bn6qw", "kt9zx", "vd4sr", "hj7bk", "cz2mn", "wq8fd"):
+        await _record_service(db, tenant, day=TO_DAY, name=f"checkout-7d9f8b6c4d-{suffix}")
+
+    answer = await _read(db, tenant)
+
+    assert len(answer.cardinality) == 1
+    warning = answer.cardinality[0]
+    assert warning.project_id == tenant.project.id
+    assert warning.services_now == 8
+    assert [(family.stem, family.kind) for family in warning.families] == [
+        ("checkout", "kubernetes-pod")
+    ]
+
+
+async def test_honestly_named_services_are_never_warned_about(db: AsyncSession) -> None:
+    """Ten real services, in real SQL, and nothing said about them."""
+    tenant = await _new_tenant(db)
+    for name in (
+        "checkout",
+        "payments",
+        "shipping",
+        "inventory",
+        "api-gateway",
+        "web-frontend",
+        "auth-service",
+        "search",
+        "recommendation-engine",
+        "email-worker",
+    ):
+        await _record_service(db, tenant, day=TO_DAY, name=name)
+
+    assert (await _read(db, tenant)).cardinality == []

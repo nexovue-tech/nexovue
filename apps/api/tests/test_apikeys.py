@@ -1,15 +1,20 @@
-"""Withdrawing an ingest key.
+"""Minting an ingest key, and withdrawing one.
 
 The store here answers from the values a statement *binds*, never from what the
 caller meant. A lookup that stopped filtering `org_id` would no longer bind one,
 and would find nothing — so a query that loses its tenancy predicate fails these
 tests rather than quietly reaching another organization's key.
 
-`test_apikeys_live.py` proves the same behaviour against real Postgres.
+Creation is an insert, so the tenant travels as a *value* rather than a filter,
+and these tests assert on the row the service actually built. The claims that
+only a database can settle — that the minted key authenticates, that both keys
+work during a rotation, that the prefix is unique — are in
+`test_apikeys_live.py`, against real Postgres.
 """
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
@@ -20,15 +25,36 @@ import pytest
 from environment import TEST_ENVIRONMENT
 
 from nexovue_api.apikeys import service
+from nexovue_api.apikeys.schemas import SHOWN_ONCE_NOTICE, ApiKeyCreated
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.auth.dependencies import get_current_identity as current_identity_dependency
-from nexovue_api.data.postgres.models import ApiKey, AuditLogEntry, Organization, Project, User
+from nexovue_api.data.postgres.models import (
+    API_KEY_PREFIX_LENGTH,
+    ApiKey,
+    AuditLogEntry,
+    Organization,
+    Project,
+    User,
+)
 from nexovue_api.deps import get_app_settings, get_db_session
-from nexovue_api.errors.exceptions import NotFoundError, PermissionDeniedError
+from nexovue_api.errors.exceptions import (
+    InternalError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from nexovue_api.settings import API_PREFIX, Settings
 
 PLAINTEXT_KEY = "nvk_live_secretsecretsecretsec"
+
+
+def _plaintext(created: ApiKeyCreated) -> str:
+    """The minted secret, asked for by name.
+
+    `ApiKeyCreated.key` is a `SecretStr`, so nothing renders it by accident.
+    A test that asserts about the plaintext has to say so, here.
+    """
+    return created.key.get_secret_value()
 
 
 def _settings() -> Settings:
@@ -78,13 +104,46 @@ class FakeControlPlane:
     def __init__(self, tenants: Sequence[Tenant]) -> None:
         self._tenants = list(tenants)
         self.written: list[Any] = []
+        # Prefixes this store claims are already taken, so the collision retry
+        # can be driven without waiting on a one-in-billions random draw.
+        self.claimed_prefixes: set[str] = set()
+        # How far into `written` a flush has already reached, so a second flush
+        # does not re-stamp a row the first one gave an id to.
+        self._flushed_through = 0
 
     def add(self, entity: Any) -> None:
         self.written.append(entity)
 
+    async def flush(self) -> None:
+        """Only what a flush is relied on for: an id and a creation time.
+
+        Nothing about tenancy is simulated here. `uuidv7()` and `now()` are
+        server defaults, and the row the service built is what the assertions
+        read — so a flush that invented an org_id would be inventing the very
+        thing under test.
+        """
+        for row in self.written[self._flushed_through :]:
+            if isinstance(row, ApiKey):
+                row.id = uuid.uuid4()
+                row.created_at = datetime.now(UTC)
+                row.last_used_at = None
+                row.revoked_at = None
+        self._flushed_through = len(self.written)
+
+    @property
+    def minted(self) -> list[ApiKey]:
+        return [row for row in self.written if isinstance(row, ApiKey)]
+
     async def scalar(self, statement: Any) -> Any:
-        """`lock_key` and `find_project`: a row only when its owner is bound too."""
+        """`lock_key` and `find_project`: a row only when its owner is bound too.
+
+        `key_prefix_is_taken` is the one unscoped read, answered from the claimed
+        set rather than from a tenant.
+        """
         values = _bound_values(statement)
+        claimed = values & self.claimed_prefixes
+        if claimed:
+            return next(iter(claimed))
         for tenant in self._tenants:
             if tenant.organization.id not in values:
                 continue
@@ -131,6 +190,159 @@ def globex() -> Tenant:
 @pytest.fixture
 def db(acme: Tenant, globex: Tenant) -> FakeControlPlane:
     return FakeControlPlane([acme, globex])
+
+
+# ------------------------------------------------------------------ minting
+
+
+async def test_creating_a_key_returns_the_plaintext_once(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    """The response body is the entire life of the secret outside the customer."""
+    created = await service.create(
+        db,  # type: ignore[arg-type]
+        org_id=acme.organization.id,
+        actor=acme.user,
+        project_id=acme.project.id,
+        name="staging exporter",
+    )
+
+    assert _plaintext(created).startswith("nvk_live_")
+    assert created.notice == SHOWN_ONCE_NOTICE
+    assert created.api_key.name == "staging exporter"
+    assert created.api_key.revoked_at is None
+    assert created.api_key.last_used_at is None
+
+
+async def test_the_minted_row_stores_a_hash_and_a_prefix_but_never_the_key(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    """The whole reason the plaintext can only be shown once."""
+    created = await service.create(
+        db,  # type: ignore[arg-type]
+        org_id=acme.organization.id,
+        actor=acme.user,
+        project_id=acme.project.id,
+        name="exporter",
+    )
+
+    (row,) = [key for key in db.minted if key.id == created.api_key.id]
+    assert row.key_hash == hashlib.sha256(_plaintext(created).encode()).hexdigest()
+    assert row.key_prefix == _plaintext(created)[:API_KEY_PREFIX_LENGTH]
+    # Every attribute of the stored row, so a new column carrying the secret
+    # fails here rather than shipping.
+    stored = " ".join(str(getattr(row, column.name)) for column in ApiKey.__table__.columns)
+    assert _plaintext(created) not in stored
+
+
+async def test_a_minted_key_belongs_to_the_session_tenant_not_the_request(
+    db: FakeControlPlane, acme: Tenant, globex: Tenant
+) -> None:
+    """`org_id` is a value on an insert, so this is what tenancy means here."""
+    created = await service.create(
+        db,  # type: ignore[arg-type]
+        org_id=acme.organization.id,
+        actor=acme.user,
+        project_id=acme.project.id,
+        name="exporter",
+    )
+
+    (row,) = [key for key in db.minted if key.id == created.api_key.id]
+    assert row.org_id == acme.organization.id
+    assert row.org_id != globex.organization.id
+    assert row.project_id == acme.project.id
+
+
+async def test_creating_a_key_records_who_minted_it_without_the_credential(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    created = await service.create(
+        db,  # type: ignore[arg-type]
+        org_id=acme.organization.id,
+        actor=acme.user,
+        project_id=acme.project.id,
+        name="exporter",
+    )
+
+    (entry,) = db.entries
+    assert entry.action == audit.API_KEY_CREATED
+    assert entry.org_id == acme.organization.id
+    assert entry.actor_user_id == acme.user.id
+    assert entry.target == f"{audit.API_KEY_TARGET}:{created.api_key.id}"
+    assert _plaintext(created) not in entry.target
+    assert created.api_key.key_hint not in str(entry.target)
+
+
+async def test_a_member_may_not_create_a_key(db: FakeControlPlane, acme: Tenant) -> None:
+    """Minting grants ingest for the whole organization; that is not everyone's."""
+    acme.user.role = "member"
+
+    with pytest.raises(PermissionDeniedError):
+        await service.create(
+            db,  # type: ignore[arg-type]
+            org_id=acme.organization.id,
+            actor=acme.user,
+            project_id=acme.project.id,
+            name="exporter",
+        )
+
+    assert db.minted == []
+    assert db.entries == []
+
+
+@pytest.mark.parametrize("role", ["owner", "admin"])
+async def test_an_owner_or_admin_may_create_a_key(
+    db: FakeControlPlane, acme: Tenant, role: str
+) -> None:
+    acme.user.role = role
+
+    created = await service.create(
+        db,  # type: ignore[arg-type]
+        org_id=acme.organization.id,
+        actor=acme.user,
+        project_id=acme.project.id,
+        name="exporter",
+    )
+
+    assert _plaintext(created)
+
+
+async def test_a_claimed_prefix_is_retried_rather_than_surfaced(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    """`uq_api_keys_key_prefix` is global, so somebody else's key can collide."""
+    taken = await service.allocate_unused_key(db)  # type: ignore[arg-type]
+    db.claimed_prefixes.add(taken[:API_KEY_PREFIX_LENGTH])
+
+    replacement = await service.allocate_unused_key(db)  # type: ignore[arg-type]
+
+    assert replacement[:API_KEY_PREFIX_LENGTH] not in db.claimed_prefixes
+
+
+async def test_an_exhausted_keyspace_fails_loudly_instead_of_spinning(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    """A store that claims everything must end the loop, not run it forever."""
+
+    class ClaimsEverything(FakeControlPlane):
+        async def scalar(self, statement: Any) -> Any:
+            return uuid.uuid4()
+
+    with pytest.raises(InternalError):
+        await service.allocate_unused_key(ClaimsEverything([acme]))  # type: ignore[arg-type]
+
+
+async def test_minting_leaves_existing_keys_live(db: FakeControlPlane, acme: Tenant) -> None:
+    """Rotation depends on this: deploy the new key before withdrawing the old."""
+    await service.create(
+        db,  # type: ignore[arg-type]
+        org_id=acme.organization.id,
+        actor=acme.user,
+        project_id=acme.project.id,
+        name="replacement",
+    )
+
+    assert acme.key.revoked_at is None
 
 
 # ----------------------------------------------------------------- the service
@@ -359,3 +571,69 @@ async def test_listing_refuses_a_project_in_another_organization(
         )
 
     assert response.status_code == 404
+
+
+async def test_the_route_mints_a_key_for_the_callers_own_project(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    app = _build_app(db, acme.identity)
+
+    async with _client(app) as client:
+        response = await client.post(
+            f"{API_PREFIX}/api-keys",
+            json={"project_id": str(acme.project.id), "name": "staging exporter"},
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["key"].startswith("nvk_live_")
+    assert body["notice"] == SHOWN_ONCE_NOTICE
+    assert body["api_key"]["name"] == "staging exporter"
+
+
+async def test_the_route_refuses_a_project_in_another_organization(
+    db: FakeControlPlane, acme: Tenant, globex: Tenant
+) -> None:
+    """A project id in the body is a value the caller chose, like one in a query."""
+    app = _build_app(db, acme.identity)
+
+    async with _client(app) as client:
+        response = await client.post(
+            f"{API_PREFIX}/api-keys",
+            json={"project_id": str(globex.project.id), "name": "stolen"},
+        )
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert db.minted == []
+
+
+async def test_the_route_refuses_a_key_with_no_name(db: FakeControlPlane, acme: Tenant) -> None:
+    """A blank name is five keys nobody can tell apart when one of them leaks."""
+    app = _build_app(db, acme.identity)
+
+    async with _client(app) as client:
+        response = await client.post(
+            f"{API_PREFIX}/api-keys", json={"project_id": str(acme.project.id), "name": ""}
+        )
+
+    assert response.status_code == 422
+    assert db.minted == []
+
+
+async def test_a_listing_after_minting_still_carries_no_secret(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    """The one place the plaintext appears is the create response, and only there."""
+    app = _build_app(db, acme.identity)
+
+    async with _client(app) as client:
+        created = await client.post(
+            f"{API_PREFIX}/api-keys",
+            json={"project_id": str(acme.project.id), "name": "exporter"},
+        )
+        listing = await client.get(
+            f"{API_PREFIX}/api-keys", params={"project_id": str(acme.project.id)}
+        )
+
+    assert created.json()["key"] not in listing.text

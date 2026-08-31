@@ -6,8 +6,8 @@
  * reader can land in are testable without a browser.
  */
 
-import type { EndpointHealth, ServiceEdge, ServiceHealth } from "./api";
-import { formatErrorRate, formatRatePerMinute } from "./health-format";
+import type { EndpointHealth, ErrorGroupSummary, ServiceEdge, ServiceHealth } from "./api";
+import { formatCount, formatErrorRate, formatRatePerMinute } from "./health-format";
 
 /**
  * `silent` is not `missing`. The rollups only know which services reported in *this*
@@ -23,7 +23,7 @@ export interface DetailSources {
   isError: boolean;
   hasTrend: boolean;
   hasEndpoints: boolean;
-  hasRankedRow: boolean;
+  hasAggregate: boolean;
 }
 
 /**
@@ -33,16 +33,8 @@ export interface DetailSources {
 export function detailState(sources: DetailSources): DetailState {
   if (sources.isPending) return "pending";
   if (sources.isError) return "failed";
-  if (!sources.hasTrend && !sources.hasEndpoints && !sources.hasRankedRow) return "silent";
+  if (!sources.hasTrend && !sources.hasEndpoints && !sources.hasAggregate) return "silent";
   return "ready";
-}
-
-/** The aggregate row for one service, or nothing when it fell outside the ranked page. */
-export function findRankedService(
-  services: readonly ServiceHealth[],
-  serviceName: string,
-): ServiceHealth | undefined {
-  return services.find((service) => service.service_name === serviceName);
 }
 
 /** One neighbour of this service, and the edge that made it one. */
@@ -86,13 +78,11 @@ export function dependencyKey(direction: "in" | "out", dependency: Dependency): 
  * The sentence under the service name — the numbers first, in words, before the reader
  * meets a single column heading.
  */
-export function describeService(
-  row: ServiceHealth | undefined,
-  windowLabel: string,
-  rankedPageLimit: number,
-): string {
+export function describeService(row: ServiceHealth | undefined, windowLabel: string): string {
+  // The aggregate is now asked for by name, so the only reason it is absent is that
+  // this service reported nothing — never that it ranked too low to be on a page.
   if (!row) {
-    return `Outside the busiest ${rankedPageLimit} services in the last ${windowLabel}, so the totals below are this service's own history rather than its ranking.`;
+    return `No totals for the last ${windowLabel} — nothing by this name reported in it.`;
   }
 
   const traffic = `${formatRatePerMinute(row.requests_per_minute)} requests a minute in the last ${windowLabel}`;
@@ -107,6 +97,22 @@ export function describeEndpoints(endpoints: readonly EndpointHealth[]): string 
   const failing = endpoints.filter((endpoint) => endpoint.error_count > 0).length;
   const counted = `${endpoints.length} ${endpoints.length === 1 ? "endpoint" : "endpoints"}, worst first`;
   return failing === 0 ? `${counted}. None failing.` : `${counted}. ${failing} failing.`;
+}
+
+/**
+ * The caption over the error list.
+ *
+ * It counts occurrences as well as groups because those are two different facts: one
+ * group thrown nine thousand times and nine thousand groups thrown once are both "a
+ * lot of errors" and need entirely different work.
+ */
+export function describeServiceErrors(groups: readonly ErrorGroupSummary[]): string {
+  if (groups.length === 0) return "No exception was recorded in this service in the window.";
+
+  const occurrences = groups.reduce((total, group) => total + group.occurrences, 0);
+  const distinct = `${groups.length} ${groups.length === 1 ? "error" : "distinct errors"}`;
+  const thrown = `${formatCount(occurrences)} ${occurrences === 1 ? "time" : "times"}`;
+  return `${distinct}, thrown ${thrown}, most frequent first. Counted for this service only.`;
 }
 
 /** Why a screen with a name on it is showing nothing, and what to do about it. */

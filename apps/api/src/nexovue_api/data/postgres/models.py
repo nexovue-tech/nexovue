@@ -459,9 +459,14 @@ class PlanPrice(Base):
     )
     effective_from: Mapped[date] = mapped_column(Date, primary_key=True)
     currency: Mapped[str] = mapped_column(String(CURRENCY_CODE_LENGTH), nullable=False)
-    price_per_service_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Minor units, and named as such: the yen's minor unit is the yen, so a name
+    # saying "cents" invites a divide by a hundred that misquotes the bill.
+    price_per_service_minor_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
     # NULL is uncapped, which is not the same statement as a cap of zero.
     max_billed_services: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ADR 0056's volume allowance, in ingested bytes per billed service per
+    # calendar month. NULL is "no allowance recorded", not an allowance of zero.
+    included_bytes_per_service: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[CreatedAt]
 
 

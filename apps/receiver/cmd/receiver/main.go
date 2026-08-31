@@ -78,12 +78,18 @@ func run() error {
 
 	traffic := otlp.NewTraffic()
 
+	// One reader, and the recorder that writes back through it: `last_used_at` is
+	// what lets a customer see a key has gone quiet before revoking it.
+	keys := auth.NewPostgresKeys(dependencies.postgres)
+	keyUses := auth.NewLastUsedRecorder(keys)
+
 	// One set of collaborators for both transports: the gates behind them are
 	// the same code, and a second Options would be a second pipeline.
 	door := otlp.Options{
-		Authenticator: auth.New(auth.NewPostgresKeys(dependencies.postgres), auth.Options{
+		Authenticator: auth.New(keys, auth.Options{
 			CacheTTL:        cfg.APIKeyCacheTTL,
 			CacheMaxEntries: cfg.APIKeyCacheMaxEntries,
+			UseRecorder:     keyUses,
 		}),
 		Limiter: ratelimit.New(ratelimit.NewValkeyCounter(dependencies.valkey), cfg.RateLimitPerSecond),
 		Publisher: ingest.NewPublisher(dependencies.kafka, ingest.Topics{
@@ -114,6 +120,9 @@ func run() error {
 	// The heartbeat: without it a receiver serving nothing and a receiver
 	// serving everything write the same empty log.
 	go traffic.LogSummaryEvery(ctx, log, cfg.IngestSummaryInterval)
+
+	// Off the request path on purpose: an export must never wait on bookkeeping.
+	go keyUses.Run(ctx)
 
 	return serveUntilSignal(ctx, log, []listener{
 		httpListener(admin),

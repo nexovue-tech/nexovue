@@ -127,6 +127,112 @@ async def services_in_range(
     return await session.scalar(statement) or 0
 
 
+async def bytes_in_range(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    from_day: date,
+    to_day: date,
+) -> int:
+    """Ingested bytes over a range, for the whole organization.
+
+    The allowance is pooled across the organization, so this is deliberately
+    not narrowable to a project: one project's bytes are not one project's
+    allowance.
+    """
+    total = await session.scalar(
+        select(func.coalesce(func.sum(UsageDaily.bytes), 0)).where(
+            UsageDaily.org_id == org_id,
+            UsageDaily.day >= from_day,
+            UsageDaily.day <= to_day,
+        )
+    )
+    return total or 0
+
+
+async def service_counts_by_project(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    previous_from: date,
+    recent_from: date,
+    to_day: date,
+) -> Sequence[Row[tuple[uuid.UUID, int, int]]]:
+    """Each project's distinct service count in two adjacent windows.
+
+    One scan with two filtered aggregates rather than two round trips, because
+    the two windows are contiguous and the rows are read the same way for both.
+    Distinct within each window: a service reporting every day is one service,
+    here for the same reason it is one on the bill.
+    """
+    recent = func.count(distinct(UsageDailyService.service_name)).filter(
+        UsageDailyService.day >= recent_from
+    )
+    previous = func.count(distinct(UsageDailyService.service_name)).filter(
+        UsageDailyService.day < recent_from
+    )
+    statement = (
+        select(
+            UsageDailyService.project_id,
+            recent.label("recent"),
+            previous.label("previous"),
+        )
+        .where(
+            UsageDailyService.org_id == org_id,
+            UsageDailyService.day >= previous_from,
+            UsageDailyService.day <= to_day,
+        )
+        .group_by(UsageDailyService.project_id)
+    )
+    return (await session.execute(statement)).all()
+
+
+async def service_names(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_ids: Sequence[uuid.UUID],
+    from_day: date,
+    to_day: date,
+    limit_per_project: int,
+) -> Sequence[Row[tuple[uuid.UUID, str]]]:
+    """The distinct service names a few projects carried, capped per project.
+
+    The cap is per project rather than over the whole result, so one project in
+    the middle of a cardinality explosion cannot crowd every other project's
+    names out of the answer — which is exactly the case this is read for.
+    """
+    if not project_ids:
+        return []
+
+    distinct_names = (
+        select(UsageDailyService.project_id, UsageDailyService.service_name)
+        .where(
+            UsageDailyService.org_id == org_id,
+            UsageDailyService.project_id.in_(project_ids),
+            UsageDailyService.day >= from_day,
+            UsageDailyService.day <= to_day,
+        )
+        .distinct()
+        .subquery()
+    )
+    ranked = select(
+        distinct_names.c.project_id,
+        distinct_names.c.service_name,
+        func.row_number()
+        .over(
+            partition_by=distinct_names.c.project_id,
+            order_by=distinct_names.c.service_name,
+        )
+        .label("rank"),
+    ).subquery()
+
+    statement = select(ranked.c.project_id, ranked.c.service_name).where(
+        ranked.c.rank <= limit_per_project
+    )
+    return (await session.execute(statement)).all()
+
+
 async def find_plan(session: AsyncSession, *, slug: str) -> Plan | None:
     """What a tier grants. Plans are the same for everyone, so not tenant-scoped."""
     plan: Plan | None = await session.scalar(select(Plan).where(Plan.slug == slug))

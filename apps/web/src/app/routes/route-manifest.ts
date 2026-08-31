@@ -20,7 +20,8 @@ export type NavPath =
   | "/database"
   | "/infrastructure"
   | "/usage"
-  | "/settings/project";
+  | "/settings/project"
+  | "/settings/api-keys";
 
 export interface ScreenDefinition {
   path: string;
@@ -127,7 +128,8 @@ export const SHELL_SCREENS: ScreenDefinition[] = [
   {
     path: "/usage",
     title: "Usage",
-    description: "What you have ingested this period and what it projects to cost.",
+    description:
+      "What you have ingested, the services this calendar month bills for, and what they come to at your recorded rate.",
     taskId: "P1-48",
   },
   {
@@ -206,6 +208,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: "/usage", title: "Usage" },
       { path: "/settings/project", title: "Settings" },
+      { path: "/settings/api-keys", title: "API keys" },
     ],
   },
 ];

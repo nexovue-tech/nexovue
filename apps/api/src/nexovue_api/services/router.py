@@ -23,6 +23,7 @@ from nexovue_api.projects.service import require_project
 from nexovue_api.services import service
 from nexovue_api.services.schemas import (
     EndpointListResponse,
+    ServiceHealthResponse,
     ServiceListResponse,
     ServiceTrendResponse,
 )
@@ -104,6 +105,34 @@ async def list_project_endpoints(
         from_time=from_time,
         to_time=to_time,
         limit=limit,
+    )
+
+
+@router.get("/{service_name}", summary="One service in a time window")
+async def get_service(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    service_name: str,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+) -> ServiceHealthResponse:
+    """The aggregate a service's own screen is headed by.
+
+    Declared after `/trend` and `/endpoints`: FastAPI matches in declaration order, so
+    a literal path registered later would be swallowed by this parameter. The cost is
+    that a service actually *named* `trend` or `endpoints` is unreachable here — a
+    collision the collection sub-resources already carry, not one this route invents.
+    """
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.get_service(
+        repository,
+        project_id=str(project.id),
+        service_name=service_name,
+        from_time=window_start,
+        to_time=window_end,
     )
 
 

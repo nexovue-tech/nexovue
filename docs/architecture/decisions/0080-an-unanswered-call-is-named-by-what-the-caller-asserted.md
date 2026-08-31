@@ -1,6 +1,6 @@
 # 0080 — An unanswered call's callee is named by what the caller asserted, and never by an IP or a transport
 
-- **Status:** Accepted
+- **Status:** Accepted. Its open question — should a bare IP be allowed to name a node? — is answered by [0082](0082-ip-named-peers-collapse-in-the-map-not-in-storage.md): the address is still stored, and the map collapses addresses of one kind into one node. Nothing else here is changed.
 - **Date:** 2026-08-30
 
 ## Context

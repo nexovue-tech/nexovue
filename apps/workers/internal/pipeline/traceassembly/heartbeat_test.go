@@ -4,13 +4,18 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The heartbeat itself belongs to the consume loop; what trace assembly adds to
 // it is this. Without these numbers a worker whose sampling buffer or counter
 // map is only growing looks exactly like a healthy one.
 func TestTheHeartbeatCarriesWhatTheTraceStagesHold(t *testing.T) {
-	pipeline := Pipeline{stages: stagesFor(t, 100), retimedSpans: 4}
+	pipeline := Pipeline{
+		stages:       stagesFor(t, 100),
+		summaries:    newSummaries(time.Minute, 100),
+		retimedSpans: 4,
+	}
 
 	held := make(map[string]slog.Value)
 	for _, attr := range pipeline.Holding() {
@@ -20,6 +25,8 @@ func TestTheHeartbeatCarriesWhatTheTraceStagesHold(t *testing.T) {
 	for _, field := range []string{
 		"buffered_traces", "buffered_spans", "counter_series",
 		"spans_kept", "spans_dropped", "traces_closed_early", "spans_retimed",
+		"summarised_traces", "trace_summaries_written", "trace_summaries_revised",
+		"trace_summaries_evicted", "trace_summaries_truncated",
 	} {
 		if _, carried := held[field]; !carried {
 			t.Errorf("the heartbeat does not carry %s", field)

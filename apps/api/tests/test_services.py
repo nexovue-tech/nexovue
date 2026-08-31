@@ -116,7 +116,8 @@ def client() -> CapturingClient:
 def test_every_service_statement_filters_on_the_tenant() -> None:
     """The repository would refuse these, but failing here names the culprit."""
     for sql in (
-        queries.SERVICES_SQL,
+        queries.services_sql(one_service=False),
+        queries.services_sql(one_service=True),
         queries.endpoints_sql(one_service=False),
         queries.endpoints_sql(one_service=True),
     ):
@@ -180,6 +181,42 @@ async def test_naming_a_service_narrows_the_statement_rather_than_the_result(
     assert client.parameters[-1]["service_name"] == "storefront"
 
 
+async def test_reading_one_service_narrows_the_statement_rather_than_the_page(
+    client: CapturingClient,
+) -> None:
+    """The whole point of the endpoint: no ranked page is fetched to find one row."""
+    start, end = _window()
+
+    await service.get_service(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        service_name="storefront",
+        from_time=start,
+        to_time=end,
+    )
+
+    assert queries.ONE_SERVICE_CLAUSE in client.statements[-1]
+    assert client.parameters[-1]["service_name"] == "storefront"
+    assert client.parameters[-1]["limit"] == service.ONE_SERVICE_LIMIT
+
+
+async def test_asking_for_every_service_binds_no_service_name(
+    client: CapturingClient,
+) -> None:
+    start, end = _window()
+
+    await service.list_services(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        from_time=start,
+        to_time=end,
+        limit=50,
+    )
+
+    assert queries.ONE_SERVICE_CLAUSE not in client.statements[-1]
+    assert "service_name" not in client.parameters[-1]
+
+
 async def test_asking_for_every_endpoint_binds_no_service_name(
     client: CapturingClient,
 ) -> None:
@@ -196,6 +233,25 @@ async def test_asking_for_every_endpoint_binds_no_service_name(
 
     assert queries.ONE_SERVICE_CLAUSE not in client.statements[-1]
     assert "service_name" not in client.parameters[-1]
+
+
+# ----------------------------------------------------------------- route order
+
+
+def test_the_literal_service_routes_are_declared_before_the_parameter_one() -> None:
+    """FastAPI matches in declaration order, and this ordering is load-bearing.
+
+    `/services/{service_name}` registered above `/services/trend` would swallow it, and
+    the sparkline would start asking for a service called "trend" — a silent failure
+    that returns 200 and an empty answer.
+    """
+    from nexovue_api.services.router import router
+
+    paths = [route.path for route in router.routes]  # type: ignore[attr-defined]
+    parameterised = paths.index("/services/{service_name}")
+
+    assert paths.index("/services/trend") < parameterised
+    assert paths.index("/services/endpoints") < parameterised
 
 
 # ------------------------------------------------------------------- isolation
@@ -238,6 +294,38 @@ async def test_a_tenant_with_no_telemetry_gets_an_empty_list_and_not_a_404() -> 
     assert page.services == []
 
 
+async def test_one_organizations_service_is_silent_for_another() -> None:
+    """The name is real, the tenant is wrong, and the answer is silence, not a row."""
+    start, end = _window()
+
+    answer = await service.get_service(
+        _repository(_client(), TENANT_B),
+        project_id=PROJECT,
+        service_name="storefront",
+        from_time=start,
+        to_time=end,
+    )
+
+    assert answer.service is None
+
+
+async def test_an_unknown_service_name_is_a_silent_answer_not_a_404() -> None:
+    """The rollup knows which services reported *in this window*, not which exist."""
+    start, end = _window()
+
+    answer = await service.get_service(
+        _repository(_client(), TENANT_A),
+        project_id=PROJECT,
+        service_name="never-deployed",
+        from_time=start,
+        to_time=end,
+    )
+
+    assert answer.service is None
+    assert answer.window_start == start
+    assert answer.window_end == end
+
+
 async def test_an_unknown_service_name_is_an_empty_list_not_an_error() -> None:
     """The rollup knows which services reported *in this window*, not which exist."""
     start, end = _window()
@@ -278,6 +366,30 @@ async def test_counts_are_reported_as_rates_against_the_window_that_produced_the
     assert page.window_end == end
 
 
+async def test_one_service_reads_exactly_as_its_row_in_the_ranking(
+    client: CapturingClient,
+) -> None:
+    """The detail screen and the overview must never quote different numbers."""
+    start, end = _window()
+
+    page = await service.list_services(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        from_time=start,
+        to_time=end,
+        limit=service.MAX_SERVICE_LIMIT,
+    )
+    one = await service.get_service(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        service_name="storefront",
+        from_time=start,
+        to_time=end,
+    )
+
+    assert one.service == page.services[0]
+
+
 async def test_the_stored_quantile_state_is_unpacked_in_the_declared_order(
     client: CapturingClient,
 ) -> None:
@@ -315,7 +427,8 @@ def test_a_service_with_no_requests_has_no_error_rate_rather_than_a_division() -
 
 def test_both_rankings_put_the_worst_first_by_the_same_rule() -> None:
     """One rule, spelled once: the service list and the endpoint list must agree."""
-    assert queries.WORST_FIRST in queries.SERVICES_SQL
+    assert queries.WORST_FIRST in queries.services_sql(one_service=False)
+    assert queries.WORST_FIRST in queries.services_sql(one_service=True)
     assert queries.WORST_FIRST in queries.endpoints_sql(one_service=False)
     assert queries.WORST_FIRST in queries.endpoints_sql(one_service=True)
 
@@ -346,7 +459,7 @@ def test_the_merge_asks_for_exactly_the_quantile_levels_the_column_stores() -> N
 
     levels = tuple(float(level) for level in declared.group(1).split(","))
     assert levels == rollup.QUANTILE_LEVELS
-    assert queries.QUANTILE_ARGUMENTS in queries.SERVICES_SQL
+    assert queries.QUANTILE_ARGUMENTS in queries.services_sql(one_service=False)
 
 
 @pytest.mark.parametrize(
@@ -368,7 +481,9 @@ def test_every_column_the_statements_name_exists_in_the_table(column: str) -> No
     declaration = re.compile(rf"^\s+`?{column}`?\s", re.MULTILINE)
 
     assert declaration.search(_migration_text()), f"{column} is not a column of endpoint_stats_1m"
-    assert column in queries.SERVICES_SQL or column in queries.endpoints_sql(one_service=True)
+    assert column in queries.services_sql(one_service=False) or column in queries.endpoints_sql(
+        one_service=True
+    )
 
 
 # ------------------------------------ the rows must be counted before sampling

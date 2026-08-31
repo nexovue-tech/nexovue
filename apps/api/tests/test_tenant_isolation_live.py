@@ -36,6 +36,7 @@ import asyncpg
 import httpx
 import pytest
 from live import require_stack
+from pydantic import SecretStr
 
 from nexovue_api.settings import API_PREFIX
 
@@ -157,11 +158,18 @@ class ApiClient:
 
 @dataclass(frozen=True, slots=True)
 class LiveTenant:
-    """A real organization on the running stack, and a session for it."""
+    """A real organization on the running stack, and a session for it.
+
+    `api_key` is a `SecretStr` because this dataclass's repr is printed verbatim
+    by pytest on any failing assertion that holds one — which put a working
+    ingest key into a test log. The redaction travels with the value rather than
+    depending on this declaration: pass the wrapper around, and only
+    `get_secret_value()` at the moment it goes into a header discloses it.
+    """
 
     org_id: str
     project_id: str
-    api_key: str
+    api_key: SecretStr
     client: ApiClient
 
 
@@ -204,7 +212,7 @@ def _sign_up() -> LiveTenant:
     return LiveTenant(
         org_id=body["organization"]["id"],
         project_id=body["project"]["id"],
-        api_key=body["api_key"],
+        api_key=SecretStr(body["api_key"]),
         client=client,
     )
 
@@ -222,7 +230,7 @@ def _sign_in_to_the_seeded_organization() -> LiveTenant:
     return LiveTenant(
         org_id=org_id,
         project_id=projects.json()["projects"][0]["id"],
-        api_key="",
+        api_key=SecretStr(""),
         client=client,
     )
 
@@ -247,7 +255,7 @@ def newcomer() -> Iterator[LiveTenant]:
 # ------------------------------------------------------------------ the ingest
 
 
-def _export_probe_trace(api_key: str) -> str:
+def _export_probe_trace(api_key: SecretStr) -> str:
     """Send one errored span through door 1 and return its trace id."""
     trace_id = secrets.token_bytes(16)
     span_id = secrets.token_bytes(8)
@@ -291,7 +299,8 @@ def _export_probe_trace(api_key: str) -> str:
     response = httpx.post(
         f"{RECEIVER_ORIGIN}/v1/traces",
         json=batch,
-        headers={"x-nexovue-key": api_key},
+        # The only disclosure: the header the receiver authenticates against.
+        headers={"x-nexovue-key": api_key.get_secret_value()},
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
     assert response.status_code == 200, f"the receiver refused the batch: {response.text}"

@@ -4,12 +4,12 @@ import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
 
 /**
- * What one service's screen reads. Four endpoints, all of them already served, and
- * field names are the API's, unchanged.
+ * What one service's screen reads. Five endpoints, and field names are the API's,
+ * unchanged.
  *
- * Three of the four are scoped to this service by the server. The ranked list is not:
- * there is no `GET /services/{name}`, so the aggregate row has to be found in the page
- * the overview endpoint returns, and this asks for the largest page the API allows.
+ * Four of the five are scoped to this service by the server, by a bound `service_name`
+ * that narrows a read this tenant is already entitled to. The fifth is the dependency
+ * graph, which has no per-service form and is sliced here.
  */
 
 /** The numbers a service row and an endpoint row are both read for. */
@@ -57,10 +57,15 @@ interface ServiceTrendResponse {
   services: ServiceTrend[];
 }
 
-interface ServiceListResponse {
+interface ServiceHealthResponse {
   window_start: string;
   window_end: string;
-  services: ServiceHealth[];
+  /**
+   * Null when nothing by that name reported in the window — and that is not a 404.
+   * The rollups know which services reported in *this* window, not which exist, so
+   * "no row" means "silent here" and the screen has to say that rather than "missing".
+   */
+  service: ServiceHealth | null;
 }
 
 interface EndpointListResponse {
@@ -74,10 +79,6 @@ interface EndpointListResponse {
  * the caller now, so the two are never read as the same dependency.
  */
 export const EDGE_QUEUE = "queue";
-
-/** Reserved names the pipeline writes rather than inventing a service. */
-const UNINSTRUMENTED_SERVICE = "(uninstrumented)";
-const UNKNOWN_SERVICE = "(unknown)";
 
 export interface ServiceEdge {
   caller: string;
@@ -100,20 +101,41 @@ interface ServiceMapResponse {
   edges: ServiceEdge[];
 }
 
-/** A service we can only see from the outside — it has no screen of its own. */
-export function isPlaceholderService(name: string): boolean {
-  return name === UNINSTRUMENTED_SERVICE || name === UNKNOWN_SERVICE;
+/** One exception, however many times it happened in this service. */
+export interface ErrorGroupSummary {
+  group_id: string;
+  exception_type: string;
+  /** Ids, numbers, hosts and addresses collapsed to tokens. This is what the group is. */
+  message_template: string;
+  /** What one instance actually said, tokens and all. */
+  latest_message: string;
+  /**
+   * De-duplicated, and counted for this service only: the same group elsewhere in the
+   * project is not in this number.
+   */
+  occurrences: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+interface ErrorGroupListResponse {
+  groups: ErrorGroupSummary[];
 }
 
 /**
- * `MAX_SERVICE_LIMIT` on the API. Asked for in full because this screen needs one
- * named row rather than a readable ranking, and a row outside the page is
- * indistinguishable from a service that was silent.
+ * A service we can only see from the outside — it has no screen of its own.
+ *
+ * The test is the parentheses, not a fixed list. A callee that never reported for
+ * itself is named from what the caller's own span said about its peer —
+ * `(valkey-cart)`, `(postgresql)`, `(kafka)` — so the set of these names is open, and
+ * a real `service.name` is a resource attribute that cannot contain parentheses.
  */
-export const RANKED_PAGE_LIMIT = 500;
+export function isPlaceholderService(name: string): boolean {
+  return name.startsWith("(") && name.endsWith(")");
+}
 
-export const rankedServicesQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["service-detail-ranked", projectId, timeWindow.from, timeWindow.to] as const;
+export const serviceQueryKey = (projectId: string, serviceName: string, timeWindow: TimeWindow) =>
+  ["service-detail", projectId, serviceName, timeWindow.from, timeWindow.to] as const;
 
 export const serviceTrendQueryKey = (
   projectId: string,
@@ -130,20 +152,36 @@ export const serviceEndpointsQueryKey = (
 export const serviceDependenciesQueryKey = (projectId: string, timeWindow: TimeWindow) =>
   ["service-dependencies", projectId, timeWindow.from, timeWindow.to] as const;
 
+export const serviceErrorsQueryKey = (
+  projectId: string,
+  serviceName: string,
+  timeWindow: TimeWindow,
+) => ["service-errors", projectId, serviceName, timeWindow.from, timeWindow.to] as const;
+
 function windowParams(projectId: string | undefined, timeWindow: TimeWindow) {
   return { project_id: projectId, from: timeWindow.from, to: timeWindow.to };
 }
 
-/** The ranked page this service's aggregate row is looked up in. */
-export function useRankedServices(projectId: string | undefined, timeWindow: TimeWindow) {
+/**
+ * This service's aggregate over the window — the six numbers the header is built on.
+ *
+ * One named row, asked for by name. The name is a path segment, so it is escaped.
+ */
+export function useService(
+  projectId: string | undefined,
+  serviceName: string,
+  timeWindow: TimeWindow,
+) {
   return useQuery({
-    queryKey: rankedServicesQueryKey(projectId ?? "", timeWindow),
+    queryKey: serviceQueryKey(projectId ?? "", serviceName, timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
-      apiClient.get<ServiceListResponse>("services", {
-        searchParams: { ...windowParams(projectId, timeWindow), limit: RANKED_PAGE_LIMIT },
+      apiClient.get<ServiceHealthResponse>(`services/${encodeURIComponent(serviceName)}`, {
+        searchParams: windowParams(projectId, timeWindow),
         signal,
       }),
+    // The wrapper carries the window the screen already knows; the row is the answer.
+    select: (response: ServiceHealthResponse) => response.service ?? undefined,
   });
 }
 
@@ -186,6 +224,33 @@ export function useServiceEndpoints(
     queryFn: ({ signal }) =>
       apiClient.get<EndpointListResponse>(`services/${encodeURIComponent(serviceName)}/endpoints`, {
         searchParams: windowParams(projectId, timeWindow),
+        signal,
+      }),
+  });
+}
+
+/**
+ * The exceptions thrown in this service, most frequent first.
+ *
+ * Narrowed by the server on a bound `service_name`. Filtering the project-wide list
+ * here instead would silently under-report: that list is capped, so a quiet service's
+ * groups can fall off the end of it and nothing on this screen could say they had.
+ *
+ * Its failure is deliberately not the screen's failure, for the same reason the
+ * dependency panel's is not — losing one panel must not blank the numbers a person
+ * came for.
+ */
+export function useServiceErrors(
+  projectId: string | undefined,
+  serviceName: string,
+  timeWindow: TimeWindow,
+) {
+  return useQuery({
+    queryKey: serviceErrorsQueryKey(projectId ?? "", serviceName, timeWindow),
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<ErrorGroupListResponse>("error-groups", {
+        searchParams: { ...windowParams(projectId, timeWindow), service_name: serviceName },
         signal,
       }),
   });

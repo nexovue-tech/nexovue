@@ -13,9 +13,12 @@ itself when Postgres is not up, so the offline suites still run without docker.
 from __future__ import annotations
 
 import os
+import re
 import socket
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urlsplit
 
@@ -25,9 +28,11 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.apikeys import service as apikeys
+from nexovue_api.apikeys.schemas import ApiKeyCreated
 from nexovue_api.audit import service as audit
-from nexovue_api.data.postgres.models import ApiKey, AuditLogEntry
+from nexovue_api.data.postgres.models import API_KEY_PREFIX_LENGTH, ApiKey, AuditLogEntry
 from nexovue_api.errors.exceptions import NotFoundError
+from nexovue_api.signup.apikeys import hash_api_key
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 
 POSTGRES_DSN: Final = os.environ.get(
@@ -37,12 +42,31 @@ ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://"
 
 REACHABILITY_TIMEOUT_SECONDS: Final = 1.0
 
+
+def _plaintext(created: ApiKeyCreated) -> str:
+    """The minted secret, asked for by name.
+
+    `ApiKeyCreated.key` is a `SecretStr`, so nothing renders it by accident.
+    A test that asserts about the plaintext has to say so, here.
+    """
+    return created.key.get_secret_value()
+
+
 # The receiver's own lookup, copied from apps/receiver/internal/auth/postgres.go.
 # Asserted verbatim so that "the control plane revoked it" and "the ingest path
 # stops accepting it" are proven to be the same fact, not two beliefs.
 RECEIVER_LOOKUP: Final = text(
     "SELECT org_id::text, project_id::text, key_hash "
     "FROM api_keys WHERE key_prefix = :key_prefix AND revoked_at IS NULL"
+)
+
+# The receiver's `last_used_at` write, likewise copied verbatim from
+# `markUsed` in the same file. The guarantee under test is the SQL's, not a
+# Python reimplementation of it: this is the statement that actually runs.
+RECEIVER_MARK_USED: Final = text(
+    "UPDATE api_keys SET last_used_at = :at "
+    "WHERE key_prefix = :key_prefix AND revoked_at IS NULL "
+    "AND (last_used_at IS NULL OR last_used_at < :at)"
 )
 
 
@@ -110,6 +134,280 @@ async def _receiver_sees(db: AsyncSession, key_prefix: str) -> Any:
     return result.first()
 
 
+async def _receiver_marks_used(db: AsyncSession, key_prefix: str, at: datetime) -> None:
+    await db.execute(RECEIVER_MARK_USED, {"key_prefix": key_prefix, "at": at})
+
+
+async def _key_by_prefix(db: AsyncSession, key_prefix: str) -> ApiKey:
+    key: ApiKey | None = await db.scalar(select(ApiKey).where(ApiKey.key_prefix == key_prefix))
+    assert key is not None, "no key with that prefix"
+    await db.refresh(key)
+    return key
+
+
+# ------------------------------------------- the statements this suite borrows
+
+# Where the two constants above were copied from. Copies drift, and a drifted
+# copy makes every assertion below a statement about a query nothing runs.
+RECEIVER_SOURCE: Final = (
+    Path(__file__).resolve().parents[3] / "apps" / "receiver" / "internal" / "auth" / "postgres.go"
+)
+
+_GO_CONSTANT: Final = re.compile(r"^const (\w+) = `([^`]*)`", re.MULTILINE)
+
+# pgx binds by position; SQLAlchemy binds by name. Same statement, two dialects.
+GO_PLACEHOLDERS: Final = {"$1": ":key_prefix", "$2": ":at"}
+
+
+def _normalized(statement: str) -> str:
+    """Whitespace and placeholder style removed, so only the SQL is compared."""
+    for positional, named in GO_PLACEHOLDERS.items():
+        statement = statement.replace(positional, named)
+    return " ".join(statement.split())
+
+
+def _go_constants() -> dict[str, str]:
+    return {
+        name: _normalized(body) for name, body in _GO_CONSTANT.findall(RECEIVER_SOURCE.read_text())
+    }
+
+
+@pytest.mark.parametrize(
+    "go_name,borrowed",
+    [("lookupByPrefix", RECEIVER_LOOKUP), ("markUsed", RECEIVER_MARK_USED)],
+)
+def test_the_statement_this_suite_runs_is_the_one_the_receiver_runs(
+    go_name: str, borrowed: Any
+) -> None:
+    """The link that makes the rest of this file evidence about the ingest path.
+
+    Without it, someone could change the receiver's SQL and every test here would
+    keep passing against the old statement — proving a fact about code that no
+    longer exists.
+    """
+    constants = _go_constants()
+    assert go_name in constants, (
+        f"{RECEIVER_SOURCE.name} no longer declares `{go_name}`. It found {sorted(constants)}."
+    )
+    assert _normalized(str(borrowed)) == constants[go_name], (
+        f"the copy of `{go_name}` in this suite has drifted from the receiver's"
+    )
+
+
+# ------------------------------------------------------------------ the minting
+
+
+async def test_a_minted_key_authenticates_on_the_ingest_path(db: AsyncSession) -> None:
+    """The whole point of the endpoint: a key it returns actually works.
+
+    Asserted through the receiver's own statement and the receiver's own hash, so
+    "the console minted a key" and "the ingest path accepts it" are one fact.
+    """
+    tenant = await _new_tenant(db)
+
+    created = await apikeys.create(
+        db,
+        org_id=tenant.organization.id,
+        actor=tenant.user,
+        project_id=tenant.project.id,
+        name="replacement",
+    )
+    await db.flush()
+
+    row = await _receiver_sees(db, _plaintext(created)[:API_KEY_PREFIX_LENGTH])
+    assert row is not None, "the receiver cannot resolve the key we just minted"
+    org_id, project_id, key_hash = row
+    assert uuid.UUID(org_id) == tenant.organization.id
+    assert uuid.UUID(project_id) == tenant.project.id
+    assert key_hash == hash_api_key(_plaintext(created))
+
+
+async def test_a_rotation_leaves_both_keys_live_until_the_old_one_is_revoked(
+    db: AsyncSession,
+) -> None:
+    """Create, deploy, verify, revoke — the standard order needs an overlap.
+
+    A create that withdrew the previous key would make every rotation an outage,
+    so this asserts the overlap exists and that revoking the old one afterwards
+    leaves the new one untouched.
+    """
+    tenant = await _new_tenant(db)
+    original = await _only_key(db, tenant.organization.id)
+
+    created = await apikeys.create(
+        db,
+        org_id=tenant.organization.id,
+        actor=tenant.user,
+        project_id=tenant.project.id,
+        name="replacement",
+    )
+    await db.flush()
+    replacement_prefix = _plaintext(created)[:API_KEY_PREFIX_LENGTH]
+
+    assert await _receiver_sees(db, original.key_prefix) is not None
+    assert await _receiver_sees(db, replacement_prefix) is not None
+
+    await apikeys.revoke(db, org_id=tenant.organization.id, actor=tenant.user, key_id=original.id)
+    await db.flush()
+
+    assert await _receiver_sees(db, original.key_prefix) is None
+    assert await _receiver_sees(db, replacement_prefix) is not None
+
+
+async def test_a_minted_key_lands_in_the_callers_own_project_only(db: AsyncSession) -> None:
+    """The isolation invariant on a write, held by the row rather than by care."""
+    tenant = await _new_tenant(db)
+    stranger = await _new_tenant(db)
+
+    created = await apikeys.create(
+        db,
+        org_id=tenant.organization.id,
+        actor=tenant.user,
+        project_id=tenant.project.id,
+        name="exporter",
+    )
+    await db.flush()
+
+    row = await _key_by_prefix(db, _plaintext(created)[:API_KEY_PREFIX_LENGTH])
+    assert row.org_id == tenant.organization.id
+    assert row.project_id == tenant.project.id
+
+    listing = await apikeys.list_for_project(
+        db, org_id=stranger.organization.id, project_id=stranger.project.id
+    )
+    assert created.api_key.id not in [summary.id for summary in listing.api_keys]
+
+
+async def test_the_database_stores_no_form_of_the_plaintext_key(db: AsyncSession) -> None:
+    """Read back over every column of the row, from the database, not the object."""
+    tenant = await _new_tenant(db)
+
+    created = await apikeys.create(
+        db,
+        org_id=tenant.organization.id,
+        actor=tenant.user,
+        project_id=tenant.project.id,
+        name="exporter",
+    )
+    await db.flush()
+
+    stored = await db.execute(
+        text("SELECT api_keys::text FROM api_keys WHERE key_prefix = :key_prefix"),
+        {"key_prefix": _plaintext(created)[:API_KEY_PREFIX_LENGTH]},
+    )
+    row_text = stored.scalar_one()
+    assert _plaintext(created) not in row_text
+    # The secret half in particular: the prefix is stored in the clear and shares
+    # its first sixteen characters with the key.
+    assert _plaintext(created)[API_KEY_PREFIX_LENGTH:] not in row_text
+
+
+async def test_two_keys_in_one_project_never_share_a_prefix(db: AsyncSession) -> None:
+    """`uq_api_keys_key_prefix` is what the receiver's lookup depends on."""
+    tenant = await _new_tenant(db)
+
+    minted = [
+        await apikeys.create(
+            db,
+            org_id=tenant.organization.id,
+            actor=tenant.user,
+            project_id=tenant.project.id,
+            name=f"key {index}",
+        )
+        for index in range(5)
+    ]
+    await db.flush()
+
+    prefixes = {created.api_key.key_hint for created in minted}
+    listing = await apikeys.list_for_project(
+        db, org_id=tenant.organization.id, project_id=tenant.project.id
+    )
+    # Five minted plus the one signup created.
+    assert len(listing.api_keys) == 6
+    assert len(prefixes) == len(minted)
+
+
+async def test_creating_a_key_records_who_minted_it(db: AsyncSession) -> None:
+    tenant = await _new_tenant(db)
+
+    created = await apikeys.create(
+        db,
+        org_id=tenant.organization.id,
+        actor=tenant.user,
+        project_id=tenant.project.id,
+        name="exporter",
+    )
+    await db.flush()
+
+    recorded = [
+        entry
+        for entry in await _entries(db, tenant.organization.id)
+        if entry.action == audit.API_KEY_CREATED
+    ]
+    # One from signup, one from this mint.
+    assert len(recorded) == 2
+    assert recorded[-1].target == f"{audit.API_KEY_TARGET}:{created.api_key.id}"
+    assert _plaintext(created) not in " ".join(entry.target for entry in recorded)
+
+
+# ------------------------------------------------------------- the last use
+
+
+async def test_the_receivers_write_moves_last_used_forward(db: AsyncSession) -> None:
+    """What turns "has the old key gone quiet?" from a guess into a reading."""
+    tenant = await _new_tenant(db)
+    key = await _only_key(db, tenant.organization.id)
+    assert key.last_used_at is None, "a key nothing has sent with has no last use"
+
+    used_at = datetime.now(UTC)
+    await _receiver_marks_used(db, key.key_prefix, used_at)
+
+    assert (await _key_by_prefix(db, key.key_prefix)).last_used_at == used_at
+
+
+async def test_an_out_of_order_write_never_moves_last_used_backwards(db: AsyncSession) -> None:
+    """Several receivers each hold their own cache, so writes arrive unordered."""
+    tenant = await _new_tenant(db)
+    key = await _only_key(db, tenant.organization.id)
+
+    later = datetime.now(UTC)
+    earlier = later - timedelta(minutes=5)
+
+    await _receiver_marks_used(db, key.key_prefix, later)
+    await _receiver_marks_used(db, key.key_prefix, earlier)
+
+    assert (await _key_by_prefix(db, key.key_prefix)).last_used_at == later
+
+
+async def test_a_revoked_key_is_never_stamped_as_used(db: AsyncSession) -> None:
+    """A withdrawn key is not in use, and a stamp on one would read as still live."""
+    tenant = await _new_tenant(db)
+    key = await _only_key(db, tenant.organization.id)
+
+    await apikeys.revoke(db, org_id=tenant.organization.id, actor=tenant.user, key_id=key.id)
+    await db.flush()
+    await _receiver_marks_used(db, key.key_prefix, datetime.now(UTC))
+
+    assert (await _key_by_prefix(db, key.key_prefix)).last_used_at is None
+
+
+async def test_the_console_reads_back_the_last_use_the_receiver_wrote(db: AsyncSession) -> None:
+    """The two ends of the feature: the receiver's write, the console's read."""
+    tenant = await _new_tenant(db)
+    key = await _only_key(db, tenant.organization.id)
+
+    used_at = datetime.now(UTC)
+    await _receiver_marks_used(db, key.key_prefix, used_at)
+    await db.refresh(key)
+
+    listing = await apikeys.list_for_project(
+        db, org_id=tenant.organization.id, project_id=tenant.project.id
+    )
+
+    (summary,) = [row for row in listing.api_keys if row.id == key.id]
+    assert summary.last_used_at == used_at
+
+
 # ------------------------------------------------------------------- the audit
 
 
@@ -144,7 +442,7 @@ async def test_no_audit_row_carries_anything_that_could_be_replayed(db: AsyncSes
         f"{entry.action} {entry.target}" for entry in await _entries(db, key.org_id)
     )
 
-    assert tenant.api_key not in recorded
+    assert tenant.api_key.get_secret_value() not in recorded
     assert key.key_prefix not in recorded
     assert key.key_hash not in recorded
     assert tenant.user.password_hash is not None

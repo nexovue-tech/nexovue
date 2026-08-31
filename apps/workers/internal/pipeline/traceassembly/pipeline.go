@@ -69,6 +69,13 @@ type Pipeline struct {
 	writer *spanWriter
 	block  *spanBlock
 
+	// summaries fills `trace_summaries`, the per-trace row the trace list is a
+	// sort-key read of. It is fed the rows the sampler released — after the
+	// sampler, unlike every other derived table here — because a list naming
+	// traces whose spans were never stored would be worse than useless.
+	summaries     *summaries
+	summaryWriter *summaryWriter
+
 	stages  *stages
 	metrics *derive.Writer
 	// endpoints writes `endpoint_stats_1m`. It is filled here rather than by a
@@ -134,7 +141,7 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		Topic:         cfg.Spans.Topic,
 		ConsumerGroup: cfg.Spans.ConsumerGroup,
 		DLQTopic:      cfg.Spans.DLQTopic,
-		MaxRows:       cfg.Spans.MaxRows,
+		MaxRows:       cfg.Spans.MaxMessages,
 		MaxDelay:      cfg.Spans.MaxDelay,
 		// A partition can arrive from another worker, whose settlements this
 		// process never saw. Re-reading the durable state before counting
@@ -146,17 +153,19 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 	}
 
 	return &Pipeline{
-		loop:      loop,
-		writer:    newSpanWriter(pool),
-		block:     newSpanBlock(),
-		stages:    stages,
-		metrics:   derive.NewWriter(pool),
-		endpoints: derive.NewEndpointWriter(pool),
-		edges:     serviceedges.NewWriter(pool),
-		seen:      dedupe.NewOffsets(),
-		ingest:    ingest,
-		log:       log.With(slog.String("pipeline", string(config.PipelineTraceAssembly))),
-		sampling:  cfg.Sampling,
+		loop:          loop,
+		writer:        newSpanWriter(pool),
+		block:         newSpanBlock(),
+		summaries:     newSummaries(cfg.Sampling.DecisionTTL, cfg.Sampling.MaxTraces),
+		summaryWriter: newSummaryWriter(pool),
+		stages:        stages,
+		metrics:       derive.NewWriter(pool),
+		endpoints:     derive.NewEndpointWriter(pool),
+		edges:         serviceedges.NewWriter(pool),
+		seen:          dedupe.NewOffsets(),
+		ingest:        ingest,
+		log:           log.With(slog.String("pipeline", string(config.PipelineTraceAssembly))),
+		sampling:      cfg.Sampling,
 	}, nil
 }
 
@@ -217,6 +226,7 @@ func (p *Pipeline) Describe() []slog.Attr {
 func (p *Pipeline) Holding() []slog.Attr {
 	stats := p.stages.buffer.Stats()
 	edges := p.stages.edges.Stats()
+	summaries := p.summaries.Stats()
 	return []slog.Attr{
 		slog.Int("buffered_traces", stats.OpenTraces),
 		slog.Int("buffered_spans", stats.BufferedSpans),
@@ -227,6 +237,16 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Uint64("traces_closed_early", stats.ClosedEarly),
 		slog.Uint64("spans_retimed", p.retimedSpans),
 		slog.Int("spans_already_stored", p.alreadyStoredSpans),
+		slog.Int("summarised_traces", summaries.OpenTraces),
+		slog.Uint64("trace_summaries_written", summaries.Written),
+		// Revised counts traces that gained a span after their row was written.
+		// Flat is the healthy shape; a number that climbs says the sampling
+		// window is closing before traces are whole.
+		slog.Uint64("trace_summaries_revised", summaries.Revised),
+		slog.Uint64("trace_summaries_evicted", summaries.Evicted),
+		// Traces whose endpoint set hit its cap, so an operation filter answers
+		// them from a partial set. It should never move.
+		slog.Uint64("trace_summaries_truncated", summaries.EndpointsTruncated),
 		slog.Int("edge_pairs_pending", edges.PendingSpans),
 		slog.Int("edge_series", edges.OpenEdges),
 		// The gap between these two is how many unanswered calls the caller's
@@ -276,7 +296,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (spanStora
 		if !run.store {
 			p.alreadyStoredSpans += result.spans
 		}
-		p.appendRows(result.rows)
+		p.appendRows(polled.At, result.rows)
 		produced.latestMinute = later(produced.latestMinute, result.latestMinute)
 		produced.latestEdgeMinute = later(produced.latestEdgeMinute, result.latestEdgeMinute)
 		skew.merge(result.skew)
@@ -285,6 +305,9 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (spanStora
 	}
 
 	if err := p.insertBounded(ctx); err != nil {
+		return spanStorage{}, err
+	}
+	if err := p.insertSummaries(ctx, p.summaries.Drain(polled.At)); err != nil {
 		return spanStorage{}, err
 	}
 	p.reportSkew(ctx, skew)
@@ -370,8 +393,14 @@ func holdsAnythingBack(decision ingeststate.Decision, batch ingeststate.Range) b
 // whose minute is complete. The loop commits what that made storable.
 func (p *Pipeline) Settle(ctx context.Context, now time.Time) error {
 	p.block.reset()
-	p.appendRows(p.stages.buffer.Expire(now))
+	p.appendRows(now, p.stages.buffer.Expire(now))
 	if err := p.insertBounded(ctx); err != nil {
+		return err
+	}
+	// Before the watermark below claims these spans are stored: a summary lost
+	// to a crash after the watermark moved would never be re-derived, and the
+	// trace would be missing from the list for as long as its spans are kept.
+	if err := p.insertSummaries(ctx, p.summaries.Drain(now)); err != nil {
 		return err
 	}
 
@@ -454,8 +483,11 @@ func (p *Pipeline) settleDerived(
 // lose nothing. The loop commits it afterwards.
 func (p *Pipeline) Drain(ctx context.Context, now time.Time) error {
 	p.block.reset()
-	p.appendRows(p.stages.buffer.Drain(now))
+	p.appendRows(now, p.stages.buffer.Drain(now))
 	if err := p.writer.insert(ctx, p.block); err != nil {
+		return err
+	}
+	if err := p.insertSummaries(ctx, p.summaries.DrainAll()); err != nil {
 		return err
 	}
 	// Everything held is drained here, so every held offset is both counted
@@ -508,6 +540,21 @@ func (p *Pipeline) insertEndpoints(ctx context.Context, stats []derive.EndpointS
 	})
 }
 
+// insertSummaries writes the per-trace rows behind the trace list.
+//
+// No deduplication guard, unlike the three rollups above, and for a reason
+// rather than an omission: every row is a complete snapshot of its trace and
+// every column of `trace_summaries` merges with max, min or set union, so a
+// retry after a lost acknowledgement writes the same answer again.
+func (p *Pipeline) insertSummaries(ctx context.Context, rows []summaryRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	return p.loop.Retry(ctx, "insert trace summaries", func(callCtx context.Context) error {
+		return p.summaryWriter.insert(callCtx, rows)
+	})
+}
+
 // insertBounded writes the accumulated block under a deadline.
 func (p *Pipeline) insertBounded(ctx context.Context) error {
 	return p.loop.Retry(ctx, "insert spans", func(callCtx context.Context) error {
@@ -515,9 +562,13 @@ func (p *Pipeline) insertBounded(ctx context.Context) error {
 	})
 }
 
-func (p *Pipeline) appendRows(rows []spanRow) {
+// appendRows queues the released rows for `spans` and folds each into its
+// trace's summary. The two see exactly the same rows, which is what makes a
+// summary an index of what was stored rather than a claim about what arrived.
+func (p *Pipeline) appendRows(now time.Time, rows []spanRow) {
 	for _, row := range rows {
 		p.block.append(row)
+		p.summaries.Observe(now, row)
 	}
 }
 

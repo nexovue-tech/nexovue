@@ -26,6 +26,18 @@ nothing, because `spans` is a plain MergeTree and nothing deduplicates it on rea
 catches one across a restart, keeping both watermarks in Keeper — counted-through (ADR 0061) and
 written-through (migration `000026`).
 
+`log-writing` and `metric-ingest` have the same root and a much narrower window: they insert inside
+`Absorb`, so a batch is exposed from its insert to its commit rather than for the ~70s spans wait.
+Narrower is not closed — measured over 60 abrupt restarts under load, 49,580 of 905,020 distinct log
+rows had two copies. Both now keep a written-through watermark in one shared KeeperMap table
+(migration `000029`), keyed by topic and partition so the two signals cannot collide.
+
+**A batch bound in messages is not a bound on memory.** One OTLP message carries as many log records
+or data points as the sender's exporter batched, so `WORKERS_*_BATCH_MAX_ROWS` — which counted
+messages — let 5,000 messages hold 50,000 rows and OOM-kill the worker at its 1 GiB limit. The
+message bound is now `WORKERS_*_BATCH_MAX_MESSAGES`, `WORKERS_*_BATCH_MAX_ROWS` bounds one insert,
+and `consume` bounds a batch's bytes as well.
+
 Because of that, **a bucket must always be able to settle**, so `derive` counts on the client's own
 span timestamp only while it is within a minute ahead of, or the broker's retention behind, the
 envelope's `received_at_unix_nano`; outside that it counts at receive time and says so. A client

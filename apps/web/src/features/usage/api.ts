@@ -47,15 +47,54 @@ export interface PlanPrice {
   /** ISO 4217. */
   currency: string;
   /** Minor units of that currency — whole, because money in binary floats rounds. */
-  price_per_service_cents: number;
+  price_per_service_minor_units: number;
   /** Null is uncapped, which is not the same statement as a cap of zero. */
   max_billed_services: number | null;
+  /** Bytes each billed service brings per month. Null is "none recorded". */
+  included_bytes_per_service: number | null;
+}
+
+/** The calendar month a bill covers — not the range of days being browsed. */
+export interface BillingPeriod {
+  first_day: string;
+  last_day: string;
+  /** False while the meter has not counted past the end of the month. */
+  settled: boolean;
+  /** Distinct services over the month: a union, never a sum of the days. */
+  services: number;
+  /** The same after the plan's ceiling. Equal to `services` when uncapped. */
+  billed_services: number;
+  bytes_ingested: number;
+  /** Minor units of `currency`. Null when no price is recorded — never a zero. */
+  service_cost_minor_units: number | null;
+  currency: string | null;
+  /** The month's pooled allowance in bytes. Null when the rate records none. */
+  included_bytes: number | null;
+}
+
+export interface ServiceNameFamily {
+  /** The name these would share if the identifier came off the end. */
+  stem: string;
+  /** `uuid`, `hex`, `kubernetes-pod` or `ordinal`. */
+  kind: string;
+  members: number;
+  examples: string[];
+}
+
+export interface CardinalityWarning {
+  project_id: string;
+  services_now: number;
+  services_before: number;
+  window_days: number;
+  /** Empty when the count moved for a reason the API could not name. */
+  families: ServiceNameFamily[];
 }
 
 export interface UsageResponse {
   plan: PlanSummary;
   /** Null until a price row exists for the tier. There is no zero here. */
   price: PlanPrice | null;
+  period: BillingPeriod;
   from_day: string;
   to_day: string;
   /** False while any part of the range could still be counted, listed days or not. */
@@ -63,6 +102,8 @@ export interface UsageResponse {
   totals: UsageTotals;
   /** A day with no ingestion is absent rather than zero-filled. */
   days: ProjectDayUsage[];
+  /** Empty for almost every organization, which is the intended state. */
+  cardinality: CardinalityWarning[];
 }
 
 export const usageQueryKey = (range: DayRange) => ["usage", range.from, range.to] as const;

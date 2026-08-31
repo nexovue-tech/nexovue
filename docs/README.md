@@ -12,6 +12,7 @@
 | [architecture/decisions/](architecture/decisions/) | ADRs | 47 decisions, one per file, with context and consequences. Never edited once accepted — superseded instead |
 | [delivery/dev-environment.md](delivery/dev-environment.md) | Delivery reference | Memory budget and compose rules for the M4 Pro dev machine |
 | [delivery/phase-1-plan.md](delivery/phase-1-plan.md) | Delivery plan | Phase 1 milestones, tasks `P1-nn`, exit criteria, performance budgets |
+| [delivery/runbooks/](delivery/runbooks/) | Runbooks | One file per operator procedure — what to type when the incident is live, as opposed to why the decision was taken |
 | [design/design-system.md](design/design-system.md) | Design reference | Colour system, severity encoding, component inventory, and the banned defaults |
 | [research/market-analysis-2026.md](research/market-analysis-2026.md) | Research snapshot | 2026 competitive and feature landscape, table stakes vs gaps |
 

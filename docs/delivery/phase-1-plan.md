@@ -224,7 +224,7 @@ effective dates so a repricing does not rewrite what was already charged.
 | P1-45 | Synthetics screen | check list, status, latency trends, failure detail with screenshot | ✅ done |
 | P1-46 | Database screen | slow queries, mean time, calls, connection health | ✅ done |
 | P1-47 | RUM screen | Core Web Vitals by page/geo/device; JS errors | todo |
-| P1-48 | Usage & cost view | per-tenant ingestion counters → usage table → projected cost in-product | ✅ done |
+| P1-48 | Usage & cost view | per-tenant ingestion counters → usage table → **the calendar month's service cost in-product**. The union of distinct services over the month at the rate in force, held to the plan's ceiling. Narrower than "projected cost", which is what this row used to say: it is **what has accrued so far, not a forecast of the month's end**, no cost is shown at all when the tier has no price row, and **volume overage is not in it** — the allowance is metered in bytes and its amount, and what happens above it, are still undecided. A month still being metered is labelled rather than shown as a small number, and a project whose service count jumps is warned about, never capped | ✅ done |
 | P1-61 | E2E screen coverage | Critical path per screen against the running stack, run by `just e2e`. **Not** `just check` — P1-60 settled that, and the justfile follows it: the commit gate must not require docker | ✅ done |
 | P1-62 | **OTel Demo realism gate** | `just otel-demo up` runs the OpenTelemetry Demo (18 services, ~10 languages) against our receiver. Trimmed to twenty containers it needs **1641 MiB**, not the 4–8 GB estimated, because the demo's declared limits are ceilings rather than reservations — no Docker allocation change was needed. Not a daily dependency. **What it found is the deliverable**: one malformed log record stopped ingest for every tenant for 41 minutes; five of twelve services had three blank promoted columns; the `queue` edge kind has never produced a row; span re-consumption after a crash duplicates rows | ✅ done |
 
@@ -234,7 +234,7 @@ effective dates so a repricing does not rewrite what was already charged.
 | P1-50 | Load + soak | 24h soak against the budgets in §4; results recorded here | todo |
 | P1-57 | Object storage cold tier | **SeaweedFS** in compose for local dev; **AWS S3 in deployment**; ClickHouse-native S3 tiering past the hot window + tested restore. Generic S3 API only | todo |
 | P1-51 | Backup/restore | runbook + tested restore for ClickHouse and Postgres volumes | todo |
-| P1-68 | Apply plan retention | `plans` table holding the tier days from [ADR 0071](../architecture/decisions/0071-plan-tiers-and-retention.md); a job regenerating the conditional TTL expression per ADR 0038; a downgrade path that warns before narrowing retention, because shortening a TTL drops the parts with no undo. Deferred deliberately — nothing about it is a one-way door, and until it exists every tenant gets the fixed `pro`-shaped retention, which over-serves rather than under-serves. `scale` additionally needs P1-57 | todo |
+| P1-68 | Apply plan retention | **Narrowed 2026-08-31 after re-reading the code.** The `plans` table from [ADR 0071](../architecture/decisions/0071-plan-tiers-and-retention.md) exists and is seeded (migration `0005`, verified live), and the per-row stamp is live — so retention is already applied forward. The TTL-regeneration job this row used to name is gone: it belonged to ADR 0038, which [ADR 0072](../architecture/decisions/0072-retention-class-partitioning.md) superseded precisely by removing it. What is left is the downgrade path — changing a plan's retention affects only rows written afterwards, and making it retroactive would drop stored parts with no undo (§9). Deferred deliberately; nothing about it is a one-way door, and until it exists every tenant gets the fixed `pro`-shaped retention, which over-serves rather than under-serves. `scale` additionally needs P1-57 | todo |
 | P1-52 | Ingest kill switch | per-tenant stop valve for runaway ingestion | todo |
 | P1-53 | Security pass | key hashing, TLS at the edge, secret handling, dependency audit | todo |
 | P1-54 | Customer docs | setup guide for both onboarding patterns (SDK direct, own collector) | todo |
@@ -340,7 +340,7 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 - **Mobile waterfall hides the `detached` and `skew` tags** for want of room. They survive in the detail panel, so the information is not lost, but a phone user never sees on the row that a span is orphaned or clock-skewed — exactly the two things that make a waterfall confusing. Needs a smaller affordance, not the same one shrunk.
 - **The mobile span-detail sheet is a fixed 55dvh** with no drag-to-resize. Fine for a short span, cramped for one with many attributes.
 - **`ALTER TABLE spans DELETE` does not cascade to `span_trace_lookup`**, leaving rows that claim a trace exists after its spans are gone. The detail query treats "lookup hit, no spans" as not-found so nothing breaks, and TTL clears them eventually, but a real purge path (P1-52, GDPR delete in Phase 2) must clean both.
-- **`last_used_at` on `api_keys` is never written.** Updating it would be a database write per ingest request on the hot path. It needs a cheaper shape — sampled, batched, or derived from usage counters — before anything can show a customer when a key was last seen.
+- ~~**`last_used_at` on `api_keys` is never written.**~~ **Resolved in P1-13** — ADR 0081: the receiver records a use only on a credential-cache miss, so the write is throttled by the cache TTL rather than by a clock of its own, and it is queued to a background writer so no export waits on it. Measured under continuous traffic: one write per key per 30s, matching `RECEIVER_API_KEY_CACHE_TTL`. The column has existed since migration 0001; only the write was missing.
 - **The receiver's rate limiter fails open** when Valkey is unreachable, on the reasoning that losing telemetry costs more than briefly losing the limit, with body caps and the broker still bounding damage. Deliberate, and worth revisiting once a paying tenant can be harmed by it.
 - **The receiver exposes no profile endpoint**, which is what blocks the trace-split re-encode budget (§4) — permanently, not just today. `net/http/pprof` on the existing admin listener would settle it, but exposing profiles needs a deliberate decision about who can reach that port.
 - **`resolveWindow` rounded the live window's end *down* to a bucket**, so the trace list silently omitted the newest 0–10 seconds, and `TraceListScreen` then froze that window at mount. Together they broke M1's exit condition at the last hop: onboarding said the first span had arrived, and the list it linked to was empty. Fixed in M1; noted because the shape recurs — a cache-stability trick that quietly changes what the query means.
@@ -355,16 +355,29 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
   statement also carries `max_bytes_before_external_group_by = 256 MiB`, so a window large
   enough to threaten the server spills to disk (288 MiB, 770 ms) instead of failing; an hour
   never reaches the threshold and is unchanged.
-  **Still open, and this is the real fix.** The cost is one hash-table entry per trace *in the
-  window*, filtered or not — it grows with traffic, not with the page, so 640 MiB is a
-  per-request figure that ten concurrent readers multiply. Bounding it properly needs a
-  per-trace summary row maintained on ingest, keyed so "newest first" can be answered without
-  aggregating the window. That is a schema change with a real alternative (adaptively narrowing
-  the scanned slice and refining over the candidates, which is correct but is three round trips
-  and a widening heuristic), so it wants an ADR and a decision rather than being folded into a
-  screen task. **Nothing else in the API has this shape**: every other `GROUP BY` in
-  `apps/api/src` keys on a service, endpoint, host, query hash or time bucket, all bounded by
-  what a customer has rather than by how much traffic they send.
+  ~~**Still open, and this is the real fix.**~~ **Done** — ADR
+  [0084](../architecture/decisions/0084-newest-first-is-a-sort-key-read-of-a-per-trace-row.md),
+  migration `000028`. The list reads `trace_summaries`, one row per stored trace ordered
+  `(tenant_id, project_id, start_time, trace_id)`, so a page costs the page. Re-measured on the
+  same store, before and after back to back: **7 days 1100 ms / 290 MiB / 12.48M rows read →
+  44 ms / 17.3 MiB / 148k**. The hour and the day got *slower* in wall clock — 9 ms → 13 ms and
+  12 ms → 21 ms, two round trips where one small group-by was already trivial — and that is the
+  trade: the cost stops being a function of the window, so ten readers of a week now pay ten pages
+  rather than ten windows.
+  The row is written **after** the sampler, from the rows the sampler released, so the list names
+  only traces that can be opened — a departure from "derive before sample" that holds because a
+  trace list is an index and not a metric; the counters and both rollups are untouched.
+  Every column merges with `max`, `min`, `anyLast` or set union and none with `sum`, so a row
+  written twice is the same answer twice — which is why it needed neither `insertdedup`'s token
+  nor a watermark of its own, only the existing `span_written_offsets` ordering.
+  **Two things it did not fix, deliberately.** The arbitrary-attribute filter still groups the
+  window, because attribute paths are unbounded and no per-trace row can carry them — it is the
+  only filter that still pays what everyone paid before. And a trace that gains a span after the
+  sampler has forgotten it gets a second summary row: 962 of 2.73M here, merged on the page by
+  `max`, so that trace's count on the screen is the more complete of the two rather than the sum.
+  **Nothing else in the API had this shape**: every other `GROUP BY` in `apps/api/src` keys on a
+  service, endpoint, host, query hash or time bucket, all bounded by what a customer has rather
+  than by how much traffic they send.
 
 ## 7d. Follow-ups surfaced while building M2
 
@@ -441,13 +454,29 @@ the reference implementations rather than only against our own reasoning.
 - **Network monitoring (category 10)** has no home in any phase. It needs eBPF kernel agents, which contradicts the standing decision not to build collection agents. Park it explicitly, or accept the contradiction deliberately?
 - **SIEM / security (category 11)** is marked "evaluate later" in the vision doc and appears in no plan. Same call needed.
 
-## 9. Scoping note — the four settings screens. **No decision taken; these are not committed tasks.**
+## 9. Scoping note — the four settings screens. **Decided 2026-08-31: Phase 1 is single-operator.**
 
-`/settings/project`, `/settings/api-keys`, `/settings/members` and `/settings/data` are routes
-that render a placeholder. **No task in this plan delivers any of them.** Building them means
-deciding roles, invitations, key lifecycle and what a retention change does to stored data — product
-decisions that have not been made, so this is a note to decide from, not a design and not a
-commitment. Written 2026-08-30 by reading the code, not the docs.
+### What a Phase 1 customer cannot do, by decision
+
+This is stated scope, not a gap waiting to be discovered. A Phase 1 organization is **one person
+running one project**, and the product should read that way rather than implying the missing pieces
+are coming:
+
+- **One operator per organization.** Phase 1 is deliberately single-operator. `/settings/members`
+  does not ship, there are no invitations, and there is no way to add a second person. A team of
+  five is five organizations with five isolated data sets.
+- **One project per organization.** Signup mints exactly one, `production`, and nothing else can
+  create another. `/settings/project` does not ship; there is no second environment for staging.
+- **Retention is read-only.** `/settings/data` does not ship. The plan's ceiling is visible on
+  `GET /usage`; the number itself cannot be changed in product. See *How retention actually
+  behaves* below for why a writable control is a harder decision than it looks.
+- **Only `/settings/api-keys` ships.** It is the one gap of the four that is a security gap rather
+  than a convenience one: without it a customer with a leaked key must choose between stopping
+  their own ingest and leaving the leak live.
+
+The three screens that do not ship are not tracked as tasks below, and no task row here commits
+work on them. The survey that follows is the evidence the decision was taken from — what the code
+actually serves, read on 2026-08-30 and re-checked on 2026-08-31.
 
 **The whole of what the control plane can change today.** Every other endpoint is a read.
 
@@ -539,23 +568,55 @@ screen-only.**
 **Not served at all:** any write to `projects.retention_days` or `masking_config`; any export; any
 "delete my data".
 
-**How retention actually behaves today** — worth stating, because the decision turns on it. The
-`project_retention` view resolves `LEAST(projects.retention_days, plans.raw_retention_days)`; the
-worker stamps that number into a `retention_days` column on every row it writes; every ClickHouse
-table's TTL is `received_at + toIntervalDay(retention_days)`. **Retention is therefore per row and
-fixed at the moment of writing.** This narrows what P1-68 leaves as "todo": the stamp is live, and
-what is deferred is regenerating the TTL for parts already on disk.
+**How retention actually behaves today** — worth stating, because the decision turns on it.
+Re-verified against the code and the migrations on 2026-08-31; the earlier wording here was right in
+substance and wrong in three details, corrected below.
 
-**The consequence, which is the decision:** a retention change made on this screen would apply only
-to rows written after it. Shortening would not remove anything already stored; lengthening would not
-bring anything back. A screen reading "retention: 7 days" while three-week-old spans are still
-queryable is untrue unless the copy says which of the two it means.
+The Postgres view `project_retention` (migration `0005`) resolves
+`LEAST(projects.retention_days, plans.raw_retention_days)` as `raw_retention_days` — a project may
+ask for less than its tier grants, never more. `derived_retention_days` is taken straight from the
+plan with no `LEAST`.
+
+The worker does **not** read that view per row. `projectconfig` refreshes a whole snapshot from
+Postgres on a ticker; `traceassembly`, `logwriting` and `metricwriting` each call
+`Cache.Retention(projectID)` **once per Kafka message** and assign the answer to every row in it. So
+a retention change reaches the stamp after at most one refresh interval, not instantly.
+
+Of the ten TTL clauses in `deploy/clickhouse/migrations`, **eight** — `spans`, `logs`, the five
+`metrics_*` tables and `span_trace_lookup` — read
+`TTL toDateTime(received_at) + toIntervalDay(retention_days)`. The `toDateTime` wrap is load-bearing:
+`received_at` is a `DateTime64`. The other **two**, the minute rollups `endpoint_stats_1m` and
+`service_edges_1m`, differ on both halves: `TTL minute + toIntervalDay(derived_retention_days)` —
+event time, not our clock, and the plan's derived number, not the project's raw one. "Every
+ClickHouse table's TTL is the same expression" was false.
+
+The retention value is also in every partition key —
+`(toDate(received_at), retention_days)` on the eight, `(toYYYYMM(minute), derived_retention_days)` on
+the two rollups — and `ttl_only_drop_parts` is `1` globally in
+`deploy/clickhouse/config.d/memory.xml`. That is ADR 0072's design: a retention class expires as
+whole parts rather than by rewriting them.
+
+**Retention is therefore per row and fixed at the moment of writing.** This narrows what P1-68
+leaves as "todo": the stamp is live, and what is deferred is regenerating the TTL for parts already
+on disk.
+
+**The consequence, and the decision taken on it: a retention change applies forward only.** It lands
+on rows written after the worker's next config refresh. Shortening removes nothing already stored;
+lengthening brings nothing back. A screen reading "retention: 7 days" while three-week-old spans are
+still queryable is untrue unless the copy says which of the two it means — which is one reason
+`/settings/data` does not ship in Phase 1.
+
+**Why retroactive shortening is not offered.** Making it retroactive means altering the TTL of parts
+already on disk, and with `ttl_only_drop_parts = 1` the next merge cycle drops those whole parts.
+**That deletes stored customer telemetry, and there is no undo** — no snapshot, no tombstone, nothing
+to restore from short of P1-51's backup, which does not exist yet. A control that can silently
+destroy a customer's history on a mistyped number is not a Phase 1 setting. Forward-only is the
+honest behaviour and it is also the safe one.
 
 **What a customer cannot do:** shorten retention after ingesting something they should not have,
 and change the masking rules that would have prevented it. Both are SQL `UPDATE`s today.
 
-**Decisions it forces:** whether a retention change is forward-only (cheap and honest, needs careful
-copy) or retroactive (that is P1-68, and shortening a TTL drops parts with no undo) · whether a
+**Decisions it forces:** whether a
 project may ask for less than its plan grants, which the view already supports · whether masking is
 editable in product at all, given that it is irreversible on data already written and that a
 malformed document has already once silently stopped masking a project's custom keys (§7) · whether
@@ -566,11 +627,20 @@ surfaced here, since **no endpoint reads it anywhere in the product**.
 **Size:** the screen is small; the honest version needs `PATCH /projects/{id}` and settled copy.
 Retroactive retention is P1-68 and is not small.
 
-### Open questions this note cannot answer
+### Answered 2026-08-31
 
-1. Does Phase 1 ship any of these four, and if not, what does a customer do about a leaked key?
-2. Is Phase 1 single-operator? Every other question about roles depends on that one.
-3. Is a retention change forward-only, or does P1-68 come forward to make it retroactive?
-4. Are sampling and masking customer controls, or support actions?
+1. **Does Phase 1 ship any of these four?** Only `/settings/api-keys`, which is what closes the
+   leaked-key gap. `/settings/project`, `/settings/members` and `/settings/data` do not ship.
+2. **Is Phase 1 single-operator?** Yes, deliberately. One operator per organization, no invitations,
+   one project per organization.
+3. **Is a retention change forward-only, or does P1-68 come forward?** Forward-only, and retroactive
+   shortening is not offered at all — see *Why retroactive shortening is not offered* above. P1-68
+   does not come forward.
+
+### Still open
+
+4. Are sampling and masking customer controls, or support actions? Both are SQL `UPDATE`s by us
+   today, and neither screen that would expose them ships in Phase 1 — so this is not blocking, but
+   it is not decided either.
 
 *Update log: plan created 2026-08-25. Scope decisions folded in 2026-08-25 (D9–D12; tasks P1-55 → P1-58). Next action: P1-01 → P1-09 (M0).*

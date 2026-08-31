@@ -105,6 +105,9 @@ class FakeTelemetry:
         # tenant -> the one trace id that tenant owns
         self._traces = traces
         self._span_row = span_row
+        # How many rows the ordered read returns for the one trace this store
+        # owns. More than one is a trace with more than one summary row.
+        self.page_rows = 1
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     async def query(
@@ -130,6 +133,32 @@ class FakeTelemetry:
                         _START_NANOS + 500_000_000,
                     )
                 ],
+            )
+
+        # The list's two reads over the per-trace summary. Checked before the
+        # `spans` branches below, which the same markers would otherwise catch.
+        if "FROM trace_summaries" in sql:
+            if owned is None:
+                return FakeQueryResult([], [])
+            if "{trace_ids:Array(String)}" in sql:
+                if owned not in set(bound.get("trace_ids", [])):
+                    return FakeQueryResult([], [])
+                return FakeQueryResult(
+                    [
+                        "trace_id",
+                        "start_time_nanos",
+                        "duration_ms",
+                        "span_count",
+                        "error_count",
+                        "worst_severity",
+                        "root_service",
+                        "root_name",
+                    ],
+                    [(owned.encode(), _START_NANOS, 412.7, 2, 1, 2, "storefront", "GET /checkout")],
+                )
+            return FakeQueryResult(
+                ["trace_id", "start_time_nanos"],
+                [(owned.encode(), _START_NANOS)] * self.page_rows,
             )
 
         # Checked before the list: both group by `trace_id`, and only the root
@@ -168,6 +197,11 @@ def _store(span_row: tuple[Any, ...] = _HTTP_SPAN_ROW) -> FakeTelemetry:
 
 def _repository(tenant: str, span_row: tuple[Any, ...] = _HTTP_SPAN_ROW) -> TenantScopedRepository:
     return TenantScopedRepository(_store(span_row), tenant_id=tenant)  # type: ignore[arg-type]
+
+
+def _repository_over(store: FakeTelemetry, tenant: str) -> TenantScopedRepository:
+    """A repository over a store the test keeps, so it can read the calls back."""
+    return TenantScopedRepository(store, tenant_id=tenant)  # type: ignore[arg-type]
 
 
 def _window() -> tuple[datetime, datetime]:
@@ -277,18 +311,23 @@ async def test_a_page_with_no_rows_asks_the_store_for_no_root_spans() -> None:
     assert not [sql for sql, _ in store.calls if "{trace_ids:Array(String)}" in sql]
 
 
-async def test_the_root_service_and_name_come_from_the_second_read() -> None:
-    """They are no longer in the group-by; losing that read would blank a row."""
+async def test_the_second_read_is_bounded_by_the_page_and_not_by_the_window() -> None:
+    """What makes it a primary-key range rather than fifty scattered probes.
+
+    Fifty ids alone left the bloom filter reading 1.91M rows of the dev store;
+    the page's own span of start times took the same answer to 27k. Losing this
+    bound is not a wrong answer, so nothing else would catch it.
+    """
     store = _store()
     page = await _page(TenantScopedRepository(store, tenant_id=TENANT_A))  # type: ignore[arg-type]
 
-    roots = [bound for sql, bound in store.calls if "{trace_ids:Array(String)}" in sql]
-    assert roots == [
+    values = [bound for sql, bound in store.calls if "{trace_ids:Array(String)}" in sql]
+    assert values == [
         {
             "project_id": PROJECT,
-            "from_time": _window()[0],
-            "to_time": _window()[1],
             "trace_ids": [TRACE_A],
+            "page_from_nanos": _START_NANOS,
+            "page_to_nanos": _START_NANOS,
             "tenant_id": TENANT_A,
         }
     ]
@@ -683,6 +722,10 @@ def test_every_trace_query_carries_the_tenant_binding() -> None:
         queries.list_traces_sql(NO_FILTERS, with_cursor=False),
         queries.list_traces_sql(NO_FILTERS, with_cursor=True),
         queries.list_traces_sql(every_filter, with_cursor=True),
+        queries.trace_page_sql(NO_FILTERS, with_cursor=False),
+        queries.trace_page_sql(NO_FILTERS, with_cursor=True),
+        queries.trace_page_sql(every_filter, with_cursor=True),
+        queries.TRACE_PAGE_VALUES_SQL,
         queries.TRACE_ROOTS_SQL,
         queries.TRACE_FACETS_SQL,
         queries.TRACE_SPANS_SQL,
@@ -701,3 +744,140 @@ def test_a_filtered_list_reads_the_table_once_and_scopes_that_read() -> None:
     assert sql.count("FROM spans") == 1
     assert sql.count(TENANT_BINDING) == 1
     assert "{project_id:String}" in sql
+
+
+# ------------------------------------------------ the per-trace summary (P1-41)
+
+
+async def test_the_list_reads_the_summary_and_never_groups_the_window() -> None:
+    """The whole point of `trace_summaries`: the page costs the page.
+
+    Grouping `spans` for the same answer held one hash-table entry per trace in
+    the window — 292 MiB and 393 ms over a week of the dev store, and 1.8 GiB
+    before the strings left the group, which the server killed.
+    """
+    store = _store()
+    await _page(_repository_over(store, TENANT_A))
+
+    statements = [sql for sql, _ in store.calls]
+    assert all("FROM spans" not in sql for sql in statements), (
+        "the unfiltered list still reads `spans`"
+    )
+    assert "GROUP BY" not in queries.trace_page_sql(NO_FILTERS, with_cursor=False), (
+        "the page statement aggregates; its cost then grows with the window again"
+    )
+
+
+async def test_an_attribute_filter_falls_back_to_grouping_spans() -> None:
+    """The one filter no per-trace row can carry, and it is answered rather than
+    dropped: attribute paths are unbounded, so the summary cannot hold them."""
+    store = _store()
+    await _page(
+        _repository_over(store, TENANT_A),
+        filters=TraceFilters(attribute_path="db.system", attribute_value="postgresql"),
+    )
+
+    statements = [sql for sql, _ in store.calls]
+    assert any("FROM spans" in sql for sql in statements)
+    assert all("FROM trace_summaries" not in sql for sql in statements)
+
+
+@pytest.mark.parametrize(
+    ("filters", "clause"),
+    [
+        (TraceFilters(service_name="storefront"), queries.SUMMARY_SERVICE_CLAUSE),
+        (TraceFilters(operation="GET /checkout"), queries.SUMMARY_OPERATION_CLAUSE),
+        (
+            TraceFilters(service_name="storefront", operation="GET /checkout"),
+            queries.SUMMARY_ENDPOINT_CLAUSE,
+        ),
+        (TraceFilters(status=queries.STATUS_ERROR), queries.SUMMARY_STATUS_ERROR_CLAUSE),
+        (TraceFilters(status=queries.STATUS_OK), queries.SUMMARY_STATUS_OK_CLAUSE),
+        (TraceFilters(min_duration_ms=250.0), queries.MIN_DURATION_CLAUSE),
+        (TraceFilters(max_duration_ms=250.0), queries.MAX_DURATION_CLAUSE),
+    ],
+)
+def test_every_filter_the_summary_answers_puts_its_own_predicate_there(
+    filters: TraceFilters, clause: str
+) -> None:
+    assert clause in queries.trace_page_sql(filters, with_cursor=False)
+
+
+def test_a_service_and_an_operation_are_matched_as_one_pair() -> None:
+    """A span filter matches when ONE span satisfies all of it together. Two
+    independent tests would match a trace whose service and whose operation are
+    on different spans, which is three unrelated spans reported as one."""
+    sql = queries.trace_page_sql(
+        TraceFilters(service_name="storefront", operation="GET /checkout"), with_cursor=False
+    )
+
+    assert queries.SUMMARY_ENDPOINT_CLAUSE in sql
+    assert queries.SUMMARY_SERVICE_CLAUSE not in sql
+    assert queries.SUMMARY_OPERATION_CLAUSE not in sql
+
+
+async def test_the_pair_is_bound_joined_and_the_separator_never_enters_the_sql() -> None:
+    store = _store()
+    await _page(
+        _repository_over(store, TENANT_A),
+        filters=TraceFilters(service_name="storefront", operation="GET /checkout"),
+    )
+
+    page = next(bound for sql, bound in store.calls if "span_endpoints" in sql)
+    assert page["endpoint"] == "storefront" + queries.ENDPOINT_SEPARATOR + "GET /checkout"
+    assert "service_name" not in page and "operation" not in page
+    assert queries.ENDPOINT_SEPARATOR not in queries.trace_page_sql(
+        TraceFilters(service_name="a", operation="b"), with_cursor=False
+    )
+
+
+def test_an_operation_without_a_service_matches_the_pairs_half() -> None:
+    sql = queries.trace_page_sql(TraceFilters(operation="GET /checkout"), with_cursor=False)
+
+    assert queries.SUMMARY_OPERATION_CLAUSE in sql
+    assert "{operation_suffix:String}" in sql
+
+
+def test_an_unfiltered_page_carries_no_predicate_beyond_the_window() -> None:
+    sql = queries.trace_page_sql(NO_FILTERS, with_cursor=False)
+
+    assert "span_services" not in sql
+    assert "span_endpoints" not in sql
+    assert "worst_severity" not in sql
+    assert "cursor_nanos" not in sql
+
+
+def test_only_the_summary_filters_the_statement_names_are_bound() -> None:
+    """An unbound parameter is a 400 from ClickHouse, not a wrong answer."""
+    assert service._summary_parameters(NO_FILTERS) == {}
+    assert service._summary_parameters(TraceFilters(service_name="storefront")) == {
+        "service_name": "storefront"
+    }
+    assert service._summary_parameters(TraceFilters(min_duration_ms=1.0)) == {
+        "min_duration_ms": 1.0
+    }
+
+
+async def test_one_trace_named_twice_by_the_page_is_one_row_on_the_screen() -> None:
+    """A trace has more than one summary row when it gained a span after the
+    sampler forgot it, and rows sharing a key stay two rows until a background
+    merge. The page collapses them; the statement deliberately does not, because
+    `LIMIT 1 BY` costs the read its sort-key order — 63.5 MiB against 17."""
+    store = _store()
+    store.page_rows = 3
+    page = await _page(_repository_over(store, TENANT_A))
+
+    assert [trace.trace_id for trace in page.traces] == [TRACE_A]
+
+
+async def test_the_cursor_names_a_position_in_the_ordered_read() -> None:
+    """Not a position in the response: a trace can drop out between the two
+    reads, and a keyset built from what survived would skip everything between."""
+    store = _store()
+    store.page_rows = 2
+    page = await _page(_repository_over(store, TENANT_A), limit=2)
+
+    assert page.next_cursor is not None
+    assert decode_cursor(page.next_cursor) == TracePageCursor(
+        start_time_nanos=_START_NANOS, trace_id=TRACE_A
+    )

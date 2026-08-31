@@ -155,9 +155,16 @@ class RecordingTelemetryStore:
 
         if "span_trace_lookup" in sql:
             return self._trace_bounds(sql, bound)
-        # The list is two statements: the page of trace ids, then the root span
-        # of each id on that page. The second is recognised by the array it
-        # binds, and must be checked first — both group by `trace_id`.
+        # The list is two statements over the per-trace summary: the page in
+        # sort-key order, then the whole of each id on that page. Checked before
+        # the `spans` branches, which the same markers would otherwise catch.
+        if "FROM trace_summaries" in sql:
+            if "{trace_ids:Array(String)}" in sql:
+                return self._summary_values(sql, bound)
+            return self._summary_page(sql, bound)
+        # The fallback, for a request naming an arbitrary attribute: the page of
+        # trace ids, then the root span of each. The second is recognised by the
+        # array it binds and must be checked first — both group by `trace_id`.
         if "{trace_ids:Array(String)}" in sql:
             return self._trace_roots(sql, bound)
         if "GROUP BY trace_id" in sql:
@@ -201,6 +208,50 @@ class RecordingTelemetryStore:
                 "worst_severity",
             ],
             [(row.trace_id, _START_NANOS, _SPAN_DURATION_MS, 1, 0, 1) for row in rows],
+        )
+
+    def _summary_page(self, sql: str, bound: dict[str, Any]) -> FakeQueryResult:
+        """The page, in the sort key's order and scoped exactly as the statement is."""
+        rows = self._matching(sql, bound, by_project=True)
+        if "cursor_trace_id" in bound:
+            rows = [
+                row
+                for row in rows
+                if (_START_NANOS, row.trace_id) < (bound["cursor_nanos"], bound["cursor_trace_id"])
+            ]
+        return FakeQueryResult(
+            ["trace_id", "start_time_nanos"], [(row.trace_id, _START_NANOS) for row in rows]
+        )
+
+    def _summary_values(self, sql: str, bound: dict[str, Any]) -> FakeQueryResult:
+        """The whole of each trace on the page, scoped exactly as the statement is."""
+        rows = self._matching(sql, bound, by_project=True)
+        wanted = set(bound.get("trace_ids", []))
+        return FakeQueryResult(
+            [
+                "trace_id",
+                "start_time_nanos",
+                "duration_ms",
+                "span_count",
+                "error_count",
+                "worst_severity",
+                "root_service",
+                "root_name",
+            ],
+            [
+                (
+                    row.trace_id,
+                    _START_NANOS,
+                    _SPAN_DURATION_MS,
+                    1,
+                    0,
+                    1,
+                    "storefront",
+                    "GET /checkout",
+                )
+                for row in rows
+                if row.trace_id in wanted
+            ],
         )
 
     def _trace_roots(self, sql: str, bound: dict[str, Any]) -> FakeQueryResult:

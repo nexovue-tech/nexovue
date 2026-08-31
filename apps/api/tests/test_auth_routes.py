@@ -290,6 +290,9 @@ async def test_every_signed_in_endpoint_refuses_an_anonymous_caller(
                 f"{API_PREFIX}/traces/{'a' * 32}", params={"project_id": str(project_id)}
             ),
             await client.get(f"{API_PREFIX}/api-keys", params={"project_id": str(project_id)}),
+            await client.post(
+                f"{API_PREFIX}/api-keys", json={"project_id": str(project_id), "name": "k"}
+            ),
             await client.post(f"{API_PREFIX}/api-keys/{uuid.uuid4()}/revoke"),
         ]
 

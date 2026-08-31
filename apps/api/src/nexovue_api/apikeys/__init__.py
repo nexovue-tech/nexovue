@@ -1,1 +1,1 @@
-"""Ingest credentials: listing them, and withdrawing one."""
+"""Ingest credentials: minting them, listing them, and withdrawing one."""

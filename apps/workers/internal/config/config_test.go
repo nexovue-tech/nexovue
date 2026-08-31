@@ -26,7 +26,7 @@ func applyEnvironment(t *testing.T, values map[string]string) {
 		"ENV", "LOG_LEVEL", "LOG_FORMAT", "WORKERS_HEALTH_ADDR", "KAFKA_BROKERS",
 		"CLICKHOUSE_DSN", "CLICKHOUSE_MAX_CONNS", "SHUTDOWN_TIMEOUT",
 		"WORKER_PIPELINES", "KAFKA_SPANS_TOPIC", "WORKERS_CONSUMER_GROUP",
-		"WORKERS_SPANS_BATCH_MAX_ROWS", "WORKERS_SPANS_BATCH_MAX_DELAY",
+		"WORKERS_SPANS_BATCH_MAX_MESSAGES", "WORKERS_SPANS_BATCH_MAX_DELAY",
 		"WORKERS_SPANS_DLQ_TOPIC", "POSTGRES_DSN", "WORKERS_POSTGRES_MAX_CONNS",
 		"WORKERS_POSTGRES_MIN_CONNS", "WORKERS_PROJECT_CONFIG_REFRESH",
 		"WORKERS_SAMPLING_WINDOW", "WORKERS_SAMPLING_DECISION_TTL",
@@ -95,7 +95,7 @@ func TestLoadRejectsMalformedValues(t *testing.T) {
 		"unknown pipeline":     {"WORKER_PIPELINES", "trace-assembler"},
 		"blank spans topic":    {"KAFKA_SPANS_TOPIC", " "},
 		"blank consumer group": {"WORKERS_CONSUMER_GROUP", "  "},
-		"zero batch rows":      {"WORKERS_SPANS_BATCH_MAX_ROWS", "0"},
+		"zero batch messages":  {"WORKERS_SPANS_BATCH_MAX_MESSAGES", "0"},
 		"zero batch delay":     {"WORKERS_SPANS_BATCH_MAX_DELAY", "0s"},
 		"wrong dsn scheme":     {"CLICKHOUSE_DSN", "postgresql://h:9000/nexovue"},
 		"dsn without database": {"CLICKHOUSE_DSN", "clickhouse://h:9000"},
@@ -151,8 +151,8 @@ func TestSpanIngestDefaultsLetAWorkerBootUnconfigured(t *testing.T) {
 	if cfg.Spans.ConsumerGroup == "" {
 		t.Error("Spans.ConsumerGroup has no default; a worker would not join a group")
 	}
-	if cfg.Spans.MaxRows <= 0 {
-		t.Errorf("Spans.MaxRows = %d, want a positive default", cfg.Spans.MaxRows)
+	if cfg.Spans.MaxMessages <= 0 {
+		t.Errorf("Spans.MaxMessages = %d, want a positive default", cfg.Spans.MaxMessages)
 	}
 	// Without this the p99 lag budget rests on a batch that a quiet tenant
 	// never fills.

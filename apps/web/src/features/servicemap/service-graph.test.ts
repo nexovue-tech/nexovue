@@ -249,3 +249,58 @@ describe("edge lanes", () => {
     }
   });
 });
+
+describe("buildServiceGraph, on peers named by a bare address", () => {
+  const ADDRESSED = response([
+    wireEdge("checkout", "(172.19.0.11)", { calls: 3, calleeKind: "grpc" }),
+    wireEdge("checkout", "(172.19.0.19)", { calls: 5, errors: 1, calleeKind: "grpc" }),
+    wireEdge("checkout", "(valkey-cart)", { calls: 400, calleeKind: "redis" }),
+  ]);
+
+  it("draws one node where the API answered with two addresses", () => {
+    const graph = buildServiceGraph(ADDRESSED);
+    const names = graph.nodes.map((node) => node.id).sort();
+
+    expect(names).toEqual(["(grpc hosts)", "(valkey-cart)", "checkout"]);
+    // Neither address survives as a node of its own.
+    expect(names).not.toContain("(172.19.0.11)");
+    expect(names).not.toContain("(172.19.0.19)");
+  });
+
+  it("carries the instance count and the addresses onto the node", () => {
+    const graph = buildServiceGraph(ADDRESSED);
+    const group = graph.nodes.find((node) => node.id === "(grpc hosts)");
+
+    expect(group?.data.addresses).toEqual(["172.19.0.11", "172.19.0.19"]);
+    expect(group?.data.peerKind).toBe("grpc");
+    // A group has no screen to open, the same as any other peer we were only told about.
+    expect(group?.data.instrumented).toBe(false);
+  });
+
+  it("keeps every call, so the map's own totals do not shrink when it collapses", () => {
+    const graph = buildServiceGraph(ADDRESSED);
+    const toGroup = graph.edges.find((edge) => edge.target === "(grpc hosts)");
+
+    expect(graph.edges).toHaveLength(2);
+    expect(toGroup?.data?.callsPerMinute).toBeCloseTo(8 / 60);
+    expect(toGroup?.data?.errorCount).toBe(1);
+    // Health is read from the merged rate, not from either edge's: one call in eight
+    // is worse than one in twenty, so the group is critical even though the edge that
+    // carried the failure was one call in five on its own.
+    expect(toGroup?.data?.errorRate).toBe(1 / 8);
+    expect(toGroup?.data?.health).toBe("critical");
+  });
+
+  it("gives the two merged edges one id rather than silently dropping one", () => {
+    const graph = buildServiceGraph(ADDRESSED);
+
+    expect(new Set(graph.edges.map((edge) => edge.id)).size).toBe(graph.edges.length);
+  });
+
+  it("leaves a map with no addressed peer exactly as it drew it before", () => {
+    const graph = buildServiceGraph(DEMO);
+
+    expect(graph.nodes.map((node) => node.id)).toContain("(valkey-cart)");
+    expect(graph.edges).toHaveLength(DEMO.edges.length);
+  });
+});

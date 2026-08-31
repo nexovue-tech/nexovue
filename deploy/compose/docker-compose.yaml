@@ -64,6 +64,12 @@ services:
     # Variable names come from apps/receiver/internal/config, which is the
     # authority on what this service reads.
     environment:
+      # Go's collector cannot see a cgroup limit — as of Go 1.26 the proposal to
+      # derive this from the cgroup is still open — so without it the heap doubles
+      # freely and the kernel kills the process first. Measured: the worker was
+      # OOM-killed at 1017 MB RSS against this 1 GiB cap. ~85%, leaving the rest
+      # for stacks and everything outside the heap.
+      GOMEMLIMIT: 650MiB
       ENV: development
       LOG_LEVEL: debug
       LOG_FORMAT: console
@@ -108,6 +114,12 @@ services:
       - ../..:/workspace
       - go-cache:/cache
     environment:
+      # Go's collector cannot see a cgroup limit — as of Go 1.26 the proposal to
+      # derive this from the cgroup is still open — so without it the heap doubles
+      # freely and the kernel kills the process first. Measured: the worker was
+      # OOM-killed at 1017 MB RSS against this 1 GiB cap. ~85%, leaving the rest
+      # for stacks and everything outside the heap.
+      GOMEMLIMIT: 870MiB
       ENV: development
       LOG_LEVEL: debug
       LOG_FORMAT: console

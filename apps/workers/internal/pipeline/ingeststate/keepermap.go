@@ -29,12 +29,13 @@ const strictModeSetting = "keeper_map_strict_mode"
 
 // KeeperMap reads and writes the per-partition state in ClickHouse.
 type KeeperMap struct {
-	pool *chpool.Pool
+	pool  *chpool.Pool
+	spans watermarks
 }
 
 // NewKeeperMap returns a store over an existing pool. The caller owns the pool.
 func NewKeeperMap(pool *chpool.Pool) *KeeperMap {
-	return &KeeperMap{pool: pool}
+	return &KeeperMap{pool: pool, spans: watermarks{pool: pool, table: writtenTable}}
 }
 
 // Load reads every partition's state from both tables and merges them.
@@ -46,7 +47,7 @@ func (s *KeeperMap) Load(ctx context.Context) (map[Partition]State, error) {
 	if err != nil {
 		return nil, err
 	}
-	written, err := s.loadWritten(ctx)
+	written, err := s.spans.load(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -61,37 +62,6 @@ func (s *KeeperMap) Load(ctx context.Context) (map[Partition]State, error) {
 		states[partition] = state
 	}
 	return states, nil
-}
-
-// loadWritten reads the span watermark per partition.
-func (s *KeeperMap) loadWritten(ctx context.Context) (Written, error) {
-	var (
-		key     proto.ColStr
-		written proto.ColInt64
-	)
-
-	watermarks := make(Written)
-	query := ch.Query{
-		Body: "SELECT " + partitionKeyColumn + ", written_through FROM " + writtenTable,
-		Result: proto.Results{
-			{Name: partitionKeyColumn, Data: &key},
-			{Name: "written_through", Data: &written},
-		},
-		OnResult: func(_ context.Context, block proto.Block) error {
-			for row := range block.Rows {
-				partition, err := ParsePartitionKey(key.Row(row))
-				if err != nil {
-					return err
-				}
-				watermarks[partition] = written[row]
-			}
-			return nil
-		},
-	}
-	if err := s.pool.Do(ctx, query); err != nil {
-		return nil, fmt.Errorf("read %s: %w", writtenTable, err)
-	}
-	return watermarks, nil
 }
 
 // loadCounted reads every partition's counter state. The table holds one small
@@ -176,35 +146,6 @@ func (s *KeeperMap) Save(ctx context.Context, states map[Partition]State) error 
 
 // SaveWritten records how far each partition's spans have been written,
 // overwriting whatever was there.
-//
-// One insert for every partition that moved, not one per partition: the whole
-// point of this write is that it costs the hot path a single round trip per
-// settle.
 func (s *KeeperMap) SaveWritten(ctx context.Context, written Written) error {
-	if len(written) == 0 {
-		return nil
-	}
-
-	var (
-		key       proto.ColStr
-		watermark proto.ColInt64
-	)
-	for partition, offset := range written {
-		key.Append(partition.Key())
-		watermark.Append(offset)
-	}
-
-	input := proto.Input{
-		{Name: partitionKeyColumn, Data: &key},
-		{Name: "written_through", Data: &watermark},
-	}
-	query := ch.Query{
-		Body:     input.Into(writtenTable),
-		Input:    input,
-		Settings: []ch.Setting{{Key: strictModeSetting, Value: "0"}},
-	}
-	if err := s.pool.Do(ctx, query); err != nil {
-		return fmt.Errorf("write %d rows to %s: %w", len(written), writtenTable, err)
-	}
-	return nil
+	return s.spans.save(ctx, written)
 }

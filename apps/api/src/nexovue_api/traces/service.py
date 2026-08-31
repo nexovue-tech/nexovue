@@ -159,9 +159,47 @@ async def list_traces(
 ) -> TraceListResponse:
     """One page of traces, newest first.
 
-    Two reads, deliberately: the group-by over the window holds only numbers,
-    and the root service and name — the two strings that made it too heavy to
-    run over a week — are fetched for this page alone. See `queries`.
+    Normally a sort-key read of `trace_summaries`, which the worker maintains
+    one row per stored trace. A request naming an arbitrary attribute cannot be
+    answered from that row — attribute paths are unbounded — so it falls back to
+    grouping `spans`, which is what that costs and why. See `queries`.
+    """
+    if not filters.answerable_from_summary:
+        return await _list_by_grouping_spans(
+            repository,
+            project_id=project_id,
+            from_time=from_time,
+            to_time=to_time,
+            filters=filters,
+            limit=limit,
+            cursor=cursor,
+        )
+    return await _list_from_summaries(
+        repository,
+        project_id=project_id,
+        from_time=from_time,
+        to_time=to_time,
+        filters=filters,
+        limit=limit,
+        cursor=cursor,
+    )
+
+
+async def _list_from_summaries(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    from_time: datetime,
+    to_time: datetime,
+    filters: TraceFilters,
+    limit: int,
+    cursor: str | None,
+) -> TraceListResponse:
+    """The page as a reverse read of the sort key, then its values.
+
+    Two reads, deliberately. The first is bounded by the page rather than by the
+    window and holds no aggregate at all; the second merges the rows a trace can
+    have more than one of, for these fifty ids only.
     """
     page = decode_cursor(cursor) if cursor else None
     parameters: dict[str, Any] = {
@@ -169,7 +207,111 @@ async def list_traces(
         "from_time": from_time,
         "to_time": to_time,
         "limit": limit,
-        **_filter_parameters(filters),
+        **_summary_parameters(filters),
+    }
+    if page is not None:
+        parameters["cursor_nanos"] = page.start_time_nanos
+        parameters["cursor_trace_id"] = page.trace_id
+
+    positions = await repository.query(
+        queries.trace_page_sql(filters, with_cursor=page is not None), parameters
+    )
+    merged = await _merged_summaries(repository, project_id=project_id, positions=positions)
+
+    traces = [_to_merged_summary(merged[trace_id]) for trace_id in _ids_in_order(positions, merged)]
+    return TraceListResponse(traces=traces, next_cursor=_next_cursor(positions, limit))
+
+
+def _ids_in_order(positions: list[dict[str, Any]], merged: dict[str, dict[str, Any]]) -> list[str]:
+    """The page's ids, newest first, each named once.
+
+    A trace can hold more than one summary row, so the ordered read can name the
+    same trace twice; collapsing them here rather than in the statement is what
+    keeps that read in sort-key order — `queries` has the measurement. A trace
+    with no merged row expired between the two reads, which is a row that has
+    gone rather than an error to report.
+    """
+    named: list[str] = []
+    seen: set[str] = set()
+    for row in positions:
+        trace_id = values.text(row["trace_id"])
+        if trace_id in seen or trace_id not in merged:
+            continue
+        seen.add(trace_id)
+        named.append(trace_id)
+    return named
+
+
+async def _merged_summaries(
+    repository: TenantScopedRepository, *, project_id: str, positions: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Every summary row of this page's traces, folded into one answer each.
+
+    The page's own span of start times is passed with the ids, because it is a
+    primary-key range where the ids alone are fifty scattered bloom-filter
+    probes — 27k rows read against 1.91M. The page is ordered, so the range is
+    its last row to its first.
+    """
+    if not positions:
+        return {}
+    starts = [int(row["start_time_nanos"]) for row in positions]
+    rows = await repository.query(
+        queries.TRACE_PAGE_VALUES_SQL,
+        {
+            "project_id": project_id,
+            "trace_ids": [values.text(row["trace_id"]) for row in positions],
+            "page_from_nanos": min(starts),
+            "page_to_nanos": max(starts),
+        },
+    )
+    return {values.text(row["trace_id"]): row for row in rows}
+
+
+def _summary_parameters(filters: TraceFilters) -> dict[str, Any]:
+    """Only the values the spliced predicates name, so an unused one is unbound.
+
+    The service and the operation arrive joined, because the stored pair is what
+    a span filter has to match: a trace whose service and whose operation sit on
+    different spans is not a match.
+    """
+    bound: dict[str, Any] = {}
+    if filters.service_name and filters.operation:
+        bound["endpoint"] = filters.service_name + queries.ENDPOINT_SEPARATOR + filters.operation
+    elif filters.service_name:
+        bound["service_name"] = filters.service_name
+    elif filters.operation:
+        bound["operation_suffix"] = queries.ENDPOINT_SEPARATOR + filters.operation
+    if filters.min_duration_ms is not None:
+        bound["min_duration_ms"] = filters.min_duration_ms
+    if filters.max_duration_ms is not None:
+        bound["max_duration_ms"] = filters.max_duration_ms
+    return bound
+
+
+async def _list_by_grouping_spans(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    from_time: datetime,
+    to_time: datetime,
+    filters: TraceFilters,
+    limit: int,
+    cursor: str | None,
+) -> TraceListResponse:
+    """The fallback: assemble each trace from its spans across the whole window.
+
+    Kept for the one filter no per-trace row can carry — an arbitrary attribute
+    path. It is the expensive shape `trace_summaries` exists to avoid, bounded
+    by `AGGREGATION_BOUND` rather than made cheap, and it is reached only when
+    the caller asks for `attr`.
+    """
+    page = decode_cursor(cursor) if cursor else None
+    parameters: dict[str, Any] = {
+        "project_id": project_id,
+        "from_time": from_time,
+        "to_time": to_time,
+        "limit": limit,
+        **_span_filter_parameters(filters),
     }
     if page is not None:
         parameters["cursor_nanos"] = page.start_time_nanos
@@ -187,10 +329,10 @@ async def list_traces(
     )
 
     traces = [_to_summary(row, roots) for row in rows]
-    return TraceListResponse(traces=traces, next_cursor=_next_cursor(rows, traces, limit))
+    return TraceListResponse(traces=traces, next_cursor=_next_cursor(rows, limit))
 
 
-def _filter_parameters(filters: TraceFilters) -> dict[str, Any]:
+def _span_filter_parameters(filters: TraceFilters) -> dict[str, Any]:
     """Only the values the spliced predicates name, so an unused one is unbound."""
     bound: dict[str, Any] = {}
     if filters.service_name:
@@ -349,14 +491,33 @@ async def trace_window(repository: TenantScopedRepository, trace_id: str) -> Tra
     )
 
 
-def _next_cursor(rows: list[dict[str, Any]], traces: list[TraceSummary], limit: int) -> str | None:
-    """A cursor only when the page was full; a short page is the last one."""
+def _next_cursor(rows: list[dict[str, Any]], limit: int) -> str | None:
+    """A cursor only when the page was full; a short page is the last one.
+
+    Built from the ordered row rather than from the response, so the keyset
+    names a position in the statement's own order even when a trace dropped out
+    between the two reads.
+    """
     if len(rows) < limit or not rows:
         return None
     return TracePageCursor(
         start_time_nanos=int(rows[-1]["start_time_nanos"]),
-        trace_id=traces[-1].trace_id,
+        trace_id=values.text(rows[-1]["trace_id"]),
     ).encode()
+
+
+def _to_merged_summary(row: dict[str, Any]) -> TraceSummary:
+    """One row of `trace_summaries`, already folded across the trace's rows."""
+    return TraceSummary(
+        trace_id=values.text(row["trace_id"]),
+        root_service=values.text(row["root_service"]),
+        root_name=values.text(row["root_name"]),
+        start_time=values.nanos_to_datetime(row["start_time_nanos"]),
+        duration_ms=float(row["duration_ms"]),
+        span_count=int(row["span_count"]),
+        error_count=int(row["error_count"]),
+        status_code=_SEVERITY_NAMES.get(int(row["worst_severity"]), UNKNOWN_STATUS),
+    )
 
 
 def _to_summary(row: dict[str, Any], roots: dict[str, tuple[str, str]]) -> TraceSummary:

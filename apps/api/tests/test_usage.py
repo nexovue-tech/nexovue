@@ -30,7 +30,7 @@ from nexovue_api.data.postgres.models import (
     UsageDailyService,
 )
 from nexovue_api.errors.exceptions import InternalError, InvalidRequestError
-from nexovue_api.usage import queries, service
+from nexovue_api.usage import billing, queries, service
 from nexovue_api.usage.queries import MeteringFrontier
 from nexovue_api.usage.schemas import UsageResponse
 
@@ -65,7 +65,7 @@ class CapturingSession:
 
     @property
     def bound_values(self) -> set[Any]:
-        return set(self.statements[-1].compile().params.values())
+        return _bound_values(self.statements[-1])
 
 
 class _Empty:
@@ -115,6 +115,10 @@ class FakeUsageStore:
     A query that lost its `org_id` predicate binds no organization, matches no
     row, and reports a tenant with traffic as a tenant with none — which is what
     the isolation tests below then catch.
+
+    Day filtering follows the days a statement bound rather than the suite's
+    range, because the billing period is a different window from the range being
+    browsed and both are read in one call.
     """
 
     def __init__(
@@ -134,49 +138,98 @@ class FakeUsageStore:
         self._unknown_partitions = unknown_partitions
 
     async def scalars(self, statement: Any) -> Any:
-        bound = set(statement.compile().params.values())
-        return _Rows(
-            [
-                row
-                for row in self._rows
-                if row.org_id in bound
-                and (row.project_id in bound or not self._narrowed(bound))
-                and FROM_DAY <= row.day <= TO_DAY
-            ]
-        )
+        return _Rows(self._counters(_Bound(statement)))
 
     async def scalar(self, statement: Any) -> Any:
-        bound = set(statement.compile().params.values())
+        bound = _Bound(statement)
         match _reads(statement):
             case "plan_prices":
-                return next((p for p in self._prices if p.plan_slug in bound), None)
+                return next((p for p in self._prices if p.plan_slug in bound.values), None)
+            case "usage_daily":
+                return sum(row.bytes for row in self._counters(bound))
             case "usage_daily_services":
                 return len({(row.project_id, row.service_name) for row in self._services(bound)})
             case _:
-                return next((plan for plan in self._plans if plan.slug in bound), None)
+                return next((plan for plan in self._plans if plan.slug in bound.values), None)
 
     async def execute(self, statement: Any) -> Any:
-        bound = set(statement.compile().params.values())
         if _reads(statement) == "usage_ingest_offsets":
             return _One((self._counted_through, self._unknown_partitions))
+
+        bound = _Bound(statement)
+        selected = set(statement.selected_columns.keys())
+        if "recent" in selected:
+            return _Rows(self._counts_by_project(bound))
+        if selected == {"project_id", "service_name"}:
+            return _Rows(self._names_by_project(bound))
+        return _Rows(self._counts_by_day(bound))
+
+    def _counts_by_day(self, bound: _Bound) -> list[_ServiceCount]:
         counts: dict[tuple[uuid.UUID, date], int] = {}
         for row in self._services(bound):
             counts[(row.project_id, row.day)] = counts.get((row.project_id, row.day), 0) + 1
-        return _Rows(
-            [_ServiceCount(project, day, n) for (project, day), n in sorted(counts.items())]
-        )
+        return [_ServiceCount(project, day, n) for (project, day), n in sorted(counts.items())]
 
-    def _services(self, bound: set[Any]) -> list[UsageDailyService]:
+    def _counts_by_project(self, bound: _Bound) -> list[_WindowCount]:
+        """Two windows, split at the recent boundary the statement bound.
+
+        The boundary is the second of the three days bound, in day order, which
+        is what the query itself binds: `previous_from`, `recent_from`, `to`.
+        """
+        recent_from = bound.days[1]
+        windows: dict[uuid.UUID, tuple[set[str], set[str]]] = {}
+        for row in self._services(bound):
+            recent, previous = windows.setdefault(row.project_id, (set(), set()))
+            (recent if row.day >= recent_from else previous).add(row.service_name)
         return [
-            row
-            for row in self._service_rows
-            if row.org_id in bound
-            and (row.project_id in bound or not self._narrowed(bound))
-            and FROM_DAY <= row.day <= TO_DAY
+            _WindowCount(project_id, len(recent), len(previous))
+            for project_id, (recent, previous) in sorted(windows.items())
         ]
 
-    def _narrowed(self, bound: set[Any]) -> bool:
-        return any(row.project_id in bound for row in self._rows)
+    def _names_by_project(self, bound: _Bound) -> list[_ServiceName]:
+        seen = {(row.project_id, row.service_name) for row in self._services(bound)}
+        return [_ServiceName(project_id, name) for project_id, name in sorted(seen)]
+
+    def _counters(self, bound: _Bound) -> list[UsageDaily]:
+        return [row for row in self._rows if self._matches(row, bound)]
+
+    def _services(self, bound: _Bound) -> list[UsageDailyService]:
+        return [row for row in self._service_rows if self._matches(row, bound)]
+
+    def _matches(self, row: Any, bound: _Bound) -> bool:
+        return (
+            row.org_id in bound.values
+            and (row.project_id in bound.values or not self._narrowed(bound))
+            and bound.covers(row.day)
+        )
+
+    def _narrowed(self, bound: _Bound) -> bool:
+        return any(row.project_id in bound.values for row in self._rows)
+
+
+class _Bound:
+    """The values one statement bound, and the day window among them.
+
+    Reading the window from the statement rather than assuming the suite's is
+    what lets one fake answer the browsed range and the billing month in the
+    same call — and a query that bound the wrong days answers with the wrong
+    rows rather than being quietly corrected here.
+    """
+
+    def __init__(self, statement: Any) -> None:
+        self.values = _bound_values(statement)
+        self.days = sorted(value for value in self.values if isinstance(value, date))
+
+    def covers(self, day: date) -> bool:
+        return not self.days or self.days[0] <= day <= self.days[-1]
+
+
+def _bound_values(statement: Any) -> set[Any]:
+    """Every value a statement bound, with an `IN` list flattened into its members."""
+    bound: set[Any] = set()
+    for value in statement.compile().params.values():
+        bound.update(value) if isinstance(value, list) else bound.add(value)
+    return bound
 
 
 def _reads(statement: Any) -> str:
@@ -204,6 +257,23 @@ class _ServiceCount:
         self.project_id = project_id
         self.day = day
         self.services = services
+
+
+class _WindowCount:
+    """The shape `service_counts_by_project` returns: two windows, one project."""
+
+    def __init__(self, project_id: uuid.UUID, recent: int, previous: int) -> None:
+        self.project_id = project_id
+        self.recent = recent
+        self.previous = previous
+
+
+class _ServiceName:
+    """The shape `service_names` returns: one project, one name."""
+
+    def __init__(self, project_id: uuid.UUID, service_name: str) -> None:
+        self.project_id = project_id
+        self.service_name = service_name
 
 
 class _Rows:
@@ -368,7 +438,7 @@ async def test_the_price_reported_is_the_one_in_force_on_the_last_day() -> None:
                 plan_slug="pro",
                 effective_from=date(2026, 1, 1),
                 currency="USD",
-                price_per_service_cents=1_000,
+                price_per_service_minor_units=1_000,
             )
         ],
     )
@@ -381,7 +451,7 @@ async def test_the_price_reported_is_the_one_in_force_on_the_last_day() -> None:
     )
 
     assert response.price is not None
-    assert response.price.price_per_service_cents == 1_000
+    assert response.price.price_per_service_minor_units == 1_000
     assert response.price.currency == "USD"
 
 
@@ -549,3 +619,351 @@ async def test_an_unmetered_partition_leaves_the_range_unsettled() -> None:
     response = await _metered(datetime(2026, 9, 1, tzinfo=UTC), unknown=1)
 
     assert response.settled is False
+
+
+# ------------------------------------------------------- the period, and its cost
+
+
+def _price(
+    *,
+    minor_units: int = 1_000,
+    ceiling: int | None = None,
+    included_bytes: int | None = None,
+) -> PlanPrice:
+    return PlanPrice(
+        plan_slug="pro",
+        effective_from=date(2026, 1, 1),
+        currency="USD",
+        price_per_service_minor_units=minor_units,
+        max_billed_services=ceiling,
+        included_bytes_per_service=included_bytes,
+    )
+
+
+async def _priced(
+    services: list[UsageDailyService],
+    *,
+    price: PlanPrice | None = None,
+    from_day: date = FROM_DAY,
+    to_day: date = TO_DAY,
+    project_id: uuid.UUID | None = None,
+) -> UsageResponse:
+    store = FakeUsageStore(_ROWS, [PRO_PLAN], services=services, prices=[price] if price else ())
+    return await service.usage_for_organization(
+        store,  # type: ignore[arg-type]
+        organization=_organization(ORG_ID),
+        from_day=from_day,
+        to_day=to_day,
+        project_id=project_id,
+    )
+
+
+def test_the_billing_period_is_the_calendar_month() -> None:
+    """Not the anniversary of signup: every customer's period starts together."""
+    assert billing.calendar_month_of(date(2026, 8, 14)) == (date(2026, 8, 1), date(2026, 8, 31))
+    assert billing.calendar_month_of(date(2026, 2, 3)) == (date(2026, 2, 1), date(2026, 2, 28))
+    # A leap February is the one month a hardcoded length gets wrong.
+    assert billing.calendar_month_of(date(2028, 2, 3)) == (date(2028, 2, 1), date(2028, 2, 29))
+
+
+async def test_the_period_is_the_month_around_the_last_day_not_the_range() -> None:
+    """The range is what is browsed; the month is what is billed."""
+    response = await _priced([], from_day=date(2026, 8, 10), to_day=date(2026, 8, 20))
+
+    assert (response.period.first_day, response.period.last_day) == (
+        date(2026, 8, 1),
+        date(2026, 8, 31),
+    )
+
+
+async def test_the_cost_is_the_months_services_and_not_the_ranges() -> None:
+    """The negative control on the multiplication itself.
+
+    `checkout` reported only before the browsed range starts, so the range
+    counts one service and the month counts two. Multiplying the number the
+    screen happens to be showing gives $10; the month's bill is $20.
+    """
+    response = await _priced(
+        [
+            _service(ORG_ID, PROJECT_ID, date(2026, 8, 2), "checkout"),
+            _service(ORG_ID, PROJECT_ID, date(2026, 8, 20), "payments"),
+        ],
+        price=_price(),
+        from_day=date(2026, 8, 10),
+        to_day=date(2026, 8, 31),
+    )
+
+    assert response.totals.services == 1
+    assert response.period.services == 2
+    assert response.period.service_cost_minor_units == 2_000
+    assert response.period.currency == "USD"
+
+
+async def test_a_service_reporting_all_month_is_billed_once() -> None:
+    """The union, in the period as well as in the range."""
+    every_day = [
+        _service(ORG_ID, PROJECT_ID, date(2026, 8, day), "checkout") for day in range(1, 29)
+    ]
+
+    response = await _priced(every_day, price=_price())
+
+    assert response.period.services == 1
+    assert response.period.service_cost_minor_units == 1_000
+
+
+async def test_no_price_recorded_means_no_cost_and_never_a_zero() -> None:
+    """A tier nobody priced is not a free tier."""
+    response = await _priced([_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")])
+
+    assert response.period.services == 1
+    assert response.period.service_cost_minor_units is None
+    assert response.period.currency is None
+
+
+async def test_the_ceiling_holds_the_billed_quantity_down() -> None:
+    """ADR 0056's cap is on the service-count component, and this is it."""
+    many = [_service(ORG_ID, PROJECT_ID, TO_DAY, f"service-{index}") for index in range(10)]
+
+    response = await _priced(many, price=_price(ceiling=4))
+
+    assert response.period.services == 10
+    assert response.period.billed_services == 4
+    assert response.period.service_cost_minor_units == 4_000
+
+
+async def test_an_uncapped_price_bills_every_service() -> None:
+    """Null is uncapped, which is not a cap of zero."""
+    many = [_service(ORG_ID, PROJECT_ID, TO_DAY, f"service-{index}") for index in range(3)]
+
+    response = await _priced(many, price=_price(ceiling=None))
+
+    assert response.period.billed_services == 3
+    assert response.period.service_cost_minor_units == 3_000
+
+
+async def test_a_month_the_meter_has_not_finished_is_not_settled() -> None:
+    """A month in progress is labelled, never shown as a small bill."""
+    store = FakeUsageStore(_ROWS, [PRO_PLAN], counted_through=datetime(2026, 8, 12, tzinfo=UTC))
+
+    response = await service.usage_for_organization(
+        store,  # type: ignore[arg-type]
+        organization=_organization(ORG_ID),
+        from_day=FROM_DAY,
+        to_day=TO_DAY,
+    )
+
+    assert response.period.settled is False
+
+
+async def test_a_month_the_meter_has_passed_is_settled() -> None:
+    store = FakeUsageStore(_ROWS, [PRO_PLAN], counted_through=datetime(2026, 9, 1, tzinfo=UTC))
+
+    response = await service.usage_for_organization(
+        store,  # type: ignore[arg-type]
+        organization=_organization(ORG_ID),
+        from_day=FROM_DAY,
+        to_day=TO_DAY,
+    )
+
+    assert response.period.settled is True
+
+
+async def test_narrowing_to_one_project_does_not_narrow_the_bill() -> None:
+    """A per-project cost is a number nobody is ever charged."""
+    services = [
+        _service(ORG_ID, PROJECT_ID, TO_DAY, "checkout"),
+        _service(ORG_ID, OTHER_PROJECT_ID, TO_DAY, "payments"),
+    ]
+
+    whole = await _priced(services, price=_price())
+    narrowed = await _priced(services, price=_price(), project_id=PROJECT_ID)
+
+    assert narrowed.totals.services == 1
+    assert narrowed.period.services == whole.period.services == 2
+    assert narrowed.period.service_cost_minor_units == 2_000
+    assert narrowed.period.bytes_ingested == whole.period.bytes_ingested
+
+
+# ------------------------------------------------------------- the allowance
+
+
+async def test_the_allowance_is_bytes_pooled_across_the_billed_services() -> None:
+    """Per service, summed: a quiet service lends its allowance to a busy one."""
+    services = [
+        _service(ORG_ID, PROJECT_ID, TO_DAY, "checkout"),
+        _service(ORG_ID, PROJECT_ID, TO_DAY, "payments"),
+    ]
+
+    response = await _priced(services, price=_price(included_bytes=1_000_000))
+
+    assert response.period.included_bytes == 2_000_000
+    # The month's rows are the two in `_ROWS`, which is what it is measured against.
+    assert response.period.bytes_ingested == 1_500
+
+
+async def test_no_allowance_recorded_is_not_an_allowance_of_zero() -> None:
+    """A null would otherwise report every byte ingested as overage."""
+    response = await _priced(
+        [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")], price=_price(included_bytes=None)
+    )
+
+    assert response.period.included_bytes is None
+    assert response.period.bytes_ingested == 1_500
+
+
+async def test_the_allowance_follows_the_ceiling_not_the_raw_count() -> None:
+    """Services past the cap are not billed, so they bring no allowance either."""
+    many = [_service(ORG_ID, PROJECT_ID, TO_DAY, f"service-{index}") for index in range(10)]
+
+    response = await _priced(many, price=_price(ceiling=4, included_bytes=1_000))
+
+    assert response.period.included_bytes == 4_000
+
+
+async def test_the_period_bytes_are_asked_for_by_organization_and_month(
+    session: CapturingSession,
+) -> None:
+    """The behaviour test above cannot see the predicate; this can."""
+    await queries.bytes_in_range(
+        session,  # type: ignore[arg-type]
+        org_id=ORG_ID,
+        from_day=FROM_DAY,
+        to_day=TO_DAY,
+    )
+
+    assert {ORG_ID, FROM_DAY, TO_DAY} <= session.bound_values
+    assert OTHER_ORG_ID not in session.bound_values
+
+
+# -------------------------------------------------------------- cardinality
+
+
+class _CapturingExecute(CapturingSession):
+    """A capturing session that also answers `execute`, returning nothing."""
+
+    async def execute(self, statement: Any) -> Any:
+        self.statements.append(statement)
+        return _Empty()
+
+
+async def test_the_windowed_counts_ask_the_database_for_a_distinct_count() -> None:
+    """The fake below dedupes with a Python set, so only the statement shows this.
+
+    Without `distinct` a service reporting on seven days counts as seven, and a
+    project running steadily would look like a project exploding.
+    """
+    captured = _CapturingExecute()
+
+    await queries.service_counts_by_project(
+        captured,  # type: ignore[arg-type]
+        org_id=ORG_ID,
+        previous_from=date(2026, 8, 17),
+        recent_from=date(2026, 8, 24),
+        to_day=TO_DAY,
+    )
+
+    statement = str(captured.statements[-1].compile())
+    assert "DISTINCT" in statement.upper(), statement
+    assert ORG_ID in captured.bound_values
+
+
+async def test_reading_service_names_binds_the_organization(session: CapturingSession) -> None:
+    """Project ids narrow; they never replace the tenant predicate."""
+    captured = _CapturingExecute()
+
+    await queries.service_names(
+        captured,  # type: ignore[arg-type]
+        org_id=ORG_ID,
+        project_ids=[PROJECT_ID],
+        from_day=FROM_DAY,
+        to_day=TO_DAY,
+        limit_per_project=10,
+    )
+
+    bound = captured.bound_values
+    assert ORG_ID in bound
+    assert OTHER_ORG_ID not in bound
+
+
+def _pods(count: int, day: date = TO_DAY) -> list[UsageDailyService]:
+    """One deployment, one service name per pod — the bill this warns about."""
+    # Every suffix is spellable in the generator's own alphabet, which has no
+    # vowels and no 0, 1 or 3 in it.
+    suffixes = ["x2k9p", "m4rt7", "bn6qw", "kt9zx", "vd4sr", "hj7bk", "cz2mn", "wq8fd"]
+    return [
+        _service(ORG_ID, PROJECT_ID, day, f"checkout-7d9f8b6c4d-{suffix}")
+        for suffix in suffixes[:count]
+    ]
+
+
+async def test_a_project_whose_names_carry_pod_ids_is_named_with_the_reason() -> None:
+    recent = TO_DAY - timedelta(days=2)
+    response = await _priced(_pods(8, day=recent))
+
+    assert len(response.cardinality) == 1
+    warning = response.cardinality[0]
+    assert warning.project_id == PROJECT_ID
+    assert warning.services_now == 8
+    assert warning.window_days == 7
+    assert [family.kind for family in warning.families] == ["kubernetes-pod"]
+    assert warning.families[0].stem == "checkout"
+    assert warning.families[0].members == 8
+    assert len(warning.families[0].examples) == 3
+
+
+async def test_the_change_is_reported_against_the_week_before() -> None:
+    """'Twelve services, up from three' — the sentence needs both numbers."""
+    last_week = TO_DAY - timedelta(days=9)
+    recent = TO_DAY - timedelta(days=1)
+    services = [
+        _service(ORG_ID, PROJECT_ID, last_week, "checkout"),
+        _service(ORG_ID, PROJECT_ID, last_week, "payments"),
+        *_pods(8, day=recent),
+    ]
+
+    response = await _priced(services)
+
+    assert (response.cardinality[0].services_now, response.cardinality[0].services_before) == (8, 2)
+
+
+async def test_a_project_running_ordinary_services_is_never_warned_about() -> None:
+    """Ten honestly named services are ten services, and silence is the answer."""
+    names = [
+        "checkout",
+        "payments",
+        "shipping",
+        "inventory",
+        "api-gateway",
+        "web-frontend",
+        "auth-service",
+        "search",
+        "recommendation-engine",
+        "email-worker",
+    ]
+    services = [_service(ORG_ID, PROJECT_ID, TO_DAY, name) for name in names]
+
+    response = await _priced(services)
+
+    assert response.cardinality == []
+
+
+async def test_a_small_project_is_left_alone_however_it_moved() -> None:
+    """Three services where there was one is a customer, not an explosion."""
+    services = [
+        _service(ORG_ID, PROJECT_ID, TO_DAY, name) for name in ("checkout", "payments", "search")
+    ]
+
+    response = await _priced(services)
+
+    assert response.cardinality == []
+
+
+async def test_another_organizations_names_are_never_examined() -> None:
+    response = await _priced(
+        [
+            _service(OTHER_ORG_ID, PROJECT_ID, TO_DAY, f"checkout-7d9f8b6c4d-{suffix}")
+            for suffix in ("x2k9p", "m4rt7", "bn6qw", "kt9zx", "vd4sr", "hj7bk", "cz2mn", "wq8fd")
+        ]
+    )
+
+    assert response.cardinality == []

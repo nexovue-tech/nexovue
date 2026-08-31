@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,8 +18,19 @@ const lookupByPrefix = `
 	FROM api_keys
 	WHERE key_prefix = $1 AND revoked_at IS NULL`
 
-// PostgresKeys reads api_keys. It is the only place the receiver touches the
-// control-plane database.
+// The one write the ingest path makes to the control plane. Guarded on the
+// timestamp so that receivers writing out of order — several processes, each with
+// its own cache — can only move `last_used_at` forward. Revoked keys are excluded
+// for the same reason the lookup excludes them: a withdrawn key is not in use.
+const markUsed = `
+	UPDATE api_keys
+	SET last_used_at = $2
+	WHERE key_prefix = $1
+	  AND revoked_at IS NULL
+	  AND (last_used_at IS NULL OR last_used_at < $2)`
+
+// PostgresKeys reads api_keys, and records when one authenticated. It is the
+// only place the receiver touches the control-plane database.
 type PostgresKeys struct {
 	pool *pgxpool.Pool
 }
@@ -43,4 +55,12 @@ func (k *PostgresKeys) CredentialFor(ctx context.Context, prefix string) (Creden
 	}
 	found.Found = true
 	return found, nil
+}
+
+// MarkUsed records that the key with this prefix authenticated at `at`.
+func (k *PostgresKeys) MarkUsed(ctx context.Context, prefix string, at time.Time) error {
+	if _, err := k.pool.Exec(ctx, markUsed, prefix, at); err != nil {
+		return fmt.Errorf("recording api_keys.last_used_at: %w", err)
+	}
+	return nil
 }

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -42,6 +43,11 @@ const drainTimeout = 15 * time.Second
 // it is the container-log fallback that ADR's second rule keeps independent of
 // the OTel pipeline, for reading when that pipeline is the broken thing.
 const heartbeatInterval = 30 * time.Second
+
+// defaultMaxBytes bounds one batch's messages when a pipeline names no bound of
+// its own. Six consumer clients run in one worker against a 1 GiB limit, so the
+// budget is what six of these plus the Go heap's own headroom fit inside.
+const defaultMaxBytes = 16 << 20
 
 // Processor is the signal-specific half of a pipeline: what a batch of records
 // produces, when what it produced has reached storage, and what it is holding
@@ -107,13 +113,37 @@ type Settings struct {
 
 	// MaxRows and MaxDelay bound one batch: enough rows for an insert the store
 	// merges cheaply, and a deadline that keeps a quiet tenant's rows moving.
+	//
+	// MaxRows counts *messages*, not the rows they carry — every caller has
+	// always passed a message count. The name is wrong and is corrected where
+	// the callers can be changed together.
 	MaxRows  int
 	MaxDelay time.Duration
+
+	// MaxBytes bounds a batch by the size of the messages in it. MaxRows cannot:
+	// one OTLP message carries as many log records or data points as the
+	// sender's exporter batched, so a batch bounded only at 5000 messages held
+	// half a gigabyte here and the worker was OOM-killed at its 1 GiB limit.
+	// Zero takes defaultMaxBytes, so a pipeline that says nothing is still
+	// bounded.
+	MaxBytes int
 
 	// OnAssigned runs when the consumer group hands this worker partitions. A
 	// partition can arrive from another worker whose durable state this process
 	// never saw, and a cache of that state has to be re-read before it is used.
 	OnAssigned func()
+}
+
+// maxBytes is the batch byte bound in force, which is the built-in default when
+// the pipeline named none.
+//
+// int32 because that is what a Kafka fetch request can express. validate
+// refuses anything larger, so the conversion below cannot truncate.
+func (s Settings) maxBytes() int32 {
+	if s.MaxBytes <= 0 || s.MaxBytes > math.MaxInt32 {
+		return defaultMaxBytes
+	}
+	return int32(s.MaxBytes)
 }
 
 func (s Settings) validate() error {
@@ -134,6 +164,11 @@ func (s Settings) validate() error {
 	}
 	if s.MaxDelay <= 0 {
 		problems = append(problems, fmt.Errorf("batch max delay is %s, want more than 0", s.MaxDelay))
+	}
+	if s.MaxBytes > math.MaxInt32 {
+		problems = append(problems, fmt.Errorf(
+			"batch max bytes is %d, want at most %d — a Kafka fetch cannot ask for more",
+			s.MaxBytes, math.MaxInt32))
 	}
 	return errors.Join(problems...)
 }
@@ -167,6 +202,10 @@ func Dial[S any](settings Settings, log *slog.Logger) (*Loop[S], error) {
 		kgo.SeedBrokers(settings.Brokers...),
 		kgo.ConsumeTopics(settings.Topic),
 		kgo.ConsumerGroup(settings.ConsumerGroup),
+		// Bounds what one fetch may return. Without it the broker may hand back
+		// 50 MiB (franz-go's default) in a single poll, and the batch bound
+		// below would be applied to memory we are already holding.
+		kgo.FetchMaxBytes(settings.maxBytes()),
 		kgo.OnPartitionsAssigned(func(context.Context, *kgo.Client, map[string][]int32) {
 			if settings.OnAssigned != nil {
 				settings.OnAssigned()
@@ -239,6 +278,7 @@ func (l *Loop[S]) Run(ctx context.Context, stages Processor[S]) error {
 	defer l.log.InfoContext(ctx, l.settings.Name+" stopped")
 
 	var pending []*kgo.Record
+	var held int
 	var flushBy time.Time
 	nextHeartbeat := l.now().Add(heartbeatInterval)
 
@@ -262,16 +302,19 @@ func (l *Loop[S]) Run(ctx context.Context, stages Processor[S]) error {
 		if err != nil {
 			return err
 		}
-		fetches.EachRecord(func(record *kgo.Record) { pending = append(pending, record) })
+		fetches.EachRecord(func(record *kgo.Record) {
+			pending = append(pending, record)
+			held += sizeOf(record)
+		})
 		if len(pending) > 0 && flushBy.IsZero() {
 			flushBy = l.now().Add(l.settings.MaxDelay)
 		}
 
-		if l.batchIsReady(pending, flushBy) {
+		if l.batchIsReady(pending, held, flushBy) {
 			if err := l.absorb(ctx, stages, pending); err != nil {
 				return err
 			}
-			pending, flushBy = pending[:0], time.Time{}
+			pending, held, flushBy = pending[:0], 0, time.Time{}
 		}
 
 		now := l.now()
@@ -319,9 +362,22 @@ func (l *Loop[S]) heartbeat(ctx context.Context, now time.Time, stages Processor
 		append(held, stages.Holding()...)...)
 }
 
-func (l *Loop[S]) batchIsReady(pending []*kgo.Record, flushBy time.Time) bool {
+func (l *Loop[S]) batchIsReady(pending []*kgo.Record, held int, flushBy time.Time) bool {
 	return len(pending) > 0 &&
-		(len(pending) >= l.settings.MaxRows || !l.now().Before(flushBy))
+		(len(pending) >= l.settings.MaxRows ||
+			held >= int(l.settings.maxBytes()) ||
+			!l.now().Before(flushBy))
+}
+
+// sizeOf is what one record costs to hold. The value dominates; the key and
+// headers are counted because a batch of small values with large headers costs
+// the same memory and would otherwise be invisible to the bound.
+func sizeOf(record *kgo.Record) int {
+	size := len(record.Key) + len(record.Value)
+	for _, header := range record.Headers {
+		size += len(header.Key) + len(header.Value)
+	}
+	return size
 }
 
 // poll waits for records, giving up at the flush deadline once a batch has

@@ -66,6 +66,12 @@ services:
       retries: 6
       start_period: 20s
     environment: &data-plane-env
+      # Go's collector cannot see a cgroup limit — as of Go 1.26 the proposal to
+      # derive one from the cgroup is still open — so without this the heap
+      # doubles freely and the kernel kills the process first. Measured: the dev
+      # worker was OOM-killed at 1017 MB RSS against a 1 GiB cap. ~85% of this
+      # service's 512M, leaving the rest for stacks and everything off-heap.
+      GOMEMLIMIT: 435MiB
       ENV: production
       LOG_LEVEL: info
       LOG_FORMAT: json
@@ -106,6 +112,11 @@ services:
       retries: 6
       start_period: 20s
     environment:
+      # Overrides the data-plane default below, because this service has its own
+      # memory limit. Keep it at roughly 85% of WORKER_MEMORY: the two are one
+      # setting in two places, and raising the limit without raising this leaves
+      # the extra memory unusable.
+      GOMEMLIMIT: ${WORKER_GOMEMLIMIT:-650MiB}
       <<: *data-plane-env
       WORKER_PIPELINES: ${WORKER_PIPELINES:-all}
       # Required rather than optional: the worker treats an absent secret as

@@ -22,11 +22,16 @@ import "sync"
 // dies with the process, and the records between the last commit and the crash
 // would be replayed with nothing to recognise them.
 //
-// That gap is closed by internal/pipeline/ingeststate, which keeps the same two
-// facts durably in Keeper: how far each partition is counted (ADR 0061) and how
-// far its spans are written (migration 000026). This type remains the cheap
-// in-process half — a map lookup rather than a cache of a remote table — and
-// both are consulted, because either alone leaves a hole.
+// That gap is closed by internal/pipeline/ingeststate, which keeps the same
+// facts durably in Keeper: how far each partition is counted (ADR 0061), how far
+// its spans are written (migration 000026), and how far the log and metric
+// pipelines have written theirs (migration 000029). This type remains the cheap
+// in-process half — a map lookup rather than a cache of a remote table — and for
+// spans both are consulted, because either alone leaves a hole.
+//
+// The log and metric pipelines use the durable watermark alone. They buffer
+// nothing, so it advances on every insert and its cache is already the
+// in-process answer; a second watermark would only repeat it.
 type Offsets struct {
 	mu        sync.Mutex
 	watermark map[partition]int64

@@ -9,6 +9,14 @@
 // for and no sampling decision to make, so a batch is written where it is
 // decoded and its offsets may move as soon as the insert returns. That is what
 // makes the batch's storage receipt an empty struct.
+//
+// "As soon as" is not "at the same time", and the gap is the whole reason this
+// pipeline needs a durable watermark. Between the insert being acknowledged and
+// the offsets being committed the batch is already stored and still replayable,
+// so an abrupt exit in that window writes its rows a second time — `logs` is a
+// plain MergeTree and nothing deduplicates it on read. internal/pipeline/
+// ingeststate keeps how far each partition is written in Keeper, so the replay
+// after a restart is recognised (migration 000029).
 package logwriting
 
 import (
@@ -18,10 +26,12 @@ import (
 	"time"
 
 	"github.com/ClickHouse/ch-go/chpool"
+	"github.com/twmb/franz-go/pkg/kgo"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
 )
 
 // Masker rewrites the decoded payload in place, so that no stage after it can
@@ -71,6 +81,10 @@ type Pipeline struct {
 	writer *logWriter
 	block  *logBlock
 
+	// written is how far each partition's rows are in the store, kept in Keeper
+	// so it survives the restart that causes the replay.
+	written *ingeststate.WriteGuard
+
 	masker    Masker
 	retention RetentionSource
 
@@ -81,9 +95,19 @@ type Pipeline struct {
 	// message failed to decode and so bypassed masking entirely.
 	parked       uint64
 	valuesMasked uint64
+	// alreadyStored counts messages a replay offered whose rows the store had
+	// already acknowledged. It is the direct evidence that the watermark is
+	// doing something, and reads zero on a worker that never restarted.
+	alreadyStored uint64
 
 	defaultRetentionDays uint16
-	log                  *slog.Logger
+
+	// maxRows caps one insert, and with it the rows held in memory. The batch's
+	// message bound cannot: a message carries as many log records as the
+	// sender's exporter batched.
+	maxRows int
+
+	log *slog.Logger
 }
 
 // written is what one batch still owes storage: nothing. The insert happens
@@ -98,14 +122,20 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		return nil, errors.New("log-writing pipeline: a masker is required")
 	}
 
+	guard := ingeststate.NewWriteGuard(ingeststate.NewIngestWatermarks(pool))
 	loop, err := consume.Dial[written](consume.Settings{
 		Name:          string(config.PipelineLogWriting),
 		Brokers:       cfg.KafkaBrokers,
 		Topic:         cfg.Logs.Topic,
 		ConsumerGroup: cfg.Logs.ConsumerGroup,
 		DLQTopic:      cfg.Logs.DLQTopic,
-		MaxRows:       cfg.Logs.MaxRows,
-		MaxDelay:      cfg.Logs.MaxDelay,
+		// consume's MaxRows has always counted messages; see LogIngest.
+		MaxRows:  cfg.Logs.MaxMessages,
+		MaxDelay: cfg.Logs.MaxDelay,
+		// A partition can arrive from another worker, whose watermark this
+		// process never read. Re-reading before writing anything is what keeps
+		// the handover from writing a partition's rows twice.
+		OnAssigned: guard.Invalidate,
 	}, log)
 	if err != nil {
 		return nil, err
@@ -115,9 +145,11 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		loop:                 loop,
 		writer:               newLogWriter(pool),
 		block:                newLogBlock(),
+		written:              guard,
 		masker:               opts.Masking,
 		retention:            retentionSource(cfg, opts),
 		defaultRetentionDays: cfg.Retention.RawDays,
+		maxRows:              cfg.Logs.MaxRows,
 		log:                  log.With(slog.String("pipeline", string(config.PipelineLogWriting))),
 	}, nil
 }
@@ -143,6 +175,8 @@ func (p *Pipeline) Running(ctx context.Context) error { return p.loop.Running(ct
 func (p *Pipeline) Describe() []slog.Attr {
 	return []slog.Attr{
 		slog.Uint64("default_retention_days", uint64(p.defaultRetentionDays)),
+		// The loop's own batch_max_rows counts messages; this is rows.
+		slog.Int("insert_max_rows", p.maxRows),
 	}
 }
 
@@ -152,6 +186,7 @@ func (p *Pipeline) Describe() []slog.Attr {
 func (p *Pipeline) Holding() []slog.Attr {
 	return []slog.Attr{
 		slog.Uint64("logs_written", p.logsWritten),
+		slog.Uint64("messages_already_stored", p.alreadyStored),
 		slog.Uint64("messages_parked", p.parked),
 		slog.Uint64("values_masked", p.valuesMasked),
 	}
@@ -163,10 +198,32 @@ func (p *Pipeline) Stored(time.Time, written) bool { return true }
 
 // Absorb decodes one polled batch, masks it, flattens it to rows and writes
 // them. A message it cannot decode is parked before its offset can move.
+//
+// The batch is written in chunks of at most maxRows rather than in one insert.
+// A message carries as many log records as the sender batched, so the batch's
+// message bound says nothing about how much is held; unbounded, 5000 messages
+// held 50,000 rows and the worker was OOM-killed.
 func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, error) {
+	if err := p.loop.Retry(ctx, "read written offsets", p.written.Refresh); err != nil {
+		return written{}, err
+	}
+
 	p.block.reset()
-	messages, masked := 0, 0
-	for _, record := range polled.Records {
+	messages, masked, stored := 0, 0, 0
+	// inBlock is exactly the records whose rows are in the block, which is what
+	// has to be parked if the store refuses it. Skipped and parked records are
+	// deliberately not in it.
+	var inBlock []*kgo.Record
+
+	for at, record := range polled.Records {
+		// A record at or below the watermark had its rows acknowledged by the
+		// store before this process died, and it is skipped whole rather than
+		// re-flattened. It cannot need parking either: a message that failed to
+		// decode was parked before its offset could be covered.
+		if !p.storing(record) {
+			p.alreadyStored++
+			continue
+		}
 		rows, maskedHere, err := p.absorbMessage(polled.At, record.Value)
 		if err != nil {
 			if parkErr := p.loop.Park(ctx, record, err); parkErr != nil {
@@ -178,34 +235,100 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 		for _, row := range rows {
 			p.block.append(row)
 		}
+		inBlock = append(inBlock, record)
 		masked += maskedHere
 		messages++
-	}
 
-	rows := p.block.rows()
-	if err := p.insertBounded(ctx); err != nil {
-		if !consume.IsPermanent(err) {
+		if p.block.rows() < p.maxRows {
+			continue
+		}
+		// Flushed at a message boundary, so every record up to and including
+		// this one is finished with, whichever way it went.
+		inserted, err := p.writeChunk(ctx, inBlock, polled.Positions[:at+1])
+		if err != nil {
 			return written{}, err
 		}
-		// ClickHouse refused these rows and will refuse them again, so the
-		// partition can never advance past them on its own. Park the batch:
-		// the records are kept on the dead-letter topic rather than dropped,
-		// and every other tenant's ingest keeps running. Before this, one
-		// malformed record stopped every signal for every tenant for an hour.
-		if parkErr := p.parkRefusedBatch(ctx, polled, err); parkErr != nil {
-			return written{}, parkErr
-		}
-		return written{}, nil
+		stored += inserted
+		inBlock = inBlock[:0]
 	}
-	p.logsWritten += countOf(rows)
+
+	inserted, err := p.writeChunk(ctx, inBlock, polled.Positions)
+	if err != nil {
+		return written{}, err
+	}
+	stored += inserted
 	p.valuesMasked += countOf(masked)
 
 	p.log.DebugContext(ctx, "batch absorbed",
 		slog.Int("messages", messages),
-		slog.Int("logs", rows),
+		slog.Int("logs", stored),
 		slog.Int("values_masked", masked),
 	)
 	return written{}, nil
+}
+
+// writeChunk inserts what has accumulated in the block, then records how far
+// the batch's offsets are written. It reports how many rows the store took.
+//
+// The order is the substance. The watermark is written only once ClickHouse has
+// acknowledged the insert — never before it. A watermark claimed early would
+// make a replay skip rows nothing ever wrote, and "no data loss between
+// receiver and storage" is a phase-1 invariant while duplication is not. After
+// the acknowledgement the failure modes are: lose the watermark write and the
+// next replay duplicates, which is exactly today's behaviour and recoverable;
+// there is no ordering in which a row goes missing.
+//
+// The Kafka commit is later still, in the loop, so the watermark is always at
+// or ahead of the committed offsets — and that gap is the replay this skips.
+func (p *Pipeline) writeChunk(
+	ctx context.Context,
+	inBlock []*kgo.Record,
+	covered []consume.Position,
+) (int, error) {
+	rows := p.block.rows()
+	err := p.insertBounded(ctx)
+	p.block.reset()
+
+	stored := 0
+	switch {
+	case err == nil:
+		p.logsWritten += countOf(rows)
+		stored = rows
+	case !consume.IsPermanent(err):
+		return 0, err
+	default:
+		// ClickHouse refused these rows and will refuse them again, so the
+		// partition can never advance past them on its own. Park them: the
+		// records are kept on the dead-letter topic rather than dropped, and
+		// every other tenant's ingest keeps running. Before this, one malformed
+		// record stopped every signal for every tenant for an hour.
+		//
+		// The watermark still advances over them. Parked is not stored, but it
+		// is just as finished: a replay that re-inserted them would be refused
+		// again and park a second copy on the dead-letter topic.
+		if parkErr := p.parkRefusedChunk(ctx, inBlock, err); parkErr != nil {
+			return 0, parkErr
+		}
+	}
+	return stored, p.advanceWritten(ctx, covered)
+}
+
+// advanceWritten records how far this batch's offsets are written, under the
+// loop's retry budget so a brief Keeper outage costs a retry rather than the
+// process.
+func (p *Pipeline) advanceWritten(ctx context.Context, covered []consume.Position) error {
+	if len(covered) == 0 {
+		return nil
+	}
+	return p.loop.Retry(ctx, "record written offsets", func(callCtx context.Context) error {
+		return p.written.Advance(callCtx, covered)
+	})
+}
+
+// storing reports whether this record's rows still have to be written.
+func (p *Pipeline) storing(record *kgo.Record) bool {
+	return p.written.Storing(
+		ingeststate.Partition{Topic: record.Topic, ID: record.Partition}, record.Offset)
 }
 
 // absorbMessage runs one Kafka message through decode → mask → flatten.
@@ -236,21 +359,22 @@ func (p *Pipeline) Settle(context.Context, time.Time) error { return nil }
 // it again.
 func (p *Pipeline) Drain(context.Context, time.Time) error { return nil }
 
-// parkRefusedBatch moves a whole batch aside after the store refused it.
+// parkRefusedChunk moves aside every record whose rows were in the insert the
+// store refused.
 //
-// The batch, not the offending record: the insert reports which *rows* it
+// The chunk, not the offending record: the insert reports which *rows* it
 // rejected only by message, and one bad record is carried in a block with up to
 // several thousand good ones. Parking all of them keeps every record — the DLQ
 // topic holds them for reprocessing — and is what lets the offset move.
-func (p *Pipeline) parkRefusedBatch(ctx context.Context, polled consume.Polled, cause error) error {
-	for _, record := range polled.Records {
+func (p *Pipeline) parkRefusedChunk(ctx context.Context, covered []*kgo.Record, cause error) error {
+	for _, record := range covered {
 		if err := p.loop.Park(ctx, record, cause); err != nil {
 			return err
 		}
 		p.parked++
 	}
-	p.log.ErrorContext(ctx, "the store refused a batch; parked rather than retried",
-		slog.Int("messages", len(polled.Records)),
+	p.log.ErrorContext(ctx, "the store refused an insert; parked its records rather than retried",
+		slog.Int("messages", len(covered)),
 		slog.String("error", cause.Error()),
 	)
 	return nil

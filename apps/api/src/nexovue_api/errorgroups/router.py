@@ -4,6 +4,9 @@
 chose. It is proved to belong to the caller's organization before it reaches a
 telemetry query — `require_project` is that proof, and the repository the query
 runs through is bound to the session's tenant, never to anything in the URL.
+
+`service_name` is a caller value too, but it only narrows a read the tenant is
+already entitled to, so it is bound as a parameter rather than checked.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ async def list_error_groups(
     project_id: ProjectId,
     from_time: FromTime = None,
     to_time: ToTime = None,
+    service_name: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=service.MAX_LIMIT)] = None,
 ) -> ErrorGroupListResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
@@ -43,6 +47,7 @@ async def list_error_groups(
     return await service.list_error_groups(
         repository,
         project_id=str(project.id),
+        service_name=service_name,
         from_time=window_start,
         to_time=window_end,
         limit=clamp_limit(limit, default=service.DEFAULT_LIMIT, maximum=service.MAX_LIMIT),

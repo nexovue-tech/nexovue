@@ -1,24 +1,46 @@
 import { describe, expect, it } from "vitest";
 
-import type { PlanPrice } from "./api";
+import type { BillingPeriod, CardinalityWarning, PlanPrice, ServiceNameFamily } from "./api";
 import {
+  CARDINALITY_REMEDY,
+  describeAllowance,
   describeCeiling,
+  describeCostBasis,
   describeCounting,
+  describeFamily,
   describeNoPrice,
+  describePeriodProgress,
   describeRateStart,
   describeScope,
+  describeServiceChange,
   formatBytes,
   formatCount,
   formatDay,
   formatMoney,
+  formatPeriod,
+  formatPeriodCost,
   formatRate,
 } from "./usage-format";
 
 const PRICE: PlanPrice = {
   effective_from: "2026-01-01",
   currency: "USD",
-  price_per_service_cents: 1_000,
+  price_per_service_minor_units: 1_000,
   max_billed_services: null,
+  included_bytes_per_service: null,
+};
+
+/** August, finished, two services billed at $10 each. */
+const PERIOD: BillingPeriod = {
+  first_day: "2026-08-01",
+  last_day: "2026-08-31",
+  settled: true,
+  services: 2,
+  billed_services: 2,
+  bytes_ingested: 500_000,
+  service_cost_minor_units: 2_000,
+  currency: "USD",
+  included_bytes: null,
 };
 
 describe("formatCount", () => {
@@ -134,5 +156,102 @@ describe("the sentences", () => {
     expect(describeScope("30 days")).toBe(
       "Every project in this organization over the last 30 days — the bill is the organization's, not one project's.",
     );
+  });
+});
+
+describe("the month's cost", () => {
+  it("names the period as the calendar month it is", () => {
+    expect(formatPeriod(PERIOD)).toBe("August 2026");
+  });
+
+  it("is the API's amount, in the currency's own minor unit", () => {
+    expect(formatPeriodCost(PERIOD)).toBe("$20.00");
+    // The yen's minor unit is the yen — the same trap the rate avoids.
+    expect(formatPeriodCost({ ...PERIOD, currency: "JPY" })).toBe("¥2,000");
+  });
+
+  it("is nothing at all when no price is recorded, and never a zero", () => {
+    expect(
+      formatPeriodCost({ ...PERIOD, service_cost_minor_units: null, currency: null }),
+    ).toBeUndefined();
+  });
+
+  it("says which quantity over which period the figure came from", () => {
+    expect(describeCostBasis(PERIOD)).toBe("2 services in August 2026, at the rate in force.");
+  });
+
+  it("says when the ceiling held the quantity down", () => {
+    // Otherwise the figure disagrees with the service count beside it and
+    // nothing on the screen explains why.
+    expect(describeCostBasis({ ...PERIOD, services: 200, billed_services: 120 })).toBe(
+      "120 services in August 2026, at the rate in force. The 200 counted are held to the plan's ceiling.",
+    );
+  });
+
+  it("marks a month still being metered rather than letting it read as final", () => {
+    expect(describePeriodProgress({ ...PERIOD, settled: false })).toBe(
+      "August 2026 is still being metered, so this will grow.",
+    );
+    expect(describePeriodProgress(PERIOD)).toBe("August 2026 has finished being metered.");
+  });
+});
+
+describe("the volume allowance", () => {
+  it("says nothing when no allowance is recorded", () => {
+    // A zero here would report every byte ingested as overage.
+    expect(describeAllowance(PERIOD)).toBeUndefined();
+  });
+
+  it("shows what is used against what is included", () => {
+    expect(describeAllowance({ ...PERIOD, included_bytes: 1_000_000 })).toBe(
+      "500.0 kB of 1.0 MB included",
+    );
+  });
+
+  it("says plainly when the volume is over it", () => {
+    expect(
+      describeAllowance({ ...PERIOD, bytes_ingested: 2_000_000, included_bytes: 1_000_000 }),
+    ).toBe("2.0 MB of 1.0 MB included — over the allowance.");
+  });
+});
+
+describe("the cardinality warning", () => {
+  const WARNING: CardinalityWarning = {
+    project_id: "11111111-1111-4111-8111-111111111111",
+    services_now: 12,
+    services_before: 3,
+    window_days: 7,
+    families: [],
+  };
+
+  const FAMILY: ServiceNameFamily = {
+    stem: "checkout",
+    kind: "kubernetes-pod",
+    members: 9,
+    examples: ["checkout-7d9f8b6c4d-x2k9p"],
+  };
+
+  it("shows the change with both numbers in it", () => {
+    expect(describeServiceChange(WARNING)).toBe("12 services, up from 3 in the 7 days before.");
+  });
+
+  it("does not say a bare zero when there was no previous week", () => {
+    expect(describeServiceChange({ ...WARNING, services_before: 0 })).toBe(
+      "12 services, none in the 7 days before.",
+    );
+  });
+
+  it("names the shape it found and what it costs", () => {
+    expect(describeFamily(FAMILY)).toContain("checkout");
+    expect(describeFamily(FAMILY)).toContain("a Kubernetes pod suffix");
+    expect(describeFamily(FAMILY)).toContain("billed as its own service");
+  });
+
+  it("falls back to a neutral word for a shape it does not recognise", () => {
+    expect(describeFamily({ ...FAMILY, kind: "something-new" })).toContain("an identifier");
+  });
+
+  it("tells the customer where the identifier belongs instead", () => {
+    expect(CARDINALITY_REMEDY).toContain("service.instance.id");
   });
 });

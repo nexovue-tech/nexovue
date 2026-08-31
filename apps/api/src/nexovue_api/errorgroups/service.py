@@ -44,14 +44,29 @@ async def list_error_groups(
     repository: TenantScopedRepository,
     *,
     project_id: str,
+    service_name: str | None,
     from_time: datetime,
     to_time: datetime,
     limit: int,
 ) -> ErrorGroupListResponse:
-    """The window's error groups, the most frequent first."""
+    """The window's error groups, the most frequent first, for one service or all.
+
+    The name narrows the statement rather than the result. Filtering a capped
+    project-wide page in Python would silently under-report a quiet service's
+    exceptions — the groups that fell off the end of the page would simply be missing,
+    and nothing on the screen could say so.
+
+    An unknown service name is an empty list rather than a 404, for the same reason
+    the service reads give: a service can be silent in a window without ceasing to
+    exist.
+    """
+    parameters = _window_parameters(project_id, from_time, to_time) | {"limit": limit}
+    if service_name is not None:
+        parameters["service_name"] = service_name
+
     rows = await repository.query(
-        queries.error_groups_sql(one_group=False),
-        _window_parameters(project_id, from_time, to_time) | {"limit": limit},
+        queries.error_groups_sql(one_group=False, one_service=service_name is not None),
+        parameters,
     )
     return ErrorGroupListResponse(groups=[_to_summary(row) for row in rows])
 
@@ -72,7 +87,7 @@ async def get_error_group(
     """
     parameters = _window_parameters(project_id, from_time, to_time)
     summary_row = await repository.query_one(
-        queries.error_groups_sql(one_group=True),
+        queries.error_groups_sql(one_group=True, one_service=False),
         parameters | {"group_id": group_id, "limit": 1},
     )
     if summary_row is None:

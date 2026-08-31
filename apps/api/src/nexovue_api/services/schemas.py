@@ -83,6 +83,19 @@ class ServiceListResponse(BaseModel):
     services: list[ServiceHealth] = Field(default_factory=list)
 
 
+class ServiceHealthResponse(BaseModel):
+    """One named service over the window, for the screen that is only about it.
+
+    `service` is null when nothing by that name reported, and that is not a 404: the
+    rollup knows which services reported in *this* window, not which exist. A service
+    that has stopped exporting, or was renamed, is silent here rather than missing.
+    """
+
+    window_start: IsoTimestamp
+    window_end: IsoTimestamp
+    service: ServiceHealth | None = None
+
+
 class EndpointListResponse(BaseModel):
     window_start: IsoTimestamp
     window_end: IsoTimestamp

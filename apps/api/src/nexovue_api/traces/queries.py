@@ -3,26 +3,36 @@
 Every statement here names `{tenant_id:String}`; the repository refuses one that
 does not, and the value is bound there from the session rather than passed in.
 
-Both list and detail are written to touch as few parts as possible. `spans` is
-ordered by `(tenant_id, project_id, service_name, toStartOfHour(timestamp),
-trace_id)` and partitioned by day, so a bounded time range is the difference
-between reading an hour and reading a month.
+**The trace list reads `trace_summaries`, not `spans`.** The worker writes one
+row per stored trace (migration `000028`), ordered `(tenant_id, project_id,
+start_time, trace_id)` — so "newest first" is a reverse read of the sort key
+with no aggregate at all, and the cost is the page rather than the window.
+Grouping `spans` for the same answer held one hash-table entry per trace in the
+window whatever the page size: measured over 12.49M spans / 2.73M traces, a
+7-day window took 292 MiB and 393 ms and read 607 MiB, and before the strings
+were taken out of the group it needed 1.8 GiB and the server killed it.
 
-**Why the list is two statements.** A trace row describes the whole trace, so
-the group-by has to cover every span in the window — one hash-table entry per
-trace, whatever the page size. Naming the trace after its root span with
-`argMin` over two strings put those strings in every entry: measured over
-12.45M spans / 2.73M traces, that state reached 1.8 GiB and the query died
-against a 2.5 GiB server. Holding only fixed-width numbers in the group brings
-the same window to 640 MiB, and the two root strings are then fetched for the
-fifty traces the page actually returns, which the `trace_id` bloom filter makes
-a 16 ms read. See `service.list_traces`.
+**Why the list is still two statements.** A trace can hold more than one summary
+row — a span arriving after the sampler forgot its trace is summarised on its
+own, and two rows sharing a key stay two rows until a background merge collapses
+them. So the first statement picks the page in sort-key order and the second
+merges every row of those fifty ids into one answer, which the `trace_id` bloom
+filter makes a granule-skipping read. The columns merge with `max`, `min` and
+set union, so a stale row folded with a complete one is the complete one.
 
-**Why a span filter is a flag and not a `WHERE`.** Filtering the spans that feed
-the group-by would compute the trace's duration, span count and error count from
-the matching spans alone, which is a different and wrong number. So each span is
-marked as matching or not, and `HAVING max(matched)` keeps the traces that
-contain one — while the aggregate still runs over every span of those traces.
+**One filter still reads `spans`: the arbitrary attribute.** Attribute paths are
+unbounded — 125 distinct ones from 15 services in a single hour of the
+OpenTelemetry Demo — so no per-trace row can carry them, and a request naming
+`attr` falls back to the grouping statements below. Nothing is dropped and
+nothing else pays for it. The service, operation, status and duration filters
+are all answered from the summary.
+
+**Why a span filter is a flag and not a `WHERE`** — in the fallback. Filtering
+the spans that feed the group-by would compute the trace's duration, span count
+and error count from the matching spans alone, which is a different and wrong
+number. So each span is marked as matching or not, and `HAVING max(matched)`
+keeps the traces that contain one — while the aggregate still runs over every
+span of those traces.
 
 The obvious alternative, `trace_id IN (SELECT trace_id … WHERE <filters>)`, was
 measured and rejected. It is far cheaper when the filter is selective — one
@@ -34,12 +44,12 @@ in the request says which kind a filter will be. The flag form costs what the
 unfiltered window costs, whatever is asked of it: the same week filtered on an
 attribute carrying 9.8M spans came to 736 MiB.
 
-**What this endpoint still costs.** One hash-table entry per trace in the
-window, filtered or not. A week of the busiest dev project is 640 MiB for fifty
-rows, and that grows with traffic rather than with the page. `AGGREGATION_BOUND`
-below stops that killing the server, but it does not remove the growth: making
-this cheap needs a per-trace summary the ingest path maintains, which is a
-schema change and a decision of its own — see the P1-41 note in the phase 1 plan.
+**What the summary means for a window.** `trace_summaries` is keyed on when a
+trace *started*, so the list now answers "traces that started in this window"
+where grouping `spans` answered "traces with a span in this window". They differ
+only at the two boundaries, and the first is what "newest first" was always
+trying to say. The trace detail is unaffected: it reads `spans` through
+`span_trace_lookup` as before.
 """
 
 from __future__ import annotations
@@ -99,6 +109,16 @@ class TraceFilters:
     @property
     def has_span_filter(self) -> bool:
         return bool(self.service_name or self.operation or self.attribute_path)
+
+    @property
+    def answerable_from_summary(self) -> bool:
+        """Whether `trace_summaries` alone can decide this request.
+
+        Everything but the attribute filter can. Attribute paths are unbounded,
+        so a per-trace row cannot carry them and the request falls back to
+        grouping `spans` — which is what the statements below are still for.
+        """
+        return self.attribute_path is None
 
 
 # ClickHouse's own parameter syntax is braces, so an optional predicate is
@@ -178,7 +198,140 @@ CURSOR_CLAUSE: Final = (
     "(start_time_nanos, trace_id) < ({cursor_nanos:Int64}, {cursor_trace_id:String})"
 )
 
-# ----------------------------------------------------------------- statements
+# ------------------------------------------------- the summary read (the list)
+
+# What one row of `trace_summaries` must satisfy. All five are tested against a
+# row rather than an aggregate, which is the whole point: no group-by, so the
+# state does not grow with the window.
+SUMMARY_SERVICE_CLAUSE: Final = "has(span_services, {service_name:String})"
+
+# How the worker joins a service to an operation inside `span_endpoints`
+# (`traceassembly/summary.go`). A unit separator cannot occur in either half, so
+# the join is reversible; it is never spliced into SQL, only bound as a value.
+ENDPOINT_SEPARATOR: Final = "\x1f"
+
+# The service and the operation are tested as one value, because a span filter
+# matches when ONE span satisfies all of it together. `span_endpoints` holds the
+# trace's distinct `service<US>operation` pairs, so this cannot match a trace
+# whose service and whose operation are on different spans. The separator never
+# reaches the SQL: the caller binds the joined value.
+SUMMARY_ENDPOINT_CLAUSE: Final = "has(span_endpoints, {endpoint:String})"
+
+# An operation named without a service. `endsWith` over the pairs is the same
+# test with the service half left open.
+SUMMARY_OPERATION_CLAUSE: Final = (
+    "arrayExists(pair -> endsWith(pair, {operation_suffix:String}), span_endpoints)"
+)
+
+SUMMARY_STATUS_ERROR_CLAUSE: Final = f"worst_severity = {SEVERITY_ERROR}"
+SUMMARY_STATUS_OK_CLAUSE: Final = f"worst_severity < {SEVERITY_ERROR}"
+
+# The keyset, in the sort key's own terms so it prunes rather than filters.
+SUMMARY_CURSOR_CLAUSE: Final = (
+    "(toUnixTimestamp64Nano(start_time), trace_id)"
+    " < ({cursor_nanos:Int64}, {cursor_trace_id:String})"
+)
+
+_SUMMARY_MATCH_MARKER: Final = "/* summary match */"
+
+# Step one of the list: which fifty traces this page holds, and where the next
+# page starts.
+#
+# `ORDER BY start_time DESC` over the sort key with tenant and project fixed is
+# a reverse read that stops at the page: measured over a 7-day window of the
+# busiest dev project, 30 ms and 17.3 MiB reading 120k rows, against 1100 ms and
+# 290 MiB reading 12.48M for the group-by it replaces.
+#
+# **No `LIMIT 1 BY trace_id` here, and it is measured rather than assumed.** A
+# trace can hold more than one row — one that gained a span after the sampler
+# forgot it, and two rows sharing a key until a background merge collapses them
+# — so the page has to be collapsed somewhere. Doing it in the statement stops
+# ClickHouse reading in order: the same window went to 19 ms and 63.5 MiB over
+# 1.02M rows, and 113 ms on one thread. It is 962 rows of 2.73M in this store,
+# so the page is collapsed where it is free, over the fifty rows returned.
+_TRACE_PAGE_TEMPLATE: Final = f"""
+SELECT
+    trace_id,
+    toUnixTimestamp64Nano(start_time) AS start_time_nanos
+FROM trace_summaries
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND start_time >= {{from_time:DateTime64(9)}}
+  AND start_time < {{to_time:DateTime64(9)}}{_SUMMARY_MATCH_MARKER}
+ORDER BY start_time DESC, trace_id DESC
+LIMIT {{limit:UInt32}}
+"""
+
+# Step two: the whole trace behind each id on the page.
+#
+# Bounded by the page's own span of start times, not by the request's window.
+# The fifty rows a page returns are adjacent in the sort key, so that bound is a
+# primary-key range: measured, 7 ms reading 27k rows, where the same statement
+# leaning on the `trace_id` bloom filter alone read 1.91M — fifty ids scattered
+# across a week hit most of the index's granules, which is what a bloom filter
+# at GRANULARITY 4 is for and not what it can do. A row of one of these traces
+# outside that range is not merged; it is older or newer than the whole page,
+# and there are 962 such rows in 2.73M.
+#
+# The aggregate is over at most a handful of rows per trace and is what makes a
+# stale row harmless: `max` of a complete snapshot and a partial one is the
+# complete one, and `argMax(…, span_count)` names the trace after whichever row
+# saw most of it. `span_count` is qualified inside `argMax` because the alias
+# below shadows the column, and ClickHouse then reads it as an aggregate inside
+# an aggregate and refuses the statement.
+TRACE_PAGE_VALUES_SQL: Final = """
+SELECT
+    trace_id,
+    toUnixTimestamp64Nano(min(start_time)) AS start_time_nanos,
+    max(duration_ms) AS duration_ms,
+    max(span_count) AS span_count,
+    max(error_count) AS error_count,
+    max(worst_severity) AS worst_severity,
+    argMax(root_service, trace_summaries.span_count) AS root_service,
+    argMax(root_name, trace_summaries.span_count) AS root_name
+FROM trace_summaries
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND start_time >= fromUnixTimestamp64Nano({page_from_nanos:Int64})
+  AND start_time <= fromUnixTimestamp64Nano({page_to_nanos:Int64})
+  AND trace_id IN {trace_ids:Array(String)}
+GROUP BY trace_id
+"""
+
+
+def trace_page_sql(filters: TraceFilters, *, with_cursor: bool) -> str:
+    """The page statement carrying only the predicates this call needs."""
+    return _TRACE_PAGE_TEMPLATE.replace(
+        _SUMMARY_MATCH_MARKER, _summary_match_clause(filters, with_cursor=with_cursor)
+    )
+
+
+def _summary_match_clause(filters: TraceFilters, *, with_cursor: bool) -> str:
+    """The rest of the `WHERE`, or nothing beyond the window."""
+    predicates = []
+    if filters.service_name and filters.operation:
+        predicates.append(SUMMARY_ENDPOINT_CLAUSE)
+    elif filters.service_name:
+        predicates.append(SUMMARY_SERVICE_CLAUSE)
+    elif filters.operation:
+        predicates.append(SUMMARY_OPERATION_CLAUSE)
+    if filters.status == STATUS_ERROR:
+        predicates.append(SUMMARY_STATUS_ERROR_CLAUSE)
+    elif filters.status == STATUS_OK:
+        predicates.append(SUMMARY_STATUS_OK_CLAUSE)
+    if filters.min_duration_ms is not None:
+        predicates.append(MIN_DURATION_CLAUSE)
+    if filters.max_duration_ms is not None:
+        predicates.append(MAX_DURATION_CLAUSE)
+    if with_cursor:
+        predicates.append(SUMMARY_CURSOR_CLAUSE)
+    if not predicates:
+        return ""
+    return "\n  AND " + "\n  AND ".join(predicates)
+
+
+# --------------------------------------------- statements over `spans` (detail,
+# facets, and the attribute-filtered list)
 
 # Where the group-by spills to disk instead of growing.
 #

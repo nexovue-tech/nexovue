@@ -41,16 +41,22 @@ type Identity struct {
 	KeyPrefix string
 }
 
-// Options tune the in-process credential cache.
+// Options tune the in-process credential cache, and say where a key's last use
+// is recorded.
 type Options struct {
 	CacheTTL        time.Duration
 	CacheMaxEntries int
+
+	// UseRecorder is told when a key authenticated against a fresh read. Nil
+	// means uses are not recorded, which is what the tests that do not care use.
+	UseRecorder KeyUseRecorder
 }
 
 // Authenticator verifies presented keys against the control plane.
 type Authenticator struct {
 	keys  KeyReader
 	cache *cache
+	uses  KeyUseRecorder
 }
 
 // KeyReader is the control-plane lookup. An interface because the store behind
@@ -64,7 +70,15 @@ type KeyReader interface {
 
 // New builds an authenticator over an api_keys reader.
 func New(keys KeyReader, opts Options) *Authenticator {
-	return &Authenticator{keys: keys, cache: newCache(opts.CacheTTL, opts.CacheMaxEntries)}
+	uses := opts.UseRecorder
+	if uses == nil {
+		uses = noKeyUseRecorder{}
+	}
+	return &Authenticator{
+		keys:  keys,
+		cache: newCache(opts.CacheTTL, opts.CacheMaxEntries),
+		uses:  uses,
+	}
 }
 
 // Authenticate resolves a presented key to the tenancy it grants.
@@ -99,6 +113,13 @@ func (a *Authenticator) Authenticate(ctx context.Context, presented string) (Ide
 	// was right, which is enough to reconstruct one hash byte at a time.
 	if subtle.ConstantTimeCompare([]byte(HashKey(presented)), []byte(stored.KeyHash)) != 1 {
 		return Identity{}, ErrUnknownKey
+	}
+
+	// Only on a fresh read, and only once the hash matched. That makes the cache
+	// TTL the throttle — a cached hit writes nothing — and keeps a guessed prefix
+	// from making a key look busy. See lastused.go.
+	if !cached {
+		a.uses.Record(prefix, time.Now())
 	}
 
 	identity := stored.Identity

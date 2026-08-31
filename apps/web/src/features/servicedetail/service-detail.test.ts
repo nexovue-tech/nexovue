@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import type { EndpointHealth, ServiceEdge, ServiceHealth } from "./api";
+import type { EndpointHealth, ErrorGroupSummary, ServiceEdge, ServiceHealth } from "./api";
+import { isPlaceholderService } from "./api";
 import {
   dependencyKey,
   describeEndpoints,
   describeService,
+  describeServiceErrors,
   describeSilence,
   detailState,
-  findRankedService,
   neighboursOf,
 } from "./service-detail";
 
@@ -65,7 +66,7 @@ const LOADED = {
   isError: false,
   hasTrend: true,
   hasEndpoints: true,
-  hasRankedRow: true,
+  hasAggregate: true,
 };
 
 describe("detailState", () => {
@@ -79,25 +80,15 @@ describe("detailState", () => {
 
   it("calls an unknown service silent, not missing", () => {
     expect(
-      detailState({ ...LOADED, hasTrend: false, hasEndpoints: false, hasRankedRow: false }),
+      detailState({ ...LOADED, hasTrend: false, hasEndpoints: false, hasAggregate: false }),
     ).toBe("silent");
   });
 
   it("is ready on any one source having something to show", () => {
-    expect(detailState({ ...LOADED, hasEndpoints: false, hasRankedRow: false })).toBe("ready");
-    expect(detailState({ ...LOADED, hasTrend: false, hasRankedRow: false })).toBe("ready");
-    // Ranked but silent in the scoped reads still beats a blank screen.
+    expect(detailState({ ...LOADED, hasEndpoints: false, hasAggregate: false })).toBe("ready");
+    expect(detailState({ ...LOADED, hasTrend: false, hasAggregate: false })).toBe("ready");
+    // An aggregate but nothing else still beats a blank screen.
     expect(detailState({ ...LOADED, hasTrend: false, hasEndpoints: false })).toBe("ready");
-  });
-});
-
-describe("findRankedService", () => {
-  it("finds the named row and nothing else", () => {
-    expect(findRankedService([STOREFRONT, HEALTHY], "demo-catalog")).toBe(HEALTHY);
-  });
-
-  it("returns nothing when the service fell outside the ranked page", () => {
-    expect(findRankedService([STOREFRONT], "demo-catalog")).toBeUndefined();
   });
 });
 
@@ -139,17 +130,20 @@ describe("neighboursOf", () => {
 
 describe("describeService", () => {
   it("leads with the rate and says plainly when nothing failed", () => {
-    expect(describeService(HEALTHY, "hour", 500)).toBe(
+    expect(describeService(HEALTHY, "hour")).toBe(
       "48 requests a minute in the last hour, none of them failing.",
     );
   });
 
   it("puts the failure share in the sentence when there is one", () => {
-    expect(describeService(STOREFRONT, "hour", 500)).toContain("5.5% of them failing.");
+    expect(describeService(STOREFRONT, "hour")).toContain("5.5% of them failing.");
   });
 
-  it("says why the totals are missing rather than showing an empty strip", () => {
-    expect(describeService(undefined, "24 hours", 500)).toContain("Outside the busiest 500");
+  it("blames silence rather than a page it fell off, now that it asks by name", () => {
+    const sentence = describeService(undefined, "24 hours");
+
+    expect(sentence).toBe("No totals for the last 24 hours — nothing by this name reported in it.");
+    expect(sentence).not.toContain("busiest");
   });
 });
 
@@ -165,6 +159,64 @@ describe("describeEndpoints", () => {
 
   it("names the empty case instead of leaving a blank caption", () => {
     expect(describeEndpoints([])).toBe("No endpoint reported in this window.");
+  });
+});
+
+function errorGroup(overrides: Partial<ErrorGroupSummary> = {}): ErrorGroupSummary {
+  return {
+    group_id: "1111aaaa1111aaaa",
+    exception_type: "ValueError",
+    message_template: "User <uuid> not found",
+    latest_message: "User 9c8d7e6f-aaaa-bbbb-cccc-ddddeeeeffff not found",
+    occurrences: 7,
+    first_seen: "2026-08-31T09:00:00Z",
+    last_seen: "2026-08-31T09:30:00Z",
+    ...overrides,
+  };
+}
+
+describe("describeServiceErrors", () => {
+  it("counts groups and throws separately, because they need different work", () => {
+    const caption = describeServiceErrors([
+      errorGroup({ occurrences: 9000 }),
+      errorGroup({ group_id: "2222", occurrences: 3 }),
+    ]);
+
+    expect(caption).toContain("2 distinct errors");
+    expect(caption).toContain("thrown 9,003 times");
+  });
+
+  it("says the count belongs to this service and not to the project", () => {
+    expect(describeServiceErrors([errorGroup()])).toContain("this service only");
+  });
+
+  it("uses the singular for one error thrown once", () => {
+    const caption = describeServiceErrors([errorGroup({ occurrences: 1 })]);
+
+    expect(caption).toContain("1 error, thrown 1 time");
+  });
+
+  it("names the empty case instead of leaving a blank caption", () => {
+    expect(describeServiceErrors([])).toBe(
+      "No exception was recorded in this service in the window.",
+    );
+  });
+});
+
+describe("isPlaceholderService", () => {
+  it("recognises a peer by its parentheses, not by a fixed list of two names", () => {
+    // ADR 0080: a callee that never reported is named from what the caller asserted,
+    // so the set of these names is open and a closed list would link `(valkey-cart)`
+    // to a service screen that can never have anything on it.
+    expect(isPlaceholderService("(valkey-cart)")).toBe(true);
+    expect(isPlaceholderService("(postgresql)")).toBe(true);
+    expect(isPlaceholderService("(uninstrumented)")).toBe(true);
+    expect(isPlaceholderService("(unknown)")).toBe(true);
+  });
+
+  it("leaves a real service name alone", () => {
+    expect(isPlaceholderService("valkey-cart")).toBe(false);
+    expect(isPlaceholderService("demo-storefront")).toBe(false);
   });
 });
 
