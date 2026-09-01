@@ -22,7 +22,9 @@ OpenTelemetry Demo run (P1-62) landed genuine host metrics under project
 `system.memory.usage`, `system.memory.utilization`, `system.disk.io` and
 `system.network.io`. Their attributes are `{"cpu": 3, "state": "idle"}`,
 `{"state": "used"}` and `{"device": …, "direction": …}` — the flat spellings.
-No resource carried a `host.name`, so they roll up as one unnamed node.
+No resource carried a `host.name`; re-checked 2026-09-01 and still none does,
+so those readings are identified by the process that reported them instead
+(`queries.py`, "Node identity").
 
 **Container names here are unverified.** `docker_stats` does not emit the
 `container.*` semconv names at all — it sends `container.cpu.utilization`,

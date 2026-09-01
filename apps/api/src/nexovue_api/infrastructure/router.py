@@ -30,7 +30,7 @@ FromTime = Annotated[datetime | None, Query(alias="from")]
 ToTime = Annotated[datetime | None, Query(alias="to")]
 
 
-@router.get("/hosts", summary="Every host and container reporting in the window")
+@router.get("/hosts", summary="Every host, container and reporter in the window")
 async def list_nodes(
     identity: CurrentIdentity,
     db: DbSession,

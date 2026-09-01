@@ -1,4 +1,4 @@
-"""Turning per-series metric readings into a row per host or container.
+"""Turning per-series metric readings into a row per node.
 
 No SQL text and no HTTP. The work here is the roll-up, and it is here rather
 than in ClickHouse for one reason: every rule below is a reading of the
@@ -57,14 +57,29 @@ MAX_SERIES: Final = 50_000
 
 @dataclass(frozen=True, slots=True)
 class NodeKey:
-    """What distinguishes one node from another in a project."""
+    """What distinguishes one node from another in a project.
+
+    A resource that named neither a host nor a container is identified by the
+    process that reported it; the query blanks `reporter` whenever the resource
+    named itself, so exactly one of the two identities is ever set. The cost is
+    an over-counted inventory — three instrumented services on one machine are
+    three nodes — and it is the lesser evil, because merging them averaged
+    unrelated machines into one row of meaningless numbers.
+    """
 
     host: str
     container: str
+    reporter: str
+    reporter_instance: str
 
     @property
     def kind(self) -> NodeKind:
-        return "container" if self.container else "host"
+        if self.container:
+            return "container"
+        if self.host:
+            return "host"
+        # Not a host: nothing in the resource said where these readings came from.
+        return "reporter"
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +114,7 @@ async def list_nodes(
     from_time: datetime,
     to_time: datetime,
 ) -> NodeListResponse:
-    """Every host and container that reported an infrastructure metric."""
+    """Every host, container and reporting process that sent one of these metrics."""
     rows = await repository.query(
         queries.NODE_READINGS_SQL,
         _read_parameters(project_id, from_time, to_time) | {"max_series": MAX_SERIES},
@@ -179,12 +194,17 @@ def _attribute_text(attributes: dict[str, Any], key: str) -> str:
 
 
 def _node_key(row: dict[str, Any]) -> NodeKey:
-    return NodeKey(host=values.text(row["host"]), container=values.text(row["container"]))
+    return NodeKey(
+        host=values.text(row["host"]),
+        container=values.text(row["container"]),
+        reporter=values.text(row["reporter"]),
+        reporter_instance=values.text(row["reporter_instance"]),
+    )
 
 
-def _ordered(entry: tuple[NodeKey, list[Reading]]) -> tuple[str, str]:
+def _ordered(entry: tuple[NodeKey, list[Reading]]) -> tuple[str, str, str, str]:
     key = entry[0]
-    return key.host, key.container
+    return key.host, key.container, key.reporter, key.reporter_instance
 
 
 def _to_reading(row: dict[str, Any]) -> Reading:
@@ -212,6 +232,8 @@ def _summarize(key: NodeKey, readings: Sequence[Reading]) -> NodeSummary:
         kind=key.kind,
         host=key.host,
         container=key.container,
+        reporter=key.reporter,
+        reporter_instance=key.reporter_instance,
         cpu_utilization=_cpu_utilization(readings),
         cpu_cores_used=_sum_of(readings, conventions.CONTAINER_CPU_USAGE),
         memory_used_bytes=_as_bytes(memory_used),

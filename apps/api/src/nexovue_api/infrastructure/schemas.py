@@ -8,11 +8,15 @@ from pydantic import BaseModel, Field
 
 from nexovue_api.wire import IsoTimestamp
 
-NodeKind = Literal["host", "container"]
+# A `reporter` is not a machine and must never be presented as one: it is the
+# process whose resource carried neither `host.name` nor `container.name`, named
+# so its readings stay attached to something instead of merging with every other
+# unnamed resource in the project.
+NodeKind = Literal["host", "container", "reporter"]
 
 
 class NodeSummary(BaseModel):
-    """One host or container, as of the end of the requested window.
+    """One host, container or reporting process, as of the end of the window.
 
     Every measurement is optional and null means *not reported*, never zero. A
     collector runs the scrapers it was configured with, so a host sending CPU
@@ -26,6 +30,13 @@ class NodeSummary(BaseModel):
     # a collector that sets both carries both.
     host: str
     container: str
+
+    # Who sent the readings, filled only when `kind` is "reporter" — the
+    # resource's `service.name` and `service.instance.id`. The instance id
+    # identifies a process, not a machine, and the Python SDK generates a fresh
+    # one per start, so a restarted service becomes a new row.
+    reporter: str = ""
+    reporter_instance: str = ""
 
     # Fraction of the node's CPUs in use, 0 to 1. Hosts only: a container reports
     # cores consumed instead, which is a different quantity.

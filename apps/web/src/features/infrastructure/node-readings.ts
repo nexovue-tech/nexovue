@@ -76,32 +76,82 @@ export function formatCores(cores: number | null): string {
  * The CPU cell. A host reports a fraction of its CPUs and a container reports cores
  * consumed; those are different quantities, so they carry different units rather than
  * sharing a column that silently means two things.
+ *
+ * A reporter reports the host's fraction — it is a machine's readings arriving without a
+ * machine's name, not a different measurement — so it reads as a host does here.
  */
 export function formatCpu(node: NodeSummary): string {
   if (node.kind === "container") return formatCores(node.cpu_cores_used);
   return formatPercent(node.cpu_utilization);
 }
 
+/** The fraction the CPU bar draws, under the same rule `formatCpu` uses. */
+export function cpuFraction(node: NodeSummary): number | null {
+  return node.kind === "container" ? null : node.cpu_utilization;
+}
+
 /**
  * What a node is called.
  *
- * A resource carrying neither name collapses to one unnamed node rather than being
- * dropped — which is a real state, not a hypothetical: the host metrics in our own store
- * arrived with no `host.name` at all. Saying so is the point; a blank row would look
- * like a rendering bug instead of a collector that needs configuring.
+ * A resource that named neither a host nor a container is labelled by *who reported* it,
+ * never by where it ran: `service.instance.id` identifies a process, and naming a machine
+ * after one would invent a host nobody told us about. That is the state the host metrics
+ * in our own store are in — every one of them.
  */
 export function nodeName(node: NodeSummary): string {
   if (node.container) return node.container;
   if (node.host) return node.host;
-  return "unnamed node";
+  if (node.reporter) return `reported by ${node.reporter}`;
+  return "an unidentified reporter";
 }
 
-export function isUnnamed(node: NodeSummary): boolean {
-  return !node.container && !node.host;
+/** How to name a node inside a sentence, where the display label reads wrong. */
+function nodeSubject(node: NodeSummary): string {
+  return node.container || node.host || node.reporter || "This node";
 }
 
-export const UNNAMED_NODE_REASON =
-  "This node's resource carried no host.name and no container.name, so everything reporting without one is rolled up here. Set the resourcedetection processor on your collector, or a host.name resource attribute on the exporter, to tell these machines apart.";
+/** Readings that arrived with no machine to attach them to. */
+export function isUnattributed(node: NodeSummary): boolean {
+  return node.kind === "reporter";
+}
+
+/**
+ * The one-line fix, and the reason these rows explain themselves at all: a customer who
+ * sets `host.name` once never sees a reporter row again.
+ *
+ * `host.name` is OpenTelemetry's resource attribute for the machine — Recommended, and
+ * still marked development. `OTEL_RESOURCE_ATTRIBUTES` is read by every SDK, so that
+ * spelling works everywhere; the Python SDK, which is what reports unattributed here,
+ * can also detect it for itself.
+ */
+export const HOST_NAME_REMEDY =
+  "To fix it: set host.name on the resource — OTEL_RESOURCE_ATTRIBUTES=host.name=$(hostname) works in every SDK, the OpenTelemetry Python SDK detects it for itself with OTEL_EXPERIMENTAL_RESOURCE_DETECTORS=host, and a collector scraping on the machine's behalf sets it with the resourcedetection processor's system detector.";
+
+/** Why one row is named after a process, and what it costs to leave it that way. */
+export function explainUnattributed(node: NodeSummary): string {
+  const instance = node.reporter_instance ? ` (service.instance.id ${node.reporter_instance})` : "";
+  return `${nodeSubject(node)}${instance} is reporting host metrics without setting host.name, so these readings cannot be attributed to a machine. ${HOST_NAME_REMEDY}`;
+}
+
+/**
+ * The fleet-wide version of the same thing, or null when every node named itself.
+ *
+ * Said once above the table rather than only in a tooltip, because it is one setting on
+ * one resource and the reader has to see it to act on it. It also states the cost of the
+ * grouping, which is not something a reader could infer from the rows.
+ */
+export function describeUnattributed(nodes: readonly NodeSummary[]): string | null {
+  const unattributed = nodes.filter(isUnattributed);
+  if (unattributed.length === 0) return null;
+
+  const reporters = [...new Set(unattributed.map((node) => node.reporter).filter(Boolean))].sort();
+  const subject =
+    reporters.length === 0
+      ? "Some resources are"
+      : `${reporters.join(", ")} ${reporters.length === 1 ? "is" : "are"}`;
+
+  return `${subject} reporting host metrics without setting host.name, so these readings cannot be attributed to a machine. They are grouped by the process that sent them instead, which keeps each row's numbers coherent and over-counts the fleet: three instrumented services on one machine appear as three rows. ${HOST_NAME_REMEDY}`;
+}
 
 /**
  * Why a cell is empty — which is two different situations that need different fixes.
@@ -115,7 +165,7 @@ export function explainMissing(node: NodeSummary, metricNames: readonly string[]
   const sent = metricNames.filter((name) => node.signals.includes(name));
 
   if (sent.length === 0) {
-    return `Not reported. ${nodeName(node)} sent none of ${metricNames.join(", ")} in this window, so the scraper for it is not enabled.`;
+    return `Not reported. ${nodeSubject(node)} sent none of ${metricNames.join(", ")} in this window, so the scraper for it is not enabled.`;
   }
   return `Not measured. ${sent.join(", ")} arrived, but no reading in it could be identified — the metric is being sent with attributes we do not recognise.`;
 }

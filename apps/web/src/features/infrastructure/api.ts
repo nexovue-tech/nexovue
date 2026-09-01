@@ -16,13 +16,22 @@ import type { TimeWindow } from "@/shared/selection";
  * nothing here reads them.
  */
 
-export type NodeKind = "host" | "container";
+/**
+ * A `reporter` is not a machine. It is the process whose resource named neither a host
+ * nor a container, named so its readings stay attached to something instead of merging
+ * with every other unnamed resource in the project.
+ */
+export type NodeKind = "host" | "container" | "reporter";
 
 export interface NodeSummary {
   kind: NodeKind;
   /** Empty when the resource carried no `host.name`. */
   host: string;
   container: string;
+
+  /** `service.name` and `service.instance.id`. Filled only when `kind` is "reporter". */
+  reporter: string;
+  reporter_instance: string;
 
   /** Fraction of the node's CPUs in use, 0 to 1. Hosts only. */
   cpu_utilization: number | null;

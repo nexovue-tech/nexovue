@@ -11,23 +11,29 @@ import type { NodeSummary, SignalSummary } from "./api";
 import { useNodes, useSignals } from "./api";
 import {
   CPU_METRICS,
+  cpuFraction,
   DISK_METRICS,
   describeMemory,
+  describeUnattributed,
   explainMissing,
+  explainUnattributed,
   FILESYSTEM_METRICS,
   formatByteRate,
   formatBytes,
   formatCount,
   formatCpu,
   formatPercent,
-  isUnnamed,
+  isUnattributed,
   NETWORK_METRICS,
   nodeName,
-  UNNAMED_NODE_REASON,
 } from "./node-readings";
 
 /**
  * The hosts and containers behind the services: CPU, memory, disk and network.
+ *
+ * A third kind of row appears when a resource named no machine at all: the readings are
+ * grouped by the process that sent them and labelled "reported by …", never by a host we
+ * were never told about. `UnattributedNotice` says so once, with the one-line fix.
  *
  * Kubernetes metrics are ingested and queryable, but pod, node and namespace views are
  * Phase 2 and deliberately absent — a fleet list is not the place to invent a cluster
@@ -64,7 +70,7 @@ export function InfrastructureScreen() {
       <header className="shrink-0 px-4 pt-5 pb-3">
         <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Infrastructure</h1>
         <p className="mt-1 text-ink-dim text-sm">
-          The hosts and containers behind your services, over the last{" "}
+          The hosts, containers and reporting processes behind your services, over the last{" "}
           {timeRangeById(rangeId).label}. A dash is a measurement nobody sent, never a zero.
         </p>
       </header>
@@ -89,6 +95,7 @@ export function InfrastructureScreen() {
       ) : (
         <>
           {nodes.data?.truncated ? <TruncationNotice /> : null}
+          <UnattributedNotice nodes={rows} />
           <NodeTable nodes={rows} />
           <SignalStrip signals={signals.data ?? []} />
         </>
@@ -123,6 +130,23 @@ function TruncationNotice() {
   );
 }
 
+/**
+ * Host metrics that cannot be attributed to a machine, and the line that fixes it.
+ *
+ * Said once for the fleet rather than once per row: it is one setting on one resource,
+ * and a reader who acts on it never sees these rows again.
+ */
+function UnattributedNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
+  const said = describeUnattributed(nodes);
+  if (said === null) return null;
+
+  return (
+    <p className="shrink-0 border-warning-border border-l-2 px-4 py-2 text-sm text-warning-text">
+      {said}
+    </p>
+  );
+}
+
 function NodeTable({ nodes }: { nodes: readonly NodeSummary[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -148,7 +172,7 @@ function NodeTable({ nodes }: { nodes: readonly NodeSummary[] }) {
         <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
           {virtualizer.getVirtualItems().map((item) => (
             <div
-              key={`${nodes[item.index].host}/${nodes[item.index].container}`}
+              key={nodeKey(nodes[item.index])}
               className="absolute top-0 left-0 w-full"
               style={{ height: `${item.size}px`, transform: `translateY(${item.start}px)` }}
             >
@@ -161,15 +185,18 @@ function NodeTable({ nodes }: { nodes: readonly NodeSummary[] }) {
   );
 }
 
-function NodeRow({ node }: { node: NodeSummary }) {
-  const cpuFraction = node.kind === "host" ? node.cpu_utilization : null;
+/** Every field the API groups a node by, so two reporter rows cannot share a key. */
+function nodeKey(node: NodeSummary): string {
+  return `${node.host}/${node.container}/${node.reporter}/${node.reporter_instance}`;
+}
 
+function NodeRow({ node }: { node: NodeSummary }) {
   return (
     <div className="flex h-full items-center border-line-subtle border-b px-4 text-sm">
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
         <span
-          className={`truncate ${isUnnamed(node) ? "text-ink-dim italic" : "text-ink"}`}
-          title={isUnnamed(node) ? UNNAMED_NODE_REASON : undefined}
+          className={`truncate ${isUnattributed(node) ? "text-ink-dim italic" : "text-ink"}`}
+          title={isUnattributed(node) ? explainUnattributed(node) : undefined}
         >
           {nodeName(node)}
         </span>
@@ -179,13 +206,21 @@ function NodeRow({ node }: { node: NodeSummary }) {
             on {node.host}
           </span>
         ) : null}
+        {node.reporter_instance ? (
+          <span
+            className="hidden shrink-0 truncate font-mono text-2xs text-ink-dim lg:inline"
+            title={`service.instance.id ${node.reporter_instance}`}
+          >
+            instance {node.reporter_instance}
+          </span>
+        ) : null}
       </span>
 
       <span className={CPU_COLUMN}>
         <Measurement
           value={formatCpu(node)}
           missingReason={explainMissing(node, CPU_METRICS)}
-          fraction={cpuFraction}
+          fraction={cpuFraction(node)}
         />
       </span>
 

@@ -36,12 +36,25 @@ while the caller asks about `timestamp`, the customer's (ADR 0067). ClickHouse
 cannot relate the two, so both bounds are present and the service widens the
 requested window by `window.RECEIVE_CLOCK_SLACK` to get the `received_at` range.
 
-**Node identity.** A host is `resource_attrs.host.name` and a container is
-`resource_attrs.container.name`, both OTLP resource attributes. ClickHouse's
-JSON type reads a dot as a path separator, so the flat key an SDK sends is a
-two-level path here. A resource carrying neither collapses to the one unnamed
-node, which is visible rather than silently dropped — an unnamed host is a
-misconfigured collector, and the screen should say so.
+**Node identity, and why it has three forms.** A host is
+`resource_attrs.host.name` and a container is `resource_attrs.container.name`,
+both OTLP resource attributes. ClickHouse's JSON type reads a dot as a path
+separator, so the flat key an SDK sends is a two-level path here.
+
+A resource carrying neither used to collapse into one node, and that was worse
+than a bad label: CPU from one machine and memory from another were added into
+one row, so the readings themselves were meaningless. Such a resource is now
+identified by the *process that reported it* — `service_name`, promoted to a
+column by the worker, and `resource_attrs.service.instance.id`. The cost is an
+over-counted inventory: three instrumented services on one machine are three
+rows. That is the lesser evil, because each row's numbers stay coherent, and
+presentation can aggregate upward where it can never recover discarded detail
+(ADR 0082).
+
+**The reporter is blanked whenever the resource named itself**, in the inner
+read rather than in Python, so the SQL grain and the node grain are the same
+expression. Grouping more finely than a node and merging afterwards would sum
+two collectors' readings of one named host into twice its memory.
 """
 
 from __future__ import annotations
@@ -54,6 +67,9 @@ _READINGS: Final = """
     SELECT
         toString(resource_attrs.host.name) AS host,
         toString(resource_attrs.container.name) AS container,
+        (host != '' OR container != '') AS names_itself,
+        if(names_itself, '', service_name) AS reporter,
+        if(names_itself, '', toString(resource_attrs.service.instance.id)) AS reporter_instance,
         metric_name,
         metric_unit,
         toJSONString(attrs) AS attributes_json,
@@ -71,6 +87,9 @@ _READINGS: Final = """
     SELECT
         toString(resource_attrs.host.name) AS host,
         toString(resource_attrs.container.name) AS container,
+        (host != '' OR container != '') AS names_itself,
+        if(names_itself, '', service_name) AS reporter,
+        if(names_itself, '', toString(resource_attrs.service.instance.id)) AS reporter_instance,
         metric_name,
         metric_unit,
         toJSONString(attrs) AS attributes_json,
@@ -97,6 +116,8 @@ NODE_READINGS_SQL: Final = f"""
 SELECT
     host,
     container,
+    reporter,
+    reporter_instance,
     metric_name,
     metric_unit,
     attributes_json,
@@ -106,8 +127,9 @@ SELECT
     toUnixTimestamp64Nano(min(timestamp)) AS earliest_nanos,
     count() AS points
 FROM ({_READINGS})
-GROUP BY host, container, metric_name, metric_unit, attributes_json
-ORDER BY host ASC, container ASC, metric_name ASC, attributes_json ASC
+GROUP BY host, container, reporter, reporter_instance, metric_name, metric_unit, attributes_json
+ORDER BY host ASC, container ASC, reporter ASC, reporter_instance ASC,
+         metric_name ASC, attributes_json ASC
 LIMIT {{max_series:UInt32}}
 """
 
@@ -120,7 +142,7 @@ SELECT
     any(metric_unit) AS metric_unit,
     count() AS points,
     uniqExact(attributes_json) AS series,
-    uniqExact((host, container)) AS nodes,
+    uniqExact((host, container, reporter, reporter_instance)) AS nodes,
     toUnixTimestamp64Nano(max(timestamp)) AS latest_nanos
 FROM ({_READINGS})
 GROUP BY metric_name

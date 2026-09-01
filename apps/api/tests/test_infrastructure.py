@@ -14,6 +14,12 @@ being counted as work — reporting a 23%-busy host at 1124%.
 
 Both spellings are tested: the flat one because it is what we receive, the
 namespaced one because it is what the specification will make producers send.
+
+The rows a *reporter* node is built from carry no host and no container, which
+is the state every host metric in our own store is in. The grouping that keeps
+two such reporters apart lives in the SQL, so it is proved in
+`test_infrastructure_live.py` against real ClickHouse; what is proved here is
+what the service does with the columns once they arrive.
 """
 
 from __future__ import annotations
@@ -42,6 +48,8 @@ _LATEST_NANOS: Final = _EARLIEST_NANOS + 100_000_000_000
 _NODE_COLUMNS: Final = [
     "host",
     "container",
+    "reporter",
+    "reporter_instance",
     "metric_name",
     "metric_unit",
     "attributes_json",
@@ -51,6 +59,10 @@ _NODE_COLUMNS: Final = [
     "earliest_nanos",
     "points",
 ]
+
+# Where `metric_name` sits in a node row, so widening the row cannot silently
+# start filtering on the wrong column.
+_METRIC_NAME: Final = _NODE_COLUMNS.index("metric_name")
 
 _SIGNAL_COLUMNS: Final = [
     "metric_name",
@@ -67,15 +79,23 @@ def series(
     *,
     host: str = HOST_A,
     container: str = "",
+    reporter: str = "",
+    reporter_instance: str = "",
     unit: str = "1",
     attributes: dict[str, Any] | None = None,
     latest: float,
     earliest: float | None = None,
 ) -> tuple[Any, ...]:
-    """One collapsed series, shaped as ClickHouse returns it."""
+    """One collapsed series, shaped as ClickHouse returns it.
+
+    The query blanks the reporter whenever the resource named itself, so a row
+    written here carries either a host/container or a reporter, never both.
+    """
     return (
         host,
         container,
+        reporter,
+        reporter_instance,
         metric_name,
         unit,
         json.dumps(attributes or {}),
@@ -109,7 +129,7 @@ class FakeMetricStore:
         bound = dict(parameters or {})
         self.last_parameters = bound
         rows = self._rows_by_tenant.get(bound["tenant_id"], [])
-        rows = [row for row in rows if row[2] in set(bound["metric_names"])]
+        rows = [row for row in rows if row[_METRIC_NAME] in set(bound["metric_names"])]
 
         if sql == queries.SIGNALS_SEEN_SQL:
             return FakeQueryResult(_SIGNAL_COLUMNS, _as_signal_rows(rows))
@@ -117,7 +137,7 @@ class FakeMetricStore:
 
 
 def _as_signal_rows(rows: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
-    names = sorted({row[2] for row in rows})
+    names = sorted({row[_METRIC_NAME] for row in rows})
     return [(name, "1", 7, 1, 1, _LATEST_NANOS) for name in names]
 
 
@@ -490,6 +510,92 @@ async def test_a_measurement_nobody_sent_is_null_and_never_zero() -> None:
     assert node.disk_bytes_per_second is None
     assert node.network_bytes_per_second is None
     assert node.signals == [conventions.SYSTEM_CPU_UTILIZATION]
+
+
+async def test_a_resource_naming_no_machine_is_named_by_the_process_that_reported_it() -> None:
+    """It is not a host, and must never be presented as one.
+
+    `service.instance.id` identifies a process. Calling that a host would invent
+    a machine nobody told us about — the mistake ADR 0080 rejected for IP-named
+    peers — so the kind says `reporter` and the readings stay attached to it.
+    """
+    node = await _one_node(
+        [
+            series(
+                conventions.SYSTEM_CPU_UTILIZATION,
+                host="",
+                reporter="recommendation",
+                reporter_instance="4d6173c8-7e68-45bd-a79e-80d4ce39ea3a",
+                attributes={"cpu": 0, "state": "user"},
+                latest=0.23,
+            )
+        ]
+    )
+
+    assert node.kind == "reporter"
+    assert node.host == ""
+    assert node.container == ""
+    assert node.reporter == "recommendation"
+    assert node.reporter_instance == "4d6173c8-7e68-45bd-a79e-80d4ce39ea3a"
+    # The reading is a host's fraction and is kept: dropping what a customer
+    # sent is the worst failure this screen has.
+    assert node.cpu_utilization == 0.23
+
+
+async def test_two_processes_reporting_without_a_host_name_are_two_nodes() -> None:
+    """Merging them averaged unrelated machines into one row of nonsense.
+
+    Our own store holds exactly this: `recommendation` reported under two
+    `service.instance.id` values, and under the old `(host, container)` key both
+    collapsed into one node whose CPU and memory came from different processes.
+    """
+    store = FakeMetricStore(
+        {
+            TENANT_A: [
+                series(
+                    conventions.SYSTEM_CPU_UTILIZATION,
+                    host="",
+                    reporter="recommendation",
+                    reporter_instance="first",
+                    attributes={"cpu": 0, "state": "user"},
+                    latest=0.2,
+                ),
+                series(
+                    conventions.SYSTEM_CPU_UTILIZATION,
+                    host="",
+                    reporter="recommendation",
+                    reporter_instance="second",
+                    attributes={"cpu": 0, "state": "user"},
+                    latest=0.8,
+                ),
+            ]
+        }
+    )
+
+    answer = await _nodes(TENANT_A, store)
+
+    assert [node.reporter_instance for node in answer.nodes] == ["first", "second"]
+    assert [node.cpu_utilization for node in answer.nodes] == [0.2, 0.8]
+
+
+async def test_a_named_host_is_still_grouped_by_its_name_and_not_by_its_reporter() -> None:
+    """A machine that named itself is one node however many processes report it.
+
+    The query blanks the reporter for such rows; if it ever stopped, one host
+    would split into a row per collector and each row would hold half its fleet
+    readings.
+    """
+    node = await _one_node(
+        [
+            _memory(state="used", value=6_000_000_000),
+            _memory(state="free", value=4_000_000_000),
+        ]
+    )
+
+    assert node.kind == "host"
+    assert node.host == HOST_A
+    assert node.reporter == ""
+    assert node.memory_used_bytes == 6_000_000_000
 
 
 async def test_a_container_is_its_own_node_and_reports_cores_not_a_fraction() -> None:

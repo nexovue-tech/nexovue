@@ -46,6 +46,16 @@ PROJECT: Final = "live-infrastructure-project"
 HOST: Final = "live-probe-host"
 CONTAINER: Final = "live-probe-container"
 
+# A resource that names no machine, which is what every host metric in this
+# store actually looks like. Two instances of one service, as a restart produces.
+REPORTER: Final = "live-probe-reporter"
+FIRST_INSTANCE: Final = "instance-one"
+SECOND_INSTANCE: Final = "instance-two"
+
+# The second collector reporting about the *same named host*, under a different
+# service resource. It must not split the host or double its readings.
+SECOND_HOST_REPORTER: Final = "live-probe-second-agent"
+
 METRIC_TABLES: Final = ("metrics_gauge", "metrics_sum")
 
 # One day of retention, so the table's TTL removes anything the mutation misses.
@@ -100,6 +110,7 @@ async def fleet(clickhouse: Any) -> AsyncIterator[str]:
 
     await clickhouse.command(_insert("metrics_gauge", _gauge_rows(tenant_id, start, end)))
     await clickhouse.command(_insert("metrics_sum", _sum_rows(tenant_id, start, end)))
+    await clickhouse.command(_insert("metrics_gauge", _reporter_rows(tenant_id, start, end)))
     try:
         yield tenant_id
     finally:
@@ -134,7 +145,9 @@ async def test_a_reporting_host_and_container_come_back_rolled_up(
     )
     by_kind = {node.kind: node for node in answer.nodes}
 
-    assert set(by_kind) == {"host", "container"}, answer.nodes
+    # The fleet also holds two processes that named no machine; they are the
+    # subject of their own tests below and are `reporter`, never `host`.
+    assert set(by_kind) == {"host", "container", "reporter"}, answer.nodes
     assert answer.truncated is False
 
     host = by_kind["host"]
@@ -175,7 +188,12 @@ async def test_signals_names_what_the_fleet_actually_sent(clickhouse: Any, fleet
         conventions.CONTAINER_MEMORY_AVAILABLE,
     }
     assert all(signal.points > 0 for signal in answer.signals)
-    assert all(signal.nodes == 1 for signal in answer.signals)
+
+    # One node per metric, except CPU: the named host and the two unattributed
+    # processes all report it, and the count is now at the reporter grain.
+    by_name = {signal.metric_name: signal.nodes for signal in answer.signals}
+    assert by_name[conventions.SYSTEM_CPU_UTILIZATION] == 3
+    assert by_name[conventions.SYSTEM_MEMORY_USAGE] == 1
 
 
 async def test_another_tenant_sees_none_of_that_fleet(clickhouse: Any, fleet: str) -> None:
@@ -222,6 +240,57 @@ async def test_the_repository_refuses_a_statement_that_lost_its_tenant_predicate
         )
 
 
+async def test_two_processes_without_a_host_name_stay_two_nodes(
+    clickhouse: Any, fleet: str
+) -> None:
+    """The grouping guarantee, asserted where it actually lives: the SQL.
+
+    Both resources name neither a host nor a container, so the old
+    `(host, container)` key put them in one node and averaged a 20%-busy process
+    with an 80%-busy one into a single meaningless 50%. They are now identified
+    by `service.instance.id`, which is what our own store's `recommendation`
+    readings needed.
+    """
+    start, end = _window()
+
+    answer = await service.list_nodes(
+        _repository(clickhouse, fleet), project_id=PROJECT, from_time=start, to_time=end
+    )
+    reporters = sorted(
+        (node for node in answer.nodes if node.kind == "reporter"),
+        key=lambda node: node.reporter_instance,
+    )
+
+    assert [node.reporter_instance for node in reporters] == [FIRST_INSTANCE, SECOND_INSTANCE]
+    assert all(node.reporter == REPORTER for node in reporters)
+    # Never a host: naming a machine after a process id would invent one.
+    assert all(node.host == "" and node.container == "" for node in reporters)
+    assert [round(node.cpu_utilization or -1, 6) for node in reporters] == [0.2, 0.8]
+
+
+async def test_a_named_host_reported_by_two_services_is_one_node_with_one_memory_figure(
+    clickhouse: Any, fleet: str
+) -> None:
+    """The regression the reporter column could have introduced.
+
+    `SYSTEM_MEMORY_USAGE` for this host arrives under two `service_name` values.
+    If the read grouped by the reporter as well as the host, the roll-up would
+    receive two series where it expects one and *sum* them — reporting the
+    machine as having twice the memory it has.
+    """
+    start, end = _window()
+
+    answer = await service.list_nodes(
+        _repository(clickhouse, fleet), project_id=PROJECT, from_time=start, to_time=end
+    )
+    hosts = [node for node in answer.nodes if node.kind == "host"]
+
+    assert len(hosts) == 1, hosts
+    assert hosts[0].reporter == ""
+    assert hosts[0].memory_used_bytes == 6_000_000_000
+    assert hosts[0].memory_limit_bytes == 10_000_000_000
+
+
 # ------------------------------------------------------------------- the fleet
 #
 # Written as SQL text rather than through the driver's row binding, because the
@@ -252,6 +321,7 @@ def _row(
     unit: str,
     attributes: dict[str, Any],
     value: float,
+    service_name: str = "otelcol",
 ) -> str:
     stamp = _quoted(at.strftime("%Y-%m-%d %H:%M:%S"))
     fields = [
@@ -261,7 +331,7 @@ def _row(
         str(PROBE_RETENTION_DAYS),
         _quoted(tenant_id),
         _quoted(PROJECT),
-        _quoted("otelcol"),
+        _quoted(service_name),
         _quoted(""),
         _quoted(""),
         _quoted(metric_name),
@@ -310,22 +380,51 @@ def _gauge_rows(tenant_id: str, start: datetime, end: datetime) -> list[str]:
     return rows
 
 
+def _reporter_rows(tenant_id: str, start: datetime, end: datetime) -> list[str]:
+    """Two processes of one service, neither naming a host — the demo's shape."""
+    rows = []
+    for instance, busy in ((FIRST_INSTANCE, 0.2), (SECOND_INSTANCE, 0.8)):
+        resource = {
+            "service": {"name": REPORTER, "instance": {"id": instance}},
+            "telemetry": {"sdk": {"language": "python"}},
+        }
+        for at in (start, end):
+            for mode, fraction in (("idle", 1.0 - busy), ("user", busy)):
+                rows.append(
+                    _row(
+                        tenant_id,
+                        at=at,
+                        resource=resource,
+                        service_name=REPORTER,
+                        metric_name=conventions.SYSTEM_CPU_UTILIZATION,
+                        unit="1",
+                        attributes={"cpu": {"mode": mode, "logical_number": "0"}},
+                        value=fraction,
+                    )
+                )
+    return rows
+
+
 def _sum_rows(tenant_id: str, start: datetime, end: datetime) -> list[str]:
     """Memory, filesystem and network are UpDownCounters and Counters."""
     rows = []
     for at in (start, end):
         for state, level in (("used", 6e9), ("free", 2e9), ("cached", 2e9)):
-            rows.append(
-                _row(
-                    tenant_id,
-                    at=at,
-                    resource=_HOST_RESOURCE,
-                    metric_name=conventions.SYSTEM_MEMORY_USAGE,
-                    unit="By",
-                    attributes={"system": {"memory": {"state": state}}},
-                    value=level,
+            # Written twice under two `service_name` values: one named host, two
+            # agents reporting it. The read must still see one series per state.
+            for reporting_service in ("otelcol", SECOND_HOST_REPORTER):
+                rows.append(
+                    _row(
+                        tenant_id,
+                        at=at,
+                        resource=_HOST_RESOURCE,
+                        service_name=reporting_service,
+                        metric_name=conventions.SYSTEM_MEMORY_USAGE,
+                        unit="By",
+                        attributes={"system": {"memory": {"state": state}}},
+                        value=level,
+                    )
                 )
-            )
         for mountpoint, used, free in (("/", 30, 70), ("/data", 10, 90)):
             for state, level in (("used", used), ("free", free)):
                 rows.append(

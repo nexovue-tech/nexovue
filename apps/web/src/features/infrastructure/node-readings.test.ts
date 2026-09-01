@@ -3,14 +3,17 @@ import { describe, expect, it } from "vitest";
 import type { NodeSummary } from "./api";
 import {
   CPU_METRICS,
+  cpuFraction,
   describeMemory,
+  describeUnattributed,
   explainMissing,
+  explainUnattributed,
   formatByteRate,
   formatBytes,
   formatCores,
   formatCpu,
   formatPercent,
-  isUnnamed,
+  isUnattributed,
   MEMORY_METRICS,
   nodeName,
 } from "./node-readings";
@@ -20,6 +23,8 @@ function node(overrides: Partial<NodeSummary> = {}): NodeSummary {
     kind: "host",
     host: "web-01",
     container: "",
+    reporter: "",
+    reporter_instance: "",
     cpu_utilization: null,
     cpu_cores_used: null,
     memory_used_bytes: null,
@@ -131,15 +136,87 @@ describe("nodeName", () => {
     expect(nodeName(node({ host: "web-01" }))).toBe("web-01");
   });
 
-  it("names the unnamed rather than rendering a blank row", () => {
-    // Real state, not hypothetical: the host metrics in our own store arrived with
-    // no host.name at all, and a blank row would look like a rendering bug.
-    const unnamed = node({ host: "", container: "" });
+  it("names the reporter when the resource named no machine", () => {
+    // Real state, not hypothetical: every host metric in our own store arrives
+    // from `recommendation` with no host.name at all.
+    expect(nodeName(reporterNode())).toBe("reported by recommendation");
+    expect(isUnattributed(reporterNode())).toBe(true);
+  });
 
-    expect(nodeName(unnamed)).toBe("unnamed node");
-    expect(isUnnamed(unnamed)).toBe(true);
+  it("never presents a reporter as a host, because it is not one", () => {
+    // `service.instance.id` identifies a process. Naming a machine after one
+    // would invent a host nobody told us about (ADR 0080).
+    const named = nodeName(reporterNode());
+
+    expect(named).not.toBe("recommendation");
+    expect(named).toContain("reported by");
+  });
+
+  it("still labels a reporter that did not even name a service", () => {
+    expect(nodeName(reporterNode({ reporter: "", reporter_instance: "" }))).toBe(
+      "an unidentified reporter",
+    );
   });
 });
+
+describe("a reporter's readings are shown, never dropped", () => {
+  it("reads its CPU as a host does, because that is what the metric is", () => {
+    const reporting = reporterNode({ cpu_utilization: 0.236 });
+
+    expect(formatCpu(reporting)).toBe("23.6%");
+    expect(cpuFraction(reporting)).toBe(0.236);
+  });
+
+  it("draws no CPU fraction for a container, which reports cores instead", () => {
+    expect(cpuFraction(node({ kind: "container", container: "c", cpu_utilization: 0.9 }))).toBe(
+      null,
+    );
+  });
+});
+
+describe("saying what is missing and how to fix it", () => {
+  it("names the reporter, the missing attribute and the remedy", () => {
+    const said = explainUnattributed(reporterNode());
+
+    expect(said).toContain("recommendation");
+    expect(said).toContain("host.name");
+    expect(said).toContain("OTEL_RESOURCE_ATTRIBUTES=host.name");
+    expect(said).toContain("OTEL_EXPERIMENTAL_RESOURCE_DETECTORS=host");
+    expect(said).toContain("4d6173c8-7e68-45bd-a79e-80d4ce39ea3a");
+  });
+
+  it("states the cost of the grouping, which no reader could infer from the rows", () => {
+    const said = describeUnattributed([reporterNode()]);
+
+    expect(said).toContain("three instrumented services on one machine appear as three rows");
+  });
+
+  it("says nothing at all when every node named itself", () => {
+    expect(describeUnattributed([node({ host: "web-01" })])).toBe(null);
+  });
+
+  it("lists each distinct reporter once, however many processes it ran", () => {
+    const said = describeUnattributed([
+      reporterNode({ reporter_instance: "one" }),
+      reporterNode({ reporter_instance: "two" }),
+      reporterNode({ reporter: "cart", reporter_instance: "three" }),
+    ]);
+
+    expect(said).toContain("cart, recommendation are");
+    expect(said?.match(/recommendation/g)).toHaveLength(1);
+  });
+});
+
+function reporterNode(overrides: Partial<NodeSummary> = {}): NodeSummary {
+  return node({
+    kind: "reporter",
+    host: "",
+    container: "",
+    reporter: "recommendation",
+    reporter_instance: "4d6173c8-7e68-45bd-a79e-80d4ce39ea3a",
+    ...overrides,
+  });
+}
 
 describe("explainMissing", () => {
   it("says the scraper is off when the node sent none of the metrics", () => {
