@@ -107,6 +107,16 @@ type Pipeline struct {
 	// clock, and the warning that recorded each batch says which one.
 	retimedSpans uint64
 
+	// disownedSpans counts spans taken back out of the sampling buffer because
+	// their partition left for another worker. It steps at every handover and
+	// is flat otherwise; each one is a row this process would have written and
+	// the new owner would have written again (ADR 0090).
+	disownedSpans int
+
+	// topic is the one this pipeline consumes, so a rebalance callback can tell
+	// which of its partitions are ours.
+	topic string
+
 	log      *slog.Logger
 	sampling config.Sampling
 }
@@ -135,6 +145,22 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 	}
 
 	ingest := ingeststate.NewGuard(ingeststate.NewKeeperMap(pool))
+	pipeline := &Pipeline{
+		writer:        newSpanWriter(pool),
+		block:         newSpanBlock(),
+		summaries:     newSummaries(cfg.Sampling.DecisionTTL, cfg.Sampling.MaxTraces),
+		summaryWriter: newSummaryWriter(pool),
+		stages:        stages,
+		metrics:       derive.NewWriter(pool),
+		endpoints:     derive.NewEndpointWriter(pool),
+		edges:         serviceedges.NewWriter(pool),
+		seen:          dedupe.NewOffsets(),
+		ingest:        ingest,
+		topic:         cfg.Spans.Topic,
+		log:           log.With(slog.String("pipeline", string(config.PipelineTraceAssembly))),
+		sampling:      cfg.Sampling,
+	}
+
 	loop, err := consume.Dial[spanStorage](consume.Settings{
 		Name:          string(config.PipelineTraceAssembly),
 		Brokers:       cfg.KafkaBrokers,
@@ -147,26 +173,55 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		// process never saw. Re-reading the durable state before counting
 		// anything is what keeps the handover from counting a minute twice.
 		OnAssigned: ingest.Invalidate,
+		// The other half of the same fact. A partition leaving takes this
+		// process's buffered spans with it, or they are written here and again
+		// by the worker that took it over.
+		OnRevoked: pipeline.release,
+		OnLost:    pipeline.releaseLost,
 	}, log)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Pipeline{
-		loop:          loop,
-		writer:        newSpanWriter(pool),
-		block:         newSpanBlock(),
-		summaries:     newSummaries(cfg.Sampling.DecisionTTL, cfg.Sampling.MaxTraces),
-		summaryWriter: newSummaryWriter(pool),
-		stages:        stages,
-		metrics:       derive.NewWriter(pool),
-		endpoints:     derive.NewEndpointWriter(pool),
-		edges:         serviceedges.NewWriter(pool),
-		seen:          dedupe.NewOffsets(),
-		ingest:        ingest,
-		log:           log.With(slog.String("pipeline", string(config.PipelineTraceAssembly))),
-		sampling:      cfg.Sampling,
-	}, nil
+	pipeline.loop = loop
+	return pipeline, nil
+}
+
+// release drops what the pipeline still holds for partitions the group has
+// taken back while the session is live.
+func (p *Pipeline) release(disowned map[string][]int32) {
+	partitions := disowned[p.topic]
+	if len(partitions) == 0 {
+		return
+	}
+
+	dropped := p.stages.buffer.Disown(partitions)
+	// The in-process replay guard has to forget them at the same instant. Left
+	// in place, a partition that came back would have these very records
+	// recognised as replays and skipped — and their spans were dropped, not
+	// stored, so that is a hole rather than a duplicate.
+	p.seen.Forget(p.topic, partitions)
+	p.disownedSpans += dropped.Spans
+
+	p.log.LogAttrs(context.Background(), slog.LevelInfo, "released buffered spans with their partitions",
+		slog.String("topic", p.topic),
+		slog.Any("partitions", partitions),
+		slog.Int("spans", dropped.Spans),
+		slog.Int("traces", dropped.Traces),
+	)
+}
+
+// releaseLost is release for a session that is already gone.
+//
+// The release itself is identical, and that is the point: dropping claims
+// nothing, so it is as safe against a broker that has stopped believing in us
+// as it is against one that has not. What differs is the durable cache — these
+// partitions may have belonged to another worker for a while, and its
+// settlements are not in this process's copy — so it is marked for re-reading
+// here rather than waiting for an assignment that may never come.
+func (p *Pipeline) releaseLost(disowned map[string][]int32) {
+	p.release(disowned)
+	p.ingest.Invalidate()
 }
 
 func samplingOptions(cfg config.Sampling) sample.Options {
@@ -237,6 +292,7 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Uint64("traces_closed_early", stats.ClosedEarly),
 		slog.Uint64("spans_retimed", p.retimedSpans),
 		slog.Int("spans_already_stored", p.alreadyStoredSpans),
+		slog.Int("spans_disowned", p.disownedSpans),
 		slog.Int("summarised_traces", summaries.OpenTraces),
 		slog.Uint64("trace_summaries_written", summaries.Written),
 		// Revised counts traces that gained a span after their row was written.
@@ -283,8 +339,9 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (spanStora
 		firstDelivery := p.seen.FirstDelivery(record.Topic, record.Partition, record.Offset)
 		partition := ingeststate.Partition{Topic: record.Topic, ID: record.Partition}
 		run := handling{
-			count: firstDelivery && counting.Counts(partition, record.Offset),
-			store: firstDelivery && counting.Stores(partition, record.Offset),
+			count:     firstDelivery && counting.Counts(partition, record.Offset),
+			store:     firstDelivery && counting.Stores(partition, record.Offset),
+			partition: record.Partition,
 		}
 		result, err := p.stages.absorbMessage(polled.At, record.Value, run)
 		if err != nil {

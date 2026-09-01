@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -131,6 +132,23 @@ type Settings struct {
 	// partition can arrive from another worker whose durable state this process
 	// never saw, and a cache of that state has to be re-read before it is used.
 	OnAssigned func()
+
+	// OnRevoked runs when the group takes partitions away while the session is
+	// still live, before the handover completes. Whatever a stage is still
+	// holding for them has to be released here: their records are uncommitted,
+	// so the worker taking the partition over reads them again, and anything
+	// this one writes afterwards is a second copy (ADR 0090).
+	//
+	// It runs on the client's goroutine while the whole group's rebalance
+	// waits, so it must be memory work. The loop makes no call out of the
+	// process on its behalf.
+	OnRevoked func(disowned map[string][]int32)
+
+	// OnLost runs when the session is already gone — a fatal group error, where
+	// the partitions may have been someone else's for a while. The same release,
+	// and nothing may be written on the way out: a commit or a watermark would
+	// be answered by a broker that no longer believes we own anything.
+	OnLost func(disowned map[string][]int32)
 }
 
 // maxBytes is the batch byte bound in force, which is the built-in default when
@@ -179,16 +197,94 @@ type Loop[S any] struct {
 	consumer *kgo.Client
 	producer *kgo.Client
 	parked   *dlq.Queue
-	queue    Queue[S]
+
+	// turning serialises one turn of the loop against the rebalance callbacks.
+	// It guards batch, queue and everything the stages hold.
+	//
+	// BlockRebalanceOnPoll almost does this on its own: a poll that returns
+	// records blocks the callbacks until AllowRebalance. A poll that returns
+	// none does not — franz-go releases the block for an empty fetch — and the
+	// loop still absorbs, settles and commits afterwards. Without this, a
+	// revoke could run while Settle was releasing traces, which is the one
+	// moment it exists to stop.
+	turning sync.Mutex
+	batch   pendingBatch
+	queue   Queue[S]
 
 	// running is what readiness reports. A worker whose pipeline has stopped is
 	// not ready, however healthy its dependencies look — the failure that taught
 	// us this presented as a green container consuming nothing for nine minutes.
 	running atomic.Bool
 
+	nextHeartbeat time.Time
+
 	settings Settings
 	log      *slog.Logger
 	now      func() time.Time // replaced in tests
+}
+
+// pendingBatch is the batch being filled from successive polls: the records,
+// what they cost to hold, and when they must be handed on even if the batch is
+// not full.
+type pendingBatch struct {
+	records []*kgo.Record
+	bytes   int
+	flushBy time.Time
+}
+
+func (p *pendingBatch) add(record *kgo.Record) {
+	p.records = append(p.records, record)
+	p.bytes += sizeOf(record)
+}
+
+// openAt starts the batch's flush deadline when its first record lands. That
+// deadline is what keeps a quiet tenant's rows moving.
+func (p *pendingBatch) openAt(now time.Time, maxDelay time.Duration) {
+	if len(p.records) > 0 && p.flushBy.IsZero() {
+		p.flushBy = now.Add(maxDelay)
+	}
+}
+
+func (p *pendingBatch) isReady(now time.Time, settings Settings) bool {
+	return len(p.records) > 0 &&
+		(len(p.records) >= settings.MaxMessages ||
+			p.bytes >= int(settings.maxBytes()) ||
+			!now.Before(p.flushBy))
+}
+
+func (p *pendingBatch) reset() {
+	clear(p.records)
+	p.records, p.bytes, p.flushBy = p.records[:0], 0, time.Time{}
+}
+
+// forget drops the records of partitions the group has taken away, and reports
+// how many. They were polled but never absorbed, so nothing has been produced
+// from them and nothing has to be undone — absorbing them now would write rows
+// the new owner writes as well.
+func (p *pendingBatch) forget(disowned map[string][]int32) int {
+	kept := p.records[:0]
+	bytes := 0
+	for _, record := range p.records {
+		if names(disowned, record.Topic, record.Partition) {
+			continue
+		}
+		kept = append(kept, record)
+		bytes += sizeOf(record)
+	}
+	dropped := len(p.records) - len(kept)
+	clear(p.records[len(kept):])
+	p.records, p.bytes = kept, bytes
+	if len(kept) == 0 {
+		p.flushBy = time.Time{}
+	}
+	return dropped
+}
+
+// pollPlan is what the next poll may ask for: how many more records this
+// batch can take, and when the poll must return regardless.
+type pollPlan struct {
+	records  int
+	deadline time.Time
 }
 
 // Dial joins the consumer group and opens the dead-letter producer. Close
@@ -196,6 +292,15 @@ type Loop[S any] struct {
 func Dial[S any](settings Settings, log *slog.Logger) (*Loop[S], error) {
 	if err := settings.validate(); err != nil {
 		return nil, fmt.Errorf("%s pipeline settings: %w", settings.Name, err)
+	}
+
+	// Built before the client, because the rebalance callbacks below reach back
+	// into it: a partition leaving has to reach the offsets this loop is
+	// holding, not only the stages.
+	loop := &Loop[S]{
+		settings: settings,
+		log:      log.With(slog.String("pipeline", settings.Name)),
+		now:      time.Now,
 	}
 
 	consumer, err := kgo.NewClient(
@@ -210,6 +315,15 @@ func Dial[S any](settings Settings, log *slog.Logger) (*Loop[S], error) {
 			if settings.OnAssigned != nil {
 				settings.OnAssigned()
 			}
+		}),
+		// The two halves of a handover. Without them the losing worker is never
+		// told, and it goes on releasing a buffer whose records the gaining
+		// worker is already reading — every span in it written twice.
+		kgo.OnPartitionsRevoked(func(ctx context.Context, _ *kgo.Client, disowned map[string][]int32) {
+			loop.disown(ctx, disowned, revoked)
+		}),
+		kgo.OnPartitionsLost(func(ctx context.Context, _ *kgo.Client, disowned map[string][]int32) {
+			loop.disown(ctx, disowned, lost)
 		}),
 		// Marks are what MarkCommitOffsets records; without this option both
 		// it and CommitMarkedOffsets are silent no-ops. Autocommit can then
@@ -233,14 +347,62 @@ func Dial[S any](settings Settings, log *slog.Logger) (*Loop[S], error) {
 		return nil, fmt.Errorf("%s dead-letter producer: %w", settings.Name, err)
 	}
 
-	return &Loop[S]{
-		consumer: consumer,
-		producer: producer,
-		parked:   dlq.New(producer, settings.DLQTopic, settings.ConsumerGroup),
-		settings: settings,
-		log:      log.With(slog.String("pipeline", settings.Name)),
-		now:      time.Now,
-	}, nil
+	loop.consumer = consumer
+	loop.producer = producer
+	loop.parked = dlq.New(producer, settings.DLQTopic, settings.ConsumerGroup)
+	return loop, nil
+}
+
+// revocation is how a partition left. A revoke is cooperative and the session
+// is still live; a loss means the session is already gone, so the partitions
+// may have belonged to someone else for a while and nothing may be written for
+// them on the way out.
+type revocation string
+
+const (
+	revoked revocation = "revoked"
+	lost    revocation = "lost"
+)
+
+// disown releases everything this worker still holds for partitions the group
+// has taken away: the records polled but not absorbed, the offsets held
+// uncommitted, and whatever the stages were keeping.
+//
+// It runs on the client's goroutine with the whole group's rebalance waiting on
+// it, so the work is memory only — no insert, no commit, no watermark. A call
+// out of the process here would be bounded by the loop's own two-minute retry
+// budget against a sixty-second rebalance timeout, and losing the session would
+// move every other partition this worker owns as well.
+//
+// Nothing is claimed as finished, which is what fixes the direction of the
+// failure: the records are still on the broker, so the worst case is that the
+// new owner writes something this one already wrote, and never that a span
+// nothing wrote is skipped.
+func (l *Loop[S]) disown(ctx context.Context, disowned map[string][]int32, how revocation) {
+	if len(disowned) == 0 {
+		return
+	}
+
+	l.turning.Lock()
+	defer l.turning.Unlock()
+
+	unpolled := l.batch.forget(disowned)
+	uncommitted := l.queue.Forget(disowned)
+
+	release, level := l.settings.OnRevoked, slog.LevelInfo
+	if how == lost {
+		release, level = l.settings.OnLost, slog.LevelWarn
+	}
+	if release != nil {
+		release(disowned)
+	}
+
+	l.log.LogAttrs(ctx, level, "released partitions the group took back",
+		slog.String("how", string(how)),
+		slog.Any("partitions", disowned),
+		slog.Int("unpolled_records", unpolled),
+		slog.Int("uncommitted_records", uncommitted),
+	)
 }
 
 // Close leaves the consumer group and releases both clients.
@@ -277,17 +439,15 @@ func (l *Loop[S]) Run(ctx context.Context, stages Processor[S]) error {
 	defer l.running.Store(false)
 	defer l.log.InfoContext(ctx, l.settings.Name+" stopped")
 
-	var pending []*kgo.Record
-	var held int
-	var flushBy time.Time
-	nextHeartbeat := l.now().Add(heartbeatInterval)
+	l.nextHeartbeat = l.now().Add(heartbeatInterval)
+	plan := pollPlan{records: l.settings.MaxMessages, deadline: l.now().Add(l.settings.MaxDelay)}
 
 	for {
 		if ctx.Err() != nil {
-			return l.drain(ctx, stages, pending)
+			return l.drain(ctx, stages)
 		}
 
-		fetches, err := l.poll(ctx, len(pending), flushBy)
+		fetches, err := l.poll(ctx, plan)
 		if errors.Is(err, errClientClosed) {
 			// Only our own shutdown may close the consumer. Closed while the
 			// context is still live means the pipeline is finished but the
@@ -302,36 +462,70 @@ func (l *Loop[S]) Run(ctx context.Context, stages Processor[S]) error {
 		if err != nil {
 			return err
 		}
-		fetches.EachRecord(func(record *kgo.Record) {
-			pending = append(pending, record)
-			held += sizeOf(record)
-		})
-		if len(pending) > 0 && flushBy.IsZero() {
-			flushBy = l.now().Add(l.settings.MaxDelay)
-		}
-
-		if l.batchIsReady(pending, held, flushBy) {
-			if err := l.absorb(ctx, stages, pending); err != nil {
-				return err
-			}
-			pending, held, flushBy = pending[:0], 0, time.Time{}
-		}
-
-		now := l.now()
-		if err := stages.Settle(ctx, now); err != nil {
+		plan, err = l.turn(ctx, stages, fetches)
+		if err != nil {
 			return err
-		}
-		if err := l.commit(ctx, l.queue.Ready(storedBy(stages, now))); err != nil {
-			return err
-		}
-		if !now.Before(nextHeartbeat) {
-			l.heartbeat(ctx, now, stages)
-			nextHeartbeat = now.Add(heartbeatInterval)
 		}
 		// Held since this iteration's poll, so nothing committed above could
 		// have raced a reassignment.
 		l.consumer.AllowRebalance()
 	}
+}
+
+// turn is one iteration's work: take in what arrived, hand a full batch to the
+// stages, let them settle what has fallen due, and commit the offsets of every
+// batch whose output is now stored.
+//
+// All of it runs under the lock the rebalance callbacks take, so a partition
+// cannot be taken away in the middle of it. It returns what the next poll may
+// ask for, read here rather than in Run because the batch it is read from is
+// the callbacks' to change.
+func (l *Loop[S]) turn(
+	ctx context.Context,
+	stages Processor[S],
+	fetches kgo.Fetches,
+) (pollPlan, error) {
+	l.turning.Lock()
+	defer l.turning.Unlock()
+
+	fetches.EachRecord(l.batch.add)
+	l.batch.openAt(l.now(), l.settings.MaxDelay)
+
+	if l.batch.isReady(l.now(), l.settings) {
+		if err := l.absorb(ctx, stages, l.batch.records); err != nil {
+			return pollPlan{}, err
+		}
+		l.batch.reset()
+	}
+
+	now := l.now()
+	if err := stages.Settle(ctx, now); err != nil {
+		return pollPlan{}, err
+	}
+	if err := l.commit(ctx, l.queue.Ready(storedBy(stages, now))); err != nil {
+		return pollPlan{}, err
+	}
+	if !now.Before(l.nextHeartbeat) {
+		l.heartbeat(ctx, now, stages)
+		l.nextHeartbeat = now.Add(heartbeatInterval)
+	}
+	return l.nextPoll(now), nil
+}
+
+// nextPoll is how many records the batch can still take and when the poll must
+// give up: at the batch's own flush deadline once it has started, and after one
+// batch delay otherwise. The second deadline is what keeps the loop turning
+// while a tenant is quiet: what a pipeline settles closes on wall-clock time,
+// not on arrivals.
+func (l *Loop[S]) nextPoll(now time.Time) pollPlan {
+	plan := pollPlan{
+		records:  l.settings.MaxMessages - len(l.batch.records),
+		deadline: now.Add(l.settings.MaxDelay),
+	}
+	if len(l.batch.records) > 0 {
+		plan.deadline = l.batch.flushBy
+	}
+	return plan
 }
 
 // storedBy asks the stages, at one instant, whether a batch's output has
@@ -362,13 +556,6 @@ func (l *Loop[S]) heartbeat(ctx context.Context, now time.Time, stages Processor
 		append(held, stages.Holding()...)...)
 }
 
-func (l *Loop[S]) batchIsReady(pending []*kgo.Record, held int, flushBy time.Time) bool {
-	return len(pending) > 0 &&
-		(len(pending) >= l.settings.MaxMessages ||
-			held >= int(l.settings.maxBytes()) ||
-			!l.now().Before(flushBy))
-}
-
 // sizeOf is what one record costs to hold. The value dominates; the key and
 // headers are counted because a batch of small values with large headers costs
 // the same memory and would otherwise be invisible to the bound.
@@ -380,23 +567,15 @@ func sizeOf(record *kgo.Record) int {
 	return size
 }
 
-// poll waits for records, giving up at the flush deadline once a batch has
-// started and after one batch delay otherwise. The second deadline is what
-// keeps the loop turning while a tenant is quiet: what a pipeline settles
-// closes on wall-clock time, not on arrivals.
-func (l *Loop[S]) poll(
-	ctx context.Context,
-	pending int,
-	flushBy time.Time,
-) (kgo.Fetches, error) {
-	deadline := l.now().Add(l.settings.MaxDelay)
-	if pending > 0 {
-		deadline = flushBy
-	}
-	pollCtx, cancel := context.WithDeadline(ctx, deadline)
+// poll waits for records on the plan the last turn of the loop left. It runs
+// outside the turn lock: a poll blocks until any rebalance callback in flight
+// has finished, and holding the lock across it would deadlock against the
+// callback waiting for the lock.
+func (l *Loop[S]) poll(ctx context.Context, plan pollPlan) (kgo.Fetches, error) {
+	pollCtx, cancel := context.WithDeadline(ctx, plan.deadline)
 	defer cancel()
 
-	fetches := l.consumer.PollRecords(pollCtx, l.settings.MaxMessages-pending)
+	fetches := l.consumer.PollRecords(pollCtx, plan.records)
 	if fetches.IsClientClosed() {
 		return fetches, errClientClosed
 	}
@@ -447,15 +626,18 @@ func (l *Loop[S]) absorb(ctx context.Context, stages Processor[S], records []*kg
 // drain writes everything still held and commits it, which is what makes a
 // planned shutdown lose nothing. It runs on a context of its own: the one that
 // ended the loop is already cancelled, and cancelled contexts cannot insert.
-func (l *Loop[S]) drain(ctx context.Context, stages Processor[S], unprocessed []*kgo.Record) error {
+func (l *Loop[S]) drain(ctx context.Context, stages Processor[S]) error {
 	drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 	defer cancel()
 
+	l.turning.Lock()
+	defer l.turning.Unlock()
+
 	// Records polled but never absorbed are simply not committed: they are
 	// still on the broker and the next owner of the partition reads them.
-	if len(unprocessed) > 0 {
+	if unprocessed := len(l.batch.records); unprocessed > 0 {
 		l.log.InfoContext(drainCtx, "leaving unprocessed records for redelivery",
-			slog.Int("records", len(unprocessed)))
+			slog.Int("records", unprocessed))
 	}
 
 	if err := stages.Drain(drainCtx, l.now()); err != nil {

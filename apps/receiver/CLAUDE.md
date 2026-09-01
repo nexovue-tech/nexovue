@@ -14,6 +14,13 @@ owner. The preflight `OPTIONS` is answered permissively and *unauthenticated*, b
 carries no credential; enforcement is on the POST behind it. Every reply to a request carrying an
 `Origin` gets CORS headers, **refusals included** — a 403 the page cannot read is a support ticket.
 
+**The browser door also reads `text/plain`, as OTLP/JSON** (ADR 0089). It is the only body
+`navigator.sendBeacon` can deliver: the Beacon spec fixes credentials mode to `include`, so anything
+outside the CORS safelist preflights and then fails against our refusal to send
+`Access-Control-Allow-Credentials`. The body is parsed as JSON like any other, so a beacon that is
+not JSON is still refused 400. **The server door has no `text/plain` entry and cannot be given one** —
+each entrance is mounted with its own `contentTypes` map and `Options.accepts` is unexported.
+
 Trace batches are **split one envelope per `trace_id`** before publishing, because trace assembly depends on Kafka partitioning by trace id. Logs and metrics forward as received.
 
 Errors follow **OTLP semantics, not problem+json** — SDK clients expect the protocol's own status codes. HTTP answers a failure in the request's own encoding (protobuf in, protobuf out); gRPC answers the mirrored `google.rpc.Code`.

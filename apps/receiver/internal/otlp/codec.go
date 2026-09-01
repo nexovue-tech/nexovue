@@ -18,6 +18,11 @@ import (
 const (
 	contentTypeProtobuf = "application/x-protobuf"
 	contentTypeJSON     = "application/json"
+
+	// contentTypeText is not an OTLP encoding. It is the CORS safelist's, and
+	// the browser door alone reads it as OTLP/JSON — see ADR 0089 and
+	// browserContentTypes below.
+	contentTypeText = "text/plain"
 )
 
 const (
@@ -57,11 +62,41 @@ var jsonCodec = codec{
 	},
 }
 
-// codecFor picks the encoding a request speaks.
+// contentTypes is the set of request encodings one door reads, keyed by media
+// type. A door is built with one set and cannot be talked into another by a
+// request, which is the same reason ADR 0086 gives each door one gatekeeper: an
+// affordance that exists for one entrance should be absent from the other's
+// code, not guarded by a condition somebody has to remember.
+type contentTypes map[string]codec
+
+// serverContentTypes is OTLP/HTTP's own pair, and nothing else. There is no
+// text/plain entry here, so no request on a server path can reach the JSON
+// codec through one.
+var serverContentTypes = contentTypes{
+	contentTypeProtobuf: protobufCodec,
+	contentTypeJSON:     jsonCodec,
+}
+
+// browserContentTypes adds text/plain, read as OTLP/JSON.
+//
+// navigator.sendBeacon is the only export that survives a page unload, it can
+// set no headers, and it fixes the request's credentials mode to "include" — so
+// a body typed application/json is preflighted, and the POST behind the
+// preflight is then failed by the browser because we deliberately never send
+// Access-Control-Allow-Credentials (ADR 0087 §4). text/plain is CORS-safelisted,
+// so the beacon is delivered instead of refused. The body is still parsed as
+// JSON and a body that is not JSON is still refused (ADR 0089).
+var browserContentTypes = contentTypes{
+	contentTypeProtobuf: protobufCodec,
+	contentTypeJSON:     jsonCodec,
+	contentTypeText:     jsonCodec,
+}
+
+// codecFor picks the encoding a request speaks, out of what this door reads.
 //
 // An absent Content-Type is read as protobuf, OTLP/HTTP's binary default, so a
 // hand-rolled client that omits the header still works.
-func codecFor(header string) (codec, error) {
+func (accepted contentTypes) codecFor(header string) (codec, error) {
 	if header == "" {
 		return protobufCodec, nil
 	}
@@ -69,21 +104,22 @@ func codecFor(header string) (codec, error) {
 	if err != nil {
 		return codec{}, errUnsupportedContentType
 	}
-	switch mediaType {
-	case contentTypeProtobuf:
-		return protobufCodec, nil
-	case contentTypeJSON:
-		return jsonCodec, nil
-	default:
+	chosen, ok := accepted[mediaType]
+	if !ok {
 		return codec{}, errUnsupportedContentType
 	}
+	return chosen, nil
 }
 
 // replyCodec is what a failure is written in when the request may not have got
 // as far as content negotiation. It never fails: an unreadable Content-Type
 // falls back to protobuf rather than leaving the caller with no body at all.
-func replyCodec(r *http.Request) codec {
-	if chosen, err := codecFor(r.Header.Get(headerContentType)); err == nil {
+//
+// A text/plain export is therefore answered in application/json, which is what
+// its body was: the content type a beacon must use is the CORS safelist's
+// requirement, not a claim about the encoding.
+func (accepted contentTypes) replyCodec(r *http.Request) codec {
+	if chosen, err := accepted.codecFor(r.Header.Get(headerContentType)); err == nil {
 		return chosen
 	}
 	return protobufCodec
@@ -113,7 +149,7 @@ func writeRefusal(w http.ResponseWriter, enc codec, refused *refusal) {
 	if refused.retryAfter > 0 {
 		w.Header().Set(headerRetryAfter, retryAfterSeconds(refused.retryAfter))
 	}
-	writeStatus(w, enc, httpStatusFor(refused.code), refused.code, refused.message)
+	writeStatus(w, enc, refused.status(), refused.code, refused.message)
 }
 
 // httpStatusFor is OTLP/HTTP's pairing of an rpc code with a status line. Only

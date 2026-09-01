@@ -63,6 +63,22 @@ func (o *Offsets) FirstDelivery(topic string, id int32, offset int64) bool {
 	return true
 }
 
+// Forget drops the watermarks of partitions the consumer group has taken away.
+//
+// It must run whenever the stages release what they were holding for those
+// partitions, and for the opposite reason to the rest of this type. Left in
+// place, a partition that came back would have its uncommitted records
+// recognised as replays and skipped — and those spans were dropped rather than
+// stored, so that is a hole. The duplicate this type exists to stop is
+// recoverable; a hole is not (ADR 0090).
+func (o *Offsets) Forget(topic string, ids []int32) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, id := range ids {
+		delete(o.watermark, partition{topic: topic, id: id})
+	}
+}
+
 // Partitions reports how many partitions are tracked, which is the whole of
 // this type's memory cost.
 func (o *Offsets) Partitions() int {

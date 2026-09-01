@@ -32,6 +32,13 @@ type refusal struct {
 	// again. Zero means the failure is not worth retrying.
 	retryAfter time.Duration
 
+	// httpStatus overrides the status the rpc code would normally pair with,
+	// for the few failures OTLP/HTTP spells more precisely than the code does —
+	// 413 and 415 are both INVALID_ARGUMENT. Zero means the code's own status.
+	// It lives here so the line that is logged and the line that is written
+	// come from one value; they disagreed while it did not.
+	httpStatus int
+
 	// cause is what went wrong on our side, for the log rather than the wire:
 	// the caller is told the fixed message, never our internals.
 	cause error
@@ -49,6 +56,21 @@ func refuseUntil(rpcCode code.Code, message string, retryAfter time.Duration) *r
 func (r *refusal) because(err error) *refusal {
 	r.cause = err
 	return r
+}
+
+// answeredAs pins the HTTP status this refusal is written with.
+func (r *refusal) answeredAs(httpStatus int) *refusal {
+	r.httpStatus = httpStatus
+	return r
+}
+
+// status is the one HTTP status this refusal has, whether it is being written
+// or logged.
+func (r *refusal) status() int {
+	if r.httpStatus != 0 {
+		return r.httpStatus
+	}
+	return httpStatusFor(r.code)
 }
 
 // authenticate is gate one. It returns a context carrying the tenancy the key
@@ -111,7 +133,7 @@ func (o Options) throttle(ctx context.Context) *refusal {
 func (o Options) record(ctx context.Context, path string, unit Unit, items int, refused *refusal) {
 	httpStatus := http.StatusOK
 	if refused != nil {
-		httpStatus = httpStatusFor(refused.code)
+		httpStatus = refused.status()
 	}
 	attrs := []any{
 		slog.String(fieldMethod, http.MethodPost),

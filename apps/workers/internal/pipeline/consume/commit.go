@@ -106,6 +106,51 @@ func (q *Queue[S]) prefix(stored func(S) bool) ([]Position, int) {
 	return positions, settled
 }
 
+// Forget drops the held offsets of partitions the consumer group has taken
+// away, and reports how many it dropped.
+//
+// Those offsets must never be committed: the stages release whatever they were
+// holding for them at the same moment, so committing would claim work nothing
+// finished. Uncommitted, the records stay on the broker and the worker that
+// takes the partition over reads them again.
+//
+// A batch left with no offsets at all goes with them — everything it produced
+// belonged to those partitions, so there is nothing left for it to gate, and an
+// empty batch at the front would report a commit lag it is not causing.
+func (q *Queue[S]) Forget(disowned map[string][]int32) int {
+	dropped := 0
+	kept := q.entries[:0]
+	for _, entry := range q.entries {
+		positions := entry.Positions[:0]
+		for _, at := range entry.Positions {
+			if names(disowned, at.Topic, at.Partition) {
+				dropped++
+				continue
+			}
+			positions = append(positions, at)
+		}
+		if len(positions) == 0 {
+			continue
+		}
+		entry.Positions = positions
+		kept = append(kept, entry)
+	}
+	clear(q.entries[len(kept):])
+	q.entries = kept
+	q.count -= dropped
+	return dropped
+}
+
+// names reports whether a set of partitions by topic contains this one.
+func names(partitions map[string][]int32, topic string, partition int32) bool {
+	for _, id := range partitions[topic] {
+		if id == partition {
+			return true
+		}
+	}
+	return false
+}
+
 // Drain releases every held batch. Shutdown uses it, after the stages have
 // themselves been drained to storage.
 func (q *Queue[S]) Drain() []Position {

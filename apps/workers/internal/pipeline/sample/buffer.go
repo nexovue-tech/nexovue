@@ -25,6 +25,13 @@ type Facts struct {
 	// `ot=rv:` randomness value. Empty is normal and harmless: the decision
 	// then comes from the randomness in the trace id itself.
 	TraceState string
+
+	// Partition is the Kafka partition the span's record arrived on. It is
+	// provenance rather than a sampling input: the buffer keeps it so that a
+	// partition handed to another worker can have its spans taken back out
+	// (ADR 0090). The topic is implicit — one buffer serves one pipeline, and a
+	// pipeline consumes one topic.
+	Partition int32
 }
 
 // Options bound the buffer. Every limit is required: an unbounded map on the
@@ -79,6 +86,16 @@ type Stats struct {
 	// ClosedEarly counts traces decided before their window ran out because the
 	// buffer was full. A number that keeps climbing means the limits are wrong.
 	ClosedEarly uint64
+	// SpansDisowned and TracesDisowned count what left with a partition the
+	// consumer group took back. They step at every handover and are flat
+	// otherwise; before Disown existed, every one of those spans was written
+	// here and again by the worker that took the partition over.
+	//
+	// int, unlike the running totals above, because they are sums of slice
+	// lengths: agreeing on the width removes a conversion rather than adding a
+	// bounds check to justify one.
+	SpansDisowned  int
+	TracesDisowned int
 	// FirstTracesKept counts traces this process kept because their project was
 	// still inside its first-traces carve-out. It should be a small number that
 	// stops growing; one that climbs steadily means carve-outs are not closing,
@@ -91,7 +108,12 @@ type Stats struct {
 // It needs no lock and no shared store: the receiver keys every span by
 // trace_id, so Kafka delivers a whole trace to one partition and one consumer
 // (ADR 0009). A worker restart loses the buffer, which the query-time join
-// covers.
+// covers, and a partition handed to another worker loses it on purpose — see
+// Disown.
+//
+// Not concurrency-safe. The consume loop calls every method from one goroutine,
+// and the rebalance callback that calls Disown holds the lock that loop takes
+// around its own turn.
 type Buffer[T any] struct {
 	options  Options
 	policies PolicySource
@@ -120,10 +142,19 @@ func keyOf(facts Facts) traceKey {
 
 type openTrace[T any] struct {
 	facts traceFacts
-	rows  []T
+	rows  []buffered[T]
 	// project is taken from the first span; a trace belongs to one project.
 	project  string
 	closesAt time.Time
+}
+
+// buffered is one held span and the partition its record arrived on. The
+// partition travels with the row rather than with the trace because a trace is
+// only *normally* one partition's whole world: the receiver keys spans by trace
+// id, but nothing in this package may assume it.
+type buffered[T any] struct {
+	partition int32
+	row       T
 }
 
 type traceFacts struct {
@@ -196,7 +227,7 @@ func (b *Buffer[T]) Add(now time.Time, facts Facts, row T) []T {
 }
 
 func (t *openTrace[T]) observe(facts Facts, row T) {
-	t.rows = append(t.rows, row)
+	t.rows = append(t.rows, buffered[T]{partition: facts.Partition, row: row})
 	t.facts.errored = t.facts.errored || facts.Errored
 	if t.facts.traceState == "" {
 		t.facts.traceState = facts.TraceState
@@ -286,7 +317,65 @@ func (b *Buffer[T]) close(now time.Time, key traceKey, trace *openTrace[T], rele
 	}
 	b.stats.TracesKept++
 	b.stats.SpansKept += uint64(len(trace.rows))
-	return append(release, trace.rows...)
+	for _, held := range trace.rows {
+		release = append(release, held.row)
+	}
+	return release
+}
+
+// Disown drops every buffered span that arrived on one of the given partitions,
+// and reports what it dropped.
+//
+// This is not data loss, and the reason is the ordering the watermark already
+// rests on: a batch's offsets are committed only once its sampling window has
+// closed, so everything still buffered belongs to records the broker has not
+// been told about. The worker that takes the partition over reads those same
+// records and writes the rows this one was holding. Keeping them is what writes
+// them twice (ADR 0090).
+//
+// Remembered verdicts are left alone. They carry no partition, they are policy
+// rather than data, and a trace dropped here was never closed, so it never
+// recorded one.
+func (b *Buffer[T]) Disown(partitions []int32) Disowned {
+	if len(partitions) == 0 {
+		return Disowned{}
+	}
+	leaving := make(map[int32]struct{}, len(partitions))
+	for _, partition := range partitions {
+		leaving[partition] = struct{}{}
+	}
+
+	var dropped Disowned
+	for key, trace := range b.open {
+		kept := trace.rows[:0]
+		for _, held := range trace.rows {
+			if _, gone := leaving[held.partition]; gone {
+				dropped.Spans++
+				continue
+			}
+			kept = append(kept, held)
+		}
+		clear(trace.rows[len(kept):])
+		trace.rows = kept
+		if len(kept) == 0 {
+			delete(b.open, key)
+			dropped.Traces++
+		}
+	}
+
+	// openOrder keeps the emptied traces' keys; Expire already skips a key
+	// whose trace is gone, so there is nothing to compact here.
+	b.spans -= dropped.Spans
+	b.stats.SpansDisowned += dropped.Spans
+	b.stats.TracesDisowned += dropped.Traces
+	return dropped
+}
+
+// Disowned is what leaving a partition cost: spans taken back out of the
+// buffer, and traces that had nothing left afterwards.
+type Disowned struct {
+	Spans  int
+	Traces int
 }
 
 func (b *Buffer[T]) rememberVerdict(now time.Time, key traceKey, keep bool) {

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"google.golang.org/genproto/googleapis/rpc/code"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
@@ -307,5 +308,122 @@ func TestABrowserExportIsLoggedUnderItsOwnPath(t *testing.T) {
 	summary := summaryLine(t, runSummary(t, traffic))
 	if summary["accepted_spans"] != float64(1) {
 		t.Errorf("accepted_spans = %v, want 1", summary["accepted_spans"])
+	}
+}
+
+/* ------------------------------------------------------- the unload beacon */
+
+// navigator.sendBeacon is the only export that survives a page unload, and it
+// can reach this door only as text/plain: it sets no headers, and it fixes the
+// request's credentials mode to "include", so any content type outside the CORS
+// safelist is preflighted and then failed by the browser because ADR 0087
+// deliberately never answers Access-Control-Allow-Credentials. ADR 0089.
+
+// beaconContentType is what a browser stamps on a text/plain beacon, charset
+// and all, so the parse of the parameter is exercised rather than assumed.
+const beaconContentType = "text/plain;charset=UTF-8"
+
+// beacon sends exactly what navigator.sendBeacon produces: a POST with no
+// header the page chose, the key in the query string, and a JSON body typed
+// text/plain.
+func beacon(t *testing.T, d door, path string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost,
+		path+"?"+auth.SiteKeyQueryParam+"="+validSiteKey, bytes.NewReader(body))
+	request.Header.Set("Content-Type", beaconContentType)
+	request.Header.Set("Origin", pageOrigin)
+
+	recorder := httptest.NewRecorder()
+	d.handler.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func jsonExportBody(t *testing.T) []byte {
+	t.Helper()
+	body, err := protojson.Marshal(exportRequest(traceID(0x55)))
+	if err != nil {
+		t.Fatalf("encoding JSON request: %v", err)
+	}
+	return body
+}
+
+func TestATextPlainBeaconIsAcceptedOnTheBrowserDoor(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+
+	response := beacon(t, d, browserTracesPath, jsonExportBody(t))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (%s)", response.Code, http.StatusOK, response.Body)
+	}
+	// text/plain is the CORS safelist's requirement, not a claim about the
+	// encoding: the body was JSON and the answer says so.
+	if got := response.Header().Get("Content-Type"); got != contentTypeJSON {
+		t.Errorf("Content-Type = %q, want %q", got, contentTypeJSON)
+	}
+	if len(d.producer.records) != 1 {
+		t.Fatalf("produced %d records, want 1", len(d.producer.records))
+	}
+	var envelope nexovuev1.Envelope
+	if err := proto.Unmarshal(d.producer.records[0].Value, &envelope); err != nil {
+		t.Fatalf("record is not an Envelope: %v", err)
+	}
+	if envelope.GetTenantId() != orgID || envelope.GetProjectId() != projectID {
+		t.Errorf("envelope tenancy = %s/%s, want %s/%s",
+			envelope.GetTenantId(), envelope.GetProjectId(), orgID, projectID)
+	}
+}
+
+func TestATextPlainBeaconReachesEverySignalOfTheBrowserDoor(t *testing.T) {
+	for _, path := range []string{browserTracesPath, browserLogsPath, browserMetricsPath} {
+		t.Run(path, func(t *testing.T) {
+			d := newDoor(t, doorOptions{})
+
+			// An empty export is legal for every signal, so one body proves the
+			// content type is read on all three without three payload shapes.
+			if response := beacon(t, d, path, []byte(`{}`)); response.Code != http.StatusOK {
+				t.Errorf("status = %d, want %d (%s)", response.Code, http.StatusOK, response.Body)
+			}
+		})
+	}
+}
+
+// The affordance belongs to the browser door and to nothing else. A server
+// exporter has no reason to send text/plain and no CORS problem to solve, so
+// the server door's content types do not contain it and cannot be made to.
+func TestATextPlainExportIsRefusedOnTheServerDoor(t *testing.T) {
+	d := newDoor(t, doorOptions{})
+
+	response := postTo(t, d, otlp.TracesPath, jsonExportBody(t),
+		map[string]string{"Content-Type": beaconContentType})
+
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want %d (%s)",
+			response.Code, http.StatusUnsupportedMediaType, response.Body)
+	}
+	if len(d.producer.records) != 0 {
+		t.Error("a text/plain export reached the broker through the server door")
+	}
+}
+
+// Accepting the content type is not accepting anything: a text/plain body is
+// still OTLP/JSON and is still parsed as such.
+func TestATextPlainBeaconThatIsNotJSONIsRefused(t *testing.T) {
+	for name, body := range map[string]string{
+		"not JSON at all":  "hello, receiver",
+		"JSON of no shape": `{"resourceSpans": "not a list"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := newDoor(t, doorOptions{})
+
+			response := beacon(t, d, browserTracesPath, []byte(body))
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d (%s)",
+					response.Code, http.StatusBadRequest, response.Body)
+			}
+			if len(d.producer.records) != 0 {
+				t.Error("an unparseable beacon reached the broker")
+			}
+		})
 	}
 }

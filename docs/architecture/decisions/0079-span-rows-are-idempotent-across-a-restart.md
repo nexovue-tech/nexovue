@@ -1,6 +1,6 @@
 # 0079 — Span rows are idempotent across a restart, on a watermark with no bracket
 
-- **Status:** Accepted
+- **Status:** Accepted — the residual bound in its Consequences is corrected in part by [0090](0090-a-partition-that-leaves-takes-its-buffered-spans-with-it.md): under a rebalance it was the whole last sampling window on every moving partition, not a rare fast-path span
 - **Date:** 2026-08-30
 - **Extends:** [0061](0061-counter-overcount-across-a-store-restart.md) — same problem, same store, one partition key; the counters were guarded and the span rows were not
 - **Corrects:** [0058](0058-tail-sampling-window-is-ten-seconds.md), whose Consequences say a restart loses the in-flight buffer. It does not; the cost runs the other way.

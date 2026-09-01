@@ -13,6 +13,38 @@
 // The load is deliberately plain: no retries, no backpressure games, one
 // envelope per trace exactly as the receiver splits them. What varies during a
 // run is the worker fleet, which is driven from outside this tool.
+//
+// # Cleaning up after a run
+//
+// A run leaves rows in three places, and the third one is billable — the usage
+// pipeline records every distinct service name it meters, so each run adds two
+// rows to a customer's service count:
+//
+//	-- ClickHouse: every trace id starts with the run id, so no run touches another
+//	DELETE FROM spans            WHERE service_name = 'nvprobe-spans-<run>';
+//	DELETE FROM logs             WHERE service_name = 'nvprobe-logs-<run>';
+//	DELETE FROM trace_summaries  WHERE startsWith(trace_id, '<run>');
+//	DELETE FROM span_trace_lookup WHERE startsWith(trace_id, '<run>');
+//	DELETE FROM endpoint_stats_1m WHERE service_name = 'nvprobe-spans-<run>';
+//	DELETE FROM service_edges_1m WHERE client_service = 'nvprobe-spans-<run>'
+//	                                OR server_service = 'nvprobe-spans-<run>';
+//	DELETE FROM metrics_sum      WHERE service_name = 'nvprobe-spans-<run>';
+//	-- Postgres: the billable one
+//	DELETE FROM usage_daily_services WHERE service_name LIKE 'nvprobe-%';
+//
+// Run against a topic of its own — `-spans-topic`, with the workers pointed at
+// it by `KAFKA_SPANS_TOPIC` and `WORKERS_CONSUMER_GROUP` — and the watermark
+// tables need clearing too, keyed by that topic. They are KeeperMap, which
+// refuses a lightweight DELETE; `ALTER TABLE … DELETE` is what works:
+//
+//	ALTER TABLE span_written_offsets DELETE WHERE startsWith(partition_key, '<topic>');
+//	ALTER TABLE span_ingest_offsets  DELETE WHERE startsWith(partition_key, '<topic>');
+//
+// `usage_daily` sums bytes per tenant and day and cannot be separated from real
+// traffic, so produce against a tenant whose usage numbers nobody is reading.
+//
+// Every statement above was run on 2026-09-01 to clear five runs, and each
+// table verified back to zero.
 package main
 
 import (

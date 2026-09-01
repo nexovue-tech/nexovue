@@ -26,6 +26,14 @@ nothing, because `spans` is a plain MergeTree and nothing deduplicates it on rea
 catches one across a restart, keeping both watermarks in Keeper — counted-through (ADR 0061) and
 written-through (migration `000026`).
 
+**Neither covers a partition moving between two live workers**, and that was worse than a crash: the
+losing worker was never told, so it wrote its whole sampling buffer while the gaining worker was
+already reading the same uncommitted records — 12.75% of spans stored twice with nothing killed. A
+revoke now **drops** what the stages hold for those partitions (ADR 0090). Anything reaching into
+`sample`, `consume` or `dedupe` has to keep the three in step: buffered spans, uncommitted offsets
+and the in-process watermark are released in one critical section, or the next handover is a
+duplicate again — or, if the watermark alone survives, a hole.
+
 `log-writing` and `metric-ingest` have the same root and a much narrower window: they insert inside
 `Absorb`, so a batch is exposed from its insert to its commit rather than for the ~70s spans wait.
 Narrower is not closed — measured over 60 abrupt restarts under load, 49,580 of 905,020 distinct log

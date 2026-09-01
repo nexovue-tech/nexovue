@@ -687,3 +687,67 @@ func TestOnlyPostIsRouted(t *testing.T) {
 		t.Error("GET /v1/traces was accepted; OTLP/HTTP is POST only")
 	}
 }
+
+// A log line that misreports a status is how an incident gets diagnosed
+// wrongly: the reader believes a 400 was answered and goes looking for a
+// malformed batch when the door in fact refused the media type. These are the
+// three failures OTLP/HTTP spells more precisely than the rpc code does, so
+// they are the three that could disagree.
+func TestARefusedStatusIsLoggedAsItWasAnswered(t *testing.T) {
+	oversized := bytes.Repeat([]byte{0}, 4096)
+
+	cases := map[string]struct {
+		headers map[string]string
+		body    []byte
+		want    int
+	}{
+		"unsupported content type": {
+			headers: map[string]string{"Content-Type": "application/xml"},
+			want:    http.StatusUnsupportedMediaType,
+		},
+		"unsupported content encoding": {
+			headers: map[string]string{"Content-Encoding": "br"},
+			want:    http.StatusUnsupportedMediaType,
+		},
+		"oversized body": {
+			body: oversized,
+			want: http.StatusRequestEntityTooLarge,
+		},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			written := &bytes.Buffer{}
+			d := newDoor(t, doorOptions{
+				maxBodyBytes: 512,
+				log:          slog.New(slog.NewJSONHandler(written, &slog.HandlerOptions{Level: slog.LevelDebug})),
+			})
+
+			body := testCase.body
+			if body == nil {
+				body = encodedRequest(t, exportRequest(traceID(0x11)))
+			}
+			response := post(t, d, body, testCase.headers)
+
+			if response.Code != testCase.want {
+				t.Fatalf("status = %d, want %d (%s)", response.Code, testCase.want, response.Body)
+			}
+			refusal := refusalLine(t, written)
+			if refusal["status"] != float64(testCase.want) {
+				t.Errorf("logged status = %v, want %d — the log and the wire disagree",
+					refusal["status"], testCase.want)
+			}
+		})
+	}
+}
+
+// refusalLine returns the one refusal a door logged.
+func refusalLine(t *testing.T, written *bytes.Buffer) map[string]any {
+	t.Helper()
+	for _, line := range recordedLines(t, written) {
+		if line["msg"] == "export refused" {
+			return line
+		}
+	}
+	t.Fatalf("no refusal was logged (%s)", written)
+	return nil
+}

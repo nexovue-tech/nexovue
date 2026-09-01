@@ -78,6 +78,11 @@ type Options struct {
 	// what a compressed one may expand to.
 	MaxBodyBytes        int64
 	MaxDecodedBodyBytes int64
+
+	// accepts is the set of request encodings this door reads. Unexported and
+	// filled by Handler, so what a door accepts is decided by which entrance it
+	// is rather than by whoever constructs the Options — see contentTypes.
+	accepts contentTypes
 }
 
 func (o Options) limits() bodyLimits {
@@ -110,12 +115,16 @@ type Doors struct {
 // under BrowserPathPrefix.
 func Handler(doors Doors) http.Handler {
 	mux := http.NewServeMux()
-	mountSignals(mux, "", doors.Server)
-	mountSignals(mux, BrowserPathPrefix, doors.Browser)
+	mountSignals(mux, "", doors.Server, serverContentTypes)
+	mountSignals(mux, BrowserPathPrefix, doors.Browser, browserContentTypes)
 	return mux
 }
 
-func mountSignals(mux *http.ServeMux, prefix string, opts Options) {
+// mountSignals fixes what one entrance reads at the point it is mounted, which
+// is the only place both entrances are named together and so the only place a
+// difference between them can be read off in one line.
+func mountSignals(mux *http.ServeMux, prefix string, opts Options, accepts contentTypes) {
+	opts.accepts = accepts
 	route(mux, prefix, opts, tracesDoor)
 	route(mux, prefix, opts, logsDoor)
 	route(mux, prefix, opts, metricsDoor)
@@ -159,7 +168,7 @@ func authenticate(opts Options, at endpoint, next http.Handler) http.Handler {
 		ctx, refused := opts.authenticate(r.Context(), opts.Gatekeeper.PresentedKey(r))
 		if refused != nil {
 			opts.record(ctx, at.httpPath, at.unit, itemsNotRead, refused)
-			writeRefusal(w, replyCodec(r), refused)
+			writeRefusal(w, opts.accepts.replyCodec(r), refused)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -172,7 +181,7 @@ func fromAllowedOrigin(opts Options, at endpoint, next http.Handler) http.Handle
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if refused := opts.checkOrigin(r.Context(), r.Header.Get(headerOrigin)); refused != nil {
 			opts.record(r.Context(), at.httpPath, at.unit, itemsNotRead, refused)
-			writeRefusal(w, replyCodec(r), refused)
+			writeRefusal(w, opts.accepts.replyCodec(r), refused)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -183,7 +192,7 @@ func throttle(opts Options, at endpoint, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if refused := opts.throttle(r.Context()); refused != nil {
 			opts.record(r.Context(), at.httpPath, at.unit, itemsNotRead, refused)
-			writeRefusal(w, replyCodec(r), refused)
+			writeRefusal(w, opts.accepts.replyCodec(r), refused)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -202,31 +211,31 @@ func export[Request proto.Message](opts Options, door signalDoor[Request]) http.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedAt := time.Now()
 
-		encoding, err := codecFor(r.Header.Get(headerContentType))
+		encoding, err := opts.accepts.codecFor(r.Header.Get(headerContentType))
 		if err != nil {
-			// Answered as 415 rather than the code's usual 400, so writeStatus
-			// is called directly; the tally still sees it.
-			opts.record(r.Context(), door.httpPath, door.unit, itemsNotRead,
-				refuse(code.Code_INVALID_ARGUMENT, err.Error()).because(err))
-			writeStatus(w, protobufCodec, http.StatusUnsupportedMediaType,
-				code.Code_INVALID_ARGUMENT, err.Error())
+			// One refusal, written and logged, so the wire and the line cannot
+			// disagree about a status OTLP/HTTP spells more precisely than the
+			// rpc code does.
+			refused := refuse(code.Code_INVALID_ARGUMENT, err.Error()).
+				answeredAs(http.StatusUnsupportedMediaType).because(err)
+			opts.record(r.Context(), door.httpPath, door.unit, itemsNotRead, refused)
+			writeRefusal(w, protobufCodec, refused)
 			return
 		}
 
 		body, err := readBody(w, r, opts.limits())
 		if err != nil {
-			opts.record(r.Context(), door.httpPath, door.unit, itemsNotRead,
-				refuse(code.Code_INVALID_ARGUMENT, messageUnreadableRequest).because(err))
-			writeBodyFailure(w, encoding, err)
+			refused := bodyRefusal(err)
+			opts.record(r.Context(), door.httpPath, door.unit, itemsNotRead, refused)
+			writeRefusal(w, encoding, refused)
 			return
 		}
 
 		request := door.newRequest()
 		if err := encoding.unmarshal(body, request); err != nil {
-			opts.record(r.Context(), door.httpPath, door.unit, itemsNotRead,
-				refuse(code.Code_INVALID_ARGUMENT, door.malformedMessage).because(err))
-			writeStatus(w, encoding, http.StatusBadRequest,
-				code.Code_INVALID_ARGUMENT, door.malformedMessage)
+			refused := refuse(code.Code_INVALID_ARGUMENT, door.malformedMessage).because(err)
+			opts.record(r.Context(), door.httpPath, door.unit, itemsNotRead, refused)
+			writeRefusal(w, encoding, refused)
 			return
 		}
 
@@ -241,26 +250,20 @@ func export[Request proto.Message](opts Options, door signalDoor[Request]) http.
 	})
 }
 
-// messageUnreadableRequest stands in for whichever body failure writeBodyFailure
-// renders: the tally cares that the request was unreadable, the caller gets the
-// specific sentinel's own wording.
-const messageUnreadableRequest = "request body could not be accepted"
-
-// writeBodyFailure answers with the sentinel's own wording rather than the
-// wrapped cause: a decompression error's text is our internals, not the
-// caller's business.
-func writeBodyFailure(w http.ResponseWriter, encoding codec, err error) {
+// bodyRefusal renders a body failure as the sentinel's own wording rather than
+// the wrapped cause: a decompression error's text is our internals, not the
+// caller's business. The cause still travels for the log.
+func bodyRefusal(err error) *refusal {
 	switch {
 	case errors.Is(err, errBodyTooLarge):
 		// Non-retryable: the same oversized batch would fail again.
-		writeStatus(w, encoding, http.StatusRequestEntityTooLarge,
-			code.Code_INVALID_ARGUMENT, errBodyTooLarge.Error())
+		return refuse(code.Code_INVALID_ARGUMENT, errBodyTooLarge.Error()).
+			answeredAs(http.StatusRequestEntityTooLarge).because(err)
 	case errors.Is(err, errUnsupportedContentEncode):
-		writeStatus(w, encoding, http.StatusUnsupportedMediaType,
-			code.Code_INVALID_ARGUMENT, errUnsupportedContentEncode.Error())
+		return refuse(code.Code_INVALID_ARGUMENT, errUnsupportedContentEncode.Error()).
+			answeredAs(http.StatusUnsupportedMediaType).because(err)
 	default:
-		writeStatus(w, encoding, http.StatusBadRequest,
-			code.Code_INVALID_ARGUMENT, errUnreadableBody.Error())
+		return refuse(code.Code_INVALID_ARGUMENT, errUnreadableBody.Error()).because(err)
 	}
 }
 
@@ -278,10 +281,9 @@ func (o Options) writeAccepted(
 	if err != nil {
 		// The batch is published but the caller will never hear so. Counted as
 		// our fault, because that is what it is.
-		o.record(r.Context(), at.httpPath, at.unit, items,
-			refuse(code.Code_INTERNAL, messageUnavailable).because(err))
-		writeStatus(w, encoding, http.StatusInternalServerError,
-			code.Code_INTERNAL, messageUnavailable)
+		refused := refuse(code.Code_INTERNAL, messageUnavailable).because(err)
+		o.record(r.Context(), at.httpPath, at.unit, items, refused)
+		writeRefusal(w, encoding, refused)
 		return
 	}
 	o.record(r.Context(), at.httpPath, at.unit, items, nil)

@@ -91,8 +91,10 @@ func (r spanRow) edgeLinks() []serviceedges.SpanLink {
 	return links
 }
 
-// sampleFacts is this span as the sample stage sees it.
-func (r spanRow) sampleFacts() sample.Facts {
+// sampleFacts is this span as the sample stage sees it. The partition comes
+// from the record rather than the row: it is where the span arrived, not
+// anything the span says about itself.
+func (r spanRow) sampleFacts(partition int32) sample.Facts {
 	return sample.Facts{
 		TraceID:    r.traceKey(),
 		ProjectID:  r.ProjectID,
@@ -100,6 +102,7 @@ func (r spanRow) sampleFacts() sample.Facts {
 		Duration:   millisecondsDuration(r.DurationMS),
 		Errored:    r.errored(),
 		TraceState: r.TraceState,
+		Partition:  partition,
 	}
 }
 
@@ -187,8 +190,9 @@ func (s *skewReport) merge(other skewReport) {
 	}
 }
 
-// handling is which stages one record still has to run through, resolved
-// against the durable per-partition watermarks before the batch is absorbed.
+// handling is which stages one record still has to run through, and where it
+// came from, resolved against the durable per-partition watermarks before the
+// batch is absorbed.
 //
 // Two flags rather than one because the two watermarks move at different
 // speeds: spans are stored a sampling window after they arrive, counters a
@@ -200,6 +204,10 @@ type handling struct {
 	count bool
 	// store lets its spans into the sampling buffer, and so to ClickHouse.
 	store bool
+	// partition is the one the record arrived on. The buffer keeps it with
+	// every span it holds, so that a partition leaving for another worker can
+	// take its spans back out (ADR 0090).
+	partition int32
 }
 
 // absorbMessage runs one Kafka message through every stage its handling still
@@ -244,7 +252,8 @@ func (s *stages) absorbMessage(now time.Time, message []byte, run handling) (abs
 		// A replay must not re-enter the buffer: the trace would be released a
 		// second time and every row in it written again.
 		if run.store {
-			result.rows = append(result.rows, s.buffer.Add(now, row.sampleFacts(), row)...)
+			result.rows = append(result.rows,
+				s.buffer.Add(now, row.sampleFacts(run.partition), row)...)
 		}
 		result.spans++
 	}

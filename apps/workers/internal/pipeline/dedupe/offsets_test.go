@@ -25,6 +25,26 @@ func TestARedeliveredRecordIsNotAFirstDelivery(t *testing.T) {
 	}
 }
 
+// The direction that makes this type dangerous rather than useful. When a
+// partition leaves, the stages drop whatever they were holding for it — so its
+// records are unprocessed again. A watermark left behind would recognise them
+// as replays and skip them, and nothing would ever write those spans.
+func TestAForgottenPartitionIsDeliveredAgain(t *testing.T) {
+	offsets := dedupe.NewOffsets()
+	offsets.FirstDelivery("spans-raw", 3, 100)
+	offsets.FirstDelivery("spans-raw", 4, 100)
+
+	offsets.Forget("spans-raw", []int32{3})
+
+	if !offsets.FirstDelivery("spans-raw", 3, 100) {
+		t.Error("a forgotten partition's record was still treated as a replay; " +
+			"its spans were dropped, not stored, so skipping them is a hole")
+	}
+	if offsets.FirstDelivery("spans-raw", 4, 100) {
+		t.Error("a partition this worker still owns forgot its watermark")
+	}
+}
+
 func TestPartitionsAndTopicsAreTrackedApart(t *testing.T) {
 	offsets := dedupe.NewOffsets()
 	offsets.FirstDelivery("spans-raw", 0, 100)
