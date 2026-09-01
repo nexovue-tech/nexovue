@@ -27,7 +27,8 @@ dev:
 dev-doors:
     docker compose -f {{compose}}/docker-compose.yaml --profile doors up -d --wait
 
-# Dev stack plus the demo app and load generator
+# Realistic traffic comes from `just otel-demo up`, not from here.
+# Dev stack plus the load generator: telemetrygen at the receiver, for the §4 budgets
 dev-tools:
     docker compose -f {{compose}}/docker-compose.yaml --profile tools up -d --wait
 
@@ -35,13 +36,29 @@ dev-tools:
 dev-app:
     docker compose -f {{compose}}/docker-compose.app.yaml up -d --wait --build
 
-# Stop everything, keep the volumes
+# Stop everything, keep the volumes. Takes the OpenTelemetry Demo with it.
 down:
+    -./tools/otel-demo/otel-demo.sh down
     docker compose -f {{compose}}/docker-compose.yaml --profile doors --profile tools down
 
-# Stop everything and delete the data. Destructive.
+# Destructive and not reversible — there is no backup (P1-51). Leaves no schema
+# and no seed, so `just fresh` is usually what you actually want.
+# Stop everything and delete every volume: stores, broker, caches
 down-hard:
+    -./tools/otel-demo/otel-demo.sh down
     docker compose -f {{compose}}/docker-compose.yaml --profile doors --profile tools down -v
+
+# Run this when the dev stack has drifted into a state you stopped trusting.
+# Takes about two minutes, most of it waiting for ClickHouse and Kafka.
+# Wipe everything and rebuild: down-hard, up, migrate, seed
+fresh: down-hard
+    just dev
+    just migrate
+    just seed
+    @echo
+    @echo "Fresh stack up, migrated and seeded."
+    @echo "  Traffic:  NEXOVUE_INGEST_KEY=nvk_live_devlocaldevlocaldevloc just otel-demo up"
+    @echo "  App:      http://localhost:15173"
 
 logs service="":
     docker compose -f {{compose}}/docker-compose.yaml logs -f {{service}}

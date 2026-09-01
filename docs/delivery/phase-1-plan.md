@@ -62,7 +62,7 @@ nexovue/
 │  ├─ ui/               design tokens + primitives
 │  └─ client-ts/        API client generated from OpenAPI
 ├─ deploy/              compose, ClickHouse DDL, Postgres migrations
-├─ tools/               loadgen, demo-app
+├─ tools/               loadgen, chaos, otel-demo, e2e
 └─ docs/                PRD, architecture, ADRs, phase plans
 ```
 
@@ -99,7 +99,7 @@ nexovue/
 
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
-| P1-11 | Demo app | `tools/demo-app` — three roles calling each other over HTTP, so traces cross real service boundaries; OTel configured only by standard `OTEL_*` vars; four named faults toggled at runtime | ✅ done |
+| P1-11 | Demo app | `tools/demo-app` — three roles calling each other over HTTP; OTel configured only by standard `OTEL_*` vars; four named faults toggled at runtime | ✅ done, then **deleted 2026-09-01**. It served its purpose as a walking skeleton and then became a liability: being three tidy services we controlled, it never produced the messy polyglot telemetry a real customer sends, and it hid defects the OpenTelemetry Demo found within minutes of first running. `just otel-demo up` replaces it |
 | P1-12 | Receiver: OTLP/HTTP | `/v1/traces`, protobuf parse via official OTel libs, **split batches one envelope per trace_id**, produce to Kafka keyed by trace_id | ✅ done |
 | P1-13 | API keys + tenancy | SHA-256 key hash (never argon2 — hot path), lookup by prefix, single cached lookup resolving org_id + project_id; every envelope tagged at the edge | ✅ done |
 | P1-14 | Rate limiting | per-key Redis counters; reject over-limit before any cost | ✅ done |
@@ -131,7 +131,7 @@ nexovue/
 |---|---|---|---|
 | P1-28 | Logs pipeline | `/v1/logs` → log-writer → `logs` table. Writer owes severity text → `severity_number`, the resource/record attribute split, a per-record decision on whether the body is a map (ADR 0062), and `received_at` so retention stays on our clock (ADR 0067). **On landing, measure stored log bytes per row and per request and re-check ADR 0071** — its retention cost model estimates logs at ~87% of stored bytes and that term is unmeasured | **done** — and the measurement it asked for is taken: **logs 10.1 bytes/row on disk, spans 18.1** (`system.parts`, 297k log rows / 12.4M span rows). ADR 0071 assumed ~35 bytes per log line, so it overstates log storage **3.5×**. Its *conclusion* survives: substituting the measured per-row bytes into its own volume assumptions (4 log lines per request, tail sampling keeping ~10% of traces) still puts logs at **82% of stored bytes** against the 87% it estimated, because the share is driven by sampling, not by row size. The volume assumptions themselves remain unmeasured and dev traffic cannot settle them — our load is synthetic and almost all spans |
 | P1-29 | Metrics pipeline | `/v1/metrics` → the five OTLP metric tables (ADR 0066); `derive` moves off the old `metrics` table onto `metrics_sum` with temporality, monotonicity and start time, and `metrics` then retires | **done** — five OTLP tables live, `derive` moved onto `metrics_sum`, and the old `metrics` table is gone (verified absent from `system.tables`) |
-| P1-30 | Error extraction | `exception_type` / `exception_message` promoted to columns; grouping view | **done for logs, NOT for spans.** Corrected 2026-08-30 while building the errors screen. The logs pipeline writes `exception_type`/`exception_message` and the grouping works from them. **The spans columns exist and nothing writes them** — `logwriting/block.go` is the only writer in the worker — so the span half of the errorgroups query has never returned a row. Two separate causes, both measured: no code extracts an exception from a span event, and `spans.events` is `[]` on 12,432,661 of 12,433,165 rows because the demo app logs exceptions rather than recording them as span events. This row was marked done on the evidence that the columns and the package existed, which was not evidence that either was populated |
+| P1-30 | Error extraction | `exception_type` / `exception_message` promoted to columns; grouping view | ✅ done 2026-09-01, **spans included**. Logs had always written the columns; spans never did, so the span half of the errorgroups query had never returned a row — measured at 0 of 12,499,337. The first `exception` event on a span now fills them (ADR 0088). The earlier note blamed the demo app for logging exceptions rather than recording them as span events; that was true of the demo app and irrelevant to the defect, which was that nothing read the events we did have |
 | P1-31 | Log↔trace correlation | "logs for this trace" query path both directions | **done** — `GET /logs?trace_id=` is the trace→logs path, and log rows carry `trace_id`/`span_id` so the reverse navigation needs no second endpoint |
 | P1-32 | Log pattern grouping | Drain-style templating → `pattern_id` on logs *(optional — drop if it delays M4)* | **dropped** — explicitly optional in this row, and M4 is the priority. Nothing depends on it |
 | P1-55 | Service dependency edges | Go worker derives caller→callee edges (call rate, error rate, latency) from cross-service parent/child spans → small ClickHouse table. No new collection | **done** — worker derives caller→callee edges into `service_edges_1m` (616 rows present in dev) |
@@ -311,7 +311,7 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 | Per-tenant retention (ClickHouse TTL is table-level) | Open question in the architecture doc — decide before M7, not before M1 |
 | Scope creep from Phase 2 | Anything touching findings/AI/alerts is out; the hooks list in §0 is the complete exception |
 | Playwright resource cost | Isolated queue, hard timeouts, low concurrency (P1-35) |
-| Our demo app is too tidy to be realistic | It is 2–3 services we control; real customers send messy polyglot telemetry. The OTel Demo gate (P1-62) is the counterweight before M6 is called done |
+| ~~Our demo app is too tidy to be realistic~~ | **Closed 2026-09-01 by deleting it.** The OTel Demo gate (P1-62) proved the point within minutes of first running — a log record that stopped ingest for every tenant, five services with three blank promoted columns, a queue edge kind never once derived. A demo we control cannot be the thing that tells us we are wrong, so it is gone and `just otel-demo up` is the traffic source |
 
 ---
 
