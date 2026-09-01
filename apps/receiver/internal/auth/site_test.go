@@ -234,47 +234,53 @@ func requestWith(header, query string) *http.Request {
 	return r
 }
 
+// browserDoor and serverDoor are the two Gatekeepers, read as a door reads them:
+// the type that resolves a kind is the only type that can read one off a request.
+func browserDoor() Gatekeeper { return newTestSiteAuthenticator(seededSiteKeys(validSiteKey)) }
+
+func serverDoor() Gatekeeper { return newTestAuthenticator(seededKeys(validKey)) }
+
 // sendBeacon cannot set headers, so the browser door has to accept a query
 // parameter or lose every unload flush.
 func TestTheBrowserDoorReadsASiteKeyFromTheQueryString(t *testing.T) {
-	if got := SiteKeyFromRequest(requestWith("", validSiteKey)); got != validSiteKey {
-		t.Errorf("SiteKeyFromRequest() = %q, want %q", got, validSiteKey)
+	if got := browserDoor().PresentedKey(requestWith("", validSiteKey)); got != validSiteKey {
+		t.Errorf("PresentedKey() = %q, want %q", got, validSiteKey)
 	}
 }
 
 func TestAHeaderWinsOverTheQueryStringOnTheBrowserDoor(t *testing.T) {
 	other := "nvp_live_otherotherotherother"
-	if got := SiteKeyFromRequest(requestWith(validSiteKey, other)); got != validSiteKey {
-		t.Errorf("SiteKeyFromRequest() = %q, want the header's %q", got, validSiteKey)
+	if got := browserDoor().PresentedKey(requestWith(validSiteKey, other)); got != validSiteKey {
+		t.Errorf("PresentedKey() = %q, want the header's %q", got, validSiteKey)
 	}
 }
 
 // The asymmetry that makes the query string safe: it may carry the kind that was
 // never secret, and only that kind.
 func TestASecretKeyInTheQueryStringIsNotEvenRead(t *testing.T) {
-	if got := SiteKeyFromRequest(requestWith("", validKey)); got != "" {
-		t.Errorf("SiteKeyFromRequest() = %q, want \"\": a secret key must not be read from a URL", got)
+	if got := browserDoor().PresentedKey(requestWith("", validKey)); got != "" {
+		t.Errorf("PresentedKey() = %q, want \"\": a secret key must not be read from a URL", got)
 	}
 }
 
 func TestTheServerDoorNeverReadsAKeyFromTheQueryString(t *testing.T) {
 	// Presented the only way a secret key could reach a URL, under either name.
 	r := httptest.NewRequest(http.MethodPost, "/v1/traces?"+SiteKeyQueryParam+"="+validKey, nil)
-	if got := KeyFromRequest(r); got != "" {
-		t.Errorf("KeyFromRequest() = %q, want \"\": a secret key belongs in a header only", got)
+	if got := serverDoor().PresentedKey(r); got != "" {
+		t.Errorf("PresentedKey() = %q, want \"\": a secret key belongs in a header only", got)
 	}
 
 	withHeader := httptest.NewRequest(http.MethodPost, "/v1/traces", nil)
 	withHeader.Header.Set(HeaderName, validKey)
-	if got := KeyFromRequest(withHeader); got != validKey {
-		t.Errorf("KeyFromRequest() = %q, want the header's %q", got, validKey)
+	if got := serverDoor().PresentedKey(withHeader); got != validKey {
+		t.Errorf("PresentedKey() = %q, want the header's %q", got, validKey)
 	}
 }
 
 // End to end through the authenticator, not just the reader.
 func TestASecretKeyPresentedToTheBrowserDoorAuthenticatesNothing(t *testing.T) {
 	auth := newTestSiteAuthenticator(seededSiteKeys(validSiteKey))
-	presented := SiteKeyFromRequest(requestWith("", validKey))
+	presented := auth.PresentedKey(requestWith("", validKey))
 
 	if _, err := auth.Authenticate(context.Background(), presented); !errors.Is(err, ErrMissingKey) {
 		t.Errorf("Authenticate() = %v, want ErrMissingKey: nothing should have been read", err)

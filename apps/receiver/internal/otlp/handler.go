@@ -65,11 +65,14 @@ const (
 
 // Options are the collaborators and limits the door needs. All are required.
 type Options struct {
-	Authenticator *auth.Authenticator
-	Limiter       *ratelimit.Limiter
-	Publisher     *ingest.Publisher
-	Logger        *slog.Logger
-	Traffic       *Traffic
+	// Gatekeeper is the one credential this door accepts, fixed when it is
+	// mounted. Which one it is decides the table, the key scheme and whether a
+	// URL may carry the key at all — see auth/presented.go.
+	Gatekeeper auth.Gatekeeper
+	Limiter    *ratelimit.Limiter
+	Publisher  *ingest.Publisher
+	Logger     *slog.Logger
+	Traffic    *Traffic
 
 	// MaxBodyBytes caps the request as it arrives; MaxDecodedBodyBytes caps
 	// what a compressed one may expand to.
@@ -81,25 +84,62 @@ func (o Options) limits() bodyLimits {
 	return bodyLimits{wire: o.MaxBodyBytes, decoded: o.MaxDecodedBodyBytes}
 }
 
-// Handler serves the OTLP/HTTP endpoints behind the gate chain.
-func Handler(opts Options) http.Handler {
+// BrowserPathPrefix is where the browser door's three OTLP paths hang, so an
+// SDK pointed at <host>/browser reaches them the way the protocol's own
+// endpoint rules build a URL.
+//
+// A separate path rather than the server paths served by whichever
+// authenticator the presented key looks like it wants. Choosing per request is
+// the branch ADR 0086's two tables removed, one level up: a route mounted with
+// one Gatekeeper cannot have it, so a secret key on a browser path and a public
+// key on a server path both fail the scheme check before any lookup runs. It is
+// also what confines the query-string read — the only place a credential may
+// arrive outside a header — to routes that can resolve nothing but public keys.
+const BrowserPathPrefix = "/browser"
+
+// Doors are the two entrances the one OTLP/HTTP listener serves. Named rather
+// than ordered: swapping them would put the secret door on the path a web page
+// reaches.
+type Doors struct {
+	Server  Options
+	Browser Options
+}
+
+// Handler serves the OTLP/HTTP endpoints behind the gate chain: the server door
+// on the paths the protocol defines, and the browser door on the same three
+// under BrowserPathPrefix.
+func Handler(doors Doors) http.Handler {
 	mux := http.NewServeMux()
-	route(mux, opts, tracesDoor)
-	route(mux, opts, logsDoor)
-	route(mux, opts, metricsDoor)
+	mountSignals(mux, "", doors.Server)
+	mountSignals(mux, BrowserPathPrefix, doors.Browser)
 	return mux
+}
+
+func mountSignals(mux *http.ServeMux, prefix string, opts Options) {
+	route(mux, prefix, opts, tracesDoor)
+	route(mux, prefix, opts, logsDoor)
+	route(mux, prefix, opts, metricsDoor)
 }
 
 // route mounts one signal's endpoint behind the full chain. POST carries every
 // export — the only method OTLP/HTTP defines — and OPTIONS exists solely so a
 // browser can ask permission to send one.
-func route[Request proto.Message](mux *http.ServeMux, opts Options, door signalDoor[Request]) {
-	mux.Handle("POST "+door.httpPath,
-		answeringCORS(stamped(authenticate(opts, door.endpoint,
-			fromAllowedOrigin(opts, door.endpoint,
-				throttle(opts, door.endpoint,
-					export(opts, door)))))))
-	mux.Handle("OPTIONS "+door.httpPath, http.HandlerFunc(preflight))
+//
+// The prefix is folded into the endpoint rather than only into the pattern, so
+// the path a request is logged and counted under is the path it arrived on.
+func route[Request proto.Message](
+	mux *http.ServeMux,
+	prefix string,
+	opts Options,
+	signal signalDoor[Request],
+) {
+	signal.httpPath = prefix + signal.httpPath
+	mux.Handle("POST "+signal.httpPath,
+		answeringCORS(stamped(authenticate(opts, signal.endpoint,
+			fromAllowedOrigin(opts, signal.endpoint,
+				throttle(opts, signal.endpoint,
+					export(opts, signal)))))))
+	mux.Handle("OPTIONS "+signal.httpPath, http.HandlerFunc(preflight))
 }
 
 // stamped records when the request entered the door and who sent it, so every
@@ -112,11 +152,11 @@ func stamped(next http.Handler) http.Handler {
 	})
 }
 
-// authenticate reads the credential out of the request header and hands the
-// verdict to the shared gate.
+// authenticate reads the credential out of the request the way this door's
+// gatekeeper is willing to read it, and hands the verdict to the shared gate.
 func authenticate(opts Options, at endpoint, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, refused := opts.authenticate(r.Context(), r.Header.Get(auth.HeaderName))
+		ctx, refused := opts.authenticate(r.Context(), opts.Gatekeeper.PresentedKey(r))
 		if refused != nil {
 			opts.record(ctx, at.httpPath, at.unit, itemsNotRead, refused)
 			writeRefusal(w, replyCodec(r), refused)

@@ -78,19 +78,19 @@ func run() error {
 
 	traffic := otlp.NewTraffic()
 
-	// One reader, and the recorder that writes back through it: `last_used_at` is
-	// what lets a customer see a key has gone quiet before revoking it.
+	// One reader per key kind, and the recorder that writes back through each:
+	// `last_used_at` is what lets a customer see a key has gone quiet before
+	// revoking it. Two recorders because they write two tables, and a reader
+	// handed one cannot reach the other's.
 	keys := auth.NewPostgresKeys(dependencies.postgres)
 	keyUses := auth.NewLastUsedRecorder(keys)
+	siteKeys := auth.NewPostgresSiteKeys(dependencies.postgres)
+	siteKeyUses := auth.NewLastUsedRecorder(siteKeys)
 
-	// One set of collaborators for both transports: the gates behind them are
-	// the same code, and a second Options would be a second pipeline.
-	door := otlp.Options{
-		Authenticator: auth.New(keys, auth.Options{
-			CacheTTL:        cfg.APIKeyCacheTTL,
-			CacheMaxEntries: cfg.APIKeyCacheMaxEntries,
-			UseRecorder:     keyUses,
-		}),
+	// One set of collaborators for both transports and both doors: the gates
+	// behind them are the same code, and a second Options would be a second
+	// pipeline. Only the gatekeeper differs, and it is the whole difference.
+	shared := otlp.Options{
 		Limiter: ratelimit.New(ratelimit.NewValkeyCounter(dependencies.valkey), cfg.RateLimitPerSecond),
 		Publisher: ingest.NewPublisher(dependencies.kafka, ingest.Topics{
 			Spans:   cfg.SpansTopic,
@@ -102,16 +102,32 @@ func run() error {
 		MaxBodyBytes:        cfg.MaxBodyBytes,
 		MaxDecodedBodyBytes: cfg.MaxDecodedBodyBytes,
 	}
+	// Both caches are tuned by the same settings, so a revoked key of either
+	// kind stops working within the same window (ADR 0086).
+	credentialCache := auth.Options{
+		CacheTTL:        cfg.APIKeyCacheTTL,
+		CacheMaxEntries: cfg.APIKeyCacheMaxEntries,
+	}
+
+	serverDoor := shared
+	serverDoor.Gatekeeper = auth.New(keys, withRecorder(credentialCache, keyUses))
+
+	browserDoor := shared
+	browserDoor.Gatekeeper = auth.NewSite(siteKeys, withRecorder(credentialCache, siteKeyUses))
 
 	admin := health.NewServer(cfg.HealthAddr, health.Handler(info, registry))
-	overHTTP := otlp.NewServer(cfg.OTLPHTTPAddr, otlp.Handler(door))
-	overGRPC := otlp.NewGRPCServer(cfg.OTLPGRPCAddr, door)
+	overHTTP := otlp.NewServer(cfg.OTLPHTTPAddr,
+		otlp.Handler(otlp.Doors{Server: serverDoor, Browser: browserDoor}))
+	// gRPC serves no browser, so it serves no public key: the transport is given
+	// the server door alone rather than being told to refuse one.
+	overGRPC := otlp.NewGRPCServer(cfg.OTLPGRPCAddr, serverDoor)
 
 	log.InfoContext(ctx, "receiver starting",
 		slog.String("revision", info.Revision),
 		slog.String("health_addr", cfg.HealthAddr),
 		slog.String("otlp_http_addr", cfg.OTLPHTTPAddr),
 		slog.String("otlp_grpc_addr", cfg.OTLPGRPCAddr),
+		slog.String("browser_path_prefix", otlp.BrowserPathPrefix),
 		slog.String("spans_topic", cfg.SpansTopic),
 		slog.String("logs_topic", cfg.LogsTopic),
 		slog.String("metrics_topic", cfg.MetricsTopic),
@@ -123,12 +139,20 @@ func run() error {
 
 	// Off the request path on purpose: an export must never wait on bookkeeping.
 	go keyUses.Run(ctx)
+	go siteKeyUses.Run(ctx)
 
 	return serveUntilSignal(ctx, log, []listener{
 		httpListener(admin),
 		httpListener(overHTTP),
 		grpcListener(overGRPC),
 	}, cfg.ShutdownTimeout)
+}
+
+// withRecorder pairs the shared credential-cache settings with one kind's use
+// recorder, so the two doors cannot drift on how stale a key may be.
+func withRecorder(cache auth.Options, uses auth.KeyUseRecorder) auth.Options {
+	cache.UseRecorder = uses
+	return cache
 }
 
 // listener is one served port as the start-and-drain sequence sees it. The OTLP

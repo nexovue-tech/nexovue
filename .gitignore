@@ -41,3 +41,7 @@ tools/otel-demo/upstream/
 
 # Playwright MCP writes screenshots and page snapshots here.
 .playwright-mcp/
+
+# Compiled probe binaries. The source is worth keeping so an experiment is
+# reproducible; a 23 MB build artifact is not, and one reached main once.
+tools/rebalanceprobe/rebalanceprobe

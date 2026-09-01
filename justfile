@@ -4,7 +4,7 @@
 compose := "deploy/compose"
 
 # go.work members. Go tooling runs per-module: `./...` from the root sees no packages.
-go_modules := "apps/receiver apps/workers packages/contracts"
+go_modules := "apps/receiver apps/workers packages/contracts tools/rebalanceprobe"
 
 # Migration targets. Both default to the dev stack's published ports; override
 # either to point at another environment.

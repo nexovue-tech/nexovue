@@ -21,9 +21,7 @@ import (
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
-	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ingest"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/otlp"
-	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ratelimit"
 )
 
 // The gRPC door runs over an in-memory listener: the transport is the real one,
@@ -46,17 +44,7 @@ func newGRPCDoor(t *testing.T, opts doorOptions) grpcDoor {
 	opts.applyDefaults()
 
 	producer := &countingProducer{err: opts.produceErr}
-	server := otlp.NewGRPCServer("bufconn", otlp.Options{
-		Authenticator: auth.New(opts.keys, auth.Options{
-			CacheTTL: time.Minute, CacheMaxEntries: 100,
-		}),
-		Limiter:             ratelimit.New(opts.counter, opts.requestsPerSec),
-		Publisher:           ingest.NewPublisher(publishingTo(producer, opts), testTopics, opts.produceBudget),
-		Logger:              opts.log,
-		Traffic:             opts.traffic,
-		MaxBodyBytes:        opts.maxBodyBytes,
-		MaxDecodedBodyBytes: opts.maxBodyBytes * 4,
-	})
+	server := otlp.NewGRPCServer("bufconn", serverDoorOptions(producer, opts))
 
 	listener := bufconn.Listen(bufconnBufferSize)
 	served := make(chan error, 1)

@@ -17,6 +17,13 @@
 		reverse_proxy receiver:4318
 	}
 
+	# The browser door, on its own prefix so no route can resolve both a secret
+	# and a public key. Without this the path falls through to `web` and a page
+	# gets HTML back from an export.
+	handle /browser/v1/* {
+		reverse_proxy receiver:4318
+	}
+
 	handle /api/* {
 		reverse_proxy api:8000
 	}

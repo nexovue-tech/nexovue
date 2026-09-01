@@ -54,7 +54,7 @@ func (r *refusal) because(err error) *refusal {
 // authenticate is gate one. It returns a context carrying the tenancy the key
 // grants; nothing past it runs for a caller we cannot name.
 func (o Options) authenticate(ctx context.Context, presentedKey string) (context.Context, *refusal) {
-	identity, err := o.Authenticator.Authenticate(ctx, presentedKey)
+	identity, err := o.Gatekeeper.Authenticate(ctx, presentedKey)
 	if err != nil {
 		if auth.IsCallerFault(err) {
 			return ctx, refuse(code.Code_UNAUTHENTICATED, messageUnauthenticated)

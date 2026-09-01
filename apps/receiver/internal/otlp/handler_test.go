@@ -30,7 +30,12 @@ import (
 )
 
 const (
-	validKey  = "nvk_live_devlocaldevlocaldevloc"
+	validKey = "nvk_live_devlocaldevlocaldevloc"
+
+	// One letter apart from validKey on purpose: the two doors must be told
+	// apart by the table they read, never by how the value looks.
+	validSiteKey = "nvp_live_devlocaldevlocaldevloc"
+
 	orgID     = "01996d5e-8f00-7a11-9c3e-4b2f6a8d1e00"
 	projectID = "01996d5e-9a40-7b22-8d4f-5c3a7b9e2f11"
 
@@ -65,6 +70,24 @@ type unreachableKeys struct{}
 
 func (unreachableKeys) CredentialFor(context.Context, string) (auth.Credential, error) {
 	return auth.Credential{}, errors.New("dial tcp: connection refused")
+}
+
+// staticSiteKeys stands in for site_keys. There is no hash to compare: the whole
+// public key is the lookup, which is the browser door's entire verification.
+type staticSiteKeys struct {
+	origins []string
+}
+
+func (s staticSiteKeys) SiteCredentialFor(
+	_ context.Context, publicKey string,
+) (auth.SiteCredential, error) {
+	if publicKey != validSiteKey {
+		return auth.SiteCredential{Found: false}, nil
+	}
+	return auth.SiteCredential{
+		Identity: auth.Identity{OrgID: orgID, ProjectID: projectID, AllowedOrigins: s.origins},
+		Found:    true,
+	}, nil
 }
 
 // countingProducer records what reached the broker, and whether the body had
@@ -132,7 +155,14 @@ type door struct {
 }
 
 type doorOptions struct {
-	keys           auth.KeyReader
+	keys auth.KeyReader
+
+	// siteKeys and siteOrigins are the browser door's half. Every door fixture
+	// mounts both entrances, because a test that a secret key is refused from a
+	// page is only worth anything against the door a page actually reaches.
+	siteKeys    auth.SiteKeyReader
+	siteOrigins []string
+
 	counter        ratelimit.Counter
 	requestsPerSec int
 	produceErr     error
@@ -158,6 +188,12 @@ const testProduceBudget = 200 * time.Millisecond
 func (o *doorOptions) applyDefaults() {
 	if o.keys == nil {
 		o.keys = staticKeys{}
+	}
+	if o.siteOrigins == nil {
+		o.siteOrigins = []string{pageOrigin}
+	}
+	if o.siteKeys == nil {
+		o.siteKeys = staticSiteKeys{origins: o.siteOrigins}
 	}
 	if o.counter == nil {
 		o.counter = &countingCounter{}
@@ -186,17 +222,40 @@ func newDoor(t *testing.T, opts doorOptions) door {
 	producer := &countingProducer{err: opts.produceErr}
 	return door{
 		producer: producer,
-		handler: otlp.Handler(otlp.Options{
-			Authenticator: auth.New(opts.keys, auth.Options{
-				CacheTTL: time.Minute, CacheMaxEntries: 100,
-			}),
-			Limiter:             ratelimit.New(opts.counter, opts.requestsPerSec),
-			Publisher:           ingest.NewPublisher(publishingTo(producer, opts), testTopics, opts.produceBudget),
-			Logger:              opts.log,
-			Traffic:             opts.traffic,
-			MaxBodyBytes:        opts.maxBodyBytes,
-			MaxDecodedBodyBytes: opts.maxBodyBytes * 4,
+		handler: otlp.Handler(otlp.Doors{
+			Server:  serverDoorOptions(producer, opts),
+			Browser: browserDoorOptions(producer, opts),
 		}),
+	}
+}
+
+// testCredentialCache is long enough that no test races the TTL and small
+// enough that nothing about eviction is being exercised by accident.
+var testCredentialCache = auth.Options{CacheTTL: time.Minute, CacheMaxEntries: 100}
+
+// The two doors differ by their gatekeeper and by nothing else, which is what
+// the wiring under test claims. Building them from one shared value here is how
+// a drift between the two would show up as a compile error rather than a gap.
+func serverDoorOptions(producer *countingProducer, opts doorOptions) otlp.Options {
+	shared := sharedDoorOptions(producer, opts)
+	shared.Gatekeeper = auth.New(opts.keys, testCredentialCache)
+	return shared
+}
+
+func browserDoorOptions(producer *countingProducer, opts doorOptions) otlp.Options {
+	shared := sharedDoorOptions(producer, opts)
+	shared.Gatekeeper = auth.NewSite(opts.siteKeys, testCredentialCache)
+	return shared
+}
+
+func sharedDoorOptions(producer *countingProducer, opts doorOptions) otlp.Options {
+	return otlp.Options{
+		Limiter:             ratelimit.New(opts.counter, opts.requestsPerSec),
+		Publisher:           ingest.NewPublisher(publishingTo(producer, opts), testTopics, opts.produceBudget),
+		Logger:              opts.log,
+		Traffic:             opts.traffic,
+		MaxBodyBytes:        opts.maxBodyBytes,
+		MaxDecodedBodyBytes: opts.maxBodyBytes * 4,
 	}
 }
 
