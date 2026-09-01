@@ -165,11 +165,17 @@ func withStart(ctx context.Context, at time.Time) context.Context {
 type caller struct {
 	address   string
 	userAgent string
+
+	// origin is the site a browser says the export came from, and for browser
+	// traffic it is the only field that names a misconfigured customer. Behind
+	// a TLS terminator the peer address is the proxy's and the user agent is
+	// some visitor's browser: neither says which page sent this.
+	origin string
 }
 
-// maxUserAgentBytes bounds a header the sender chooses. A log line is not the
+// maxCallerValueBytes bounds a header the sender chooses. A log line is not the
 // place to find out how long a stranger's string can be.
-const maxUserAgentBytes = 128
+const maxCallerValueBytes = 128
 
 // headerUserAgent is the agent's name as gRPC metadata spells it: metadata keys
 // are lower-cased, so the HTTP spelling would never match.
@@ -179,7 +185,11 @@ const headerUserAgent = "user-agent"
 // own peer, never a forwarded-for header: a header can be set to anything by
 // whoever set it, and an address that can be chosen names nobody.
 func callerOf(r *http.Request) caller {
-	return caller{address: r.RemoteAddr, userAgent: truncate(r.UserAgent())}
+	return caller{
+		address:   r.RemoteAddr,
+		userAgent: truncate(r.UserAgent()),
+		origin:    truncate(r.Header.Get(headerOrigin)),
+	}
 }
 
 // callerOfRPC reads the caller out of a gRPC call. grpc-go puts the agent in
@@ -198,10 +208,10 @@ func callerOfRPC(ctx context.Context) caller {
 }
 
 func truncate(value string) string {
-	if len(value) <= maxUserAgentBytes {
+	if len(value) <= maxCallerValueBytes {
 		return value
 	}
-	return value[:maxUserAgentBytes]
+	return value[:maxCallerValueBytes]
 }
 
 // attrs are the caller's fields for a log line, omitting what the transport did
@@ -213,6 +223,9 @@ func (c caller) attrs() []any {
 	}
 	if c.userAgent != "" {
 		attrs = append(attrs, slog.String(fieldUserAgent, c.userAgent))
+	}
+	if c.origin != "" {
+		attrs = append(attrs, slog.String(fieldOrigin, c.origin))
 	}
 	return attrs
 }

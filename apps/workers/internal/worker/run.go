@@ -108,10 +108,15 @@ func run(serviceName string) error {
 		registry.Register(health.Check{Name: dependencyPostgres, Probe: control.Ping})
 	}
 
-	server := health.NewServer(cfg.HealthAddr, health.Handler(info, liveness, registry))
+	admin := health.Handler(info, liveness, registry)
+	if cfg.Profiling {
+		admin = health.WithProfiling(admin)
+	}
+	server := health.NewServer(cfg.HealthAddr, admin)
 	log.InfoContext(ctx, "worker starting",
 		slog.String("revision", info.Revision),
 		slog.String("health_addr", cfg.HealthAddr),
+		slog.Bool("profiling", cfg.Profiling),
 		slog.String("clickhouse_address", cfg.ClickHouse.Address),
 		slog.String("pipelines", config.JoinPipelines(cfg.Pipelines)),
 	)

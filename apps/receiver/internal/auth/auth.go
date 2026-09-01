@@ -28,18 +28,57 @@ var (
 	ErrUnknownKey   = errors.New("ingest key is unknown or revoked")
 )
 
-// Identity is the tenancy a valid key grants. Both ids come from one api_keys
-// row, so the hot path never walks a key to project to organization chain.
+// Kind says which sort of credential granted an identity. It has no safe zero
+// value on purpose: an Identity nobody set a kind on is neither kind, and the
+// predicates below refuse it.
+type Kind string
+
+const (
+	// KindSecret is a server-side api_keys credential: hashed, verified in
+	// constant time, and the only kind that may use the server ingest doors.
+	KindSecret Kind = "secret"
+
+	// KindPublic is a site_keys credential: printed in a customer's page, so it
+	// may do one thing — accept browser telemetry for its own project.
+	KindPublic Kind = "public"
+)
+
+// Identity is the tenancy a valid key grants. Both ids come from one row, so the
+// hot path never walks a key to project to organization chain.
 type Identity struct {
+	// Kind is what the holder of this key is allowed to be. Set by whichever
+	// authenticator resolved it, never by a caller.
+	Kind Kind
+
 	OrgID     string
 	ProjectID string
 
 	// KeyPrefix names the credential rather than the tenant, and is what the
-	// rate limiter counts against. It is the plaintext half the control plane
-	// already stores in the clear, so it is an identifier, not a secret — but
-	// it is never logged, because three of its characters are secret.
+	// rate limiter counts against. For a secret key it is the plaintext half the
+	// control plane stores in the clear — an identifier, not a secret, but never
+	// logged because three of its characters are secret. For a site key it is
+	// the whole public key, which is not a secret at all.
 	KeyPrefix string
+
+	// AllowedOrigins is the browser door's origin allow-list, and is empty for
+	// every secret credential. Empty means allow nothing: a public key with no
+	// origins accepts no browser request.
+	//
+	// It is abuse mitigation, not an authentication boundary — a caller that
+	// sends no Origin header is not filtered by one, which is why the kind's
+	// permissions are narrow rather than its origins being trusted.
+	AllowedOrigins []string
 }
+
+// MayIngestServerTelemetry reports whether this identity may use the server OTLP
+// doors. Only the secret kind may. Written as an allow-list so an unset or
+// future kind is refused rather than admitted by a missing case.
+func (i Identity) MayIngestServerTelemetry() bool { return i.Kind == KindSecret }
+
+// MayIngestBrowserTelemetry reports whether this identity may use the browser
+// door. Only the public kind may — a secret key does not belong in a page, and
+// accepting one there would teach customers to put it in one.
+func (i Identity) MayIngestBrowserTelemetry() bool { return i.Kind == KindPublic }
 
 // Options tune the in-process credential cache, and say where a key's last use
 // is recorded.
@@ -55,7 +94,7 @@ type Options struct {
 // Authenticator verifies presented keys against the control plane.
 type Authenticator struct {
 	keys  KeyReader
-	cache *cache
+	cache *cache[Credential]
 	uses  KeyUseRecorder
 }
 
@@ -76,7 +115,7 @@ func New(keys KeyReader, opts Options) *Authenticator {
 	}
 	return &Authenticator{
 		keys:  keys,
-		cache: newCache(opts.CacheTTL, opts.CacheMaxEntries),
+		cache: newCache[Credential](opts.CacheTTL, opts.CacheMaxEntries),
 		uses:  uses,
 	}
 }
@@ -123,6 +162,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, presented string) (Ide
 	}
 
 	identity := stored.Identity
+	identity.Kind = KindSecret
 	identity.KeyPrefix = prefix
 	return identity, nil
 }

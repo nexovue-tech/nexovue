@@ -16,6 +16,18 @@
 
 import type { ApiKeySummary } from "./api";
 
+/**
+ * The timing fields both kinds of key carry. The four-state reading is about
+ * `last_used_at` and nothing else, so it is written against this rather than
+ * against either key type — one implementation, two kinds, no second answer to
+ * "has this key gone quiet?".
+ */
+export interface KeyTiming {
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
 const MS_PER_MINUTE = 60_000;
 const MS_PER_HOUR = 60 * MS_PER_MINUTE;
 
@@ -49,7 +61,7 @@ export interface KeyStatus {
   silentForMs?: number;
 }
 
-export function keyStatus(key: ApiKeySummary, now: number): KeyStatus {
+export function keyStatus(key: KeyTiming, now: number): KeyStatus {
   const revoked = key.revoked_at !== null;
   if (key.last_used_at === null) return { traffic: "never-used", revoked };
 
@@ -103,10 +115,35 @@ export function describeTraffic(status: KeyStatus): string {
 }
 
 /**
+ * The same reading, worded for a public key.
+ *
+ * It is a weaker reading than the secret kind's, and the difference is stated
+ * rather than hidden: a site key is printed in the page, so a stranger who read
+ * the source can make it look busy. That errs towards "still in use" and never
+ * towards "safe to revoke", so it cannot mislead the decision it informs — but a
+ * customer should know why a retired key can still show traffic.
+ */
+export function describeSiteKeyTraffic(status: KeyStatus): string {
+  if (status.revoked) {
+    return "Withdrawn. The receiver stopped accepting it within a minute of revocation.";
+  }
+  switch (status.traffic) {
+    case "never-used":
+      return "No page has ever sent with this key. Revoking it stops nothing.";
+    case "in-use":
+      return "A browser sent with this key in the last hour. Revoking it stops those pages reporting.";
+    case "settling":
+      return "Quiet for a while, but not long enough to be sure. A low-traffic site can be quiet for hours.";
+    case "quiet":
+      return "No browser has sent with this key for over a day. Safe to withdraw.";
+  }
+}
+
+/**
  * Live keys first and newest first within each group, so the key somebody just
  * minted is at the top and the withdrawn ones do not push it down the page.
  */
-export function orderedKeys(keys: readonly ApiKeySummary[]): ApiKeySummary[] {
+export function orderedKeys<T extends KeyTiming>(keys: readonly T[]): T[] {
   return [...keys].sort((left, right) => {
     const leftRevoked = left.revoked_at !== null;
     const rightRevoked = right.revoked_at !== null;
@@ -115,7 +152,7 @@ export function orderedKeys(keys: readonly ApiKeySummary[]): ApiKeySummary[] {
   });
 }
 
-export function liveKeyCount(keys: readonly ApiKeySummary[]): number {
+export function liveKeyCount(keys: readonly KeyTiming[]): number {
   return keys.filter((key) => key.revoked_at === null).length;
 }
 

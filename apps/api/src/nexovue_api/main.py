@@ -105,6 +105,7 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(auth_router.router)
     versioned.include_router(projects_router.router)
     versioned.include_router(apikeys_router.router)
+    versioned.include_router(apikeys_router.site_key_router)
     versioned.include_router(checks_router.router)
     versioned.include_router(deploys_router.router)
     versioned.include_router(integrations_router.router)

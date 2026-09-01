@@ -30,7 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from nexovue_api.apikeys import service as apikeys
 from nexovue_api.apikeys.schemas import ApiKeyCreated
 from nexovue_api.audit import service as audit
-from nexovue_api.data.postgres.models import API_KEY_PREFIX_LENGTH, ApiKey, AuditLogEntry
+from nexovue_api.data.postgres.models import (
+    API_KEY_PREFIX_LENGTH,
+    ApiKey,
+    AuditLogEntry,
+    SiteKey,
+)
 from nexovue_api.errors.exceptions import NotFoundError
 from nexovue_api.signup.apikeys import hash_api_key
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
@@ -66,6 +71,21 @@ RECEIVER_LOOKUP: Final = text(
 RECEIVER_MARK_USED: Final = text(
     "UPDATE api_keys SET last_used_at = :at "
     "WHERE key_prefix = :key_prefix AND revoked_at IS NULL "
+    "AND (last_used_at IS NULL OR last_used_at < :at)"
+)
+
+
+# The browser door's lookup and write, copied from the same file. Borrowed for
+# the same reason: "the console retired it" and "the browser door stops accepting
+# it" must be one fact, not two beliefs.
+RECEIVER_SITE_LOOKUP: Final = text(
+    "SELECT org_id::text, project_id::text, allowed_origins "
+    "FROM site_keys WHERE public_key = :public_key AND revoked_at IS NULL"
+)
+
+RECEIVER_SITE_MARK_USED: Final = text(
+    "UPDATE site_keys SET last_used_at = :at "
+    "WHERE public_key = :public_key AND revoked_at IS NULL "
     "AND (last_used_at IS NULL OR last_used_at < :at)"
 )
 
@@ -155,14 +175,19 @@ RECEIVER_SOURCE: Final = (
 
 _GO_CONSTANT: Final = re.compile(r"^const (\w+) = `([^`]*)`", re.MULTILINE)
 
-# pgx binds by position; SQLAlchemy binds by name. Same statement, two dialects.
-GO_PLACEHOLDERS: Final = {"$1": ":key_prefix", "$2": ":at"}
+# pgx binds by position; SQLAlchemy binds by name. Same statement, two dialects,
+# so both sides are reduced to the positional form before comparing. Normalizing
+# towards *positional* rather than towards a fixed set of names is what lets the
+# site-key statements bind `:public_key` where the api_keys ones bind
+# `:key_prefix` — $1 is a different column in each, and a shared name-map would
+# have had to pretend otherwise.
+NAMED_PLACEHOLDERS: Final = {":key_prefix": "$1", ":public_key": "$1", ":at": "$2"}
 
 
 def _normalized(statement: str) -> str:
     """Whitespace and placeholder style removed, so only the SQL is compared."""
-    for positional, named in GO_PLACEHOLDERS.items():
-        statement = statement.replace(positional, named)
+    for named, positional in NAMED_PLACEHOLDERS.items():
+        statement = statement.replace(named, positional)
     return " ".join(statement.split())
 
 
@@ -174,7 +199,12 @@ def _go_constants() -> dict[str, str]:
 
 @pytest.mark.parametrize(
     "go_name,borrowed",
-    [("lookupByPrefix", RECEIVER_LOOKUP), ("markUsed", RECEIVER_MARK_USED)],
+    [
+        ("lookupByPrefix", RECEIVER_LOOKUP),
+        ("markUsed", RECEIVER_MARK_USED),
+        ("lookupSiteKey", RECEIVER_SITE_LOOKUP),
+        ("markSiteKeyUsed", RECEIVER_SITE_MARK_USED),
+    ],
 )
 def test_the_statement_this_suite_runs_is_the_one_the_receiver_runs(
     go_name: str, borrowed: Any
@@ -539,3 +569,158 @@ async def test_a_listing_shows_the_revoked_key_rather_than_hiding_it(db: AsyncSe
 
     assert [summary.id for summary in listing.api_keys] == [key.id]
     assert listing.api_keys[0].revoked_at is not None
+
+
+# ------------------------------- the public kind, against the real constraints
+
+
+async def _site_key_seen_by_receiver(db: AsyncSession, public_key: str) -> Any:
+    result = await db.execute(RECEIVER_SITE_LOOKUP, {"public_key": public_key})
+    return result.first()
+
+
+async def _mint_site_key(db: AsyncSession, tenant: ProvisionedTenant) -> Any:
+    return await apikeys.create_site_key(
+        db,
+        org_id=tenant.organization.id,
+        actor=tenant.user,
+        project_id=tenant.project.id,
+        name="marketing site",
+        allowed_origins=["https://app.example.com"],
+    )
+
+
+async def test_a_minted_site_key_authenticates_on_the_browser_door(db: AsyncSession) -> None:
+    """The whole point: a key the console minted is one the browser door resolves,
+    by the receiver's own statement, with the origins attached."""
+    tenant = await _new_tenant(db)
+    created = await _mint_site_key(db, tenant)
+    await db.flush()
+
+    row = await _site_key_seen_by_receiver(db, created.public_key)
+
+    assert row is not None, "the browser door could not resolve a key just minted"
+    assert uuid.UUID(row[0]) == tenant.organization.id
+    assert uuid.UUID(row[1]) == tenant.project.id
+    assert row[2] == ["https://app.example.com"]
+
+
+async def test_the_database_stores_the_site_key_in_the_clear(db: AsyncSession) -> None:
+    """The decision, proven against the column rather than against a model.
+
+    The value the customer will paste into a page is the value in the row. If
+    this ever fails, something started hashing a published value — and the
+    browser door's exact-match lookup would silently find nothing.
+    """
+    tenant = await _new_tenant(db)
+    created = await _mint_site_key(db, tenant)
+    await db.flush()
+
+    stored = await db.scalar(select(SiteKey).where(SiteKey.id == created.id))
+    assert stored is not None
+    assert stored.public_key == created.public_key
+    assert stored.public_key.startswith("nvp_live_")
+
+
+async def test_retiring_a_site_key_stops_the_browser_door_resolving_it(db: AsyncSession) -> None:
+    tenant = await _new_tenant(db)
+    created = await _mint_site_key(db, tenant)
+    await db.flush()
+    assert await _site_key_seen_by_receiver(db, created.public_key) is not None
+
+    await apikeys.revoke_site_key(
+        db, org_id=tenant.organization.id, actor=tenant.user, key_id=created.id
+    )
+    await db.flush()
+
+    assert await _site_key_seen_by_receiver(db, created.public_key) is None
+
+
+async def test_neither_doors_statement_can_return_the_other_kinds_key(db: AsyncSession) -> None:
+    """The claim ADR 0086 rests on, executed rather than argued.
+
+    Both live keys exist in one project. The server door's statement is run with
+    the public key as its parameter, and the browser door's with the secret key's
+    prefix. Both find nothing, because each names a table the other's key is not
+    in — no filter had to be remembered for that to hold.
+    """
+    tenant = await _new_tenant(db)
+    site_key = await _mint_site_key(db, tenant)
+    await db.flush()
+    secret_key = await _only_key(db, tenant.organization.id)
+
+    crossed_into_api_keys = await _receiver_sees(db, site_key.public_key)
+    crossed_into_site_keys = await _site_key_seen_by_receiver(db, secret_key.key_prefix)
+
+    assert crossed_into_api_keys is None, "a public key resolved on the server door"
+    assert crossed_into_site_keys is None, "a secret key resolved on the browser door"
+
+    # And each still resolves on its own door, so the test above is not passing
+    # merely because both lookups are broken.
+    assert await _receiver_sees(db, secret_key.key_prefix) is not None
+    assert await _site_key_seen_by_receiver(db, site_key.public_key) is not None
+
+
+async def test_two_site_keys_never_share_a_public_key(db: AsyncSession) -> None:
+    """`uq_site_keys_public_key` is global, and the browser door depends on it:
+    two tenants holding one value would make the lookup ambiguous."""
+    first = await _new_tenant(db)
+    second = await _new_tenant(db)
+    keys = [await _mint_site_key(db, first), await _mint_site_key(db, second)]
+    await db.flush()
+
+    assert keys[0].public_key != keys[1].public_key
+    assert len({key.public_key for key in keys}) == 2
+
+
+async def test_the_receivers_write_moves_site_key_last_used_forward_only(db: AsyncSession) -> None:
+    """The same forward-only guard the secret door has, because several receivers
+    each hold their own cache and their writes arrive unordered."""
+    tenant = await _new_tenant(db)
+    created = await _mint_site_key(db, tenant)
+    await db.flush()
+
+    later = datetime.now(UTC)
+    earlier = later - timedelta(hours=1)
+
+    await db.execute(RECEIVER_SITE_MARK_USED, {"public_key": created.public_key, "at": later})
+    await db.execute(RECEIVER_SITE_MARK_USED, {"public_key": created.public_key, "at": earlier})
+    await db.flush()
+
+    stored = await db.scalar(select(SiteKey).where(SiteKey.id == created.id))
+    assert stored is not None
+    await db.refresh(stored)
+    assert stored.last_used_at == later
+
+
+async def test_a_retired_site_key_is_never_stamped_as_used(db: AsyncSession) -> None:
+    """A withdrawn key is not in use, and a stamp on one would read in the console
+    as still live."""
+    tenant = await _new_tenant(db)
+    created = await _mint_site_key(db, tenant)
+    await db.flush()
+    await apikeys.revoke_site_key(
+        db, org_id=tenant.organization.id, actor=tenant.user, key_id=created.id
+    )
+    await db.flush()
+
+    await db.execute(
+        RECEIVER_SITE_MARK_USED, {"public_key": created.public_key, "at": datetime.now(UTC)}
+    )
+    await db.flush()
+
+    stored = await db.scalar(select(SiteKey).where(SiteKey.id == created.id))
+    assert stored is not None
+    await db.refresh(stored)
+    assert stored.last_used_at is None
+
+
+async def test_minting_a_site_key_is_audited_against_the_real_table(db: AsyncSession) -> None:
+    tenant = await _new_tenant(db)
+    created = await _mint_site_key(db, tenant)
+    await db.flush()
+
+    entries = await _entries(db, tenant.organization.id)
+    site_key_entries = [entry for entry in entries if entry.action == audit.SITE_KEY_CREATED]
+
+    assert [entry.target for entry in site_key_entries] == [f"site_key:{created.id}"]

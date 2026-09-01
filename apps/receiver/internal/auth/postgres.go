@@ -29,6 +29,28 @@ const markUsed = `
 	  AND revoked_at IS NULL
 	  AND (last_used_at IS NULL OR last_used_at < $2)`
 
+// The browser door's lookup. It names site_keys, and only site_keys, which is
+// what makes "a public key answered where a secret one was expected" unreachable
+// rather than merely unintended (ADR 0086).
+//
+// There is no key_hash to select because the table has no such column: a site key
+// is stored whole and in the clear, so this exact match on the unique index is
+// the entire verification. allowed_origins comes back with it because the
+// transport needs it in the same round trip the tenancy arrives in.
+const lookupSiteKey = `
+	SELECT org_id::text, project_id::text, allowed_origins
+	FROM site_keys
+	WHERE public_key = $1 AND revoked_at IS NULL`
+
+// The browser door's equivalent of markUsed, guarded the same way so several
+// receivers can only move the timestamp forward.
+const markSiteKeyUsed = `
+	UPDATE site_keys
+	SET last_used_at = $2
+	WHERE public_key = $1
+	  AND revoked_at IS NULL
+	  AND (last_used_at IS NULL OR last_used_at < $2)`
+
 // PostgresKeys reads api_keys, and records when one authenticated. It is the
 // only place the receiver touches the control-plane database.
 type PostgresKeys struct {
@@ -61,6 +83,50 @@ func (k *PostgresKeys) CredentialFor(ctx context.Context, prefix string) (Creden
 func (k *PostgresKeys) MarkUsed(ctx context.Context, prefix string, at time.Time) error {
 	if _, err := k.pool.Exec(ctx, markUsed, prefix, at); err != nil {
 		return fmt.Errorf("recording api_keys.last_used_at: %w", err)
+	}
+	return nil
+}
+
+// PostgresSiteKeys reads site_keys, and records when one authenticated.
+//
+// A separate type over the same pool rather than two more methods on
+// PostgresKeys: the type a door is handed then cannot reach the other table at
+// all, which is the same argument one level up from the two tables themselves.
+type PostgresSiteKeys struct {
+	pool *pgxpool.Pool
+}
+
+// NewPostgresSiteKeys returns a site-key reader over an existing pool.
+func NewPostgresSiteKeys(pool *pgxpool.Pool) *PostgresSiteKeys {
+	return &PostgresSiteKeys{pool: pool}
+}
+
+// SiteCredentialFor reads the live site_keys row this public key names.
+func (k *PostgresSiteKeys) SiteCredentialFor(
+	ctx context.Context, publicKey string,
+) (SiteCredential, error) {
+	var found SiteCredential
+	err := k.pool.QueryRow(ctx, lookupSiteKey, publicKey).Scan(
+		&found.Identity.OrgID,
+		&found.Identity.ProjectID,
+		&found.Identity.AllowedOrigins,
+	)
+
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// A miss is an answer, not a failure: it caches like any other.
+		return SiteCredential{Found: false}, nil
+	case err != nil:
+		return SiteCredential{}, fmt.Errorf("querying site_keys: %w", err)
+	}
+	found.Found = true
+	return found, nil
+}
+
+// MarkUsed records that this public key authenticated at `at`.
+func (k *PostgresSiteKeys) MarkUsed(ctx context.Context, publicKey string, at time.Time) error {
+	if _, err := k.pool.Exec(ctx, markSiteKeyUsed, publicKey, at); err != nil {
+		return fmt.Errorf("recording site_keys.last_used_at: %w", err)
 	}
 	return nil
 }

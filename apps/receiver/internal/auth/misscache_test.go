@@ -10,7 +10,7 @@ import (
 // the onboarding path: paste the key, export, get 401 for thirty seconds.
 func TestAMissIsForgottenLongBeforeAHit(t *testing.T) {
 	at := time.Unix(0, 0)
-	c := newCache(30*time.Second, 10)
+	c := newCache[Credential](30*time.Second, 10)
 	c.now = func() time.Time { return at }
 
 	c.store("nvk_live_missing", Credential{Found: false})
@@ -28,7 +28,7 @@ func TestAMissIsForgottenLongBeforeAHit(t *testing.T) {
 
 func TestAMissIsCachedLongEnoughToSpareThePostgresLookup(t *testing.T) {
 	at := time.Unix(0, 0)
-	c := newCache(30*time.Second, 10)
+	c := newCache[Credential](30*time.Second, 10)
 	c.now = func() time.Time { return at }
 	c.store("nvk_live_missing", Credential{Found: false})
 
@@ -42,7 +42,7 @@ func TestAMissIsCachedLongEnoughToSpareThePostgresLookup(t *testing.T) {
 // A deployment configured below the miss TTL must not accidentally raise it.
 func TestAShortConfiguredTTLIsNotLengthenedForMisses(t *testing.T) {
 	at := time.Unix(0, 0)
-	c := newCache(time.Second, 10)
+	c := newCache[Credential](time.Second, 10)
 	c.now = func() time.Time { return at }
 	c.store("nvk_live_missing", Credential{Found: false})
 

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { ApiKeySummary } from "./api";
+import type { ApiKeySummary, SiteKeySummary } from "./api";
 import {
+  describeSiteKeyTraffic,
   describeTraffic,
   IN_USE_WITHIN_MS,
   isVerifiedQuiet,
@@ -16,6 +17,7 @@ const NOW = Date.parse("2026-08-31T12:00:00Z");
 
 function key(overrides: Partial<ApiKeySummary> = {}): ApiKeySummary {
   return {
+    kind: "secret",
     id: "11111111-1111-4111-8111-111111111111",
     project_id: "22222222-2222-4222-8222-222222222222",
     name: "production exporter",
@@ -161,5 +163,70 @@ describe("suggestedRotationName", () => {
     expect(suggestedRotationName(key({ name: "production exporter" }), NOW)).toBe(
       "production exporter (rotated 2026-08-31)",
     );
+  });
+});
+
+/* -------------------------------------------------------- public site keys */
+
+function siteKey(overrides: Partial<SiteKeySummary> = {}): SiteKeySummary {
+  return {
+    kind: "public",
+    id: "33333333-3333-4333-8333-333333333333",
+    project_id: "22222222-2222-4222-8222-222222222222",
+    name: "marketing site",
+    public_key: "nvp_live_devlocaldevlocaldevloc",
+    allowed_origins: ["https://app.example.com"],
+    created_at: "2026-08-01T09:00:00Z",
+    last_used_at: null,
+    revoked_at: null,
+    ...overrides,
+  };
+}
+
+describe("the four-state reading over both kinds", () => {
+  it("reads a public key with the same states as a secret one", () => {
+    expect(keyStatus(siteKey({ last_used_at: agoBy(IN_USE_WITHIN_MS / 2) }), NOW).traffic).toBe(
+      "in-use",
+    );
+    expect(
+      keyStatus(siteKey({ last_used_at: agoBy(QUIET_ENOUGH_TO_REVOKE_MS * 2) }), NOW).traffic,
+    ).toBe("quiet");
+    expect(keyStatus(siteKey(), NOW).traffic).toBe("never-used");
+  });
+
+  it("orders and counts public keys too, so neither list needs its own helper", () => {
+    const ordered = orderedKeys([
+      siteKey({ id: "revoked", revoked_at: "2026-08-20T00:00:00Z" }),
+      siteKey({ id: "live", created_at: "2026-08-30T00:00:00Z" }),
+    ]);
+
+    expect(ordered.map((each) => each.id)).toEqual(["live", "revoked"]);
+    expect(liveKeyCount([siteKey(), siteKey({ revoked_at: "2026-08-01T00:00:00Z" })])).toBe(1);
+  });
+});
+
+describe("describeSiteKeyTraffic", () => {
+  it("never offers a leak framing, because a public key cannot leak", () => {
+    const everyState = [
+      siteKey(),
+      siteKey({ last_used_at: agoBy(IN_USE_WITHIN_MS / 2) }),
+      siteKey({ last_used_at: agoBy(IN_USE_WITHIN_MS * 2) }),
+      siteKey({ last_used_at: agoBy(QUIET_ENOUGH_TO_REVOKE_MS * 2) }),
+      siteKey({ revoked_at: "2026-08-20T00:00:00Z" }),
+    ].map((each) => describeSiteKeyTraffic(keyStatus(each, NOW)));
+
+    for (const sentence of everyState) {
+      expect(sentence.toLowerCase()).not.toContain("leak");
+      expect(sentence.toLowerCase()).not.toContain("secret");
+      expect(sentence.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("says what revoking costs, in the browser's terms rather than a service's", () => {
+    const inUse = describeSiteKeyTraffic(
+      keyStatus(siteKey({ last_used_at: agoBy(IN_USE_WITHIN_MS / 2) }), NOW),
+    );
+    expect(inUse).toContain("browser");
+    expect(inUse).toContain("pages");
   });
 });

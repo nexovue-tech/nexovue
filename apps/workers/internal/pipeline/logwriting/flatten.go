@@ -21,15 +21,6 @@ import (
 // sort key groups by.
 const attrServiceName = "service.name"
 
-// The record attributes an exception arrives in when it comes as a log rather
-// than as a span event. OpenTelemetry is deprecating the Span Events API, so
-// both shapes arrive — from different customers — for years, and promoting
-// these two lets one grouping query read both eras.
-const (
-	attrExceptionType    = "exception.type"
-	attrExceptionMessage = "exception.message"
-)
-
 // Which clock `timestamp` was taken from. OTLP makes a record's own Timestamp
 // optional and defines ObservedTimestamp beside it, so a stored timestamp can
 // mean three different things; recording which keeps a query from reading our
@@ -142,6 +133,9 @@ func flattenRecord(
 	timestamp, source := recordTime(record, marks.receivedAt)
 	severity, severityNumber := severityOf(record)
 	body, structured := renderBody(record.GetBody())
+	// The same attribute names a span event carries; a record is one exception,
+	// so there is nothing to choose between.
+	exception := otlpvalue.ExceptionFrom(attributes)
 
 	return logRow{
 		Timestamp:        timestamp,
@@ -158,8 +152,8 @@ func flattenRecord(
 		BodyStructured:   structured,
 		ResourceAttrs:    resource.attrsJSON,
 		LogAttrs:         otlpvalue.AttributesJSON(attributes),
-		ExceptionType:    otlpvalue.StringOrEmpty(attributes, attrExceptionType),
-		ExceptionMessage: otlpvalue.StringOrEmpty(attributes, attrExceptionMessage),
+		ExceptionType:    exception.Type,
+		ExceptionMessage: exception.Message,
 		TimestampSource:  source,
 	}
 }

@@ -129,9 +129,8 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		Topic:         cfg.Logs.Topic,
 		ConsumerGroup: cfg.Logs.ConsumerGroup,
 		DLQTopic:      cfg.Logs.DLQTopic,
-		// consume's MaxRows has always counted messages; see LogIngest.
-		MaxRows:  cfg.Logs.MaxMessages,
-		MaxDelay: cfg.Logs.MaxDelay,
+		MaxMessages:   cfg.Logs.MaxMessages,
+		MaxDelay:      cfg.Logs.MaxDelay,
 		// A partition can arrive from another worker, whose watermark this
 		// process never read. Re-reading before writing anything is what keeps
 		// the handover from writing a partition's rows twice.
@@ -175,7 +174,7 @@ func (p *Pipeline) Running(ctx context.Context) error { return p.loop.Running(ct
 func (p *Pipeline) Describe() []slog.Attr {
 	return []slog.Attr{
 		slog.Uint64("default_retention_days", uint64(p.defaultRetentionDays)),
-		// The loop's own batch_max_rows counts messages; this is rows.
+		// The loop's own batch_max_messages counts messages; this is rows.
 		slog.Int("insert_max_rows", p.maxRows),
 	}
 }

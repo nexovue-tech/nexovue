@@ -87,6 +87,12 @@ func runExport[Request proto.Message](
 		opts.record(ctx, door.grpcPath, door.unit, itemsNotRead, refused)
 		return refused.grpcError()
 	}
+	// No origin over gRPC — this transport serves no browser — so the gate here
+	// says only that a public key has no business on it.
+	if refused := opts.checkOrigin(ctx, ""); refused != nil {
+		opts.record(ctx, door.grpcPath, door.unit, itemsNotRead, refused)
+		return refused.grpcError()
+	}
 	if refused := opts.throttle(ctx); refused != nil {
 		opts.record(ctx, door.grpcPath, door.unit, itemsNotRead, refused)
 		return refused.grpcError()
@@ -215,6 +221,8 @@ func grpcCodeFor(rpcCode code.Code) codes.Code {
 	switch rpcCode {
 	case code.Code_UNAUTHENTICATED:
 		return codes.Unauthenticated
+	case code.Code_PERMISSION_DENIED:
+		return codes.PermissionDenied
 	case code.Code_RESOURCE_EXHAUSTED:
 		return codes.ResourceExhausted
 	case code.Code_INVALID_ARGUMENT:

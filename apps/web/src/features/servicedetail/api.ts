@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
+import type { ServiceEdge } from "@/shared/service-peers";
 
 /**
  * What one service's screen reads. Five endpoints, and field names are the API's,
@@ -74,26 +75,6 @@ interface EndpointListResponse {
   endpoints: EndpointHealth[];
 }
 
-/**
- * A queue hop, as the API spells it. It can be retried for hours; a direct call fails
- * the caller now, so the two are never read as the same dependency.
- */
-export const EDGE_QUEUE = "queue";
-
-export interface ServiceEdge {
-  caller: string;
-  callee: string;
-  /** `call` or `queue`; anything else is read as a call. */
-  edge_kind: string;
-  call_count: number;
-  error_count: number;
-  calls_per_minute: number;
-  error_rate: number;
-  p50_ms: number;
-  p95_ms: number;
-  p99_ms: number;
-}
-
 interface ServiceMapResponse {
   window_start: string;
   window_end: string;
@@ -120,18 +101,6 @@ export interface ErrorGroupSummary {
 
 interface ErrorGroupListResponse {
   groups: ErrorGroupSummary[];
-}
-
-/**
- * A service we can only see from the outside — it has no screen of its own.
- *
- * The test is the parentheses, not a fixed list. A callee that never reported for
- * itself is named from what the caller's own span said about its peer —
- * `(valkey-cart)`, `(postgresql)`, `(kafka)` — so the set of these names is open, and
- * a real `service.name` is a resource attribute that cannot contain parentheses.
- */
-export function isPlaceholderService(name: string): boolean {
-  return name.startsWith("(") && name.endsWith(")");
 }
 
 export const serviceQueryKey = (projectId: string, serviceName: string, timeWindow: TimeWindow) =>

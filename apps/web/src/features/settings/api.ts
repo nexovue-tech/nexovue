@@ -13,6 +13,8 @@ import { apiClient } from "@/shared/api-client";
  */
 
 export interface ApiKeySummary {
+  /** Fixed by the API. A key's kind is which table it came from, never a guess. */
+  kind: "secret";
   id: string;
   project_id: string;
   name: string;
@@ -20,6 +22,29 @@ export interface ApiKeySummary {
   key_hint: string;
   created_at: string;
   /** Null until the receiver has seen the key authenticate. Coarse by design. */
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+/**
+ * A public browser key. The mirror image of the type above, and the differences
+ * are the point.
+ *
+ * `public_key` is the whole key, present on every read, because this value lives
+ * in the customer's own page source: there is no hint to show instead, nothing
+ * to reveal once, and no reason to withhold it. It is safe to render, safe to
+ * copy and safe to log — which is exactly why it must never be styled like the
+ * secret one.
+ */
+export interface SiteKeySummary {
+  kind: "public";
+  id: string;
+  project_id: string;
+  name: string;
+  public_key: string;
+  /** Where this key may report from. Empty would accept nothing. */
+  allowed_origins: string[];
+  created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
 }
@@ -74,5 +99,66 @@ export function useRevokeApiKey(projectId: string | undefined) {
     mutationKey: ["api-keys", "revoke"],
     mutationFn: (keyId: string) => apiClient.post<ApiKeySummary>(`api-keys/${keyId}/revoke`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: apiKeysQueryKey(projectId) }),
+  });
+}
+
+/* ------------------------------------------------------- public browser keys */
+
+/**
+ * Site keys reach a different endpoint, not the same one with a `kind` on it, so
+ * a request for the secret list can never answer with a public key. The query
+ * cache is keyed separately for the same reason.
+ *
+ * Unlike the secret create, the response here goes straight into the cache: it
+ * carries nothing that must not be kept, because the key it carries is one the
+ * customer is about to paste into a public web page.
+ */
+export interface SiteKeyCreateInput {
+  name: string;
+  allowedOrigins: string[];
+}
+
+interface SiteKeyListResponse {
+  site_keys: SiteKeySummary[];
+}
+
+export const siteKeysQueryKey = (projectId: string | undefined) =>
+  ["site-keys", projectId] as const;
+
+export function useSiteKeys(projectId: string | undefined) {
+  return useQuery({
+    queryKey: siteKeysQueryKey(projectId),
+    queryFn: ({ signal }) =>
+      apiClient.get<SiteKeyListResponse>("site-keys", {
+        searchParams: { project_id: projectId },
+        signal,
+      }),
+    select: (response) => response.site_keys,
+    enabled: projectId !== undefined,
+  });
+}
+
+export function useCreateSiteKey(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationKey: ["site-keys", "create"],
+    mutationFn: ({ name, allowedOrigins }: SiteKeyCreateInput) =>
+      apiClient.post<SiteKeySummary>("site-keys", {
+        project_id: projectId,
+        name,
+        allowed_origins: allowedOrigins,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: siteKeysQueryKey(projectId) }),
+  });
+}
+
+export function useRevokeSiteKey(projectId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationKey: ["site-keys", "revoke"],
+    mutationFn: (keyId: string) => apiClient.post<SiteKeySummary>(`site-keys/${keyId}/revoke`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: siteKeysQueryKey(projectId) }),
   });
 }

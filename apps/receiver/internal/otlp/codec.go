@@ -123,6 +123,8 @@ func httpStatusFor(rpcCode code.Code) int {
 	switch rpcCode {
 	case code.Code_UNAUTHENTICATED:
 		return http.StatusUnauthorized
+	case code.Code_PERMISSION_DENIED:
+		return http.StatusForbidden
 	case code.Code_RESOURCE_EXHAUSTED:
 		return http.StatusTooManyRequests
 	case code.Code_INVALID_ARGUMENT:

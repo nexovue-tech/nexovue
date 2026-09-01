@@ -37,6 +37,11 @@ type Config struct {
 
 	HealthAddr string `env:"WORKERS_HEALTH_ADDR" envDefault:":8081"`
 
+	// Profiling mounts Go's runtime profiles on the admin listener. Off by
+	// default: the endpoints are unauthenticated and hand out goroutine stacks
+	// and the live heap to anything that can reach the port.
+	Profiling bool `env:"WORKERS_PPROF_ENABLED" envDefault:"false"`
+
 	KafkaBrokers  []string `env:"KAFKA_BROKERS,required,notEmpty" envSeparator:","`
 	ClickHouseDSN string   `env:"CLICKHOUSE_DSN,required,notEmpty"`
 

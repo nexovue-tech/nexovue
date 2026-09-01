@@ -262,8 +262,8 @@ func errorRecord() *logspb.LogRecord {
 		SpanId:       testSpanID,
 		Body:         stringValue("payment declined"),
 		Attributes: []*commonpb.KeyValue{
-			{Key: attrExceptionType, Value: stringValue("ValueError")},
-			{Key: attrExceptionMessage, Value: stringValue("bad card")},
+			{Key: otlpvalue.AttrExceptionType, Value: stringValue("ValueError")},
+			{Key: otlpvalue.AttrExceptionMessage, Value: stringValue("bad card")},
 		},
 	}
 }

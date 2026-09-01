@@ -21,6 +21,7 @@ import {
   suggestedRotationName,
   TRAFFIC_LABEL,
 } from "./key-status";
+import { SiteKeysSection } from "./SiteKeysSection";
 
 /**
  * The ingest keys of the selected project, and the two ways to replace one.
@@ -80,12 +81,28 @@ export function ApiKeysScreen() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">API keys</h1>
+        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Ingest keys</h1>
         <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">
-          The keys your services authenticate with when they export telemetry. A project can hold
-          several at once, which is what lets you replace one without an outage.
+          Two kinds, and they are not interchangeable.{" "}
+          <strong className="font-medium text-ink">Server keys</strong> are secret and belong in
+          your backend services. <strong className="font-medium text-ink">Browser keys</strong> are
+          public and belong in your web pages. Putting a server key in a page hands your
+          project&rsquo;s ingest to anyone who views source, so the two are kept apart everywhere —
+          including here.
         </p>
       </header>
+
+      <div className="shrink-0 px-4 pb-3">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">Server keys</h2>
+          <SecretBadge />
+        </div>
+        <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">
+          The keys your services authenticate with when they export telemetry. A project can hold
+          several at once, which is what lets you replace one without an outage. The secret is shown
+          once, at creation, and never again.
+        </p>
+      </div>
 
       {minted ? <MintedKey created={minted} onDismiss={() => setMinted(undefined)} /> : null}
 
@@ -136,7 +153,19 @@ export function ApiKeysScreen() {
           onDismissRevokeError={() => revoke.reset()}
         />
       )}
+
+      <SiteKeysSection projectId={projectId} />
     </div>
+  );
+}
+
+/** The counterpart to SiteKeysSection's Public badge. Every row in this half is
+    a secret, and the label says so beside the key rather than only in prose. */
+function SecretBadge() {
+  return (
+    <span className="shrink-0 rounded-sm border border-critical-border bg-critical-subtle px-1.5 py-0.5 font-mono text-2xs text-critical-text uppercase tracking-caps">
+      Secret
+    </span>
   );
 }
 
@@ -329,6 +358,7 @@ function KeyRow({
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <span className="font-medium text-ink text-base">{apiKey.name}</span>
             <span className="font-mono text-2xs text-ink-dim">{apiKey.key_hint}</span>
+            <SecretBadge />
             {status.revoked ? <RevokedBadge /> : <TrafficBadge traffic={status.traffic} />}
           </div>
           <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">

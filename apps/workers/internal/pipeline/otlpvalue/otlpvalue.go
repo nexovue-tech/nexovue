@@ -214,6 +214,50 @@ func StringOrEmpty(attributes []*commonpb.KeyValue, key string) string {
 	return text
 }
 
+// ExceptionEventName is the name OpenTelemetry gives the span event that
+// records a thrown exception, and AttrException* are the attributes it carries.
+// Both spellings are stable and neither was ever renamed — verified against the
+// current conventions and against the OpenTelemetry Demo's own spans, where ten
+// languages all emit exactly these keys.
+// https://opentelemetry.io/docs/specs/semconv/exceptions/exceptions-spans/
+//
+// They live here rather than in either pipeline because an exception arrives
+// two ways — as a span event, and as a log record under the same attribute
+// names — and one grouping query reads both columns. A drifted spelling in
+// either writer empties half the Errors screen with nothing to show it.
+const (
+	ExceptionEventName = "exception"
+
+	AttrExceptionType    = "exception.type"
+	AttrExceptionMessage = "exception.message"
+)
+
+// Exception is the pair promoted to the `exception_type` and `exception_message`
+// columns that both `spans` and `logs` carry.
+//
+// `exception.stacktrace` is deliberately not here: it is large, never filtered
+// on, and already stored — in a span's `events` and a log's attributes — which
+// is where the API reads it from. `exception.escaped` is deprecated by the
+// conventions and is not promoted either.
+type Exception struct {
+	Type    string
+	Message string
+}
+
+// Recorded reports whether the attributes said anything at all. The conventions
+// make type and message *conditionally* required, so an event carrying only one
+// of them is still an exception.
+func (e Exception) Recorded() bool { return e.Type != "" || e.Message != "" }
+
+// ExceptionFrom reads the promoted pair out of one attribute list — a log
+// record's own attributes, or a span event's.
+func ExceptionFrom(attributes []*commonpb.KeyValue) Exception {
+	return Exception{
+		Type:    StringOrEmpty(attributes, AttrExceptionType),
+		Message: StringOrEmpty(attributes, AttrExceptionMessage),
+	}
+}
+
 // Int returns the value of key as an integer.
 //
 // A double is accepted and truncated, because a JSON-encoded exporter has no

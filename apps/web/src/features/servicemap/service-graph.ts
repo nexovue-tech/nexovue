@@ -10,9 +10,16 @@
 import type { Edge, Node } from "@xyflow/react";
 import { Position } from "@xyflow/react";
 
-import { EDGE_QUEUE, isPlaceholderService, type ServiceEdge, type ServiceMapResponse } from "./api";
+import {
+  collapseAddressPeers,
+  EDGE_QUEUE,
+  type HostGroup,
+  isPlaceholderService,
+  type ServiceEdge,
+} from "@/shared/service-peers";
+
+import type { ServiceMapResponse } from "./api";
 import { layoutServiceGraph, NODE_HEIGHT, NODE_WIDTH } from "./graph-layout";
-import { collapseAddressPeers, type HostGroup } from "./peer-hosts";
 
 export const SERVICE_NODE_TYPE = "service";
 export const DEPENDENCY_EDGE_TYPE = "dependency";

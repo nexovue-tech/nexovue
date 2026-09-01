@@ -28,6 +28,7 @@ from nexovue_api.data.postgres.models import (
     DeployEvent,
     Integration,
     Organization,
+    SiteKey,
     User,
 )
 
@@ -45,6 +46,10 @@ CHECK_UPDATED: Final = "check.updated"
 CHECK_DELETED: Final = "check.deleted"
 API_KEY_CREATED: Final = "api_key.created"
 API_KEY_REVOKED: Final = "api_key.revoked"
+# Named apart from the secret kind, because "a key was minted" is a different
+# event depending on which one: one grants server ingest, the other a browser's.
+SITE_KEY_CREATED: Final = "site_key.created"
+SITE_KEY_REVOKED: Final = "site_key.revoked"
 SESSION_DENIED: Final = "session.denied"
 DEPLOY_RECORDED: Final = "deploy.recorded"
 DEPLOY_WEBHOOK_SECRET_VIEWED: Final = "deploy.webhook_secret_viewed"
@@ -52,6 +57,7 @@ DEPLOY_WEBHOOK_SECRET_VIEWED: Final = "deploy.webhook_secret_viewed"
 ORGANIZATION_TARGET: Final = "organization"
 USER_TARGET: Final = "user"
 API_KEY_TARGET: Final = "api_key"
+SITE_KEY_TARGET: Final = "site_key"
 CHECK_TARGET: Final = "check"
 INTEGRATION_TARGET: Final = "integration"
 WEBHOOK_SECRET_TARGET: Final = "webhook_secret"
@@ -121,6 +127,36 @@ def record_api_key_revoked(db: AsyncSession, *, api_key: ApiKey, actor_user_id: 
         actor_user_id=actor_user_id,
         action=API_KEY_REVOKED,
         target=_target(API_KEY_TARGET, api_key.id),
+    )
+
+
+def record_site_key_created(
+    db: AsyncSession, *, site_key: SiteKey, actor_user_id: uuid.UUID
+) -> None:
+    """A public browser credential was minted, and by whom.
+
+    Recorded despite the key being non-secret: what is worth auditing is that a
+    project gained a door, not that a secret changed hands.
+    """
+    _add(
+        db,
+        org_id=site_key.org_id,
+        actor_user_id=actor_user_id,
+        action=SITE_KEY_CREATED,
+        target=_target(SITE_KEY_TARGET, site_key.id),
+    )
+
+
+def record_site_key_revoked(
+    db: AsyncSession, *, site_key: SiteKey, actor_user_id: uuid.UUID
+) -> None:
+    """A public browser credential was withdrawn, and by whom."""
+    _add(
+        db,
+        org_id=site_key.org_id,
+        actor_user_id=actor_user_id,
+        action=SITE_KEY_REVOKED,
+        target=_target(SITE_KEY_TARGET, site_key.id),
     )
 
 

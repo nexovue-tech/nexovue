@@ -60,6 +60,11 @@ DEFAULT_RETENTION_DAYS: Final = 30
 # hidden, which is entropy enough that lengthening the prefix costs nothing.
 API_KEY_PREFIX_LENGTH: Final = 16
 
+# `nvp_live_<22 chars>` in full. Stored whole and in the clear, because a site key
+# is printed in the page that carries it — there is no secret half to withhold, so
+# there is no prefix to split off. See ADR 0086.
+SITE_KEY_LENGTH: Final = 31
+
 # Long enough for an email address, the longest thing an actor label holds.
 ACTOR_LABEL_LENGTH: Final = 320
 SHA256_HEX_LENGTH: Final = 64
@@ -190,8 +195,15 @@ class Project(Base):
 
 
 class ApiKey(Base):
-    """An ingest credential. Carries both ids so the receiver's hot path is one
-    cached lookup rather than a key → project → org chain."""
+    """A *secret* ingest credential — the server-side kind, and the only kind this
+    table holds. Carries both ids so the receiver's hot path is one cached lookup
+    rather than a key → project → org chain.
+
+    The kind is the table, not a column (ADR 0086). Browser keys live in
+    `site_keys`, so the receiver's server-door lookup — which reads this table and
+    then compares a hash — cannot return a public key even if someone forgot a
+    filter. `key_hash` therefore stays NOT NULL: nothing here lacks one.
+    """
 
     __tablename__ = "api_keys"
 
@@ -219,8 +231,19 @@ class ApiKey(Base):
 
 
 class SiteKey(Base):
-    """Door 3's public, non-secret browser key. Origin-restricted rather than
-    secret, because it ships inside a page anyone can read."""
+    """Door 3's *public*, non-secret browser key — the other kind of ingest
+    credential, and the only kind this table holds.
+
+    It ships inside a page anyone can read, so it is restricted by origin rather
+    than by secrecy, and it is stored whole and in the clear. There is no
+    `key_hash` column and that is the point: hashing a value printed in every
+    page's source protects nothing, and it would cost the exact-match index that
+    makes the browser door's lookup a single probe. ADR 0086.
+
+    A separate table from `api_keys` for the same reason: it makes "a public key
+    is accepted where a secret one was expected" unreachable at the SQL level
+    rather than dependent on a `WHERE kind = …` nobody forgets.
+    """
 
     __tablename__ = "site_keys"
 
@@ -231,10 +254,17 @@ class SiteKey(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
-    public_key: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False, unique=True)
+    # Named for the same reason api_keys rows are: five keys nobody can tell
+    # apart are five keys nobody dares revoke.
+    name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    public_key: Mapped[str] = mapped_column(String(SITE_KEY_LENGTH), nullable=False, unique=True)
+    # Abuse mitigation, not an authentication boundary: a caller that sends no
+    # Origin header is not filtered by one. Empty means the browser door accepts
+    # nothing, which is why creating one requires at least one origin.
     allowed_origins: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
     )
+    last_used_at: Mapped[OptionalTimestamp]
     created_at: Mapped[CreatedAt]
     revoked_at: Mapped[OptionalTimestamp]
 

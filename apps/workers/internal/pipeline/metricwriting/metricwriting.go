@@ -132,9 +132,8 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		Topic:         cfg.MetricIngest.Topic,
 		ConsumerGroup: cfg.MetricIngest.ConsumerGroup,
 		DLQTopic:      cfg.MetricIngest.DLQTopic,
-		// consume's MaxRows has always counted messages; see MetricIngest.
-		MaxRows:  cfg.MetricIngest.MaxMessages,
-		MaxDelay: cfg.MetricIngest.MaxDelay,
+		MaxMessages:   cfg.MetricIngest.MaxMessages,
+		MaxDelay:      cfg.MetricIngest.MaxDelay,
 		// A partition can arrive from another worker, whose watermark this
 		// process never read.
 		OnAssigned: guard.Invalidate,
@@ -181,7 +180,7 @@ func (p *Pipeline) Describe() []slog.Attr {
 	return []slog.Attr{
 		slog.String("metric_tables", gaugeTable+", "+sumTable+", "+histogramTable+
 			", "+expHistogramTable+", "+summaryTable),
-		// The loop's own batch_max_rows counts messages; this is rows.
+		// The loop's own batch_max_messages counts messages; this is rows.
 		slog.Int("insert_max_rows", p.maxRows),
 	}
 }

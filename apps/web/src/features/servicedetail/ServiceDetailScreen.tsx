@@ -9,18 +9,17 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatDuration } from "@/shared/format/duration";
 import { formatRelativeTime } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import type { HostGroup, ServiceEdge } from "@/shared/service-peers";
+import { collapseAddressPeers, EDGE_QUEUE, isPlaceholderService } from "@/shared/service-peers";
 
 import type {
   EndpointHealth,
   ErrorGroupSummary,
   HealthMetrics,
-  ServiceEdge,
   ServiceHealth,
   TrendPoint,
 } from "./api";
 import {
-  EDGE_QUEUE,
-  isPlaceholderService,
   useService,
   useServiceDependencies,
   useServiceEndpoints,
@@ -203,9 +202,12 @@ export function ServiceDetailView({
   });
 
   const plots = useMemo(() => buildTrendPlots(points), [points]);
+  // Address-named peers are folded before the lists are sliced, so this panel and the
+  // service map agree about how many dependencies there are (ADR 0082).
+  const peers = useMemo(() => collapseAddressPeers(dependencies.data), [dependencies.data]);
   const neighbours = useMemo(
-    () => neighboursOf(dependencies.data, serviceName),
-    [dependencies.data, serviceName],
+    () => neighboursOf(peers.edges, serviceName),
+    [peers.edges, serviceName],
   );
 
   return (
@@ -241,6 +243,7 @@ export function ServiceDetailView({
               source={dependencies}
               callers={neighbours.callers}
               callees={neighbours.callees}
+              hostGroups={peers.groups}
             />
 
             <ErrorSection serviceName={serviceName} source={errors} />
@@ -438,11 +441,13 @@ function DependencySection({
   source,
   callers,
   callees,
+  hostGroups,
 }: {
   serviceName: string;
   source: PanelSource<ServiceEdge>;
   callers: readonly Dependency[];
   callees: readonly Dependency[];
+  hostGroups: ReadonlyMap<string, HostGroup>;
 }) {
   return (
     <>
@@ -469,12 +474,14 @@ function DependencySection({
             title="Called by"
             direction="in"
             dependencies={callers}
+            hostGroups={hostGroups}
             empty="Nothing called this service in the window."
           />
           <DependencyList
             title="Calls"
             direction="out"
             dependencies={callees}
+            hostGroups={hostGroups}
             empty="This service called nothing else in the window."
           />
         </div>
@@ -500,11 +507,13 @@ function DependencyList({
   title,
   direction,
   dependencies,
+  hostGroups,
   empty,
 }: {
   title: string;
   direction: "in" | "out";
   dependencies: readonly Dependency[];
+  hostGroups: ReadonlyMap<string, HostGroup>;
   empty: string;
 }) {
   const Arrow = direction === "in" ? ArrowRight : ArrowLeft;
@@ -521,7 +530,7 @@ function DependencyList({
         <ul>
           {dependencies.map((dependency) => (
             <li key={dependencyKey(direction, dependency)}>
-              <DependencyLine dependency={dependency} />
+              <DependencyLine dependency={dependency} hosts={hostGroups.get(dependency.peer)} />
             </li>
           ))}
         </ul>
@@ -530,13 +539,25 @@ function DependencyList({
   );
 }
 
-function DependencyLine({ dependency }: { dependency: Dependency }) {
+/**
+ * What a collapsed row stands for, on hover. The row aggregates and the title gives
+ * back the detail storage kept — the addresses themselves, which is the only place a
+ * reader can still see them.
+ */
+function describeHosts(hosts: HostGroup): string {
+  const count = hosts.addresses.length;
+  return `${count} ${count === 1 ? "host" : "hosts"} reached by address, with no telemetry of their own — ${hosts.addresses.join(", ")}. Addresses change on restart, so they are listed as one dependency rather than one row each.`;
+}
+
+function DependencyLine({ dependency, hosts }: { dependency: Dependency; hosts?: HostGroup }) {
   const { peer, edge } = dependency;
   const failing = edge.error_count > 0;
 
   const name = isPlaceholderService(peer) ? (
     // Something we only see from the outside: it has no screen to open.
-    <span className="truncate text-ink-dim italic">{peer}</span>
+    <span className="truncate text-ink-dim italic" title={hosts && describeHosts(hosts)}>
+      {peer}
+    </span>
   ) : (
     <Link
       to="/services/$name"
@@ -551,6 +572,12 @@ function DependencyLine({ dependency }: { dependency: Dependency }) {
     <div className="flex items-center gap-2 border-line-subtle border-b py-1.5 text-sm">
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
         {name}
+        {hosts ? (
+          // How many there are is the fact a collapsed row would otherwise have hidden.
+          <span className="shrink-0 font-mono text-2xs text-ink-dim">
+            {hosts.addresses.length} {hosts.addresses.length === 1 ? "instance" : "instances"}
+          </span>
+        ) : null}
         {edge.edge_kind === EDGE_QUEUE ? (
           <span className="shrink-0 font-mono text-2xs text-ink-dim uppercase tracking-caps">
             queue

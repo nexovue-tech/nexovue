@@ -111,21 +111,20 @@ type Settings struct {
 	ConsumerGroup string
 	DLQTopic      string
 
-	// MaxRows and MaxDelay bound one batch: enough rows for an insert the store
-	// merges cheaply, and a deadline that keeps a quiet tenant's rows moving.
+	// MaxMessages and MaxDelay bound one batch: how many broker messages it
+	// holds, and a deadline that keeps a quiet tenant's rows moving.
 	//
-	// MaxRows counts *messages*, not the rows they carry — every caller has
-	// always passed a message count. The name is wrong and is corrected where
-	// the callers can be changed together.
-	MaxRows  int
-	MaxDelay time.Duration
+	// Messages, not the rows they carry. A pipeline that must bound its rows
+	// bounds them where it knows how many a message decoded into.
+	MaxMessages int
+	MaxDelay    time.Duration
 
-	// MaxBytes bounds a batch by the size of the messages in it. MaxRows cannot:
-	// one OTLP message carries as many log records or data points as the
-	// sender's exporter batched, so a batch bounded only at 5000 messages held
-	// half a gigabyte here and the worker was OOM-killed at its 1 GiB limit.
-	// Zero takes defaultMaxBytes, so a pipeline that says nothing is still
-	// bounded.
+	// MaxBytes bounds a batch by the size of the messages in it. MaxMessages
+	// cannot: one OTLP message carries as many log records or data points as
+	// the sender's exporter batched, so a batch bounded only at 5000 messages
+	// held half a gigabyte here and the worker was OOM-killed at its 1 GiB
+	// limit. Zero takes defaultMaxBytes, so a pipeline that says nothing is
+	// still bounded.
 	MaxBytes int
 
 	// OnAssigned runs when the consumer group hands this worker partitions. A
@@ -159,8 +158,9 @@ func (s Settings) validate() error {
 	if len(s.Brokers) == 0 {
 		problems = append(problems, errors.New("brokers are required"))
 	}
-	if s.MaxRows <= 0 {
-		problems = append(problems, fmt.Errorf("batch max rows is %d, want more than 0", s.MaxRows))
+	if s.MaxMessages <= 0 {
+		problems = append(problems, fmt.Errorf(
+			"batch max messages is %d, want more than 0", s.MaxMessages))
 	}
 	if s.MaxDelay <= 0 {
 		problems = append(problems, fmt.Errorf("batch max delay is %s, want more than 0", s.MaxDelay))
@@ -345,7 +345,7 @@ func (l *Loop[S]) describe() []slog.Attr {
 		slog.String("topic", l.settings.Topic),
 		slog.String("group", l.settings.ConsumerGroup),
 		slog.String("dlq_topic", l.settings.DLQTopic),
-		slog.Int("batch_max_rows", l.settings.MaxRows),
+		slog.Int("batch_max_messages", l.settings.MaxMessages),
 		slog.Duration("batch_max_delay", l.settings.MaxDelay),
 	}
 }
@@ -364,7 +364,7 @@ func (l *Loop[S]) heartbeat(ctx context.Context, now time.Time, stages Processor
 
 func (l *Loop[S]) batchIsReady(pending []*kgo.Record, held int, flushBy time.Time) bool {
 	return len(pending) > 0 &&
-		(len(pending) >= l.settings.MaxRows ||
+		(len(pending) >= l.settings.MaxMessages ||
 			held >= int(l.settings.maxBytes()) ||
 			!l.now().Before(flushBy))
 }
@@ -396,7 +396,7 @@ func (l *Loop[S]) poll(
 	pollCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 
-	fetches := l.consumer.PollRecords(pollCtx, l.settings.MaxRows-pending)
+	fetches := l.consumer.PollRecords(pollCtx, l.settings.MaxMessages-pending)
 	if fetches.IsClientClosed() {
 		return fetches, errClientClosed
 	}

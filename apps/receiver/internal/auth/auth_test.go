@@ -177,7 +177,7 @@ func TestAuthenticateReportsALookupFailureSeparately(t *testing.T) {
 
 func TestCacheStaysWithinItsCeiling(t *testing.T) {
 	const maxEntries = 8
-	cache := newCache(time.Minute, maxEntries)
+	cache := newCache[Credential](time.Minute, maxEntries)
 
 	for i := range 100 {
 		cache.store(string(rune('a'+i%26))+string(rune('a'+i/26)), Credential{Found: false})

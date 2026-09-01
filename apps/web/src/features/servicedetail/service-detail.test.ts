@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { EndpointHealth, ErrorGroupSummary, ServiceEdge, ServiceHealth } from "./api";
-import { isPlaceholderService } from "./api";
+import type { ServiceEdge } from "@/shared/service-peers";
+import { collapseAddressPeers } from "@/shared/service-peers";
+
+import type { EndpointHealth, ErrorGroupSummary, ServiceHealth } from "./api";
 import {
   dependencyKey,
   describeEndpoints,
@@ -51,6 +53,7 @@ function edge(caller: string, callee: string, kind = "call"): ServiceEdge {
     caller,
     callee,
     edge_kind: kind,
+    callee_kind: "",
     call_count: 10,
     error_count: 0,
     calls_per_minute: 1,
@@ -104,6 +107,35 @@ describe("neighboursOf", () => {
 
     expect(callers.map((dependency) => dependency.peer)).toEqual(["demo-frontend"]);
     expect(callees.map((dependency) => dependency.peer)).toEqual(["demo-payments"]);
+  });
+
+  it("lists two address-named peers of one technology as one dependency", () => {
+    // ADR 0082. The map collapses these into one node; a panel that listed them
+    // separately would make the same pair of peers one dependency on one screen and
+    // two on another.
+    const addressed = (callee: string) => ({
+      ...edge("checkout", callee),
+      callee_kind: "grpc",
+    });
+    const { edges, groups } = collapseAddressPeers([
+      addressed("(172.19.0.11)"),
+      addressed("(172.19.0.19)"),
+    ]);
+
+    const { callees } = neighboursOf(edges, "checkout");
+
+    expect(callees.map((dependency) => dependency.peer)).toEqual(["(grpc hosts)"]);
+    expect(callees[0].edge.call_count).toBe(20);
+    expect(groups.get("(grpc hosts)")?.addresses).toEqual(["172.19.0.11", "172.19.0.19"]);
+  });
+
+  it("leaves a named peer as its own row", () => {
+    const { edges, groups } = collapseAddressPeers([edge("checkout", "(valkey-cart)")]);
+
+    const { callees } = neighboursOf(edges, "checkout");
+
+    expect(callees.map((dependency) => dependency.peer)).toEqual(["(valkey-cart)"]);
+    expect(groups.size).toBe(0);
   });
 
   it("puts a self-edge on both sides, because it genuinely is both ends", () => {
@@ -200,23 +232,6 @@ describe("describeServiceErrors", () => {
     expect(describeServiceErrors([])).toBe(
       "No exception was recorded in this service in the window.",
     );
-  });
-});
-
-describe("isPlaceholderService", () => {
-  it("recognises a peer by its parentheses, not by a fixed list of two names", () => {
-    // ADR 0080: a callee that never reported is named from what the caller asserted,
-    // so the set of these names is open and a closed list would link `(valkey-cart)`
-    // to a service screen that can never have anything on it.
-    expect(isPlaceholderService("(valkey-cart)")).toBe(true);
-    expect(isPlaceholderService("(postgresql)")).toBe(true);
-    expect(isPlaceholderService("(uninstrumented)")).toBe(true);
-    expect(isPlaceholderService("(unknown)")).toBe(true);
-  });
-
-  it("leaves a real service name alone", () => {
-    expect(isPlaceholderService("valkey-cart")).toBe(false);
-    expect(isPlaceholderService("demo-storefront")).toBe(false);
   });
 });
 

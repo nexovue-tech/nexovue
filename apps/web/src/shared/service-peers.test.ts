@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { ServiceEdge } from "./api";
-import { collapseAddressPeers, hostGroupName, isAddressLiteral } from "./peer-hosts";
+import type { ServiceEdge } from "./service-peers";
+import {
+  collapseAddressPeers,
+  hostGroupName,
+  isAddressLiteral,
+  isPlaceholderService,
+} from "./service-peers";
 
 function edge(overrides: Partial<ServiceEdge> = {}): ServiceEdge {
   return {
@@ -191,5 +196,22 @@ describe("collapseAddressPeers", () => {
     ]);
 
     expect(groups.get("(grpc hosts)")?.addresses).toEqual(["10.0.0.1"]);
+  });
+});
+
+describe("isPlaceholderService", () => {
+  it("recognises a peer by its parentheses, not by a fixed list of two names", () => {
+    // ADR 0080: a callee that never reported is named from what the caller asserted,
+    // so the set of these names is open and a closed list would link `(valkey-cart)`
+    // to a service screen that can never have anything on it.
+    expect(isPlaceholderService("(valkey-cart)")).toBe(true);
+    expect(isPlaceholderService("(postgresql)")).toBe(true);
+    expect(isPlaceholderService("(uninstrumented)")).toBe(true);
+    expect(isPlaceholderService("(unknown)")).toBe(true);
+  });
+
+  it("leaves a real service name alone", () => {
+    expect(isPlaceholderService("valkey-cart")).toBe(false);
+    expect(isPlaceholderService("demo-storefront")).toBe(false);
   });
 });

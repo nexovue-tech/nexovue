@@ -39,6 +39,8 @@ type spanBlock struct {
 	resourceAttrs     proto.ColJSONStr
 	spanAttrs         proto.ColJSONStr
 	events            proto.ColStr
+	exceptionType     *proto.ColLowCardinality[string]
+	exceptionMessage  proto.ColStr
 	// The three arrays the `links` Nested column flattened into. They are
 	// written as separate columns because that is what the server stores.
 	linkTraceIDs   *proto.ColArr[[]byte]
@@ -68,6 +70,7 @@ func newSpanBlock() *spanBlock {
 		rpcMethod:         new(proto.ColStr).LowCardinality(),
 		rpcStatus:         new(proto.ColStr).LowCardinality(),
 		deploymentVersion: new(proto.ColStr).LowCardinality(),
+		exceptionType:     new(proto.ColStr).LowCardinality(),
 		linkTraceIDs:      proto.NewArray[[]byte](&proto.ColFixedStr{Size: otlpvalue.TraceIDHexLen}),
 		linkSpanIDs:       proto.NewArray[[]byte](&proto.ColFixedStr{Size: otlpvalue.SpanIDHexLen}),
 		linkAttributes:    proto.NewArray[string](new(proto.ColStr)),
@@ -103,6 +106,8 @@ func newSpanBlock() *spanBlock {
 		{Name: "resource_attrs", Data: &block.resourceAttrs},
 		{Name: "span_attrs", Data: &block.spanAttrs},
 		{Name: "events", Data: &block.events},
+		{Name: "exception_type", Data: block.exceptionType},
+		{Name: "exception_message", Data: &block.exceptionMessage},
 		{Name: "links.trace_id", Data: block.linkTraceIDs},
 		{Name: "links.span_id", Data: block.linkSpanIDs},
 		{Name: "links.attributes", Data: block.linkAttributes},
@@ -136,6 +141,8 @@ func (b *spanBlock) append(row spanRow) {
 	b.resourceAttrs.Append(row.ResourceAttrs)
 	b.spanAttrs.Append(row.SpanAttrs)
 	b.events.Append(row.Events)
+	b.exceptionType.Append(row.ExceptionType)
+	b.exceptionMessage.Append(row.ExceptionMessage)
 	b.appendLinks(row.Links)
 }
 

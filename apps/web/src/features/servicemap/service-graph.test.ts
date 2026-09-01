@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { ServiceEdge, ServiceMapResponse } from "./api";
+import type { ServiceEdge } from "@/shared/service-peers";
+
+import type { ServiceMapResponse } from "./api";
 import { buildServiceGraph, edgeWeight, healthOf, type ServiceNodeData } from "./service-graph";
 
 /** Only the fields the transform reads; the rest of the wire shape is not its business. */

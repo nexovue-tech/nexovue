@@ -141,7 +141,7 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		Topic:         cfg.Spans.Topic,
 		ConsumerGroup: cfg.Spans.ConsumerGroup,
 		DLQTopic:      cfg.Spans.DLQTopic,
-		MaxRows:       cfg.Spans.MaxMessages,
+		MaxMessages:   cfg.Spans.MaxMessages,
 		MaxDelay:      cfg.Spans.MaxDelay,
 		// A partition can arrive from another worker, whose settlements this
 		// process never saw. Re-reading the durable state before counting

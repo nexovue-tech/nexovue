@@ -4,11 +4,14 @@
 //
 // Gates run in order and the order is load-bearing:
 //
-//	auth -> ratelimit -> decode -> normalize -> produce
+//	auth -> origin -> ratelimit -> decode -> normalize -> produce
 //
-// Authentication comes first so no endpoint ever exists unauthenticated, and
-// the limiter comes before the payload is read so a tenant over its limit costs
-// us a Valkey round trip rather than a megabyte of parsing. The gates live in
+// Authentication comes first so no endpoint ever exists unauthenticated. The
+// origin gate is next because the list it checks belongs to the key, and
+// because a request from an origin the key does not cover must not spend the
+// owner's rate budget. The limiter comes before the payload is read so a tenant
+// over its limit costs us a Valkey round trip rather than a megabyte of
+// parsing. The gates live in
 // gates.go and every door runs the same ones over both transports: only where
 // the credential is read from and how a verdict is written differ.
 //
@@ -49,6 +52,17 @@ const (
 	messageUnavailable     = "receiver cannot serve this request, retry"
 )
 
+// The browser refusals say more than the credential ones do, and on purpose:
+// the caller already holds the key, so naming what is wrong with the request
+// tells an attacker nothing and tells a customer onboarding a site everything.
+// A CORS refusal is invisible to page script, so a vague message here is a
+// customer with no way to find their own mistake.
+const (
+	messageOriginNotAllowed       = "this ingest key is not allowed from this origin"
+	messagePublicKeyWithoutOrigin = "public ingest key presented without a browser Origin"
+	messageNotABrowserKey         = "this ingest key cannot be used from a browser; a public site key is what a web page sends"
+)
+
 // Options are the collaborators and limits the door needs. All are required.
 type Options struct {
 	Authenticator *auth.Authenticator
@@ -76,13 +90,16 @@ func Handler(opts Options) http.Handler {
 	return mux
 }
 
-// route mounts one signal's endpoint behind the full chain. POST only, which is
-// the only method OTLP/HTTP defines.
+// route mounts one signal's endpoint behind the full chain. POST carries every
+// export — the only method OTLP/HTTP defines — and OPTIONS exists solely so a
+// browser can ask permission to send one.
 func route[Request proto.Message](mux *http.ServeMux, opts Options, door signalDoor[Request]) {
 	mux.Handle("POST "+door.httpPath,
-		stamped(authenticate(opts, door.endpoint,
-			throttle(opts, door.endpoint,
-				export(opts, door)))))
+		answeringCORS(stamped(authenticate(opts, door.endpoint,
+			fromAllowedOrigin(opts, door.endpoint,
+				throttle(opts, door.endpoint,
+					export(opts, door)))))))
+	mux.Handle("OPTIONS "+door.httpPath, http.HandlerFunc(preflight))
 }
 
 // stamped records when the request entered the door and who sent it, so every
@@ -106,6 +123,19 @@ func authenticate(opts Options, at endpoint, next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// fromAllowedOrigin is the browser gate: the key's own list decides whether the
+// page that sent this export may use it.
+func fromAllowedOrigin(opts Options, at endpoint, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if refused := opts.checkOrigin(r.Context(), r.Header.Get(headerOrigin)); refused != nil {
+			opts.record(r.Context(), at.httpPath, at.unit, itemsNotRead, refused)
+			writeRefusal(w, replyCodec(r), refused)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

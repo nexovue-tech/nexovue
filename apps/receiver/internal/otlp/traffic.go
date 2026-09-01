@@ -14,10 +14,17 @@ import (
 // query written against one works against the other.
 const (
 	reasonUnauthenticated = "unauthenticated"
-	reasonThrottled       = "throttled"
-	reasonInvalid         = "invalid"
-	reasonUnavailable     = "unavailable"
-	reasonInternal        = "internal"
+
+	// reasonForbiddenOrigin is a key used from a page it was not issued for, or
+	// a secret key used from a page at all. Counted separately from
+	// unauthenticated because the key was good and the site was not, which is a
+	// different customer conversation.
+	reasonForbiddenOrigin = "forbidden_origin"
+
+	reasonThrottled   = "throttled"
+	reasonInvalid     = "invalid"
+	reasonUnavailable = "unavailable"
+	reasonInternal    = "internal"
 
 	// reasonLimiterDown is not a refusal: the limiter failing open still admits
 	// the request. It is counted because losing the protection silently is how
@@ -28,7 +35,10 @@ const (
 // refusalReasons and degradationReasons fix the summary's shape: every window
 // reports every counter, so a zero is a fact rather than a missing field.
 var (
-	refusalReasons     = []string{reasonUnauthenticated, reasonThrottled, reasonInvalid, reasonUnavailable, reasonInternal}
+	refusalReasons = []string{
+		reasonUnauthenticated, reasonForbiddenOrigin, reasonThrottled,
+		reasonInvalid, reasonUnavailable, reasonInternal,
+	}
 	degradationReasons = []string{reasonLimiterDown}
 )
 
@@ -68,6 +78,10 @@ const (
 	// these two a window of them names no sender at all.
 	fieldPeerAddress = "peer_address"
 	fieldUserAgent   = "user_agent"
+
+	// fieldOrigin is the site a browser named. It is what turns a window of
+	// forbidden_origin refusals from a number into an address to check.
+	fieldOrigin = "origin"
 
 	// fieldItems is the telemetry count on one event line. The line's path says
 	// which door it came from, so the field itself stays signal-neutral and one
@@ -230,6 +244,8 @@ func reasonFor(rpcCode code.Code) string {
 	switch rpcCode {
 	case code.Code_UNAUTHENTICATED:
 		return reasonUnauthenticated
+	case code.Code_PERMISSION_DENIED:
+		return reasonForbiddenOrigin
 	case code.Code_RESOURCE_EXHAUSTED:
 		return reasonThrottled
 	case code.Code_INVALID_ARGUMENT:

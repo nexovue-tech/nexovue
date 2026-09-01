@@ -49,6 +49,10 @@ EXEMPT: Final = {
     # two organizations register the same one.
     "email_is_taken",
     "key_prefix_is_taken",
+    # The public browser key is unique system-wide for the same reason a key
+    # prefix is: the receiver resolves a browser request by this value alone, so
+    # two tenants holding one would make that lookup ambiguous.
+    "site_key_is_taken",
 }
 
 

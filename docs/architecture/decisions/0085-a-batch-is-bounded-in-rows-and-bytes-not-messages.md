@@ -93,3 +93,16 @@ comment now says outright what it counts.
 
 **The startup line gained `insert_max_rows`**, because `batch_max_rows` in that same line means
 messages and the two are otherwise indistinguishable.
+
+## Since accepted — 2026-08-31
+
+Both loose ends above are closed, on the same day and against the same code.
+
+**`consume.Settings.MaxRows` is now `MaxMessages`**, with `traceassembly`, `usage`, `logwriting` and
+`metricwriting` moved to it in the same change. The startup line's `batch_max_rows` is now
+`batch_max_messages`, and `insert_max_rows` beside it keeps its meaning: the two are no longer told
+apart by a comment. The validation message reads *batch max messages*.
+
+**The `usage/usage.go` coupling was already gone.** Those two lines read `cfg.Logs.MaxMessages` and
+`cfg.MetricIngest.MaxMessages` in the code as it stands, so the fragility described above does not
+exist; the paragraph is the intent at the time it was written and not the shipped state.

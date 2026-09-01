@@ -7,4 +7,5 @@ use (
 	./tools/chaos
 	./tools/demo-app
 	./tools/loadgen
+	./tools/rebalanceprobe
 )

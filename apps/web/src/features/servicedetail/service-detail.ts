@@ -6,7 +6,9 @@
  * reader can land in are testable without a browser.
  */
 
-import type { EndpointHealth, ErrorGroupSummary, ServiceEdge, ServiceHealth } from "./api";
+import type { ServiceEdge } from "@/shared/service-peers";
+
+import type { EndpointHealth, ErrorGroupSummary, ServiceHealth } from "./api";
 import { formatCount, formatErrorRate, formatRatePerMinute } from "./health-format";
 
 /**

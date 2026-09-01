@@ -52,8 +52,8 @@ projects        id uuid pk · org_id fk · slug · name · retention_days
                 · sampling_config jsonb · created_at · deleted_at
 api_keys        id uuid pk · org_id fk · project_id fk · name · key_prefix
                 · key_hash · last_used_at · created_at · revoked_at
-site_keys       id uuid pk · org_id fk · project_id fk · public_key
-                · allowed_origins text[] · revoked_at
+site_keys       id uuid pk · org_id fk · project_id fk · name · public_key
+                · allowed_origins text[] · last_used_at · created_at · revoked_at
 checks          id uuid pk · org_id fk · project_id fk · type · target
                 · interval_seconds · config jsonb · enabled · created_at
 integrations    id uuid pk · org_id fk · project_id fk · kind
@@ -67,15 +67,21 @@ audit_log       id uuid pk · org_id fk · actor_user_id · action · target · 
 
 `role` is `owner | admin | member | viewer`. The `viewer` role is what the P3 non-technical owner gets in Phase 2.
 
-### Four decisions inside this schema
+### Five decisions inside this schema
 
 **1. `org_id` is denormalized onto every table**, even where it is reachable through `project_id`. Deliberate: it puts the tenant filter one column away everywhere, so a single rule — *every query filters `org_id`* — holds identically on the Postgres and ClickHouse sides. One rule, enforced in one repository layer, on both stores.
 
-**2. API keys hash with SHA-256; passwords hash with argon2.** Argon2 is *designed* to be slow, which is right for a password typed by a human and catastrophic for a credential verified on the ingest path thousands of times per second. API keys are high-entropy random strings, so key stretching buys nothing against brute force. Lookup by `key_prefix`, verify by hash, cache the result in Redis with invalidation on revoke.
+**2. A key's kind is the table it lives in.** `api_keys` holds the secret,
+server-side kind; `site_keys` holds the public, browser-side kind, stored in the
+clear because it ships inside the page that carries it. Neither table holds both,
+so the receiver's server-door lookup cannot return a public key even if a filter
+were forgotten — see [ADR 0086](decisions/0086-a-keys-kind-is-the-table-it-lives-in.md).
 
-**3. One key lookup resolves both ids.** The `api_keys` row carries `org_id` and `project_id`, so the receiver's hot path is a single cached lookup rather than a key→project→org chain.
+**3. API keys hash with SHA-256; passwords hash with argon2.** Argon2 is *designed* to be slow, which is right for a password typed by a human and catastrophic for a credential verified on the ingest path thousands of times per second. API keys are high-entropy random strings, so key stretching buys nothing against brute force. Lookup by `key_prefix`, verify by hash, cache the result in Redis with invalidation on revoke.
 
-**4. UUIDv7 for primary keys** (RFC 9562) — time-ordered, so index locality behaves like a sequence while remaining globally unique and safe to expose. Stored native in Postgres, rendered as canonical strings in ClickHouse's `tenant_id` / `project_id` columns.
+**4. One key lookup resolves both ids.** The `api_keys` row carries `org_id` and `project_id`, so the receiver's hot path is a single cached lookup rather than a key→project→org chain.
+
+**5. UUIDv7 for primary keys** (RFC 9562) — time-ordered, so index locality behaves like a sequence while remaining globally unique and safe to expose. Stored native in Postgres, rendered as canonical strings in ClickHouse's `tenant_id` / `project_id` columns.
 
 ### API key format
 

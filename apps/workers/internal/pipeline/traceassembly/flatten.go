@@ -71,6 +71,11 @@ type spanRow struct {
 	ResourceAttrs        string
 	SpanAttrs            string
 	Events               string
+	// ExceptionType and ExceptionMessage are lifted out of the `exception`
+	// event so error grouping can read a column instead of parsing every span's
+	// events. The whole event, stacktrace included, stays in Events.
+	ExceptionType    string
+	ExceptionMessage string
 	// Links are the spans this one names as its causes. Across a queue they are
 	// the only evidence of who published the message: the consumer starts its
 	// own trace and links back, so `parent_span_id` names nothing.
@@ -166,6 +171,7 @@ func flattenSpan(
 	attributes := span.GetAttributes()
 	promoted := promotedHTTP(attributes, httpNames)
 	rpc := promotedRPC(attributes)
+	exception := firstException(span.GetEvents())
 
 	return spanRow{
 		Timestamp:         unixNanoTime(span.GetStartTimeUnixNano()),
@@ -190,6 +196,8 @@ func flattenSpan(
 		ResourceAttrs:     resource.attrsJSON,
 		SpanAttrs:         otlpvalue.AttributesJSON(attributes),
 		Events:            eventsJSON(span.GetEvents()),
+		ExceptionType:     exception.Type,
+		ExceptionMessage:  exception.Message,
 		Links:             spanLinks(span.GetLinks()),
 		Peer:              peerOf(attributes, rpc.system),
 		// Carried for the sampler alone, which reads an explicit `rv` out of it
@@ -337,6 +345,29 @@ func spanLinks(links []*tracepb.Span_Link) []spanLink {
 		})
 	}
 	return converted
+}
+
+// firstException promotes one `exception` event to the two columns error
+// grouping reads. A span may record several, and the columns hold one.
+//
+// The first one that said anything wins, for two reasons. It is the throw that
+// happened, where a later event on the same span is usually the same exception
+// re-recorded as it unwinds — measured on the dev store, every span carrying two
+// exception events carried one distinct type. And it is the one the API already
+// falls back to when it digs the matching stacktrace back out of `events`, so
+// the column and the stacktrace beside it name the same throw.
+//
+// The exceptions not promoted are not lost: every event stays whole in `events`.
+func firstException(events []*tracepb.Span_Event) otlpvalue.Exception {
+	for _, event := range events {
+		if event.GetName() != otlpvalue.ExceptionEventName {
+			continue
+		}
+		if exception := otlpvalue.ExceptionFrom(event.GetAttributes()); exception.Recorded() {
+			return exception
+		}
+	}
+	return otlpvalue.Exception{}
 }
 
 // spanEvent is the shape serialized into the `events` String column.

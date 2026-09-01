@@ -134,6 +134,11 @@ services:
       # spans the change.
       WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:-7b6H4ZIcduE9aYaTRdv2LKQeIKR3hYf5w4IDCAdevfI=}
       WORKER_PIPELINES: all
+      # Go's runtime profiles on the admin listener, which is not published to
+      # the host — reach them with `docker compose exec worker wget -qO-
+      # http://127.0.0.1:8081/debug/pprof/heap`. Off everywhere else: the
+      # endpoints are unauthenticated.
+      WORKERS_PPROF_ENABLED: "true"
     healthcheck:
       # /healthz — liveness. It now covers the pipeline as well as the process,
       # so a stopped consumer turns the container red; it deliberately does NOT
