@@ -5,8 +5,10 @@ import {
   CPU_METRICS,
   cpuFraction,
   describeMemory,
+  describeStale,
   describeUnattributed,
   explainMissing,
+  explainStale,
   explainUnattributed,
   formatByteRate,
   formatBytes,
@@ -16,6 +18,7 @@ import {
   isUnattributed,
   MEMORY_METRICS,
   nodeName,
+  STOPPED_REPORTING,
 } from "./node-readings";
 
 function node(overrides: Partial<NodeSummary> = {}): NodeSummary {
@@ -37,10 +40,15 @@ function node(overrides: Partial<NodeSummary> = {}): NodeSummary {
     network_bytes_per_second: null,
     first_seen: "2026-08-30T09:29:55.196Z",
     last_seen: "2026-08-30T09:42:56.449Z",
+    reporting_interval_seconds: 60,
+    stale: false,
     signals: [],
     ...overrides,
   };
 }
+
+/** The moment "now" is, so a relative time in an assertion is a fixed string. */
+const NOW = Date.parse("2026-08-30T10:40:00.000Z");
 
 describe("an absent measurement is never a zero", () => {
   it("answers a null byte count with a rule", () => {
@@ -217,6 +225,67 @@ function reporterNode(overrides: Partial<NodeSummary> = {}): NodeSummary {
     ...overrides,
   });
 }
+
+describe("a node that stopped reporting is separated from one that has not", () => {
+  it("says what it can prove and not that the node is down", () => {
+    // A machine switched off and a collector that crashed are identical from
+    // here. Claiming the first would be a diagnosis we have no evidence for.
+    const said = explainStale(node({ stale: true }), NOW);
+
+    expect(said).toContain("may be down, or it may have stopped sending");
+    expect(said).toContain("cannot tell the two apart");
+    expect(STOPPED_REPORTING).toBe("stopped reporting");
+  });
+
+  it("carries the cadence, which is the only thing that makes the age mean anything", () => {
+    // "57 min ago" is unremarkable for a host scraped every hour and a long
+    // outage for one scraped every minute. Without the interval, neither the
+    // reader nor the rule can tell those apart.
+    const said = explainStale(node({ stale: true, reporting_interval_seconds: 60 }), NOW);
+
+    expect(said).toContain("57 min. ago");
+    expect(said).toContain("every 1m 00s");
+  });
+
+  it("says so plainly when the node sent too few points to show a cadence", () => {
+    const said = explainStale(node({ stale: true, reporting_interval_seconds: null }), NOW);
+
+    expect(said).toContain("too few points");
+    expect(said).not.toContain("every");
+  });
+
+  it("counts and names the quiet nodes for the fleet, since a row can be below the fold", () => {
+    const said = describeStale([
+      node({ host: "web-01", stale: true }),
+      node({ host: "web-02" }),
+      reporterNode({ stale: true }),
+    ]);
+
+    expect(said).toContain("2 nodes have stopped reporting");
+    expect(said).toContain("web-01");
+    expect(said).toContain("reported by recommendation");
+    expect(said).not.toContain("web-02");
+  });
+
+  it("agrees with itself when only one node is quiet", () => {
+    const said = describeStale([node({ host: "web-01", stale: true })]);
+
+    expect(said).toContain("1 node has stopped reporting");
+  });
+
+  it("says nothing at all when the whole fleet is still reporting", () => {
+    expect(describeStale([node(), reporterNode()])).toBe(null);
+  });
+
+  it("keeps a quiet node's readings rather than blanking them", () => {
+    // They were measured. Erasing them is the same lie as writing a zero, and
+    // the last known state is what someone opening this screen came for.
+    const quiet = node({ stale: true, cpu_utilization: 0.054 });
+
+    expect(formatCpu(quiet)).toBe("5.4%");
+    expect(describeStale([quiet])).toContain("last known state");
+  });
+});
 
 describe("explainMissing", () => {
   it("says the scraper is off when the node sent none of the metrics", () => {

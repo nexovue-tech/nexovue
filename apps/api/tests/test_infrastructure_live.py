@@ -56,6 +56,10 @@ SECOND_INSTANCE: Final = "instance-two"
 # service resource. It must not split the host or double its readings.
 SECOND_HOST_REPORTER: Final = "live-probe-second-agent"
 
+# A third process of that service, whose last reading landed long enough before
+# the window closed that it has plainly stopped reporting.
+SILENT_INSTANCE: Final = "instance-that-went-quiet"
+
 METRIC_TABLES: Final = ("metrics_gauge", "metrics_sum")
 
 # One day of retention, so the table's TTL removes anything the mutation misses.
@@ -63,6 +67,21 @@ PROBE_RETENTION_DAYS: Final = 1
 
 # How far apart the fleet's two observations sit, which is what a rate divides by.
 WINDOW_SECONDS: Final = 100
+
+# How long before the others the silent instance stopped. Well past the five
+# intervals its own two points imply, and still inside the read window.
+SILENCE_SECONDS: Final = 480
+
+# The disk this host reports, its only partition, and a genuinely second disk.
+# `/proc/diskstats` lists all three, and the first two carry the same bytes.
+DISK: Final = "vda"
+DISK_PARTITION: Final = "vda1"
+SECOND_DISK: Final = "vdb"
+
+# The volume behind `/`, mounted a second time at `/bind` — the same bytes under
+# two mountpoints, which is what the Collector's scraper emits for a bind mount.
+ROOT_DEVICE: Final = "/dev/vda1"
+DATA_DEVICE: Final = "/dev/vdb1"
 
 
 def _dsn() -> SplitResult:
@@ -122,9 +141,14 @@ async def fleet(clickhouse: Any) -> AsyncIterator[str]:
 
 
 def _window() -> tuple[datetime, datetime]:
-    """Wide enough to hold the fleet whatever the clock did while it was written."""
+    """Wide enough to hold the fleet whatever the clock did while it was written.
+
+    It has to reach back past the silent instance's *first* point as well as its
+    last, or the read would see one point, measure no cadence, and prove the
+    fallback rather than the measured rule.
+    """
     end = datetime.now(UTC) + timedelta(minutes=1)
-    return end - timedelta(minutes=10), end
+    return end - timedelta(minutes=30), end
 
 
 def _repository(client: Any, tenant_id: str) -> TenantScopedRepository:
@@ -158,11 +182,20 @@ async def test_a_reporting_host_and_container_come_back_rolled_up(
     assert host.memory_used_bytes == 6_000_000_000
     assert host.memory_limit_bytes == 10_000_000_000
     assert host.memory_utilization == 0.6
+    # `/` and its bind mount at `/bind` are one device and count once; `/data`
+    # is a second device and is added.
     assert host.filesystem_used_bytes == 40
     assert host.filesystem_limit_bytes == 200
     assert host.filesystem_utilization == 0.2
-    # 5,000 bytes over 100 seconds on each of two directions.
+    # 5,000 bytes over 100 seconds on each of eth0's two directions. Loopback
+    # moved 45,000 on each and contributes nothing.
     assert host.network_bytes_per_second == 100.0
+    # vda at 100 B/s plus vdb at 10. vda1 is a partition of vda carrying the
+    # same bytes, and adding it would say 200.
+    assert host.disk_bytes_per_second == 110.0
+    # Reporting every hundred seconds, right up to the end of the window.
+    assert host.reporting_interval_seconds == float(WINDOW_SECONDS)
+    assert host.stale is False
 
     container = by_kind["container"]
     assert container.container == CONTAINER
@@ -182,6 +215,7 @@ async def test_signals_names_what_the_fleet_actually_sent(clickhouse: Any, fleet
         conventions.SYSTEM_CPU_UTILIZATION,
         conventions.SYSTEM_MEMORY_USAGE,
         conventions.SYSTEM_FILESYSTEM_USAGE,
+        conventions.SYSTEM_DISK_IO,
         conventions.SYSTEM_NETWORK_IO,
         conventions.CONTAINER_CPU_USAGE,
         conventions.CONTAINER_MEMORY_USAGE,
@@ -189,10 +223,10 @@ async def test_signals_names_what_the_fleet_actually_sent(clickhouse: Any, fleet
     }
     assert all(signal.points > 0 for signal in answer.signals)
 
-    # One node per metric, except CPU: the named host and the two unattributed
+    # One node per metric, except CPU: the named host and the three unattributed
     # processes all report it, and the count is now at the reporter grain.
     by_name = {signal.metric_name: signal.nodes for signal in answer.signals}
-    assert by_name[conventions.SYSTEM_CPU_UTILIZATION] == 3
+    assert by_name[conventions.SYSTEM_CPU_UTILIZATION] == 4
     assert by_name[conventions.SYSTEM_MEMORY_USAGE] == 1
 
 
@@ -240,12 +274,12 @@ async def test_the_repository_refuses_a_statement_that_lost_its_tenant_predicate
         )
 
 
-async def test_two_processes_without_a_host_name_stay_two_nodes(
+async def test_processes_without_a_host_name_stay_separate_nodes(
     clickhouse: Any, fleet: str
 ) -> None:
     """The grouping guarantee, asserted where it actually lives: the SQL.
 
-    Both resources name neither a host nor a container, so the old
+    None of these resources names a host or a container, so the old
     `(host, container)` key put them in one node and averaged a 20%-busy process
     with an 80%-busy one into a single meaningless 50%. They are now identified
     by `service.instance.id`, which is what our own store's `recommendation`
@@ -261,11 +295,45 @@ async def test_two_processes_without_a_host_name_stay_two_nodes(
         key=lambda node: node.reporter_instance,
     )
 
-    assert [node.reporter_instance for node in reporters] == [FIRST_INSTANCE, SECOND_INSTANCE]
+    assert [node.reporter_instance for node in reporters] == sorted(
+        [FIRST_INSTANCE, SECOND_INSTANCE, SILENT_INSTANCE]
+    )
     assert all(node.reporter == REPORTER for node in reporters)
     # Never a host: naming a machine after a process id would invent one.
     assert all(node.host == "" and node.container == "" for node in reporters)
-    assert [round(node.cpu_utilization or -1, 6) for node in reporters] == [0.2, 0.8]
+    assert {node.reporter_instance: round(node.cpu_utilization or -1, 6) for node in reporters} == {
+        FIRST_INSTANCE: 0.2,
+        SECOND_INSTANCE: 0.8,
+        SILENT_INSTANCE: 0.5,
+    }
+
+
+async def test_a_process_that_stopped_reporting_is_marked_and_still_listed(
+    clickhouse: Any, fleet: str
+) -> None:
+    """The defect stated the right way round: is this thing down, or has it only
+    stopped reporting?
+
+    Three processes of one service reached the store; the third's last reading
+    landed eight minutes before the window closed, having arrived every hundred
+    seconds until then. It is separated from the live two by that cadence and
+    not by a fixed age, and its readings stay on the screen — they are its last
+    known state, and a vanished node is the most important row here.
+    """
+    start, end = _window()
+
+    answer = await service.list_nodes(
+        _repository(clickhouse, fleet), project_id=PROJECT, from_time=start, to_time=end
+    )
+    by_instance = {node.reporter_instance: node for node in answer.nodes if node.kind == "reporter"}
+
+    silent = by_instance[SILENT_INSTANCE]
+    assert silent.reporting_interval_seconds == float(WINDOW_SECONDS)
+    assert silent.stale is True
+    assert silent.cpu_utilization == 0.5
+
+    assert by_instance[FIRST_INSTANCE].stale is False
+    assert by_instance[SECOND_INSTANCE].stale is False
 
 
 async def test_a_named_host_reported_by_two_services_is_one_node_with_one_memory_figure(
@@ -381,14 +449,26 @@ def _gauge_rows(tenant_id: str, start: datetime, end: datetime) -> list[str]:
 
 
 def _reporter_rows(tenant_id: str, start: datetime, end: datetime) -> list[str]:
-    """Two processes of one service, neither naming a host — the demo's shape."""
+    """Three processes of one service, none naming a host — the demo's shape.
+
+    Two are still reporting up to the end of the window. The third stopped
+    `SILENCE_SECONDS` earlier, which is what a restart leaves behind: a row
+    holding real readings from a process that no longer exists.
+    """
+    silence = timedelta(seconds=SILENCE_SECONDS)
+    observations = {
+        FIRST_INSTANCE: (0.2, (start, end)),
+        SECOND_INSTANCE: (0.8, (start, end)),
+        SILENT_INSTANCE: (0.5, (start - silence, end - silence)),
+    }
+
     rows = []
-    for instance, busy in ((FIRST_INSTANCE, 0.2), (SECOND_INSTANCE, 0.8)):
+    for instance, (busy, times) in observations.items():
         resource = {
             "service": {"name": REPORTER, "instance": {"id": instance}},
             "telemetry": {"sdk": {"language": "python"}},
         }
-        for at in (start, end):
+        for at in times:
             for mode, fraction in (("idle", 1.0 - busy), ("user", busy)):
                 rows.append(
                     _row(
@@ -425,7 +505,13 @@ def _sum_rows(tenant_id: str, start: datetime, end: datetime) -> list[str]:
                         value=level,
                     )
                 )
-        for mountpoint, used, free in (("/", 30, 70), ("/data", 10, 90)):
+        # `/` and `/bind` are one device, so the pair must count once; `/data`
+        # is a second device and must be added to it.
+        for device, mountpoint, used, free in (
+            (ROOT_DEVICE, "/", 30, 70),
+            (ROOT_DEVICE, "/bind", 30, 70),
+            (DATA_DEVICE, "/data", 10, 90),
+        ):
             for state, level in (("used", used), ("free", free)):
                 rows.append(
                     _row(
@@ -435,7 +521,10 @@ def _sum_rows(tenant_id: str, start: datetime, end: datetime) -> list[str]:
                         metric_name=conventions.SYSTEM_FILESYSTEM_USAGE,
                         unit="By",
                         attributes={
-                            "system": {"filesystem": {"state": state, "mountpoint": mountpoint}}
+                            "system": {
+                                "device": device,
+                                "filesystem": {"state": state, "mountpoint": mountpoint},
+                            }
                         },
                         value=level,
                     )
@@ -456,17 +545,45 @@ def _sum_rows(tenant_id: str, start: datetime, end: datetime) -> list[str]:
                 )
             )
 
-    # A counter only rises: 5,000 bytes across the window on each direction.
-    for direction in ("receive", "transmit"):
-        for at, level in ((start, 0), (end, 5_000)):
+    # A counter only rises: 5,000 bytes across the window on each direction of
+    # the real interface. Loopback moves nine times as much and must not appear
+    # in the answer at all — it never reached a network, and the same bytes are
+    # counted on both of its directions.
+    for interface, transferred in (("eth0", 5_000), ("lo", 45_000)):
+        for direction in ("receive", "transmit"):
+            for at, level in ((start, 0), (end, transferred)):
+                rows.append(
+                    _row(
+                        tenant_id,
+                        at=at,
+                        resource=_HOST_RESOURCE,
+                        metric_name=conventions.SYSTEM_NETWORK_IO,
+                        unit="By",
+                        attributes={
+                            "network": {
+                                "interface": {"name": interface},
+                                "io": {"direction": direction},
+                            }
+                        },
+                        value=level,
+                    )
+                )
+
+    # The disk, the partition inside it carrying the very same bytes, and a
+    # second disk that is genuinely its own.
+    for device, transferred in ((DISK, 10_000), (DISK_PARTITION, 10_000), (SECOND_DISK, 1_000)):
+        for at, level in ((start, 0), (end, transferred)):
             rows.append(
                 _row(
                     tenant_id,
                     at=at,
                     resource=_HOST_RESOURCE,
-                    metric_name=conventions.SYSTEM_NETWORK_IO,
+                    metric_name=conventions.SYSTEM_DISK_IO,
                     unit="By",
-                    attributes={"network": {"io": {"direction": direction}}},
+                    attributes={
+                        "system": {"device": device},
+                        "disk": {"io": {"direction": "read"}},
+                    },
                     value=level,
                 )
             )

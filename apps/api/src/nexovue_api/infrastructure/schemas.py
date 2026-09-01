@@ -47,19 +47,32 @@ class NodeSummary(BaseModel):
     memory_limit_bytes: int | None = None
     memory_utilization: float | None = None
 
-    # Summed across every mounted filesystem the node reported.
+    # Summed across the node's volumes, counting a device mounted twice once.
     filesystem_used_bytes: int | None = None
     filesystem_limit_bytes: int | None = None
     filesystem_utilization: float | None = None
 
     # Rates, because the underlying metrics are counters that only rise. Read
     # across the window, so a short window gives a spikier number than a long
-    # one — that is a property of the question, not of the node.
+    # one — that is a property of the question, not of the node. Each disk and
+    # each interface is counted once: see `independence.py`.
     disk_bytes_per_second: float | None = None
     network_bytes_per_second: float | None = None
 
     first_seen: IsoTimestamp
     last_seen: IsoTimestamp
+
+    # How often this node reported, measured from its own points. It is what
+    # gives `last_seen` a meaning: a minute of silence is nothing from a host
+    # scraped every ten minutes and three missed reports from one scraped every
+    # ten seconds. Null when the window held too few points to show a cadence.
+    reporting_interval_seconds: float | None = None
+
+    # True when this node went quiet before the requested window ended — more
+    # than `liveness.STALE_AFTER_INTERVALS` of its own intervals with nothing.
+    # It never means "down": telemetry cannot tell a dead machine from one that
+    # stopped sending, and this says only that we have not heard from it.
+    stale: bool
     # The metric names this node sent inside the window, in name order.
     signals: list[str] = Field(default_factory=list)
 

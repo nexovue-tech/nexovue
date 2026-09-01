@@ -52,6 +52,21 @@ export interface NodeSummary {
 
   first_seen: string;
   last_seen: string;
+
+  /**
+   * How often this node reported, measured from its own points. It is what gives
+   * `last_seen` a meaning: a minute of silence is nothing from a host scraped every ten
+   * minutes and three missed reports from one scraped every ten seconds. Null when the
+   * window held too few points to show a cadence.
+   */
+  reporting_interval_seconds: number | null;
+
+  /**
+   * True when this node went quiet before the window ended. It never means "down":
+   * telemetry cannot tell a dead machine from one that stopped sending.
+   */
+  stale: boolean;
+
   /** The metric names this node sent inside the window, in name order. */
   signals: string[];
 }

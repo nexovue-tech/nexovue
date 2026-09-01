@@ -7,12 +7,21 @@
  * no memory — a claim we have no reading for. Every formatter here answers `null` with
  * an em dash, and every em dash has a tooltip saying which of the two reasons it is:
  * the node sent no such metric, or it sent one whose readings we could not interpret.
+ *
+ * The same rule governs a node that went quiet: its row keeps the readings it sent,
+ * marked as the node's last known state rather than its current one. Erasing them would
+ * be the same lie in a different place.
  */
+
+import { formatDuration } from "@/shared/format/duration";
+import { formatRelativeTime } from "@/shared/format/time";
 
 import type { NodeSummary } from "./api";
 
 /** Nothing measured. */
 const UNKNOWN = "—";
+
+const MS_PER_SECOND = 1000;
 
 /** Fixed locale: digit grouping must not change with the reader's machine. */
 const NUMBER_LOCALE = "en-US";
@@ -151,6 +160,51 @@ export function describeUnattributed(nodes: readonly NodeSummary[]): string | nu
       : `${reporters.join(", ")} ${reporters.length === 1 ? "is" : "are"}`;
 
   return `${subject} reporting host metrics without setting host.name, so these readings cannot be attributed to a machine. They are grouped by the process that sent them instead, which keeps each row's numbers coherent and over-counts the fleet: three instrumented services on one machine appear as three rows. ${HOST_NAME_REMEDY}`;
+}
+
+/* ------------------------------------------------------- has it stopped reporting? */
+
+/**
+ * The label on a node that went quiet.
+ *
+ * "Stopped reporting" and not "down", because those are different claims and telemetry
+ * cannot tell them apart: a machine that was switched off and one whose collector
+ * crashed look identical from here. Saying the one we can prove is the point.
+ */
+export const STOPPED_REPORTING = "stopped reporting";
+
+/**
+ * Why a row is marked, in the terms that let a reader judge it: the cadence this node
+ * was keeping, and how long it has been since it kept it.
+ *
+ * The cadence is the whole reason the mark means anything. "Last seen 4 min ago" is
+ * unremarkable for a host scraped every ten minutes and three missed reports for one
+ * scraped every minute, and only the interval separates the two.
+ */
+export function explainStale(node: NodeSummary, now = Date.now()): string {
+  const silence = `Last reported ${formatRelativeTime(node.last_seen, now)}`;
+  if (node.reporting_interval_seconds === null) {
+    return `${silence}, and it sent too few points to show how often it reports. It may be down, or it may have stopped sending — this cannot tell the two apart.`;
+  }
+  return `${silence}, having been reporting every ${formatDuration(
+    node.reporting_interval_seconds * MS_PER_SECOND,
+  )}. It may be down, or it may have stopped sending — this cannot tell the two apart.`;
+}
+
+/**
+ * The fleet-wide count, or null when everything is still reporting.
+ *
+ * Said above the table for the same reason the unattributed notice is: a node that
+ * vanished is the most important thing this screen can tell someone, and a mark on a row
+ * far down a virtualized list is not something a reader will find by scrolling.
+ */
+export function describeStale(nodes: readonly NodeSummary[]): string | null {
+  const quiet = nodes.filter((candidate) => candidate.stale);
+  if (quiet.length === 0) return null;
+
+  const named = quiet.map(nodeName).join(", ");
+  const subject = quiet.length === 1 ? "node has" : `nodes have`;
+  return `${quiet.length} ${subject} stopped reporting: ${named}. Each is still listed with the readings it sent — they are that node's last known state, not its current one. A node that vanished may be down, or may only have stopped sending; nothing in the telemetry separates those.`;
 }
 
 /**

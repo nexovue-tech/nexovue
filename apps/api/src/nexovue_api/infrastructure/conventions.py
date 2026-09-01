@@ -26,6 +26,12 @@ No resource carried a `host.name`; re-checked 2026-09-01 and still none does,
 so those readings are identified by the process that reported them instead
 (`queries.py`, "Node identity").
 
+**No filesystem reading has ever arrived**, re-checked 2026-09-01, and the
+reason is the producer rather than the store: the Python `SystemMetricsInstrumentor`
+carries a `# TODO Add _get_system_filesystem_usage` where that scraper would be.
+The Collector's `filesystemscraper` does send it, which is why `independence.py`
+still has to deduplicate its mountpoints unverified against live rows.
+
 **Container names here are unverified.** `docker_stats` does not emit the
 `container.*` semconv names at all — it sends `container.cpu.utilization`,
 `container.memory.usage.total`, `container.blockio.*` and
@@ -134,3 +140,16 @@ MEMORY_USED_STATE: Final = "used"
 
 FILESYSTEM_STATE_ATTRIBUTES: Final[tuple[str, ...]] = ("state", "system.filesystem.state")
 FILESYSTEM_USED_STATE: Final = "used"
+FILESYSTEM_MOUNTPOINT_ATTRIBUTES: Final[tuple[str, ...]] = (
+    "mountpoint",
+    "system.filesystem.mountpoint",
+)
+
+# Which block device a disk or filesystem reading belongs to. `service` needs it
+# to tell a partition from the disk that contains it, and one filesystem from the
+# same one mounted twice — without it those series are added to themselves.
+DEVICE_ATTRIBUTES: Final[tuple[str, ...]] = ("device", "system.device")
+
+# Which network interface a reading belongs to. The Collector and the Python SDK
+# both send `device`; semconv v1.27.0 named it `network.interface.name`.
+NETWORK_INTERFACE_ATTRIBUTES: Final[tuple[str, ...]] = ("device", "network.interface.name")

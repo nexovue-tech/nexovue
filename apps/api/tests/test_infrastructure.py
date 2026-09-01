@@ -41,9 +41,19 @@ HOST_B: Final = "db-01"
 WINDOW_END: Final = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
 WINDOW_START: Final = WINDOW_END - timedelta(hours=1)
 
-_EARLIEST_NANOS: Final = int(WINDOW_START.timestamp() * 1_000_000_000)
-# A hundred seconds of coverage, so a rate divides by a round number.
-_LATEST_NANOS: Final = _EARLIEST_NANOS + 100_000_000_000
+_NANOS_PER_SECOND: Final = 1_000_000_000
+
+# A hundred seconds of coverage ending as the window does, so a rate divides by
+# a round number and a node built from these series is still reporting.
+_LATEST_NANOS: Final = int(WINDOW_END.timestamp() * _NANOS_PER_SECOND)
+_SPAN_SECONDS: Final = 100.0
+
+# Eleven points across those hundred seconds: a report every ten seconds, which
+# is the cadence the liveness rule reads a node's deadline off.
+_POINTS: Final = 11
+_INTERVAL_SECONDS: Final = 10.0
+
+_AN_HOUR_IN_NANOS: Final = 3_600 * _NANOS_PER_SECOND
 
 _NODE_COLUMNS: Final = [
     "host",
@@ -85,11 +95,18 @@ def series(
     attributes: dict[str, Any] | None = None,
     latest: float,
     earliest: float | None = None,
+    latest_nanos: int = _LATEST_NANOS,
+    span_seconds: float = _SPAN_SECONDS,
+    points: int = _POINTS,
 ) -> tuple[Any, ...]:
     """One collapsed series, shaped as ClickHouse returns it.
 
     The query blanks the reporter whenever the resource named itself, so a row
     written here carries either a host/container or a reporter, never both.
+
+    `span_seconds` and `points` together are the cadence the liveness rule reads
+    a node's deadline off; the defaults are a report every ten seconds arriving
+    right up to the end of the window.
     """
     return (
         host,
@@ -101,9 +118,9 @@ def series(
         json.dumps(attributes or {}),
         latest,
         earliest if earliest is not None else latest,
-        _LATEST_NANOS,
-        _EARLIEST_NANOS,
-        7,
+        latest_nanos,
+        latest_nanos - int(span_seconds * _NANOS_PER_SECOND),
+        points,
     )
 
 
@@ -452,19 +469,145 @@ async def test_a_declared_memory_limit_wins_over_the_reconstructed_one() -> None
     assert node.memory_utilization == 0.25
 
 
-async def test_filesystem_figures_are_summed_across_mountpoints() -> None:
+async def test_filesystem_figures_are_summed_across_separate_volumes() -> None:
     node = await _one_node(
         [
-            _filesystem(mountpoint="/", state="used", value=30),
-            _filesystem(mountpoint="/", state="free", value=70),
-            _filesystem(mountpoint="/data", state="used", value=10),
-            _filesystem(mountpoint="/data", state="free", value=90),
+            _filesystem(device="/dev/vda1", mountpoint="/", state="used", value=30),
+            _filesystem(device="/dev/vda1", mountpoint="/", state="free", value=70),
+            _filesystem(device="/dev/vdb1", mountpoint="/data", state="used", value=10),
+            _filesystem(device="/dev/vdb1", mountpoint="/data", state="free", value=90),
         ]
     )
 
     assert node.filesystem_used_bytes == 40
     assert node.filesystem_limit_bytes == 200
     assert node.filesystem_utilization == 0.2
+
+
+# ------------------------------------- a sum needs the series to be independent
+#
+# Three of these metrics split on an attribute whose values overlap, so summing
+# every series of them counts the same bytes twice. Each rule below is a reading
+# of a producer's naming rather than of the specification, which settles none of
+# it; `independence.py` says which way each errs.
+
+
+async def test_a_partition_is_not_added_to_the_disk_that_contains_it() -> None:
+    """The live defect: `/proc/diskstats` lists `vda1` beside `vda`.
+
+    Measured on the demo's own store over thirty minutes, `vda` and `vda1`
+    carried identical read and write counters — one is a partition of the other,
+    not a second disk — and the screen reported twice the real traffic.
+    """
+    node = await _one_node(
+        [
+            _disk(device="vda", direction="read", earliest=0, latest=10_000),
+            _disk(device="vda1", direction="read", earliest=0, latest=10_000),
+            _disk(device="vdb", direction="read", earliest=0, latest=1_000),
+        ]
+    )
+
+    # 100 bytes/s from vda and 10 from vdb. Counting vda1 as well would say 200.
+    assert node.disk_bytes_per_second == 110.0
+
+
+async def test_an_nvme_partition_is_recognised_and_a_second_array_is_not() -> None:
+    """The kernel inserts `p` when a disk's own name ends in a digit.
+
+    That single rule is what keeps `nvme0n1p1` a partition while `md11` stays a
+    separate array rather than a partition of `md1` — the failure a bare
+    "name plus digits" test would produce.
+    """
+    node = await _one_node(
+        [
+            _disk(device="nvme0n1", direction="read", earliest=0, latest=10_000),
+            _disk(device="nvme0n1p1", direction="read", earliest=0, latest=10_000),
+            _disk(device="md1", direction="read", earliest=0, latest=1_000),
+            _disk(device="md11", direction="read", earliest=0, latest=1_000),
+        ]
+    )
+
+    # nvme0n1 at 100 B/s, plus md1 and md11 at 10 each — two arrays, not one.
+    assert node.disk_bytes_per_second == 120.0
+
+
+async def test_the_twenty_seventh_disk_is_not_read_as_a_partition_of_the_first() -> None:
+    """`sdaa` follows `sdz`, and it is a disk. The suffix has to be a number."""
+    node = await _one_node(
+        [
+            _disk(device="sda", direction="read", earliest=0, latest=10_000),
+            _disk(device="sdaa", direction="read", earliest=0, latest=10_000),
+        ]
+    )
+
+    assert node.disk_bytes_per_second == 200.0
+
+
+async def test_a_partition_whose_disk_was_not_reported_is_still_counted() -> None:
+    """Nothing here duplicates it, and dropping what a customer sent is worse."""
+    node = await _one_node([_disk(device="sda1", direction="read", earliest=0, latest=10_000)])
+
+    assert node.disk_bytes_per_second == 100.0
+
+
+async def test_loopback_is_not_network_traffic_and_is_left_out() -> None:
+    """It never reached a network, and its bytes are reported twice over.
+
+    On the demo's store `lo` showed 170.8 KiB transmitted and the same 170.8 KiB
+    received — one set of bytes, counted on both directions of one interface.
+    """
+    node = await _one_node(
+        [
+            _network(device="eth0", direction="receive", earliest=0, latest=5_000),
+            _network(device="eth0", direction="transmit", earliest=0, latest=5_000),
+            _network(device="lo", direction="receive", earliest=0, latest=9_000),
+            _network(device="lo", direction="transmit", earliest=0, latest=9_000),
+        ]
+    )
+
+    assert node.network_bytes_per_second == 100.0
+
+
+async def test_a_bsd_loopback_interface_is_left_out_too() -> None:
+    node = await _one_node(
+        [
+            _network(device="en0", direction="receive", earliest=0, latest=5_000),
+            _network(device="lo0", direction="receive", earliest=0, latest=9_000),
+        ]
+    )
+
+    assert node.network_bytes_per_second == 50.0
+
+
+async def test_one_filesystem_mounted_twice_is_counted_once() -> None:
+    """A bind mount, or `/` and `/var` on one device: the same bytes reported
+    under two mountpoints. Summing them reports twice the storage the machine
+    has, and the Collector's own scraper keys on (mountpoint, device) — so it
+    emits exactly this."""
+    node = await _one_node(
+        [
+            _filesystem(device="/dev/vda1", mountpoint="/", state="used", value=30),
+            _filesystem(device="/dev/vda1", mountpoint="/", state="free", value=70),
+            _filesystem(device="/dev/vda1", mountpoint="/var", state="used", value=30),
+            _filesystem(device="/dev/vda1", mountpoint="/var", state="free", value=70),
+        ]
+    )
+
+    assert node.filesystem_used_bytes == 30
+    assert node.filesystem_limit_bytes == 100
+    assert node.filesystem_utilization == 0.3
+
+
+async def test_mounts_that_name_no_device_stay_separate_filesystems() -> None:
+    """Two tmpfs mounts are genuinely two, and a blank device says nothing."""
+    node = await _one_node(
+        [
+            _filesystem(device="", mountpoint="/run", state="used", value=10),
+            _filesystem(device="", mountpoint="/dev/shm", state="used", value=10),
+        ]
+    )
+
+    assert node.filesystem_used_bytes == 20
 
 
 async def test_network_and_disk_are_reported_as_rates_not_totals() -> None:
@@ -497,6 +640,99 @@ async def test_a_counter_that_fell_is_an_exporter_restart_and_is_left_out() -> N
     )
 
     assert node.network_bytes_per_second == 50.0
+
+
+# ------------------------------------------------------- has it stopped reporting?
+#
+# `last_seen` on its own says nothing: a host reporting every ten seconds and one
+# reporting every ten minutes are not equally late at the same age. The threshold
+# is therefore read off each node's own cadence, and the question is asked against
+# the end of the requested window rather than wall-clock now — so a window that
+# closed yesterday still has an answer.
+
+
+async def test_a_nodes_reporting_cadence_is_measured_from_its_own_points() -> None:
+    node = await _one_node([_cpu(cpu="0", mode="user", value=0.4)])
+
+    assert node.reporting_interval_seconds == _INTERVAL_SECONDS
+    assert node.stale is False
+
+
+async def test_a_node_that_went_quiet_for_several_of_its_intervals_is_stale() -> None:
+    """The live defect: two rows styled identically, one of them long gone.
+
+    `recommendation` restarted, and the replaced process's row sat beside the
+    live one saying only "57 min ago" — which is meaningless without the cadence
+    it broke.
+    """
+    node = await _one_node([_quiet_since(_LATEST_NANOS - _AN_HOUR_IN_NANOS)])
+
+    assert node.reporting_interval_seconds == _INTERVAL_SECONDS
+    assert node.stale is True
+
+
+async def test_lateness_is_judged_against_the_cadence_and_not_a_fixed_age() -> None:
+    """Five minutes of silence is nothing from a node reporting every ten of
+    them, and it is three missed reports from a node reporting every minute.
+    A fixed threshold has to be wrong about one of the two."""
+    five_minutes_ago = _LATEST_NANOS - 300 * _NANOS_PER_SECOND
+
+    # Three points twenty minutes apart: a report every ten minutes.
+    unhurried = await _one_node([_quiet_since(five_minutes_ago, span_seconds=1_200, points=3)])
+    # Eleven points a hundred seconds apart: a report every ten seconds.
+    brisk = await _one_node([_quiet_since(five_minutes_ago)])
+
+    assert unhurried.reporting_interval_seconds == 600.0
+    assert unhurried.stale is False
+    assert brisk.reporting_interval_seconds == _INTERVAL_SECONDS
+    assert brisk.stale is True
+
+
+async def test_a_node_with_no_measurable_cadence_falls_back_to_a_fixed_age() -> None:
+    """One point in the window shows no interval, and inventing one would be a
+    guess. The fallback is stated where it lives, not implied here."""
+    recent = await _one_node([_quiet_since(_LATEST_NANOS, points=1)])
+    long_ago = await _one_node([_quiet_since(_LATEST_NANOS - _AN_HOUR_IN_NANOS, points=1)])
+
+    assert recent.reporting_interval_seconds is None
+    assert recent.stale is False
+    assert long_ago.stale is True
+
+
+async def test_a_node_that_stopped_reporting_is_still_listed_with_its_readings() -> None:
+    """A host that vanished is the most important thing this screen can say, and
+    dropping it is how that gets lost. The row stays, marked."""
+    store = FakeMetricStore(
+        {
+            TENANT_A: [
+                series(
+                    conventions.SYSTEM_CPU_UTILIZATION,
+                    host="",
+                    reporter="recommendation",
+                    reporter_instance="gone",
+                    attributes={"cpu": 0, "state": "user"},
+                    latest=0.054,
+                    latest_nanos=_LATEST_NANOS - _AN_HOUR_IN_NANOS,
+                ),
+                series(
+                    conventions.SYSTEM_CPU_UTILIZATION,
+                    host="",
+                    reporter="recommendation",
+                    reporter_instance="live",
+                    attributes={"cpu": 0, "state": "user"},
+                    latest=0.066,
+                ),
+            ]
+        }
+    )
+
+    answer = await _nodes(TENANT_A, store)
+
+    assert [node.reporter_instance for node in answer.nodes] == ["gone", "live"]
+    assert [node.stale for node in answer.nodes] == [True, False]
+    # Its last known readings are kept: they were measured, and erasing them
+    # would be the same lie as a zero.
+    assert [node.cpu_utilization for node in answer.nodes] == [0.054, 0.066]
 
 
 async def test_a_measurement_nobody_sent_is_null_and_never_zero() -> None:
@@ -645,6 +881,20 @@ async def test_a_container_is_its_own_node_and_reports_cores_not_a_fraction() ->
 # ------------------------------------------------------------------ row shapes
 
 
+def _quiet_since(
+    latest_nanos: int, *, span_seconds: float = _SPAN_SECONDS, points: int = _POINTS
+) -> tuple[Any, ...]:
+    """One CPU series whose last point landed at a chosen moment."""
+    return series(
+        conventions.SYSTEM_CPU_UTILIZATION,
+        attributes={"cpu": 0, "state": "user"},
+        latest=0.4,
+        latest_nanos=latest_nanos,
+        span_seconds=span_seconds,
+        points=points,
+    )
+
+
 def _cpu(*, cpu: str, mode: str, value: float) -> tuple[Any, ...]:
     return series(
         conventions.SYSTEM_CPU_UTILIZATION,
@@ -662,11 +912,14 @@ def _memory(*, state: str, value: float) -> tuple[Any, ...]:
     )
 
 
-def _filesystem(*, mountpoint: str, state: str, value: float) -> tuple[Any, ...]:
+def _filesystem(*, device: str, mountpoint: str, state: str, value: float) -> tuple[Any, ...]:
     return series(
         conventions.SYSTEM_FILESYSTEM_USAGE,
         unit="By",
-        attributes={"system": {"filesystem": {"state": state, "mountpoint": mountpoint}}},
+        attributes={
+            "device": device,
+            "system": {"filesystem": {"state": state, "mountpoint": mountpoint}},
+        },
         latest=value,
     )
 
@@ -678,6 +931,27 @@ def _counter(
         metric_name,
         unit="By",
         attributes={"direction": direction},
+        earliest=earliest,
+        latest=latest,
+    )
+
+
+def _disk(*, device: str, direction: str, earliest: float, latest: float) -> tuple[Any, ...]:
+    """The flat spelling both the Collector and the Python SDK send."""
+    return series(
+        conventions.SYSTEM_DISK_IO,
+        unit="By",
+        attributes={"device": device, "direction": direction},
+        earliest=earliest,
+        latest=latest,
+    )
+
+
+def _network(*, device: str, direction: str, earliest: float, latest: float) -> tuple[Any, ...]:
+    return series(
+        conventions.SYSTEM_NETWORK_IO,
+        unit="By",
+        attributes={"device": device, "direction": direction},
         earliest=earliest,
         latest=latest,
     )

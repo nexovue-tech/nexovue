@@ -14,8 +14,10 @@ import {
   cpuFraction,
   DISK_METRICS,
   describeMemory,
+  describeStale,
   describeUnattributed,
   explainMissing,
+  explainStale,
   explainUnattributed,
   FILESYSTEM_METRICS,
   formatByteRate,
@@ -26,6 +28,7 @@ import {
   isUnattributed,
   NETWORK_METRICS,
   nodeName,
+  STOPPED_REPORTING,
 } from "./node-readings";
 
 /**
@@ -34,6 +37,11 @@ import {
  * A third kind of row appears when a resource named no machine at all: the readings are
  * grouped by the process that sent them and labelled "reported by …", never by a host we
  * were never told about. `UnattributedNotice` says so once, with the one-line fix.
+ *
+ * A node that has gone quiet is marked and counted rather than dropped or reordered.
+ * "Stopped reporting" is the whole claim: a machine that was switched off and a collector
+ * that crashed are indistinguishable from here, and the API's `stale` says only that the
+ * node fell silent for several of its own reporting intervals.
  *
  * Kubernetes metrics are ingested and queryable, but pod, node and namespace views are
  * Phase 2 and deliberately absent — a fleet list is not the place to invent a cluster
@@ -95,6 +103,7 @@ export function InfrastructureScreen() {
       ) : (
         <>
           {nodes.data?.truncated ? <TruncationNotice /> : null}
+          <StaleNotice nodes={rows} />
           <UnattributedNotice nodes={rows} />
           <NodeTable nodes={rows} />
           <SignalStrip signals={signals.data ?? []} />
@@ -126,6 +135,26 @@ function TruncationNotice() {
     <p className="shrink-0 border-warning-border border-l-2 px-4 py-2 text-sm text-warning-text">
       This is the start of the fleet, not all of it — the read hit its series ceiling. Narrow the
       time range to see a complete list.
+    </p>
+  );
+}
+
+/**
+ * The nodes we have stopped hearing from, named once above the table.
+ *
+ * A mark on the row alone is not enough: the list is virtualized, so a node that
+ * vanished can sit below the fold, and that is the single most important thing this
+ * screen has to say. The rows themselves stay exactly where they are — reordering by
+ * staleness would rank a restart artefact against a real outage, and nothing here knows
+ * which is which.
+ */
+function StaleNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
+  const said = describeStale(nodes);
+  if (said === null) return null;
+
+  return (
+    <p className="shrink-0 border-critical-border border-l-2 px-4 py-2 text-critical-text text-sm">
+      {said}
     </p>
   );
 }
@@ -201,6 +230,7 @@ function NodeRow({ node }: { node: NodeSummary }) {
           {nodeName(node)}
         </span>
         <span className="shrink-0 font-mono text-2xs text-ink-dim">{node.kind}</span>
+        {node.stale ? <StoppedReportingBadge node={node} /> : null}
         {node.container && node.host ? (
           <span className="hidden shrink-0 truncate font-mono text-2xs text-ink-dim lg:inline">
             on {node.host}
@@ -263,6 +293,26 @@ function NodeRow({ node }: { node: NodeSummary }) {
         {formatRelativeTime(node.last_seen)}
       </span>
     </div>
+  );
+}
+
+/**
+ * The mark that separates a node still reporting from one that has gone quiet — the two
+ * were rendered identically, which is what made a dead row indistinguishable from a live
+ * one.
+ *
+ * It says "stopped reporting" rather than "down" because those are different claims and
+ * the telemetry only supports the first. The tooltip carries the evidence: how long the
+ * silence is, and the cadence it broke.
+ */
+function StoppedReportingBadge({ node }: { node: NodeSummary }) {
+  return (
+    <span
+      className="shrink-0 rounded-sm border border-critical-border bg-critical-subtle px-1.5 py-0.5 font-mono text-2xs text-critical-text uppercase tracking-caps"
+      title={explainStale(node)}
+    >
+      {STOPPED_REPORTING}
+    </span>
   );
 }
 

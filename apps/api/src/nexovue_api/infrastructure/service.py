@@ -15,14 +15,23 @@ only `idle`, the same number is `1 - idle`.
 
 *Memory and filesystem totals.* `system.memory.usage` is split by state and the
 states partition the total, so their sum is the limit when `system.memory.limit`
-is absent. Filesystem figures are summed across mountpoints: a host with five
-volumes gets one used-over-capacity pair, which is what a fleet list shows.
+is absent. Filesystem figures are summed across volumes: a host with five gets
+one used-over-capacity pair, which is what a fleet list shows.
 
 *Disk and network.* These are counters that only rise, so a level is
 meaningless and the reading is a rate: each series' own delta over its own
-elapsed time, summed across interfaces and directions. A fall means the
-exporter restarted, and that series contributes nothing rather than a negative
-rate.
+elapsed time, summed across devices and directions. A fall means the exporter
+restarted, and that series contributes nothing rather than a negative rate.
+
+**A sum is only ever taken across series that describe disjoint things.** Three
+of these metrics split on an attribute whose values overlap — a disk and its own
+partition, an interface and loopback, one filesystem mounted at two paths — and
+`independence.py` removes the overlap before the sum. Which way those rules err,
+and what they cannot see, is written down there.
+
+*Liveness.* A node's `last_seen` means nothing without the cadence it was
+reporting at, so both go on the wire and `liveness.py` holds the rule that
+relates them.
 
 A measurement nobody sent stays `None`. Substituting zero would report an
 unmonitored host as a healthy one.
@@ -38,7 +47,7 @@ from typing import Any, Final
 
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.infrastructure import conventions, queries
+from nexovue_api.infrastructure import conventions, independence, liveness, queries
 from nexovue_api.infrastructure.schemas import (
     NodeKind,
     NodeListResponse,
@@ -93,6 +102,7 @@ class Reading:
     latest_value: float
     first_seen: datetime
     last_seen: datetime
+    points: int
 
     def attribute(self, keys: Sequence[str]) -> str:
         """The first of these attribute spellings this series carries."""
@@ -105,6 +115,13 @@ class Reading:
     @property
     def elapsed_seconds(self) -> float:
         return (self.last_seen - self.first_seen).total_seconds()
+
+    @property
+    def reporting_interval_seconds(self) -> float | None:
+        """How often this series arrived. None when one point cannot show it."""
+        if self.points < 2 or self.elapsed_seconds <= 0:
+            return None
+        return self.elapsed_seconds / (self.points - 1)
 
 
 async def list_nodes(
@@ -126,7 +143,8 @@ async def list_nodes(
 
     return NodeListResponse(
         nodes=[
-            _summarize(key, readings) for key, readings in sorted(by_node.items(), key=_ordered)
+            _summarize(key, readings, as_of=to_time)
+            for key, readings in sorted(by_node.items(), key=_ordered)
         ],
         truncated=len(rows) >= MAX_SERIES,
     )
@@ -216,17 +234,23 @@ def _to_reading(row: dict[str, Any]) -> Reading:
         latest_value=float(row["latest_value"]),
         first_seen=values.nanos_to_datetime(row["earliest_nanos"]),
         last_seen=values.nanos_to_datetime(row["latest_nanos"]),
+        points=int(row["points"]),
     )
 
 
 # ------------------------------------------------------------------- roll-ups
 
 
-def _summarize(key: NodeKey, readings: Sequence[Reading]) -> NodeSummary:
+def _summarize(key: NodeKey, readings: Sequence[Reading], *, as_of: datetime) -> NodeSummary:
     memory_used = _memory_used_bytes(readings)
     memory_limit = _memory_limit_bytes(readings)
-    filesystem_used = _sum_of(readings, conventions.SYSTEM_FILESYSTEM_USAGE, _used_filesystem)
-    filesystem_limit = _filesystem_limit_bytes(readings)
+
+    volumes = _one_series_per_volume(readings)
+    filesystem_used = _sum_of(volumes, conventions.SYSTEM_FILESYSTEM_USAGE, _used_filesystem)
+    filesystem_limit = _filesystem_limit_bytes(volumes)
+
+    last_seen = max(reading.last_seen for reading in readings)
+    interval = _reporting_interval_seconds(readings)
 
     return NodeSummary(
         kind=key.kind,
@@ -242,20 +266,33 @@ def _summarize(key: NodeKey, readings: Sequence[Reading]) -> NodeSummary:
         filesystem_used_bytes=_as_bytes(filesystem_used),
         filesystem_limit_bytes=_as_bytes(filesystem_limit),
         filesystem_utilization=_ratio(filesystem_used, filesystem_limit),
-        disk_bytes_per_second=_byte_rate(
-            readings, conventions.SYSTEM_DISK_IO, conventions.CONTAINER_DISK_IO
-        ),
-        network_bytes_per_second=_byte_rate(
-            readings, conventions.SYSTEM_NETWORK_IO, conventions.CONTAINER_NETWORK_IO
-        ),
+        disk_bytes_per_second=_disk_bytes_per_second(readings),
+        network_bytes_per_second=_network_bytes_per_second(readings),
         first_seen=min(reading.first_seen for reading in readings),
-        last_seen=max(reading.last_seen for reading in readings),
+        last_seen=last_seen,
+        reporting_interval_seconds=interval,
+        stale=liveness.has_stopped_reporting(
+            last_seen=last_seen, as_of=as_of, interval_seconds=interval
+        ),
         signals=sorted({reading.metric_name for reading in readings}),
     )
 
 
 def _named(readings: Iterable[Reading], metric_name: str) -> list[Reading]:
     return [reading for reading in readings if reading.metric_name == metric_name]
+
+
+def _any_named(readings: Iterable[Reading], metric_names: Sequence[str]) -> list[Reading]:
+    return [reading for reading in readings if reading.metric_name in set(metric_names)]
+
+
+def _reporting_interval_seconds(readings: Sequence[Reading]) -> float | None:
+    """How often this node reports, read off its own series."""
+    return liveness.reporting_interval_seconds(
+        interval
+        for interval in (reading.reporting_interval_seconds for reading in readings)
+        if interval is not None
+    )
 
 
 def _cpu_utilization(readings: Sequence[Reading]) -> float | None:
@@ -370,18 +407,70 @@ def _sum_of(
     return sum(reading.latest_value for reading in selected) if selected else None
 
 
-def _byte_rate(readings: Sequence[Reading], *metric_names: str) -> float | None:
-    """Bytes per second across every series of these counters.
+def _disk_bytes_per_second(readings: Sequence[Reading]) -> float | None:
+    """Bytes per second across this node's disks, counting each disk once.
+
+    `/proc/diskstats` lists a partition beside the disk that contains it, and a
+    partition's bytes *are* its disk's bytes — adding both reported a machine at
+    twice its real traffic.
+    """
+    reported = _any_named(readings, (conventions.SYSTEM_DISK_IO, conventions.CONTAINER_DISK_IO))
+    disks = independence.whole_disks(_device(reading) for reading in reported)
+    return _summed_rate(
+        reading for reading in reported if not _device(reading) or _device(reading) in disks
+    )
+
+
+def _network_bytes_per_second(readings: Sequence[Reading]) -> float | None:
+    """Bytes per second across this node's network interfaces, without loopback.
+
+    Loopback traffic never reached a network, and its every byte is reported
+    twice: once transmitted and again received on the same interface.
+    """
+    reported = _any_named(
+        readings, (conventions.SYSTEM_NETWORK_IO, conventions.CONTAINER_NETWORK_IO)
+    )
+    return _summed_rate(
+        reading
+        for reading in reported
+        if not independence.is_loopback(reading.attribute(conventions.NETWORK_INTERFACE_ATTRIBUTES))
+    )
+
+
+def _one_series_per_volume(readings: Sequence[Reading]) -> list[Reading]:
+    """This node's filesystem readings, each device represented by one mountpoint.
+
+    One device mounted at two paths — a bind mount, or `/` and `/var` on one
+    filesystem — is one volume's bytes reported twice, and summing them reports
+    a machine with twice its storage.
+    """
+    reported = _any_named(
+        readings, (conventions.SYSTEM_FILESYSTEM_USAGE, conventions.SYSTEM_FILESYSTEM_LIMIT)
+    )
+    kept = independence.one_mountpoint_per_device(_volume(reading) for reading in reported)
+    return [reading for reading in reported if _volume(reading) in kept]
+
+
+def _device(reading: Reading) -> str:
+    return reading.attribute(conventions.DEVICE_ATTRIBUTES)
+
+
+def _volume(reading: Reading) -> tuple[str, str]:
+    """Which filesystem a reading describes: its device, and where it is mounted."""
+    return _device(reading), reading.attribute(conventions.FILESYSTEM_MOUNTPOINT_ATTRIBUTES)
+
+
+def _summed_rate(readings: Iterable[Reading]) -> float | None:
+    """Bytes per second across counters that only rise. None when none were sent.
 
     Each series is divided by its own elapsed time before the sum, because two
-    interfaces need not have been observed over the same span. A series whose
-    value fell saw an exporter restart and is left out — its delta describes the
+    devices need not have been observed over the same span. A series whose value
+    fell saw an exporter restart and is left out — its delta describes the
     restart, not the traffic.
     """
     rates = [
         (reading.latest_value - reading.earliest_value) / reading.elapsed_seconds
-        for metric_name in metric_names
-        for reading in _named(readings, metric_name)
+        for reading in readings
         if reading.elapsed_seconds > 0 and reading.latest_value >= reading.earliest_value
     ]
     return sum(rates) if rates else None
