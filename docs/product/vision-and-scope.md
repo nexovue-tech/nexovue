@@ -1,10 +1,12 @@
 # Product Vision & Scope
 
 > **Owner:** Raj
-> **Status:** Ideation / scoping. No code, no prototypes, no timelines yet.
+> **Status:** Product intent. Written during scoping and kept as the statement of *what we mean to build* — it is not a status report. Phase 1 has since been built through M8; `../delivery/phase-1-plan.md` is the authority on what exists.
 > **Purpose:** What we are building, for whom, and what is in or out of scope. Update as thinking evolves.
 > **Companion docs:** `../architecture/system-architecture.md` (technical design) · `requirements.md` (features) · `../research/market-analysis-2026.md` (research)
-> **Last updated:** 2026-08-15
+> **Last updated:** 2026-09-04 — the pricing and open-question sections reconciled against the code.
+>
+> **How to read this file.** Everything here is intent unless it says otherwise. Nothing in it is evidence that a thing is built. Where a decision has since been implemented, the section says so and names the migration or ADR.
 
 ---
 
@@ -40,9 +42,9 @@ All via **OpenTelemetry** (OTLP protocol, community SDKs — we do **not** build
 | 4 | **Deploy & change events** | Deploys, config changes, feature flags | Correlation ("spiked 2 min after deploy X") |
 
 **Later signals:**
-- 5. Continuous profiles — line-level CPU/memory attribution
-- 6. Session replays — RUM-side signal
-- 7. Synthetic check results — from our own probe bots
+- 5. Continuous profiles — line-level CPU/memory attribution. *Not built.*
+- 6. Session replays — RUM-side signal. *Not built.*
+- 7. Synthetic check results — from our own probe bots. **Built**: door 2 publishes them as OTLP metrics and logs inside the standard envelope, so they need no table and no worker of their own.
 
 ---
 
@@ -75,6 +77,12 @@ All via **OpenTelemetry** (OTLP protocol, community SDKs — we do **not** build
 | 3. **Browser snippet** | Lightweight JS script tag in the customer's site (OTel browser SDK is maturing; replay needs a custom DOM recorder) | RUM, session replay |
 | 4. **Pull integrations (APIs/webhooks)** | We connect out or receive webhooks: cloud APIs (CloudWatch/GCP) for infra metrics, direct DB connections (pg_stat_statements) for DB health, GitHub/CI webhooks for deploy events, cloud audit logs for SIEM | Infra metrics (cloud path), database monitoring, deploy events, SIEM |
 
+**Which of these exist (2026-09-04):** door 1 accepts traces, logs and metrics over OTLP/HTTP and
+OTLP/gRPC. Door 2 runs HTTP, SSL and Playwright browser checks. Door 3's receiving side is built — a
+separate browser entrance under `/browser`, gated by public site keys and an origin allowlist — but
+the RUM screens are not. Door 4b polls CloudWatch and `pg_stat_statements`, and deploy webhooks are
+built. SIEM and session replay are neither built nor scoped.
+
 Special cases:
 - **Continuous profiling** — new official OTel signal, support still early; historically own agents (Pyroscope-style).
 - **Network monitoring** — eBPF kernel-level agents, not OTel.
@@ -104,10 +112,35 @@ This pipeline IS the product's differentiation — competitors have pieces, not 
 ## 5. Business / Pricing
 
 > ✅ **DECIDED 2026-08-27 — the unit is the service.** See [ADR 0056](../architecture/decisions/0056-per-service-pricing.md).
+> 💵 **PRICED 2026-09-01, provisionally.** `apps/api/migrations/versions/0015_seed_plan_prices.py`.
 
 Price per service monitored, with a volume allowance per service and a ceiling on the service-count
-component. Free tier for one service. Four promises: the bill has a ceiling · never per seat · never
+component. Four promises: the bill has a ceiling · never per seat · never
 per host · over the allowance we **block and say so rather than bill**.
+
+The first prices are rows in `plan_prices`, effective 2026-09-01, priced against what the market
+charges rather than against cost. A repricing is a **new row with a later `effective_from`**, never
+an edit to an existing one, so a past invoice can always be recomputed from what it was billed on
+([ADR 0083](../architecture/decisions/0083-the-period-is-the-month-and-the-allowance-is-bytes.md)):
+
+| Plan | Per service / month | Included bytes per service | Service ceiling |
+|---|---|---|---|
+| free | $0.00 | 2 GiB | **3 services** |
+| pro | $6.00 | 10 GiB | uncapped |
+| scale | $5.00 | 25 GiB | uncapped |
+
+Enterprise deliberately has no row: a tier priced by agreement has no list price, and the usage
+screen shows no cost for it, which is the truth.
+
+At $6, ten services cost $60/month against roughly $138 for the three hosts of Datadog
+infrastructure and APM that would carry them — a service is finer than a host, so the per-unit price
+has to sit below a per-host price. That is the comparison the number is built to win, and the one
+worth re-checking when it changes.
+
+**Still open, and the migration says so:** ADR 0056 states both that we block above the allowance
+*and* that overage stays live and bills. Those are two different products. `max_billed_services`
+caps the free tier at three; what happens when a **paid** tier exceeds its included volume is
+undecided, and the usage screen says in words that overage is not in the figure it shows.
 
 M1's measurements are what made this decidable — marginal cost is **$0.0017 per million spans**
 against Dash0's $0.60 list, so infrastructure is a rounding error against any defensible price. The
@@ -118,8 +151,8 @@ at the top end. It loses on two things: the same traffic bills across a 10× ran
 how richly a customer's SDK is configured, and it **taxes instrumentation** — which starves the
 Phase 2 insight layer that is the whole differentiation.
 
-**Still open:** exact price points, the Phase 2 inference cost that could still break the unit, and
-payments (below).
+**Still open:** the Phase 2 inference cost that could still break the unit, paid-tier overage
+behaviour, and payments (below).
 
 ---
 
@@ -146,8 +179,7 @@ Key design points:
 | 2026-08 | Build on OpenTelemetry; do not build collection SDKs/agents |
 | 2026-08 | Derive application metrics from traces first (simpler setup) |
 | 2026-08 | Two-view design: developer view + plain-language owner view |
-| 2026-08 | Agency channel and pricing model deferred |
-| 2026-08 | No code / prototype yet — focus on understanding & scoping |
+| 2026-08 | Agency channel deferred; pricing model settled 2026-08-27 (ADR 0056) and priced 2026-09-01 |
 | 2026-08 | OTel setup: customer owns instrumentation; we own the receiving side (OTLP endpoint + API key + setup docs). Two customer patterns: (A) SDK direct-to-endpoint via 2 env vars — the onboarding priority ("value in 10 minutes"); (B) SDK → customer's own collector → our endpoint (for batching, data scrubbing, host metrics). Same ingestion pipeline serves both. |
 
 ---
@@ -165,11 +197,11 @@ Key design points:
 *(Still open:)*
 - What exact metrics define "value in 10 minutes" success during onboarding tests?
 
-**Commercial model — researched 2026-08-27, nothing decided. Must close before M6, because P1-48 (Usage & cost view) cannot be built without the billing unit.**
+**Commercial model — researched 2026-08-27. The billing unit and the free-tier ceiling closed before M6 shipped; the usage and cost screen is built. Payments remain open.**
 
 - ~~**The billing unit.**~~ **RESOLVED — ADR 0056, per service.** For the record, §5 recorded the direction as *per-site/per-service, not per-GB*. A market scan found **no vendor doing that**: the field is per-host (Datadog $35/host, Splunk $55/host, Dynatrace ~$58/8 GiB host), per-agent (AppDynamics — the closest existing thing), per-CPU-core, per-GB ingest (New Relic $0.40, Grafana Tempo $0.45, SigNoz $0.30, Better Stack €0.10) or per-signal-count (Dash0, which moved off GB **specifically because** GB pricing explodes with cardinality). The likely reason nobody prices per-service: **our cost tracks ingest volume and storage, not service count**, so per-service decouples price from cost — good for the customer, dangerous for margin. Tail sampling (ADR 0010) only half-helps, because metrics derive *pre*-sampling, so receiver, Kafka and worker cost track raw volume regardless of what we charge for. Also found: "predictable" is claimed by opposite units — Splunk markets per-host as the predictable one, SigNoz markets no-per-host-no-per-seat as the predictable one. **Predictability is a property set (no surprise overages, spend caps, in-product projection, no punitive dimension), not a unit.** We could achieve it on almost any unit.
-- **ACTIONABLE NOW (follows ADR 0056): `usage_daily` counts spans, logs, metric_points and bytes** — a per-GB shape, which contradicts the recorded direction. If billing is per-service, the number that matters is *distinct `service.name` per project per day*, and nothing counts it.
-- **ACTIONABLE NOW: no `plans` table exists.** `organizations.plan` is a free string, and ADR 0038 regenerates retention TTL *from plan tiers in Postgres*. Without a table the tiers get hardcoded in the TTL job, the receiver's quota gate and the usage screen — three places, drifting.
+- ~~**`usage_daily` counts spans, logs, metric_points and bytes, and nothing counts services.**~~ **DONE.** Migration 0010 added `usage_daily_services` — distinct `service.name` per project per day, which is the billable quantity ADR 0056 names. `usage_daily`'s four counters stay as the guardrail meter, not the bill.
+- ~~**No `plans` table exists.**~~ **DONE.** Migration 0005 added `plans`, holding each tier's raw and derived retention days, plus a `project_retention` view; migration 0013 added `plan_prices` and 0015 seeded it. The tiers are read, not hardcoded: the worker takes retention from the `project_retention` view (`apps/workers/internal/projectconfig/postgres.go`), and the receiver's allowance gate joins `organizations.plan` against `plan_prices` in one statement (`apps/receiver/internal/allowance/postgres.go`).
 - ~~**Free-tier ceiling behaviour**~~ **RESOLVED — block, do not degrade** (ADR 0056). For the record: — the market has a clear answer: **block, do not degrade**. Sentry rejects new events until the next period, and with a spend cap on, overages are blocked rather than billed, backed by spike protection and SDK-side sampling. That maps onto P1-52 (kill switch) — same mechanism, different trigger.
 - **Payments.** **Stripe Managed Payments (Stripe's own merchant of record) excludes India**, and Stripe is invite-only here — the obvious default is off the table before the comparison starts. FIRA/FIRC is statutory, not preference: Rule 89(2) CGST Rules requires a BRC or FIRC as proof of foreign-currency receipt, with an LUT (Form RFD-11) filed annually to export without paying IGST upfront; SaaS export is zero-rated under §16 IGST Act. **Unresolved and not answerable from research:** with a merchant of record, the MoR is the legal seller and money flows customer → MoR → us, so the payout is arguably a payment *from the MoR* rather than an export of services to the customer. Whether that still qualifies as zero-rated export with clean FIRA is a question for a CA who does cross-border SaaS. Vendor-comparison searches returned almost entirely one MoR's own marketing, so no provider ranking is recorded here.
 

@@ -141,7 +141,9 @@ The neutral scale carries a trace of the brand hue (chroma 0.010 at 157.1°) rat
 
 ### Tokens
 
-Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verified against both contrast standards — not eyeballed. Hex comments are the sRGB equivalents.
+Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verified against both contrast standards — not eyeballed. Hex comments are the sRGB equivalents. `packages/ui/tokens.css` is the file; the values below were re-diffed against it on 2026-09-04 and match.
+
+**The file has three blocks, not the two shown here.** Between them sits `@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { … } }`, carrying the same light values, so a viewer with no stored choice follows the OS. The guard is what makes an explicit choice win: `:root:not([data-theme="dark"])` stops matching once the user has picked dark. Adding a token means adding it in all three.
 
 ```css
 /* ---------- DARK (default) ---------- */
@@ -312,13 +314,20 @@ This is why severity colours are *not* all tuned to identical contrast. An early
 
 ## Components
 
-| Category | Components |
+**Built, and where.** The shared set is deliberately small; everything specific to one screen lives in that screen's feature folder, which is what the import rule enforces.
+
+| Where | What is there |
 |---|---|
-| Shell | AppShell · CommandPalette · TimeRangePicker · FilterBar |
-| Data | VirtualTable · LogViewer · KeyValueList · StackTrace · JsonTree |
-| Signal | SeverityBadge · StatusDot · Sparkline · MiniChart |
-| Custom, high-risk | **TraceWaterfall** · **LogViewer** — no library provides these; both need virtualization |
-| Feedback | Drawer · Toast · EmptyState · LoadingSkeleton |
+| `app/layout/` | `AppShell` · `Sidebar` · `TopBar` · `CommandPaletteMount` |
+| `shared/components/` | `Button` · `TextField` · `SelectField` · `CopyButton` · `EmptyState` · `Skeleton` · `ErrorBoundary` · `ErrorScreen` · `InlineFailure` · `ComingSoon` — 535 lines in total |
+| `shared/toast/` | `ToastRegion` + `toast-store` |
+| `features/traces/` | **`TraceWaterfall`** · `WaterfallRow` · `SpanDetail` — no library provides a waterfall |
+| `features/logs/` | `LogsScreen` and the live-tail client |
+| `features/servicedetail/`, `features/synthetics/` | `TrendChart` · `PhaseChart`, the two uPlot wrappers |
+
+`useVirtualizer` is called directly in the five screens that need it — logs, traces list, trace waterfall, database and usage — rather than through a shared `VirtualTable`. Five callers is now enough that a shared wrapper would earn its place; it does not exist yet.
+
+**Named in the design but not built:** `TimeRangePicker` · `FilterBar` · `VirtualTable` · `KeyValueList` · `StackTrace` · `JsonTree` · `SeverityBadge` · `StatusDot` · `Sparkline` · `Drawer`. Some will turn out to belong to one screen rather than to `shared/`; cross-feature reuse is the signal that moves something, not a guess made in advance.
 
 ## Global handling
 

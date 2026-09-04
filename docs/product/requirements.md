@@ -4,6 +4,17 @@
 > **Companion docs:** `vision-and-scope.md` (scope) · `../architecture/system-architecture.md` (technical design) · `../research/market-analysis-2026.md` (research)
 > **How to use this doc:** every feature gets the same structure as F1 (the template): Description → User stories → Acceptance criteria → UI notes → Dependencies → Open questions. We fill features in one by one; a feature is "specified" when its acceptance criteria are testable.
 
+> ⚠️ **The markers here mean *specified*, not *built*, and the two do not track each other.**
+> `🔲 TO SPECIFY` means nobody has written this feature's acceptance criteria yet. Several such
+> features are already shipping — the Logs, Errors, Traces, Services, Service Map, Infrastructure,
+> Database, Synthetics and Usage screens all exist. Conversely, F1 is the only fully specified
+> feature and is **not** built: `/` is deliberately an empty placeholder for the whole of Phase 1
+> (`apps/web/src/app/routes/route-manifest.ts`), so that no dashboard drifts into being the front
+> door. **`../delivery/phase-1-plan.md` is the authority on what exists.** Nothing in this file is.
+>
+> Acceptance criteria are written in the present tense because that is what an acceptance criterion
+> is — a statement to test against once built. Read every `AC` below as *must*, never as *does*.
+
 ---
 
 ## 1. Product Overview
@@ -186,7 +197,7 @@ To be written as a companion one-pager: performance targets (feed load, query la
 ### F31 — Admin Console (internal) 🔲 TO SPECIFY
 Our own back-office, not a customer surface: find an organization, see its usage against plan, comp or suspend an account, and **impersonate a user to reproduce what they are seeing**. Impersonation is reported as the highest-value piece and the one most often missed early — it requires explicit consent, a time bound, and a full audit trail.
 
-**Schema hook, cheap now and expensive later:** the `audit_log` table already exists. Writes made during an impersonated session need an impersonation context recorded on them; adding that field when audit entries are first written costs nothing, retrofitting it means backfilling a security record that cannot be reconstructed.
+**Schema hook — taken.** ✅ Migration `0004_audit_log_non_user_actors` added `audit_log.impersonation_context` (the impersonation session id) and `audit_log.actor_label` (for actors who are not rows in `users`, such as our own staff). The window closed correctly: the field was in place before audit entries started being written, so nothing has to be backfilled. F31 still has to *use* it — nothing sets the column today.
 
 ## 7. Glossary
 

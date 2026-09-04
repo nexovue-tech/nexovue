@@ -2,10 +2,29 @@
 
 > **Type:** Delivery reference · **Target machine:** Apple M4 Pro, 24 GB unified memory
 > **Companion doc:** `phase-1-plan.md` (§4 performance budgets)
+> **Verified against `justfile` and `deploy/compose/` on 2026-09-04.**
+
+## The three commands worth knowing first
+
+```
+just fresh      wipe everything and rebuild: down-hard → dev → topics → migrate → seed
+just dev        the core stack, nothing else
+just otel-demo up   realistic traffic from the OpenTelemetry Demo, at our receiver
+```
+
+`just topics` is not optional after a `just down-hard`. Auto-creation is off on the broker, so a
+wiped Kafka volume comes back with **no topics**, and the receiver then refuses every export with
+`UNKNOWN_TOPIC_OR_PARTITION` — silently, at roughly 330 refusals a minute. `just fresh` calls it for
+you; a hand-rolled `down-hard` + `dev` does not.
+
+`just --list` is the full set. There is deliberately no combined `migrate-down`: a migration belongs
+to one store, so `just migrate-down-pg` and `just migrate-down-ch` are named separately (ADR 0079).
+Snapshots and restores follow the same rule — `just backup`, then `just restore-pg` or
+`just restore-ch`, never both at once; the runbooks under `runbooks/` own that procedure.
 
 ## The constraint
 
-Docker Desktop on macOS runs a Linux VM. **Measured 2026-08-26: the VM is currently allocated 8.3 GB** (`docker info`), which is below what the dev target needs — raise it to ~13 GB in Docker Desktop settings, leaving ~11 GB for macOS, editor and browser.
+Docker Desktop on macOS runs a Linux VM. **Measured 2026-08-26: the VM was allocated 8.3 GB** (`docker info`), which is below what the dev target needs — raise it to ~13 GB in Docker Desktop settings, leaving ~11 GB for macOS, editor and browser. Re-run `docker info` rather than trusting that number; it is a machine setting nothing in this repo enforces.
 
 Two different budgets apply, and conflating them is what makes the numbers look wrong:
 
@@ -18,21 +37,24 @@ The dev ceiling is high because a dev container is also a build machine. Go's co
 
 ## Memory budget
 
-| Service | Limit | Note |
-|---|---|---|
-| ClickHouse | 3 GB | `max_server_memory_usage` capped; reduced mark cache |
-| Kafka (KRaft) | 1.5 GB | `KAFKA_HEAP_OPTS=-Xmx1g` |
-| Postgres | 1 GB | |
-| Redis | 0.5 GB | |
-| SeaweedFS | 0.5 GB | |
-| Receiver | 0.5 GB | |
-| Worker | 1 GB | one process, all pipelines (ADR 0050); trace assembly is the hungry part |
-| API | 0.8 GB | |
-| Scheduler | 0.5 GB | |
-| Web | 0.1 GB | |
-| **Core total** | **~10 GB** | leaves ~3 GB headroom |
-| *+ demo app & loadgen* | ~1 GB | `tools` profile |
-| *+ Playwright* | ~1.5 GB per browser | `doors` profile |
+These are the limits in `deploy/compose/docker-compose.yaml` and `compose.infra.yaml` — the **dev**
+target. The app and on-premise targets are smaller, because their containers host no compiler.
+
+| Service | Dev limit | App-target limit | Note |
+|---|---|---|---|
+| ClickHouse | 3 GB | 3 GB | `max_server_memory_usage` capped in `config.d/memory.xml`; reduced mark cache |
+| Kafka (KRaft) | 1.5 GB | 1.5 GB | `KAFKA_HEAP_OPTS=-Xmx1g` |
+| Postgres | 1 GB | 1 GB | |
+| Valkey | 0.5 GB | 0.5 GB | the compose **service is still named `redis`**; the image is `valkey/valkey` (ADR 0048) |
+| SeaweedFS | 0.5 GB | 0.5 GB | |
+| Receiver | 0.75 GB | 0.5 GB | dev also hosts `go build` under `air` |
+| Worker | 1 GB | 0.75 GB | one process, all pipelines (ADR 0050); trace assembly is the hungry part |
+| API | 1 GB | 0.81 GB | |
+| Web | 1 GB | 0.125 GB | dev is the Vite dev server; the app target is nginx over a static build |
+| **Core total** | **~10.25 GB** | | leaves ~2.75 GB headroom in a 13 GB VM |
+| *+ loadgen* | 0.5 GB | — | `tools` profile |
+| *+ scheduler-beat · light · browser* | 0.25 · 0.75 · 1.5 GB | 0.25 · 0.25 · 1.5 GB | `doors` profile; the browser container is Playwright |
+| *+ insight · ollama* | 0.75 GB · 6 GB | 1 GB · 8 GB | `insight` profile, Phase 2 — `apps/insight` does not exist yet |
 
 ## Host ports
 
@@ -50,8 +72,10 @@ ports are unchanged — only the host mapping moved.
 | Valkey | **16379** | 6379 |
 | Kafka | **19092** | 29092 |
 | SeaweedFS S3 · master | **18333 · 19333** | 8333 · 9333 |
-| Demo app | **18090** | 8090 |
 | Ollama | **21434** | 11434 |
+
+The OpenTelemetry Demo is not in this block: it is a separate compose project with its own ports,
+and it reaches our receiver on 14318 like any other customer would.
 
 Ollama is the exception to the pattern: a natively-installed Ollama already owns 11434,
 and on this machine native is the right way to run it anyway.
@@ -66,9 +90,11 @@ Use `deploy.resources.limits`, **not `mem_limit`**. The widespread advice that `
 
 ClickHouse is a special case: it misreads cgroup limits in Docker, so its cap is set explicitly in `deploy/clickhouse/config.d/memory.xml` rather than inherited from the container.
 
-**2. Compose profiles, not one big up.** `just dev` starts the core only. `doors` adds Celery and Playwright; `tools` adds the demo app and load generator. The full stack is rarely needed at once.
+**2. Compose profiles, not one big up.** `just dev` starts the core only. `just dev-doors` adds the three Celery containers, one of them Playwright; `just dev-tools` adds the load generator. `insight` and `ollama` are Phase 2 and start nothing today. The full stack is rarely needed at once.
 
-**3. ClickHouse keeps a 3-day TTL in dev.** Production is 30 days. Without this the SSD quietly fills with test spans.
+**3. ClickHouse keeps a short TTL in dev.** The migrations carry the production TTLs — 30 days raw, 90 days metrics. `deploy/clickhouse/dev-retention.sql` shortens spans and logs to 3 days, and it is **not** run by `just migrate` or `just fresh`: apply it by hand after migrating, with the command in its own header comment. Without it the SSD quietly fills with test spans.
+
+> ⚠️ That script is currently broken and has not been fixed here, because this is a documentation change. Its third statement is `ALTER TABLE metrics`, and there is no `metrics` table — ADR 0066 split metrics into five tables (`metrics_sum`, `metrics_gauge`, `metrics_histogram`, `metrics_exp_histogram`, `metrics_summary`). The statement fails with `UNKNOWN_TABLE`, so metric retention in dev is whatever the migrations set. `trace_summaries`, `span_trace_lookup`, `endpoint_stats_1m` and `service_edges_1m` are not shortened either.
 
 **4. Playwright: arm64 image, `--ipc=host`, `shm_size: 1gb`.** The 64 MB `/dev/shm` default is the most common cause of Chromium instability in Docker. The official images ship ARM64 variants covering Chromium, Firefox and WebKit — the Apple Silicon Rosetta problem applies to native installs, not the container.
 
@@ -83,7 +109,7 @@ The difference is deliberate, not drift:
 | Web | **Vite dev server** with HMR | Static build behind the proxy |
 | Proxy | none — services are reached directly | Caddy, terminating TLS |
 | Doors 2 and 4 | `--profile doors` | always on |
-| Insight, Ollama | `--profile insight` / `--profile ollama` | always on (Phase 2) |
+| Insight, Ollama | `--profile insight` / `--profile ollama` | defined, both behind `--profile insight`; Phase 2, `apps/insight` does not exist yet |
 | Celery | beat, light and browser as separate containers | the same three |
 
 The rule: development optimises for reading logs and restarting one thing at a
@@ -94,11 +120,24 @@ On this machine Ollama should run **natively rather than in the `ollama`
 profile** — Docker on macOS has no Metal passthrough, so the container is
 CPU-only. `LLM_BASE_URL` therefore defaults to `host.docker.internal`.
 
-## Running the OTel Demo (P1-62)
+## Running the OTel Demo (P1-62) — the daily traffic source
 
-The OpenTelemetry Demo needs [4 GB minimal, 8 GB+ full](https://opentelemetry.io/docs/demo/requirements/system/) across 18 services. It does **not** coexist with our stack in a 13 GB VM, and it is not meant to — it is a periodic realism gate, not a dependency.
+**This section was wrong until 2026-09-04 and cost time.** It said the demo needs 4–8 GB, does not coexist with our stack, and has to be run by hand against a raised Docker allocation. None of that is true any more: `tools/otel-demo/` trims the upstream compose files and drives them for you.
 
-To run it: stop the `doors` and `tools` profiles, raise the Docker allocation temporarily, and use the demo's *minimal* deployment (which drops its own Kafka and the services depending on it). Point its OTLP exporter at our receiver.
+```
+NEXOVUE_INGEST_KEY=nvk_live_devlocaldevlocaldevloc just otel-demo up
+just otel-demo stats     memory, this stack and the demo's
+just otel-demo logs      follow every demo container
+just otel-demo down      stop the demo only; `just down` also takes it with it
+```
+
+**Measured 2026-08-30, images already pulled: 1641 MiB resident across 20 containers, about four minutes from `up` to the first full service map.** It fits alongside the core stack in a 13 GB VM, which is why it replaced the hand-written demo shop as the everyday traffic source rather than staying a periodic gate.
+
+What runs: everything upstream's core and full compose files define, minus three — `otel-collector` (we are the backend; its only job there was to be one), `flagd-ui` and `telemetry-docs`, which have no callers. That leaves 20 containers, **18 of them reporting telemetry, in ten languages**, including the Kafka queue hop that produces span-link edges in the service map. The upstream clone is pinned to `3.0.0`; `latest` would silently change what the gate measured between runs.
+
+`NEXOVUE_OTEL_DEMO_SCOPE=core` drops Kafka, accounting and fraud-detection, saving roughly 800 MB on a machine that cannot spare it. `NEXOVUE_INGEST_KEY` selects the project the demo lands in and defaults to the key `just seed` creates.
+
+It is still never part of `just check` or `just e2e`: it wants minutes and a running stack. It is a command you run deliberately.
 
 ## What the performance budgets mean here
 

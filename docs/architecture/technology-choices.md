@@ -1,7 +1,8 @@
 # Technology Choices
 
-> **Type:** Architecture reference · **Last verified:** 2026-08-25
+> **Type:** Architecture reference · **Research last done:** 2026-08-25 · **Checked against `go.mod`, `pyproject.toml` and `package.json`:** 2026-09-04
 > **Rule:** nothing is added to this stack without searching first — current version, maintenance signal, and licence. Recorded here with the source, so a future reader can tell what was checked and when.
+> **Read this as *what is installed*.** Every row below names something that is actually a dependency today. Two rows that named things nobody ever installed (Base UI, shadcn/ui) were removed on 2026-09-04 — see [No component library](#no-component-library).
 
 ## Data plane (Go)
 
@@ -12,6 +13,7 @@
 | **[ch-go](https://clickhouse.com/docs/integrations/language-clients/go/index)** (write path) | ClickHouse's own docs recommend it for insert-heavy workloads; `clickhouse-go` pays a row→column pivot plus reflection per insert | Apache 2.0 | **clickhouse-go/v2** — friendlier `database/sql` semantics we do not need on a pure insert path |
 | **[SeaweedFS](https://productimpossible.com/articles/self-hosted-s3-after-minio/)** (local dev) + **AWS S3** (deployment) | S3-compatible, actively maintained, Apache 2.0 — so no archived or copyleft component exists anywhere in the stack. Code touches the **generic S3 API only**, so the deployment swap is configuration. SeaweedFS also remains a viable production target if a fully on-premise deployment is ever needed | Apache 2.0 / — | **MinIO** — community edition archived 25 Apr 2026, unpatched, AGPLv3. **Garage** — maintained but AGPLv3 |
 | **Go stdlib `net/http` + `google.golang.org/grpc`** | Stdlib routing is sufficient since 1.22; one less dependency on the hot path | BSD-3 | **chi** — fine, but earns nothing here |
+| **Valkey** as the server, **[valkey-go](https://github.com/valkey-io/valkey-go)** in the receiver, **redis-py** in the API and scheduler | Valkey is the BSD-3 fork created when Redis relicensed, and applying one licence standard to Kafka, object storage and the cache alike is the whole reason ([ADR 0048](decisions/0048-valkey-instead-of-redis.md)). The wire protocol, URL scheme and clients are unchanged — the compose service is still named `redis`, the variable is still `REDIS_URL`, and the image is `valkey/valkey` | BSD-3 / MIT | **Redis 8** — tri-licensed AGPLv3 / RSALv2 / SSPLv1, after MinIO was rejected for AGPLv3 and Redpanda for BSL |
 | **Protobuf + [buf](https://buf.build)** for the internal envelope | Cross-language contract between Go producers and Go/Python consumers; renames fail CI instead of silently zeroing data; `buf breaking` enforces compatibility. Envelope holds our metadata only — the payload is untouched OTLP | Apache 2.0 | **JSON + JSON Schema** — readable on the wire, but no compile-time safety across two languages, 2–5× larger messages, slower parsing at ingest volume |
 
 ## Control plane (Python)
@@ -20,7 +22,7 @@
 |---|---|---|---|
 | **[uv](https://cuttlesoft.com/blog/2026/01/27/python-dependency-management-in-2026/)** | ~75M monthly downloads, ahead of Poetry's ~66M; Astral acquired by OpenAI March 2026; 10–100× faster than pip | MIT/Apache 2.0 | **Poetry** — mature, still preferred for publishing libraries; we publish nothing |
 | **FastAPI + Pydantic v2** | Async, typed, OpenAPI generation feeds `packages/client-ts` | MIT | — |
-| **Celery + Beat** | DB-backed schedules editable from the UI; process-based model suits heavy Playwright checks | BSD-3 | **[Taskiq / FastStream / Dramatiq](https://docs.bswen.com/blog/2026-06-18-celery-alternatives-2026/)** — genuinely faster on I/O-bound work, but our probe volume is per-minute, not per-second, so the overhead never binds |
+| **Celery**, with **our own beat scheduler** | Process-based model suits heavy Playwright checks. Beat's own scheduler is replaced by `apps/scheduler/beat.py` + `leader.py` ([ADR 0036](decisions/0036-write-our-own-celery-beat-scheduler.md)): schedules are read from Postgres and editable from the UI, and a Valkey lock makes one of several beat processes the leader, because two beats scheduling at once fires every customer's check twice | BSD-3 | **[Taskiq / FastStream / Dramatiq](https://docs.bswen.com/blog/2026-06-18-celery-alternatives-2026/)** — genuinely faster on I/O-bound work, but our probe volume is per-minute, not per-second, so the overhead never binds. **Community DB-backed Beat packages** — the first-party one (`django-celery-beat`) is Django-only, and outside Django there are three small packages, one recently maintained and one semi-abandoned, which is not what sits under a customer-facing feature |
 | **clickhouse-connect** | Official Python client for the read path | Apache 2.0 | — |
 
 ## Testing & telemetry tooling
@@ -29,8 +31,7 @@
 |---|---|---|---|
 | **[Playwright](https://playwright.dev/docs/docker)** | Two jobs: browser-flow synthetic checks (P1-35) and our own e2e tests (P1-60/61). Three engines including WebKit, and auto-waiting — which is what keeps unattended checks from producing 3am false alarms. Official ARM64 images | Apache 2.0 | **Puppeteer** (Chromium only) · **Selenium/Cypress** (weaker multi-engine and waiting semantics). Checkly, the category leader in browser synthetics, is Playwright-based |
 | **[telemetrygen](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/cmd/telemetrygen)** | Synthetic OTLP traces/metrics/logs over HTTP and gRPC with no application to deploy — the right shape for load and soak testing (P1-18, P1-50) | Apache 2.0 | Hand-rolled load generator — more work, less realistic protocol coverage |
-| **Own demo app** (`tools/demo-app`) | Daily driver: 2–3 services, ~300 MB, deterministic fault injection on command, and it dogfoods the exact customer onboarding path every day | — | Using the OTel Demo daily — it needs 4–8 GB and does not coexist with our stack on a 24 GB machine |
-| **[OpenTelemetry Demo](https://opentelemetry.io/docs/demo/requirements/system/)** | Periodic realism gate (P1-62): 18 services across ~10 languages with `flagd` fault injection. Answers what our tidy demo app cannot — cardinality, semconv variation, service-map density | Apache 2.0 | Building our own realistic polyglot fleet — enormous effort to reproduce something maintained by the OTel community |
+| **[OpenTelemetry Demo](https://opentelemetry.io/docs/demo/)** 3.0.0, trimmed and pinned in `tools/otel-demo/` | **The daily traffic source** (P1-62). 20 containers, 18 of them reporting, across ten languages, with `flagd` fault injection. Answers what a tidy demo app cannot — cardinality, semconv variation, service-map density, and a real Kafka queue hop. Measured 2026-08-30 at 1641 MiB resident, which is what made it affordable every day | Apache 2.0 | **Our own hand-written demo shop** (`tools/demo-app`) — three Go services that agreed with themselves. Deleted 2026-09-03: a service map is only worth trusting once it has drawn something we did not write |
 
 ## Frontend (TypeScript)
 
@@ -42,10 +43,25 @@
 | **[uPlot](https://github.com/leeoniya/uPlot)** | Time-series specialist; [ECharts hits a canvas ceiling past ~500K–1M points](https://lightningchart.com/blog/best-apache-echarts-alternative-in-2026/) | MIT | **ECharts / Recharts** — Recharts cannot handle telemetry density at all |
 | **[React Flow / xyflow](https://xyflow.com/open-source)** | Service-map nodes are React components, so a box can hold name, health colour, rate and a sparkline. Our customers run 5–50 services, well inside its DOM-node comfort zone. Layout via dagre/elkjs | MIT | **[Cytoscape.js](https://radar.firstaimovers.com/react-flow-vs-cytoscape-graph-engine-choice)** — better at thousands of nodes and richer built-in layouts, but a separate non-React rendering world; right answer only if graphs get far larger than our customers have |
 | **Tailwind v4** | CSS-first config built on custom properties with OKLCH native, so our design tokens *are* the framework's tokens; zero runtime | MIT | **Panda CSS** — stronger when tokens must cross a design tool and code; we have one brand and no Figma handoff. **CSS Modules/vanilla-extract** — most control, far more hand-written CSS |
-| **[Base UI](https://blog.logrocket.com/headless-ui-alternatives/)** | Built by the original Radix engineers, now at MUI with a full-time team and monthly releases; v1.0 December 2025 | MIT | **Radix UI** — maintenance visibly slowed, long-open issues. **React Aria** — best-in-class accessibility, considerably more verbose |
-| **[shadcn/ui](https://ui.shadcn.com/docs/registry)** | A code distribution registry built on Base UI, not a dependency — the CLI copies source we own and restyle. Defaults to Base UI since Dec 2025 | MIT | Building every primitive from scratch — slower with no ownership benefit, since shadcn output is ours to rewrite anyway |
-| **TanStack Virtual + Table** | Log viewer and trace waterfall render 100k rows with ~60 in the DOM | MIT | — |
+| **No component library** | Every primitive is hand-written. See [No component library](#no-component-library) below | — | **Base UI** and **shadcn/ui** — both were chosen on paper in M0 and neither was ever installed |
+| **TanStack Virtual** | Log viewer and trace waterfall render 100k rows with ~60 in the DOM | MIT | **TanStack Table** — named here until 2026-09-04 and never installed; the tables we have are hand-written and did not need a headless table engine |
+| **[lucide-react](https://lucide.dev)** | The icon set. One dependency, tree-shaken, and the only one the UI pulls for presentation | ISC | — |
 | **[Biome](https://biomejs.dev/blog/roadmap-2026/)** | Format + lint in one Rust binary; 2.2's `noRestrictedImports` patterns and `noImportCycle` cover our import-boundary rules | MIT | **ESLint + plugins** — kept in reserve; `dependency-cruiser` is the fallback if Biome's boundary support proves too weak ([Nx-style module boundaries are still only a discussion](https://github.com/biomejs/biome/discussions/6245)) |
+
+## No component library
+
+**Base UI and shadcn/ui were rows in this table from 2026-08-25 to 2026-09-04, and neither was ever
+installed.** `pnpm-lock.yaml` mentions Base UI zero times and no `components.json` exists anywhere.
+An agent reading this file would have gone looking for primitives that are not there, or added a
+dependency the product deliberately does not have.
+
+What is actually true: every component is hand-written inside `apps/web/src/shared/components`, the
+platform now supplies what headless libraries existed for — Popover API, CSS anchor positioning,
+`<dialog>`, `@starting-style`, invoker commands, all confirmed by feature detection rather than a
+support table — and the three UI dependencies that remain (uPlot, React Flow, TanStack Virtual) are
+specialised engines, not component libraries. The reasoning and the revisit conditions are in
+[`../design/design-system.md`](../design/design-system.md), which is the authority; this row exists
+so nobody rediscovers the question from this table.
 
 ## Still unpicked
 
@@ -59,21 +75,34 @@ Layout decisions and their sources are in [repository-structure.md](repository-s
 
 ## Pinned versions
 
-Installed and verified on the dev machine 2026-08-26. Pins that carry a *reason* rather than "latest at the time":
+Toolchain versions verified on the dev machine 2026-08-26; the container images below re-read from
+`deploy/compose/` on 2026-09-04. Pins that carry a *reason* rather than "latest at the time":
 
-| | Version | Why pinned here |
-|---|---|---|
-| Go | 1.27.0 | — |
-| Node | 26.7.0 | — |
-| Python | 3.13 | 3.14 is on the machine, but C-extension dependencies (asyncpg, pydantic-core, clickhouse-connect) lag a new minor. Revisit once they publish 3.14 wheels |
-| **ClickHouse** | **≥ 25.3** | The native JSON type is production-ready only from 25.3; our attribute schema depends on it |
-| **Postgres** | **18** | Native `uuidv7()`, used as a column default across the control-plane schema |
-| golangci-lint | 2.13.1 | v2 config schema — a v1 file will not load |
-| buf | 1.72.0 | `buf.gen.yaml` v2 syntax |
-| Biome | 2.5.10 | `linter.rules.preset` replaced the deprecated `recommended` key |
-| pnpm / uv / just | 11.24.0 / 0.12.6 / 1.58.0 | — |
+| | Version | Where it is pinned | Why pinned here |
+|---|---|---|---|
+| Go | 1.27.0 | `go.work`, every `go.mod` | — |
+| Node | 26.7.0 | `.nvmrc`, `package.json` `engines: >=26` | — |
+| Python | 3.13 | `.python-version`, `requires-python` | 3.14 is on the machine, but C-extension dependencies (asyncpg, pydantic-core, clickhouse-connect) lag a new minor. Revisit once they publish 3.14 wheels |
+| **ClickHouse** | **26.3.20.7-jammy** (needs ≥ 25.3) | `compose.infra.yaml` | The native JSON type is production-ready only from 25.3; our attribute schema depends on it (ADR 0034) |
+| **Postgres** | **18**, via `pgvector/pgvector:0.8.6-pg18-trixie` | `compose.infra.yaml` | Native `uuidv7()`, used as a column default across the control-plane schema. The pgvector image rather than stock, because RAG embeddings live in the same database (ADR 0004) |
+| **Kafka** | **4.3.1**, KRaft mode | `compose.infra.yaml` | 4.x removed ZooKeeper; one process instead of two |
+| Valkey | 8.1.4-alpine | `compose.infra.yaml` | Its RDB cannot be read by Redis and vice versa — irrelevant for a cache, but a production swap means a cold start |
+| SeaweedFS | 4.44 | `compose.infra.yaml` | — |
+| golangci-lint | 2.13.1 | dev machine | v2 config schema — a v1 file will not load |
+| buf | 1.72.0 | dev machine | `buf.gen.yaml` v2 syntax |
+| Biome | 2.5.10 | root `package.json` | `linter.rules.preset` replaced the deprecated `recommended` key |
+| Playwright | 1.62.1 | `tools/e2e/package.json`, scheduler `browser` extra | The e2e suite and the browser-flow probes must agree on a version |
+| pnpm / uv / just | 11.24.0 / 0.12.6 / 1.58.0 | `packageManager`, dev machine | — |
 
-Libraries chosen during M0 planning: `caarlos0/env/v11` (Go config) · `structlog` (Python logging) · `air` (Go live reload) · `golang-migrate` (ClickHouse migrations) · native `fetch` (web HTTP) · IBM Plex superfamily (typography).
+The rest of the dependency list, all confirmed present on 2026-09-04:
+
+**Go** — `caarlos0/env/v11` (config) · `lmittmann/tint` (log handler) · `jackc/pgx/v5` (Postgres) · `google/uuid` (UUIDv7 ingest ids) · `air` (live reload) · `golang-migrate` (ClickHouse migrations).
+**Python** — `structlog` (logging) · `alembic` (Postgres migrations) · `asyncpg` + `SQLAlchemy[asyncio]` · `argon2-cffi` (password hashing) · `pycurl` (probes, because it reports DNS/connect/TLS/first-byte separately and httpx reports only a total) · `confluent-kafka` (probe results, the librdkafka wrapper) · `boto3` (assuming a customer's AWS role) · `opentelemetry-proto` (building OTLP payloads for doors 2 and 4b).
+**Web** — native `fetch` (there is no HTTP client dependency) · IBM Plex superfamily, vendored as woff2 in `packages/ui/fonts/` rather than loaded from a CDN.
+
+**No OpenTelemetry SDK is installed anywhere.** Both language stacks import the OTLP *protobuf*
+definitions only, to read and write messages. ADR 0053 decided that nexovue monitors nexovue; that
+is not built, and nothing exports a span about itself today.
 
 ## Verification log
 

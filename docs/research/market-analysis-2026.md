@@ -1,7 +1,8 @@
 # Market Analysis — Observability Platforms, 2026
 
-> **Type:** Research snapshot, point-in-time (2026). Not a living doc — supersede with a new dated file rather than editing.
+> **Type:** Research snapshot, **researched 2026-08-25**. Not a living doc — supersede with a new dated file rather than editing. Everything below is the market as it looked on that date and has not been re-checked since.
 > **Scope:** End-user-facing features only; competitive landscape and gap analysis.
+> **What was built from it:** the per-service pricing decision ([ADR 0056](../architecture/decisions/0056-per-service-pricing.md)) and the first prices (`apps/api/migrations/versions/0015_seed_plan_prices.py`, effective 2026-09-01) were argued partly from the competitor figures in §D.1 and §B. Reviewed 2026-09-04: nothing here contradicts what we priced.
  
 ## TL;DR
 - The market has bifurcated: incumbents (Datadog, New Relic, Dynatrace, Splunk, Grafana, Elastic) offer deep, broad, but complex and expensive dashboard-centric platforms, while a wave of AI-native and simplicity-focused challengers (Middleware OpsAI, Sentry Seer, Better Stack, SigNoz, Coralogix, plus AI-SRE startups like Traversal, Observe, Resolve AI, Cleric) are competing on autonomous root-cause analysis, plain-language insight, and predictable pricing — which is exactly Raj's positioning.
