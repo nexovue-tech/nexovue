@@ -239,6 +239,55 @@ effective dates so a repricing does not rewrite what was already charged.
 | P1-53 | Security pass | key hashing, TLS at the edge, secret handling, dependency audit | todo |
 | P1-54 | Customer docs | setup guide for both onboarding patterns (SDK direct, own collector) | todo |
 
+### M8 — The commercial layer (account, billing, the way in and the way out)
+
+*Exit: a stranger can sign up, prove they own the address, recover a lost password, see what they
+are being charged, pay for it, change plan, and leave — without any of it being a SQL statement we
+run for them.*
+
+**Why this is a milestone and not a settings screen.** M0–M7 build a system that works. None of it
+makes the system *sellable*, and two things make that gap concrete rather than cosmetic:
+
+- **The byte cap ships a dead end.** A free organization that spends its allowance is refused until
+  the 1st, and the screen names the limit and the reset date because there is nowhere to send them.
+  There is no upgrade path in the product. We built a wall with no door.
+- **Signup trusts an address nobody proved.** `users.email_verified_at` has existed since migration
+  0001 and **nothing writes it** — the same shape as `last_used_at` and `site_keys` before them: a
+  column added in anticipation, and no code behind it. A customer who mistypes their email at signup
+  owns an account they can never recover, because there is also no password reset.
+
+**Two hard dependencies gate almost everything below, and neither exists anywhere in the repository.**
+
+- **A transactional email sender.** Nothing sends mail — no SMTP, no provider, no queue. Verification,
+  password reset, and invoices all need it, and it is the reason `/settings/members` was deferred in
+  §9. It is a vendor decision before it is a code decision.
+- **A payment processor.** Nothing takes money. `plan_prices` states what a plan costs and no code
+  charges anyone. This is a vendor decision, a compliance question (tax, VAT, invoicing per
+  jurisdiction) and a data question (what we store versus what the processor holds) — the same
+  posture ADR 0076 took for cloud credentials: hold nothing we can avoid holding.
+
+**What this milestone does not reopen.** §9's single-operator decision stands: `/settings/members`
+still does not ship, because a role picker in front of enforcement that arrives in Phase 2 (F26) is a
+promise the product would not keep. Project management is revisited here because one project per
+organization stops being a scoping choice and starts being a limitation the moment someone pays.
+
+| ID | Task | Deliverable | Status |
+|---|---|---|---|
+| P1-69 | **Transactional email** | The sender nothing has today, and the blocker for three rows below. Needs a provider chosen, a deliverability posture (SPF/DKIM/DMARC on a sending domain), a bounce and complaint path, and a decision about what happens to a flow when delivery fails — a verification link that silently never arrives is worse than a visible error. Templates are the small part | todo |
+| P1-70 | Email verification | Writes the `email_verified_at` that has existed unwritten since 0001. Forces: what an unverified account may do — ingest freely, ingest nothing, or read but not send — and how long a link lives. Verifying *after* signup rather than blocking it keeps the first-span celebration intact, which is the one moment onboarding earns | todo |
+| P1-71 | Password reset | A single-use, expiring, constant-time-compared token, and the same answer for a known and an unknown address so the form is not an account-existence oracle. Ends every live session on success — `sessions` exists and is Valkey-backed, so the revocation path is real work, not a flag | todo |
+| P1-72 | Profile & security screen | Name, email change (which re-verifies), password change (which requires the current one), and **timezone**. The timezone is not cosmetic: every screen renders timestamps in the browser's locale today, so an incident timeline read in IST against a UTC ClickHouse row is a reader doing arithmetic during an outage. Also lists live sessions with a way to end them | todo |
+| P1-73 | Payment processor | The second hard dependency. Store the processor's customer id and nothing else that can be avoided — no card data, no PAN, ideally no address we are not required to hold. Webhooks for payment success and failure, verified the way `POST /deploys/webhook` already verifies its own: HMAC over the raw body, compared in constant time | todo |
+| P1-74 | Plan change | The door in the wall. Upgrade must take effect on the ingest path within one allowance-cache TTL, because a customer who has just paid to be unblocked will retry immediately. Downgrade forces the harder half: what happens to data retained under a longer plan when the shorter one takes effect — and §9 already establishes that shortening retention retroactively drops parts with no undo, so the honest answer is probably forward-only again | todo |
+| P1-75 | Billing screen | What is owed and why, payment method, invoice history, and a billing email separate from the login one — the person who pays is often not the person who signs in. The usage screen already shows what accrued; this is where it becomes a charge | todo |
+| P1-76 | Project management | Create, rename, soft-delete. §9 records what this forces and it has not changed: who may press each, and what deleting a project does to telemetry already in ClickHouse — `projects.deleted_at` exists and nothing drops partitions, so a deleted project's data is invisible and still stored, still counted, still retained | todo |
+| P1-77 | Account & organization deletion | The way out, and a GDPR obligation rather than a courtesy. Needs the ClickHouse purge path §7c already flags as missing — `ALTER TABLE spans DELETE` does not cascade to `span_trace_lookup`, and the same will be true of `trace_summaries` and both rollups. Cancelling a subscription is the easy half | todo |
+
+**Ordering that is not negotiable:** P1-69 before 70 and 71. P1-73 before 74 and 75. Everything else
+can move.
+
+---
+
 ---
 
 ## 4. Performance budgets (measured by `just load`, not estimated)
@@ -474,8 +523,12 @@ are coming:
   than a convenience one: without it a customer with a leaked key must choose between stopping
   their own ingest and leaving the leak live.
 
-The three screens that do not ship are not tracked as tasks below, and no task row here commits
-work on them. The survey that follows is the evidence the decision was taken from — what the code
+Two of the three now have a home in **M8**, which is where the product becomes sellable rather
+than merely working: `/settings/project` returns as P1-76, because one project per organization stops
+being a scoping choice the moment someone pays, and the account surface §9 never covered — profile,
+password reset, email verification, billing — is the bulk of that milestone. **`/settings/members`
+does not return**, for the reason below: a role picker in front of enforcement that arrives in
+Phase 2 is a promise the product would not keep. The survey that follows is the evidence the decision was taken from — what the code
 actually serves, read on 2026-08-30 and re-checked on 2026-08-31.
 
 **The whole of what the control plane can change today.** Every other endpoint is a read.
@@ -640,7 +693,10 @@ Retroactive retention is P1-68 and is not small.
 ### Still open
 
 4. Are sampling and masking customer controls, or support actions? Both are SQL `UPDATE`s by us
-   today, and neither screen that would expose them ships in Phase 1 — so this is not blocking, but
-   it is not decided either.
+   today. M8's P1-76 brings the screen that would host them, so this stops being theoretical when
+   that row starts — but the two are not the same question. Sampling is reversible and only changes
+   what is kept next; masking is irreversible on data already written, and a malformed document has
+   already once silently stopped masking a project's custom keys (§7d). They can be answered
+   differently.
 
 *Update log: plan created 2026-08-25. Scope decisions folded in 2026-08-25 (D9–D12; tasks P1-55 → P1-58). Next action: P1-01 → P1-09 (M0).*
