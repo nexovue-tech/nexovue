@@ -233,10 +233,10 @@ effective dates so a repricing does not rewrite what was already charged.
 |---|---|---|---|
 | P1-50 | Load + soak | 24h soak against the budgets in §4; results recorded here | todo |
 | P1-57 | Object storage cold tier | **SeaweedFS** in compose for local dev; **AWS S3 in deployment**; ClickHouse-native S3 tiering past the hot window + tested restore. Generic S3 API only | todo |
-| P1-51 | Backup/restore | runbook + tested restore for ClickHouse and Postgres volumes | todo |
+| P1-51 | Backup/restore | runbook + tested restore for ClickHouse and Postgres | ✅ done. **Logical** per store, not the volume copy this row first asked for — that is what makes it portable across versions and selectively restorable. Native ClickHouse `BACKUP`/`RESTORE`, `pg_dump --format=custom`. Two full cycles run with every Docker volume deleted in between; both sides matched on all 12 ClickHouse and 17 Postgres tables, and a known trace returned at 78 spans across 12 services with identical nanosecond timestamps. ~40s to data-back-and-checked. **The restore's real hazard was a watermark, not the data**: the dump carried `spans-raw:0 → 250` into a broker recreated at offset 0, which would have made the meter skip that partition's first 251 records for ever, silently — ADR 0095 extends ADR 0068's KeeperMap exclusion to Postgres's `usage_ingest_offsets`. Runbook `docs/delivery/runbooks/restore-from-backup.md`. **Left open, deliberately: schedule, retention, off-site location, encryption** — recovery point today is whenever somebody last ran `just backup` |
 | P1-68 | Apply plan retention | **Narrowed 2026-08-31 after re-reading the code.** The `plans` table from [ADR 0071](../architecture/decisions/0071-plan-tiers-and-retention.md) exists and is seeded (migration `0005`, verified live), and the per-row stamp is live — so retention is already applied forward. The TTL-regeneration job this row used to name is gone: it belonged to ADR 0038, which [ADR 0072](../architecture/decisions/0072-retention-class-partitioning.md) superseded precisely by removing it. What is left is the downgrade path — changing a plan's retention affects only rows written afterwards, and making it retroactive would drop stored parts with no undo (§9). Deferred deliberately; nothing about it is a one-way door, and until it exists every tenant gets the fixed `pro`-shaped retention, which over-serves rather than under-serves. `scale` additionally needs P1-57 | todo |
 | P1-52 | Ingest kill switch | per-tenant stop valve for runaway ingestion | todo |
-| P1-53 | Security pass | key hashing, TLS at the edge, secret handling, dependency audit | todo |
+| P1-53 | Security pass | key hashing, TLS at the edge, secret handling, dependency audit | audit done, **fixes outstanding**. Tenant isolation verified on both stores with evidence (6 structural tests on ClickHouse, 517 on Postgres) — no query escapes the chokepoint. Credential handling, secrets-in-git and the dependency audit came back clean across Go, Python and npm. Carrier-grade NAT was accepted as a public address by both address boundaries and is now refused (ADR-free, one commit). **Three findings remain and each needs a decision, not a patch:** browser synthetic checks have no SSRF boundary at all (`page.goto` bypasses the socket guard the HTTP check uses); a scraped site key can now spend a free org's whole month, because ADR 0093 made the consequence 31 days long and ADR 0087 reasoned about it when it was one second; and `TRUSTED_PROXY_COUNT` is unset behind Caddy, so ten login attempts a minute lock out every user. TLS and security headers at the edge are still unbuilt |
 | P1-54 | Customer docs | setup guide for both onboarding patterns (SDK direct, own collector) | todo |
 
 ### M8 — The commercial layer (account, billing, the way in and the way out)
@@ -661,10 +661,11 @@ still queryable is untrue unless the copy says which of the two it means — whi
 
 **Why retroactive shortening is not offered.** Making it retroactive means altering the TTL of parts
 already on disk, and with `ttl_only_drop_parts = 1` the next merge cycle drops those whole parts.
-**That deletes stored customer telemetry, and there is no undo** — no snapshot, no tombstone, nothing
-to restore from short of P1-51's backup, which does not exist yet. A control that can silently
-destroy a customer's history on a mistyped number is not a Phase 1 setting. Forward-only is the
-honest behaviour and it is also the safe one.
+**That deletes stored customer telemetry.** P1-51 now exists, so there is an undo — but it is a
+manual snapshot taken whenever somebody last ran `just backup`, not a continuous one, so the undo
+recovers to that point and loses everything since. A control that can silently destroy a customer's
+history on a mistyped number is still not a Phase 1 setting. Forward-only is the honest behaviour
+and it is also the safe one.
 
 **What a customer cannot do:** shorten retention after ingesting something they should not have,
 and change the masking rules that would have prevented it. Both are SQL `UPDATE`s today.
