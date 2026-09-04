@@ -156,6 +156,12 @@ services:
       CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
       REDIS_URL: redis://redis:6379/0
       KAFKA_BROKERS: kafka:9092
+      # Caddy is the only hop in front of the API here, so the caller's address
+      # is the last entry X-Forwarded-For. Left at the default 0 the middleware
+      # correctly refuses to trust the header and falls back to the direct peer
+      # — which is Caddy, for everybody. Every user then shares one bucket, so
+      # ten failed logins a minute lock out the whole deployment.
+      TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
       # TODO(cold tier): AWS S3 endpoint + credentials, or the SeaweedFS
       #   service above for an air-gapped install. Generic S3 API only.
       # TODO(name): settings.py has no S3 field yet, so this variable name is
