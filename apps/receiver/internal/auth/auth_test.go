@@ -145,7 +145,7 @@ func TestAuthenticateRequeriesOnceTheCacheEntryExpires(t *testing.T) {
 	auth := New(keys, Options{CacheTTL: time.Minute, CacheMaxEntries: 100})
 
 	now := time.Now()
-	auth.cache.now = func() time.Time { return now }
+	auth.cache.UseClock(func() time.Time { return now })
 	if _, err := auth.Authenticate(context.Background(), validKey); err != nil {
 		t.Fatalf("Authenticate() = %v, want no error", err)
 	}
@@ -172,18 +172,5 @@ func TestAuthenticateReportsALookupFailureSeparately(t *testing.T) {
 	}
 	if IsCallerFault(err) {
 		t.Error("an unreachable control plane must not be reported as a bad key")
-	}
-}
-
-func TestCacheStaysWithinItsCeiling(t *testing.T) {
-	const maxEntries = 8
-	cache := newCache[Credential](time.Minute, maxEntries)
-
-	for i := range 100 {
-		cache.store(string(rune('a'+i%26))+string(rune('a'+i/26)), Credential{Found: false})
-		if len(cache.entries) > maxEntries {
-			t.Fatalf("cache grew to %d entries, want at most %d: misses are attacker-chosen",
-				len(cache.entries), maxEntries)
-		}
 	}
 }

@@ -3,9 +3,21 @@
 Front door for every data door. Terminates OTLP, authenticates, tags tenancy, normalizes, publishes to Kafka.
 
 Gates run in order and the order is load-bearing:
-`auth` → `origin` → `ratelimit` → `decode` → `normalize` → `produce`
+`auth` → `origin` → `allowance` → `ratelimit` → `decode` → `normalize` → `produce`
 
 Nothing downstream of `normalize` knows which door the data came from.
+
+**`allowance` is the plan gate** (ADR 0093). An organization whose plan includes a
+monthly volume, and has spent it, is refused until the 1st. It sits above `ratelimit`
+because it answers from an in-process cache rather than a Valkey round trip, so the
+customer this gate exists for — one sending hard and being refused for all of it — costs
+nothing to turn away. **Only a plan with a ceiling on its billed services has an
+allowance**: `max_billed_services IS NULL` on pro and scale, so nothing that pays is ever
+refused for volume. The refusal is `RESOURCE_EXHAUSTED` **without** `RetryInfo`, so a
+compliant client drops the batch rather than resending it until the month turns, and it
+is counted as `allowance_spent` rather than `throttled` — both are the same rpc code and
+they are entirely different conversations. A control-plane read that fails admits the
+request: losing the protection costs money, and refusing costs the customer their data.
 
 **`origin` is the browser gate** (ADR 0087). It sits after `auth` because the allowlist belongs to
 the key, and before `ratelimit` because a request from an origin the key does not cover must not

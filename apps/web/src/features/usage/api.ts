@@ -70,6 +70,12 @@ export interface BillingPeriod {
   currency: string | null;
   /** The month's pooled allowance in bytes. Null when the rate records none. */
   included_bytes: number | null;
+  /**
+   * True when going past `included_bytes` refuses further ingest until the 1st.
+   * The API decides it — which tiers are capped is policy, and working it out
+   * from the price row here would be a second place for it to be wrong.
+   */
+  allowance_enforced: boolean;
 }
 
 export interface ServiceNameFamily {

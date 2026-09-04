@@ -216,6 +216,7 @@ async def _billing_period(
         # denominate.
         currency=price.currency if cost is not None and price is not None else None,
         included_bytes=billing.included_bytes(services, price),
+        allowance_enforced=billing.allowance_is_enforced(price),
     )
 
 

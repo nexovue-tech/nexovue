@@ -117,6 +117,13 @@ class BillingPeriodUsage(BaseModel):
     # none. Overage above it is deliberately not priced — see `service`.
     included_bytes: int | None = None
 
+    # True when going past `included_bytes` refuses further ingest for the rest
+    # of the month, which is the free tier and nothing else (ADR 0093). The API
+    # decides this rather than the browser: which tiers are capped is policy,
+    # and a screen that worked it out from the price row would be a second place
+    # for it to be wrong.
+    allowance_enforced: bool = False
+
 
 class ServiceNameFamily(BaseModel):
     """Service names differing only by a trailing identifier."""

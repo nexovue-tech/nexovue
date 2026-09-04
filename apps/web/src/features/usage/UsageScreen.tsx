@@ -10,14 +10,15 @@ import type { BillingPeriod, CardinalityWarning, PlanPrice, UsageResponse } from
 import { useUsage } from "./api";
 import {
   CARDINALITY_REMEDY,
-  COST_EXCLUDES_OVERAGE,
   DAY_TABLE_CAPTION,
   describeAllowance,
+  describeAllowanceSpent,
   describeCeiling,
   describeCostBasis,
   describeCounting,
   describeFamily,
   describeNoPrice,
+  describeOverage,
   describePeriodProgress,
   describeRateStart,
   describeScope,
@@ -28,6 +29,7 @@ import {
   formatPeriod,
   formatPeriodCost,
   formatRate,
+  isAllowanceSpent,
   NO_COST_LABEL,
   NO_COST_REASON,
   NO_PRICE_LABEL,
@@ -185,7 +187,7 @@ function Summary({ usage }: { usage: UsageResponse }) {
         <div>
           <Term>{formatPeriod(usage.period)}</Term>
           <dd>
-            <Cost period={usage.period} />
+            <Cost period={usage.period} planName={usage.plan.name} />
           </dd>
         </div>
 
@@ -227,6 +229,12 @@ function Summary({ usage }: { usage: UsageResponse }) {
         {allowance ? <Ingested term="Included volume" value={allowance} /> : null}
       </dl>
 
+      {isAllowanceSpent(usage.period) ? (
+        <p className="mt-3 border-warning-solid border-l-2 py-0.5 pl-3 text-sm text-warning-text">
+          {describeAllowanceSpent(usage.period)}
+        </p>
+      ) : null}
+
       <p
         className={`mt-3 border-l-2 py-0.5 pl-3 text-sm ${
           usage.settled
@@ -247,7 +255,7 @@ function Summary({ usage }: { usage: UsageResponse }) {
  * final-looking number — is the failure this screen exists to avoid, and it is the
  * same rule the day rows already follow.
  */
-function Cost({ period }: { period: BillingPeriod }) {
+function Cost({ period, planName }: { period: BillingPeriod; planName: string }) {
   const amount = formatPeriodCost(period);
 
   if (amount === undefined) {
@@ -266,7 +274,8 @@ function Cost({ period }: { period: BillingPeriod }) {
         {period.settled ? null : <StillMetering />}
       </p>
       <p className="mt-1 text-ink-dim text-sm leading-relaxed">
-        {describeCostBasis(period)} {describePeriodProgress(period)} {COST_EXCLUDES_OVERAGE}
+        {describeCostBasis(period, planName)} {describePeriodProgress(period)}{" "}
+        {describeOverage(period)}
       </p>
     </>
   );

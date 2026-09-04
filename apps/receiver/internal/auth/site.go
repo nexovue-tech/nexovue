@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/cache"
 )
 
 // The browser door's half of authentication.
@@ -42,7 +44,7 @@ type SiteKeyReader interface {
 // SiteAuthenticator verifies public browser keys against the control plane.
 type SiteAuthenticator struct {
 	keys  SiteKeyReader
-	cache *cache[SiteCredential]
+	cache *cache.Cache[SiteCredential]
 	uses  KeyUseRecorder
 }
 
@@ -56,7 +58,7 @@ func NewSite(keys SiteKeyReader, opts Options) *SiteAuthenticator {
 	}
 	return &SiteAuthenticator{
 		keys:  keys,
-		cache: newCache[SiteCredential](opts.CacheTTL, opts.CacheMaxEntries),
+		cache: cache.New[SiteCredential](opts.CacheTTL, opts.CacheMaxEntries),
 		uses:  uses,
 	}
 }
@@ -78,7 +80,7 @@ func (a *SiteAuthenticator) Authenticate(ctx context.Context, presented string) 
 		return Identity{}, err
 	}
 
-	stored, cached := a.cache.lookup(presented)
+	stored, cached := a.cache.Lookup(presented)
 	if !cached {
 		var err error
 		stored, err = a.keys.SiteCredentialFor(ctx, presented)
@@ -87,7 +89,7 @@ func (a *SiteAuthenticator) Authenticate(ctx context.Context, presented string) 
 		}
 		// Misses cache too, so a bad key in a page cannot hammer Postgres — and
 		// a bad key in a page is a request per pageview, not per deploy.
-		a.cache.store(presented, stored)
+		a.cache.Store(presented, stored)
 	}
 
 	if !stored.Found {

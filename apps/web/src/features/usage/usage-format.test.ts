@@ -2,13 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import type { BillingPeriod, CardinalityWarning, PlanPrice, ServiceNameFamily } from "./api";
 import {
+  allowanceResetDay,
   CARDINALITY_REMEDY,
   describeAllowance,
+  describeAllowanceSpent,
   describeCeiling,
   describeCostBasis,
   describeCounting,
   describeFamily,
   describeNoPrice,
+  describeOverage,
   describePeriodProgress,
   describeRateStart,
   describeScope,
@@ -20,6 +23,7 @@ import {
   formatPeriod,
   formatPeriodCost,
   formatRate,
+  isAllowanceSpent,
 } from "./usage-format";
 
 const PRICE: PlanPrice = {
@@ -41,6 +45,7 @@ const PERIOD: BillingPeriod = {
   service_cost_minor_units: 2_000,
   currency: "USD",
   included_bytes: null,
+  allowance_enforced: false,
 };
 
 describe("formatCount", () => {
@@ -177,14 +182,17 @@ describe("the month's cost", () => {
   });
 
   it("says which quantity over which period the figure came from", () => {
-    expect(describeCostBasis(PERIOD)).toBe("2 services in August 2026, at the rate in force.");
+    expect(describeCostBasis(PERIOD, "Pro")).toBe(
+      "2 services in August 2026, at the rate in force.",
+    );
   });
 
-  it("says when the ceiling held the quantity down", () => {
-    // Otherwise the figure disagrees with the service count beside it and
-    // nothing on the screen explains why.
-    expect(describeCostBasis({ ...PERIOD, services: 200, billed_services: 120 })).toBe(
-      "120 services in August 2026, at the rate in force. The 200 counted are held to the plan's ceiling.",
+  it("says the ceiling is on the bill, not a discount on the count", () => {
+    // "The 200 counted are held to the plan's ceiling" read as a discount. The
+    // customer is running 200 services and being billed for 120, and the
+    // sentence has to say that in their direction, not ours.
+    expect(describeCostBasis({ ...PERIOD, services: 200, billed_services: 120 }, "Free")).toBe(
+      "120 services in August 2026, at the rate in force. You are running 200 services; Free bills 120.",
     );
   });
 
@@ -208,10 +216,71 @@ describe("the volume allowance", () => {
     );
   });
 
-  it("says plainly when the volume is over it", () => {
+  it("says plainly when the volume is over an allowance nothing enforces", () => {
     expect(
       describeAllowance({ ...PERIOD, bytes_ingested: 2_000_000, included_bytes: 1_000_000 }),
     ).toBe("2.0 MB of 1.0 MB included — over the allowance.");
+  });
+
+  it("warns before an enforced allowance is spent, not only after", () => {
+    // A refusal a customer could not see coming is the failure this exists to
+    // prevent: the receiver's refusal reaches only their exporter's logs.
+    expect(
+      describeAllowance({ ...PERIOD, included_bytes: 1_000_000, allowance_enforced: true }),
+    ).toBe(
+      "500.0 kB of 1.0 MB included. Ingestion stops once this is spent and resumes Sep 1, 2026.",
+    );
+  });
+
+  it("says an enforced allowance is spent, and when it comes back", () => {
+    expect(
+      describeAllowance({
+        ...PERIOD,
+        bytes_ingested: 2_000_000,
+        included_bytes: 1_000_000,
+        allowance_enforced: true,
+      }),
+    ).toBe("2.0 MB of 1.0 MB included — spent. Further ingestion is refused until Sep 1, 2026.");
+  });
+
+  it("resets on the day after the month it covered, not the day after today", () => {
+    // A screen looking back at August in September must not say the allowance
+    // returns tomorrow.
+    expect(allowanceResetDay(PERIOD)).toBe("2026-09-01");
+    expect(allowanceResetDay({ ...PERIOD, first_day: "2026-12-01", last_day: "2026-12-31" })).toBe(
+      "2027-01-01",
+    );
+  });
+
+  it("is only spent where the plan enforces the allowance", () => {
+    const over = { ...PERIOD, bytes_ingested: 2_000_000, included_bytes: 1_000_000 };
+    expect(isAllowanceSpent(over)).toBe(false);
+    expect(isAllowanceSpent({ ...over, allowance_enforced: true })).toBe(true);
+  });
+
+  it("names the loss rather than softening it when the door is refusing", () => {
+    expect(
+      describeAllowanceSpent({
+        ...PERIOD,
+        bytes_ingested: 2_000_000,
+        included_bytes: 1_000_000,
+        allowance_enforced: true,
+      }),
+    ).toBe(
+      "The volume included in August 2026 is spent, so exports are being refused until Sep 1, 2026. Telemetry sent in the meantime is not stored and cannot be recovered.",
+    );
+  });
+});
+
+describe("what the cost figure leaves out", () => {
+  it("says the overage is undecided where nothing is refused", () => {
+    expect(describeOverage(PERIOD)).toContain("is not decided");
+  });
+
+  it("says there is nothing to bill where volume is refused instead", () => {
+    expect(describeOverage({ ...PERIOD, allowance_enforced: true })).toContain(
+      "refused rather than billed",
+    );
   });
 });
 

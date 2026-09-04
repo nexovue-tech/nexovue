@@ -28,6 +28,12 @@ type refusal struct {
 	code    code.Code
 	message string
 
+	// countedAs overrides the tally name the rpc code would carry. Two gates
+	// answer RESOURCE_EXHAUSTED — the rate limiter and the plan allowance — and
+	// a window that folded them together would report a customer whose free
+	// month ran out as one sending too fast. Empty means the code's own name.
+	countedAs string
+
 	// retryAfter is how long the client should wait before sending the batch
 	// again. Zero means the failure is not worth retrying.
 	retryAfter time.Duration
@@ -64,6 +70,21 @@ func (r *refusal) answeredAs(httpStatus int) *refusal {
 	return r
 }
 
+// countedUnder pins the tally name, for a verdict its rpc code does not name
+// precisely enough.
+func (r *refusal) countedUnder(reason string) *refusal {
+	r.countedAs = reason
+	return r
+}
+
+// reason is the one name this refusal is counted and logged under.
+func (r *refusal) reason() string {
+	if r.countedAs != "" {
+		return r.countedAs
+	}
+	return reasonFor(r.code)
+}
+
 // status is the one HTTP status this refusal has, whether it is being written
 // or logged.
 func (r *refusal) status() int {
@@ -94,8 +115,54 @@ func (o Options) authenticate(ctx context.Context, presentedKey string) (context
 	}), nil
 }
 
-// throttle is gate two. It answers before the payload is decoded, which is the
-// whole reason it sits above decoding rather than inside the exporter.
+// withinAllowance is the plan gate: has this organization spent the volume its
+// plan includes for the calendar month.
+//
+// It sits above the limiter for the reason the origin gate does. The answer is
+// an in-process cache lookup, so an organization whose free month is over is
+// turned away without a Valkey round trip — which matters precisely in the case
+// this gate exists for, one that is sending hard and being refused for all of
+// it.
+//
+// Only a plan with a ceiling on its billed services has an allowance to spend,
+// so nothing paying is ever refused here. ADR 0093.
+func (o Options) withinAllowance(ctx context.Context) *refusal {
+	identity, ok := auth.FromContext(ctx)
+	if !ok {
+		// Only reachable if the gate order were rewired.
+		return refuse(code.Code_INTERNAL, messageUnavailable).
+			because(errors.New("allowance gate ran before authentication"))
+	}
+
+	verdict, err := o.Allowance.Check(ctx, identity.OrgID)
+	if err != nil {
+		// Fail open, exactly as the limiter does. A control-plane blip must not
+		// become an ingest outage: what is lost by admitting an over-allowance
+		// export is money, and what is lost by refusing a good one is the
+		// customer's telemetry.
+		if o.Traffic.Degraded(reasonAllowanceUnknown) {
+			o.Logger.WarnContext(ctx, "plan allowance unreadable, allowing request",
+				slog.String(fieldReason, reasonAllowanceUnknown),
+				slog.String(fieldError, logging.RedactCredentials(err.Error())))
+		}
+		return nil
+	}
+	if verdict.Spent {
+		// RESOURCE_EXHAUSTED and deliberately no RetryInfo: the spec makes this
+		// code non-retryable unless one is attached, so a compliant client drops
+		// the batch instead of resending it until the 1st. A retryable refusal
+		// would lose the data anyway — the OTel Collector gives up on a queued
+		// batch after five minutes — and would spend three weeks of the
+		// customer's egress finding that out.
+		return refuse(code.Code_RESOURCE_EXHAUSTED, allowanceSpentMessage(verdict.ResetsOn)).
+			countedUnder(reasonAllowanceSpent)
+	}
+	return nil
+}
+
+// throttle is the rate-limit gate. It answers before the payload is decoded,
+// which is the whole reason it sits above decoding rather than inside the
+// exporter.
 func (o Options) throttle(ctx context.Context) *refusal {
 	identity, ok := auth.FromContext(ctx)
 	if !ok {
@@ -150,7 +217,7 @@ func (o Options) record(ctx context.Context, path string, unit Unit, items int, 
 		return
 	}
 
-	reason := reasonFor(refused.code)
+	reason := refused.reason()
 	if !o.Traffic.Refused(unit, reason, items) {
 		return
 	}

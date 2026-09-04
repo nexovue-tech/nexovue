@@ -168,6 +168,7 @@ contracts-check:
 topics:
     ./deploy/kafka/topics.sh
 
+# Apply all migrations: Postgres then ClickHouse
 migrate: migrate-pg migrate-ch
 
 migrate-pg:

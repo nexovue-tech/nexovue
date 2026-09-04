@@ -23,6 +23,7 @@ import (
 
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/allowance"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ingest"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/otlp"
@@ -66,10 +67,14 @@ func (staticKeys) CredentialFor(_ context.Context, prefix string) (auth.Credenti
 	}, nil
 }
 
+// errUnreachableControlPlane is what a dependency being down looks like from
+// the door: not the caller's fault, and not a verdict.
+var errUnreachableControlPlane = errors.New("dial tcp: connection refused")
+
 type unreachableKeys struct{}
 
 func (unreachableKeys) CredentialFor(context.Context, string) (auth.Credential, error) {
-	return auth.Credential{}, errors.New("dial tcp: connection refused")
+	return auth.Credential{}, errUnreachableControlPlane
 }
 
 // staticSiteKeys stands in for site_keys. There is no hash to compare: the whole
@@ -147,6 +152,23 @@ func (brokenCounter) Increment(context.Context, string, time.Duration) (int64, e
 	return 0, errors.New("dial tcp: connection refused")
 }
 
+// staticUsage stands in for the control plane's record of a month. The zero
+// value is an organization on a plan that enforces nothing, which is what every
+// test that is not about the allowance wants.
+type staticUsage struct {
+	usage allowance.Usage
+	err   error
+}
+
+func (s staticUsage) UsageFor(
+	context.Context, string, allowance.Month, time.Time,
+) (allowance.Usage, error) {
+	if s.err != nil {
+		return allowance.Usage{}, s.err
+	}
+	return s.usage, nil
+}
+
 // --- fixtures ----------------------------------------------------------------
 
 type door struct {
@@ -165,6 +187,10 @@ type doorOptions struct {
 
 	counter        ratelimit.Counter
 	requestsPerSec int
+
+	// allowanceUsage replaces the unenforced default when a test is about the
+	// plan gate.
+	allowanceUsage allowance.Reader
 	produceErr     error
 	maxBodyBytes   int64
 
@@ -201,6 +227,11 @@ func (o *doorOptions) applyDefaults() {
 	if o.requestsPerSec == 0 {
 		o.requestsPerSec = 1000
 	}
+	if o.allowanceUsage == nil {
+		// Found, and enforcing nothing: the free tier's boundary must not be in
+		// the way of every other test on this door.
+		o.allowanceUsage = staticUsage{usage: allowance.Usage{Found: true}}
+	}
 	if o.maxBodyBytes == 0 {
 		o.maxBodyBytes = 1 << 20
 	}
@@ -233,6 +264,10 @@ func newDoor(t *testing.T, opts doorOptions) door {
 // enough that nothing about eviction is being exercised by accident.
 var testCredentialCache = auth.Options{CacheTTL: time.Minute, CacheMaxEntries: 100}
 
+// Same reasoning for the plan gate's cache: long enough that no test races the
+// TTL, small enough that nothing about eviction happens by accident.
+var testAllowanceCache = allowance.Options{CacheTTL: time.Minute, CacheMaxEntries: 100}
+
 // The two doors differ by their gatekeeper and by nothing else, which is what
 // the wiring under test claims. Building them from one shared value here is how
 // a drift between the two would show up as a compile error rather than a gap.
@@ -251,6 +286,7 @@ func browserDoorOptions(producer *countingProducer, opts doorOptions) otlp.Optio
 func sharedDoorOptions(producer *countingProducer, opts doorOptions) otlp.Options {
 	return otlp.Options{
 		Limiter:             ratelimit.New(opts.counter, opts.requestsPerSec),
+		Allowance:           allowance.New(opts.allowanceUsage, testAllowanceCache),
 		Publisher:           ingest.NewPublisher(publishingTo(producer, opts), testTopics, opts.produceBudget),
 		Logger:              opts.log,
 		Traffic:             opts.traffic,

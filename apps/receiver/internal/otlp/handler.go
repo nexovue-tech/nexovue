@@ -4,16 +4,18 @@
 //
 // Gates run in order and the order is load-bearing:
 //
-//	auth -> origin -> ratelimit -> decode -> normalize -> produce
+//	auth -> origin -> allowance -> ratelimit -> decode -> normalize -> produce
 //
 // Authentication comes first so no endpoint ever exists unauthenticated. The
 // origin gate is next because the list it checks belongs to the key, and
 // because a request from an origin the key does not cover must not spend the
-// owner's rate budget. The limiter comes before the payload is read so a tenant
-// over its limit costs us a Valkey round trip rather than a megabyte of
-// parsing. The gates live in
-// gates.go and every door runs the same ones over both transports: only where
-// the credential is read from and how a verdict is written differ.
+// owner's rate budget. The allowance gate follows for the same reason and one
+// more: it answers from an in-process cache, so an organization whose plan
+// month is spent is refused without a Valkey round trip. The limiter comes
+// before the payload is read so a tenant over its limit costs us a Valkey round
+// trip rather than a megabyte of parsing. The gates live in gates.go and every
+// door runs the same ones over both transports: only where the credential is
+// read from and how a verdict is written differ.
 //
 // What each signal does differently — the request it decodes, the unit it
 // counts, whether it is split before publishing — lives in signals.go, and is
@@ -32,6 +34,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/code"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/allowance"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ingest"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ratelimit"
@@ -52,6 +55,22 @@ const (
 	messageUnavailable     = "receiver cannot serve this request, retry"
 )
 
+// The plan refusal names the date, because "when does this come back" is the
+// only question a customer has left and the answer is not guessable from the
+// code. It says the allowance was spent rather than that the rate was exceeded:
+// both are RESOURCE_EXHAUSTED, and only one of them clears in a second.
+const messageAllowanceSpent = "the included monthly ingest volume for this plan is spent; " +
+	"ingestion resumes on "
+
+// allowanceResetLayout is a plain calendar date. Not RFC 3339: the allowance
+// returns at the start of a UTC day, and an instant would invite a customer to
+// read a timezone into it that is not there.
+const allowanceResetLayout = time.DateOnly
+
+func allowanceSpentMessage(resetsOn time.Time) string {
+	return messageAllowanceSpent + resetsOn.UTC().Format(allowanceResetLayout)
+}
+
 // The browser refusals say more than the credential ones do, and on purpose:
 // the caller already holds the key, so naming what is wrong with the request
 // tells an attacker nothing and tells a customer onboarding a site everything.
@@ -70,9 +89,15 @@ type Options struct {
 	// URL may carry the key at all — see auth/presented.go.
 	Gatekeeper auth.Gatekeeper
 	Limiter    *ratelimit.Limiter
-	Publisher  *ingest.Publisher
-	Logger     *slog.Logger
-	Traffic    *Traffic
+
+	// Allowance is the plan gate: whether this organization has volume left in
+	// the month its plan includes. Shared by both doors and both transports —
+	// the boundary belongs to the organization, not to the entrance.
+	Allowance *allowance.Checker
+
+	Publisher *ingest.Publisher
+	Logger    *slog.Logger
+	Traffic   *Traffic
 
 	// MaxBodyBytes caps the request as it arrives; MaxDecodedBodyBytes caps
 	// what a compressed one may expand to.
@@ -146,8 +171,9 @@ func route[Request proto.Message](
 	mux.Handle("POST "+signal.httpPath,
 		answeringCORS(stamped(authenticate(opts, signal.endpoint,
 			fromAllowedOrigin(opts, signal.endpoint,
-				throttle(opts, signal.endpoint,
-					export(opts, signal)))))))
+				withinAllowance(opts, signal.endpoint,
+					throttle(opts, signal.endpoint,
+						export(opts, signal))))))))
 	mux.Handle("OPTIONS "+signal.httpPath, http.HandlerFunc(preflight))
 }
 
@@ -180,6 +206,18 @@ func authenticate(opts Options, at endpoint, next http.Handler) http.Handler {
 func fromAllowedOrigin(opts Options, at endpoint, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if refused := opts.checkOrigin(r.Context(), r.Header.Get(headerOrigin)); refused != nil {
+			opts.record(r.Context(), at.httpPath, at.unit, itemsNotRead, refused)
+			writeRefusal(w, opts.accepts.replyCodec(r), refused)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withinAllowance is the plan gate: the organization's month, spent or not.
+func withinAllowance(opts Options, at endpoint, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if refused := opts.withinAllowance(r.Context()); refused != nil {
 			opts.record(r.Context(), at.httpPath, at.unit, itemsNotRead, refused)
 			writeRefusal(w, opts.accepts.replyCodec(r), refused)
 			return

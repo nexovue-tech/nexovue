@@ -820,6 +820,64 @@ async def test_the_allowance_follows_the_ceiling_not_the_raw_count() -> None:
     assert response.period.included_bytes == 4_000
 
 
+async def test_a_capped_tier_grants_the_whole_ceiling_below_it_too() -> None:
+    """The allowance is the plan's, not the running count's.
+
+    It is enforced at the ingest door (ADR 0093), so it must not move with the
+    service count: a customer refused at one service's worth would otherwise be
+    told that starting a second service is the remedy.
+    """
+    one = [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")]
+
+    response = await _priced(one, price=_price(ceiling=4, included_bytes=1_000))
+
+    assert response.period.included_bytes == 4_000
+
+
+async def test_the_free_tier_as_seeded_includes_six_gibibytes() -> None:
+    """Migration 0015's free row, multiplied the way the receiver multiplies it.
+
+    The same figures appear in the receiver's own allowance suite. If the two
+    diverge the customer is shown a limit the door does not apply.
+    """
+    gib = 1024**3
+    one = [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")]
+
+    response = await _priced(one, price=_price(ceiling=3, included_bytes=2 * gib))
+
+    assert response.period.included_bytes == 6 * gib
+    assert response.period.allowance_enforced is True
+
+
+async def test_an_uncapped_tier_enforces_nothing() -> None:
+    """Pro and scale record no ceiling, and nothing that pays is refused volume."""
+    services = [
+        _service(ORG_ID, PROJECT_ID, TO_DAY, "checkout"),
+        _service(ORG_ID, PROJECT_ID, TO_DAY, "payments"),
+    ]
+
+    response = await _priced(services, price=_price(included_bytes=10 * 1024**3))
+
+    assert response.period.allowance_enforced is False
+
+
+async def test_a_tier_with_no_recorded_allowance_enforces_nothing() -> None:
+    """A ceiling on the bill is not a ceiling on volume without an amount to cap."""
+    one = [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")]
+
+    response = await _priced(one, price=_price(ceiling=3, included_bytes=None))
+
+    assert response.period.included_bytes is None
+    assert response.period.allowance_enforced is False
+
+
+async def test_an_unpriced_tier_enforces_nothing() -> None:
+    """No row is not a plan that includes zero."""
+    response = await _priced([_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")], price=None)
+
+    assert response.period.allowance_enforced is False
+
+
 async def test_the_period_bytes_are_asked_for_by_organization_and_month(
     session: CapturingSession,
 ) -> None:

@@ -93,6 +93,10 @@ func runExport[Request proto.Message](
 		opts.record(ctx, door.grpcPath, door.unit, itemsNotRead, refused)
 		return refused.grpcError()
 	}
+	if refused := opts.withinAllowance(ctx); refused != nil {
+		opts.record(ctx, door.grpcPath, door.unit, itemsNotRead, refused)
+		return refused.grpcError()
+	}
 	if refused := opts.throttle(ctx); refused != nil {
 		opts.record(ctx, door.grpcPath, door.unit, itemsNotRead, refused)
 		return refused.grpcError()

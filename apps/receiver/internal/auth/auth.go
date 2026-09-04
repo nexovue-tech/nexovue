@@ -14,6 +14,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/cache"
 )
 
 // HeaderName carries the ingest key. Lower-case because that is how it is
@@ -94,7 +96,7 @@ type Options struct {
 // Authenticator verifies presented keys against the control plane.
 type Authenticator struct {
 	keys  KeyReader
-	cache *cache[Credential]
+	cache *cache.Cache[Credential]
 	uses  KeyUseRecorder
 }
 
@@ -115,7 +117,7 @@ func New(keys KeyReader, opts Options) *Authenticator {
 	}
 	return &Authenticator{
 		keys:  keys,
-		cache: newCache[Credential](opts.CacheTTL, opts.CacheMaxEntries),
+		cache: cache.New[Credential](opts.CacheTTL, opts.CacheMaxEntries),
 		uses:  uses,
 	}
 }
@@ -134,7 +136,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, presented string) (Ide
 	}
 
 	prefix := lookupPrefix(presented)
-	stored, cached := a.cache.lookup(prefix)
+	stored, cached := a.cache.Lookup(prefix)
 	if !cached {
 		var err error
 		stored, err = a.keys.CredentialFor(ctx, prefix)
@@ -142,7 +144,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, presented string) (Ide
 			return Identity{}, fmt.Errorf("looking up ingest key: %w", err)
 		}
 		// Misses are cached too, so an invalid key cannot hammer Postgres.
-		a.cache.store(prefix, stored)
+		a.cache.Store(prefix, stored)
 	}
 
 	if !stored.Found {

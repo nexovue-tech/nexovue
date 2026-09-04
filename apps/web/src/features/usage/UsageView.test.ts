@@ -50,6 +50,7 @@ const PERIOD: UsageResponse["period"] = {
   service_cost_minor_units: null,
   currency: null,
   included_bytes: null,
+  allowance_enforced: false,
 };
 
 /**
@@ -252,6 +253,40 @@ describe("UsageView", () => {
       }),
     );
     expect(withAllowance).toContain("90.0 GB of 100.0 GB included");
+  });
+
+  it("says the allowance is spent and when it resets, where the door is refusing", () => {
+    // The receiver's RESOURCE_EXHAUSTED reaches only whoever reads their
+    // exporter's logs. Without this the customer's telemetry stops and nothing
+    // they can see says why.
+    const spent = {
+      ...COSTED,
+      included_bytes: 10_000_000_000,
+      allowance_enforced: true,
+    };
+    const container = render({ usage: { ...USAGE, price: PRICED, period: spent } });
+    const rendered = readable(container);
+
+    expect(rendered).toContain("90.0 GB of 10.0 GB included — spent");
+    expect(rendered).toContain("exports are being refused until Sep 1, 2026");
+    expect(rendered).toContain("cannot be recovered");
+    expect(container.innerHTML).toContain("text-warning-text");
+  });
+
+  it("says nothing about a refusal on a plan that refuses nothing", () => {
+    const over = { ...COSTED, included_bytes: 10_000_000_000 };
+    const rendered = readable(render({ usage: { ...USAGE, price: PRICED, period: over } }));
+
+    expect(rendered).toContain("over the allowance");
+    expect(rendered).not.toContain("being refused");
+  });
+
+  it("says there is no overage to bill where volume is refused instead", () => {
+    const enforced = { ...COSTED, included_bytes: 10_000_000_000, allowance_enforced: true };
+    const rendered = readable(render({ usage: { ...USAGE, price: PRICED, period: enforced } }));
+
+    expect(rendered).toContain("refused rather than billed");
+    expect(rendered).not.toContain("is not decided");
   });
 
   /* -------------------------------------------------------------- cardinality */

@@ -17,6 +17,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/valkey-io/valkey-go"
 
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/allowance"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/buildinfo"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/config"
@@ -92,6 +93,15 @@ func run() error {
 	// pipeline. Only the gatekeeper differs, and it is the whole difference.
 	shared := otlp.Options{
 		Limiter: ratelimit.New(ratelimit.NewValkeyCounter(dependencies.valkey), cfg.RateLimitPerSecond),
+		// One checker for both doors and both transports: the plan boundary is
+		// the organization's, so a customer cannot buy more month by changing
+		// which entrance they send to.
+		Allowance: allowance.New(
+			allowance.NewPostgresUsage(dependencies.postgres),
+			allowance.Options{
+				CacheTTL:        cfg.AllowanceCacheTTL,
+				CacheMaxEntries: cfg.AllowanceCacheMaxEntries,
+			}),
 		Publisher: ingest.NewPublisher(dependencies.kafka, ingest.Topics{
 			Spans:   cfg.SpansTopic,
 			Logs:    cfg.LogsTopic,

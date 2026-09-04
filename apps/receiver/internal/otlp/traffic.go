@@ -21,7 +21,14 @@ const (
 	// different customer conversation.
 	reasonForbiddenOrigin = "forbidden_origin"
 
-	reasonThrottled   = "throttled"
+	reasonThrottled = "throttled"
+
+	// reasonAllowanceSpent is a plan's monthly included volume used up. Both
+	// this and reasonThrottled answer RESOURCE_EXHAUSTED, and they are counted
+	// apart because they are different conversations: one clears in a second,
+	// the other on the 1st, and only one of them is a support ticket.
+	reasonAllowanceSpent = "allowance_spent"
+
 	reasonInvalid     = "invalid"
 	reasonUnavailable = "unavailable"
 	reasonInternal    = "internal"
@@ -30,6 +37,10 @@ const (
 	// the request. It is counted because losing the protection silently is how
 	// the next incident starts.
 	reasonLimiterDown = "limiter_unavailable"
+
+	// reasonAllowanceUnknown is the same shape: the plan gate failing open
+	// still admits the request, and a window of these is ingest nobody billed.
+	reasonAllowanceUnknown = "allowance_unavailable"
 )
 
 // refusalReasons and degradationReasons fix the summary's shape: every window
@@ -37,9 +48,9 @@ const (
 var (
 	refusalReasons = []string{
 		reasonUnauthenticated, reasonForbiddenOrigin, reasonThrottled,
-		reasonInvalid, reasonUnavailable, reasonInternal,
+		reasonAllowanceSpent, reasonInvalid, reasonUnavailable, reasonInternal,
 	}
-	degradationReasons = []string{reasonLimiterDown}
+	degradationReasons = []string{reasonLimiterDown, reasonAllowanceUnknown}
 )
 
 // Unit is what one signal's telemetry is counted in — the thing a customer
@@ -238,8 +249,10 @@ func (t *Traffic) take(reason string) int64 {
 	return counted.count.Swap(0)
 }
 
-// reasonFor names a verdict for the tally. Only the codes the gates produce are
-// listed; anything else is our bug, and internal is what a bug means.
+// reasonFor names a verdict for the tally from its rpc code alone. It is the
+// default; a gate whose code is shared with another says which it is with
+// `countedUnder`. Only the codes the gates produce are listed; anything else is
+// our bug, and internal is what a bug means.
 func reasonFor(rpcCode code.Code) string {
 	switch rpcCode {
 	case code.Code_UNAUTHENTICATED:

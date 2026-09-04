@@ -354,6 +354,37 @@ async def test_the_allowance_is_read_from_the_row_and_pooled(db: AsyncSession) -
     assert answer.period.bytes_ingested == 2_500
 
 
+async def test_a_capped_tier_reads_the_ceilings_allowance_from_real_postgres(
+    db: AsyncSession,
+) -> None:
+    """The free tier as migration 0015 seeds it: 2 GiB x 3, whatever is running.
+
+    Enforced at the ingest door (ADR 0093), so the number the screen states has
+    to be the number the door applies — and it must not shrink to one service's
+    worth because only one service happens to be reporting.
+    """
+    gib = 1024**3
+    tenant = await _new_tenant(db)
+    await _record_price(db, tenant, minor_units=0, ceiling=3, included_bytes=2 * gib)
+    await _record_service(db, tenant, day=TO_DAY, name="checkout")
+
+    answer = await _read(db, tenant)
+
+    assert answer.period.included_bytes == 6 * gib
+    assert answer.period.allowance_enforced is True
+
+
+async def test_an_uncapped_tier_read_from_real_postgres_enforces_nothing(
+    db: AsyncSession,
+) -> None:
+    """Blocking a paying customer would be far worse than the hole being closed."""
+    tenant = await _new_tenant(db)
+    await _record_price(db, tenant, minor_units=600, included_bytes=10 * 1024**3)
+    await _record_service(db, tenant, day=TO_DAY, name="checkout")
+
+    assert (await _read(db, tenant)).period.allowance_enforced is False
+
+
 async def test_a_price_row_with_no_allowance_reports_none_rather_than_zero(
     db: AsyncSession,
 ) -> None:

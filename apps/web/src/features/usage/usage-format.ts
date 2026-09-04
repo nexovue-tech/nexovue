@@ -133,24 +133,36 @@ export function formatPeriodCost(period: BillingPeriod): string | undefined {
 /**
  * What the figure is, said in full: which quantity, over which period.
  *
- * A ceiling that bit is named, because otherwise the cost disagrees with the service
- * count beside it and nothing on the screen accounts for the difference.
+ * A ceiling that bit is named as a ceiling on the *bill*, in the customer's own
+ * direction: they are running eighteen services and being billed for three. The
+ * earlier wording — "the 18 counted are held to the plan's ceiling" — read as a
+ * discount, which is what a service cap is not: the eighteenth service is monitored
+ * and unbilled, and saying so plainly is the honest half of the sentence.
  */
-export function describeCostBasis(period: BillingPeriod): string {
+export function describeCostBasis(period: BillingPeriod, planName: string): string {
   const services = `${formatCount(period.billed_services)} ${plural(period.billed_services, "service")}`;
   const basis = `${services} in ${formatPeriod(period)}, at the rate in force.`;
   if (period.billed_services >= period.services) return basis;
-  return `${basis} The ${formatCount(period.services)} counted are held to the plan's ceiling.`;
+  return `${basis} You are running ${formatCount(period.services)} services; ${planName} bills ${formatCount(period.billed_services)}.`;
 }
 
 /**
- * The one thing the figure leaves out.
+ * The one thing the figure leaves out, which is not the same sentence on every tier.
  *
- * Volume above the allowance is not in it, and saying so is the difference between
- * a partial number and a misleading one.
+ * Where the allowance is enforced there is no overage to bill, because there is no
+ * overage: it is refused (ADR 0093). Where it is not, what volume above the allowance
+ * costs is still undecided, and saying so is the difference between a partial number
+ * and a misleading one.
  */
 export const COST_EXCLUDES_OVERAGE =
   "This covers the services only. What volume above the included allowance costs is not decided, so nothing for it is included here.";
+
+export const NO_OVERAGE_TO_BILL =
+  "This covers the services only. Volume above the included allowance is refused rather than billed, so there is nothing to add for it.";
+
+export function describeOverage(period: BillingPeriod): string {
+  return period.allowance_enforced ? NO_OVERAGE_TO_BILL : COST_EXCLUDES_OVERAGE;
+}
 
 /** A month still being metered is labelled rather than read as a small bill. */
 export function describePeriodProgress(period: BillingPeriod): string {
@@ -158,10 +170,61 @@ export function describePeriodProgress(period: BillingPeriod): string {
   return `${formatPeriod(period)} is still being metered, so this will grow.`;
 }
 
+/**
+ * The day a spent allowance comes back: the day after the month it covered.
+ *
+ * The month's own last day, not the clock's — a screen looking back at August in
+ * September must not claim the allowance returns tomorrow.
+ */
+export function allowanceResetDay(period: BillingPeriod): string {
+  const at = new Date(`${period.last_day}T00:00:00Z`);
+  if (Number.isNaN(at.getTime())) return period.last_day;
+  at.setUTCDate(at.getUTCDate() + 1);
+  return at.toISOString().slice(0, 10);
+}
+
+/**
+ * What is left of the month's volume, and what happens when it runs out.
+ *
+ * Where the allowance is enforced the sentence says so before it is spent, not only
+ * after: a refusal a customer could not see coming is the failure this screen exists
+ * to prevent, and the receiver's refusal is invisible to everyone but whoever reads
+ * their exporter's logs.
+ */
 export function describeAllowance(period: BillingPeriod): string | undefined {
   if (period.included_bytes === null) return undefined;
+
   const used = `${formatBytes(period.bytes_ingested)} of ${formatBytes(period.included_bytes)} included`;
-  return period.bytes_ingested > period.included_bytes ? `${used} — over the allowance.` : used;
+  const spent = period.bytes_ingested > period.included_bytes;
+
+  if (!period.allowance_enforced) {
+    return spent ? `${used} — over the allowance.` : used;
+  }
+  const resumes = formatDay(allowanceResetDay(period));
+  if (spent) {
+    return `${used} — spent. Further ingestion is refused until ${resumes}.`;
+  }
+  return `${used}. Ingestion stops once this is spent and resumes ${resumes}.`;
+}
+
+/** Whether the door is refusing this organization's exports right now. */
+export function isAllowanceSpent(period: BillingPeriod): boolean {
+  return (
+    period.allowance_enforced &&
+    period.included_bytes !== null &&
+    period.bytes_ingested > period.included_bytes
+  );
+}
+
+/**
+ * Said again, in the open, when it is actually happening.
+ *
+ * The receiver's refusal reaches only whoever reads their exporter's logs, so a
+ * customer whose telemetry has stopped needs to be able to find out here. It names
+ * the loss rather than softening it: the data sent while refused is gone.
+ */
+export function describeAllowanceSpent(period: BillingPeriod): string {
+  return `The volume included in ${formatPeriod(period)} is spent, so exports are being refused until ${formatDay(allowanceResetDay(period))}. Telemetry sent in the meantime is not stored and cannot be recovered.`;
 }
 
 /* -------------------------------------------------------------- service names */

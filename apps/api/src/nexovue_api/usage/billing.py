@@ -20,10 +20,12 @@ whole month's bill. Predictable beats optimal for a first product.
 logs and metrics, and they are what costs storage and transfer. Counting spans
 would charge a well-instrumented service more for being well instrumented.
 
-**What is still not computed.** The allowance amount is a row nobody has
-inserted, and what happens above it — billed as overage, or blocked and said —
-is not decided: ADR 0056 promises both in different paragraphs. So the cost
-here is the service-count component only, and it says so.
+**What happens above the allowance is settled for the free tier only.** ADR 0056
+promised both "block and say so rather than bill" and "overage stays live, so
+growth still pays", in different paragraphs. ADR 0093 chooses the first where the
+plan caps the services it bills — the free tier — and leaves the second open for
+the tiers that pay. So the cost here is still the service-count component only,
+and it says so.
 """
 
 from __future__ import annotations
@@ -73,15 +75,26 @@ def service_cost_minor_units(services: int, price: PlanPrice | None) -> int | No
 
 
 def included_bytes(services: int, price: PlanPrice | None) -> int | None:
-    """The month's volume allowance: what each billed service brings, pooled.
+    """The month's volume allowance, pooled across the organization.
 
-    Pooled across the organization rather than enforced service by service,
-    which is what the field does — Datadog's per-host ingestion allowance is
-    "summed over all the APM hosts", so a quiet service lends its unused
-    allowance to a busy one. Enforcing it per service would need bytes
-    attributed to each service, and a payload carrying several services would
-    have to have its bytes apportioned between them by a rule nobody has
-    chosen.
+    Pooled rather than enforced service by service, which is what the field
+    does — Datadog's per-host ingestion allowance is "summed over all the APM
+    hosts", so a quiet service lends its unused allowance to a busy one.
+    Enforcing it per service would need bytes attributed to each service, and a
+    payload carrying several services would have to have its bytes apportioned
+    between them by a rule nobody has chosen.
+
+    **Where the plan has a ceiling, the allowance is the ceiling's**, not the
+    running count's: three services' worth on Free whether one service is
+    running or three. That is because this number is enforced at the ingest
+    door (ADR 0093), and an allowance that moved with the service count would
+    change what a customer may send as services came and went — and would tell
+    a customer refused at 2 GiB that starting a second service is the remedy.
+    An uncapped tier has no such number, so each service run brings its own.
+
+    `allowance.includedBytes` in the receiver computes the same figure from the
+    same row. The two have to agree, or the screen states a limit the door does
+    not apply.
 
     None when no rate is recorded or the rate records no allowance. An
     allowance nobody set is not an allowance of zero, which would report every
@@ -89,4 +102,22 @@ def included_bytes(services: int, price: PlanPrice | None) -> int | None:
     """
     if price is None or price.included_bytes_per_service is None:
         return None
-    return billed_services(services, price) * price.included_bytes_per_service
+    if price.max_billed_services is None:
+        return services * price.included_bytes_per_service
+    return price.max_billed_services * price.included_bytes_per_service
+
+
+def allowance_is_enforced(price: PlanPrice | None) -> bool:
+    """Whether volume past the allowance is refused rather than billed.
+
+    True only where the plan puts a ceiling on the services it bills, which is
+    the free tier and nothing else. ADR 0083 section 6 refuses to cap a paying
+    customer to hold their bill down, and this does not: a tier with no ceiling
+    has no enforced allowance, so nothing that pays is ever refused for volume.
+    ADR 0093 is where the two sit side by side.
+    """
+    return (
+        price is not None
+        and price.included_bytes_per_service is not None
+        and price.max_billed_services is not None
+    )

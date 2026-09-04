@@ -39,7 +39,7 @@ func TestAKeyInContinuousUseIsRecordedOncePerCachePeriod(t *testing.T) {
 	auth := authenticatorRecordingInto(keys, uses)
 
 	now := time.Now()
-	auth.cache.now = func() time.Time { return now }
+	auth.cache.UseClock(func() time.Time { return now })
 
 	for range 20 {
 		if _, err := auth.Authenticate(context.Background(), validKey); err != nil {

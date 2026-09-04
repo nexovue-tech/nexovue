@@ -82,6 +82,16 @@ type Config struct {
 	APIKeyCacheTTL        time.Duration `env:"RECEIVER_API_KEY_CACHE_TTL" envDefault:"30s"`
 	APIKeyCacheMaxEntries int           `env:"RECEIVER_API_KEY_CACHE_MAX_ENTRIES" envDefault:"10000"`
 
+	// AllowanceCacheTTL bounds how far past its included volume an organization
+	// can get before the door notices, and how long an upgrade takes to open the
+	// door again. Its own setting rather than the key cache's: that one is sized
+	// for how long a revoked key may keep working, and moving it for a security
+	// reason must not silently change what a customer is billed.
+	// One entry per organization this receiver has seen, so the ceiling is a
+	// bound on tenants rather than on attacker-chosen strings.
+	AllowanceCacheTTL        time.Duration `env:"RECEIVER_ALLOWANCE_CACHE_TTL" envDefault:"30s"`
+	AllowanceCacheMaxEntries int           `env:"RECEIVER_ALLOWANCE_CACHE_MAX_ENTRIES" envDefault:"10000"`
+
 	RateLimitPerSecond int `env:"RECEIVER_RATE_LIMIT_PER_SECOND" envDefault:"1000"`
 
 	// Pool sizes are stated rather than inherited: pgx defaults to one
@@ -126,6 +136,11 @@ func (c Config) ProducerBatchMaxBytes() int32 {
 // capped by the code rather than left to whoever writes the deployment.
 const MaxAPIKeyCacheTTL = time.Minute
 
+// MaxAllowanceCacheTTL is the ceiling on RECEIVER_ALLOWANCE_CACHE_TTL. It is
+// how long a customer who has just paid to raise their allowance keeps being
+// refused, so it is capped by the code rather than left to a deployment.
+const MaxAllowanceCacheTTL = 5 * time.Minute
+
 // Load reads and validates the environment, returning an error that names the
 // offending variable.
 func Load() (Config, error) {
@@ -168,6 +183,9 @@ func (c Config) validate() error {
 		positiveDuration("RECEIVER_API_KEY_CACHE_TTL", c.APIKeyCacheTTL),
 		atMostDuration("RECEIVER_API_KEY_CACHE_TTL", c.APIKeyCacheTTL, MaxAPIKeyCacheTTL),
 		positiveCount("RECEIVER_API_KEY_CACHE_MAX_ENTRIES", c.APIKeyCacheMaxEntries),
+		positiveDuration("RECEIVER_ALLOWANCE_CACHE_TTL", c.AllowanceCacheTTL),
+		atMostDuration("RECEIVER_ALLOWANCE_CACHE_TTL", c.AllowanceCacheTTL, MaxAllowanceCacheTTL),
+		positiveCount("RECEIVER_ALLOWANCE_CACHE_MAX_ENTRIES", c.AllowanceCacheMaxEntries),
 		positiveCount("RECEIVER_RATE_LIMIT_PER_SECOND", c.RateLimitPerSecond),
 		positiveCount("RECEIVER_POSTGRES_MAX_CONNS", int(c.PostgresMaxConns)),
 		positiveCount("RECEIVER_POSTGRES_MIN_CONNS", int(c.PostgresMinConns)),
