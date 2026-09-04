@@ -7,32 +7,14 @@
  * minor unit, and the cost shown names what it does not include.
  */
 
+import { formatDecimalBytes } from "@/shared/format/bytes";
+import { formatCount } from "@/shared/format/number";
+import { plural } from "@/shared/format/plural";
+
 import type { BillingPeriod, CardinalityWarning, PlanPrice, ServiceNameFamily } from "./api";
 
 /** Fixed locale: digit grouping and the currency symbol must not follow the machine. */
 const NUMBER_LOCALE = "en-US";
-
-const BYTE_UNITS = ["B", "kB", "MB", "GB", "TB", "PB"] as const;
-// Decimal, not 1024: this is the number a customer compares against a per-GB price
-// somewhere else, and everyone quoting per-GB quotes decimal.
-const BYTES_PER_UNIT = 1000;
-
-export function formatCount(count: number): string {
-  if (!Number.isFinite(count)) return "0";
-  return Math.round(count).toLocaleString(NUMBER_LOCALE);
-}
-
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-
-  let value = bytes;
-  let unit = 0;
-  while (value >= BYTES_PER_UNIT && unit < BYTE_UNITS.length - 1) {
-    value /= BYTES_PER_UNIT;
-    unit += 1;
-  }
-  return `${unit === 0 ? Math.round(value) : value.toFixed(1)} ${BYTE_UNITS[unit]}`;
-}
 
 const dayFormatter = new Intl.DateTimeFormat(NUMBER_LOCALE, {
   day: "numeric",
@@ -194,7 +176,7 @@ export function allowanceResetDay(period: BillingPeriod): string {
 export function describeAllowance(period: BillingPeriod): string | undefined {
   if (period.included_bytes === null) return undefined;
 
-  const used = `${formatBytes(period.bytes_ingested)} of ${formatBytes(period.included_bytes)} included`;
+  const used = `${formatDecimalBytes(period.bytes_ingested)} of ${formatDecimalBytes(period.included_bytes)} included`;
   const spent = period.bytes_ingested > period.included_bytes;
 
   if (!period.allowance_enforced) {
@@ -289,8 +271,4 @@ export function describeCounting(settled: boolean, unsettledDays: number): strin
     return `${formatCount(unsettledDays)} ${plural(unsettledDays, "day")} here ${unsettledDays === 1 ? "has" : "have"} not finished being counted, so these numbers can still grow.`;
   }
   return "Part of this range has not finished being counted, so these numbers can still grow.";
-}
-
-function plural(count: number, word: string): string {
-  return count === 1 ? word : `${word}s`;
 }

@@ -6,13 +6,20 @@ import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows, SkeletonText } from "@/shared/components/Skeleton";
 import { formatDuration } from "@/shared/format/duration";
+import { formatErrors } from "@/shared/format/health";
+import { formatRatePerMinute } from "@/shared/format/rate";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
 import type { EndpointGroup, EndpointHealth, HealthMetrics, ServiceHealth } from "./api";
 import { useEndpointsByService, useServiceList } from "./api";
-import { describeVolume, formatErrors, formatRatePerMinute } from "./health-format";
 import type { ServiceOrder, ServiceRow } from "./service-rows";
-import { buildServiceRows, describeServices, ORDER_OPTIONS, rowHeight } from "./service-rows";
+import {
+  buildServiceRows,
+  describeServices,
+  describeVolume,
+  ORDER_OPTIONS,
+  rowHeight,
+} from "./service-rows";
 
 const OVERSCAN_ROWS = 10;
 

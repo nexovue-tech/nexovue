@@ -65,6 +65,10 @@
                     "message": "features must not import each other. Move the shared thing to shared/, or compose both features in app/."
                   },
                   {
+                    "group": ["../**"],
+                    "message": "a relative path that leaves a feature directory evades the two rules below, because those match the import string and \"../services/thing\" contains neither \"features/\" nor an alias. Feature directories are flat, so \"../\" always escapes one. Use @/shared/, or move the shared thing there."
+                  },
+                  {
                     "group": ["**/app/**", "@/app/**"],
                     "message": "features must not import from app/. Imports flow shared -> features -> app; compose features at the app layer."
                   }

@@ -252,7 +252,7 @@ describe("UsageView", () => {
         },
       }),
     );
-    expect(withAllowance).toContain("90.0 GB of 100.0 GB included");
+    expect(withAllowance).toContain("90.0 GB of 100 GB included");
   });
 
   it("says the allowance is spent and when it resets, where the door is refusing", () => {

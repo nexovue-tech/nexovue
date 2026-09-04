@@ -6,6 +6,8 @@ import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { formatCount } from "@/shared/format/number";
+import { plural } from "@/shared/format/plural";
 import { formatClockTime, formatTimestamp } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
@@ -444,8 +446,7 @@ function GapRow({ dropped }: { dropped: number }) {
   return (
     <div className="flex h-full items-center border-line-subtle border-b border-l-2 border-l-warning-solid bg-surface px-4">
       <span className="pl-2 text-warning-text">
-        {dropped.toLocaleString()} {dropped === 1 ? "line" : "lines"} dropped — the tail fell behind
-        here
+        {formatCount(dropped)} {plural(dropped, "line")} dropped — the tail fell behind here
       </span>
     </div>
   );

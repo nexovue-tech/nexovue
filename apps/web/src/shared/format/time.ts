@@ -1,7 +1,11 @@
 /**
  * Timestamps in two registers: the wall clock for lining spans up against each other,
  * and "4 min ago" for answering "is this recent" without arithmetic.
+ *
+ * An unparseable timestamp is data we cannot trust, so it is shown as absent.
  */
+
+import { UNKNOWN } from "./number";
 
 const CLOCK_TIME = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit",
@@ -24,9 +28,6 @@ const MS_PER_SECOND = 1000;
 const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_DAY = 86_400;
-
-/** An unparseable timestamp is data we cannot trust, so it is shown as absent. */
-const UNKNOWN = "—";
 
 function parse(iso: string): Date | undefined {
   const value = new Date(iso);

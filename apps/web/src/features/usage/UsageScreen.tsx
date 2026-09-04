@@ -4,6 +4,8 @@ import { useRef, useState } from "react";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { formatDecimalBytes } from "@/shared/format/bytes";
+import { formatCount } from "@/shared/format/number";
 import { useProjects } from "@/shared/projects";
 
 import type { BillingPeriod, CardinalityWarning, PlanPrice, UsageResponse } from "./api";
@@ -23,8 +25,6 @@ import {
   describeRateStart,
   describeScope,
   describeServiceChange,
-  formatBytes,
-  formatCount,
   formatDay,
   formatPeriod,
   formatPeriodCost,
@@ -225,7 +225,7 @@ function Summary({ usage }: { usage: UsageResponse }) {
         <Ingested term="Spans" value={formatCount(usage.totals.spans)} />
         <Ingested term="Logs" value={formatCount(usage.totals.logs)} />
         <Ingested term="Metric points" value={formatCount(usage.totals.metric_points)} />
-        <Ingested term="Bytes" value={formatBytes(usage.totals.bytes_ingested)} />
+        <Ingested term="Bytes" value={formatDecimalBytes(usage.totals.bytes_ingested)} />
         {allowance ? <Ingested term="Included volume" value={allowance} /> : null}
       </dl>
 
@@ -446,7 +446,7 @@ function DayRow({ row }: { row: UsageRow }) {
         {formatCount(usage.metric_points)}
       </span>
       <span className={`${BYTES_COLUMN} font-mono text-2xs text-ink-dim`}>
-        {formatBytes(usage.bytes_ingested)}
+        {formatDecimalBytes(usage.bytes_ingested)}
       </span>
     </div>
   );

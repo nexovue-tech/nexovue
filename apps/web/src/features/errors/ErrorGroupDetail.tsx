@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { CopyButton } from "@/shared/components/CopyButton";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { formatCount } from "@/shared/format/number";
 import { formatClockTime, formatTimestamp } from "@/shared/format/time";
 
 import type { ErrorGroupDetail, ErrorGroupSummary, ErrorOccurrence } from "./api";
@@ -13,7 +14,6 @@ import {
   describeOccurrences,
   describeServices,
   firstWithStacktrace,
-  formatOccurrences,
   stackFrames,
 } from "./error-groups";
 
@@ -69,7 +69,7 @@ export function ErrorGroupPanel({
           <dl>
             <Entry
               term="Occurrences"
-              value={formatOccurrences(group.occurrences)}
+              value={formatCount(group.occurrences)}
               mono
               hint="De-duplicated: one throw recorded on both a span and a log record is one occurrence."
             />

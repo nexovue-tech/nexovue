@@ -13,71 +13,31 @@
  * be the same lie in a different place.
  */
 
+import { formatBinaryBytes } from "@/shared/format/bytes";
 import { formatDuration } from "@/shared/format/duration";
+import { formatPercent, isReading, UNKNOWN } from "@/shared/format/number";
 import { formatRelativeTime } from "@/shared/format/time";
 
 import type { NodeSummary } from "./api";
 
-/** Nothing measured. */
-const UNKNOWN = "—";
-
 const MS_PER_SECOND = 1000;
-
-/** Fixed locale: digit grouping must not change with the reader's machine. */
-const NUMBER_LOCALE = "en-US";
-
-/**
- * Binary prefixes throughout, for memory and for rates alike. Memory is quoted in GiB by
- * every host tool there is, and switching to SI for the rate columns would put two
- * meanings of "G" on one row.
- */
-const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"] as const;
-const BYTES_PER_UNIT = 1024;
-
-const PERCENT = 100;
-const SMALLEST_SHOWN_PERCENT = 0.1;
 
 /** Below this a rate rounds to "0 B/s", which reads as "no traffic". */
 const SMALLEST_SHOWN_RATE = 1;
 
-export function formatBytes(bytes: number | null): string {
-  if (bytes === null || !Number.isFinite(bytes) || bytes < 0) return UNKNOWN;
-
-  let value = bytes;
-  let unit = 0;
-  while (value >= BYTES_PER_UNIT && unit < BYTE_UNITS.length - 1) {
-    value /= BYTES_PER_UNIT;
-    unit += 1;
-  }
-
-  const digits = unit === 0 || value >= 100 ? 0 : 1;
-  return `${value.toFixed(digits)} ${BYTE_UNITS[unit]}`;
-}
-
+/**
+ * Binary prefixes throughout, for memory and for the rate columns alike. Switching to
+ * decimal for one of them would put two meanings of "G" on the same row.
+ */
 export function formatByteRate(bytesPerSecond: number | null): string {
-  if (bytesPerSecond === null || !Number.isFinite(bytesPerSecond) || bytesPerSecond < 0) {
-    return UNKNOWN;
-  }
+  if (!isReading(bytesPerSecond)) return UNKNOWN;
   // A trickle is not silence, and rounding it to zero would say it was.
   if (bytesPerSecond > 0 && bytesPerSecond < SMALLEST_SHOWN_RATE) return "<1 B/s";
-  return `${formatBytes(bytesPerSecond)}/s`;
-}
-
-/**
- * A fraction on the wire, a percentage on the screen. Deliberately not clamped to 100:
- * a figure above it means the roll-up is wrong, and hiding that is how a wrong number
- * survives.
- */
-export function formatPercent(fraction: number | null): string {
-  if (fraction === null || !Number.isFinite(fraction) || fraction < 0) return UNKNOWN;
-
-  const percent = fraction * PERCENT;
-  if (percent > 0 && percent < SMALLEST_SHOWN_PERCENT) return "<0.1%";
-  return `${percent.toFixed(1)}%`;
+  return `${formatBinaryBytes(bytesPerSecond)}/s`;
 }
 
 export function formatCores(cores: number | null): string {
-  if (cores === null || !Number.isFinite(cores) || cores < 0) return UNKNOWN;
+  if (!isReading(cores)) return UNKNOWN;
   return `${cores.toFixed(2)} cores`;
 }
 
@@ -224,17 +184,12 @@ export function explainMissing(node: NodeSummary, metricNames: readonly string[]
   return `Not measured. ${sent.join(", ")} arrived, but no reading in it could be identified — the metric is being sent with attributes we do not recognise.`;
 }
 
-export function formatCount(count: number): string {
-  if (!Number.isFinite(count)) return UNKNOWN;
-  return Math.round(count).toLocaleString(NUMBER_LOCALE);
-}
-
 /** Memory as used-over-total, which is how the question is actually asked. */
 export function describeMemory(node: NodeSummary): string {
   if (node.memory_used_bytes === null && node.memory_limit_bytes === null) {
     return explainMissing(node, MEMORY_METRICS);
   }
-  return `${formatBytes(node.memory_used_bytes)} used of ${formatBytes(node.memory_limit_bytes)}.`;
+  return `${formatBinaryBytes(node.memory_used_bytes)} used of ${formatBinaryBytes(node.memory_limit_bytes)}.`;
 }
 
 /* The metric names behind each column, so a tooltip can name what is missing. */

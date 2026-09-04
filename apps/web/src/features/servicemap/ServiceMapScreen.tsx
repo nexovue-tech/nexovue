@@ -3,6 +3,7 @@ import { useMemo } from "react";
 
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
+import { plural } from "@/shared/format/plural";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
 import "@xyflow/react/dist/base.css";
@@ -131,10 +132,6 @@ function MapSummary({
       )}
     </>
   );
-}
-
-function plural(count: number, one: string, many = `${one}s`): string {
-  return count === 1 ? one : many;
 }
 
 /** What the drawing means, said in words. Colour is never the only carrier. */

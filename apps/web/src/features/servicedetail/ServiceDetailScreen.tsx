@@ -7,6 +7,9 @@ import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatDuration } from "@/shared/format/duration";
+import { formatErrors } from "@/shared/format/health";
+import { formatCount, formatPercent } from "@/shared/format/number";
+import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 import type { HostGroup, ServiceEdge } from "@/shared/service-peers";
@@ -26,7 +29,6 @@ import {
   useServiceErrors,
   useServiceTrend,
 } from "./api";
-import { formatCount, formatErrorRate, formatErrors, formatRatePerMinute } from "./health-format";
 import type { Dependency, DetailState } from "./service-detail";
 import {
   dependencyKey,
@@ -56,7 +58,7 @@ const WIDE_ONLY = "hidden lg:block";
 const AXIS_FORMAT: Record<TrendMetric, (value: number) => string> = {
   rate: formatRatePerMinute,
   // `buildTrendPlots` has already multiplied out; the formatter wants the fraction back.
-  errorRate: (percent) => formatErrorRate(percent / PERCENT),
+  errorRate: (percent) => formatPercent(percent / PERCENT),
   latency: formatDuration,
 };
 

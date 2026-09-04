@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { formatCount } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import type { TimeWindow } from "@/shared/selection";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
@@ -11,7 +12,7 @@ import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 import type { ErrorGroupDetail, ErrorGroupSummary } from "./api";
 import { useErrorGroup, useErrorGroups } from "./api";
 import { ErrorGroupPanel } from "./ErrorGroupDetail";
-import { describeErrors, describeServices, formatOccurrences, isNewInWindow } from "./error-groups";
+import { describeErrors, describeServices, isNewInWindow } from "./error-groups";
 
 const ROW_HEIGHT = 46;
 const OVERSCAN_ROWS = 8;
@@ -238,7 +239,7 @@ function GroupRow({
         </span>
 
         <span className={`${COUNT_COLUMN} font-mono text-2xs text-ink`}>
-          {formatOccurrences(group.occurrences)}
+          {formatCount(group.occurrences)}
         </span>
 
         <span

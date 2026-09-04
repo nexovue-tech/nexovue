@@ -4,6 +4,8 @@ import { useRef } from "react";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { formatBinaryBytes } from "@/shared/format/bytes";
+import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
@@ -21,10 +23,7 @@ import {
   explainUnattributed,
   FILESYSTEM_METRICS,
   formatByteRate,
-  formatBytes,
-  formatCount,
   formatCpu,
-  formatPercent,
   isUnattributed,
   NETWORK_METRICS,
   nodeName,
@@ -318,8 +317,8 @@ function StoppedReportingBadge({ node }: { node: NodeSummary }) {
 
 function memoryCell(node: NodeSummary): string {
   if (node.memory_utilization !== null) return formatPercent(node.memory_utilization);
-  if (node.memory_used_bytes !== null) return formatBytes(node.memory_used_bytes);
-  return "—";
+  if (node.memory_used_bytes !== null) return formatBinaryBytes(node.memory_used_bytes);
+  return UNKNOWN;
 }
 
 /**
@@ -328,15 +327,15 @@ function memoryCell(node: NodeSummary): string {
  */
 function storageCell(node: NodeSummary): string {
   if (node.filesystem_utilization !== null) return formatPercent(node.filesystem_utilization);
-  if (node.filesystem_used_bytes !== null) return formatBytes(node.filesystem_used_bytes);
-  return "—";
+  if (node.filesystem_used_bytes !== null) return formatBinaryBytes(node.filesystem_used_bytes);
+  return UNKNOWN;
 }
 
 function describeStorage(node: NodeSummary): string {
   if (node.filesystem_used_bytes === null && node.filesystem_limit_bytes === null) {
     return explainMissing(node, FILESYSTEM_METRICS);
   }
-  return `${formatBytes(node.filesystem_used_bytes)} used of ${formatBytes(
+  return `${formatBinaryBytes(node.filesystem_used_bytes)} used of ${formatBinaryBytes(
     node.filesystem_limit_bytes,
   )}, summed across every mounted filesystem this node reported.`;
 }
@@ -358,7 +357,7 @@ function Measurement({
   title?: string;
   fraction: number | null;
 }) {
-  if (value === "—") return <Plain value={value} missingReason={missingReason} />;
+  if (value === UNKNOWN) return <Plain value={value} missingReason={missingReason} />;
 
   return (
     <span className="flex flex-col items-end gap-1" title={title}>
@@ -381,10 +380,10 @@ function UtilizationBar({ fraction }: { fraction: number }) {
 
 /** A plain cell whose dash explains itself. */
 function Plain({ value, missingReason }: { value: string; missingReason: string }) {
-  if (value === "—") {
+  if (value === UNKNOWN) {
     return (
       <span className="font-mono text-2xs text-ink-dim" title={missingReason}>
-        —
+        {UNKNOWN}
       </span>
     );
   }

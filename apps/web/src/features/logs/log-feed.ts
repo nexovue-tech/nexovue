@@ -12,6 +12,9 @@
  * watching a tail is trusting that what is on screen is what happened.
  */
 
+import { formatCount } from "@/shared/format/number";
+import { plural } from "@/shared/format/plural";
+
 /** One stored record. Field names are the API's, unchanged. */
 export interface LogLine {
   /** A hash of the record's own columns; `logs` has no primary key. */
@@ -187,7 +190,7 @@ export function describeLogs(
   tail: TailNarration,
   droppedTotal: number,
 ): string {
-  const lines = rowCount === 1 ? "1 line" : `${rowCount.toLocaleString()} lines`;
+  const lines = `${formatCount(rowCount)} ${plural(rowCount, "line")}`;
   const scope = `${lines} from the last ${windowLabel}, newest first`;
   const sentence =
     tail === "live"
@@ -197,6 +200,6 @@ export function describeLogs(
         : `${scope}.`;
 
   if (droppedTotal === 0) return sentence;
-  const dropped = droppedTotal === 1 ? "1 line was" : `${droppedTotal.toLocaleString()} lines were`;
+  const dropped = `${formatCount(droppedTotal)} ${plural(droppedTotal, "line was", "lines were")}`;
   return `${sentence} ${dropped} dropped while the tail was behind — each gap is marked.`;
 }

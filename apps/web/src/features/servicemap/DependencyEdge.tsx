@@ -1,8 +1,9 @@
 import { EdgeLabelRenderer, type EdgeProps, getSmoothStepPath } from "@xyflow/react";
 
 import { formatDuration } from "@/shared/format/duration";
+import { formatPercent } from "@/shared/format/number";
+import { formatCompactRate } from "@/shared/format/rate";
 
-import { formatErrorRate, formatRate } from "./format";
 import type { DependencyEdge as DependencyEdgeShape, Health } from "./service-graph";
 
 /**
@@ -72,9 +73,9 @@ export function DependencyEdge({
   // would have to be measured across two machines' clocks.
   const latencyLabel = data.queued ? "publish p95" : "p95";
   const summary = [
-    `${formatRate(data.callsPerMinute)}/min`,
+    `${formatCompactRate(data.callsPerMinute)}/min`,
     `${latencyLabel} ${formatDuration(data.p95Ms)}`,
-    data.errorCount > 0 ? `${data.errorCount} failed (${formatErrorRate(data.errorRate)})` : "",
+    data.errorCount > 0 ? `${data.errorCount} failed (${formatPercent(data.errorRate)})` : "",
     data.queued ? "queued" : "direct call",
   ]
     .filter(Boolean)
@@ -110,7 +111,7 @@ export function DependencyEdge({
           {/* Stacked, not strung out: the label has to live in the gap between two
               columns, and a wide one forces the whole map to be zoomed out to fit. */}
           <span className="text-center font-mono text-2xs text-ink-dim leading-tight">
-            {formatRate(data.callsPerMinute)}/min
+            {formatCompactRate(data.callsPerMinute)}/min
             <br />
             {latencyLabel} {formatDuration(data.p95Ms)}
           </span>
@@ -118,7 +119,7 @@ export function DependencyEdge({
             <span
               className={`rounded-xs border px-1 font-medium font-mono text-2xs ${BADGE[health]}`}
             >
-              {data.errorCount} failed · {formatErrorRate(data.errorRate)}
+              {data.errorCount} failed · {formatPercent(data.errorRate)}
             </span>
           ) : null}
         </div>

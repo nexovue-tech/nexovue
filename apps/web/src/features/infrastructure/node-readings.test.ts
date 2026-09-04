@@ -11,10 +11,8 @@ import {
   explainStale,
   explainUnattributed,
   formatByteRate,
-  formatBytes,
   formatCores,
   formatCpu,
-  formatPercent,
   isUnattributed,
   MEMORY_METRICS,
   nodeName,
@@ -51,41 +49,12 @@ function node(overrides: Partial<NodeSummary> = {}): NodeSummary {
 const NOW = Date.parse("2026-08-30T10:40:00.000Z");
 
 describe("an absent measurement is never a zero", () => {
-  it("answers a null byte count with a rule", () => {
-    // "0 B" would report an unmonitored host as one using no memory.
-    expect(formatBytes(null)).toBe("—");
-  });
-
   it("answers a null rate with a rule", () => {
     expect(formatByteRate(null)).toBe("—");
   });
 
-  it("answers a null fraction with a rule", () => {
-    expect(formatPercent(null)).toBe("—");
-  });
-
   it("answers a null core count with a rule", () => {
     expect(formatCores(null)).toBe("—");
-  });
-
-  it("still shows a genuine zero as zero", () => {
-    expect(formatBytes(0)).toBe("0 B");
-    expect(formatPercent(0)).toBe("0.0%");
-  });
-});
-
-describe("formatBytes", () => {
-  it("uses binary prefixes, the way every host tool quotes memory", () => {
-    expect(formatBytes(8_600_219_648)).toBe("8.0 GiB");
-    expect(formatBytes(5_943_672_832)).toBe("5.5 GiB");
-  });
-
-  it("leaves plain bytes unscaled", () => {
-    expect(formatBytes(512)).toBe("512 B");
-  });
-
-  it("drops the decimal once three digits are already there", () => {
-    expect(formatBytes(512 * 1024)).toBe("512 KiB");
   });
 });
 
@@ -100,20 +69,6 @@ describe("formatByteRate", () => {
 
   it("shows a real zero as zero", () => {
     expect(formatByteRate(0)).toBe("0 B/s");
-  });
-});
-
-describe("formatPercent", () => {
-  it("turns the wire's fraction into a percentage", () => {
-    expect(formatPercent(0.23575)).toBe("23.6%");
-  });
-
-  it("marks a floor rather than reporting a busy host as 0.0%", () => {
-    expect(formatPercent(0.0002)).toBe("<0.1%");
-  });
-
-  it("does not clamp an impossible figure — hiding it is how a wrong number survives", () => {
-    expect(formatPercent(11.247)).toBe("1124.7%");
   });
 });
 

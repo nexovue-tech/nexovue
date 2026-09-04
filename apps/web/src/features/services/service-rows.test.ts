@@ -5,6 +5,7 @@ import {
   applyOrder,
   buildServiceRows,
   describeServices,
+  describeVolume,
   orderCaption,
   rowHeight,
   serviceRowKey,
@@ -206,5 +207,15 @@ describe("orderCaption", () => {
   it("reads as the end of the sentence above the list", () => {
     expect(orderCaption("worst")).toBe("worst first");
     expect(orderCaption("slowest")).toBe("slowest first");
+  });
+});
+
+describe("describeVolume", () => {
+  it("names the volume the rate came from", () => {
+    expect(describeVolume(2867)).toBe("2,867 requests in this window");
+  });
+
+  it("agrees with itself in the singular", () => {
+    expect(describeVolume(1)).toBe("1 request in this window");
   });
 });

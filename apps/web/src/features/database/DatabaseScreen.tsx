@@ -5,6 +5,7 @@ import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatDuration } from "@/shared/format/duration";
+import { formatCount } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
@@ -16,7 +17,6 @@ import {
   describeCallsInWindow,
   describeHashLookup,
   formatCallsInWindow,
-  formatCount,
   formatServer,
   shortHash,
 } from "./statement-format";

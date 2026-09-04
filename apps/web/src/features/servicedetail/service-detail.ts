@@ -6,10 +6,11 @@
  * reader can land in are testable without a browser.
  */
 
+import { formatCount, formatPercent } from "@/shared/format/number";
+import { formatRatePerMinute } from "@/shared/format/rate";
 import type { ServiceEdge } from "@/shared/service-peers";
 
 import type { EndpointHealth, ErrorGroupSummary, ServiceHealth } from "./api";
-import { formatCount, formatErrorRate, formatRatePerMinute } from "./health-format";
 
 /**
  * `silent` is not `missing`. The rollups only know which services reported in *this*
@@ -89,7 +90,7 @@ export function describeService(row: ServiceHealth | undefined, windowLabel: str
 
   const traffic = `${formatRatePerMinute(row.requests_per_minute)} requests a minute in the last ${windowLabel}`;
   if (row.error_count === 0) return `${traffic}, none of them failing.`;
-  return `${traffic}, ${formatErrorRate(row.error_rate)} of them failing.`;
+  return `${traffic}, ${formatPercent(row.error_rate)} of them failing.`;
 }
 
 /** The caption over the endpoint table. */

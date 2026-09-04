@@ -6,6 +6,9 @@
  * exactly one place instead of twice.
  */
 
+import { formatCount } from "@/shared/format/number";
+import { plural } from "@/shared/format/plural";
+
 import type { EndpointGroup, EndpointHealth, HealthMetrics, ServiceHealth } from "./api";
 
 /**
@@ -114,6 +117,10 @@ function noteFor(group: EndpointGroup | undefined): "pending" | "empty" | "faile
 
 /** The sentence under the title. It says what is on the screen and in what order. */
 export function describeServices(count: number, windowLabel: string, order: ServiceOrder): string {
-  const services = count === 1 ? "service" : "services";
-  return `${count} ${services} reporting in the last ${windowLabel}, ${orderCaption(order)}.`;
+  return `${count} ${plural(count, "service")} reporting in the last ${windowLabel}, ${orderCaption(order)}.`;
+}
+
+/** The tooltip behind the rate column — the absolute volume the rate came from. */
+export function describeVolume(requestCount: number): string {
+  return `${formatCount(requestCount)} ${plural(requestCount, "request")} in this window`;
 }

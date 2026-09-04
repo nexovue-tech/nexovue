@@ -5,7 +5,6 @@ import {
   describeCallsInWindow,
   describeHashLookup,
   formatCallsInWindow,
-  formatCount,
   formatServer,
   shortHash,
 } from "./statement-format";
@@ -93,11 +92,5 @@ describe("describeHashLookup", () => {
     expect(said).toContain("-4913072044542253312");
     expect(said).toContain("orders");
     expect(said).toContain("db.internal:5432");
-  });
-});
-
-describe("formatCount", () => {
-  it("groups thousands in a fixed locale", () => {
-    expect(formatCount(90_000)).toBe("90,000");
   });
 });

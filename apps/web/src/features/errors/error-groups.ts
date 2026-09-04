@@ -6,12 +6,11 @@
  * week" — so first-seen against the window is the fact this module is built around.
  */
 
+import { formatCount, UNKNOWN } from "@/shared/format/number";
+import { plural } from "@/shared/format/plural";
 import type { TimeWindow } from "@/shared/selection";
 
 import type { ErrorGroupSummary } from "./api";
-
-/** Fixed locale: digit grouping must not change with the reader's machine. */
-const NUMBER_LOCALE = "en-US";
 
 /**
  * How close to the window's start still counts as "already happening when it opened".
@@ -52,11 +51,6 @@ export function isNewInWindow(group: ErrorGroupSummary, timeWindow: TimeWindow):
   return groupStart(group.first_seen, timeWindow) === "started-in-window";
 }
 
-export function formatOccurrences(count: number): string {
-  if (!Number.isFinite(count) || count <= 0) return "0";
-  return Math.round(count).toLocaleString(NUMBER_LOCALE);
-}
-
 export function totalOccurrences(groups: readonly ErrorGroupSummary[]): number {
   return groups.reduce((running, group) => running + group.occurrences, 0);
 }
@@ -66,11 +60,6 @@ export function countNewInWindow(
   timeWindow: TimeWindow,
 ): number {
   return groups.filter((group) => isNewInWindow(group, timeWindow)).length;
-}
-
-/** English plurals for the handful of nouns this screen counts. */
-function plural(count: number, singular: string): string {
-  return count === 1 ? singular : `${singular}s`;
 }
 
 /**
@@ -86,8 +75,8 @@ export function describeErrors(
 
   const occurrences = totalOccurrences(groups);
   const opening =
-    `${formatOccurrences(groups.length)} distinct ${plural(groups.length, "exception")}` +
-    ` · ${formatOccurrences(occurrences)} ${plural(occurrences, "occurrence")}` +
+    `${formatCount(groups.length)} distinct ${plural(groups.length, "exception")}` +
+    ` · ${formatCount(occurrences)} ${plural(occurrences, "occurrence")}` +
     ` in the last ${windowLabel}`;
 
   const fresh = countNewInWindow(groups, timeWindow);
@@ -100,7 +89,7 @@ export function describeErrors(
 const SERVICES_SHOWN = 2;
 
 export function describeServices(services: readonly string[]): string {
-  if (services.length === 0) return "—";
+  if (services.length === 0) return UNKNOWN;
   if (services.length <= SERVICES_SHOWN) return services.join(", ");
   return `${services[0]} +${services.length - 1}`;
 }

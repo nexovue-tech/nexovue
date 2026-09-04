@@ -16,8 +16,6 @@ import {
   describeRateStart,
   describeScope,
   describeServiceChange,
-  formatBytes,
-  formatCount,
   formatDay,
   formatMoney,
   formatPeriod,
@@ -47,32 +45,6 @@ const PERIOD: BillingPeriod = {
   included_bytes: null,
   allowance_enforced: false,
 };
-
-describe("formatCount", () => {
-  it("groups thousands in a fixed locale", () => {
-    expect(formatCount(1_234_567)).toBe("1,234,567");
-  });
-
-  it("survives a non-finite count rather than printing NaN", () => {
-    expect(formatCount(Number.NaN)).toBe("0");
-  });
-});
-
-describe("formatBytes", () => {
-  it("steps up in decimal units, because that is what per-GB prices are quoted in", () => {
-    expect(formatBytes(999)).toBe("999 B");
-    expect(formatBytes(1_000)).toBe("1.0 kB");
-    expect(formatBytes(42_100_000_000)).toBe("42.1 GB");
-  });
-
-  it("does not round bytes into a fraction of a byte", () => {
-    expect(formatBytes(1)).toBe("1 B");
-  });
-
-  it("is a plain zero when nothing was ingested", () => {
-    expect(formatBytes(0)).toBe("0 B");
-  });
-});
 
 describe("formatDay", () => {
   it("reads the day the meter counted, in UTC", () => {
@@ -212,7 +184,7 @@ describe("the volume allowance", () => {
 
   it("shows what is used against what is included", () => {
     expect(describeAllowance({ ...PERIOD, included_bytes: 1_000_000 })).toBe(
-      "500.0 kB of 1.0 MB included",
+      "500 kB of 1.0 MB included",
     );
   });
 
@@ -228,7 +200,7 @@ describe("the volume allowance", () => {
     expect(
       describeAllowance({ ...PERIOD, included_bytes: 1_000_000, allowance_enforced: true }),
     ).toBe(
-      "500.0 kB of 1.0 MB included. Ingestion stops once this is spent and resumes Sep 1, 2026.",
+      "500 kB of 1.0 MB included. Ingestion stops once this is spent and resumes Sep 1, 2026.",
     );
   });
 

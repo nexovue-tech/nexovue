@@ -7,24 +7,15 @@
  * truth is "we have only looked once". That distinction is the whole screen.
  */
 
+import { formatCount, UNKNOWN } from "@/shared/format/number";
+
 import type { DatabaseServer, StatementCost } from "./api";
-
-/** Fixed locale: the digit grouping must not change with the reader's machine. */
-const NUMBER_LOCALE = "en-US";
-
-/** Nothing measured. A rule, never a zero. */
-const UNKNOWN = "—";
 
 /** A difference across a window needs a start and an end to be a difference. */
 const READINGS_FOR_A_DIFFERENCE = 2;
 
 /** `queryid` is a 64-bit integer as text — too long to scan, long enough to confuse. */
 const HASH_PREFIX_LENGTH = 12;
-
-export function formatCount(count: number): string {
-  if (!Number.isFinite(count) || count < 0) return UNKNOWN;
-  return Math.round(count).toLocaleString(NUMBER_LOCALE);
-}
 
 /**
  * Calls during the window, or a rule when one poll cannot yet tell.

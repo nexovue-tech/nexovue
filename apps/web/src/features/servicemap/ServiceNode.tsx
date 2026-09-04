@@ -1,7 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { Handle, type NodeProps, Position } from "@xyflow/react";
 
-import { formatRate } from "./format";
+import { formatCompactRate } from "@/shared/format/rate";
+
 import type { Health, ServiceNode as ServiceNodeShape } from "./service-graph";
 
 /**
@@ -75,8 +76,8 @@ function describe(data: ServiceNodeShape["data"]): string {
 
   const traffic =
     data.flow === "serves"
-      ? `serves ${formatRate(data.callsPerMinute)} calls a minute`
-      : `sends ${formatRate(data.callsPerMinute)} calls a minute`;
+      ? `serves ${formatCompactRate(data.callsPerMinute)} calls a minute`
+      : `sends ${formatCompactRate(data.callsPerMinute)} calls a minute`;
   const failures = data.errorCount > 0 ? `, ${data.errorCount} of them failing` : "";
   return `${data.name} ${traffic}${failures}.`;
 }
@@ -116,7 +117,7 @@ function ServiceNodeBody({ data }: { data: ServiceNodeShape["data"] }) {
       <span className="mt-0.5 flex items-baseline gap-1 truncate font-mono text-2xs text-ink-dim">
         {data.instrumented ? (
           <span className="shrink-0">
-            {data.flow === "serves" ? "in" : "out"} {formatRate(data.callsPerMinute)}/min
+            {data.flow === "serves" ? "in" : "out"} {formatCompactRate(data.callsPerMinute)}/min
           </span>
         ) : (
           // The technology is the new information, so it leads. For a group of

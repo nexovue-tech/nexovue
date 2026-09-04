@@ -9,7 +9,6 @@ import {
   describeOccurrences,
   describeServices,
   firstWithStacktrace,
-  formatOccurrences,
   groupStart,
   isNewInWindow,
   stackFrames,
@@ -77,18 +76,6 @@ describe("isNewInWindow and countNewInWindow", () => {
     expect(isNewInWindow(groups[0], WINDOW)).toBe(true);
     expect(isNewInWindow(groups[1], WINDOW)).toBe(false);
     expect(countNewInWindow(groups, WINDOW)).toBe(1);
-  });
-});
-
-describe("formatOccurrences", () => {
-  it("groups the digits so a five-figure count is readable", () => {
-    expect(formatOccurrences(158)).toBe("158");
-    expect(formatOccurrences(12_483)).toBe("12,483");
-  });
-
-  it("handles a count that is not a count", () => {
-    expect(formatOccurrences(Number.NaN)).toBe("0");
-    expect(formatOccurrences(-4)).toBe("0");
   });
 });
 
