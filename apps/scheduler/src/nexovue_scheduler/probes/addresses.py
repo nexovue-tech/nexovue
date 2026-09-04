@@ -38,13 +38,22 @@ def is_publicly_routable(address_text: str) -> bool:
     An address that will not parse is refused rather than allowed. This is asked
     on the path to a connection, so the safe answer to "I do not recognise this"
     is no.
+
+    Two tests, and it must be both. The named flags carry the intent and catch
+    what `is_global` alone would let through — multicast, and `64:ff9b::/96`
+    wrapping a private v4 address, which is how NAT64 reaches 169.254.169.254
+    in one hop. `is_global` catches what the named flags miss: Python stopped
+    reporting carrier-grade NAT (100.64.0.0/10) as private, and that range
+    carries GKE pod CIDRs and Alibaba's metadata endpoint at 100.100.100.200.
+    Neither test is a superset of the other, so narrowing to one reopens
+    whatever the other was holding.
     """
     try:
         address = ipaddress.ip_address(address_text)
     except ValueError:
         return False
 
-    return not (
+    return address.is_global and not (
         address.is_private
         or address.is_loopback
         or address.is_link_local

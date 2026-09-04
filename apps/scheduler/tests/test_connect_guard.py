@@ -69,6 +69,15 @@ class FakeSockAddr:
         "fd00::1",  # unique-local, the IPv6 equivalent of private
         "0.0.0.0",
         "224.0.0.1",  # multicast
+        # Carrier-grade NAT. Python does not report 100.64.0.0/10 as private,
+        # so the named flags alone let it through — and it carries GKE pod
+        # CIDRs and Alibaba's metadata endpoint.
+        "100.64.0.1",
+        "100.100.100.200",
+        # NAT64 reaching the metadata address in one hop. `is_global` alone
+        # would allow these, which is why the check is both tests, not one.
+        "64:ff9b::a9fe:a9fe",
+        "64:ff9b::a00:1",
         "",
         "not-an-address",
     ],

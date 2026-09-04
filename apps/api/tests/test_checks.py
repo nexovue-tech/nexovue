@@ -117,6 +117,10 @@ class TestTargetsWeRefuseToFetch:
             "http://[::1]:5432/",
             "http://postgres:5432/",
             "http://localhost/",
+            # Carrier-grade NAT: not reported as private by Python, and it
+            # carries GKE pod CIDRs and Alibaba's metadata endpoint.
+            "http://100.64.0.1/",
+            "http://100.100.100.200/latest/meta-data/",
         ],
     )
     def test_a_target_inside_our_network_is_refused(self, target: str) -> None:

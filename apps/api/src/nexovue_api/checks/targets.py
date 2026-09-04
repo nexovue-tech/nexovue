@@ -118,3 +118,9 @@ def _refuse_private_address(host: str) -> None:
         raise InvalidRequestError("A target must be a public address, not a private one.")
     if address.is_reserved or address.is_multicast or address.is_unspecified:
         raise InvalidRequestError("That is not an address a check can reach.")
+    if not address.is_global:
+        # Carrier-grade NAT (100.64.0.0/10) is not reported as private by
+        # Python, and it carries GKE pod CIDRs and Alibaba's metadata endpoint.
+        # Same pairing as `nexovue_scheduler.probes.addresses`, which is the
+        # boundary this message exists to pre-empt.
+        raise InvalidRequestError("A target must be a public address, not a private one.")
