@@ -54,6 +54,20 @@ export class ApiError extends Error {
   }
 }
 
+const HTTP_NOT_FOUND = 404;
+
+/**
+ * True when the API answered "no such resource in this organization".
+ *
+ * Lives here rather than in a feature so no screen carries a bare status number: what a
+ * 404 *means* is the resource's business, but recognising one is the client's. It says
+ * nothing about why the resource is absent — the API deliberately answers the same way
+ * for a row that never existed and a row belonging to another tenant.
+ */
+export function isNotFound(error: unknown): boolean {
+  return error instanceof ApiError && error.status === HTTP_NOT_FOUND;
+}
+
 export interface RequestOptions {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   /** Serialised as JSON. Use `formData` for uploads. */

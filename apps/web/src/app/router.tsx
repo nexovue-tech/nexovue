@@ -155,28 +155,10 @@ const usageRoute = createRoute({
   component: UsageScreen,
 });
 
-const settingsProjectRoute = createRoute({
-  getParentRoute: () => shellRoute,
-  path: "/settings/project",
-  component: placeholderFor("/settings/project"),
-});
-
 const settingsApiKeysRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/api-keys",
   component: ApiKeysScreen,
-});
-
-const settingsMembersRoute = createRoute({
-  getParentRoute: () => shellRoute,
-  path: "/settings/members",
-  component: placeholderFor("/settings/members"),
-});
-
-const settingsDataRoute = createRoute({
-  getParentRoute: () => shellRoute,
-  path: "/settings/data",
-  component: placeholderFor("/settings/data"),
 });
 
 /* Bare screens — outside the shell. */
@@ -223,10 +205,7 @@ const routeTree = rootRoute.addChildren([
     databaseRoute,
     rumRoute,
     usageRoute,
-    settingsProjectRoute,
     settingsApiKeysRoute,
-    settingsMembersRoute,
-    settingsDataRoute,
     notFoundRoute,
   ]),
   loginRoute,

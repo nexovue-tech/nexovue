@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, apiClient } from "./api-client";
+import { ApiError, apiClient, isNotFound } from "./api-client";
 
 /**
  * The regression these guard: `ApiError` was constructed without its fourth argument,
@@ -60,5 +60,22 @@ describe("apiClient failures", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect(error.status).toBe(503);
     expect(error.problem).toBeUndefined();
+  });
+});
+
+describe("isNotFound", () => {
+  it("recognises the API's answer that no such resource exists here", async () => {
+    respondWith(404, { title: "No such resource in this organization", status: 404 });
+    const error = await apiClient.get("traces/abc").catch((c: unknown) => c);
+    expect(isNotFound(error)).toBe(true);
+  });
+
+  it("is false for a failure, so an unreachable server never reads as an absent row", async () => {
+    respondWith(500, { title: "The database is unreachable", status: 500 });
+    const serverError = await apiClient.get("traces/abc").catch((c: unknown) => c);
+    expect(isNotFound(serverError)).toBe(false);
+
+    expect(isNotFound(new Error("Could not reach the server"))).toBe(false);
+    expect(isNotFound(undefined)).toBe(false);
   });
 });

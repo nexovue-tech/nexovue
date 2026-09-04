@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
+import { isNotFound } from "@/shared/api-client";
 import { CopyButton } from "@/shared/components/CopyButton";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
@@ -12,6 +13,8 @@ import { useTrace } from "./api";
 import { SpanDetail } from "./SpanDetail";
 import { TraceWaterfall } from "./TraceWaterfall";
 import { buildSpanTree, flattenTree } from "./trace-tree";
+
+const BACK_LINK_CLASS = "font-mono text-2xs text-ink-dim uppercase tracking-caps hover:text-ink";
 
 /**
  * One request end to end.
@@ -41,8 +44,12 @@ export function TraceScreen({ traceId }: { traceId: string }) {
     );
   }
 
+  // A 404 here is an answer, not a failure: the store does not have this trace and
+  // never will. Anything else may work on a second attempt, so only it offers one.
   if (trace.isError) {
-    return (
+    return isNotFound(trace.error) ? (
+      <TraceNotStored traceId={traceId} />
+    ) : (
       <div className="px-4 py-6">
         <InlineFailure
           title="This trace could not be loaded"
@@ -60,10 +67,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="shrink-0 border-line border-b px-4 pt-5 pb-3">
-          <Link
-            to="/traces"
-            className="font-mono text-2xs text-ink-dim uppercase tracking-caps hover:text-ink"
-          >
+          <Link to="/traces" className={BACK_LINK_CLASS}>
             ← All traces
           </Link>
 
@@ -119,6 +123,38 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           <SpanDetail row={selectedRow} onClose={() => setSelectedSpanId(undefined)} />
         </aside>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * A trace the store does not have.
+ *
+ * Most log lines name one: logs are written in full, traces are tail-sampled, so a
+ * healthy trace is usually judged and dropped while its log lines survive. That is the
+ * system working, not failing, and it reads as neither an error nor a blank screen.
+ *
+ * No retry, deliberately: the API answered correctly and will answer the same way for
+ * ever. The wording claims no more than the 404 carries — it never says which of the
+ * reasons applies, because the API refuses to say (see `traces/service.py`).
+ */
+export function TraceNotStored({ traceId }: { traceId: string }) {
+  return (
+    <div className="px-4 py-6">
+      <Link to="/traces" className={BACK_LINK_CLASS}>
+        ← All traces
+      </Link>
+
+      <EmptyState
+        title="This trace was not kept"
+        detail="Traces that failed or ran slow are always stored. The rest are sampled, so only a fraction of healthy traces is written — a log line often names one that was never kept, or one that has since passed its retention window. There is nothing to load and nothing to retry."
+        action={
+          <span className="flex items-center gap-2 font-mono text-2xs text-ink-dim">
+            <span className="select-all">{traceId}</span>
+            <CopyButton value={traceId} label="trace id" />
+          </span>
+        }
+      />
     </div>
   );
 }

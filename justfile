@@ -50,9 +50,10 @@ down-hard:
 
 # Run this when the dev stack has drifted into a state you stopped trusting.
 # Takes about two minutes, most of it waiting for ClickHouse and Kafka.
-# Wipe everything and rebuild: down-hard, up, migrate, seed
+# Wipe everything and rebuild: down-hard, up, topics, migrate, seed
 fresh: down-hard
     just dev
+    just topics
     just migrate
     just seed
     @echo
@@ -159,6 +160,14 @@ contracts-check:
 # ---------- data ----------
 
 # Apply all migrations: Postgres then ClickHouse
+# Auto-creation is off on the broker, so a wiped Kafka volume comes back with no
+# topics and the receiver refuses every export with UNKNOWN_TOPIC_OR_PARTITION —
+# silently, at ~330 refusals a minute. `fresh` calls this; run it by hand after
+# any `down-hard`.
+# Create the ingestion topics on the running broker
+topics:
+    ./deploy/kafka/topics.sh
+
 migrate: migrate-pg migrate-ch
 
 migrate-pg:

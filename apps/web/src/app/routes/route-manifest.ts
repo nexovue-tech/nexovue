@@ -20,7 +20,6 @@ export type NavPath =
   | "/database"
   | "/infrastructure"
   | "/usage"
-  | "/settings/project"
   | "/settings/api-keys";
 
 export interface ScreenDefinition {
@@ -132,29 +131,14 @@ export const SHELL_SCREENS: ScreenDefinition[] = [
       "What you have ingested, the services this calendar month bills for, and what they come to at your recorded rate.",
     taskId: "P1-48",
   },
-  {
-    path: "/settings/project",
-    title: "Project",
-    description: "Project name, environments and the defaults every screen inherits.",
-    taskId: "P1-59",
-  },
+  // Settings is one screen, not four. `/settings/project`, `/settings/members` and
+  // `/settings/data` were dropped on 2026-08-31 with the decision that Phase 1 is
+  // single-operator (plan §9), so no task delivers them and nothing may link to them.
   {
     path: "/settings/api-keys",
     title: "API keys",
     description: "Create, rotate and revoke the keys your services send telemetry with.",
     taskId: "P1-13",
-  },
-  {
-    path: "/settings/members",
-    title: "Members",
-    description: "Who can see this organisation's data, and what each of them may do.",
-    taskId: "P1-59",
-  },
-  {
-    path: "/settings/data",
-    title: "Data handling",
-    description: "Retention windows and the masking rules applied before anything is written.",
-    taskId: "P1-24",
   },
 ];
 
@@ -207,7 +191,6 @@ export const NAV_SECTIONS: NavSection[] = [
     label: "Account",
     items: [
       { path: "/usage", title: "Usage" },
-      { path: "/settings/project", title: "Settings" },
       { path: "/settings/api-keys", title: "API keys" },
     ],
   },
