@@ -30,6 +30,9 @@ dist/
 # Local data volumes
 deploy/data/
 
+# `just backup` snapshots. Customer data, and large.
+.backups/
+
 # `go build` at the repo root drops the loadgen binary here.
 /loadgen
 

@@ -22,6 +22,7 @@ the wrong situation, and naming the wrong situation first is most of the value.
 | Runbook | Covers |
 |---|---|
 | [collapse-duplicate-span-rows.md](collapse-duplicate-span-rows.md) | Removing duplicate rows from `spans` after a crash-loop duplicated data a customer queries |
+| [restore-from-backup.md](restore-from-backup.md) | Putting ClickHouse and Postgres back from a `just backup` snapshot, and checking that they came back |
 
-P1-51 (backup/restore) will add the restore procedure here. [ADR 0053](../../architecture/decisions/0053-nexovue-monitors-nexovue.md)
-names a start-up ordering that belongs here too, once it has been run at least once.
+[ADR 0053](../../architecture/decisions/0053-nexovue-monitors-nexovue.md) names a start-up ordering
+that belongs here too, once it has been run at least once.

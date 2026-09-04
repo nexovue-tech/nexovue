@@ -41,8 +41,9 @@ down:
     -./tools/otel-demo/otel-demo.sh down
     docker compose -f {{compose}}/docker-compose.yaml --profile doors --profile tools down
 
-# Destructive and not reversible — there is no backup (P1-51). Leaves no schema
-# and no seed, so `just fresh` is usually what you actually want.
+# Destructive. Everything not in a snapshot from `just backup` is gone, including
+# Kafka's buffer, and it leaves no schema and no seed — so `just fresh` is usually
+# what you actually want. To keep the data, take a backup first.
 # Stop everything and delete every volume: stores, broker, caches
 down-hard:
     -./tools/otel-demo/otel-demo.sh down
@@ -194,6 +195,47 @@ migrate-down-ch:
 # Create one org, one owner, a production project and a known dev API key
 seed:
     POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api python -m nexovue_api.seed
+
+# ---------- backup ----------
+
+# Snapshots land here. Outside every Docker volume on purpose: `just down-hard`
+# deletes volumes, and a backup that dies with the thing it protects is a file.
+backup_dir := env("NEXOVUE_BACKUP_DIR", justfile_directory() / ".backups")
+
+# Writes a Postgres dump, a ClickHouse archive, a manifest of every table's row
+# count and both schema revisions, and checksums. Safe to run on a live stack;
+# stop ingest first if you want the manifest's row counts to be exact.
+# Snapshot both stores into .backups/<timestamp>/
+backup:
+    NEXOVUE_BACKUP_DIR="{{backup_dir}}" ./deploy/backup/backup.sh
+
+# List the snapshots taken so far
+backups:
+    @ls -1 "{{backup_dir}}" 2>/dev/null || echo "no snapshots yet — run: just backup"
+
+# Restore ONE store from a snapshot, into an empty one. There is deliberately no
+# combined `restore`, for the reason `migrate-down` gives one section up: the two
+# stores fail separately, are restored separately, and the operator has to know
+# which one they mean.
+#
+# Neither takes a migration first — both snapshots carry their own schema and the
+# revision that produced it. Stop the writers, restore, then check, in the order
+# docs/delivery/runbooks/restore-from-backup.md gives.
+
+# Restore the control plane from a snapshot
+restore-pg snapshot:
+    NEXOVUE_BACKUP_DIR="{{backup_dir}}" ./deploy/backup/restore-postgres.sh {{snapshot}}
+
+# Restore the telemetry store from a snapshot
+restore-ch snapshot:
+    NEXOVUE_BACKUP_DIR="{{backup_dir}}" ./deploy/backup/restore-clickhouse.sh {{snapshot}}
+
+# Compares row counts per table, both schema revisions, and that no ingest
+# watermark sits above the broker offset it names. This is what "the restore
+# worked" means; the restore commands exiting 0 is not.
+# Check a running stack against a snapshot's manifest
+backup-verify snapshot:
+    NEXOVUE_BACKUP_DIR="{{backup_dir}}" ./deploy/backup/verify.sh {{snapshot}}
 
 # ---------- performance ----------
 
