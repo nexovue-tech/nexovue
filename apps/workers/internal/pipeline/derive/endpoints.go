@@ -48,10 +48,49 @@ type endpointKey struct {
 	retentionDays uint16
 }
 
+// countedEndpoint is one partition's share of one endpoint-minute, for the same
+// reason `counted` is: a revoke drops a partition's contribution, and the shares
+// are summed back together at drain time.
+type countedEndpoint struct {
+	endpointKey
+	partition int32
+}
+
+// before orders shares so that the ones belonging to an endpoint-minute are
+// adjacent and in ascending partition order, which is what makes a drain
+// reproducible.
+func (c countedEndpoint) before(other countedEndpoint) bool {
+	switch {
+	case !c.minute.Equal(other.minute):
+		return c.minute.Before(other.minute)
+	case c.tenantID != other.tenantID:
+		return c.tenantID < other.tenantID
+	case c.projectID != other.projectID:
+		return c.projectID < other.projectID
+	case c.serviceName != other.serviceName:
+		return c.serviceName < other.serviceName
+	case c.spanKind != other.spanKind:
+		return c.spanKind < other.spanKind
+	case c.spanName != other.spanName:
+		return c.spanName < other.spanName
+	case c.retentionDays != other.retentionDays:
+		return c.retentionDays < other.retentionDays
+	default:
+		return c.partition < other.partition
+	}
+}
+
 type endpointTotals struct {
 	requests uint64
 	errors   uint64
 	latency  latencysample.Reservoir
+}
+
+// add folds one partition's share into a running total for its endpoint-minute.
+func (t *endpointTotals) add(share *endpointTotals) {
+	t.requests += share.requests
+	t.errors += share.errors
+	t.latency.Merge(share.latency)
 }
 
 // inbound reports whether a span is a request this service served. The rollup
@@ -69,14 +108,17 @@ func (c *Counters) observeEndpoint(minute time.Time, span Span) {
 	if !inbound(span.SpanKind) {
 		return
 	}
-	key := endpointKey{
-		minute:        minute,
-		tenantID:      span.TenantID,
-		projectID:     span.ProjectID,
-		serviceName:   span.ServiceName,
-		spanKind:      span.SpanKind,
-		spanName:      span.SpanName,
-		retentionDays: span.RetentionDays,
+	key := countedEndpoint{
+		endpointKey: endpointKey{
+			minute:        minute,
+			tenantID:      span.TenantID,
+			projectID:     span.ProjectID,
+			serviceName:   span.ServiceName,
+			spanKind:      span.SpanKind,
+			spanName:      span.SpanName,
+			retentionDays: span.RetentionDays,
+		},
+		partition: span.Partition,
 	}
 	totals, ok := c.endpoints[key]
 	if !ok {
@@ -93,24 +135,31 @@ func (c *Counters) observeEndpoint(minute time.Time, span Span) {
 // drainEndpoints hands out the rows for every minute the caller calls closed,
 // removing them from memory.
 func (c *Counters) drainEndpoints(closed func(minute time.Time) bool) []EndpointStat {
-	stats := make([]EndpointStat, 0, len(c.endpoints))
-	for key, totals := range c.endpoints {
-		if !closed(key.minute) {
-			continue
+	due := make([]countedEndpoint, 0, len(c.endpoints))
+	for key := range c.endpoints {
+		if closed(key.minute) {
+			due = append(due, key)
 		}
-		stats = append(stats, EndpointStat{
-			Minute:        key.minute,
-			TenantID:      key.tenantID,
-			ProjectID:     key.projectID,
-			RetentionDays: key.retentionDays,
-			ServiceName:   key.serviceName,
-			SpanKind:      key.spanKind,
-			SpanName:      key.spanName,
-			RequestCount:  totals.requests,
-			ErrorCount:    totals.errors,
-			LatencyMS:     totals.latency.Values(),
-		})
+	}
+	sort.Slice(due, func(i, j int) bool { return due[i].before(due[j]) })
+
+	stats := make([]EndpointStat, 0, len(due))
+	var (
+		row     endpointKey
+		running endpointTotals
+		open    bool
+	)
+	for _, key := range due {
+		if open && key.endpointKey != row {
+			stats = append(stats, row.stat(running))
+			running = endpointTotals{}
+		}
+		row, open = key.endpointKey, true
+		running.add(c.endpoints[key])
 		delete(c.endpoints, key)
+	}
+	if open {
+		stats = append(stats, row.stat(running))
 	}
 
 	// Sorted for the same reason the counter points are: the block ClickHouse
@@ -119,6 +168,22 @@ func (c *Counters) drainEndpoints(closed func(minute time.Time) bool) []Endpoint
 	// retry and the rollup double-counts.
 	sort.Slice(stats, func(i, j int) bool { return stats[i].less(stats[j]) })
 	return stats
+}
+
+// stat is the row one endpoint-minute's summed totals become.
+func (k endpointKey) stat(summed endpointTotals) EndpointStat {
+	return EndpointStat{
+		Minute:        k.minute,
+		TenantID:      k.tenantID,
+		ProjectID:     k.projectID,
+		RetentionDays: k.retentionDays,
+		ServiceName:   k.serviceName,
+		SpanKind:      k.spanKind,
+		SpanName:      k.spanName,
+		RequestCount:  summed.requests,
+		ErrorCount:    summed.errors,
+		LatencyMS:     summed.latency.Values(),
+	}
 }
 
 // less orders endpoint rows totally, so a drain is reproducible. The fields are

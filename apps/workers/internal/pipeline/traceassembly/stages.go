@@ -33,10 +33,12 @@ func (r spanRow) endpoint() string {
 func (r spanRow) traceKey() string { return string(r.TraceID) }
 
 // countable is this span as the derive stage sees it. receivedAt is what the
-// counters judge the client's timestamp against, so it is passed in rather than
-// stored on the row: it belongs to the message, not to the span.
-func (r spanRow) countable(receivedAt time.Time, retentionDays uint16) derive.Span {
+// counters judge the client's timestamp against, and partition is where the
+// record arrived, so both are passed in rather than stored on the row: they
+// belong to the message, not to the span.
+func (r spanRow) countable(receivedAt time.Time, retentionDays uint16, partition int32) derive.Span {
 	return derive.Span{
+		Partition:     partition,
 		RetentionDays: retentionDays,
 		TenantID:      r.TenantID,
 		ProjectID:     r.ProjectID,
@@ -59,8 +61,9 @@ func (r spanRow) countable(receivedAt time.Time, retentionDays uint16) derive.Sp
 // edgeSpan is this span as edge derivation sees it. The accumulator declares
 // its own input type rather than importing this one, so the two are free to
 // change apart; this is the one place they are mapped.
-func (r spanRow) edgeSpan(receivedAt time.Time, retentionDays uint16) serviceedges.Span {
+func (r spanRow) edgeSpan(receivedAt time.Time, retentionDays uint16, partition int32) serviceedges.Span {
 	return serviceedges.Span{
+		Partition:     partition,
 		TenantID:      r.TenantID,
 		ProjectID:     r.ProjectID,
 		RetentionDays: retentionDays,
@@ -204,9 +207,11 @@ type handling struct {
 	count bool
 	// store lets its spans into the sampling buffer, and so to ClickHouse.
 	store bool
-	// partition is the one the record arrived on. The buffer keeps it with
-	// every span it holds, so that a partition leaving for another worker can
-	// take its spans back out (ADR 0090).
+	// partition is the one the record arrived on. Every stage that holds
+	// something across messages keeps it — the sampling buffer with each span
+	// (ADR 0090), the counters and the edge rollup with each minute's share
+	// (ADR 0094) — so that a partition leaving for another worker can take its
+	// whole contribution back out.
 	partition int32
 }
 
@@ -235,7 +240,7 @@ func (s *stages) absorbMessage(now time.Time, message []byte, run handling) (abs
 		// span, whatever the sampler decides about the trace it belongs to
 		// (ADR 0010).
 		if run.count {
-			countable := row.countable(receivedAt, derivedDays)
+			countable := row.countable(receivedAt, derivedDays, run.partition)
 			minute, discarded := s.counters.Observe(now, countable)
 			result.latestMinute = later(result.latestMinute, minute)
 			if discarded != 0 {
@@ -245,7 +250,8 @@ func (s *stages) absorbMessage(now time.Time, message []byte, run handling) (abs
 			// Edges see every span too, and for the same reason: the sampler
 			// keeps about one healthy trace in ten, so an edge rate measured
 			// after it would be a tenth of the truth (ADR 0010).
-			edgeMinute, _ := s.edges.Observe(now, row.edgeSpan(receivedAt, derivedDays))
+			edgeMinute, _ := s.edges.Observe(now,
+				row.edgeSpan(receivedAt, derivedDays, run.partition))
 			result.latestEdgeMinute = later(result.latestEdgeMinute, edgeMinute)
 		}
 		// Offered to the buffer only when its spans are not already stored.

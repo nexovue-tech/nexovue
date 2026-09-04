@@ -432,6 +432,38 @@ func (b *pairBuffer) holds(ref parkedRef) bool {
 
 func (b *pairBuffer) pending() int { return b.parked }
 
+// disown takes every span that arrived on one of the leaving partitions out of
+// the buffer, without settling it, and reports how many it dropped.
+//
+// Settled instead of dropped, a caller would record the very edge the worker
+// taking its partition over is about to record for itself. The arrivals queue
+// keeps the dropped spans' references; remove already reports a span that is no
+// longer there, so there is nothing to compact.
+func (b *pairBuffer) disown(leaving map[int32]struct{}) int {
+	dropped := 0
+	for key, held := range b.entries {
+		if held.caller != nil {
+			if _, gone := leaving[held.caller.observed.span.Partition]; gone {
+				held.caller = nil
+				dropped++
+			}
+		}
+		kept := held.callees[:0]
+		for _, callee := range held.callees {
+			if _, gone := leaving[callee.observed.span.Partition]; gone {
+				dropped++
+				continue
+			}
+			kept = append(kept, callee)
+		}
+		clear(held.callees[len(kept):])
+		held.callees = kept
+		b.discardIfEmpty(key, held)
+	}
+	b.parked -= dropped
+	return dropped
+}
+
 // unpairedResolution settles a span that will never find its partner.
 //
 // A CLIENT still reports its call. The request was made, something answered it

@@ -29,10 +29,23 @@ written-through (migration `000026`).
 **Neither covers a partition moving between two live workers**, and that was worse than a crash: the
 losing worker was never told, so it wrote its whole sampling buffer while the gaining worker was
 already reading the same uncommitted records — 12.75% of spans stored twice with nothing killed. A
-revoke now **drops** what the stages hold for those partitions (ADR 0090). Anything reaching into
-`sample`, `consume` or `dedupe` has to keep the three in step: buffered spans, uncommitted offsets
-and the in-process watermark are released in one critical section, or the next handover is a
-duplicate again — or, if the watermark alone survives, a hole.
+revoke now **drops** what the stages hold for those partitions (ADR 0090), and that drop covers the
+counters too (ADR 0094).
+
+**Everything that survives one message keeps the partition it came from**, so a revoke can take that
+partition's whole contribution back out: `sample.Buffer` per span, `derive.Counters` and
+`serviceedges.Accumulator` per minute-bucket share, `usage.Meter` per tenant-day share. The shares
+are summed back together at drain time — in **ascending partition order**, because a floating-point
+sum that changes order changes the block bytes ClickHouse deduplicates on — so no table knows the
+difference. Dropping is safe because a batch's offsets, and its durable watermark, move only once
+every bucket it fed has drained; anything still in an open bucket is a record the broker has not been
+told about. Adding a new accumulator without provenance re-opens the defect **silently**: a
+duplicated span row can be collapsed, a doubled counter cannot.
+
+All of it is released in one critical section — buffered spans, minute buckets, uncommitted offsets
+and the in-process watermark — or the next handover is a duplicate again; and if the watermark alone
+survives, a hole. For `usage` a hole is an under-bill and a duplicate is an over-bill, so its four
+pieces (meter, `reached`, `receivedThrough`, `dedupe.Offsets`) go together or none of them do.
 
 `log-writing` and `metric-ingest` have the same root and a much narrower window: they insert inside
 `Absorb`, so a batch is exposed from its insert to its commit rather than for the ~70s spans wait.

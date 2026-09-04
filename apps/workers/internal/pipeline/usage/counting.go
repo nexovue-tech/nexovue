@@ -68,6 +68,12 @@ type totals struct {
 	rowsWritten   int64
 	rowsUnmatched int64
 	servicesFound int64
+	// disownedTenantDays and disownedBytes are what left with a partition the
+	// consumer group took back. They step at every handover and are flat
+	// otherwise; before disown existed, every one of those bytes was billed here
+	// and again by the worker that took the partition over.
+	disownedTenantDays int64
+	disownedBytes      int64
 }
 
 func newCounting(signal Signal, store Store, retry retrier, log *slog.Logger) *counting {
@@ -88,6 +94,43 @@ func newCounting(signal Signal, store Store, retry retrier, log *slog.Logger) *c
 
 // invalidate marks the durable watermark due a re-read.
 func (c *counting) invalidate() { c.stale.Store(true) }
+
+// disown drops everything held for partitions the group has taken back: the
+// counters not yet flushed, the progress a flush would claim for them, and the
+// in-process record of having metered them.
+//
+// All four together or none. Dropping the counters while `reached` still names
+// the partition would advance its durable watermark over records nothing
+// counted, and dropping them while `seen` still remembers their offsets would
+// make this worker skip those records if the partition came back — an
+// under-bill, where the over-bill this exists to stop is at least visible.
+//
+// `counted` is left alone: it is a cache of what the store holds, which is still
+// true, and the assignment that brings a partition back re-reads all of it.
+//
+// It runs on the consumer client's goroutine with the whole group's rebalance
+// waiting, so it is memory work only — no flush, no Postgres round trip.
+func (c *counting) disown(topic string, partitions []int32) {
+	if len(partitions) == 0 {
+		return
+	}
+
+	dropped := c.meter.Disown(partitions)
+	for _, partition := range partitions {
+		delete(c.reached, partition)
+		delete(c.receivedThrough, partition)
+	}
+	c.seen.Forget(topic, partitions)
+	c.totals.disownedTenantDays += int64(dropped.TenantDays)
+	c.totals.disownedBytes += dropped.Bytes
+
+	c.log.LogAttrs(context.Background(), slog.LevelInfo, "released unmetered counters with their partitions",
+		slog.String("topic", topic),
+		slog.Any("partitions", partitions),
+		slog.Int("tenant_days", dropped.TenantDays),
+		slog.Int64("bytes", dropped.Bytes),
+	)
+}
 
 // absorb counts one polled batch into the meter. Nothing is written: the flush
 // is on a timer, so a Postgres round trip is never in the path of a batch.
@@ -112,7 +155,8 @@ func (c *counting) absorb(ctx context.Context, records []*kgo.Record, at time.Ti
 			continue
 		}
 		receivedAt := consume.ReceivedAt(envelope, at)
-		c.meter.Observe(envelope.GetTenantId(), envelope.GetProjectId(), receivedAt, metered)
+		c.meter.Observe(record.Partition,
+			envelope.GetTenantId(), envelope.GetProjectId(), receivedAt, metered)
 		c.advanceReceived(record.Partition, receivedAt)
 		c.totals.counters.add(metered.Counts)
 		c.totals.messages++

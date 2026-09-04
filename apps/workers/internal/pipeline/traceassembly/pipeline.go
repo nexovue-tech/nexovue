@@ -113,6 +113,13 @@ type Pipeline struct {
 	// the new owner would have written again (ADR 0090).
 	disownedSpans int
 
+	// disownedCountedSpans and disownedEdgeCalls are the same evidence for the
+	// derived rollups: the counts and the calls that left with their partition
+	// instead of being summed into `metrics_sum` and `service_edges_1m` here and
+	// again by the new owner (ADR 0094).
+	disownedCountedSpans uint64
+	disownedEdgeCalls    uint64
+
 	// topic is the one this pipeline consumes, so a rebalance callback can tell
 	// which of its partitions are ours.
 	topic string
@@ -188,7 +195,12 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 }
 
 // release drops what the pipeline still holds for partitions the group has
-// taken back while the session is live.
+// taken back while the session is live: the buffered spans, and the shares of
+// every open minute those partitions counted.
+//
+// All of it or none of it. The buffer alone was ADR 0090 and left the counters
+// over-summing (ADR 0094); a span row written twice can be collapsed, but a
+// counter summed twice has no individual contribution left to remove.
 func (p *Pipeline) release(disowned map[string][]int32) {
 	partitions := disowned[p.topic]
 	if len(partitions) == 0 {
@@ -196,18 +208,28 @@ func (p *Pipeline) release(disowned map[string][]int32) {
 	}
 
 	dropped := p.stages.buffer.Disown(partitions)
+	counters := p.stages.counters.Disown(partitions)
+	edges := p.stages.edges.Disown(partitions)
 	// The in-process replay guard has to forget them at the same instant. Left
 	// in place, a partition that came back would have these very records
 	// recognised as replays and skipped — and their spans were dropped, not
 	// stored, so that is a hole rather than a duplicate.
 	p.seen.Forget(p.topic, partitions)
 	p.disownedSpans += dropped.Spans
+	p.disownedCountedSpans += counters.Spans
+	p.disownedEdgeCalls += edges.Calls
 
-	p.log.LogAttrs(context.Background(), slog.LevelInfo, "released buffered spans with their partitions",
+	p.log.LogAttrs(context.Background(), slog.LevelInfo, "released what the partitions were holding",
 		slog.String("topic", p.topic),
 		slog.Any("partitions", partitions),
 		slog.Int("spans", dropped.Spans),
 		slog.Int("traces", dropped.Traces),
+		slog.Uint64("counted_spans", counters.Spans),
+		slog.Int("counter_series", counters.Series),
+		slog.Int("endpoint_series", counters.Endpoints),
+		slog.Uint64("edge_calls", edges.Calls),
+		slog.Int("edge_series", edges.Edges),
+		slog.Int("edge_pairs_pending", edges.Pending),
 	)
 }
 
@@ -293,6 +315,8 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Uint64("spans_retimed", p.retimedSpans),
 		slog.Int("spans_already_stored", p.alreadyStoredSpans),
 		slog.Int("spans_disowned", p.disownedSpans),
+		slog.Uint64("counted_spans_disowned", p.disownedCountedSpans),
+		slog.Uint64("edge_calls_disowned", p.disownedEdgeCalls),
 		slog.Int("summarised_traces", summaries.OpenTraces),
 		slog.Uint64("trace_summaries_written", summaries.Written),
 		// Revised counts traces that gained a span after their row was written.

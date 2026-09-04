@@ -82,6 +82,14 @@ type Span struct {
 
 	DurationMS float64
 	Errored    bool
+
+	// Partition is the Kafka partition the span's record arrived on. It is
+	// provenance rather than a dimension — no row carries it — but the buckets
+	// keep each partition's share apart so that a partition handed to another
+	// worker can have its contribution taken back out (ADR 0094). The topic is
+	// implicit: one set of counters serves one pipeline, and a pipeline consumes
+	// one topic.
+	Partition int32
 }
 
 // Point is one row of the `metrics` table.
@@ -118,10 +126,51 @@ type series struct {
 	retentionDays uint16
 }
 
+// counted is one partition's share of one series. The buckets are keyed by it
+// rather than by the series alone so that a revoke can drop a partition's
+// contribution; the shares are summed back together at drain time, and no row
+// ever carries the partition.
+type counted struct {
+	series
+	partition int32
+}
+
+// before orders shares so that the ones belonging to a series are adjacent and
+// in ascending partition order. Folding them in that order is what keeps a
+// re-derivation of the same offsets summing the same floating-point total, and
+// so producing the block ClickHouse recognises as a repeat.
+func (c counted) before(other counted) bool {
+	switch {
+	case !c.minute.Equal(other.minute):
+		return c.minute.Before(other.minute)
+	case c.tenantID != other.tenantID:
+		return c.tenantID < other.tenantID
+	case c.projectID != other.projectID:
+		return c.projectID < other.projectID
+	case c.service != other.service:
+		return c.service < other.service
+	case c.endpoint != other.endpoint:
+		return c.endpoint < other.endpoint
+	case c.httpMethod != other.httpMethod:
+		return c.httpMethod < other.httpMethod
+	case c.retentionDays != other.retentionDays:
+		return c.retentionDays < other.retentionDays
+	default:
+		return c.partition < other.partition
+	}
+}
+
 type totals struct {
 	spans      float64
 	errors     float64
 	durationMS float64
+}
+
+// add folds one partition's share into a running total for its series.
+func (t *totals) add(share totals) {
+	t.spans += share.spans
+	t.errors += share.errors
+	t.durationMS += share.durationMS
 }
 
 // Counters accumulate per-minute totals in memory and hand out rows once a
@@ -130,12 +179,12 @@ type totals struct {
 // It is not safe for concurrent use: one pipeline goroutine owns it, which is
 // how the trace-assembly loop is built.
 type Counters struct {
-	buckets map[series]*totals
+	buckets map[counted]*totals
 	// endpoints is the second output, at the endpoint rollup's own grain. It is
 	// a separate map rather than a wider key because `metrics_sum` covers every
 	// span kind, and folding span_name into its series would multiply that
 	// table by a dimension only this rollup reads.
-	endpoints map[endpointKey]*endpointTotals
+	endpoints map[countedEndpoint]*endpointTotals
 	lateGrace time.Duration
 }
 
@@ -159,8 +208,8 @@ func (d Derived) Empty() bool { return len(d.Points) == 0 && len(d.Endpoints) ==
 // same as one — late data costs a row, never accuracy.
 func NewCounters(lateGrace time.Duration) *Counters {
 	return &Counters{
-		buckets:   make(map[series]*totals),
-		endpoints: make(map[endpointKey]*endpointTotals),
+		buckets:   make(map[counted]*totals),
+		endpoints: make(map[countedEndpoint]*endpointTotals),
 		lateGrace: lateGrace,
 	}
 }
@@ -176,14 +225,17 @@ func NewCounters(lateGrace time.Duration) *Counters {
 // per span, and can name the tenant whose clock is wrong.
 func (c *Counters) Observe(now time.Time, span Span) (minute time.Time, discardedSkew time.Duration) {
 	at, discarded := clocktrust.Instant(span.Timestamp, span.ReceivedAt, now)
-	key := series{
-		minute:        at.UTC().Truncate(clocktrust.Bucket),
-		tenantID:      span.TenantID,
-		projectID:     span.ProjectID,
-		service:       span.ServiceName,
-		endpoint:      span.Endpoint,
-		httpMethod:    span.HTTPMethod,
-		retentionDays: span.RetentionDays,
+	key := counted{
+		series: series{
+			minute:        at.UTC().Truncate(clocktrust.Bucket),
+			tenantID:      span.TenantID,
+			projectID:     span.ProjectID,
+			service:       span.ServiceName,
+			endpoint:      span.Endpoint,
+			httpMethod:    span.HTTPMethod,
+			retentionDays: span.RetentionDays,
+		},
+		partition: span.Partition,
 	}
 	bucket, ok := c.buckets[key]
 	if !ok {
@@ -226,19 +278,34 @@ func (c *Counters) DrainAll() Derived {
 	return c.drain(func(time.Time) bool { return true })
 }
 
+// drain sums each series' per-partition shares back together and hands out one
+// set of rows per series, exactly as if the partitions had never been apart.
 func (c *Counters) drain(closed func(minute time.Time) bool) Derived {
-	points := make([]Point, 0, len(c.buckets)*3)
-	for key, bucket := range c.buckets {
-		if !closed(key.minute) {
-			continue
+	due := make([]counted, 0, len(c.buckets))
+	for key := range c.buckets {
+		if closed(key.minute) {
+			due = append(due, key)
 		}
-		attrs := key.attributesJSON()
-		points = append(points,
-			key.point(MetricSpanCount, bucket.spans, attrs),
-			key.point(MetricSpanErrors, bucket.errors, attrs),
-			key.point(MetricSpanDurationSum, bucket.durationMS, attrs),
-		)
+	}
+	sort.Slice(due, func(i, j int) bool { return due[i].before(due[j]) })
+
+	points := make([]Point, 0, len(due)*3)
+	var (
+		line    series
+		running totals
+		open    bool
+	)
+	for _, key := range due {
+		if open && key.series != line {
+			points = append(points, line.points(running)...)
+			running = totals{}
+		}
+		line, open = key.series, true
+		running.add(*c.buckets[key])
 		delete(c.buckets, key)
+	}
+	if open {
+		points = append(points, line.points(running)...)
 	}
 
 	// Sorted because the block ClickHouse receives must be byte-identical when a
@@ -248,6 +315,64 @@ func (c *Counters) drain(closed func(minute time.Time) bool) Derived {
 	// different block every time and every replay double-counts.
 	sort.Slice(points, func(i, j int) bool { return points[i].less(points[j]) })
 	return Derived{Points: points, Endpoints: c.drainEndpoints(closed)}
+}
+
+// points is the three rows one series' totals become.
+func (s series) points(summed totals) []Point {
+	attrs := s.attributesJSON()
+	return []Point{
+		s.point(MetricSpanCount, summed.spans, attrs),
+		s.point(MetricSpanErrors, summed.errors, attrs),
+		s.point(MetricSpanDurationSum, summed.durationMS, attrs),
+	}
+}
+
+// Disowned is what leaving a partition cost the counters: the shares taken out
+// of both maps, and the spans whose counts went with them.
+type Disowned struct {
+	Series    int
+	Endpoints int
+	Spans     uint64
+}
+
+// Disown drops every share that arrived on one of the given partitions, from
+// both the counter buckets and the endpoint rollup.
+//
+// This is not lost data, and the reason is the ordering the offsets already
+// rest on: a batch's offsets — and its durable counted-through watermark — move
+// only once every minute bucket it fed has been drained, so anything still in
+// an open bucket belongs to records the broker has not been told about. The
+// worker that takes the partition over reads those records again and counts
+// them. Keeping them is what counts them twice, and a counter counted twice
+// cannot be repaired: `metrics_sum` is summed on read and the individual
+// contributions are gone (ADR 0094).
+func (c *Counters) Disown(partitions []int32) Disowned {
+	if len(partitions) == 0 {
+		return Disowned{}
+	}
+	leaving := make(map[int32]struct{}, len(partitions))
+	for _, partition := range partitions {
+		leaving[partition] = struct{}{}
+	}
+
+	var dropped Disowned
+	for key, bucket := range c.buckets {
+		if _, gone := leaving[key.partition]; !gone {
+			continue
+		}
+		dropped.Series++
+		// Every increment is exactly one span, so the total is an exact integer.
+		dropped.Spans += uint64(bucket.spans)
+		delete(c.buckets, key)
+	}
+	for key := range c.endpoints {
+		if _, gone := leaving[key.partition]; !gone {
+			continue
+		}
+		dropped.Endpoints++
+		delete(c.endpoints, key)
+	}
+	return dropped
 }
 
 // less orders points totally, so a drain is reproducible.
@@ -268,11 +393,13 @@ func (p Point) less(other Point) bool {
 	}
 }
 
-// Pending reports how many counter series are held, which is what the pipeline
-// logs and what shows a leak if one ever appears.
+// Pending reports how many per-partition counter shares are held, which is what
+// the pipeline logs and what shows a leak if one ever appears. Shares rather
+// than series, because the shares are what occupy memory; one series spread
+// over eight partitions is eight of them.
 func (c *Counters) Pending() int { return len(c.buckets) }
 
-// PendingEndpoints reports how many endpoint-minutes are held. Logged
+// PendingEndpoints reports how many endpoint-minute shares are held. Logged
 // separately because it is the map that can grow with a customer's span-name
 // cardinality, and each of its buckets holds a latency sample rather than three
 // floats.

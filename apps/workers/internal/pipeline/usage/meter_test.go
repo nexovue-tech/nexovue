@@ -6,10 +6,15 @@ import (
 	"time"
 )
 
+// onePartition is where the messages in these tests arrived. The meter keeps a
+// share per partition so a handover can drop one (ADR 0094); nothing below is
+// about that, so they all use the same one and the shares never split.
+const onePartition int32 = 0
+
 func TestOneTenantDayIsOneRow(t *testing.T) {
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, testReceivedAt, Metered{Counts: Counts{Spans: 3, Bytes: 100}})
-	meter.Observe(testOrg, testProject, testReceivedAt.Add(time.Hour), Metered{Counts: Counts{Spans: 4, Bytes: 200}})
+	meter.Observe(onePartition, testOrg, testProject, testReceivedAt, Metered{Counts: Counts{Spans: 3, Bytes: 100}})
+	meter.Observe(onePartition, testOrg, testProject, testReceivedAt.Add(time.Hour), Metered{Counts: Counts{Spans: 4, Bytes: 200}})
 
 	rows := meter.Drain()
 	if len(rows) != 1 {
@@ -27,8 +32,8 @@ func TestTheDayIsAUTCDay(t *testing.T) {
 	justAfter := lateNight.Add(2 * time.Minute)
 
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, lateNight, Metered{Counts: Counts{Spans: 1}})
-	meter.Observe(testOrg, testProject, justAfter, Metered{Counts: Counts{Spans: 1}})
+	meter.Observe(onePartition, testOrg, testProject, lateNight, Metered{Counts: Counts{Spans: 1}})
+	meter.Observe(onePartition, testOrg, testProject, justAfter, Metered{Counts: Counts{Spans: 1}})
 
 	rows := meter.Drain()
 	if len(rows) != 2 {
@@ -50,7 +55,7 @@ func TestTheDayDoesNotFollowTheWorkersTimezone(t *testing.T) {
 	local := time.Date(2026, 8, 31, 1, 30, 0, 0, istanbul)
 
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, local, Metered{Counts: Counts{Spans: 1}})
+	meter.Observe(onePartition, testOrg, testProject, local, Metered{Counts: Counts{Spans: 1}})
 
 	rows := meter.Drain()
 	if want := time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC); !rows[0].Day.Equal(want) {
@@ -60,9 +65,9 @@ func TestTheDayDoesNotFollowTheWorkersTimezone(t *testing.T) {
 
 func TestTenantsAreMeteredApart(t *testing.T) {
 	meter := NewMeter()
-	meter.Observe("org-a", "project-a", testReceivedAt, Metered{Counts: Counts{Spans: 1}})
-	meter.Observe("org-b", "project-b", testReceivedAt, Metered{Counts: Counts{Spans: 2}})
-	meter.Observe("org-a", "project-other", testReceivedAt, Metered{Counts: Counts{Spans: 4}})
+	meter.Observe(onePartition, "org-a", "project-a", testReceivedAt, Metered{Counts: Counts{Spans: 1}})
+	meter.Observe(onePartition, "org-b", "project-b", testReceivedAt, Metered{Counts: Counts{Spans: 2}})
+	meter.Observe(onePartition, "org-a", "project-other", testReceivedAt, Metered{Counts: Counts{Spans: 4}})
 
 	rows := meter.Drain()
 	if len(rows) != 3 {
@@ -79,7 +84,7 @@ func TestTenantsAreMeteredApart(t *testing.T) {
 // row of zeros against a tenant.
 func TestAnEmptyMessageIsNotMetered(t *testing.T) {
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, testReceivedAt, Metered{})
+	meter.Observe(onePartition, testOrg, testProject, testReceivedAt, Metered{})
 
 	if meter.Pending() != 0 {
 		t.Errorf("pending = %d, want 0", meter.Pending())
@@ -91,7 +96,7 @@ func TestAnEmptyMessageIsNotMetered(t *testing.T) {
 
 func TestDrainEmptiesTheMeter(t *testing.T) {
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, testReceivedAt, Metered{Counts: Counts{Spans: 1}})
+	meter.Observe(onePartition, testOrg, testProject, testReceivedAt, Metered{Counts: Counts{Spans: 1}})
 
 	if rows := meter.Drain(); len(rows) != 1 {
 		t.Fatalf("first drain returned %d rows, want 1", len(rows))
@@ -107,7 +112,7 @@ func TestDrainEmptiesTheMeter(t *testing.T) {
 func TestDrainOrdersRowsForAStableWrite(t *testing.T) {
 	meter := NewMeter()
 	for _, org := range []string{"org-c", "org-a", "org-b"} {
-		meter.Observe(org, testProject, testReceivedAt, Metered{Counts: Counts{Spans: 1}})
+		meter.Observe(onePartition, org, testProject, testReceivedAt, Metered{Counts: Counts{Spans: 1}})
 	}
 
 	rows := meter.Drain()
@@ -124,12 +129,12 @@ func TestDrainOrdersRowsForAStableWrite(t *testing.T) {
 func TestServicesAccumulateAsASetPerTenantDay(t *testing.T) {
 	meter := NewMeter()
 	for range 50 {
-		meter.Observe(testOrg, testProject, testReceivedAt, Metered{
+		meter.Observe(onePartition, testOrg, testProject, testReceivedAt, Metered{
 			Counts:   Counts{Spans: 1},
 			Services: []string{"checkout", "payments"},
 		})
 	}
-	meter.Observe(testOrg, testProject, testReceivedAt, Metered{
+	meter.Observe(onePartition, testOrg, testProject, testReceivedAt, Metered{
 		Counts:   Counts{Spans: 1},
 		Services: []string{"ledger"},
 	})
@@ -152,10 +157,10 @@ func TestAServiceIsCountedOnEachDayItSent(t *testing.T) {
 	lateNight := time.Date(2026, 8, 30, 23, 59, 0, 0, time.UTC)
 
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, lateNight, Metered{
+	meter.Observe(onePartition, testOrg, testProject, lateNight, Metered{
 		Counts: Counts{Spans: 1}, Services: []string{"checkout"},
 	})
-	meter.Observe(testOrg, testProject, lateNight.Add(2*time.Minute), Metered{
+	meter.Observe(onePartition, testOrg, testProject, lateNight.Add(2*time.Minute), Metered{
 		Counts: Counts{Spans: 1}, Services: []string{"checkout", "payments"},
 	})
 
@@ -175,10 +180,10 @@ func TestAServiceIsCountedOnEachDayItSent(t *testing.T) {
 // each. Nothing about the set may cross a tenant.
 func TestTheSameServiceNameInTwoTenantsIsTwoServices(t *testing.T) {
 	meter := NewMeter()
-	meter.Observe("org-a", "project-a", testReceivedAt, Metered{
+	meter.Observe(onePartition, "org-a", "project-a", testReceivedAt, Metered{
 		Counts: Counts{Spans: 1}, Services: []string{"checkout"},
 	})
-	meter.Observe("org-b", "project-b", testReceivedAt, Metered{
+	meter.Observe(onePartition, "org-b", "project-b", testReceivedAt, Metered{
 		Counts: Counts{Spans: 1}, Services: []string{"checkout"},
 	})
 
@@ -197,7 +202,7 @@ func TestTheSameServiceNameInTwoTenantsIsTwoServices(t *testing.T) {
 // deadlock between two workers writing the same tenant.
 func TestDrainOrdersServiceNames(t *testing.T) {
 	meter := NewMeter()
-	meter.Observe(testOrg, testProject, testReceivedAt, Metered{
+	meter.Observe(onePartition, testOrg, testProject, testReceivedAt, Metered{
 		Counts:   Counts{Spans: 1},
 		Services: []string{"payments", "checkout", "ledger"},
 	})

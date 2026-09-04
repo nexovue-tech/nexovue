@@ -181,6 +181,14 @@ type Span struct {
 	// the caller experienced, network included, which is what the edge records.
 	DurationMS float64
 	Errored    bool
+
+	// Partition is the Kafka partition this span's record arrived on. It is
+	// provenance rather than a dimension — no row carries it — but the pairing
+	// buffer and the minute buckets keep it so that a partition handed to
+	// another worker can have its contribution taken back out (ADR 0094). An
+	// edge belongs to its caller's partition, because the caller is what the
+	// edge is bucketed on.
+	Partition int32
 }
 
 // SpanLink is one span a span links to: the identity of a cause, in the trace

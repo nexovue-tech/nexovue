@@ -62,6 +62,20 @@ func (r *Reservoir) Observe(weight uint64, ms float64) {
 	r.siftDown(0)
 }
 
+// Merge folds another sample into this one, keeping the smallest weights of the
+// two together.
+//
+// It exists because a bucket accumulates one sample per Kafka partition, so
+// that a partition handed to another worker can have its share dropped
+// (ADR 0094). The result is the same sample the whole bucket would have built
+// on its own: the weights decide what is kept, so which partition a duration
+// arrived on cannot change the answer.
+func (r *Reservoir) Merge(other Reservoir) {
+	for _, sample := range other.kept {
+		r.Observe(sample.weight, sample.ms)
+	}
+}
+
 // Values returns the sampled durations in ascending order. Sorted because the
 // order reaches the store inside the quantile state, and a block that differs
 // only in ordering is a block the store cannot recognise as a repeat.

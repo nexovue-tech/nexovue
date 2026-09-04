@@ -63,6 +63,11 @@ func New(cfg config.Config, signal Signal, log *slog.Logger, opts Options) (*Pip
 		flushInterval: flushInterval(opts),
 		log:           scoped,
 	}
+	// Built before the client, because the rebalance callbacks below reach into
+	// it: Dial starts consuming, so a rebalance can be signalled before Dial has
+	// returned. Its retrier reads the loop lazily, and only Absorb and Settle
+	// call it — both on the loop's own goroutine, long after Run has it.
+	pipeline.counting = newCounting(signal, opts.Store, pipeline.retry, scoped)
 
 	loop, err := consume.Dial[receipt](consume.Settings{
 		Name:          signal.Name,
@@ -76,14 +81,43 @@ func New(cfg config.Config, signal Signal, log *slog.Logger, opts Options) (*Pip
 		// process never saw. Re-reading the durable watermark before counting
 		// anything is what keeps the handover from counting a batch twice.
 		OnAssigned: func() { pipeline.counting.invalidate() },
+		// The other half of the same fact. A partition leaving takes the
+		// counters this process has metered but not flushed with it, or they are
+		// billed here and again by the worker that took it over (ADR 0094).
+		OnRevoked: pipeline.release,
+		OnLost:    pipeline.releaseLost,
 	}, log)
 	if err != nil {
 		return nil, err
 	}
 
 	pipeline.loop = loop
-	pipeline.counting = newCounting(signal, opts.Store, loop.Retry, scoped)
 	return pipeline, nil
+}
+
+// retry is the consume loop's bounded call out of the process, reached through
+// the pipeline so the counting can be built before the loop exists.
+func (p *Pipeline) retry(ctx context.Context, what string, op func(context.Context) error) error {
+	return p.loop.Retry(ctx, what, op)
+}
+
+// release drops what the meter still holds for partitions the group has taken
+// back while the session is live.
+func (p *Pipeline) release(disowned map[string][]int32) {
+	p.counting.disown(p.topic, disowned[p.topic])
+}
+
+// releaseLost is release for a session that is already gone.
+//
+// The release itself is identical — dropping claims nothing, so it is as safe
+// against a broker that has stopped believing in us as against one that has
+// not. What differs is the durable watermark: these partitions may have belonged
+// to another worker for a while, and its flushes are not in this process's cache,
+// so it is marked for re-reading here rather than waiting for an assignment that
+// may never come.
+func (p *Pipeline) releaseLost(disowned map[string][]int32) {
+	p.release(disowned)
+	p.counting.invalidate()
 }
 
 func flushInterval(opts Options) time.Duration {
@@ -124,6 +158,10 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Int64("usage_rows_written", totals.rowsWritten),
 		slog.Int64("usage_rows_unattributed", totals.rowsUnmatched),
 		slog.Int64("services_recorded", totals.servicesFound),
+		// What a handover took back rather than billing twice. It steps at each
+		// rebalance and is flat otherwise (ADR 0094).
+		slog.Int64("tenant_days_disowned", totals.disownedTenantDays),
+		slog.Int64("bytes_disowned", totals.disownedBytes),
 	}
 }
 

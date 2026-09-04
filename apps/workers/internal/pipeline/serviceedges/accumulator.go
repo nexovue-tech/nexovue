@@ -90,10 +90,57 @@ type edgeKey struct {
 	retentionDays uint16
 }
 
+// countedEdge is one partition's share of one edge-minute. The buckets are
+// keyed by it rather than by the edge alone so that a revoke can drop a
+// partition's contribution; the shares are summed back together at drain time,
+// and no row ever carries the partition.
+//
+// The partition is the *caller's*: an edge is bucketed on the caller's span and
+// exists only because that span arrived, so the caller's record is what a
+// handover must take it back with.
+type countedEdge struct {
+	edgeKey
+	partition int32
+}
+
+// before orders shares so that the ones belonging to an edge-minute are
+// adjacent and in ascending partition order. Folding them in that order is what
+// keeps a re-derivation of the same offsets summing the same floating-point
+// total, and so producing the block the store recognises as a repeat.
+func (c countedEdge) before(other countedEdge) bool {
+	switch {
+	case !c.minute.Equal(other.minute):
+		return c.minute.Before(other.minute)
+	case c.tenantID != other.tenantID:
+		return c.tenantID < other.tenantID
+	case c.projectID != other.projectID:
+		return c.projectID < other.projectID
+	case c.clientService != other.clientService:
+		return c.clientService < other.clientService
+	case c.serverService != other.serverService:
+		return c.serverService < other.serverService
+	case c.serverPeerKind != other.serverPeerKind:
+		return c.serverPeerKind < other.serverPeerKind
+	case c.edgeKind != other.edgeKind:
+		return c.edgeKind < other.edgeKind
+	case c.retentionDays != other.retentionDays:
+		return c.retentionDays < other.retentionDays
+	default:
+		return c.partition < other.partition
+	}
+}
+
 type edgeTotals struct {
 	calls   uint64
 	errors  uint64
 	latency latencysample.Reservoir
+}
+
+// add folds one partition's share into a running total for its edge-minute.
+func (t *edgeTotals) add(share *edgeTotals) {
+	t.calls += share.calls
+	t.errors += share.errors
+	t.latency.Merge(share.latency)
 }
 
 // Accumulator pairs spans into edges and accumulates them per minute, handing
@@ -101,7 +148,7 @@ type edgeTotals struct {
 type Accumulator struct {
 	opts    Options
 	pending *pairBuffer
-	buckets map[edgeKey]*edgeTotals
+	buckets map[countedEdge]*edgeTotals
 	stats   Stats
 }
 
@@ -113,7 +160,7 @@ func New(opts Options) (*Accumulator, error) {
 	return &Accumulator{
 		opts:    opts,
 		pending: newPairBuffer(opts.PairWindow, opts.MaxPending),
-		buckets: make(map[edgeKey]*edgeTotals),
+		buckets: make(map[countedEdge]*edgeTotals),
 	}, nil
 }
 
@@ -182,15 +229,18 @@ func (a *Accumulator) record(resolved resolution) {
 		}
 	}
 
-	key := edgeKey{
-		minute:         startOfMinute(resolved.caller.bucketAt),
-		tenantID:       caller.TenantID,
-		projectID:      caller.ProjectID,
-		clientService:  serviceOf(caller),
-		serverService:  serverService,
-		serverPeerKind: serverPeerKind,
-		edgeKind:       resolved.edgeKind,
-		retentionDays:  caller.RetentionDays,
+	key := countedEdge{
+		edgeKey: edgeKey{
+			minute:         startOfMinute(resolved.caller.bucketAt),
+			tenantID:       caller.TenantID,
+			projectID:      caller.ProjectID,
+			clientService:  serviceOf(caller),
+			serverService:  serverService,
+			serverPeerKind: serverPeerKind,
+			edgeKind:       resolved.edgeKind,
+			retentionDays:  caller.RetentionDays,
+		},
+		partition: caller.Partition,
 	}
 
 	totals, ok := a.buckets[key]
@@ -247,26 +297,34 @@ func (a *Accumulator) DrainAll() []Edge {
 	return a.drain(func(time.Time) bool { return true })
 }
 
+// drain sums each edge-minute's per-partition shares back together and hands
+// out one row per edge, exactly as if the partitions had never been apart.
 func (a *Accumulator) drain(closed func(minute time.Time) bool) []Edge {
-	edges := make([]Edge, 0, len(a.buckets))
-	for key, totals := range a.buckets {
-		if !closed(key.minute) {
-			continue
+	due := make([]countedEdge, 0, len(a.buckets))
+	for key := range a.buckets {
+		if closed(key.minute) {
+			due = append(due, key)
 		}
-		edges = append(edges, Edge{
-			Minute:         key.minute,
-			TenantID:       key.tenantID,
-			ProjectID:      key.projectID,
-			RetentionDays:  key.retentionDays,
-			ClientService:  key.clientService,
-			ServerService:  key.serverService,
-			ServerPeerKind: key.serverPeerKind,
-			Kind:           key.edgeKind,
-			CallCount:      totals.calls,
-			ErrorCount:     totals.errors,
-			LatencyMS:      totals.latency.Values(),
-		})
+	}
+	sort.Slice(due, func(i, j int) bool { return due[i].before(due[j]) })
+
+	edges := make([]Edge, 0, len(due))
+	var (
+		row     edgeKey
+		running edgeTotals
+		open    bool
+	)
+	for _, key := range due {
+		if open && key.edgeKey != row {
+			edges = append(edges, row.edge(running))
+			running = edgeTotals{}
+		}
+		row, open = key.edgeKey, true
+		running.add(a.buckets[key])
 		delete(a.buckets, key)
+	}
+	if open {
+		edges = append(edges, row.edge(running))
 	}
 
 	// Sorted because the block ClickHouse receives must be byte-identical when a
@@ -276,6 +334,72 @@ func (a *Accumulator) drain(closed func(minute time.Time) bool) []Edge {
 	// different block every time.
 	sort.Slice(edges, func(i, j int) bool { return edges[i].less(edges[j]) })
 	return edges
+}
+
+// edge is the row one edge-minute's summed totals become.
+func (k edgeKey) edge(summed edgeTotals) Edge {
+	return Edge{
+		Minute:         k.minute,
+		TenantID:       k.tenantID,
+		ProjectID:      k.projectID,
+		RetentionDays:  k.retentionDays,
+		ClientService:  k.clientService,
+		ServerService:  k.serverService,
+		ServerPeerKind: k.serverPeerKind,
+		Kind:           k.edgeKind,
+		CallCount:      summed.calls,
+		ErrorCount:     summed.errors,
+		LatencyMS:      summed.latency.Values(),
+	}
+}
+
+// Disowned is what leaving a partition cost the graph: the shares taken out of
+// the minute buckets, the calls whose counts went with them, and the spans
+// taken out of the pairing buffer before they could become an edge.
+type Disowned struct {
+	Edges   int
+	Calls   uint64
+	Pending int
+}
+
+// Disown drops everything that arrived on one of the given partitions: the
+// spans still waiting for a partner, and each partition's share of every open
+// minute.
+//
+// This is not lost data for the same reason it is not in the counters: a
+// batch's offsets move only once every edge minute it fed has been drained, so
+// anything still held belongs to records the broker has not been told about, and
+// the worker that takes the partition over derives them again.
+//
+// A parked span is dropped without settling it. Settling a caller records an
+// edge — an unanswered one for a CLIENT — and that is precisely the row the new
+// owner is about to derive for itself.
+//
+// What this does cost is the queue hop whose two halves sat on different
+// partitions and only one of them left: its producer and consumer can no longer
+// meet, so that edge is not derived by either worker. Cross-partition pairing
+// already only happens while one worker holds both partitions, and a missing
+// minute of one edge is a gap the next minute fills — where an over-summed
+// call count is permanent.
+func (a *Accumulator) Disown(partitions []int32) Disowned {
+	if len(partitions) == 0 {
+		return Disowned{}
+	}
+	leaving := make(map[int32]struct{}, len(partitions))
+	for _, partition := range partitions {
+		leaving[partition] = struct{}{}
+	}
+
+	dropped := Disowned{Pending: a.pending.disown(leaving)}
+	for key, totals := range a.buckets {
+		if _, gone := leaving[key.partition]; !gone {
+			continue
+		}
+		dropped.Edges++
+		dropped.Calls += totals.calls
+		delete(a.buckets, key)
+	}
+	return dropped
 }
 
 // less orders edges totally, so a drain is reproducible.
