@@ -204,7 +204,7 @@ effective dates so a repricing does not rewrite what was already charged.
 
 | ID | Task | Deliverable | Status |
 |---|---|---|---|
-| P1-38 | Public site keys + CORS | non-secret per-site key path on the receiver | todo |
+| P1-38 | Public site keys + CORS | non-secret per-site key path on the receiver | ✅ done. A public key is a **separate table**, not a flag on `api_keys`: the server door ends in `subtle.ConstantTimeCompare(HashKey(presented), stored.KeyHash)`, and a kind column makes that comparison conditional — a wrong branch there means a value printed in every page's source authenticates full server ingest (ADR 0086). It is not hashed, because a hash protects a published value against nothing. The browser door is its own path prefix for the same reason (ADR 0087): the preflight carries no credential — a browser announces the key header's *name*, never its value — so it is answered permissively and unauthenticated, and the POST behind it is what gets judged. `text/plain` is accepted on that door alone, because `sendBeacon` fixes credentials mode to `include` and could not deliver otherwise, which lost every page-unload flush (ADR 0089). Origin is checked **before** the rate limiter so a wrong-origin request cannot spend the owner's budget. Proven in a real browser through to a stored ClickHouse row |
 | P1-39 | Browser SDK ingestion | OTel browser SDK → spans/metrics; Core Web Vitals (LCP/INP/CLS) | todo |
 | P1-58 | Source maps | upload + store source maps per release; symbolicate JS stack traces. Without this, RUM errors are minified noise | todo |
 
