@@ -207,6 +207,12 @@ services:
       --queues light --concurrency 8 --loglevel info
     environment: *control-plane-env
 
+  # TODO(browser-image): this cannot run. `*image-base` is built from
+  #   apps/scheduler/Dockerfile, which deliberately carries no Playwright and no
+  #   Chromium — that is the whole reason Dockerfile.browser exists. The worker
+  #   starts, takes a browser check off the queue and fails on the import. It
+  #   needs its own image, and the registry path for one is TODO(registry)
+  #   above. Browser checks are unavailable on-prem until both are answered.
   scheduler-browser:
     <<: *service-defaults
     image: *image-base

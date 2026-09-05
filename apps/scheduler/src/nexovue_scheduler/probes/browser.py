@@ -7,6 +7,11 @@ door2-synthetic-browser.bin` is the frozen example, and the severities, scope
 name and attribute keys below are read from it rather than chosen. If this file
 and that fixture disagree, the fixture is right.
 
+Chromium runs behind `browser_proxy`, which is the flow's only way onto the
+network: every name is resolved and judged there, so a customer's flow cannot
+reach an address inside our network however the name it uses resolves. A step
+the proxy refused during is a failed step, whatever the page showed.
+
 Playwright is imported inside `perform` rather than at module scope. Only the
 browser image installs it, and the envelope in the second half of this file has
 to be buildable — and testable — without a 1.5GB browser present.
@@ -16,13 +21,16 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, Protocol
+from urllib.parse import urlsplit
 
 from nexovue.v1 import envelope_pb2
 from opentelemetry.proto.collector.logs.v1 import logs_service_pb2
 from opentelemetry.proto.common.v1 import common_pb2
 from opentelemetry.proto.logs.v1 import logs_pb2
 
+from nexovue_scheduler.probes.addresses import refusal_reason_for
+from nexovue_scheduler.probes.browser_proxy import LISTEN_HOST, PublicAddressProxy
 from nexovue_scheduler.publish import (
     PROBER_VERSION,
     SCHEMA_URL,
@@ -35,6 +43,34 @@ CHECK_TYPE_BROWSER: Final = "browser"
 # The only engine we drive. WebKit and Firefox would each be a second browser to
 # install, a second version to report and a second set of flakes to explain.
 BROWSER_NAME: Final = "chromium"
+
+# The only schemes a step may open. The proxy judges where a request goes on
+# the network; `file://` and `chrome://` never touch the network, so they are
+# refused before the browser is asked. The API refuses them at creation too,
+# but this is the door that actually opens, so it decides for itself.
+NAVIGABLE_SCHEMES: Final = frozenset({"http", "https"})
+
+# Chromium sends localhost and link-local targets direct, past any proxy, unless
+# told not to. This is the telling. Playwright adds it by itself today, but that
+# rests on a helper and an environment variable, and the boundary must not.
+PROXY_BYPASS_NOTHING: Final = "<-loopback>"
+
+# WebRTC sends UDP straight to an address a page names, which no HTTP proxy can
+# carry. Chromium ignores a switch it does not recognise, and the two builds
+# Playwright chooses between spell this one differently — so both are passed and
+# the boundary does not depend on which binary launched. See ADR 0096.
+WEBRTC_PROXIED_ONLY: Final = "disable_non_proxied_udp"
+
+CHROMIUM_EGRESS_ARGUMENTS: Final = (
+    # Chromium's own resolver answers "no such name" for everything but the
+    # proxy's address. A proxied load never asks it — an HTTP proxy is handed
+    # the name, not an address — so this reaches only what resolves locally.
+    # Nothing was observed slipping past without it (ADR 0096); it is kept
+    # because a resolver that cannot answer cannot leak one.
+    f"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE {LISTEN_HOST}",
+    f"--force-webrtc-ip-handling-policy={WEBRTC_PROXIED_ONLY}",
+    f"--webrtc-ip-handling-policy={WEBRTC_PROXIED_ONLY}",
+)
 
 
 # The `config` JSONB a customer edits. Steps run in order and stop at the first
@@ -66,7 +102,6 @@ REQUIRED_FIELDS: Final[dict[str, tuple[str, ...]]] = {
 # raised, so the customer sees *why* their check is broken in their own logs
 # instead of the check going quietly missing.
 ERROR_TYPE_CONFIGURATION: Final = "ConfigurationError"
-ERROR_TYPE_ASSERTION: Final = "AssertionError"
 
 ATTR_ERROR_TYPE: Final = "error.type"
 ATTR_FAILED_STEP: Final = "synthetic.check.failed_step"
@@ -90,6 +125,20 @@ class FlowConfigError(ValueError):
         self.index = index
         self.name = name
         self.message = message
+
+
+class EgressRefusedError(RuntimeError):
+    """The proxy refused an address this step asked for.
+
+    Raised by us rather than Chromium: a refusal over plain HTTP comes back as
+    a page, and `goto` would report that it loaded.
+    """
+
+
+class EgressJudge(Protocol):
+    """What a step's judgement needs from the proxy: whom it refused meanwhile."""
+
+    def take_refusals(self) -> list[str]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,8 +194,10 @@ def perform(
     """Run one browser flow and report how far it got.
 
     Never raises for a target's behaviour — a page that will not load is a
-    result, not an error. It raises only if Playwright itself cannot start,
-    which is news about us rather than about the customer's site.
+    result, not an error. It raises when *we* cannot run the check at all:
+    Playwright failing to start, or the egress proxy failing to listen. Both are
+    news about us rather than about the customer's site, and `http_check` draws
+    the same line for the same reason.
     """
     started = time.monotonic()
     try:
@@ -166,7 +217,8 @@ def parse_steps(config: dict[str, Any], target: str) -> list[BrowserStep]:
     """
     raw = config.get(CONFIG_STEPS)
     if raw is None:
-        return [BrowserStep(name=ACTION_GOTO, action=ACTION_GOTO, url=target)]
+        url = _navigable_url(0, ACTION_GOTO, target)
+        return [BrowserStep(name=ACTION_GOTO, action=ACTION_GOTO, url=url)]
     if not isinstance(raw, list):
         raise FlowConfigError(0, CONFIG_STEPS, f"{CONFIG_STEPS} must be a list of steps")
     return [_parse_step(index, entry) for index, entry in enumerate(raw)]
@@ -187,17 +239,25 @@ def _parse_step(index: int, entry: object) -> BrowserStep:
     if missing:
         raise FlowConfigError(index, name, f"action {action!r} needs {', '.join(missing)}")
 
+    url = _optional_string(entry.get(STEP_URL))
     return BrowserStep(
         name=name,
         action=action,
         selector=_optional_string(entry.get(STEP_SELECTOR)),
-        url=_optional_string(entry.get(STEP_URL)),
+        url=_navigable_url(index, name, url) if url is not None else None,
         text=_optional_string(entry.get(STEP_TEXT)),
     )
 
 
 def _optional_string(value: object) -> str | None:
     return str(value) if value is not None else None
+
+
+def _navigable_url(index: int, name: str, url: str) -> str:
+    """A URL the browser may open, or a configuration error naming the step."""
+    if urlsplit(url).scheme.lower() not in NAVIGABLE_SCHEMES:
+        raise FlowConfigError(index, name, f"a step can only open http or https, not {url!r}")
+    return url
 
 
 def _config_failure(
@@ -227,6 +287,21 @@ def _config_failure(
     )
 
 
+def launch_options(proxy_endpoint: str) -> dict[str, Any]:
+    """How Chromium is launched: through the proxy, with no other way out.
+
+    Headless is pinned rather than left to Playwright's default because it
+    chooses the binary — `chromium-headless-shell` when headless, Chrome for
+    Testing when not. They accept different switches, and only one of them is
+    what the live suite and the browser image measure.
+    """
+    return {
+        "headless": True,
+        "proxy": {"server": proxy_endpoint, "bypass": PROXY_BYPASS_NOTHING},
+        "args": list(CHROMIUM_EGRESS_ARGUMENTS),
+    }
+
+
 def _drive(
     check_id: str,
     target: str,
@@ -234,38 +309,24 @@ def _drive(
     timeout_seconds: int,
     started: float,
 ) -> FlowResult:
-    """Open a browser, run the steps in order, stop at the first failure."""
-    # Imported here rather than at module scope: only the browser image installs
-    # Playwright, and this module's envelope half must import without it.
-    from playwright.sync_api import Error as PlaywrightError
-    from playwright.sync_api import sync_playwright
+    """Open a browser behind the proxy, run the steps in order, stop at the first failure."""
+    # The proxy first, and Playwright only once it is listening. A flow must not
+    # start without its boundary, and a proxy that cannot listen raises here
+    # rather than after a browser exists that could run without it.
+    with PublicAddressProxy() as proxy:
+        # Imported here rather than at module scope: only the browser image
+        # installs Playwright, and this module's envelope half must import
+        # without it.
+        from playwright.sync_api import sync_playwright
 
-    failure: StepFailure | None = None
-    passed = 0
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch()
-        version = browser.version
-        page = browser.new_page()
-        page.set_default_timeout(timeout_seconds * MILLISECONDS_PER_SECOND)
-        try:
-            for index, step in enumerate(steps):
-                try:
-                    _run_step(page, step, target)
-                except (PlaywrightError, AssertionError) as stopped:
-                    failure = StepFailure(
-                        name=step.name,
-                        index=index,
-                        error_type=type(stopped).__name__,
-                        message=str(stopped).strip().splitlines()[0],
-                        at_unix_nano=time.time_ns(),
-                        url=page.url or target,
-                        browser_version=version,
-                    )
-                    break
-                passed += 1
-        finally:
-            browser.close()
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(**launch_options(proxy.endpoint))
+            page = browser.new_page()
+            page.set_default_timeout(timeout_seconds * MILLISECONDS_PER_SECOND)
+            try:
+                passed, failure = _run_steps(page, steps, target, proxy, browser.version)
+            finally:
+                browser.close()
 
     return FlowResult(
         check_id=check_id,
@@ -275,6 +336,79 @@ def _drive(
         total_seconds=time.monotonic() - started,
         failure=failure,
     )
+
+
+def _run_steps(
+    page: Any, steps: list[BrowserStep], target: str, judge: EgressJudge, browser_version: str
+) -> tuple[int, StepFailure | None]:
+    """How many steps passed, and what stopped the first one that did not."""
+    from playwright.sync_api import Error as PlaywrightError
+
+    for index, step in enumerate(steps):
+        try:
+            _run_judged_step(page, step, target, judge)
+        except (PlaywrightError, AssertionError, EgressRefusedError) as stopped:
+            return index, _step_failure(step, index, stopped, page, target, browser_version)
+    return _judge_after_the_last_step(page, steps, target, judge, browser_version)
+
+
+def _judge_after_the_last_step(
+    page: Any, steps: list[BrowserStep], target: str, judge: EgressJudge, browser_version: str
+) -> tuple[int, StepFailure | None]:
+    """A refusal the final step caused has no next step to notice it.
+
+    Chromium fetches subresources asynchronously, so a refusal can land after
+    the step that caused it returned. Without this drain a flow whose last step
+    was blocked reported `up`.
+    """
+    if not steps:
+        return 0, None
+    last = len(steps) - 1
+    try:
+        _raise_if_refused(judge)
+    except EgressRefusedError as refused:
+        return last, _step_failure(steps[last], last, refused, page, target, browser_version)
+    return len(steps), None
+
+
+def _step_failure(
+    step: BrowserStep,
+    index: int,
+    stopped: BaseException,
+    page: Any,
+    target: str,
+    browser_version: str,
+) -> StepFailure:
+    return StepFailure(
+        name=step.name,
+        index=index,
+        error_type=type(stopped).__name__,
+        message=str(stopped).strip().splitlines()[0],
+        at_unix_nano=time.time_ns(),
+        url=page.url or target,
+        browser_version=browser_version,
+    )
+
+
+def _run_judged_step(page: Any, step: BrowserStep, target: str, judge: EgressJudge) -> None:
+    """One step, judged by the proxy as well as by Chromium.
+
+    A refusal during the step fails it whatever the page showed. When Chromium
+    also failed, the refusal is the reason reported: its own message reads as
+    the site being down, which is the wrong diagnosis.
+    """
+    try:
+        _run_step(page, step, target)
+    except Exception as stopped:
+        _raise_if_refused(judge, cause=stopped)
+        raise
+    _raise_if_refused(judge)
+
+
+def _raise_if_refused(judge: EgressJudge, cause: BaseException | None = None) -> None:
+    reason = refusal_reason_for(judge.take_refusals())
+    if reason is not None:
+        raise EgressRefusedError(reason) from cause
 
 
 def _run_step(page: Any, step: BrowserStep, target: str) -> None:

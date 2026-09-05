@@ -318,7 +318,10 @@ services:
       celery -A nexovue_scheduler.celery_app worker
       --queues browser --concurrency 1 --loglevel info
     volumes:
-      - ../../apps/scheduler/src:/app/src
+      # Over the image's own copy, which is what the package imports from. It
+      # was mounted at /app/src, a path nothing reads, so this worker ran the
+      # code from its last build however the working tree changed.
+      - ../../apps/scheduler/src:/app/apps/scheduler/src
     environment: *scheduler-env
     # Chromium's default 64 MB /dev/shm is the usual cause of crashes in Docker.
     shm_size: 1gb

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+from collections.abc import Iterable
 from typing import Any, Final
 
 import pycurl
@@ -63,6 +64,19 @@ def is_publicly_routable(address_text: str) -> bool:
     )
 
 
+def refusal_reason_for(refused_addresses: Iterable[str]) -> str | None:
+    """The error to report instead of the client's, when we caused the failure.
+
+    None when nothing was refused, so an ordinary failure keeps its own message
+    rather than gaining a false one. Shared by every guard, so a refusal reads
+    the same whether libcurl or Chromium was the one asking.
+    """
+    addresses = ", ".join(dict.fromkeys(refused_addresses))
+    if not addresses:
+        return None
+    return f"Target resolved to a non-public address and was not contacted: {addresses}"
+
+
 class ConnectGuard:
     """Opens sockets for libcurl, refusing any address that is not public.
 
@@ -85,7 +99,4 @@ class ConnectGuard:
 
     def refusal_reason(self) -> str | None:
         """The error to report instead of libcurl's, when we caused the failure."""
-        if not self.refused_addresses:
-            return None
-        addresses = ", ".join(dict.fromkeys(self.refused_addresses))
-        return f"Target resolved to a non-public address and was not contacted: {addresses}"
+        return refusal_reason_for(self.refused_addresses)
