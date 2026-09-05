@@ -60,3 +60,8 @@ func logBody(run string, partition int32, sequence uint32) string {
 func spanService(run string) string { return "nvprobe-spans-" + run }
 
 func logService(run string) string { return "nvprobe-logs-" + run }
+
+// peerService is the callee every probe edge points at. Nothing reports under
+// it, so the store holds it parenthesised — the marker the edge accumulator
+// puts on a name it was told rather than one that reported for itself.
+func peerService(run string) string { return "nvprobe-peer-" + run }

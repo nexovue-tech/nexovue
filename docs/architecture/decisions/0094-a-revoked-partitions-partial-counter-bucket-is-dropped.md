@@ -178,8 +178,21 @@ already only happens while one worker holds both partitions (`serviceedges` pack
 gap of one minute in one edge is filled by the next minute — where an over-summed `call_count` is
 permanent. **Reasoned from the code, not measured.**
 
-**Which direction it fails.** Toward duplication, in every path, exactly as 0090 requires. Nothing
-is recorded as finished: no offset committed, no watermark advanced, no counter claimed stored.
+**Which direction it fails.** Toward duplication, in every path, exactly as 0090 requires: for a
+record whose contribution is dropped, no offset is committed and no watermark advanced, so the new
+owner reads it again.
+
+The third thing that sentence used to claim — *no counter claimed stored* — is **not true**, and the
+rig caught it. A minute bucket closes `clocktrust.Bucket + LateGrace` after its minute begins (70s),
+while `Stored` also holds a batch's offsets for the sampling window measured from the instant it was
+polled. Where that window outlasts what is left of the 70s, the bucket drains into ClickHouse while
+the batch's offsets are still held; a revoke then finds nothing in the bucket to take back for those
+records, and the new owner counts them a second time. It is still a duplicate and never a hole — the
+direction stands — but the residual is not zero, and it is not zero at the shipped window either.
+Measured over a six-minute run: **1,235 spans (+3.43%) at the rig's 60s sampling window and 70
+(+0.19%) at the shipped 10s**. Shrinking the window inverts which side runs out first but does not
+close the gap, which is a correction to a claim this ADR previously reasoned rather than measured:
+see *The two-worker rig* below.
 
 **A latent boot crash, found on the way and fixed here.** `usage.New` built its `counting` *after*
 `consume.Dial` returned, while `Dial` starts consuming — so a rebalance callback could reach a nil
@@ -187,7 +200,12 @@ is recorded as finished: no offset committed, no watermark advanced, no counter 
 to that window is what made it worth closing rather than widening: `counting` is now built before
 `Dial`, and reaches the loop's retry budget through the pipeline instead of capturing it.
 
-**Measured — what was and was not run.**
+**Measured at the value that reaches the store.** On a real rebalance the change takes
+`metrics_sum` from **+22.78% to +3.43%** over what the broker accepted, `endpoint_stats_1m` the
+same, `service_edges_1m` from **+22.76% to −0.01%**, and `usage_daily` — the bill — from **+1.40%
+to exact on both spans and bytes**. At the shipped sampling window the counter residual is
+**+0.19%**. The full method, the three arms and the one call nobody can yet account for are in
+*The two-worker rig* below.
 
 - **Run, and watched fail before the change.** Four negative controls, asserting on the values that
   reach the store rather than through any flag a double sets. Before: `nexovue.spans.count` drained
@@ -200,12 +218,183 @@ to that window is what made it worth closing rather than widening: `counting` is
   inside a rolled-back transaction, confirming the usage guard does not stop a two-worker overlap —
   13 billed where 8 is correct. This is what makes the test's `recordedStore` a model of the SQL
   rather than a mock of it.
-- **Not run: the two-worker rig.** 0090's numbers came from `tools/rebalanceprobe` driving a real
-  rebalance across two workers on an isolated topic. The equivalent measurement here is
-  `sum(value) FROM metrics_sum WHERE metric_name = 'nexovue.spans.count' AND service_name =
-  'nvprobe-spans-<run>'` against the spans the probe accepted, plus `sum(call_count) FROM
-  service_edges_1m` and the tenant's `usage_daily` row, before and after. It was **not** run: the
-  rig needs two workers pointed at a probe topic and leaves rows in a shared dev stack that other
-  work is using at the same time, including billable `usage_daily_services` rows the probe's own
-  header warns about. **So the fix is proved at the value that reaches the store, and not yet on a
-  live rebalance.**
+- **Run on the instrument, and watched fail before *its* fix.** A fifth negative control, on the rig
+  rather than on the worker: `TestTwoWorkersSharesOfAMinuteDeriveDifferentBlocks` in
+  `tools/rebalanceprobe` builds a minute of the arm's own traffic, splits it 6/6 by partition as the
+  two workers hold it, and fails if the two shares would reach any of the three counter tables as
+  the same block. It failed on all three; the numbers are in the rig section below.
+
+## The two-worker rig — 2026-09-04
+
+0090's numbers came from `tools/rebalanceprobe` driving a real rebalance across two workers on an
+isolated topic. Three arms of the counter equivalent ran, and the method is recorded here because
+0090's was not, and had to be reconstructed from scripts left behind in a temp directory.
+
+**The arm.** Its own topic (`spans-probe-<arm>`, 12 partitions, created explicitly — auto-creation
+is off on the broker and a missing topic makes the producer fail rather than the run), its own
+consumer group, two workers on the same binary. One resident; a peer joins and leaves gracefully
+four times across a six-minute run; **nothing is killed**. `WORKER_PIPELINES=trace-assembly`, which
+starts the counters, the edge accumulator and the usage meter together — all four stages under test
+in one run. The first two arms use `WORKERS_SAMPLING_WINDOW=60s` for the reason 0090 gives: at the
+shipped 10s the handover is a photo finish the losing worker can win, and 60s makes the outcome
+certain rather than lucky. The third arm runs the shipped 10s, because that window turned out to be
+what decides the residual below.
+
+**The denominator is the probe's own report**, which counts only what the broker acknowledged. The
+probe was extended for this ADR so that one run gives each stage a denominator of its own — every
+trace's first span is a CLIENT naming a peer nothing reports for, the rest are parentless SERVERs
+that can never pair with it. So every accepted span counts in `metrics_sum`, only the SERVERs reach
+`endpoint_stats_1m` (`derive/endpoints.go` `inbound`), and each caller settles unpaired into exactly
+one `service_edges_1m` row named `(nvprobe-peer-<run>)`. `usage_daily` is checked on both spans and
+bytes, the bytes being the OTLP payload inside the envelope, which is what `usage.countSpans` bills.
+Each arm reports its own: **7,200 / 7,200 / 7,199 envelopes, 0 refused**.
+
+**The arm ends on a condition, never on a sleep.** Commit lag is ~70s by design, so counts read
+early look like loss that is really latency. It waits for a heartbeat *after* the probe finished
+showing nothing held in either pipeline **and** zero broker lag for both groups — 150s, 100s and 70s
+for the three arms.
+
+**Every arm is read for the artefact before it is read for the total.** `DuplicatedInsertedBlocks`
+moved **0** across all three, and `written_rows` from `system.query_log` matches the rows present
+for `metrics_sum` (51 = 51 in each arm; the two rollups merge on write, so theirs is a ceiling).
+This is the check whose absence let an earlier pair of arms report a 14.6% apparent *loss* that was
+really the store discarding identical blocks — see *the instrument had to be fixed first* below.
+
+**Before the change** — worker built at `c5bc989`, the fix's parent; run `bff30a12`, 60s window:
+
+| | stored | correct | over |
+|---|---|---|---|
+| `metrics_sum` `nexovue.spans.count` | 44,200 | 36,000 | **+8,200 (+22.78%)** |
+| `endpoint_stats_1m` SERVER requests | 35,360 | 28,800 | +6,560 (+22.78%) |
+| `service_edges_1m` calls | 8,839 | 7,200 | +1,639 (+22.76%) |
+| `usage_daily` spans | 36,505 | 36,000 | **+505 (+1.40%)** |
+| `usage_daily` bytes | 3,000,711 | 2,959,200 | **+41,511 (+1.40%)** |
+| `spans` rows / distinct | 36,000 / 36,000 | 36,000 | **0** |
+
+The over-count is an identity, not a rate. **8,200 is exactly the resident's own `spans_disowned`**
+for the run, and the endpoint figure is four-fifths of it to the unit, which is the SERVER share of
+a probe trace. The edge figure is 1,639 against the 1,640 traces disowned — one short, and that one
+is the same call the after arm is also short of; see the edge deficit below. The usage over-count
+resolves the same way: 202 messages were uncommitted across the four revokes, `dedupe.Offsets`
+recognised 101 of them as replays, and the remaining **101 × 5 spans = 505** and **101 × 411 bytes =
+41,511** are the whole of it — 411 bytes being the payload of every probe envelope. The `spans`
+table is clean at 36,000 rows and 36,000 distinct, so **0090's fix held while the counters beside it
+doubled**: exactly the hole 0090 named and left.
+
+**After the change** — worker built at `7d1d7b7`; run `00ecde7a`, same 60s window, same denominators:
+
+| | stored | correct | over | was |
+|---|---|---|---|---|
+| `metrics_sum` `nexovue.spans.count` | 37,235 | 36,000 | **+1,235 (+3.43%)** | +22.78% |
+| `endpoint_stats_1m` SERVER requests | 29,788 | 28,800 | +988 (+3.43%) | +22.78% |
+| `service_edges_1m` calls | 7,199 | 7,200 | **−1 (−0.01%)** | +22.76% |
+| `usage_daily` spans | 36,000 | 36,000 | **0 — exact** | +1.40% |
+| `usage_daily` bytes | 2,959,200 | 2,959,200 | **0 — exact** | +1.40% |
+| `spans` rows / distinct | 36,000 / 36,000 | 36,000 | 0 | 0 |
+
+**The bill is exactly right.** `usage_daily` matched its denominator on both spans and bytes to the
+unit, on a run where the release path fired at every handover — the resident dropped 6 tenant-days
+and 33,291, 32,880 and 25,071 bytes at three of the four. That is the number ADR 0083 ends the free
+tier on and ADR 0056 prices against, and it is the one the change existed for.
+
+**The residual is 1,235 spans, and it is the same identity again.** The resident's heartbeat closed
+the run at `spans_disowned=8,130` against `counted_spans_disowned=6,895`; the difference is
+**1,235**, which is the `metrics_sum` over-count to the unit, and four-fifths of it (988) is the
+endpoint over-count to the unit. Per handover the gap was 615, 0, 620, 0 — the two handovers where
+the resident dropped spans it no longer had counter shares for. Those spans' counters were already
+in ClickHouse while their offsets were not committed, so the new owner counted them again.
+
+**The shipped window shrinks the residual 18-fold but does not remove it** — worker `7d1d7b7`, run
+`9e5612da`, `WORKERS_SAMPLING_WINDOW=10s`, the value that ships:
+
+| | stored | correct | over |
+|---|---|---|---|
+| `metrics_sum` `nexovue.spans.count` | 36,065 | 35,995 | **+70 (+0.19%)** |
+| `endpoint_stats_1m` SERVER requests | 28,852 | 28,796 | +56 (+0.19%) |
+| `service_edges_1m` calls | 7,212 | 7,199 | +13 (+0.18%) |
+| `usage_daily` spans / bytes | 35,995 / 2,958,789 | same | **0 — exact** |
+| `spans` rows / distinct | 35,995 / 35,995 | 35,995 | 0 |
+
+**This corrects a claim that was reasoned rather than measured, and the reasoning was wrong.** The
+earlier note said that at 10s the offsets wait until `poll + 10s` while the bucket closes at
+`minute + 70s`, which is never earlier, so the residual *should not arise at all*. The mechanism
+does invert exactly as predicted — at 10s the resident closed with `spans_disowned=2,035` against
+`counted_spans_disowned=6,460`, the counters now holding **more** than the sampling buffer rather
+than less, and `edge_calls_disowned` went from 0 to 885 — but the residual is **+70, not 0**. The
+two timers are not the whole story: a bucket can still drain between the poll and the revoke inside
+a 10s window. **What is measured is that the shipped configuration over-counts by 0.19% across a
+handover, not that it does not.** Whether 0.19% is worth closing is Raj's call, and the bill is
+exact at both windows.
+
+**Two things an adversarial review of this section found, both recorded rather than quietly fixed.**
+First, the "120× better than 22.78%" comparison that stood here has been removed: it set the *after*
+binary at a 10s window against the *before* binary at 60s, changing two variables at once, and this
+ADR's own arms show the window alone moves the residual 18-fold with the binary held constant. Most
+of that ratio was the window, not the fix. Second, the `service_edges_1m` row above is disputed: the
+review derives **+14** from the identity `+70 spans ÷ 5 spans-per-trace`, against the +13 that
+`7,212 − 7,199` gives here. **Neither can now be settled, because the raw counter output was never
+saved to a file and the rows were deleted during cleanup** — every figure in this section survives
+only as prose in this document. That is the defect to fix before the next measurement: capture the
+output, then delete the rows.
+
+**One edge call short, in both 60s arms, and it is not the fix.** The after arm stored 7,199 calls
+against 7,200 accepted. The before arm is short by the same one: its identity predicts
+7,200 + 1,640 disowned traces = 8,840 and it stored 8,839, while the span and endpoint identities in
+that same arm are exact. So the deficit is present in the pre-fix binary too. The 10s arm came out
+**+13 over** rather than short, so it is not a systematic loss in either direction. **The cause is
+not established.** It is 0.014% of one run's calls, it is the only under-count anywhere in three
+arms, and it is recorded here unexplained rather than reasoned away.
+
+**The instrument had to be fixed first, and that is the finding that nearly cost the measurement.**
+An earlier pair of arms reported the after arm 14.6% *under* its denominator. That was not loss: a
+partial counter block's counts are equal between two workers holding an even split of a
+series-minute — that split being the case under measurement — so the durations behind them are the
+only field that can tell the two blocks apart, and every probe span reported the same 5 ms. Watched,
+before the probe was fixed: one minute of the rig's traffic split 6/6 across twelve partitions gives
+both halves `15000.000000 ms over 3000 spans` in `metrics_sum`, `12000.000000 ms over 2400 spans` in
+`endpoint_stats_1m` and `3000.000000 ms over 600 spans` in `service_edges_1m`. Three identical pairs;
+three blocks ClickHouse discarded as retries. `rebalanceprobe` now derives each span's duration from
+that span's own identity — 5.000 to 8.999 ms, still two hundred times under
+`WORKERS_SAMPLING_SLOW_THRESHOLD`, and deterministic, so a genuine replay still reproduces its block
+byte for byte. The three arms above were all run on that probe, and all three moved
+`DuplicatedInsertedBlocks` by zero.
+
+**Found on the way, and not recorded anywhere before.** Insert-block deduplication cannot tell a
+retry from two workers legitimately deriving the same block. ADRs
+[0060](0060-counter-idempotency-via-clickhouse-dedup.md) and
+[0075](0075-block-deduplication-replaces-the-read-before-retry.md) turned the window on for exactly
+the retry case and record two limits — the window's depth, and its survival of a store restart —
+but not this one. Real traffic has duration jitter, which makes a collision unlikely; a service
+whose spans are uniform (a health check at a constant duration, on two partitions, one span each)
+is the case where it is not, and the loss is silent and unrecoverable in precisely the way this ADR
+opens by describing. The probe made it visible; it did not create it. **Whether the window needs a
+discriminator, or this is accepted and recorded as a known limit of 0060, is not decided here.**
+
+**Not measured, and not measurable on this rig.** The cross-partition queue edge that Consequences
+says is genuinely lost rather than deferred. Every probe trace is one envelope on one partition, so
+a producer and a consumer never sit on different partitions and that path is never exercised. It
+stays reasoned from the code.
+
+**How an arm is read** — `<svc>` is `nvprobe-spans-<run>` from the probe's report:
+
+```sql
+SELECT sum(value)         FROM metrics_sum       WHERE metric_name = 'nexovue.spans.count'
+                                                   AND service_name = '<svc>';   -- vs spans_accepted
+SELECT sum(request_count) FROM endpoint_stats_1m WHERE service_name = '<svc>';    -- vs server_spans_accepted
+SELECT sum(call_count)    FROM service_edges_1m  WHERE client_service = '<svc>';  -- vs edge_calls_accepted
+SELECT count(), uniqExact(span_id) FROM spans    WHERE service_name = '<svc>';    -- 0090 comparability
+-- Postgres, as a delta against a baseline taken before the arm: usage_daily adds on conflict.
+SELECT spans, bytes FROM usage_daily WHERE org_id = :org AND project_id = :project AND day = :day;
+```
+
+Read before them, never after, or the totals are not what the workers derived: `system.events`
+`DuplicatedInsertedBlocks` across the arm, and `written_rows` from `system.query_log` for the three
+tables against the rows actually present.
+
+**A run leaves rows, and one set is billable.** `rebalanceprobe`'s own header carries the statements
+that remove them, extended here with `usage_ingest_offsets`, which a run also writes and the header
+did not name. `usage_daily` is the one that cannot be separated from real traffic — it is keyed
+(org, project, day) and adds on conflict — so an arm records its baseline first and reports its own
+number as the delta. Removing the probe's share of that row afterwards is a subtraction nobody can
+check; running the probe against an org and project of its own is the change that would end this,
+and it is not made here.

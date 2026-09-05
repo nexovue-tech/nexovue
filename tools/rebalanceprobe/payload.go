@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/hex"
 	"fmt"
+	"hash/fnv"
 	"time"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
@@ -17,10 +18,39 @@ import (
 // attrServiceName is the resource attribute both stores promote to a column.
 const attrServiceName = "service.name"
 
-// spanDuration is what every probe span reports. Well under
-// WORKERS_SAMPLING_SLOW_THRESHOLD, so "slow" is never the reason a trace is
-// kept — the error status is, and that is deterministic.
-const spanDuration = 5 * time.Millisecond
+// attrPeerService is what a caller says it called. It is what turns the probe's
+// first span into a row of `service_edges_1m`: nothing answers it, so the edge
+// accumulator names the callee from this after the pairing window expires —
+// exactly one edge per trace, with no second service to instrument.
+const attrPeerService = "service.peer.name"
+
+// callerSpanIndex is the one span of a trace that opens an edge.
+const callerSpanIndex = 0
+
+// minimumSpanDuration is the shortest a probe span reports and
+// spanDurationSpread how far above it they reach. Both stay far under
+// WORKERS_SAMPLING_SLOW_THRESHOLD (2s), so "slow" is never the reason a trace
+// is kept — the error status is, and that is deterministic.
+const (
+	minimumSpanDuration = 5 * time.Millisecond
+	spanDurationSpread  = 4 * time.Millisecond
+)
+
+// durationOf gives every span a duration of its own, derived from that span's
+// identity so re-reading the same record derives the same value.
+//
+// One duration for all of them would make the probe the thing it measures: two
+// workers holding an even split of a series-minute derive counter blocks whose
+// counts are equal by definition, so only the durations can separate them — and
+// identical blocks are what ClickHouse silently drops as a retry (ADRs 0060 and
+// 0075). Hashed rather than linear in the sequence, because the rig's partition
+// is that sequence modulo the partition count, and any linear function of it
+// totals the same over both halves.
+func durationOf(sequence uint32, index int) time.Duration {
+	identity := fnv.New64a()
+	_, _ = identity.Write([]byte(spanID(sequence, index)))
+	return minimumSpanDuration + time.Duration(identity.Sum64()%uint64(spanDurationSpread))
+}
 
 // severityInfo is OTLP's INFO number, which the store's sort key orders by.
 const severityInfo = 9
@@ -32,6 +62,13 @@ const severityInfo = 9
 // Every span is given ERROR status. The tail sampler keeps error traces whole
 // under the shipped default policy, so every probe span reaches storage without
 // changing any sampling setting — which is what makes loss countable at all.
+//
+// The first span of every trace is a CLIENT naming a peer nothing reports for,
+// and the rest are SERVERs. That gives each of the three counter stages a
+// denominator of its own from one run: every span counts in `metrics_sum`, only
+// the SERVERs reach `endpoint_stats_1m`, and only the CLIENT makes an edge. The
+// SERVERs are deliberately left parentless so they never pair with the CLIENT —
+// one trace is one edge, whoever consumes it.
 func traceRequest(run string, partition int32, sequence uint32, spans int, now time.Time) (
 	*tracesvc.ExportTraceServiceRequest, error,
 ) {
@@ -46,15 +83,25 @@ func traceRequest(run string, partition int32, sequence uint32, spans int, now t
 		if err != nil {
 			return nil, fmt.Errorf("span id: %w", err)
 		}
-		records = append(records, &tracepb.Span{
+		record := &tracepb.Span{
 			TraceId:           trace,
 			SpanId:            id,
 			Name:              "nvprobe",
 			Kind:              tracepb.Span_SPAN_KIND_SERVER,
-			StartTimeUnixNano: uint64(now.UnixNano()),                   //nolint:gosec // a wall clock is positive
-			EndTimeUnixNano:   uint64(now.Add(spanDuration).UnixNano()), //nolint:gosec // a wall clock is positive
+			StartTimeUnixNano: uint64(now.UnixNano()),                                  //nolint:gosec // a wall clock is positive
+			EndTimeUnixNano:   uint64(now.Add(durationOf(sequence, index)).UnixNano()), //nolint:gosec // a wall clock is positive
 			Status:            &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR},
-		})
+		}
+		if index == callerSpanIndex {
+			record.Kind = tracepb.Span_SPAN_KIND_CLIENT
+			record.Attributes = []*commonpb.KeyValue{{
+				Key: attrPeerService,
+				Value: &commonpb.AnyValue{
+					Value: &commonpb.AnyValue_StringValue{StringValue: peerService(run)},
+				},
+			}}
+		}
+		records = append(records, record)
 	}
 
 	return &tracesvc.ExportTraceServiceRequest{

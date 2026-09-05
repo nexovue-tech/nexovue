@@ -18,32 +18,43 @@ import (
 const semconvVersion = "1.27.0"
 
 // tally is what the broker said about one signal's messages, counted in rows as
-// well as messages because one message carries many of them.
+// well as messages because one message carries many of them — and in payload
+// bytes, because that is the unit the usage meter bills on.
 type tally struct {
-	messagesAccepted atomic.Int64
-	messagesFailed   atomic.Int64
-	rowsAccepted     atomic.Int64
-	rowsPerMessage   int
+	messagesAccepted     atomic.Int64
+	messagesFailed       atomic.Int64
+	rowsAccepted         atomic.Int64
+	payloadBytesAccepted atomic.Int64
+	rowsPerMessage       int
 }
 
-func (t *tally) accepted() { t.messagesAccepted.Add(1); t.rowsAccepted.Add(int64(t.rowsPerMessage)) }
+func (t *tally) accepted(payloadBytes int) {
+	t.messagesAccepted.Add(1)
+	t.rowsAccepted.Add(int64(t.rowsPerMessage))
+	t.payloadBytesAccepted.Add(int64(payloadBytes))
+}
 
 func (t *tally) failed() { t.messagesFailed.Add(1) }
 
 // envelopeFor wraps an OTLP payload in the frozen internal envelope — the same
-// message the receiver writes, so the worker sees no difference.
-func envelopeFor(tenant, project string, signal nexovuev1.Signal, payload proto.Message) ([]byte, error) {
+// message the receiver writes, so the worker sees no difference. It also
+// returns the encoded payload's size: the usage meter bills the OTLP bytes
+// inside the envelope, not the envelope, so that is the denominator
+// `usage_daily.bytes` is checked against.
+func envelopeFor(tenant, project string, signal nexovuev1.Signal, payload proto.Message) (
+	message []byte, payloadBytes int, err error,
+) {
 	encoded, err := proto.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("encoding %s payload: %w", signal, err)
+		return nil, 0, fmt.Errorf("encoding %s payload: %w", signal, err)
 	}
 
 	ingestID, err := uuid.NewV7()
 	if err != nil {
-		return nil, fmt.Errorf("generating ingest id: %w", err)
+		return nil, 0, fmt.Errorf("generating ingest id: %w", err)
 	}
 
-	message, err := proto.Marshal(&nexovuev1.Envelope{
+	message, err = proto.Marshal(&nexovuev1.Envelope{
 		TenantId:           tenant,
 		ProjectId:          project,
 		Door:               nexovuev1.Door_DOOR_OTLP,
@@ -54,9 +65,9 @@ func envelopeFor(tenant, project string, signal nexovuev1.Signal, payload proto.
 		Payload:            encoded,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("encoding envelope for %s: %w", signal, err)
+		return nil, 0, fmt.Errorf("encoding envelope for %s: %w", signal, err)
 	}
-	return message, nil
+	return message, len(encoded), nil
 }
 
 // producer holds the broker connection every signal loop shares.
@@ -93,14 +104,14 @@ func (p *producer) close() { p.client.Close() }
 // send publishes one message and records the broker's answer. A record is
 // counted as accepted only when the broker acknowledged it, so the stored count
 // is measured against what was actually taken.
-func (p *producer) send(topic string, partition int32, value []byte, into *tally) {
+func (p *producer) send(topic string, partition int32, value []byte, payloadBytes int, into *tally) {
 	record := &kgo.Record{Topic: topic, Partition: partition, Value: value}
 	p.client.Produce(p.publish, record, func(_ *kgo.Record, err error) {
 		if err != nil {
 			into.failed()
 			return
 		}
-		into.accepted()
+		into.accepted(payloadBytes)
 	})
 }
 

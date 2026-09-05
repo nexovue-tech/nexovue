@@ -31,6 +31,7 @@
 //	DELETE FROM metrics_sum      WHERE service_name = 'nvprobe-spans-<run>';
 //	-- Postgres: the billable one
 //	DELETE FROM usage_daily_services WHERE service_name LIKE 'nvprobe-%';
+//	DELETE FROM usage_ingest_offsets WHERE topic = '<topic>';
 //
 // Run against a topic of its own — `-spans-topic`, with the workers pointed at
 // it by `KAFKA_SPANS_TOPIC` and `WORKERS_CONSUMER_GROUP` — and the watermark
@@ -161,11 +162,11 @@ func produceSpans(ctx context.Context, broker *producer, cfg settings, runID str
 		if err != nil {
 			return err
 		}
-		message, err := envelopeFor(cfg.tenantID, cfg.projectID, nexovuev1.Signal_SIGNAL_SPANS, payload)
+		message, payloadBytes, err := envelopeFor(cfg.tenantID, cfg.projectID, nexovuev1.Signal_SIGNAL_SPANS, payload)
 		if err != nil {
 			return err
 		}
-		broker.send(cfg.spansTopic, partition, message, into)
+		broker.send(cfg.spansTopic, partition, message, payloadBytes, into)
 		return nil
 	})
 }
@@ -178,11 +179,11 @@ func produceLogs(ctx context.Context, broker *producer, cfg settings, runID stri
 		if err != nil {
 			return err
 		}
-		message, err := envelopeFor(cfg.tenantID, cfg.projectID, nexovuev1.Signal_SIGNAL_LOGS, payload)
+		message, payloadBytes, err := envelopeFor(cfg.tenantID, cfg.projectID, nexovuev1.Signal_SIGNAL_LOGS, payload)
 		if err != nil {
 			return err
 		}
-		broker.send(cfg.logsTopic, partition, message, into)
+		broker.send(cfg.logsTopic, partition, message, payloadBytes, into)
 		return nil
 	})
 }
@@ -210,38 +211,62 @@ func pace(ctx context.Context, perSecond int, send func(sequence uint32) error) 
 }
 
 // report is the run's own half of the measurement: what the broker accepted,
-// and the identities the stored rows are counted under.
+// and the identities the stored rows are counted under. The payload bytes are
+// the denominator for `usage_daily.bytes`, which is what the free tier ends on
+// (ADR 0083) — a rebalance that over-counts them over-bills.
+//
+// Each counter stage gets its own denominator by name rather than leaving the
+// reader to work it out: the shape of a probe trace (one CLIENT, the rest
+// SERVERs) means every accepted span is `metrics_sum`'s, the caller alone is
+// `service_edges_1m`'s, and the SERVERs are `endpoint_stats_1m`'s.
 type report struct {
-	Run             string `json:"run"`
-	SpanService     string `json:"span_service"`
-	LogService      string `json:"log_service"`
-	SpanMessages    int64  `json:"span_messages_accepted"`
-	SpanMessagesBad int64  `json:"span_messages_failed"`
-	SpansAccepted   int64  `json:"spans_accepted"`
-	LogMessages     int64  `json:"log_messages_accepted"`
-	LogMessagesBad  int64  `json:"log_messages_failed"`
-	LogsAccepted    int64  `json:"logs_accepted"`
-	SpanPartitions  int    `json:"span_partitions"`
-	LogPartitions   int    `json:"log_partitions"`
+	Run                 string `json:"run"`
+	SpanService         string `json:"span_service"`
+	LogService          string `json:"log_service"`
+	PeerService         string `json:"peer_service"`
+	SpanMessages        int64  `json:"span_messages_accepted"`
+	SpanMessagesBad     int64  `json:"span_messages_failed"`
+	SpansAccepted       int64  `json:"spans_accepted"`
+	ServerSpansAccepted int64  `json:"server_spans_accepted"`
+	EdgeCallsAccepted   int64  `json:"edge_calls_accepted"`
+	SpanPayloadBytes    int64  `json:"span_payload_bytes_accepted"`
+	LogMessages         int64  `json:"log_messages_accepted"`
+	LogMessagesBad      int64  `json:"log_messages_failed"`
+	LogsAccepted        int64  `json:"logs_accepted"`
+	LogPayloadBytes     int64  `json:"log_payload_bytes_accepted"`
+	SpanPartitions      int    `json:"span_partitions"`
+	LogPartitions       int    `json:"log_partitions"`
+}
+
+// reportFor builds the run's report from what the broker acknowledged.
+func reportFor(runID string, cfg settings, spans, logs *tally) report {
+	// One span of every accepted trace is its caller, so the accepted messages
+	// are the edge denominator and what is left over is the endpoint rollup's.
+	callers := spans.messagesAccepted.Load()
+	return report{
+		Run:                 runID,
+		SpanService:         spanService(runID),
+		LogService:          logService(runID),
+		PeerService:         peerService(runID),
+		SpanMessages:        callers,
+		SpanMessagesBad:     spans.messagesFailed.Load(),
+		SpansAccepted:       spans.rowsAccepted.Load(),
+		ServerSpansAccepted: spans.rowsAccepted.Load() - callers,
+		EdgeCallsAccepted:   callers,
+		SpanPayloadBytes:    spans.payloadBytesAccepted.Load(),
+		LogMessages:         logs.messagesAccepted.Load(),
+		LogMessagesBad:      logs.messagesFailed.Load(),
+		LogsAccepted:        logs.rowsAccepted.Load(),
+		LogPayloadBytes:     logs.payloadBytesAccepted.Load(),
+		SpanPartitions:      cfg.spanPartitions,
+		LogPartitions:       cfg.logPartitions,
+	}
 }
 
 func writeReport(to *os.File, runID string, cfg settings, spans, logs *tally) error {
-	body := report{
-		Run:             runID,
-		SpanService:     spanService(runID),
-		LogService:      logService(runID),
-		SpanMessages:    spans.messagesAccepted.Load(),
-		SpanMessagesBad: spans.messagesFailed.Load(),
-		SpansAccepted:   spans.rowsAccepted.Load(),
-		LogMessages:     logs.messagesAccepted.Load(),
-		LogMessagesBad:  logs.messagesFailed.Load(),
-		LogsAccepted:    logs.rowsAccepted.Load(),
-		SpanPartitions:  cfg.spanPartitions,
-		LogPartitions:   cfg.logPartitions,
-	}
 	encoder := json.NewEncoder(to)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(body)
+	return encoder.Encode(reportFor(runID, cfg, spans, logs))
 }
 
 func readSettings() (settings, error) {
