@@ -86,10 +86,12 @@ func TestABrowserExportFromAnAllowedOriginIsPublished(t *testing.T) {
 		t.Errorf("envelope tenancy = %s/%s, want %s/%s",
 			envelope.GetTenantId(), envelope.GetProjectId(), orgID, projectID)
 	}
-	// A browser export is still an OTLP export: nothing downstream may learn
-	// which door it came through.
-	if envelope.GetDoor() != nexovuev1.Door_DOOR_OTLP {
-		t.Errorf("door = %v, want DOOR_OTLP", envelope.GetDoor())
+	// The payload is still OTLP, and the envelope names the entrance: the usage
+	// meter bills a page's bytes to the browser budget by this field, so an
+	// export from a public key stamped as the server door would spend the
+	// budget this split exists to protect (ADR 0097).
+	if envelope.GetDoor() != nexovuev1.Door_DOOR_RUM {
+		t.Errorf("door = %v, want DOOR_RUM", envelope.GetDoor())
 	}
 }
 

@@ -27,6 +27,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -407,8 +408,9 @@ class ProjectWebhookSecret(Base):
 
 class UsageDaily(Base):
     """Ingestion counters rolled up per day. The guardrail meter, not the bill:
-    ADR 0056 prices per service, and these four are what shows a customer the
-    volume behind that — so nobody is surprised by either number."""
+    ADR 0056 prices per service, and these counters are what shows a customer
+    the volume behind that — so nobody is surprised by either number.
+    `browser_bytes` is a part of `bytes`, not a fifth unit beside it."""
 
     __tablename__ = "usage_daily"
 
@@ -423,6 +425,9 @@ class UsageDaily(Base):
     logs: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     metric_points: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    # The part of `bytes` that came through the browser door, which the plan
+    # budgets on its own (ADR 0097). Never more than `bytes`.
+    browser_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
 
 
 class UsageDailyService(Base):
@@ -497,6 +502,10 @@ class PlanPrice(Base):
     # ADR 0056's volume allowance, in ingested bytes per billed service per
     # calendar month. NULL is "no allowance recorded", not an allowance of zero.
     included_bytes_per_service: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # The share of that allowance the browser door may spend, as a whole
+    # percentage; the server door has the rest (ADR 0097). NULL is "no split
+    # recorded": both doors spend the one allowance.
+    browser_share_percent: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     created_at: Mapped[CreatedAt]
 
 

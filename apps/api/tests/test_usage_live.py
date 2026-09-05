@@ -85,8 +85,16 @@ async def _new_tenant(db: AsyncSession) -> ProvisionedTenant:
 
 
 async def _record(
-    db: AsyncSession, tenant: ProvisionedTenant, *, day: date, spans: int, byte_count: int
+    db: AsyncSession,
+    tenant: ProvisionedTenant,
+    *,
+    day: date,
+    spans: int,
+    byte_count: int,
+    browser_byte_count: int = 0,
 ) -> None:
+    # `browser_bytes` is a part of `bytes`, so the default is a day nothing came
+    # through the browser door — which is every row before ADR 0097.
     db.add(
         UsageDaily(
             org_id=tenant.organization.id,
@@ -96,6 +104,7 @@ async def _record(
             logs=spans * 2,
             metric_points=spans * 3,
             bytes=byte_count,
+            browser_bytes=browser_byte_count,
         )
     )
     await db.flush()
@@ -261,6 +270,7 @@ async def _record_price(
     currency: str = "USD",
     ceiling: int | None = None,
     included_bytes: int | None = None,
+    browser_share: int | None = None,
 ) -> None:
     """A real price row, in the transaction this suite rolls back.
 
@@ -275,9 +285,59 @@ async def _record_price(
             price_per_service_minor_units=minor_units,
             max_billed_services=ceiling,
             included_bytes_per_service=included_bytes,
+            browser_share_percent=browser_share,
         )
     )
     await db.flush()
+
+
+async def test_the_split_is_read_from_a_real_price_row(db: AsyncSession) -> None:
+    """Migration 0016's free row, read back through Postgres (ADR 0097).
+
+    The offline suite builds the row in Python, so it cannot prove the column
+    exists or that a value survives the round trip. This can.
+    """
+    gib = 1024**3
+    tenant = await _new_tenant(db)
+    await _record_price(
+        db, tenant, minor_units=0, ceiling=3, included_bytes=2 * gib, browser_share=25
+    )
+
+    answer = await _read(db, tenant)
+
+    assert answer.period.included_bytes == 6 * gib
+    assert answer.period.browser_included_bytes == 6 * gib // 4
+    assert answer.period.server_included_bytes == 6 * gib - 6 * gib // 4
+    assert answer.price is not None
+    assert answer.price.browser_share_percent == 25
+
+
+async def test_a_price_row_recording_no_share_reports_no_split(db: AsyncSession) -> None:
+    """Every row seeded before 0016, read back: one allowance, both doors."""
+    tenant = await _new_tenant(db)
+    await _record_price(db, tenant, minor_units=0, ceiling=3, included_bytes=1_000)
+
+    answer = await _read(db, tenant)
+
+    assert answer.period.included_bytes == 3_000
+    assert answer.period.browser_included_bytes is None
+    assert answer.period.server_included_bytes is None
+
+
+async def test_the_browser_bytes_are_summed_from_their_own_column(db: AsyncSession) -> None:
+    """The part and the whole, summed by Postgres rather than by a fake.
+
+    The offline store adds the rows in Python, so a statement summing `bytes`
+    twice would answer correctly there and be wrong here.
+    """
+    tenant = await _new_tenant(db)
+    await _record(db, tenant, day=TO_DAY, spans=100, byte_count=1_000, browser_byte_count=400)
+    await _record(db, tenant, day=TO_DAY - timedelta(days=1), spans=25, byte_count=250)
+
+    answer = await _read(db, tenant)
+
+    assert answer.period.bytes_ingested == 1_250
+    assert answer.period.browser_bytes_ingested == 400
 
 
 async def test_the_period_is_the_calendar_month_around_the_last_day(db: AsyncSession) -> None:

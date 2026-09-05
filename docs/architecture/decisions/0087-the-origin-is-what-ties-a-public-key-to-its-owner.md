@@ -1,6 +1,12 @@
 # 0087 — The Origin is what ties a public key to its owner, and it is abuse control, not authentication
 
-- **Status:** Accepted
+- **Status:** Accepted. Corrected in part by
+  [0097](0097-the-allowance-is-split-per-door-and-the-door-is-the-kind-of-key.md) — the paragraph
+  "What a scraped key costs its owner, in the worst case" was true when written and stopped being
+  true when [0093](0093-the-free-tier-ends-on-bytes-and-says-so.md) made the month's allowance one
+  pooled number: the cost became the customer's entire organization refused for up to 31 days, not
+  a per-second rate ceiling recovering in about a second. 0097 splits the allowance per door and
+  bounds it again. Everything else here stands.
 - **Date:** 2026-08-31
 
 ## Context

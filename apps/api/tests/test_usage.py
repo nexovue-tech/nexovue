@@ -50,7 +50,7 @@ PRO_PLAN: Final = Plan(slug="pro", name="Pro", raw_retention_days=30, derived_re
 
 
 class CapturingSession:
-    """Records the statement it was handed and answers nothing."""
+    """Records the statement it was handed and answers nothing of substance."""
 
     def __init__(self) -> None:
         self.statements: list[Any] = []
@@ -62,6 +62,11 @@ class CapturingSession:
     async def scalar(self, statement: Any) -> Any:
         self.statements.append(statement)
         return None
+
+    async def execute(self, statement: Any) -> Any:
+        self.statements.append(statement)
+        # A two-column row, which is the shape `bytes_in_range` reads.
+        return _One((0, 0))
 
     @property
     def bound_values(self) -> set[Any]:
@@ -145,8 +150,6 @@ class FakeUsageStore:
         match _reads(statement):
             case "plan_prices":
                 return next((p for p in self._prices if p.plan_slug in bound.values), None)
-            case "usage_daily":
-                return sum(row.bytes for row in self._counters(bound))
             case "usage_daily_services":
                 return len({(row.project_id, row.service_name) for row in self._services(bound)})
             case _:
@@ -155,6 +158,15 @@ class FakeUsageStore:
     async def execute(self, statement: Any) -> Any:
         if _reads(statement) == "usage_ingest_offsets":
             return _One((self._counted_through, self._unknown_partitions))
+
+        if _reads(statement) == "usage_daily":
+            counted = self._counters(_Bound(statement))
+            return _One(
+                (
+                    sum(row.bytes for row in counted),
+                    sum(row.browser_bytes for row in counted),
+                )
+            )
 
         bound = _Bound(statement)
         selected = set(statement.selected_columns.keys())
@@ -287,8 +299,16 @@ class _Rows:
 
 
 def _usage(
-    org_id: uuid.UUID, project_id: uuid.UUID, day: date, *, spans: int, byte_count: int
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    day: date,
+    *,
+    spans: int,
+    byte_count: int,
+    browser_byte_count: int = 0,
 ) -> UsageDaily:
+    # `browser_bytes` is a part of `bytes`, so the default is a day nothing was
+    # sent through the browser door — which is every row before ADR 0097.
     return UsageDaily(
         org_id=org_id,
         project_id=project_id,
@@ -297,6 +317,7 @@ def _usage(
         logs=spans * 2,
         metric_points=spans * 3,
         bytes=byte_count,
+        browser_bytes=browser_byte_count,
     )
 
 
@@ -629,6 +650,7 @@ def _price(
     minor_units: int = 1_000,
     ceiling: int | None = None,
     included_bytes: int | None = None,
+    browser_share: int | None = None,
 ) -> PlanPrice:
     return PlanPrice(
         plan_slug="pro",
@@ -637,6 +659,7 @@ def _price(
         price_per_service_minor_units=minor_units,
         max_billed_services=ceiling,
         included_bytes_per_service=included_bytes,
+        browser_share_percent=browser_share,
     )
 
 
@@ -876,6 +899,169 @@ async def test_an_unpriced_tier_enforces_nothing() -> None:
     response = await _priced([_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")], price=None)
 
     assert response.period.allowance_enforced is False
+
+
+# ------------------------------------------- the allowance split between doors
+
+
+GIB: Final = 1024**3
+
+
+async def test_the_seeded_free_row_gives_the_browser_a_quarter_of_the_month() -> None:
+    """Migration 0016's free row, read the way the receiver reads it.
+
+    The same three figures appear in the receiver's own allowance suite
+    (`TestTheSeededFreeTierGivesTheBrowserAQuarter`). If the two diverge, a
+    customer is refused at a limit this screen never showed them.
+    """
+    one = [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")]
+
+    response = await _priced(one, price=_price(ceiling=3, included_bytes=2 * GIB, browser_share=25))
+
+    assert response.period.included_bytes == 6 * GIB
+    assert response.period.browser_included_bytes == 6 * GIB // 4
+    assert response.period.allowance_enforced is True
+
+
+async def test_an_unused_browser_cap_is_not_withheld_from_the_month() -> None:
+    """The cap is a ceiling, not a reservation, and the screen must say so.
+
+    `included_bytes` stays the whole month whatever the browser's cap is, so a
+    customer reading the screen sees the volume they can actually use. Under the
+    partition this replaced, the screen showed a server share of 4.5 GiB and the
+    door refused there — for a cap nobody could reach, since the browser SDK is
+    P1-39 and unbuilt. The receiver asserts the same in
+    `TestABrowserShareNobodyUsesIsNotStrandedFromTheServer`.
+    """
+    one = [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")]
+
+    response = await _priced(one, price=_price(ceiling=3, included_bytes=2 * GIB, browser_share=25))
+
+    assert response.period.included_bytes == 6 * GIB
+    assert response.period.browser_included_bytes == 6 * GIB // 4
+
+
+async def test_a_row_recording_no_share_reports_no_split() -> None:
+    """Every row before ADR 0097, and what they still mean: one allowance.
+
+    A null cap rather than a copy of the whole, because the screen has to be
+    able to tell "every door spends this" from "the browser door may spend all
+    of it", which is a share of 100.
+    """
+    one = [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")]
+
+    response = await _priced(one, price=_price(ceiling=3, included_bytes=2 * GIB))
+
+    assert response.period.included_bytes == 6 * GIB
+    assert response.period.browser_included_bytes is None
+
+
+def test_the_two_shares_always_sum_to_the_whole() -> None:
+    """A cap is a ceiling inside the plan's total, never an addition to it.
+
+    Whatever the percentage, and whatever the rounding: the browser door's cap
+    is somewhere between nothing and the whole month, so a customer cannot buy
+    more month by sending through the other entrance. The receiver asserts the
+    same list of shares over the same 6 GiB.
+    """
+    for share in (0, 1, 25, 33, 50, 99, 100):
+        price = _price(ceiling=3, included_bytes=2 * GIB, browser_share=share)
+        cap = billing.browser_cap_bytes(1, price)
+
+        assert cap is not None
+        assert 0 <= cap <= 6 * GIB, share
+
+
+def test_a_share_of_zero_is_not_the_same_statement_as_no_share() -> None:
+    """Zero is a plan the browser door may send nothing through; null is pooled."""
+    none_recorded = billing.browser_cap_bytes(1, _price(ceiling=3, included_bytes=2 * GIB))
+    zero_recorded = billing.browser_cap_bytes(
+        1, _price(ceiling=3, included_bytes=2 * GIB, browser_share=0)
+    )
+
+    assert none_recorded is None
+    assert zero_recorded == 0
+
+
+def test_a_row_with_no_allowance_has_no_split_to_report() -> None:
+    """There is nothing to divide, so a share on such a row divides nothing."""
+    assert billing.browser_cap_bytes(1, _price(ceiling=3, browser_share=25)) is None
+    assert billing.browser_cap_bytes(1, None) is None
+
+
+async def test_a_share_on_an_uncapped_row_splits_a_number_nothing_enforces() -> None:
+    """Pro and scale get no share row, and if one appeared it would refuse nobody.
+
+    The split follows `included_bytes`, which an uncapped tier still reports;
+    what makes it a boundary is `allowance_enforced`, and that stays false. The
+    receiver asserts the same of the same row.
+    """
+    one = [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")]
+
+    response = await _priced(one, price=_price(included_bytes=10 * GIB, browser_share=25))
+
+    assert response.period.allowance_enforced is False
+    assert response.period.browser_included_bytes == 10 * GIB // 4
+
+
+async def test_the_browser_part_is_summed_from_the_browser_column(
+    session: CapturingSession,
+) -> None:
+    """Read off the statement, because the behaviour test below cannot see this.
+
+    The fake store sums the rows in Python, so a statement asking for `bytes`
+    twice would answer the browser figure correctly and still be wrong against
+    a database. Both sums come from one statement over one set of rows, so the
+    part can never be read from a different range than the whole.
+    """
+    await queries.bytes_in_range(
+        session,  # type: ignore[arg-type]
+        org_id=ORG_ID,
+        from_day=FROM_DAY,
+        to_day=TO_DAY,
+    )
+
+    statement = str(session.statements[-1])
+    assert "sum(usage_daily.bytes)" in statement
+    assert "sum(usage_daily.browser_bytes)" in statement
+
+
+async def test_the_browser_bytes_spent_are_reported_as_a_part_of_the_whole() -> None:
+    """The screen needs both numbers, and it must not add them together.
+
+    The server door's spend is the difference. A screen showing 1,500 sent and
+    400 browser bytes as two totals would report 1,900 bytes that were never
+    ingested.
+    """
+    rows = [
+        _usage(ORG_ID, PROJECT_ID, date(2026, 8, 10), spans=100, byte_count=1_000),
+        _usage(
+            ORG_ID, PROJECT_ID, date(2026, 8, 11), spans=50, byte_count=500, browser_byte_count=400
+        ),
+    ]
+    store = FakeUsageStore(rows, [PRO_PLAN], prices=[_price(browser_share=25)])
+
+    response = await service.usage_for_organization(
+        store,  # type: ignore[arg-type]
+        organization=_organization(ORG_ID),
+        from_day=FROM_DAY,
+        to_day=TO_DAY,
+    )
+
+    assert response.period.bytes_ingested == 1_500
+    assert response.period.browser_bytes_ingested == 400
+
+
+async def test_the_price_summary_carries_the_share_the_row_records() -> None:
+    """The rate on the wire says how it is split, for the same reason it says
+    what it includes: the screen must not work the policy out for itself."""
+    response = await _priced(
+        [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")],
+        price=_price(ceiling=3, included_bytes=2 * GIB, browser_share=25),
+    )
+
+    assert response.price is not None
+    assert response.price.browser_share_percent == 25
 
 
 async def test_the_period_bytes_are_asked_for_by_organization_and_month(

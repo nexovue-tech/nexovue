@@ -32,9 +32,14 @@ from __future__ import annotations
 
 import calendar
 from datetime import date
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 from nexovue_api.data.postgres.models import PlanPrice
+
+# The denominator `plan_prices.browser_share_percent` is written in: the column
+# holds a whole-number percentage. `allowance.percentWhole` in the receiver is
+# the same constant, and the two have to stay the same.
+PERCENT_WHOLE: Final = 100
 
 
 class BillingPeriod(NamedTuple):
@@ -92,9 +97,10 @@ def included_bytes(services: int, price: PlanPrice | None) -> int | None:
     a customer refused at 2 GiB that starting a second service is the remedy.
     An uncapped tier has no such number, so each service run brings its own.
 
-    `allowance.includedBytes` in the receiver computes the same figure from the
-    same row. The two have to agree, or the screen states a limit the door does
-    not apply.
+    `allowance.Usage.IncludedBytes` in the receiver computes the same figure
+    from the same row. The two have to agree, or the screen states a limit the
+    door does not apply. Where the row also records a split this is still the
+    whole — `browser_cap_bytes` is the ceiling the browser door alone carries.
 
     None when no rate is recorded or the rate records no allowance. An
     allowance nobody set is not an allowance of zero, which would report every
@@ -105,6 +111,42 @@ def included_bytes(services: int, price: PlanPrice | None) -> int | None:
     if price.max_billed_services is None:
         return services * price.included_bytes_per_service
     return price.max_billed_services * price.included_bytes_per_service
+
+
+def browser_cap_bytes(services: int, price: PlanPrice | None) -> int | None:
+    """The most the browser door may spend of the month, or None when uncapped.
+
+    A public site key is printed in the customer's page, so anyone who views
+    source can spend at that door. ADR 0097 caps it so a scraped key cannot
+    silence the customer's servers.
+
+    **A cap, not a share of a partition.** The server door's limit stays the
+    whole month: the browser's cap comes out of the whole only as it is actually
+    spent, so a customer sending no browser telemetry keeps every byte of their
+    plan. Reserving the share instead withdrew a quarter of the free tier for a
+    door nobody could reach, since the browser SDK is P1-39 and unbuilt.
+
+    None is "the row records no split", which is what every row before 0097
+    means and still means: every door spends the one allowance. That is a
+    different statement from a share of zero, which is a plan the browser door
+    may send nothing through.
+
+    `allowance.Usage.browserIncludedBytes` in the receiver computes the same
+    number from the same row, with the same rounding. Divergence here is a
+    customer refused at a limit the screen never showed them.
+
+    The one place the two deliberately differ: on a row with no ceiling on
+    billed services — every paying tier — the receiver records no allowance at
+    all and enforces nothing, while this returns a figure from the services
+    counted so far. That figure is a description, not a boundary, and
+    `allowance_is_enforced` is what says so. Sending it lets the screen show a
+    paying customer their included volume without implying a door that would
+    ever refuse them.
+    """
+    included = included_bytes(services, price)
+    if included is None or price is None or price.browser_share_percent is None:
+        return None
+    return included * price.browser_share_percent // PERCENT_WHOLE
 
 
 def allowance_is_enforced(price: PlanPrice | None) -> bool:

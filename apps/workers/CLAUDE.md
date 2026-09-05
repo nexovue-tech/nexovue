@@ -47,6 +47,14 @@ and the in-process watermark — or the next handover is a duplicate again; and 
 survives, a hole. For `usage` a hole is an under-bill and a duplicate is an over-bill, so its four
 pieces (meter, `reached`, `receivedThrough`, `dedupe.Offsets`) go together or none of them do.
 
+**`usage` records which door each byte came through** (ADR 0097). `usage_daily.browser_bytes`
+is the part of `bytes` whose envelope named `DOOR_RUM` — the browser door, opened by a public
+site key — and it is what lets the receiver hold the browser door to its own share of the
+plan's allowance. Every other door, including an envelope naming none, is the server's:
+`bytes` stays the whole month, so the usage screen's total does not move. A meter that
+counted browser bytes into `bytes` alone would make a scraped site key end the customer's
+month again.
+
 `log-writing` and `metric-ingest` have the same root and a much narrower window: they insert inside
 `Absorb`, so a batch is exposed from its insert to its commit rather than for the ~70s spans wait.
 Narrower is not closed — measured over 60 abrupt restarts under load, 49,580 of 905,020 distinct log

@@ -29,6 +29,19 @@ const (
 	// the other on the 1st, and only one of them is a support ticket.
 	reasonAllowanceSpent = "allowance_spent"
 
+	// reasonBrowserAllowanceSpent is the browser door's share of a split
+	// allowance used up (ADR 0097). Its own tally because it is its own
+	// conversation: the server refusal means the free tier is over, this one
+	// means the customer's site — or whoever copied its key — spent the
+	// site's share, and the backend is still reporting.
+	reasonBrowserAllowanceSpent = "browser_allowance_spent"
+
+	// reasonOrganizationGone is ingest arriving for a deleted organization. Its
+	// own tally because it is neither a plan nor a rate problem and never
+	// clears: a key still authenticating for a deleted organization is a
+	// deletion that did not finish, and a rising count here is the signal.
+	reasonOrganizationGone = "organization_gone"
+
 	reasonInvalid     = "invalid"
 	reasonUnavailable = "unavailable"
 	reasonInternal    = "internal"
@@ -48,7 +61,8 @@ const (
 var (
 	refusalReasons = []string{
 		reasonUnauthenticated, reasonForbiddenOrigin, reasonThrottled,
-		reasonAllowanceSpent, reasonInvalid, reasonUnavailable, reasonInternal,
+		reasonAllowanceSpent, reasonBrowserAllowanceSpent,
+		reasonInvalid, reasonUnavailable, reasonInternal,
 	}
 	degradationReasons = []string{reasonLimiterDown, reasonAllowanceUnknown}
 )

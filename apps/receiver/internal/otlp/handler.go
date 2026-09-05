@@ -58,17 +58,46 @@ const (
 // The plan refusal names the date, because "when does this come back" is the
 // only question a customer has left and the answer is not guessable from the
 // code. It says the allowance was spent rather than that the rate was exceeded:
-// both are RESOURCE_EXHAUSTED, and only one of them clears in a second.
-const messageAllowanceSpent = "the included monthly ingest volume for this plan is spent; " +
-	"ingestion resumes on "
+// both are RESOURCE_EXHAUSTED, and only one of them clears in a second. Where
+// the plan caps the browser door it names that cap, so a customer refused from
+// their page is not told their whole month is over — it is not.
+const (
+	messageAllowanceSpentPrefix = "the included monthly "
+	messageAllowanceSpentSuffix = " for this plan is spent; ingestion resumes on "
+
+	volumePooled  = "ingest volume"
+	volumeBrowser = "browser ingest volume"
+
+	// Says the organization rather than the key, because the key is still
+	// valid — revoking it belongs with account deletion, not here — and a
+	// customer reading this needs to know which of the two is gone.
+	messageOrganizationGone = "this organization has been deleted; ingestion is closed"
+)
 
 // allowanceResetLayout is a plain calendar date. Not RFC 3339: the allowance
 // returns at the start of a UTC day, and an instant would invite a customer to
 // read a timezone into it that is not there.
 const allowanceResetLayout = time.DateOnly
 
-func allowanceSpentMessage(resetsOn time.Time) string {
-	return messageAllowanceSpent + resetsOn.UTC().Format(allowanceResetLayout)
+func allowanceSpentMessage(verdict allowance.Verdict) string {
+	// A deleted organization is not over its allowance and has no reset date to
+	// name. Reusing the spent wording would tell whoever still holds the key to
+	// come back on the 1st, which is not true and never becomes true.
+	if verdict.Gone {
+		return messageOrganizationGone
+	}
+	return messageAllowanceSpentPrefix + volumeNameOf(verdict.Budget) +
+		messageAllowanceSpentSuffix + verdict.ResetsOn.UTC().Format(allowanceResetLayout)
+}
+
+// volumeNameOf is what the refusal calls the budget that ran out. Two names,
+// not three: the browser door has a cap of its own, and every other entrance is
+// judged against the plan's whole allowance.
+func volumeNameOf(budget allowance.Budget) string {
+	if budget == allowance.Browser {
+		return volumeBrowser
+	}
+	return volumePooled
 }
 
 // The browser refusals say more than the credential ones do, and on purpose:
@@ -91,8 +120,9 @@ type Options struct {
 	Limiter    *ratelimit.Limiter
 
 	// Allowance is the plan gate: whether this organization has volume left in
-	// the month its plan includes. Shared by both doors and both transports —
-	// the boundary belongs to the organization, not to the entrance.
+	// the month its plan includes, at this door. Shared by both doors and both
+	// transports — the total belongs to the organization, and the checker
+	// splits it per door, so one read serves every entrance (ADR 0097).
 	Allowance *allowance.Checker
 
 	Publisher *ingest.Publisher

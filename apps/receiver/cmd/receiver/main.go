@@ -93,9 +93,11 @@ func run() error {
 	// pipeline. Only the gatekeeper differs, and it is the whole difference.
 	shared := otlp.Options{
 		Limiter: ratelimit.New(ratelimit.NewValkeyCounter(dependencies.valkey), cfg.RateLimitPerSecond),
-		// One checker for both doors and both transports: the plan boundary is
-		// the organization's, so a customer cannot buy more month by changing
-		// which entrance they send to.
+		// One checker for both doors and both transports: the plan's total is
+		// the organization's, read once and split per door inside the checker
+		// (ADR 0097), so a customer cannot buy more month by changing which
+		// entrance they send to — and a spent browser share cannot spend the
+		// server's.
 		Allowance: allowance.New(
 			allowance.NewPostgresUsage(dependencies.postgres),
 			allowance.Options{

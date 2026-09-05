@@ -81,11 +81,11 @@ It re-encodes only what it split. Logs and metrics travel as the exact bytes tha
 | Entrance | `door` | Signals | Where |
 |---|---|---|---|
 | OTLP server door (HTTP `:4318`, gRPC `:4317`) | `DOOR_OTLP` | spans, logs, metrics | `apps/receiver/internal/ingest/ingest.go` |
-| OTLP browser door (`/browser/v1/*`, public site keys) | `DOOR_OTLP` | spans, logs, metrics | same file — the browser entrance is a separate route and gatekeeper, not a separate door value |
+| OTLP browser door (`/browser/v1/*`, public site keys) | `DOOR_RUM` | spans, logs, metrics | same file — `ingest.DoorFor` reads the kind of key that opened the door, and a public key names the browser door ([0097](decisions/0097-the-allowance-is-split-per-door-and-the-door-is-the-kind-of-key.md)) |
 | Synthetic checks and browser flows | `DOOR_SYNTHETIC` | metrics, logs | `apps/scheduler/src/nexovue_scheduler/publish.py`, `probes/browser.py` |
 | Cloud and database pollers | `DOOR_POLLER` | metrics | `apps/scheduler/src/nexovue_scheduler/pollers/envelope.py` |
 
-`DOOR_RUM` and `DOOR_WEBHOOK` are declared in the proto and **nothing in the running system emits either**. The `door3-rum.bin` fixture asserts `DOOR_RUM`, while the browser door that carries RUM traffic stamps `DOOR_OTLP` and has a test asserting it does. Do not branch on `door` to identify RUM traffic until that disagreement is settled.
+`door` has one reader downstream: the usage meter bills `DOOR_RUM` bytes to `usage_daily.browser_bytes`, which is how the browser door is held to its own share of the plan's allowance (0097). Until 2026-09-04 the browser door stamped `DOOR_OTLP` and a receiver test asserted that "nothing downstream may learn which door it came through"; 0097 settled that the payload format is what downstream must not depend on, not the entrance, and the `door3-rum.bin` fixture had been right all along. `DOOR_WEBHOOK` is declared and **nothing emits it**.
 
 ## Topics and keys
 

@@ -92,8 +92,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Named by plan as well as by day: a later migration seeding another row on
+    # the same date is not this migration's, and deleting it would drop that
+    # plan back to an older price.
     op.execute(
-        sa.text("DELETE FROM plan_prices WHERE effective_from = :day").bindparams(
-            day=_EFFECTIVE_FROM
-        )
+        sa.text(
+            "DELETE FROM plan_prices WHERE effective_from = :day AND plan_slug = ANY(:slugs)"
+        ).bindparams(day=_EFFECTIVE_FROM, slugs=[slug for slug, _, _, _ in _PRICES])
     )

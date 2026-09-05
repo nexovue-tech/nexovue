@@ -11,7 +11,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/allowance"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ingest"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/logging"
 )
 
@@ -116,7 +118,7 @@ func (o Options) authenticate(ctx context.Context, presentedKey string) (context
 }
 
 // withinAllowance is the plan gate: has this organization spent the volume its
-// plan includes for the calendar month.
+// plan includes for the calendar month, at the door this export came through.
 //
 // It sits above the limiter for the reason the origin gate does. The answer is
 // an in-process cache lookup, so an organization whose free month is over is
@@ -126,6 +128,9 @@ func (o Options) authenticate(ctx context.Context, presentedKey string) (context
 //
 // Only a plan with a ceiling on its billed services has an allowance to spend,
 // so nothing paying is ever refused here. ADR 0093.
+//
+// The door asked about is the one the envelope will be stamped with, so the
+// budget judged here is the budget the meter charges (ADR 0097).
 func (o Options) withinAllowance(ctx context.Context) *refusal {
 	identity, ok := auth.FromContext(ctx)
 	if !ok {
@@ -134,7 +139,7 @@ func (o Options) withinAllowance(ctx context.Context) *refusal {
 			because(errors.New("allowance gate ran before authentication"))
 	}
 
-	verdict, err := o.Allowance.Check(ctx, identity.OrgID)
+	verdict, err := o.Allowance.Check(ctx, identity.OrgID, ingest.DoorFor(identity))
 	if err != nil {
 		// Fail open, exactly as the limiter does. A control-plane blip must not
 		// become an ingest outage: what is lost by admitting an over-allowance
@@ -154,10 +159,26 @@ func (o Options) withinAllowance(ctx context.Context) *refusal {
 		// would lose the data anyway — the OTel Collector gives up on a queued
 		// batch after five minutes — and would spend three weeks of the
 		// customer's egress finding that out.
-		return refuse(code.Code_RESOURCE_EXHAUSTED, allowanceSpentMessage(verdict.ResetsOn)).
-			countedUnder(reasonAllowanceSpent)
+		return refuse(code.Code_RESOURCE_EXHAUSTED, allowanceSpentMessage(verdict)).
+			countedUnder(allowanceSpentReason(verdict))
 	}
 	return nil
+}
+
+// allowanceSpentReason is the tally a spent budget is counted under. The
+// browser door's is its own: a window of server refusals says the customer's
+// free tier is over, where a window of browser refusals says their site — or
+// whoever read its source — spent the site's share, and the two are different
+// conversations.
+func allowanceSpentReason(verdict allowance.Verdict) string {
+	switch {
+	case verdict.Gone:
+		return reasonOrganizationGone
+	case verdict.Budget == allowance.Browser:
+		return reasonBrowserAllowanceSpent
+	default:
+		return reasonAllowanceSpent
+	}
 }
 
 // throttle is the rate-limit gate. It answers before the payload is decoded,

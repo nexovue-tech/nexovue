@@ -127,27 +127,47 @@ async def services_in_range(
     return await session.scalar(statement) or 0
 
 
+class IngestedBytes(NamedTuple):
+    """What the meter counted over a range, and the browser door's part of it.
+
+    `browser` is a part of `total`, never beside it, so the two must not be
+    added together. It is what the browser door's own share is spent against
+    (ADR 0097).
+    """
+
+    total: int
+    browser: int
+
+
 async def bytes_in_range(
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
     from_day: date,
     to_day: date,
-) -> int:
+) -> IngestedBytes:
     """Ingested bytes over a range, for the whole organization.
 
     The allowance is pooled across the organization, so this is deliberately
     not narrowable to a project: one project's bytes are not one project's
     allowance.
+
+    Both figures come from one statement over one set of rows, so the part can
+    never be read from a different range than the whole.
     """
-    total = await session.scalar(
-        select(func.coalesce(func.sum(UsageDaily.bytes), 0)).where(
-            UsageDaily.org_id == org_id,
-            UsageDaily.day >= from_day,
-            UsageDaily.day <= to_day,
+    row = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(UsageDaily.bytes), 0),
+                func.coalesce(func.sum(UsageDaily.browser_bytes), 0),
+            ).where(
+                UsageDaily.org_id == org_id,
+                UsageDaily.day >= from_day,
+                UsageDaily.day <= to_day,
+            )
         )
-    )
-    return total or 0
+    ).one()
+    return IngestedBytes(total=row[0] or 0, browser=row[1] or 0)
 
 
 async def service_counts_by_project(

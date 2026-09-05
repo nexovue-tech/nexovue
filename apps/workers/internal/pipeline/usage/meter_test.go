@@ -25,6 +25,27 @@ func TestOneTenantDayIsOneRow(t *testing.T) {
 	}
 }
 
+// Browser bytes accumulate beside the whole count, never instead of it: a day
+// that took a page's export and a server's carries both in `bytes` and only the
+// page's in `browser_bytes` (ADR 0097).
+func TestBrowserBytesAccumulateBesideTheWholeCount(t *testing.T) {
+	meter := NewMeter()
+	meter.Observe(onePartition, testOrg, testProject, testReceivedAt,
+		Metered{Counts: Counts{Spans: 1, Bytes: 100, BrowserBytes: 100}})
+	meter.Observe(onePartition, testOrg, testProject, testReceivedAt,
+		Metered{Counts: Counts{Spans: 1, Bytes: 200}})
+	meter.Observe(onePartition, testOrg, testProject, testReceivedAt,
+		Metered{Counts: Counts{Spans: 1, Bytes: 40, BrowserBytes: 40}})
+
+	rows := meter.Drain()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if rows[0].Bytes != 340 || rows[0].BrowserBytes != 140 {
+		t.Errorf("counters = %+v, want 340 bytes of which 140 the browser's", rows[0].Counts)
+	}
+}
+
 // The day boundary is UTC, and it is our own clock: two messages minutes apart
 // either side of midnight belong to different days.
 func TestTheDayIsAUTCDay(t *testing.T) {

@@ -1,6 +1,11 @@
 # 0093 — The free tier ends on bytes, uniformly, and says so in three places
 
-- **Status:** Accepted
+- **Status:** Accepted. Superseded in part by
+  [0097](0097-the-allowance-is-split-per-door-and-the-door-is-the-kind-of-key.md) — the allowance
+  below is one pooled number refused at every door, which made a scraped public site key able to
+  end a customer's whole month. It is still one number pooled across the organization; a plan row
+  may now divide it between the browser door and the server door, and each door is judged against
+  its own share. Everything else here stands.
 - **Settles in part:** [0056](0056-per-service-pricing.md) — its contradiction between "we block and
   say so rather than bill" and "volume overage above the allowance stays live, so growth still
   pays", which [0083](0083-the-period-is-the-month-and-the-allowance-is-bytes.md) recorded and

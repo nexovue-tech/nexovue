@@ -1,9 +1,11 @@
 // Package ingest wraps a normalized payload in the frozen envelope and hands it
 // to the broker.
 //
-// This is the last gate. Nothing downstream of it knows which door the data
-// came from, and the HTTP request is not acknowledged until the broker has the
-// message — the receiver never accepts data it has not managed to hand on.
+// This is the last gate. Downstream sees one payload format whatever door the
+// data came from; the envelope's door names the entrance, and the usage meter
+// bills by it (ADR 0097). The HTTP request is not acknowledged until the broker
+// has the message — the receiver never accepts data it has not managed to hand
+// on.
 package ingest
 
 import (
@@ -25,6 +27,29 @@ import (
 // construction is testable without a Kafka cluster.
 type Producer interface {
 	ProduceSync(ctx context.Context, records ...*kgo.Record) kgo.ProduceResults
+}
+
+// DoorFor is the entrance an identity's telemetry is stamped as having come
+// through, and it is decided by the kind of key that opened it: a public key is
+// printed in a web page and can only open the browser door (ADR 0086), so its
+// bytes are the browser door's. The usage meter bills the browser door to its
+// own budget (ADR 0097), and the allowance gate asks about the same door this
+// stamps, so the two cannot disagree about which budget an export spends.
+//
+// Written as an allow-list because auth.Kind has no safe zero: a kind nobody
+// set is an authentication defect, not an entrance, and it names no door. Both
+// readers of the field then charge it to the server's share — the browser's is
+// the small one anyone can spend, and traffic we cannot place must not be
+// handed it.
+func DoorFor(identity auth.Identity) nexovuev1.Door {
+	switch identity.Kind {
+	case auth.KindSecret:
+		return nexovuev1.Door_DOOR_OTLP
+	case auth.KindPublic:
+		return nexovuev1.Door_DOOR_RUM
+	default:
+		return nexovuev1.Door_DOOR_UNSPECIFIED
+	}
 }
 
 // Topics names where each signal's envelopes are published. One topic per
@@ -234,7 +259,7 @@ func recordFor(
 	envelope, err := proto.Marshal(&nexovuev1.Envelope{
 		TenantId:           identity.OrgID,
 		ProjectId:          identity.ProjectID,
-		Door:               nexovuev1.Door_DOOR_OTLP,
+		Door:               DoorFor(identity),
 		Signal:             batch.Signal,
 		ReceivedAtUnixNano: receivedAt.UnixNano(),
 		IngestId:           ingestID.String(),

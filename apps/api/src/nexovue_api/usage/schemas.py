@@ -82,6 +82,10 @@ class PlanPriceSummary(BaseModel):
     # across the organization. Null is "no allowance recorded", which is not an
     # allowance of zero.
     included_bytes_per_service: int | None = None
+    # How much of that allowance the browser door may spend, as a whole
+    # percentage; the server door has the rest (ADR 0097). Null is "no split
+    # recorded": both doors spend the one allowance.
+    browser_share_percent: int | None = None
 
 
 class BillingPeriodUsage(BaseModel):
@@ -116,6 +120,26 @@ class BillingPeriodUsage(BaseModel):
     # The month's pooled volume allowance in bytes, null when the rate records
     # none. Overage above it is deliberately not priced — see `service`.
     included_bytes: int | None = None
+
+    # The browser door's cap and what it has spent of it (ADR 0097). The cap is
+    # null where the plan row records no split, which is when every door spends
+    # `included_bytes` itself.
+    #
+    # A cap, not a share: the server door's limit is `included_bytes`, the whole
+    # month, and there is deliberately no second figure beside it. What the
+    # browser has spent comes out of the whole as it is spent, so an unused cap
+    # is still the server's to use — which is why a `server_included_bytes`
+    # field would be a number that changes with usage rather than a limit, and
+    # is not sent.
+    #
+    # `browser_bytes_ingested` is a part of `bytes_ingested`, never a figure to
+    # add to it: the server door's spend is the difference between the two.
+    #
+    # Sent because the door applies it: a screen computing the cap itself would
+    # be a second place for the policy to be wrong — the same reason
+    # `allowance_enforced` is sent rather than derived.
+    browser_bytes_ingested: int = 0
+    browser_included_bytes: int | None = None
 
     # True when going past `included_bytes` refuses further ingest for the rest
     # of the month, which is the free tier and nothing else (ADR 0093). The API

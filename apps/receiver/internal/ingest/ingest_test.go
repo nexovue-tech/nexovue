@@ -57,8 +57,53 @@ func (f *fakeProducer) ProduceSync(_ context.Context, records ...*kgo.Record) kg
 	return results
 }
 
+// identity is a server-side caller: the secret kind, as auth.New stamps it.
 func identity() auth.Identity {
-	return auth.Identity{OrgID: orgID, ProjectID: projectID, KeyPrefix: "nvk_live_dev"}
+	return auth.Identity{
+		Kind: auth.KindSecret, OrgID: orgID, ProjectID: projectID, KeyPrefix: "nvk_live_dev",
+	}
+}
+
+// siteIdentity is a page's caller: the public kind, as auth.NewSite stamps it.
+func siteIdentity() auth.Identity {
+	return auth.Identity{
+		Kind: auth.KindPublic, OrgID: orgID, ProjectID: projectID, KeyPrefix: "nvp_live_dev",
+	}
+}
+
+// The door is what the usage meter bills a message's bytes against (ADR 0097):
+// a public key's bytes go to the browser budget, so its envelope has to name
+// the browser door — and the server kind has to keep naming the OTLP door, or
+// every server export would be billed as a page's.
+func TestTheDoorNamesTheKindOfKeyThatOpenedIt(t *testing.T) {
+	cases := []struct {
+		name string
+		who  auth.Identity
+		want nexovuev1.Door
+	}{
+		{"a secret key is the server door", identity(), nexovuev1.Door_DOOR_OTLP},
+		{"a public key is the browser door", siteIdentity(), nexovuev1.Door_DOOR_RUM},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			producer := &fakeProducer{}
+
+			err := ingest.NewPublisher(producer, testTopics, testBudget).PublishTraces(
+				context.Background(), tc.who, time.Now(), []tracesplit.Group{groupFor("aabb", "1.43.0")},
+			)
+			if err != nil {
+				t.Fatalf("PublishTraces() = %v, want no error", err)
+			}
+
+			var envelope nexovuev1.Envelope
+			if err := proto.Unmarshal(producer.records[0].Value, &envelope); err != nil {
+				t.Fatalf("record value is not an Envelope: %v", err)
+			}
+			if envelope.GetDoor() != tc.want {
+				t.Errorf("door = %v, want %v", envelope.GetDoor(), tc.want)
+			}
+		})
+	}
 }
 
 func groupFor(traceID string, semconv string) tracesplit.Group {

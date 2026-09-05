@@ -163,14 +163,26 @@ func metricsFrom(t *testing.T, pointsEach int, servicesNamed ...string) []byte {
 	return marshal(t, request)
 }
 
-// envelope wraps a payload the way every door does before the broker.
+// envelope wraps a payload the way the server door does before the broker.
 func envelope(t *testing.T, signal nexovuev1.Signal, payload []byte, receivedAt time.Time) []byte {
+	t.Helper()
+	return envelopeThrough(t, nexovuev1.Door_DOOR_OTLP, signal, payload, receivedAt)
+}
+
+// envelopeThrough wraps a payload as one named door stamps it.
+func envelopeThrough(
+	t *testing.T,
+	door nexovuev1.Door,
+	signal nexovuev1.Signal,
+	payload []byte,
+	receivedAt time.Time,
+) []byte {
 	t.Helper()
 
 	return marshal(t, &nexovuev1.Envelope{
 		TenantId:           testOrg,
 		ProjectId:          testProject,
-		Door:               nexovuev1.Door_DOOR_OTLP,
+		Door:               door,
 		Signal:             signal,
 		ReceivedAtUnixNano: receivedAt.UnixNano(),
 		IngestId:           "ingest-1",
@@ -253,6 +265,87 @@ func TestAnUndecodableMessageIsRejectedWithItsTenant(t *testing.T) {
 		t.Errorf("rejection names %s/%s, want %s/%s; a message nobody can "+
 			"attribute is one nobody can chase",
 			rejection.TenantID, rejection.ProjectID, testOrg, testProject)
+	}
+}
+
+// --------------------------------------------- which door the bytes came through
+
+// The browser door's bytes are charged to the browser's share of the allowance
+// and to nothing else (ADR 0097). Every other door — the server's, the
+// scheduler's, and an envelope naming none — is the server's, because a byte
+// the browser door cannot spend is what the split protects. The whole count
+// still carries every byte, so the usage screen's total does not change.
+func TestOnlyTheBrowserDoorsBytesAreBrowserBytes(t *testing.T) {
+	payload := spanPayload(t, 3)
+	cases := []struct {
+		door        nexovuev1.Door
+		wantBrowser int64
+	}{
+		{nexovuev1.Door_DOOR_RUM, int64(len(payload))},
+		{nexovuev1.Door_DOOR_OTLP, 0},
+		{nexovuev1.Door_DOOR_SYNTHETIC, 0},
+		{nexovuev1.Door_DOOR_POLLER, 0},
+		{nexovuev1.Door_DOOR_UNSPECIFIED, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.door.String(), func(t *testing.T) {
+			message := envelopeThrough(t, tc.door, nexovuev1.Signal_SIGNAL_SPANS, payload, testReceivedAt)
+
+			_, metered, err := Spans.meter(message)
+			if err != nil {
+				t.Fatalf("metering: %v", err)
+			}
+			if metered.BrowserBytes != tc.wantBrowser {
+				t.Errorf("browser bytes = %d, want %d", metered.BrowserBytes, tc.wantBrowser)
+			}
+			if metered.Bytes != int64(len(payload)) {
+				t.Errorf("bytes = %d, want the whole payload's %d: the door changes which "+
+					"share is charged, never the total", metered.Bytes, len(payload))
+			}
+		})
+	}
+}
+
+// Logs and metrics through the browser door are the browser's too; the share
+// is bytes across all three signals, exactly as the allowance is.
+func TestEverySignalThroughTheBrowserDoorIsBrowserBytes(t *testing.T) {
+	cases := []struct {
+		signal  Signal
+		payload []byte
+	}{
+		{Logs, logPayload(t, 2)},
+		{Metrics, metricPayload(t)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.signal.Name, func(t *testing.T) {
+			message := envelopeThrough(t, nexovuev1.Door_DOOR_RUM, tc.signal.wire, tc.payload, testReceivedAt)
+
+			_, metered, err := tc.signal.meter(message)
+			if err != nil {
+				t.Fatalf("metering: %v", err)
+			}
+			if metered.BrowserBytes != int64(len(tc.payload)) {
+				t.Errorf("browser bytes = %d, want %d", metered.BrowserBytes, len(tc.payload))
+			}
+		})
+	}
+}
+
+// The flush carries browser bytes in their own column, beside the whole count.
+// Asserted at the column: a meter that counted them and a statement that never
+// wrote them would leave the door judging every byte as the server's.
+func TestTheFlushCarriesBrowserBytesInTheirOwnColumn(t *testing.T) {
+	columns := columnsOf([]Row{
+		{OrgID: testOrg, ProjectID: testProject, Day: testReceivedAt, Counts: Counts{Bytes: 300, BrowserBytes: 100}},
+		{OrgID: testOrg, ProjectID: "project-2", Day: testReceivedAt, Counts: Counts{Bytes: 50}},
+	})
+
+	if !slices.Equal(columns.browserBytes, []int64{100, 0}) {
+		t.Errorf("browser_bytes column = %v, want [100 0]", columns.browserBytes)
+	}
+	if !slices.Equal(columns.bytes, []int64{300, 50}) {
+		t.Errorf("bytes column = %v, want [300 50]: the whole count, browser bytes included",
+			columns.bytes)
 	}
 }
 

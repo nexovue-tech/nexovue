@@ -211,9 +211,11 @@ func TestAPlanRefusalIsCountedApartFromARateLimit(t *testing.T) {
 	}
 }
 
-// The plan boundary belongs to the organization, so it cannot be sidestepped by
-// sending from a page instead of a server.
-func TestTheBrowserDoorIsHeldToTheSameAllowance(t *testing.T) {
+// On a row recording no split, the one allowance belongs to the organization
+// and cannot be sidestepped by sending from a page instead of a server. That is
+// every row seeded before ADR 0097, and it stays true; where a row does record
+// a split, the two doors are judged apart — see below.
+func TestOnAPooledRowTheBrowserDoorIsHeldToTheSameAllowance(t *testing.T) {
 	d := newDoor(t, doorOptions{allowanceUsage: spentFreeMonth})
 
 	response := postTo(t, d, otlp.BrowserPathPrefix+otlp.TracesPath,
@@ -223,6 +225,164 @@ func TestTheBrowserDoorIsHeldToTheSameAllowance(t *testing.T) {
 	if response.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want %d: a spent month is spent at every door",
 			response.Code, http.StatusTooManyRequests)
+	}
+}
+
+/* ------------------------------------ the split between the two doors */
+
+// The free month as migration 0016 seeds it: a quarter of the 6 GiB is the
+// browser door's, the rest the server's. The figures below are the row's own
+// columns, not a verdict, so the arithmetic that decides a refusal runs in the
+// gate under test rather than in this file (the trap ADR 0093 recorded).
+const (
+	freeBrowserShare = 25
+	freeBrowserBytes = freeMonthIncluded / 4
+	freeServerBytes  = freeMonthIncluded - freeBrowserBytes
+)
+
+func splitFreeMonth(ingested, browserIngested int64) staticUsage {
+	return staticUsage{usage: allowance.Usage{
+		IncludedBytes:        freeMonthIncluded,
+		Enforced:             true,
+		BrowserSharePercent:  freeBrowserShare,
+		Split:                true,
+		IngestedBytes:        ingested,
+		BrowserIngestedBytes: browserIngested,
+		Found:                true,
+	}}
+}
+
+// browserShareSpent is the attack ADR 0097 closes: a public key, scraped from
+// the page it is printed in, has sent many months' worth through the browser
+// door, and the customer's servers have sent nothing.
+var browserShareSpent = splitFreeMonth(50*freeMonthIncluded, 50*freeMonthIncluded)
+
+// serverOnlyAtTheOldPartitionLine is a backend that has spent what the
+// partition used to give it — 75% of the plan — with the site's share
+// untouched. Under the partition this was refused. Under the cap it is not:
+// nothing has spent the browser's share, so it is still the server's to use.
+var serverOnlyAtTheOldPartitionLine = splitFreeMonth(freeServerBytes+1, 0)
+
+// wholePlanSpent is a backend one byte past the plan's whole allowance, with
+// the site's share untouched. This is what closes the server door now.
+var wholePlanSpent = splitFreeMonth(freeMonthIncluded+1, 0)
+
+var siteKeyFromPage = map[string]string{"Origin": pageOrigin, "X-Nexovue-Key": validSiteKey}
+
+// The property protected: a customer's backend keeps reporting no matter what
+// happens to their website. Asserted at the door, both transports.
+func TestASpentBrowserShareRefusesThePageAndAdmitsTheServer(t *testing.T) {
+	d := newDoor(t, doorOptions{allowanceUsage: browserShareSpent})
+
+	page := postTo(t, d, otlp.BrowserPathPrefix+otlp.TracesPath,
+		encodedRequest(t, exportRequest(traceID(0x11))), siteKeyFromPage)
+	if page.Code != http.StatusTooManyRequests {
+		t.Fatalf("browser door status = %d, want %d: the site's share is spent",
+			page.Code, http.StatusTooManyRequests)
+	}
+
+	server := post(t, d, encodedRequest(t, exportRequest(traceID(0x22))), nil)
+	if server.Code != http.StatusOK {
+		t.Fatalf("server door status = %d, want %d: the backend must keep reporting "+
+			"whatever happens to the website (%s)", server.Code, http.StatusOK, server.Body)
+	}
+	if len(d.producer.records) != 1 {
+		t.Errorf("%d records reached the broker, want the server's 1", len(d.producer.records))
+	}
+}
+
+func TestASpentBrowserShareAdmitsTheServerOverGRPC(t *testing.T) {
+	d := newGRPCDoor(t, doorOptions{allowanceUsage: browserShareSpent})
+
+	if _, err := d.export(t, exportRequest(traceID(0x11))); err != nil {
+		t.Fatalf("export = %v, want no error: the browser's share is not the server's", err)
+	}
+	if len(d.producer.records) != 1 {
+		t.Errorf("%d records reached the broker, want 1", len(d.producer.records))
+	}
+}
+
+// The shares are a partition of the plan's total, so the server's own share
+// ending does not open the browser's to it, and does not close the browser's.
+// The share is a cap, not a reservation, and this is that at the door. A
+// backend at 75% of the plan with no browser telemetry at all keeps sending:
+// the browser's share is only withheld once a browser actually spends it.
+//
+// This replaces a test asserting the opposite — that the same backend was
+// refused while the untouched browser share sat beside it. That was the
+// partition, and it withdrew a quarter of the free tier for a door nobody could
+// reach, since the browser SDK is P1-39 and unbuilt.
+func TestABackendIsNotRefusedForABrowserShareNobodyHasSpent(t *testing.T) {
+	d := newDoor(t, doorOptions{allowanceUsage: serverOnlyAtTheOldPartitionLine})
+
+	server := post(t, d, encodedRequest(t, exportRequest(traceID(0x11))), nil)
+	if server.Code != http.StatusOK {
+		t.Fatalf("server door status = %d, want %d: the browser share is unspent and so still the server's (%s)",
+			server.Code, http.StatusOK, server.Body)
+	}
+}
+
+// The other side of the same rule: once the plan's whole allowance is gone,
+// every door closes. A cap on one door must not become a way to send more than
+// the month includes.
+func TestThePlansWholeAllowanceSpentClosesBothDoors(t *testing.T) {
+	d := newDoor(t, doorOptions{allowanceUsage: wholePlanSpent})
+
+	server := post(t, d, encodedRequest(t, exportRequest(traceID(0x11))), nil)
+	if server.Code != http.StatusTooManyRequests {
+		t.Errorf("server door status = %d, want %d: the plan's allowance is spent",
+			server.Code, http.StatusTooManyRequests)
+	}
+
+	page := postTo(t, d, otlp.BrowserPathPrefix+otlp.TracesPath,
+		encodedRequest(t, exportRequest(traceID(0x22))), siteKeyFromPage)
+	if page.Code != http.StatusTooManyRequests {
+		t.Errorf("browser door status = %d, want %d: the browser door may not spend a plan the server filled (%s)",
+			page.Code, http.StatusTooManyRequests, page.Body)
+	}
+}
+
+// A customer refused from their page must not be told their month is over —
+// it is not — and one refused from their servers must not be told to look at
+// their site.
+func TestASplitRefusalNamesTheShareThatRanOut(t *testing.T) {
+	pageRefusal := postTo(t, newDoor(t, doorOptions{allowanceUsage: browserShareSpent}),
+		otlp.BrowserPathPrefix+otlp.TracesPath,
+		encodedRequest(t, exportRequest(traceID(0x11))), siteKeyFromPage)
+	if message := rpcStatus(t, pageRefusal).GetMessage(); !strings.Contains(message, "browser ingest volume") {
+		t.Errorf("browser refusal = %q, want it to name the browser's share", message)
+	}
+
+	serverRefusal := post(t, newDoor(t, doorOptions{allowanceUsage: wholePlanSpent}),
+		encodedRequest(t, exportRequest(traceID(0x11))), nil)
+	message := rpcStatus(t, serverRefusal).GetMessage()
+	if !strings.Contains(message, "ingest volume") || strings.Contains(message, "browser ingest volume") {
+		t.Errorf("server refusal = %q, want it to name the plan's own volume", message)
+	}
+	if !strings.Contains(message, "resumes on") {
+		t.Errorf("server refusal = %q, want it to name the day ingestion resumes", message)
+	}
+}
+
+// A window of browser refusals is the site — or whoever copied its key —
+// spending the site's share while the backend still reports. A window of server
+// refusals is the free tier ending. Folding them would hide the very case the
+// split exists for.
+func TestABrowserShareRefusalIsCountedApartFromTheServers(t *testing.T) {
+	traffic := otlp.NewTraffic()
+	d := newDoor(t, doorOptions{allowanceUsage: browserShareSpent, traffic: traffic})
+
+	postTo(t, d, otlp.BrowserPathPrefix+otlp.TracesPath,
+		encodedRequest(t, exportRequest(traceID(0x11))), siteKeyFromPage)
+
+	summary := summaryLine(t, runSummary(t, traffic))
+	if summary["refused_browser_allowance_spent"] != float64(1) {
+		t.Errorf("refused_browser_allowance_spent = %v, want 1",
+			summary["refused_browser_allowance_spent"])
+	}
+	if summary["refused_allowance_spent"] != float64(0) {
+		t.Errorf("refused_allowance_spent = %v, want 0: the site's share is not the month",
+			summary["refused_allowance_spent"])
 	}
 }
 

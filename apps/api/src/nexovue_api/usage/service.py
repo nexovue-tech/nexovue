@@ -177,6 +177,7 @@ def _price_summary(price: PlanPrice | None) -> PlanPriceSummary | None:
         price_per_service_minor_units=price.price_per_service_minor_units,
         max_billed_services=price.max_billed_services,
         included_bytes_per_service=price.included_bytes_per_service,
+        browser_share_percent=price.browser_share_percent,
     )
 
 
@@ -210,12 +211,16 @@ async def _billing_period(
         settled=is_settled(period.last_day, frontier),
         services=services,
         billed_services=billing.billed_services(services, price),
-        bytes_ingested=ingested,
+        bytes_ingested=ingested.total,
+        browser_bytes_ingested=ingested.browser,
         service_cost_minor_units=cost,
         # The currency belongs to the amount; without one there is nothing to
         # denominate.
         currency=price.currency if cost is not None and price is not None else None,
         included_bytes=billing.included_bytes(services, price),
+        # Null means the row records no split, and the whole is what every door
+        # spends. See `billing.browser_cap_bytes`.
+        browser_included_bytes=billing.browser_cap_bytes(services, price),
         allowance_enforced=billing.allowance_is_enforced(price),
     )
 

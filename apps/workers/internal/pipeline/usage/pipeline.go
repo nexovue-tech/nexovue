@@ -155,6 +155,9 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Int64("logs_metered", totals.counters.Logs),
 		slog.Int64("metric_points_metered", totals.counters.MetricPoints),
 		slog.Int64("bytes_metered", totals.counters.Bytes),
+		// The part of bytes_metered the browser door's budget is charged for
+		// (ADR 0097). Flat at zero until a page exports.
+		slog.Int64("browser_bytes_metered", totals.counters.BrowserBytes),
 		slog.Int64("usage_rows_written", totals.rowsWritten),
 		slog.Int64("usage_rows_unattributed", totals.rowsUnmatched),
 		slog.Int64("services_recorded", totals.servicesFound),

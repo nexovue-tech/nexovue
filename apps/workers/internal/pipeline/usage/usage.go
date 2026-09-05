@@ -40,17 +40,24 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
 )
 
-// Counts is what one message carried, in the four units `usage_daily` records.
+// Counts is what one message carried, in the units `usage_daily` records.
 //
 // Bytes is the OTLP payload the customer sent, not the Kafka record: the
 // envelope around it is our own metadata, and metering a customer on our
 // wrapper would meter our own overhead. It is the same measurement ADR 0056
 // costed the pricing model against — bytes on the ingestion topic.
+//
+// BrowserBytes is the part of Bytes that came through the browser door, which
+// the plan's allowance budgets on its own (ADR 0097): a public site key is
+// printed in the customer's page, so anyone can spend the browser's share, and
+// the door keeps that spending out of the server's share only if the meter
+// records which door each byte came through.
 type Counts struct {
 	Spans        int64
 	Logs         int64
 	MetricPoints int64
 	Bytes        int64
+	BrowserBytes int64
 }
 
 // add folds one message's counts into a running total.
@@ -59,6 +66,7 @@ func (c *Counts) add(other Counts) {
 	c.Logs += other.Logs
 	c.MetricPoints += other.MetricPoints
 	c.Bytes += other.Bytes
+	c.BrowserBytes += other.BrowserBytes
 }
 
 // empty reports whether anything was counted, which is what lets a flush skip
@@ -235,7 +243,20 @@ func (s Signal) meter(message []byte) (*nexovuev1.Envelope, Metered, error) {
 	if err != nil {
 		return nil, Metered{}, consume.RejectedBy(envelope, err)
 	}
+	metered.BrowserBytes = browserBytesOf(envelope.GetDoor(), metered.Bytes)
 	return envelope, metered, nil
+}
+
+// browserBytesOf is how much of a message's payload the browser door's budget
+// is charged: all of it when the envelope names the browser door, none
+// otherwise. Every other entrance — the server door, the scheduler's doors, and
+// an envelope that names none — is the server's, because a byte the browser
+// door cannot spend is what the split protects (ADR 0097).
+func browserBytesOf(door nexovuev1.Door, payloadBytes int64) int64 {
+	if door == nexovuev1.Door_DOOR_RUM {
+		return payloadBytes
+	}
+	return 0
 }
 
 // countSpans counts the spans in one OTLP trace export, and the services they

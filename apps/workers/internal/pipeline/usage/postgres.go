@@ -108,14 +108,19 @@ const advanceOffsets = `
 // wedging the pipeline on one poisoned message; and matching org and project
 // together means a message claiming another organization's project writes
 // nothing, which is the tenant-isolation invariant enforced at the write.
+//
+// `browser_bytes` is the part of `bytes` that came through the browser door,
+// added beside it rather than instead of it, so `bytes` stays the whole month
+// the usage screen shows (ADR 0097).
 const addCounters = `
 	INSERT INTO usage_daily AS existing
-		(org_id, project_id, day, spans, logs, metric_points, bytes)
+		(org_id, project_id, day, spans, logs, metric_points, bytes, browser_bytes)
 	SELECT projects.org_id, projects.id, counted.day,
-	       counted.spans, counted.logs, counted.metric_points, counted.bytes
+	       counted.spans, counted.logs, counted.metric_points,
+	       counted.bytes, counted.browser_bytes
 	FROM unnest($1::text[], $2::text[], $3::date[],
-	            $4::bigint[], $5::bigint[], $6::bigint[], $7::bigint[])
-		AS counted(org_id, project_id, day, spans, logs, metric_points, bytes)
+	            $4::bigint[], $5::bigint[], $6::bigint[], $7::bigint[], $8::bigint[])
+		AS counted(org_id, project_id, day, spans, logs, metric_points, bytes, browser_bytes)
 	JOIN projects
 		ON projects.id::text = counted.project_id
 		AND projects.org_id::text = counted.org_id
@@ -123,7 +128,8 @@ const addCounters = `
 	SET spans         = existing.spans + excluded.spans,
 	    logs          = existing.logs + excluded.logs,
 	    metric_points = existing.metric_points + excluded.metric_points,
-	    bytes         = existing.bytes + excluded.bytes`
+	    bytes         = existing.bytes + excluded.bytes,
+	    browser_bytes = existing.browser_bytes + excluded.browser_bytes`
 
 // addServices records which services were billable on a day.
 //
@@ -278,7 +284,7 @@ func (s *PostgresStore) add(ctx context.Context, tx pgx.Tx, rows []Row) (int, er
 	columns := columnsOf(rows)
 	tag, err := tx.Exec(ctx, addCounters,
 		columns.orgIDs, columns.projectIDs, columns.days,
-		columns.spans, columns.logs, columns.metricPoints, columns.bytes)
+		columns.spans, columns.logs, columns.metricPoints, columns.bytes, columns.browserBytes)
 	if err != nil {
 		return 0, fmt.Errorf("add usage counters: %w", err)
 	}
@@ -311,6 +317,7 @@ type columns struct {
 	logs         []int64
 	metricPoints []int64
 	bytes        []int64
+	browserBytes []int64
 }
 
 func columnsOf(rows []Row) columns {
@@ -322,6 +329,7 @@ func columnsOf(rows []Row) columns {
 		logs:         make([]int64, 0, len(rows)),
 		metricPoints: make([]int64, 0, len(rows)),
 		bytes:        make([]int64, 0, len(rows)),
+		browserBytes: make([]int64, 0, len(rows)),
 	}
 	for _, row := range rows {
 		held.orgIDs = append(held.orgIDs, row.OrgID)
@@ -331,6 +339,7 @@ func columnsOf(rows []Row) columns {
 		held.logs = append(held.logs, row.Logs)
 		held.metricPoints = append(held.metricPoints, row.MetricPoints)
 		held.bytes = append(held.bytes, row.Bytes)
+		held.browserBytes = append(held.browserBytes, row.BrowserBytes)
 	}
 	return held
 }
