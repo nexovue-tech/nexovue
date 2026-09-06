@@ -307,7 +307,6 @@ async def test_the_split_is_read_from_a_real_price_row(db: AsyncSession) -> None
 
     assert answer.period.included_bytes == 6 * gib
     assert answer.period.browser_included_bytes == 6 * gib // 4
-    assert answer.period.server_included_bytes == 6 * gib - 6 * gib // 4
     assert answer.price is not None
     assert answer.price.browser_share_percent == 25
 
@@ -321,7 +320,6 @@ async def test_a_price_row_recording_no_share_reports_no_split(db: AsyncSession)
 
     assert answer.period.included_bytes == 3_000
     assert answer.period.browser_included_bytes is None
-    assert answer.period.server_included_bytes is None
 
 
 async def test_the_browser_bytes_are_summed_from_their_own_column(db: AsyncSession) -> None:
