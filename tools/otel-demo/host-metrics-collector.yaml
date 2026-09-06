@@ -1,0 +1,78 @@
+# Door 1's missing half: the machine the demo runs on.
+#
+# **This file is ours, not a patched copy of an upstream one.** The other two
+# configs beside it are copies of files in the pinned clone and carry a "re-check
+# this against the clone when UPSTREAM_REF moves" note. This one has no clone
+# original — upstream has no host-metrics collector, because upstream's collector
+# is a backend and we dropped it for that reason. Do not go looking for a
+# original to diff against.
+#
+# Every demo service reports its own spans, logs and metrics. Not one of them can
+# report the host they share, so the Infrastructure screen has been empty through
+# every run of this demo — `conventions.py` records the previous run landing
+# `system.*` metrics from somewhere but "No resource carried a `host.name`".
+#
+# What this collector is *not*: a hop for anyone else's telemetry. Every demo
+# service still exports straight to our receiver. This one only scrapes and
+# exports its own readings.
+
+receivers:
+  host_metrics:
+    # The host's /proc and /sys, bind-mounted in compose.nexovue.yaml. Without
+    # root_path the scrapers read this container's own namespaces and report the
+    # collector's view of itself as though it were the machine.
+    root_path: /hostfs
+    collection_interval: 30s
+    scrapers:
+      cpu:
+        metrics:
+          # Off by default, and it is the one the Infrastructure screen reads.
+          # The scraper's own default is `system.cpu.time`, a name we do not read
+          # at all, so a collector left at defaults sends nothing usable.
+          system.cpu.utilization:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
+          system.memory.limit:
+            enabled: true
+      disk:
+      network:
+      # Needs the filesystems themselves, not just /proc: it reads the mount
+      # table and then stats each mount point. With only /proc and /sys mounted
+      # it found the table and failed every stat — "failed to read usage at
+      # /hostfs/oldroot". The root bind mount in compose.nexovue.yaml is what
+      # makes this scraper work at all.
+      filesystem:
+
+processors:
+  resource:
+    attributes:
+      # A node is identified by `host.name`, else `container.name`, else the
+      # process that reported it (ADR 0082). Falling through to the third costs
+      # an over-counted inventory, and every reading this store has ever held
+      # fell through — the collector does not invent a name, so it is set here.
+      - key: host.name
+        value: ${env:NEXOVUE_DEMO_HOST_NAME}
+        action: upsert
+  batch:
+
+exporters:
+  otlp_http:
+    # The exporter appends /v1/metrics itself.
+    endpoint: ${env:NEXOVUE_OTLP_HTTP_URL}
+    headers:
+      x-nexovue-key: ${env:NEXOVUE_INGEST_KEY}
+
+service:
+  pipelines:
+    metrics:
+      receivers: [host_metrics]
+      processors: [resource, batch]
+      exporters: [otlp_http]
+  telemetry:
+    # The collector's own internal metrics are not host metrics. Sending them
+    # would put dozens of names into a store whose screen reads exactly thirteen.
+    metrics:
+      level: none

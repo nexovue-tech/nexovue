@@ -18,6 +18,40 @@
 # this file; each says what it changed and against which tag.
 
 services:
+  # The one container here that is ours, and the only one that is a *producer*
+  # rather than one of upstream's services.
+  #
+  # Not upstream's `otel-collector`, which is still dropped and should stay
+  # dropped — we are the backend, and nothing routes through this. It scrapes the
+  # machine every demo container shares and exports the readings, because no
+  # application service can report the host it runs on and the Infrastructure
+  # screen has therefore been empty through every run of this demo.
+  #
+  # Same image as upstream's collector, referenced by upstream's own variable, so
+  # there is one collector version in play rather than two.
+  host-metrics:
+    image: ${COLLECTOR_CONTRIB_IMAGE:?set by the demo's own .env}
+    container_name: host-metrics
+    command: ["--config=/etc/otelcol/host-metrics.yaml"]
+    environment:
+      - NEXOVUE_INGEST_KEY=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
+      - NEXOVUE_OTLP_HTTP_URL=http://${OTEL_COLLECTOR_HOST}:${OTEL_COLLECTOR_PORT_HTTP}
+      # Says what it is. On Docker Desktop this is the Linux VM the containers
+      # share, not the laptop, and the name should not pretend otherwise.
+      - NEXOVUE_DEMO_HOST_NAME=${NEXOVUE_DEMO_HOST_NAME:-otel-demo-host}
+    volumes:
+      - ${NEXOVUE_OVERLAY_DIR:?set by otel-demo.sh}/host-metrics-collector.yaml:/etc/otelcol/host-metrics.yaml:ro
+      # Read-only, and the only reason this container exists. The root mount is
+      # for the filesystem scraper, which stats each mount point it finds in
+      # /proc and fails every one of them without it.
+      - /:/hostfs:ro
+      - /proc:/hostfs/proc:ro
+      - /sys:/hostfs/sys:ro
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+
   ad:
     environment: &nexovue-key
       - OTEL_EXPORTER_OTLP_HEADERS=x-nexovue-key=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}

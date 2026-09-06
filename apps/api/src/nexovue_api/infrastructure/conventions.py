@@ -22,13 +22,27 @@ OpenTelemetry Demo run (P1-62) landed genuine host metrics under project
 `system.memory.usage`, `system.memory.utilization`, `system.disk.io` and
 `system.network.io`. Their attributes are `{"cpu": 3, "state": "idle"}`,
 `{"state": "used"}` and `{"device": …, "direction": …}` — the flat spellings.
-No resource carried a `host.name`; re-checked 2026-09-01 and still none does,
-so those readings are identified by the process that reported them instead
-(`queries.py`, "Node identity").
+No resource carried a `host.name`; re-checked 2026-09-01 and still none did, so
+those readings were identified by the process that reported them instead
+(`queries.py`, "Node identity"). **That changed on 2026-09-06**: the demo now
+runs a host-metrics collector of its own
+(`tools/otel-demo/host-metrics-collector.yaml`) which sets `host.name`, and both
+identities are visible side by side — a real host row, and the
+`recommendation` service still falling through to reporter identity because the
+Python SDK's instrumentation names no host. The fallback is not a bug and the
+screen says so.
 
-**No filesystem reading has ever arrived**, re-checked 2026-09-01, and the
-reason is the producer rather than the store: the Python `SystemMetricsInstrumentor`
-carries a `# TODO Add _get_system_filesystem_usage` where that scraper would be.
+**No filesystem reading had ever arrived** either, and the reason was the
+producer rather than the store: the Python `SystemMetricsInstrumentor` carries a
+`# TODO Add _get_system_filesystem_usage` where that scraper would be. The
+collector above has one, so `system.filesystem.usage` now arrives — it needs the
+filesystems themselves bind-mounted, not only `/proc`, or every `statfs` fails.
+
+Seven of the thirteen names below now arrive from that collector:
+`system.cpu.utilization`, `system.memory.usage`, `system.memory.limit`,
+`system.memory.utilization`, `system.filesystem.usage`, `system.disk.io` and
+`system.network.io`. `system.filesystem.limit` is not one the scraper emits, and
+the five `container.*` names still have no producer at all.
 The Collector's `filesystemscraper` does send it, which is why `independence.py`
 still has to deduplicate its mountpoints unverified against live rows.
 

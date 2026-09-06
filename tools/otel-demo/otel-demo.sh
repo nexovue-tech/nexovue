@@ -62,6 +62,9 @@ export NEXOVUE_OVERLAY_DIR
 # it, for a run on a machine that cannot spare the extra ~800 MB.
 : "${NEXOVUE_OTEL_DEMO_SCOPE:=full}"
 
+# Ours, and first. It depends on nothing demo-side, so a misconfiguration should
+# surface in seconds rather than after four minutes of application startup.
+readonly WAVE_HOST_METRICS=(host-metrics)
 readonly WAVE_BACKING=(flagd valkey-cart astronomy-db)
 readonly WAVE_SERVICES=(product-catalog quote currency shipping email payment recommendation ad cart checkout image-provider)
 readonly WAVE_EDGE=(frontend frontend-proxy)
@@ -143,6 +146,8 @@ cmd_up() {
     fetch_upstream
     require_receiver
     report_headroom
+
+    start_wave "host metrics" "${WAVE_HOST_METRICS[@]}"
 
     start_wave "backing stores" "${WAVE_BACKING[@]}"
     wait_for_settle 15
