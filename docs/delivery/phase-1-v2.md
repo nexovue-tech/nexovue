@@ -132,12 +132,82 @@ extra lookup and inherits the cache TTL that already exists. Postgres column, re
 refused with its own reason and its own counter — the shape `377a9c5` already established for
 deletion.
 
+### G7 · A customer can actually obtain the browser SDK · *open-decisions §1d*
+
+`packages/browser-sdk` is the product for door 3 — the script a customer pastes into their page —
+and **there is nowhere to paste it from.** `dist/` is gitignored and built by hand; nothing
+publishes it; no CDN exists; `docs/architecture/technology-choices.md` mentions a CDN exactly once
+and only to say fonts are *not* loaded from one.
+
+So door 3 works end to end in the demo, where the collector mounts the bundle off the local
+filesystem, and is uninstallable for anybody else. That is a launch blocker in the plainest sense:
+**P1-54's setup guide cannot be written, because the `<script src=…>` line has no URL to contain.**
+
+§1d holds the four questions with the research behind them. Only the second is a decision rather
+than a task:
+
+1. **Where the file lives** — object storage as origin, a CDN in front. Blocked on the deployment
+   target being settled, and no earlier.
+2. **The version path scheme, and what the pasted snippet defaults to.** A single unversioned URL
+   forces a choice between a cache worth having and a fix that reaches customers this year. The
+   escape both comparable products take is a versioned immutable URL. **What the snippet defaults
+   to is the real decision**: pin, and a fix we ship reaches nobody without the customer editing
+   their HTML; do not pin, and a bad release reaches everyone at once.
+3. **Whether we publish SRI hashes** — and note `integrity` and auto-updating are mutually
+   exclusive, so offering both and letting the customer choose is the shape that works.
+4. **What publishes `dist/`** — small, and blocked on the three above.
+
+**One constraint already settled and easy to lose:** the CDN must send
+`Access-Control-Allow-Origin`. A cross-origin script that throws is replaced by the browser with
+the bare string `Script error.`, so an error-reporting SDK that cannot read errors is the *default*
+outcome, not the failure case. A CDN that cannot set that header is disqualified, not inconvenient.
+
+### G6 · A paid plan's failure mode must not be an unbounded bill on us · *open-decisions §1b*
+
+**This is the item most easily missed, because it looks like a pricing question and is a financial
+one.** Verified against the live `plan_prices` table today:
+
+```
+free   0        2 GiB    max_billed_services 3      browser_share 25
+pro    600      10 GiB   max_billed_services NULL   browser_share NULL
+scale  500      25 GiB   max_billed_services NULL   browser_share NULL
+enterprise — no row at all
+```
+
+`allowance/postgres.go` reads NULL as **not enforced**, and its comment gives the right reason:
+that line *"keeps a customer who pays from ever being refused for volume"*. Good — but it means the
+same stolen-site-key attack has two different victims:
+
+| Plan | A scraped site key does |
+|---|---|
+| free | burns the allowance, customer goes blind — **operational** harm, closed by ADR 0097 |
+| paid | nothing stops it — **unbounded ingest on our cost**, and it cannot be billed back |
+
+It cannot be billed back because that was never settled. Migration 0015 says so itself: ADR 0056
+states both that we block above the allowance *and* that overage stays live and bills — two
+different products — and nothing resolved it.
+
+**You cannot sell a plan whose worst case is an unbounded bill landing on you.** Three decisions,
+and only the first is safe to take now:
+
+1. **Do paid tiers get a browser cap?** §1b recommends yes and it is the only thing between a
+   scraped key and an unbounded bill. A cap works on an unlimited plan where a partition cannot —
+   a lid on one tap needs no limit on the tank — and the guarantee that a paying customer's servers
+   are never refused is untouched. **Take this one.**
+2. **What number?** Free is 25% of a 6 GiB pool; paid has no pool. §1b is explicit that no usage
+   data exists and it must not be invented — the honest earliest moment is after P1-47 ships and
+   real RUM traffic has been seen. **Blocked on data, and correctly so.**
+3. **Block or bill on overage.** ADR 0056's contradiction, now load-bearing because everything
+   above assumes paid tiers stay unenforced. **This is a product decision that gates P1-74**, since
+   a plan-change screen has to say what happens when you exceed it.
+
 ---
 
 ## 2. The commercial layer — required for revenue, not for correctness
 
 M8 in the plan. **Everything here is gated on G2**, because verification and invoices both need
-mail.
+mail — and P1-74 is additionally gated on G6.3, because a plan-change screen cannot be
+built before someone decides what exceeding a plan does.
 
 ### The payment decision, researched
 
@@ -244,6 +314,59 @@ class as the two green-but-empty results CLAUDE.md rule 12 was written from.
 
 ---
 
+## 4a. Carried forward from the plan's own follow-up sections
+
+`phase-1-plan.md` §7c and §7d hold follow-ups that never became rows. Most are struck through as
+resolved. These are not, and two of them matter here.
+
+**The receiver's rate limiter fails open when Valkey is unreachable.** Deliberate, and the
+reasoning is sound today: losing telemetry costs more than briefly losing the limit, with body caps
+and the broker still bounding damage. The plan's own note says it is *"worth revisiting once a
+paying tenant can be harmed by it"* — which is precisely the moment M8 arrives. **It belongs in the
+same decision as G6**, because both are about what happens when a paid tenant's traffic is
+unbounded.
+
+**No profile endpoint on the receiver.** Already named in §3 as what blocks the re-encode budget.
+Recorded here too because §7c calls it permanent rather than pending, and it is neither — it is one
+decision about who may reach the admin port.
+
+**Two mobile UX items** — the waterfall hides the `detached` and `skew` tags for want of room, and
+the span-detail sheet is a fixed 55dvh with no drag-to-resize. Neither loses information; both are
+cramped. Not gate items, and worth doing whenever those screens are open anyway.
+
+**The `ALTER TABLE spans DELETE` cascade gap** appears in §7c as a trace-detail correctness note
+and again under P1-77 as a deletion obligation. It is one defect with two consequences, and §2's
+scoping note is where it should be solved.
+
+## 4c. The other open decisions, and why they are not gates
+
+Three of open-decisions' Part 1 sections are deliberately *not* in the gate above, and each has a
+reason rather than an oversight:
+
+- **§1c** collects the decisions raised and not made — `url.full` carrying the query string and
+  fragment, migration 0016's `_EFFECTIVE_FROM`, the counter residual at the shipped sampling
+  window, the probe's throwaway org, and what sample revises the 25% split. **The one worth pulling
+  forward is `url.full`**, not because it breaks anything but because it is the answer to a
+  security questionnaire, and it is the same key-versus-value gap [ADR 0101](../architecture/decisions/0101-spans-carry-query-text-and-the-database-poller-does-not.md)
+  just settled for `db.query.text`. Cheap to decide, expensive to be asked cold.
+- **§1e** — what we accept at the front door — already recommends adding nothing until Phase 1
+  closes, for the ordering reason this whole file argues. It becomes live *after* Phase 2 scoping,
+  not before.
+- **§1f** — which container producer we support, and whether the Infrastructure list becomes a
+  tree. Not a gate: the screen fills from host and container metrics today, and the tree question
+  cannot be observed until the producer is chosen.
+
+## 4b. Two categories with no home in any phase
+
+§8 of the plan records these and nothing has moved them:
+
+- **Network monitoring (category 10)** needs eBPF kernel agents, which contradicts the standing
+  decision not to build collection agents. Parked.
+- **SIEM / security (category 11)** is *"evaluate later"* in the vision doc and appears in no plan.
+
+**Neither blocks Phase 2**, but both should be answered *before* Phase 2 scoping rather than during
+it, because "no home in any phase" is how a category quietly becomes a commitment nobody made.
+
 ## 5. The order I would actually take
 
 **Now — the safety gate.** G3 and G4 first: both are small, both are open holes, and G3 is an SSRF
@@ -253,14 +376,21 @@ possible at all.
 **Next — the account gate.** G2, and P1-70/71 behind it. This is the largest block of work in the
 list and the one whose absence is invisible until a customer is locked out.
 
-**Then — the commercial layer.** P1-73 and the rows behind it.
+**Then — the commercial layer.** G6.1's paid-tier browser cap first, because it is small and it is
+the only thing between a scraped key and a bill we cannot pass on. Then P1-73 and the rows behind
+it. G6.3 — block or bill on overage — has to be answered before P1-74, and G6.2's number is
+correctly blocked on real RUM traffic, so it waits for P1-47.
 
 **Then — the measurements.** G5, the four blank budgets, pprof on the receiver, and finally P1-50's
 soak, which is the last thing before Phase 2 because it exercises everything the rest of this list
 just changed.
 
+**Alongside the account gate, because it blocks the same documentation:** G7's SDK distribution.
+P1-54 cannot write door 3's setup guide until the script tag has a URL, and the version-default
+question inside it is a decision rather than a task.
+
 **In parallel, whenever a screen is being touched anyway:** P1-47's breakdowns, P1-54's remaining
-docs, and the Tier 2 corrections.
+docs, §1c's `url.full` question, and the Tier 2 corrections.
 
 **Deliberately not before Phase 2:** P1-57's cold tier (real but not a launch blocker at small
 scale), P1-68's retention downgrade path (the plan already records it as not a one-way door, and
@@ -272,7 +402,8 @@ self-instrumentation, which §7a already defers until the platform runs somewher
 ## 6. What "ready for Phase 2" means, stated as a test
 
 A stranger can sign up, prove they own the address, recover a lost password, connect a service over
-TLS, see their data, be charged for it, change plan, and leave — and the platform survives a
+TLS *and paste a script tag that resolves*, see their data, be charged for it on a plan whose
+overage behaviour is decided, change plan, and leave — and the platform survives a
 24-hour soak with a per-tenant stop valve, no unguarded egress surface, and every §4 budget carrying
 a number somebody watched.
 
