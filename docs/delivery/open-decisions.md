@@ -384,6 +384,102 @@ Then, in this order:
 
 ---
 
+## 1f. Which container producer we support, and what shape the screen takes
+
+Two questions, and the second is the one that changes the work. The first is
+already flagged as open inside `conventions.py` — *"which producer we intend to
+support is an open decision"* — where nobody looking for a decision would find
+it. **A decision recorded only in a source comment is not recorded.**
+
+### Question one: five names in the contract have no producer
+
+`INFRASTRUCTURE_METRIC_NAMES` holds thirteen names. Seven arrive from the demo's
+host-metrics collector. `system.filesystem.limit` is not one the scraper emits.
+The five `container.*` names have never had a producer, and reading what the two
+candidate receivers actually emit makes the choice concrete rather than
+stylistic.
+
+**`docker_stats` matches none of the five.** Not spelling — different
+quantities:
+
+| Our contract | What `dockerstats` sends |
+|---|---|
+| `container.cpu.usage` (cores, gauge) | `container.cpu.usage.total` (ns, cumulative) and `container.cpu.utilization` (%) |
+| `container.memory.usage` | `container.memory.usage.total` |
+| `container.memory.available` | `container.memory.usage.limit` |
+| `container.disk.io` | `container.blockio.io_service_bytes_recursive` |
+| `container.network.io` | `container.network.io.usage.rx_bytes` / `tx_bytes` |
+
+Every one of its metrics is still at **Development stability**, so the names can
+move again.
+
+**`kubeletstats` matches three of the five by default** — `container.cpu.usage`,
+`container.memory.usage` and `container.memory.available` — and not
+`container.disk.io` or `container.network.io`, whose nearest equivalents are
+`k8s.pod.network.io`. So **the names in our contract are Kubernetes-shaped**,
+which is not what anyone assumed when they were written from the specification.
+The awkward part is that `conventions.py` also says Kubernetes pod and node
+views are Phase 2 and deliberately absent: the producer that fits our contract
+is the one we deferred.
+
+**What stays refused:** renaming a producer's metrics into our names at ingest.
+`container.cpu.utilization` is a percentage and `container.cpu.usage` is cores;
+writing one into the other's column puts a fabricated number in the store and
+makes the screen look right while being wrong. Supporting Docker means **adding
+its real names to the contract**, which is honest, not aliasing, which is not.
+
+### Question two: the screen is a flat list, and containers break it
+
+Raised by Raj: today the screen is per host, and if container or pod metrics
+arrive we would want a total *and* a per-container, per-pod or per-node
+breakdown. That is right, and the model is half-ready for it.
+
+**What already works.** ADR 0082's identity ladder is `host.name`, else
+`container.name`, else the reporting process, and `queries.py` states the
+principle this rests on — *"presentation can aggregate upward where it can never
+recover discarded detail"*. `NodeSummary` already carries `kind` (host,
+container, reporter) **and both `host` and `container` strings**, with the
+schema noting that *"a container running under a collector that sets both
+carries both"*. So the parent link is present in data the API already returns
+whenever the customer's collector sets `host.name` — `dockerstats` sets only the
+`container.*` resource attributes, so this needs a `resource` or
+`resourcedetection` processor, exactly as our own demo collector does.
+
+**What does not work, and it is not a missing feature but a wrong sum.**
+`NodeListResponse` is a flat `list[NodeSummary]` with no nesting and no fleet
+total. Land container metrics on it today and a host and the ten containers
+inside it become eleven sibling rows. Any total across them **double-counts**:
+the host's 8 GB already contains the containers' 6 GB. A fleet total is
+therefore not a `sum()` over the list — it is a sum over one level of a
+hierarchy that does not exist yet.
+
+So the decision has three parts:
+
+- **Does the list become a tree**, or stay flat with a filter by `kind`?
+- **What is a total the total of** — hosts only, containers only, or a chosen
+  level? Whatever is chosen has to be stated on the screen, because a number
+  that silently sums two levels is worse than no number.
+- **What happens to a container whose collector never set `host.name`.** It has
+  no parent, and inventing one is the same error as inventing a metric name.
+
+### Recommendation
+
+**Pick one producer and make the contract match it, before touching the
+screen.** A hierarchy over five names nothing emits is work with no way to know
+it is right. `kubeletstats` is the cheaper half — three of five fill with no
+code — but it needs the Phase 2 Kubernetes deferral revisited; `dockerstats`
+needs five new names in the contract and is the case a developer can actually
+run today.
+
+Then the screen, and **flat with a `kind` filter first**, not a tree. It is a
+smaller change, it is honest about what it shows, and the double-counting
+question has to be answered either way. The tree can come with F20.
+
+Not urgent on either count: nothing here blocks a paying customer, and the
+Infrastructure screen fills from host metrics today.
+
+---
+
 # Part 2 — Findings backlog
 
 All of these were **demonstrated** — an agent ran something that showed them —

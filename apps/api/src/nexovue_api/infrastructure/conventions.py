@@ -52,8 +52,10 @@ still has to deduplicate its mountpoints unverified against live rows.
 `container.network.io.usage.*`, which are different metrics rather than
 different spellings. The names below are the specification's, no container
 metric has ever reached our store, and which producer we intend to support is an
-open decision. They are kept because they are the spec's and cost nothing to
-read; they should not be trusted until a container actually reports.
+open decision — held in `docs/delivery/open-decisions.md` §1f with what each
+receiver actually emits, rather than only here. They are kept because they are
+the spec's and cost nothing to read; they should not be trusted until a
+container actually reports.
 
 Kubernetes pod and node views are Phase 2 and deliberately absent.
 """
