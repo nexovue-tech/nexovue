@@ -189,6 +189,27 @@ untouched.
 - **Exposing browser synthetic checks to customers.** Recommended per
   deployment, not per feature: safe once ADR 0096's proxy change is committed;
   unsafe on any deployment running the proxy-less code.
+- **`db.query.text` is stored on spans while the poller refuses to send it.**
+  Door 4b sends `db.query.hash` and never `query`, on the stated grounds that
+  *"a query built by string concatenation carries its parameters — customer data
+  — into that column."* Door 1 stores the text: a span read out of the demo's
+  own store carries
+  `db.query.text: "INSERT INTO accounting.\"order\" (order_id) VALUES (@p0)…"`.
+  That one is parameterised, which is the .NET SDK's choice and not a guarantee —
+  another SDK, or concatenated SQL, puts the values there. Masking does not close
+  it: `credential_keys` matches the attribute *key*, and `db.query.text` contains
+  none of password/secret/token, so only a Luhn-passing number or a `Bearer`
+  credential inside the SQL would be caught. Every APM stores query text, so this
+  is a position rather than a defect — but it is a position two doors currently
+  disagree on, and it is better decided than found by a customer's security
+  review. Related: [[url.full]] above, which is the same key-versus-value gap.
+- **The poller's real reach is not said anywhere a customer can see it.**
+  `postgres_connect.py` accepts `rds_iam` only and `postgres_stats.py` emits one
+  `db.system.name`, so the connector reaches AWS RDS PostgreSQL with IAM auth and
+  nothing else. A customer with self-hosted Postgres connects an integration and
+  gets an error message. ADR 0100 gives them a working route; the product still
+  does not point at it. The smallest fix in this area and the one with the most
+  visible payoff.
 - **Whether `url.full` should be truncated when `captureUrlQuery` is off.**
   `captureUrlQuery` defaults to false and its comment gives the right reason —
   *"masking matches attribute keys, not values, so a token in a query string

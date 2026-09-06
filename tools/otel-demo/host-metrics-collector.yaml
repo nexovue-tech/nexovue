@@ -46,15 +46,77 @@ receivers:
       # makes this scraper work at all.
       filesystem:
 
-  # Deliberately left at its defaults, because this is a measurement and not a
-  # configuration: open-decisions.md §1f records that no container metric has
-  # ever reached our store and that the five `container.*` names our
-  # Infrastructure screen reads may have no producer. Enabling a curated list
-  # here would answer the question we are asking. What lands is what
-  # `docker_stats` sends unprompted, against 21 real containers.
+  # Left at its defaults. It was first turned on to measure what this receiver
+  # actually emits — none of the five `container.*` names the Infrastructure
+  # screen was written against, which is recorded in open-decisions.md §1f and
+  # fixed by that screen now reading Docker's spellings too. Curating a metric
+  # list here would only hide the next such mismatch.
   docker_stats:
     endpoint: unix:///var/run/docker.sock
     collection_interval: 30s
+
+  # Door 4b's query-level reads, produced by the *customer's* collector rather
+  # than by our poller. This is the route ADR 0076 leaves open: it refuses to
+  # store a self-hosted database's password, and here nobody has to — the
+  # credential lives in this file, on the customer's side, and never reaches us.
+  # `sqlquery` speaks PostgreSQL, MySQL, Oracle, SQL Server and ClickHouse, so
+  # one shape covers engines our own poller does not.
+  #
+  # **Every name below is a contract, not a choice.** The metric names, units and
+  # attribute keys are what `apps/api/.../dbstats/queries.py` reads. The column
+  # aliases are quoted so they *are* the attribute keys — `sqlquery` names an
+  # attribute after its column, so `AS "db.query.hash"` is what puts the value
+  # where the Database screen looks. Change one and the screen empties.
+  sqlquery/astronomy:
+    driver: postgres
+    datasource: "host=astronomy-db port=5432 user=postgres password=${env:NEXOVUE_DEMO_DB_PASSWORD} database=astronomy_db sslmode=disable"
+    collection_interval: 30s
+    queries:
+      # Mean execution time per normalized statement. `calls` rides along as an
+      # attribute rather than as its own metric, for the reason `envelope.py`
+      # gives: 300ms across four calls is noise, across ninety thousand it is an
+      # incident. Milliseconds are divided down because the contract is seconds.
+      #
+      # The statement TEXT is never selected. `pg_stat_statements` does not
+      # always strip literals — a query built by concatenation carries its
+      # parameters into `query` — so the hash identifies it and the customer
+      # matches it back in their own database.
+      - sql: >
+          SELECT statements.queryid::text AS "db.query.hash",
+                 databases.datname AS "db.namespace",
+                 statements.calls::text AS "db.client.operation.calls",
+                 (statements.mean_exec_time / 1000.0) AS mean_seconds
+          FROM pg_stat_statements AS statements
+          JOIN pg_database AS databases ON databases.oid = statements.dbid
+          WHERE statements.queryid IS NOT NULL
+          ORDER BY statements.total_exec_time DESC
+          LIMIT 100
+        metrics:
+          - metric_name: db.client.operation.duration
+            value_column: mean_seconds
+            unit: s
+            value_type: double
+            data_type: gauge
+            attribute_columns:
+              ["db.query.hash", "db.namespace", "db.client.operation.calls"]
+            static_attributes:
+              db.system.name: postgresql
+      # Backends by state. Needs no extension, so it fills half the screen even
+      # where `pg_stat_statements` is unavailable — which is why the screen asks
+      # the two questions separately.
+      - sql: >
+          SELECT COALESCE(state, 'unknown') AS "db.client.connection.state",
+                 count(*)::text AS backends
+          FROM pg_stat_activity
+          WHERE state IS NOT NULL
+          GROUP BY state
+        metrics:
+          - metric_name: db.client.connection.count
+            value_column: backends
+            unit: "{connection}"
+            value_type: int
+            data_type: gauge
+            attribute_columns: ["db.client.connection.state"]
 
 processors:
   resource:
@@ -66,6 +128,45 @@ processors:
       - key: host.name
         value: ${env:NEXOVUE_DEMO_HOST_NAME}
         action: upsert
+  # `docker_stats` has no notion of a project: it reads the daemon, so it reports
+  # every container on the machine. On a developer's laptop that means nexovue's
+  # own thirteen containers arrive beside the demo's, and `nexovue-clickhouse-1`
+  # appears on a screen meant to show a customer's application. Dropped here
+  # rather than tolerated, because the demo's whole job is to look like a
+  # customer's environment.
+  #
+  # By `container.name` and not the receiver's own `excluded_images`, which
+  # matches image names only — ours are built as `nexovue-api`, `nexovue-web` and
+  # the rest, but the infrastructure beside them is `postgres`, `valkey/valkey`
+  # and `clickhouse/clickhouse-server`, so an image list would be long, and wrong
+  # the moment one changes.
+  #
+  # **A customer needs this too.** Anyone enabling `docker_stats` on a shared
+  # host sends us every container running there, including ones belonging to
+  # something else entirely. Whatever we document should carry a filter like
+  # this one.
+  filter/only_the_demo:
+    error_mode: ignore
+    metrics:
+      metric:
+        - 'IsMatch(resource.attributes["container.name"], "^nexovue-")'
+
+  # `server.address` and `server.port` are resource attributes in the contract —
+  # `dbstats/queries.py` reads them from `resource_attrs`, not from the point —
+  # and `sqlquery` sets neither. Its own processor, because the host pipeline's
+  # readings are not about a database server.
+  resource/database:
+    attributes:
+      - key: server.address
+        value: astronomy-db
+        action: upsert
+      - key: server.port
+        value: 5432
+        action: upsert
+      - key: service.name
+        value: otel-demo-database
+        action: upsert
+
   batch:
 
 exporters:
@@ -85,7 +186,16 @@ service:
       # `host` and `container`, and the parent link is only real if a producer
       # sends both on one resource.
       receivers: [host_metrics, docker_stats]
-      processors: [resource, batch]
+      # `filter` before `resource`: no point stamping `host.name` on a reading
+      # that is about to be dropped.
+      processors: [filter/only_the_demo, resource, batch]
+      exporters: [otlp_http]
+    # Separate from the host pipeline: these readings describe a database
+    # server, so they must not pass through the filter and the `host.name`
+    # stamp that the container readings need.
+    metrics/database:
+      receivers: [sqlquery/astronomy]
+      processors: [resource/database, batch]
       exporters: [otlp_http]
   telemetry:
     # The collector's own internal metrics are not host metrics. Sending them

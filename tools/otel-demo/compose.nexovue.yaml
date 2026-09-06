@@ -39,6 +39,11 @@ services:
       # Says what it is. On Docker Desktop this is the Linux VM the containers
       # share, not the laptop, and the name should not pretend otherwise.
       - NEXOVUE_DEMO_HOST_NAME=${NEXOVUE_DEMO_HOST_NAME:-otel-demo-host}
+      # The demo's own Postgres password, from its .env. Passed rather than
+      # written into the collector config, because the whole point of the
+      # sqlquery route is that a database credential stays on the customer's
+      # side — and a config file in git is not that.
+      - NEXOVUE_DEMO_DB_PASSWORD=${POSTGRES_PASSWORD:?set by the demo's own .env}
     volumes:
       - ${NEXOVUE_OVERLAY_DIR:?set by otel-demo.sh}/host-metrics-collector.yaml:/etc/otelcol/host-metrics.yaml:ro
       # Read-only, and the only reason this container exists. The root mount is
