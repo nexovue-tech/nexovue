@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.integrations import queries, service
 from nexovue_api.integrations.schemas import CreateIntegrationRequest
 
@@ -88,6 +89,67 @@ def test_the_request_has_no_field_for_an_external_id() -> None:
         }
     )
     assert not hasattr(request, "external_id")
+
+
+def test_a_self_hosted_postgres_connector_is_refused_at_creation() -> None:
+    """The refusal has to happen here, not at the first poll.
+
+    Without it the API answers 201 and the scheduler discovers a minute later
+    that it cannot authenticate, so the customer sees success and then a
+    `failing` row somewhere else, with nothing at the point of the mistake
+    saying what was wrong.
+    """
+    request = CreateIntegrationRequest.model_validate(
+        {
+            "project_id": str(PROJECT_ID),
+            "kind": "postgres",
+            "config": {
+                "host": "db.internal",
+                "database": "orders",
+                "user": "monitor",
+                "auth": "password",
+            },
+        }
+    )
+    with pytest.raises(InvalidRequestError) as refusal:
+        service._refuse_unsupported_target(request)
+
+    message = str(refusal.value)
+    # Both halves, because a refusal that only says "no" sends a customer away
+    # for nothing when ADR 0100 gives them a route that works.
+    assert "IAM" in message, "the refusal must say what IS supported"
+    assert "Collector" in message, "the refusal must name the route that works"
+
+
+def test_an_rds_iam_connector_is_accepted_and_so_is_omitting_the_mode() -> None:
+    """`rds_iam` is the default, so a config that names no `auth` is the ordinary
+    case and must not be refused by the check that exists for the other one."""
+    for config in (
+        {"host": "x.rds.amazonaws.com", "database": "orders", "user": "monitor"},
+        {
+            "host": "x.rds.amazonaws.com",
+            "database": "orders",
+            "user": "monitor",
+            "auth": "rds_iam",
+        },
+    ):
+        request = CreateIntegrationRequest.model_validate(
+            {"project_id": str(PROJECT_ID), "kind": "postgres", "config": config}
+        )
+        service._refuse_unsupported_target(request)
+
+
+def test_a_cloudwatch_connector_is_not_judged_by_the_postgres_rule() -> None:
+    """It has one auth mode and no way to ask for another, so the check must not
+    reach it — an `auth` key there means nothing and must not refuse the row."""
+    request = CreateIntegrationRequest.model_validate(
+        {
+            "project_id": str(PROJECT_ID),
+            "kind": "cloudwatch",
+            "config": {"role_arn": "arn:aws:iam::123456789012:role/nexovue", "auth": "password"},
+        }
+    )
+    service._refuse_unsupported_target(request)
 
 
 def test_the_trust_policy_condition_names_the_generated_id() -> None:

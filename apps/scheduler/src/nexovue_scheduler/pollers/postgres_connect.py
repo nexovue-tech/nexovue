@@ -57,11 +57,17 @@ class DatabaseTarget:
                 f"{self.host}: IAM database authentication needs a role to assume"
             )
         if self.auth == AUTH_PASSWORD:
+            # Reachable only by a connector created before the API began refusing
+            # this, so it is phrased for whoever reads the row's `last_error` —
+            # which is a customer. No ADR number: that is a document they cannot
+            # read, and since ADR 0100 "not implemented" is the wrong answer
+            # anyway, because their own collector can send the same data.
             raise DatabaseAuthError(
-                f"{self.host}: password authentication for self-hosted Postgres is "
-                "not implemented — this system stores no customer database "
-                "passwords (ADR 0076). Use an RDS instance with IAM database "
-                "authentication enabled."
+                f"{self.host}: this connector reads AWS RDS PostgreSQL with IAM "
+                "database authentication, which is why it needs no password. For a "
+                "database anywhere else, your own OpenTelemetry Collector can send "
+                "the same data without a credential leaving your network — see the "
+                "'Connecting a database' guide."
             )
         if self.auth != AUTH_RDS_IAM:
             raise DatabaseAuthError(f"{self.host}: unknown auth mode {self.auth!r}")

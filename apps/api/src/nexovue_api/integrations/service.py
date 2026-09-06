@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
 from nexovue_api.data.postgres.models import Integration
-from nexovue_api.errors.exceptions import NotFoundError
+from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
 from nexovue_api.integrations import queries
 from nexovue_api.integrations.schemas import (
     CreatedIntegrationResponse,
@@ -34,6 +34,10 @@ from nexovue_api.projects import service as projects
 # the same value is recorded here rather than hidden as a literal at the call.
 STATUS_ACTIVE: Final = "active"
 
+# The `kind` whose config this module validates. The other kind, cloudwatch,
+# needs no auth check: it has one auth mode and no way to ask for another.
+KIND_POSTGRES: Final = "postgres"
+
 
 async def list_for_project(
     session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
@@ -41,6 +45,41 @@ async def list_for_project(
     await projects.require_project(session, org_id=org_id, project_id=project_id)
     rows = await queries.list_integrations(session, org_id=org_id, project_id=project_id)
     return IntegrationListResponse(integrations=[_summary(row) for row in rows])
+
+
+# The one auth mode `nexovue_scheduler.pollers.postgres_connect` accepts. Restated
+# here rather than imported, for the reason the scheduler restates the API's
+# column names: the two deploy separately, and an API that cannot start because a
+# scheduler package moved is an API serving nobody. It is a contract, so a change
+# on either side must change both.
+SUPPORTED_POSTGRES_AUTH: Final = "rds_iam"
+
+# Phrased for the person reading it, not for us. It says what *is* supported and
+# where the other route is, because since ADR 0100 "not supported" is the wrong
+# answer — a database anywhere else is reachable through the customer's own
+# collector, and a refusal that does not say so sends them away for nothing.
+_UNSUPPORTED_POSTGRES_AUTH: Final = (
+    "This connector reads AWS RDS PostgreSQL with IAM database authentication, "
+    "which is why it needs no password from you. For a database anywhere else — "
+    "self-hosted, on-premise, or another cloud — your own OpenTelemetry Collector "
+    "can send the same data without a credential ever leaving your network. See "
+    "the 'Connecting a database' guide."
+)
+
+
+def _refuse_unsupported_target(request: CreateIntegrationRequest) -> None:
+    """Fail at creation rather than at the first poll.
+
+    Without this the API accepts the connector, returns 201, and the scheduler
+    discovers a minute later that it cannot authenticate — so the customer sees
+    success, then a `failing` status somewhere else, with nothing at the point of
+    the mistake saying what was wrong.
+    """
+    if request.kind != KIND_POSTGRES:
+        return
+    auth = str(request.config.get("auth", SUPPORTED_POSTGRES_AUTH))
+    if auth != SUPPORTED_POSTGRES_AUTH:
+        raise InvalidRequestError(_UNSUPPORTED_POSTGRES_AUTH)
 
 
 async def create(
@@ -51,6 +90,7 @@ async def create(
     request: CreateIntegrationRequest,
 ) -> CreatedIntegrationResponse:
     """Define a connector, and mint the ExternalId that guards it."""
+    _refuse_unsupported_target(request)
     project = await projects.require_project(session, org_id=org_id, project_id=request.project_id)
 
     integration = Integration(

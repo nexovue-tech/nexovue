@@ -189,59 +189,24 @@ untouched.
 - **Exposing browser synthetic checks to customers.** Recommended per
   deployment, not per feature: safe once ADR 0096's proxy change is committed;
   unsafe on any deployment running the proxy-less code.
-- **`db.query.text` is stored on spans while the poller refuses to send it.**
-  Door 4b sends `db.query.hash` and never `query`, on the stated grounds that
-  *"a query built by string concatenation carries its parameters — customer data
-  — into that column."* Door 1 stores the text: a span read out of the demo's
-  own store carries
-  `db.query.text: "INSERT INTO accounting.\"order\" (order_id) VALUES (@p0)…"`.
-  That one is parameterised, which is the .NET SDK's choice and not a guarantee —
-  another SDK, or concatenated SQL, puts the values there. Masking does not close
-  it: `credential_keys` matches the attribute *key*, and `db.query.text` contains
-  none of password/secret/token, so only a Luhn-passing number or a `Bearer`
-  credential inside the SQL would be caught. Every APM stores query text, so this
-  is a position rather than a defect — but it is a position two doors currently
-  disagree on, and it is better decided than found by a customer's security
-  review. Related: [[url.full]] above, which is the same key-versus-value gap.
-- **The poller's real reach is not said anywhere a customer can see it.**
-  `postgres_connect.py` accepts `rds_iam` only and `postgres_stats.py` emits one
-  `db.system.name`, so the connector reaches AWS RDS PostgreSQL with IAM auth and
-  nothing else. A customer with self-hosted Postgres connects an integration and
-  gets an error message. ADR 0100 gives them a working route; the product still
-  does not point at it. The smallest fix in this area and the one with the most
-  visible payoff.
-- **Whether `url.full` should be truncated when `captureUrlQuery` is off.**
-  `captureUrlQuery` defaults to false and its comment gives the right reason —
-  *"masking matches attribute keys, not values, so a token in a query string
-  would be stored verbatim for the whole retention period."* Two lines above it,
-  `pagecontext.ts` sets `url.full` to `location.href` unconditionally, on every
-  record. `href` carries the query, so the option removes a dedicated
-  `url.query` attribute while the same data ships anyway. The README says so —
-  *"`url.full` carries the same exposure and cannot be avoided for a page
-  view"* — so this is documented rather than hidden, and the disputed word is
-  *cannot*: sending `origin + pathname` when the option is off is available and
-  was not chosen. Masking does not close it. `Rules.masksValues()` is true only
-  for `card_numbers` and `authorization_credentials`, so a card number or a
-  `Bearer` credential inside the URL is masked, while `?session_token=abc123`
-  survives — `credential_keys` matches the attribute *key*, which here is
-  `url.full`. **The sharper half is the fragment.** A browser never puts `#…` in
-  an HTTP request, so a customer's own access logs cannot contain it, but
-  `location.href` includes it and the SDK reads it from JavaScript — an OAuth
-  implicit-flow access token reaches us that the customer's own server never
-  saw. Against all of that: a genuinely full URL is what makes a reported bug
-  reproducible, which is why it is a decision and not a defect. Not recorded in
-  Part 2 for that reason.
-- **What the RUM screen should show beyond one number per vital.** Migration
-  000030 promoted five attributes to columns for the stated reason that a screen
-  filters and aggregates on them, and `queries.py` groups by `vital_name` alone.
-  So `url_path` and `device_class` are populated on every row and read by
-  nothing, `session_id` likewise, and `country` has no producer at all. The
-  screen renders five p75 cards and a thin-data warning below `MIN_READINGS`.
-  The gap is the useful part — *p75 by page and device over time* needs a
-  `GROUP BY` and no migration, which is what promoting the columns bought. Two
-  questions inside this and neither is answered: which breakdown ships first,
-  and whether `MIN_READINGS = 10` is the right floor for calling a p75
-  believable. Both want real customer traffic to settle, and there is none.
+- ~~**`db.query.text` is stored on spans while the poller refuses to send it.**~~
+  **DECIDED 2026-09-06 as [ADR 0101](../architecture/decisions/0101-spans-carry-query-text-and-the-database-poller-does-not.md).**
+  The asymmetry is kept, because the cost of refusing differs: an engineer on a
+  slow database span needs the statement and the span is often the only place a
+  one-off slow query appears, where door 4b has a hash that identifies the
+  statement exactly and gains nothing from the text. Defaults unchanged on ADR
+  0059's own test. The control already existed — `mask_keys` — and reaches span
+  attributes; what was missing was the decision and a customer-readable note,
+  now in `docs/product/database-monitoring-setup.md`. The same key-versus-value
+  gap on [[url.full]] stays open below and is a different decision.
+- ~~**The poller's real reach is not said anywhere a customer can see it.**~~
+  **FIXED 2026-09-06.** `integrations/service.py` now refuses a non-`rds_iam`
+  Postgres connector at creation rather than letting the scheduler discover it a
+  minute later, and both that message and the scheduler's name what *is*
+  supported and point at the collector route instead of at an ADR number a
+  customer cannot read. Negative-controlled: disabling the check fails the test.
+  What is still absent is an Integrations screen — `last_error` is in the API
+  response and nothing renders it — which is P1-scale work rather than this.
 
 ---
 

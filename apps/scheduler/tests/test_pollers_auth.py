@@ -150,15 +150,22 @@ def test_a_database_target_defaults_to_iam_authentication() -> None:
     assert target.grant == RoleGrant(role_arn=ROLE_ARN, external_id=EXTERNAL_ID)
 
 
-def test_self_hosted_password_auth_is_refused_with_a_reason() -> None:
-    """Deliberately not implemented. Storing a customer's database password
-    needs envelope encryption and a key-management scheme this project has not
-    decided on, and inventing one badly is worse than the feature being absent.
-    Refused loudly here rather than falling back to something weaker."""
+def test_self_hosted_password_auth_is_refused_and_points_somewhere() -> None:
+    """Refused loudly rather than falling back to something weaker.
+
+    We still store no database password: that needs a key-management scheme this
+    project has not decided on, and inventing one badly is worse than the feature
+    being absent. What changed with ADR 0100 is that this is no longer a dead end
+    — the customer's own collector reads the same two queries inside their
+    network — so the refusal has to name that route. Asserted on both halves,
+    because a refusal that only says "no" sends them away for nothing.
+    """
     config = _postgres_config() | {"auth": AUTH_PASSWORD}
     with pytest.raises(DatabaseAuthError) as refusal:
         integrations.database_target_from(config)
-    assert "not implemented" in str(refusal.value)
+    message = str(refusal.value)
+    assert "IAM" in message, "the refusal must say what IS supported"
+    assert "Collector" in message, "the refusal must name the route that works"
 
 
 def test_an_unknown_auth_mode_is_refused() -> None:

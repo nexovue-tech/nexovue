@@ -178,9 +178,26 @@ connection states. Select `DIGEST`, never `DIGEST_TEXT` — the latter is the st
 **Collected:** a statement's hash, the database it ran in, its call count, its mean execution time,
 the server address and port, and backend counts by state.
 
-**Never collected:** the statement text, query parameters, table contents, or any row of your data.
-A statement is identified by its hash; to see the text, look the hash up in your own
-`pg_stat_statements`.
+**Never collected by either route above:** the statement text, query parameters, table contents,
+or any row of your data. A statement is identified by its hash; to see the text, look the hash up
+in your own `pg_stat_statements`.
+
+**Your traces are a separate matter, and worth knowing about.** If your application is
+instrumented with OpenTelemetry, its database spans carry `db.query.text` — the statement your code
+ran — because that is what makes a slow query debuggable from the trace. Most SDKs send it
+parameterised, so values appear as `@p0` or `?` rather than as data, but that is the SDK's
+behaviour and not a guarantee: a query built by joining strings together has no parameters to
+strip.
+
+To have it removed before we store it, set your project's masking configuration:
+
+```json
+{ "mask_keys": ["db.query.text"] }
+```
+
+Masking happens before the write and cannot be undone — the original is gone, so a statement you
+mask is one you cannot read back later. If you would rather values never left your process at all,
+most SDKs can be configured to sanitise before sending, which is the stronger option.
 
 **Read-only, enforced rather than promised.** The connector opens its session with
 `default_transaction_read_only` and contains only two `SELECT` statements. On the collector route
