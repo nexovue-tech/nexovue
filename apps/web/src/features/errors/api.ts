@@ -40,6 +40,10 @@ export interface ErrorOccurrence {
   exception_message: string;
   /** Empty when the SDK sent none — which is most SDKs on a log-shaped exception. */
   stacktrace: string;
+  /** The build this came from, which is what a source map is matched on. Empty
+   * when the sender stamped no version, and a stack with no release cannot be
+   * symbolicated at all. */
+  release: string;
 }
 
 interface ErrorGroupListResponse {

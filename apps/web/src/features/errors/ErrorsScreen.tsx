@@ -12,7 +12,14 @@ import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 import type { ErrorGroupDetail, ErrorGroupSummary } from "./api";
 import { useErrorGroup, useErrorGroups } from "./api";
 import { ErrorGroupPanel } from "./ErrorGroupDetail";
-import { describeErrors, describeServices, isNewInWindow } from "./error-groups";
+import {
+  describeErrors,
+  describeServices,
+  firstWithStacktrace,
+  isNewInWindow,
+} from "./error-groups";
+import type { SymbolicationState } from "./symbolication";
+import { useSymbolication } from "./symbolication";
 
 const ROW_HEIGHT = 46;
 const OVERSCAN_ROWS = 8;
@@ -38,6 +45,15 @@ export function ErrorsScreen() {
   const groups = useErrorGroups(projectId, timeWindow);
   const detail = useErrorGroup(projectId, selectedGroupId, timeWindow);
 
+  // The stack the panel will show is the one symbolication is asked about, so
+  // the carrier is picked here rather than inside the view.
+  const carrier = firstWithStacktrace(detail.data?.recent ?? []);
+  const symbolication = useSymbolication(
+    projectId,
+    carrier?.stacktrace ?? "",
+    carrier?.release ?? "",
+  );
+
   const listed = groups.data?.groups ?? [];
   // A group id is derived from the window's rows, so moving the window can retire the
   // selection. Falling back to nothing beats a panel describing a group that is gone.
@@ -46,6 +62,7 @@ export function ErrorsScreen() {
   return (
     <ErrorsView
       windowLabel={timeRangeById(rangeId).label}
+      symbolication={symbolication}
       timeWindow={timeWindow}
       groups={listed}
       isPending={groups.isPending}
@@ -66,6 +83,8 @@ export function ErrorsScreen() {
 interface ErrorsViewProps {
   /** "hour", "24 hours" — the range picker's own word, so the two agree. */
   windowLabel: string;
+  /** The resolved stack for the selected group, asked for by the route component. */
+  symbolication: SymbolicationState;
   timeWindow: TimeWindow;
   groups: readonly ErrorGroupSummary[];
   isPending: boolean;
@@ -84,6 +103,7 @@ interface ErrorsViewProps {
 /** Everything the screen shows, with no query client and no clock behind it. */
 export function ErrorsView({
   windowLabel,
+  symbolication,
   timeWindow,
   groups,
   isPending,
@@ -164,6 +184,7 @@ export function ErrorsView({
         >
           <ErrorGroupPanel
             summary={selected}
+            symbolication={symbolication}
             detail={detail?.group.group_id === selected.group_id ? detail : undefined}
             isPending={detailIsPending}
             isError={detailIsError}

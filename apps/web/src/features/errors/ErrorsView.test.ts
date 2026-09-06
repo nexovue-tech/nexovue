@@ -64,6 +64,9 @@ function occurrence(overrides: Partial<ErrorOccurrence> = {}): ErrorOccurrence {
     occurred_at: "2026-08-28T20:11:00.411Z",
     trace_id: "89862496c280c749485ae30629e9737f",
     span_id: "c8f8acc1e53ceb86",
+    // A Python service that stamped no version, which is the common case and
+    // the one where symbolication cannot run at all.
+    release: "",
     exception_message: "card authorization declined by upstream",
     stacktrace: "",
     ...overrides,
@@ -142,6 +145,9 @@ function render(overrides: Overrides = {}): Promise<HTMLElement> {
   return mountInRouter(
     createElement(ErrorsView, {
       windowLabel: "6 hours",
+      // Nothing symbolicated: these fixtures are a Python service, which has no
+      // release and no source map, and the stack is shown as it arrived.
+      symbolication: { frames: undefined, isPending: false, isError: false },
       timeWindow: WINDOW,
       groups: [DECLINED, LONG_STANDING],
       isPending: false,

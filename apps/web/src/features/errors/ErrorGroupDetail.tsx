@@ -16,6 +16,8 @@ import {
   firstWithStacktrace,
   stackFrames,
 } from "./error-groups";
+import type { SymbolicatedFrame, SymbolicationState } from "./symbolication";
+import { identified } from "./symbolication";
 
 /**
  * One exception in full: what it is, how long it has been happening, and the stack.
@@ -26,6 +28,7 @@ import {
 export function ErrorGroupPanel({
   summary,
   detail,
+  symbolication,
   isPending,
   isError,
   error,
@@ -34,6 +37,8 @@ export function ErrorGroupPanel({
 }: {
   /** The list's own row, so the panel has an identity before the read returns. */
   summary: ErrorGroupSummary;
+  /** The resolved stack, already asked for by the route component. */
+  symbolication: SymbolicationState;
   detail?: ErrorGroupDetail;
   isPending: boolean;
   isError: boolean;
@@ -101,7 +106,7 @@ export function ErrorGroupPanel({
           <InlineFailure title="Instances could not be loaded" error={error} onRetry={onRetry} />
         ) : (
           <>
-            <StackTrace occurrences={recent} />
+            <StackTrace occurrences={recent} symbolication={symbolication} />
             <RecentOccurrences occurrences={recent} />
           </>
         )}
@@ -118,7 +123,13 @@ export function ErrorGroupPanel({
  * every fact above it off the panel, and each frame wraps under a hanging indent
  * rather than making a reader scroll sideways once per line.
  */
-function StackTrace({ occurrences }: { occurrences: readonly ErrorOccurrence[] }) {
+function StackTrace({
+  occurrences,
+  symbolication,
+}: {
+  occurrences: readonly ErrorOccurrence[];
+  symbolication: SymbolicationState;
+}) {
   const carrier = firstWithStacktrace(occurrences);
 
   if (!carrier) {
@@ -133,6 +144,8 @@ function StackTrace({ occurrences }: { occurrences: readonly ErrorOccurrence[] }
     );
   }
 
+  const resolved = symbolication.frames?.filter((frame) => frame.resolved) ?? [];
+
   return (
     <Section
       title="Stack trace"
@@ -141,15 +154,114 @@ function StackTrace({ occurrences }: { occurrences: readonly ErrorOccurrence[] }
       <p className="mb-1.5 text-ink-dim text-xs">
         From the instance at {formatClockTime(carrier.occurred_at)} on {carrier.service_name}.
       </p>
-      <pre className="max-h-80 overflow-y-auto rounded-xs bg-surface p-3 font-mono text-2xs text-ink leading-relaxed">
-        {stackFrames(carrier.stacktrace).map((frame) => (
-          <span key={frame.id} className="-indent-6 block whitespace-pre-wrap break-words pl-6">
-            {frame.text}
+
+      {resolved.length > 0 ? (
+        <OriginalStack frames={symbolication.frames ?? []} resolvedCount={resolved.length} />
+      ) : (
+        <>
+          <pre className="max-h-80 overflow-y-auto rounded-xs bg-surface p-3 font-mono text-2xs text-ink leading-relaxed">
+            {stackFrames(carrier.stacktrace).map((frame) => (
+              <span key={frame.id} className="-indent-6 block whitespace-pre-wrap break-words pl-6">
+                {frame.text}
+              </span>
+            ))}
+          </pre>
+          <WhyStillMinified
+            release={carrier.release}
+            pending={symbolication.isPending}
+            failed={symbolication.isError}
+            answered={symbolication.frames !== undefined}
+          />
+        </>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * The stack after symbolication, one frame per line.
+ *
+ * A frame no map covered keeps its minified position rather than being dropped —
+ * a trace missing its middle is harder to read than one partly minified — and is
+ * dimmed so the eye goes to the frames that are actually source.
+ */
+function OriginalStack({
+  frames,
+  resolvedCount,
+}: {
+  frames: readonly SymbolicatedFrame[];
+  resolvedCount: number;
+}) {
+  return (
+    <>
+      <pre className="max-h-80 overflow-y-auto rounded-xs bg-surface p-3 font-mono text-2xs leading-relaxed">
+        {identified(frames).map(({ id, frame }) => (
+          <span
+            key={id}
+            className={`-indent-6 block whitespace-pre-wrap break-words pl-6 ${
+              frame.resolved ? "text-ink" : "text-ink-dim"
+            }`}
+          >
+            {"    at "}
+            {frame.function_name === "" ? "" : `${frame.function_name} `}
+            {`${frame.file}:${frame.line}:${frame.column}`}
+            {frame.context_line === "" ? null : (
+              <span className="block pl-6 text-ink-dim">{frame.context_line.trim()}</span>
+            )}
           </span>
         ))}
       </pre>
-    </Section>
+      <p className="mt-1.5 text-ink-dim text-xs">
+        {resolvedCount} of {frames.length} frames mapped back to source. A function name needs the
+        minified bundle beside the map, which is not stored — the file and line do not.
+      </p>
+    </>
   );
+}
+
+/**
+ * Why the stack above is still minified, when it is.
+ *
+ * Silence here reads as the product being broken. Each branch names the one
+ * thing the customer would have to change.
+ */
+function WhyStillMinified({
+  release,
+  pending,
+  failed,
+  answered,
+}: {
+  release: string;
+  pending: boolean;
+  failed: boolean;
+  answered: boolean;
+}) {
+  if (pending) return <p className="mt-1.5 text-ink-dim text-xs">Looking for a source map…</p>;
+  if (failed) {
+    return (
+      <p className="mt-1.5 text-ink-dim text-xs">
+        The source map lookup failed, so this stack is shown as it arrived.
+      </p>
+    );
+  }
+  if (release.trim() === "") {
+    return (
+      <p className="mt-1.5 text-ink-dim text-xs">
+        This instance carries no release, so there is nothing to match a source map against. Set{" "}
+        <code className="font-mono text-2xs">serviceVersion</code> in the browser SDK, and upload
+        that build&apos;s maps.
+      </p>
+    );
+  }
+  if (answered) {
+    return (
+      <p className="mt-1.5 text-ink-dim text-xs">
+        No uploaded source map covers these files for release{" "}
+        <code className="font-mono text-2xs">{release}</code>.
+      </p>
+    );
+  }
+  return null;
 }
 
 /** The instances behind the count, newest first, each a way into its trace. */
