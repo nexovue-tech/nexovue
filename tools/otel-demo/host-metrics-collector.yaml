@@ -46,6 +46,16 @@ receivers:
       # makes this scraper work at all.
       filesystem:
 
+  # Deliberately left at its defaults, because this is a measurement and not a
+  # configuration: open-decisions.md §1f records that no container metric has
+  # ever reached our store and that the five `container.*` names our
+  # Infrastructure screen reads may have no producer. Enabling a curated list
+  # here would answer the question we are asking. What lands is what
+  # `docker_stats` sends unprompted, against 21 real containers.
+  docker_stats:
+    endpoint: unix:///var/run/docker.sock
+    collection_interval: 30s
+
 processors:
   resource:
     attributes:
@@ -68,7 +78,13 @@ exporters:
 service:
   pipelines:
     metrics:
-      receivers: [host_metrics]
+      # One pipeline, so the `resource` processor above stamps `host.name` on the
+      # container readings as well as the host's. That is what a real deployment
+      # would do — a container genuinely does run on that host — and it is the
+      # direct test of §1f's hierarchy question: `NodeSummary` carries both
+      # `host` and `container`, and the parent link is only real if a producer
+      # sends both on one resource.
+      receivers: [host_metrics, docker_stats]
       processors: [resource, batch]
       exporters: [otlp_http]
   telemetry:

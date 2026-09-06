@@ -462,6 +462,71 @@ So the decision has three parts:
 - **What happens to a container whose collector never set `host.name`.** It has
   no parent, and inventing one is the same error as inventing a metric name.
 
+### Measured 2026-09-06, rather than reasoned about
+
+Everything above came from reading receiver documentation. `docker_stats` was
+then turned on in the demo's own collector
+(`tools/otel-demo/host-metrics-collector.yaml`, left at its defaults on purpose)
+and pointed at 35 running containers. Four things came back, and two of them
+were not predicted here.
+
+**1. Thirteen names arrived and none of them is ours.** Confirmed both
+directions — these landed:
+
+```
+container.cpu.usage.total / .kernelmode / .usermode   container.cpu.utilization
+container.memory.usage.total   container.memory.usage.limit
+container.memory.percent   container.memory.file
+container.blockio.io_service_bytes_recursive
+container.network.io.usage.rx_bytes / .tx_bytes / .rx_dropped / .tx_dropped
+```
+
+and a query for the five names in `INFRASTRUCTURE_METRIC_NAMES` returned **no
+rows at all**. The mismatch is total, and it is now observed rather than
+inferred.
+
+**2. The screen shows nothing, with the data sitting in the store.** 238 points
+per metric across 35 container resources are in `metrics_gauge` and
+`metrics_sum`, and `GET /infrastructure/hosts` returns **two rows** — one host,
+one reporter, zero containers. The name contract is the entire gap; nothing else
+about the pipeline is in the way.
+
+**3. `host.name` and `container.name` do arrive on one resource**, which is the
+hierarchy question answered:
+
+```json
+{"container": {"name": "frontend-proxy", "id": "1a722e62…", "runtime": "docker",
+               "image": {"name": "…demo:3.0.0-frontend-proxy"}},
+ "host": {"name": "otel-demo-host"}}
+```
+
+`host.name` is not something `docker_stats` sends — the collector's `resource`
+processor upserts it, one line, exactly as it already does for host metrics. So
+the parent link a tree would need is real and cheap, and `NodeSummary` already
+has the fields to carry it.
+
+**4. Unpredicted, and it matters more than the naming: `docker_stats` is
+host-wide.** With no filter it scraped every container on the machine — the 21
+demo services *and* all thirteen of nexovue's own, `nexovue-clickhouse-1` and
+`nexovue-postgres-1` included. A customer who enables this on a shared host
+sends us every container running there, including ones belonging to something
+else entirely. Any recommendation to customers has to carry a
+`container.exclude` or a filter processor, or we are billing them for other
+people's containers and showing them telemetry they did not mean to send.
+
+**One operational note.** The receiver refused to start —
+`permission denied while trying to connect to the docker API` — because the
+image runs as `10001:10001` and the socket is `root:root` mode 660. `group_add:
+["0"]` fixes it and is used instead of `user: root`. It is not a security
+improvement in itself: reaching the Docker API is root-equivalent by
+construction, since it can create a privileged container. That is why the mount
+lives in `tools/otel-demo/` and must never appear in `deploy/compose/`.
+
+**A correction to this section's own reasoning.** The double-counting problem
+described above is real but *downstream* — it cannot occur today, because
+containers never reach the screen at all. The name contract has to be settled
+before the hierarchy question can even be observed.
+
 ### Recommendation
 
 **Pick one producer and make the contract match it, before touching the

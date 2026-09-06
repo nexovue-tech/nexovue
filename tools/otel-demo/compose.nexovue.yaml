@@ -47,10 +47,25 @@ services:
       - /:/hostfs:ro
       - /proc:/hostfs/proc:ro
       - /sys:/hostfs/sys:ro
+      # `docker_stats` reads the daemon's container stats API, and this is the
+      # only way to reach it. Read-only is not the reassurance it looks like —
+      # the Docker socket is effectively root on the host whatever the mode — so
+      # it stays in `tools/otel-demo/`, on a developer's own machine, and must
+      # never appear in `deploy/compose/`.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # The image runs as 10001:10001 and the socket is root:root mode 660, so the
+    # receiver failed to start with "permission denied" until this. `group_add`
+    # rather than `user: root`: the process stays non-root for everything else it
+    # touches. It is not a security improvement in itself — reaching the Docker
+    # API is root-equivalent by construction, since it can create a privileged
+    # container — it just refuses to take more than the one thing needed.
+    group_add: ["0"]
     deploy:
       resources:
         limits:
-          memory: 192M
+          # Raised from 192M when docker_stats joined: it holds a client and a
+          # stats stream per container, and the demo runs twenty-one.
+          memory: 320M
 
   ad:
     environment: &nexovue-key
