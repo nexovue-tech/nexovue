@@ -259,7 +259,7 @@ def _summarize(key: NodeKey, readings: Sequence[Reading], *, as_of: datetime) ->
         reporter=key.reporter,
         reporter_instance=key.reporter_instance,
         cpu_utilization=_cpu_utilization(readings),
-        cpu_cores_used=_sum_of(readings, conventions.CONTAINER_CPU_USAGE),
+        cpu_cores_used=_sum_of_any(readings, conventions.CONTAINER_CPU_USAGE_NAMES),
         memory_used_bytes=_as_bytes(memory_used),
         memory_limit_bytes=_as_bytes(memory_limit),
         memory_utilization=_memory_utilization(readings, memory_used, memory_limit),
@@ -345,15 +345,16 @@ def _memory_used_bytes(readings: Sequence[Reading]) -> float | None:
     system = _sum_of(readings, conventions.SYSTEM_MEMORY_USAGE, _used_memory)
     if system is not None:
         return system
-    return _sum_of(readings, conventions.CONTAINER_MEMORY_USAGE)
+    return _sum_of_any(readings, conventions.CONTAINER_MEMORY_USAGE_NAMES)
 
 
 def _memory_limit_bytes(readings: Sequence[Reading]) -> float | None:
     """Total memory, reported directly or reconstructed from the states.
 
     `system.memory.usage`'s states partition the whole, so their sum is the
-    total when the collector does not send `system.memory.limit`. For a
-    container the same holds of used plus available.
+    total when the collector does not send `system.memory.limit`. A container
+    reports the limit directly under Docker's vocabulary, and under the
+    specification's it is what is used plus what remains.
     """
     declared = _sum_of(readings, conventions.SYSTEM_MEMORY_LIMIT)
     if declared is not None:
@@ -362,6 +363,10 @@ def _memory_limit_bytes(readings: Sequence[Reading]) -> float | None:
     from_states = _sum_of(readings, conventions.SYSTEM_MEMORY_USAGE)
     if from_states is not None:
         return from_states
+
+    docker = _sum_of(readings, conventions.DOCKER_CONTAINER_MEMORY_LIMIT)
+    if docker is not None:
+        return docker
 
     used = _sum_of(readings, conventions.CONTAINER_MEMORY_USAGE)
     available = _sum_of(readings, conventions.CONTAINER_MEMORY_AVAILABLE)
@@ -395,6 +400,12 @@ def _used_filesystem(reading: Reading) -> bool:
     )
 
 
+def _sum_of_any(readings: Sequence[Reading], metric_names: Sequence[str]) -> float | None:
+    """The latest values of one quantity, under whichever name it arrived."""
+    selected = _any_named(readings, metric_names)
+    return sum(reading.latest_value for reading in selected) if selected else None
+
+
 def _sum_of(
     readings: Sequence[Reading],
     metric_name: str,
@@ -414,7 +425,14 @@ def _disk_bytes_per_second(readings: Sequence[Reading]) -> float | None:
     partition's bytes *are* its disk's bytes — adding both reported a machine at
     twice its real traffic.
     """
-    reported = _any_named(readings, (conventions.SYSTEM_DISK_IO, conventions.CONTAINER_DISK_IO))
+    reported = _any_named(
+        readings,
+        (
+            conventions.SYSTEM_DISK_IO,
+            conventions.CONTAINER_DISK_IO,
+            conventions.DOCKER_CONTAINER_DISK_IO,
+        ),
+    )
     disks = independence.whole_disks(_device(reading) for reading in reported)
     return _summed_rate(
         reading for reading in reported if not _device(reading) or _device(reading) in disks
@@ -428,7 +446,15 @@ def _network_bytes_per_second(readings: Sequence[Reading]) -> float | None:
     twice: once transmitted and again received on the same interface.
     """
     reported = _any_named(
-        readings, (conventions.SYSTEM_NETWORK_IO, conventions.CONTAINER_NETWORK_IO)
+        readings,
+        (
+            conventions.SYSTEM_NETWORK_IO,
+            conventions.CONTAINER_NETWORK_IO,
+            # Two metrics, one per direction, where the others carry a
+            # `direction` attribute on one. Summing both is the same total.
+            conventions.DOCKER_CONTAINER_NETWORK_RX,
+            conventions.DOCKER_CONTAINER_NETWORK_TX,
+        ),
     )
     return _summed_rate(
         reading

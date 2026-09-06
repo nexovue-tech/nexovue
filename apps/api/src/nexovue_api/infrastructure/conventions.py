@@ -46,16 +46,26 @@ the five `container.*` names still have no producer at all.
 The Collector's `filesystemscraper` does send it, which is why `independence.py`
 still has to deduplicate its mountpoints unverified against live rows.
 
-**Container names here are unverified.** `docker_stats` does not emit the
-`container.*` semconv names at all — it sends `container.cpu.utilization`,
-`container.memory.usage.total`, `container.blockio.*` and
-`container.network.io.usage.*`, which are different metrics rather than
-different spellings. The names below are the specification's, no container
-metric has ever reached our store, and which producer we intend to support is an
-open decision — held in `docs/delivery/open-decisions.md` §1f with what each
-receiver actually emits, rather than only here. They are kept because they are
-the spec's and cost nothing to read; they should not be trusted until a
-container actually reports.
+**Container names, measured 2026-09-06 rather than assumed.** `docker_stats`
+emits none of the specification's `container.*` names, so both spellings are
+read here and the specification's are kept — `kubeletstats` sends three of them,
+and a customer on Kubernetes should not need us to change.
+
+The mapping was settled by looking at values, not names, and one of them is a
+trap: **`container.cpu.utilization` is CPU cores, not a fraction.** `flagd`
+reported 8.1664 of it while `docker stats` showed 955.86% for the same
+container, and a fraction cannot exceed 1. It is therefore the same quantity as
+the specification's `container.cpu.usage` under a misleading name, and it feeds
+`cpu_cores_used`. Reading it into `cpu_utilization` would put an 8 in a column
+that means 0 to 1.
+
+`container.memory.usage.limit` is the exception that is not a synonym: it is the
+limit itself, where the specification's `container.memory.available` is what
+remains. Both reach `memory_limit_bytes`, the limit directly and the available
+by adding it to what is used.
+
+What is deliberately *not* done is renaming at ingest. A stored row keeps the
+name its producer chose; only this read layer knows both vocabularies.
 
 Kubernetes pod and node views are Phase 2 and deliberately absent.
 """
@@ -97,6 +107,28 @@ CONTAINER_MEMORY_USAGE: Final = "container.memory.usage"
 # UpDownCounter, bytes. Memory still available to the container.
 CONTAINER_MEMORY_AVAILABLE: Final = "container.memory.available"
 
+# ---- Docker's spellings for the same five quantities, from dockerstatsreceiver.
+# Measured, not read off a name: see the header. `container.cpu.utilization` is
+# cores despite the word, so it is a synonym of CONTAINER_CPU_USAGE and not of
+# any utilization.
+DOCKER_CONTAINER_CPU_USAGE: Final = "container.cpu.utilization"
+DOCKER_CONTAINER_MEMORY_USAGE: Final = "container.memory.usage.total"
+# The limit itself, where CONTAINER_MEMORY_AVAILABLE is what remains of it.
+DOCKER_CONTAINER_MEMORY_LIMIT: Final = "container.memory.usage.limit"
+# Cumulative bytes, carrying device_major/device_minor and an `operation` of
+# read or write. There is no device *name*, so the whole-disk deduplication that
+# `system.disk.io` needs finds nothing to do and every series is counted once.
+DOCKER_CONTAINER_DISK_IO: Final = "container.blockio.io_service_bytes_recursive"
+# Two metrics where `system.network.io` is one with a `direction` attribute.
+# Summing both is what the system metric's own roll-up already does.
+DOCKER_CONTAINER_NETWORK_RX: Final = "container.network.io.usage.rx_bytes"
+DOCKER_CONTAINER_NETWORK_TX: Final = "container.network.io.usage.tx_bytes"
+
+# Every spelling of one quantity, for the roll-ups to read. A node speaks one
+# vocabulary or the other, never both, so these never double-count.
+CONTAINER_CPU_USAGE_NAMES: Final = (CONTAINER_CPU_USAGE, DOCKER_CONTAINER_CPU_USAGE)
+CONTAINER_MEMORY_USAGE_NAMES: Final = (CONTAINER_MEMORY_USAGE, DOCKER_CONTAINER_MEMORY_USAGE)
+
 # Monotonic counters, bytes.
 CONTAINER_DISK_IO: Final = "container.disk.io"
 CONTAINER_NETWORK_IO: Final = "container.network.io"
@@ -117,13 +149,27 @@ INFRASTRUCTURE_METRIC_NAMES: Final[tuple[str, ...]] = (
     CONTAINER_MEMORY_AVAILABLE,
     CONTAINER_DISK_IO,
     CONTAINER_NETWORK_IO,
+    DOCKER_CONTAINER_CPU_USAGE,
+    DOCKER_CONTAINER_MEMORY_USAGE,
+    DOCKER_CONTAINER_MEMORY_LIMIT,
+    DOCKER_CONTAINER_DISK_IO,
+    DOCKER_CONTAINER_NETWORK_RX,
+    DOCKER_CONTAINER_NETWORK_TX,
 )
 
 # The counters whose stored value only rises. Their reading is a rate, and a
 # fall between two points means the process restarted rather than that traffic
 # went backwards.
 CUMULATIVE_BYTE_COUNTERS: Final = frozenset(
-    {SYSTEM_DISK_IO, SYSTEM_NETWORK_IO, CONTAINER_DISK_IO, CONTAINER_NETWORK_IO}
+    {
+        SYSTEM_DISK_IO,
+        SYSTEM_NETWORK_IO,
+        CONTAINER_DISK_IO,
+        CONTAINER_NETWORK_IO,
+        DOCKER_CONTAINER_DISK_IO,
+        DOCKER_CONTAINER_NETWORK_RX,
+        DOCKER_CONTAINER_NETWORK_TX,
+    }
 )
 
 # ------------------------------------------------------------ attribute names

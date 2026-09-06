@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
@@ -70,7 +70,9 @@ export function InfrastructureScreen() {
   const nodes = useNodes(projectId, timeWindow);
   const signals = useSignals(projectId, timeWindow);
 
-  const rows = nodes.data?.nodes ?? [];
+  const all = nodes.data?.nodes ?? [];
+  const [kind, setKind] = useState<KindFilter>("all");
+  const rows = kind === "all" ? all : all.filter((node) => node.kind === kind);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -97,11 +99,13 @@ export function InfrastructureScreen() {
             }}
           />
         </div>
-      ) : rows.length === 0 ? (
+      ) : all.length === 0 ? (
         <NothingReporting />
       ) : (
         <>
           {nodes.data?.truncated ? <TruncationNotice /> : null}
+          <KindFilterBar nodes={all} selected={kind} onSelect={setKind} />
+          <NestingNotice nodes={all} />
           <StaleNotice nodes={rows} />
           <UnattributedNotice nodes={rows} />
           <NodeTable nodes={rows} />
@@ -171,6 +175,89 @@ function UnattributedNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
   return (
     <p className="shrink-0 border-warning-border border-l-2 px-4 py-2 text-sm text-warning-text">
       {said}
+    </p>
+  );
+}
+
+type KindFilter = "all" | NodeSummary["kind"];
+
+/* Plural labels, because the button carries a count. */
+const KIND_LABELS: Record<NodeSummary["kind"], string> = {
+  host: "Hosts",
+  container: "Containers",
+  reporter: "Reporters",
+};
+
+const KIND_ORDER: readonly NodeSummary["kind"][] = ["host", "container", "reporter"];
+
+/**
+ * Narrows the list to one kind of node.
+ *
+ * It exists because a host and the containers inside it are not comparable rows, and
+ * a reader scanning a mixed list has no way to know which is which without reading
+ * every kind label. Hidden when only one kind reported, so a fleet of plain hosts is
+ * not given a control that does nothing.
+ */
+function KindFilterBar({
+  nodes,
+  selected,
+  onSelect,
+}: {
+  nodes: readonly NodeSummary[];
+  selected: KindFilter;
+  onSelect: (kind: KindFilter) => void;
+}) {
+  const present = KIND_ORDER.filter((kind) => nodes.some((node) => node.kind === kind));
+  if (present.length < 2) return null;
+
+  const options: { id: KindFilter; label: string; count: number }[] = [
+    { id: "all", label: "All", count: nodes.length },
+    ...present.map((kind) => ({
+      id: kind as KindFilter,
+      label: KIND_LABELS[kind],
+      count: nodes.filter((node) => node.kind === kind).length,
+    })),
+  ];
+
+  return (
+    <div className="flex shrink-0 items-baseline gap-1.5 px-4 pb-2 font-mono text-2xs uppercase tracking-caps">
+      <span className="text-ink-dim">Show</span>
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          aria-pressed={selected === option.id}
+          onClick={() => onSelect(option.id)}
+          className={`rounded-sm border px-1.5 py-0.5 ${
+            selected === option.id
+              ? "border-line bg-raised text-ink"
+              : "border-transparent text-ink-dim hover:text-ink"
+          }`}
+        >
+          {option.label} {option.count}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Says once what the rows cannot say individually: a container's usage is already
+ * inside its host's.
+ *
+ * There is no total on this screen, so nothing is summed wrongly today — but a reader
+ * adding a host's memory to its containers' would double-count real bytes, and the
+ * list gives them no reason not to. Shown only when both kinds are present.
+ */
+function NestingNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
+  const hasHost = nodes.some((node) => node.kind === "host");
+  const hasContainer = nodes.some((node) => node.kind === "container");
+  if (!hasHost || !hasContainer) return null;
+
+  return (
+    <p className="shrink-0 px-4 pb-2 text-ink-dim text-xs">
+      A container&rsquo;s usage is already counted inside its host&rsquo;s. These are two views of
+      the same machine, not two machines, so their rows should not be added together.
     </p>
   );
 }
