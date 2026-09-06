@@ -13,6 +13,7 @@ import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
 import { LogsScreen } from "@/features/logs/LogsScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
+import { RumScreen } from "@/features/rum/RumScreen";
 import { ServiceDetailScreen } from "@/features/servicedetail/ServiceDetailScreen";
 import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
 import { ServicesScreen } from "@/features/services/ServicesScreen";
@@ -146,7 +147,7 @@ const databaseRoute = createRoute({
 const rumRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/rum",
-  component: placeholderFor("/rum"),
+  component: RumScreen,
 });
 
 const usageRoute = createRoute({
