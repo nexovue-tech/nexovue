@@ -240,8 +240,16 @@ cmd_up() {
 
 cmd_down() {
     # Scoped to this compose project by name, so it cannot reach a nexovue-*
-    # container even if one were somehow in the same network.
-    compose down --remove-orphans
+    # container even if one were somehow in the same network — and the same
+    # scoping is what makes `-v` safe.
+    #
+    # `-v` because the demo declares no named volumes but its images do: the
+    # Postgres data directory and Kafka's log dirs are anonymous volumes, and a
+    # `down` without `-v` orphans a fresh set of them on every run. It is also
+    # the honest behaviour for a demo — the next `up` regenerates every byte of
+    # it, so keeping the old astronomy_db rows and Kafka offsets buys nothing and
+    # makes "is this a clean run?" unanswerable.
+    compose down -v --remove-orphans
 }
 
 cmd_stats() {

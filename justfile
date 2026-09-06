@@ -32,6 +32,8 @@ dev:
 dev-app:
     docker compose -f {{compose}}/docker-compose.app.yaml up -d --wait --build
 
+# Keeps *our* volumes — stores, broker, caches. The demo's go, because they are
+# anonymous volumes its images create and its next `up` regenerates.
 # Stop everything, keep the volumes. Takes the OpenTelemetry Demo with it.
 down:
     -./tools/otel-demo/otel-demo.sh down
