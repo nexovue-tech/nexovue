@@ -3,8 +3,9 @@ import { newSessionId } from "./ids";
 
 /**
  * A visitor's session id, the only join between their vitals, their errors and
- * their page views — we have no session table, and session.id is not a promoted
- * column anywhere.
+ * their page views — there is no session table. It is promoted to a column in
+ * `web_vitals` (migration 000030) and stays inside the attributes on everything
+ * else, so a vital can be traced back to the visit without reading JSON.
  *
  * localStorage rather than sessionStorage: sessionStorage dies with the tab, so
  * every new tab would be a new session and a closed-then-reopened tab would lose

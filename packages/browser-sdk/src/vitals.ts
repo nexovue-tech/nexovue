@@ -21,9 +21,17 @@ import { guard } from "./diagnostics";
  */
 export function reportWebVitals(emit: (metric: Metric) => void): void {
   const report = guard("vitals.report", emit);
-  onCLS(report);
-  onFCP(report);
-  onINP(report);
-  onLCP(report);
-  onTTFB(report);
+  // Registered one at a time. web-vitals reaches PerformanceObserver as it
+  // subscribes, so an engine missing one entry type throws here — and a single
+  // throw across all five would cost the other four metrics, the error capture
+  // registered after this, and the page view with it.
+  //
+  // Written out rather than looped: each subscriber is typed to its own metric,
+  // so an array of them has no common signature to call.
+  const subscribe = guard("vitals.register", (register: () => void) => register());
+  subscribe(() => onCLS(report));
+  subscribe(() => onFCP(report));
+  subscribe(() => onINP(report));
+  subscribe(() => onLCP(report));
+  subscribe(() => onTTFB(report));
 }
