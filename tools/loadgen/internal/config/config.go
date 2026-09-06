@@ -39,6 +39,16 @@ const (
 	defaultLagPoll      = "250ms"
 	defaultLagDrain     = "60s"
 	defaultRequestLimit = "10s"
+
+	// Door 3. The site key is the one `just seed` writes, so a freshly seeded
+	// stack needs no arguments; the origin has to be one that key allows.
+	defaultSiteKey            = "nvp_live_devlocaldevlocaldevloc"
+	defaultBrowserOrigin      = "http://localhost:15173"
+	defaultBrowserVisitors    = "12"
+	defaultBrowserPageRate    = "20"
+	defaultBrowserErrorRate   = "0.15"
+	defaultBrowserServiceName = "acme-storefront"
+	defaultBrowserRelease     = "2026.09.06-1"
 )
 
 // ClickHouse is where the lag measurement looks for the spans it sent.
@@ -80,7 +90,32 @@ type Config struct {
 	// LagDrainTimeout is how long to keep looking for spans after the load
 	// stops before calling them lost.
 	LagDrainTimeout time.Duration
+
+	Browser Browser
 }
+
+// Browser is door 3's share of the run: the browser door, driven the way a page
+// drives it.
+//
+// It is off unless a site key is set, because a run that authenticated with
+// nothing would measure the door refusing rather than the door working.
+type Browser struct {
+	SiteKey string
+	// Origin must be one the site key allows. The door checks it, and it is the
+	// only thing standing between a public key and anyone else's site.
+	Origin      string
+	ServiceName string
+	// Release is stamped as service.version, which is what a source map is
+	// matched on when a stack is symbolicated.
+	Release            string
+	Visitors           int
+	PageLoadsPerSecond float64
+	// ErrorRate is the share of page loads that also throw.
+	ErrorRate float64
+}
+
+// Enabled reports whether this run drives the browser door at all.
+func (b Browser) Enabled() bool { return b.SiteKey != "" && b.Origin != "" }
 
 // Load reads the environment, failing rather than starting half-configured.
 func Load() (Config, error) {
@@ -121,6 +156,19 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	browserVisitors, err := positiveInt("LOADGEN_BROWSER_VISITORS", defaultBrowserVisitors)
+	if err != nil {
+		return Config{}, err
+	}
+	browserPageRate, err := nonNegativeFloat("LOADGEN_BROWSER_PAGE_RATE", defaultBrowserPageRate)
+	if err != nil {
+		return Config{}, err
+	}
+	browserErrorRate, err := nonNegativeFloat("LOADGEN_BROWSER_ERROR_RATE", defaultBrowserErrorRate)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		Endpoint:          env("LOADGEN_ENDPOINT", defaultEndpoint),
 		IngestKey:         env("LOADGEN_INGEST_KEY", defaultIngestKey),
@@ -135,6 +183,15 @@ func Load() (Config, error) {
 		LagSampleInterval: lagSample,
 		LagPollInterval:   lagPoll,
 		LagDrainTimeout:   lagDrain,
+		Browser: Browser{
+			SiteKey:            env("LOADGEN_SITE_KEY", defaultSiteKey),
+			Origin:             env("LOADGEN_BROWSER_ORIGIN", defaultBrowserOrigin),
+			ServiceName:        env("LOADGEN_BROWSER_SERVICE_NAME", defaultBrowserServiceName),
+			Release:            env("LOADGEN_BROWSER_RELEASE", defaultBrowserRelease),
+			Visitors:           browserVisitors,
+			PageLoadsPerSecond: browserPageRate,
+			ErrorRate:          browserErrorRate,
+		},
 		ClickHouse: ClickHouse{
 			URL:      env("LOADGEN_CLICKHOUSE_URL", defaultClickHouse),
 			User:     env("LOADGEN_CLICKHOUSE_USER", defaultCHUser),

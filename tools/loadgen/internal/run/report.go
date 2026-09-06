@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/nexovue-tech/nexovue/tools/loadgen/internal/browserdoor"
 	"github.com/nexovue-tech/nexovue/tools/loadgen/internal/config"
 	"github.com/nexovue-tech/nexovue/tools/loadgen/internal/lag"
 	"github.com/nexovue-tech/nexovue/tools/loadgen/internal/measure"
@@ -19,6 +20,8 @@ type Report struct {
 	Lag       lag.Result
 	// LagBoundBy is the poll interval every lag figure is accurate to.
 	LagBoundBy time.Duration
+	// Browser is door 3's share of the run. Zero when it was not configured.
+	Browser browserdoor.Result
 }
 
 // Write prints the report. Budgets it cannot speak to are named as such, so a
@@ -35,11 +38,39 @@ func (r Report) Write(w io.Writer) error {
 	r.writeLatency(out)
 	r.writeThroughput(out)
 	r.writeLag(out)
+	r.writeBrowserDoor(out)
 
 	out.printf("\nnot measured here: receiver CPU and memory (read `docker stats` during the run),\n")
 	out.printf("trace-split re-encode CPU share (needs a profile or benchmark inside the receiver).\n")
 
 	return out.err
+}
+
+// writeBrowserDoor reports door 3, and says plainly when it did not run —
+// a browser section quietly absent reads as a door with no traffic rather than
+// as a run that never opened it.
+func (r Report) writeBrowserDoor(out *printer) {
+	out.printf("\nbrowser door (door 3)\n")
+	if !r.Config.Browser.Enabled() {
+		out.printf("  not driven: no site key configured (LOADGEN_SITE_KEY)\n")
+		return
+	}
+
+	b := r.Browser
+	out.printf("  origin %s, %d visitors, %.0f page loads/sec offered\n",
+		r.Config.Browser.Origin, r.Config.Browser.Visitors, r.Config.Browser.PageLoadsPerSecond)
+	out.printf("  page loads %d, web vitals %d, errors %d\n", b.PageLoads, b.Vitals, b.Errors)
+	out.printf("  exports accepted %d, refused %d\n", b.Accepted, b.Refused)
+
+	// A run of nothing but refusals is otherwise a table of zeroes, and the
+	// usual cause — an origin the site key does not allow — is one line to fix.
+	if b.Refused > 0 {
+		out.printf("  first refusal: %s\n", b.FirstRefusal)
+	}
+	if b.Accepted == 0 {
+		out.printf("  nothing reached the door; check the site key allows %s\n",
+			r.Config.Browser.Origin)
+	}
 }
 
 func (r Report) writeTransport(out *printer) {

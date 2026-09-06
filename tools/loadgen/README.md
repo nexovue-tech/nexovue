@@ -53,6 +53,13 @@ All environment variables, all with working defaults.
 | `LOADGEN_LAG_SAMPLE_INTERVAL` | `200ms` | Spacing of traces followed into storage |
 | `LOADGEN_LAG_POLL_INTERVAL` | `250ms` | Poll period, and the resolution of every lag figure |
 | `LOADGEN_LAG_DRAIN_TIMEOUT` | `60s` | How long to keep looking after the load stops |
+| `LOADGEN_SITE_KEY` | seeded dev key | Door 3's public browser key; empty turns the browser door off |
+| `LOADGEN_BROWSER_ORIGIN` | `http://localhost:15173` | Sent as `Origin`; must be one the site key allows |
+| `LOADGEN_BROWSER_VISITORS` | `12` | Simulated browsers, each keeping its own session id |
+| `LOADGEN_BROWSER_PAGE_RATE` | `20` | Offered page loads/sec across all visitors; `0` is unthrottled |
+| `LOADGEN_BROWSER_ERROR_RATE` | `0.15` | Share of page loads that also throw |
+| `LOADGEN_BROWSER_SERVICE_NAME` | `acme-storefront` | `service.name` on the browser telemetry |
+| `LOADGEN_BROWSER_RELEASE` | `2026.09.06-1` | `service.version`, which is what a source map is matched on |
 
 ## Reading the output
 
@@ -81,6 +88,26 @@ All environment variables, all with working defaults.
   requests contribute; an unanswered one would enter the request timeout as if
   the receiver had taken that long.
 - **queryable lag** is accurate to one poll interval and never better.
+
+## The browser door
+
+Door 3 is driven beside the spans, because a receiver under one door's load is
+not the receiver a customer has. It authenticates the way a page does — a public
+site key plus an `Origin` header the key allows — and sends the same OTLP log
+records the browser SDK sends, so a run exercises the door a customer reaches
+rather than an approximation of it.
+
+It goes straight at the receiver rather than through the measuring proxy. The
+proxy's latency figures are the span numbers §4's budgets are written about, and
+mixing a second signal into them would report a figure that means neither.
+
+This is also the only thing that fills the RUM and Errors screens on a dev stack:
+every other door has a generator and this one had none, so a freshly seeded stack
+showed "No browser has reported yet" until somebody opened a browser by hand.
+
+The default site key is the one `just seed` writes. A stack seeded before that
+existed has no such key, and the run reports every export refused with the origin
+to check — re-seed, or set `LOADGEN_SITE_KEY` to a key you minted.
 
 ## Known limits
 

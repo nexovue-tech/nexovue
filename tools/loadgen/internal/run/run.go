@@ -11,6 +11,7 @@ import (
 	telemetrygen "github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/pkg"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/pkg/traces"
 
+	"github.com/nexovue-tech/nexovue/tools/loadgen/internal/browserdoor"
 	"github.com/nexovue-tech/nexovue/tools/loadgen/internal/config"
 	"github.com/nexovue-tech/nexovue/tools/loadgen/internal/lag"
 	"github.com/nexovue-tech/nexovue/tools/loadgen/internal/measure"
@@ -70,11 +71,23 @@ func Load(ctx context.Context, cfg config.Config, log *slog.Logger) (Report, err
 		slog.Int("spans_per_trace", cfg.SpansPerTrace()),
 	)
 
+	// Door 3 runs beside the spans rather than after them, because a receiver
+	// under one door's load is not the receiver a customer has.
+	//
+	// It goes straight at the receiver and not through the measuring proxy: the
+	// proxy's numbers are the span latency the §4 budgets are written about, and
+	// mixing a second signal into them would report a figure that means neither.
+	browserDone := make(chan browserdoor.Result, 1)
+	go func() {
+		browserDone <- driveBrowserDoor(ctx, cfg, log)
+	}()
+
 	if err := traces.Start(generatorConfig(cfg, proxyAddr)); err != nil {
 		stopTracker()
 		<-trackerDone
 		return Report{}, fmt.Errorf("generating traces: %w", err)
 	}
+	browser := <-browserDone
 
 	log.Info("load finished, waiting for spans to become queryable",
 		slog.Duration("drain_timeout", cfg.LagDrainTimeout))
@@ -85,7 +98,36 @@ func Load(ctx context.Context, cfg config.Config, log *slog.Logger) (Report, err
 		Transport:  recorder.Result(),
 		Lag:        tracker.Result(),
 		LagBoundBy: cfg.LagPollInterval,
+		Browser:    browser,
 	}, nil
+}
+
+// driveBrowserDoor runs door 3 for the length of the load, or reports nothing
+// when the run is not configured for it.
+//
+// A failure here does not fail the run: the span budgets are what `just load`
+// exists to measure, and losing the browser door's numbers must not cost them.
+func driveBrowserDoor(ctx context.Context, cfg config.Config, log *slog.Logger) browserdoor.Result {
+	if !cfg.Browser.Enabled() {
+		log.Info("browser door skipped: no site key configured")
+		return browserdoor.Result{}
+	}
+	result, err := browserdoor.Drive(ctx, browserdoor.Options{
+		Endpoint:           cfg.Endpoint,
+		SiteKey:            cfg.Browser.SiteKey,
+		Origin:             cfg.Browser.Origin,
+		ServiceName:        cfg.Browser.ServiceName,
+		Release:            cfg.Browser.Release,
+		Visitors:           cfg.Browser.Visitors,
+		PageLoadsPerSecond: cfg.Browser.PageLoadsPerSecond,
+		ErrorRate:          cfg.Browser.ErrorRate,
+		Duration:           cfg.Duration,
+		Timeout:            cfg.RequestTimeout,
+	}, log)
+	if err != nil {
+		log.Warn("browser door did not run", slog.Any("error", err))
+	}
+	return result
 }
 
 // awaitDrain lets storage catch up after the load stops, then stops the tracker

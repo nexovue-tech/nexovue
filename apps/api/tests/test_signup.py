@@ -85,3 +85,26 @@ def test_the_seed_key_matches_the_format_signup_produces() -> None:
 
     assert DEV_API_KEY.startswith(API_KEY_PREFIX)
     assert len(DEV_API_KEY) == len(API_KEY_PREFIX) + API_KEY_SECRET_LENGTH
+
+
+def test_the_seed_site_key_matches_the_format_the_browser_door_accepts() -> None:
+    """A malformed dev key fails at the receiver, where the message is about a
+    key rather than about the seed that wrote it."""
+    from nexovue_api.apikeys.sitekeys import SITE_KEY_RANDOM_LENGTH, SITE_KEY_SCHEME
+    from nexovue_api.seed import DEV_SITE_KEY
+
+    assert DEV_SITE_KEY.startswith(SITE_KEY_SCHEME)
+    assert len(DEV_SITE_KEY) == len(SITE_KEY_SCHEME) + SITE_KEY_RANDOM_LENGTH
+
+
+def test_the_seed_site_key_allows_every_origin_the_dev_stack_serves() -> None:
+    """An origin missing from the list refuses 100% of that origin's traffic,
+    and the failure is indistinguishable from the SDK not working."""
+    from nexovue_api.seed import DEV_SITE_KEY_ORIGINS
+
+    assert DEV_SITE_KEY_ORIGINS, "a key with no origins accepts nothing"
+    assert all(origin.startswith("http://") for origin in DEV_SITE_KEY_ORIGINS)
+    # Both spellings of the dev host: a browser sends whichever the address bar
+    # holds, and they are different origins to the receiver.
+    assert any("localhost" in origin for origin in DEV_SITE_KEY_ORIGINS)
+    assert any("127.0.0.1" in origin for origin in DEV_SITE_KEY_ORIGINS)
