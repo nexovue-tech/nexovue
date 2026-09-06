@@ -86,7 +86,7 @@ type Pipeline struct {
 	// log records and are written to `logs` like any other, then promoted into
 	// their own table and rollup. Held here so they flush on the same chunk
 	// boundaries as the rows they came from — see writeChunk.
-	vitalWriter   *vitals.Writer
+	vitalWriter   vitalPromoter
 	vitalReadings []vitals.Reading
 	vitalRollup   *vitals.Rollup
 
@@ -107,6 +107,10 @@ type Pipeline struct {
 	// vitalsWritten is how many web vital readings were promoted out of those
 	// logs. It reads zero on a deployment with no browser door installed.
 	vitalsWritten uint64
+	// vitalsRefused counts readings the store would not take. Non-zero means a
+	// RUM screen is missing data that `logs` still holds — recoverable, and
+	// invisible without this number.
+	vitalsRefused uint64
 	// alreadyStored counts messages a replay offered whose rows the store had
 	// already acknowledged. It is the direct evidence that the watermark is
 	// doing something, and reads zero on a worker that never restarted.
@@ -120,6 +124,14 @@ type Pipeline struct {
 	maxRows int
 
 	log *slog.Logger
+}
+
+// vitalPromoter is the vitals writer's shape as this pipeline uses it. Narrow
+// and declared here so a test can stand in a store that refuses, which is the
+// path that decides whether one browser record can cost every other tenant in
+// the chunk its log records.
+type vitalPromoter interface {
+	Insert(ctx context.Context, readings []vitals.Reading, stats []vitals.Stat) error
 }
 
 // written is what one batch still owes storage: nothing. The insert happens
@@ -200,6 +212,7 @@ func (p *Pipeline) Holding() []slog.Attr {
 	return []slog.Attr{
 		slog.Uint64("logs_written", p.logsWritten),
 		slog.Uint64("web_vitals_written", p.vitalsWritten),
+		slog.Uint64("web_vitals_refused", p.vitalsRefused),
 		slog.Uint64("messages_already_stored", p.alreadyStored),
 		slog.Uint64("messages_parked", p.parked),
 		slog.Uint64("values_masked", p.valuesMasked),
@@ -306,11 +319,10 @@ func (p *Pipeline) writeChunk(
 	// whole and the readings that already landed are recognised as the repeat
 	// they are by their deduplication token; the reverse order would leave a
 	// reading promoted from a row that no retry ever wrote.
-	err := p.insertVitalsBounded(ctx)
+	promoted, err := p.promoteVitals(ctx)
 	if err == nil {
 		err = p.insertBounded(ctx)
 	}
-	promoted := len(p.vitalReadings)
 	p.block.reset()
 	p.resetVitals()
 
@@ -428,16 +440,50 @@ func (p *Pipeline) resetVitals() {
 	p.vitalRollup.Reset()
 }
 
-// insertVitalsBounded writes the readings promoted out of this chunk, and the
-// rollup rows they fold into, under the same retry budget as the logs.
-func (p *Pipeline) insertVitalsBounded(ctx context.Context) error {
+// promoteVitals writes the readings promoted out of this chunk, and the rollup
+// rows they fold into, under the same retry budget as the logs. It reports how
+// many readings the store took.
+//
+// **A refusal here does not park the chunk.** The readings are a promoted copy
+// of records that are about to be written to `logs`, and migration 000030 says
+// every row of `web_vitals` is re-derivable from them — so a browser record the
+// store will not take costs a screen, where parking the chunk would cost every
+// other tenant in it their log records. That distinction is the whole reason
+// the two inserts are separate: one malformed record once stopped ingest for
+// every tenant for 41 minutes, and this is the same shape.
+//
+// A transient failure is still returned, because that one is worth retrying.
+func (p *Pipeline) promoteVitals(ctx context.Context) (int, error) {
 	if len(p.vitalReadings) == 0 {
-		return nil
+		return 0, nil
 	}
 	rows := p.vitalRollup.Rows()
-	return p.loop.Retry(ctx, "insert web vitals", func(callCtx context.Context) error {
+	err := p.loop.Retry(ctx, "insert web vitals", func(callCtx context.Context) error {
 		return p.vitalWriter.Insert(callCtx, p.vitalReadings, rows)
 	})
+	return p.afterPromoting(ctx, err)
+}
+
+// afterPromoting turns one vitals insert's outcome into what it costs: rows
+// stored, an error worth retrying, or a refusal counted and stepped over.
+//
+// Separate from the insert because it is the decision, and the decision is what
+// has to be provable without a broker behind it.
+func (p *Pipeline) afterPromoting(ctx context.Context, err error) (int, error) {
+	switch {
+	case err == nil:
+		return len(p.vitalReadings), nil
+	case !consume.IsPermanent(err):
+		return 0, err
+	default:
+		p.vitalsRefused += countOf(len(p.vitalReadings))
+		p.log.ErrorContext(ctx, "the store refused these web vitals; the log records they "+
+			"were promoted from are still being written",
+			slog.Int("readings", len(p.vitalReadings)),
+			slog.String("error", err.Error()),
+		)
+		return 0, nil
+	}
 }
 
 // insertBounded writes the accumulated block under a deadline.
