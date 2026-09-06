@@ -67,8 +67,32 @@ services:
   email:
     environment: *nexovue-key
 
+  # The storefront reports twice, and they are different signals.
+  #
+  # Its server half uses the ingest key like every other service. Its *browser*
+  # half — upstream's own `FrontendTracer`, which auto-instruments fetch, XHR,
+  # document load and clicks — reports through the browser door instead, because
+  # that is the door a page is allowed to reach: a public site key checked
+  # against the Origin it was served from, never a secret one.
+  #
+  # It goes through Envoy's existing `/otlp-http/` route rather than straight at
+  # the receiver, which buys two things. The URL is then same-origin for both the
+  # person on localhost:8080 and the load generator's Chromium on
+  # frontend-proxy:8080, so one string serves both; and same-origin means no
+  # preflight, which the browser door would answer but which is one less thing
+  # to be wrong.
+  #
+  # The key travels in the query string because this exporter takes its URL from
+  # the environment and nothing else — there is no header to set. That is what
+  # `nexovue_site_key` exists for, and it accepts only a public `nvp_live_` key.
+  #
+  # **This is not RUM.** It sends spans, so it fills Traces and the service map,
+  # and the browser's `traceparent` reaches the backend — one trace from a click
+  # to product-catalog. Web vitals are log records and arrive separately.
   frontend:
-    environment: *nexovue-key
+    environment:
+      - OTEL_EXPORTER_OTLP_HEADERS=x-nexovue-key=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
+      - PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:8080/otlp-http/browser/v1/traces?nexovue_site_key=${NEXOVUE_SITE_KEY:?set NEXOVUE_SITE_KEY}
 
   flagd:
     environment: *nexovue-key

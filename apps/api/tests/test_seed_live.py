@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import socket
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Final
 from urllib.parse import urlsplit
 
@@ -119,6 +120,46 @@ async def test_the_browser_key_belongs_to_the_tenant_the_seed_made(
     assert organization is not None
     assert key is not None
     assert key.org_id == organization.id
+
+
+async def test_a_second_seed_brings_a_stale_origin_list_up_to_date(db: AsyncSession) -> None:
+    """The one thing a second seed does change, and why it has to.
+
+    A dev database seeded before the demo storefront existed carries an origin
+    list that refuses it. Nothing else would fix that: there is no update
+    endpoint for a site key's origins, and the failure is a 403 that reads like a
+    broken SDK rather than like stale seed data.
+    """
+    key = await db.scalar(select(SiteKey).where(SiteKey.public_key == DEV_SITE_KEY))
+    assert key is not None, "the dev site key is missing; seed the database first"
+    key.allowed_origins = ["http://localhost:15173"]
+    await db.flush()
+
+    await seed(db)
+    await db.flush()
+
+    refreshed = await db.scalar(select(SiteKey).where(SiteKey.public_key == DEV_SITE_KEY))
+    assert refreshed is not None
+    assert list(refreshed.allowed_origins) == list(DEV_SITE_KEY_ORIGINS)
+    # The demo storefront is reachable from two spellings and both must be there.
+    assert "http://localhost:8080" in refreshed.allowed_origins
+    assert "http://frontend-proxy:8080" in refreshed.allowed_origins
+
+
+async def test_a_revoked_key_is_left_alone(db: AsyncSession) -> None:
+    """A developer who retired the key on purpose keeps that decision."""
+    key = await db.scalar(select(SiteKey).where(SiteKey.public_key == DEV_SITE_KEY))
+    assert key is not None
+    key.allowed_origins = ["http://localhost:15173"]
+    key.revoked_at = datetime.now(UTC)
+    await db.flush()
+
+    await seed(db)
+    await db.flush()
+
+    refreshed = await db.scalar(select(SiteKey).where(SiteKey.public_key == DEV_SITE_KEY))
+    assert refreshed is not None
+    assert list(refreshed.allowed_origins) == ["http://localhost:15173"]
 
 
 async def test_seeding_a_database_that_already_has_the_tenant_changes_nothing(

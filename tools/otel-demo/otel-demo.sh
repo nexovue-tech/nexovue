@@ -21,6 +21,10 @@
 # NEXOVUE_INGEST_KEY selects the project the demo lands in. It defaults to the
 # key `just seed` creates, which is also the one our own demo app uses — set it
 # to a key of its own if the service map should show the demo and nothing else.
+# NEXOVUE_SITE_KEY is the browser half of the same choice: the storefront's own
+# page reports through the browser door, which authenticates on a public key and
+# the Origin it was served from. It must be a key whose allowed origins include
+# the storefront — `just seed` writes one that does.
 # NEXOVUE_OTEL_DEMO_SCOPE=core drops the Kafka layer on a tighter machine.
 
 set -euo pipefail
@@ -34,8 +38,10 @@ readonly UPSTREAM_DIR="${HERE}/upstream"
 readonly PROJECT_NAME="otel-demo"
 
 : "${NEXOVUE_INGEST_KEY:=nvk_live_devlocaldevlocaldevloc}"
+: "${NEXOVUE_SITE_KEY:=nvp_live_devlocaldevlocaldevloc}"
 : "${NEXOVUE_OTLP_HTTP_URL:=http://localhost:14318}"
 export NEXOVUE_INGEST_KEY
+export NEXOVUE_SITE_KEY
 
 # Where the patched proxy config files live. Exported because compose resolves a
 # relative host path against --project-directory, which is the upstream clone.

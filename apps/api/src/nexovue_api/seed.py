@@ -50,9 +50,16 @@ DEV_SITE_KEY_NAME: Final = "local development"
 # Every origin the dev stack serves a page from. A site key with an origin list
 # that misses one refuses 100% of that origin's traffic, and the failure looks
 # exactly like the SDK not working.
+#
+# The last two are the OpenTelemetry Demo storefront, which `just otel-demo up`
+# serves through Envoy. Two origins for one page: a person opens it on localhost,
+# and the demo's own load generator opens it by compose service name from inside
+# the demo's network.
 DEV_SITE_KEY_ORIGINS: Final = [
     "http://localhost:15173",
     "http://127.0.0.1:15173",
+    "http://localhost:8080",
+    "http://frontend-proxy:8080",
 ]
 
 _log = structlog.get_logger(__name__)
@@ -62,6 +69,7 @@ async def seed(session: AsyncSession) -> bool:
     """Create the development tenant. Returns False if it already existed."""
     existing = await session.scalar(select(Organization).where(Organization.slug == DEV_ORG_SLUG))
     if existing is not None:
+        await _reconcile_site_key_origins(session)
         return False
 
     tenant = await provision_tenant(
@@ -84,6 +92,34 @@ async def seed(session: AsyncSession) -> bool:
         )
     )
     return True
+
+
+async def _reconcile_site_key_origins(session: AsyncSession) -> None:
+    """Bring the dev site key's origins up to date on an already-seeded database.
+
+    The one deliberate exception to "the seed creates, it does not update", and
+    it earns it: the origin list is the only seeded value that changes as the dev
+    stack grows a page to serve. A stale list refuses 100% of that origin's
+    traffic with a 403 that reads exactly like a broken SDK — a failure nobody
+    would think to blame on a seed that ran months ago.
+
+    Everything else here stays create-once. A developer who has revoked or edited
+    the key on purpose keeps that: a revoked key is left alone.
+    """
+    key = await session.scalar(
+        select(SiteKey).where(SiteKey.public_key == DEV_SITE_KEY, SiteKey.revoked_at.is_(None))
+    )
+    if key is None or list(key.allowed_origins) == DEV_SITE_KEY_ORIGINS:
+        return
+
+    added = [origin for origin in DEV_SITE_KEY_ORIGINS if origin not in key.allowed_origins]
+    key.allowed_origins = list(DEV_SITE_KEY_ORIGINS)
+    _log.info(
+        "development site key origins reconciled",
+        public_key=DEV_SITE_KEY,
+        added=added,
+        origins=DEV_SITE_KEY_ORIGINS,
+    )
 
 
 async def main() -> None:
