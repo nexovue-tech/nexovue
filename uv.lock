@@ -1071,6 +1071,18 @@ wheels = [
 ]
 
 [[package]]
+name = "milksnake"
+version = "0.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cffi" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/37/9c/100deced3999e748500dda3027e2a19b0074199ba27cdc5a6988d22919b8/milksnake-0.1.6.tar.gz", hash = "sha256:0198f8932b4e136c29c0d0d490ff1bac03f82c3a7b2ee6f666e3683b64314fd9", size = 10483, upload-time = "2023-10-12T11:34:39.781Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6d/5b/1688cbd7244f039a2c1a762e246f04f7fc3eff07932776ac9944da3ea208/milksnake-0.1.6-py2.py3-none-any.whl", hash = "sha256:31e3eafaf2a48e177bb4b2dacef2c7ae8c5b2147a19c6d626209b819490e6f1d", size = 11136, upload-time = "2023-10-12T11:34:37.927Z" },
+]
+
+[[package]]
 name = "multidict"
 version = "6.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1247,13 +1259,16 @@ dependencies = [
     { name = "alembic" },
     { name = "argon2-cffi" },
     { name = "asyncpg" },
+    { name = "boto3" },
     { name = "clickhouse-connect", extra = ["async"] },
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "python-multipart" },
     { name = "redis" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "structlog" },
+    { name = "symbolic" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1262,13 +1277,16 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
     { name = "argon2-cffi", specifier = ">=23.1" },
     { name = "asyncpg", specifier = ">=0.30" },
+    { name = "boto3", specifier = ">=1.35" },
     { name = "clickhouse-connect", extras = ["async"], specifier = ">=1.7" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "redis", specifier = ">=5.2" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.4" },
+    { name = "symbolic", specifier = ">=13.9" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 
@@ -1665,6 +1683,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-multipart"
+version = "0.0.32"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/42/55c32bb9b12693c092ad250a0e82edb5b31ddeda6eb772de5f308b3804ad/python_multipart-0.0.32.tar.gz", hash = "sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e", size = 46881, upload-time = "2026-06-04T16:18:58.647Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl", hash = "sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23", size = 30042, upload-time = "2026-06-04T16:18:57.319Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1807,6 +1834,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5e/89/b4a0bcfdf4f71a3dea31379f095929613d7e4528a0996bca6aa964cd0dca/structlog-26.1.0.tar.gz", hash = "sha256:f63a716cbd1b1291cf7661de7794b455acfa4c43c5bcf1630e6ad5ddc1adb3b7", size = 1459881, upload-time = "2026-06-06T07:33:39.348Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/18/489c97b834dfff9cf2fc2507cede4bcd4b11e67f84bc462acd1992496f86/structlog-26.1.0-py3-none-any.whl", hash = "sha256:e081a26d6c373e6d201eca24eede26d8ffab07f88f477822e679183428d3d91e", size = 73764, upload-time = "2026-06-06T07:33:38.046Z" },
+]
+
+[[package]]
+name = "symbolic"
+version = "13.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "milksnake" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/18/40/aac9e8b3dd67b936e53c2e8219fe50c891686d4c4a21b2a25495f3c13636/symbolic-13.9.0.tar.gz", hash = "sha256:3755cf16d3b5d5c2979604717bb480e1d6465f8a751732b5ae0e4d2205009066", size = 6243009, upload-time = "2026-07-09T10:24:06.775Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/86/29/fea593d0eb7d70f72eba5d91ff332bae1260de1bd33b5f0e189face96018/symbolic-13.9.0-py2.py3-none-macosx_10_15_x86_64.whl", hash = "sha256:70855889f6f303351fe8504bf1c38a5668a4dbf0b0990b2504969fa3e6dec506", size = 2564641, upload-time = "2026-07-09T10:23:58.37Z" },
+    { url = "https://files.pythonhosted.org/packages/46/35/f5ab113dffd786aca8f130cdae6b67529cf8536fef27a99ebef040913273/symbolic-13.9.0-py2.py3-none-macosx_11_0_arm64.whl", hash = "sha256:0fccfe0abc63f676c4153114132305f444859bfaaa11dbf83f1b5268302fe913", size = 2340167, upload-time = "2026-07-09T10:24:00.234Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/5b/f685322f99fd1b8587a2175743d9ac6d60cdff6c0bf298e8b0341df8131c/symbolic-13.9.0-py2.py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:88901a60a759d7c512fbd1b73548fe794e3c3197e97fee4bcb561ebca8175d23", size = 16883579, upload-time = "2026-07-09T10:24:01.699Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/a2/900e752fd4da3fb4b23afac6cfff9e74fb658ea0809c951493c6aea93fd5/symbolic-13.9.0-py2.py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:e6f93ffd4973a4b6a043a46bed28bb214d58ddd13c8ed41c16ba0e585198669b", size = 19185900, upload-time = "2026-07-09T10:24:04.169Z" },
 ]
 
 [[package]]

@@ -15,6 +15,26 @@ dependencies = [
     "clickhouse-connect[async]>=1.7",
     "structlog>=24.4",
     "argon2-cffi>=23.1",
+    # Object storage for source map bytes, over the generic S3 API only (ADR
+    # 0015): SeaweedFS locally, AWS S3 in deployment. boto3 rather than an async
+    # wrapper — aiobotocore pins `botocore<1.43.57` and aioboto3 pins
+    # `aiobotocore==2.25.1`, either of which would drag the whole workspace's AWS
+    # SDK backwards and couple the scheduler's STS code (ADR 0076) to a third
+    # party's release cadence. Its calls run off the event loop through anyio,
+    # which Starlette already ships.
+    "boto3>=1.35",
+    # FastAPI parses no multipart body without it, so an upload endpoint cannot
+    # exist until it is declared.
+    "python-multipart>=0.0.20",
+    # Source map symbolication: Sentry's library. `SourceMapCache.from_bytes`
+    # takes the minified bytes *and* the map, and `lookup(line, col, context)`
+    # returns the original file, line, name and surrounding source. Rejected the
+    # pure-Python readers as abandoned — `sourcemap` last released 2017-08-08.
+    # It reads no ECMA-426 debug id: `symbolic`'s debug ids are the native
+    # DWARF/Breakpad kind, and a JavaScript one is a plain key in the map's own
+    # JSON. Prebuilt py2.py3 wheels cover macOS arm64 and manylinux_2_28, so
+    # neither a laptop nor the python:3.13-slim image needs a Rust toolchain.
+    "symbolic>=13.9",
 ]
 
 [build-system]

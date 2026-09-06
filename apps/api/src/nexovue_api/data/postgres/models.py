@@ -22,6 +22,7 @@ from typing import Any, Final
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     Enum,
     ForeignKey,
@@ -83,6 +84,15 @@ SERVICE_NAME_LENGTH: Final = 255
 
 # ISO 4217.
 CURRENCY_CODE_LENGTH: Final = 3
+
+# An S3 object key; the bucket's own limit is 1024 UTF-8 bytes. A bundler path
+# inside a build output can be nearly as long, so the two share the cap.
+STORAGE_KEY_LENGTH: Final = 1024
+MINIFIED_PATH_LENGTH: Final = 1024
+
+# The ECMA-426 debug id. The specification names it a string and states no
+# length; generators emit a UUID or a 32-character hex digest.
+DEBUG_ID_LENGTH: Final = 64
 
 
 class Organization(Base):
@@ -403,6 +413,61 @@ class ProjectWebhookSecret(Base):
 
     __table_args__ = (
         Index("ix_webhook_secrets_project_id_revoked_at", "project_id", "revoked_at"),
+    )
+
+
+class SourceMap(Base):
+    """One uploaded source map, so a minified browser stacktrace can be read.
+
+    Metadata only. A source map is routinely larger than the bundle it describes
+    and there is one per build, so the bytes live in object storage and
+    `storage_key` names them. A key rather than a URL: a URL would bake one
+    deployment's endpoint into rows that outlive it (ADR 0015).
+
+    Two ways to find the map for a stack frame. `debug_id` is the ECMA-426 id a
+    build stamps into both the bundle and its map, which makes the lookup exact;
+    it is null whenever the customer's bundler does not emit one, which is still
+    the common case. `release` plus `minified_path` is the fallback, and
+    `release` joins logically to `spans.deployment_version` and
+    `deploy_events.version` — a cross-store join by string, not a foreign key.
+
+    Neither lookup is unique. A re-uploaded build must supersede rather than
+    fail, and which of several matching rows wins is the service's decision to
+    make from `uploaded_at`.
+    """
+
+    __tablename__ = "source_maps"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    release: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    debug_id: Mapped[str | None] = mapped_column(String(DEBUG_ID_LENGTH), nullable=True)
+    minified_path: Mapped[str] = mapped_column(String(MINIFIED_PATH_LENGTH), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(STORAGE_KEY_LENGTH), nullable=False)
+    # Zero would be a truncated upload recorded as a success, which symbolication
+    # would report as "no source map" rather than as the failure it was.
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    uploaded_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        CheckConstraint("size_bytes > 0", name="size_is_positive"),
+        Index(
+            "ix_source_maps_project_id_debug_id",
+            "project_id",
+            "debug_id",
+            postgresql_where=text("debug_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_source_maps_project_id_release_minified_path",
+            "project_id",
+            "release",
+            "minified_path",
+        ),
     )
 
 

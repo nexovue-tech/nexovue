@@ -32,10 +32,12 @@ from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
 from nexovue_api.middleware.ratelimit import RateLimitMiddleware
 from nexovue_api.middleware.request_log import RequestLogMiddleware
 from nexovue_api.projects import router as projects_router
+from nexovue_api.rum import router as rum_router
 from nexovue_api.servicemap import router as service_map_router
 from nexovue_api.services import router as services_router
 from nexovue_api.settings import API_PREFIX, Settings, load_settings_or_exit
 from nexovue_api.signup import router as signup_router
+from nexovue_api.sourcemaps import router as source_maps_router
 from nexovue_api.synthetics import router as synthetics_router
 from nexovue_api.system import router as system_router
 from nexovue_api.telemetry.logging import configure_logging
@@ -118,6 +120,8 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(traces_router.router)
     versioned.include_router(logs_router.router)
     versioned.include_router(error_groups_router.router)
+    versioned.include_router(rum_router.router)
+    versioned.include_router(source_maps_router.router)
     app.include_router(versioned)
 
 
