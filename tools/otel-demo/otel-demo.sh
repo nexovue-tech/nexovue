@@ -29,7 +29,7 @@
 # 21 containers, about four minutes from `up` to the first full service map.
 # It was 1641 across 20 before the collector and k6's browser scenario.
 #
-# Needs `just dev-doors` as well as `just dev`: without the probe workers the
+# Needs `just dev`, which now starts the probe workers too: without them the
 # checks are created and never probed, and `up` refuses rather than pretending.
 #
 #   ./tools/otel-demo/otel-demo.sh up      bring the trimmed demo up, in waves
@@ -193,7 +193,7 @@ require_probe_workers() {
         return
     fi
     echo "the probe workers are not running, so door 2's checks would never be probed." >&2
-    echo "  start them with: just dev-doors" >&2
+    echo "  start them with: just dev" >&2
     exit 1
 }
 

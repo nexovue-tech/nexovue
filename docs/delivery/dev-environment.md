@@ -30,7 +30,7 @@ Two different budgets apply, and conflating them is what makes the numbers look 
 
 | | What it covers | Total |
 |---|---|---|
-| **Runtime** | the services doing their job | ~2.2 GB measured steady-state |
+| **Runtime** | the services doing their job | ~3.7 GB measured 2026-09-06, on a stack the demo had been feeding — ClickHouse is 1.6 GB of that and grows with what it stores. The four probe-worker containers are 393 MiB of it, idle. |
 | **Dev ceiling** | the same services *plus the compilers they host* — `go build`, `pnpm install`, `uv sync` run inside the containers | ~12 GB of caps |
 
 The dev ceiling is high because a dev container is also a build machine. Go's compiler parallelism drives peak RSS, so `GOFLAGS=-p=2` is set — without it `ch-go/proto` was OOM-killed at 320 MB. `pnpm install` was SIGKILLed at 512 MB. The app target needs neither, and `web` there is nginx at 128 MB rather than a Vite dev server at 1 GB.
@@ -51,9 +51,9 @@ target. The app and on-premise targets are smaller, because their containers hos
 | Worker | 1 GB | 0.75 GB | one process, all pipelines (ADR 0050); trace assembly is the hungry part |
 | API | 1 GB | 0.81 GB | |
 | Web | 1 GB | 0.125 GB | dev is the Vite dev server; the app target is nginx over a static build |
-| **Core total** | **~10.25 GB** | | leaves ~2.75 GB headroom in a 13 GB VM |
+| scheduler-beat (×2) · light · browser | 0.25 · 0.75 · 1.5 GB | 0.25 · 0.25 · 1.5 GB | the browser container is Playwright; **beat runs two replicas** and elects a leader, so `just dev` is 13 containers from 12 services; in the core since 2026-09-06 |
+| **Core total** | **~13 GB of caps** | | caps are not reservations — the thirteen containers measured 3795 MiB resident |
 | *+ loadgen* | 0.5 GB | — | `tools` profile |
-| *+ scheduler-beat · light · browser* | 0.25 · 0.75 · 1.5 GB | 0.25 · 0.25 · 1.5 GB | `doors` profile; the browser container is Playwright |
 | *+ insight · ollama* | 0.75 GB · 6 GB | 1 GB · 8 GB | `insight` profile, Phase 2 — `apps/insight` does not exist yet |
 
 ## Host ports
@@ -90,7 +90,7 @@ Use `deploy.resources.limits`, **not `mem_limit`**. The widespread advice that `
 
 ClickHouse is a special case: it misreads cgroup limits in Docker, so its cap is set explicitly in `deploy/clickhouse/config.d/memory.xml` rather than inherited from the container.
 
-**2. Compose profiles, not one big up.** `just dev` starts the core only. `just dev-doors` adds the three Celery containers, one of them Playwright; `just dev-tools` adds the load generator. `insight` and `ollama` are Phase 2 and start nothing today. The full stack is rarely needed at once.
+**2. Compose profiles, for the things not everyone needs.** `just dev` starts the core *and* the three Celery probe containers, one of them Playwright — they were behind a `doors` profile until 2026-09-06, and the reasoning that "the full stack is rarely needed at once" stopped holding once `just otel-demo up` became the daily traffic source and refused to start without them. Measured idle on 2026-09-06 they cost 393 MiB across four containers — `scheduler-beat` runs two replicas that elect a leader, so twelve services come up as thirteen containers. `just dev-tools` still adds the load generator, and `insight` and `ollama` are Phase 2 and start nothing today.
 
 **3. ClickHouse keeps a short TTL in dev.** The migrations carry the production TTLs — 30 days raw, 90 days metrics. `deploy/clickhouse/dev-retention.sql` shortens spans and logs to 3 days, and it is **not** run by `just migrate` or `just fresh`: apply it by hand after migrating, with the command in its own header comment. Without it the SSD quietly fills with test spans.
 
@@ -100,15 +100,16 @@ ClickHouse is a special case: it misreads cgroup limits in Docker, so its cap is
 
 ## Development is not production's shape
 
-`just dev` runs **nine** containers: the five infrastructure services plus
-`receiver`, `worker`, `api` and `web`. Production runs **fourteen** (ADR 0052).
-The difference is deliberate, not drift:
+`just dev` runs **thirteen** containers from twelve services: the five
+infrastructure services, plus `receiver`, `worker`, `api` and `web`, plus the
+three Celery probe services — of which `scheduler-beat` runs two replicas.
+Production runs **fourteen** (ADR 0052). The difference is deliberate, not drift:
 
 | | Development | Production |
 |---|---|---|
 | Web | **Vite dev server** with HMR | Static build behind the proxy |
 | Proxy | none — services are reached directly | Caddy, terminating TLS |
-| Doors 2 and 4 | `--profile doors` | always on |
+| Doors 2 and 4 | always on, since 2026-09-06 | always on |
 | Insight, Ollama | `--profile insight` / `--profile ollama` | defined, both behind `--profile insight`; Phase 2, `apps/insight` does not exist yet |
 | Celery | beat, light and browser as separate containers | the same three |
 
@@ -125,7 +126,6 @@ CPU-only. `LLM_BASE_URL` therefore defaults to `host.docker.internal`.
 **This section was wrong until 2026-09-04 and cost time.** It said the demo needs 4–8 GB, does not coexist with our stack, and has to be run by hand against a raised Docker allocation. None of that is true any more: `tools/otel-demo/` trims the upstream compose files and drives them for you.
 
 ```
-just dev-doors                       the probe workers, which door 2 needs
 NEXOVUE_INGEST_KEY=nvk_live_devlocaldevlocaldevloc just otel-demo up
 just otel-demo stats     memory, this stack and the demo's
 just otel-demo logs      follow every demo container

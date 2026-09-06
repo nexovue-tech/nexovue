@@ -249,7 +249,6 @@ services:
 
   # ---------- doors 2 and 4b ----------
   scheduler-beat:
-    profiles: ["doors"]
     build:
       context: ../..
       dockerfile: deploy/docker/python-dev.Dockerfile
@@ -298,7 +297,6 @@ services:
           memory: 256M
 
   scheduler-light:
-    profiles: ["doors"]
     build:
       context: ../..
       dockerfile: deploy/docker/python-dev.Dockerfile
@@ -327,7 +325,6 @@ services:
           memory: 768M
 
   scheduler-browser:
-    profiles: ["doors"]
     build:
       context: ../..
       dockerfile: apps/scheduler/Dockerfile.browser

@@ -19,13 +19,14 @@ _default:
 
 # ---------- running ----------
 
-# Dev stack: infrastructure + services with hot reload
+# Dev stack: infrastructure + services with hot reload, including the Celery
+# probe workers. They were behind a `doors` profile until 2026-09-06, on the
+# reasoning that the full stack is rarely needed at once — but `just otel-demo up`
+# is the daily traffic source and refuses without them, so the extra step was a
+# papercut on the common path. Measured idle: 393 MiB across four containers
+# (scheduler-beat runs two replicas and elects a leader).
 dev:
     docker compose -f {{compose}}/docker-compose.yaml up -d --wait
-
-# Dev stack plus doors 2 and 4b (Celery probes, Playwright browsers)
-dev-doors:
-    docker compose -f {{compose}}/docker-compose.yaml --profile doors up -d --wait
 
 # Realistic traffic comes from `just otel-demo up`, not from here.
 # Dev stack plus the load generator: telemetrygen at the receiver, for the §4 budgets
@@ -39,7 +40,7 @@ dev-app:
 # Stop everything, keep the volumes. Takes the OpenTelemetry Demo with it.
 down:
     -./tools/otel-demo/otel-demo.sh down
-    docker compose -f {{compose}}/docker-compose.yaml --profile doors --profile tools down
+    docker compose -f {{compose}}/docker-compose.yaml --profile tools down
 
 # Destructive. Everything not in a snapshot from `just backup` is gone, including
 # Kafka's buffer, and it leaves no schema and no seed — so `just fresh` is usually
@@ -47,7 +48,7 @@ down:
 # Stop everything and delete every volume: stores, broker, caches
 down-hard:
     -./tools/otel-demo/otel-demo.sh down
-    docker compose -f {{compose}}/docker-compose.yaml --profile doors --profile tools down -v
+    docker compose -f {{compose}}/docker-compose.yaml --profile tools down -v
 
 # Run this when the dev stack has drifted into a state you stopped trusting.
 # Takes about two minutes, most of it waiting for ClickHouse and Kafka.
@@ -59,7 +60,6 @@ fresh: down-hard
     just seed
     @echo
     @echo "Fresh stack up, migrated and seeded."
-    @echo "  Probes:   just dev-doors        the demo needs these, and refuses without them"
     @echo "  Traffic:  just otel-demo up     five doors; the key defaults to the seeded one"
     @echo "  App:      http://localhost:15173"
     @echo

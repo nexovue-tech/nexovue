@@ -42,7 +42,7 @@ const PHASES = ["dns", "tcp", "tls", "ttfb", "transfer"] as const;
  * every break in it looks like. Naming them saves the next person the hunt.
  */
 const NOTHING_MEASURED =
-  "the check was created but nothing was measured against it — check that the scheduler is running (`just dev-doors`) and that the worker is consuming";
+  "the check was created but nothing was measured against it — check that the scheduler is running (`just dev`) and that the worker is consuming";
 
 /** Five shares rounded to whole percent can only drift half a point each. */
 const SHARE_TOLERANCE_PERCENT = 3;
