@@ -6,6 +6,11 @@
 
 ---
 
+> **What is still outstanding is tracked in [phase-1-v2.md](phase-1-v2.md)**, opened 2026-09-06.
+> This file remains the record of what was built and why. Four rows below are stale — P1-53's
+> browser-SSRF, site-key and `TRUSTED_PROXY_COUNT` findings are fixed, and P1-54 is started — and
+> v2 says so with the evidence.
+
 ## 0. Scope
 
 **Phase 1 = the core system.** Every data door lands its data in storage in one normalized shape, and the UI can show all of it.
