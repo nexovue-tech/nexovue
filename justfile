@@ -59,8 +59,13 @@ fresh: down-hard
     just seed
     @echo
     @echo "Fresh stack up, migrated and seeded."
-    @echo "  Traffic:  NEXOVUE_INGEST_KEY=nvk_live_devlocaldevlocaldevloc just otel-demo up"
+    @echo "  Probes:   just dev-doors        the demo needs these, and refuses without them"
+    @echo "  Traffic:  just otel-demo up     five doors; the key defaults to the seeded one"
     @echo "  App:      http://localhost:15173"
+    @echo
+    @echo "  Two screens stay empty until you act: RUM needs a page loaded"
+    @echo "  (open http://localhost:8080, or run just load), and Database is"
+    @echo "  blocked on ADR 0076."
 
 logs service="":
     docker compose -f {{compose}}/docker-compose.yaml logs -f {{service}}
