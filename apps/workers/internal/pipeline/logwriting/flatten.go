@@ -15,6 +15,7 @@ import (
 	nexovuev1 "github.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/vitals"
 )
 
 // attrServiceName is the resource attribute behind the promoted column the log
@@ -92,12 +93,22 @@ func decodeEnvelope(message []byte) (decoded, error) {
 type stamps struct {
 	receivedAt    time.Time
 	retentionDays uint16
+	// derivedRetentionDays belongs to the vitals rollup rather than to a log
+	// row, and is carried here because the same message produces both.
+	derivedRetentionDays uint16
 }
 
 // rows flattens the decoded payload, which by this point has already been
 // through the mask stage.
-func (d decoded) rows(marks stamps) []logRow {
+//
+// It returns the vital readings alongside the rows because both come from the
+// same records, and walking the payload twice to find them would decode the
+// same attributes again for the sake of a separation the caller does not want:
+// the readings must be written under the same offsets as the rows they came
+// from, or a restart between the two inserts loses one of them.
+func (d decoded) rows(marks stamps) ([]logRow, []vitals.Reading) {
 	rows := make([]logRow, 0, countRecords(d.request))
+	var readings []vitals.Reading
 	for _, resourceLogs := range d.request.GetResourceLogs() {
 		resourceAttrs := resourceLogs.GetResource().GetAttributes()
 		shared := resourceFacts{
@@ -109,11 +120,30 @@ func (d decoded) rows(marks stamps) []logRow {
 				if record == nil {
 					continue
 				}
-				rows = append(rows, flattenRecord(d.envelope, shared, marks, record))
+				row := flattenRecord(d.envelope, shared, marks, record)
+				rows = append(rows, row)
+				if reading, isVital := vitals.ReadingFrom(record, vitalMarks(row, marks)); isVital {
+					readings = append(readings, reading)
+				}
 			}
 		}
 	}
-	return rows
+	return rows, readings
+}
+
+// vitalMarks are what a reading takes from its message rather than from its own
+// attributes. The timestamp is the row's, already resolved through the same
+// event → observed → received fallback, so the two tables cannot disagree about
+// when a reading happened.
+func vitalMarks(row logRow, marks stamps) vitals.Marks {
+	return vitals.Marks{
+		Timestamp:            row.Timestamp,
+		ReceivedAt:           marks.receivedAt,
+		RetentionDays:        marks.retentionDays,
+		DerivedRetentionDays: marks.derivedRetentionDays,
+		TenantID:             row.TenantID,
+		ProjectID:            row.ProjectID,
+	}
 }
 
 // resourceFacts are the values every record under one resource shares, computed

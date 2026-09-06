@@ -141,7 +141,7 @@ func TestFlattenSplitsAttributesAndPromotesTheException(t *testing.T) {
 		request:  requestWithOneRecord(errorRecord()),
 	}
 
-	rows := payload.rows(testStamps())
+	rows, _ := payload.rows(testStamps())
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
@@ -184,7 +184,8 @@ func TestIDsAreHexAtTheDeclaredWidth(t *testing.T) {
 		envelope: &nexovuev1.Envelope{},
 		request:  requestWithOneRecord(errorRecord()),
 	}
-	row := payload.rows(testStamps())[0]
+	rows, _ := payload.rows(testStamps())
+	row := rows[0]
 
 	if len(row.TraceID) != otlpvalue.TraceIDHexLen || len(row.SpanID) != otlpvalue.SpanIDHexLen {
 		t.Fatalf("id widths = (%d, %d), want (%d, %d)",
@@ -198,7 +199,8 @@ func TestIDsAreHexAtTheDeclaredWidth(t *testing.T) {
 		envelope: &nexovuev1.Envelope{},
 		request:  requestWithOneRecord(&logspb.LogRecord{}),
 	}
-	bare := untraced.rows(testStamps())[0]
+	bareRows, _ := untraced.rows(testStamps())
+	bare := bareRows[0]
 	if len(bare.TraceID) != otlpvalue.TraceIDHexLen || len(bare.SpanID) != otlpvalue.SpanIDHexLen {
 		t.Errorf("a record with no trace context wrote ids of width (%d, %d)",
 			len(bare.TraceID), len(bare.SpanID))

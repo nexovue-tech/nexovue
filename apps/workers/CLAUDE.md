@@ -5,7 +5,11 @@
 running. The names are load-bearing: splitting a deployment is a config change, not a rewrite.
 
 Counter derivation and the service-edge rollup are stages **inside** `trace-assembly`, not names of
-their own. They had names once and started nothing.
+their own. They had names once and started nothing. The browser door's web vitals are the same shape
+one signal over: they arrive as ordinary log records, so `internal/pipeline/vitals` promotes them
+into `web_vitals` and its rollup from **inside** `log-writing`, on that pipeline's own chunk
+boundaries and under its watermark. A consumer group of its own would decode every log record a
+second time and need a second watermark to stay consistent with the first.
 
 Pipeline order is **decode → mask → derive → sample → sink**, and it carries two invariants:
 - **`derive` runs before `sample`** — metrics are computed from all traces, so counts stay exact

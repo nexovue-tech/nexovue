@@ -64,7 +64,7 @@ func TestMaskingRunsBeforeRowsAreBuilt(t *testing.T) {
 	masker := &blankingMasker{}
 	pipeline := testPipeline(masker, fixedRetention{raw: 7})
 
-	rows, masked, err := pipeline.absorbMessage(receivedAt, logMessage(t))
+	rows, _, masked, err := pipeline.absorbMessage(receivedAt, logMessage(t))
 	if err != nil {
 		t.Fatalf("absorbMessage: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestMaskingRunsBeforeRowsAreBuilt(t *testing.T) {
 func TestRetentionFallsBackToTheDeploymentDefault(t *testing.T) {
 	pipeline := testPipeline(&blankingMasker{}, staticRetention{raw: 30})
 
-	rows, _, err := pipeline.absorbMessage(receivedAt, logMessage(t))
+	rows, _, _, err := pipeline.absorbMessage(receivedAt, logMessage(t))
 	if err != nil {
 		t.Fatalf("absorbMessage: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestRetentionFallsBackToTheDeploymentDefault(t *testing.T) {
 func TestReceivedAtComesFromTheEnvelope(t *testing.T) {
 	pipeline := testPipeline(&blankingMasker{}, staticRetention{raw: 30})
 
-	rows, _, err := pipeline.absorbMessage(time.Unix(0, 1).UTC(), logMessage(t))
+	rows, _, _, err := pipeline.absorbMessage(time.Unix(0, 1).UTC(), logMessage(t))
 	if err != nil {
 		t.Fatalf("absorbMessage: %v", err)
 	}

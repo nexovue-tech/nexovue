@@ -279,6 +279,42 @@ func Int(attributes []*commonpb.KeyValue, key string) (int64, bool) {
 	}
 }
 
+// Float64 returns the value of key as a floating-point number.
+//
+// An integer is accepted and widened, for the mirror of the reason Int accepts
+// a double: a vital whose value lands exactly on a whole number is encoded as
+// an int by any exporter that writes JSON, so a column that took only doubles
+// would silently drop every CLS of 0 and every TTFB of a round millisecond.
+func Float64(attributes []*commonpb.KeyValue, key string) (float64, bool) {
+	value, ok := Find(attributes, key)
+	if !ok {
+		return 0, false
+	}
+	switch typed := value.GetValue().(type) {
+	case *commonpb.AnyValue_DoubleValue:
+		return typed.DoubleValue, true
+	case *commonpb.AnyValue_IntValue:
+		return float64(typed.IntValue), true
+	default:
+		return 0, false
+	}
+}
+
+// Bool returns the value of key when it is a boolean. Unlike the numbers there
+// is nothing to coerce: a string "true" is a different attribute shape, and
+// reading it as a boolean would invent agreement the sender never expressed.
+func Bool(attributes []*commonpb.KeyValue, key string) (bool, bool) {
+	value, ok := Find(attributes, key)
+	if !ok {
+		return false, false
+	}
+	flag, isBool := value.GetValue().(*commonpb.AnyValue_BoolValue)
+	if !isBool {
+		return false, false
+	}
+	return flag.BoolValue, true
+}
+
 // HexID renders a trace or span id as the lower-case hex of exactly width
 // bytes, which is what the FixedString columns store.
 //

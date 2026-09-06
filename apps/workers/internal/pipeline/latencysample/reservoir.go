@@ -38,15 +38,22 @@ type weighted struct {
 	ms     float64
 }
 
-// Weigh derives a sample's weight from the identity of the span it came from.
-func Weigh(traceID, spanID []byte) uint64 {
+// WeighIdentity derives a sample's weight from whatever identifies the thing
+// sampled. Any number of parts, because not everything sampled is a span: a web
+// vital is identified by the id the browser gave the reading.
+func WeighIdentity(parts ...[]byte) uint64 {
 	digest := fnv.New64a()
-	// hash.Hash documents that Write never returns an error, so the results are
-	// discarded explicitly rather than checked into a path that cannot happen.
-	_, _ = digest.Write(traceID)
-	_, _ = digest.Write(spanID)
+	for _, part := range parts {
+		// hash.Hash documents that Write never returns an error, so the results
+		// are discarded explicitly rather than checked into a path that cannot
+		// happen.
+		_, _ = digest.Write(part)
+	}
 	return digest.Sum64()
 }
+
+// Weigh derives a sample's weight from the identity of the span it came from.
+func Weigh(traceID, spanID []byte) uint64 { return WeighIdentity(traceID, spanID) }
 
 // Observe offers one duration to the sample.
 func (r *Reservoir) Observe(weight uint64, ms float64) {

@@ -2,14 +2,13 @@ package logwriting
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/chpool"
-	"github.com/ClickHouse/ch-go/proto"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/storefailure"
 )
 
 // jsonAsStringSetting lets a JSON column travel the native protocol as one
@@ -41,29 +40,10 @@ func (w *logWriter) insert(ctx context.Context, block *logBlock) error {
 	}
 	if err := w.pool.Do(ctx, query); err != nil {
 		wrapped := fmt.Errorf("insert %d logs: %w", block.rows(), err)
-		if refusedTheData(err) {
+		if storefailure.RefusedTheData(err) {
 			return consume.AsPermanent(wrapped)
 		}
 		return wrapped
 	}
 	return nil
-}
-
-// refusedTheData reports whether ClickHouse rejected the rows themselves rather
-// than being unable to take them right now.
-//
-// Deliberately a short list. Misjudging an outage as permanent parks records
-// that would have been written a second later, so anything not clearly about
-// the data's own shape stays retryable — the default is to wait.
-func refusedTheData(err error) bool {
-	var exception *ch.Exception
-	if !errors.As(err, &exception) {
-		return false
-	}
-	return exception.IsCode(
-		proto.ErrIncorrectData,   // the rows themselves; what the demo's log record hit
-		proto.ErrTypeMismatch,    // a value that will never fit its column
-		proto.ErrIllegalColumn,   // e.g. a JSON path used where it cannot be
-		proto.ErrCannotParseText, // malformed on the wire, not in flight
-	)
 }

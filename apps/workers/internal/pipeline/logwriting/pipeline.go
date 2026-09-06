@@ -32,6 +32,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/vitals"
 )
 
 // Masker rewrites the decoded payload in place, so that no stage after it can
@@ -81,6 +82,14 @@ type Pipeline struct {
 	writer *logWriter
 	block  *logBlock
 
+	// The browser door's web vitals ride this pipeline: they arrive as ordinary
+	// log records and are written to `logs` like any other, then promoted into
+	// their own table and rollup. Held here so they flush on the same chunk
+	// boundaries as the rows they came from — see writeChunk.
+	vitalWriter   *vitals.Writer
+	vitalReadings []vitals.Reading
+	vitalRollup   *vitals.Rollup
+
 	// written is how far each partition's rows are in the store, kept in Keeper
 	// so it survives the restart that causes the replay.
 	written *ingeststate.WriteGuard
@@ -95,6 +104,9 @@ type Pipeline struct {
 	// message failed to decode and so bypassed masking entirely.
 	parked       uint64
 	valuesMasked uint64
+	// vitalsWritten is how many web vital readings were promoted out of those
+	// logs. It reads zero on a deployment with no browser door installed.
+	vitalsWritten uint64
 	// alreadyStored counts messages a replay offered whose rows the store had
 	// already acknowledged. It is the direct evidence that the watermark is
 	// doing something, and reads zero on a worker that never restarted.
@@ -144,6 +156,8 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		loop:                 loop,
 		writer:               newLogWriter(pool),
 		block:                newLogBlock(),
+		vitalWriter:          vitals.NewWriter(pool),
+		vitalRollup:          vitals.NewRollup(),
 		written:              guard,
 		masker:               opts.Masking,
 		retention:            retentionSource(cfg, opts),
@@ -185,6 +199,7 @@ func (p *Pipeline) Describe() []slog.Attr {
 func (p *Pipeline) Holding() []slog.Attr {
 	return []slog.Attr{
 		slog.Uint64("logs_written", p.logsWritten),
+		slog.Uint64("web_vitals_written", p.vitalsWritten),
 		slog.Uint64("messages_already_stored", p.alreadyStored),
 		slog.Uint64("messages_parked", p.parked),
 		slog.Uint64("values_masked", p.valuesMasked),
@@ -208,6 +223,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 	}
 
 	p.block.reset()
+	p.resetVitals()
 	messages, masked, stored := 0, 0, 0
 	// inBlock is exactly the records whose rows are in the block, which is what
 	// has to be parked if the store refuses it. Skipped and parked records are
@@ -223,7 +239,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 			p.alreadyStored++
 			continue
 		}
-		rows, maskedHere, err := p.absorbMessage(polled.At, record.Value)
+		rows, readings, maskedHere, err := p.absorbMessage(polled.At, record.Value)
 		if err != nil {
 			if parkErr := p.loop.Park(ctx, record, err); parkErr != nil {
 				return written{}, parkErr
@@ -234,6 +250,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 		for _, row := range rows {
 			p.block.append(row)
 		}
+		p.holdVitals(readings)
 		inBlock = append(inBlock, record)
 		masked += maskedHere
 		messages++
@@ -285,13 +302,23 @@ func (p *Pipeline) writeChunk(
 	covered []consume.Position,
 ) (int, error) {
 	rows := p.block.rows()
-	err := p.insertBounded(ctx)
+	// The vitals go in first. If the log insert then fails, the batch is retried
+	// whole and the readings that already landed are recognised as the repeat
+	// they are by their deduplication token; the reverse order would leave a
+	// reading promoted from a row that no retry ever wrote.
+	err := p.insertVitalsBounded(ctx)
+	if err == nil {
+		err = p.insertBounded(ctx)
+	}
+	promoted := len(p.vitalReadings)
 	p.block.reset()
+	p.resetVitals()
 
 	stored := 0
 	switch {
 	case err == nil:
 		p.logsWritten += countOf(rows)
+		p.vitalsWritten += countOf(promoted)
 		stored = rows
 	case !consume.IsPermanent(err):
 		return 0, err
@@ -331,22 +358,29 @@ func (p *Pipeline) storing(record *kgo.Record) bool {
 }
 
 // absorbMessage runs one Kafka message through decode → mask → flatten.
-func (p *Pipeline) absorbMessage(now time.Time, message []byte) ([]logRow, int, error) {
+func (p *Pipeline) absorbMessage(
+	now time.Time,
+	message []byte,
+) ([]logRow, []vitals.Reading, int, error) {
 	payload, err := decodeEnvelope(message)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 
 	projectID := payload.envelope.GetProjectId()
-	// Mask first: from here on no stage can see the original values.
+	// Mask first: from here on no stage can see the original values. The vital
+	// readings are promoted after this, so they inherit the masking rather than
+	// needing their own.
 	masked := p.masker.MaskResourceLogs(projectID, payload.request.GetResourceLogs())
 
-	rawDays, _ := p.retention.Retention(projectID)
+	rawDays, derivedDays := p.retention.Retention(projectID)
 	marks := stamps{
-		receivedAt:    consume.ReceivedAt(payload.envelope, now),
-		retentionDays: rawDays,
+		receivedAt:           consume.ReceivedAt(payload.envelope, now),
+		retentionDays:        rawDays,
+		derivedRetentionDays: derivedDays,
 	}
-	return payload.rows(marks), masked, nil
+	rows, readings := payload.rows(marks)
+	return rows, readings, masked, nil
 }
 
 // Settle has nothing to do: every batch is written inside Absorb, so nothing
@@ -377,6 +411,33 @@ func (p *Pipeline) parkRefusedChunk(ctx context.Context, covered []*kgo.Record, 
 		slog.String("error", cause.Error()),
 	)
 	return nil
+}
+
+// holdVitals keeps one message's readings until the chunk they belong to is
+// written, folding each into the per-minute rollup as it arrives.
+func (p *Pipeline) holdVitals(readings []vitals.Reading) {
+	for _, reading := range readings {
+		p.vitalReadings = append(p.vitalReadings, reading)
+		p.vitalRollup.Add(reading)
+	}
+}
+
+// resetVitals drops what the last chunk held, keeping the slice's capacity.
+func (p *Pipeline) resetVitals() {
+	p.vitalReadings = p.vitalReadings[:0]
+	p.vitalRollup.Reset()
+}
+
+// insertVitalsBounded writes the readings promoted out of this chunk, and the
+// rollup rows they fold into, under the same retry budget as the logs.
+func (p *Pipeline) insertVitalsBounded(ctx context.Context) error {
+	if len(p.vitalReadings) == 0 {
+		return nil
+	}
+	rows := p.vitalRollup.Rows()
+	return p.loop.Retry(ctx, "insert web vitals", func(callCtx context.Context) error {
+		return p.vitalWriter.Insert(callCtx, p.vitalReadings, rows)
+	})
 }
 
 // insertBounded writes the accumulated block under a deadline.
