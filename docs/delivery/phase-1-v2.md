@@ -411,9 +411,112 @@ reason rather than an oversight:
 **Neither blocks Phase 2**, but both should be answered *before* Phase 2 scoping rather than during
 it, because "no home in any phase" is how a category quietly becomes a commitment nobody made.
 
+## 4d. Structure — what a deep read found, and what it did not
+
+Asked whether the codebase needs refactoring before Phase 2 closes the door on it, the honest
+answer is **no broad refactor, and three specific seams.** The architecture was read rather than
+assumed on 2026-09-07.
+
+### What holds, checked rather than trusted
+
+| Check | Result |
+|---|---|
+| a `service.py` importing FastAPI or raising `HTTPException` | none |
+| a `router.py` containing SQL | none |
+| a `service.py` containing raw SQL | none |
+| mutable module-level state in a service | none |
+| largest non-test source file | 754 lines |
+
+The patterns are present and correctly chosen. **Repository** — `data/clickhouse/base.py`, and it
+is the strongest thing here: a structural test parses every module and rejects the three near-misses
+that contain the tenant text and still leak. **Strategy with a template method** — `Processor[S any]`
+writes the poll/offset/commit/heartbeat loop once and lets each signal supply four methods, so a
+Phase 2 pipeline is an implementation rather than a fork. **Adapter** — `packages/contracts`, one
+envelope before the broker, storage never learning that doors exist. **Facade** —
+`shared/api-client.ts` behind fourteen per-feature modules.
+
+**Singleton and Factory are absent and should stay absent.** Dependencies arrive through FastAPI's
+`Depends`; adding either would be a step backwards.
+
+**Phase 2 has somewhere to attach**, which is the thing a pre-launch codebase usually gets wrong.
+Services take a repository rather than a `Request` — `seed.py` already calls
+`signup.service.provision_tenant` outside HTTP, so a findings engine can call any of them. The
+Celery scheduler is shaped for periodic evaluation already. A new worker pipeline is an interface
+implementation.
+
+### A1 · The authorization seam — the only item that gets harder after Phase 2
+
+**47 routes. A role is read in exactly one module** — `apikeys/service.py`, four call sites, one
+`frozenset`.
+
+Correct today, because §9 decided Phase 1 is single-operator and every user is an owner. It stops
+being correct at M8's P1-76 or Phase 2's F26, and then **43 routes have no authorization at all** —
+creating checks and integrations, posting deploys, rotating webhook secrets.
+
+**Why it cannot wait:** it is a cross-cutting concern retrofitted into 47 places, after a phase of
+feature work has made it eighty. That is the change that never gets made.
+
+**The seam already exists.** Every route takes
+`CurrentIdentity = Annotated[Identity, Depends(get_current_identity)]`, so the fix composes with
+what is there rather than replacing it:
+
+```python
+RequireOwner = Annotated[Identity, Depends(require_role("owner", "admin"))]
+```
+
+One line per route, no service changes, and the policy lives in one module instead of four
+`if actor.role not in …` checks scattered through one service. **Today it changes no behaviour** —
+every Phase 1 user is an owner — which is exactly what makes it safe to introduce now and unsafe to
+introduce later.
+
+### A2 · The contract-test pattern is not applied everywhere its root exists
+
+Three constants are restated across the API/scheduler boundary, deliberately, because *"the two
+deploy separately"* — sound reasoning, and `test_synthetics.py` states the mitigation exactly:
+
+> *"Restating a name is how two services drift apart; this is the assertion that turns a rename
+> into a failing test instead of an empty chart."*
+
+Door 2 and door 4b's metric names both have that test. **The third does not: `SUPPORTED_POSTGRES_AUTH`
+in `integrations/service.py`, added on 2026-09-06, restates the scheduler's `AUTH_RDS_IAM` with a
+comment saying a change must change both, and nothing enforces it.** Same root, fixed in two of
+three places — rule 5, and the omission is mine.
+
+Three lines to fix, and worth a sweep beyond it: **31 metric-name constants cross a service
+boundary**, and the two tested pairs cover the API against the scheduler. Nothing checks the Go
+worker's ClickHouse column names against the API's readers, which is the same drift with a longer
+fuse.
+
+### A3 · `packages/py-platform`, smaller than §7b implies
+
+§7b calls for a shared workspace member. Measured: **299 lines**. `context.py` and `redaction.py`
+are byte-identical between `api` and `scheduler`; `logging.py` differs in **two lines**, both import
+prefixes.
+
+A two-hour job, and it matters for what it prevents rather than what it removes — a redaction rule
+fixed in one copy and not the other is a privacy bug that passes every test in both services.
+
+### Deliberately not changed
+
+**The restated-contract pattern itself.** It looks like duplication and is a correct decision: a
+scheduler that cannot start because a control-plane package moved is a scheduler running nobody's
+polls. Keep it, test it.
+
+**One worker container, six pipelines** (ADR 0050). §7b says split when measurement says to.
+Measurement has not.
+
+**Fourteen per-feature `api.ts` modules.** The right amount of duplication — the alternative
+couples every screen to one generated schema.
+
+**No logic was found that is wrong by design.** All three items above are structural.
+
 ## 5. The order I would actually take
 
-**Now — the safety gate.** G4 then G3, in that order: G4 is small, and it removes the stated
+**First — A1, the authorization seam.** It is the only item on this whole list that gets
+materially harder after Phase 2, it changes no behaviour today, and it is a day now against a
+fortnight later. A2 and A3 ride alongside it: three lines and two hours respectively.
+
+**Then — the safety gate.** G4 then G3, in that order: G4 is small, and it removes the stated
 reason G3 was never fixed. Both are open holes, and G3 is an SSRF surface every sibling boundary
 already closes. T1-5 belongs here too — it is a `CHECK` or a test, and it guards the cap G6 extends. Then G1, because TLS is what makes exposure
 possible at all.
