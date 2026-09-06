@@ -1,7 +1,7 @@
 # P1-62 — the demo's Envoy (`frontend-proxy`), pointed at our receiver *with a key*.
 #
 # A verbatim copy of upstream `src/frontend-proxy/envoy.tmpl.yaml` at tag 3.0.0,
-# with two changes:
+# with three changes:
 #
 #   1. `initial_metadata` on the two `grpc_service` blocks that export to us —
 #      the tracer's and the OpenTelemetry access logger's. Envoy configures its
@@ -9,14 +9,22 @@
 #      every span and every access log it exports is refused 401 at our door.
 #   2. `dns_lookup_family` on the two collector clusters, so Envoy dials the
 #      address our receiver actually listens on. See the comment there.
+#   3. A Lua filter that puts our browser SDK on every page the storefront
+#      serves. It goes here rather than in the frontend's own `_document.tsx`
+#      because that image is pulled prebuilt and the clone is never edited in
+#      place — this file is already patched and already mounted, so it is the
+#      one place upstream's behaviour can be changed without a rebuild.
 #
 # `initial_metadata` is a top-level field of GrpcService and exists "for
 # scenarios in which additional ad hoc authorization headers ... are to be
 # injected" —
 # https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/core/v3/grpc_service.proto
 #
-# ${NEXOVUE_INGEST_KEY} is substituted by the image's own entrypoint, which runs
-# envsubst over this file with no variable list and so expands every ${...} in it.
+# ${NEXOVUE_INGEST_KEY}, ${NEXOVUE_SITE_KEY} and ${NEXOVUE_RUM_RELEASE} are
+# substituted by the image's own entrypoint, which runs envsubst over this file
+# with no variable list and so expands every ${...} in it. That is also why the
+# injected JavaScript below contains no dollar sign at all: a template literal
+# or a jQuery-style name would be eaten before Envoy ever saw it.
 #
 # Re-check this file against the clone whenever UPSTREAM_REF moves.
 # Copyright The OpenTelemetry Authors
@@ -112,6 +120,70 @@ static_resources:
                         header_delay: {}
                         percentage:
                           numerator: 100
+                  - name: envoy.filters.http.lua
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+                      default_source_code:
+                        inline_string: |
+                          -- Our browser SDK, on every page the storefront serves.
+                          --
+                          -- The bundle is served by image-provider, which this proxy already
+                          -- routes /images/ to, so the browser fetches and caches it like any
+                          -- other static file.
+                          --
+                          -- flushIntervalMs is 3s here against the SDK's own 10s default, and it
+                          -- is demo configuration rather than a product opinion. The load
+                          -- generator's browser opens a page, clicks twice and closes it in about
+                          -- five seconds — measured — so at the default it died before its first
+                          -- flush every time, and the unload beacon queued as the renderer is torn
+                          -- down does not reliably survive. A human reading the shop is unaffected
+                          -- either way.
+                          --
+                          -- The endpoint is location.origin .. "/otlp-http", and that one string
+                          -- is why this works for both readers: a person on localhost:8080 and
+                          -- the load generator's Chromium on frontend-proxy:8080 each resolve it
+                          -- to their own origin. It is also same-origin, so there is no preflight
+                          -- to answer — and the browser still sends Origin on a same-origin POST,
+                          -- which is what the door checks.
+                          local SNIPPET = [==[<script src="/images/nexovue-rum.min.js"></script><script>window.nexovue&&nexovue.init({siteKey:"${NEXOVUE_SITE_KEY}",endpoint:location.origin+"/otlp-http",serviceName:"frontend-web",serviceVersion:"${NEXOVUE_RUM_RELEASE}",flushIntervalMs:3000,route:(function(p){return p.indexOf("/product/")===0?"/product/{id}":p})(location.pathname)})</script>]==]
+
+                          function envoy_on_request(handle)
+                            -- Next.js compresses its own HTML and Lua sees the bytes on the wire,
+                            -- so a compressed body would be unreadable here. Asked for identity on
+                            -- document loads only, which leaves /images and /otlp-http alone.
+                            if handle:headers():get("sec-fetch-dest") == "document" then
+                              handle:headers():remove("accept-encoding")
+                            end
+                          end
+
+                          function envoy_on_response(handle)
+                            local headers = handle:headers()
+                            local content_type = headers:get("content-type")
+                            if content_type == nil then return end
+                            if string.find(content_type, "text/html", 1, true) == nil then return end
+                            -- Compressed anyway: skip rather than corrupt the page.
+                            if headers:get("content-encoding") ~= nil then return end
+
+                            -- Dropped *before* the body is buffered, and that order is the whole
+                            -- of it: by the time handle:body() returns, these headers have already
+                            -- gone downstream, so a length written afterwards changes nothing.
+                            -- Measured with it written afterwards: the header still said 11549
+                            -- while 11882 bytes were sent, which truncates the end of the page in
+                            -- any client that believes it. Removing it lets Envoy frame the
+                            -- response itself, which it can do correctly and we cannot.
+                            headers:remove("content-length")
+
+                            local body = handle:body()
+                            if body == nil or body:length() == 0 then return end
+                            local page = tostring(body:getBytes(0, body:length()))
+                            local head_end = string.find(page, "</head>", 1, true)
+                            -- No head to inject into is a response this filter has no business
+                            -- rewriting, so it is left exactly as it arrived.
+                            if head_end == nil then return end
+
+                            local rewritten = string.sub(page, 1, head_end - 1) .. SNIPPET .. string.sub(page, head_end)
+                            body:setBytes(rewritten)
+                          end
                   - name: envoy.filters.http.router
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router

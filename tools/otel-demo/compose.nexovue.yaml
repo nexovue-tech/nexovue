@@ -143,13 +143,29 @@ services:
   shipping:
     environment: *nexovue-key
 
+  # k6's browser scenario is upstream's default. We had turned it off on the
+  # belief that it starts a Chromium per virtual user and "costs more memory than
+  # every application service put together". Both halves were wrong, and both
+  # were measured before this line was written:
+  #
+  #   - 3.0.0's own script.js pins that scenario at `vus: 1` whatever
+  #     LOAD_GENERATOR_VUS says. One headless browser, not one per user.
+  #   - the whole load-generator, Chromium included, sits at 150 MiB of its
+  #     512 MiB limit.
+  #
+  # **It does not produce browser telemetry, and that was the reason it was
+  # turned back on.** Measured over 55 completed browser iterations: zero
+  # exports reached the browser door — not from our injected SDK, and not from
+  # upstream's own `FrontendTracer` either. Whatever k6's browser module does
+  # to page-initiated requests, it does to both equally, so this is not
+  # something our injection can fix. The RUM screen is filled by a person
+  # opening the storefront, or by `just load`.
+  #
+  # It stays on for what it does deliver: the only thing here that drives the
+  # shop through a real browser, which is where `browser_add_to_cart` and
+  # `browser_change_currency` come from.
   load-generator:
-    environment:
-      - OTEL_EXPORTER_OTLP_HEADERS=x-nexovue-key=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
-      # k6's browser mode starts a headless Chromium per virtual user. It costs
-      # more memory than every application service put together and adds one
-      # more node to the map, not one more language.
-      - K6_BROWSER_ENABLED=false
+    environment: *nexovue-key
 
   # From upstream's `compose.full.yaml`. They are the only queue hop in the demo
   # — checkout produces an order, these two consume it — so they are the only
@@ -172,6 +188,12 @@ services:
       - NEXOVUE_INGEST_KEY=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
     volumes:
       - ${NEXOVUE_OVERLAY_DIR:?set by otel-demo.sh}/image-provider-nginx.conf.template:/nginx.conf.template:ro
+      # Door 3's bundle, served from the demo's only static-file server — the
+      # one Envoy already routes `/images/` to, so the browser can fetch it with
+      # no new container and no new route. `dist/` is gitignored, so this fails
+      # loudly when the SDK has not been built; otel-demo.sh says so by name.
+      - ${NEXOVUE_BROWSER_SDK_DIST:?set by otel-demo.sh}/nexovue-rum.min.js:/static/nexovue-rum.min.js:ro
+      - ${NEXOVUE_BROWSER_SDK_DIST}/nexovue-rum.min.js.map:/static/nexovue-rum.min.js.map:ro
     # Upstream's own CMD, with NEXOVUE_INGEST_KEY added to the envsubst list —
     # envsubst substitutes only the names it is given — and with upstream's
     # `cat /etc/nginx/nginx.conf` dropped, which would print the key to the log.
@@ -183,5 +205,11 @@ services:
   frontend-proxy:
     environment:
       - NEXOVUE_INGEST_KEY=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
+      # Both are substituted into the Lua filter's injected script by the image's
+      # own entrypoint. The site key is public by design — it is checked against
+      # the Origin it was served from, not kept secret — which is what lets it sit
+      # in a page anyone can read.
+      - NEXOVUE_SITE_KEY=${NEXOVUE_SITE_KEY:?set NEXOVUE_SITE_KEY}
+      - NEXOVUE_RUM_RELEASE=${NEXOVUE_RUM_RELEASE:?set NEXOVUE_RUM_RELEASE}
     volumes:
       - ${NEXOVUE_OVERLAY_DIR:?set by otel-demo.sh}/frontend-proxy-envoy.tmpl.yaml:/home/envoy/envoy.tmpl.yaml:ro

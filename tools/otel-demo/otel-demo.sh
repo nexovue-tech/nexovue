@@ -39,14 +39,26 @@ readonly PROJECT_NAME="otel-demo"
 
 : "${NEXOVUE_INGEST_KEY:=nvk_live_devlocaldevlocaldevloc}"
 : "${NEXOVUE_SITE_KEY:=nvp_live_devlocaldevlocaldevloc}"
+# The release the storefront's pages report as service.version, and the version a
+# deploy event carries. Timestamped because each `up` genuinely is a deploy of
+# this demo, and a release that never changes cannot demonstrate a release.
+: "${NEXOVUE_RUM_RELEASE:=${UPSTREAM_REF}-$(date -u +%Y%m%d%H%M)}"
 : "${NEXOVUE_OTLP_HTTP_URL:=http://localhost:14318}"
 export NEXOVUE_INGEST_KEY
 export NEXOVUE_SITE_KEY
+export NEXOVUE_RUM_RELEASE
 
 # Where the patched proxy config files live. Exported because compose resolves a
 # relative host path against --project-directory, which is the upstream clone.
 NEXOVUE_OVERLAY_DIR="${HERE}"
 export NEXOVUE_OVERLAY_DIR
+
+# The browser SDK's built bundle, which the storefront's pages load. Exported for
+# the same reason, and checked in require_browser_sdk because `dist/` is
+# gitignored — a missing build would otherwise surface as compose refusing to
+# mount a file, which says nothing about what to do.
+NEXOVUE_BROWSER_SDK_DIST="$(cd "${HERE}/../.." && pwd)/packages/browser-sdk/dist"
+export NEXOVUE_BROWSER_SDK_DIST
 
 # Everything upstream's core and full compose files define, minus three.
 #
@@ -142,9 +154,22 @@ start_wave() {
     compose up -d --no-deps --quiet-pull "$@"
 }
 
+# The storefront's pages carry our browser SDK, which is built rather than
+# checked in. Without it compose fails on a missing bind-mount source, which
+# names a path and not a remedy.
+require_browser_sdk() {
+    if [ -f "${NEXOVUE_BROWSER_SDK_DIST}/nexovue-rum.min.js" ]; then
+        return
+    fi
+    echo "the browser SDK is not built, so the storefront has no script to load." >&2
+    echo "  build it with: pnpm --filter @nexovue/browser-sdk build" >&2
+    exit 1
+}
+
 cmd_up() {
     fetch_upstream
     require_receiver
+    require_browser_sdk
     report_headroom
 
     start_wave "host metrics" "${WAVE_HOST_METRICS[@]}"
