@@ -114,6 +114,7 @@ func (d decoded) rows(marks stamps) ([]logRow, []vitals.Reading) {
 		shared := resourceFacts{
 			attrsJSON:   otlpvalue.AttributesJSON(resourceAttrs),
 			serviceName: otlpvalue.StringOrEmpty(resourceAttrs, attrServiceName),
+			deviceClass: vitals.DeviceClassOf(resourceAttrs),
 		}
 		for _, scopeLogs := range resourceLogs.GetScopeLogs() {
 			for _, record := range scopeLogs.GetLogRecords() {
@@ -122,7 +123,7 @@ func (d decoded) rows(marks stamps) ([]logRow, []vitals.Reading) {
 				}
 				row := flattenRecord(d.envelope, shared, marks, record)
 				rows = append(rows, row)
-				if reading, isVital := vitals.ReadingFrom(record, vitalMarks(row, marks)); isVital {
+				if reading, isVital := vitals.ReadingFrom(record, vitalMarks(row, shared, marks)); isVital {
 					readings = append(readings, reading)
 				}
 			}
@@ -135,7 +136,7 @@ func (d decoded) rows(marks stamps) ([]logRow, []vitals.Reading) {
 // attributes. The timestamp is the row's, already resolved through the same
 // event → observed → received fallback, so the two tables cannot disagree about
 // when a reading happened.
-func vitalMarks(row logRow, marks stamps) vitals.Marks {
+func vitalMarks(row logRow, resource resourceFacts, marks stamps) vitals.Marks {
 	return vitals.Marks{
 		Timestamp:            row.Timestamp,
 		ReceivedAt:           marks.receivedAt,
@@ -143,6 +144,7 @@ func vitalMarks(row logRow, marks stamps) vitals.Marks {
 		DerivedRetentionDays: marks.derivedRetentionDays,
 		TenantID:             row.TenantID,
 		ProjectID:            row.ProjectID,
+		DeviceClass:          resource.deviceClass,
 	}
 }
 
@@ -151,6 +153,9 @@ func vitalMarks(row logRow, marks stamps) vitals.Marks {
 type resourceFacts struct {
 	attrsJSON   string
 	serviceName string
+	// deviceClass belongs to the browser door's vitals and is derived here
+	// because the attribute behind it is on the resource, not on any record.
+	deviceClass string
 }
 
 func flattenRecord(

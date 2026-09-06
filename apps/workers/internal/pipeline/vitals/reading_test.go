@@ -38,6 +38,7 @@ func testMarks() Marks {
 		DerivedRetentionDays: 395,
 		TenantID:             "tenant-a",
 		ProjectID:            "project-a",
+		DeviceClass:          DeviceClassMobile,
 	}
 }
 
@@ -54,7 +55,6 @@ func vitalRecord() *logspb.LogRecord {
 			stringAttr(attrNavigationType, "navigate"),
 			stringAttr(attrSessionID, "session-1"),
 			stringAttr(attrURLPath, "/checkout"),
-			boolAttr(attrMobile, true),
 		},
 	}
 }
@@ -142,21 +142,41 @@ func TestAnIntegerValuedReadingIsStillARreading(t *testing.T) {
 	}
 }
 
-func TestDeviceClassSaysNothingWhenTheBrowserDidNot(t *testing.T) {
-	desktop := vitalRecord()
-	desktop.Attributes = append(desktop.Attributes[:8], boolAttr(attrMobile, false))
+func TestDeviceClassComesFromTheResourceAndNotFromTheRecord(t *testing.T) {
+	// The defect this catches was shipped and found in a real browser: the SDK
+	// puts browser.mobile on the RESOURCE, so a device class read off a record's
+	// own attributes is empty for every reading ever written. A column nothing
+	// writes to looks exactly like a column nothing has filled yet.
+	record := vitalRecord()
+	record.Attributes = append(record.Attributes, boolAttr(AttrMobile, true))
 
-	silent := vitalRecord()
-	silent.Attributes = silent.Attributes[:8]
+	marks := testMarks()
+	marks.DeviceClass = ""
+	reading, _ := ReadingFrom(record, marks)
 
-	reading, _ := ReadingFrom(desktop, testMarks())
-	if reading.DeviceClass != DeviceClassDesktop {
-		t.Errorf("device_class = %q, want %q", reading.DeviceClass, DeviceClassDesktop)
+	if reading.DeviceClass != "" {
+		t.Errorf("device_class = %q from a record attribute; it is a resource attribute",
+			reading.DeviceClass)
 	}
+}
 
-	unreported, _ := ReadingFrom(silent, testMarks())
-	if unreported.DeviceClass != "" {
-		t.Errorf("device_class = %q, want empty: a wrong default reads as a measurement",
-			unreported.DeviceClass)
+func TestDeviceClassOfTheResource(t *testing.T) {
+	cases := map[string]struct {
+		attributes []*commonpb.KeyValue
+		want       string
+	}{
+		"a phone":                {[]*commonpb.KeyValue{boolAttr(AttrMobile, true)}, DeviceClassMobile},
+		"a desktop":              {[]*commonpb.KeyValue{boolAttr(AttrMobile, false)}, DeviceClassDesktop},
+		"a browser that said no": {nil, ""},
+		// A string "true" is a different attribute shape, and reading it as a
+		// boolean would invent agreement the sender never expressed.
+		"the wrong shape": {[]*commonpb.KeyValue{stringAttr(AttrMobile, "true")}, ""},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := DeviceClassOf(test.attributes); got != test.want {
+				t.Errorf("device class = %q, want %q", got, test.want)
+			}
+		})
 	}
 }

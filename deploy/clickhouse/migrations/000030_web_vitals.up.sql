@@ -25,10 +25,15 @@
 -- loses above ~100,000. Grouping paths into pages is a normalisation nothing in
 -- the system performs yet.
 --
--- `device_class` and `country` have no producer today. The SDK sends
--- `browser.mobile`, `browser.platform` and `browser.brands`, from which a
--- device class is derivable; there is no GeoIP anywhere in this system, so
--- `country` stays empty until something resolves the client address. Both are
+-- `device_class` is written from `browser.mobile`, which the SDK puts on the
+-- RESOURCE and not on the record — `internal/pipeline/vitals` reads it there,
+-- and reading it off a record's own attributes fills this column for nobody.
+-- Two values, mobile and desktop: the attribute is a boolean, so a tablet is
+-- indistinguishable from a phone, and a browser that does not report it leaves
+-- the column empty rather than defaulting to either.
+--
+-- `country` has no producer. There is no GeoIP anywhere in this system, so it
+-- stays empty until something resolves the client address. Both are
 -- LowCardinality because both are genuinely bounded once filled.
 --
 -- `session_id` is a String rather than FixedString(32), unlike `trace_id`. A

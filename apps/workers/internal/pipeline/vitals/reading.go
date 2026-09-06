@@ -43,8 +43,13 @@ const (
 
 	attrSessionID = "session.id"
 	attrURLPath   = "url.path"
-	attrMobile    = "browser.mobile"
 )
+
+// AttrMobile is a RESOURCE attribute, not a record one. `resource.ts` puts the
+// browser.* facts on the resource because they describe the visitor's browser
+// rather than any one reading — so a device class read off a record's own
+// attributes would be empty for every reading ever written.
+const AttrMobile = "browser.mobile"
 
 // The device classes this system can tell apart, which is two. `browser.mobile`
 // is a boolean, so a tablet is indistinguishable from a phone and neither is
@@ -138,7 +143,7 @@ func ReadingFrom(record *logspb.LogRecord, marks Marks) (Reading, bool) {
 		Rating:               otlpvalue.StringOrEmpty(attributes, attrVitalRating),
 		NavigationType:       otlpvalue.StringOrEmpty(attributes, attrNavigationType),
 		URLPath:              otlpvalue.StringOrEmpty(attributes, attrURLPath),
-		DeviceClass:          deviceClassOf(attributes),
+		DeviceClass:          marks.DeviceClass,
 		Attrs:                otlpvalue.AttributesJSON(attributes),
 	}, true
 }
@@ -152,13 +157,17 @@ type Marks struct {
 	DerivedRetentionDays uint16
 	TenantID             string
 	ProjectID            string
+	// DeviceClass is derived from the resource, so it is passed in rather than
+	// read here — see AttrMobile.
+	DeviceClass string
 }
 
-// deviceClassOf reads the one device fact the browser reports. Absent stays
-// empty rather than defaulting to desktop: an unfilled column is visibly
-// unfilled, where a wrong default is indistinguishable from a measurement.
-func deviceClassOf(attributes []*commonpb.KeyValue) string {
-	mobile, reported := otlpvalue.Bool(attributes, attrMobile)
+// DeviceClassOf reads the one device fact the browser reports, from the resource
+// attributes that carry it. Absent stays empty rather than defaulting to
+// desktop: an unfilled column is visibly unfilled, where a wrong default is
+// indistinguishable from a measurement.
+func DeviceClassOf(attributes []*commonpb.KeyValue) string {
+	mobile, reported := otlpvalue.Bool(attributes, AttrMobile)
 	switch {
 	case !reported:
 		return ""
