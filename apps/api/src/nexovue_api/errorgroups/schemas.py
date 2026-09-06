@@ -53,6 +53,11 @@ class ErrorOccurrence(BaseModel):
     # Read out of the span's `events` or the log record's attributes, where it
     # is stored whole rather than promoted. Empty when the SDK sent none.
     stacktrace: str
+    # The build this came from, which is what a source map is matched on. Empty
+    # when the sender set no version — a browser SDK without `serviceVersion`,
+    # or a service that deploys without stamping one — and a stacktrace with no
+    # release cannot be symbolicated at all, so the screen has to know.
+    release: str = ""
 
 
 class ErrorGroupDetailResponse(BaseModel):

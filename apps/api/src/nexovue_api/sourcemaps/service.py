@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Final
+from urllib.parse import urlsplit
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from symbolic.sourcemapcache import SourceMapCache
@@ -161,14 +162,16 @@ async def _cache_for(
         row = await queries.find_by_debug_id(
             session, org_id=org_id, project_id=project_id, debug_id=debug_id
         )
-    if row is None and release:
+    for candidate in _candidate_paths(minified_path) if row is None and release else ():
         row = await queries.find_by_release_and_path(
             session,
             org_id=org_id,
             project_id=project_id,
             release=release,
-            minified_path=minified_path,
+            minified_path=candidate,
         )
+        if row is not None:
+            break
     if row is None:
         return None
 
@@ -182,6 +185,27 @@ async def _cache_for(
         # A stored map we cannot parse is our problem, not the caller's, and it
         # must not fail the whole trace: the other frames still resolve.
         return None
+
+
+def _candidate_paths(frame_file: str) -> list[str]:
+    """The spellings one stack frame's file could have been uploaded under.
+
+    A stack frame names a URL the browser fetched —
+    `https://shop.example.com/static/js/main.a3f9.js`. A build uploads what its
+    bundler wrote — `static/js/main.a3f9.js`. Matching only the first would mean
+    a customer had to re-upload the same map for every environment they deploy
+    to, because the origin is the part that changes.
+
+    Narrowest first, so an exact upload always wins over a coincidental
+    basename, and the basename is last because two builds can legitimately both
+    contain `index.js`.
+    """
+    candidates = [frame_file]
+    path = urlsplit(frame_file).path if "//" in frame_file else frame_file
+    for spelling in (path, path.lstrip("/"), path.rsplit("/", 1)[-1]):
+        if spelling and spelling not in candidates:
+            candidates.append(spelling)
+    return candidates
 
 
 def _require_store(store: ObjectStore | None) -> ObjectStore:

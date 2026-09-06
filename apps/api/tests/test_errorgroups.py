@@ -77,6 +77,7 @@ _OCCURRENCE_COLUMNS = [
     "occurred_nanos",
     "trace_ref",
     "span_ref",
+    "release",
     "exception_type",
     "exception_message",
     "detail_json",
@@ -149,6 +150,8 @@ def _occurrence_rows() -> list[tuple[Any, ...]]:
             _OCCURRED_NANOS,
             TRACE_A.encode(),
             SPAN_A.encode(),
+            # A span carries its build as a promoted column.
+            "2026.09.06-1",
             "ValueError",
             "User <uuid> not found",
             _SPAN_EVENTS,
@@ -159,6 +162,9 @@ def _occurrence_rows() -> list[tuple[Any, ...]]:
             _OCCURRED_NANOS - 1_000,
             b"0" * 32,
             b"0" * 16,
+            # A sender that stamped no version. Symbolication is impossible for
+            # this one, and the screen has to be able to say so.
+            "",
             "ValueError",
             "User <uuid> not found",
             _LOG_ATTRIBUTES,
@@ -446,6 +452,24 @@ def test_a_record_without_a_readable_exception_event_has_no_stacktrace(unreadabl
 
 
 # --------------------------------------------------------- partition pruning
+
+
+async def test_an_occurrence_carries_the_build_it_came_from() -> None:
+    """A stacktrace with no release cannot be symbolicated, so the screen is told.
+
+    The span in this fixture was deployed with a version; the log record was not,
+    which is the browser SDK's default — `serviceVersion` is optional. Reporting
+    the second as an empty string rather than omitting it is what lets the screen
+    say "no release, so no source map" instead of silently not symbolicating.
+    """
+    start, end = _window()
+
+    detail = await service.get_error_group(
+        _repository(TENANT_A), project_id=PROJECT, group_id=GROUP_A, from_time=start, to_time=end
+    )
+
+    releases = [occurrence.release for occurrence in detail.recent]
+    assert releases == ["2026.09.06-1", ""]
 
 
 async def test_the_query_is_bounded_on_our_receive_clock_as_well_as_the_customers() -> None:

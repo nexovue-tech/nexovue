@@ -142,6 +142,7 @@ def _to_occurrence(row: dict[str, Any]) -> ErrorOccurrence:
         trace_id=values.present_trace_id(row["trace_ref"]),
         span_id=values.present_span_id(row["span_ref"]),
         exception_message=message,
+        release=values.text(row["release"]),
         stacktrace=_stacktrace(
             source=source,
             detail_json=row["detail_json"],

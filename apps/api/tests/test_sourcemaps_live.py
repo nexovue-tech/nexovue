@@ -206,6 +206,42 @@ async def test_a_build_with_no_debug_id_is_found_by_release_and_path(
     assert answer.frames[0].file == "Checkout.tsx"
 
 
+async def test_a_map_uploaded_as_a_build_path_matches_a_frame_naming_a_url(
+    db: AsyncSession, store: ObjectStore
+) -> None:
+    """CI uploads what the bundler wrote; the browser reports what it fetched.
+
+    Without this the feature does nothing in practice: a map uploaded as
+    `static/js/a.3f9c.js` would never match a frame naming
+    `https://shop.example.com/static/js/a.3f9c.js`, and the customer would have
+    to re-upload per environment because the origin is what changes.
+    """
+    org_id, project_id = await _tenant(db, f"paths-{uuid.uuid4()}@example.test")
+
+    await service.store_source_map(
+        db,
+        store,
+        org_id=org_id,
+        project_id=project_id,
+        release=RELEASE,
+        minified_path=MINIFIED_PATH,  # "static/js/a.3f9c.js", as a build writes it
+        debug_id="",
+        body=SOURCE_MAP,
+    )
+
+    answer = await service.symbolicate(
+        db,
+        store,
+        org_id=org_id,
+        project_id=project_id,
+        frames=[StackFrame(file=f"https://shop.example.com/{MINIFIED_PATH}", line=1, column=9)],
+        debug_id="",
+        release=RELEASE,
+    )
+    assert answer.frames[0].resolved, "a frame naming a URL did not find the map uploaded by path"
+    assert answer.frames[0].file == "Checkout.tsx"
+
+
 async def test_another_organizations_map_is_not_reachable(
     db: AsyncSession, store: ObjectStore
 ) -> None:

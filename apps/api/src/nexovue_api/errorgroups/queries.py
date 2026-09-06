@@ -35,6 +35,12 @@ ABSENT_SPAN_ID: Final = values.ABSENT_SPAN_ID
 # path separator, so the flat key arrives as a two-level path.
 SDK_FINGERPRINT_PATH: Final = "grouping.fingerprint"
 
+# Which build an error came from, which is what a source map is matched on when
+# the bundler emitted no debug id. A span carries it as a promoted column; a log
+# record carries it on the resource, where the browser SDK's `serviceVersion`
+# option puts it.
+RELEASE_PATH: Final = "service.version"
+
 SOURCE_SPAN: Final = "span"
 SOURCE_LOG: Final = "log"
 
@@ -95,7 +101,8 @@ _SPAN_COLUMNS: Final = f"""
     service_name,
     toUnixTimestamp64Nano(timestamp) AS occurred_nanos,
     replaceAll(trace_id, '\\0', '') AS trace_ref,
-    replaceAll(span_id, '\\0', '') AS span_ref
+    replaceAll(span_id, '\\0', '') AS span_ref,
+    deployment_version AS release
 """
 
 # ClickHouse's own parameter syntax is braces, so the single-service predicate is
@@ -126,7 +133,8 @@ _LOG_COLUMNS: Final = f"""
     service_name,
     toUnixTimestamp64Nano(timestamp) AS occurred_nanos,
     replaceAll(trace_id, '\\0', '') AS trace_ref,
-    replaceAll(span_id, '\\0', '') AS span_ref
+    replaceAll(span_id, '\\0', '') AS span_ref,
+    ifNull(resource_attrs.{RELEASE_PATH}.:String, '') AS release
 """
 
 _LOG_ERRORS: Final = f"""
@@ -179,6 +187,7 @@ _GROUPING: Final = f"""
     occurred_nanos,
     trace_ref,
     span_ref,
+    release,
     {_MESSAGE_TEMPLATE} AS message_template,
     sdk_fingerprint != '' AS grouped_by_sdk,
     lower(hex(sipHash64(if(
@@ -256,6 +265,7 @@ SELECT
     occurred_nanos,
     trace_ref,
     span_ref,
+    release,
     exception_type,
     exception_message,
     detail_json
