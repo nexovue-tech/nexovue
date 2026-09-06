@@ -189,6 +189,38 @@ untouched.
 - **Exposing browser synthetic checks to customers.** Recommended per
   deployment, not per feature: safe once ADR 0096's proxy change is committed;
   unsafe on any deployment running the proxy-less code.
+- **Whether `url.full` should be truncated when `captureUrlQuery` is off.**
+  `captureUrlQuery` defaults to false and its comment gives the right reason —
+  *"masking matches attribute keys, not values, so a token in a query string
+  would be stored verbatim for the whole retention period."* Two lines above it,
+  `pagecontext.ts` sets `url.full` to `location.href` unconditionally, on every
+  record. `href` carries the query, so the option removes a dedicated
+  `url.query` attribute while the same data ships anyway. The README says so —
+  *"`url.full` carries the same exposure and cannot be avoided for a page
+  view"* — so this is documented rather than hidden, and the disputed word is
+  *cannot*: sending `origin + pathname` when the option is off is available and
+  was not chosen. Masking does not close it. `Rules.masksValues()` is true only
+  for `card_numbers` and `authorization_credentials`, so a card number or a
+  `Bearer` credential inside the URL is masked, while `?session_token=abc123`
+  survives — `credential_keys` matches the attribute *key*, which here is
+  `url.full`. **The sharper half is the fragment.** A browser never puts `#…` in
+  an HTTP request, so a customer's own access logs cannot contain it, but
+  `location.href` includes it and the SDK reads it from JavaScript — an OAuth
+  implicit-flow access token reaches us that the customer's own server never
+  saw. Against all of that: a genuinely full URL is what makes a reported bug
+  reproducible, which is why it is a decision and not a defect. Not recorded in
+  Part 2 for that reason.
+- **What the RUM screen should show beyond one number per vital.** Migration
+  000030 promoted five attributes to columns for the stated reason that a screen
+  filters and aggregates on them, and `queries.py` groups by `vital_name` alone.
+  So `url_path` and `device_class` are populated on every row and read by
+  nothing, `session_id` likewise, and `country` has no producer at all. The
+  screen renders five p75 cards and a thin-data warning below `MIN_READINGS`.
+  The gap is the useful part — *p75 by page and device over time* needs a
+  `GROUP BY` and no migration, which is what promoting the columns bought. Two
+  questions inside this and neither is answered: which breakdown ships first,
+  and whether `MIN_READINGS = 10` is the right floor for calling a p75
+  believable. Both want real customer traffic to settle, and there is none.
 
 ---
 
