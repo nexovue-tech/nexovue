@@ -128,9 +128,29 @@ class Settings(BaseSettings):
             return [entry.strip() for entry in value.split(",") if entry.strip()]
         return value
 
+    # Lets a probe reach a private address, which the connect guard otherwise
+    # refuses. Off unless asked for by name, and the property below requires two
+    # independent things to be true — so a staging or production deployment that
+    # somehow inherits this variable still refuses, because `env` is not
+    # development there.
+    #
+    # It exists for one reason: the dev stack's probes have to reach the
+    # OpenTelemetry Demo storefront, which compose publishes on the Docker host,
+    # and a Docker host is a private address by construction.
+    allow_private_probe_targets: bool = False
+
     @property
     def is_development(self) -> bool:
         return self.env == "development"
+
+    @property
+    def private_probe_targets_allowed(self) -> bool:
+        """Whether a probe may open a socket to a private address.
+
+        Loopback and link-local stay refused regardless; see
+        `probes.addresses.may_connect_to`, which is where that line is drawn.
+        """
+        return self.allow_private_probe_targets and self.is_development
 
 
 def describe_validation_error(error: ValidationError) -> str:

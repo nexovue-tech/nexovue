@@ -64,6 +64,45 @@ def is_publicly_routable(address_text: str) -> bool:
     )
 
 
+def may_connect_to(address_text: str, *, private_allowed: bool) -> bool:
+    """Whether a probe may open a socket to this address.
+
+    A second question beside `is_publicly_routable`, not a change to it. That one
+    answers "can the public internet reach this", which several suites exist to
+    hold to its word; widening it would silently defeat them.
+
+    `private_allowed` is development only and widens exactly one thing: the
+    ranges the Docker host lives in, because that is where `just otel-demo up`
+    publishes the demo storefront and a probe has no other way to reach it.
+
+    **Loopback and link-local stay refused even then**, and that is the line
+    worth defending. Loopback is the worker's own container, link-local is
+    169.254.169.254 where every major cloud serves instance credentials, and
+    neither becomes safe to probe because somebody is developing. The one thing
+    this opens is a private network the developer is already inside.
+    """
+    if is_publicly_routable(address_text):
+        return True
+    if not private_allowed:
+        return False
+
+    try:
+        address = ipaddress.ip_address(address_text)
+    except ValueError:
+        # Unparseable stays refused on the path to a connection, for the reason
+        # `is_publicly_routable` gives: the safe answer to "I do not recognise
+        # this" is no.
+        return False
+
+    return address.is_private and not (
+        address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+    )
+
+
 def refusal_reason_for(refused_addresses: Iterable[str]) -> str | None:
     """The error to report instead of the client's, when we caused the failure.
 
@@ -85,14 +124,18 @@ class ConnectGuard:
     the one result that should be investigated looks like the most ordinary one.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, private_allowed: bool = False) -> None:
         self.refused_addresses: list[str] = []
+        # Passed in rather than read from the environment here, because every
+        # other collaborator of a probe is passed in and a hidden module-level
+        # read is the kind of thing that survives into production unnoticed.
+        self._private_allowed = private_allowed
 
     def open_socket(self, purpose: int, address: Any) -> Any:
         """libcurl's socket factory. `address.addr[0]` is the resolved host."""
         del purpose  # libcurl distinguishes proxy sockets; the rule is the same
         resolved = str(address.addr[0])
-        if not is_publicly_routable(resolved):
+        if not may_connect_to(resolved, private_allowed=self._private_allowed):
             self.refused_addresses.append(resolved)
             return REFUSED
         return socket.socket(address.family, address.socktype, address.protocol)

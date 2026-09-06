@@ -26,7 +26,7 @@ from types import TracebackType
 from typing import Final
 from urllib.parse import SplitResult, urlsplit
 
-from nexovue_scheduler.probes.addresses import is_publicly_routable
+from nexovue_scheduler.probes.addresses import may_connect_to
 
 # Loopback only. The proxy runs inside the browser worker and is for that
 # worker's Chromium; binding it to the container's network address would offer
@@ -286,7 +286,11 @@ class PublicAddressProxy:
     down — the same reason `ConnectGuard` keeps its own list.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, private_allowed: bool = False) -> None:
+        # Passed in for the reason ConnectGuard's is: a hidden environment read
+        # inside a security boundary is the kind of thing that survives into
+        # production without anyone choosing it.
+        self._private_allowed = private_allowed
         self._refused: list[str] = []
         self._refused_lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -447,7 +451,7 @@ class PublicAddressProxy:
         refused: list[str] = []
         for family, socket_type, protocol, _canonical, sockaddr in candidates:
             address = str(sockaddr[0])
-            if not is_publicly_routable(address):
+            if not may_connect_to(address, private_allowed=self._private_allowed):
                 refused.append(address)
                 continue
             connection = await _connect(loop, family, socket_type, protocol, sockaddr)

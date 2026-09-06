@@ -45,7 +45,9 @@ MAX_BODY_BYTES: Final = 1 * 1024 * 1024
 _HTTP_ERROR_FLOOR: Final = 400
 
 
-def perform(check_id: str, target: str, timeout_seconds: int) -> ProbeResult:
+def perform(
+    check_id: str, target: str, timeout_seconds: int, *, private_allowed: bool = False
+) -> ProbeResult:
     """Run one HTTP check and report what happened, success or failure.
 
     Never raises for a target's behaviour — an unreachable host is a result, not
@@ -54,7 +56,7 @@ def perform(check_id: str, target: str, timeout_seconds: int) -> ProbeResult:
     """
     body = io.BytesIO()
     curl = pycurl.Curl()
-    guard = ConnectGuard()
+    guard = ConnectGuard(private_allowed=private_allowed)
     try:
         _configure(curl, target, timeout_seconds, body, guard)
         try:

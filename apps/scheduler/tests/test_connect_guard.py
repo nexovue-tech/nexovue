@@ -21,7 +21,12 @@ from typing import Any, Final
 import pytest
 from live import require_stack
 
-from nexovue_scheduler.probes.addresses import REFUSED, ConnectGuard, is_publicly_routable
+from nexovue_scheduler.probes.addresses import (
+    REFUSED,
+    ConnectGuard,
+    is_publicly_routable,
+    may_connect_to,
+)
 
 # Names that resolve to a fixed address by design, so the rebinding case can be
 # exercised against real DNS rather than a mock of it.
@@ -172,3 +177,72 @@ def test_a_real_public_name_resolving_privately_is_refused_at_connect(name: str)
     assert result.up is False
     assert result.error is not None
     assert "not contacted" in result.error
+
+
+# ---------------------------------------------------------------------------
+# The development escape, and the two things it must never widen.
+#
+# `may_connect_to` exists so a developer's probes can reach the OpenTelemetry
+# Demo storefront, which compose publishes on the Docker host — a private
+# address by construction. Everything below is about what it must still refuse,
+# because that is the half that matters.
+
+
+class TestTheDevelopmentEscape:
+    """`private_allowed` opens the Docker host and nothing else."""
+
+    def test_it_changes_nothing_at_all_when_it_is_off(self) -> None:
+        for address in ("10.0.0.5", "192.168.1.10", "172.17.0.2", "100.64.0.1"):
+            assert may_connect_to(address, private_allowed=False) is False
+        assert may_connect_to("93.184.216.34", private_allowed=False) is True
+
+    def test_it_opens_the_private_ranges_the_docker_host_lives_in(self) -> None:
+        for address in ("10.0.0.5", "192.168.65.2", "172.17.0.2"):
+            assert may_connect_to(address, private_allowed=True) is True
+
+    def test_loopback_stays_refused_even_then(self) -> None:
+        """The worker's own container. Probing it is never a developer's intent."""
+        for address in ("127.0.0.1", "127.0.0.53", "::1"):
+            assert may_connect_to(address, private_allowed=True) is False
+
+    def test_the_metadata_endpoint_stays_refused_even_then(self) -> None:
+        """169.254.169.254 serves instance credentials on every major cloud.
+
+        It does not become safe to probe because somebody is developing, and a
+        developer's laptop is exactly where a stolen role would be used.
+        """
+        for address in ("169.254.169.254", "169.254.1.1", "fe80::1"):
+            assert may_connect_to(address, private_allowed=True) is False
+
+    def test_an_unparseable_address_stays_refused_even_then(self) -> None:
+        """On the path to a connection, "I do not recognise this" answers no."""
+        assert may_connect_to("not-an-address", private_allowed=True) is False
+        assert may_connect_to("", private_allowed=True) is False
+
+    def test_a_public_address_needs_no_escape(self) -> None:
+        assert may_connect_to("93.184.216.34", private_allowed=True) is True
+
+
+class TestTheGuardCarriesTheDecision:
+    """The flag reaches the socket, which is the only place it matters."""
+
+    def test_a_guard_left_at_its_default_refuses_the_docker_host(self) -> None:
+        guard = ConnectGuard()
+
+        assert guard.open_socket(1, FakeSockAddr(addr=("192.168.65.2", 80))) == REFUSED
+        assert guard.refused_addresses == ["192.168.65.2"]
+
+    def test_a_guard_told_to_allow_private_opens_it(self) -> None:
+        guard = ConnectGuard(private_allowed=True)
+
+        opened = guard.open_socket(1, FakeSockAddr(addr=("192.168.65.2", 80)))
+
+        assert opened != REFUSED
+        assert guard.refused_addresses == []
+        opened.close()
+
+    def test_even_then_it_refuses_loopback_and_says_so(self) -> None:
+        guard = ConnectGuard(private_allowed=True)
+
+        assert guard.open_socket(1, FakeSockAddr(addr=("127.0.0.1", 80))) == REFUSED
+        assert "127.0.0.1" in (guard.refusal_reason() or "")

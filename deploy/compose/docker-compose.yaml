@@ -272,6 +272,15 @@ services:
       # The envelope bindings are generated output, not an installed package,
       # so every Python service that speaks the envelope adds them itself.
       PYTHONPATH: /workspace/packages/contracts/gen/python
+      # Lets a probe reach a private address, which is where `just otel-demo up`
+      # publishes the demo storefront — a Docker host is private by construction,
+      # so without this a check against it is created and then never contacted.
+      #
+      # It is not sufficient on its own: the setting also requires ENV to be
+      # development, so a staging deployment that inherited this line still
+      # refuses. And it does not open loopback or link-local at any setting; see
+      # `probes.addresses.may_connect_to`, which is where that line is drawn.
+      ALLOW_PRIVATE_PROBE_TARGETS: "true"
     depends_on:
       postgres:
         condition: service_healthy

@@ -135,7 +135,13 @@ def run_browser_flow(
     timeout = _step_budget(config or {}, settings.browser_task_soft_time_limit_seconds)
     observed_at = time.time_ns()
 
-    flow = browser.perform(check_id, target, timeout, config or {})
+    flow = browser.perform(
+        check_id,
+        target,
+        timeout,
+        config or {},
+        private_allowed=settings.private_probe_targets_allowed,
+    )
     logger.info(
         "browser flow completed",
         check_id=check_id,
@@ -183,7 +189,9 @@ def _probe(check_id: str, check_type: str, target: str, timeout: int) -> ProbeRe
     be visible as a failure, not silently absent from the graph.
     """
     if check_type == http_check.CHECK_TYPE_HTTP:
-        return http_check.perform(check_id, target, timeout)
+        return http_check.perform(
+            check_id, target, timeout, private_allowed=get_settings().private_probe_targets_allowed
+        )
     raise ValueError(f"check {check_id}: no prober for type {check_type!r}")
 
 

@@ -190,6 +190,8 @@ def perform(
     target: str,
     timeout_seconds: int,
     config: dict[str, Any] | None = None,
+    *,
+    private_allowed: bool = False,
 ) -> FlowResult:
     """Run one browser flow and report how far it got.
 
@@ -205,7 +207,9 @@ def perform(
     except FlowConfigError as invalid:
         return _config_failure(check_id, target, invalid, config or {}, started)
 
-    return _drive(check_id, target, steps, timeout_seconds, started)
+    return _drive(
+        check_id, target, steps, timeout_seconds, started, private_allowed=private_allowed
+    )
 
 
 def parse_steps(config: dict[str, Any], target: str) -> list[BrowserStep]:
@@ -308,12 +312,14 @@ def _drive(
     steps: list[BrowserStep],
     timeout_seconds: int,
     started: float,
+    *,
+    private_allowed: bool,
 ) -> FlowResult:
     """Open a browser behind the proxy, run the steps in order, stop at the first failure."""
     # The proxy first, and Playwright only once it is listening. A flow must not
     # start without its boundary, and a proxy that cannot listen raises here
     # rather than after a browser exists that could run without it.
-    with PublicAddressProxy() as proxy:
+    with PublicAddressProxy(private_allowed=private_allowed) as proxy:
         # Imported here rather than at module scope: only the browser image
         # installs Playwright, and this module's envelope half must import
         # without it.
