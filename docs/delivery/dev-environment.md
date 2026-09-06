@@ -96,6 +96,10 @@ ClickHouse is a special case: it misreads cgroup limits in Docker, so its cap is
 
 > ⚠️ That script is currently broken and has not been fixed here, because this is a documentation change. Its third statement is `ALTER TABLE metrics`, and there is no `metrics` table — ADR 0066 split metrics into five tables (`metrics_sum`, `metrics_gauge`, `metrics_histogram`, `metrics_exp_histogram`, `metrics_summary`). The statement fails with `UNKNOWN_TABLE`, so metric retention in dev is whatever the migrations set. `trace_summaries`, `span_trace_lookup`, `endpoint_stats_1m` and `service_edges_1m` are not shortened either.
 
+**5. Only `just fresh` rebuilds images, and a stale one fails in a way that names nothing.** Compose has never rebuilt on a changed Dockerfile — [docker/compose#1487](https://github.com/docker/compose/issues/1487), open since 2015 — so `--build` is the only mechanism and it costs 47s even fully cached. That is too much on `just dev`, so it sits in `fresh` instead. **The gap is real and left open deliberately:** edit a Dockerfile, run plain `just dev`, and the container still runs the old image. Run `just fresh`, or `docker compose -f deploy/compose/docker-compose.yaml build <service>`.
+
+This is not hypothetical. On 2026-09-06 `just fresh` failed with `container nexovue-receiver-1 is unhealthy`, and the only real line was five screens up the log: `compile: signal: killed`. The receiver's image had been built before `ENV GOFLAGS=-p=2` reached `go-dev.Dockerfile` and nothing had rebuilt it since 2026-08-26. Without that flag `go build` uses one process per core — twelve here — inside a 768 MB cap, and the compiler is OOM-killed. It only surfaces after `down-hard`, because that deletes the Go build cache and forces a cold compile; a warm cache had hidden it for eleven days.
+
 **4. Playwright: arm64 image, `--ipc=host`, `shm_size: 1gb`.** The 64 MB `/dev/shm` default is the most common cause of Chromium instability in Docker. The official images ship ARM64 variants covering Chromium, Firefox and WebKit — the Apple Silicon Rosetta problem applies to native installs, not the container.
 
 ## Development is not production's shape

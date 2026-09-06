@@ -46,9 +46,18 @@ down-hard:
     docker compose -f {{compose}}/docker-compose.yaml down -v
 
 # Run this when the dev stack has drifted into a state you stopped trusting.
-# Takes about two minutes, most of it waiting for ClickHouse and Kafka.
-# Wipe everything and rebuild: down-hard, up, topics, migrate, seed
+# Takes about two and a half minutes, most of it waiting for ClickHouse and Kafka.
+#
+# The build is here and not in `dev` on purpose. Compose has never rebuilt on a
+# changed Dockerfile — docker/compose#1487, open since 2015 — so `--build` is the
+# only mechanism, and it costs 47s even fully cached, which is too much on a
+# command run many times a day. `fresh` is where it belongs: it is the command
+# for a state you stopped trusting, a stale image is exactly that state, and
+# `down-hard` has just deleted the Go build cache — so the cold compile that
+# follows is the one that fails when an image is missing GOFLAGS=-p=2.
+# Wipe everything and rebuild: down-hard, build, up, topics, migrate, seed
 fresh: down-hard
+    docker compose -f {{compose}}/docker-compose.yaml build
     just dev
     just topics
     just migrate
