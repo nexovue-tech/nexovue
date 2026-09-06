@@ -285,7 +285,7 @@ growth, cache eviction behaviour, disk — are precisely the ones a five-minute 
 **This should be the last thing before Phase 2**, because it is the only test that exercises
 everything else at once.
 
-### M6 · P1-57, the S3 cold tier
+### M6 · P1-57, the S3 cold tier — *listed here for completeness; deferred in §5*
 
 No ClickHouse storage policy exists — I checked `deploy/clickhouse/`. SeaweedFS is in compose and
 serves source maps through `ObjectStore`, not ClickHouse tiering.
@@ -546,6 +546,44 @@ today's fixed `pro`-shaped retention over-serves rather than under-serves), and 
 self-instrumentation, which §7a already defers until the platform runs somewhere real.
 
 ---
+
+## 5a. The count
+
+**39 items. 29 are build work; 6 are decisions with no code; 4 are deliberately deferred past
+Phase 2.** Sizes are relative — S is under a day, M is a few days, L is a week or more and usually
+carries a decision inside it.
+
+| | Group | Items | Build work |
+|---|---|---|---|
+| **G1–G7** | Gate — nothing ships to a paying customer until these are true | 11 | 9 |
+| **A1–A3** | Architecture — cheap now, expensive after Phase 2 | 3 | 3 |
+| **C1–C7** | Commercial layer (M8) | 7 | 7 |
+| **M1–M5** | Measurements and exit criteria | 5 | 5 |
+| **F1–F5** | Findings and gate defects | 5 | 5 |
+| **D1–D4** | Decisions with no code | 4 | 0 |
+| **X1–X4** | Deferred past Phase 2 deliberately | 4 | 0 |
+
+**Five are large**, and every one carries a decision rather than only code: P1-69 email, P1-73
+payments, P1-76 project management, the ClickHouse purge path, and G7's SDK distribution.
+
+**Eleven are small** — under a day each — and four of those are the whole safety gate: G3, G4, G6a
+and A2. **The cheapest quarter of this list closes the two open holes and the untested contract.**
+
+### The eleven that are under a day
+
+| | |
+|---|---|
+| G3 | poller SSRF boundary |
+| G4 | asyncpg `verify-full` |
+| G6a | paid-tier browser cap |
+| A2 | contract test + cross-service sweep |
+| A3 | `packages/py-platform` |
+| M3 | pprof on the admin listener |
+| M4 | RUM breakdowns by page and device |
+| F1 | T1-5 repricing guard |
+| F2 | T1-6 rig cleanup |
+| F3 | the three tests that cannot fail |
+| F5 | the T2 corrections |
 
 ## 6. What "ready for Phase 2" means, stated as a test
 
