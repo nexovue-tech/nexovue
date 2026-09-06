@@ -49,6 +49,10 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101"]
+# A command-line tool's output *is* its interface. The services log through
+# structlog because something reads those logs later; this one is read by the
+# person who just typed the command, next to a bash script doing the same.
+"tools/**" = ["T201"]
 
 [tool.mypy]
 python_version = "3.13"

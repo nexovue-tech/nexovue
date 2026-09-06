@@ -166,10 +166,31 @@ require_browser_sdk() {
     exit 1
 }
 
+# The checks this opens are probed by the scheduler, which is a separate compose
+# profile. Without it they are created and then never run, and the Synthetics
+# screen reads as broken for a reason nothing on it explains.
+require_probe_workers() {
+    if [ -n "$(docker ps --quiet --filter name=scheduler-light --filter status=running)" ]; then
+        return
+    fi
+    echo "the probe workers are not running, so door 2's checks would never be probed." >&2
+    echo "  start them with: just dev-doors" >&2
+    exit 1
+}
+
+# Door 2 and door 4a need something created before they have anything to report.
+# Failing here fails `up`, deliberately: a demo that came up and quietly opened
+# four doors of five is worse than one that says which one it could not.
+open_doors() {
+    echo "--- doors: checks and deploy events"
+    NEXOVUE_UPSTREAM_REF="${UPSTREAM_REF}" python3 "${HERE}/doors.py"
+}
+
 cmd_up() {
     fetch_upstream
     require_receiver
     require_browser_sdk
+    require_probe_workers
     report_headroom
 
     start_wave "host metrics" "${WAVE_HOST_METRICS[@]}"
@@ -187,6 +208,10 @@ cmd_up() {
     wait_for_settle 45
     start_wave "traffic" "${WAVE_TRAFFIC[@]}"
     wait_for_settle 30
+
+    # Last, because the storefront has to be answering before a check is pointed
+    # at it and before a deploy of it is announced.
+    open_doors
 
     report_headroom
     compose ps --format 'table {{.Name}}\t{{.Status}}'
