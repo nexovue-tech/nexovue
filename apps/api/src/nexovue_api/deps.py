@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
 from nexovue_api.auth.sessions import Session, SessionStore, session_token_from_headers
+from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.errors.exceptions import UnauthenticatedError
 from nexovue_api.lifespan import Resources
 from nexovue_api.settings import Settings
@@ -63,6 +64,13 @@ def get_clickhouse(resources: Annotated[Resources, Depends(get_resources)]) -> A
     return resources.clickhouse
 
 
+def get_object_store(
+    resources: Annotated[Resources, Depends(get_resources)],
+) -> ObjectStore | None:
+    """The object store, or None when the deployment configured none."""
+    return resources.object_store
+
+
 def get_session_store(resources: Annotated[Resources, Depends(get_resources)]) -> SessionStore:
     return resources.sessions
 
@@ -91,3 +99,5 @@ RedisClient = Annotated[Redis, Depends(get_redis)]
 ClickHouseClient = Annotated[AsyncClient, Depends(get_clickhouse)]
 CurrentSession = Annotated[Session, Depends(get_current_session)]
 SessionStoreDep = Annotated[SessionStore, Depends(get_session_store)]
+# Optional on purpose: only source maps need it, and they say so by name.
+ObjectStoreDep = Annotated[ObjectStore | None, Depends(get_object_store)]

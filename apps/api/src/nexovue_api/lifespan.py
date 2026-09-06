@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from nexovue_api.auth.sessions import SessionStore
+from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.health.checks import dependency_checks
 from nexovue_api.health.registry import CheckRegistry
 from nexovue_api.ratelimit.limiter import RateLimiter
@@ -55,6 +56,9 @@ class Resources:
     clickhouse: AsyncClient
     sessions: SessionStore
     rate_limiter: RateLimiter
+    # None when no object store is configured. Source map upload and
+    # symbolication refuse by name in that case; nothing else needs one.
+    object_store: ObjectStore | None
 
 
 def build_lifespan(
@@ -117,6 +121,7 @@ async def open_resources(settings: Settings) -> Resources:
     )
 
     return Resources(
+        object_store=await _open_object_store(settings),
         engine=engine,
         session_factory=session_factory,
         redis=redis,
@@ -124,6 +129,25 @@ async def open_resources(settings: Settings) -> Resources:
         sessions=SessionStore(redis, ttl_seconds=settings.session_ttl_seconds),
         rate_limiter=RateLimiter(redis),
     )
+
+
+async def _open_object_store(settings: Settings) -> ObjectStore | None:
+    """Build the object store client, or None when it is not configured.
+
+    The bucket is created only in development. Elsewhere it is provisioned with
+    the rest of the infrastructure, and an API that could create its own bucket
+    would need a permission it should not hold.
+    """
+    configured = settings.object_store
+    if configured is None:
+        logger.info("no object store configured; source map upload is unavailable")
+        return None
+
+    store = ObjectStore(configured)
+    if settings.is_development:
+        await store.ensure_bucket()
+    logger.info("object store ready", bucket=configured.bucket)
+    return store
 
 
 async def close_resources(resources: Resources) -> None:

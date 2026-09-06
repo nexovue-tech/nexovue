@@ -183,6 +183,14 @@ services:
       # shape the workers use, and derives the port from it.
       CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
       REDIS_URL: redis://redis:6379/0
+      # Source map bytes. The generic S3 API only (ADR 0015) — SeaweedFS here,
+      # AWS S3 in deployment. The dev credentials are the ones in
+      # deploy/seaweedfs/s3.json; the API creates the bucket at boot in
+      # development only.
+      S3_ENDPOINT: http://seaweedfs:8333
+      S3_BUCKET: nexovue-dev
+      S3_ACCESS_KEY_ID: nexovue_dev_access
+      S3_SECRET_ACCESS_KEY: nexovue_dev_secret
     ports:
       - "${API_HOST_PORT:-18000}:8000"
     healthcheck:

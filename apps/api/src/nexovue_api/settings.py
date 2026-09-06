@@ -12,6 +12,7 @@ Two rules hold here and in every other service:
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Annotated, Final, Literal
 
@@ -45,6 +46,31 @@ API_PREFIX: Final = "/api/v1"
 
 class SettingsError(Exception):
     """Configuration that stops the process, phrased for the person fixing it."""
+
+
+@dataclass(frozen=True)
+class ObjectStoreSettings:
+    """A complete object store configuration, which is all four values or none.
+
+    Separate from Settings so the store's client cannot be handed a half-filled
+    configuration: a caller either has one of these or has nothing to try.
+    """
+
+    endpoint: str
+    bucket: str
+    access_key_id: str
+    secret_access_key: str
+    region: str
+
+
+# The environment variables an unconfigured object store tells the caller to
+# set. Spelled once so the message and the fields cannot drift apart.
+OBJECT_STORE_VARIABLES: Final = (
+    "S3_ENDPOINT",
+    "S3_BUCKET",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
+)
 
 
 class Settings(BaseSettings):
@@ -86,6 +112,39 @@ class Settings(BaseSettings):
     trusted_proxy_count: Annotated[int, Field(ge=0, le=10)] = 0
 
     cors_allowed_origins: list[str] = Field(default_factory=list)
+
+    # --- object storage: source map bytes now, the cold tier later ----------
+    # The generic S3 API only (ADR 0015): SeaweedFS locally, AWS S3 in
+    # deployment. Optional as a group, and deliberately not required at boot —
+    # a deployment that uploads no source maps needs no object store, and an
+    # API that refused to start without one would break every existing install
+    # on upgrade. The endpoints that need it refuse by variable name instead.
+    s3_endpoint: str | None = None
+    s3_bucket: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
+    # SeaweedFS ignores the region and AWS requires one; signing needs a value
+    # either way, so the default is the region AWS itself treats as canonical.
+    s3_region: str = "us-east-1"
+
+    @property
+    def object_store(self) -> ObjectStoreSettings | None:
+        """The object store's settings, or None when it is not configured.
+
+        All four or none: a half-configured store fails at the first upload with
+        a signing error naming nothing, where this names the variables.
+        """
+        parts = (self.s3_endpoint, self.s3_bucket, self.s3_access_key_id,
+                 self.s3_secret_access_key)
+        if not all(parts):
+            return None
+        return ObjectStoreSettings(
+            endpoint=str(self.s3_endpoint),
+            bucket=str(self.s3_bucket),
+            access_key_id=str(self.s3_access_key_id),
+            secret_access_key=str(self.s3_secret_access_key),
+            region=self.s3_region,
+        )
 
     @property
     def clickhouse_host(self) -> str:
