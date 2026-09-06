@@ -305,6 +305,85 @@ What would change that: the first customer who is not us.
 
 ---
 
+## 1e. What we accept at the front door, and what we should
+
+Raised while mapping our shape against Grafana's. Nothing here is a defect; the
+question is product scope, and it has never been decided in one place.
+
+### What the door accepts today, read off the receiver
+
+**OTLP and nothing else.** `otlp/signals.go` serves `/v1/traces`, `/v1/logs` and
+`/v1/metrics`; compose publishes gRPC on 4317 and HTTP on 4318; `codec.go`
+accepts protobuf and JSON, plus `text/plain` on the browser door only, because
+it is CORS-safelisted. There is no Prometheus scrape, no remote-write, no
+StatsD and no syslog.
+
+That is broader than it sounds. Every OTel SDK in every language reaches us with
+no work on our side, so does any OTel Collector, and so does anything carrying a
+native OTLP exporter — nginx's `ngx_otel_module` and Envoy both do, which the
+demo proves rather than assumes.
+
+**What it excludes is the Prometheus exporter ecosystem** — `node_exporter`,
+`redis_exporter`, `postgres_exporter`, `kube-state-metrics`, hundreds more, none
+of which speaks OTLP. A customer already running Kubernetes almost certainly has
+Prometheus.
+
+**A bridge already exists and costs us nothing.** The OTel Collector has both a
+`prometheus` receiver, which scrapes exporters, and a `prometheusremotewrite`
+receiver. So a Prometheus customer can reach us today by running a collector —
+which is the "own collector" onboarding pattern P1-54 already plans to document.
+**The open question is therefore not whether they can, but whether they must
+install something first.**
+
+### What the research showed
+
+By 2026 the platforms we would be compared against accept both OTLP and
+Prometheus rather than OTLP alone, specifically to give a migrating customer a
+path — OpenObserve documents Prometheus remote-write alongside OTLP, and Metoro
+accepts OTLP plus remote-write for custom metrics. A remote-write door fits our
+architecture cleanly: it is a new door that normalizes to the same envelope
+before the broker, so the Phase 1 invariant holds unchanged.
+
+### Three tiers, and the cheapest is not a protocol
+
+**Widen door 4b, no new protocol at all.** `cloudwatch.py` is pinned to
+`AWS/RDS` with four metrics, and everything around it — `GetMetricData`, the
+`RdsMetric` shape, the STS auth from ADR 0076, the envelope — is namespace
+agnostic. `AWS/EC2`, `AWS/ApplicationELB`, `AWS/Lambda` and `AWS/ElastiCache`
+are a metric list each. Azure Monitor and GCP Cloud Monitoring pollers are the
+same shape again, and that is exactly how Grafana reaches all three clouds.
+
+**Prometheus remote-write**, as a native door, is the one protocol worth adding.
+
+**Not worth building:** native StatsD, syslog or Fluentd parsers, because Fluent
+Bit and Vector both ship OpenTelemetry outputs and the bridge already exists;
+Prometheus *scrape*, because scraping means reaching into a customer's network
+where remote-write has them push to us; and a "PostgreSQL as a data source"
+feature in Grafana's sense, which is a dashboard builder (F20) and not ingest.
+
+### Recommendation
+
+**Add nothing to the ingest surface until Phase 1 closes**, and the reason is
+ordering rather than difficulty. Seven rows still block a paying customer —
+P1-69/70/71 leave us with no transactional email, so no password reset and no
+verification; P1-53 leaves TLS unbuilt at the edge and three security findings
+open; P1-52, P1-54 and P1-50 are unstarted. A wider front door on a product
+nobody can sign up to is breadth nobody uses.
+
+Then, in this order:
+
+1. **Document the collector bridge**, as part of P1-54. Zero code, and it turns
+   "we do not support Prometheus" into a config snippet. The best return per
+   hour anywhere in this list.
+2. **Run door 4b against real AWS.** Both pollers are marked done and neither
+   has ever made a real call — `botocore.stub.Stubber` throughout. Breadth we
+   already claim is worth more than breadth we might add.
+3. **Widen the CloudWatch namespaces**, then Azure and GCP.
+4. **Prometheus remote-write** as a native door.
+5. **Resolve ADR 0076**, which is already blocking a screen that exists.
+
+---
+
 # Part 2 — Findings backlog
 
 All of these were **demonstrated** — an agent ran something that showed them —
