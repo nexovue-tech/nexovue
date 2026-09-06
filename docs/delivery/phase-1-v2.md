@@ -29,6 +29,12 @@ with `allowance_test.go` holding the browser cap at 25% of the free tier.
 `docker-compose.onprem.yaml:164` sets `TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}`. The
 setting exists in `settings.py` and defaults to 0, which is correct for a deployment with no proxy.
 
+**§9's "sharpest gap of the four" is closed.** The scoping note says
+*"there is no `POST /api-keys`… a customer with a leaked key chooses between stopping their own
+ingest and leaving the leak live"*, and calls it a security gap rather than a convenience one. The
+endpoint exists — *"Mint an ingest key, leaving existing ones live"* — and `ApiKeysScreen` mints
+and rotates. Nothing in §9 says so.
+
 **P1-54 is started.** `docs/product/database-monitoring-setup.md` covers both database onboarding
 routes, verified end to end. The rest of P1-54 — the OTLP setup guide for doors 1 and 3 — is not
 written.
@@ -109,6 +115,13 @@ threads it through the probes — explicitly, per connection, not read from the 
 the boundary. The same two-condition development escape applies, for the same reason.
 
 Small, and it closes a hole that survives every other boundary this project has built.
+
+**Do G4 first, because it removes G3's stated blocker.** T3-6's full text records that
+*"connecting to a judged IP literal would break TLS"* is the reason T1-2 was left unfixed — and
+that blocker does not exist, because `ssl="require"` never verified the certificate in the first
+place. Fixing G4 to `verify-full` makes the objection real for the first time and settles how to
+answer it: pin the address and pass the hostname for verification, which is the standard shape and
+what `PublicAddressProxy` already does for door 2.
 
 ### G4 · The poller verifies the certificate it connects to · *T3-6*
 
@@ -307,12 +320,38 @@ them as confident prose is not.
 suite of 117, three different numbers for one test count, and a claim about `ipaddress` that the
 interpreter contradicts.
 
-**T3-3 deserves naming here because it is a gate defect, not a finding:** `storeprobe_test.go` is
+**Three findings are one gate defect, and it is the same shape as rule 12 itself.** T3-4 —
+`PROXY_BYPASS_NOTHING` and the WebRTC flags are the only two lines whose removal produces a real
+leak, and the only two with no behavioural test, so deleting either leaves every live test green.
+T3-5 — the Python statement guard asserts both substrings are present but nothing about position,
+so it passes on a statement with the two `func.sum` arguments transposed, where the total returns
+the browser part and vice versa. And: `storeprobe_test.go` is
 behind a `//go:build storeprobe` tag and `just check` passes no `-tags`, so it is invisible to `go
 test`, `go vet` and the linter. It can stop compiling without anyone learning. This is the same
 class as the two green-but-empty results CLAUDE.md rule 12 was written from.
 
 ---
+
+## 3a. One Tier 1 finding that is neither fixed nor scheduled
+
+**T1-5 — the browser split can vanish silently on a repricing.** The allowance gate reads exactly
+one `plan_prices` row — newest `effective_from <= today` — with no fallback for a NULL column. The
+house convention is that a repricing is *a new row restating every column*, so a future `free` row
+that omits `browser_share_percent` silently reverts to the pooled rule.
+
+**No constraint, no test, no error.** It is a convention held only by whoever writes the next
+migration, guarding the cap that G6 is about to extend to paid tiers — so it gets more load-bearing,
+not less.
+
+**Root fix:** a `CHECK` that a `free`-tier row carries a share, or a test that fails when the
+newest effective row for any tier with a cap has a NULL in that column. The second generalises
+better, because the tiers that carry a cap are about to change.
+
+**T1-6 is smaller and worth doing with it.** `cleanup94.sh` takes unvalidated positional arguments
+and can wipe `span_ingest_offsets` — the durable counted-through watermark whose loss produces
+exactly the silent permanent over-count ADR 0094 exists to describe. A measurement rig that can
+cause the defect it measures is a rig whose results cannot be trusted. It lives in a scratchpad and
+should either be validated or deleted.
 
 ## 4a. Carried forward from the plan's own follow-up sections
 
@@ -352,6 +391,11 @@ reason rather than an oversight:
 - **§1e** — what we accept at the front door — already recommends adding nothing until Phase 1
   closes, for the ordering reason this whole file argues. It becomes live *after* Phase 2 scoping,
   not before.
+- **§9's still-open question 4** — are sampling and masking customer controls or support actions?
+  Both are SQL `UPDATE`s by us today. Not a gate, and it stops being theoretical when P1-76 brings
+  the screen that would host them. The two must be answered separately: sampling is reversible and
+  only changes what is kept next, where masking is irreversible on data already written — and a
+  malformed masking document has already once silently stopped masking a project's custom keys.
 - **§1f** — which container producer we support, and whether the Infrastructure list becomes a
   tree. Not a gate: the screen fills from host and container metrics today, and the tree question
   cannot be observed until the producer is chosen.
@@ -369,8 +413,9 @@ it, because "no home in any phase" is how a category quietly becomes a commitmen
 
 ## 5. The order I would actually take
 
-**Now — the safety gate.** G3 and G4 first: both are small, both are open holes, and G3 is an SSRF
-surface that every sibling boundary already closes. Then G1, because TLS is what makes exposure
+**Now — the safety gate.** G4 then G3, in that order: G4 is small, and it removes the stated
+reason G3 was never fixed. Both are open holes, and G3 is an SSRF surface every sibling boundary
+already closes. T1-5 belongs here too — it is a `CHECK` or a test, and it guards the cap G6 extends. Then G1, because TLS is what makes exposure
 possible at all.
 
 **Next — the account gate.** G2, and P1-70/71 behind it. This is the largest block of work in the
