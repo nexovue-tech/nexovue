@@ -192,6 +192,87 @@ untouched.
 
 ---
 
+## 1d. How a customer's page gets the browser SDK
+
+**Nothing decides this today, and ADR 0099 says so on purpose.** Its scope line
+reads *"`tools/otel-demo/` only. This decides how a demo page carries our
+script; it says nothing about how a customer's page does, which is a script tag
+they add."* That sentence is accurate and leaves a hole: door 3 has a working
+SDK, a working ingest path and a working demo integration, and no answer to
+"where does the file live".
+
+### What exists, and what it is not
+
+`packages/browser-sdk` builds two artifacts, and the split is already the two
+distribution channels: `index.js` (ES module) for a customer with a bundler, and
+`nexovue-rum.min.js` (IIFE, global `nexovue`) for a customer who can only paste
+a script tag — a Shopify or WordPress storefront has no build step, so the
+script tag is the one that decides whether door 3 is sellable.
+
+The demo proves the *integration* and not the hosting. It plays all three roles
+locally: `dist/` is the origin, `image-provider` is the edge, the storefront is
+the customer's page. In production those are three separate systems and none of
+them is built.
+
+`dist/` is gitignored and built by hand — `otel-demo.sh` fails with
+`pnpm --filter @nexovue/browser-sdk build` when it is missing. Nothing publishes
+it anywhere.
+
+### Four questions, and only the last one is small
+
+**Where the file lives.** Object storage as origin plus a CDN in front. Not
+researched here, because the deployment target is not settled and choosing a CDN
+before that is choosing in the wrong order.
+
+**The version path scheme, which is the one that matters.** A single unversioned
+URL forces a choice between a long cache — where a bug fix reaches nobody for a
+year — and a short one, which throws the CDN away. The escape both comparable
+products use is that the URL carries the version and versioned URLs are
+immutable: PostHog serves `/static/array.js` following latest v1 with
+`/static/1/array.js` and `/static/1.380.0/array.js` beside it, and Sentry's
+loader works the same way. The frozen path takes
+`Cache-Control: max-age=31536000, immutable`, which tells the browser not to
+revalidate at all.
+
+**Which of those the pasted snippet defaults to is the actual decision**, and it
+is not a technical one: default to a pinned exact version and every customer is
+frozen on whatever they pasted, so a fix we ship reaches nobody without asking
+them to edit their HTML. Default to the auto-updating path and a bad release
+reaches every customer at once.
+
+**Whether we publish SRI hashes.** Subresource Integrity lets a customer pin a
+SHA-384 of the exact bytes, and the browser refuses to run the file if they do
+not match. This is the honest answer to the risk we are asking customers to
+take — our code on their checkout page, so a compromise of our CDN account is a
+compromise of every customer at once. The tension is structural: a hash is a
+hash of specific bytes, so `integrity` and an auto-updating URL cannot both be
+true. Offering both and letting the customer choose is the shape that works.
+
+**What publishes `dist/`.** Small, and blocked on the three above.
+
+### One constraint that is already settled and must not be lost
+
+The CDN must send `Access-Control-Allow-Origin`. This is not a preference: a
+script served cross-origin that throws is replaced by the browser with the bare
+string `Script error.` — no file, no line, no `Error` object — so an
+error-reporting SDK that cannot read errors is the default outcome. It needs
+`crossorigin="anonymous"` on the tag *and* the header from the serving origin.
+The SDK already detects that exact shape and prints the fix once; the README's
+"three things the customer must configure" documents it. Any CDN that cannot set
+that header is disqualified rather than inconvenient.
+
+### Recommendation
+
+**Do not build this yet, and do record it.** It is deploy-time work whose inputs
+— the deployment target, the release process, whether `dist/` is built in CI —
+are all unsettled, and every question above answers more cheaply once they are.
+Nothing about door 3 is blocked in the meantime: the demo is the customer until
+there is a real one.
+
+What would change that: the first customer who is not us.
+
+---
+
 # Part 2 — Findings backlog
 
 All of these were **demonstrated** — an agent ran something that showed them —

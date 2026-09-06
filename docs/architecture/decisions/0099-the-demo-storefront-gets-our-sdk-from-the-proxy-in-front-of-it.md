@@ -4,6 +4,9 @@
 - **Date:** 2026-09-06
 - **Scope:** `tools/otel-demo/` only. This decides how a *demo* page carries our script; it
   says nothing about how a customer's page does, which is a script tag they add.
+  That question is open and held in
+  [open-decisions §1d](../../delivery/open-decisions.md) — CDN, version path scheme,
+  and whether SRI hashes are published.
 
 ## Context
 
