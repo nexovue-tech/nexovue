@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.src.tsbuildinfo",
+    "target": "es2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "esnext",
+    "types": ["vite/client"],
+
+    "skipLibCheck": true,
+
+    /* Bundler mode. No allowImportingTsExtensions: tsconfig.dts.json emits from
+       these same files, and that flag forbids emit. */
+    "moduleResolution": "bundler",
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": ["src", "types"]
+}

@@ -1,0 +1,39 @@
+{
+  "name": "@nexovue/browser-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Real user monitoring for the nexovue browser door: web vitals, JS errors, page views and sessions.",
+  "license": "UNLICENSED",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.dts.json",
+    "typecheck": "tsc -b",
+    "size": "node scripts/measure-size.js",
+    "test": "vitest run && pnpm run build && pnpm run size"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/sdk-trace-web": "2.11.0",
+    "web-vitals": "6.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "jsdom": "^30.0.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}

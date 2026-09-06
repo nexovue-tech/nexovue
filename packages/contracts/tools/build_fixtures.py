@@ -1,6 +1,7 @@
 """Regenerate the golden fixtures in ../fixtures.
 
-One committed envelope per door, per docs/architecture/ingestion-envelope.md. Every
+One committed envelope per shape a door sends — door 3 sends two signals from one
+page view, so it has two — per docs/architecture/ingestion-envelope.md. Every
 value here is fixed — no clocks, no randomness — so a rebuild that changes a byte
 means the contract or the payload shape changed, and the diff says which.
 
@@ -62,6 +63,18 @@ def double_attribute(key: str, value: float) -> common_pb2.KeyValue:
 
 def bool_attribute(key: str, value: bool) -> common_pb2.KeyValue:
     return common_pb2.KeyValue(key=key, value=common_pb2.AnyValue(bool_value=value))
+
+
+def string_array_attribute(key: str, values: list[str]) -> common_pb2.KeyValue:
+    """An attribute the registry types string[] — browser.brands is the one here."""
+    return common_pb2.KeyValue(
+        key=key,
+        value=common_pb2.AnyValue(
+            array_value=common_pb2.ArrayValue(
+                values=[common_pb2.AnyValue(string_value=value) for value in values]
+            )
+        ),
+    )
 
 
 def resource_for(
@@ -555,81 +568,216 @@ def door2_synthetic_browser() -> envelope_pb2.Envelope:
 
 
 # ----------------------------------------------------------------- door 3: RUM
+#
+# Door 3's client is our own browser SDK (packages/browser-sdk). It names itself
+# rather than "opentelemetry" and declares no deployment environment, so
+# resource_for() above does not describe it. It sends two signals from one page
+# view — vitals and errors as logs, the page view as a span — and an envelope
+# carries one signal, so door 3 has two fixtures.
+
+BROWSER_SDK_NAME = "@nexovue/browser-sdk"
+BROWSER_SDK_VERSION = "0.1.0"
+
+# Both fixtures are the same visitor's single page view: session.id is the only
+# join between a vital, an error and a page view, and there is no session table.
+RUM_SESSION_ID = "5f3c9a17d84b42e0bb1c6d5a90e2f478"
+RUM_PAGE_URL = "https://shop.acme.example/checkout"
+RUM_PAGE_PATH = "/checkout"
 
 
-def door3_rum() -> envelope_pb2.Envelope:
-    """A browser page load: the document span, a fetch child carrying the backend trace, and LCP."""
+def browser_resource() -> resource_pb2.Resource:
+    """The resource the browser SDK puts on every export, spans and logs alike.
+
+    A Chromium visitor, because the three User-Agent Client Hints attributes
+    exist nowhere else: Firefox and Safari expose none of them and the SDK leaves
+    all three unset rather than sending "". browser.brands is a string ARRAY.
+    """
+    return resource_pb2.Resource(
+        attributes=[
+            string_attribute("service.name", "acme-storefront"),
+            string_attribute("service.version", "2026.8.14"),
+            string_attribute("telemetry.sdk.name", BROWSER_SDK_NAME),
+            string_attribute("telemetry.sdk.language", "webjs"),
+            string_attribute("telemetry.sdk.version", BROWSER_SDK_VERSION),
+            string_attribute(
+                "user_agent.original",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+            ),
+            string_attribute("browser.language", "en-GB"),
+            string_array_attribute(
+                "browser.brands",
+                ["Not_A Brand 24", "Chromium 142", "Google Chrome 142"],
+            ),
+            string_attribute("browser.platform", "macOS"),
+            bool_attribute("browser.mobile", False),
+        ]
+    )
+
+
+def rum_page_context() -> list[common_pb2.KeyValue]:
+    """What every record the browser SDK sends says about where it happened."""
+    return [
+        string_attribute("session.id", RUM_SESSION_ID),
+        string_attribute("url.full", RUM_PAGE_URL),
+        string_attribute("url.path", RUM_PAGE_PATH),
+    ]
+
+
+def web_vital_record(
+    name: str,
+    value: float,
+    metric_id: str,
+    rating: str,
+    reported_offset_millis: int,
+) -> logs_pb2.LogRecord:
+    """One web-vitals callback in the conventions' browser.web_vital event shape.
+
+    The vital's name is a lowercase VALUE — there is no key per vital — and the
+    value is passed through in the library's own units: milliseconds for lcp, a
+    unitless ratio for cls. delta equals value on a single report.
+    """
+    reported_at = BASE_UNIX_NANO + reported_offset_millis * NANOS_PER_MILLISECOND
+    return logs_pb2.LogRecord(
+        time_unix_nano=reported_at,
+        observed_time_unix_nano=reported_at,
+        severity_number=logs_pb2.SEVERITY_NUMBER_INFO,
+        severity_text="INFO",
+        event_name="browser.web_vital",
+        attributes=[
+            string_attribute("browser.web_vital.name", name),
+            double_attribute("browser.web_vital.value", value),
+            double_attribute("browser.web_vital.delta", value),
+            string_attribute("browser.web_vital.id", metric_id),
+            string_attribute("browser.web_vital.rating", rating),
+            string_attribute("browser.web_vital.navigation_type", "navigate"),
+            *rum_page_context(),
+        ],
+    )
+
+
+def door3_rum_logs() -> envelope_pb2.Envelope:
+    """The page-hide beacon: two web vitals and an uncaught error, as log records.
+
+    Vitals and errors travel as logs rather than as span attributes because
+    nothing samples logs, while the page-view span below faces the tail sampler.
+    """
+    message = "n.checkout is not a function"
+    thrown_at = BASE_UNIX_NANO + 6_301 * NANOS_PER_MILLISECOND
+
+    uncaught_error = logs_pb2.LogRecord(
+        time_unix_nano=thrown_at,
+        observed_time_unix_nano=thrown_at,
+        severity_number=logs_pb2.SEVERITY_NUMBER_ERROR,
+        severity_text="ERROR",
+        event_name="exception",
+        body=common_pb2.AnyValue(string_value=message),
+        attributes=[
+            # exception.type is mandatory, not conditional: the Errors screen
+            # filters exception_type != '', so a record without one is invisible.
+            string_attribute("exception.type", "TypeError"),
+            string_attribute("exception.message", message),
+            # Raw and minified. Symbolication happens at query time.
+            string_attribute(
+                "exception.stacktrace",
+                "TypeError: n.checkout is not a function\n"
+                "    at t (https://cdn.acme.example/app.9f3c1a.min.js:2:48211)\n"
+                "    at HTMLButtonElement.<anonymous> "
+                "(https://cdn.acme.example/app.9f3c1a.min.js:2:12904)",
+            ),
+            *rum_page_context(),
+        ],
+        # No trace context, deliberately: error groups count distinct
+        # (trace id, span id) pairs, so a page's errors sharing the page-view
+        # span's context would be reported as one occurrence.
+    )
+
+    request = logs_service_pb2.ExportLogsServiceRequest(
+        resource_logs=[
+            logs_pb2.ResourceLogs(
+                resource=browser_resource(),
+                scope_logs=[
+                    logs_pb2.ScopeLogs(
+                        scope=common_pb2.InstrumentationScope(
+                            name=BROWSER_SDK_NAME, version=BROWSER_SDK_VERSION
+                        ),
+                        # Arrival order: lcp finalises at the first interaction,
+                        # cls only when the page is hidden.
+                        log_records=[
+                            web_vital_record(
+                                "lcp",
+                                3210.0,
+                                "v6-1787649300178-4901823746152",
+                                "needs-improvement",
+                                4_142,
+                            ),
+                            uncaught_error,
+                            web_vital_record(
+                                "cls",
+                                0.03,
+                                "v6-1787649300182-7318204965731",
+                                "good",
+                                8_704,
+                            ),
+                        ],
+                        schema_url=f"https://opentelemetry.io/schemas/{SEMCONV_VERSION}",
+                    )
+                ],
+                # No resource schema_url: the SDK declares the generation on the
+                # scope only, which is where the receiver reads it from first.
+            )
+        ]
+    )
+    return envelope(
+        envelope_pb2.DOOR_RUM,
+        envelope_pb2.SIGNAL_LOGS,
+        "01996d5e-9a40-7c01-a000-000000000009",
+        received_offset_millis=8_712,
+        payload=request.SerializeToString(),
+    )
+
+
+def door3_rum_traces() -> envelope_pb2.Envelope:
+    """The page view: one root span per navigation, under a fixed literal name.
+
+    No fetch child. Backend correlation needs the customer's own API to allow the
+    traceparent header, which is their configuration, and the SDK opens no span
+    for a request. Received after the logs above: both leave in the page-hide
+    flush, which sends logs first.
+    """
     trace_id = bytes.fromhex("9c1f8e2d4a6b7c8d9e0f1a2b3c4d5e6f")
-    document_span_id = bytes.fromhex("1a2b3c4d5e6f7a8b")
-    fetch_span_id = bytes.fromhex("2b3c4d5e6f7a8b9c")
+    page_view_span_id = bytes.fromhex("1a2b3c4d5e6f7a8b")
     start = BASE_UNIX_NANO
 
-    document_load = trace_pb2.Span(
+    page_view = trace_pb2.Span(
         trace_id=trace_id,
-        span_id=document_span_id,
-        name="documentLoad",
+        span_id=page_view_span_id,
+        # A fixed literal, never the URL: endpoint_stats_1m groups by span_name
+        # and retains 13 months, so a per-URL name mints a rollup row per URL.
+        name="page_view",
         kind=trace_pb2.Span.SPAN_KIND_INTERNAL,
         start_time_unix_nano=start,
         end_time_unix_nano=start + 1_940 * NANOS_PER_MILLISECOND,
-        attributes=[
-            string_attribute("url.full", "https://shop.acme.example/checkout"),
-            string_attribute("url.path", "/checkout"),
-            string_attribute(
-                "user_agent.original",
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15",
-            ),
-            string_attribute("session.id", "01996d5e-9a40-7e01-c000-0000000000aa"),
-            double_attribute("browser.web_vital.lcp", 1.842),
-            double_attribute("browser.web_vital.cls", 0.03),
-            int_attribute("browser.web_vital.inp", 112),
-        ],
+        # url.query and http.route are absent: the first is opt-in because
+        # masking matches attribute keys and not values, and a route template is
+        # the customer's knowledge, never derived from a path.
+        attributes=[*rum_page_context(), string_attribute("url.scheme", "https")],
         status=trace_pb2.Status(code=trace_pb2.Status.STATUS_CODE_UNSET),
-    )
-
-    # The backend correlation: this span's trace_id is what the server continues.
-    checkout_fetch = trace_pb2.Span(
-        trace_id=trace_id,
-        span_id=fetch_span_id,
-        parent_span_id=document_span_id,
-        name="POST",
-        kind=trace_pb2.Span.SPAN_KIND_CLIENT,
-        start_time_unix_nano=start + 1_502 * NANOS_PER_MILLISECOND,
-        end_time_unix_nano=start + 1_921 * NANOS_PER_MILLISECOND,
-        attributes=[
-            string_attribute("http.request.method", "POST"),
-            string_attribute("url.full", "https://shop.acme.example/api/checkout"),
-            int_attribute("http.response.status_code", 500),
-            string_attribute("error.type", "500"),
-        ],
-        status=trace_pb2.Status(
-            code=trace_pb2.Status.STATUS_CODE_ERROR, message="Internal Server Error"
-        ),
     )
 
     request = trace_service_pb2.ExportTraceServiceRequest(
         resource_spans=[
             trace_pb2.ResourceSpans(
-                resource=resource_for(
-                    "acme-storefront",
-                    "2026.8.14",
-                    "webjs",
-                    extra=[
-                        string_attribute("browser.brands", "Safari 18.5"),
-                        string_attribute("browser.platform", "iOS"),
-                        bool_attribute("browser.mobile", True),
-                    ],
-                ),
+                resource=browser_resource(),
                 scope_spans=[
                     trace_pb2.ScopeSpans(
                         scope=common_pb2.InstrumentationScope(
-                            name="@opentelemetry/instrumentation-document-load",
-                            version="0.50.0",
+                            name=BROWSER_SDK_NAME, version=BROWSER_SDK_VERSION
                         ),
-                        spans=[document_load, checkout_fetch],
+                        spans=[page_view],
                         schema_url=f"https://opentelemetry.io/schemas/{SEMCONV_VERSION}",
                     )
                 ],
-                schema_url=f"https://opentelemetry.io/schemas/{SEMCONV_VERSION}",
             )
         ]
     )
@@ -637,7 +785,7 @@ def door3_rum() -> envelope_pb2.Envelope:
         envelope_pb2.DOOR_RUM,
         envelope_pb2.SIGNAL_SPANS,
         "01996d5e-9a40-7c01-a000-000000000006",
-        received_offset_millis=2_050,
+        received_offset_millis=8_719,
         payload=request.SerializeToString(),
     )
 
@@ -823,7 +971,8 @@ FIXTURE_BUILDERS = {
     "door1-metrics.bin": door1_metrics,
     "door2-synthetic-http.bin": door2_synthetic_http,
     "door2-synthetic-browser.bin": door2_synthetic_browser,
-    "door3-rum.bin": door3_rum,
+    "door3-rum-logs.bin": door3_rum_logs,
+    "door3-rum-traces.bin": door3_rum_traces,
     "door4b-cloudwatch.bin": door4b_cloudwatch,
     "door4b-dbstats.bin": door4b_dbstats,
 }

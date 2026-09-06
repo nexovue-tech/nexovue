@@ -14,7 +14,7 @@ Field numbers are never reused. `buf breaking` fails the build on an incompatibl
 proto/nexovue/v1/envelope.proto   the contract — the only hand-written proto
 gen/go/nexovue/v1/                committed Go bindings
 gen/python/nexovue/v1/            committed Python bindings + .pyi stubs
-fixtures/                         one golden envelope per door, committed
+fixtures/                         one golden envelope per shape a door sends, committed
 tools/build_fixtures.py           rebuilds fixtures deterministically
 roundtrip_test.go                 Go round-trip proof
 tests/                            Python round-trip proof

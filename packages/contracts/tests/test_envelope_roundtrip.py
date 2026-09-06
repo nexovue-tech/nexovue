@@ -25,8 +25,10 @@ SEMCONV_VERSION: Final = "1.44.0"
 NANOS_PER_MILLISECOND: Final = 1_000_000
 BASE_UNIX_NANO: Final = 1787649300 * 1_000_000_000
 
-# One row per door, exactly the list in docs/architecture/ingestion-envelope.md:
+# One row per shape a door sends, the list in docs/architecture/ingestion-envelope.md:
 # filename, door, signal, ingest_id, offset from BASE_UNIX_NANO in milliseconds.
+# Door 3 has two rows: one page view produces both log records and a span, and an
+# envelope carries one signal.
 EXPECTATIONS: Final = [
     (
         "door1-traces.bin",
@@ -64,11 +66,18 @@ EXPECTATIONS: Final = [
         32_190,
     ),
     (
-        "door3-rum.bin",
+        "door3-rum-logs.bin",
+        envelope_pb2.DOOR_RUM,
+        envelope_pb2.SIGNAL_LOGS,
+        "01996d5e-9a40-7c01-a000-000000000009",
+        8_712,
+    ),
+    (
+        "door3-rum-traces.bin",
         envelope_pb2.DOOR_RUM,
         envelope_pb2.SIGNAL_SPANS,
         "01996d5e-9a40-7c01-a000-000000000006",
-        2_050,
+        8_719,
     ),
     (
         "door4b-cloudwatch.bin",

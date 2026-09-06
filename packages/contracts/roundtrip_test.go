@@ -39,14 +39,17 @@ type fixtureExpectation struct {
 	minPayloadEntryCount int
 }
 
-// One row per door, exactly the list in docs/architecture/ingestion-envelope.md.
+// One row per shape a door sends, the list in docs/architecture/ingestion-envelope.md.
+// Door 3 has two: one page view produces both log records and a span, and an
+// envelope carries one signal.
 var expectations = []fixtureExpectation{
 	{"door1-traces.bin", nexovuev1.Door_DOOR_OTLP, nexovuev1.Signal_SIGNAL_SPANS, "01996d5e-9a40-7c01-a000-000000000001", 430, 1},
 	{"door1-logs.bin", nexovuev1.Door_DOOR_OTLP, nexovuev1.Signal_SIGNAL_LOGS, "01996d5e-9a40-7c01-a000-000000000002", 1_260, 1},
 	{"door1-metrics.bin", nexovuev1.Door_DOOR_OTLP, nexovuev1.Signal_SIGNAL_METRICS, "01996d5e-9a40-7c01-a000-000000000003", 60_080, 1},
 	{"door2-synthetic-http.bin", nexovuev1.Door_DOOR_SYNTHETIC, nexovuev1.Signal_SIGNAL_METRICS, "01996d5e-9a40-7c01-a000-000000000004", 310, 1},
 	{"door2-synthetic-browser.bin", nexovuev1.Door_DOOR_SYNTHETIC, nexovuev1.Signal_SIGNAL_LOGS, "01996d5e-9a40-7c01-a000-000000000005", 32_190, 1},
-	{"door3-rum.bin", nexovuev1.Door_DOOR_RUM, nexovuev1.Signal_SIGNAL_SPANS, "01996d5e-9a40-7c01-a000-000000000006", 2_050, 1},
+	{"door3-rum-logs.bin", nexovuev1.Door_DOOR_RUM, nexovuev1.Signal_SIGNAL_LOGS, "01996d5e-9a40-7c01-a000-000000000009", 8_712, 1},
+	{"door3-rum-traces.bin", nexovuev1.Door_DOOR_RUM, nexovuev1.Signal_SIGNAL_SPANS, "01996d5e-9a40-7c01-a000-000000000006", 8_719, 1},
 	{"door4b-cloudwatch.bin", nexovuev1.Door_DOOR_POLLER, nexovuev1.Signal_SIGNAL_METRICS, "01996d5e-9a40-7c01-a000-000000000007", 60_140, 1},
 	{"door4b-dbstats.bin", nexovuev1.Door_DOOR_POLLER, nexovuev1.Signal_SIGNAL_METRICS, "01996d5e-9a40-7c01-a000-000000000008", 60_210, 1},
 }
