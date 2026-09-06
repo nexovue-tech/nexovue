@@ -134,8 +134,7 @@ class Settings(BaseSettings):
         All four or none: a half-configured store fails at the first upload with
         a signing error naming nothing, where this names the variables.
         """
-        parts = (self.s3_endpoint, self.s3_bucket, self.s3_access_key_id,
-                 self.s3_secret_access_key)
+        parts = (self.s3_endpoint, self.s3_bucket, self.s3_access_key_id, self.s3_secret_access_key)
         if not all(parts):
             return None
         return ObjectStoreSettings(

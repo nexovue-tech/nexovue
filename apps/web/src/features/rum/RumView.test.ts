@@ -87,6 +87,7 @@ describe("the RUM screen", () => {
         traceId: "0af7651916cd43dd8448eb211c80319c",
         correlationId: "0af7651916cd43dd8448eb211c80319c",
         offline: false,
+        aborted: false,
       }),
     });
     expect(text).toContain("Web vitals could not be loaded");

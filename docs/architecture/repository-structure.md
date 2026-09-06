@@ -286,7 +286,7 @@ Never a nil dereference at first use, never a default that works locally and is 
 
 ```python
 async def query(self, sql: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    if not binds_tenant(sql):          # the `tenant_id = {tenant_id:String}` predicate
+    if not binds_tenant(sql):  # the `tenant_id = {tenant_id:String}` predicate
         raise TenantFilterMissingError(sql)
 
     bound: dict[str, Any] = {**(parameters or {}), "tenant_id": self._tenant_id}

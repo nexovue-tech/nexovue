@@ -123,9 +123,7 @@ async function runSdkOnAPage(page: Page, siteKey: string): Promise<void> {
   await page.waitForTimeout(500);
 }
 
-test("a script tag on a real page reaches both the RUM and the errors screen", async ({
-  page,
-}) => {
+test("a script tag on a real page reaches both the RUM and the errors screen", async ({ page }) => {
   test.setTimeout(ARRIVAL_TIMEOUT_MS + 90_000);
 
   await signUp(page, newAccount());
