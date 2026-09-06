@@ -14,6 +14,42 @@
 // envelope per trace exactly as the receiver splits them. What varies during a
 // run is the worker fleet, which is driven from outside this tool.
 //
+// # Recording a run, before you clean up
+//
+// Capture the numbers to files first. The cleanup below is irreversible, and a
+// figure nobody wrote down cannot be recovered from a deleted row.
+//
+// This is a repair, not a precaution. The 2026-09-05 counter measurement left
+// its `service_edges_1m` figure disputed — +13 by subtraction against the +14 a
+// reviewer derives from `+70 spans / 5 spans-per-trace` — and neither can now be
+// settled, because the output was never saved and the rows were deleted here.
+// ADR 0094 records the disagreement in the place it should have recorded an
+// answer.
+//
+// The report is JSON on stdout and the progress line goes to stderr, so one
+// redirect captures what was produced and nothing else:
+//
+//	go run ./tools/rebalanceprobe -duration 6m -spans-topic spans-probe > <run>-produced.json
+//
+// Then the other side of the subtraction — what was stored — under the same
+// predicates as the DELETEs below, so the rows counted and the rows removed
+// cannot drift apart:
+//
+//	SELECT 'spans' AS what, count() AS n FROM spans WHERE service_name = 'nvprobe-spans-<run>'
+//	UNION ALL SELECT 'logs', count() FROM logs WHERE service_name = 'nvprobe-logs-<run>'
+//	UNION ALL SELECT 'trace_summaries', count() FROM trace_summaries WHERE startsWith(trace_id, '<run>')
+//	UNION ALL SELECT 'span_trace_lookup', count() FROM span_trace_lookup WHERE startsWith(trace_id, '<run>')
+//	UNION ALL SELECT 'endpoint_stats_1m.request_count', sum(request_count) FROM endpoint_stats_1m WHERE service_name = 'nvprobe-spans-<run>'
+//	UNION ALL SELECT 'service_edges_1m.call_count', sum(call_count) FROM service_edges_1m WHERE client_service = 'nvprobe-spans-<run>' OR server_service = 'nvprobe-spans-<run>'
+//	UNION ALL SELECT 'metrics_sum', count() FROM metrics_sum WHERE service_name = 'nvprobe-spans-<run>'
+//
+// One UNION ALL and no ORDER BY, deliberately: ClickHouse applies a trailing
+// ORDER BY to the last branch alone, not to the union, and fails on the alias.
+//
+// Where a figure is a delta, take it once before the arm and once after and keep
+// both. `usage_daily` needs that most, because it cannot be separated from real
+// traffic — its baseline is knowable only before the run.
+//
 // # Cleaning up after a run
 //
 // A run leaves rows in three places, and the third one is billable — the usage

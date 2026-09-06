@@ -335,7 +335,11 @@ review derives **+14** from the identity `+70 spans ÷ 5 spans-per-trace`, again
 `7,212 − 7,199` gives here. **Neither can now be settled, because the raw counter output was never
 saved to a file and the rows were deleted during cleanup** — every figure in this section survives
 only as prose in this document. That is the defect to fix before the next measurement: capture the
-output, then delete the rows.
+output, then delete the rows. **Fixed on 2026-09-06** — that instruction now lives in
+`tools/rebalanceprobe`'s own header, in a section placed above the cleanup SQL, with the redirect
+that captures the report and the query that counts the stored side under the same predicates the
+DELETEs use. It was recorded here and in a commit message, which are both places nobody reads
+before running a tool.
 
 **One edge call short, in both 60s arms, and it is not the fix.** The after arm stored 7,199 calls
 against 7,200 accepted. The before arm is short by the same one: its identity predicts
