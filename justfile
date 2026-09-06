@@ -19,19 +19,14 @@ _default:
 
 # ---------- running ----------
 
-# Dev stack: infrastructure + services with hot reload, including the Celery
-# probe workers. They were behind a `doors` profile until 2026-09-06, on the
+# The Celery probe workers were behind a `doors` profile until 2026-09-06, on the
 # reasoning that the full stack is rarely needed at once — but `just otel-demo up`
 # is the daily traffic source and refuses without them, so the extra step was a
 # papercut on the common path. Measured idle: 393 MiB across four containers
 # (scheduler-beat runs two replicas and elects a leader).
+# Dev stack: infrastructure + every service, hot reloading, probe workers included
 dev:
     docker compose -f {{compose}}/docker-compose.yaml up -d --wait
-
-# Realistic traffic comes from `just otel-demo up`, not from here.
-# Dev stack plus the load generator: telemetrygen at the receiver, for the §4 budgets
-dev-tools:
-    docker compose -f {{compose}}/docker-compose.yaml --profile tools up -d --wait
 
 # Production replica: same infrastructure, services from built images
 dev-app:
@@ -40,7 +35,7 @@ dev-app:
 # Stop everything, keep the volumes. Takes the OpenTelemetry Demo with it.
 down:
     -./tools/otel-demo/otel-demo.sh down
-    docker compose -f {{compose}}/docker-compose.yaml --profile tools down
+    docker compose -f {{compose}}/docker-compose.yaml down
 
 # Destructive. Everything not in a snapshot from `just backup` is gone, including
 # Kafka's buffer, and it leaves no schema and no seed — so `just fresh` is usually
@@ -48,7 +43,7 @@ down:
 # Stop everything and delete every volume: stores, broker, caches
 down-hard:
     -./tools/otel-demo/otel-demo.sh down
-    docker compose -f {{compose}}/docker-compose.yaml --profile tools down -v
+    docker compose -f {{compose}}/docker-compose.yaml down -v
 
 # Run this when the dev stack has drifted into a state you stopped trusting.
 # Takes about two minutes, most of it waiting for ClickHouse and Kafka.
@@ -244,6 +239,10 @@ backup-verify snapshot:
 
 # ---------- performance ----------
 
+# Runs on this machine, not in a container, and that is not incidental: its
+# endpoint defaults to localhost:14318, which is the receiver's published port
+# here and nothing at all inside a container. A `just dev-tools` that got this
+# wrong shipped for months sending zero spans.
 # Measure against the budgets in docs/delivery/phase-1-plan.md section 4
 load:
     go run ./tools/loadgen

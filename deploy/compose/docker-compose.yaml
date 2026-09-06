@@ -358,23 +358,14 @@ services:
   #
   # `just otel-demo up` is the traffic source now: 18 services, ~10 languages,
   # pointed at our own receiver. See tools/otel-demo/.
-
-  loadgen:
-    profiles: ["tools"]
-    build:
-      context: ../..
-      dockerfile: deploy/docker/go-dev.Dockerfile
-    command: go run ./tools/loadgen
-    working_dir: /workspace
-    volumes:
-      - ../..:/workspace
-      - go-cache:/cache
-    environment:
-      TARGET_ENDPOINT: http://receiver:4318
-    deploy:
-      resources:
-        limits:
-          memory: 512M
+  #
+  # A `loadgen` service sat here behind a `tools` profile until 2026-09-06 and
+  # had never sent a span: it set TARGET_ENDPOINT, which tools/loadgen does not
+  # read, so it fell back to localhost:14318 — its own container — and refused
+  # every export against itself while exiting 0. The generator is not gone;
+  # `just load` runs it on the host, where that default is the receiver's
+  # published port. It measures budgets, which is a thing you invoke, not a
+  # thing you leave running.
 
   # ---------- intelligence (Phase 2, `insight` profile) ----------
   # Not part of `just dev`: apps/insight does not exist until F3/F6. Defined

@@ -53,7 +53,7 @@ target. The app and on-premise targets are smaller, because their containers hos
 | Web | 1 GB | 0.125 GB | dev is the Vite dev server; the app target is nginx over a static build |
 | scheduler-beat (×2) · light · browser | 0.25 · 0.75 · 1.5 GB | 0.25 · 0.25 · 1.5 GB | the browser container is Playwright; **beat runs two replicas** and elects a leader, so `just dev` is 13 containers from 12 services; in the core since 2026-09-06 |
 | **Core total** | **~13 GB of caps** | | caps are not reservations — the thirteen containers measured 3795 MiB resident |
-| *+ loadgen* | 0.5 GB | — | `tools` profile |
+| *+ loadgen* | — | — | **removed 2026-09-06.** `just load` runs it on the host; it was never a container that worked |
 | *+ insight · ollama* | 0.75 GB · 6 GB | 1 GB · 8 GB | `insight` profile, Phase 2 — `apps/insight` does not exist yet |
 
 ## Host ports
@@ -90,7 +90,7 @@ Use `deploy.resources.limits`, **not `mem_limit`**. The widespread advice that `
 
 ClickHouse is a special case: it misreads cgroup limits in Docker, so its cap is set explicitly in `deploy/clickhouse/config.d/memory.xml` rather than inherited from the container.
 
-**2. Compose profiles, for the things not everyone needs.** `just dev` starts the core *and* the three Celery probe containers, one of them Playwright — they were behind a `doors` profile until 2026-09-06, and the reasoning that "the full stack is rarely needed at once" stopped holding once `just otel-demo up` became the daily traffic source and refused to start without them. Measured idle on 2026-09-06 they cost 393 MiB across four containers — `scheduler-beat` runs two replicas that elect a leader, so twelve services come up as thirteen containers. `just dev-tools` still adds the load generator, and `insight` and `ollama` are Phase 2 and start nothing today.
+**2. Compose profiles, for the things not everyone needs.** `just dev` starts the core *and* the three Celery probe containers, one of them Playwright — they were behind a `doors` profile until 2026-09-06, and the reasoning that "the full stack is rarely needed at once" stopped holding once `just otel-demo up` became the daily traffic source and refused to start without them. Measured idle on 2026-09-06 they cost 393 MiB across four containers — `scheduler-beat` runs two replicas that elect a leader, so twelve services come up as thirteen containers. The `tools` profile went the same day and for a blunter reason: its one service, `loadgen`, set `TARGET_ENDPOINT` — a variable `tools/loadgen` does not read — so it fell back to `localhost:14318`, its own container, and refused every export against itself while exiting 0. It had never sent a span. The generator itself is fine and stays: `just load` runs it on the host, where that default is the receiver's published port. `insight` and `ollama` are Phase 2 and start nothing today.
 
 **3. ClickHouse keeps a short TTL in dev.** The migrations carry the production TTLs — 30 days raw, 90 days metrics. `deploy/clickhouse/dev-retention.sql` shortens spans and logs to 3 days, and it is **not** run by `just migrate` or `just fresh`: apply it by hand after migrating, with the command in its own header comment. Without it the SSD quietly fills with test spans.
 

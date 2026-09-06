@@ -13,7 +13,7 @@ import { signIn } from "./support/accounts";
 import { SEEDED_USER, TRACE_LIST_COLUMNS } from "./support/stack";
 
 const NOTHING_ARRIVING =
-  "the seeded organisation has no traces in the last hour — start something that exports, e.g. `just dev-tools`";
+  "the seeded organisation has no traces in the last hour — start something that exports: `just otel-demo up` for a real shop's traffic, or `just load` for a measured minute of it";
 
 test("a returning user signs in and reaches the traces already arriving", async ({ page }) => {
   await signIn(page, SEEDED_USER.email, SEEDED_USER.password);

@@ -11,7 +11,7 @@ import { expect, request as playwrightRequest, test as setup } from "@playwright
 
 import { API_ORIGIN, RECEIVER_ORIGIN, WEB_ORIGIN } from "./support/stack";
 
-const START_THE_STACK = "Start it with `just dev-tools`, then run `just e2e` again.";
+const START_THE_STACK = "Start it with `just dev`, then run `just e2e` again.";
 
 setup("the compose stack is up", async () => {
   // A fresh context per probe: these are liveness checks, not requests on anyone's behalf.

@@ -431,7 +431,7 @@ def test_a_cursor_issued_to_one_organization_cannot_page_another_organizations_t
     if cursor is None:
         pytest.fail(
             "the seeded organization has only one page of traces, so a forged "
-            "cursor cannot be tested — send some traffic with `just dev-tools` "
+            "cursor cannot be tested — send some traffic with `just otel-demo up` "
             "or `just load`"
         )
     theirs = {trace["trace_id"] for trace in issued.json()["traces"]}
@@ -457,7 +457,7 @@ def test_a_newcomers_session_cannot_see_the_seeded_organizations_traces(
         pytest.fail(
             "the seeded organization has no traces in the default window, so "
             "cross-tenant trace reads cannot be tested — send some traffic with "
-            "`just dev-tools` or `just load`"
+            "`just otel-demo up` or `just load`"
         )
 
     stolen = newcomer.client.get(
