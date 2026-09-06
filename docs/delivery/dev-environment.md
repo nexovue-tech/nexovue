@@ -125,13 +125,35 @@ CPU-only. `LLM_BASE_URL` therefore defaults to `host.docker.internal`.
 **This section was wrong until 2026-09-04 and cost time.** It said the demo needs 4–8 GB, does not coexist with our stack, and has to be run by hand against a raised Docker allocation. None of that is true any more: `tools/otel-demo/` trims the upstream compose files and drives them for you.
 
 ```
+just dev-doors                       the probe workers, which door 2 needs
 NEXOVUE_INGEST_KEY=nvk_live_devlocaldevlocaldevloc just otel-demo up
 just otel-demo stats     memory, this stack and the demo's
 just otel-demo logs      follow every demo container
 just otel-demo down      stop the demo only; `just down` also takes it with it
 ```
 
-**Measured 2026-08-30, images already pulled: 1641 MiB resident across 20 containers, about four minutes from `up` to the first full service map.** It fits alongside the core stack in a 13 GB VM, which is why it replaced the hand-written demo shop as the everyday traffic source rather than staying a periodic gate.
+**Measured 2026-09-06, images already pulled: 2007 MiB resident across 21 containers, about four minutes from `up` to the first full service map.** (It was 1641 across 20 before P1-63 added a host-metrics collector and turned k6's browser scenario back on.) It fits alongside the core stack in a 13 GB VM, which is why it replaced the hand-written demo shop as the everyday traffic source rather than staying a periodic gate.
+
+### Which screens it fills, and the one it does not
+
+Five of the six doors, since P1-63:
+
+| Screen | Filled by |
+|---|---|
+| Services, Traces, Service map, Logs, Errors | door 1 — every demo service reports |
+| Traces, again | the storefront's **own browser**, whose spans join the backend's in one trace |
+| Infrastructure | a `hostmetrics` collector in the overlay, 7 of the 13 names the screen reads |
+| Synthetics | two checks `doors.py` creates, probing the storefront |
+| **RUM** | our SDK, injected into the shop's pages by Envoy — **but see below** |
+| Deploys (API only; there is no screen) | signed deliveries `doors.py` posts |
+| **Database** | **nothing.** Blocked on ADR 0076 — `astronomy-db` ships `pg_stat_statements` preloaded and a `monitoring_user` already granted, and the poller still refuses password auth for self-hosted Postgres |
+
+**RUM needs a person, or `just load`.** The script is on every page the storefront
+serves, and it works — open `http://localhost:8080`, click around, and the vitals
+arrive. But k6's browser scenario produces no browser telemetry at all: measured
+over 55 completed iterations, zero exports reached the door, from our SDK *or*
+from upstream's own `FrontendTracer`. Both are silenced equally, so it is k6's
+browser module rather than anything the injection can fix.
 
 What runs: everything upstream's core and full compose files define, minus three — `otel-collector` (we are the backend; its only job there was to be one), `flagd-ui` and `telemetry-docs`, which have no callers. That leaves 20 containers, **18 of them reporting telemetry, in ten languages**, including the Kafka queue hop that produces span-link edges in the service map. The upstream clone is pinned to `3.0.0`; `latest` would silently change what the gate measured between runs.
 

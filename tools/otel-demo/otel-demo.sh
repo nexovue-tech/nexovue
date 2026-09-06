@@ -1,17 +1,36 @@
 #!/usr/bin/env bash
-# P1-62 — the OpenTelemetry Demo realism gate.
+# P1-62, then P1-63 — the OpenTelemetry Demo, and every door it can reach.
 #
-# Runs the upstream OpenTelemetry Demo — 20 containers, 18 of them sending
+# Runs the upstream OpenTelemetry Demo — 21 containers, 18 of them sending
 # telemetry, in ten languages — against our receiver, so the screens are judged
-# on telemetry we did not write. Our own demo app is three Go services that
-# agree with themselves; this one does not.
+# on telemetry we did not write. Our own demo app was three Go services that
+# agreed with themselves; this one does not.
+#
+# **It opens five doors, not one.** P1-62 fed door 1 and left four screens empty,
+# which is a strange thing for the daily traffic source to do. Now:
+#
+#   door 1  every service reports, and so does the storefront's own browser —
+#           whose spans join the backend's in one trace
+#   door 1  a hostmetrics collector of ours, the only container here that is not
+#           upstream's, because no application service can report its own host
+#   door 2  two checks doors.py creates, probing the storefront
+#   door 3  our browser SDK, injected into the shop's pages by Envoy
+#   door 4a a signed deploy event carrying the release the pages report
+#
+#   door 4b is **not** opened. `astronomy-db` has pg_stat_statements preloaded
+#           and a monitoring_user granted, and the poller refuses password auth
+#           for self-hosted Postgres (ADR 0076). The Database screen stays empty.
 #
 # Deliberately a separate command. It is not in `just check` — that gate must
 # never need Docker — and not in `just e2e`, which runs against a stack this
 # disturbs for minutes at a time.
 #
-# Measured on 2026-08-30, images already pulled: 1641 MiB resident across the
-# 20 containers, about four minutes from `up` to the first full service map.
+# Measured on 2026-09-06, images already pulled: 2007 MiB resident across the
+# 21 containers, about four minutes from `up` to the first full service map.
+# It was 1641 across 20 before the collector and k6's browser scenario.
+#
+# Needs `just dev-doors` as well as `just dev`: without the probe workers the
+# checks are created and never probed, and `up` refuses rather than pretending.
 #
 #   ./tools/otel-demo/otel-demo.sh up      bring the trimmed demo up, in waves
 #   ./tools/otel-demo/otel-demo.sh stats   memory, this stack and the demo's
