@@ -11,6 +11,45 @@ row in `phase-1-plan.md` disagrees with what the code does, this file says so an
 
 ---
 
+## Status — updated 2026-09-07
+
+**Tracked here rather than in a status column elsewhere, so this file answers "what next"
+without a second file to reconcile.** A row is `done` only when something was run and watched,
+never when the code was written.
+
+| | Item | Status | Landed |
+|---|---|---|---|
+| **A1** | authorization seam — `require_role`, 8 routes, coverage test | ✅ **done** | `7e930d5` |
+| **A2** | contract tests — auth mode + ClickHouse table names | ✅ **done** | `e18713c` |
+| **A3** | `packages/py-platform` — 299 duplicated lines removed | ✅ **done** | `f4291d8` |
+| **G1** | TLS edge | 🟡 **decisions taken, headers unbuilt** | `42c3b48` |
+| **G2** | account recovery | 🟡 **P1-69 infrastructure done; P1-70/71 not started** | `a6ef9cd` `9febb8a` `3a76dda` |
+| **G3** | poller SSRF boundary | ⬜ next but one | — |
+| **G4** | poller certificate verification | ⬜ **next** | — |
+| **G5** | ingest kill switch | ⬜ | — |
+| **G6** | paid-tier cap | ⬜ | — |
+| **G7** | SDK distribution | ⬜ | — |
+| **C1–C7** | commercial layer | ⬜ gated on G2 | — |
+| **M1–M5** | measurements | ⬜ | — |
+| **F1–F5** | findings | ⬜ | — |
+
+### What "partly done" means for the two 🟡 rows
+
+**G1.** Both decisions it deferred are now taken and written into `deploy/caddy/Caddyfile`: two
+hostnames — `app.nexovue.com` and `ingest.nexovue.com` — and no public gRPC in Phase 1. ADR 0089
+made the hostname a privacy requirement rather than a preference, and the cookie half is settled by
+an omission that now carries a comment: `auth/cookies.py` sets no `Domain`, which makes the session
+cookie host-only. **The security headers are still unbuilt**, and that is the whole of what G1 has
+left.
+
+**G2.** P1-69's infrastructure is complete and verified: provider chosen, `mail.nexovue.com`
+carrying SPF, DKIM, DMARC and a bounce path — all four confirmed resolving against a public
+resolver, not read off an export — `EmailSender` behind ADR 0102's port, `ResendEmailSender`
+implementing it, `build_email_sender` choosing from `EMAIL_PROVIDER`, and two real messages sent
+and accepted. **P1-70 and P1-71 — verification and reset — are the features and are not started.**
+
+---
+
 ## 0. What the plan says is open and is not
 
 Four things in `phase-1-plan.md` are stale, and two of them are the reason P1-53 looks worse than
@@ -547,11 +586,11 @@ changing them is free today and expensive on the day after launch.
 
 ## 5. The order I would actually take
 
-**First — A1, the authorization seam.** It is the only item on this whole list that gets
-materially harder after Phase 2, it changes no behaviour today, and it is a day now against a
-fortnight later. A2 and A3 ride alongside it: three lines and two hours respectively.
+**~~First — A1, the authorization seam.~~ Done 2026-09-07, with A2 and A3 alongside it.** The
+reasoning stands as written: it was the only item that gets materially harder after Phase 2, it
+changed no behaviour, and it took a day rather than the fortnight it would have later.
 
-**Then — the safety gate.** G4 then G3, in that order: G4 is small, and it removes the stated
+**Now — the safety gate.** G4 then G3, in that order: G4 is small, and it removes the stated
 reason G3 was never fixed. Both are open holes, and G3 is an SSRF surface every sibling boundary
 already closes. T1-5 belongs here too — it is a `CHECK` or a test, and it guards the cap G6 extends. Then G1, because TLS is what makes exposure
 possible at all.
