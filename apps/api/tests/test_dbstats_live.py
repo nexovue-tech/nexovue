@@ -1,17 +1,19 @@
 """Database-statistics reads against the running ClickHouse (M6 Phase A).
 
-**There is no data behind these endpoints, and this suite says so out loud.**
-Door 4b's poller has never been pointed at a real Postgres, so `metrics_gauge`
-holds no row under either metric name. What can honestly be proved live is:
+**This suite asserted emptiness until 2026-09-07, and said so out loud so that
+it could stop.** Door 4b's poller had never been pointed at a real Postgres, and
+the premise was written as an assertion with an instruction attached: *"if this
+fails, a database has been polled for the first time — and the tests below
+should be replaced with ones that assert on real readings."*
 
-1. the statements are valid against the real schema — they parse, they run;
-2. the empty result becomes an empty response, not an error and not a sample;
-3. the emptiness is about this signal, not about a broken query — the same
-   table, read for the same tenant, does return rows for other metrics.
+It failed. [ADR 0100](../../../docs/architecture/decisions/0100-a-database-we-cannot-reach-is-polled-by-the-customers-own-collector.md)
+made the demo's own Postgres reachable through the customer-collector route, so
+real readings exist and these are the assertions the old ones asked for.
 
-Until a customer database is connected, that is the whole of the live evidence.
-The row mapping is exercised offline in `test_dbstats.py` against the shape
-`nexovue_scheduler.pollers.envelope` publishes.
+The suite is deliberately tolerant of *how much* data there is — it runs against
+whatever the demo happens to have published — and strict about its shape. A
+count that varies between runs is not evidence; a statement with no hash, or a
+duration that is not a positive number of seconds, is.
 
 It fails when the stack is not up rather than skipping, because a skip here is
 indistinguishable from a pass. `NEXOVUE_SKIP_LIVE_TESTS=1` opts out on purpose.
@@ -116,13 +118,13 @@ def _window() -> tuple[datetime, datetime]:
     return _since(), datetime.now(UTC)
 
 
-async def test_the_poller_has_published_nothing_which_is_why_this_suite_is_thin(
-    client: AsyncClient,
-) -> None:
-    """States the premise as an assertion so it cannot quietly stop being true.
+async def test_both_metric_names_have_readings_in_the_store(client: AsyncClient) -> None:
+    """The premise, still stated as an assertion — now the other way round.
 
-    If this fails, a database has been polled for the first time — and the
-    tests below should be replaced with ones that assert on real readings.
+    This replaced a test asserting the opposite, which failed the day ADR 0100
+    made a database reachable. Keeping the premise asserted is the point: if
+    these rows disappear, the suite below would go green against nothing, which
+    is the failure `require_stack` exists to prevent one level up.
     """
     result = await client.query(
         """
@@ -137,16 +139,23 @@ async def test_the_poller_has_published_nothing_which_is_why_this_suite_is_thin(
         },
     )
 
-    assert result.result_rows == [], (
-        "door 4b has published readings for the first time — replace this suite "
-        f"with assertions on the real rows: {result.result_rows}"
+    published = {str(name) for name, _ in result.result_rows}
+    assert published == {queries.METRIC_OPERATION_DURATION, queries.METRIC_CONNECTION_COUNT}, (
+        "door 4b's readings are missing from the store, so everything below would "
+        f"assert against nothing. Run `just otel-demo up`. Found: {published}"
     )
 
 
-async def test_slow_statements_answers_with_an_empty_list_against_real_clickhouse(
+async def test_slow_statements_reads_real_rows_and_they_are_shaped_correctly(
     client: AsyncClient, tenant_with_metrics: tuple[str, str]
 ) -> None:
-    """The statement is valid against the real schema, and finds nothing."""
+    """Every field, because the ones that are wrong are wrong silently.
+
+    A hash that came back empty, or a mean in milliseconds under a column
+    labelled seconds, produces a screen that renders happily and misleads. The
+    count is deliberately not asserted — it depends on what the demo has done
+    recently, and a number that varies between runs is not evidence.
+    """
     tenant_id, project_id = tenant_with_metrics
     start, end = _window()
 
@@ -158,12 +167,32 @@ async def test_slow_statements_answers_with_an_empty_list_against_real_clickhous
         limit=service.DEFAULT_STATEMENT_LIMIT,
     )
 
-    assert result.statements == []
+    assert result.statements, (
+        "no statements read back; the premise test above should have caught this"
+    )
+    for statement in result.statements:
+        assert statement.query_hash, "a statement with no hash cannot be looked up by anyone"
+        assert statement.db_system, "the screen needs to say which engine this was"
+        assert statement.server.address, "grouped by server, so it cannot be blank"
+        assert statement.latest_mean_ms >= 0
+        # Seconds on the wire, milliseconds on the screen. A poller that sent
+        # milliseconds would put a thousand-fold error here and nothing else
+        # would notice — an hour-long statement is what that looks like.
+        assert statement.latest_mean_ms < 3_600_000, (
+            f"{statement.latest_mean_ms}ms is longer than an hour, which is what a "
+            f"seconds/milliseconds unit error looks like"
+        )
+        assert statement.worst_mean_ms >= statement.latest_mean_ms or statement.readings == 1
 
 
-async def test_connection_health_answers_with_an_empty_list_against_real_clickhouse(
+async def test_connection_health_reads_real_backend_states(
     client: AsyncClient, tenant_with_metrics: tuple[str, str]
 ) -> None:
+    """States come from `pg_stat_activity`, so they are Postgres's own words.
+
+    Asserted against that vocabulary rather than a fixed list, because a state
+    this product invented would mean the translation layer had started guessing.
+    """
     tenant_id, project_id = tenant_with_metrics
     start, end = _window()
 
@@ -174,17 +203,39 @@ async def test_connection_health_answers_with_an_empty_list_against_real_clickho
         to_time=end,
     )
 
-    assert result.states == []
-    assert result.latest_backends_total == 0
+    assert result.states, "no backend states read back"
+    # `pg_stat_activity.state`'s full vocabulary. `starting` is the one this
+    # test first omitted and the demo's Postgres produced within a minute — a
+    # backend that has connected and not yet begun. The web app renders an
+    # unrecognised state with a generic caption rather than dropping it, which
+    # is why an omission here is a test bug and not a product one.
+    known = {
+        "active",
+        "idle",
+        "idle in transaction",
+        "idle in transaction (aborted)",
+        "fastpath function call",
+        "starting",
+        "disabled",
+        "unknown",
+    }
+    for state in result.states:
+        assert state.state in known, f"{state.state!r} is not a state pg_stat_activity reports"
+        assert state.latest_backends >= 0
+        assert state.peak_backends >= state.latest_backends
+    assert result.latest_backends_total == sum(s.latest_backends for s in result.states)
+    assert result.latest_backends_total > 0, "a database with no backends is not one we polled"
 
 
-async def test_the_emptiness_is_this_signal_and_not_a_query_that_reads_nothing(
+async def test_the_tenant_this_suite_reads_holds_other_metrics_too(
     client: AsyncClient, tenant_with_metrics: tuple[str, str]
 ) -> None:
-    """Without this, an endpoint that could never return a row looks identical.
+    """Kept from when this suite asserted emptiness, and still worth having.
 
-    The same table, the same tenant, the same window: other metrics are there.
-    So `[]` above is "door 4b has not run", not "this read is broken".
+    It proved `[]` meant "door 4b has not run" rather than "this read is
+    broken". Now that rows exist it proves the fixture picked a tenant that is
+    genuinely busy, so a future emptiness above would be about door 4b and not
+    about the suite having chosen a dormant project.
     """
     tenant_id, _ = tenant_with_metrics
     result = await client.query(

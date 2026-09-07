@@ -124,6 +124,13 @@ test-go:
 test-py:
     #!/usr/bin/env bash
     set -uo pipefail
+    # `.env` if it exists, because the live suites need what it holds. Every
+    # other one gates on a service `just dev` starts and reachable on a known
+    # localhost port; the mail suite gates on a credential, which no compose
+    # file can provide. Without this it raises during collection and takes the
+    # offline suites with it — a gate that fails for a reason unrelated to the
+    # code is a gate people learn to ignore.
+    [ -f .env ] && { set -a; . ./.env; set +a; }
     uv run pytest
     code=$?
     if [ $code -eq 5 ]; then echo "no tests collected yet — see the testing policy"; exit 0; fi
