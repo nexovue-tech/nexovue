@@ -11,6 +11,7 @@ credential or a network.
 
 from __future__ import annotations
 
+import re
 import ssl
 import uuid
 from datetime import UTC, datetime
@@ -22,18 +23,20 @@ import certifi
 import pytest
 from botocore.stub import Stubber
 
-from nexovue_scheduler.pollers import integrations
+from nexovue_scheduler.pollers import integrations, postgres_connect
 from nexovue_scheduler.pollers.aws import RoleGrant, session_name_for
 from nexovue_scheduler.pollers.postgres_connect import (
     AUTH_PASSWORD,
     AUTH_RDS_IAM,
     RDS_SSL_MODE,
     READ_ONLY_SESSION,
+    DatabaseAddressError,
     DatabaseAuthError,
     DatabaseTarget,
     DatabaseTLSError,
     rds_auth_token,
     rds_tls_context,
+    refuse_unreachable_host,
 )
 
 ACCOUNT_ID: Final = "123456789012"
@@ -270,3 +273,91 @@ def test_a_real_bundle_produces_a_context_that_checks_the_hostname(tmp_path: Pat
 
     assert context.check_hostname is True
     assert context.verify_mode is ssl.CERT_REQUIRED
+
+
+# ------------------------------------------------------- the address boundary
+
+
+async def test_a_host_resolving_to_loopback_is_refused() -> None:
+    """The third SSRF surface, and the one that needs no attacker.
+
+    `database_target_from` checks only that the host is a string, so until this
+    a tenant could name `localhost` and the scheduler would connect to itself
+    from inside our network. Door 2's HTTP check refuses this through
+    `ConnectGuard` and its browser flow through `PublicAddressProxy`; door 4b
+    went through neither.
+    """
+    with pytest.raises(DatabaseAddressError, match=re.escape("127.0.0.1")):
+        await refuse_unreachable_host("localhost", 5432, private_allowed=False)
+
+
+async def test_the_metadata_endpoint_is_refused_even_in_development() -> None:
+    """169.254.169.254 is where every major cloud serves instance credentials.
+
+    ADR 0098's line, restated for this door: link-local does not become safe to
+    reach because somebody is developing, and a developer's laptop is exactly
+    where a stolen role would be used. Asserted with the escape *on*, because
+    that is the setting where a weaker rule would show.
+    """
+    with pytest.raises(DatabaseAddressError, match=re.escape("169.254.169.254")):
+        await refuse_unreachable_host("169.254.169.254", 5432, private_allowed=True)
+
+
+async def test_loopback_stays_refused_with_the_development_escape_on() -> None:
+    """The other half of ADR 0098's line: loopback is the worker's own container."""
+    with pytest.raises(DatabaseAddressError, match=re.escape("127.0.0.1")):
+        await refuse_unreachable_host("127.0.0.1", 5432, private_allowed=True)
+
+
+async def test_a_private_address_is_refused_by_default_and_allowed_in_development() -> None:
+    """The one thing the escape opens: a private network the developer is inside.
+
+    Both directions in one test, because the value of the flag is the whole
+    difference and asserting only the permissive half would pass with the guard
+    removed.
+    """
+    with pytest.raises(DatabaseAddressError, match=re.escape("10.0.0.1")):
+        await refuse_unreachable_host("10.0.0.1", 5432, private_allowed=False)
+
+    await refuse_unreachable_host("10.0.0.1", 5432, private_allowed=True)
+
+
+async def test_a_public_address_is_allowed() -> None:
+    """Without this the suite would pass with a guard that refused everything."""
+    await refuse_unreachable_host("1.1.1.1", 5432, private_allowed=False)
+
+
+async def test_a_name_that_does_not_resolve_is_refused_and_says_so() -> None:
+    """Refused rather than passed through: asyncpg's own resolution failure
+    arrives later and reads like the database being down."""
+    with pytest.raises(DatabaseAddressError, match="does not resolve"):
+        await refuse_unreachable_host("no-such-host.invalid", 5432, private_allowed=False)
+
+
+async def test_connect_read_only_consults_the_boundary_before_connecting() -> None:
+    """The line whose deletion nothing else would catch.
+
+    Every test above exercises `refuse_unreachable_host` directly, so removing
+    its one call site leaves them all green — the shape T3-4 records, where the
+    only line that prevents a real leak is the only one with no behavioural
+    test.
+
+    Asserted by consequence rather than by inspection: a loopback host must
+    raise *before* anything is attempted, which needs no database to prove and
+    would fail differently if the guard ran too late.
+    """
+    target = integrations.database_target_from(
+        _postgres_config() | {"host": "localhost"}, EXTERNAL_ID
+    )
+
+    with pytest.raises(DatabaseAddressError, match=re.escape("127.0.0.1")):
+        await postgres_connect.connect_read_only(
+            target,
+            integration_id="i-1",
+            region="eu-west-1",
+            # Deliberately a path that does not exist: if the guard were to run
+            # after TLS setup, this would raise DatabaseTLSError instead and the
+            # test would say which of the two came first.
+            ca_bundle_path="/no/such/bundle.pem",
+            private_allowed=False,
+        )

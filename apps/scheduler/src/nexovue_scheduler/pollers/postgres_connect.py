@@ -14,6 +14,8 @@ back to something weaker.
 
 from __future__ import annotations
 
+import asyncio
+import socket
 import ssl
 from dataclasses import dataclass
 from functools import lru_cache
@@ -23,6 +25,7 @@ from typing import Any, Final
 import asyncpg
 
 from nexovue_scheduler.pollers.aws import RoleGrant, assume_customer_role, session_name_for
+from nexovue_scheduler.probes.addresses import may_connect_to
 
 AUTH_RDS_IAM: Final = "rds_iam"
 AUTH_PASSWORD: Final = "password"
@@ -56,6 +59,10 @@ RDS_SSL_MODE: Final = "verify-full"
 RDS_CA_BUNDLE_VARIABLE: Final = "RDS_CA_BUNDLE_PATH"
 
 CONNECT_TIMEOUT_SECONDS: Final = 10
+
+
+class DatabaseAddressError(RuntimeError):
+    """The configured host resolves somewhere this poller may not go."""
 
 
 class DatabaseTLSError(RuntimeError):
@@ -160,8 +167,60 @@ def rds_tls_context(bundle_path: str) -> ssl.SSLContext:
     return context
 
 
+async def refuse_unreachable_host(host: str, port: int, *, private_allowed: bool) -> None:
+    """Resolve the configured host and refuse if any address is not public.
+
+    **This is half of the boundary and the other half is TLS**, which is why G4
+    had to land first and why neither alone would do.
+
+    *This* half catches the case that needs no attacker: a tenant who configures
+    `localhost`, `169.254.169.254`, or an address inside our own network, and a
+    poller that would faithfully connect to it. `database_target_from` checks
+    only that the host is a string, so until now nothing looked at where it
+    pointed. That is the third SSRF surface, and the only one door 2 does not
+    already close through `ConnectGuard` and `PublicAddressProxy`.
+
+    **What it does not close is rebinding**, and it cannot. asyncpg does not
+    expose `server_hostname`: `connect_utils` passes `server_hostname=host`, so
+    the value used to connect is the value the certificate is checked against.
+    Handing it a judged IP literal would make TLS fail, because an RDS
+    certificate names the hostname and not the address — which is exactly the
+    objection recorded against T1-2, and it is true. So the host is resolved,
+    judged, and then connected to **by name**, leaving a window in which a second
+    resolution could answer differently.
+
+    `verify-full` closes that window. An attacker who rebinds the name to an
+    internal address cannot present a certificate valid for the customer's
+    database hostname, so the handshake fails. Resolution-time judgement stops
+    the honest mistake; certificate verification stops the deliberate attack.
+    Before G4 only the first would have existed, and it would have been a
+    boundary in name.
+    """
+    try:
+        resolved = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as failure:
+        raise DatabaseAddressError(f"{host} does not resolve: {failure}") from failure
+
+    addresses = {str(info[4][0]) for info in resolved}
+    refused = sorted(
+        address
+        for address in addresses
+        if not may_connect_to(address, private_allowed=private_allowed)
+    )
+    if refused:
+        raise DatabaseAddressError(
+            f"{host} resolved to {', '.join(refused)}, which this poller may not connect to. "
+            f"A monitoring target must be reachable from the public internet."
+        )
+
+
 async def connect_read_only(
-    target: DatabaseTarget, *, integration_id: str, region: str, ca_bundle_path: str
+    target: DatabaseTarget,
+    *,
+    integration_id: str,
+    region: str,
+    ca_bundle_path: str,
+    private_allowed: bool = False,
 ) -> asyncpg.Connection[Any]:
     """A connection that cannot write, authenticated without a stored secret.
 
@@ -170,6 +229,7 @@ async def connect_read_only(
     boundary: a hidden module-level environment read is the kind of thing that
     survives into production without anyone choosing it.
     """
+    await refuse_unreachable_host(target.host, target.port, private_allowed=private_allowed)
     password = rds_auth_token(target, integration_id=integration_id, region=region)
     connection: asyncpg.Connection[Any] = await asyncpg.connect(
         host=target.host,

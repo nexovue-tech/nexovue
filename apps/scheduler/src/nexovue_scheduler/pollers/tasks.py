@@ -164,6 +164,11 @@ def _poll_postgres(
             integration_id=integration_id,
             region=region,
             ca_bundle_path=settings.rds_ca_bundle_path,
+            # The same two-condition escape ADR 0098 gives the probes: the flag
+            # alone is not enough, `env` must also say development. A staging
+            # deployment that inherited the variable from a copied compose file
+            # still refuses.
+            private_allowed=settings.private_probe_targets_allowed,
         )
     )
     logger.info(
@@ -192,6 +197,7 @@ async def _read_database(
     integration_id: str,
     region: str,
     ca_bundle_path: str,
+    private_allowed: bool,
 ) -> postgres_stats.DatabaseSnapshot:
     """One connection, two reads, closed either way.
 
@@ -200,7 +206,11 @@ async def _read_database(
     whose connection count it is reporting.
     """
     connection = await postgres_connect.connect_read_only(
-        target, integration_id=integration_id, region=region, ca_bundle_path=ca_bundle_path
+        target,
+        integration_id=integration_id,
+        region=region,
+        ca_bundle_path=ca_bundle_path,
+        private_allowed=private_allowed,
     )
     try:
         return await postgres_stats.collect_snapshot(connection)

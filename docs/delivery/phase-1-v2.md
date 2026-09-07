@@ -24,8 +24,8 @@ never when the code was written.
 | **A3** | `packages/py-platform` — 299 duplicated lines removed | ✅ **done** | `f4291d8` |
 | **G1** | TLS edge | 🟡 **decisions taken, headers unbuilt** | `42c3b48` |
 | **G2** | account recovery | 🟡 **P1-69 infrastructure done; P1-70/71 not started** | `a6ef9cd` `9febb8a` `3a76dda` |
-| **G3** | poller SSRF boundary | ⬜ next but one | — |
-| **G4** | poller certificate verification | ⬜ **next** | — |
+| **G3** | poller SSRF boundary | ✅ **done** | `pending` |
+| **G4** | poller certificate verification | ✅ **done** | `f26ec33` |
 | **G5** | ingest kill switch | ⬜ | — |
 | **G6** | paid-tier cap | ⬜ | — |
 | **G7** | SDK distribution | ⬜ | — |
@@ -152,6 +152,17 @@ poller goes through neither.
 [ADR 0098](../architecture/decisions/0098-a-probe-reaches-a-private-address-only-when-two-settings-both-say-development.md)
 threads it through the probes — explicitly, per connection, not read from the environment inside
 the boundary. The same two-condition development escape applies, for the same reason.
+
+**Done 2026-09-07, and one sentence below turned out to be wrong.** The recommendation was to *"pin
+the address and pass the hostname for verification"*. asyncpg does not expose `server_hostname` —
+`connect_utils` passes `server_hostname=host`, so the value used to connect is the value the
+certificate is checked against, and handing it a judged IP literal makes TLS fail exactly as T3-6's
+objection said. So the host is resolved, every address judged, and the connection made **by name**.
+That leaves a rebinding window, and `verify-full` is what closes it: an attacker who rebinds the
+name cannot present a certificate valid for the customer's database hostname. Resolution-time
+judgement stops the honest misconfiguration; certificate verification stops the deliberate attack.
+**G4 was not merely a convenient thing to do first — without it this would have been a boundary in
+name only.**
 
 Small, and it closes a hole that survives every other boundary this project has built.
 
