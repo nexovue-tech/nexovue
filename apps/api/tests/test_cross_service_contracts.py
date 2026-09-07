@@ -121,6 +121,34 @@ def test_the_integration_kind_is_one_the_scheduler_polls() -> None:
     assert KIND_CLOUDWATCH == "cloudwatch"
 
 
+# ------------------------------------------------------- scheduler <-> browser SDK
+
+# The array literal in `pagecontext.ts`, read as source because TypeScript is the
+# one producer here that no Python test can import.
+_TYPESCRIPT_LIST: Final = re.compile(
+    r"export const SENSITIVE_QUERY_PARAMETERS = \[(?P<body>.*?)\]", re.DOTALL
+)
+_QUOTED: Final = re.compile(r'"([^"]+)"')
+
+
+def test_the_sensitive_query_parameters_are_the_same_list_in_both_languages() -> None:
+    """ADR 0103 puts one list in two languages, and neither can import the other.
+
+    The failure it prevents is quiet in the way this file's header describes: a
+    parameter added on the SDK side and not on the probe's is a signature that
+    keeps being recorded, with nothing anywhere reporting a difference.
+    """
+    from nexovue_scheduler.probes.urls import SENSITIVE_QUERY_PARAMETERS
+
+    source = (REPOSITORY_ROOT / "packages" / "browser-sdk" / "src" / "pagecontext.ts").read_text(
+        encoding="utf-8"
+    )
+    declaration = _TYPESCRIPT_LIST.search(source)
+    assert declaration, "no SENSITIVE_QUERY_PARAMETERS array in pagecontext.ts"
+
+    assert _QUOTED.findall(declaration.group("body")) == list(SENSITIVE_QUERY_PARAMETERS)
+
+
 # ------------------------------------------------------- API <-> ClickHouse
 
 

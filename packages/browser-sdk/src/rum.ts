@@ -54,9 +54,9 @@ export function startRum(config: ResolvedConfig): Collector {
 
   // Registered before the lifecycle listener, so web-vitals' own window-capture
   // visibilitychange handler runs before our document-target flush.
-  reportWebVitals((metric) => exporter.enqueueLog(webVitalRecord(metric, sessionId())));
+  reportWebVitals((metric) => exporter.enqueueLog(webVitalRecord(metric, sessionId(), config)));
   const detachErrors = captureErrors((error) =>
-    exporter.enqueueLog(errorRecord(error, sessionId())),
+    exporter.enqueueLog(errorRecord(error, sessionId(), config)),
   );
   const cancelPageView = whenPageLoaded((loadedAt) => {
     const span = tracer.startSpan(PAGE_VIEW_SPAN_NAME, {

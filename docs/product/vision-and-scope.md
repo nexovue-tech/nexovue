@@ -61,8 +61,8 @@ All via **OpenTelemetry** (OTLP protocol, community SDKs — we do **not** build
 | 7 | Session replay | Video-like playback of user sessions, linked to errors | FullStory, LogRocket |
 | 8 | Database monitoring | Query performance, slow query analysis, connection pool health | Datadog DBM, pganalyze |
 | 9 | Continuous profiling | Line-level CPU/memory flame graphs | Pyroscope |
-| 10 | Network monitoring | Service-to-service flows, DNS, latency maps | Datadog NPM |
-| 11 | SIEM / security | Threat detection, audit trails — *evaluate later, may stay out of scope* | Splunk ES |
+| 10 | Network monitoring | Service-to-service flows, DNS, latency maps — **out of scope, ADR 0106**: no agent of ours, accepted as OTLP if the customer runs one, no screen | Datadog NPM |
+| 11 | SIEM / security | Threat detection, audit trails — **out of scope, ADR 0106**: not re-opened as a screen, the nearest thing we build is export | Splunk ES |
 
 ---
 
@@ -81,11 +81,11 @@ All via **OpenTelemetry** (OTLP protocol, community SDKs — we do **not** build
 OTLP/gRPC. Door 2 runs HTTP, SSL and Playwright browser checks. Door 3's receiving side is built — a
 separate browser entrance under `/browser`, gated by public site keys and an origin allowlist — but
 the RUM screens are not. Door 4b polls CloudWatch and `pg_stat_statements`, and deploy webhooks are
-built. SIEM and session replay are neither built nor scoped.
+built. Session replay is neither built nor scoped; SIEM is decided out of scope (ADR 0106).
 
 Special cases:
 - **Continuous profiling** — new official OTel signal, support still early; historically own agents (Pyroscope-style).
-- **Network monitoring** — eBPF kernel-level agents, not OTel.
+- **Network monitoring** — eBPF kernel-level agents, not OTel. Decided out of scope 2026-09-07 (ADR 0106): accepted as OTLP from a producer the customer runs, never collected by us.
 - **Database monitoring** — two layers: query spans via OTel traces (door 1) + deep DB stats via direct connection (door 4).
 
 ---
@@ -180,6 +180,7 @@ Key design points:
 | 2026-08 | Derive application metrics from traces first (simpler setup) |
 | 2026-08 | Two-view design: developer view + plain-language owner view |
 | 2026-08 | Agency channel deferred; pricing model settled 2026-08-27 (ADR 0056) and priced 2026-09-01 |
+| 2026-09-07 | Network monitoring and SIEM are out of scope (ADR 0106). Categories 10 and 11 had no phase since 2026-08-25. Network telemetry is accepted as OTLP from a producer the customer runs — OBI, Beyla, Hubble, Tetragon — and never collected by an agent of ours, which is what keeps the founding no-agents decision intact rather than contradicting it. SIEM is not re-opened as a screen: the data overlaps with observability by roughly 80%, the *product* is detection content and certifications, and the nearest thing we build is export. |
 | 2026-08 | OTel setup: customer owns instrumentation; we own the receiving side (OTLP endpoint + API key + setup docs). Two customer patterns: (A) SDK direct-to-endpoint via 2 env vars — the onboarding priority ("value in 10 minutes"); (B) SDK → customer's own collector → our endpoint (for batching, data scrubbing, host metrics). Same ingestion pipeline serves both. |
 
 ---

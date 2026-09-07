@@ -18,11 +18,16 @@ export interface NexovueOptions {
    */
   route?: string;
   /**
-   * Sends the URL's query string as url.query. Off by default: masking matches
-   * attribute keys, not values, so a token in a query string would be stored
-   * verbatim for the whole retention period.
+   * Lets everything after the path leave the page: the query string and the
+   * fragment, on url.full and as url.query.
+   *
+   * Off by default, and it is one switch rather than two because they are one
+   * exposure. Masking in the pipeline matches attribute *keys*, not values, so a
+   * token in a query string is stored verbatim for the whole retention period —
+   * and a fragment is where an OAuth implicit flow puts an access token. ADR
+   * 0103 has the page-view URL that carried a postal address while this was off.
    */
-  captureUrlQuery?: boolean;
+  captureQueryAndFragment?: boolean;
   sessionIdleTimeoutMs?: number;
   sessionMaxDurationMs?: number;
   flushIntervalMs?: number;
@@ -34,7 +39,7 @@ export interface ResolvedConfig {
   serviceName: string;
   serviceVersion: string | undefined;
   route: string | undefined;
-  captureUrlQuery: boolean;
+  captureQueryAndFragment: boolean;
   sessionIdleTimeoutMs: number;
   sessionMaxDurationMs: number;
   flushIntervalMs: number;
@@ -97,7 +102,7 @@ export function resolveConfig(
     serviceName: trimmed(options.serviceName) ?? defaultServiceName(),
     serviceVersion: trimmed(options.serviceVersion),
     route: trimmed(options.route),
-    captureUrlQuery: options.captureUrlQuery === true,
+    captureQueryAndFragment: options.captureQueryAndFragment === true,
     sessionIdleTimeoutMs: positiveOr(options.sessionIdleTimeoutMs, defaults.sessionIdleTimeoutMs),
     sessionMaxDurationMs: positiveOr(options.sessionMaxDurationMs, defaults.sessionMaxDurationMs),
     flushIntervalMs: positiveOr(options.flushIntervalMs, defaults.flushIntervalMs),

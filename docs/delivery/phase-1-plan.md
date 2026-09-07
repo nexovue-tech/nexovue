@@ -25,7 +25,7 @@
 **Out of scope — Phase 2**
 Findings feed (F1), finding detail (F2), AI insights/chatbot/solution (F3–F5), anomaly detection (F6), owner status page (F7), case management (F22), alerting connectors (F21), session replay (F16), continuous profiling (F17), SLOs (F19), dashboard builder (F20).
 
-**Scope boundaries decided 2026-08-25:** service map **is** in Phase 1 (F9 — a screen over trace data we already hold). Kubernetes telemetry **is ingested** via door 1 and is queryable, but pod/node/namespace-aware screens are Phase 2. The UI is fixed screens per signal — no user-built dashboards. Network monitoring (eBPF) and SIEM remain unplaced in any phase — open question, see §8.
+**Scope boundaries decided 2026-08-25:** service map **is** in Phase 1 (F9 — a screen over trace data we already hold). Kubernetes telemetry **is ingested** via door 1 and is queryable, but pod/node/namespace-aware screens are Phase 2. The UI is fixed screens per signal — no user-built dashboards. Network monitoring (eBPF) and SIEM are **out of scope**, decided 2026-09-07 (ADR 0106) — see §8.
 
 **Phase 2 hooks built now because they are nearly free later:** per-minute materialized views, exact pre-sampling counters, deploy-events table, live-update pub/sub channel, usage metering counters. Skipping these means retrofitting the data layer.
 
@@ -406,7 +406,7 @@ Mechanically: tokens exist before the first screen; raw hex outside `packages/ui
 - **The mobile span-detail sheet is a fixed 55dvh** with no drag-to-resize. Fine for a short span, cramped for one with many attributes.
 - **`ALTER TABLE spans DELETE` does not cascade to `span_trace_lookup`**, leaving rows that claim a trace exists after its spans are gone. The detail query treats "lookup hit, no spans" as not-found so nothing breaks, and TTL clears them eventually, but a real purge path (P1-52, GDPR delete in Phase 2) must clean both.
 - ~~**`last_used_at` on `api_keys` is never written.**~~ **Resolved in P1-13** — ADR 0081: the receiver records a use only on a credential-cache miss, so the write is throttled by the cache TTL rather than by a clock of its own, and it is queued to a background writer so no export waits on it. Measured under continuous traffic: one write per key per 30s, matching `RECEIVER_API_KEY_CACHE_TTL`. The column has existed since migration 0001; only the write was missing.
-- **The receiver's rate limiter fails open** when Valkey is unreachable, on the reasoning that losing telemetry costs more than briefly losing the limit, with body caps and the broker still bounding damage. Deliberate, and worth revisiting once a paying tenant can be harmed by it.
+- ~~**The receiver's rate limiter fails open** when Valkey is unreachable~~ — **revisited 2026-09-07, [ADR 0104](../architecture/decisions/0104-a-limiter-that-cannot-count-leaves-the-door-open-and-bounds-it-in-process.md).** The door stays open and gains a bounded in-process fallback engaged only on the error path, because a paid plan has no enforced allowance (ADR 0093) and so nothing at all bounds it while Valkey is down. **The pairing with G6 was wrong**: the limiter bounds rate and protects the platform, the allowance bounds volume and protects the bill, and a tenant sending at exactly their limit forever produces an unbounded bill with the limiter working perfectly. It belongs with G5. One build row, not yet built.
 - **The receiver exposes no profile endpoint**, which is what blocks the trace-split re-encode budget (§4) — permanently, not just today. `net/http/pprof` on the existing admin listener would settle it, but exposing profiles needs a deliberate decision about who can reach that port.
 - **`resolveWindow` rounded the live window's end *down* to a bucket**, so the trace list silently omitted the newest 0–10 seconds, and `TraceListScreen` then froze that window at mount. Together they broke M1's exit condition at the last hop: onboarding said the first span had arrived, and the list it linked to was empty. Fixed in M1; noted because the shape recurs — a cache-stability trick that quietly changes what the query means.
 - ~~**The trace list groups over `spans` on every request.**~~ **Looked at in P1-41, and it
@@ -514,10 +514,12 @@ the reference implementations rather than only against our own reasoning.
   intent. It now keeps the last good configuration for that project and only reaches the defaults
   when nothing has ever parsed.
 
-## 8. Open scope questions
+## 8. ~~Open scope questions~~ — CLOSED 2026-09-07
 
-- **Network monitoring (category 10)** has no home in any phase. It needs eBPF kernel agents, which contradicts the standing decision not to build collection agents. Park it explicitly, or accept the contradiction deliberately?
-- **SIEM / security (category 11)** is marked "evaluate later" in the vision doc and appears in no plan. Same call needed.
+Both categories are decided in [ADR 0106](../architecture/decisions/0106-network-telemetry-is-accepted-and-never-collected-and-siem-is-out-of-scope.md).
+
+- ~~**Network monitoring (category 10)**~~ **Parked explicitly, and the contradiction is not accepted.** We build no eBPF agent, no kernel module, no host agent — the founding "we do not build collection agents" decision stands. A customer who runs OpenTelemetry's own eBPF instrumentation, Beyla, Hubble or Tetragon and points its OTLP exporter at door 1 has it land with no work from us, and **that is the whole commitment**: no screen, no attribute mapping, no claim. The consequence is real and chosen — a dependency carrying no instrumented call stays invisible on the service map.
+- ~~**SIEM / security (category 11)**~~ **Out of scope for Phase 1 and Phase 2, and not re-opened as a screen.** The nearest thing we ever build is export, to the SIEM the customer already has. "Evaluate later" has been the answer twice; a third would be a decision taken by not deciding.
 
 ## 9. Scoping note — the four settings screens. **Decided 2026-08-31: Phase 1 is single-operator.**
 
@@ -572,9 +574,10 @@ API ever writes that column — so changing a sampling rate is a SQL `UPDATE` by
 
 **Decisions it forces:** is more than one project in Phase 1 at all, or is one-per-org the Phase 1
 shape · who may create, rename or delete a project · what deleting one does to telemetry already in
-ClickHouse (`projects.deleted_at` exists; nothing drops partitions) · whether sampling is a customer
-control or a support action · same question for masking, which is irreversible on data already
-written.
+ClickHouse (`projects.deleted_at` exists; nothing drops partitions). ~~Whether sampling and masking
+are customer controls or support actions~~ is **answered** — both are customer controls, with the
+masking off-switch guarded and the document validated on write ([ADR 0105](../architecture/decisions/0105-sampling-and-masking-are-the-customers-settings-and-only-the-off-switch-is-guarded.md)),
+so P1-76 builds the writes rather than re-opening the question.
 
 **Size:** medium-to-large, and **needs API work** — create, patch, soft-delete, plus separate writes
 for the two config documents if those are in scope. The largest of the four if they are.
@@ -707,13 +710,22 @@ Retroactive retention is P1-68 and is not small.
    shortening is not offered at all — see *Why retroactive shortening is not offered* above. P1-68
    does not come forward.
 
+### Answered 2026-09-07
+
+4. ~~Are sampling and masking customer controls, or support actions?~~ **Both are customer
+   controls — [ADR 0105](../architecture/decisions/0105-sampling-and-masking-are-the-customers-settings-and-only-the-off-switch-is-guarded.md).**
+   The customer is the only party who knows which of their attribute keys carry secrets, and an
+   arrangement where finding out means we read their telemetry is worse for them than a form. They
+   are answered differently in one place only: **turning a shipped masking rule off** is the single
+   edit that widens what leaves their process, so it takes a confirmation naming the rule and an
+   audit row. Sampling gets no guard, because it is reversible and a dialogue on a reversible
+   setting teaches people to click through the one that matters. **And the API validates the
+   document on write** — that is where §7d's malformed-document hole actually closes, since
+   `refresh.go` keeping the last-good rules still leaves a cold start falling back to defaults that
+   name no custom keys.
+
 ### Still open
 
-4. Are sampling and masking customer controls, or support actions? Both are SQL `UPDATE`s by us
-   today. M8's P1-76 brings the screen that would host them, so this stops being theoretical when
-   that row starts — but the two are not the same question. Sampling is reversible and only changes
-   what is kept next; masking is irreversible on data already written, and a malformed document has
-   already once silently stopped masking a project's custom keys (§7d). They can be answered
-   differently.
+None in this section.
 
 *Update log: plan created 2026-08-25. Scope decisions folded in 2026-08-25 (D9–D12; tasks P1-55 → P1-58). Next action: P1-01 → P1-09 (M0).*

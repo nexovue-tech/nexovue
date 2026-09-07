@@ -189,6 +189,17 @@ untouched.
 - **Exposing browser synthetic checks to customers.** Recommended per
   deployment, not per feature: safe once ADR 0096's proxy change is committed;
   unsafe on any deployment running the proxy-less code.
+- ~~**`url.full` carries the query string and the fragment while `captureUrlQuery`
+  is off.**~~ **DECIDED 2026-09-07 as [ADR 0103](../architecture/decisions/0103-a-url-leaves-the-page-trimmed-to-its-path-unless-the-page-asked-otherwise.md)**,
+  and it was a live defect rather than a question. Measured in the dev store:
+  ten records from our own SDK, `url.query` empty on every one of them, and two
+  carrying a 2.4 KB query string with an order and a postal address — plus one
+  fragment. One switch, `captureQueryAndFragment`, now governs everything after
+  the path, and off means `url.full` is scheme, host and path. The synthetic
+  probe keeps the query and the fragment, because a redirect to a login page is
+  the diagnosis, and strips credentials and redacts the conventions' signature
+  parameters instead. Door 1's 11,834 leaking rows are the customer's own SDKs
+  and Envoy, where `mask_keys` is the control.
 - ~~**`db.query.text` is stored on spans while the poller refuses to send it.**~~
   **DECIDED 2026-09-06 as [ADR 0101](../architecture/decisions/0101-spans-carry-query-text-and-the-database-poller-does-not.md).**
   The asymmetry is kept, because the cost of refusing differs: an engineer on a
@@ -370,7 +381,20 @@ Then, in this order:
 
 ---
 
-## 1f. Which container producer we support, and what shape the screen takes
+## 1f. ~~Which container producer we support, and what shape the screen takes~~ — CLOSED BY THE CODE
+
+**Read again 2026-09-07, and both questions are already answered in the source.**
+`infrastructure/conventions.py` reads *both* vocabularies — the specification's
+five `container.*` names and `dockerstats`' spellings for the same five
+quantities — so no producer had to be picked and a customer on `kubeletstats`
+needs no change from us. `InfrastructureScreen.tsx` is a flat list with a
+`KindFilterBar` over `host` / `container` / `reporter`, hidden when only one kind
+reported, which is exactly what the recommendation below asked for. The tree
+stays with F20.
+
+The section is kept because the measurement in it — including that
+`container.cpu.utilization` is cores and not a fraction — is why the mapping is
+right. Everything below is the state before the code caught up.
 
 Two questions, and the second is the one that changes the work. The first is
 already flagged as open inside `conventions.py` — *"which producer we intend to

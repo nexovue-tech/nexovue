@@ -27,7 +27,7 @@ Only `siteKey` and `endpoint` are required. Everything else has a default:
 | `serviceName`          | the page's hostname  | names the property in the console; fills the `service_name` column |
 | `serviceVersion`       | unset                | joins telemetry to a release                                       |
 | `route`                | unset                | a route template such as `/products/{id}`; never guessed from the path |
-| `captureUrlQuery`      | `false`              | sends the query string as `url.query` (see the warning below)      |
+| `captureQueryAndFragment` | `false`           | lets the query string and the fragment leave the page (see below)  |
 | `sessionIdleTimeoutMs` | 30 minutes           | idle gap that ends a session                                       |
 | `sessionMaxDurationMs` | 4 hours              | absolute cap on one session                                        |
 | `flushIntervalMs`      | 10 seconds           | how often a visible page sends what it has buffered                |
@@ -94,12 +94,30 @@ than it looks: the door parses OTLP/JSON with unknown fields discarded and
 answers 200 either way, so a misspelling is silently dropped rather than
 refused — only a test on this side would ever notice.
 
-### `captureUrlQuery`
+### `captureQueryAndFragment`
 
-Off by default. Attribute masking in the pipeline matches attribute *keys*, not
-values, so `url.query = "session_token=abc123"` would be stored verbatim for the
-whole retention period. Note that `url.full` carries the same exposure and cannot
-be avoided for a page view.
+Off by default, and one switch rather than two because the query string and the
+fragment are one exposure. With it off, every URL the SDK reports — on page
+views, web vitals and errors alike — is **scheme, host and path**, and no
+`url.query` attribute is sent.
+
+Why it is off. Attribute masking in the pipeline matches attribute *keys*, not
+values, so `session_token=abc123` in a URL would be stored verbatim for the whole
+retention period whichever attribute carried it. And the fragment is worse than
+the query: an OAuth implicit or hybrid flow returns `#access_token=…`, so a page
+view a moment after sign-in would carry a bearer token.
+
+This was measured, not feared. [ADR 0103](../../docs/architecture/decisions/0103-a-url-leaves-the-page-trimmed-to-its-path-unless-the-page-asked-otherwise.md)
+has the rows: with the old option off, `url.query` was empty on every record and
+`url.full` still carried a 2.4 KB query string containing an order and a postal
+address, because it was `location.href`.
+
+Turning it on sends both, with the OpenTelemetry conventions' sensitive
+parameters — `X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`,
+`sig`, `X-Goog-Signature` — replaced by `REDACTED` with their keys kept. That
+list is the presigned-URL list and it will not catch your own token names; if
+your query strings carry secrets, leave this off and use `http.route` to tell
+pages apart.
 
 ## How it gets there
 

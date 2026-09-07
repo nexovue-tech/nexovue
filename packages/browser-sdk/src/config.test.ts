@@ -78,9 +78,9 @@ describe("defaults", () => {
     expect(config?.serviceName).toBe(window.location.hostname);
   });
 
-  it("leaves url.query off, because masking matches keys and not values", () => {
+  it("leaves the query string and the fragment off, both on one switch", () => {
     const config = resolveConfig({ siteKey: VALID_KEY, endpoint: "https://ingest.test" }, DEFAULTS);
-    expect(config?.captureUrlQuery).toBe(false);
+    expect(config?.captureQueryAndFragment).toBe(false);
   });
 
   it("ignores a nonsensical interval rather than scheduling on it", () => {

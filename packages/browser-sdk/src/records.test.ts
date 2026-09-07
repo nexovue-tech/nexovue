@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Metric } from "web-vitals";
 
+import type { ResolvedConfig } from "./config";
 import { logsExport } from "./otlp/logrecords";
 import { errorRecord, webVitalRecord } from "./records";
 
@@ -13,6 +14,27 @@ import { errorRecord, webVitalRecord } from "./records";
  */
 
 const SESSION_ID = "0089dddd0089dddd0089dddd0089dddd";
+
+/**
+ * The default configuration, which is the one that matters here: the page below
+ * has a query string and a fragment, and ADR 0103 says neither reaches a record
+ * unless the page asked. `TRIMMED_URL` is what url.full must be instead.
+ */
+function config(captureQueryAndFragment = false): ResolvedConfig {
+  return {
+    siteKey: "nvp_live_dZjiAYryiKTJ45KgB1EFUH",
+    endpoint: "https://ingest.test",
+    serviceName: "acme-storefront",
+    serviceVersion: undefined,
+    route: undefined,
+    captureQueryAndFragment,
+    sessionIdleTimeoutMs: 1800000,
+    sessionMaxDurationMs: 14400000,
+    flushIntervalMs: 10000,
+  };
+}
+
+const TRIMMED_URL = "http://localhost:3000/checkout";
 
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(1788626299167);
@@ -34,7 +56,7 @@ function lcp(): Metric {
 
 describe("a web vital", () => {
   it("is one log record carrying the vital's name as a lowercase value", () => {
-    expect(webVitalRecord(lcp(), SESSION_ID)).toEqual({
+    expect(webVitalRecord(lcp(), SESSION_ID, config())).toEqual({
       timeUnixNano: "1788626299167000000",
       observedTimeUnixNano: "1788626299167000000",
       severityNumber: 9,
@@ -48,20 +70,24 @@ describe("a web vital", () => {
         { key: "browser.web_vital.rating", value: { stringValue: "needs-improvement" } },
         { key: "browser.web_vital.navigation_type", value: { stringValue: "navigate" } },
         { key: "session.id", value: { stringValue: SESSION_ID } },
-        { key: "url.full", value: { stringValue: window.location.href } },
+        { key: "url.full", value: { stringValue: TRIMMED_URL } },
         { key: "url.path", value: { stringValue: "/checkout" } },
       ],
     });
   });
 
   it("never carries a flat browser.web_vital attribute, which would collide with the paths", () => {
-    const keys = webVitalRecord(lcp(), SESSION_ID).attributes.map((entry) => entry.key);
+    const keys = webVitalRecord(lcp(), SESSION_ID, config()).attributes.map((entry) => entry.key);
     expect(keys).not.toContain("browser.web_vital");
     expect(keys).not.toContain("browser.web_vital.lcp");
   });
 
   it("passes a soft navigation through rather than rewriting it to a known value", () => {
-    const record = webVitalRecord({ ...lcp(), navigationType: "soft-navigation" }, SESSION_ID);
+    const record = webVitalRecord(
+      { ...lcp(), navigationType: "soft-navigation" },
+      SESSION_ID,
+      config(),
+    );
     expect(record.attributes).toContainEqual({
       key: "browser.web_vital.navigation_type",
       value: { stringValue: "soft-navigation" },
@@ -69,7 +95,11 @@ describe("a web vital", () => {
   });
 
   it("carries a zero CLS as a real reading rather than dropping it", () => {
-    const record = webVitalRecord({ ...lcp(), name: "CLS", value: 0, delta: 0 }, SESSION_ID);
+    const record = webVitalRecord(
+      { ...lcp(), name: "CLS", value: 0, delta: 0 },
+      SESSION_ID,
+      config(),
+    );
     expect(record.attributes).toContainEqual({
       key: "browser.web_vital.value",
       value: { doubleValue: 0 },
@@ -78,7 +108,7 @@ describe("a web vital", () => {
 
   it("never serialises metric.entries", () => {
     const withEntries = { ...lcp(), entries: [{ name: "huge" } as PerformanceEntry] };
-    expect(JSON.stringify(webVitalRecord(withEntries, SESSION_ID))).not.toContain("huge");
+    expect(JSON.stringify(webVitalRecord(withEntries, SESSION_ID, config()))).not.toContain("huge");
   });
 });
 
@@ -93,7 +123,7 @@ describe("a JS error", () => {
   };
 
   it("is one ERROR log record with the three exception attributes", () => {
-    expect(errorRecord(captured, SESSION_ID)).toEqual({
+    expect(errorRecord(captured, SESSION_ID, config())).toEqual({
       timeUnixNano: "1788626299167000000",
       observedTimeUnixNano: "1788626299167000000",
       severityNumber: 17,
@@ -105,14 +135,17 @@ describe("a JS error", () => {
         { key: "exception.message", value: { stringValue: "t is not a function" } },
         { key: "exception.stacktrace", value: { stringValue: captured.stacktrace } },
         { key: "session.id", value: { stringValue: SESSION_ID } },
-        { key: "url.full", value: { stringValue: window.location.href } },
+        { key: "url.full", value: { stringValue: TRIMMED_URL } },
         { key: "url.path", value: { stringValue: "/checkout" } },
       ],
     });
   });
 
   it("carries no trace context, or the Errors screen would count a page's errors as one", () => {
-    const record = errorRecord(captured, SESSION_ID) as unknown as Record<string, unknown>;
+    const record = errorRecord(captured, SESSION_ID, config()) as unknown as Record<
+      string,
+      unknown
+    >;
     expect(record.traceId).toBeUndefined();
     expect(record.spanId).toBeUndefined();
   });
@@ -127,6 +160,7 @@ describe("a JS error", () => {
         column: 5,
       },
       SESSION_ID,
+      config(),
     );
     expect(record.attributes).toContainEqual({
       key: "code.line.number",
@@ -136,7 +170,7 @@ describe("a JS error", () => {
   });
 
   it("always has exception.type, which the Errors screen filters on", () => {
-    const record = errorRecord({ ...captured, type: "Error", message: "" }, SESSION_ID);
+    const record = errorRecord({ ...captured, type: "Error", message: "" }, SESSION_ID, config());
     expect(record.attributes).toContainEqual({
       key: "exception.type",
       value: { stringValue: "Error" },
@@ -150,7 +184,7 @@ describe("the logs envelope", () => {
       logsExport(
         [{ key: "service.name", value: { stringValue: "acme-storefront" } }],
         [
-          webVitalRecord(lcp(), SESSION_ID),
+          webVitalRecord(lcp(), SESSION_ID, config()),
           errorRecord(
             {
               ...{
@@ -163,6 +197,7 @@ describe("the logs envelope", () => {
               },
             },
             SESSION_ID,
+            config(),
           ),
         ],
       ),

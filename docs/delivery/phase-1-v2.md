@@ -32,6 +32,15 @@ never when the code was written.
 | **C1–C7** | commercial layer | ⬜ gated on G2 | — |
 | **M1–M5** | measurements | ⬜ | — |
 | **F1–F5** | findings | ⬜ | — |
+| **D1** | `url.full` trimmed to the path — ADR 0103 | ✅ **decided and fixed** | `pending` |
+| **D2** | limiter fail-open — ADR 0104 | ✅ **decided**, fallback unbuilt | `pending` |
+| **D3** | sampling and masking are customer controls — ADR 0105 | ✅ **decided** | `pending` |
+| **D4** | network monitoring and SIEM out of scope — ADR 0106 | ✅ **decided** | `pending` |
+
+**D1 is the row worth reading twice.** It was filed as a decision needing no code, and the first
+thing that happened on taking it was a query against the dev store that found a page-view record
+carrying a customer's postal address in `url.full` — on a project whose configuration said no query
+string leaves the page. It is fixed, in the SDK and in the probe, with negative controls on both.
 
 ### What "partly done" means for the two 🟡 rows
 
@@ -408,12 +417,16 @@ should either be validated or deleted.
 `phase-1-plan.md` §7c and §7d hold follow-ups that never became rows. Most are struck through as
 resolved. These are not, and two of them matter here.
 
-**The receiver's rate limiter fails open when Valkey is unreachable.** Deliberate, and the
-reasoning is sound today: losing telemetry costs more than briefly losing the limit, with body caps
-and the broker still bounding damage. The plan's own note says it is *"worth revisiting once a
-paying tenant can be harmed by it"* — which is precisely the moment M8 arrives. **It belongs in the
-same decision as G6**, because both are about what happens when a paid tenant's traffic is
-unbounded.
+**The receiver's rate limiter fails open when Valkey is unreachable.** ~~It belongs in the same
+decision as G6~~ — **wrong, and corrected 2026-09-07 by D2 / [ADR 0104](../architecture/decisions/0104-a-limiter-that-cannot-count-leaves-the-door-open-and-bounds-it-in-process.md).**
+The allowance bounds volume and therefore the bill; the limiter bounds rate and therefore the
+platform. A paid tenant sending at exactly their limit forever produces an unbounded bill with the
+limiter working perfectly, so this is **G5's** question and never was G6's. The door stays open —
+losing telemetry because our Valkey is down is the worse failure — and gains a bounded in-process
+fallback engaged only on the error path, because `allowance.go` is explicit that *"no paying
+customer is ever refused for volume"*, so nothing at all bounds a paid plan while the counter is
+unreachable. **One build row**, sized as a multiple of the configured limit, per receiver instance
+and described as such.
 
 **No profile endpoint on the receiver.** Already named in §3 as what blocks the re-encode budget.
 Recorded here too because §7c calls it permanent rather than pending, and it is neither — it is one
@@ -427,43 +440,57 @@ cramped. Not gate items, and worth doing whenever those screens are open anyway.
 and again under P1-77 as a deletion obligation. It is one defect with two consequences, and §2's
 scoping note is where it should be solved.
 
-## 4c. The other open decisions, and why they are not gates
+## 4c. ~~The other open decisions~~ — D1–D4, all four taken 2026-09-07
 
-Three of open-decisions' Part 1 sections are deliberately *not* in the gate above, and each has a
-reason rather than an oversight:
+**The four decisions this file counted as "no code" are decided.** They were the cheapest items on
+the list and the ones most easily deferred forever, and one of them turned out not to be a decision
+at all.
 
-- **§1c** collects the decisions raised and not made — `url.full` carrying the query string and
-  fragment, migration 0016's `_EFFECTIVE_FROM`, the counter residual at the shipped sampling
-  window, the probe's throwaway org, and what sample revises the 25% split. **The one worth pulling
-  forward is `url.full`**, not because it breaks anything but because it is the answer to a
-  security questionnaire, and it is the same key-versus-value gap [ADR 0101](../architecture/decisions/0101-spans-carry-query-text-and-the-database-poller-does-not.md)
-  just settled for `db.query.text`. Cheap to decide, expensive to be asked cold.
-- **§1e** — what we accept at the front door — already recommends adding nothing until Phase 1
-  closes, for the ordering reason this whole file argues. It becomes live *after* Phase 2 scoping,
-  not before.
-- **§9's still-open question 4** — are sampling and masking customer controls or support actions?
-  Both are SQL `UPDATE`s by us today. Not a gate, and it stops being theoretical when P1-76 brings
-  the screen that would host them. The two must be answered separately: sampling is reversible and
-  only changes what is kept next, where masking is irreversible on data already written — and a
-  malformed masking document has already once silently stopped masking a project's custom keys.
-- **§1f** — which container producer we support, and whether the Infrastructure list becomes a
-  tree. Not a gate: the screen fills from host and container metrics today, and the tree question
-  cannot be observed until the producer is chosen.
+| | the question | answer | ADR |
+|---|---|---|---|
+| **D1** | `url.full` carries the query string and the fragment while the option that governs the query is off (§1c) | **a live defect, not a question.** One switch governs everything after the path, off by default | [0103](../architecture/decisions/0103-a-url-leaves-the-page-trimmed-to-its-path-unless-the-page-asked-otherwise.md) |
+| **D2** | the receiver's rate limiter fails open when Valkey is unreachable (§4a) | stays open, bounds itself in process — and **it belongs with G5, not G6** | [0104](../architecture/decisions/0104-a-limiter-that-cannot-count-leaves-the-door-open-and-bounds-it-in-process.md) |
+| **D3** | are sampling and masking customer controls or support actions (§9 q4) | both are customer controls; only masking's off-switch is guarded; the API validates on write | [0105](../architecture/decisions/0105-sampling-and-masking-are-the-customers-settings-and-only-the-off-switch-is-guarded.md) |
+| **D4** | network monitoring and SIEM have no home in any phase (§4b) | both out of scope: network telemetry is accepted, never collected; SIEM is never a screen | [0106](../architecture/decisions/0106-network-telemetry-is-accepted-and-never-collected-and-siem-is-out-of-scope.md) |
 
-## 4b. Three categories with no home in any phase
+**D1 was not a decision.** It is the only one that was checked against the store rather than
+reasoned about, and the check found a page-view record carrying a 2.4 KB query string with a
+customer's postal address in it, on a project configured to send no query string. It is now a fixed
+Tier 1 defect with tests on both sides, and the reason it sat in a "decisions with no code" row for
+a fortnight is that nobody had looked.
 
-§8 of the plan records the first two and nothing has moved them. The third was found on 2026-09-07
-and is in the same state:
+**Two things this section said are corrected rather than quietly re-filed:**
 
-- **Network monitoring (category 10)** needs eBPF kernel agents, which contradicts the standing
-  decision not to build collection agents. Parked.
-- **SIEM / security (category 11)** is *"evaluate later"* in the vision doc and appears in no plan.
+- It said *"three of open-decisions' Part 1 sections"* and listed four. The count was stale.
+- **§1f is not open and was not when this was written.** `conventions.py` reads both the
+  specification's `container.*` names and `dockerstats`' spellings for the same five quantities, so
+  no producer had to be picked, and `InfrastructureScreen.tsx` already ships the flat list with a
+  kind filter that the recommendation asked for. The code had answered it; the document had not
+  been re-read. It is struck in open-decisions with the measurement kept.
+
+**§1e — what we accept at the front door — stays open and stays right.** It already recommends
+adding nothing to the ingest surface until Phase 1 closes, and that is an ordering answer whose
+inputs do not exist yet. It is not counted as an undecided D row; it is a decision scheduled for
+after Phase 2 scoping.
+
+## 4b. Three categories with no home in any phase — **two now have one**
+
+§8 of the plan recorded the first two and nothing had moved them. The third was found on 2026-09-07.
+
+- ~~**Network monitoring (category 10)**~~ **DECIDED 2026-09-07, D4 / [ADR 0106](../architecture/decisions/0106-network-telemetry-is-accepted-and-never-collected-and-siem-is-out-of-scope.md).**
+  The contradiction is not accepted: we build no agent. Network telemetry is *accepted* as OTLP
+  from a producer the customer runs — OBI, Beyla, Hubble, Tetragon — and that is the whole
+  commitment. No screen.
+- ~~**SIEM / security (category 11)**~~ **DECIDED 2026-09-07, D4 / ADR 0106.** Out of scope for
+  Phase 1 and Phase 2, and not re-opened as a screen. The nearest thing we ever build is export.
 - **F29 — LLM / AI-app observability.** In `requirements.md` as *TO SPECIFY*, and in no phase's
-  F-list. See below: it is cheaper than it looks and narrower than it sounds.
+  F-list. **Still the only homeless one.** See below: it is cheaper than it looks and narrower than
+  it sounds.
 
-**None blocks Phase 2**, but all three should be answered *before* Phase 2 scoping rather than
-during it, because "no home in any phase" is how a category quietly becomes a commitment nobody
-made.
+**None blocks Phase 2.** Two are answered before Phase 2 scoping rather than during it, which was
+the point: "no home in any phase" is how a category quietly becomes a commitment nobody made. F29
+is the one that still needs the call, and it is the one where the answer is *build a narrow thing*
+rather than *decline*.
 
 ### F29, checked rather than assumed
 
@@ -696,9 +723,14 @@ self-instrumentation, which §7a already defers until the platform runs somewher
 
 ## 5a. The count
 
-**39 items. 29 are build work; 6 are decisions with no code; 4 are deliberately deferred past
+**41 items. 31 are build work; 6 are decisions with no code; 4 are deliberately deferred past
 Phase 2.** Sizes are relative — S is under a day, M is a few days, L is a week or more and usually
 carries a decision inside it.
+
+**It was 39 until the D-series was actually taken, and the two new rows are the point of taking
+it.** D1 turned out to be a live defect and is now a fixed build item; D2's decision spawns the
+limiter's in-process fallback. A decision list nobody works through is a list that hides work, not
+one that has none.
 
 | | Group | Items | Build work | Done |
 |---|---|---|---|---|
@@ -707,15 +739,22 @@ carries a decision inside it.
 | **C1–C7** | Commercial layer (M8) | 7 | 7 | 0 |
 | **M1–M5** | Measurements and exit criteria | 5 | 5 | 0 |
 | **F1–F5** | Findings and gate defects | 5 | 5 | 0 |
-| **D1–D4** | Decisions with no code | 4 | 0 | 0 decided |
+| **D1–D4** | Decisions — no code was expected, two rows appeared | 4 | 2 *(found by deciding)* | **4 decided — complete**, 1 of 2 built |
 | **X1–X4** | Deferred past Phase 2 deliberately | 4 | 0 | n/a |
 
-**6 of 29 build items done, as of 2026-09-07.** One series is complete —
-**A1–A3**, the architecture seams — and it was taken first on the argument that it is the only
-work that gets materially harder after Phase 2. Nothing else is finished, and only the gate has
-been started.
+**7 of 31 build items done, as of 2026-09-07.** Two series are complete: **A1–A3**, the
+architecture seams, taken first on the argument that it is the only work that gets materially
+harder after Phase 2; and **D1–D4**, the four decisions, which cost an afternoon and had sat
+untouched since this file was written.
 
-### Inside the gate, which is the only series in progress
+**What taking them found, which is the argument for taking the cheap rows early:** D1 was not a
+decision at all but PII sitting in the store — a page-view record carrying a customer's postal
+address on a project configured to send no query string — and it is now fixed with negative-
+controlled tests on both sides. D2's real content was that the file had filed it under the wrong
+gate item. D4 removed two categories from the product that had been quietly accumulating an
+obligation since August. Only D3 was the shape it looked.
+
+### Inside the gate, which is the only series still in progress
 
 | | | |
 |---|---|---|
@@ -735,9 +774,10 @@ been started.
 with negative-controlled tests. What remains in G is the *product* half: an edge that sets headers,
 an account a customer can recover, a stop valve, a cap, and somewhere to fetch the SDK from.
 
-**D1–D4 has moved not at all**, and that is worth seeing in a table rather than inferring. Four
-decisions needing no code, none taken. They are the cheapest items on the whole list and the ones
-most easily deferred forever.
+~~**D1–D4 has moved not at all**~~ — **all four taken 2026-09-07**, and they were the cheapest
+items on the list exactly as this said. §4c has the four answers and the two things the file itself
+had wrong. What is left of them is one build row: the limiter's in-process fallback, which belongs
+beside G5.
 
 **Five are large**, and every one carries a decision rather than only code: P1-69 email, P1-73
 payments, P1-76 project management, the ClickHouse purge path, and G7's SDK distribution.

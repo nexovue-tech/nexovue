@@ -31,6 +31,7 @@ from opentelemetry.proto.logs.v1 import logs_pb2
 
 from nexovue_scheduler.probes.addresses import refusal_reason_for
 from nexovue_scheduler.probes.browser_proxy import LISTEN_HOST, PublicAddressProxy
+from nexovue_scheduler.probes.urls import reportable_url
 from nexovue_scheduler.publish import (
     PROBER_VERSION,
     SCHEMA_URL,
@@ -510,7 +511,9 @@ def _add_failure_record(scope_logs: logs_pb2.ScopeLogs, failure: StepFailure) ->
                 # Absent rather than empty when the browser never started or the
                 # screenshot was not kept: an empty ref reads as a broken link.
                 ATTR_SCREENSHOT_REF: failure.screenshot_ref,
-                ATTR_URL_FULL: failure.url,
+                # Credentials removed and signatures redacted at the one point the
+                # URL leaves us, so both StepFailure sites are covered. ADR 0103.
+                ATTR_URL_FULL: reportable_url(failure.url),
                 ATTR_BROWSER_NAME: BROWSER_NAME,
                 ATTR_BROWSER_VERSION: failure.browser_version,
             }

@@ -1,5 +1,5 @@
 import type { Metric } from "web-vitals";
-
+import type { ResolvedConfig } from "./config";
 import {
   EXCEPTION_EVENT_NAME,
   SEVERITY_ERROR,
@@ -37,7 +37,11 @@ import { nowNanos } from "./time";
  * metric.entries is never serialised. It holds raw PerformanceEntry objects and
  * the INP one in particular can be very large.
  */
-export function webVitalRecord(metric: Metric, sessionId: string): LogRecordJson {
+export function webVitalRecord(
+  metric: Metric,
+  sessionId: string,
+  config: ResolvedConfig,
+): LogRecordJson {
   const attributes = new AttributeList()
     .string(ATTR_WEB_VITAL_NAME, metric.name.toLowerCase())
     .double(ATTR_WEB_VITAL_VALUE, metric.value)
@@ -54,7 +58,7 @@ export function webVitalRecord(metric: Metric, sessionId: string): LogRecordJson
     severityNumber: SEVERITY_INFO,
     severityText: "INFO",
     eventName: WEB_VITAL_EVENT_NAME,
-    attributes: addPageContext(attributes, sessionId).build(),
+    attributes: addPageContext(attributes, sessionId, config).build(),
   };
 }
 
@@ -68,7 +72,11 @@ export function webVitalRecord(metric: Metric, sessionId: string): LogRecordJson
  * The body repeats the message because it is the column carrying a text index;
  * the attribute copy is what fills exception_message.
  */
-export function errorRecord(error: CapturedError, sessionId: string): LogRecordJson {
+export function errorRecord(
+  error: CapturedError,
+  sessionId: string,
+  config: ResolvedConfig,
+): LogRecordJson {
   const attributes = new AttributeList()
     .string(ATTR_EXCEPTION_TYPE, error.type)
     .string(ATTR_EXCEPTION_MESSAGE, error.message)
@@ -84,6 +92,6 @@ export function errorRecord(error: CapturedError, sessionId: string): LogRecordJ
     severityText: "ERROR",
     eventName: EXCEPTION_EVENT_NAME,
     body: { stringValue: error.message },
-    attributes: addPageContext(attributes, sessionId).build(),
+    attributes: addPageContext(attributes, sessionId, config).build(),
   };
 }
