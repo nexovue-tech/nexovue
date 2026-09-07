@@ -279,12 +279,15 @@ Three things follow.
    property to keep rather than an accident.
 2. **The ingest hostname must not share a cookie domain with the console.** A
    cookie scoped to a parent domain would be sent to a child, so
-   `ingest.nexovue.tech` under a console cookie set for `.nexovue.tech` would
-   receive our own users' session cookies on every unload beacon. **This is not
-   settled.** `deploy/caddy/Caddyfile` line 10 still reads
-   `TODO(hostname): one name for everything, or separate ingest and app names?`,
-   and this decision turns that from a routing preference into a privacy
-   requirement.
+   `ingest.nexovue.com` under a console cookie set for `.nexovue.com` would
+   receive our own users' session cookies on every unload beacon. **Settled
+   2026-09-07:** two names, `app.nexovue.com` and `ingest.nexovue.com`, and the
+   Caddyfile TODO is replaced by the decision. Two names are necessary and not
+   sufficient — the requirement is really about cookie *scope*, and it is met
+   today by an omission: `auth/cookies.py` passes no `domain`, which makes the
+   session cookie host-only. That omission now carries a comment saying so,
+   because adding a Domain to make some future subdomain work would defeat this
+   without touching anything named in it.
 3. **A visitor's cookies for the *customer's* site are not affected.** They are
    scoped to the customer's host and are never sent to ours.
 

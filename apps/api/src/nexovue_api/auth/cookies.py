@@ -21,6 +21,15 @@ from nexovue_api.settings import Settings
 SAME_SITE: Final = "lax"
 COOKIE_PATH: Final = "/"
 
+# **No `domain` is set, and that omission is load-bearing.** A cookie with no
+# Domain attribute is host-only: it goes back to exactly the host that set it and
+# to no sibling. Setting `domain=".nexovue.com"` to make some subdomain work
+# would send this session token to `ingest.nexovue.com` on every browser-door
+# beacon — our own users' sessions, arriving at the endpoint that accepts
+# unauthenticated public traffic from thousands of other people's pages.
+# ADR 0089 names that as a privacy requirement rather than a preference.
+# Do not add a Domain here.
+
 
 def set_session_cookie(response: Response, token: str, settings: Settings) -> None:
     """Attach a freshly minted session to the response."""

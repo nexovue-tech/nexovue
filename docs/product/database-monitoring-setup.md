@@ -139,7 +139,7 @@ processors:
 
 exporters:
   otlp_http:
-    endpoint: https://ingest.nexovue.tech
+    endpoint: https://ingest.nexovue.com
     headers:
       x-nexovue-key: ${env:NEXOVUE_INGEST_KEY}
 

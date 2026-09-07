@@ -36,7 +36,7 @@ CHECK_TYPE_HTTP: Final = "http"
 # Identifies us in the customer's access logs. A probe that arrives anonymously
 # looks like scraping, and the person reading those logs deserves to know who is
 # calling and why.
-USER_AGENT: Final = "nexovue-prober/0.1 (+https://nexovue.tech/probes)"
+USER_AGENT: Final = "nexovue-prober/0.1 (+https://nexovue.com/probes)"
 
 # A response body we never read still has to be downloaded to time the transfer
 # phase. This bounds what a hostile or misconfigured target can make us hold.

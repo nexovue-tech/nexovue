@@ -5,7 +5,7 @@ import { reportOnce } from "./diagnostics";
 export interface NexovueOptions {
   /** The public site key: nvp_live_ plus 22 base62 characters. */
   siteKey: string;
-  /** Origin of the nexovue receiver, e.g. https://ingest.nexovue.tech. */
+  /** Origin of the nexovue receiver, e.g. https://ingest.nexovue.com. */
   endpoint: string;
   /** Names the property in the console. Defaults to the page's hostname. */
   serviceName?: string;
@@ -86,7 +86,7 @@ export function resolveConfig(
     reportOnce(
       "endpoint",
       "refusing to start: endpoint must be an absolute http or https URL, " +
-        "e.g. https://ingest.nexovue.tech",
+        "e.g. https://ingest.nexovue.com",
     );
     return undefined;
   }

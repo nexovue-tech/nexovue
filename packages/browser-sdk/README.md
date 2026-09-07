@@ -16,7 +16,7 @@ import { init } from "@nexovue/browser-sdk";
 
 init({
   siteKey: "nvp_live_xxxxxxxxxxxxxxxxxxxxxx",
-  endpoint: "https://ingest.nexovue.tech",
+  endpoint: "https://ingest.nexovue.com",
 });
 ```
 

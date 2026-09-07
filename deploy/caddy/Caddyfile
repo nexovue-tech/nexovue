@@ -7,9 +7,15 @@
 	email {$NEXOVUE_TLS_EMAIL}
 }
 
-# TODO(hostname): one name for everything, or separate ingest and app names?
-# Ingest is machine traffic at high volume; the app is browser traffic. Splitting
-# them lets the two be rate-limited, logged and moved apart later.
+# Two names, decided 2026-09-07: `app.nexovue.com` and `ingest.nexovue.com`.
+# Ingest is machine traffic at high volume; the app is browser traffic, and they
+# want different rate limits, different logs and a CSP that means nothing on the
+# OTLP path. ADR 0089 makes it a privacy requirement rather than a preference:
+# the ingest host must not share a cookie domain with the console.
+#
+# **Two names are necessary and not sufficient.** The session cookie must stay
+# host-only — `auth/cookies.py` sets no Domain attribute, deliberately — because
+# a cookie scoped to `.nexovue.com` reaches every child, including this one.
 {$NEXOVUE_PUBLIC_HOST} {
 	# OTLP: the receiver speaks the protocol's own error semantics, so nothing
 	# here may rewrite a response body.

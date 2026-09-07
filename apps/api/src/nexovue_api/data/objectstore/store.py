@@ -1,6 +1,6 @@
 """The object store, over the generic S3 API only.
 
-ADR 0015 fixes the store as the S3 API rather than any one vendor's: SeaweedFS
+ADR 0037 fixes the store as the S3 API rather than any one vendor's: SeaweedFS
 locally, AWS S3 in deployment. Nothing here may use a feature outside that API,
 because the two have to be the same store from this side.
 

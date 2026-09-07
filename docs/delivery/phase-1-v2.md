@@ -58,7 +58,7 @@ reverse-proxies four routes correctly and does nothing else: **no HSTS, no
 Two decisions it defers and this plan should not:
 
 - **One hostname or two.** Its TODO asks whether ingest and the app share a name. **Recommendation:
-  two — `ingest.nexovue.tech` and `app.nexovue.tech`.** Ingest is machine traffic at volume and the
+  two — `ingest.nexovue.com` and `app.nexovue.com`.** Ingest is machine traffic at volume and the
   app is browser traffic; splitting them lets the two be rate-limited, logged, cached and moved
   apart later without a migration, and it keeps a browser-facing CSP off the OTLP path where it
   means nothing. It also matters for door 3: the SDK's `endpoint` is a public string in every
