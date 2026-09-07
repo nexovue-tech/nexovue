@@ -700,15 +700,44 @@ self-instrumentation, which §7a already defers until the platform runs somewher
 Phase 2.** Sizes are relative — S is under a day, M is a few days, L is a week or more and usually
 carries a decision inside it.
 
-| | Group | Items | Build work |
-|---|---|---|---|
-| **G1–G7** | Gate — nothing ships to a paying customer until these are true | 11 | 9 |
-| **A1–A3** | Architecture — cheap now, expensive after Phase 2 | 3 | 3 |
-| **C1–C7** | Commercial layer (M8) | 7 | 7 |
-| **M1–M5** | Measurements and exit criteria | 5 | 5 |
-| **F1–F5** | Findings and gate defects | 5 | 5 |
-| **D1–D4** | Decisions with no code | 4 | 0 |
-| **X1–X4** | Deferred past Phase 2 deliberately | 4 | 0 |
+| | Group | Items | Build work | Done |
+|---|---|---|---|---|
+| **G1–G7** | Gate — nothing ships to a paying customer until these are true | 11 | 9 | **3** + 1 partial |
+| **A1–A3** | Architecture — cheap now, expensive after Phase 2 | 3 | 3 | **3 — complete** |
+| **C1–C7** | Commercial layer (M8) | 7 | 7 | 0 |
+| **M1–M5** | Measurements and exit criteria | 5 | 5 | 0 |
+| **F1–F5** | Findings and gate defects | 5 | 5 | 0 |
+| **D1–D4** | Decisions with no code | 4 | 0 | 0 decided |
+| **X1–X4** | Deferred past Phase 2 deliberately | 4 | 0 | n/a |
+
+**6 of 29 build items done, as of 2026-09-07.** One series is complete —
+**A1–A3**, the architecture seams — and it was taken first on the argument that it is the only
+work that gets materially harder after Phase 2. Nothing else is finished, and only the gate has
+been started.
+
+### Inside the gate, which is the only series in progress
+
+| | | |
+|---|---|---|
+| G2a · P1-69 email | ✅ | provider, DNS, port, adapter, composition root, real send |
+| G3 · poller SSRF boundary | ✅ | `2f06a98` |
+| G4 · poller certificate verification | ✅ | `f26ec33` |
+| G1 · TLS edge | 🟡 | hostname and gRPC decided; **security headers unbuilt** |
+| G2b · P1-70 verification | ⬜ | |
+| G2c · P1-71 password reset | ⬜ | |
+| G5 · ingest kill switch | ⬜ | |
+| G6a · paid-tier browser cap | ⬜ | |
+| G7 · SDK distribution | ⬜ | |
+| G6b · the cap number | ⛔ | blocked on real RUM traffic, correctly |
+| G6c · block or bill on overage | ❓ | a decision, and it gates P1-74 |
+
+**The safety half of the gate is closed** — G3 and G4 were the two open holes, and both are shut
+with negative-controlled tests. What remains in G is the *product* half: an edge that sets headers,
+an account a customer can recover, a stop valve, a cap, and somewhere to fetch the SDK from.
+
+**D1–D4 has moved not at all**, and that is worth seeing in a table rather than inferring. Four
+decisions needing no code, none taken. They are the cheapest items on the whole list and the ones
+most easily deferred forever.
 
 **Five are large**, and every one carries a decision rather than only code: P1-69 email, P1-73
 payments, P1-76 project management, the ClickHouse purge path, and G7's SDK distribution.
