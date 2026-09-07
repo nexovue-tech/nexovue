@@ -11,11 +11,14 @@ credential or a network.
 
 from __future__ import annotations
 
+import ssl
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Final
 
 import boto3
+import certifi
 import pytest
 from botocore.stub import Stubber
 
@@ -28,7 +31,9 @@ from nexovue_scheduler.pollers.postgres_connect import (
     READ_ONLY_SESSION,
     DatabaseAuthError,
     DatabaseTarget,
+    DatabaseTLSError,
     rds_auth_token,
+    rds_tls_context,
 )
 
 ACCOUNT_ID: Final = "123456789012"
@@ -212,9 +217,56 @@ def test_the_database_password_is_minted_per_poll_from_the_customer_s_role() -> 
     assert "X-Amz-Expires=900" in token
 
 
-def test_the_monitoring_session_cannot_write_and_must_use_tls() -> None:
+def test_the_monitoring_session_cannot_write() -> None:
     """Read-only is enforced on the session, not only requested of the customer:
-    a monitoring connection that can write is one that eventually will. TLS is
-    not optional either — RDS rejects an IAM token over a plaintext connection."""
+    a monitoring connection that can write is one that eventually will."""
     assert READ_ONLY_SESSION == {"default_transaction_read_only": "on"}
-    assert RDS_SSL_MODE == "require"
+
+
+def test_the_ssl_mode_verifies_the_certificate_and_the_hostname() -> None:
+    """`require` was TLS with no verification at all, which is the defect.
+
+    Asserted as a constant rather than through a connection, because the
+    difference is invisible at runtime: both modes encrypt, both satisfy RDS,
+    and only one checks who is on the other end. A future edit back to `require`
+    would break nothing a functional test could see.
+    """
+    assert RDS_SSL_MODE == "verify-full"
+
+
+def test_a_missing_ca_bundle_refuses_rather_than_connecting_unverified() -> None:
+    """The tempting recovery is the defect wearing the clothes of resilience.
+
+    A context that fell back to the system trust store would connect to an
+    RDS instance only where Amazon's CA happens to be present, and would
+    silently accept any certificate where a bundle was supplied but empty.
+    """
+    rds_tls_context.cache_clear()
+    with pytest.raises(DatabaseTLSError, match="RDS_CA_BUNDLE_PATH"):
+        rds_tls_context("")
+
+
+def test_a_ca_bundle_path_that_is_not_a_file_is_named_in_the_refusal() -> None:
+    """A typo in a path is the failure that actually happens, and "certificate
+    verify failed" three layers down does not name it."""
+    rds_tls_context.cache_clear()
+    with pytest.raises(DatabaseTLSError, match="not a file"):
+        rds_tls_context("/no/such/rds-bundle.pem")
+
+
+def test_a_real_bundle_produces_a_context_that_checks_the_hostname(tmp_path: Path) -> None:
+    """Both flags asserted, because `verify-full` is exactly the pair of them.
+
+    `check_hostname` alone would accept a valid certificate for another host;
+    `verify_mode` alone would accept a self-signed one for this host. The
+    combination is what makes pinning an address safe, which is what unblocks
+    T1-2.
+    """
+    bundle = tmp_path / "bundle.pem"
+    bundle.write_text(certifi.contents(), encoding="utf-8")
+
+    rds_tls_context.cache_clear()
+    context = rds_tls_context(str(bundle))
+
+    assert context.check_hostname is True
+    assert context.verify_mode is ssl.CERT_REQUIRED

@@ -158,7 +158,14 @@ def _poll_postgres(
     region = str(config.get(CONFIG_REGION, settings.aws_region))
     window = PollWindow.ending_now(seconds=LOOKBACK_SECONDS)
 
-    snapshot = asyncio.run(_read_database(target, integration_id=integration_id, region=region))
+    snapshot = asyncio.run(
+        _read_database(
+            target,
+            integration_id=integration_id,
+            region=region,
+            ca_bundle_path=settings.rds_ca_bundle_path,
+        )
+    )
     logger.info(
         "postgres poll completed",
         integration_id=integration_id,
@@ -180,7 +187,11 @@ def _poll_postgres(
 
 
 async def _read_database(
-    target: postgres_connect.DatabaseTarget, *, integration_id: str, region: str
+    target: postgres_connect.DatabaseTarget,
+    *,
+    integration_id: str,
+    region: str,
+    ca_bundle_path: str,
 ) -> postgres_stats.DatabaseSnapshot:
     """One connection, two reads, closed either way.
 
@@ -189,7 +200,7 @@ async def _read_database(
     whose connection count it is reporting.
     """
     connection = await postgres_connect.connect_read_only(
-        target, integration_id=integration_id, region=region
+        target, integration_id=integration_id, region=region, ca_bundle_path=ca_bundle_path
     )
     try:
         return await postgres_stats.collect_snapshot(connection)

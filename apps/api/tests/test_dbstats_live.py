@@ -6,8 +6,8 @@ the premise was written as an assertion with an instruction attached: *"if this
 fails, a database has been polled for the first time — and the tests below
 should be replaced with ones that assert on real readings."*
 
-It failed. [ADR 0100](../../../docs/architecture/decisions/0100-a-database-we-cannot-reach-is-polled-by-the-customers-own-collector.md)
-made the demo's own Postgres reachable through the customer-collector route, so
+It failed. ADR 0100 — a database we cannot reach is polled by the customer's own
+collector — made the demo's own Postgres reachable that way, so
 real readings exist and these are the assertions the old ones asked for.
 
 The suite is deliberately tolerant of *how much* data there is — it runs against

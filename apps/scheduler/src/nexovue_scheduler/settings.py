@@ -91,6 +91,13 @@ class Settings(BaseSettings):
     # keys, so there is nothing secret in this service's configuration.
     aws_region: str = "eu-west-1"
 
+    # Amazon's RDS CA bundle, for verifying a customer database's certificate.
+    # asyncpg cannot use the system trust store, and RDS certificates are signed
+    # by Amazon's own authority — so the path is supplied rather than assumed.
+    # Empty is not a fallback: `rds_tls_context` refuses, because the alternative
+    # is an unverified connection carrying a database credential.
+    rds_ca_bundle_path: str = "/etc/ssl/certs/rds-global-bundle.pem"
+
     # --- beat leadership ----------------------------------------------------
     # More than one beat process runs, so that a dead one does not stop every
     # customer's checks. Only the holder of this lock schedules; the others wait

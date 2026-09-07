@@ -13,3 +13,7 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = "src"
+# `py.typed` ships so mypy reads this package's own annotations rather than
+# treating it as untyped. Without it a consumer sees `import-untyped` and every
+# call through it becomes `Any`.
+source-include = ["src/nexovue_platform/py.typed"]
