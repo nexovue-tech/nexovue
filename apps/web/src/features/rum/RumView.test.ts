@@ -8,7 +8,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ApiError } from "@/shared/api-client";
 
 import { RumView } from "./RumScreen";
-import { readableVitals } from "./vitals";
+import { ROUTE_TEMPLATE_TAG, readableVitals } from "./vitals";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -87,8 +87,16 @@ describe("the RUM screen", () => {
           dimension: "page",
           truncated: false,
           groups: [
-            { key: "/checkout", vitals: [{ name: "lcp", p75: 9000, readings: 60 }] },
-            { key: "/", vitals: [{ name: "lcp", p75: 400, readings: 40 }] },
+            {
+              key: "/checkout",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 9000, readings: 60 }],
+            },
+            {
+              key: "/",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 400, readings: 40 }],
+            },
           ],
         },
       },
@@ -110,8 +118,16 @@ describe("the RUM screen", () => {
           dimension: "page",
           truncated: false,
           groups: [
-            { key: "/busy", vitals: [{ name: "lcp", p75: 2000, readings: 90 }] },
-            { key: "/rare", vitals: [{ name: "lcp", p75: 120, readings: 3 }] },
+            {
+              key: "/busy",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 2000, readings: 90 }],
+            },
+            {
+              key: "/rare",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 120, readings: 3 }],
+            },
           ],
         },
       },
@@ -131,16 +147,95 @@ describe("the RUM screen", () => {
         page: {
           dimension: "page",
           truncated: false,
-          groups: [{ key: "/", vitals: [{ name: "lcp", p75: 2000, readings: 100 }] }],
+          groups: [
+            {
+              key: "/",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 2000, readings: 100 }],
+            },
+          ],
         },
         device: {
           dimension: "device",
           truncated: false,
-          groups: [{ key: "desktop", vitals: [{ name: "lcp", p75: 2000, readings: 100 }] }],
+          groups: [
+            {
+              key: "desktop",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 2000, readings: 100 }],
+            },
+          ],
         },
       },
     });
     expect(text).not.toContain("Split by");
+  });
+
+  it("marks a route template apart from a raw URL in the page breakdown", () => {
+    // A reader comparing the two has to know one row is a page and the other is
+    // one order's URL, or the numbers are not comparable at all.
+    const text = render({
+      ...BASE,
+      vitals: readableVitals([{ name: "lcp", p75: 2000, readings: 100 }]),
+      breakdowns: {
+        page: {
+          dimension: "page",
+          truncated: false,
+          groups: [
+            {
+              key: "/cart/checkout/{orderId}",
+              is_route_template: true,
+              vitals: [{ name: "lcp", p75: 9000, readings: 60 }],
+            },
+            {
+              key: "/about",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 400, readings: 40 }],
+            },
+          ],
+        },
+      },
+    });
+    // Asserted on the rows themselves, not on the page text: the footnote below
+    // the table names the tag too, so a whole-page match would pass with no tag
+    // on any row at all.
+    const rows = [...container.querySelectorAll("tbody th")].map((cell) => cell.textContent ?? "");
+    expect(rows).toHaveLength(2);
+    const [routed, raw] = rows;
+    expect(routed).toContain("/cart/checkout/{orderId}");
+    expect(routed).toContain(ROUTE_TEMPLATE_TAG);
+    expect(raw).toContain("/about");
+    expect(raw).not.toContain(ROUTE_TEMPLATE_TAG);
+    // And the sentence that says what the tag means.
+    expect(text).toContain("gave the SDK a template for");
+  });
+
+  it("does not tag a device class as a route template", () => {
+    const text = render({
+      ...BASE,
+      vitals: readableVitals([{ name: "lcp", p75: 2000, readings: 100 }]),
+      breakdowns: {
+        device: {
+          dimension: "device",
+          truncated: false,
+          groups: [
+            {
+              key: "desktop",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 2000, readings: 50 }],
+            },
+            {
+              key: "mobile",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 3000, readings: 50 }],
+            },
+          ],
+        },
+      },
+    });
+    const rows = [...container.querySelectorAll("tbody th")].map((cell) => cell.textContent ?? "");
+    expect(rows).toEqual(["desktop", "mobile"]);
+    expect(text).not.toContain("gave the SDK a template for");
   });
 
   it("says the page list was cut rather than presenting it as the whole site", () => {
@@ -152,8 +247,16 @@ describe("the RUM screen", () => {
           dimension: "page",
           truncated: true,
           groups: [
-            { key: "/a", vitals: [{ name: "lcp", p75: 2000, readings: 50 }] },
-            { key: "/b", vitals: [{ name: "lcp", p75: 2000, readings: 50 }] },
+            {
+              key: "/a",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 2000, readings: 50 }],
+            },
+            {
+              key: "/b",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 2000, readings: 50 }],
+            },
           ],
         },
       },
@@ -170,8 +273,16 @@ describe("the RUM screen", () => {
           dimension: "device",
           truncated: false,
           groups: [
-            { key: "desktop", vitals: [{ name: "lcp", p75: 2000, readings: 50 }] },
-            { key: "", vitals: [{ name: "lcp", p75: 3000, readings: 50 }] },
+            {
+              key: "desktop",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 2000, readings: 50 }],
+            },
+            {
+              key: "",
+              is_route_template: false,
+              vitals: [{ name: "lcp", p75: 3000, readings: 50 }],
+            },
           ],
         },
       },

@@ -28,11 +28,13 @@ arithmetic: 25GB would have been $7.50 of ingest inside a $6 price.
 price, and inventing one would make the usage screen state a number no contract
 uses. With no row the screen shows no cost, which is the truth for that tier.
 
-**What this does not settle.** ADR 0056 says both that we block above the
-allowance and that overage stays live and bills — two different products — and
-nothing here resolves that. `max_billed_services` caps the free tier at three;
-what happens when a paid tier exceeds its included volume is still undecided, and
-the usage screen says in words that overage is not in the figure it shows.
+~~**What this does not settle.**~~ **Settled 2026-09-07 by ADR 0107.** This note
+recorded that ADR 0056 says both that we block above the allowance and that
+overage stays live and bills — two different products — and refused to guess
+between them. The answer is **stop and say so**, with a ceiling the customer may
+raise in advance to a number they choose; 0056's "overage stays live" clause is
+withdrawn. `max_billed_services` still caps the free tier at three, and the
+figures for a paid tier remain blocked on usage data that does not exist.
 
 Revision ID: 0015
 Revises: 0014

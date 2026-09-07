@@ -113,7 +113,7 @@ func readingToken(readings []Reading) string {
 	for _, reading := range readings {
 		digest.AddRow(reading.ReceivedAt.UTC(), reading.TenantID, reading.ProjectID,
 			reading.SessionID, reading.VitalName, reading.VitalID, reading.Value,
-			reading.URLPath, reading.DeviceClass, reading.Country)
+			reading.URLPath, reading.Route, reading.DeviceClass, reading.Country)
 	}
 	return digest.Token()
 }
@@ -122,11 +122,16 @@ func readingToken(readings []Reading) string {
 // the only thing there is: the statement reads from `input()`, and that form is
 // not covered by the store's own block hashing — see the insertdedup package,
 // where it is measured.
+//
+// It must cover every column of the target's sort key. A column in the key that
+// is absent here makes two genuinely different batches share one token, and the
+// store drops the second: the minute a customer first configures a route, its
+// rollup rows differ from the previous minute's in nothing else.
 func rollupToken(stats []Stat) string {
 	digest := insertdedup.NewDigest()
 	for _, stat := range stats {
 		digest.AddRow(stat.Minute.UTC(), stat.TenantID, stat.ProjectID,
-			stat.DerivedRetentionDays, stat.VitalName, stat.URLPath,
+			stat.DerivedRetentionDays, stat.VitalName, stat.Route, stat.URLPath,
 			stat.DeviceClass, stat.Country, stat.ReadingCount, stat.Values)
 	}
 	return digest.Token()

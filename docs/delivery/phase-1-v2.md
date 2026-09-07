@@ -37,6 +37,17 @@ never when the code was written.
 | **D3** | sampling and masking are customer controls — ADR 0105 | ✅ **decided** | `pending` |
 | **D4** | network monitoring and SIEM out of scope — ADR 0106 | ✅ **decided** | `pending` |
 
+**Five open questions from the agent round were answered on 2026-09-07**, and one of them was a
+product decision rather than a technical one:
+
+| | question | answer |
+|---|---|---|
+| **G6c** | block or bill when a paid tier exceeds its volume? | **stop and say so, with a ceiling the customer may raise** — [ADR 0107](../architecture/decisions/0107-over-the-allowance-we-stop-and-say-so-and-the-customer-may-raise-the-ceiling.md). ADR 0056's own fourth promise wins; its "overage stays live" clause is withdrawn. **C2 / P1-74 is unblocked.** |
+| evidence in an immutable ADR | supersede, edit, or leave? | a third permitted edit — an `**Evidence corrected:**` line under the status block, body untouched. Applied to 0096 and 0097 |
+| `fallbackBurstMultiple` | constant or environment variable? | **stays a constant.** Nothing is deployed, so there is no incident to tune during and no measurement to tune against. Adding the knob now is designing around an absent constraint (rule 14); the number should be set from what a real Valkey outage looked like |
+| the stop valve's operator half | screen, endpoint, or hand-written SQL? | **`just suspend-close/open/show`**, plus `ingest_suspended_reason` and a `CHECK` binding it to the timestamp. Not an endpoint: naming *who* closed a valve needs an operator identity §9's single-operator scoping does not have. The screen belongs with P1-76 |
+| `url_path` templating | carry `http.route`, derive one, or leave it? | **carry the customer's own template through, falling back to the path** — [ADR 0108](../architecture/decisions/0108-a-web-vital-is-grouped-by-the-customers-route-template-and-falls-back-to-the-path.md), built. Deriving one invents data, and `pagecontext.ts` already holds the rule: *"a route template is the customer's knowledge, not something derived from a path"*. **Building it found a silent data-loss defect** — `route` was in the rollup's sort key and not in its insert-deduplication token, so the minute a customer first set a template ClickHouse would have dropped the insert |
+
 **D1 is the row worth reading twice.** It was filed as a decision needing no code, and the first
 thing that happened on taking it was a query against the dev store that found a page-view record
 carrying a customer's postal address in `url.full` — on a project whose configuration said no query
@@ -216,6 +227,22 @@ extra lookup and inherits the cache TTL that already exists. Postgres column, re
 refused with its own reason and its own counter — the shape `377a9c5` already established for
 deletion.
 
+**Done 2026-09-07, both halves.** `organizations.ingest_suspended_at` with
+`ingest_suspended_reason` beside it and a `CHECK` binding the two, read in the allowance's existing
+statement so closing it costs the hot path no extra query. The operator half is
+`just suspend-close <slug> "<reason>"` / `suspend-open` / `suspend-show` rather than an endpoint,
+because naming *who* closed a valve needs an operator identity Phase 1 does not have.
+
+**Proved end to end rather than by unit test.** With the dev key sending OTLP: valve open → `200`;
+closed by hand → `200` at t+5s, t+10s, t+15s, then **`429` with `code 8` and the message
+"ingestion is suspended for this organization; contact support"** at t+20s, inside the 30-second
+allowance cache TTL; reopened → `429` for fifteen seconds, then `200`. Both directions bite within
+the TTL and nothing else changed.
+
+**One hole, inherited rather than introduced:** the allowance gate admits the request when the
+control plane cannot be read, so a Postgres outage reopens every valve. The kill switch is fast,
+not absolute.
+
 ### G7 · A customer can actually obtain the browser SDK · *open-decisions §1d*
 
 `packages/browser-sdk` is the product for door 3 — the script a customer pastes into their page —
@@ -375,6 +402,20 @@ page/geo/device"*. `country` has no producer at all, because there is no GeoIP i
 **Recommendation: ship page and device; drop geo from the row's wording.** The columns exist so
 this is a `GROUP BY`, not a migration. Geo needs a GeoIP decision nobody has taken and should not
 be smuggled in as part of a screen change. `MIN_READINGS = 10` is open in the same area.
+
+**Done 2026-09-07/08.** Page and device shipped over the existing rollup; geo dropped from the row's
+wording, because `country` has no producer. `MIN_READINGS` stays at 10 and stays out of SQL — a page
+visited three times is a fact, and hiding it would report no traffic; a thin group renders as a dash
+rather than a confident percentile.
+
+**And the breakdown grouped by the wrong thing until [ADR 0108](../architecture/decisions/0108-a-web-vital-is-grouped-by-the-customers-route-template-and-falls-back-to-the-path.md).**
+`url_path` is stored as the browser sent it, so a real shop got one group per order. The SDK already
+collected the customer's `route` template and put it on the page-view span only; it now reaches
+every vital and error record, and the breakdown groups route-then-path. **Three things this did not
+fix, named rather than left to be discovered:** the rollup still mints one row per URL per minute,
+so the screen is bounded and storage is not; `route` is a single `init()` option, so a single-page
+app stamps one template across a whole session; and no row proving any of it came from a real
+browser.
 
 ### X1 · P1-57, the S3 cold tier — *deferred in §5, and counted in the X row, not the M row*
 

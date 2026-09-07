@@ -95,6 +95,12 @@ function redactedQuery(search: string): string {
  * What every record says about where it happened. session.id is on all of them
  * because it is the only join between a visitor's vitals, errors and page views
  * — there is no session table and session.id is not a promoted column anywhere.
+ *
+ * http.route is here rather than on the page-view span alone because it is what
+ * the store groups a page by: without it a vital lands under the raw path, and
+ * a site with an order id in its URLs gets one breakdown group per order. It is
+ * never guessed — a route template is the customer's knowledge, not something
+ * derived from a path — so a page that configured none is grouped by its path.
  */
 export function addPageContext(
   attributes: AttributeList,
@@ -104,7 +110,8 @@ export function addPageContext(
   return attributes
     .string(ATTR_SESSION_ID, sessionId)
     .string(ATTR_URL_FULL, reportableUrl(config))
-    .string(ATTR_URL_PATH, globalThis.location?.pathname);
+    .string(ATTR_URL_PATH, globalThis.location?.pathname)
+    .string(ATTR_HTTP_ROUTE, config.route);
 }
 
 /**
@@ -125,8 +132,8 @@ export function pageViewAttributes(config: ResolvedConfig, sessionId: string): A
   // cannot leave the page by the other door. See ADR 0103.
   const query = reportableQuery(config);
   if (query !== "") attributes[ATTR_URL_QUERY] = query;
-  // The only page attribute that reaches an indexed column, and never guessed:
-  // a route template is the customer's knowledge, not something derived from a path.
+  // Spelled again rather than shared: a span carries the tracer's own attribute
+  // shape, not an OTLP list. See addPageContext for why it is never guessed.
   if (config.route) attributes[ATTR_HTTP_ROUTE] = config.route;
   return attributes;
 }

@@ -26,7 +26,7 @@ Only `siteKey` and `endpoint` are required. Everything else has a default:
 | ---------------------- | -------------------- | ---------------------------------------------------------------- |
 | `serviceName`          | the page's hostname  | names the property in the console; fills the `service_name` column |
 | `serviceVersion`       | unset                | joins telemetry to a release                                       |
-| `route`                | unset                | a route template such as `/products/{id}`; never guessed from the path |
+| `route`                | unset                | a route template such as `/products/{id}`; groups the RUM page breakdown, and is never guessed from the path |
 | `captureQueryAndFragment` | `false`           | lets the query string and the fragment leave the page (see below)  |
 | `sessionIdleTimeoutMs` | 30 minutes           | idle gap that ends a session                                       |
 | `sessionMaxDurationMs` | 4 hours              | absolute cap on one session                                        |
@@ -116,8 +116,15 @@ Turning it on sends both, with the OpenTelemetry conventions' sensitive
 parameters — `X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`,
 `sig`, `X-Goog-Signature` — replaced by `REDACTED` with their keys kept. That
 list is the presigned-URL list and it will not catch your own token names; if
-your query strings carry secrets, leave this off and use `http.route` to tell
-pages apart.
+your query strings carry secrets, leave this off and use `route` to tell pages
+apart.
+
+`route` reaches page views, web vitals and errors alike, and it is what the RUM
+page breakdown groups by. Without it every distinct path is its own group, so a
+checkout URL carrying an order id produces one group per order; with it they
+collapse to `/cart/checkout/{orderId}`. Nothing derives a template from a path —
+a wrong guess would be invisible and permanent — so a page that sets none is
+still reported, grouped by its raw path.
 
 ## How it gets there
 

@@ -24,10 +24,11 @@ from nexovue_api.rum.schemas import (
 # from the rollup's own parameter list so the two cannot drift apart.
 P75_POSITION: Final = queries.ROLLUP_QUANTILES.index(0.75)
 
-# How many groups a breakdown returns. A page list is unbounded in principle:
+# How many groups a breakdown returns. A page list is bounded by the customer's
+# route templates where they configured any, and unbounded where they did not:
 # `url_path` is stored as the browser sent it, so a site with an order id in its
-# paths produces a group per order. Ranking by readings first means the cut
-# falls on the long tail, and `truncated` says it happened.
+# paths and no `route` option produces a group per order. Ranking by readings
+# first means the cut falls on the long tail, and `truncated` says it happened.
 MAX_GROUPS: Final = 50
 
 # Which statement answers which dimension. A lookup rather than a column name
@@ -105,6 +106,9 @@ def _to_group(row: dict[str, Any]) -> WebVitalGroup:
     ]
     return WebVitalGroup(
         key=values.text(row["group_key"]),
+        # UInt8 from the page statement's `max`, Bool from the device
+        # statement's constant. Both are the same question here.
+        is_route_template=bool(row["is_route_template"]),
         vitals=sorted(vitals, key=lambda vital: vital.name),
     )
 

@@ -103,26 +103,30 @@ async def _write_readings(
     values: list[float],
     minute: datetime,
     url_path: str = "/checkout",
+    route: str = "",
     device_class: str = "mobile",
 ) -> None:
     """One rollup row, folded into a quantile state by the server.
 
     The same `arrayReduce` the Go writer uses, so what this suite reads back is a
     state built the way production builds it rather than one shaped for a test.
+
+    `route` defaults to empty, which is the customer who configured none.
     """
     await client.command(
         f"""
         INSERT INTO {ROLLUP_TABLE}
-            (tenant_id, derived_retention_days, project_id, vital_name, url_path,
-             device_class, country, minute, reading_count, value_quantiles)
-        SELECT %(tenant)s, 395, %(project)s, %(vital)s, %(path)s, %(device)s, '',
-               %(minute)s, %(count)s,
+            (tenant_id, derived_retention_days, project_id, vital_name, route,
+             url_path, device_class, country, minute, reading_count, value_quantiles)
+        SELECT %(tenant)s, 395, %(project)s, %(vital)s, %(route)s, %(path)s,
+               %(device)s, '', %(minute)s, %(count)s,
                arrayReduce('quantilesState({QUANTILE_LEVELS})', %(values)s)
         """,
         parameters={
             "tenant": tenant_id,
             "project": project_id,
             "vital": vital,
+            "route": route,
             "path": url_path,
             "device": device_class,
             "minute": minute,
@@ -139,19 +143,21 @@ async def _write_one_reading_per_page(
     project_id: str,
     minute: datetime,
     pages: int,
+    route: str = "",
 ) -> None:
     """`pages` distinct paths, one reading each, in a single statement.
 
-    This is the shape that makes the group limit matter: a path carrying an
-    order id is a new group per order, and there is no normalization anywhere
-    between the browser and the rollup.
+    This is the shape that makes the group limit matter: with no `route` a path
+    carrying an order id is a new group per order. Pass one and the same paths
+    collapse to a single group, which is what the option is for.
     """
     await client.command(
         f"""
         INSERT INTO {ROLLUP_TABLE}
-            (tenant_id, derived_retention_days, project_id, vital_name, url_path,
-             device_class, country, minute, reading_count, value_quantiles)
-        SELECT %(tenant)s, 395, %(project)s, 'lcp', concat('/order/', toString(number)),
+            (tenant_id, derived_retention_days, project_id, vital_name, route,
+             url_path, device_class, country, minute, reading_count, value_quantiles)
+        SELECT %(tenant)s, 395, %(project)s, 'lcp', %(route)s,
+               concat('/order/', toString(number)),
                'desktop', '', %(minute)s, 1,
                arrayReduce('quantilesState({QUANTILE_LEVELS})', [100.0])
         FROM numbers(%(pages)s)
@@ -159,6 +165,7 @@ async def _write_one_reading_per_page(
         parameters={
             "tenant": tenant_id,
             "project": project_id,
+            "route": route,
             "minute": minute,
             "pages": pages,
         },
@@ -309,9 +316,12 @@ async def test_a_window_with_no_readings_is_an_empty_list_and_not_an_error(
 
 # ------------------------------------------------------- the breakdowns, P1-47
 #
-# `url_path` and `device_class` are promoted columns on `web_vitals` and are in
-# `web_vitals_1m`'s sort key, so these are a `GROUP BY` over the same rollup the
-# headline reads — not a raw-row scan and not a migration.
+# `route`, `url_path` and `device_class` are promoted columns on `web_vitals` and
+# are in `web_vitals_1m`'s sort key, so these are a `GROUP BY` over the same
+# rollup the headline reads — not a raw-row scan and not a migration.
+#
+# A page is `route` where the customer configured one and `url_path` where they
+# did not, so the tests below cover both and the mixture.
 
 
 async def _break_down(
@@ -555,3 +565,182 @@ async def test_a_window_with_no_readings_breaks_down_to_nothing(
     )
     assert answer.groups == []
     assert not answer.truncated
+
+
+# ------------------------------------------------------ grouping pages by route
+#
+# The defect: our own dev store held `/cart/checkout/978ac453-aa9f-11f1-91c3-…`,
+# so a real shop produced one breakdown group per order. The customer already
+# tells us the answer through the SDK's `route` option; nothing carried it.
+
+
+async def test_one_route_template_collapses_every_url_beneath_it(
+    client: AsyncClient, tenant: str
+) -> None:
+    """Three orders, one page — and one p75 over all three, not three p75s.
+
+    The merge has to happen in the store: a page's percentile cannot be recovered
+    from three per-URL percentiles.
+    """
+    project_id = str(uuid.uuid4())
+    minute = datetime.now(UTC).replace(second=0, microsecond=0)
+    template = "/cart/checkout/{orderId}"
+    for order, value in (("978ac453", 100.0), ("aa9f11f1", 200.0), ("91c31e31", 300.0)):
+        await _write_readings(
+            client,
+            tenant_id=tenant,
+            project_id=project_id,
+            vital="lcp",
+            values=[value],
+            minute=minute,
+            url_path=f"/cart/checkout/{order}",
+            route=template,
+        )
+
+    answer = await _break_down(
+        client, tenant, dimension=BreakdownDimension.PAGE, project_id=project_id
+    )
+
+    assert [group.key for group in answer.groups] == [template]
+    group = answer.groups[0]
+    assert group.is_route_template
+    assert group.vitals[0].readings == 3
+    # The p75 of 100, 200 and 300 together. Any per-URL percentile would be one
+    # of those three values.
+    assert group.vitals[0].p75 == pytest.approx(250.0)
+
+
+async def test_a_page_with_no_route_is_still_grouped_by_its_path(
+    client: AsyncClient, tenant: str
+) -> None:
+    """The fallback. A customer who configured nothing still gets a breakdown."""
+    project_id = str(uuid.uuid4())
+    minute = datetime.now(UTC).replace(second=0, microsecond=0)
+    await _write_readings(
+        client,
+        tenant_id=tenant,
+        project_id=project_id,
+        vital="lcp",
+        values=[900.0] * 4,
+        minute=minute,
+        url_path="/about",
+    )
+
+    answer = await _break_down(
+        client, tenant, dimension=BreakdownDimension.PAGE, project_id=project_id
+    )
+
+    assert [group.key for group in answer.groups] == ["/about"]
+    assert not answer.groups[0].is_route_template
+    assert answer.groups[0].vitals[0].p75 == pytest.approx(900.0)
+
+
+async def test_routed_and_unrouted_pages_do_not_collide(client: AsyncClient, tenant: str) -> None:
+    """The mixture, which is what a real customer part-way through looks like.
+
+    Both appear, each with its own distribution, and each says which kind of key
+    it is — a template means "this page", a path means "this one URL".
+    """
+    project_id = str(uuid.uuid4())
+    minute = datetime.now(UTC).replace(second=0, microsecond=0)
+    template = "/cart/checkout/{orderId}"
+    for order, value in (("978ac453", 100.0), ("aa9f11f1", 300.0)):
+        await _write_readings(
+            client,
+            tenant_id=tenant,
+            project_id=project_id,
+            vital="lcp",
+            values=[value],
+            minute=minute,
+            url_path=f"/cart/checkout/{order}",
+            route=template,
+        )
+    await _write_readings(
+        client,
+        tenant_id=tenant,
+        project_id=project_id,
+        vital="lcp",
+        values=[900.0] * 4,
+        minute=minute,
+        url_path="/about",
+    )
+
+    answer = await _break_down(
+        client, tenant, dimension=BreakdownDimension.PAGE, project_id=project_id
+    )
+
+    by_page = {group.key: group for group in answer.groups}
+    assert set(by_page) == {template, "/about"}
+    assert by_page[template].is_route_template
+    assert not by_page["/about"].is_route_template
+    assert by_page[template].vitals[0].readings == 2
+    assert by_page[template].vitals[0].p75 == pytest.approx(250.0)
+    assert by_page["/about"].vitals[0].readings == 4
+    assert by_page["/about"].vitals[0].p75 == pytest.approx(900.0)
+
+
+async def test_a_route_template_keeps_the_group_count_flat_as_orders_arrive(
+    client: AsyncClient, tenant: str
+) -> None:
+    """The whole point, stated as the number a customer would notice.
+
+    Sixty order URLs with no template overflow the group limit and the breakdown
+    says it was cut. The same sixty under one template are one row.
+    """
+    project_id = str(uuid.uuid4())
+    minute = datetime.now(UTC).replace(second=0, microsecond=0)
+    await _write_one_reading_per_page(
+        client,
+        tenant_id=tenant,
+        project_id=project_id,
+        minute=minute,
+        pages=service.MAX_GROUPS + 10,
+    )
+    unrouted = await _break_down(
+        client, tenant, dimension=BreakdownDimension.PAGE, project_id=project_id
+    )
+    assert len(unrouted.groups) == service.MAX_GROUPS
+    assert unrouted.truncated
+
+    routed_project = str(uuid.uuid4())
+    template = "/order/{id}"
+    await _write_one_reading_per_page(
+        client,
+        tenant_id=tenant,
+        project_id=routed_project,
+        minute=minute,
+        pages=service.MAX_GROUPS + 10,
+        route=template,
+    )
+    routed = await _break_down(
+        client, tenant, dimension=BreakdownDimension.PAGE, project_id=routed_project
+    )
+    assert [group.key for group in routed.groups] == [template]
+    assert not routed.truncated
+    assert routed.groups[0].vitals[0].readings == service.MAX_GROUPS + 10
+
+
+async def test_a_device_breakdown_never_claims_a_route_template(
+    client: AsyncClient, tenant: str
+) -> None:
+    """A device class is a device class. The flag exists so one reader serves both."""
+    project_id = str(uuid.uuid4())
+    minute = datetime.now(UTC).replace(second=0, microsecond=0)
+    await _write_readings(
+        client,
+        tenant_id=tenant,
+        project_id=project_id,
+        vital="lcp",
+        values=[400.0] * 4,
+        minute=minute,
+        url_path="/cart/checkout/1",
+        route="/cart/checkout/{orderId}",
+        device_class="desktop",
+    )
+
+    answer = await _break_down(
+        client, tenant, dimension=BreakdownDimension.DEVICE, project_id=project_id
+    )
+
+    assert [group.key for group in answer.groups] == ["desktop"]
+    assert not answer.groups[0].is_route_template

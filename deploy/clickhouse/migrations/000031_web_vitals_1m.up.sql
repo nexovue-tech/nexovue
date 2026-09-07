@@ -15,16 +15,30 @@
 -- Google's 28-day window at read time, and an hour does not merge down: too
 -- fine costs storage, too coarse cannot be undone.
 --
--- **The cardinality cost is real and is named here.** `constants.ts` fixes the
--- page-view span name to a literal precisely so a per-URL name cannot mint a
--- rollup row per URL per minute in `endpoint_stats_1m`, and `url_path` in this
--- key does exactly that thing on purpose — there is no route template on a
--- vital record to group by (see 000030). The bound is that rows per minute can
--- never exceed readings per minute, so this table is never taller than the raw
--- one; a site with per-id URLs simply degenerates to one rollup row per reading,
--- each carrying a quantile state larger than the Float64 it replaced. That is a
+-- **`route` sits immediately before `url_path`, and both are in the key.** The
+-- screen groups a page by `if(route != '', route, url_path)`, so one group's
+-- rows are one contiguous run of the key only when the template sorts ahead of
+-- the path it stands for; put `route` after `url_path` and a routed page's rows
+-- scatter across every order id it ever served. It sits after `vital_name`
+-- because a screen still asks about one vital at a time, which is the same
+-- reason 000030 gives for that column's own position.
+--
+-- **`url_path` stays.** `route` is not a replacement for it: it is empty for a
+-- customer who configured none, and where both are filled `route != ''` is what
+-- lets the breakdown say "this is a page" rather than "this is a URL" without a
+-- flag column. Keeping the path also means a wrong route — one static template
+-- across a whole app — is recoverable by reading past it, where storing only
+-- the derived group would have lost the paths for good.
+--
+-- **The cardinality cost is real, and `route` does not remove it.** `url_path`
+-- in this key mints a rollup row per URL per minute — the very thing
+-- `constants.ts` fixes the page-view span name to a literal to prevent in
+-- `endpoint_stats_1m`. `route` fixes what the *reader* groups by, not how many
+-- rows are stored. The bound is unchanged: rows per minute can never exceed
+-- readings per minute, so this table is never taller than the raw one, and a
+-- site with per-id URLs degenerates to one rollup row per reading, each
+-- carrying a quantile state larger than the Float64 it replaced. That is a
 -- storage cost, bounded by `derived_retention_days`, not a wrong answer.
--- Normalising `url_path` into a page group is what would remove it.
 --
 -- `reading_count` is not decoration: it is what lets the screen refuse to show
 -- a p75 computed from four samples.
@@ -41,6 +55,7 @@ CREATE TABLE IF NOT EXISTS web_vitals_1m
     `derived_retention_days` UInt16 DEFAULT 395 CODEC(T64, ZSTD(1)),
     `project_id` LowCardinality(String) CODEC(ZSTD(1)),
     `vital_name` LowCardinality(String) CODEC(ZSTD(1)),
+    `route` LowCardinality(String) CODEC(ZSTD(1)),
     `url_path` String CODEC(ZSTD(1)),
     `device_class` LowCardinality(String) CODEC(ZSTD(1)),
     `country` LowCardinality(String) CODEC(ZSTD(1)),
@@ -50,6 +65,6 @@ CREATE TABLE IF NOT EXISTS web_vitals_1m
 )
 ENGINE = AggregatingMergeTree
 PARTITION BY (toYYYYMM(minute), derived_retention_days)
-ORDER BY (tenant_id, project_id, vital_name, url_path, device_class, country, minute)
+ORDER BY (tenant_id, project_id, vital_name, route, url_path, device_class, country, minute)
 TTL minute + toIntervalDay(derived_retention_days)
 SETTINGS index_granularity = 8192, non_replicated_deduplication_window = 1000

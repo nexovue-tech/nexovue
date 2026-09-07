@@ -53,6 +53,12 @@ select = [
 # structlog because something reads those logs later; this one is read by the
 # person who just typed the command, next to a bash script doing the same.
 "tools/**" = ["T201"]
+# The same rule, and the same reason. `suspend` is the ingest stop valve's
+# operator half (P1-52): its reader is the person who just typed
+# `just suspend-close` at 3am, and `suspend-show` prints rows meant to be piped.
+# It lives under the API package because it needs the models and the DSN, not
+# because it is part of the service.
+"apps/api/src/nexovue_api/suspend.py" = ["T201"]
 
 [tool.mypy]
 python_version = "3.13"

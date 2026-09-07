@@ -9,7 +9,14 @@ import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 import type { BreakdownDimension, WebVitalBreakdown } from "./api";
 import { useWebVitals, useWebVitalsBreakdown } from "./api";
 import type { BreakdownCell, ReadableGroup, ReadableVital } from "./vitals";
-import { describeVitals, MIN_READINGS, readableGroup, readableVitals, VITALS } from "./vitals";
+import {
+  describeVitals,
+  MIN_READINGS,
+  ROUTE_TEMPLATE_TAG,
+  readableGroup,
+  readableVitals,
+  VITALS,
+} from "./vitals";
 
 /* Every rating's colour, named once so a card and its footnote cannot disagree. */
 const RATING_STYLES: Record<ReadableVital["rating"], string> = {
@@ -281,6 +288,15 @@ function VitalBreakdown({ breakdowns }: { breakdowns: Breakdowns }) {
       <p className="mt-2 text-ink-dim text-xs">
         A dash is a percentile fewer than {MIN_READINGS} readings could not support, never a zero —
         splitting the readings makes every count smaller than the one on the card.
+        {selected === "page" ? (
+          <>
+            {" "}
+            A{" "}
+            <span className="font-mono text-2xs uppercase tracking-caps">{ROUTE_TEMPLATE_TAG}</span>{" "}
+            row is a page you gave the SDK a template for; the rest are single URLs exactly as the
+            browser sent them.
+          </>
+        ) : null}
       </p>
     </section>
   );
@@ -320,15 +336,19 @@ function DimensionBar({
 }
 
 /**
- * Said rather than silently cut, because a path is stored exactly as the browser sent
- * it: a site with an order id in its URLs has one row per order, and the busiest pages
- * are the ones that survive.
+ * Said rather than silently cut, because a page with no route template is grouped by the
+ * path exactly as the browser sent it: a site with an order id in its URLs has one row
+ * per order, and the busiest pages are the ones that survive. The SDK's `route` option
+ * is what collapses them, which is why the notice names it.
  */
 function TruncationNotice({ dimension }: { dimension: BreakdownDimension }) {
   return (
     <p className="mt-2 border-warning-border border-l-2 px-3 py-1.5 text-sm text-warning-text">
       These are the busiest {dimension === "page" ? "pages" : "device classes"}, not all of them —
       the read hit its group ceiling.
+      {dimension === "page"
+        ? " Untagged rows are raw URLs; set the SDK's route option to group them into pages."
+        : null}
     </p>
   );
 }
@@ -339,13 +359,23 @@ function BreakdownRow({ group }: { group: ReadableGroup }) {
       {/* `w-full max-w-0` is what lets the inner span truncate inside a table cell:
           without it the column simply grows to fit the longest path. */}
       <th scope="row" className="w-full max-w-0 py-1.5 pr-3 font-normal">
-        <span
-          className={`block truncate text-sm ${
-            group.key === "" ? "text-ink-dim italic" : "text-ink"
-          }`}
-          title={group.label}
-        >
-          {group.label}
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          {group.isRouteTemplate ? (
+            <span
+              className="shrink-0 rounded-sm border border-line px-1 font-mono text-2xs text-ink-dim uppercase tracking-caps"
+              title="A route template you configured, so every URL matching it is one page."
+            >
+              {ROUTE_TEMPLATE_TAG}
+            </span>
+          ) : null}
+          <span
+            className={`min-w-0 truncate text-sm ${
+              group.key === "" ? "text-ink-dim italic" : "text-ink"
+            }`}
+            title={group.label}
+          >
+            {group.label}
+          </span>
         </span>
       </th>
       {group.cells.map((cell) => (

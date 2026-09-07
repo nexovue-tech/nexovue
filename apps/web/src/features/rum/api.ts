@@ -23,8 +23,14 @@ interface WebVitalsResponse {
 export type BreakdownDimension = "page" | "device";
 
 export interface WebVitalGroup {
-  /** The url path, or the device class. Empty when the browser reported none. */
+  /** The page, or the device class. Empty when the browser reported none. */
   key: string;
+  /**
+   * Whether `key` is the customer's own route template rather than a URL a browser
+   * was on. A template is "this page"; a path is "this one URL". Always false for
+   * a device breakdown.
+   */
+  is_route_template: boolean;
   vitals: WebVitalSummary[];
 }
 

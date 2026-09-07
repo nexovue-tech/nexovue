@@ -17,13 +17,18 @@
 -- otherwise from the site's own host — so the column would not divide anything.
 --
 -- `url_path` is a plain String and deliberately not LowCardinality. It is the
--- path the browser was actually on, not a route template: `pagecontext.ts` puts
--- `http.route` only on the page-view span and only when the customer configured
--- one, so a vital record carries no template to group by. A customer with
--- per-id URLs therefore produces unbounded distinct values, and ClickHouse's
--- own guidance is that LowCardinality wins below ~10,000 distinct values and
--- loses above ~100,000. Grouping paths into pages is a normalisation nothing in
--- the system performs yet.
+-- path the browser was actually on, and a customer with per-id URLs produces
+-- unbounded distinct values — ClickHouse's own guidance is that LowCardinality
+-- wins below ~10,000 distinct values and loses above ~100,000.
+--
+-- `route` is that path's page, and is LowCardinality for the reason `url_path`
+-- is not: it is the customer's own route template — `/products/{id}` — carried
+-- from the SDK's `route` option by `pagecontext.ts`, so it is bounded by how
+-- many routes their app has, which is tens or hundreds. It is never derived: a
+-- template is the customer's knowledge, and a guess at one from a path would be
+-- invisible and permanent. Empty when they configured none, and the read falls
+-- back to `url_path` there — a customer who sets nothing still gets a
+-- breakdown, just a noisier one.
 --
 -- `device_class` is written from `browser.mobile`, which the SDK puts on the
 -- RESOURCE and not on the record — `internal/pipeline/vitals` reads it there,
@@ -70,6 +75,8 @@ CREATE TABLE IF NOT EXISTS web_vitals
     `rating` LowCardinality(String) CODEC(ZSTD(1)),
     `navigation_type` LowCardinality(String) CODEC(ZSTD(1)),
     `url_path` String CODEC(ZSTD(1)),
+    -- The customer's own route template, or empty. Read from `http.route`.
+    `route` LowCardinality(String) CODEC(ZSTD(1)),
     `device_class` LowCardinality(String) CODEC(ZSTD(1)),
     `country` LowCardinality(String) CODEC(ZSTD(1)),
     -- Everything else the record carried, including browser.* and the vital id.

@@ -52,16 +52,26 @@ ORDER BY vital_name
 # `country` is deliberately not a dimension. The column exists in the rollup but
 # nothing writes it — there is no GeoIP in the system — so a geo breakdown today
 # would be a single group named "".
+#
+# A page is `route` where the customer configured one and `url_path` where they
+# did not, and the choice is made in SQL because that is where the rows are:
+# `/products/1` and `/products/2` have to become one distribution, and merging
+# two quantile states is something only the store can do. `is_route_template`
+# comes back beside the key because the two mean different things to a reader —
+# a template is "this page", a path is "this URL" — and `route != ''` already
+# says which without a column of its own.
 
 PAGE_BREAKDOWN_SQL: Final = f"""
 SELECT
     group_key,
+    max(is_route_template) AS is_route_template,
     groupArray(vital_name) AS vital_names,
     groupArray(readings) AS vital_readings,
     groupArray(quantiles) AS vital_quantiles
 FROM (
     SELECT
-        url_path AS group_key,
+        if(route != '', route, url_path) AS group_key,
+        max(route != '') AS is_route_template,
         vital_name,
         sum(reading_count) AS readings,
         quantilesMerge({_QUANTILE_ARGUMENTS})(value_quantiles) AS quantiles
@@ -77,15 +87,19 @@ ORDER BY sum(readings) DESC, group_key
 LIMIT {{group_limit:UInt32}}
 """
 
+# The flag is a constant here rather than absent, so one reader handles both
+# statements: a device class is a device class, never a route template.
 DEVICE_BREAKDOWN_SQL: Final = f"""
 SELECT
     group_key,
+    max(is_route_template) AS is_route_template,
     groupArray(vital_name) AS vital_names,
     groupArray(readings) AS vital_readings,
     groupArray(quantiles) AS vital_quantiles
 FROM (
     SELECT
         device_class AS group_key,
+        false AS is_route_template,
         vital_name,
         sum(reading_count) AS readings,
         quantilesMerge({_QUANTILE_ARGUMENTS})(value_quantiles) AS quantiles

@@ -43,6 +43,9 @@ const (
 
 	attrSessionID = "session.id"
 	attrURLPath   = "url.path"
+	// A RECORD attribute, unlike browser.mobile below: `pagecontext.ts` puts it
+	// on every vital and error record, not only on the page-view span.
+	attrHTTPRoute = "http.route"
 )
 
 // AttrMobile is a RESOURCE attribute, not a record one. `resource.ts` puts the
@@ -90,7 +93,11 @@ type Reading struct {
 	Rating         string
 	NavigationType string
 
-	URLPath     string
+	URLPath string
+	// Route is the customer's own route template — `/products/{id}` — and is
+	// what a page breakdown groups by. Empty when they configured none, and
+	// never derived from the path: a wrong template would be invisible.
+	Route       string
 	DeviceClass string
 	// Country has no producer: there is no GeoIP anywhere in this system, so
 	// nothing resolves the client address. The column exists so that filling it
@@ -143,6 +150,7 @@ func ReadingFrom(record *logspb.LogRecord, marks Marks) (Reading, bool) {
 		Rating:               otlpvalue.StringOrEmpty(attributes, attrVitalRating),
 		NavigationType:       otlpvalue.StringOrEmpty(attributes, attrNavigationType),
 		URLPath:              otlpvalue.StringOrEmpty(attributes, attrURLPath),
+		Route:                otlpvalue.StringOrEmpty(attributes, attrHTTPRoute),
 		DeviceClass:          marks.DeviceClass,
 		Attrs:                otlpvalue.AttributesJSON(attributes),
 	}, true

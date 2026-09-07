@@ -20,19 +20,22 @@ const SESSION_ID = "0089dddd0089dddd0089dddd0089dddd";
  * has a query string and a fragment, and ADR 0103 says neither reaches a record
  * unless the page asked. `TRIMMED_URL` is what url.full must be instead.
  */
-function config(captureQueryAndFragment = false): ResolvedConfig {
+function config(captureQueryAndFragment = false, route?: string): ResolvedConfig {
   return {
     siteKey: "nvp_live_dZjiAYryiKTJ45KgB1EFUH",
     endpoint: "https://ingest.test",
     serviceName: "acme-storefront",
     serviceVersion: undefined,
-    route: undefined,
+    route,
     captureQueryAndFragment,
     sessionIdleTimeoutMs: 1800000,
     sessionMaxDurationMs: 14400000,
     flushIntervalMs: 10000,
   };
 }
+
+/** The template a customer configures, and the URL a browser is actually on. */
+const ROUTE = "/cart/checkout/{orderId}";
 
 const TRIMMED_URL = "http://localhost:3000/checkout";
 
@@ -109,6 +112,61 @@ describe("a web vital", () => {
   it("never serialises metric.entries", () => {
     const withEntries = { ...lcp(), entries: [{ name: "huge" } as PerformanceEntry] };
     expect(JSON.stringify(webVitalRecord(withEntries, SESSION_ID, config()))).not.toContain("huge");
+  });
+});
+
+/**
+ * The breakdown groups by `http.route` and falls back to `url.path`, so a vital
+ * that reaches the store without the template lands under the raw URL. Our own
+ * dev store held `/cart/checkout/978ac453-…`: one breakdown group per order.
+ */
+describe("the route template", () => {
+  it("is on a vital record when the customer configured one", () => {
+    const record = webVitalRecord(lcp(), SESSION_ID, config(false, ROUTE));
+    expect(record.attributes).toContainEqual({
+      key: "http.route",
+      value: { stringValue: ROUTE },
+    });
+    // The raw path travels beside it; the store needs both to tell them apart.
+    expect(record.attributes).toContainEqual({
+      key: "url.path",
+      value: { stringValue: "/checkout" },
+    });
+  });
+
+  it("is on an error record too, from the same page context", () => {
+    const record = errorRecord(
+      {
+        type: "TypeError",
+        message: "t is not a function",
+        stacktrace: "TypeError: t is not a function",
+        filePath: undefined,
+        line: undefined,
+        column: undefined,
+      },
+      SESSION_ID,
+      config(false, ROUTE),
+    );
+    expect(record.attributes).toContainEqual({
+      key: "http.route",
+      value: { stringValue: ROUTE },
+    });
+  });
+
+  it("is absent rather than empty when the customer configured none", () => {
+    const keys = webVitalRecord(lcp(), SESSION_ID, config()).attributes.map((entry) => entry.key);
+    expect(keys).not.toContain("http.route");
+  });
+
+  it("is never derived from a path that looks like it has an id in it", () => {
+    window.history.replaceState({}, "", "/cart/checkout/978ac453-aa9f-11f1-91c3-1e31e47ab720");
+    const record = webVitalRecord(lcp(), SESSION_ID, config());
+    const keys = record.attributes.map((entry) => entry.key);
+    expect(keys).not.toContain("http.route");
+    expect(record.attributes).toContainEqual({
+      key: "url.path",
+      value: { stringValue: "/cart/checkout/978ac453-aa9f-11f1-91c3-1e31e47ab720" },
+    });
   });
 });
 

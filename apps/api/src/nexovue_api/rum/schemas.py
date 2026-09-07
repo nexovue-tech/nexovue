@@ -41,9 +41,16 @@ class BreakdownDimension(StrEnum):
 class WebVitalGroup(BaseModel):
     """One page or one device class, with the vitals measured inside it."""
 
-    # The `url_path` or the `device_class` these readings share. Empty when the
-    # browser reported none; that is a real group, not a missing one.
+    # The page or the `device_class` these readings share. A page is the
+    # customer's own `http.route` template where they configured one and the raw
+    # `url_path` where they did not. Empty when the browser reported neither;
+    # that is a real group, not a missing one.
     key: str
+    # Whether `key` is a route template rather than a URL the browser was on.
+    # The two mean different things to a reader — "this page" against "this one
+    # URL" — and only the customer's own template can say which. Always false
+    # for a device breakdown.
+    is_route_template: bool = False
     # Same shape as the unsplit summary, so one reader handles both. Each
     # carries its own `readings`, which is what decides whether its p75 means
     # anything — a split makes every count smaller than the screen's headline.
@@ -55,6 +62,6 @@ class WebVitalBreakdownResponse(BaseModel):
     # Busiest first, so a limit cuts the long tail rather than the answer.
     groups: list[WebVitalGroup] = Field(default_factory=list)
     # More groups exist than were returned. Reported rather than silently cut:
-    # `url_path` is stored exactly as the browser sent it, ids and all, so a
-    # site with an id in its paths has one group per order.
+    # a page with no `http.route` is grouped by the raw path, ids and all, so a
+    # site that configures no route templates has one group per order.
     truncated: bool = False

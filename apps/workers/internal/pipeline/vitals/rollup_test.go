@@ -50,16 +50,42 @@ func TestEachDimensionOfTheSortKeySplitsTheBucket(t *testing.T) {
 	byVital.VitalName = "inp"
 	byPath := base
 	byPath.URLPath = "/cart"
+	byRoute := base
+	byRoute.Route = "/cart/{id}"
 	byDevice := base
 	byDevice.DeviceClass = DeviceClassDesktop
 	byCountry := base
 	byCountry.Country = "IN"
 
-	for _, reading := range []Reading{base, byVital, byPath, byDevice, byCountry} {
+	for _, reading := range []Reading{base, byVital, byPath, byRoute, byDevice, byCountry} {
 		rollup.Add(reading)
 	}
-	if rows := rollup.Rows(); len(rows) != 5 {
-		t.Fatalf("rows = %d, want 5: every dimension in the key splits the bucket", len(rows))
+	if rows := rollup.Rows(); len(rows) != 6 {
+		t.Fatalf("rows = %d, want 6: every dimension in the key splits the bucket", len(rows))
+	}
+}
+
+// Two order ids under one template are two rollup rows — `url_path` is still in
+// the key — and the store merges their quantile states at read time. What the
+// rollup must not do is lose the template, which is the only thing that lets
+// the read collapse them.
+func TestTheRouteTravelsOntoEveryRowItGrouped(t *testing.T) {
+	const template = "/cart/checkout/{orderId}"
+	rollup := NewRollup()
+	for _, id := range []string{"978ac453", "aa9f11f1"} {
+		reading := readingAt(1, "lcp", "/cart/checkout/"+id, id, 1000)
+		reading.Route = template
+		rollup.Add(reading)
+	}
+
+	rows := rollup.Rows()
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2: url_path is still a dimension of the key", len(rows))
+	}
+	for _, row := range rows {
+		if row.Route != template {
+			t.Errorf("route = %q on the row for %q, want %q", row.Route, row.URLPath, template)
+		}
 	}
 }
 

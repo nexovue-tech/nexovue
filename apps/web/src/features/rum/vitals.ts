@@ -174,6 +174,9 @@ export const UNMEASURED = "—";
 /** What an empty `key` is called: the browser sent no path or no device class. */
 export const UNLABELLED_GROUP = "not reported";
 
+/** Marks a row whose key is a route template rather than one URL. */
+export const ROUTE_TEMPLATE_TAG = "route";
+
 /** How many readings a cell rests on, in the words the cards already use. */
 export function describeReadings(readings: number): string {
   if (readings === 0) return "not reported on this row";
@@ -190,8 +193,10 @@ export interface BreakdownCell extends ReadableVital {
 
 export interface ReadableGroup {
   key: string;
-  /** The path or device class as a person reads it. */
+  /** The page or device class as a person reads it. */
   label: string;
+  /** True when `label` is a route template, which is a page rather than one URL. */
+  isRouteTemplate: boolean;
   cells: BreakdownCell[];
 }
 
@@ -208,6 +213,7 @@ export function readableGroup(group: WebVitalGroup): ReadableGroup {
   return {
     key: group.key,
     label: group.key === "" ? UNLABELLED_GROUP : group.key,
+    isRouteTemplate: group.is_route_template,
     cells: readableVitals(group.vitals).map((vital) => ({
       ...vital,
       display: vital.rating === "insufficient" ? UNMEASURED : vital.display,

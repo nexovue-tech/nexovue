@@ -15,6 +15,7 @@ type Stat struct {
 	ProjectID            string
 	DerivedRetentionDays uint16
 	VitalName            string
+	Route                string
 	URLPath              string
 	DeviceClass          string
 	Country              string
@@ -33,6 +34,7 @@ type statKey struct {
 	tenantID    string
 	projectID   string
 	vitalName   string
+	route       string
 	urlPath     string
 	deviceClass string
 	country     string
@@ -74,6 +76,7 @@ func (r *Rollup) Add(reading Reading) {
 		tenantID:             reading.TenantID,
 		projectID:            reading.ProjectID,
 		vitalName:            reading.VitalName,
+		route:                reading.Route,
 		urlPath:              reading.URLPath,
 		deviceClass:          reading.DeviceClass,
 		country:              reading.Country,
@@ -104,6 +107,7 @@ func (r *Rollup) Rows() []Stat {
 			ProjectID:            key.projectID,
 			DerivedRetentionDays: key.derivedRetentionDays,
 			VitalName:            key.vitalName,
+			Route:                key.route,
 			URLPath:              key.urlPath,
 			DeviceClass:          key.deviceClass,
 			Country:              key.country,
@@ -130,6 +134,8 @@ func (s Stat) less(other Stat) bool {
 		return s.ProjectID < other.ProjectID
 	case s.VitalName != other.VitalName:
 		return s.VitalName < other.VitalName
+	case s.Route != other.Route:
+		return s.Route < other.Route
 	case s.URLPath != other.URLPath:
 		return s.URLPath < other.URLPath
 	case s.DeviceClass != other.DeviceClass:

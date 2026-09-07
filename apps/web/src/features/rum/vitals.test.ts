@@ -94,7 +94,11 @@ describe("the five cards", () => {
 
 describe("a breakdown row", () => {
   it("keeps the same fixed column order as the cards", () => {
-    const group = readableGroup({ key: "/", vitals: [summary(LCP, 2000)] });
+    const group = readableGroup({
+      key: "/",
+      is_route_template: false,
+      vitals: [summary(LCP, 2000)],
+    });
     expect(group.cells.map((cell) => cell.name)).toEqual(["lcp", "inp", "cls", "fcp", "ttfb"]);
   });
 
@@ -103,6 +107,7 @@ describe("a breakdown row", () => {
     // has three readings, and its p75 is one visitor's morning.
     const group = readableGroup({
       key: "/rare",
+      is_route_template: false,
       vitals: [summary(LCP, 120, MIN_READINGS - 1)],
     });
     const lcp = group.cells.find((cell) => cell.name === LCP);
@@ -111,7 +116,11 @@ describe("a breakdown row", () => {
   });
 
   it("shows the value once the split still leaves enough behind it", () => {
-    const group = readableGroup({ key: "/busy", vitals: [summary(LCP, 2412, MIN_READINGS)] });
+    const group = readableGroup({
+      key: "/busy",
+      is_route_template: false,
+      vitals: [summary(LCP, 2412, MIN_READINGS)],
+    });
     const lcp = group.cells.find((cell) => cell.name === LCP);
     expect(lcp?.display).toBe("2.41 s");
     expect(lcp?.rating).toBe("good");
@@ -123,10 +132,33 @@ describe("a breakdown row", () => {
     expect(describeReadings(MIN_READINGS)).toBe(`${MIN_READINGS} readings`);
   });
 
+  it("carries whether its key is a route template or one URL", () => {
+    // They mean different things to the person reading: a template is "this
+    // page", a path is "this URL". The screen has to be able to say which.
+    const routed = readableGroup({
+      key: "/cart/checkout/{orderId}",
+      is_route_template: true,
+      vitals: [],
+    });
+    const raw = readableGroup({
+      key: "/cart/checkout/978ac453-aa9f-11f1-91c3-1e31e47ab720",
+      is_route_template: false,
+      vitals: [],
+    });
+    expect(routed.isRouteTemplate).toBe(true);
+    expect(raw.isRouteTemplate).toBe(false);
+    // The label is the key either way; nothing is rewritten for display.
+    expect(routed.label).toBe("/cart/checkout/{orderId}");
+  });
+
   it("names an empty key rather than rendering a blank row", () => {
     // A device class the browser never sent is a real group, not a missing one.
-    expect(readableGroup({ key: "", vitals: [] }).label).toBe(UNLABELLED_GROUP);
-    expect(readableGroup({ key: "mobile", vitals: [] }).label).toBe("mobile");
+    expect(readableGroup({ key: "", is_route_template: false, vitals: [] }).label).toBe(
+      UNLABELLED_GROUP,
+    );
+    expect(readableGroup({ key: "mobile", is_route_template: false, vitals: [] }).label).toBe(
+      "mobile",
+    );
   });
 });
 

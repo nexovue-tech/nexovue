@@ -41,6 +41,23 @@ door and nothing else, and the refusal says so in its own words rather than
 borrowing the allowance's: a suspended customer told their month ran out would
 wait for the 1st, and the 1st does not reopen this.
 
+`ingest_suspended_reason` records **why**, and it is not optional decoration.
+The first message after a suspension is the customer asking why their data
+stopped, and the answer has to survive the person who closed the valve being
+asleep. It is NULL exactly when the valve is open — a reason without a
+suspension is a note nobody will read again, and a suspension without a reason
+is a support conversation that starts from nothing. Free text rather than an
+enum: the reasons an operator closes a valve at 3am are not a list anybody can
+write in advance, and an enum with an `other` member is free text wearing a
+constraint. **The receiver never reads it** — it is written by whoever closes
+the valve and read by a person.
+
+**Not audit, and deliberately not pretending to be.** There is no audit table in
+this system, so this column records the reason and not the actor. Naming who
+closed a valve needs an identity for operators, which Phase 1's single-operator
+scoping (§9) does not have. When that arrives, this column is superseded by a
+row in a real audit table rather than extended with a `suspended_by` beside it.
+
 No index. The only reader looks the row up by primary key.
 
 Revision ID: 0018
@@ -76,7 +93,30 @@ def upgrade() -> None:
             ),
         ),
     )
+    op.add_column(
+        "organizations",
+        sa.Column(
+            "ingest_suspended_reason",
+            sa.Text(),
+            nullable=True,
+            comment=(
+                "Why the valve was closed, in an operator's own words. NULL exactly "
+                "when ingest_suspended_at is NULL. Read by a person answering the "
+                "customer, never by the receiver."
+            ),
+        ),
+    )
+    # The two columns describe one fact, so a state where only one is set is not
+    # a state anybody meant. Enforced here rather than in a service, because the
+    # valve is closed by hand and there is no service in that path.
+    op.create_check_constraint(
+        "suspension_carries_its_reason",
+        "organizations",
+        "(ingest_suspended_at IS NULL) = (ingest_suspended_reason IS NULL)",
+    )
 
 
 def downgrade() -> None:
+    op.drop_constraint("ck_organizations_suspension_carries_its_reason", "organizations")
+    op.drop_column("organizations", "ingest_suspended_reason")
     op.drop_column("organizations", "ingest_suspended_at")

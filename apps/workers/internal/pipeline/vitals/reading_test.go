@@ -95,6 +95,42 @@ func TestReadingPromotesEveryColumnTheSDKSends(t *testing.T) {
 	}
 }
 
+// The breakdown groups by `route` and falls back to `url_path`, so a template
+// dropped here means a group per order id for the customer who configured one.
+// Unlike browser.mobile it is a RECORD attribute — `pagecontext.ts` puts it on
+// every vital and error record — so it is read from the record's own list.
+func TestTheRouteTemplateIsReadFromTheRecordsOwnAttributes(t *testing.T) {
+	const template = "/cart/checkout/{orderId}"
+	record := vitalRecord()
+	record.Attributes = append(record.Attributes, stringAttr(attrHTTPRoute, template))
+
+	reading, isVital := ReadingFrom(record, testMarks())
+	if !isVital {
+		t.Fatal("a record carrying the SDK's own event name was not read as a vital")
+	}
+	if reading.Route != template {
+		t.Errorf("route = %q, want %q", reading.Route, template)
+	}
+	// Both are stored: the path is what the fallback groups by, and it is also
+	// how a reader tells "this page" from "this one URL".
+	if reading.URLPath != "/checkout" {
+		t.Errorf("url_path = %q, want /checkout beside the route", reading.URLPath)
+	}
+}
+
+// A customer who configured no route must still get a breakdown, grouped by the
+// path — and the column must be empty rather than a template guessed from it.
+func TestAReadingWithoutARouteCarriesAnEmptyOneRatherThanAGuess(t *testing.T) {
+	record := vitalRecord()
+	record.Attributes = append(record.Attributes,
+		stringAttr(attrURLPath, "/cart/checkout/978ac453-aa9f-11f1-91c3-1e31e47ab720"))
+
+	reading, _ := ReadingFrom(record, testMarks())
+	if reading.Route != "" {
+		t.Errorf("route = %q, want empty: a template is never derived from a path", reading.Route)
+	}
+}
+
 func TestRecordsThatAreNotReadingsAreRefused(t *testing.T) {
 	withoutName := vitalRecord()
 	withoutName.Attributes = withoutName.Attributes[1:]

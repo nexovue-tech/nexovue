@@ -16,7 +16,7 @@ const (
 // onto the wrong ones.
 const readingColumns = "(timestamp, received_at, retention_days, tenant_id, project_id, " +
 	"session_id, vital_name, value, delta, rating, navigation_type, url_path, " +
-	"device_class, country, attrs)"
+	"route, device_class, country, attrs)"
 
 const readingInsert = "INSERT INTO " + readingsTable + " " + readingColumns + " VALUES"
 
@@ -37,6 +37,7 @@ type readingBlock struct {
 	rating         *proto.ColLowCardinality[string]
 	navigationType *proto.ColLowCardinality[string]
 	urlPath        proto.ColStr
+	route          *proto.ColLowCardinality[string]
 	deviceClass    *proto.ColLowCardinality[string]
 	country        *proto.ColLowCardinality[string]
 	attrs          proto.ColJSONStr
@@ -51,6 +52,7 @@ func newReadingBlock() *readingBlock {
 		vitalName:      new(proto.ColStr).LowCardinality(),
 		rating:         new(proto.ColStr).LowCardinality(),
 		navigationType: new(proto.ColStr).LowCardinality(),
+		route:          new(proto.ColStr).LowCardinality(),
 		deviceClass:    new(proto.ColStr).LowCardinality(),
 		country:        new(proto.ColStr).LowCardinality(),
 	}
@@ -72,6 +74,7 @@ func newReadingBlock() *readingBlock {
 		{Name: "rating", Data: block.rating},
 		{Name: "navigation_type", Data: block.navigationType},
 		{Name: "url_path", Data: &block.urlPath},
+		{Name: "route", Data: block.route},
 		{Name: "device_class", Data: block.deviceClass},
 		{Name: "country", Data: block.country},
 		{Name: "attrs", Data: &block.attrs},
@@ -92,6 +95,7 @@ func (b *readingBlock) append(reading Reading) {
 	b.rating.Append(reading.Rating)
 	b.navigationType.Append(reading.NavigationType)
 	b.urlPath.Append(reading.URLPath)
+	b.route.Append(reading.Route)
 	b.deviceClass.Append(reading.DeviceClass)
 	b.country.Append(reading.Country)
 	b.attrs.Append(reading.Attrs)
@@ -105,11 +109,11 @@ func (b *readingBlock) reset() { b.columns.Reset() }
 // readings travel as an array and the server folds them into the state on the
 // way in.
 const rollupInput = "tenant_id String, derived_retention_days UInt16, project_id String, " +
-	"vital_name String, url_path String, device_class String, country String, " +
+	"vital_name String, route String, url_path String, device_class String, country String, " +
 	"minute DateTime, reading_count UInt64, values Array(Float64)"
 
 const rollupColumns = "(tenant_id, derived_retention_days, project_id, vital_name, " +
-	"url_path, device_class, country, minute, reading_count, value_quantiles)"
+	"route, url_path, device_class, country, minute, reading_count, value_quantiles)"
 
 // rollupInsert folds each row's readings into the quantile state the table
 // stores. arrayReduce applies the aggregate within one row, so the insert needs
@@ -124,7 +128,7 @@ const rollupColumns = "(tenant_id, derived_retention_days, project_id, vital_nam
 // A plain `INSERT ... VALUES` implies it; an INSERT that reads from `input()`
 // does not, and ClickHouse rejects the statement without it.
 const rollupInsert = "INSERT INTO " + rollupTable + " " + rollupColumns +
-	" SELECT tenant_id, derived_retention_days, project_id, vital_name, url_path, " +
+	" SELECT tenant_id, derived_retention_days, project_id, vital_name, route, url_path, " +
 	"device_class, country, minute, reading_count, " +
 	"arrayReduce('quantilesState(0.5, 0.75, 0.95)', values) " +
 	"FROM input('" + rollupInput + "') FORMAT Native"
@@ -135,6 +139,7 @@ type rollupBlock struct {
 	retentionDays proto.ColUInt16
 	projectID     proto.ColStr
 	vitalName     proto.ColStr
+	route         proto.ColStr
 	urlPath       proto.ColStr
 	deviceClass   proto.ColStr
 	country       proto.ColStr
@@ -152,6 +157,7 @@ func newRollupBlock() *rollupBlock {
 		{Name: "derived_retention_days", Data: &block.retentionDays},
 		{Name: "project_id", Data: &block.projectID},
 		{Name: "vital_name", Data: &block.vitalName},
+		{Name: "route", Data: &block.route},
 		{Name: "url_path", Data: &block.urlPath},
 		{Name: "device_class", Data: &block.deviceClass},
 		{Name: "country", Data: &block.country},
@@ -167,6 +173,7 @@ func (b *rollupBlock) append(stat Stat) {
 	b.retentionDays.Append(stat.DerivedRetentionDays)
 	b.projectID.Append(stat.ProjectID)
 	b.vitalName.Append(stat.VitalName)
+	b.route.Append(stat.Route)
 	b.urlPath.Append(stat.URLPath)
 	b.deviceClass.Append(stat.DeviceClass)
 	b.country.Append(stat.Country)

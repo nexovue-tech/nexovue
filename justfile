@@ -216,6 +216,24 @@ migrate-down-ch:
 seed:
     POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api python -m nexovue_api.seed
 
+# The ingest stop valve (P1-52). Three recipes rather than one variadic one:
+# `just` re-splits *ARGS on whitespace, so a quoted reason arrives as several
+# arguments — found by running it. Named parameters are quoted individually.
+# A terminal rather than a screen on purpose: naming *who* closed a valve needs
+# an operator identity Phase 1 does not have. See migration 0018.
+
+# List every organization whose ingest is currently suspended
+suspend-show:
+    POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api python -m nexovue_api.suspend show
+
+# Stop one organization's ingest at the receiver. The reason is required.
+suspend-close slug reason:
+    POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api python -m nexovue_api.suspend close "{{slug}}" --reason "{{reason}}"
+
+# Resume one organization's ingest. Data refused while it was closed is gone.
+suspend-open slug:
+    POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api python -m nexovue_api.suspend open "{{slug}}"
+
 # ---------- backup ----------
 
 # Snapshots land here. Outside every Docker volume on purpose: `just down-hard`

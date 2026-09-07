@@ -7,6 +7,16 @@
   door and the server door, and each door is judged against its own share. Everything else in 0093
   — the month, the bytes, the uncapped tiers, `RESOURCE_EXHAUSTED` with no `RetryInfo`, the gate's
   position — stands.
+- **Evidence corrected 2026-09-07 (T2-5).** The verification section reports *"1,184 passed, 138
+  live tests deselected"* from `-k "not live"`. **That command was never the right one**: `-k` is a
+  substring match, so it also deselects nineteen offline tests whose names merely contain the
+  letters `live` — `test_minting_leaves_existing_keys_live`, seven `liveness` parameters in
+  `test_postgres_tenancy_structure.py`, and others. The designed switch is
+  `NEXOVUE_SKIP_LIVE_TESTS=1`, defined in `tests/helpers/live.py`, and the honest command-line arm is
+  `--ignore-glob='*_live.py'`, which matches the `*_live.py` naming convention. **The figures
+  themselves are UNREPRODUCED, not replaced**: the suite has grown by roughly 380 tests since, and
+  re-deriving them needs a checkout of that commit. No number is invented here. The body below is
+  left as written, per this directory's README.
 - **Corrects in part:** [0087](0087-the-origin-is-what-ties-a-public-key-to-its-owner.md) — its
   paragraph *"What a scraped key costs its owner, in the worst case"* costs a scraped site key at
   the per-key rate ceiling, recovering in about a second. That was true the day it was written.

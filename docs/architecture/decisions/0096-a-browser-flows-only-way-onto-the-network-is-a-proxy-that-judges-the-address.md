@@ -4,6 +4,14 @@
 - **Date:** 2026-09-04
 - **Closes:** the first of the three findings P1-53's security pass left outstanding — *"browser
   synthetic checks have no SSRF boundary at all"*.
+- **Evidence corrected 2026-09-07 (T2-7).** §2a says *"`ipaddress` does not report an IPv4-mapped
+  address as loopback — it is `is_global` that refuses it"*. **The first clause is false.** On this
+  repository's own interpreter, `.venv/bin/python -c "import ipaddress;
+  a=ipaddress.ip_address('::ffff:127.0.0.1'); print(a.is_loopback, a.is_global)"` on Python 3.13.15
+  prints `True False`. **The rule stands and there is no hole** — `is_publicly_routable` requires
+  `is_global` *and* none of the named flags, so the address is refused twice over. What was wrong is
+  the stated reason for the second half of that test, not the test. The body below is left as
+  written, per this directory's README.
 
 ## Context
 

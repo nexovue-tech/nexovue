@@ -123,6 +123,11 @@ class Organization(Base):
     # reads it on the same row as the allowance, so closing it costs the ingest
     # path no extra query and takes effect within RECEIVER_ALLOWANCE_CACHE_TTL.
     ingest_suspended_at: Mapped[OptionalTimestamp]
+    # Why, in the operator's own words, for the person answering the customer
+    # who asks. NULL exactly when the valve is open, enforced by a CHECK in 0018:
+    # a suspension without a reason is a support conversation starting from
+    # nothing. The receiver never reads it.
+    ingest_suspended_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class User(Base):

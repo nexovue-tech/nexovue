@@ -147,6 +147,97 @@ func TestARepeatedInsertIsRecognised(t *testing.T) {
 		1, "raw rows after the same insert twice")
 }
 
+// TestTheRouteLandsInItsColumnAndGroupsThePages sends a customer with both kinds
+// of page through the real writer: three order URLs under one route template,
+// and one page that configured none. It then reads them back the way the API's
+// page breakdown does — `if(route != ”, route, url_path)`.
+//
+// This is the whole change end to end. A unit test can prove the attribute is
+// read; only the server can prove the column exists, that the rollup's new sort
+// key accepts the row, and that three quantile states written under three
+// different `url_path` values merge into one page's distribution.
+func TestTheRouteLandsInItsColumnAndGroupsThePages(t *testing.T) {
+	ctx := context.Background()
+	pool, err := chpool.Dial(ctx, chpool.Options{
+		ClientOptions: ch.Options{
+			Address:  os.Getenv("PROBE_CH_ADDR"),
+			Database: "nexovue",
+			User:     "nexovue",
+			Password: "nexovue_dev",
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	t.Cleanup(func() { deleteProbeRows(t, pool) })
+
+	const template = "/cart/checkout/{orderId}"
+	now := time.Now().UTC()
+	rollup := NewRollup()
+	readings := make([]Reading, 0, 4)
+
+	// Three orders under one template. 100, 200, 300 → p75 250.
+	for i, value := range []float64{100, 200, 300} {
+		reading := Reading{
+			Timestamp: now, ReceivedAt: now, RetentionDays: 30, DerivedRetentionDays: 395,
+			TenantID: probeTenant, ProjectID: "probe-project", SessionID: "probe-session",
+			VitalName: "lcp", VitalID: string(rune('p' + i)), Value: value, Delta: value,
+			Rating: "good", NavigationType: "navigate",
+			URLPath: "/cart/checkout/978ac453-aa9f-11f1-91c3-1e31e47ab72" + string(rune('0'+i)),
+			Route:   template, DeviceClass: DeviceClassDesktop, Attrs: "{}",
+		}
+		readings = append(readings, reading)
+		rollup.Add(reading)
+	}
+	// One page the customer configured no template for. It must still appear.
+	unrouted := Reading{
+		Timestamp: now, ReceivedAt: now, RetentionDays: 30, DerivedRetentionDays: 395,
+		TenantID: probeTenant, ProjectID: "probe-project", SessionID: "probe-session",
+		VitalName: "lcp", VitalID: "u", Value: 900, Delta: 900,
+		Rating: "poor", NavigationType: "navigate",
+		URLPath: "/about", DeviceClass: DeviceClassDesktop, Attrs: "{}",
+	}
+	readings = append(readings, unrouted)
+	rollup.Add(unrouted)
+
+	if err := NewWriter(pool).Insert(ctx, readings, rollup.Rows()); err != nil {
+		t.Fatalf("the server refused the writer's blocks: %v", err)
+	}
+
+	// The raw column holds the template the browser sent, not a derived one.
+	assertScalar(t, pool,
+		"SELECT toUInt64(count()) AS v FROM "+readingsTable+" WHERE tenant_id = '"+probeTenant+
+			"' AND route = '"+template+"'",
+		3, "raw readings carrying the route")
+	assertScalar(t, pool,
+		"SELECT toUInt64(count()) AS v FROM "+readingsTable+" WHERE tenant_id = '"+probeTenant+
+			"' AND route = '' AND url_path = '/about'",
+		1, "the unrouted reading, with an empty route rather than a guess")
+
+	// The rollup still holds a row per URL — url_path is in the key — and the
+	// read is what collapses them into one page.
+	assertScalar(t, pool,
+		"SELECT toUInt64(count()) AS v FROM "+rollupTable+" WHERE tenant_id = '"+probeTenant+"'",
+		4, "rollup rows before the read groups them")
+	assertScalar(t, pool,
+		"SELECT toUInt64(uniqExact(if(route != '', route, url_path))) AS v FROM "+rollupTable+
+			" WHERE tenant_id = '"+probeTenant+"'",
+		2, "pages the breakdown groups those rows into")
+
+	// The three orders' quantile states merge, which is the point: 250 is the
+	// p75 of 100, 200 and 300 together, not of any one row.
+	assertScalar(t, pool,
+		"SELECT toUInt64(quantilesMerge(0.5, 0.75, 0.95)(value_quantiles)[2]) AS v FROM "+
+			rollupTable+" WHERE tenant_id = '"+probeTenant+"' AND route = '"+template+"'",
+		250, "p75 across the three orders under one template")
+	// The unrouted page keeps its own distribution rather than joining theirs.
+	assertScalar(t, pool,
+		"SELECT toUInt64(quantilesMerge(0.5, 0.75, 0.95)(value_quantiles)[2]) AS v FROM "+
+			rollupTable+" WHERE tenant_id = '"+probeTenant+"' AND route = '' AND url_path = '/about'",
+		900, "p75 of the page with no route template")
+}
+
 func assertScalar(t *testing.T, pool *chpool.Pool, query string, want uint64, what string) {
 	t.Helper()
 	var got proto.ColUInt64
