@@ -24,6 +24,18 @@ Environment = Literal["development", "staging", "production"]
 LogLevel = Literal["debug", "info", "warn", "error"]
 LogFormat = Literal["json", "console"]
 
+# Which implementation of a port is used. The vendor's name is the *value* here,
+# never the key — `EMAIL_API_KEY` stays neutral so it survives the switch, while
+# `EMAIL_PROVIDER` is the thing meant to change. A Literal rather than a free
+# string so an unknown value fails when settings are read, at start-up, rather
+# than at the first send in front of somebody waiting for a password reset.
+#
+# ADR 0102 expects payments to end up as two of these — a domestic gateway and a
+# merchant of record, because a non-EU seller owes EU VAT from the first euro —
+# which is why the payment one is named for the role it fills.
+EmailProvider = Literal["resend"]
+DomesticPaymentProvider = Literal["cashfree"]
+
 # ClickHouse speaks two protocols on two ports. Every service names the store
 # with the same variable and the same scheme; only the port differs, because the
 # API talks HTTP and the Go workers talk the native protocol.
@@ -76,6 +88,7 @@ class EmailSettings:
     key's own prefix already identifies which one it is.
     """
 
+    provider: EmailProvider
     api_key: str
     # The domain whose SPF, DKIM and DMARC were verified. `from_address` must be
     # at it; a provider refuses anything else, which is the point of both fields
@@ -90,6 +103,7 @@ class EmailSettings:
 # The environment variables an unconfigured email sender tells the caller to
 # set. Spelled once so the message and the fields cannot drift apart.
 EMAIL_VARIABLES: Final = (
+    "EMAIL_PROVIDER",
     "EMAIL_API_KEY",
     "EMAIL_SENDING_DOMAIN",
     "EMAIL_FROM_ADDRESS",
@@ -161,7 +175,8 @@ class Settings(BaseSettings):
     # either way, so the default is the region AWS itself treats as canonical.
     s3_region: str = "us-east-1"
 
-    # --- email: all four or none, see EmailSettings -------------------------
+    # --- email: all of these or none, see EmailSettings ---------------------
+    email_provider: EmailProvider = "resend"
     email_api_key: str = ""
     email_sending_domain: str = ""
     email_from_address: str = ""
@@ -184,6 +199,7 @@ class Settings(BaseSettings):
         if not all(parts):
             return None
         return EmailSettings(
+            provider=self.email_provider,
             api_key=self.email_api_key,
             sending_domain=self.email_sending_domain,
             from_address=self.email_from_address,

@@ -13,16 +13,20 @@ from __future__ import annotations
 
 import inspect
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
+import nexovue_api
+from nexovue_api.notifications import EmailNotConfiguredError, build_email_sender
 from nexovue_api.notifications.resend import SEND_ENDPOINT, ResendEmailSender
 from nexovue_api.notifications.sender import EmailError, EmailSender, Message
-from nexovue_api.settings import EmailSettings
+from nexovue_api.settings import EMAIL_VARIABLES, EmailSettings
 
 SETTINGS = EmailSettings(
+    provider="resend",
     api_key="re_test_key",
     sending_domain="mail.nexovue.com",
     from_address="noreply@mail.nexovue.com",
@@ -149,3 +153,48 @@ def test_the_implementation_matches_the_port_signature() -> None:
             f"{expected.kind} on the port — a keyword-only argument that became positional is "
             f"a call site that breaks without the type checker noticing."
         )
+
+
+# ---------------------------------------------------------- the composition root
+
+
+def test_the_provider_is_chosen_from_configuration_and_not_by_a_caller() -> None:
+    """The third part of the pattern: a port and an adapter alone still leave a
+    caller naming a vendor at construction.
+
+    Switching provider is a change to `EMAIL_PROVIDER` and nothing else, which
+    is only true while this is the single place that reads it.
+    """
+    sender = build_email_sender(SETTINGS)
+    assert isinstance(sender, ResendEmailSender)
+
+
+def test_nothing_outside_the_composition_root_imports_a_provider() -> None:
+    """One file may name a vendor's module; the rest ask for the port.
+
+    Without this the pattern erodes quietly — a second `from ... import
+    ResendEmailSender` compiles, passes, and makes the next switch a search
+    through the tree rather than one edit.
+    """
+    api_source = Path(nexovue_api.__file__).parent
+    allowed = {"notifications/__init__.py", "notifications/resend.py"}
+
+    offenders = [
+        str(module.relative_to(api_source))
+        for module in api_source.rglob("*.py")
+        if str(module.relative_to(api_source)) not in allowed
+        and "ResendEmailSender" in module.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        f"{offenders} name a provider directly. Ask `build_email_sender` for an `EmailSender` "
+        f"instead; only the composition root chooses."
+    )
+
+
+def test_unconfigured_email_names_the_variables_that_are_missing() -> None:
+    """A caller staring at "could not send" cannot guess which of four is unset."""
+    with pytest.raises(EmailNotConfiguredError) as refusal:
+        raise EmailNotConfiguredError(EMAIL_VARIABLES)
+
+    for variable in EMAIL_VARIABLES:
+        assert variable in str(refusal.value)
