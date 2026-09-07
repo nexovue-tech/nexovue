@@ -247,12 +247,30 @@ def test_nothing_outside_the_chokepoint_and_its_wiring_holds_the_raw_driver() ->
     assert not offenders, f"the raw ClickHouse client escaped the chokepoint: {offenders}"
 
 
+def _names_clickhouse(node: ast.AST) -> bool:
+    """Whether an attribute's qualifier is the ClickHouse client rather than
+    some other library that happens to share a class name."""
+    if isinstance(node, ast.Name):
+        return "clickhouse" in node.id.lower()
+    if isinstance(node, ast.Attribute):
+        return "clickhouse" in node.attr.lower() or _names_clickhouse(node.value)
+    return False
+
+
 def _raw_client_reference(node: ast.AST) -> tuple[int, str] | None:
     """The line and the forbidden identifier this node names, if it names one."""
     if isinstance(node, ast.Name) and node.id in _RAW_CLIENT_NAMES:
         return node.lineno, node.id
     if isinstance(node, ast.Attribute) and node.attr in _RAW_CLIENT_NAMES:
-        return node.lineno, node.attr
+        # Qualified, so the qualifier decides. `AsyncClient` is not a name
+        # ClickHouse owns — httpx has one too, and matching the attribute alone
+        # flagged `httpx.AsyncClient` in the mail sender, which touches no
+        # store. A false positive here is worse than it looks: the obvious way
+        # to silence it is an allowlist entry, and that would exempt a module
+        # from the real check as well.
+        if _names_clickhouse(node.value):
+            return node.lineno, node.attr
+        return None
     if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("clickhouse_connect"):
         return node.lineno, str(node.module)
     if isinstance(node, ast.Import):

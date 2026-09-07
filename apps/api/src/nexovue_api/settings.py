@@ -63,6 +63,40 @@ class ObjectStoreSettings:
     region: str
 
 
+@dataclass(frozen=True, slots=True)
+class EmailSettings:
+    """A complete email configuration, which is all four values or none.
+
+    Same shape and same reason as `ObjectStoreSettings`: a half-filled
+    configuration fails at the first send, and a provider's "domain not
+    verified" tells a reader nothing about which variable was missing.
+
+    No provider is named. ADR 0102 keeps a vendor's vocabulary out of the port,
+    and a vendor's name in a settings field is that leak in another file — the
+    key's own prefix already identifies which one it is.
+    """
+
+    api_key: str
+    # The domain whose SPF, DKIM and DMARC were verified. `from_address` must be
+    # at it; a provider refuses anything else, which is the point of both fields
+    # existing rather than one.
+    sending_domain: str
+    from_address: str
+    # A real inbox, deliberately not on the sending domain. Without it a
+    # customer who replies to a `noreply` sender is talking to nobody.
+    reply_to: str
+
+
+# The environment variables an unconfigured email sender tells the caller to
+# set. Spelled once so the message and the fields cannot drift apart.
+EMAIL_VARIABLES: Final = (
+    "EMAIL_API_KEY",
+    "EMAIL_SENDING_DOMAIN",
+    "EMAIL_FROM_ADDRESS",
+    "EMAIL_REPLY_TO",
+)
+
+
 # The environment variables an unconfigured object store tells the caller to
 # set. Spelled once so the message and the fields cannot drift apart.
 OBJECT_STORE_VARIABLES: Final = (
@@ -126,6 +160,35 @@ class Settings(BaseSettings):
     # SeaweedFS ignores the region and AWS requires one; signing needs a value
     # either way, so the default is the region AWS itself treats as canonical.
     s3_region: str = "us-east-1"
+
+    # --- email: all four or none, see EmailSettings -------------------------
+    email_api_key: str = ""
+    email_sending_domain: str = ""
+    email_from_address: str = ""
+    email_reply_to: str = ""
+
+    @property
+    def email(self) -> EmailSettings | None:
+        """The email settings, or None when mail is not configured.
+
+        None rather than an error, because an API that cannot send mail still
+        serves every screen. The caller that needs to send is the one that must
+        refuse, and it can name `EMAIL_VARIABLES` when it does.
+        """
+        parts = (
+            self.email_api_key,
+            self.email_sending_domain,
+            self.email_from_address,
+            self.email_reply_to,
+        )
+        if not all(parts):
+            return None
+        return EmailSettings(
+            api_key=self.email_api_key,
+            sending_domain=self.email_sending_domain,
+            from_address=self.email_from_address,
+            reply_to=self.email_reply_to,
+        )
 
     @property
     def object_store(self) -> ObjectStoreSettings | None:
