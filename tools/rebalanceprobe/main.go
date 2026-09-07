@@ -83,6 +83,18 @@
 // statement wipes the live watermarks — the durable counted-through offsets
 // whose loss is the silent permanent over-count ADR 0094 describes (T1-6).
 //
+// A run also leaves a consumer group and a topic behind, and those are what the
+// rest of the teardown was missing until 2026-09-08 — the scratchpad script that
+// carried them was deleted (T1-6) and these lines came here with it:
+//
+//	kafka-consumer-groups.sh --bootstrap-server localhost:9092 --delete --group '<group>'
+//	kafka-consumer-groups.sh --bootstrap-server localhost:9092 --delete --group '<group>-usage'
+//	kafka-topics.sh          --bootstrap-server localhost:9092 --delete --topic '<topic>'
+//
+// Deleting the topic is also what makes the two watermark statements above
+// tidiness rather than necessity: with the topic gone, rows keyed
+// `<topic>:<partition>` are unreachable by any consumer.
+//
 // `usage_daily` sums bytes per tenant and day and cannot be separated from real
 // traffic, so produce against a tenant whose usage numbers nobody is reading.
 //

@@ -11,7 +11,7 @@ row in `phase-1-plan.md` disagrees with what the code does, this file says so an
 
 ---
 
-## Status — updated 2026-09-07
+## Status — updated 2026-09-08
 
 **Tracked here rather than in a status column elsewhere, so this file answers "what next"
 without a second file to reconcile.** A row is `done` only when something was run and watched,
@@ -22,20 +22,27 @@ never when the code was written.
 | **A1** | authorization seam — `require_role`, 8 routes, coverage test | ✅ **done** | `7e930d5` |
 | **A2** | contract tests — auth mode + ClickHouse table names | ✅ **done** | `e18713c` |
 | **A3** | `packages/py-platform` — 299 duplicated lines removed | ✅ **done** | `f4291d8` |
-| **G1** | TLS edge | 🟡 **decisions taken; the two site blocks and the headers are being built now** | `42c3b48` |
-| **G2** | account recovery | ✅ **done** — P1-69, P1-70 and P1-71 | `a6ef9cd` `9febb8a` `3a76dda` `pending` |
-| **G3** | poller SSRF boundary | ✅ **done** | `pending` |
+| **G1** | TLS edge — two site blocks, HSTS/nosniff on both, console headers on the app | ✅ **done** | `10ae52f` |
+| **G2** | account recovery — P1-69, P1-70, P1-71 | ✅ **done** | `a6ef9cd` `9febb8a` `3a76dda` `fa3c11d` |
+| **G3** | poller SSRF boundary | ✅ **done** | `2f06a98` |
 | **G4** | poller certificate verification | ✅ **done** | `f26ec33` |
-| **G5** | ingest kill switch | ⬜ | — |
-| **G6** | paid-tier cap | ⬜ | — |
-| **G7** | SDK distribution | ⬜ | — |
-| **C1–C7** | commercial layer | ⬜ gated on G2 | — |
-| **M1–M4** | measurements | ⬜ | — |
-| **F1–F5** | findings | 🟡 **F2 done; F5 part-done** | `pending` |
-| **D1** | `url.full` trimmed to the path — ADR 0103 | ✅ **decided and fixed** | `pending` |
-| **D2** | limiter fail-open — ADR 0104 | ✅ **decided**, fallback unbuilt | `pending` |
-| **D3** | sampling and masking are customer controls — ADR 0105 | ✅ **decided** | `pending` |
-| **D4** | network monitoring and SIEM out of scope — ADR 0106 | ✅ **decided** | `pending` |
+| **G5** | ingest kill switch — both halves, proved end to end | ✅ **done** | `10ae52f` `58986ea` |
+| **G6a** | paid-tier browser cap | ⬜ **and larger than this file said** — see §5a | — |
+| **G7** | SDK distribution | ⬜ blocked on a deployment target | — |
+| **C1–C7** | commercial layer | ⬜ **unblocked now G2 is done**; C2 also needed G6c, which is decided | — |
+| **M1** | four blank §4 budgets | ⬜ | — |
+| **M2** | P1-50, the 24-hour soak | ⬜ **last thing before Phase 2** | — |
+| **M3** | pprof on the admin listener | ✅ **done** | `10ae52f` |
+| **M4** | RUM breakdowns by page and device | ✅ **done** | `10ae52f` `58986ea` |
+| **F1** | T1-5 repricing guard | ✅ **done** | `10ae52f` |
+| **F2** | T1-6 rig cleanup | ✅ **done**, by deleting it | `10ae52f` |
+| **F3** | the three tests that cannot fail | ✅ **done** | `10ae52f` |
+| **F4** | re-run and capture the Tier 2 figures | ⬜ T2-1, T2-2, T2-3, T2-6 | — |
+| **F5** | the three cheap T2 corrections | ✅ **done** | `10ae52f` |
+| **D1** | `url.full` trimmed to the path — ADR 0103 | ✅ **decided and fixed** | `0e97d65` |
+| **D2** | limiter fail-open — ADR 0104 | ✅ **decided and built** | `10ae52f` |
+| **D3** | sampling and masking are customer controls — ADR 0105 | ✅ **decided**; the writes land in C5/P1-76 | `0e97d65` |
+| **D4** | network monitoring and SIEM out of scope — ADR 0106 | ✅ **decided** | `0e97d65` |
 
 **Five open questions from the agent round were answered on 2026-09-07**, and one of them was a
 product decision rather than a technical one:
@@ -138,6 +145,25 @@ HSTS, no `X-Content-Type-Options`, no `Referrer-Policy`, no CSP, and no frame pr
 file.** `42c3b48` answered both of them *in a comment* and left the config serving one name — see
 the G1 note in the status section — so between that commit and the edge being built, this section
 and the Caddyfile disagreed and the Caddyfile was right.
+
+**Built 2026-09-08.** Two site blocks, `{$NEXOVUE_APP_HOST}` and `{$NEXOVUE_INGEST_HOST}`; an
+`edge_headers` snippet carrying HSTS and `X-Content-Type-Options` on **both** hosts, and a
+`console_headers` snippet with `Referrer-Policy`, `X-Frame-Options`, COOP, CORP,
+`Permissions-Policy` and a CSP on the **app host alone**. `caddy validate` clean and the headers
+curled off a running edge.
+
+**The app-only split is a real constraint, not tidiness.** `Cross-Origin-Resource-Policy:
+same-origin` on ingest would make the edge refuse door 3's export, which is cross-origin by design
+(ADR 0089) — a CSP on ingest is merely pointless, CORP on ingest is an outage.
+
+**Two defects only running it could find.** Caddy marks a whole `header` block *deferred* when it
+contains a deletion and skips it on an upstream failure, so `-Server` was silently dropping HSTS
+from every 502; and `reverse_proxy`'s own `Via: 1.1 Caddy` was undoing `-Server` anyway.
+
+**One thing left, and it needs a browser rather than a commit.** `style-src 'self'` ships as
+`Content-Security-Policy-Report-Only` because no browser has loaded the console under it. Load the
+app once, and either drop `'unsafe-inline'` from the enforced policy or keep it with the reason
+recorded.
 
 Two decisions it defers and this plan should not:
 
@@ -544,7 +570,10 @@ same unbounded predicate — `ALTER TABLE span_ingest_offsets DELETE WHERE start
 shape for it twice over: `spans` matches the real `spans:0` *and* every probe topic named
 `spans-probe-…`. **The narrow fix is equality on the topic component** —
 `WHERE splitByChar(':', partition_key)[1] = '<topic>'` — which cannot reach a topic that merely
-starts the same way. **Not done here: `tools/` is code and this pass was scoped to documentation.**
+starts the same way. ~~**Not done here: `tools/` is code and this pass was scoped to
+documentation.**~~ **Fixed 2026-09-08**, and more simply than that: the key is `topic:partition`,
+so appending the separator — `startsWith(partition_key, '<topic>:')` — is exact on the topic
+boundary and `'spans:'` cannot match `spans-probe:0`. The reason is in the header beside it.
 
 **And one step the deleted script had that the header does not**, recorded so deleting it loses
 nothing. A run leaves a consumer group and a topic behind as well as rows, and the header stops at
@@ -559,8 +588,9 @@ kafka-topics.sh          --bootstrap-server localhost:9092 --delete --topic '<to
 Deleting the topic is also what makes the watermark question moot: with the topic gone, the rows
 keyed `<topic>:<partition>` are unreachable by any consumer, so the two `ALTER TABLE … DELETE`
 statements are tidiness rather than necessity — and tidiness is a poor reason to run an unbounded
-predicate against a `KeeperMap` guard. **These three lines belong in `rebalanceprobe`'s header
-beside the rest of the teardown.**
+predicate against a `KeeperMap` guard. ~~**These three lines belong in `rebalanceprobe`'s header beside the rest of the teardown.**~~
+**Added 2026-09-08.** They were still missing on the day this said they belonged there, which is
+the ordinary way a "belongs in" sentence becomes a thing nobody did.
 
 ## 4a. Carried forward from the plan's own follow-up sections
 
@@ -834,6 +864,44 @@ own configuration — the ingest hostname, the SDK URL scheme, the ingest key fo
 door the moment someone uses it. Those are worth more care now, not less, precisely because
 changing them is free today and expensive on the day after launch.
 
+## 4f. Found while building, and not yet rows anywhere
+
+**Everything above was found by reading. This section is what was found by *running*** — nine items
+that did not exist as work on 2026-09-06 and are not counted in §5a, because inventing rows for
+them mid-count would make the totals unauditable. They are listed so the next person does not have
+to rediscover them.
+
+**Two block a customer using what was just built:**
+
+- **There are no `/verify-email` or `/reset-password` screens.** The endpoints exist and are
+  tested; `apps/web` has no route for either, so every link mailed today lands on a 404. The link
+  points at the app deliberately — a customer clicking in a mail client must reach a screen, not
+  JSON — so the screens are the other half of P1-70 and P1-71, not a nicety.
+- **`APP_BASE_URL` has no default and must be set.** Deliberate: a link built against a guessed
+  host is a link to nowhere, and the failure would be a customer who cannot verify rather than a
+  stack trace. `.env.example` carries the dev value.
+
+**Three are consequences of ADR 0108, written into it and repeated here:**
+
+- **The rollup's row count is still unbounded.** Grouping is fixed; storage is not. A customer with
+  per-id URLs mints one `web_vitals_1m` row per order per minute even with a route configured.
+- **`route` is a single `init()` option**, so a single-page app that navigates client-side stamps
+  one template across a whole session. There is no per-navigation route API.
+- **No row proving any of it came from a real browser.** The schema facts are from
+  `system.columns`; every row was written by the writer under test.
+
+**Four are smaller:**
+
+- **The schemaprobe suite is once-per-minute.** `rollupToken` is correctly stable for identical
+  rows in one minute, so a second run inside 60 seconds deduplicates to nothing and every rollup
+  assertion reads 0 — **green, having verified nothing**, which is rule 12's own failure mode. It
+  needs a per-run discriminator or a warning where somebody will read it.
+- **G1's CSP has not met a browser** — see §1.
+- **The worker image has not been rebuilt** since ADR 0108, so the running dev receiver still
+  writes empty routes.
+- **The demo serves a stale SDK bundle.** A single-file bind mount keeps the old inode, so
+  `image-provider` has the pre-0103 build until it is restarted.
+
 ## 5. The order I would actually take
 
 **~~First — A1, the authorization seam.~~ Done 2026-09-07, with A2 and A3 alongside it.** The
@@ -898,19 +966,25 @@ adding one.
 
 | | Group | Items | Build work | Done |
 |---|---|---|---|---|
-| **G1–G7** | Gate — nothing ships to a paying customer until these are true | 11 | 9 | **3** + 1 partial |
+| **G1–G7** | Gate — nothing ships to a paying customer until these are true | 11 | 9 | **7** |
 | **A1–A3** | Architecture — cheap now, expensive after Phase 2 | 3 | 3 | **3 — complete** |
 | **C1–C7** | Commercial layer (M8 in the plan) | 7 | 7 | 0 |
-| **M1–M4** | Measurements and exit criteria | 4 | 4 | 0 |
-| **F1–F5** | Findings and gate defects | 5 | 5 | **1** + 1 partial |
-| **D1–D4** | Decisions — no code was expected, two rows appeared | 4 | 2 *(found by deciding)* | **4 decided — complete**, 1 of 2 built |
+| **M1–M4** | Measurements and exit criteria | 4 | 4 | **2** |
+| **F1–F5** | Findings and gate defects | 5 | 5 | **4** |
+| **D1–D4** | Decisions — no code was expected, two rows appeared | 4 | 2 *(found by deciding)* | **4 decided — complete**, 2 of 2 built |
 | **X1–X3** | Deferred past Phase 2 deliberately | 3 | 0 | n/a |
-| | **totals** | **37** | **30** | **8 built** |
+| | **totals** | **37** | **30** | **18 built** |
 
-**8 of 30 build items done, as of 2026-09-07.** Two series are complete: **A1–A3**, the
-architecture seams, taken first on the argument that it is the only work that gets materially
-harder after Phase 2; and **D1–D4**, the four decisions, which cost an afternoon and had sat
-untouched since this file was written.
+**18 of 30 build items done, as of 2026-09-08**, up from 8 the day before. Three series are
+complete or nearly so: **A1–A3** the architecture seams, **D1–D4** the four decisions and both
+build rows they turned out to hide, and **F1–F5** bar one — only F4's re-run remains. The gate is
+**7 of 9**, with G6a and G7 left.
+
+**The status board above was stale until 2026-09-08 and said so in two directions at once** — §1
+recorded G5 as *"Done 2026-09-07, both halves"* while the board still showed it unstarted, and G1,
+M3, M4, F1, F3, F5 and D2's fallback had all landed without the board moving. It is rewritten
+item by item rather than by series, because a row covering four items cannot say that two of them
+are done.
 
 **Three numbers in this section were wrong until 2026-09-07 and are corrected above.** The headline
 said ~~41 items~~ while the rows summed to 39, and said ~~6 decisions with no code~~ where the rows
@@ -934,18 +1008,19 @@ obligation since August. Only D3 was the shape it looked.
 | G2a · P1-69 email | ✅ | provider, DNS, port, adapter, composition root, real send |
 | G3 · poller SSRF boundary | ✅ | `2f06a98` |
 | G4 · poller certificate verification | ✅ | `f26ec33` |
-| G1 · TLS edge | 🟡 | hostname and gRPC **decided in a comment rather than in config** (see the G1 note in the status section); the two site blocks and the security headers are being built now |
-| G2b · P1-70 verification | ⬜ | |
-| G2c · P1-71 password reset | ⬜ | |
-| G5 · ingest kill switch | ⬜ | |
-| G6a · paid-tier browser cap | ⬜ | |
-| G7 · SDK distribution | ⬜ | |
+| G1 · TLS edge | ✅ | two site blocks and the header snippets; `caddy validate` clean, headers curled |
+| G2b · P1-70 verification | ✅ | writes the column that had existed unwritten since 0001 |
+| G2c · P1-71 password reset | ✅ | single-use token, and every live session ended via `sessions_valid_from` |
+| G5 · ingest kill switch | ✅ | valve closed by hand → `429` at t+20s; reopened → `200` |
+| G6a · paid-tier browser cap | ⬜ | **the last unblocked gate item** |
+| G7 · SDK distribution | ⬜ | blocked on a deployment target |
 | G6b · the cap number | ⛔ | blocked on real RUM traffic, correctly |
-| G6c · block or bill on overage | ❓ | a decision, and it gates P1-74 |
+| ~~G6c · block or bill on overage~~ | ✅ | **decided 2026-09-07 — [ADR 0107](../architecture/decisions/0107-over-the-allowance-we-stop-and-say-so-and-the-customer-may-raise-the-ceiling.md).** Stop and say so, with a ceiling the customer may raise. **P1-74 unblocked** |
 
-**The safety half of the gate is closed** — G3 and G4 were the two open holes, and both are shut
-with negative-controlled tests. What remains in G is the *product* half: an edge that sets headers,
-an account a customer can recover, a stop valve, a cap, and somewhere to fetch the SDK from.
+~~**The safety half of the gate is closed**~~ — **the gate is 7 of 9.** The edge sets headers, the
+account can be recovered, the stop valve exists and has been watched biting. **What is left is a
+cap and a URL**: G6a, which needs an allowance that does not depend on a service-count ceiling, and
+G7, which needs somewhere to publish a file to.
 
 ~~**D1–D4 has moved not at all**~~ — **all four taken 2026-09-07**, and they were the cheapest
 items on the list exactly as this said. §4c has the four answers and the two things the file itself
@@ -960,21 +1035,21 @@ them were the safety gate — G3, G4 and A2 — and all three are done. **The ch
 list closed the two open holes and the untested contract**, which is what the sentence claimed and
 is now true rather than predicted.
 
-### The eleven that are under a day
+### The ten that are under a day
 
 | | |
 |---|---|
-| G3 | poller SSRF boundary |
-| G4 | asyncpg `verify-full` |
+| G3 | poller SSRF boundary — ✅ **done** |
+| G4 | asyncpg `verify-full` — ✅ **done** |
 | ~~G6a~~ | ~~paid-tier browser cap~~ — **struck 2026-09-08: it is not under a day.** `allowance/postgres.go:132` returns unenforced when `max_billed_services` is NULL and the browser cap lives *inside* the enforced branch, so a paid plan takes an early return no cap can be reached from. It needs an allowance that does not depend on a service-count ceiling — a design change, recorded in [ADR 0107](../architecture/decisions/0107-over-the-allowance-we-stop-and-say-so-and-the-customer-may-raise-the-ceiling.md) |
-| A2 | contract test + cross-service sweep |
-| A3 | `packages/py-platform` |
-| M3 | pprof on the admin listener |
-| M4 | RUM breakdowns by page and device |
-| F1 | T1-5 repricing guard |
+| A2 | contract test + cross-service sweep — ✅ **done** |
+| A3 | `packages/py-platform` — ✅ **done** |
+| M3 | pprof on the admin listener — ✅ **done** |
+| M4 | RUM breakdowns by page and device — ✅ **done** |
+| F1 | T1-5 repricing guard — ✅ **done** |
 | F2 | T1-6 rig cleanup — ✅ **done 2026-09-07**, by deleting the script |
-| F3 | the three tests that cannot fail |
-| F5 | the T2 corrections — 🟡 **T2-4, T2-5 and T2-7 corrected 2026-09-07**; T2-1, T2-2, T2-3 and T2-6 need ADR 0094's measurement re-run and captured |
+| F3 | the three tests that cannot fail — ✅ **done** |
+| F5 | the three cheap T2 corrections — ✅ **done 2026-09-07** (T2-4, T2-5, T2-7). T2-1/2/3/6 are **F4**, not F5: they need ADR 0094's measurement re-run and captured, which is not a day's work |
 
 ## 6. What "ready for Phase 2" means, stated as a test
 
