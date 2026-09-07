@@ -14,6 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, Query, UploadFile, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
+from nexovue_api.auth.policy import MayAdminister
 from nexovue_api.deps import DbSession, ObjectStoreDep
 from nexovue_api.projects.service import require_project
 from nexovue_api.sourcemaps import service
@@ -55,7 +56,7 @@ async def list_source_maps(
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Upload one source map")
 async def upload_source_map(
-    identity: CurrentIdentity,
+    identity: MayAdminister,
     db: DbSession,
     store: ObjectStoreDep,
     project_id: ProjectId,

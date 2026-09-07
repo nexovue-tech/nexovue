@@ -11,6 +11,7 @@ import uuid
 from fastapi import APIRouter, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
+from nexovue_api.auth.policy import MayAdminister
 from nexovue_api.checks import service
 from nexovue_api.checks.schemas import (
     CheckListResponse,
@@ -34,7 +35,7 @@ async def list_checks(
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Define a check")
 async def create_check(
-    identity: CurrentIdentity,
+    identity: MayAdminister,
     db: DbSession,
     request: CreateCheckRequest,
 ) -> CheckSummary:
@@ -45,7 +46,7 @@ async def create_check(
 
 @router.patch("/{check_id}", summary="Edit a check, or pause it")
 async def update_check(
-    identity: CurrentIdentity,
+    identity: MayAdminister,
     db: DbSession,
     check_id: uuid.UUID,
     request: UpdateCheckRequest,
@@ -61,7 +62,7 @@ async def update_check(
 
 @router.delete("/{check_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Remove a check")
 async def delete_check(
-    identity: CurrentIdentity,
+    identity: MayAdminister,
     db: DbSession,
     check_id: uuid.UUID,
 ) -> None:
