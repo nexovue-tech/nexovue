@@ -185,6 +185,12 @@ Releases list with deploy markers on all charts; before/after comparison per rel
 ### F29 — LLM / AI-App Observability 🔲 TO SPECIFY
 UI lens for customers building on LLMs: token usage, model latency and cost per endpoint/model, prompt/completion traces (gen_ai.* attributes), error rates of AI calls. Fast-growing category; architecture already carries the data.
 
+**Checked 2026-09-07, and "architecture already carries the data" is literally true.** `spans.span_attrs` is a ClickHouse `JSON` column, so `gen_ai.*` attributes from an instrumented application land, store and are queryable today — they appear in Traces and on the Service map. **No door is needed**: doors are organised by how data arrives, and `gen_ai` is a kind of span rather than a kind of entrance. What is missing is a screen and a metric contract.
+
+**Scope line, so this is not read as "build MLflow".** An app *calling* a model in production is ours. *Building* models — experiment tracking, model registry, artifacts, evaluation — is a different product, a different buyer and not observability. MLflow exports OTLP `gen_ai.*` (`MLFLOW_ENABLE_OTEL_GENAI_SEMCONV`), so it is a **producer feeding door 1**, not a competitor.
+
+**Timing:** the `gen_ai.*` conventions are still Development status. Building against a moving spec is how `INFRASTRUCTURE_METRIC_NAMES` came to hold five `container.*` names that no producer emits. See [phase-1-v2 §4b](../delivery/phase-1-v2.md).
+
 ### F30 — Public Status Page 🔲 TO SPECIFY
 Customer-publishable status.mysite.com: components, current status, incident history, subscribe-to-updates. Table stakes per market analysis; shares the plain-language engine with F7 (owner view = private; this = public).
 

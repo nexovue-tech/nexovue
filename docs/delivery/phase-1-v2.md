@@ -439,16 +439,78 @@ reason rather than an oversight:
   tree. Not a gate: the screen fills from host and container metrics today, and the tree question
   cannot be observed until the producer is chosen.
 
-## 4b. Two categories with no home in any phase
+## 4b. Three categories with no home in any phase
 
-§8 of the plan records these and nothing has moved them:
+§8 of the plan records the first two and nothing has moved them. The third was found on 2026-09-07
+and is in the same state:
 
 - **Network monitoring (category 10)** needs eBPF kernel agents, which contradicts the standing
   decision not to build collection agents. Parked.
 - **SIEM / security (category 11)** is *"evaluate later"* in the vision doc and appears in no plan.
+- **F29 — LLM / AI-app observability.** In `requirements.md` as *TO SPECIFY*, and in no phase's
+  F-list. See below: it is cheaper than it looks and narrower than it sounds.
 
-**Neither blocks Phase 2**, but both should be answered *before* Phase 2 scoping rather than during
-it, because "no home in any phase" is how a category quietly becomes a commitment nobody made.
+**None blocks Phase 2**, but all three should be answered *before* Phase 2 scoping rather than
+during it, because "no home in any phase" is how a category quietly becomes a commitment nobody
+made.
+
+### F29, checked rather than assumed
+
+**No door is needed, and that is the first thing to get right.** `spans.span_attrs` is a ClickHouse
+`JSON` column, so an application instrumented with OpenTelemetry sends `gen_ai.request.model`,
+`gen_ai.usage.input_tokens` and the rest, and those **land, store and are queryable today**. They
+already appear in Traces and on the Service map.
+
+Doors are organised by *how* data arrives — pushed OTLP, probes we run, browsers, pollers — never
+by what the data is about. `gen_ai` is a kind of span, not a kind of entrance, and a door for it
+would be a second way into a room that is already open. What is missing is a **screen and a metric
+contract**, the same shape as `INFRASTRUCTURE_METRIC_NAMES` and `web_vitals`.
+
+**The customer side is nearly automatic too.** Dedicated auto-instrumentation packages exist —
+`opentelemetry-instrumentation-genai-openai`, `opentelemetry-instrumentation-google-genai`, one for
+the Claude Agent SDK advertising *"zero code changes required"*, and coverage for OpenAI Agents,
+LangChain and LlamaIndex. It is a `pip install` rather than wrapping every call.
+
+**So the honest claim today is narrow and true:** *"if your app is instrumented, its LLM calls
+arrive and are visible in Traces alongside everything else."* Not *"we do LLM observability"*,
+which implies a tokens-and-cost screen that does not exist. Three of the four links work; the
+fourth is the screen.
+
+### MLflow is a producer, not a competitor
+
+Worth recording because the opposite conclusion is the obvious one and it is wrong.
+
+**MLflow can export in OTLP `gen_ai.*` format** — `MLFLOW_ENABLE_OTEL_GENAI_SEMCONV` plus an OTLP
+endpoint. Its own documentation states the intent: *"AI observability data is never locked into a
+proprietary format and any compliant tool can produce or consume it."* So a customer keeps MLflow
+for building models and sends their production traces here, through door 1, with no code from us.
+
+### The scope line, so this is not re-opened as "should we build MLflow"
+
+| | Whose question | Ours? |
+|---|---|---|
+| An app **calling** a model in production — tokens, cost, latency, errors, in the same trace as the HTTP request and the database call | an engineer running a product | **yes — this is F29** |
+| **Building** models — experiment tracking, model registry, artifacts, evaluation | a data scientist during development | **no** |
+
+The second is not an extension of this product. It is a different data model (runs, experiments,
+gigabyte artifacts), a different buyer, and not observability — it is the workshop where a model is
+made, not the production system it runs in. MLflow's GenAI tracing is a recent addition to it, not
+what it is for.
+
+**The differentiator for the half that is ours is the same one as everywhere else here:** an LLM
+call sits in the same trace as the request that triggered it and the query beside it. A dedicated
+LLM tool cannot do that, because it does not know the rest of the customer's system exists.
+
+### When to build it
+
+**When `gen_ai.*` stabilises, or when a real customer sends those spans and asks why nothing reads
+them.** The conventions are still Development status as of 2026 and the transition plan says
+stability is pending.
+
+That timing is not caution for its own sake. `INFRASTRUCTURE_METRIC_NAMES` holds five `container.*`
+names written from a specification, and `docker_stats` emits none of them — a contract built
+against a moving spec that no producer satisfies, discovered a year later. That cost has been paid
+once already this week.
 
 ## 4d. Structure — what a deep read found, and what it did not
 

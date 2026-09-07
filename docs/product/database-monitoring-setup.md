@@ -206,6 +206,20 @@ monitoring user that will eventually write, so do not grant one.
 
 ---
 
+## A note on AI and LLM calls
+
+If your application calls an LLM and is instrumented with OpenTelemetry, **those calls already
+arrive** — no extra configuration, no separate endpoint. They appear in Traces alongside the HTTP
+request that triggered them and any database query beside it, which is the point: a slow response
+is answerable in one place rather than three.
+
+Instrumentation is usually a package rather than a code change —
+`opentelemetry-instrumentation-genai-openai`, `opentelemetry-instrumentation-google-genai`, and
+equivalents for the Claude Agent SDK, OpenAI Agents, LangChain and LlamaIndex.
+
+**What does not exist yet is a dedicated screen** for token usage and cost per model. The data is
+stored and queryable; the lens over it is not built.
+
 ## Not supported yet
 
 **MongoDB, Redis, Elasticsearch, Cassandra.** The Database screen groups by a *normalized statement*
