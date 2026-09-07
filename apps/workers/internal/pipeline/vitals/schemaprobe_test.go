@@ -4,6 +4,7 @@ package vitals
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -13,8 +14,16 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 )
 
-// probeTenant marks the rows this probe writes so they can be removed again.
-const probeTenant = "__m5_vitals_probe__"
+// probeTenantPrefix marks every row any run of this probe writes, so a run that
+// died before its cleanup does not leave rows behind forever.
+const probeTenantPrefix = "__m5_vitals_probe__"
+
+// probeTenant is this run's own tenant, and it is per-run because the rollup's
+// deduplication token is derived from the target's sort key — tenant included.
+// Fixture rows that were identical between runs produced an identical token
+// inside one wall-clock minute, and the store dropped the second insert without
+// an error, leaving every rollup assertion reading zero.
+var probeTenant = fmt.Sprintf("%s%d-%d", probeTenantPrefix, os.Getpid(), time.Now().UnixNano())
 
 // TestTheWriterRoundTripsThroughTheServer sends real readings through the real
 // writer into both tables, then reads the p75 back the way the API reads it —
@@ -78,6 +87,7 @@ func TestTheWriterRoundTripsThroughTheServer(t *testing.T) {
 	}
 	t.Logf("wrote %d readings across %d columns and 1 rollup row",
 		len(readings), len(newReadingBlock().columns))
+	assertInsertLanded(t, pool, readingsTable, rollupTable)
 
 	assertScalar(t, pool,
 		"SELECT toUInt64(count()) AS v FROM "+readingsTable+" WHERE tenant_id = '"+probeTenant+"'",
@@ -137,6 +147,8 @@ func TestARepeatedInsertIsRecognised(t *testing.T) {
 			t.Fatalf("insert %d: %v", attempt+1, err)
 		}
 	}
+	// The second insert is meant to store nothing; the first is not.
+	assertInsertLanded(t, pool, readingsTable, rollupTable)
 
 	assertScalar(t, pool,
 		"SELECT toUInt64(sum(reading_count)) AS v FROM "+rollupTable+
@@ -204,6 +216,7 @@ func TestTheRouteLandsInItsColumnAndGroupsThePages(t *testing.T) {
 	if err := NewWriter(pool).Insert(ctx, readings, rollup.Rows()); err != nil {
 		t.Fatalf("the server refused the writer's blocks: %v", err)
 	}
+	assertInsertLanded(t, pool, readingsTable, rollupTable)
 
 	// The raw column holds the template the browser sent, not a derived one.
 	assertScalar(t, pool,
@@ -238,7 +251,38 @@ func TestTheRouteLandsInItsColumnAndGroupsThePages(t *testing.T) {
 		900, "p75 of the page with no route template")
 }
 
+// assertInsertLanded proves the insert was stored before anything asks what
+// shape it has. A deduplicated insert is accepted and dropped, so it reads back
+// as zero rows — and `quantilesMerge` over none of them raises a nan conversion
+// error that points nowhere near the cause.
+func assertInsertLanded(t *testing.T, pool *chpool.Pool, tables ...string) {
+	t.Helper()
+	for _, table := range tables {
+		stored := scalar(t, pool,
+			"SELECT toUInt64(count()) AS v FROM "+table+" WHERE tenant_id = '"+probeTenant+"'",
+			"rows stored in "+table)
+		if stored == 0 {
+			t.Fatalf("%s holds no rows for %s: the insert was accepted and stored nothing, "+
+				"which is what a repeated insert_deduplication_token looks like",
+				table, probeTenant)
+		}
+		t.Logf("%s stored %d rows for this run", table, stored)
+	}
+}
+
 func assertScalar(t *testing.T, pool *chpool.Pool, query string, want uint64, what string) {
+	t.Helper()
+	// Zero is what a dropped insert reads back as, so it can never be the
+	// expectation: prove the rows landed, then assert on the subset.
+	if want == 0 {
+		t.Fatalf("%s expects 0, which an insert that stored nothing also satisfies", what)
+	}
+	if got := scalar(t, pool, query, what); got != want {
+		t.Errorf("%s = %d, want %d", what, got, want)
+	}
+}
+
+func scalar(t *testing.T, pool *chpool.Pool, query, what string) uint64 {
 	t.Helper()
 	var got proto.ColUInt64
 	if err := pool.Do(context.Background(), ch.Query{
@@ -247,16 +291,21 @@ func assertScalar(t *testing.T, pool *chpool.Pool, query string, want uint64, wh
 	}); err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
-	if got.Rows() != 1 || got.Row(0) != want {
-		t.Errorf("%s = %v, want %d", what, got, want)
+	if got.Rows() != 1 {
+		t.Fatalf("%s returned %d rows, want 1", what, got.Rows())
 	}
+	return got.Row(0)
 }
 
+// deleteProbeRows removes every probe run's rows, not only this one's: the
+// tenant is per-run, so a run killed before its cleanup would otherwise leave
+// rows nothing ever sweeps but the table's TTL.
 func deleteProbeRows(t *testing.T, pool *chpool.Pool) {
 	t.Helper()
 	for _, table := range []string{readingsTable, rollupTable} {
 		err := pool.Do(context.Background(), ch.Query{
-			Body:     "ALTER TABLE " + table + " DELETE WHERE tenant_id = '" + probeTenant + "'",
+			Body: "ALTER TABLE " + table +
+				" DELETE WHERE startsWith(tenant_id, '" + probeTenantPrefix + "')",
 			Settings: []ch.Setting{{Key: "mutations_sync", Value: "2"}},
 		})
 		if err != nil {

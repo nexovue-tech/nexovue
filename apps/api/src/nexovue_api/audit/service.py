@@ -40,6 +40,10 @@ SESSION_ENDED: Final = "session.ended"
 EMAIL_VERIFIED: Final = "user.email_verified"
 PASSWORD_RESET_REQUESTED: Final = "user.password_reset_requested"
 PASSWORD_RESET_COMPLETED: Final = "user.password_reset_completed"
+# Distinct from a reset: this one was done by somebody already signed in who
+# supplied the current password, which is a different story to read back.
+PASSWORD_CHANGED: Final = "user.password_changed"
+ALL_SESSIONS_ENDED: Final = "user.sessions_ended"
 DEPLOY_WEBHOOK_SECRET_CREATED: Final = "deploy.webhook_secret_created"
 DEPLOY_WEBHOOK_SECRET_REVOKED: Final = "deploy.webhook_secret_revoked"
 INTEGRATION_CREATED: Final = "integration.created"
@@ -130,6 +134,39 @@ def record_password_reset_completed(db: AsyncSession, *, user: User) -> None:
         org_id=user.org_id,
         actor_user_id=user.id,
         action=PASSWORD_RESET_COMPLETED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_password_changed(db: AsyncSession, *, user: User) -> None:
+    """A signed-in user changed their own password (P1-72).
+
+    Kept apart from `PASSWORD_RESET_COMPLETED` because the two say different
+    things about who was there: a reset is somebody who followed a mailed link,
+    this is somebody who was already signed in and knew the old password. A
+    change with no sign-in before it is the sequence worth noticing.
+    """
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=PASSWORD_CHANGED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_all_sessions_ended(db: AsyncSession, *, user: User) -> None:
+    """Every session on this account was ended at once (P1-72).
+
+    One row, not one per session: there is nothing to enumerate — Redis keys
+    sessions by token fingerprint — so what happened is a single write to
+    `users.sessions_valid_from`, and that is what this records.
+    """
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=ALL_SESSIONS_ENDED,
         target=_target(USER_TARGET, user.id),
     )
 

@@ -22,7 +22,7 @@ from nexovue_api.auth.dependencies import _issued_before_reset
 from nexovue_api.auth.sessions import Session
 from nexovue_api.auth.tokens import OneTimeTokenStore, TokenPurpose
 from nexovue_api.data.postgres.models import User
-from nexovue_api.notifications import Delivery, EmailSender, Message
+from nexovue_api.notifications import Delivery, EmailError, EmailSender, Message
 
 TTL: Final = 3600
 
@@ -217,3 +217,59 @@ def test_every_session_stands_when_no_reset_has_happened() -> None:
     ancient = Session(user_id="u", org_id="o", created_at=datetime(2020, 1, 1, tzinfo=UTC))
 
     assert not _issued_before_reset(ancient, _user(sessions_valid_from=None))
+
+
+class RefusingSender:
+    """A provider that is having a bad minute. Satisfies `EmailSender`."""
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def send(self, *, to: str, message: Message, data: Mapping[str, Any]) -> Delivery:
+        self.attempts += 1
+        raise EmailError("the mail provider refused the message (500): upstream unavailable")
+
+
+async def test_a_failing_provider_does_not_reveal_that_the_address_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The oracle this endpoint is shaped to avoid, and it was open until 2026-09-08.
+
+    A send that raised escaped as a 5xx for a known address while an unknown one
+    still got 202 — so a provider having a bad minute told a stranger which
+    addresses have accounts, exactly when nobody would think to look.
+
+    Both calls must return without raising. The known one must also have *tried*,
+    or this would pass by never sending at all.
+    """
+    known = _user(email="owner@acme.test")
+    tokens, _ = _store()
+    sender = RefusingSender()
+
+    async def finds_the_user(_db: object, _email: str) -> tuple[User, object] | None:
+        return (known, object())
+
+    async def finds_nobody(_db: object, _email: str) -> tuple[User, object] | None:
+        return None
+
+    monkeypatch.setattr(recovery, "find_active_user_by_email", finds_the_user)
+    await recovery.request_password_reset(
+        None,  # type: ignore[arg-type]
+        tokens,
+        sender,
+        address="owner@acme.test",
+        app_base_url="https://app.nexovue.com",
+        ttl_seconds=TTL,
+    )
+    assert sender.attempts == 1, "the known address was never actually attempted"
+
+    monkeypatch.setattr(recovery, "find_active_user_by_email", finds_nobody)
+    await recovery.request_password_reset(
+        None,  # type: ignore[arg-type]
+        tokens,
+        sender,
+        address="nobody@acme.test",
+        app_base_url="https://app.nexovue.com",
+        ttl_seconds=TTL,
+    )
+    assert sender.attempts == 1, "an unknown address must not reach the provider"

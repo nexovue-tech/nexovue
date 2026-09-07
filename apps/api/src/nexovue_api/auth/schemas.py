@@ -8,6 +8,7 @@ structure rather than three.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated
 
 from pydantic import BaseModel, Field
@@ -30,6 +31,11 @@ class UserSummary(BaseModel):
     email: str
     name: str | None
     role: str
+    # Null until the address is proven (P1-70). Exposed because the app has no
+    # other way to know whether to offer a resend — verification gates nothing,
+    # so its absence is invisible without this. The moment, not a boolean: "when"
+    # is the question support asks, and a boolean cannot answer it.
+    email_verified_at: datetime | None
 
 
 class OrganizationSummary(BaseModel):

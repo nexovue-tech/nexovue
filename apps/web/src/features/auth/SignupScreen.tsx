@@ -7,7 +7,7 @@ import { TextField } from "@/shared/components/TextField";
 import { rememberFirstSetup } from "@/shared/session";
 
 import { AuthScreenLayout, FormMessage } from "./AuthScreenLayout";
-import { signup } from "./api";
+import { PASSWORD_MIN_LENGTH, signup } from "./api";
 import { describeFormProblem } from "./problem-fields";
 
 /**
@@ -102,6 +102,7 @@ export function SignupScreen() {
             value={password}
             onChange={setPassword}
             autoComplete="new-password"
+            hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
             error={problem.fieldErrors.password}
           />
 

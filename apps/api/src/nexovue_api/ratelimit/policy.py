@@ -75,6 +75,13 @@ AUTH_PATHS: Final = (
     # and the per-email scope is what bounds that rather than the per-IP one.
     f"{API_PREFIX}/auth/password-reset",
     f"{API_PREFIX}/auth/verify-email",
+    # Changing a password verifies the CURRENT one, which makes it a credential
+    # check wearing a profile route's clothes. On the default tier that is 300
+    # guesses a minute against exactly the attacker the endpoint exists to stop —
+    # somebody holding a stolen session and trying to take the account. Only the
+    # per-IP scope applies here, because the body carries no email for
+    # `_email_from` to find.
+    f"{API_PREFIX}/profile/password",
     f"{API_PREFIX}/auth/password-reset",
 )
 TELEMETRY_PATHS: Final = (

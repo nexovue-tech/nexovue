@@ -83,10 +83,27 @@ async def end_session(db: AsyncSession, sessions: SessionStore, token: str | Non
     audit.record_session_ended(db, org_id=org_id, user_id=user_id)
 
 
+def describe_user(user: User) -> UserSummary:
+    """One place a `UserSummary` is built.
+
+    It exists because there were two, and adding `email_verified_at` to the
+    schema broke the other one at runtime rather than at type-check time —
+    Pydantic validates on construction, so a missing field is a 500 and not a
+    compiler error. Every caller comes here so the next field cannot do that.
+    """
+    return UserSummary(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        role=user.role,
+        email_verified_at=user.email_verified_at,
+    )
+
+
 def describe_identity(user: User, organization: Organization) -> IdentityResponse:
     """The shared body of login, signup's session, and `/auth/me`."""
     return IdentityResponse(
-        user=UserSummary(id=user.id, email=user.email, name=user.name, role=user.role),
+        user=describe_user(user),
         organization=OrganizationSummary(
             id=organization.id, slug=organization.slug, name=organization.name
         ),

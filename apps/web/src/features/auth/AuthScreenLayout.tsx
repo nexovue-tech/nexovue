@@ -1,11 +1,14 @@
 import type { ReactNode } from "react";
 
 /**
- * The frame the two bare screens share. Outside the shell on purpose: there is no
+ * The frame the bare screens share. Outside the shell on purpose: there is no
  * project, time range or navigation to show to someone who is not signed in yet.
  *
  * Narrow measure, heading in serif, everything else quiet — the same reading register
  * as the rest of the product, just with one thing on the page.
+ *
+ * `children` is optional because the recovery screens have states with nothing to do
+ * on them — a verified address is a sentence and a way onward, not a form.
  */
 export function AuthScreenLayout({
   title,
@@ -15,7 +18,7 @@ export function AuthScreenLayout({
 }: {
   title: string;
   intro: string;
-  children: ReactNode;
+  children?: ReactNode;
   footer?: ReactNode;
 }) {
   return (
@@ -26,7 +29,7 @@ export function AuthScreenLayout({
         <h1 className="mt-6 font-semibold font-serif text-2xl text-ink tracking-tight">{title}</h1>
         <p className="mt-2 text-ink-dim text-sm leading-relaxed">{intro}</p>
 
-        <div className="mt-7">{children}</div>
+        {children ? <div className="mt-7">{children}</div> : null}
 
         {footer ? (
           <div className="mt-6 border-line-subtle border-t pt-4 text-ink-dim text-sm">{footer}</div>
@@ -43,6 +46,18 @@ export function FormMessage({ message }: { message: string }) {
       role="alert"
       className="mb-5 border-critical-solid border-l-2 py-1 pl-3 text-critical-text text-sm"
     >
+      {message}
+    </p>
+  );
+}
+
+/**
+ * Something that already went right, usually on the screen before this one. `status`
+ * rather than `alert`: a screen reader should mention it, not interrupt for it.
+ */
+export function FormNotice({ message }: { message: string }) {
+  return (
+    <p role="status" className="mb-5 border-brand-line border-l-2 py-1 pl-3 text-ink text-sm">
       {message}
     </p>
   );

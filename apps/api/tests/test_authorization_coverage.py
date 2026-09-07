@@ -59,6 +59,18 @@ EXEMPT: Final = {
     # supplied, so the only account it can affect is the caller's own. Requiring
     # `owner` here would stop a member ever proving their own address.
     "resend_verification",
+    # Authenticated, and deliberately available to *any* role, for the same
+    # reason as `resend_verification`: all three act on `identity.user` and take
+    # no user id from a path or a body, so the only account any of them can
+    # affect is the caller's own. A policy here would say "only an owner may
+    # change their own name", which is not a rule anybody wants — and the day
+    # F26 adds a member, it would be the rule that stops them ever setting a
+    # password. `change_password` carries its own gate instead, and a stronger
+    # one than a role: it verifies the current password, which is the one thing
+    # a stolen session cannot supply.
+    "update_profile",
+    "change_password",
+    "sign_out_everywhere",
     # A POST that reads. Symbolication turns minified frames back into original
     # ones and writes nothing; it is a POST because a stack trace does not fit
     # in a query string.

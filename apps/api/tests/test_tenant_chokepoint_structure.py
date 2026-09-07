@@ -103,8 +103,12 @@ def _telemetry_tables() -> frozenset[str]:
 
 TELEMETRY_TABLES: Final = _telemetry_tables()
 
+# `ALTER TABLE <t> DELETE` is the third way to name a telemetry table, and until
+# 2026-09-08 this pattern could not see it: a mutation has neither FROM nor JOIN,
+# so **the one statement that can empty the store was invisible to the guard that
+# exists to watch statements**. Found while building the purge path (C6).
 _READS_A_TELEMETRY_TABLE: Final = re.compile(
-    r"\b(?:FROM|JOIN)\s+(" + "|".join(sorted(TELEMETRY_TABLES)) + r")\b",
+    r"\b(?:FROM|JOIN|ALTER\s+TABLE)\s+(" + "|".join(sorted(TELEMETRY_TABLES)) + r")\b",
     re.IGNORECASE,
 )
 
@@ -144,12 +148,39 @@ def _interpolations(node: ast.Constant | ast.JoinedStr) -> tuple[ast.expr, ...]:
     return tuple(part.value for part in node.values if isinstance(part, ast.FormattedValue))
 
 
+def _docstrings(tree: ast.AST) -> set[int]:
+    """The id of every docstring node in a module.
+
+    Docstrings are prose, not statements, and this file's own explanations name
+    the tables they are about. Widening the pattern to `ALTER TABLE` made that
+    matter immediately: `purge/service.py` opens by explaining why
+    `ALTER TABLE spans DELETE` is not one statement, and the guard read the
+    sentence as SQL missing a tenant binding.
+    """
+    holders = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, holders) or not node.body:
+            continue
+        first = node.body[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            ids.add(id(first.value))
+    return ids
+
+
 def _telemetry_sql() -> list[SqlLiteral]:
     """Every string in the API that reads a telemetry table."""
     found: list[SqlLiteral] = []
     for module in API_MODULES:
+        prose = _docstrings(module.tree)
         for node in ast.walk(module.tree):
             if not isinstance(node, ast.Constant | ast.JoinedStr):
+                continue
+            if id(node) in prose:
                 continue
             text = _static_text(node)
             if _READS_A_TELEMETRY_TABLE.search(text):

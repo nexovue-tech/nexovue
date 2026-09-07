@@ -51,6 +51,21 @@ function fieldErrorsFrom(error: ApiError): Record<string, string> {
   return byField;
 }
 
+/** Shown when the API refused a link without explaining — a 5xx, not a spent token. */
+const LINK_REFUSED_WITHOUT_REASON = "That link could not be checked just now. Try again shortly.";
+
+/**
+ * Why a recovery link did not work, in the API's own words wherever it gave them.
+ *
+ * The API answers every way a link can fail — never issued, already spent, expired,
+ * minted for the other purpose — with one message on purpose: telling them apart would
+ * tell an attacker which guesses were once real. So this passes that message straight
+ * through and never tries to narrow it.
+ */
+export function describeLinkRefusal(error: unknown): string {
+  return describeFormProblem(error).message ?? LINK_REFUSED_WITHOUT_REASON;
+}
+
 export function describeFormProblem(error: unknown): FormProblem {
   if (!(error instanceof ApiError)) return NO_PROBLEM;
 

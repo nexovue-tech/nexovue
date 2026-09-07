@@ -32,6 +32,7 @@ from nexovue_api.middleware.correlation import CorrelationIdMiddleware
 from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
 from nexovue_api.middleware.ratelimit import RateLimitMiddleware
 from nexovue_api.middleware.request_log import RequestLogMiddleware
+from nexovue_api.profile import router as profile_router
 from nexovue_api.projects import router as projects_router
 from nexovue_api.rum import router as rum_router
 from nexovue_api.servicemap import router as service_map_router
@@ -105,6 +106,7 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(system_router.router)
     versioned.include_router(signup_router.router)
     versioned.include_router(auth_router.router)
+    versioned.include_router(profile_router.router)
     versioned.include_router(projects_router.router)
     versioned.include_router(apikeys_router.router)
     versioned.include_router(apikeys_router.site_key_router)

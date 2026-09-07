@@ -27,6 +27,17 @@ from nexovue_api.settings import API_PREFIX
     [
         (f"{API_PREFIX}/auth/login", AUTH_TIER),
         (f"{API_PREFIX}/signup", AUTH_TIER),
+        (f"{API_PREFIX}/auth/password-reset", AUTH_TIER),
+        (f"{API_PREFIX}/auth/password-reset/confirm", AUTH_TIER),
+        (f"{API_PREFIX}/auth/verify-email", AUTH_TIER),
+        # Every route that checks a credential belongs on the strict tier, and
+        # this one does not look like it does: changing a password verifies the
+        # current one, so on the default tier it is 300 guesses a minute for
+        # whoever holds a stolen session.
+        (f"{API_PREFIX}/profile/password", AUTH_TIER),
+        # …and the rest of the profile is an ordinary authenticated write.
+        (f"{API_PREFIX}/profile", DEFAULT_TIER),
+        (f"{API_PREFIX}/profile/sign-out-everywhere", DEFAULT_TIER),
         (f"{API_PREFIX}/traces", TELEMETRY_TIER),
         (f"{API_PREFIX}/traces/abc123", TELEMETRY_TIER),
         (f"{API_PREFIX}/logs", TELEMETRY_TIER),

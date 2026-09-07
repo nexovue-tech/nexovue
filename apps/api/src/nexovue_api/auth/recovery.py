@@ -8,9 +8,22 @@ splits along those lines with `sessions`, `credentials`, `policy` and `tokens`.
 **Two rules run through every function here.**
 
 *Nothing tells a stranger whether an address has an account.* The reset endpoint
-answers identically for a known and an unknown address, does the same work for
-both, and reveals nothing in timing — `credentials.verify_password` already
-carries the same rule for sign-in and the reasoning is quoted there.
+answers identically for a known and an unknown address, **including when the
+mail provider fails**, which is the part this file originally got wrong: a send
+that raised escaped as a 5xx for a known address while an unknown one still got
+202, so a provider having a bad minute turned the form into the oracle the
+design exists to prevent. `credentials.verify_password` carries the same rule for
+sign-in and the reasoning is quoted there.
+
+**What is *not* claimed is constant time.** The known path makes a network call
+and the unknown path returns immediately, so the two are distinguishable by
+somebody measuring carefully. Equalising that would mean doing a fake send, and a
+fake send is a thing that can itself fail and be measured. What bounds the attack
+instead is the rate limiter: `/auth/password-reset` sits on `AUTH_TIER`, ten a
+minute per address and per IP, which makes enumeration by stopwatch expensive
+enough to be a poor way to learn something a signup form would also reveal. This
+paragraph replaces an earlier sentence claiming the timing revealed nothing,
+which was untrue when written.
 
 *A refusal never explains itself.* `consume` returns `None` for a token that was
 never issued, already spent, expired, or minted for the other purpose, and all
@@ -27,6 +40,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Final
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
@@ -36,6 +50,8 @@ from nexovue_api.auth.tokens import OneTimeTokenStore, TokenPurpose
 from nexovue_api.data.postgres.models import Organization, User
 from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.notifications import EmailError, EmailSender, Message
+
+_log = structlog.get_logger(__name__)
 
 # One message for every way a link can fail to work. See the module docstring.
 LINK_NO_LONGER_VALID: Final = (
@@ -120,9 +136,19 @@ async def request_password_reset(
 ) -> None:
     """Mail a reset link if the address has an account, and say nothing either way.
 
-    The caller must answer the same regardless, so this returns `None` in both
-    cases and raises only when the *provider* failed — which is our fault and
-    not a fact about the address.
+    **Returns `None` on every path, including a provider that refused.** An
+    earlier version let `EmailError` escape, which meant a known address got a
+    5xx and an unknown one got 202 whenever the provider was unhealthy — the
+    account-existence oracle this endpoint is shaped to avoid, appearing exactly
+    when somebody is having a bad day and would not think to look.
+
+    A failure is loud in the log and silent in the response, which is the only
+    split that keeps both properties: the operator learns the provider is
+    refusing, and the caller learns nothing about the address.
+
+    `EmailNotConfiguredError` is deliberately *not* caught here — it is raised by
+    the `EmailDelivery` dependency before this function runs, so it fails the
+    request identically for every address and carries no signal.
     """
     found = await find_active_user_by_email(db, normalize_email(address))
     if found is None:
@@ -132,14 +158,24 @@ async def request_password_reset(
     token = await tokens.issue(
         purpose=TokenPurpose.RESET_PASSWORD, user_id=str(user.id), ttl_seconds=ttl_seconds
     )
-    await email.send(
-        to=user.email,
-        message=Message.RESET_PASSWORD,
-        data={
-            "link": _link(app_base_url, "reset-password", token),
-            "expires_in": describe_lifetime(ttl_seconds),
-        },
-    )
+    try:
+        await email.send(
+            to=user.email,
+            message=Message.RESET_PASSWORD,
+            data={
+                "link": _link(app_base_url, "reset-password", token),
+                "expires_in": describe_lifetime(ttl_seconds),
+            },
+        )
+    except EmailError as refused:
+        # Loud here, silent to the caller. See the docstring: raising would tell
+        # a stranger the address exists.
+        _log.error(
+            "a password reset link could not be sent; the customer has been told nothing",
+            user_id=str(user.id),
+            error=str(refused),
+        )
+        return
     audit.record_password_reset_requested(db, user=user)
 
 

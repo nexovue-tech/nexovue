@@ -6,8 +6,12 @@ import {
   Outlet,
 } from "@tanstack/react-router";
 
+import { ForgotPasswordScreen } from "@/features/auth/ForgotPasswordScreen";
 import { LoginScreen } from "@/features/auth/LoginScreen";
+import { ResetPasswordScreen } from "@/features/auth/ResetPasswordScreen";
 import { SignupScreen } from "@/features/auth/SignupScreen";
+import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
+import { VerifyEmailScreen } from "@/features/auth/VerifyEmailScreen";
 import { DatabaseScreen } from "@/features/database/DatabaseScreen";
 import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
@@ -48,9 +52,9 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({
 });
 
 /**
- * Pathless layout route: everything signed-in renders inside the shell. `/login`,
- * `/signup` and `/onboarding` deliberately sit outside it — there is no project, time
- * range or navigation to show yet.
+ * Pathless layout route: everything signed-in renders inside the shell. The bare screens
+ * — `/login`, `/signup`, `/onboarding` and the three recovery screens — deliberately sit
+ * outside it: there is no project, time range or navigation to show yet.
  */
 const shellRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -167,8 +171,14 @@ const settingsApiKeysRoute = createRoute({
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
-  component: LoginScreen,
+  component: LoginRoute,
+  validateSearch: parseLoginSearch,
 });
+
+/** The route owns the search param; the screen owns everything after it. */
+function LoginRoute() {
+  return <LoginScreen notice={loginRoute.useSearch().notice} />;
+}
 
 const signupRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -180,6 +190,48 @@ const onboardingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/onboarding",
   component: OnboardingScreen,
+});
+
+/**
+ * The two screens a mailed link lands on, plus the form that asks for one.
+ *
+ * Unauthenticated and outside the shell like the rest: the customer clicks these from a
+ * mail client, which is a different browser session from the one they signed up in. The
+ * API builds the addresses in `auth/recovery.py::_link` and puts the token in the query
+ * string, so these paths and that function have to agree.
+ *
+ * None of them belongs in route-manifest.ts — that table drives the sidebar, and neither
+ * does /login or /signup.
+ */
+
+const verifyEmailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/verify-email",
+  component: VerifyEmailRoute,
+  validateSearch: parseTokenSearch,
+});
+
+/** The route owns the search param; the screen owns everything after it. */
+function VerifyEmailRoute() {
+  return <VerifyEmailScreen token={verifyEmailRoute.useSearch().token} />;
+}
+
+const resetPasswordRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/reset-password",
+  component: ResetPasswordRoute,
+  validateSearch: parseTokenSearch,
+});
+
+/** The route owns the search param; the screen owns everything after it. */
+function ResetPasswordRoute() {
+  return <ResetPasswordScreen token={resetPasswordRoute.useSearch().token} />;
+}
+
+const forgotPasswordRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/forgot-password",
+  component: ForgotPasswordScreen,
 });
 
 /* ---------------------------------------------------------------------- router */
@@ -212,6 +264,9 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   signupRoute,
   onboardingRoute,
+  verifyEmailRoute,
+  resetPasswordRoute,
+  forgotPasswordRoute,
 ]);
 
 function RouteError({ error, reset }: { error: Error; reset: () => void }) {

@@ -29,7 +29,8 @@ never when the code was written.
 | **G5** | ingest kill switch — both halves, proved end to end | ✅ **done** | `10ae52f` `58986ea` |
 | **G6a** | paid-tier browser cap | ⬜ **and larger than this file said** — see §5a | — |
 | **G7** | SDK distribution | ⬜ blocked on a deployment target | — |
-| **C1–C7** | commercial layer | ⬜ **unblocked now G2 is done**; C2 also needed G6c, which is decided | — |
+| **C4** | P1-72 profile & security | 🟡 **API done 2026-09-08**; screen, email change and timezone not built | `pending` |
+| **C1–C3, C5–C7** | the rest of the commercial layer | ⬜ **unblocked now G2 is done**; C2 also needed G6c, which is decided | — |
 | **M1** | four blank §4 budgets | ⬜ | — |
 | **M2** | P1-50, the 24-hour soak | ⬜ **last thing before Phase 2** | — |
 | **M3** | pprof on the admin listener | ✅ **done** | `10ae52f` |
@@ -890,12 +891,65 @@ to rediscover them.
 - **No row proving any of it came from a real browser.** The schema facts are from
   `system.columns`; every row was written by the writer under test.
 
+**One was found by a test failing for a reason nobody had considered**, and it is the most
+interesting thing in this section:
+
+- **A worker crash duplicated metric rows, and block-level deduplication did not stop it.**
+  `test_synthetics_live.py::test_the_phases_of_a_probe_sum_to_the_duration_it_reported` failed with
+  `81.026 == 40.513 ± 4.05` — **exactly 2×**, which is a double-count and not flakiness.
+  `CHECK_RUNS_SQL` groups by the exact nanosecond and reads the duration with `anyIf` and the phases
+  with `sumIf`, so duplicate rows double one and not the other. Two probe instants were found
+  carrying **10 phase rows where a check writes 5**, at 19:39:38 and 19:59:38 — both inside the
+  window in which ClickHouse was wedged at its memory ceiling and the worker died mid-insert with
+  *"pipeline ended; the worker cannot continue"*.
+
+  **Every telemetry table already sets `non_replicated_deduplication_window = 1000`** — checked on
+  the live server, and `trace_summaries` is the one exception. So the protection was on and did not
+  help, because block deduplication catches an *identical block*: a worker that dies mid-batch and
+  re-consumes from its last committed offset rebuilds batches on different boundaries, so the same
+  records arrive inside a block with a different hash and are inserted again.
+
+  **Three pipelines already solve this and the rest do not.** `derive`, `serviceedges` and `vitals`
+  carry an explicit `insertdedup` token derived from the row content; `metricwriting`, and the span
+  and log writers, rely on the block hash alone. Phase 1's invariant is *"no data loss between
+  receiver and storage"* — this is its mirror image, data **gained**, and nothing in the suite was
+  watching for it.
+
+  Not fixed here. It is a design question about idempotent writes across a restart, it wants its own
+  measurement, and the honest thing today is that it was found rather than that it was handled. The
+  failing test will pass once its window rolls past 19:59; that is the residue ageing out, not the
+  defect being fixed.
+
 **Four are smaller:**
 
-- **The schemaprobe suite is once-per-minute.** `rollupToken` is correctly stable for identical
-  rows in one minute, so a second run inside 60 seconds deduplicates to nothing and every rollup
-  assertion reads 0 — **green, having verified nothing**, which is rule 12's own failure mode. It
-  needs a per-run discriminator or a warning where somebody will read it.
+- ~~**The schemaprobe suite is once-per-minute** … a second run reads 0 — **green, having verified
+  nothing**.~~ **Wrong, and corrected 2026-09-08 by running it. FIXED the same day.**
+
+  The mechanism was right and the consequence was not. `rollupToken` folds the minute bucket and
+  every other fixture field was a literal, so a second run inside one wall-clock minute derived an
+  identical `insert_deduplication_token`; `web_vitals_1m` carries
+  `non_replicated_deduplication_window = 1000`, so ClickHouse **dropped the insert and returned
+  success**. But the suite did not go green — all eleven assertions expected a non-zero value, so
+  it went **red, with a misleading error**: `quantilesMerge` over an empty set raises
+  `Unexpected inf or nan to integer conversion`, which reads as a quantile or schema bug and names
+  deduplication nowhere. That is arguably worse than a false green, because it is the message that
+  could talk somebody into weakening the token — and the token's stability is what stops a retried
+  batch double-counting a customer's usage.
+
+  **I recorded the false-green claim from an agent's report without running it**, which is the
+  thing rule 12 exists to prevent, in the section written to catch things nobody had run.
+
+  Fixed with both shapes rather than either: a per-run discriminator in the probe's tenant (which is
+  in the sort key, so the rows differ honestly and the token differs with them), and assertions that
+  refuse a zero expectation outright plus an `assertInsertLanded` check that names
+  `insert_deduplication_token` as the cause. `rollupToken` and the dedup setting are untouched.
+  **Verified here: two runs at 19:41:34 and 19:41:35 UTC, the same minute, both `ok`.** Note the
+  suite needs `PROBE_CH_ADDR=127.0.0.1:19000`, which its own header documents.
+
+  **The raw insert path never had it** — `readingToken` folds `ReceivedAt` at nanosecond precision,
+  so it differs every run; on the failing run every raw assertion passed while every rollup one read
+  zero. `metricwriting`'s probe has no `insert_deduplication_token` at all, so it is not affected —
+  read rather than run.
 - **G1's CSP has not met a browser** — see §1.
 - **The worker image has not been rebuilt** since ADR 0108, so the running dev receiver still
   writes empty routes.
