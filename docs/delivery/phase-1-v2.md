@@ -510,6 +510,41 @@ couples every screen to one generated schema.
 
 **No logic was found that is wrong by design.** All three items above are structural.
 
+## 4e. Read this file against rule 14
+
+**Nothing is deployed and nobody is a customer.** Recorded as `CLAUDE.md` rule 14 on 2026-09-07,
+and it changes how several items above should be read — because a recommendation shaped by a
+constraint that does not exist is answering the wrong question.
+
+**What it does *not* change.** Every gate item stands. G1–G7 are all things that must be true
+*before* the first customer, and being pre-deployment is exactly why they are cheap now. A1 is the
+clearest case: the argument for doing the authorization seam first is *entirely* that no behaviour
+depends on it yet.
+
+**What it does change, and it is worth being explicit:**
+
+- **Migrations are not append-only yet.** Wherever this file or `open-decisions` reasons about a
+  deploy window, a column arriving before the code that writes it, or a customer part-way through
+  their allowance when a migration lands — none of that applies. **Rewrite the migration.** T1-3 was
+  removed by adopting 1a; it could equally have been removed by editing 0016, and that is the
+  cheaper answer while `alembic downgrade` costs nothing.
+- **`integrations.config_encrypted` should be renamed.** ADR 0076 records that the column holds
+  plain UTF-8 JSON and that *"the column name predates this decision and is now misleading"*, and
+  lists renaming under Consequences. There is no data to migrate and no reader outside this repo.
+  It is a rename, and rule 6 asks for intention-revealing names.
+- **G7's version-default question is smaller than it reads.** *"A fix we ship reaches nobody without
+  the customer editing their HTML"* describes customers who do not exist. Pick the scheme that is
+  right for the end state — versioned immutable paths with an auto-updating default — and ship it
+  once, rather than treating it as a trade-off to be balanced.
+- **The paid-tier cap number (G6b) is still genuinely blocked**, and for a reason rule 14 does not
+  dissolve: there is no usage data because there is no usage. Being pre-deployment is *why* it is
+  blocked, not an argument for guessing.
+
+**The one thing rule 14 sharpens rather than relaxes:** anything a customer will paste into their
+own configuration — the ingest hostname, the SDK URL scheme, the ingest key format — is a one-way
+door the moment someone uses it. Those are worth more care now, not less, precisely because
+changing them is free today and expensive on the day after launch.
+
 ## 5. The order I would actually take
 
 **First — A1, the authorization seam.** It is the only item on this whole list that gets

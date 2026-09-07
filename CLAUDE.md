@@ -46,6 +46,29 @@ simplification of the engineering: keep every measurement, and never soften a re
 it easier to say. It lapses specifically in status reports, findings lists and "what's next", which
 is where it has had to be corrected twice — so check those before sending.
 
+**14. Nothing is deployed and nobody is a customer.** This is pre-deployment
+development. There is no production, no staging, no customer, no data anyone
+would miss, and no version anybody is running. **So propose the correct fix, not
+the compatible one.** Rename the column, change the shape, delete the migration
+and write it again, break the API, redo the schema — none of it costs what it
+would cost later, and doing it later is what costs.
+
+Reasoning that does not apply yet, and must not be used as an argument: a deploy
+window, a backwards-compatible migration, a customer already part-way through
+their allowance, an existing key or URL somebody would have to edit, a rollout
+plan, a feature flag to protect a live path, a deprecation period. If a
+recommendation leans on any of those, it is answering a question this project
+does not have.
+
+What *does* still apply: a decision that will be hard to reverse **after** the
+first customer — a public URL shape, a stored credential scheme, a hostname
+customers paste into their own config — is worth getting right now precisely
+because it is cheap now. The rule is not "care less". It is **"the constraint
+you are designing around does not exist yet, so design for the end state."**
+
+Say so when a plan is being shaped by an absent constraint. It is the most
+common way this project's work gets made worse than it needs to be.
+
 ## Invariants (Phase 1)
 
 Tenant isolation enforced at the repository layer · no data loss between receiver and storage · metrics derived from all traces **before** sampling · every door normalizes to one internal envelope before the broker · performance budgets in `docs/delivery/phase-1-plan.md` §4 measured, not estimated.
