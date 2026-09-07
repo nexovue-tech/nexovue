@@ -51,8 +51,16 @@ const brokerRetryAfter = 5 * time.Second
 const (
 	messageUnauthenticated = "invalid or missing " + auth.HeaderName + " credential"
 	messageThrottled       = "ingest rate limit exceeded for this key"
-	messageBrokerDown      = "ingestion buffer unavailable, retry"
-	messageUnavailable     = "receiver cannot serve this request, retry"
+
+	// Named apart from messageThrottled because the number this refused at is
+	// not the configured one: the shared counter is unreachable, so each
+	// receiver is bounding itself at a multiple of the limit (ADR 0104). A
+	// customer told only "rate limit exceeded" would check their configured
+	// limit, find themselves under it, and be right.
+	messageThrottledInProcess = "ingest rate limit exceeded: the shared rate counter is " +
+		"unavailable and a per-receiver limit is in force, retry"
+	messageBrokerDown  = "ingestion buffer unavailable, retry"
+	messageUnavailable = "receiver cannot serve this request, retry"
 )
 
 // The plan refusal names the date, because "when does this come back" is the
@@ -72,6 +80,12 @@ const (
 	// valid — revoking it belongs with account deletion, not here — and a
 	// customer reading this needs to know which of the two is gone.
 	messageOrganizationGone = "this organization has been deleted; ingestion is closed"
+
+	// The stop valve is operational and not billing, and the message has to say
+	// so: this customer may be nowhere near their allowance. It names no date
+	// because there is none — a person closed the valve and a person opens it —
+	// so the only useful next step is the one it gives.
+	messageIngestSuspended = "ingestion is suspended for this organization; contact support"
 )
 
 // allowanceResetLayout is a plain calendar date. Not RFC 3339: the allowance
@@ -79,15 +93,21 @@ const (
 // read a timezone into it that is not there.
 const allowanceResetLayout = time.DateOnly
 
-func allowanceSpentMessage(verdict allowance.Verdict) string {
-	// A deleted organization is not over its allowance and has no reset date to
-	// name. Reusing the spent wording would tell whoever still holds the key to
-	// come back on the 1st, which is not true and never becomes true.
-	if verdict.Gone {
+// ingestRefusedMessage is what the plan gate tells the caller, and each cause
+// gets its own wording because each has a different ending. Reusing the spent
+// wording for either of the other two would tell the caller to come back on the
+// 1st — untrue for a deleted organization, and untrue for a suspension, which
+// ends when a person ends it.
+func ingestRefusedMessage(verdict allowance.Verdict) string {
+	switch verdict.Cause {
+	case allowance.OrganizationGone:
 		return messageOrganizationGone
+	case allowance.IngestSuspended:
+		return messageIngestSuspended
+	default:
+		return messageAllowanceSpentPrefix + volumeNameOf(verdict.Budget) +
+			messageAllowanceSpentSuffix + verdict.ResetsOn.UTC().Format(allowanceResetLayout)
 	}
-	return messageAllowanceSpentPrefix + volumeNameOf(verdict.Budget) +
-		messageAllowanceSpentSuffix + verdict.ResetsOn.UTC().Format(allowanceResetLayout)
 }
 
 // volumeNameOf is what the refusal calls the budget that ran out. Two names,

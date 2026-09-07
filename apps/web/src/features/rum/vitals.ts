@@ -1,4 +1,6 @@
-import type { WebVitalSummary } from "./api";
+import { formatCount } from "@/shared/format/number";
+
+import type { WebVitalGroup, WebVitalSummary } from "./api";
 
 /**
  * What a Core Web Vital means once it is a number on a screen.
@@ -162,6 +164,56 @@ export function readableVitals(summaries: readonly WebVitalSummary[]): ReadableV
       readings: summary?.readings ?? 0,
     };
   });
+}
+
+/* --------------------------------------------------------- the breakdowns */
+
+/** A measurement the sample size will not support. Never a zero. */
+export const UNMEASURED = "—";
+
+/** What an empty `key` is called: the browser sent no path or no device class. */
+export const UNLABELLED_GROUP = "not reported";
+
+/** How many readings a cell rests on, in the words the cards already use. */
+export function describeReadings(readings: number): string {
+  if (readings === 0) return "not reported on this row";
+  if (readings < MIN_READINGS) {
+    return `${formatCount(readings)} readings — too few for a percentile`;
+  }
+  return `${formatCount(readings)} readings`;
+}
+
+export interface BreakdownCell extends ReadableVital {
+  /** Why the cell reads as it does. Always present, because a dash must explain itself. */
+  detail: string;
+}
+
+export interface ReadableGroup {
+  key: string;
+  /** The path or device class as a person reads it. */
+  label: string;
+  cells: BreakdownCell[];
+}
+
+/**
+ * One breakdown row: the same five vitals, judged by the same thresholds.
+ *
+ * A split makes every count smaller — `MIN_READINGS` mattered at the site level and
+ * decides most cells at the page level — so a cell under the threshold shows a dash and
+ * its count rather than the percentile. On a card a dimmed number sits beside the words
+ * "Not enough data"; in a table there is no room for that, and a fast-looking number in
+ * a column of real ones invites exactly the comparison it cannot support.
+ */
+export function readableGroup(group: WebVitalGroup): ReadableGroup {
+  return {
+    key: group.key,
+    label: group.key === "" ? UNLABELLED_GROUP : group.key,
+    cells: readableVitals(group.vitals).map((vital) => ({
+      ...vital,
+      display: vital.rating === "insufficient" ? UNMEASURED : vital.display,
+      detail: describeReadings(vital.readings),
+    })),
+  };
 }
 
 /**

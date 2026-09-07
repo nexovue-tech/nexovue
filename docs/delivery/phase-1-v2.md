@@ -22,7 +22,7 @@ never when the code was written.
 | **A1** | authorization seam — `require_role`, 8 routes, coverage test | ✅ **done** | `7e930d5` |
 | **A2** | contract tests — auth mode + ClickHouse table names | ✅ **done** | `e18713c` |
 | **A3** | `packages/py-platform` — 299 duplicated lines removed | ✅ **done** | `f4291d8` |
-| **G1** | TLS edge | 🟡 **decisions taken, headers unbuilt** | `42c3b48` |
+| **G1** | TLS edge | 🟡 **decisions taken; the two site blocks and the headers are being built now** | `42c3b48` |
 | **G2** | account recovery | 🟡 **P1-69 infrastructure done; P1-70/71 not started** | `a6ef9cd` `9febb8a` `3a76dda` |
 | **G3** | poller SSRF boundary | ✅ **done** | `pending` |
 | **G4** | poller certificate verification | ✅ **done** | `f26ec33` |
@@ -30,8 +30,8 @@ never when the code was written.
 | **G6** | paid-tier cap | ⬜ | — |
 | **G7** | SDK distribution | ⬜ | — |
 | **C1–C7** | commercial layer | ⬜ gated on G2 | — |
-| **M1–M5** | measurements | ⬜ | — |
-| **F1–F5** | findings | ⬜ | — |
+| **M1–M4** | measurements | ⬜ | — |
+| **F1–F5** | findings | 🟡 **F2 done; F5 part-done** | `pending` |
 | **D1** | `url.full` trimmed to the path — ADR 0103 | ✅ **decided and fixed** | `pending` |
 | **D2** | limiter fail-open — ADR 0104 | ✅ **decided**, fallback unbuilt | `pending` |
 | **D3** | sampling and masking are customer controls — ADR 0105 | ✅ **decided** | `pending` |
@@ -44,12 +44,19 @@ string leaves the page. It is fixed, in the SDK and in the probe, with negative 
 
 ### What "partly done" means for the two 🟡 rows
 
-**G1.** Both decisions it deferred are now taken and written into `deploy/caddy/Caddyfile`: two
-hostnames — `app.nexovue.com` and `ingest.nexovue.com` — and no public gRPC in Phase 1. ADR 0089
-made the hostname a privacy requirement rather than a preference, and the cookie half is settled by
-an omission that now carries a comment: `auth/cookies.py` sets no `Domain`, which makes the session
-cookie host-only. **The security headers are still unbuilt**, and that is the whole of what G1 has
-left.
+**G1.** Both decisions it deferred are now taken: two hostnames — `app.nexovue.com` and
+`ingest.nexovue.com` — and no public gRPC in Phase 1. ADR 0089 made the hostname a privacy
+requirement rather than a preference, and the cookie half is settled by an omission that now carries
+a comment: `auth/cookies.py` sets no `Domain`, which makes the session cookie host-only.
+
+~~Both decisions are *written into* `deploy/caddy/Caddyfile`.~~ **Corrected 2026-09-07 — they were
+written into it as a comment, not as configuration.** `git show 42c3b48:deploy/caddy/Caddyfile`
+has one site block, `{$NEXOVUE_PUBLIC_HOST}`, under a comment beginning *"Two names, decided
+2026-09-07"*. The commit replaced a TODO with the reasoning behind the answer and left the config
+serving a single name, so a reader taking this row at its word would have believed a two-hostname
+edge existed when one did not. The two site blocks — `{$NEXOVUE_APP_HOST}` and
+`{$NEXOVUE_INGEST_HOST}` — are being built now, alongside the headers. This is the plainest form of
+the rule this file opens with: where the document and the config disagreed, the config was right.
 
 **G2.** P1-69's infrastructure is complete and verified: provider chosen, `mail.nexovue.com`
 carrying SPF, DKIM, DMARC and a bounce path — all four confirmed resolving against a public
@@ -70,7 +77,7 @@ now wraps every flow in `PublicAddressProxy`, which is [ADR 0096](../architectur
 shipped, extended by [0098](../architecture/decisions/0098-a-probe-reaches-a-private-address-only-when-two-settings-both-say-development.md).
 
 **P1-53's site-key finding is fixed.** *"A scraped site key can now spend a free org's whole
-month"* was closed by the per-door cap — open-decisions §1a, decided and shipped as M5 task zero,
+month"* was closed by the per-door cap — open-decisions §1a, decided and shipped as the plan's M5 task zero,
 with `allowance_test.go` holding the browser cap at 25% of the free tier.
 
 **P1-53's `TRUSTED_PROXY_COUNT` finding is fixed for the deployment that has an edge.**
@@ -99,9 +106,14 @@ Ordered by what blocks what, not by size.
 
 ### G1 · The edge terminates TLS and sets security headers · *P1-53 remainder*
 
-`deploy/caddy/Caddyfile` is labelled **SKELETON** in its own first line and carries two TODOs. It
-reverse-proxies four routes correctly and does nothing else: **no HSTS, no
-`X-Content-Type-Options`, no `Referrer-Policy`, no CSP, and no frame protection.**
+**As this section was written**, `deploy/caddy/Caddyfile` was labelled **SKELETON** in its own first
+line and carried two TODOs. It reverse-proxied four routes correctly and did nothing else: **no
+HSTS, no `X-Content-Type-Options`, no `Referrer-Policy`, no CSP, and no frame protection.**
+
+**Read the two recommendations below as the record of a decision, not as a description of the
+file.** `42c3b48` answered both of them *in a comment* and left the config serving one name — see
+the G1 note in the status section — so between that commit and the edge being built, this section
+and the Caddyfile disagreed and the Caddyfile was right.
 
 Two decisions it defers and this plan should not:
 
@@ -325,34 +337,36 @@ A deletion that leaves derived rows behind is not a deletion, and GDPR does not 
 
 ## 3. Exit criteria that are measurements, not features
 
-### M4 · Four budgets in §4 are still blank
+**How the numbers in this file are read, so "M4" cannot mean two things again.** `M1–M4`, `G1–G7`,
+`A1–A3`, `C1–C7`, `D1–D4`, `F1–F5` and `X1–X3` are **this file's own series** — the ones §5a counts.
+`P1-nn` is always a task number from `phase-1-plan.md`, and where a *plan milestone* is meant this
+file names it as one ("M8 in the plan"). Corrected 2026-09-07: §3's headings had been carrying the
+plan's milestone numbers while §5a counted a different M-series, so `M4` named the budgets here and
+the RUM breakdowns there.
+
+### M1 · Four budgets in §4 are still blank
 
 `Endpoint stats 24h`, `Log search 1h`, `First screen load`, and **`Data loss under broker restart:
 zero`** — the last of which is a Phase 1 invariant with no measurement behind it.
+
+### M2 · P1-50, the 24-hour soak
+
+Never run. The short-run numbers are all five-minute runs, and the failures a soak finds — leaks,
+unbounded growth, cache eviction behaviour, disk — are precisely the ones a five-minute run cannot.
+
+**This should be the last thing before Phase 2**, because it is the only test that exercises
+everything else at once.
+
+### M3 · pprof on the receiver's admin listener
 
 The re-encode budget is marked permanently unmeasurable *"until the receiver exposes a profile
 endpoint"*. **Recommendation: add `net/http/pprof` to the receiver's existing admin listener**,
 which is not exposed publicly. It is a few lines, it closes a budget the plan calls permanently
 open, and it is the same endpoint you would want the first time a receiver misbehaves in
-production.
+production. It is counted apart from M1 because it is a separate change that unblocks one of the
+four, not one of the four.
 
-### M5 · P1-50, the 24-hour soak
-
-Never run. The M1 numbers are all short runs, and the failures a soak finds — leaks, unbounded
-growth, cache eviction behaviour, disk — are precisely the ones a five-minute run cannot.
-
-**This should be the last thing before Phase 2**, because it is the only test that exercises
-everything else at once.
-
-### M6 · P1-57, the S3 cold tier — *listed here for completeness; deferred in §5*
-
-No ClickHouse storage policy exists — I checked `deploy/clickhouse/`. SeaweedFS is in compose and
-serves source maps through `ObjectStore`, not ClickHouse tiering.
-
-Without this, storage grows forever at the hot tier's cost. It is not a launch blocker for a small
-number of customers; it becomes one quickly.
-
-### P1-47 · The RUM screen owes its breakdowns
+### M4 · P1-47's RUM breakdowns by page and device
 
 `rum/queries.py` groups by `vital_name` alone. `url_path`, `device_class` and `session_id` are
 promoted columns populated on every row and read by nothing — the row asks for *"Core Web Vitals by
@@ -362,22 +376,63 @@ page/geo/device"*. `country` has no producer at all, because there is no GeoIP i
 this is a `GROUP BY`, not a migration. Geo needs a GeoIP decision nobody has taken and should not
 be smuggled in as part of a screen change. `MIN_READINGS = 10` is open in the same area.
 
+### X1 · P1-57, the S3 cold tier — *deferred in §5, and counted in the X row, not the M row*
+
+No ClickHouse storage policy exists — I checked `deploy/clickhouse/`. SeaweedFS is in compose and
+serves source maps through `ObjectStore`, not ClickHouse tiering.
+
+Without this, storage grows forever at the hot tier's cost. It is not a launch blocker for a small
+number of customers; it becomes one quickly.
+
+**Corrected 2026-09-07.** It sat under an `M6` heading in this section while §5 deferred it, and
+§5a counted it *twice* — once in the measurements row and once in the deferred row. It is deferred
+work, so it is X1 and the M row lost an item.
+
 ---
 
 ## 4. Evidence defects — the rule 12 tier
 
-Open-decisions Part 2's Tier 2 is six findings that share one root: **numbers were published from
-runs whose output was never saved.** T2-2 states it plainly — every headline survives only as
-prose, and nobody can re-derive it.
+Open-decisions Part 2's Tier 2 is **seven** findings — ~~six~~, corrected 2026-09-07 by counting
+the rows — and they share one root: **numbers were published from runs whose output was never
+saved.** T2-2 states it plainly — every headline survives only as prose, and nobody can re-derive
+it.
 
 The process fix landed on 2026-09-06 (`26a3d9d`): `rebalanceprobe`'s header now carries the capture
 instruction above its cleanup SQL. **The figures themselves are still unverifiable**, and the
 honest options are to re-run and capture, or to mark them as unreproduced. Either is fine; leaving
 them as confident prose is not.
 
-**T2-4, T2-5 and T2-7 are cheap and should just be corrected** — a stated baseline of 169 against a
-suite of 117, three different numbers for one test count, and a claim about `ipaddress` that the
-interpreter contradicts.
+~~**T2-4, T2-5 and T2-7 are cheap and should just be corrected** — a stated baseline of 169 against
+a suite of 117, three different numbers for one test count, and a claim about `ipaddress` that the
+interpreter contradicts.~~ **Done 2026-09-07, and one of the three was already right.** Each was
+settled by running the thing rather than by reasoning about it; open-decisions Part 2 carries the
+commands and their output.
+
+- **T2-4 was stale as a finding.** ADR 0096 does not state 169 — it states 117 → 186 and withdraws
+  169 in its own text, in the commit it landed in (`a4bb331`). Its numbers reproduce exactly:
+  `test_browser_proxy.py` **43**, `test_browser_flow.py` **19**, `test_browser_egress_live.py` **7**
+  (all three files untouched since), and the scheduler suite collects **216** today, which is 186
+  plus the 30 tests added since. Nothing to correct in the ADR; the finding's wording was what was
+  wrong.
+- **T2-5 stands and the method was the defect.** `-k "not live"` is a substring match: run today it
+  deselects **183** where `--ignore-glob='*_live.py'` leaves **1536**, and the 19-test gap is
+  offline tests with `live` inside a longer word — `test_a_replayed_delivery_is_refused`,
+  `liveness`, `test_minting_leaves_existing_keys_live`. The repo has a designed switch for this,
+  `NEXOVUE_SKIP_LIVE_TESTS=1` in `tests/helpers/live.py`, and neither published number used it.
+  **The 2026-09-04 figures themselves are UNREPRODUCED** — the suite has grown by ~380 tests since
+  and re-deriving them needs a checkout of that commit.
+- **T2-7 stands and is contradicted by the interpreter.** On this project's Python,
+  `ipaddress.ip_address("::ffff:127.0.0.1").is_loopback` is **True**. There is no hole —
+  `is_publicly_routable` requires `is_global` *and* the named flags — but ADR 0096 §2a's stated
+  reason for the second test is wrong.
+
+**ADRs are immutable here** (`docs/architecture/decisions/README.md`: *"Once an ADR is accepted it
+is never edited"*, the status line being the one permitted edit), and git confirms the rule is kept
+— the only post-acceptance ADR edits in this repository are supersession links. So T2-5's and
+T2-7's corrections are recorded in open-decisions Part 2 and, for T2-5, in the decisions-log row in
+`system-architecture.md`, which is an index rather than a record and is editable. **Whether an
+evidence error in an accepted ADR also warrants its own ADR is a decision for Raj**, not something
+to assume either way.
 
 **Three findings are one gate defect, and it is the same shape as rule 12 itself.** T3-4 —
 `PROXY_BYPASS_NOTHING` and the WebRTC flags are the only two lines whose removal produces a real
@@ -406,11 +461,52 @@ not less.
 newest effective row for any tier with a cap has a NULL in that column. The second generalises
 better, because the tiers that carry a cap are about to change.
 
-**T1-6 is smaller and worth doing with it.** `cleanup94.sh` takes unvalidated positional arguments
+~~**T1-6 is smaller and worth doing with it.** `cleanup94.sh` takes unvalidated positional arguments
 and can wipe `span_ingest_offsets` — the durable counted-through watermark whose loss produces
 exactly the silent permanent over-count ADR 0094 exists to describe. A measurement rig that can
 cause the defect it measures is a rig whose results cannot be trusted. It lives in a scratchpad and
-should either be validated or deleted.
+should either be validated or deleted.~~ **Closed 2026-09-07 by deleting it (F2).**
+
+The finding is accurate. Its two DELETEs are keyed
+`ALTER TABLE span_ingest_offsets DELETE WHERE startsWith(partition_key, '$TOPIC')`, and `$TOPIC` is
+the second positional argument with no check on it: an empty string matches every partition key in
+the table, and so does the real topic name `spans`, because `startsWith` is a prefix test. Either
+one silently deletes the counted-through watermarks for real traffic, and `usage/counting.go`'s
+`alreadyCounted` then stops skipping records the meter has already counted — the permanent
+over-count ADR 0094 exists to describe, caused by the tool that measures it.
+
+**It was deleted rather than validated**, because the cleanup it performs already lives in the
+repository: `tools/rebalanceprobe/main.go`'s package header carries every statement, and commit
+`26a3d9d` moved the capture instruction there deliberately — *"`rebalanceprobe`'s header is [a place
+people read], because that is where the cleanup SQL lives"*. The scratchpad script was a second copy
+of a contract that is supposed to have one, in a session-scoped temp directory outside the
+repository that nothing references and no future run would find. Validating it would have meant
+maintaining the duplicate that rule 11 says should have gone when the header replaced it.
+
+**One residual, and it is in the repository rather than the scratchpad.** That header documents the
+same unbounded predicate — `ALTER TABLE span_ingest_offsets DELETE WHERE startsWith(partition_key,
+'<topic>')` — so a person substituting `spans` for `<topic>` reaches the same outcome by hand.
+`ingeststate/keepermap.go` says the key is `"{topic}:{partition}"`, so a prefix test is the wrong
+shape for it twice over: `spans` matches the real `spans:0` *and* every probe topic named
+`spans-probe-…`. **The narrow fix is equality on the topic component** —
+`WHERE splitByChar(':', partition_key)[1] = '<topic>'` — which cannot reach a topic that merely
+starts the same way. **Not done here: `tools/` is code and this pass was scoped to documentation.**
+
+**And one step the deleted script had that the header does not**, recorded so deleting it loses
+nothing. A run leaves a consumer group and a topic behind as well as rows, and the header stops at
+the rows:
+
+```sh
+kafka-consumer-groups.sh --bootstrap-server localhost:9092 --delete --group '<group>'
+kafka-consumer-groups.sh --bootstrap-server localhost:9092 --delete --group '<group>-usage'
+kafka-topics.sh          --bootstrap-server localhost:9092 --delete --topic '<topic>'
+```
+
+Deleting the topic is also what makes the watermark question moot: with the topic gone, the rows
+keyed `<topic>:<partition>` are unreachable by any consumer, so the two `ALTER TABLE … DELETE`
+statements are tidiness rather than necessity — and tidiness is a poor reason to run an unbounded
+predicate against a `KeeperMap` guard. **These three lines belong in `rebalanceprobe`'s header
+beside the rest of the teardown.**
 
 ## 4a. Carried forward from the plan's own follow-up sections
 
@@ -589,7 +685,7 @@ implementation.
 `frozenset`.
 
 Correct today, because §9 decided Phase 1 is single-operator and every user is an owner. It stops
-being correct at M8's P1-76 or Phase 2's F26, and then **43 routes have no authorization at all** —
+being correct at the plan's M8 (P1-76) or Phase 2's F26, and then **43 routes have no authorization at all** —
 creating checks and integrations, posting deploys, rotating webhook secrets.
 
 **Why it cannot wait:** it is a cross-cutting concern retrofitted into 47 places, after a phase of
@@ -703,49 +799,72 @@ the only thing between a scraped key and a bill we cannot pass on. Then P1-73 an
 it. G6.3 — block or bill on overage — has to be answered before P1-74, and G6.2's number is
 correctly blocked on real RUM traffic, so it waits for P1-47.
 
-**Then — the measurements.** G5, the four blank budgets, pprof on the receiver, and finally P1-50's
-soak, which is the last thing before Phase 2 because it exercises everything the rest of this list
-just changed.
+**Then — the measurements.** G5, then M1's four blank budgets, M3's pprof on the receiver, and
+finally M2, P1-50's soak, which is the last thing before Phase 2 because it exercises everything the
+rest of this list just changed. (M4, the RUM breakdowns, is in the parallel list below rather than
+here — it is a screen change, not a measurement of the platform.)
 
 **Alongside the account gate, because it blocks the same documentation:** G7's SDK distribution.
 P1-54 cannot write door 3's setup guide until the script tag has a URL, and the version-default
 question inside it is a decision rather than a task.
 
 **In parallel, whenever a screen is being touched anyway:** P1-47's breakdowns, P1-54's remaining
-docs, §1c's `url.full` question, and the Tier 2 corrections.
+docs, and the Tier 2 corrections. *(§1c's `url.full` question was on this list and is not work any
+more — it was decided and built on 2026-09-07 as D1 / [ADR 0103](../architecture/decisions/0103-a-url-leaves-the-page-trimmed-to-its-path-unless-the-page-asked-otherwise.md),
+and §4c records what the decision found.)*
 
-**Deliberately not before Phase 2:** P1-57's cold tier (real but not a launch blocker at small
-scale), P1-68's retention downgrade path (the plan already records it as not a one-way door, and
-today's fixed `pro`-shaped retention over-serves rather than under-serves), and P1-26
-self-instrumentation, which §7a already defers until the platform runs somewhere real.
+**Deliberately not before Phase 2 — the X series, and there are three of them:**
+
+- **X1 · P1-57's cold tier** — real, but not a launch blocker at small scale. §3 has the detail.
+- **X2 · P1-68's retention downgrade path** — the plan already records it as not a one-way door,
+  and today's fixed `pro`-shaped retention over-serves rather than under-serves.
+- **X3 · P1-26 self-instrumentation** — §7a already defers it until the platform runs somewhere
+  real.
+
+**Corrected 2026-09-07: the count row said `X1–X4 … 4` and this paragraph named three.** The whole
+file was searched for a fourth deliberately-deferred item and there is not one — §4b's network
+monitoring and SIEM are *out of scope entirely* (D4 / ADR 0106) rather than deferred, F29 is
+recorded as homeless rather than deferred, and §1e is a decision scheduled for after Phase 2
+scoping which this file already says it does not count. So the count is 3, not 4, and the members
+are numbered here so the next reader can check it by counting them.
 
 ---
 
 ## 5a. The count
 
-**41 items. 31 are build work; 6 are decisions with no code; 4 are deliberately deferred past
+**37 items. 30 are build work; 4 are decisions with no code; 3 are deliberately deferred past
 Phase 2.** Sizes are relative — S is under a day, M is a few days, L is a week or more and usually
 carries a decision inside it.
 
-**It was 39 until the D-series was actually taken, and the two new rows are the point of taking
-it.** D1 turned out to be a live defect and is now a fixed build item; D2's decision spawns the
-limiter's in-process fallback. A decision list nobody works through is a list that hides work, not
-one that has none.
+**Taking the D-series moved build work from 28 to 30 and did not move the item count.** D1 turned
+out to be a live defect and is now a fixed build item; D2's decision spawns the limiter's in-process
+fallback. A decision list nobody works through is a list that hides work, not one that has none —
+but the work it hides was already on the list as a decision row, so it converts a row rather than
+adding one.
 
 | | Group | Items | Build work | Done |
 |---|---|---|---|---|
 | **G1–G7** | Gate — nothing ships to a paying customer until these are true | 11 | 9 | **3** + 1 partial |
 | **A1–A3** | Architecture — cheap now, expensive after Phase 2 | 3 | 3 | **3 — complete** |
-| **C1–C7** | Commercial layer (M8) | 7 | 7 | 0 |
-| **M1–M5** | Measurements and exit criteria | 5 | 5 | 0 |
-| **F1–F5** | Findings and gate defects | 5 | 5 | 0 |
+| **C1–C7** | Commercial layer (M8 in the plan) | 7 | 7 | 0 |
+| **M1–M4** | Measurements and exit criteria | 4 | 4 | 0 |
+| **F1–F5** | Findings and gate defects | 5 | 5 | **1** + 1 partial |
 | **D1–D4** | Decisions — no code was expected, two rows appeared | 4 | 2 *(found by deciding)* | **4 decided — complete**, 1 of 2 built |
-| **X1–X4** | Deferred past Phase 2 deliberately | 4 | 0 | n/a |
+| **X1–X3** | Deferred past Phase 2 deliberately | 3 | 0 | n/a |
+| | **totals** | **37** | **30** | **8 built** |
 
-**7 of 31 build items done, as of 2026-09-07.** Two series are complete: **A1–A3**, the
+**8 of 30 build items done, as of 2026-09-07.** Two series are complete: **A1–A3**, the
 architecture seams, taken first on the argument that it is the only work that gets materially
 harder after Phase 2; and **D1–D4**, the four decisions, which cost an afternoon and had sat
 untouched since this file was written.
+
+**Three numbers in this section were wrong until 2026-09-07 and are corrected above.** The headline
+said ~~41 items~~ while the rows summed to 39, and said ~~6 decisions with no code~~ where the rows
+carry 4 (G6b, G6c, D3, D4) — taking D1 and D2 had converted two decision rows into build rows and
+the headline had added them instead. On top of that, P1-57's cold tier was counted in **both** the
+measurement row and the deferred row, and the deferred row claimed a fourth member §5 never named.
+Removing the double count and the phantom leaves 37 items and 30 build items, and the totals row
+above exists so the next reader can add the column up rather than trust the sentence.
 
 **What taking them found, which is the argument for taking the cheap rows early:** D1 was not a
 decision at all but PII sitting in the store — a page-view record carrying a customer's postal
@@ -761,7 +880,7 @@ obligation since August. Only D3 was the shape it looked.
 | G2a · P1-69 email | ✅ | provider, DNS, port, adapter, composition root, real send |
 | G3 · poller SSRF boundary | ✅ | `2f06a98` |
 | G4 · poller certificate verification | ✅ | `f26ec33` |
-| G1 · TLS edge | 🟡 | hostname and gRPC decided; **security headers unbuilt** |
+| G1 · TLS edge | 🟡 | hostname and gRPC **decided in a comment rather than in config** (see the G1 note in the status section); the two site blocks and the security headers are being built now |
 | G2b · P1-70 verification | ⬜ | |
 | G2c · P1-71 password reset | ⬜ | |
 | G5 · ingest kill switch | ⬜ | |
@@ -797,9 +916,9 @@ and A2. **The cheapest quarter of this list closes the two open holes and the un
 | M3 | pprof on the admin listener |
 | M4 | RUM breakdowns by page and device |
 | F1 | T1-5 repricing guard |
-| F2 | T1-6 rig cleanup |
+| F2 | T1-6 rig cleanup — ✅ **done 2026-09-07**, by deleting the script |
 | F3 | the three tests that cannot fail |
-| F5 | the T2 corrections |
+| F5 | the T2 corrections — 🟡 **T2-4, T2-5 and T2-7 corrected 2026-09-07**; T2-1, T2-2, T2-3 and T2-6 need ADR 0094's measurement re-run and captured |
 
 ## 6. What "ready for Phase 2" means, stated as a test
 

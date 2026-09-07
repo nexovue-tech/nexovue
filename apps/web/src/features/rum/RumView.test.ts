@@ -78,6 +78,108 @@ describe("the RUM screen", () => {
     expect(text).toContain("Diagnostics");
   });
 
+  it("splits the numbers by page once more than one page reported", () => {
+    const text = render({
+      ...BASE,
+      vitals: readableVitals([{ name: "lcp", p75: 2000, readings: 100 }]),
+      breakdowns: {
+        page: {
+          dimension: "page",
+          truncated: false,
+          groups: [
+            { key: "/checkout", vitals: [{ name: "lcp", p75: 9000, readings: 60 }] },
+            { key: "/", vitals: [{ name: "lcp", p75: 400, readings: 40 }] },
+          ],
+        },
+      },
+    });
+    expect(text).toContain("/checkout");
+    expect(text).toContain("9.00 s");
+    expect(text).toContain("400 ms");
+    // Only one split has more than one group, so there is nothing to choose between.
+    expect(text).toContain("Page 2");
+    expect(text).not.toContain("Device");
+  });
+
+  it("shows a page the readings cannot carry as a dash rather than a fast number", () => {
+    const text = render({
+      ...BASE,
+      vitals: readableVitals([{ name: "lcp", p75: 2000, readings: 100 }]),
+      breakdowns: {
+        page: {
+          dimension: "page",
+          truncated: false,
+          groups: [
+            { key: "/busy", vitals: [{ name: "lcp", p75: 2000, readings: 90 }] },
+            { key: "/rare", vitals: [{ name: "lcp", p75: 120, readings: 3 }] },
+          ],
+        },
+      },
+    });
+    // The failure this prevents: /rare reading as the fastest page on the site
+    // because one visitor with a warm cache is the whole sample.
+    expect(text).toContain("/rare");
+    expect(text).not.toContain("120 ms");
+    expect(text).toContain("never a zero");
+  });
+
+  it("hides the split entirely when neither dimension has more than one group", () => {
+    const text = render({
+      ...BASE,
+      vitals: readableVitals([{ name: "lcp", p75: 2000, readings: 100 }]),
+      breakdowns: {
+        page: {
+          dimension: "page",
+          truncated: false,
+          groups: [{ key: "/", vitals: [{ name: "lcp", p75: 2000, readings: 100 }] }],
+        },
+        device: {
+          dimension: "device",
+          truncated: false,
+          groups: [{ key: "desktop", vitals: [{ name: "lcp", p75: 2000, readings: 100 }] }],
+        },
+      },
+    });
+    expect(text).not.toContain("Split by");
+  });
+
+  it("says the page list was cut rather than presenting it as the whole site", () => {
+    const text = render({
+      ...BASE,
+      vitals: readableVitals([{ name: "lcp", p75: 2000, readings: 100 }]),
+      breakdowns: {
+        page: {
+          dimension: "page",
+          truncated: true,
+          groups: [
+            { key: "/a", vitals: [{ name: "lcp", p75: 2000, readings: 50 }] },
+            { key: "/b", vitals: [{ name: "lcp", p75: 2000, readings: 50 }] },
+          ],
+        },
+      },
+    });
+    expect(text).toContain("not all of them");
+  });
+
+  it("names a device class the browser did not report instead of showing an empty row", () => {
+    const text = render({
+      ...BASE,
+      vitals: readableVitals([{ name: "lcp", p75: 2000, readings: 100 }]),
+      breakdowns: {
+        device: {
+          dimension: "device",
+          truncated: false,
+          groups: [
+            { key: "desktop", vitals: [{ name: "lcp", p75: 2000, readings: 50 }] },
+            { key: "", vitals: [{ name: "lcp", p75: 3000, readings: 50 }] },
+          ],
+        },
+      },
+    });
+    expect(text).toContain("desktop");
+    expect(text).toContain("not reported");
+  });
+
   it("offers a retry rather than an empty screen when the read failed", () => {
     const text = render({
       ...BASE,

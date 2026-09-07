@@ -42,6 +42,20 @@ const (
 	// deletion that did not finish, and a rising count here is the signal.
 	reasonOrganizationGone = "organization_gone"
 
+	// reasonIngestSuspended is the operator's stop valve closed on an
+	// organization (P1-52). Its own tally because it is neither a plan nor a
+	// rate problem and it is not the customer's doing: they are inside their
+	// allowance and we stopped them anyway. A window of these is us, and it is
+	// the only refusal here that a person has to lift by hand.
+	reasonIngestSuspended = "ingest_suspended"
+
+	// reasonThrottledInProcess is the fallback bound refusing while the shared
+	// rate counter is unreachable (ADR 0104). Counted apart from
+	// reasonThrottled because the number it refused at is not the configured
+	// one — it is a multiple of it, per receiver instance — and a support
+	// conversation that cannot tell the two apart is unanswerable.
+	reasonThrottledInProcess = "throttled_in_process"
+
 	reasonInvalid     = "invalid"
 	reasonUnavailable = "unavailable"
 	reasonInternal    = "internal"
@@ -59,9 +73,16 @@ const (
 // refusalReasons and degradationReasons fix the summary's shape: every window
 // reports every counter, so a zero is a fact rather than a missing field.
 var (
+	// Every reason a gate can produce is listed. A reason missing from here is
+	// not a cosmetic gap: it never appears in the summary, and `note` answers
+	// "worth a log line" for every occurrence, so the one thing that was meant
+	// to be counted quietly floods the log instead. `organization_gone` shipped
+	// missing and did exactly that.
 	refusalReasons = []string{
 		reasonUnauthenticated, reasonForbiddenOrigin, reasonThrottled,
+		reasonThrottledInProcess,
 		reasonAllowanceSpent, reasonBrowserAllowanceSpent,
+		reasonOrganizationGone, reasonIngestSuspended,
 		reasonInvalid, reasonUnavailable, reasonInternal,
 	}
 	degradationReasons = []string{reasonLimiterDown, reasonAllowanceUnknown}

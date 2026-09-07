@@ -3,6 +3,7 @@ package otlp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -131,6 +132,12 @@ func (o Options) authenticate(ctx context.Context, presentedKey string) (context
 //
 // The door asked about is the one the envelope will be stamped with, so the
 // budget judged here is the budget the meter charges (ADR 0097).
+//
+// The same answer carries the operator's stop valve (P1-52), which is not a
+// plan question at all: it is how a tenant that is inside its allowance and
+// still hurting the platform is stopped. It is refused here because this is
+// where the answer already is — a valve that cost a second lookup on every
+// export would be a valve nobody turns on.
 func (o Options) withinAllowance(ctx context.Context) *refusal {
 	identity, ok := auth.FromContext(ctx)
 	if !ok {
@@ -152,31 +159,35 @@ func (o Options) withinAllowance(ctx context.Context) *refusal {
 		}
 		return nil
 	}
-	if verdict.Spent {
+	if verdict.Refused() {
 		// RESOURCE_EXHAUSTED and deliberately no RetryInfo: the spec makes this
 		// code non-retryable unless one is attached, so a compliant client drops
 		// the batch instead of resending it until the 1st. A retryable refusal
 		// would lose the data anyway — the OTel Collector gives up on a queued
 		// batch after five minutes — and would spend three weeks of the
 		// customer's egress finding that out.
-		return refuse(code.Code_RESOURCE_EXHAUSTED, allowanceSpentMessage(verdict)).
-			countedUnder(allowanceSpentReason(verdict))
+		return refuse(code.Code_RESOURCE_EXHAUSTED, ingestRefusedMessage(verdict)).
+			countedUnder(ingestRefusedReason(verdict))
 	}
 	return nil
 }
 
-// allowanceSpentReason is the tally a spent budget is counted under. The
-// browser door's is its own: a window of server refusals says the customer's
-// free tier is over, where a window of browser refusals says their site — or
-// whoever read its source — spent the site's share, and the two are different
-// conversations.
-func allowanceSpentReason(verdict allowance.Verdict) string {
-	switch {
-	case verdict.Gone:
+// ingestRefusedReason is the tally this gate's refusal is counted under. Four
+// names, because each is a different conversation: the free tier is over, the
+// site's share is over, the organization is deleted, or we closed the valve on
+// them. A window of browser refusals says the customer's site — or whoever read
+// its source — spent the site's share while their backend kept reporting; a
+// window of suspensions says an operator did this on purpose.
+func ingestRefusedReason(verdict allowance.Verdict) string {
+	switch verdict.Cause {
+	case allowance.OrganizationGone:
 		return reasonOrganizationGone
-	case verdict.Budget == allowance.Browser:
-		return reasonBrowserAllowanceSpent
+	case allowance.IngestSuspended:
+		return reasonIngestSuspended
 	default:
+		if verdict.Budget == allowance.Browser {
+			return reasonBrowserAllowanceSpent
+		}
 		return reasonAllowanceSpent
 	}
 }
@@ -197,10 +208,28 @@ func (o Options) throttle(ctx context.Context) *refusal {
 		// Fail open. A Valkey blip must not turn into an ingest outage: losing
 		// a customer's telemetry costs more than briefly losing the protection,
 		// and the broker and payload caps still bound the damage.
+		//
+		// Open, not unbounded (ADR 0104). The body cap and the broker limit one
+		// request and the throughput behind it; neither limits requests per
+		// second, and an outage is exactly when the platform has least headroom
+		// to absorb a burst. The bound below is per receiver instance and sized
+		// well above the configured limit — it is there to stop a burst, not to
+		// stand in for a counter it cannot see.
 		if o.Traffic.Degraded(reasonLimiterDown) {
 			o.Logger.WarnContext(ctx, "rate limiter unavailable, allowing request",
 				slog.String(fieldReason, reasonLimiterDown),
 				slog.String(fieldError, logging.RedactCredentials(err.Error())))
+		}
+		if local := o.Limiter.AllowWhileCounterDown(identity.KeyPrefix); !local.Allowed {
+			// The cause names the number that refused, because it is not the
+			// configured one. Without it the first support conversation about a
+			// refusal during an outage has nothing to answer with.
+			return refuseUntil(code.Code_RESOURCE_EXHAUSTED,
+				messageThrottledInProcess, local.RetryAfter).
+				countedUnder(reasonThrottledInProcess).
+				because(fmt.Errorf(
+					"shared rate counter unreachable; refused by this receiver's own bound of %d/s",
+					o.Limiter.FallbackPerSecond()))
 		}
 		return nil
 	}

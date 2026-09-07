@@ -18,7 +18,11 @@ from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
 from nexovue_api.deps import DbSession
 from nexovue_api.projects.service import require_project
 from nexovue_api.rum import service
-from nexovue_api.rum.schemas import WebVitalsResponse
+from nexovue_api.rum.schemas import (
+    BreakdownDimension,
+    WebVitalBreakdownResponse,
+    WebVitalsResponse,
+)
 from nexovue_api.window import resolve_window
 
 router = APIRouter(prefix="/rum", tags=["rum"])
@@ -26,6 +30,9 @@ router = APIRouter(prefix="/rum", tags=["rum"])
 ProjectId = Annotated[uuid.UUID, Query(description="Project to read browser data from")]
 FromTime = Annotated[datetime | None, Query(alias="from")]
 ToTime = Annotated[datetime | None, Query(alias="to")]
+# An enum, so a dimension the store cannot group by is refused as a 422 here
+# rather than reaching a query.
+Dimension = Annotated[BreakdownDimension, Query(description="Split the readings by page or device")]
 
 
 @router.get("/web-vitals", summary="Each Core Web Vital's p75 over a time window")
@@ -41,6 +48,30 @@ async def get_web_vitals(
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.summarize_web_vitals(
         repository,
+        project_id=str(project.id),
+        from_time=window_start,
+        to_time=window_end,
+    )
+
+
+@router.get(
+    "/web-vitals/breakdown",
+    summary="Each Core Web Vital's p75 split by page or by device class",
+)
+async def get_web_vitals_breakdown(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    project_id: ProjectId,
+    dimension: Dimension,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+) -> WebVitalBreakdownResponse:
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.break_down_web_vitals(
+        repository,
+        dimension=dimension,
         project_id=str(project.id),
         from_time=window_start,
         to_time=window_end,

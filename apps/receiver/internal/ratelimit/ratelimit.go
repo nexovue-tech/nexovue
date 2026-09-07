@@ -45,12 +45,24 @@ type Decision struct {
 type Limiter struct {
 	counter   Counter
 	perSecond int64
-	now       func() time.Time // replaced in tests; time.Now in production
+
+	// fallback is the bound that applies when counter cannot answer. Held here
+	// rather than built by the caller so there is no way to construct a limiter
+	// with no fallback — see AllowWhileCounterDown.
+	fallback *inProcessLimiter
+
+	now func() time.Time // replaced in tests; time.Now in production
 }
 
 // New returns a limiter allowing perSecond requests for each subject.
 func New(counter Counter, perSecond int) *Limiter {
-	return &Limiter{counter: counter, perSecond: int64(perSecond), now: time.Now}
+	return &Limiter{
+		counter:   counter,
+		perSecond: int64(perSecond),
+		fallback: newInProcessLimiter(
+			int64(perSecond)*fallbackBurstMultiple, fallbackMaxSubjects),
+		now: time.Now,
+	}
 }
 
 // Allow counts one request against subject's current window.
@@ -76,6 +88,27 @@ func (l *Limiter) Allow(ctx context.Context, subject string) (Decision, error) {
 	}
 	return Decision{Allowed: true}, nil
 }
+
+// AllowWhileCounterDown answers from this process alone, for the case where the
+// shared counter could not answer at all. Only that case: a caller reaching for
+// it on a healthy Valkey would be applying two limits to one request.
+//
+// It is deliberately a second call rather than something Allow does for itself.
+// Whether ingest fails open or closed is a policy question and stays the
+// caller's, exactly as the error from Allow does; what this package supplies is
+// a bound to fail open *within*.
+//
+// **The bound is per receiver instance.** FallbackPerSecond is what one process
+// allows, so the fleet allows that times its size, and a refusal here will not
+// match the configured limit. That is the honest description and it is the one
+// the refusal has to carry.
+func (l *Limiter) AllowWhileCounterDown(subject string) Decision {
+	return l.fallback.allow(subject, l.now())
+}
+
+// FallbackPerSecond is the number AllowWhileCounterDown refuses at, for the log
+// line that has to say which limit refused. Per receiver instance.
+func (l *Limiter) FallbackPerSecond() int64 { return int64(l.fallback.perSecond) }
 
 // counterKey names one subject's window. The window number is part of the key
 // rather than a stored value, so rolling over costs nothing.

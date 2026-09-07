@@ -23,7 +23,7 @@ from live import require_stack
 from loopback_site import LoopbackSite
 
 from nexovue_scheduler.probes import browser
-from nexovue_scheduler.probes.browser_proxy import THREAD_NAME
+from nexovue_scheduler.probes.browser_proxy import THREAD_NAME, PublicAddressProxy
 
 # Names that resolve to a fixed address by design. Real DNS, not a mock of it.
 LOOPBACK_NAME: Final = "127.0.0.1.nip.io"
@@ -35,6 +35,34 @@ PUBLIC_SITE: Final = "https://example.com/"
 REDIRECTOR: Final = "https://httpbin.org/redirect-to"
 
 STEP_TIMEOUT_SECONDS: Final = 15
+
+# Playwright adds `<-loopback>` to the bypass list itself whenever ours does not
+# already name loopback, so a Chromium launched without `PROXY_BYPASS_NOTHING`
+# still proxies loopback and nothing leaks. That second copy is what left the
+# line with no behavioural guard. This is Playwright's own switch for turning it
+# off, and with it off the boundary rests on our line alone — which is the only
+# state in which deleting our line can be observed.
+PLAYWRIGHT_LOOPBACK_BYPASS_OFF: Final = "PLAYWRIGHT_DISABLE_FORCED_CHROMIUM_PROXIED_LOOPBACK"
+
+# Offers ICE and reports every candidate the browser gathered. A UDP candidate
+# is a socket opened straight to an address the page named, which no HTTP proxy
+# carries; with `disable_non_proxied_udp` Chromium gathers none at all.
+GATHER_ICE_CANDIDATES: Final = """
+(timeoutMilliseconds) => new Promise((resolve) => {
+  const connection = new RTCPeerConnection();
+  const gathered = [];
+  const finish = () => { connection.close(); resolve(gathered); };
+  connection.onicecandidate = (event) => {
+    if (event.candidate && event.candidate.candidate) gathered.push(event.candidate.candidate);
+    else finish();
+  };
+  connection.createDataChannel("egress-probe");
+  connection.createOffer().then((offer) => connection.setLocalDescription(offer));
+  setTimeout(finish, timeoutMilliseconds);
+})
+"""
+ICE_GATHERING_TIMEOUT_MILLISECONDS: Final = 5000
+BLANK_PAGE: Final = "about:blank"
 
 
 def _chromium_available() -> bool:
@@ -181,6 +209,70 @@ def test_the_metadata_name_is_refused_by_address() -> None:
     assert flow.failure is not None
     assert "169.254.169.254" in flow.failure.message
     assert "not contacted" in flow.failure.message
+
+
+# --------------------------------------------- the two switches, watched failing
+
+
+def test_a_loopback_address_is_still_proxied_when_only_our_bypass_list_says_so(
+    loopback_site: LoopbackSite, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`browser.PROXY_BYPASS_NOTHING`, observed rather than spelled out.
+
+    Chromium sends `127.0.0.1` direct, past any proxy, unless the bypass list
+    forbids it. Every other test here targets a *name* that resolves to
+    loopback, which Chromium hands to the proxy regardless — so none of them
+    moves when the line is deleted. This targets the literal address, with
+    Playwright's duplicate of the same switch turned off, which is the one
+    arrangement where the line is load-bearing on its own.
+
+    Deleting it here: the site records the hit and the flow reads its secret.
+    """
+    monkeypatch.setenv(PLAYWRIGHT_LOOPBACK_BYPASS_OFF, "1")
+    url = loopback_site.url()
+
+    flow = browser.perform(
+        "bypass",
+        url,
+        STEP_TIMEOUT_SECONDS,
+        {"steps": [{"action": "goto", "url": url}, _read_body_step(loopback_site)]},
+    )
+
+    assert loopback_site.hits == [], "the browser went straight to loopback, around the proxy"
+    assert flow.up is False
+    assert flow.failure is not None
+    assert flow.failure.index == 0
+    assert flow.failure.error_type == "EgressRefusedError"
+    assert "127.0.0.1" in flow.failure.message
+
+
+def test_webrtc_gathers_no_candidate_the_proxy_could_not_carry() -> None:
+    """The WebRTC switches, observed rather than spelled out.
+
+    WebRTC opens UDP sockets to addresses a page names. An HTTP proxy carries
+    none of that, so a page loaded through the boundary can still reach the
+    worker's own network over ICE — the leak the switches close (ADR 0096).
+    No STUN server and no network are needed to see it: with the switches gone
+    Chromium gathers host candidates by itself, and each one is a live UDP
+    socket outside the proxy.
+
+    `test_both_spellings_of_the_webrtc_switch_are_passed` covers the second
+    spelling, which this binary ignores; only the effective one moves here.
+    """
+    from playwright.sync_api import sync_playwright
+
+    with PublicAddressProxy(private_allowed=False) as proxy, sync_playwright() as playwright:
+        chromium = playwright.chromium.launch(**browser.launch_options(proxy.endpoint))
+        try:
+            page = chromium.new_page()
+            page.goto(BLANK_PAGE)
+            candidates = page.evaluate(GATHER_ICE_CANDIDATES, ICE_GATHERING_TIMEOUT_MILLISECONDS)
+        finally:
+            chromium.close()
+
+    assert candidates == [], (
+        f"WebRTC gathered {len(candidates)} candidate(s) the proxy never saw: {candidates}"
+    )
 
 
 # ------------------------------------------------------------------ fail closed

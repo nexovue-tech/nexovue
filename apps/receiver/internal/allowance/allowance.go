@@ -21,6 +21,13 @@
 // doors are still judged against the plan's whole allowance, so nothing sums
 // past it and a customer cannot buy more month by changing entrance.
 //
+// The same read carries the operator's stop valve, which is not a billing
+// boundary at all: `organizations.ingest_suspended_at` is how one runaway tenant
+// is stopped while it is still well inside its allowance. It rides this lookup
+// rather than one of its own because closing a valve must not cost the ingest
+// path a second query, and because it then inherits the cache TTL — which is
+// also how long it takes to bite.
+//
 // The month, the pooling and the arithmetic are ADR 0083's, and the same rule is
 // written a second time in `nexovue_api.usage.billing` for the screen that shows
 // it. Two languages, one policy: change one and the customer is told a number we
@@ -93,6 +100,16 @@ type Usage struct {
 	// `deleted_at`. Distinct from Found being false, because the gate refuses
 	// one and admits the other.
 	Deleted bool
+
+	// IngestSuspended is the operator's stop valve: `ingest_suspended_at` set on
+	// the organization row.
+	//
+	// **Operational, not billing.** An organization well inside its allowance
+	// can be suspended, and a suspension is lifted by a person rather than by
+	// the calendar. It rides this read rather than one of its own so that
+	// closing the valve costs no lookup and inherits the same cache TTL — which
+	// is also the delay before it bites, on every instance.
+	IngestSuspended bool
 }
 
 // Exists implements cache.Value.
@@ -232,24 +249,45 @@ type Options struct {
 	CacheMaxEntries int
 }
 
+// Cause names why the door must turn ingest away. One cause rather than a
+// boolean each, because the three refusals are mutually exclusive and separate
+// flags can be set to say something that cannot be true — a spent allowance on
+// an organization that was also deleted.
+//
+// They are kept apart because each is a different conversation with a different
+// ending: a spent allowance returns on the 1st, a deleted organization never
+// does, and a suspension ends when a person ends it.
+type Cause int
+
+const (
+	// Admitted is the only cause that lets the export through.
+	Admitted Cause = iota
+	// AllowanceSpent is the plan's included volume used up for the month, at
+	// the budget this door spends. ResetsOn says when it comes back.
+	AllowanceSpent
+	// OrganizationGone is ingest arriving for a deleted organization.
+	OrganizationGone
+	// IngestSuspended is the operator's stop valve, closed by hand on this
+	// organization. Not a billing boundary — see Usage.IngestSuspended.
+	IngestSuspended
+)
+
 // Verdict is what the gate needs about one organization at one door.
 type Verdict struct {
-	// Spent is true when further ingest at this door must be refused for the
-	// rest of the month.
-	Spent bool
+	// Cause is why ingest must be turned away, or Admitted.
+	Cause Cause
 
 	// Budget is the allowance that was judged, so the refusal can say which
-	// one ran out. Only meaningful when Spent.
+	// one ran out. Only meaningful when Cause is AllowanceSpent.
 	Budget Budget
 
-	// ResetsOn is the day the allowance comes back. Only meaningful when Spent.
+	// ResetsOn is the day the allowance comes back. Only meaningful when Cause
+	// is AllowanceSpent.
 	ResetsOn time.Time
-
-	// Gone is true when the organization has been deleted. A separate field
-	// from Spent because the two are different refusals: a spent allowance
-	// returns on the 1st, and a deleted organization never does.
-	Gone bool
 }
+
+// Refused reports whether the door must turn this export away.
+func (v Verdict) Refused() bool { return v.Cause != Admitted }
 
 // Checker answers the gate from a short-lived copy of the control plane.
 type Checker struct {
@@ -305,7 +343,7 @@ func (c *Checker) Check(ctx context.Context, orgID string, door nexovuev1.Door) 
 	// is also where revoking the keys belongs. This gate closes the volume hole
 	// and nothing more.
 	if held.Deleted {
-		return Verdict{Spent: true, Gone: true}, nil
+		return Verdict{Cause: OrganizationGone}, nil
 	}
 
 	// An organization we genuinely cannot find has no allowance to be over. The
@@ -315,6 +353,20 @@ func (c *Checker) Check(ctx context.Context, orgID string, door nexovuev1.Door) 
 	if !held.Found {
 		return Verdict{}, nil
 	}
+
+	// The stop valve, and it is above the allowance on purpose: an operator
+	// closes it precisely for a tenant that is *inside* its allowance and still
+	// hurting the platform, so the refusal it produces has to be the one the
+	// customer and the log both see. Refused at every door, because a tenant
+	// stopped for what it is doing to the cluster is not stopped at one
+	// entrance.
+	if held.IngestSuspended {
+		return Verdict{Cause: IngestSuspended}, nil
+	}
+
 	budget := held.budgetFor(door)
-	return Verdict{Spent: held.spent(budget), Budget: budget, ResetsOn: month.ResetsOn()}, nil
+	if held.spent(budget) {
+		return Verdict{Cause: AllowanceSpent, Budget: budget, ResetsOn: month.ResetsOn()}, nil
+	}
+	return Verdict{Budget: budget}, nil
 }

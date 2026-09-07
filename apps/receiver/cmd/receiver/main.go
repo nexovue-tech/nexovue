@@ -127,7 +127,11 @@ func run() error {
 	browserDoor := shared
 	browserDoor.Gatekeeper = auth.NewSite(siteKeys, withRecorder(credentialCache, siteKeyUses))
 
-	admin := health.NewServer(cfg.HealthAddr, health.Handler(info, registry))
+	adminHandler := health.Handler(info, registry)
+	if cfg.Profiling {
+		adminHandler = health.WithProfiling(adminHandler)
+	}
+	admin := health.NewServer(cfg.HealthAddr, adminHandler)
 	overHTTP := otlp.NewServer(cfg.OTLPHTTPAddr,
 		otlp.Handler(otlp.Doors{Server: serverDoor, Browser: browserDoor}))
 	// gRPC serves no browser, so it serves no public key: the transport is given
@@ -137,6 +141,9 @@ func run() error {
 	log.InfoContext(ctx, "receiver starting",
 		slog.String("revision", info.Revision),
 		slog.String("health_addr", cfg.HealthAddr),
+		// On the boot line because an unauthenticated profiler left on by
+		// accident is otherwise invisible until someone finds it.
+		slog.Bool("profiling", cfg.Profiling),
 		slog.String("otlp_http_addr", cfg.OTLPHTTPAddr),
 		slog.String("otlp_grpc_addr", cfg.OTLPGRPCAddr),
 		slog.String("browser_path_prefix", otlp.BrowserPathPrefix),

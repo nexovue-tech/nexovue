@@ -35,3 +35,68 @@ WHERE tenant_id = {{tenant_id:String}}
 GROUP BY vital_name
 ORDER BY vital_name
 """
+
+# The two breakdowns below differ by one column and are still written out in
+# full, for the reason `infrastructure/queries.py` gives at length:
+# `tests/test_tenant_chokepoint_structure.py` reads string literals, so a
+# statement whose `FROM` and whose tenant predicate live in different constants
+# is no longer provably scoped from the source alone. The repetition is what
+# keeps the guarantee machine-readable.
+#
+# Both group twice in one pass. The inner aggregation merges each
+# (group, vital) distribution; the outer one ranks groups by how many readings
+# arrived, so the busiest pages are the ones that survive the limit. The vitals
+# come back as parallel arrays rather than as one row each because the limit
+# applies to a *group*, and a row-per-vital shape cannot be limited by group.
+#
+# `country` is deliberately not a dimension. The column exists in the rollup but
+# nothing writes it — there is no GeoIP in the system — so a geo breakdown today
+# would be a single group named "".
+
+PAGE_BREAKDOWN_SQL: Final = f"""
+SELECT
+    group_key,
+    groupArray(vital_name) AS vital_names,
+    groupArray(readings) AS vital_readings,
+    groupArray(quantiles) AS vital_quantiles
+FROM (
+    SELECT
+        url_path AS group_key,
+        vital_name,
+        sum(reading_count) AS readings,
+        quantilesMerge({_QUANTILE_ARGUMENTS})(value_quantiles) AS quantiles
+    FROM web_vitals_1m
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND minute >= {{from_time:DateTime}}
+      AND minute < {{to_time:DateTime}}
+    GROUP BY group_key, vital_name
+)
+GROUP BY group_key
+ORDER BY sum(readings) DESC, group_key
+LIMIT {{group_limit:UInt32}}
+"""
+
+DEVICE_BREAKDOWN_SQL: Final = f"""
+SELECT
+    group_key,
+    groupArray(vital_name) AS vital_names,
+    groupArray(readings) AS vital_readings,
+    groupArray(quantiles) AS vital_quantiles
+FROM (
+    SELECT
+        device_class AS group_key,
+        vital_name,
+        sum(reading_count) AS readings,
+        quantilesMerge({_QUANTILE_ARGUMENTS})(value_quantiles) AS quantiles
+    FROM web_vitals_1m
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND minute >= {{from_time:DateTime}}
+      AND minute < {{to_time:DateTime}}
+    GROUP BY group_key, vital_name
+)
+GROUP BY group_key
+ORDER BY sum(readings) DESC, group_key
+LIMIT {{group_limit:UInt32}}
+"""

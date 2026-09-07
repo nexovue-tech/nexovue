@@ -74,8 +74,14 @@
 // tables need clearing too, keyed by that topic. They are KeeperMap, which
 // refuses a lightweight DELETE; `ALTER TABLE … DELETE` is what works:
 //
-//	ALTER TABLE span_written_offsets DELETE WHERE startsWith(partition_key, '<topic>');
-//	ALTER TABLE span_ingest_offsets  DELETE WHERE startsWith(partition_key, '<topic>');
+//	ALTER TABLE span_written_offsets DELETE WHERE startsWith(partition_key, '<topic>:');
+//	ALTER TABLE span_ingest_offsets  DELETE WHERE startsWith(partition_key, '<topic>:');
+//
+// **The trailing colon is load-bearing and is why the scratchpad copy of this
+// was deleted rather than kept.** `ingeststate.Partition.Key` is
+// `topic + ":" + partition`, so without it `'spans'` matches `spans:0` and the
+// statement wipes the live watermarks — the durable counted-through offsets
+// whose loss is the silent permanent over-count ADR 0094 describes (T1-6).
 //
 // `usage_daily` sums bytes per tenant and day and cannot be separated from real
 // traffic, so produce against a tenant whose usage numbers nobody is reading.

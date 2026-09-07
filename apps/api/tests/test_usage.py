@@ -1004,7 +1004,7 @@ async def test_a_share_on_an_uncapped_row_splits_a_number_nothing_enforces() -> 
     assert response.period.browser_included_bytes == 10 * GIB // 4
 
 
-async def test_the_browser_part_is_summed_from_the_browser_column(
+async def test_the_total_and_the_browser_part_are_selected_in_that_order(
     session: CapturingSession,
 ) -> None:
     """Read off the statement, because the behaviour test below cannot see this.
@@ -1013,6 +1013,12 @@ async def test_the_browser_part_is_summed_from_the_browser_column(
     twice would answer the browser figure correctly and still be wrong against
     a database. Both sums come from one statement over one set of rows, so the
     part can never be read from a different range than the whole.
+
+    **Asserted by position, not by presence.** `bytes_in_range` reads column 0
+    as the total and column 1 as the browser's part, so the two sums transposed
+    still contain both substrings and would report the browser figure as the
+    month's whole spend — a customer shown a fraction of what they sent, and a
+    browser cap judged against every byte.
     """
     await queries.bytes_in_range(
         session,  # type: ignore[arg-type]
@@ -1021,9 +1027,14 @@ async def test_the_browser_part_is_summed_from_the_browser_column(
         to_day=TO_DAY,
     )
 
-    statement = str(session.statements[-1])
-    assert "sum(usage_daily.bytes)" in statement
-    assert "sum(usage_daily.browser_bytes)" in statement
+    selected = [str(column) for column in session.statements[-1].selected_columns]
+    assert len(selected) == 2, f"the statement selects {selected}, and the reader unpacks two"
+    assert "sum(usage_daily.bytes)" in selected[0], (
+        f"column 0 is read as the month's total and is {selected[0]}"
+    )
+    assert "sum(usage_daily.browser_bytes)" in selected[1], (
+        f"column 1 is read as the browser door's part and is {selected[1]}"
+    )
 
 
 async def test_the_browser_bytes_spent_are_reported_as_a_part_of_the_whole() -> None:

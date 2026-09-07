@@ -76,10 +76,11 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      # TODO(hostname): the public hostname is undecided, and Caddy needs it to
-      #   obtain a certificate. Ingest and app may want separate names
-      #   (ingest.example.com / app.example.com) — that is also undecided.
-      NEXOVUE_PUBLIC_HOST: ${NEXOVUE_PUBLIC_HOST:?set NEXOVUE_PUBLIC_HOST}
+      # Two names, not one: a session cookie scoped to a parent domain reaches
+      # every child, so one name would deliver it on every browser-door beacon
+      # (ADR 0089). Caddy obtains a certificate for each.
+      NEXOVUE_APP_HOST: ${NEXOVUE_APP_HOST:?set NEXOVUE_APP_HOST}
+      NEXOVUE_INGEST_HOST: ${NEXOVUE_INGEST_HOST:?set NEXOVUE_INGEST_HOST}
       NEXOVUE_TLS_EMAIL: ${NEXOVUE_TLS_EMAIL:?set NEXOVUE_TLS_EMAIL}
     volumes:
       - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro

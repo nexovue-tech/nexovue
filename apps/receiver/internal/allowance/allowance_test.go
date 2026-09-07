@@ -82,7 +82,7 @@ func TestVolumeUnderTheAllowanceIsAdmitted(t *testing.T) {
 		IngestedBytes: freeIncluded - 1, Found: true,
 	}})
 
-	if verdict.Spent {
+	if verdict.Refused() {
 		t.Error("refused a byte below the allowance; the last included byte is included")
 	}
 }
@@ -93,7 +93,7 @@ func TestVolumePastTheAllowanceIsSpent(t *testing.T) {
 		IngestedBytes: freeIncluded + 1, Found: true,
 	}})
 
-	if !verdict.Spent {
+	if !verdict.Refused() {
 		t.Fatal("admitted a byte past the allowance; the free tier would never end")
 	}
 	if verdict.Budget != Pooled {
@@ -109,7 +109,7 @@ func TestAPlanWithNoCeilingIsNeverSpent(t *testing.T) {
 		Enforced: false, IngestedBytes: 900 * gib, Found: true,
 	}})
 
-	if verdict.Spent {
+	if verdict.Refused() {
 		t.Error("refused an uncapped plan; pro and scale record no max_billed_services")
 	}
 }
@@ -119,7 +119,7 @@ func TestAPlanWithNoCeilingIsNeverSpent(t *testing.T) {
 func TestAnOrganizationWithNoRowIsNotRefused(t *testing.T) {
 	verdict := checkOnce(t, &fakeUsage{usage: Usage{Found: false}})
 
-	if verdict.Spent {
+	if verdict.Refused() {
 		t.Error("refused an organization we could not find")
 	}
 }
@@ -130,14 +130,14 @@ func TestAZeroAllowanceRefusesOnceAnythingHasArrived(t *testing.T) {
 	nothingYet := checkOnce(t, &fakeUsage{usage: Usage{
 		IncludedBytes: 0, Enforced: true, IngestedBytes: 0, Found: true,
 	}})
-	if nothingYet.Spent {
+	if nothingYet.Refused() {
 		t.Error("refused before anything was ingested; nothing was over anything")
 	}
 
 	somethingArrived := checkOnce(t, &fakeUsage{usage: Usage{
 		IncludedBytes: 0, Enforced: true, IngestedBytes: 1, Found: true,
 	}})
-	if !somethingArrived.Spent {
+	if !somethingArrived.Refused() {
 		t.Error("a plan recording an allowance of zero admitted volume anyway")
 	}
 }
@@ -317,7 +317,7 @@ func TestAShareOnAnUncappedRowRefusesNothing(t *testing.T) {
 
 	usage := &fakeUsage{usage: usageFrom(&perService, nil, &share, 900*gib, 900*gib)}
 
-	if checkAt(t, usage, browserDoor).Spent || checkAt(t, usage, serverDoor).Spent {
+	if checkAt(t, usage, browserDoor).Refused() || checkAt(t, usage, serverDoor).Refused() {
 		t.Error("an uncapped plan was refused because its row also records a split")
 	}
 }
@@ -378,12 +378,13 @@ func TestADeletedOrganizationIsRefusedRatherThanAdmitted(t *testing.T) {
 
 	for _, door := range []nexovuev1.Door{serverDoor, browserDoor} {
 		verdict := checkAt(t, deleted, door)
-		if !verdict.Spent {
+		if !verdict.Refused() {
 			t.Errorf("%v: a deleted organization was admitted; deletion turns the cap off", door)
 		}
-		if !verdict.Gone {
-			t.Errorf("%v: verdict = %+v, want Gone — a spent allowance returns on the 1st and "+
-				"a deleted organization never does, so the refusal must not say it will", door, verdict)
+		if verdict.Cause != OrganizationGone {
+			t.Errorf("%v: verdict = %+v, want OrganizationGone — a spent allowance returns on "+
+				"the 1st and a deleted organization never does, so the refusal must not say "+
+				"it will", door, verdict)
 		}
 	}
 }
@@ -395,7 +396,7 @@ func TestADeletedOrganizationIsRefusedRatherThanAdmitted(t *testing.T) {
 func TestAnOrganizationThatCannotBeFoundIsStillAdmitted(t *testing.T) {
 	missing := &fakeUsage{usage: Usage{Found: false}}
 
-	if verdict := checkAt(t, missing, serverDoor); verdict.Spent {
+	if verdict := checkAt(t, missing, serverDoor); verdict.Refused() {
 		t.Errorf("verdict = %+v, want admitted: a control-plane miss must not become an ingest outage", verdict)
 	}
 }
@@ -408,7 +409,7 @@ func TestARowRecordingNoShareIsPooledAcrossBothDoors(t *testing.T) {
 
 	for _, door := range []nexovuev1.Door{serverDoor, browserDoor} {
 		verdict := checkAt(t, usage, door)
-		if !verdict.Spent || verdict.Budget != Pooled {
+		if !verdict.Refused() || verdict.Budget != Pooled {
 			t.Errorf("%v: verdict = %+v, want the pooled allowance spent", door, verdict)
 		}
 	}
@@ -431,10 +432,10 @@ func TestASpentBrowserShareDoesNotSpendTheServers(t *testing.T) {
 			usage := &fakeUsage{usage: freeMonth(tc.browserIngested, tc.browserIngested)}
 
 			browser := checkAt(t, usage, browserDoor)
-			if !browser.Spent || browser.Budget != Browser {
+			if !browser.Refused() || browser.Budget != Browser {
 				t.Errorf("browser door verdict = %+v, want the browser share spent", browser)
 			}
-			if server := checkAt(t, usage, serverDoor); server.Spent {
+			if server := checkAt(t, usage, serverDoor); server.Refused() {
 				t.Errorf("the server door was refused at %d browser bytes; the backend must keep "+
 					"reporting whatever happens to the website", tc.browserIngested)
 			}
@@ -449,13 +450,13 @@ func TestASpentBrowserShareDoesNotSpendTheServers(t *testing.T) {
 // reach it — the browser SDK is P1-39 and unbuilt.
 func TestABrowserShareNobodyUsesIsNotStrandedFromTheServer(t *testing.T) {
 	justUnder := &fakeUsage{usage: freeMonth(freeIncluded, 0)}
-	if verdict := checkAt(t, justUnder, serverDoor); verdict.Spent {
+	if verdict := checkAt(t, justUnder, serverDoor); verdict.Refused() {
 		t.Errorf("server door refused at %d of the plan's %d bytes, with no browser byte spent: "+
 			"the browser's share was reserved rather than capped", freeIncluded, freeIncluded)
 	}
 
 	over := &fakeUsage{usage: freeMonth(freeIncluded+1, 0)}
-	if verdict := checkAt(t, over, serverDoor); !verdict.Spent {
+	if verdict := checkAt(t, over, serverDoor); !verdict.Refused() {
 		t.Error("server door admitted past the plan's whole allowance")
 	}
 }
@@ -468,7 +469,7 @@ func TestTheBrowserDoorCannotSpendPastAPlanTheServerAlreadyFilled(t *testing.T) 
 	spentOnTheServer := &fakeUsage{usage: freeMonth(freeIncluded+1, 0)}
 
 	verdict := checkAt(t, spentOnTheServer, browserDoor)
-	if !verdict.Spent {
+	if !verdict.Refused() {
 		t.Error("the browser door was admitted on a plan the server door had already spent; " +
 			"the two now sum past the month, which is what ADR 0093 refuses")
 	}
@@ -478,10 +479,10 @@ func TestTheBrowserDoorCannotSpendPastAPlanTheServerAlreadyFilled(t *testing.T) 
 func TestEachShareIsSpentOnlyPastItsOwnLastByte(t *testing.T) {
 	atTheLine := &fakeUsage{usage: freeMonth(freeIncluded, freeBrowserBytes)}
 
-	if checkAt(t, atTheLine, browserDoor).Spent {
+	if checkAt(t, atTheLine, browserDoor).Refused() {
 		t.Error("refused the browser door on its last included byte")
 	}
-	if checkAt(t, atTheLine, serverDoor).Spent {
+	if checkAt(t, atTheLine, serverDoor).Refused() {
 		t.Error("refused the server door on its last included byte")
 	}
 }
@@ -516,7 +517,7 @@ func TestEveryDoorButTheBrowsersIsJudgedOnTheWholeAllowance(t *testing.T) {
 		nexovuev1.Door_DOOR_POLLER,
 		nexovuev1.Door_DOOR_UNSPECIFIED,
 	} {
-		if verdict := checkAt(t, usage, door); !verdict.Spent || verdict.Budget != Pooled {
+		if verdict := checkAt(t, usage, door); !verdict.Refused() || verdict.Budget != Pooled {
 			t.Errorf("%v: verdict = %+v, want the plan's whole allowance spent", door, verdict)
 		}
 	}
@@ -559,10 +560,10 @@ func TestAShareOfZeroOrOneHundredIsHonoured(t *testing.T) {
 
 	none := int16(0)
 	nothingForTheBrowser := &fakeUsage{usage: usageFrom(&perService, &ceiling, &none, 1, 1)}
-	if !checkAt(t, nothingForTheBrowser, browserDoor).Spent {
+	if !checkAt(t, nothingForTheBrowser, browserDoor).Refused() {
 		t.Error("a browser share of zero admitted a browser byte")
 	}
-	if checkAt(t, nothingForTheBrowser, serverDoor).Spent {
+	if checkAt(t, nothingForTheBrowser, serverDoor).Refused() {
 		t.Error("a browser share of zero refused the server door, which has the whole plan")
 	}
 
@@ -572,10 +573,10 @@ func TestAShareOfZeroOrOneHundredIsHonoured(t *testing.T) {
 	// which is the reading this change replaces.
 	all := int16(100)
 	unspent := &fakeUsage{usage: usageFrom(&perService, &ceiling, &all, 1, 0)}
-	if checkAt(t, unspent, serverDoor).Spent {
+	if checkAt(t, unspent, serverDoor).Refused() {
 		t.Error("a browser share of one hundred refused a server byte the browser had not spent")
 	}
-	if checkAt(t, unspent, browserDoor).Spent {
+	if checkAt(t, unspent, browserDoor).Refused() {
 		t.Error("a browser share of one hundred refused the browser door, which may spend the whole plan")
 	}
 
@@ -586,7 +587,7 @@ func TestAShareOfZeroOrOneHundredIsHonoured(t *testing.T) {
 	spentByTheBrowser := &fakeUsage{
 		usage: usageFrom(&perService, &ceiling, &all, freeIncluded+1, freeIncluded),
 	}
-	if !checkAt(t, spentByTheBrowser, serverDoor).Spent {
+	if !checkAt(t, spentByTheBrowser, serverDoor).Refused() {
 		t.Error("the server door was admitted after the browser spent the whole plan")
 	}
 }

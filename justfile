@@ -119,7 +119,9 @@ test-go:
     set -euo pipefail
     # -count=1 because a cached "ok" is not evidence a test ran, and this gate
     # has twice reported green on a suite that executed nothing (rule 12).
-    for m in {{go_modules}}; do (cd "$m" && go test -count=1 ./...); done
+    # `vet -tags storeprobe` compiles the tagged probes without running them:
+    # they need a live control plane, but a file nothing compiles rots unseen.
+    for m in {{go_modules}}; do (cd "$m" && go vet -tags storeprobe ./... && go test -count=1 ./...); done
 
 test-py:
     #!/usr/bin/env bash

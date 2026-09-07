@@ -1,34 +1,108 @@
-# TLS edge for the on-premise deployment. SKELETON — see the TODOs.
+# TLS edge for the on-premise deployment.
 #
 # Caddy obtains and renews certificates on its own as long as it knows a
 # hostname and the host answers on 80 and 443.
-
 {
 	email {$NEXOVUE_TLS_EMAIL}
 }
 
-# Two names, decided 2026-09-07: `app.nexovue.com` and `ingest.nexovue.com`.
-# Ingest is machine traffic at high volume; the app is browser traffic, and they
-# want different rate limits, different logs and a CSP that means nothing on the
-# OTLP path. ADR 0089 makes it a privacy requirement rather than a preference:
-# the ingest host must not share a cookie domain with the console.
+# ---------------------------------------------------------------------------
+# Response headers
 #
-# **Two names are necessary and not sufficient.** The session cookie must stay
-# host-only — `auth/cookies.py` sets no Domain attribute, deliberately — because
-# a cookie scoped to `.nexovue.com` reaches every child, including this one.
-{$NEXOVUE_PUBLIC_HOST} {
-	# OTLP: the receiver speaks the protocol's own error semantics, so nothing
-	# here may rewrite a response body.
-	handle /v1/* {
-		reverse_proxy receiver:4318
+# Two snippets, not one block copied twice: the console is browser traffic and
+# ingest is machine traffic, and several of the console's headers are actively
+# wrong on the OTLP path. `Cross-Origin-Resource-Policy: same-origin` is the
+# clearest case — door 3 exports from the customer's own page, so same-origin
+# would refuse the traffic ingest exists to accept (ADR 0089).
+# ---------------------------------------------------------------------------
+
+# Everything both hosts send. HSTS belongs on ingest too: the browser SDK's
+# `endpoint` is a public string in a customer's page, and this is what stops a
+# mistyped `http://` one from ever leaving in the clear.
+(edge_headers) {
+	header {
+		# Two years, per the OWASP Secure Headers Project. No `preload`: that
+		# list is close to irreversible and needs the apex, which is not ours
+		# to commit on a domain that has never served a request.
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
 	}
 
-	# The browser door, on its own prefix so no route can resolve both a secret
-	# and a public key. Without this the path falls through to `web` and a page
-	# gets HTML back from an export.
-	handle /browser/v1/* {
-		reverse_proxy receiver:4318
+	# Deletions get their own block on purpose. A deletion makes the whole block
+	# deferred, and a deferred block is skipped when an upstream fails — so
+	# sharing one would drop HSTS from every 502. Losing only these there is
+	# harmless: they hide which proxy answered, nothing more. `Via` goes with
+	# `Server` because reverse_proxy sets it to `1.1 Caddy`, which would name
+	# the thing the line above just stopped naming.
+	header {
+		-Server
+		-Via
 	}
+}
+
+# The console only. Every value here assumes a browser is rendering a document,
+# which nothing on the ingest host ever does.
+(console_headers) {
+	import edge_headers
+
+	header {
+		# Console URLs carry trace and service identifiers, so no referrer
+		# leaves at all. The app loads no cross-origin subresource that needs one.
+		Referrer-Policy "no-referrer"
+
+		# frame-ancestors is the one that modern browsers obey; X-Frame-Options
+		# is kept for the ones that do not read CSP.
+		X-Frame-Options "DENY"
+
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+
+		# Sensors, capture devices and payment: the console uses none of them.
+		# Deliberately absent so they keep their `self` default: clipboard-write
+		# (shared/components/CopyButton.tsx) and publickey-credentials-get,
+		# which would have to be reopened the day login grows a passkey.
+		Permissions-Policy "accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), magnetometer=(), microphone=(), midi=(), payment=(), screen-wake-lock=(), serial=(), usb=(), xr-spatial-tracking=()"
+
+		# Checked against apps/web, not assumed. The app loads no external
+		# origin at all — fonts are vendored into @nexovue/ui and bundled — so
+		# `default-src 'self'` covers images, fonts, styles and scripts.
+		#
+		# script-src: the hash is the theme bootstrap in apps/web/index.html,
+		# which must run before first paint and so cannot be moved to a file.
+		# `apps/api/tests/test_caddyfile_headers.py` fails if the two drift.
+		#
+		# connect-src: the log tail is a same-origin WebSocket, and `'self'`
+		# is documented as not resolving to `wss:` in every browser, so the
+		# origin is spelled out.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-l0ccwCCCCbd6qE6AXzKsNeUubznvX4TgnnF7fn9ilzs='; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://{$NEXOVUE_APP_HOST}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
+		# `style-src 'self'` is the one directive above that was reasoned about
+		# rather than watched. React and uPlot position elements through the
+		# CSSOM, which CSP does not govern, so this should report nothing —
+		# but no browser has loaded the console under it. Load the app, watch
+		# the console for a style violation, and if none fires, drop
+		# 'unsafe-inline' above and delete this header.
+		Content-Security-Policy-Report-Only "style-src 'self'"
+	}
+}
+
+# ---------------------------------------------------------------------------
+# Sites
+#
+# Two names, decided 2026-09-07. Ingest is machine traffic at high volume; the
+# console is browser traffic, and they want different rate limits, different
+# logs and a CSP that means nothing on the OTLP path. ADR 0089 makes it a
+# privacy requirement rather than a preference: the ingest host must not share
+# a cookie domain with the console.
+#
+# **Two names are necessary and not sufficient.** The session cookie must stay
+# host-only — `auth/cookies.py` sets no Domain attribute, deliberately —
+# because a cookie scoped to `.nexovue.com` reaches every child, including this
+# one.
+# ---------------------------------------------------------------------------
+
+{$NEXOVUE_APP_HOST} {
+	import console_headers
 
 	handle /api/* {
 		reverse_proxy api:8000
@@ -39,6 +113,30 @@
 	}
 }
 
+{$NEXOVUE_INGEST_HOST} {
+	import edge_headers
+
+	# OTLP: the receiver speaks the protocol's own error semantics, so nothing
+	# here may rewrite a response body. The receiver also owns CORS for door 3
+	# (ADR 0087) — the edge must not answer a preflight on its behalf.
+	handle /v1/* {
+		reverse_proxy receiver:4318
+	}
+
+	# The browser door, on its own prefix so no route can resolve both a secret
+	# and a public key.
+	handle /browser/v1/* {
+		reverse_proxy receiver:4318
+	}
+
+	# Anything else on this name is a misconfigured exporter. Say so, rather
+	# than letting Caddy answer an empty 200 that reads as success.
+	handle {
+		respond 404
+	}
+}
+
 # TODO(grpc): OTLP/gRPC on 4317 (P1-19) terminates TLS separately — h2c through
 # Caddy needs its own site block and a decision on whether gRPC gets its own
-# port or is multiplexed on 443.
+# port or is multiplexed on 443. Decided 2026-09-07 not to expose it publicly
+# in Phase 1: OTLP/HTTP already carries every door.

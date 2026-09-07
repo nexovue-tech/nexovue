@@ -44,6 +44,14 @@ type Config struct {
 	OTLPGRPCAddr string `env:"RECEIVER_OTLP_GRPC_ADDR" envDefault:":4317"`
 	HealthAddr   string `env:"RECEIVER_HEALTH_ADDR" envDefault:":8081"`
 
+	// Profiling mounts Go's runtime profiles on the admin listener — the one
+	// above, never an OTLP port. Off by default: the endpoints are
+	// unauthenticated, a CPU profile is a remote way to make the process work,
+	// and the heap and command line are a remote way to read it. Turning it on
+	// is a statement that the admin port is not published, which is what
+	// `health.WithProfiling` records having checked.
+	Profiling bool `env:"RECEIVER_PPROF_ENABLED" envDefault:"false"`
+
 	KafkaBrokers []string `env:"KAFKA_BROKERS,required,notEmpty" envSeparator:","`
 	PostgresDSN  string   `env:"POSTGRES_DSN,required,notEmpty"`
 	RedisURL     string   `env:"REDIS_URL,required,notEmpty"`

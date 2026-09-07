@@ -76,6 +76,12 @@ services:
       KAFKA_BROKERS: kafka:9092
       POSTGRES_DSN: ${DEV_POSTGRES_DSN:-postgresql://nexovue:nexovue_dev@postgres:5432/nexovue}
       REDIS_URL: redis://redis:6379/0
+      # Go's runtime profiles on the admin listener, which is not published to
+      # the host — reach them with `docker compose exec receiver wget -qO-
+      # http://127.0.0.1:8081/debug/pprof/heap`. Off everywhere else: the
+      # endpoints are unauthenticated. Without this the re-encode budget in
+      # phase-1-plan.md §4 stays unmeasurable in dev as well as in production.
+      RECEIVER_PPROF_ENABLED: "true"
     ports:
       - "${RECEIVER_GRPC_HOST_PORT:-14317}:4317"
       - "${RECEIVER_HTTP_HOST_PORT:-14318}:4318"

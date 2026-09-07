@@ -117,6 +117,12 @@ class Organization(Base):
     # Soft delete: purging telemetry means dropping ClickHouse partitions and
     # cold-tier objects, which cannot happen inside this transaction.
     deleted_at: Mapped[OptionalTimestamp]
+    # The ingest stop valve (P1-52). NULL is open; any value closes the door at
+    # the receiver. Operational, not billing — a suspended organization may be
+    # well inside its allowance, and only a person reopens it. The receiver
+    # reads it on the same row as the allowance, so closing it costs the ingest
+    # path no extra query and takes effect within RECEIVER_ALLOWANCE_CACHE_TTL.
+    ingest_suspended_at: Mapped[OptionalTimestamp]
 
 
 class User(Base):
@@ -545,9 +551,13 @@ class PlanPrice(Base):
     while a row appended with a later `effective_from` leaves history alone. The
     price in force on a day is the latest row not after it.
 
-    **Empty on purpose.** ADR 0056 fixed the unit — one service monitored, with
-    a ceiling on the service-count component — and did not fix the amounts. They
-    are rows for a person to insert, not constants for us to invent.
+    ADR 0056 fixed the unit — one service monitored, with a ceiling on the
+    service-count component — and did not fix the amounts: they are rows for a
+    person to insert, not constants for us to invent. ~~Empty on purpose.~~ It
+    has not been empty since 0015 seeded three tiers and 0016 restated `free`
+    with its browser share; `test_plan_prices_live.py` now guards the convention
+    that a repricing restates every column, which only means anything because
+    rows exist.
     """
 
     __tablename__ = "plan_prices"

@@ -3,14 +3,18 @@ import { describe, expect, it } from "vitest";
 import type { WebVitalSummary } from "./api";
 import {
   CLS,
+  describeReadings,
   describeVitals,
   formatValue,
   INP,
   LCP,
   MIN_READINGS,
   rate,
+  readableGroup,
   readableVitals,
   TTFB,
+  UNLABELLED_GROUP,
+  UNMEASURED,
 } from "./vitals";
 
 const enough = MIN_READINGS;
@@ -85,6 +89,44 @@ describe("the five cards", () => {
       "INP",
       "CLS",
     ]);
+  });
+});
+
+describe("a breakdown row", () => {
+  it("keeps the same fixed column order as the cards", () => {
+    const group = readableGroup({ key: "/", vitals: [summary(LCP, 2000)] });
+    expect(group.cells.map((cell) => cell.name)).toEqual(["lcp", "inp", "cls", "fcp", "ttfb"]);
+  });
+
+  it("shows a dash instead of a percentile the split made too thin", () => {
+    // The whole reason the threshold matters more here: a page seen three times
+    // has three readings, and its p75 is one visitor's morning.
+    const group = readableGroup({
+      key: "/rare",
+      vitals: [summary(LCP, 120, MIN_READINGS - 1)],
+    });
+    const lcp = group.cells.find((cell) => cell.name === LCP);
+    expect(lcp?.display).toBe(UNMEASURED);
+    expect(lcp?.detail).toContain("too few for a percentile");
+  });
+
+  it("shows the value once the split still leaves enough behind it", () => {
+    const group = readableGroup({ key: "/busy", vitals: [summary(LCP, 2412, MIN_READINGS)] });
+    const lcp = group.cells.find((cell) => cell.name === LCP);
+    expect(lcp?.display).toBe("2.41 s");
+    expect(lcp?.rating).toBe("good");
+  });
+
+  it("separates a vital nobody reported here from one reported too rarely", () => {
+    expect(describeReadings(0)).toContain("not reported");
+    expect(describeReadings(1)).toContain("too few");
+    expect(describeReadings(MIN_READINGS)).toBe(`${MIN_READINGS} readings`);
+  });
+
+  it("names an empty key rather than rendering a blank row", () => {
+    // A device class the browser never sent is a real group, not a missing one.
+    expect(readableGroup({ key: "", vitals: [] }).label).toBe(UNLABELLED_GROUP);
+    expect(readableGroup({ key: "mobile", vitals: [] }).label).toBe("mobile");
   });
 });
 

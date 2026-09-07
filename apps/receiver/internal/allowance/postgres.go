@@ -11,8 +11,8 @@ import (
 )
 
 // One statement answers the gate: what the plan in force today includes, how it
-// is split between the doors, and what the meter has counted this month at
-// each.
+// is split between the doors, what the meter has counted this month at each, and
+// whether an operator has closed the stop valve on this organization.
 //
 // The rate is the one in force *today*, not on the month's last day — a
 // repricing that starts on the 20th must not govern a month sitting on the 15th
@@ -29,7 +29,8 @@ const readMonthlyUsage = `
 	       price.browser_share_percent,
 	       COALESCE(metered.bytes, 0),
 	       COALESCE(metered.browser_bytes, 0),
-	       org.deleted_at IS NOT NULL
+	       org.deleted_at IS NOT NULL,
+	       org.ingest_suspended_at IS NOT NULL
 	FROM organizations org
 	LEFT JOIN LATERAL (
 		SELECT p.included_bytes_per_service, p.max_billed_services, p.browser_share_percent
@@ -75,10 +76,12 @@ func (u *PostgresUsage) UsageFor(
 		ingested        int64
 		browserIngested int64
 		deleted         bool
+		suspended       bool
 	)
 	err := u.pool.QueryRow(ctx, readMonthlyUsage,
 		orgID, month.FirstDay, month.LastDay, on.UTC()).
-		Scan(&perService, &maxServices, &browserShare, &ingested, &browserIngested, &deleted)
+		Scan(&perService, &maxServices, &browserShare,
+			&ingested, &browserIngested, &deleted, &suspended)
 
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -94,7 +97,16 @@ func (u *PostgresUsage) UsageFor(
 		return Usage{Found: true, Deleted: true}, nil
 	}
 
-	return usageFrom(perService, maxServices, browserShare, ingested, browserIngested), nil
+	// `ingest_suspended_at` NULL is the ordinary state, and that is the
+	// deliberate reading: the valve is closed only by an explicit act, so a
+	// column nobody has written cannot stop a tenant. Any non-NULL value
+	// suspends — the timestamp records *when* an operator closed it and is
+	// deliberately not compared with now, because reading a future date as
+	// "not yet" would be a scheduling feature nobody asked for and would turn a
+	// mistyped year into a valve that silently never closes.
+	usage := usageFrom(perService, maxServices, browserShare, ingested, browserIngested)
+	usage.IngestSuspended = suspended
+	return usage, nil
 }
 
 // usageFrom turns what the statement returned into the gate's inputs. It is a

@@ -35,10 +35,21 @@ belongs with account deletion in M8. One checker serves
 both doors and both transports, reading the month once and asking about the door the envelope
 will carry. The refusal is `RESOURCE_EXHAUSTED` **without** `RetryInfo`, so a compliant client
 drops the batch rather than resending it until the month turns, and it is counted as
-`allowance_spent`, `browser_allowance_spent` or `organization_gone` rather than `throttled` —
-all the same rpc code and three different conversations. A control-plane read that fails
-admits the request: losing the protection costs money, and refusing costs the customer their
-data.
+`allowance_spent`, `browser_allowance_spent`, `organization_gone` or `ingest_suspended` rather
+than `throttled` — all the same rpc code and four different conversations. `allowance.Verdict`
+carries one `Cause` rather than a flag per refusal, so it cannot say two of them at once. A
+control-plane read that fails admits the request: losing the protection costs money, and
+refusing costs the customer their data.
+
+**`organizations.ingest_suspended_at` is the operator's stop valve** (P1-52), read on the same
+row and in the same statement as the allowance, so closing it costs the ingest path no extra
+query. **It is operational, not billing**: it stops a tenant that is well inside its allowance —
+including a paying one the allowance never touches — and it is the only refusal here that a
+person has to lift by hand. NULL is open; any recorded moment closes the valve at every door,
+and the timestamp is deliberately not compared with now. It takes up to
+`RECEIVER_ALLOWANCE_CACHE_TTL` (30s by default) to bite on each instance, and a control plane
+that cannot be read admits the request, so the valve cannot be closed during a Postgres outage.
+The keys still authenticate, exactly as they do for a deleted organization.
 
 **`origin` is the browser gate** (ADR 0087). It sits after `auth` because the allowlist belongs to
 the key, and before `ratelimit` because a request from an origin the key does not cover must not
@@ -59,3 +70,19 @@ Trace batches are **split one envelope per `trace_id`** before publishing, becau
 Errors follow **OTLP semantics, not problem+json** — SDK clients expect the protocol's own status codes. HTTP answers a failure in the request's own encoding (protobuf in, protobuf out); gRPC answers the mirrored `google.rpc.Code`.
 
 One asymmetry is deliberate. An oversized gRPC export is refused `RESOURCE_EXHAUSTED` by grpc-go itself, before any handler exists, where the HTTP door answers 413. That is safe because the spec makes `RESOURCE_EXHAUSTED` **non-retryable unless the server attaches `RetryInfo`** — grpc-go's size error carries none, so a compliant client drops the batch rather than resending it forever. Our *rate-limit* refusal does attach `RetryInfo`, because that one genuinely is recoverable.
+
+**The limiter fails open when Valkey errors, and bounds itself in process while it does** (ADR
+0104). `ratelimit.AllowWhileCounterDown` is a token bucket per key prefix, engaged only on the
+error path, sized at `fallbackBurstMultiple` (10) times `RECEIVER_RATE_LIMIT_PER_SECOND` — a
+multiple, not a copy, because each instance sees only its share of a key's traffic and matching
+the configured number would refuse traffic Valkey would have allowed. **It is per receiver
+instance**: the effective ceiling is that number times the fleet, and it grows as the fleet
+grows. The map is bounded for the reason `cache.go` gives — the key prefix on an invalid request
+is attacker-chosen. `limiter_unavailable` stays the one degraded line per window; a refusal from
+the fallback is counted as `throttled_in_process`, not `throttled`, and its log line names the
+per-instance number that refused, because it is not the configured one.
+
+**`net/http/pprof` mounts on the admin listener when `RECEIVER_PPROF_ENABLED` is set**, and only
+there — never an OTLP port. Off by default: the endpoints are unauthenticated. Checked
+2026-09-07 that :8081 is published by none of the three compose files and routed to by nothing
+in the Caddyfile; anything that changes which ports are published has to check that again.
