@@ -5,7 +5,7 @@ description = "Insight-first observability platform"
 requires-python = ">=3.13"
 
 [tool.uv.workspace]
-members = ["apps/api", "apps/scheduler"]
+members = ["apps/api", "apps/scheduler", "packages/py-platform"]
 
 [tool.uv]
 package = false
@@ -92,3 +92,6 @@ asyncio_mode = "auto"
 # guard. It sits above the apps because the API and the scheduler both need it.
 pythonpath = ["tests/helpers", "packages/contracts/gen/python"]
 testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests"]
+
+[tool.uv.sources]
+nexovue-platform = { workspace = true }

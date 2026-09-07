@@ -16,6 +16,7 @@ from typing import Final
 import clickhouse_connect
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from fastapi import FastAPI
+from nexovue_platform.telemetry.logging import get_logger
 from redis.asyncio import ConnectionPool, Redis
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -31,7 +32,6 @@ from nexovue_api.health.registry import CheckRegistry
 from nexovue_api.ratelimit.limiter import RateLimiter
 from nexovue_api.ratelimit.policy import FixedPlanLimits
 from nexovue_api.settings import Settings
-from nexovue_api.telemetry.logging import get_logger
 
 logger = get_logger(__name__)
 

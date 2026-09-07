@@ -15,12 +15,13 @@ from __future__ import annotations
 import time
 from typing import Any, Final
 
+from nexovue_platform.telemetry.logging import get_logger
+
 from nexovue_scheduler.celery_app import app
 from nexovue_scheduler.probes import browser, http_check
 from nexovue_scheduler.probes.result import ProbeResult
 from nexovue_scheduler.publish import ResultPublisher, build_envelope
 from nexovue_scheduler.settings import get_settings
-from nexovue_scheduler.telemetry.logging import get_logger
 
 logger = get_logger(__name__)
 

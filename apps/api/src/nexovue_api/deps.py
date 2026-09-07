@@ -19,6 +19,7 @@ from typing import Annotated
 
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from fastapi import Depends
+from nexovue_platform.telemetry.context import bind_tenant
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
@@ -28,7 +29,6 @@ from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.errors.exceptions import UnauthenticatedError
 from nexovue_api.lifespan import Resources
 from nexovue_api.settings import Settings
-from nexovue_api.telemetry.context import bind_tenant
 
 
 def get_app_settings(connection: HTTPConnection) -> Settings:

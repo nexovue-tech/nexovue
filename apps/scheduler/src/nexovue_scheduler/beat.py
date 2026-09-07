@@ -21,6 +21,7 @@ from typing import Any
 
 from celery.beat import ScheduleEntry, Scheduler
 from celery.schedules import schedule as run_every
+from nexovue_platform.telemetry.logging import get_logger
 from redis import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
@@ -28,7 +29,6 @@ from nexovue_scheduler.checks import CheckDefinition, load_enabled_checks
 from nexovue_scheduler.leader import LeaderLock
 from nexovue_scheduler.pollers.integrations import IntegrationDefinition, load_active_integrations
 from nexovue_scheduler.settings import QUEUE_LIGHT, Settings, get_settings
-from nexovue_scheduler.telemetry.logging import get_logger
 
 # The task every check dispatches to. Named as a string rather than imported so
 # beat does not pull in pycurl and Playwright to schedule work it never runs.

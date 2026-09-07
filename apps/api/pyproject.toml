@@ -14,6 +14,8 @@ dependencies = [
     "redis>=5.2",
     "clickhouse-connect[async]>=1.7",
     "structlog>=24.4",
+    # Shared with the other service: logging, request context, redaction.
+    "nexovue-platform",
     "argon2-cffi>=23.1",
     # Object storage for source map bytes, over the generic S3 API only (ADR
     # 0015): SeaweedFS locally, AWS S3 in deployment. boto3 rather than an async

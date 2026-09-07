@@ -20,10 +20,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Final
 
+from nexovue_platform.telemetry.logging import get_logger
+from nexovue_platform.telemetry.redaction import redact_credentials
 from redis import Redis
-
-from nexovue_scheduler.telemetry.logging import get_logger
-from nexovue_scheduler.telemetry.redaction import redact_credentials
 
 logger = get_logger(__name__)
 

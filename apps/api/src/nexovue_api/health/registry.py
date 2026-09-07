@@ -13,10 +13,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Final
 
+from nexovue_platform.telemetry.redaction import redact_credentials
 from pydantic import BaseModel
 
 from nexovue_api.buildinfo import BuildInfo, build_info
-from nexovue_api.telemetry.redaction import redact_credentials
 
 # Short on purpose: readiness must answer well inside an orchestrator's timeout.
 DEFAULT_PROBE_TIMEOUT_SECONDS: Final = 2.0

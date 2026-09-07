@@ -17,11 +17,11 @@ from __future__ import annotations
 import asyncio
 import uuid
 
+from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from nexovue_scheduler.pollers import integrations
 from nexovue_scheduler.settings import Settings
-from nexovue_scheduler.telemetry.logging import get_logger
 
 logger = get_logger(__name__)
 

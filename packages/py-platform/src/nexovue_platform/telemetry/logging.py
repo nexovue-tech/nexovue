@@ -24,14 +24,14 @@ from typing import Any, Final, TextIO
 
 import structlog
 
-from nexovue_api.telemetry.context import (
+from nexovue_platform.telemetry.context import (
     FIELD_ENV,
     FIELD_LEVEL,
     FIELD_MESSAGE,
     FIELD_SERVICE,
     FIELD_TIMESTAMP,
 )
-from nexovue_api.telemetry.redaction import redact_event
+from nexovue_platform.telemetry.redaction import redact_event
 
 FORMAT_JSON: Final = "json"
 FORMAT_CONSOLE: Final = "console"

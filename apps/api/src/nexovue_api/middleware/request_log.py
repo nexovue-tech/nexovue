@@ -10,9 +10,8 @@ import time
 from http import HTTPStatus
 from typing import Final
 
+from nexovue_platform.telemetry.logging import get_logger
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
-
-from nexovue_api.telemetry.logging import get_logger
 
 logger = get_logger(__name__)
 

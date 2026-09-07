@@ -1,0 +1,15 @@
+[project]
+name = "nexovue-platform"
+version = "0.1.0"
+description = "What the API and the scheduler both need: structured logging, request context, redaction"
+requires-python = ">=3.13"
+dependencies = [
+    "structlog>=24.4",
+]
+
+[build-system]
+requires = ["uv_build>=0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src"

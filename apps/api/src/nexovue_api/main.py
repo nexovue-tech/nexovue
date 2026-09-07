@@ -12,6 +12,7 @@ order, a request passes through:
 from __future__ import annotations
 
 from fastapi import APIRouter, FastAPI
+from nexovue_platform.telemetry.logging import configure_logging
 from starlette.middleware.cors import CORSMiddleware
 
 from nexovue_api.apikeys import router as apikeys_router
@@ -40,7 +41,6 @@ from nexovue_api.signup import router as signup_router
 from nexovue_api.sourcemaps import router as source_maps_router
 from nexovue_api.synthetics import router as synthetics_router
 from nexovue_api.system import router as system_router
-from nexovue_api.telemetry.logging import configure_logging
 from nexovue_api.traces import router as traces_router
 from nexovue_api.usage import router as usage_router
 

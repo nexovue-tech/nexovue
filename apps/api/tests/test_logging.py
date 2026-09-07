@@ -9,8 +9,7 @@ from collections.abc import Iterator
 
 import pytest
 import structlog
-
-from nexovue_api.telemetry.context import (
+from nexovue_platform.telemetry.context import (
     FIELD_CORRELATION_ID,
     FIELD_ENV,
     FIELD_LEVEL,
@@ -23,8 +22,8 @@ from nexovue_api.telemetry.context import (
     bind_tenant,
     parse_traceparent,
 )
-from nexovue_api.telemetry.logging import FORMAT_CONSOLE, FORMAT_JSON, configure_logging
-from nexovue_api.telemetry.redaction import PLACEHOLDER, redact_credentials
+from nexovue_platform.telemetry.logging import FORMAT_CONSOLE, FORMAT_JSON, configure_logging
+from nexovue_platform.telemetry.redaction import PLACEHOLDER, redact_credentials
 
 # Planted everywhere a credential can enter a log line. It must survive none of them.
 KNOWN_SECRET = "hunter2-do-not-log-this"

@@ -13,17 +13,17 @@ from typing import Any, Final
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from nexovue_platform.telemetry.context import (
+    CORRELATION_ID_HEADER,
+    FIELD_CORRELATION_ID,
+    current_correlation_id,
+)
+from nexovue_platform.telemetry.logging import get_logger
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
 from nexovue_api.errors import problems
 from nexovue_api.errors.exceptions import DomainError, RateLimitExceededError
-from nexovue_api.telemetry.context import (
-    CORRELATION_ID_HEADER,
-    FIELD_CORRELATION_ID,
-    current_correlation_id,
-)
-from nexovue_api.telemetry.logging import get_logger
 
 logger = get_logger(__name__)
 

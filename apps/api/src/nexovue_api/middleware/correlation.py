@@ -10,15 +10,14 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from starlette.datastructures import Headers, MutableHeaders
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
-
-from nexovue_api.telemetry.context import (
+from nexovue_platform.telemetry.context import (
     CORRELATION_ID_HEADER,
     TRACEPARENT_HEADER,
     bind_request_context,
     parse_traceparent,
 )
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _HTTP_SCOPE: str = "http"
 

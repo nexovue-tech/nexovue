@@ -9,6 +9,8 @@ import pytest
 import structlog
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from nexovue_platform.telemetry.context import CORRELATION_ID_HEADER
+from nexovue_platform.telemetry.logging import FORMAT_JSON, configure_logging
 from pydantic import BaseModel
 
 from nexovue_api.errors import problems
@@ -21,8 +23,6 @@ from nexovue_api.errors.exceptions import (
 from nexovue_api.errors.handlers import install_error_handlers
 from nexovue_api.middleware.correlation import CorrelationIdMiddleware
 from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
-from nexovue_api.telemetry.context import CORRELATION_ID_HEADER
-from nexovue_api.telemetry.logging import FORMAT_JSON, configure_logging
 
 SECRET_IN_TRACEBACK = "hunter2-do-not-leak-this"
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"

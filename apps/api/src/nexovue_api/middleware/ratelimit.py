@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any, Final
 
+from nexovue_platform.telemetry.logging import get_logger
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -24,7 +25,6 @@ from nexovue_api.errors.handlers import problem_response
 from nexovue_api.ratelimit import headers as ratelimit_headers
 from nexovue_api.ratelimit.limiter import Decision, RateLimiter
 from nexovue_api.ratelimit.policy import AUTH_TIER, PlanLimits, Tier, tier_for_path
-from nexovue_api.telemetry.logging import get_logger
 
 logger = get_logger(__name__)
 

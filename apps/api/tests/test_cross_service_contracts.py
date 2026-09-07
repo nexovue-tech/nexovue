@@ -152,6 +152,50 @@ def test_every_table_a_query_reads_is_one_the_migrations_create(module: Path) ->
     )
 
 
+# ------------------------------------------------------- the shared package
+
+
+def test_the_shared_package_reaches_neither_service_nor_a_database() -> None:
+    """`py-platform` depends on both services, so it must depend on neither.
+
+    Two rules, and the second is the one this test exists for. Importing
+    `nexovue_api` or `nexovue_scheduler` from here would make the dependency
+    circular and reintroduce exactly what `pollers/integrations.py` avoids — a
+    scheduler that cannot start because a control-plane package moved.
+
+    And it must hold no database access, because moving these modules out of
+    `apps/api/src` moved them out of `test_postgres_tenancy_structure.py`'s
+    scope: that check parametrizes over every function under the API's source
+    tree, and fourteen parametrized cases disappeared with them. None of them
+    queried anything, but nothing would notice if a future one did. This is the
+    boundary that replaces it.
+    """
+    platform_source = REPOSITORY_ROOT / "packages" / "py-platform" / "src" / "nexovue_platform"
+    assert platform_source.is_dir(), f"no shared package at {platform_source}"
+
+    forbidden = ("nexovue_api", "nexovue_scheduler", "sqlalchemy", "asyncpg", "clickhouse")
+    offending: list[str] = []
+    for module in platform_source.rglob("*.py"):
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            offending += [
+                f"{module.name}: {name}"
+                for name in names
+                if any(name.startswith(bad) for bad in forbidden)
+            ]
+
+    assert not offending, (
+        f"the shared package imports {offending}. It is depended on by both services, so it may "
+        f"depend on neither — and it holds no database access, which is what keeps it outside "
+        f"the tenancy guard safely."
+    )
+
+
 def test_the_migrations_are_where_this_check_thinks_they_are() -> None:
     """A moved directory must break this, not silently check nothing.
 

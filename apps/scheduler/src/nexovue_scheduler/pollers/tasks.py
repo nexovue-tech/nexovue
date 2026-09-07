@@ -14,6 +14,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Final
 
+from nexovue_platform.telemetry.logging import get_logger
+
 from nexovue_scheduler.celery_app import app
 from nexovue_scheduler.pollers import cloudwatch, integrations, postgres_connect, postgres_stats
 from nexovue_scheduler.pollers.aws import assume_customer_role, session_name_for
@@ -22,7 +24,6 @@ from nexovue_scheduler.pollers.health import report_failure, report_success
 from nexovue_scheduler.pollers.window import PollWindow
 from nexovue_scheduler.publish import ResultPublisher
 from nexovue_scheduler.settings import get_settings
-from nexovue_scheduler.telemetry.logging import get_logger
 
 logger = get_logger(__name__)
 

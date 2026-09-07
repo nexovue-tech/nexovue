@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "nexovue",
     "nexovue-api",
+    "nexovue-platform",
     "nexovue-scheduler",
 ]
 
@@ -1262,6 +1263,7 @@ dependencies = [
     { name = "boto3" },
     { name = "clickhouse-connect", extra = ["async"] },
     { name = "fastapi" },
+    { name = "nexovue-platform" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-multipart" },
@@ -1280,6 +1282,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
     { name = "clickhouse-connect", extras = ["async"], specifier = ">=1.7" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "nexovue-platform", editable = "packages/py-platform" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.6" },
     { name = "python-multipart", specifier = ">=0.0.20" },
@@ -1291,6 +1294,17 @@ requires-dist = [
 ]
 
 [[package]]
+name = "nexovue-platform"
+version = "0.1.0"
+source = { editable = "packages/py-platform" }
+dependencies = [
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "structlog", specifier = ">=24.4" }]
+
+[[package]]
 name = "nexovue-scheduler"
 version = "0.1.0"
 source = { editable = "apps/scheduler" }
@@ -1299,6 +1313,7 @@ dependencies = [
     { name = "boto3" },
     { name = "celery", extra = ["redis"] },
     { name = "confluent-kafka" },
+    { name = "nexovue-platform" },
     { name = "opentelemetry-proto" },
     { name = "protobuf" },
     { name = "pycurl" },
@@ -1319,6 +1334,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
     { name = "celery", extras = ["redis"], specifier = ">=5.4" },
     { name = "confluent-kafka", specifier = ">=2.6" },
+    { name = "nexovue-platform", editable = "packages/py-platform" },
     { name = "opentelemetry-proto", specifier = ">=1.28" },
     { name = "playwright", marker = "extra == 'browser'", specifier = ">=1.62" },
     { name = "protobuf", specifier = ">=5.28" },
