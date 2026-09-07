@@ -15,6 +15,7 @@ from typing import Annotated, Final
 from fastapi import Depends
 
 from nexovue_api.auth.queries import load_identity
+from nexovue_api.auth.sessions import Session
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import Organization, User
 from nexovue_api.deps import ClickHouseClient, CurrentSession, DbSession
@@ -49,7 +50,22 @@ async def get_current_identity(session: CurrentSession, db: DbSession) -> Identi
         raise UnauthenticatedError(SESSION_NO_LONGER_VALID)
 
     user, organization = found
+    if _issued_before_reset(session, user):
+        # P1-71: a password reset ends every session it did not issue. There is
+        # nothing to enumerate — Redis keys sessions by token fingerprint — so
+        # the epoch on the user row is the revocation, and this is where it bites.
+        raise UnauthenticatedError(SESSION_NO_LONGER_VALID)
     return Identity(user=user, organization=organization)
+
+
+def _issued_before_reset(session: Session, user: User) -> bool:
+    """Whether this session predates the last moment that invalidated them all.
+
+    NULL means no reset has happened, which is every user until one does.
+    """
+    if user.sessions_valid_from is None:
+        return False
+    return session.created_at < user.sessions_valid_from
 
 
 CurrentIdentity = Annotated[Identity, Depends(get_current_identity)]

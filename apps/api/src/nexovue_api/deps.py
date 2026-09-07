@@ -25,10 +25,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
 from nexovue_api.auth.sessions import Session, SessionStore, session_token_from_headers
+from nexovue_api.auth.tokens import OneTimeTokenStore
 from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.errors.exceptions import UnauthenticatedError
 from nexovue_api.lifespan import Resources
-from nexovue_api.settings import Settings
+from nexovue_api.notifications import EmailNotConfiguredError, EmailSender
+from nexovue_api.settings import EMAIL_VARIABLES, Settings
 
 
 def get_app_settings(connection: HTTPConnection) -> Settings:
@@ -71,6 +73,39 @@ def get_object_store(
     return resources.object_store
 
 
+def get_email_sender(
+    resources: Annotated[Resources, Depends(get_resources)],
+) -> EmailSender:
+    """The mail sender, or a refusal naming what is unset.
+
+    Raising here rather than handing back None means a route that needs mail
+    cannot forget to check: the dependency either supplies a sender or the
+    request never reaches the handler. `EmailNotConfiguredError` names all four
+    variables, because "could not send" leaves an operator guessing which.
+    """
+    if resources.email is None:
+        raise EmailNotConfiguredError(EMAIL_VARIABLES)
+    return resources.email
+
+
+def get_optional_email_sender(
+    resources: Annotated[Resources, Depends(get_resources)],
+) -> EmailSender | None:
+    """The mail sender, or None, for the one caller that must not fail without it.
+
+    Signup sends a verification link and must still create the account when mail
+    is unconfigured or refused — see `signup/router._mail_verification`. Every
+    other caller wants `EmailDelivery`, which refuses before the handler runs.
+    """
+    return resources.email
+
+
+def get_one_time_tokens(
+    resources: Annotated[Resources, Depends(get_resources)],
+) -> OneTimeTokenStore:
+    return OneTimeTokenStore(resources.redis)
+
+
 def get_session_store(resources: Annotated[Resources, Depends(get_resources)]) -> SessionStore:
     return resources.sessions
 
@@ -101,3 +136,10 @@ CurrentSession = Annotated[Session, Depends(get_current_session)]
 SessionStoreDep = Annotated[SessionStore, Depends(get_session_store)]
 # Optional on purpose: only source maps need it, and they say so by name.
 ObjectStoreDep = Annotated[ObjectStore | None, Depends(get_object_store)]
+# Not optional, unlike the object store: a route that asks for this one needs to
+# send, so the refusal belongs before the handler rather than inside it.
+EmailDelivery = Annotated[EmailSender, Depends(get_email_sender)]
+# Optional, like the object store, and for one caller: signup must not fail
+# because mail could not go. Everything else uses EmailDelivery.
+OptionalEmail = Annotated[EmailSender | None, Depends(get_optional_email_sender)]
+OneTimeTokens = Annotated[OneTimeTokenStore, Depends(get_one_time_tokens)]

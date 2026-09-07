@@ -150,6 +150,11 @@ class User(Base):
     name: Mapped[str | None] = mapped_column(String(NAME_MAX_LENGTH), nullable=True)
     role: Mapped[str] = mapped_column(UserRole, nullable=False)
     email_verified_at: Mapped[OptionalTimestamp]
+    # Sessions created before this are refused (migration 0019). NULL means no
+    # reset has happened. It is the whole of "a password reset ends every live
+    # session": Redis keys sessions by token fingerprint, so there is nothing to
+    # enumerate, and this comparison rides a user row every request already loads.
+    sessions_valid_from: Mapped[OptionalTimestamp]
     invited_by: Mapped[uuid.UUID | None] = mapped_column(
         UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

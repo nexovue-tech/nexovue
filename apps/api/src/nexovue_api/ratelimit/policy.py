@@ -68,6 +68,13 @@ AUTH_PATHS: Final = (
     # Signup is a sibling of /auth, not a child: it creates the organization the
     # session then belongs to. It is still credential-stuffing surface.
     f"{API_PREFIX}/signup",
+    # Account recovery, and it is listed path by path rather than as an
+    # `/auth/` prefix because `/auth/me` is polled by every signed-in screen and
+    # would be throttled at ten a minute. The reset request is the one that
+    # matters most: unthrottled it is a way to have us mail anybody repeatedly,
+    # and the per-email scope is what bounds that rather than the per-IP one.
+    f"{API_PREFIX}/auth/password-reset",
+    f"{API_PREFIX}/auth/verify-email",
     f"{API_PREFIX}/auth/password-reset",
 )
 TELEMETRY_PATHS: Final = (

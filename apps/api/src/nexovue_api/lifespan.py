@@ -29,9 +29,10 @@ from nexovue_api.auth.sessions import SessionStore
 from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.health.checks import dependency_checks
 from nexovue_api.health.registry import CheckRegistry
+from nexovue_api.notifications import EmailSender, build_email_sender
 from nexovue_api.ratelimit.limiter import RateLimiter
 from nexovue_api.ratelimit.policy import FixedPlanLimits
-from nexovue_api.settings import Settings
+from nexovue_api.settings import EMAIL_VARIABLES, Settings
 
 logger = get_logger(__name__)
 
@@ -59,6 +60,10 @@ class Resources:
     # None when no object store is configured. Source map upload and
     # symbolication refuse by name in that case; nothing else needs one.
     object_store: ObjectStore | None
+    # None when mail is not configured, on the same principle: every screen
+    # still serves, and the two flows that must send — verification and password
+    # reset — refuse by naming the variables that are missing.
+    email: EmailSender | None
 
 
 def build_lifespan(
@@ -122,6 +127,7 @@ async def open_resources(settings: Settings) -> Resources:
 
     return Resources(
         object_store=await _open_object_store(settings),
+        email=_open_email(settings),
         engine=engine,
         session_factory=session_factory,
         redis=redis,
@@ -129,6 +135,25 @@ async def open_resources(settings: Settings) -> Resources:
         sessions=SessionStore(redis, ttl_seconds=settings.session_ttl_seconds),
         rate_limiter=RateLimiter(redis),
     )
+
+
+def _open_email(settings: Settings) -> EmailSender | None:
+    """The mail sender, or None when mail is not configured.
+
+    `build_email_sender` is ADR 0102's composition root and the only place a
+    provider is chosen; this is the only place it is called. Nothing here learns
+    which provider answered.
+    """
+    configured = settings.email
+    if configured is None:
+        logger.info(
+            "no email provider configured; verification and password reset are unavailable",
+            variables=list(EMAIL_VARIABLES),
+        )
+        return None
+
+    logger.info("email sender ready", sending_domain=configured.sending_domain)
+    return build_email_sender(configured)
 
 
 async def _open_object_store(settings: Settings) -> ObjectStore | None:

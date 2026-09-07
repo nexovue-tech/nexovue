@@ -50,3 +50,36 @@ class IdentityResponse(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailAddress
     password: Password
+
+
+class PasswordResetRequest(BaseModel):
+    """Ask for a reset link.
+
+    The address is all it takes, and the answer is the same whether or not it
+    has an account — see `recovery`. Nothing here is optional, because a body
+    with no address is a client defect rather than a valid "reset nobody".
+    """
+
+    email: EmailAddress
+
+
+class TokenSubmission(BaseModel):
+    """A link's token, handed back by the screen the customer landed on.
+
+    Bounded so a caller cannot ask us to hash a megabyte. The token itself is
+    43 URL-safe characters from 32 random bytes; the ceiling is generous rather
+    than exact, because a token that is the wrong length is refused by finding
+    no key, not by its shape.
+    """
+
+    token: Annotated[str, Field(min_length=1, max_length=512)]
+
+
+class PasswordReset(TokenSubmission):
+    """A reset link's token and the password to set behind it.
+
+    The new password is held to the same rules as one chosen at signup: the
+    constraint belongs to the password, not to the door it came through.
+    """
+
+    password: Password

@@ -46,6 +46,19 @@ EXEMPT: Final = {
     # Unauthenticated: they are how a session comes into existence and ends.
     "login",
     "logout",
+    # Unauthenticated by design: both are followed from a mail client, which is
+    # a different browser session from the one that asked — often a different
+    # device. The token in the body is the whole credential, single-use and
+    # expiring (`auth/tokens.py`), and requiring a session would make the flows
+    # useless to the person they exist for: somebody locked out.
+    "verify_email",
+    "request_password_reset",
+    "confirm_password_reset",
+    # Authenticated, and deliberately available to *any* role. It mails a fresh
+    # verification link to `identity.user.email` and to no address the caller
+    # supplied, so the only account it can affect is the caller's own. Requiring
+    # `owner` here would stop a member ever proving their own address.
+    "resend_verification",
     # A POST that reads. Symbolication turns minified frames back into original
     # ones and writes nothing; it is a POST because a stack trace does not fit
     # in a query string.

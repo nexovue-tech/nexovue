@@ -182,6 +182,19 @@ class Settings(BaseSettings):
     email_from_address: str = ""
     email_reply_to: str = ""
 
+    # Where a verification or reset link points. It is the customer-facing app,
+    # never this API: the link is clicked in a browser and lands on a screen that
+    # then calls the endpoint. Two hostnames (ADR 0089), and this is the app one.
+    # No default — a link built against a guessed host is a link to nowhere, and
+    # the failure is a customer who cannot verify rather than a stack trace.
+    app_base_url: str = ""
+
+    # A verification link is followed at leisure; a reset link is a live
+    # credential to somebody's account. Different lifetimes, and the difference
+    # is the reason they are two settings rather than one.
+    verify_email_ttl_seconds: int = 24 * 60 * 60
+    reset_password_ttl_seconds: int = 60 * 60
+
     @property
     def email(self) -> EmailSettings | None:
         """The email settings, or None when mail is not configured.

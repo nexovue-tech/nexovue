@@ -23,7 +23,7 @@ never when the code was written.
 | **A2** | contract tests — auth mode + ClickHouse table names | ✅ **done** | `e18713c` |
 | **A3** | `packages/py-platform` — 299 duplicated lines removed | ✅ **done** | `f4291d8` |
 | **G1** | TLS edge | 🟡 **decisions taken; the two site blocks and the headers are being built now** | `42c3b48` |
-| **G2** | account recovery | 🟡 **P1-69 infrastructure done; P1-70/71 not started** | `a6ef9cd` `9febb8a` `3a76dda` |
+| **G2** | account recovery | ✅ **done** — P1-69, P1-70 and P1-71 | `a6ef9cd` `9febb8a` `3a76dda` `pending` |
 | **G3** | poller SSRF boundary | ✅ **done** | `pending` |
 | **G4** | poller certificate verification | ✅ **done** | `f26ec33` |
 | **G5** | ingest kill switch | ⬜ | — |
@@ -69,11 +69,24 @@ edge existed when one did not. The two site blocks — `{$NEXOVUE_APP_HOST}` and
 `{$NEXOVUE_INGEST_HOST}` — are being built now, alongside the headers. This is the plainest form of
 the rule this file opens with: where the document and the config disagreed, the config was right.
 
-**G2.** P1-69's infrastructure is complete and verified: provider chosen, `mail.nexovue.com`
-carrying SPF, DKIM, DMARC and a bounce path — all four confirmed resolving against a public
-resolver, not read off an export — `EmailSender` behind ADR 0102's port, `ResendEmailSender`
-implementing it, `build_email_sender` choosing from `EMAIL_PROVIDER`, and two real messages sent
-and accepted. **P1-70 and P1-71 — verification and reset — are the features and are not started.**
+**G2 is closed.** P1-69's infrastructure was already verified — provider, `mail.nexovue.com`
+carrying SPF, DKIM, DMARC and a bounce path all confirmed against a public resolver, the port, the
+adapter, the composition root, two real messages accepted. **P1-70 and P1-71 landed 2026-09-08.**
+
+Three things that were not obvious until the code was read:
+
+- **The sender was never wired into the app.** `build_email_sender` existed and was tested;
+  `Resources` had no `email` field and nothing called it. G2's remaining half started with wiring,
+  not with features.
+- **"A reset ends every live session" had nothing to run.** Redis keys sessions by token
+  fingerprint and `SessionStore.revoke` takes a *token*, so there was no query for "all of this
+  user's". `users.sessions_valid_from` (migration 0019) is the answer: one write invalidates every
+  session, nothing to enumerate and nothing to drift, and the comparison rides a user row
+  `get_current_identity` already loads on every request.
+- **A1's authorization guard caught the new routes**, which is what it was built for. Four are
+  exempt with their reasons written down — three are followed from a mail client and have no
+  session to judge, and `resend_verification` is deliberately open to any role because it can only
+  ever mail the caller's own address.
 
 ---
 
@@ -942,8 +955,10 @@ beside G5.
 **Five are large**, and every one carries a decision rather than only code: P1-69 email, P1-73
 payments, P1-76 project management, the ClickHouse purge path, and G7's SDK distribution.
 
-**Eleven are small** — under a day each — and four of those are the whole safety gate: G3, G4, G6a
-and A2. **The cheapest quarter of this list closes the two open holes and the untested contract.**
+~~**Eleven are small**~~ — **ten**, since G6a was struck on 2026-09-08 for not being one. Three of
+them were the safety gate — G3, G4 and A2 — and all three are done. **The cheapest quarter of this
+list closed the two open holes and the untested contract**, which is what the sentence claimed and
+is now true rather than predicted.
 
 ### The eleven that are under a day
 
@@ -951,7 +966,7 @@ and A2. **The cheapest quarter of this list closes the two open holes and the un
 |---|---|
 | G3 | poller SSRF boundary |
 | G4 | asyncpg `verify-full` |
-| G6a | paid-tier browser cap |
+| ~~G6a~~ | ~~paid-tier browser cap~~ — **struck 2026-09-08: it is not under a day.** `allowance/postgres.go:132` returns unenforced when `max_billed_services` is NULL and the browser cap lives *inside* the enforced branch, so a paid plan takes an early return no cap can be reached from. It needs an allowance that does not depend on a service-count ceiling — a design change, recorded in [ADR 0107](../architecture/decisions/0107-over-the-allowance-we-stop-and-say-so-and-the-customer-may-raise-the-ceiling.md) |
 | A2 | contract test + cross-service sweep |
 | A3 | `packages/py-platform` |
 | M3 | pprof on the admin listener |

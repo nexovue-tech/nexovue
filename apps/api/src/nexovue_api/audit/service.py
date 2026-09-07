@@ -37,6 +37,9 @@ from nexovue_api.data.postgres.models import (
 ORGANIZATION_CREATED: Final = "organization.created"
 SESSION_CREATED: Final = "session.created"
 SESSION_ENDED: Final = "session.ended"
+EMAIL_VERIFIED: Final = "user.email_verified"
+PASSWORD_RESET_REQUESTED: Final = "user.password_reset_requested"
+PASSWORD_RESET_COMPLETED: Final = "user.password_reset_completed"
 DEPLOY_WEBHOOK_SECRET_CREATED: Final = "deploy.webhook_secret_created"
 DEPLOY_WEBHOOK_SECRET_REVOKED: Final = "deploy.webhook_secret_revoked"
 INTEGRATION_CREATED: Final = "integration.created"
@@ -91,6 +94,42 @@ def record_session_created(db: AsyncSession, *, user: User) -> None:
         org_id=user.org_id,
         actor_user_id=user.id,
         action=SESSION_CREATED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_email_verified(db: AsyncSession, *, user: User) -> None:
+    """The address was proven. Written once — a second click finds no token."""
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=EMAIL_VERIFIED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_password_reset_requested(db: AsyncSession, *, user: User) -> None:
+    """A reset link was mailed. Recorded only when an account matched — a request
+    for an unknown address is somebody else's typo, and storing it would build a
+    list of addresses somebody once guessed (see UNKNOWN_ACCOUNT_TARGET)."""
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=PASSWORD_RESET_REQUESTED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_password_reset_completed(db: AsyncSession, *, user: User) -> None:
+    """The password changed and every session ended. The pair matters: a reset
+    with no matching request is somebody using a link that was not asked for."""
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=PASSWORD_RESET_COMPLETED,
         target=_target(USER_TARGET, user.id),
     )
 

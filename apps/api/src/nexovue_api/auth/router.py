@@ -11,12 +11,24 @@ from http import HTTPStatus
 
 from fastapi import APIRouter, Request, Response
 
-from nexovue_api.auth import service
+from nexovue_api.auth import recovery, service
 from nexovue_api.auth.cookies import clear_session_cookie, set_session_cookie
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.schemas import IdentityResponse, LoginRequest
+from nexovue_api.auth.schemas import (
+    IdentityResponse,
+    LoginRequest,
+    PasswordReset,
+    PasswordResetRequest,
+    TokenSubmission,
+)
 from nexovue_api.auth.sessions import session_token_from_headers
-from nexovue_api.deps import AppSettings, DbSession, SessionStoreDep
+from nexovue_api.deps import (
+    AppSettings,
+    DbSession,
+    EmailDelivery,
+    OneTimeTokens,
+    SessionStoreDep,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -57,3 +69,101 @@ async def logout(
 @router.get("/me", summary="The signed-in user and their organization")
 async def me(identity: CurrentIdentity) -> IdentityResponse:
     return service.describe_identity(identity.user, identity.organization)
+
+
+@router.post(
+    "/verify-email/resend",
+    status_code=HTTPStatus.ACCEPTED,
+    summary="Send a fresh verification link to your own address",
+)
+async def resend_verification(
+    identity: CurrentIdentity,
+    tokens: OneTimeTokens,
+    email: EmailDelivery,
+    settings: AppSettings,
+) -> None:
+    """Authenticated, and it mails `identity.user.email` rather than any address
+    in the body: a caller-chosen recipient would let anybody send mail from our
+    verified domain to wherever they liked.
+
+    202 rather than 204 — the mail has been handed to a provider, not delivered,
+    and the status should not claim more than that. An address that is already
+    verified is also a 202 and sends nothing, because scolding somebody whose
+    account is already fine helps nobody.
+    """
+    await recovery.send_verification(
+        tokens,
+        email,
+        user=identity.user,
+        app_base_url=settings.app_base_url,
+        ttl_seconds=settings.verify_email_ttl_seconds,
+    )
+
+
+@router.post(
+    "/verify-email",
+    status_code=HTTPStatus.NO_CONTENT,
+    summary="Prove control of the address on the account",
+)
+async def verify_email(payload: TokenSubmission, db: DbSession, tokens: OneTimeTokens) -> None:
+    """Unauthenticated on purpose: the customer clicks this from a mail client,
+    which is a different browser session from the one they signed up in — often
+    a different device.
+
+    Writes `users.email_verified_at`, which has existed unwritten since
+    migration 0001. It unlocks nothing in Phase 1; see `recovery.verify_email`.
+    """
+    await recovery.verify_email(db, tokens, token=payload.token)
+
+
+@router.post(
+    "/password-reset",
+    status_code=HTTPStatus.ACCEPTED,
+    summary="Ask for a password reset link",
+)
+async def request_password_reset(
+    payload: PasswordResetRequest,
+    db: DbSession,
+    tokens: OneTimeTokens,
+    email: EmailDelivery,
+    settings: AppSettings,
+) -> None:
+    """Always 202, for a known and an unknown address alike.
+
+    The status is the whole security property of this endpoint: anything that
+    varies with whether the address has an account — the code, the body, a
+    delay — turns the form into an account-existence oracle.
+    """
+    await recovery.request_password_reset(
+        db,
+        tokens,
+        email,
+        address=payload.email,
+        app_base_url=settings.app_base_url,
+        ttl_seconds=settings.reset_password_ttl_seconds,
+    )
+
+
+@router.post(
+    "/password-reset/confirm",
+    status_code=HTTPStatus.NO_CONTENT,
+    summary="Set a new password with a reset link's token",
+)
+async def confirm_password_reset(
+    payload: PasswordReset,
+    response: Response,
+    db: DbSession,
+    tokens: OneTimeTokens,
+    settings: AppSettings,
+) -> None:
+    """Sets the password and ends every live session, including the caller's.
+
+    **No session is issued back.** Signing the customer in here would be
+    convenient and wrong: the person holding the link proved they control the
+    address, and the next step is to sign in with the password they just chose
+    — which is also the step that tells them it worked. The cookie is cleared
+    so a browser that was signed in as somebody does not keep a session the
+    reset just invalidated.
+    """
+    await recovery.reset_password(db, tokens, token=payload.token, new_password=payload.password)
+    clear_session_cookie(response, settings)
