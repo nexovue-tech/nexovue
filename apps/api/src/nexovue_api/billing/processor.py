@@ -104,10 +104,14 @@ class Checkout:
     """
 
     url: str
-    # The processor's own name for the arrangement this checkout starts, and the
-    # identifier its webhooks will echo back. Required, because ADR 0110 makes it
-    # the only thread between the checkout and the event: the row written here is
-    # what later answers *whose* subscription an event is about.
+    # The name this arrangement is known by at the processor, and the identifier
+    # its webhooks echo back. Required, because ADR 0110 makes it the only thread
+    # between the checkout and the event: the row written here is what later
+    # answers *whose* subscription an event is about.
+    #
+    # An implementation may mint it rather than receive it — at the domestic
+    # processor the create call takes it as a request field — which is why it is
+    # the adapter that supplies it and not the caller.
     subscription_ref: str
     # The processor's id for the payer, when it issues one at this point. Absent
     # at a processor with no customer object, and absent at one that only names

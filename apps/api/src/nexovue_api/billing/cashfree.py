@@ -124,12 +124,12 @@ TERMINAL_STATUSES: Final = CANCELLED_STATUSES | frozenset(
 #     object carries no `subscription_tags`
 #     https://www.cashfree.com/docs/api-reference/payments/latest/payment-links/create
 CHECKOUT_UNAVAILABLE_DETAIL: Final = (
-    "the subscription create call has not been exercised against this "
-    "processor, so the field its response names the new subscription in is "
-    "unverified. That field is what `Checkout.subscription_ref` must carry and "
-    "what every webhook is matched on, and a wrong guess would write rows no "
-    "event can ever find — silently, and only discoverable at a customer's "
-    "first renewal. It needs one call against their sandbox, not a decision"
+    "this processor's subscription flow hands back a session id for its own "
+    "browser SDK, never a redirectable link, and the one call that does answer "
+    "with a URL requires the payment method to be chosen first — which would "
+    "put card selection in this application. `Checkout` promises a URL, so the "
+    "port and this processor disagree about what a handoff is. That is ADR "
+    "0102's wording rather than a gap in this file"
 )
 
 
@@ -144,18 +144,27 @@ class CheckoutHandoffUndecidedError(BillingError):
     and `billing.service` resolves whose it is from the row the checkout wrote,
     so the call that returns a redirectable link is usable.
 
-    **What is left is not a decision, it is a measurement.** The create call has
-    never been made against this processor, so which field of its response names
-    the new subscription is unconfirmed. That value becomes
-    `Checkout.subscription_ref`, it is written to `billing_subscriptions`, and it
-    is the only thing a later webhook is matched on — so reading the wrong field
-    produces rows that look correct and that no event can ever resolve. The
-    failure surfaces at a customer's first renewal, as money taken with the plan
-    never moving.
+    **The measurement has now been taken, and it answered two things.** One
+    sandbox create call on 2026-09-09, watched rather than read:
 
-    Guessing it from documentation would be a claim nobody watched. One call
-    against their sandbox settles it, and it is the last thing between this
-    module and a working checkout.
+    *The reference is ours to mint.* `subscription_id` is a request field, echoed
+    back unchanged; the processor's own `cf_subscription_id` is separate and
+    unused here. So `Checkout.subscription_ref` needs no discovery at all — this
+    module chooses it, which makes ADR 0110's correlation stronger than that ADR
+    assumed rather than weaker.
+
+    *There is no redirectable link.* The response carries a
+    `subscription_session_id` for the processor's browser SDK and nothing else a
+    customer can be sent to. The one endpoint that does answer with a URL takes a
+    `payment_method` — card, UPI, enach — so obtaining it means choosing the
+    payment instrument in this application, which is precisely what ADR 0076's
+    posture and `Checkout`'s "a URL rather than a form" exist to prevent.
+
+    **So what remains is a decision about the port, not about this file.**
+    `Checkout` promises a URL; this processor's subscription flow cannot give
+    one. Either the port stops promising a URL and starts describing a handoff
+    the front end completes, or paid subscriptions are taken somewhere else.
+    Both are above this module.
     """
 
     def __init__(self) -> None:

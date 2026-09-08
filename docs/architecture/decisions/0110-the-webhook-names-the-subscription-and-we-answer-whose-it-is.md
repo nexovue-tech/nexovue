@@ -70,11 +70,19 @@ starting, which cannot be attributed at all. Nothing charges, and nothing moves 
 the event carried an organization id; with that gone, an unknown reference is refused by the caller
 rather than invented downstream.
 
-**Cashfree's remaining blocker is a measurement, not a decision.** `begin_checkout` still refuses,
-and the reason has changed completely: the create call has never been made, so which response field
-names the new subscription is unverified. That value becomes `subscription_ref` and is the only
-thing a webhook is matched on — reading the wrong field writes rows no event can resolve, surfacing
-at a customer's first renewal as money taken with the plan never moving. One sandbox call settles it.
+**The reference turns out to be ours to mint, which makes this stronger than it was written.** One
+Cashfree sandbox create call on 2026-09-09 — made, not read — echoed back the `subscription_id` we
+sent it. Their own `cf_subscription_id` is a separate field we do not use. So the identifier tying a
+webhook to a tenant is chosen by us and merely stored by them, which is the opposite of the
+arrangement this ADR replaced.
+
+**`begin_checkout` still refuses, and the reason is now a port question.** The same call showed the
+response carries a `subscription_session_id` for Cashfree's browser SDK and no redirectable link;
+the one endpoint that does answer with a URL requires `payment_method` — card, UPI, enach — so
+getting a URL means choosing the payment instrument in our own application, which is what ADR 0076's
+posture forbids. `Checkout` promises a URL. Either the port stops promising one and describes a
+handoff the front end completes, or paid subscriptions are taken elsewhere. That is ADR 0102's
+wording and is not settled here.
 
 **A processor that issues no reference before the redirect cannot satisfy this port.** Stated so it
 is a known boundary rather than a surprise at the second adapter.

@@ -459,22 +459,22 @@ class TestConfigurationAndWiring:
         with pytest.raises(BillingError, match=SECURE_URL_SCHEME):
             await _checkout(return_url=return_url)
 
-    async def test_checkout_refuses_because_the_response_field_is_unverified(self) -> None:
-        """Every input is now supplied, and the design question is answered.
+    async def test_checkout_refuses_because_this_processor_hands_back_no_link(self) -> None:
+        """Every input is supplied, both earlier reasons are gone, and it still
+        cannot start one.
 
-        This test used to assert the refusal was about `subscription_tags` — the
-        call that accepted them answered with a session id rather than a URL, so
-        the port could not be satisfied. ADR 0110 removed the tags entirely, so
-        that reason no longer exists and asserting it would pass while being
-        false.
+        The refusal has been re-aimed twice, and each time the old assertion
+        would have kept passing while describing something untrue. First it was
+        about `subscription_tags`, which ADR 0110 deleted. Then it was about an
+        unverified response field, which one sandbox call on 2026-09-09 settled:
+        `subscription_id` is a *request* field, so the reference is ours to mint.
 
-        What remains is not a decision: the create call has never been made, so
-        which response field names the new subscription is unconfirmed. That
-        value becomes `Checkout.subscription_ref` and is the only thing a webhook
-        is matched on, which is why it is worth refusing over rather than
-        guessing.
+        What that call also showed is the reason now asserted — the response
+        carries a session id for the processor's browser SDK and no link, and the
+        endpoint that does return a URL wants the payment method chosen first.
+        `Checkout` promises a URL, so this is ADR 0102's port to change.
         """
-        with pytest.raises(CheckoutHandoffUndecidedError, match="unverified"):
+        with pytest.raises(CheckoutHandoffUndecidedError, match="redirectable link"):
             await _checkout()
 
     async def test_no_failure_message_carries_the_signing_key_or_the_raw_body(self) -> None:
