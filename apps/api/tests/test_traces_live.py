@@ -25,7 +25,7 @@ import os
 import socket
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Final
 from urllib.parse import urlsplit
 
@@ -616,7 +616,35 @@ async def test_the_summary_and_the_span_grouping_name_the_same_traces(
     shared = summarised.keys() & grouped.keys()
     assert shared, "the two paths named no trace in common"
 
-    for trace_id in shared:
+    # The docstring above said the comparison was over traces wholly inside the
+    # window and the code never did it — it narrowed the window by five minutes
+    # and then compared everything shared, which is not the same thing. A trace
+    # longer than that slack still straddles the inner edge, and the demo has
+    # one: a seven-minute k6 checkout. Observed 2026-09-07, trace `024c5ad0…`
+    # with 70 spans in its summary and 3 in the grouping, naming different roots.
+    # Neither read is wrong; they answer different questions at an edge, so the
+    # comparison has to stay away from edges. This is T3-7.
+    def _utc(moment: datetime) -> datetime:
+        """Both sides in one zone. The window and the summary do not agree on
+        whether a timestamp carries an offset, and comparing them raw raises."""
+        return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+
+    def _spans_the_whole_trace(trace_id: str) -> bool:
+        summary = summarised[trace_id]
+        started = _utc(summary.start_time)
+        return started >= _utc(inner_start) and started + timedelta(
+            milliseconds=summary.duration_ms
+        ) <= _utc(inner_end)
+
+    wholly_inside = {trace_id for trace_id in shared if _spans_the_whole_trace(trace_id)}
+    # Without this the suite could pass having compared nothing, which is the
+    # failure mode the filter itself introduces.
+    assert wholly_inside, (
+        f"{len(shared)} traces are in both answers and none lies wholly inside "
+        f"{inner_start.isoformat()}..{inner_end.isoformat()}, so this compared nothing"
+    )
+
+    for trace_id in wholly_inside:
         assert summarised[trace_id].span_count == grouped[trace_id].span_count
         assert summarised[trace_id].error_count == grouped[trace_id].error_count
         assert summarised[trace_id].status_code == grouped[trace_id].status_code
