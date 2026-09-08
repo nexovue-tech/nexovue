@@ -213,8 +213,40 @@ async def test_a_name_is_written_and_cleared_on_the_real_row(db: AsyncSession) -
     tenant = await _tenant(db)
     user = tenant.user
 
-    profile.rename(user, ProfileUpdate(name="  Ada Lovelace  "))
+    profile.update_details(user, ProfileUpdate(name="  Ada Lovelace  ", timezone=None))
     assert (await _reloaded(db, user)).name == "Ada Lovelace"
 
-    profile.rename(user, ProfileUpdate(name="   "))
+    profile.update_details(user, ProfileUpdate(name="   ", timezone=None))
     assert (await _reloaded(db, user)).name is None
+
+
+async def test_a_timezone_is_written_and_cleared_on_the_real_row(db: AsyncSession) -> None:
+    """Migration 0021's column, proved against the database that has it.
+
+    `users.timezone` is nullable and NULL means "no zone chosen, render in the
+    browser's", so clearing has to reach Postgres as NULL rather than as `""`.
+    """
+    tenant = await _tenant(db)
+    user = tenant.user
+    assert (await _reloaded(db, user)).timezone is None, "a new account arrives with a zone set"
+
+    profile.update_details(user, ProfileUpdate(name=None, timezone=" Asia/Kolkata "))
+    assert (await _reloaded(db, user)).timezone == "Asia/Kolkata"
+
+    profile.update_details(user, ProfileUpdate(name=None, timezone=""))
+    assert (await _reloaded(db, user)).timezone is None
+
+
+async def test_a_zone_the_system_cannot_render_never_reaches_the_column(
+    db: AsyncSession,
+) -> None:
+    """An offset is the tempting wrong value and it is refused: `+05:30` is true
+    for half of any year that observes daylight saving, and a column of offsets
+    is silently wrong for the other half."""
+    tenant = await _tenant(db)
+    user = tenant.user
+
+    with pytest.raises(InvalidRequestError):
+        profile.update_details(user, ProfileUpdate(name=None, timezone="+05:30"))
+
+    assert (await _reloaded(db, user)).timezone is None

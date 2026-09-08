@@ -13,10 +13,22 @@ import (
 // One statement resolves both ids: api_keys carries org_id as well as
 // project_id precisely so this is not a three-table join on the ingest path.
 // A revoked key is not a row this query can return.
+//
+// **The join to projects is not free and is not optional.** It costs the ingest
+// path a lookup this comment once existed to avoid, and it buys the thing that
+// was missing until 2026-09-08: a key whose project is soft-deleted still
+// authenticated here, while `projectconfig/postgres.go` filters
+// `projects.deleted_at IS NULL` and drops that project from the settings
+// refresh. So a deleted project kept accepting telemetry from the internet
+// **under default masking rather than its own** — a customer who had configured
+// `mask_keys` lost it at the moment they pressed delete. The row was also still
+// spending the organization's allowance while being unreachable on every screen.
+// One cached row per key prefix carries this, so it is one join per cache miss.
 const lookupByPrefix = `
-	SELECT org_id::text, project_id::text, key_hash
-	FROM api_keys
-	WHERE key_prefix = $1 AND revoked_at IS NULL`
+	SELECT k.org_id::text, k.project_id::text, k.key_hash
+	FROM api_keys k
+	JOIN projects p ON p.id = k.project_id
+	WHERE k.key_prefix = $1 AND k.revoked_at IS NULL AND p.deleted_at IS NULL`
 
 // The one write the ingest path makes to the control plane. Guarded on the
 // timestamp so that receivers writing out of order — several processes, each with
@@ -37,10 +49,13 @@ const markUsed = `
 // is stored whole and in the clear, so this exact match on the unique index is
 // the entire verification. allowed_origins comes back with it because the
 // transport needs it in the same round trip the tenancy arrives in.
+// The same `projects.deleted_at` join as the server door, for the same reason —
+// rule 5: one defect in two sibling lookups is one fix, not one lookup's.
 const lookupSiteKey = `
-	SELECT org_id::text, project_id::text, allowed_origins
-	FROM site_keys
-	WHERE public_key = $1 AND revoked_at IS NULL`
+	SELECT k.org_id::text, k.project_id::text, k.allowed_origins
+	FROM site_keys k
+	JOIN projects p ON p.id = k.project_id
+	WHERE k.public_key = $1 AND k.revoked_at IS NULL AND p.deleted_at IS NULL`
 
 // The browser door's equivalent of markUsed, guarded the same way so several
 // receivers can only move the timestamp forward.

@@ -28,8 +28,9 @@ import hmac
 import json
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any, Final
 
 import httpx
@@ -39,7 +40,10 @@ from environment import TEST_ENVIRONMENT
 from nexovue_api.billing import (
     BillingEvent,
     BillingEventKind,
+    Checkout,
     ConfiguredProcessor,
+    CurrencyUnknownError,
+    Money,
     SignatureInvalidError,
     UnhandledBillingEventError,
     queries,
@@ -53,15 +57,27 @@ from nexovue_api.billing.cashfree import (
     TIMESTAMP_HEADER,
     CashfreePaymentProcessor,
 )
-from nexovue_api.billing.schemas import DeliveryOutcome
-from nexovue_api.data.postgres.models import BillingSubscription, BillingWebhookDelivery
-from nexovue_api.errors.exceptions import UnauthenticatedError
+from nexovue_api.billing.schemas import DeliveryOutcome, StartCheckoutRequest
+from nexovue_api.data.postgres.models import (
+    BillingSubscription,
+    BillingWebhookDelivery,
+    Organization,
+    Plan,
+    PlanPrice,
+    UsageDailyService,
+)
+from nexovue_api.errors.exceptions import (
+    ConflictError,
+    InvalidRequestError,
+    UnauthenticatedError,
+)
 from nexovue_api.settings import (
     API_PREFIX,
     DOMESTIC_PAYMENT_VARIABLES,
     DomesticPaymentSettings,
     Settings,
 )
+from nexovue_api.usage import billing as usage_billing
 
 ORG_ID: Final = uuid.UUID("0198f2a0-0000-7000-8000-000000000001")
 OTHER_ORG_ID: Final = uuid.UUID("0198f2a0-0000-7000-8000-0000000000ff")
@@ -123,12 +139,32 @@ class StubProcessor:
     event: BillingEvent | None = None
     failure: Exception | None = None
     seen: list[bytes] | None = None
+    checkout_url: str = "https://processor.example.test/pay/abc"
+    checkouts: list[dict[str, Any]] = field(default_factory=list)
+    cancelled: list[str] = field(default_factory=list)
 
-    async def begin_checkout(self, *, org_id: uuid.UUID, plan_slug: str, billing_email: str) -> Any:
-        raise NotImplementedError
+    async def begin_checkout(
+        self,
+        *,
+        org_id: uuid.UUID,
+        plan_slug: str,
+        contact: Any,
+        authorised_maximum: Any,
+        return_url: str,
+    ) -> Checkout:
+        self.checkouts.append(
+            {
+                "org_id": org_id,
+                "plan_slug": plan_slug,
+                "contact": contact,
+                "authorised_maximum": authorised_maximum,
+                "return_url": return_url,
+            }
+        )
+        return Checkout(url=self.checkout_url, processor_customer_ref="cust_1")
 
     async def cancel(self, *, subscription_ref: str) -> None:
-        raise NotImplementedError
+        self.cancelled.append(subscription_ref)
 
     def event_from_webhook(self, *, body: bytes, headers: dict[str, str]) -> BillingEvent:
         if self.seen is not None:
@@ -155,6 +191,22 @@ def _event(
 
 def _configured(processor: Any) -> ConfiguredProcessor:
     return ConfiguredProcessor(name=PROCESSOR_NAME, processor=processor)
+
+
+def _plan_row(slug: str = "pro") -> Plan:
+    return Plan(slug=slug, name=slug.title(), raw_retention_days=30, derived_retention_days=395)
+
+
+def _checkout_request(
+    *, plan_slug: str = "pro", services_committed: int = 3
+) -> StartCheckoutRequest:
+    return StartCheckoutRequest(
+        plan_slug=plan_slug,
+        services_committed=services_committed,
+        contact_name="Some One",
+        contact_email="someone@example.test",
+        contact_phone="+919000000000",
+    )
 
 
 @pytest.fixture
@@ -191,6 +243,16 @@ async def test_the_subscription_lookup_binds_the_organization(session: Capturing
 
     assert ORG_ID in session.bound_values
     assert SUBSCRIPTION_REF in session.bound_values
+
+
+async def test_the_latest_subscription_lookup_binds_the_organization(
+    session: CapturingSession,
+) -> None:
+    """The billing screen's own read. Unscoped it would answer "whose is the
+    newest arrangement in the system?" and show it under this tenant's plan."""
+    await queries.latest_subscription(session, org_id=ORG_ID)  # type: ignore[arg-type]
+
+    assert ORG_ID in session.bound_values
 
 
 async def test_no_query_binds_an_organization_it_was_not_given(
@@ -580,3 +642,576 @@ async def test_the_door_refuses_a_tampered_delivery_without_writing() -> None:
 
     assert response.status_code == 401
     assert session.staged == []
+
+
+# --------------------------------------------------- the plan change (P1-74)
+
+
+ORGANIZATION: Final = "organization"
+
+
+def _organization(plan: str = "free") -> Organization:
+    """A tenant row, built without a session. `id` is set by hand because
+    nothing here reaches a database to have a default applied."""
+    organization = Organization(id=ORG_ID, slug="acme", name="Acme", plan=plan)
+    return organization
+
+
+def _delivery_answers(organization: Organization | None) -> list[Any]:
+    """What `record_from_webhook` asks the store for, in the order it asks.
+
+    Three scalars: has this delivery been seen, is there a row for this
+    arrangement, and which organization does the event name. The first two are
+    None for a first activation.
+    """
+    return [None, None, organization]
+
+
+class TestThePlanFollowsTheProcessor:
+    """P1-74's answer, and the property the whole row exists for: no route sets
+    `organizations.plan`, so a tier is only ever granted by an event a processor
+    signed."""
+
+    async def test_an_activation_puts_the_organization_on_the_plan_it_paid_for(self) -> None:
+        """Within one `RECEIVER_ALLOWANCE_CACHE_TTL` of this write, the ingest
+        door stops refusing — which is what "upgrade must take effect on the
+        ingest path" means in the plan."""
+        organization = _organization(plan="free")
+        session = CapturingSession(answers=_delivery_answers(organization))
+
+        outcome = await service.record_from_webhook(
+            session,  # type: ignore[arg-type]
+            configured=_configured(StubProcessor(event=_event())),
+            body=b"{}",
+            headers={},
+        )
+
+        assert outcome.outcome is DeliveryOutcome.RECORDED
+        assert organization.plan == "pro"
+
+    async def test_a_cancellation_drops_the_organization_back_to_the_free_tier(self) -> None:
+        """At the processor's own period boundary, not on a date computed here:
+        this runs when the processor's event says the arrangement ended."""
+        organization = _organization(plan="pro")
+        session = CapturingSession(answers=_delivery_answers(organization))
+
+        await service.record_from_webhook(
+            session,  # type: ignore[arg-type]
+            configured=_configured(
+                StubProcessor(event=_event(BillingEventKind.SUBSCRIPTION_CANCELLED))
+            ),
+            body=b"{}",
+            headers={},
+        )
+
+        assert organization.plan == service.PLAN_WITHOUT_A_SUBSCRIPTION
+
+    @pytest.mark.parametrize(
+        "kind",
+        [BillingEventKind.PAYMENT_SUCCEEDED, BillingEventKind.PAYMENT_FAILED],
+        ids=["succeeded", "failed"],
+    )
+    async def test_a_charge_moves_no_plan(self, kind: BillingEventKind) -> None:
+        """A card that declines once must not cost a customer their tier, and a
+        successful charge on a plan they already hold changes nothing."""
+        organization = _organization(plan="pro")
+        session = CapturingSession(answers=_delivery_answers(organization))
+
+        await service.record_from_webhook(
+            session,  # type: ignore[arg-type]
+            configured=_configured(StubProcessor(event=_event(kind))),
+            body=b"{}",
+            headers={},
+        )
+
+        assert organization.plan == "pro"
+
+    async def test_an_event_for_an_organization_that_is_gone_is_still_accepted(self) -> None:
+        """The delivery was signed, so refusing it asks the processor to send it
+        again forever. A deleted tenant is not a reason to do that."""
+        session = CapturingSession(answers=_delivery_answers(None))
+
+        outcome = await service.record_from_webhook(
+            session,  # type: ignore[arg-type]
+            configured=_configured(StubProcessor(event=_event())),
+            body=b"{}",
+            headers={},
+        )
+
+        assert outcome.outcome is DeliveryOutcome.RECORDED
+
+
+# ----------------------------------------------- what a mandate may charge
+
+
+_PRO_PRICE: Final = PlanPrice(
+    plan_slug="pro",
+    effective_from=date(2026, 9, 1),
+    currency="USD",
+    price_per_service_minor_units=600,
+    max_billed_services=None,
+    included_bytes_per_service=10 * 1024**3,
+    browser_share_percent=None,
+)
+
+_FREE_PRICE: Final = PlanPrice(
+    plan_slug="free",
+    effective_from=date(2026, 9, 1),
+    currency="USD",
+    price_per_service_minor_units=0,
+    max_billed_services=3,
+    included_bytes_per_service=2 * 1024**3,
+    browser_share_percent=25,
+)
+
+TODAY: Final = date(2026, 9, 8)
+
+
+class TestTheAuthorisedMaximum:
+    """ADR 0107's ceiling, in money, from the row the usage screen already reads."""
+
+    async def test_the_ceiling_is_the_rate_times_the_count_in_minor_units(self) -> None:
+        """Three services at $6 is $18, and $18 is 1800 — never 18.0. Money is a
+        whole count of the smallest unit, because binary floating point cannot
+        hold a tenth and an amount that drifts is an amount a customer disputes.
+        """
+        session = CapturingSession(answers=[_PRO_PRICE])
+
+        maximum = await service.authorised_maximum_for(
+            session,  # type: ignore[arg-type]
+            plan_slug="pro",
+            services_committed=3,
+            on_day=TODAY,
+        )
+
+        assert maximum == Money(minor_units=1800, currency="USD")
+        assert isinstance(maximum.minor_units, int)
+
+    async def test_the_ceiling_is_the_number_the_usage_screen_would_show(self) -> None:
+        """One function, not two. The screen's cost and the mandate's ceiling
+        come out of `usage.billing`, so a customer cannot be quoted one figure
+        and charged against another."""
+        session = CapturingSession(answers=[_PRO_PRICE])
+
+        maximum = await service.authorised_maximum_for(
+            session,  # type: ignore[arg-type]
+            plan_slug="pro",
+            services_committed=7,
+            on_day=TODAY,
+        )
+
+        assert maximum.minor_units == usage_billing.service_cost_minor_units(7, _PRO_PRICE)
+
+    async def test_a_tier_with_no_list_price_cannot_be_subscribed_to(self) -> None:
+        """`enterprise` is priced by agreement and has no row on purpose.
+        Inventing one would authorise a mandate against a number no contract uses."""
+        session = CapturingSession(answers=[None])
+
+        with pytest.raises(InvalidRequestError, match="no list price"):
+            await service.authorised_maximum_for(
+                session,  # type: ignore[arg-type]
+                plan_slug="enterprise",
+                services_committed=3,
+                on_day=TODAY,
+            )
+
+    async def test_a_free_tier_has_no_mandate_to_authorise(self) -> None:
+        session = CapturingSession(answers=[_FREE_PRICE])
+
+        with pytest.raises(InvalidRequestError, match="costs nothing"):
+            await service.authorised_maximum_for(
+                session,  # type: ignore[arg-type]
+                plan_slug="free",
+                services_committed=3,
+                on_day=TODAY,
+            )
+
+
+class TestTheReturnUrl:
+    def test_it_points_at_the_app_and_carries_no_outcome(self) -> None:
+        """The webhook is what this product believes. A return URL carrying a
+        result would be a result the customer could type into the address bar."""
+        url = service.checkout_return_url("https://app.example.test/")
+
+        assert url == "https://app.example.test/settings/billing"
+        assert "?" not in url
+
+    def test_an_unset_app_base_url_is_refused_rather_than_guessed(self) -> None:
+        """A guessed host is a link to nowhere, met after the money has moved."""
+        with pytest.raises(InvalidRequestError, match="APP_BASE_URL"):
+            service.checkout_return_url("   ")
+
+
+class TestStartingACheckout:
+    async def test_the_processor_is_handed_the_resolved_price_and_return_url(self) -> None:
+        """The two inputs `begin_checkout` used to refuse for, resolved above the
+        adapter: the price out of `plan_prices` and the URL out of APP_BASE_URL."""
+        processor = StubProcessor()
+        # find_plan, latest_subscription, find_effective_price.
+        session = CapturingSession(answers=[_plan_row(), None, _PRO_PRICE])
+
+        handoff = await service.begin_plan_change(
+            session,  # type: ignore[arg-type]
+            configured=_configured(processor),
+            organization=_organization(),
+            request=_checkout_request(services_committed=3),
+            app_base_url="https://app.example.test",
+            today=TODAY,
+        )
+
+        assert handoff.url == processor.checkout_url
+        assert processor.checkouts[0]["authorised_maximum"] == Money(1800, "USD")
+        assert processor.checkouts[0]["return_url"] == "https://app.example.test/settings/billing"
+        assert processor.checkouts[0]["org_id"] == ORG_ID
+
+    async def test_the_contact_reaches_the_processor_and_is_never_staged(self) -> None:
+        """ADR 0109: the processor holds what the bank's notice needs and we hold
+        no copy. Nothing carrying a phone number may be staged for the store."""
+        processor = StubProcessor()
+        session = CapturingSession(answers=[_plan_row(), None, _PRO_PRICE])
+
+        await service.begin_plan_change(
+            session,  # type: ignore[arg-type]
+            configured=_configured(processor),
+            organization=_organization(),
+            request=_checkout_request(),
+            app_base_url="https://app.example.test",
+            today=TODAY,
+        )
+
+        assert processor.checkouts[0]["contact"].phone == "+919000000000"
+        assert session.staged == []
+
+    async def test_an_unknown_plan_is_refused_before_a_processor_is_called(self) -> None:
+        processor = StubProcessor()
+        session = CapturingSession(answers=[None])
+
+        with pytest.raises(InvalidRequestError, match="No such plan"):
+            await service.begin_plan_change(
+                session,  # type: ignore[arg-type]
+                configured=_configured(processor),
+                organization=_organization(),
+                request=_checkout_request(plan_slug="platinum"),
+                app_base_url="https://app.example.test",
+                today=TODAY,
+            )
+        assert processor.checkouts == []
+
+    async def test_a_second_mandate_for_a_plan_already_live_is_refused(self) -> None:
+        """Two mandates for one plan is two monthly debits for one subscription."""
+        live = BillingSubscription(
+            org_id=ORG_ID,
+            processor=PROCESSOR_NAME,
+            subscription_ref=SUBSCRIPTION_REF,
+            plan_slug="pro",
+            status=service.STATUS_ACTIVE,
+        )
+        processor = StubProcessor()
+        session = CapturingSession(answers=[_plan_row(), live])
+
+        with pytest.raises(ConflictError):
+            await service.begin_plan_change(
+                session,  # type: ignore[arg-type]
+                configured=_configured(processor),
+                organization=_organization(plan="pro"),
+                request=_checkout_request(),
+                app_base_url="https://app.example.test",
+                today=TODAY,
+            )
+        assert processor.checkouts == []
+
+
+class TestEndingASubscription:
+    async def test_the_processor_is_asked_to_cancel_the_arrangement_it_issued(self) -> None:
+        live = BillingSubscription(
+            org_id=ORG_ID,
+            processor=PROCESSOR_NAME,
+            subscription_ref=SUBSCRIPTION_REF,
+            plan_slug="pro",
+            status=service.STATUS_ACTIVE,
+        )
+        processor = StubProcessor()
+        session = CapturingSession(answers=[live])
+
+        await service.end_subscription(
+            session,  # type: ignore[arg-type]
+            configured=_configured(processor),
+            organization=_organization(plan="pro"),
+        )
+
+        assert processor.cancelled == [SUBSCRIPTION_REF]
+
+    async def test_the_plan_is_not_moved_here(self) -> None:
+        """The processor decides when the arrangement ends, at its own period
+        boundary. Dropping the tier the moment cancel was *asked for* would take
+        away a month the customer has already paid for."""
+        live = BillingSubscription(
+            org_id=ORG_ID,
+            processor=PROCESSOR_NAME,
+            subscription_ref=SUBSCRIPTION_REF,
+            plan_slug="pro",
+            status=service.STATUS_ACTIVE,
+        )
+        organization = _organization(plan="pro")
+        session = CapturingSession(answers=[live])
+
+        await service.end_subscription(
+            session,  # type: ignore[arg-type]
+            configured=_configured(StubProcessor()),
+            organization=organization,
+        )
+
+        assert organization.plan == "pro"
+
+    async def test_an_organization_with_nothing_live_is_refused(self) -> None:
+        session = CapturingSession(answers=[None])
+
+        with pytest.raises(ConflictError, match="no live subscription"):
+            await service.end_subscription(
+                session,  # type: ignore[arg-type]
+                configured=_configured(StubProcessor()),
+                organization=_organization(),
+            )
+
+    async def test_an_arrangement_at_another_processor_is_not_cancelled_here(self) -> None:
+        """ADR 0102 expects two. Naming this subscription at the wrong one would
+        get a "not found" reported to the customer as a failed cancellation."""
+        foreign = BillingSubscription(
+            org_id=ORG_ID,
+            processor="a-different-processor",
+            subscription_ref=SUBSCRIPTION_REF,
+            plan_slug="pro",
+            status=service.STATUS_ACTIVE,
+        )
+        processor = StubProcessor()
+        session = CapturingSession(answers=[foreign])
+
+        with pytest.raises(ConflictError, match="not taken out through"):
+            await service.end_subscription(
+                session,  # type: ignore[arg-type]
+                configured=_configured(processor),
+                organization=_organization(plan="pro"),
+            )
+        assert processor.cancelled == []
+
+
+# ------------------------------------------------ the billing screen (P1-75)
+
+
+class _Rows:
+    """One `execute` result, answering `.one()` with a row a test supplied."""
+
+    def __init__(self, row: tuple[Any, ...]) -> None:
+        self._row = row
+
+    def one(self) -> tuple[Any, ...]:
+        return self._row
+
+
+class OverviewSession:
+    """Answers each read by the model it selects, so the assertions do not
+    depend on the order the service happens to ask in.
+
+    `CapturingSession` answers a queue, which is right for the webhook path —
+    three reads in a fixed order. The screen makes six across two packages, and
+    a queue there would fail on a harmless reordering rather than on a defect.
+    """
+
+    def __init__(
+        self,
+        *,
+        plan: Plan | None,
+        price: PlanPrice | None,
+        subscription: BillingSubscription | None,
+        services: int,
+        ingested: tuple[int, int],
+        frontier: tuple[datetime | None, int],
+    ) -> None:
+        self.statements: list[Any] = []
+        self.staged: list[Any] = []
+        self._by_entity: dict[Any, Any] = {
+            Plan: plan,
+            PlanPrice: price,
+            BillingSubscription: subscription,
+            UsageDailyService: services,
+        }
+        self._rows = [_Rows(ingested), _Rows(frontier)]
+
+    async def scalar(self, statement: Any) -> Any:
+        self.statements.append(statement)
+        return self._by_entity.get(statement.column_descriptions[0]["entity"])
+
+    async def execute(self, statement: Any) -> _Rows:
+        self.statements.append(statement)
+        return self._rows.pop(0)
+
+    def add(self, instance: Any) -> None:
+        self.staged.append(instance)
+
+    @property
+    def every_bound_value(self) -> set[Any]:
+        return {
+            value for statement in self.statements for value in statement.compile().params.values()
+        }
+
+
+def _overview_session(
+    *,
+    plan_slug: str = "free",
+    price: PlanPrice | None = None,
+    subscription: BillingSubscription | None = None,
+    services: int = 2,
+    ingested: tuple[int, int] = (1_000_000, 250_000),
+) -> OverviewSession:
+    return OverviewSession(
+        plan=_plan_row(plan_slug),
+        price=_FREE_PRICE if price is None else price,
+        subscription=subscription,
+        services=services,
+        ingested=ingested,
+        frontier=(datetime(2026, 10, 1, tzinfo=UTC), 0),
+    )
+
+
+class TestTheBillingScreen:
+    """P1-75. Which plan, what pays for it, and where the month stands."""
+
+    async def test_the_allowance_figures_are_the_ones_usage_computes(self) -> None:
+        """The whole point of the reuse. `allowance/allowance.go` warns that this
+        rule is already written twice — once in Go for the door and once in
+        `usage.billing` for the screen — and that a third copy means telling a
+        customer a number nobody enforces. Every figure below is asserted
+        against the function the usage screen calls for the same figure.
+        """
+        session = _overview_session(services=2)
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(),
+            today=TODAY,
+        )
+
+        period = overview.period
+        assert period.included_bytes == usage_billing.included_bytes(2, _FREE_PRICE)
+        assert period.browser_included_bytes == usage_billing.browser_cap_bytes(2, _FREE_PRICE)
+        assert period.billed_services == usage_billing.billed_services(2, _FREE_PRICE)
+        assert period.service_cost_minor_units == usage_billing.service_cost_minor_units(
+            2, _FREE_PRICE
+        )
+        assert period.allowance_enforced is usage_billing.allowance_is_enforced(_FREE_PRICE)
+
+    async def test_the_period_is_the_calendar_month_the_day_falls_in(self) -> None:
+        """ADR 0083: the bill covers a calendar month, not an anniversary."""
+        session = _overview_session()
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(),
+            today=TODAY,
+        )
+
+        assert overview.period.first_day == date(2026, 9, 1)
+        assert overview.period.last_day == date(2026, 9, 30)
+
+    async def test_a_free_tier_is_told_that_going_past_the_allowance_stops_ingestion(
+        self,
+    ) -> None:
+        """ADR 0107's sentence, and the screen cannot write it without this flag.
+        Sent rather than derived: which tiers are capped is policy, and a screen
+        working it out from the price row is a second place for it to be wrong."""
+        session = _overview_session(price=_FREE_PRICE)
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(),
+            today=TODAY,
+        )
+
+        assert overview.period.allowance_enforced is True
+
+    async def test_a_paid_tier_is_not_told_that_it_will_be_stopped(self) -> None:
+        """`max_billed_services` is NULL on every paying tier, so nothing that
+        pays is currently refused for volume. Saying otherwise would promise a
+        door that does not exist."""
+        session = _overview_session(plan_slug="pro", price=_PRO_PRICE)
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(plan="pro"),
+            today=TODAY,
+        )
+
+        assert overview.period.allowance_enforced is False
+
+    async def test_an_organization_that_has_never_paid_shows_no_subscription(self) -> None:
+        """Null, not an invented row: a free-tier account has no arrangement, and
+        a placeholder would read as one that failed."""
+        session = _overview_session(subscription=None)
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(),
+            today=TODAY,
+        )
+
+        assert overview.subscription is None
+
+    async def test_the_subscription_is_shown_without_the_processors_name_or_reference(
+        self,
+    ) -> None:
+        """ADR 0102 keeps the vendor out of everything above the adapter, and a
+        subscription id is of use to nobody reading a screen."""
+        session = _overview_session(
+            plan_slug="pro",
+            price=_PRO_PRICE,
+            subscription=BillingSubscription(
+                org_id=ORG_ID,
+                processor=PROCESSOR_NAME,
+                subscription_ref=SUBSCRIPTION_REF,
+                plan_slug="pro",
+                status=service.STATUS_ACTIVE,
+                activated_at=datetime(2026, 9, 2, tzinfo=UTC),
+            ),
+        )
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(plan="pro"),
+            today=TODAY,
+        )
+
+        assert overview.subscription is not None
+        assert overview.subscription.plan_slug == "pro"
+        assert overview.subscription.status == service.STATUS_ACTIVE
+        rendered = overview.model_dump_json()
+        assert PROCESSOR_NAME not in rendered
+        assert SUBSCRIPTION_REF not in rendered
+
+    async def test_every_read_the_screen_makes_binds_this_organization(self) -> None:
+        """The screen reads across two packages, and one query that lost its
+        predicate would show another tenant's spend against this one's plan."""
+        session = _overview_session(services=2)
+
+        await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(),
+            today=TODAY,
+        )
+
+        assert ORG_ID in session.every_bound_value
+        assert OTHER_ORG_ID not in session.every_bound_value
+
+
+class TestMoney:
+    """An amount is a whole count of the smallest unit, and the currency travels
+    with it — 600 is six dollars or six hundred yen depending on a field that
+    must not live somewhere else."""
+
+    def test_minor_units_become_major_units_without_floating_point(self) -> None:
+        assert Money(minor_units=1800, currency="USD").major_units() == Decimal("18")
+
+    def test_a_currency_whose_smallest_unit_is_unknown_is_refused(self) -> None:
+        """The yen's minor unit is the yen. A default divisor of a hundred would
+        bill 1% of a yen invoice and nothing would fail when it happened."""
+        with pytest.raises(CurrencyUnknownError):
+            Money(minor_units=600, currency="JPY").major_units()

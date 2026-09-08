@@ -117,6 +117,30 @@ async def verify_email(payload: TokenSubmission, db: DbSession, tokens: OneTimeT
 
 
 @router.post(
+    "/email-change/confirm",
+    status_code=HTTPStatus.NO_CONTENT,
+    summary="Move the account to the address a change link was sent to",
+)
+async def confirm_email_change(
+    payload: TokenSubmission, db: DbSession, tokens: OneTimeTokens
+) -> None:
+    """Unauthenticated for the same reason `verify-email` is: the link is opened
+    from a mail client at the *new* address, which is a different browser
+    session from the one that asked and often a different device.
+
+    The address it moves the account to comes from the token, not from the body
+    and not from a column — so this endpoint takes no address and cannot be
+    pointed at one. Asking for the change is `POST /profile/email`, which is
+    where the current password is proved.
+
+    **No session is issued and none is ended.** Nothing here suggests the
+    password is in anybody else's hands, and the customer is already signed in
+    on the device they asked from.
+    """
+    await recovery.confirm_email_change(db, tokens, token=payload.token)
+
+
+@router.post(
     "/password-reset",
     status_code=HTTPStatus.ACCEPTED,
     summary="Ask for a password reset link",

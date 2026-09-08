@@ -28,6 +28,7 @@ from nexovue_api.data.postgres.models import (
     DeployEvent,
     Integration,
     Organization,
+    Project,
     SiteKey,
     User,
 )
@@ -44,6 +45,12 @@ PASSWORD_RESET_COMPLETED: Final = "user.password_reset_completed"
 # supplied the current password, which is a different story to read back.
 PASSWORD_CHANGED: Final = "user.password_changed"
 ALL_SESSIONS_ENDED: Final = "user.sessions_ended"
+# The two halves of a change of address, kept apart because only the pair tells
+# the story: a request with no completion is somebody who asked and could not
+# prove the new inbox, and a completion is the moment the account's recovery
+# channel moved. Neither records an address — see `record_email_changed`.
+EMAIL_CHANGE_REQUESTED: Final = "user.email_change_requested"
+EMAIL_CHANGED: Final = "user.email_changed"
 DEPLOY_WEBHOOK_SECRET_CREATED: Final = "deploy.webhook_secret_created"
 DEPLOY_WEBHOOK_SECRET_REVOKED: Final = "deploy.webhook_secret_revoked"
 INTEGRATION_CREATED: Final = "integration.created"
@@ -65,6 +72,16 @@ DEPLOY_WEBHOOK_SECRET_VIEWED: Final = "deploy.webhook_secret_viewed"
 # `record_organization_erased`.
 ORGANIZATION_DELETION_REQUESTED: Final = "organization.deletion_requested"
 ORGANIZATION_ERASED: Final = "organization.erased"
+# P1-76. A project is an ingest surface, so creating and closing one is worth the
+# same trail a key is; renaming is recorded for the reason `check.updated` is —
+# an edit is how a thing that was reviewed becomes a different thing.
+PROJECT_CREATED: Final = "project.created"
+PROJECT_UPDATED: Final = "project.updated"
+PROJECT_DELETED: Final = "project.deleted"
+# The one guarded edit in ADR 0105: switching a shipped masking rule off widens
+# what leaves the customer's process, and it is the only edit here whose blast
+# radius is other people's secrets.
+PROJECT_MASKING_RULE_DISABLED: Final = "project.masking_rule_disabled"
 
 ORGANIZATION_TARGET: Final = "organization"
 USER_TARGET: Final = "user"
@@ -156,6 +173,39 @@ def record_password_changed(db: AsyncSession, *, user: User) -> None:
         org_id=user.org_id,
         actor_user_id=user.id,
         action=PASSWORD_CHANGED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_email_change_requested(db: AsyncSession, *, user: User) -> None:
+    """A confirmation link was mailed to an address this account wants to move to.
+
+    Recorded before anything changes, because this is the row that exists when a
+    change is *attempted* and abandoned — which is what an account takeover that
+    could not finish looks like from here.
+    """
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=EMAIL_CHANGE_REQUESTED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_email_changed(db: AsyncSession, *, user: User) -> None:
+    """The account's address moved, and the new one was proven in the same step.
+
+    **Neither address is recorded**, which follows the rule at the top of this
+    file: a target names a row by its primary key. The old address is personal
+    data about a person whose account no longer carries it, and the new one is
+    on the row this entry already points at.
+    """
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=EMAIL_CHANGED,
         target=_target(USER_TARGET, user.id),
     )
 
@@ -434,6 +484,75 @@ def record_organization_erased(db: AsyncSession, *, org_id: uuid.UUID) -> None:
         action=ORGANIZATION_ERASED,
         target=_target(ORGANIZATION_TARGET, org_id),
     )
+
+
+def record_project_created(db: AsyncSession, *, project: Project, actor_user_id: uuid.UUID) -> None:
+    """A new environment exists, so there is a new place telemetry can be sent."""
+    _add(
+        db,
+        org_id=project.org_id,
+        actor_user_id=actor_user_id,
+        action=PROJECT_CREATED,
+        target=_target(PROJECT_TARGET, project.id),
+    )
+
+
+def record_project_updated(db: AsyncSession, *, project: Project, actor_user_id: uuid.UUID) -> None:
+    """A project's name or slug changed. The old value is not recorded — the
+    entry says who renamed what and when, and the row itself says what it is now."""
+    _add(
+        db,
+        org_id=project.org_id,
+        actor_user_id=actor_user_id,
+        action=PROJECT_UPDATED,
+        target=_target(PROJECT_TARGET, project.id),
+    )
+
+
+def record_project_deleted(
+    db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """A project was closed and every credential it held was withdrawn."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=PROJECT_DELETED,
+        target=_target(PROJECT_TARGET, project_id),
+    )
+
+
+def record_masking_rule_disabled(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    rule: str,
+    actor_user_id: uuid.UUID,
+) -> None:
+    """A shipped masking rule was switched off, and which one.
+
+    One row per rule, because "who widened what" is the question this log is
+    asked, and a single row naming a list cannot be searched by rule.
+    """
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=PROJECT_MASKING_RULE_DISABLED,
+        target=masking_rule_target(project_id, rule),
+    )
+
+
+def masking_rule_target(project_id: uuid.UUID, rule: str) -> str:
+    """The `target` a disabled-rule entry carries: the project, and the rule name.
+
+    The one target that names more than a row's primary key. A rule name is a
+    constant from `mask/rules.go` and discloses nothing — it is the name of a
+    default we ship — and without it the entry would say a rule was turned off
+    without saying which, which is the only fact worth recording here.
+    """
+    return f"{_target(PROJECT_TARGET, project_id)}:{rule}"
 
 
 def erasure_certificate_target(org_id: uuid.UUID) -> str:

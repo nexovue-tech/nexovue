@@ -23,6 +23,12 @@ sign-out-everywhere**, and the difference is not a preference:
   compromised, and "everywhere" has to include the machine in front of them —
   which may be the shared or borrowed one they are trying to get out of. Keeping
   the caller's session would make the control quieter than its own name.
+
+**A change of address starts here and finishes somewhere else.** Asking for one
+is a profile action gated on the current password; completing one is a proof of
+control over an inbox, followed from a mail client with no session — so it lives
+with the other link-following flows in `auth/recovery.py`. Nothing on the
+account changes until that link is followed.
 """
 
 from __future__ import annotations
@@ -33,13 +39,17 @@ from typing import Final
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
+from nexovue_api.auth import recovery
 from nexovue_api.auth.credentials import hash_password, verify_password
 from nexovue_api.auth.schemas import UserSummary
 from nexovue_api.auth.service import describe_user, start_session
 from nexovue_api.auth.sessions import SessionStore
+from nexovue_api.auth.tokens import OneTimeTokenStore
 from nexovue_api.data.postgres.models import User
 from nexovue_api.errors.exceptions import InvalidRequestError
+from nexovue_api.notifications import EmailSender
 from nexovue_api.profile.schemas import ProfileUpdate
+from nexovue_api.profile.timezones import stored_timezone
 
 # Deliberately the same wording whether the account has no password at all (an
 # invited user, `users.password_hash` NULL) or the one supplied is wrong. Both
@@ -54,14 +64,60 @@ PASSWORD_UNCHANGED: Final = (
 )
 
 
-def rename(user: User, update: ProfileUpdate) -> UserSummary:
-    """Set the caller's display name and describe the account back.
+def update_details(user: User, update: ProfileUpdate) -> UserSummary:
+    """Set the caller's display name and time zone, and describe the account back.
 
-    The row is already attached to the request's session, so the assignment is
+    The row is already attached to the request's session, so the assignments are
     the write; the request dependency commits it.
+
+    The time zone is judged before either field is assigned, so a bad zone name
+    does not leave a new name behind on a request that was refused.
     """
+    timezone = stored_timezone(update.timezone)
     user.name = _stored_name(update.name)
+    user.timezone = timezone
     return _describe(user)
+
+
+async def request_email_change(
+    db: AsyncSession,
+    tokens: OneTimeTokenStore,
+    email: EmailSender,
+    *,
+    user: User,
+    current_password: str,
+    new_address: str,
+    app_base_url: str,
+    ttl_seconds: int,
+) -> None:
+    """Prove the caller owns this account, then mail the new address a link.
+
+    **The gate is the current password, for a stronger reason than the password
+    change has.** An address is the account's recovery channel: whoever receives
+    mail at it can reset the password and take the account outright. So a change
+    of address is the *first* move in a takeover, and a stolen session — which
+    can read every screen but cannot produce the password — is exactly the
+    caller this refuses.
+
+    An invited user with no password (F26, `password_hash` NULL) cannot change
+    their address here, and the refusal is worded identically to a wrong
+    password so the endpoint never says which case it is. Their route is the
+    reset link, the same as for a password change.
+
+    Nothing is written. `recovery.send_email_change_link` owns what happens next
+    and the module docstring there says why the account stays as it is.
+    """
+    if not verify_password(user.password_hash, current_password):
+        raise InvalidRequestError(CURRENT_PASSWORD_WRONG)
+    await recovery.send_email_change_link(
+        db,
+        tokens,
+        email,
+        user=user,
+        new_address=new_address,
+        app_base_url=app_base_url,
+        ttl_seconds=ttl_seconds,
+    )
 
 
 async def change_password(

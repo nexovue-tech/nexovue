@@ -82,7 +82,16 @@ AUTH_PATHS: Final = (
     # per-IP scope applies here, because the body carries no email for
     # `_email_from` to find.
     f"{API_PREFIX}/profile/password",
-    f"{API_PREFIX}/auth/password-reset",
+    # Same reasoning, and the stakes are higher: asking to move an account to a
+    # new address verifies the CURRENT password, and whoever ends up holding the
+    # address can reset the password afterwards. On the default tier that is 300
+    # guesses a minute at the gate protecting an account takeover. It is also
+    # the one authenticated endpoint that mails an address the caller chose, so
+    # an unthrottled one is a way to send from our verified domain in bulk.
+    f"{API_PREFIX}/profile/email",
+    # Spends the link that address change mailed. Token guessing, throttled the
+    # way `/auth/verify-email` is.
+    f"{API_PREFIX}/auth/email-change",
 )
 TELEMETRY_PATHS: Final = (
     f"{API_PREFIX}/traces",

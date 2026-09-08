@@ -96,6 +96,7 @@ def describe_user(user: User) -> UserSummary:
         email=user.email,
         name=user.name,
         role=user.role,
+        timezone=user.timezone,
         email_verified_at=user.email_verified_at,
     )
 

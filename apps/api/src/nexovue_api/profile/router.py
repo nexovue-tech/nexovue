@@ -23,20 +23,67 @@ from nexovue_api.auth.cookies import clear_session_cookie, set_session_cookie
 from nexovue_api.auth.dependencies import CurrentIdentity
 from nexovue_api.auth.schemas import UserSummary
 from nexovue_api.auth.sessions import session_token_from_headers
-from nexovue_api.deps import AppSettings, DbSession, SessionStoreDep
+from nexovue_api.deps import (
+    AppSettings,
+    DbSession,
+    EmailDelivery,
+    OneTimeTokens,
+    SessionStoreDep,
+)
 from nexovue_api.profile import service
-from nexovue_api.profile.schemas import PasswordChange, ProfileUpdate
+from nexovue_api.profile.schemas import EmailChangeRequest, PasswordChange, ProfileUpdate
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
 
-@router.patch("", summary="Change your own display name")
+@router.patch("", summary="Change your own display name and time zone")
 async def update_profile(
     payload: ProfileUpdate, identity: CurrentIdentity, db: DbSession
 ) -> UserSummary:
     """`db` is taken so the request dependency commits: the row `identity` holds
     is attached to that session, so assigning to it is the write."""
-    return service.rename(identity.user, payload)
+    return service.update_details(identity.user, payload)
+
+
+@router.post(
+    "/email",
+    status_code=HTTPStatus.ACCEPTED,
+    summary="Ask to move this account to a different email address",
+)
+async def request_email_change(
+    payload: EmailChangeRequest,
+    identity: CurrentIdentity,
+    db: DbSession,
+    tokens: OneTimeTokens,
+    email: EmailDelivery,
+    settings: AppSettings,
+) -> None:
+    """Mails a confirmation link to the **new** address and changes nothing yet.
+
+    202 rather than 204: a message has been handed to a provider, not delivered,
+    and the status should not claim more than that — the same reading
+    `/auth/verify-email/resend` takes.
+
+    The address moves when the link is followed, at
+    `POST /auth/email-change/confirm`. That endpoint is unauthenticated and
+    lives in `auth` because it is opened from a mail client, which is a
+    different browser session from this one and often a different device.
+
+    The link's lifetime is `verify_email_ttl_seconds` and not a setting of its
+    own: this *is* an address verification, pointed at an address the account
+    does not hold yet, and somebody switching inboxes needs the same unhurried
+    day a new signup gets.
+    """
+    await service.request_email_change(
+        db,
+        tokens,
+        email,
+        user=identity.user,
+        current_password=payload.current_password,
+        new_address=payload.new_email,
+        app_base_url=settings.app_base_url,
+        ttl_seconds=settings.verify_email_ttl_seconds,
+    )
 
 
 @router.post(

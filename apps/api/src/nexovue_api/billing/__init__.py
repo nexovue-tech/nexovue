@@ -29,6 +29,8 @@ from nexovue_api.billing.processor import (
     BillingEventKind,
     Checkout,
     ContactField,
+    CurrencyUnknownError,
+    Money,
     PaymentProcessor,
     SignatureInvalidError,
 )
@@ -42,6 +44,8 @@ __all__ = [
     "Checkout",
     "ConfiguredProcessor",
     "ContactField",
+    "CurrencyUnknownError",
+    "Money",
     "PaymentProcessor",
     "PaymentsNotConfiguredError",
     "SignatureInvalidError",

@@ -77,6 +77,11 @@ SLUG_MAX_LENGTH: Final = 63
 NAME_MAX_LENGTH: Final = 200
 SHORT_LABEL_LENGTH: Final = 64
 
+# An IANA time zone name. The longest the database ships is
+# `America/Argentina/ComodRivadavia` at 32 characters; doubled, because the cap
+# is a guard against an absurd string reaching Postgres and not a spec limit.
+TIMEZONE_NAME_LENGTH: Final = 64
+
 # `service.name` is a resource attribute OTLP puts no length limit on. The meter
 # truncates to this before writing, so an absurd name is stored as a service
 # rather than failing the flush that carried it.
@@ -163,6 +168,12 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     name: Mapped[str | None] = mapped_column(String(NAME_MAX_LENGTH), nullable=True)
     role: Mapped[str] = mapped_column(UserRole, nullable=False)
+    # An IANA name (`Asia/Kolkata`), never an offset: an offset stored in March
+    # is wrong in November, and the name is what survives a daylight-saving
+    # change. NULL means nobody has chosen one and the screen keeps rendering in
+    # the browser's zone — which is what every screen does today, so NULL is the
+    # honest state of every existing row rather than a default nobody picked.
+    timezone: Mapped[str | None] = mapped_column(String(TIMEZONE_NAME_LENGTH), nullable=True)
     email_verified_at: Mapped[OptionalTimestamp]
     # Sessions created before this are refused (migration 0019). NULL means no
     # reset has happened. It is the whole of "a password reset ends every live

@@ -54,6 +54,11 @@ EXEMPT: Final = {
     "verify_email",
     "request_password_reset",
     "confirm_password_reset",
+    # Unauthenticated for the same reason, and it takes no address: the address
+    # it moves the account to comes from the token, which was minted only after
+    # `request_email_change` verified the current password. The link is opened
+    # at the new address, which is a mailbox, not a signed-in browser.
+    "confirm_email_change",
     # Authenticated, and deliberately available to *any* role. It mails a fresh
     # verification link to `identity.user.email` and to no address the caller
     # supplied, so the only account it can affect is the caller's own. Requiring
@@ -71,6 +76,13 @@ EXEMPT: Final = {
     "update_profile",
     "change_password",
     "sign_out_everywhere",
+    # Authenticated, any role, and acts only on `identity.user`. Its gate is not
+    # a role but the current password, which is stronger here than anywhere else
+    # in this list: whoever holds an account's address can reset its password,
+    # so this is the endpoint an account takeover reaches for first. A role
+    # policy would let an owner with a stolen session through and lock a member
+    # out of their own address.
+    "request_email_change",
     # A POST that reads. Symbolication turns minified frames back into original
     # ones and writes nothing; it is a POST because a stack trace does not fit
     # in a query string.

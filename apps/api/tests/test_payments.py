@@ -35,6 +35,8 @@ from nexovue_api.billing import (
     BillingError,
     BillingEventKind,
     ContactField,
+    CurrencyUnknownError,
+    Money,
     PaymentsNotConfiguredError,
     SignatureInvalidError,
     UnhandledBillingEventError,
@@ -47,10 +49,11 @@ from nexovue_api.billing.cashfree import (
     DELIVERY_HEADER,
     ORG_TAG,
     PLAN_TAG,
+    SECURE_URL_SCHEME,
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
     CashfreePaymentProcessor,
-    CheckoutInputsUndecidedError,
+    CheckoutHandoffUndecidedError,
 )
 from nexovue_api.settings import DomesticPaymentSettings
 
@@ -113,6 +116,29 @@ def _headers(body: bytes, **overrides: str) -> dict[str, str]:
     }
     headers.update(overrides)
     return headers
+
+
+COMPLETE_CONTACT: Final = BillingContact(
+    email="someone@example.test", name="Some One", phone="+919000000000"
+)
+AUTHORISED_MAXIMUM: Final = Money(minor_units=1800, currency="USD")
+RETURN_URL: Final = "https://app.example.test/settings/billing"
+
+
+async def _checkout(
+    *,
+    contact: BillingContact = COMPLETE_CONTACT,
+    authorised_maximum: Money = AUTHORISED_MAXIMUM,
+    return_url: str = RETURN_URL,
+) -> Any:
+    """One `begin_checkout` with every input valid unless a test says otherwise."""
+    return await _processor().begin_checkout(
+        org_id=ORG_ID,
+        plan_slug="pro",
+        contact=contact,
+        authorised_maximum=authorised_maximum,
+        return_url=return_url,
+    )
 
 
 def _processor(handler: Any = None) -> CashfreePaymentProcessor:
@@ -409,18 +435,50 @@ class TestConfigurationAndWiring:
         without_phone = BillingContact(email="someone@example.test", name="Some One")
 
         with pytest.raises(BillingError, match="phone"):
-            await _processor().begin_checkout(org_id=ORG_ID, plan_slug="pro", contact=without_phone)
+            await _checkout(contact=without_phone)
 
-    async def test_checkout_still_refuses_for_the_two_inputs_nobody_has_resolved(self) -> None:
-        """The phone was one of three and is settled. A price is a `plan_prices`
-        lookup that belongs above this module and a return URL is a deployment
-        fact; inventing either would send a fabricated amount to a processor."""
-        complete = BillingContact(
-            email="someone@example.test", name="Some One", phone="+919000000000"
-        )
+    @pytest.mark.parametrize("minor_units", [0, -600], ids=["nothing", "negative"])
+    async def test_a_mandate_for_nothing_is_refused(self, minor_units: int) -> None:
+        """A mandate authorising no charge is not a subscription anybody bought,
+        and a negative one is arithmetic that went wrong upstream."""
+        with pytest.raises(BillingError, match="chargeable amount"):
+            await _checkout(authorised_maximum=Money(minor_units=minor_units, currency="USD"))
 
-        with pytest.raises(CheckoutInputsUndecidedError, match="price"):
-            await _processor().begin_checkout(org_id=ORG_ID, plan_slug="pro", contact=complete)
+    async def test_an_amount_in_an_unnameable_currency_is_refused_before_the_wire(self) -> None:
+        """This processor takes major units, so an amount whose smallest unit
+        this product cannot name would have to be divided by a guessed number.
+        The yen's minor unit is the yen: a default of a hundred bills 1% of it."""
+        with pytest.raises(CurrencyUnknownError, match="JPY"):
+            await _checkout(authorised_maximum=Money(minor_units=600, currency="JPY"))
+
+    @pytest.mark.parametrize(
+        "return_url",
+        ["http://localhost:5173/settings/billing", "app.example.test/settings/billing"],
+        ids=["plain http", "no scheme"],
+    )
+    async def test_a_return_url_the_processor_would_never_register_is_refused(
+        self, return_url: str
+    ) -> None:
+        """Their go-live rules take https only, and a link refused at
+        registration is found months after the line that built it was written.
+        https://www.cashfree.com/docs/payments/online/go-live/whitelist"""
+        with pytest.raises(BillingError, match=SECURE_URL_SCHEME):
+            await _checkout(return_url=return_url)
+
+    async def test_checkout_refuses_because_no_call_carries_both_a_url_and_the_tags(
+        self,
+    ) -> None:
+        """Every input is now supplied and it still cannot start one.
+
+        Checked against the documentation on 2026-09-08, not remembered: the
+        create call that accepts `subscription_tags` answers with a session id
+        for a browser SDK, and the one that answers with a link accepts no tags.
+        `_translate` reads the organization out of those tags, so satisfying
+        `Checkout.url` and `event_from_webhook` at once is not currently
+        possible — which is a decision about ADR 0102's port, above this file.
+        """
+        with pytest.raises(CheckoutHandoffUndecidedError, match="tags"):
+            await _checkout()
 
     async def test_no_failure_message_carries_the_signing_key_or_the_raw_body(self) -> None:
         """Every one of these strings ends up in a log line or a problem

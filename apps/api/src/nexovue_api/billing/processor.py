@@ -29,8 +29,9 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import Enum, StrEnum
-from typing import Protocol
+from typing import Final, Protocol
 
 
 class BillingError(Exception):
@@ -91,6 +92,59 @@ class Checkout:
 
     url: str
     processor_customer_ref: str
+
+
+class CurrencyUnknownError(BillingError):
+    """An amount arrived in a currency whose smallest unit this product cannot
+    name, so it cannot be written on a wire that wants major units.
+
+    Refused rather than divided by a hundred: the yen's minor unit *is* the yen,
+    so a default exponent turns a ¥600 bill into ¥6.
+    """
+
+    def __init__(self, currency: str) -> None:
+        super().__init__(
+            f"no minor-unit exponent is recorded for {currency}, so an amount in "
+            f"it cannot be stated in major units without guessing the divisor"
+        )
+
+
+# How many of a currency's smallest unit make one of its major unit — ISO 4217's
+# exponent, as a divisor. Only the currencies this product actually prices in
+# belong here: an entry is a claim about a real currency, and the default that
+# would cover the rest is the guess `CurrencyUnknownError` exists to refuse.
+MINOR_UNITS_PER_MAJOR: Final = {"USD": 100, "INR": 100, "EUR": 100, "GBP": 100}
+
+
+@dataclass(frozen=True, slots=True)
+class Money:
+    """An amount, as a whole count of a currency's smallest unit.
+
+    An integer, never a float: binary floating point cannot hold 0.10, and an
+    amount that drifts by a hundredth is an amount a customer disputes.
+    `plan_prices.price_per_service_minor_units` is stored the same way and for
+    the same reason.
+
+    The currency travels with the number because an integer alone is not an
+    amount — 600 is six dollars or six hundred yen depending on a field that
+    must not be somewhere else.
+    """
+
+    minor_units: int
+    # ISO 4217 alpha-3, as `plan_prices.currency` holds it.
+    currency: str
+
+    def major_units(self) -> Decimal:
+        """The same amount as a decimal of the currency's major unit.
+
+        Some processors take money that way rather than in minor units. Decimal
+        rather than float for the reason above, and the divisor is looked up
+        rather than assumed.
+        """
+        divisor = MINOR_UNITS_PER_MAJOR.get(self.currency.upper())
+        if divisor is None:
+            raise CurrencyUnknownError(self.currency)
+        return Decimal(self.minor_units) / Decimal(divisor)
 
 
 class ContactField(StrEnum):
@@ -156,13 +210,31 @@ class PaymentProcessor(Protocol):
         ...
 
     async def begin_checkout(
-        self, *, org_id: uuid.UUID, plan_slug: str, contact: BillingContact
+        self,
+        *,
+        org_id: uuid.UUID,
+        plan_slug: str,
+        contact: BillingContact,
+        authorised_maximum: Money,
+        return_url: str,
     ) -> Checkout:
         """Start a subscription, and hand back where to send the customer.
 
         `plan_slug` is ours — `pro`, `scale` — matching `plan_prices`. Mapping it
         to whatever the processor calls a price is the implementation's job and
         the only place that mapping may live.
+
+        **`authorised_maximum` is the most one billing period may charge**, not
+        a fixed amount to charge every period. ADR 0056 prices per service
+        monitored, so what a month comes to moves with the customer's own
+        service count, and a fixed figure would be wrong the first time they
+        deploy something. It is also ADR 0107's ceiling said in money: a
+        customer can never be charged past a number they chose in advance.
+
+        `return_url` is where the processor sends the customer's browser when
+        the payment reaches a terminal state. It carries no outcome and proves
+        nothing — the webhook is what this product believes — so it is only
+        somewhere sensible to land.
 
         The contact carries what `required_contact_fields` asked for. An
         implementation may refuse one that does not, but the screen should have

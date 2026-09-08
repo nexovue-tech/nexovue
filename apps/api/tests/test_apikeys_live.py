@@ -61,8 +61,9 @@ def _plaintext(created: ApiKeyCreated) -> str:
 # Asserted verbatim so that "the control plane revoked it" and "the ingest path
 # stops accepting it" are proven to be the same fact, not two beliefs.
 RECEIVER_LOOKUP: Final = text(
-    "SELECT org_id::text, project_id::text, key_hash "
-    "FROM api_keys WHERE key_prefix = :key_prefix AND revoked_at IS NULL"
+    "SELECT k.org_id::text, k.project_id::text, k.key_hash "
+    "FROM api_keys k JOIN projects p ON p.id = k.project_id "
+    "WHERE k.key_prefix = :key_prefix AND k.revoked_at IS NULL AND p.deleted_at IS NULL"
 )
 
 # The receiver's `last_used_at` write, likewise copied verbatim from
@@ -79,8 +80,9 @@ RECEIVER_MARK_USED: Final = text(
 # the same reason: "the console retired it" and "the browser door stops accepting
 # it" must be one fact, not two beliefs.
 RECEIVER_SITE_LOOKUP: Final = text(
-    "SELECT org_id::text, project_id::text, allowed_origins "
-    "FROM site_keys WHERE public_key = :public_key AND revoked_at IS NULL"
+    "SELECT k.org_id::text, k.project_id::text, k.allowed_origins "
+    "FROM site_keys k JOIN projects p ON p.id = k.project_id "
+    "WHERE k.public_key = :public_key AND k.revoked_at IS NULL AND p.deleted_at IS NULL"
 )
 
 RECEIVER_SITE_MARK_USED: Final = text(
@@ -250,6 +252,46 @@ async def test_a_minted_key_authenticates_on_the_ingest_path(db: AsyncSession) -
     assert uuid.UUID(org_id) == tenant.organization.id
     assert uuid.UUID(project_id) == tenant.project.id
     assert key_hash == hash_api_key(_plaintext(created))
+
+
+async def test_a_key_stops_authenticating_when_its_project_is_deleted(
+    db: AsyncSession,
+) -> None:
+    """The hole this join closes, and it was open until 2026-09-08.
+
+    `projects.deleted_at` was set by the console and read by nobody on the ingest
+    path: the key still authenticated, so a deleted project kept accepting
+    telemetry from the internet. Worse than merely accepting it —
+    `projectconfig/postgres.go` *does* filter `projects.deleted_at IS NULL`, so
+    the worker dropped that project from its settings refresh and the arriving
+    data was masked by the defaults rather than by the customer's own
+    `mask_keys`. Pressing delete quietly widened what we stored.
+
+    Asserted through the receiver's own statement, so this is a fact about the
+    ingest path and not about a Python reimplementation of it.
+    """
+    tenant = await _new_tenant(db)
+    created = await apikeys.create(
+        db,
+        org_id=tenant.organization.id,
+        actor=tenant.user,
+        project_id=tenant.project.id,
+        name="doomed",
+    )
+    await db.flush()
+    prefix = _plaintext(created)[:API_KEY_PREFIX_LENGTH]
+    assert await _receiver_sees(db, prefix) is not None, "the key did not work before the delete"
+
+    await db.execute(
+        text("UPDATE projects SET deleted_at = now() WHERE id = :id"),
+        {"id": tenant.project.id},
+    )
+    await db.flush()
+
+    assert await _receiver_sees(db, prefix) is None, (
+        "a deleted project's key still authenticates, so it keeps ingesting under "
+        "default masking while being invisible on every screen"
+    )
 
 
 async def test_a_rotation_leaves_both_keys_live_until_the_old_one_is_revoked(

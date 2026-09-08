@@ -149,6 +149,77 @@ def test_the_sensitive_query_parameters_are_the_same_list_in_both_languages() ->
     assert _QUOTED.findall(declaration.group("body")) == list(SENSITIVE_QUERY_PARAMETERS)
 
 
+# ------------------------------------------------------- API <-> the Go worker's config grammar
+
+WORKER_PIPELINE: Final = REPOSITORY_ROOT / "apps" / "workers" / "internal" / "pipeline"
+MASK_RULES_GO: Final = WORKER_PIPELINE / "mask" / "rules.go"
+SAMPLE_POLICY_GO: Final = WORKER_PIPELINE / "sample" / "policy.go"
+
+# The `json:"..."` tags on a Go struct, which are the document keys it accepts.
+_STRUCT: Final = re.compile(r"type (?P<name>\w+) struct \{(?P<body>.*?)\n\}", re.DOTALL)
+_JSON_TAG: Final = re.compile(r'json:"(?P<key>[^",]+)"')
+
+# `RuleCredentialKeys = "credential_keys"` — the family names, read from the
+# constants rather than from `DefaultRuleNames`, because the switch in
+# `setFamily` is keyed on these and it is that switch which decides what is
+# accepted.
+_RULE_CONSTANT: Final = re.compile(r'^\s*Rule\w+\s*=\s*"(?P<name>[a-z_]+)"', re.MULTILINE)
+
+
+def _document_keys(source: Path, struct: str) -> list[str]:
+    """The JSON keys a Go struct binds, in declaration order."""
+    for match in _STRUCT.finditer(source.read_text(encoding="utf-8")):
+        if match.group("name") == struct:
+            return _JSON_TAG.findall(match.group("body"))
+    raise AssertionError(f"no `type {struct} struct` in {source.name}")
+
+
+def test_the_masking_document_keys_are_the_ones_the_worker_binds() -> None:
+    """ADR 0105 puts one grammar in two languages, and neither can import the other.
+
+    The API refuses a document the worker would reject, which is the whole point
+    of validating on write: `refresh.go` falls back to defaults that name no
+    custom keys on a cold start, so a bad document stored today is a project that
+    silently stops masking at the next restart.
+
+    A key accepted here and unknown there is that hole with a form in front of
+    it — the document stores, the worker ignores the line, and the customer
+    believes an attribute is being masked.
+    """
+    from nexovue_api.projects.config import MASKING_DOCUMENT_KEYS
+
+    assert set(_document_keys(MASK_RULES_GO, "projectConfig")) == set(MASKING_DOCUMENT_KEYS)
+
+
+def test_the_masking_rule_names_are_the_ones_the_worker_switches_on() -> None:
+    """`setFamily` already makes an unknown name an error, so the API's list must
+    be neither wider — a rule it accepts and the worker refuses, which stores a
+    document that stops the project masking at all — nor narrower, which would
+    refuse a rule the product ships."""
+    from nexovue_api.projects.config import MASKING_RULE_NAMES
+
+    names = _RULE_CONSTANT.findall(MASK_RULES_GO.read_text(encoding="utf-8"))
+    assert names, "no Rule* constants found in mask/rules.go"
+    assert set(names) == set(MASKING_RULE_NAMES)
+
+
+def test_the_sampling_document_keys_are_the_ones_the_worker_binds() -> None:
+    """Sampling's failure is quieter than masking's rather than milder: an
+    out-of-range percentage makes `PolicyFromJSON` return an error, the refresher
+    logs it and keeps the deployment default, and the project stores a tenth of
+    what it asked to store with nothing on any screen saying so."""
+    from nexovue_api.projects.config import SAMPLING_DOCUMENT_KEYS
+
+    assert set(_document_keys(SAMPLE_POLICY_GO, "projectConfig")) == set(SAMPLING_DOCUMENT_KEYS)
+
+
+def test_the_worker_sources_are_where_this_check_thinks_they_are() -> None:
+    """A moved file must break this, not silently check nothing — the same guard
+    the ClickHouse migrations carry below."""
+    assert MASK_RULES_GO.is_file(), f"no masking grammar at {MASK_RULES_GO}"
+    assert SAMPLE_POLICY_GO.is_file(), f"no sampling grammar at {SAMPLE_POLICY_GO}"
+
+
 # ------------------------------------------------------- API <-> ClickHouse
 
 

@@ -15,7 +15,11 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexovue_api.data.postgres.models import BillingSubscription, BillingWebhookDelivery
+from nexovue_api.data.postgres.models import (
+    BillingSubscription,
+    BillingWebhookDelivery,
+    Organization,
+)
 
 
 async def delivery_already_recorded(
@@ -43,6 +47,43 @@ async def subscription_by_ref(
     # that flow out of a query module would take the checking off every caller.
     found: BillingSubscription | None = await session.scalar(statement)
     return found
+
+
+async def latest_subscription(
+    session: AsyncSession, *, org_id: uuid.UUID
+) -> BillingSubscription | None:
+    """This organization's most recent arrangement, whatever became of it.
+
+    Newest rather than "the active one", because a screen has to be able to say
+    *cancelled* as well as *active* — a customer whose mandate just ended and
+    who is shown nothing at all learns less than one shown the row that ended.
+    Rows accumulate rather than being edited across arrangements, so the newest
+    is the one the customer is living in.
+
+    Not narrowed by processor: ADR 0102 expects two, and an organization pays
+    through one of them at a time. Narrowing here would hide the arrangement
+    from a screen that has no business knowing which processor answered.
+    """
+    statement = (
+        select(BillingSubscription)
+        .where(BillingSubscription.org_id == org_id)
+        .order_by(BillingSubscription.created_at.desc(), BillingSubscription.id.desc())
+        .limit(1)
+    )
+    found: BillingSubscription | None = await session.scalar(statement)
+    return found
+
+
+async def find_organization(session: AsyncSession, *, org_id: uuid.UUID) -> Organization | None:
+    """The tenant row a webhook's event names, so its plan can be moved.
+
+    Keyed on the primary key, which for this table *is* the tenant: there is no
+    `org_id` column to bind because the identity is the row.
+    """
+    organization: Organization | None = await session.scalar(
+        select(Organization).where(Organization.id == org_id)
+    )
+    return organization
 
 
 def add_subscription(session: AsyncSession, subscription: BillingSubscription) -> None:

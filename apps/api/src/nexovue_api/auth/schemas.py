@@ -31,6 +31,11 @@ class UserSummary(BaseModel):
     email: str
     name: str | None
     role: str
+    # The IANA zone this person reads timestamps in, or null when they have not
+    # chosen one and the screen should keep using the browser's. Exposed because
+    # the profile screen has no other way to show which zone is set, and every
+    # screen that renders a timestamp needs it (P1-72).
+    timezone: str | None
     # Null until the address is proven (P1-70). Exposed because the app has no
     # other way to know whether to offer a resend — verification gates nothing,
     # so its absence is invisible without this. The moment, not a boolean: "when"

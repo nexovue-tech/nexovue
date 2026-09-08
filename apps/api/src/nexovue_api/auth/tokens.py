@@ -17,6 +17,15 @@ which for a reset token means an attacker racing the customer.
 to the reset endpoint. Without that, one token type would be interchangeable
 with the other and the weaker of the two would set the strength of both.
 
+**A change-of-address link carries the address, not just the account.** Two
+purposes need only "whose account is this"; changing an address also needs "to
+which one", and the answer rides in the token rather than on the user row. A
+`users.pending_email` column would be overwritten by a second request, and
+following the *first* link would then apply an address that link never proved —
+control of the old inbox standing in as proof of a new one. Binding the address
+to the token closes that: a link applies the address it was minted for or
+nothing.
+
 Comparison is by hash lookup rather than by string equality: Redis finds the key
 or does not, so there is no timing signal to leak in the first place. That is
 the same reason `sessions.py` keys on a fingerprint.
@@ -24,7 +33,9 @@ the same reason `sessions.py` keys on a fingerprint.
 
 from __future__ import annotations
 
+import json
 import secrets
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
@@ -38,6 +49,9 @@ TOKEN_KEY_PREFIX: Final = "onetime"
 # there is nothing for key stretching to buy.
 TOKEN_BYTES: Final = 32
 
+_USER_ID_FIELD: Final = "user_id"
+_NEW_EMAIL_FIELD: Final = "new_email"
+
 
 class TokenPurpose(StrEnum):
     """What a token may be presented for, and nothing else.
@@ -48,6 +62,21 @@ class TokenPurpose(StrEnum):
 
     VERIFY_EMAIL = "verify_email"
     RESET_PASSWORD = "reset_password"
+    CHANGE_EMAIL = "change_email"
+
+
+# The purposes whose whole claim is "this account". `CHANGE_EMAIL` is not one:
+# its claim names an address too, so it is issued and spent through its own pair
+# of methods and a caller cannot reach it with a user id it invented.
+ID_VALUED_PURPOSES: Final = frozenset({TokenPurpose.VERIFY_EMAIL, TokenPurpose.RESET_PASSWORD})
+
+
+@dataclass(frozen=True, slots=True)
+class EmailChange:
+    """What a change-of-address link stands for: whose account, and which address."""
+
+    user_id: str
+    new_email: str
 
 
 class OneTimeTokenStore:
@@ -59,23 +88,47 @@ class OneTimeTokenStore:
     async def issue(self, *, purpose: TokenPurpose, user_id: str, ttl_seconds: int) -> str:
         """Mint a token for one user and one purpose, and return it to be mailed.
 
-        The caller supplies the lifetime because the two purposes do not share
-        one: a verification link is followed at leisure, a reset link is a live
+        The caller supplies the lifetime because the purposes do not share one:
+        a verification link is followed at leisure, a reset link is a live
         credential to somebody's account.
         """
-        token = secrets.token_urlsafe(TOKEN_BYTES)
-        await self._redis.set(_key(purpose, token), user_id, ex=ttl_seconds)
-        return token
+        return await self._mint(_id_valued(purpose), user_id, ttl_seconds)
 
     async def consume(self, *, purpose: TokenPurpose, token: str) -> str | None:
         """The user id behind a token, spending it in the same round trip.
 
         `None` covers every way a token can fail — never issued, already spent,
-        expired, or issued for the other purpose — deliberately, because the
-        caller must answer all four identically. A caller that could tell
+        expired, or issued for another purpose — deliberately, because the
+        caller must answer all of them identically. A caller that could tell
         "expired" from "never existed" would be telling an attacker which
         guesses were once real.
         """
+        return await self._spend(_id_valued(purpose), token)
+
+    async def issue_email_change(self, *, user_id: str, new_email: str, ttl_seconds: int) -> str:
+        """Mint a link that moves one account to one address, and no other."""
+        claim = json.dumps({_USER_ID_FIELD: user_id, _NEW_EMAIL_FIELD: new_email})
+        return await self._mint(TokenPurpose.CHANGE_EMAIL, claim, ttl_seconds)
+
+    async def consume_email_change(self, *, token: str) -> EmailChange | None:
+        """The account and address behind a change-of-address link, spending it.
+
+        `None` for every failure, including a stored value that will not decode:
+        the only way to hold one of those is to have written it into Redis by
+        hand, and a caller that crashed on it would be a caller that can be made
+        to crash from outside the application.
+        """
+        claim = await self._spend(TokenPurpose.CHANGE_EMAIL, token)
+        return None if claim is None else _decoded(claim)
+
+    async def _mint(self, purpose: TokenPurpose, value: str, ttl_seconds: int) -> str:
+        token = secrets.token_urlsafe(TOKEN_BYTES)
+        await self._redis.set(_key(purpose, token), value, ex=ttl_seconds)
+        return token
+
+    async def _spend(self, purpose: TokenPurpose, token: str) -> str | None:
+        """`GETDEL`: read and remove in one round trip, so two requests arriving
+        together cannot both succeed."""
         if not token:
             return None
         spent = await self._redis.getdel(_key(purpose, token))
@@ -94,6 +147,33 @@ class OneTimeTokenStore:
         raise NotImplementedError(
             "tokens are bounded by their TTL, not by enumeration — see the docstring"
         )
+
+
+def _id_valued(purpose: TokenPurpose) -> TokenPurpose:
+    """Refuse a purpose whose claim is more than a user id.
+
+    A programming error, not a request: spending a change-of-address token
+    through `consume` would hand the caller a JSON document where it expected an
+    id, and it should fail here rather than three frames later.
+    """
+    if purpose not in ID_VALUED_PURPOSES:
+        raise ValueError(f"{purpose.value} carries more than a user id; use its own methods")
+    return purpose
+
+
+def _decoded(claim: str) -> EmailChange | None:
+    """A stored change-of-address claim, or None if it is not one."""
+    try:
+        fields = json.loads(claim)
+    except ValueError:
+        return None
+    if not isinstance(fields, dict):
+        return None
+    user_id = fields.get(_USER_ID_FIELD)
+    new_email = fields.get(_NEW_EMAIL_FIELD)
+    if not isinstance(user_id, str) or not isinstance(new_email, str):
+        return None
+    return EmailChange(user_id=user_id, new_email=new_email)
 
 
 def _key(purpose: TokenPurpose, token: str) -> str:

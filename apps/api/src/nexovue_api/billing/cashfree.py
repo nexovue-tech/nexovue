@@ -45,6 +45,7 @@ from nexovue_api.billing.processor import (
     BillingEventKind,
     Checkout,
     ContactField,
+    Money,
     SignatureInvalidError,
 )
 from nexovue_api.settings import DOMESTIC_PAYMENT_VARIABLES, DomesticPaymentSettings
@@ -83,6 +84,12 @@ CANCEL_ACTION: Final = "CANCEL"
 # slow network, short enough that a stalled gateway does not hold a request open.
 TIMEOUT_SECONDS: Final = 15.0
 
+# The only scheme this processor will register a return address under. Checked
+# here rather than trusted, because the rule bites at go-live — long after the
+# line that built the URL was written.
+# https://www.cashfree.com/docs/payments/online/go-live/whitelist
+SECURE_URL_SCHEME: Final = "https://"
+
 # Our two facts, carried on the subscription so every webhook about it brings
 # them back. Cashfree echoes `subscription_tags` on the status and payment
 # events alike, which is what lets `event_from_webhook` name an organization
@@ -111,28 +118,46 @@ TERMINAL_STATUSES: Final = CANCELLED_STATUSES | frozenset(
     {"COMPLETED", "EXPIRED", "LINK_EXPIRED", "CARD_EXPIRED"}
 )
 
-# What the port does not supply and this processor cannot proceed without. Spelled
-# out because "checkout failed" would send whoever reads it looking for a bug.
+# Every input this processor was missing is now supplied, and one thing it
+# cannot get from any of them is left. Spelled out because "checkout failed"
+# would send whoever reads it looking for a bug in the code rather than at the
+# provider's two incompatible endpoints.
+#
+# Verified against the documentation on 2026-09-08, not remembered:
+#   - POST /pg/subscriptions returns `subscription_session_id` and no URL, and
+#     its hosted page is reached by handing that id to the vendor's browser SDK
+#     https://www.cashfree.com/docs/payments/subscription/hosted-checkout
+#   - POST /pg/links returns a redirectable `link_url`, and its `subscription`
+#     object carries no `subscription_tags`
+#     https://www.cashfree.com/docs/api-reference/payments/latest/payment-links/create
 CHECKOUT_UNAVAILABLE_DETAIL: Final = (
-    "this processor needs two things the caller has not resolved yet: the plan's "
-    "price in the smallest currency unit, and the URL to return the customer to "
-    "after paying. The phone was the third and is settled — ADR 0109 put it on "
-    "`BillingContact`, declared through `required_contact_fields`. The price is "
-    "a `plan_prices` lookup that belongs above this module, and the return URL "
-    "is a deployment fact that belongs in settings beside APP_BASE_URL. "
-    "Inventing either would send a fabricated amount to a payment processor."
+    "no call this processor offers returns both a redirectable URL and the "
+    "custom tags every webhook must echo back. The tagged call answers with a "
+    "session id for a browser SDK, and the call that answers with a URL cannot "
+    "carry tags — so `Checkout.url` and `event_from_webhook` cannot both be "
+    "satisfied. Choosing between them changes what ADR 0102's port promises, "
+    "which is a decision above this module rather than a gap in it"
 )
 
 
-class CheckoutInputsUndecidedError(BillingError):
-    """`begin_checkout` was called and two of its inputs are still unresolved.
+class CheckoutHandoffUndecidedError(BillingError):
+    """`begin_checkout` has every input and still cannot start one.
 
-    Deliberately *not* silent and deliberately not a placeholder request. It
-    named three things when it was written; ADR 0109 settled the first by giving
-    the port a `BillingContact` the processor declares its need for. The other
-    two are not port problems: a price is a `plan_prices` lookup that belongs
-    above this module, and a return URL is a deployment fact. This refuses in a
-    way that names what is left rather than failing at the provider.
+    It named three missing inputs when it was written and then two. ADR 0109
+    settled the phone; the price and the return URL are now resolved above this
+    module and passed in. What is left is not an input at all: this processor
+    has two create calls and **neither** satisfies both halves of the port.
+
+    `_translate` reads the organization out of `subscription_tags` on purpose —
+    it is what lets a webhook name a tenant without a database, the same order
+    `deploys` follows. The call that accepts those tags hands back a session id
+    rather than a link. The call that hands back a link accepts no tags.
+
+    Refusing here is deliberate. Building against the untagged call would mean
+    rewriting a verified, negative-controlled webhook path around a field the
+    documentation does not confirm; building against the untagged-but-linked one
+    would mean `Checkout` stops being a URL, which is ADR 0102's wording and not
+    this file's to change.
     """
 
     def __init__(self) -> None:
@@ -168,14 +193,21 @@ class CashfreePaymentProcessor:
         return frozenset({ContactField.NAME, ContactField.EMAIL, ContactField.PHONE})
 
     async def begin_checkout(
-        self, *, org_id: uuid.UUID, plan_slug: str, contact: BillingContact
+        self,
+        *,
+        org_id: uuid.UUID,
+        plan_slug: str,
+        contact: BillingContact,
+        authorised_maximum: Money,
+        return_url: str,
     ) -> Checkout:
-        """Not implemented yet, on purpose and loudly.
+        """Every input is checked, and then this refuses. See
+        `CheckoutHandoffUndecidedError` for what is left and why.
 
-        The contact is now checked rather than ignored — a caller that skipped a
-        declared field learns which one here, not from the provider — and then
-        the price and return URL are still missing. See
-        `CheckoutInputsUndecidedError`.
+        The checks run first and in this order so a caller learns which of its
+        own inputs is wrong before it learns the provider cannot be called —
+        a bad amount is a bug to fix here, and finding it only after the
+        handoff question is answered would waste that decision.
         """
         missing = contact.missing(self.required_contact_fields())
         if missing:
@@ -184,7 +216,24 @@ class CashfreePaymentProcessor:
                 + ", ".join(sorted(field.value for field in missing))
                 + ", which this processor declared it needs"
             )
-        raise CheckoutInputsUndecidedError
+        if authorised_maximum.minor_units <= 0:
+            raise BillingError(
+                "the authorised maximum is not a chargeable amount; a mandate "
+                "for nothing would authorise a customer to be billed nothing"
+            )
+        # Raises on a currency whose smallest unit this product cannot name.
+        # Called for that check: this processor takes major units, so an amount
+        # it cannot express is a refusal here rather than a wrong charge there.
+        authorised_maximum.major_units()
+        if not return_url.startswith(SECURE_URL_SCHEME):
+            # Their own go-live rules refuse anything else, and a link that is
+            # rejected at registration is found months after it was written.
+            # https://www.cashfree.com/docs/payments/online/go-live/whitelist
+            raise BillingError(
+                f"the return url must begin with {SECURE_URL_SCHEME}, "
+                f"which is the only scheme this processor accepts"
+            )
+        raise CheckoutHandoffUndecidedError
 
     async def cancel(self, *, subscription_ref: str) -> None:
         """End a subscription, and treat one that is already over as success.

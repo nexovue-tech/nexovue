@@ -19,14 +19,22 @@ of decision worth getting right while it is still free.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Final
 
 from fastapi import APIRouter, Request, status
 
+from nexovue_api.auth.dependencies import CurrentIdentity
+from nexovue_api.auth.policy import MayAdminister
 from nexovue_api.billing import service
 from nexovue_api.billing.dependencies import DomesticPayments
-from nexovue_api.billing.schemas import DeliveryAcknowledgement
-from nexovue_api.deps import DbSession
+from nexovue_api.billing.schemas import (
+    BillingOverview,
+    CheckoutHandoff,
+    DeliveryAcknowledgement,
+    StartCheckoutRequest,
+)
+from nexovue_api.deps import AppSettings, DbSession
 from nexovue_api.errors.exceptions import InvalidRequestError
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -73,3 +81,56 @@ async def _bounded_body(request: Request) -> bytes:
             raise InvalidRequestError(BODY_TOO_LARGE_DETAIL)
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+@router.get("", summary="The plan, the subscription behind it, and the month's allowance")
+async def read_billing_overview(
+    identity: CurrentIdentity,
+    db: DbSession,
+) -> BillingOverview:
+    """P1-75. Readable by any member: what the organization pays and how close
+    it is to the ceiling is not administration, and a member who cannot see it
+    finds out that ingestion stopped by noticing the telemetry went quiet."""
+    return await service.overview(
+        db, organization=identity.organization, today=datetime.now(UTC).date()
+    )
+
+
+@router.post(
+    "/checkout",
+    status_code=status.HTTP_201_CREATED,
+    summary="Start the mandate that moves this organization onto a paid plan",
+)
+async def start_checkout(
+    identity: MayAdminister,
+    db: DbSession,
+    settings: AppSettings,
+    payments: DomesticPayments,
+    request: StartCheckoutRequest,
+) -> CheckoutHandoff:
+    """P1-74's upgrade half. Answers with somewhere to authorise a mandate and
+    changes no plan — `organizations.plan` moves on the processor's event."""
+    return await service.begin_plan_change(
+        db,
+        configured=payments,
+        organization=identity.organization,
+        request=request,
+        app_base_url=settings.app_base_url,
+        today=datetime.now(UTC).date(),
+    )
+
+
+@router.delete(
+    "/subscription",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Ask the processor to end this organization's subscription",
+)
+async def cancel_subscription(
+    identity: MayAdminister,
+    db: DbSession,
+    payments: DomesticPayments,
+) -> None:
+    """P1-74's downgrade half. **202, not 204**: the arrangement ends when the
+    processor says it has, at its own period boundary, and the plan moves on
+    that event — so this has accepted the request rather than completed it."""
+    await service.end_subscription(db, configured=payments, organization=identity.organization)

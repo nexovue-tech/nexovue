@@ -1,9 +1,23 @@
 """Proving an address, and getting back in without one.
 
-P1-70 and P1-71. Kept out of `service.py` because signing in and recovering an
-account are different jobs — `service.py` decides whether a credential is good,
-this decides whether somebody controls an address — and the auth package already
-splits along those lines with `sessions`, `credentials`, `policy` and `tokens`.
+P1-70, P1-71 and the change-of-address half of P1-72. Kept out of `service.py`
+because signing in and recovering an account are different jobs — `service.py`
+decides whether a credential is good, this decides whether somebody controls an
+address — and the auth package already splits along those lines with `sessions`,
+`credentials`, `policy` and `tokens`.
+
+**Changing an address is the same proof pointed at a different inbox**, which is
+why it is here and not a package of its own. Two rules shape it and each is a
+failure it prevents:
+
+*The link goes to the new address.* Mailing the old one proves nothing about the
+new one, and proving control of the new one is the entire point.
+
+*Nothing on the account changes until the link is followed.* Until then the
+customer keeps the address they can receive mail at. A change that took effect
+immediately and then failed verification would leave somebody locked out of an
+inbox they cannot read — the outcome P1-70 exists to prevent, arrived at from
+the other direction.
 
 **Two rules run through every function here.**
 
@@ -41,15 +55,23 @@ from datetime import UTC, datetime
 from typing import Final
 
 import structlog
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
-from nexovue_api.auth.credentials import hash_password, normalize_email
+from nexovue_api.auth.credentials import hash_password, is_valid_email, normalize_email
 from nexovue_api.auth.queries import find_active_user_by_email
 from nexovue_api.auth.tokens import OneTimeTokenStore, TokenPurpose
 from nexovue_api.data.postgres.models import Organization, User
-from nexovue_api.errors.exceptions import InvalidRequestError
+from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError
 from nexovue_api.notifications import EmailError, EmailSender, Message
+
+# `users.email` is globally unique, and both of these already say what a person
+# should do about a collision. Imported rather than restated: a second wording
+# for one constraint is a second thing to keep true. They belong in `auth`
+# rather than in `signup` — see the note in the P1-72 handover.
+from nexovue_api.signup.queries import email_is_taken
+from nexovue_api.signup.service import EMAIL_INVALID_DETAIL, EMAIL_TAKEN_DETAIL
 
 _log = structlog.get_logger(__name__)
 
@@ -57,6 +79,12 @@ _log = structlog.get_logger(__name__)
 LINK_NO_LONGER_VALID: Final = (
     "That link is no longer valid. It may have expired or already been used. Request a new one."
 )
+
+# Refused rather than accepted as a no-op, for the same reason a password change
+# refuses the password already set: it is almost always a mis-paste, and mailing
+# a "confirm this address" link for the address somebody already has reads as
+# the product being confused.
+EMAIL_ALREADY_YOURS: Final = "That is already the address on this account."
 
 # What a recipient reads in the mail. Rendered from the token's own lifetime
 # rather than written down twice, so changing the TTL cannot leave the message
@@ -123,6 +151,101 @@ async def verify_email(db: AsyncSession, tokens: OneTimeTokenStore, *, token: st
     if user.email_verified_at is None:
         user.email_verified_at = datetime.now(UTC)
         audit.record_email_verified(db, user=user)
+
+
+async def send_email_change_link(
+    db: AsyncSession,
+    tokens: OneTimeTokenStore,
+    email: EmailSender,
+    *,
+    user: User,
+    new_address: str,
+    app_base_url: str,
+    ttl_seconds: int,
+) -> None:
+    """Mail a confirmation link to the address a customer wants to move to.
+
+    **Nothing on the account is written here.** The address changes when the
+    link is followed and not before, so a customer who mistypes the address
+    keeps the one they can still read mail at, and a request they abandon
+    expires on its own with nothing to clean up.
+
+    **The collision is answered here rather than by the unique index.** Refusing
+    an address that already has an account is a small piece of "this address is
+    taken", told to somebody who has already proved they hold this account's
+    password — not the anonymous oracle `request_password_reset` is shaped to
+    avoid. The alternative is a customer who typed their spouse's address by
+    mistake waiting forever for a mail that our own database guaranteed would
+    never be sent. `confirm_email_change` checks again, because between the two
+    calls somebody else can take it.
+
+    The caller is expected to have proved the current password already; see
+    `profile.service.request_email_change` for why that gate exists.
+    """
+    address = normalize_email(new_address)
+    if not is_valid_email(address):
+        raise InvalidRequestError(EMAIL_INVALID_DETAIL)
+    if address == user.email:
+        raise InvalidRequestError(EMAIL_ALREADY_YOURS)
+    if await email_is_taken(db, address):
+        raise ConflictError(EMAIL_TAKEN_DETAIL)
+
+    token = await tokens.issue_email_change(
+        user_id=str(user.id), new_email=address, ttl_seconds=ttl_seconds
+    )
+    await email.send(
+        to=address,
+        message=Message.VERIFY_EMAIL,
+        data={
+            "link": _link(app_base_url, "email-change", token),
+            "expires_in": describe_lifetime(ttl_seconds),
+        },
+    )
+    audit.record_email_change_requested(db, user=user)
+
+
+async def confirm_email_change(db: AsyncSession, tokens: OneTimeTokenStore, *, token: str) -> User:
+    """Spend a change-of-address link and move the account onto it.
+
+    **This is the write the whole flow was deferring.** The address arrives from
+    the token rather than from the row, so a link applies the address it was
+    minted for even if a later request named a different one.
+
+    The new address is stamped verified in the same breath: following this link
+    is the same proof `verify_email` accepts, and asking for it twice would be
+    asking somebody to prove the same thing again.
+
+    **No session is ended.** A reset ends every session because the password may
+    be in somebody else's hands; nothing here says that. The gate that protects
+    this flow is the current password, checked when the link was asked for.
+    """
+    change = await tokens.consume_email_change(token=token)
+    if change is None:
+        raise InvalidRequestError(LINK_NO_LONGER_VALID)
+    user = await _live_user(db, change.user_id)
+
+    if user.email != change.new_email:
+        if await email_is_taken(db, change.new_email):
+            raise ConflictError(EMAIL_TAKEN_DETAIL)
+        user.email = change.new_email
+        audit.record_email_changed(db, user=user)
+    user.email_verified_at = datetime.now(UTC)
+    await _flush_or_refuse(db)
+    return user
+
+
+async def _flush_or_refuse(db: AsyncSession) -> None:
+    """Write now, so a lost race is a message and not a 500.
+
+    The unique index on `users.email` is the guarantee; the check above only
+    makes the common case a sentence somebody can act on. Without this flush the
+    violation would surface from the request dependency's commit, long after any
+    handler could turn it into one.
+    """
+    try:
+        await db.flush()
+    except IntegrityError as collided:
+        raise ConflictError(EMAIL_TAKEN_DETAIL) from collided
 
 
 async def request_password_reset(
@@ -214,7 +337,11 @@ async def _user_behind(
     user_id = await tokens.consume(purpose=purpose, token=token)
     if user_id is None:
         raise InvalidRequestError(LINK_NO_LONGER_VALID)
+    return await _live_user(db, user_id)
 
+
+async def _live_user(db: AsyncSession, user_id: str) -> User:
+    """The user an already-spent token named, if their tenant is still here."""
     user = await db.get(User, _as_uuid(user_id))
     if user is None:
         raise InvalidRequestError(LINK_NO_LONGER_VALID)
@@ -250,11 +377,14 @@ def _link(app_base_url: str, path: str, token: str) -> str:
 
 
 __all__ = [
+    "EMAIL_ALREADY_YOURS",
     "LINK_NO_LONGER_VALID",
     "EmailError",
+    "confirm_email_change",
     "describe_lifetime",
     "request_password_reset",
     "reset_password",
+    "send_email_change_link",
     "send_verification",
     "verify_email",
 ]
