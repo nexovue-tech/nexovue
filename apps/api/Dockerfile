@@ -10,10 +10,12 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY apps/api/pyproject.toml apps/api/
 COPY apps/scheduler/pyproject.toml apps/scheduler/
+COPY packages/py-platform/pyproject.toml packages/py-platform/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-workspace --package nexovue-api
 
 COPY apps/api apps/api
+COPY packages/py-platform packages/py-platform
 COPY packages/contracts/gen/python packages/contracts/gen/python
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --package nexovue-api
 
