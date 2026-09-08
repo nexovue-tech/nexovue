@@ -197,6 +197,28 @@ services:
       S3_BUCKET: nexovue-dev
       S3_ACCESS_KEY_ID: nexovue_dev_access
       S3_SECRET_ACCESS_KEY: nexovue_dev_secret
+    # The developer's own third-party credentials — the payment gateway
+    # (`PAYMENTS_DOMESTIC_*`) and the mail provider (`EMAIL_*`).
+    #
+    # **These are the only settings this file cannot supply itself.** Every value
+    # above is a dev constant, because Postgres and SeaweedFS are containers
+    # started here and their passwords mean nothing outside this machine. A
+    # sandbox gateway account is not: it belongs to a person, so it lives in
+    # their own `.env` and reaches the container from there.
+    #
+    # `required: false` because the stack must come up without one. Nothing on
+    # the walking-skeleton path needs either credential, and a developer who has
+    # not signed up for a gateway should not be blocked from running the product
+    # — the billing screen says upgrading is unavailable, and the API answers 503
+    # rather than 500 if a route that needs one is called.
+    #
+    # Read directly rather than through `${VAR}` substitution: compose resolves
+    # those against the *project directory*, which is this folder rather than the
+    # repository root, so a value in the root `.env` would silently expand to
+    # nothing and the container would look configured while carrying blanks.
+    env_file:
+      - path: ../../.env
+        required: false
     ports:
       - "${API_HOST_PORT:-18000}:8000"
     healthcheck:

@@ -157,6 +157,28 @@ services:
       S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+      # Third-party credentials, passed through rather than demanded.
+      #
+      # `:-` and not `:?` on purpose, unlike every variable above: an install
+      # that charges nobody needs no gateway, and one that sends no mail needs no
+      # provider. `Settings.domestic_payments` and `Settings.email` read an unset
+      # or blank value as "not configured" and hand back None, so the screens
+      # still serve and only the routes that need a credential refuse — by
+      # variable name, which is what `PaymentsNotConfiguredError` is for.
+      #
+      # An empty string is the same as absent to both, so a deployment that sets
+      # three of the four gets None rather than a half-built client that fails at
+      # its first signature check.
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-}
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      EMAIL_SENDING_DOMAIN: ${EMAIL_SENDING_DOMAIN:-}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-}
+      EMAIL_REPLY_TO: ${EMAIL_REPLY_TO:-}
+      PAYMENTS_DOMESTIC_PROVIDER: ${PAYMENTS_DOMESTIC_PROVIDER:-cashfree}
+      PAYMENTS_DOMESTIC_APP_ID: ${PAYMENTS_DOMESTIC_APP_ID:-}
+      PAYMENTS_DOMESTIC_SECRET_KEY: ${PAYMENTS_DOMESTIC_SECRET_KEY:-}
+      PAYMENTS_DOMESTIC_ENV: ${PAYMENTS_DOMESTIC_ENV:-sandbox}
+      PAYMENTS_DOMESTIC_BASE_URL: ${PAYMENTS_DOMESTIC_BASE_URL:-}
     ports:
       - "8000:8000"
     depends_on:
