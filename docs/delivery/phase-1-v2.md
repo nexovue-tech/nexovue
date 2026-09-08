@@ -31,7 +31,7 @@ never when the code was written.
 | **G7** | SDK distribution | ⬜ blocked on a deployment target | — |
 | **C4** | P1-72 profile & security | 🟡 **API done 2026-09-08**; screen, email change and timezone not built | `pending` |
 | **C1–C3, C5–C7** | the rest of the commercial layer | ⬜ **unblocked now G2 is done**; C2 also needed G6c, which is decided | — |
-| **M1** | four blank §4 budgets | ⬜ | — |
+| **M1** | four blank §4 budgets | ✅ **done 2026-09-08 — all four pass** | `pending` |
 | **M2** | P1-50, the 24-hour soak | ⬜ **last thing before Phase 2** | — |
 | **M3** | pprof on the admin listener | ✅ **done** | `10ae52f` |
 | **M4** | RUM breakdowns by page and device | ✅ **done** | `10ae52f` `58986ea` |
@@ -411,10 +411,34 @@ file names it as one ("M8 in the plan"). Corrected 2026-09-07: §3's headings ha
 plan's milestone numbers while §5a counted a different M-series, so `M4` named the budgets here and
 the RUM breakdowns there.
 
-### M1 · Four budgets in §4 are still blank
+### M1 · ~~Four budgets in §4 are still blank~~ — **measured 2026-09-08, all four pass**
 
-`Endpoint stats 24h`, `Log search 1h`, `First screen load`, and **`Data loss under broker restart:
-zero`** — the last of which is a Phase 1 invariant with no measurement behind it.
+| Budget | Target | Measured |
+|---|---|---|
+| Endpoint stats, 24h | p95 < 300 ms | **53.4 ms** |
+| Log search, 1h | p95 < 2 s | **126.0 ms** |
+| First screen load | < 2 s | **LCP 775 ms** (dev-mode Vite, so conservative) |
+| Data loss under broker restart | zero | **zero** — 299 accepted, 299 stored, 299 distinct |
+
+Taken on a freshly seeded store with the demo as traffic, which is why they were taken that day:
+**a clean store is what makes the number trustworthy, and it stops being clean as test rows
+accumulate.**
+
+**The last one was the point of the exercise.** It is a Phase 1 invariant that had no measurement
+behind it at all — a promise rather than a fact. Kafka was restarted mid-run; one export came back
+`503` while the broker was down, which is the door declining rather than losing, because the
+receiver acks only after the broker accepts. Nothing was lost and nothing was duplicated.
+
+**Two things went wrong first, and both are worth keeping.** A rate-limited request answers in
+about 6 ms, so the first latency run counted `429`s as fast successes and reported p50 11.1 ms
+where the truth is 22.5 ms — a latency harness that ignores status codes measures its own rate
+limiter. And the broker probe was first written with spans, which read **zero stored against 299
+accepted**: not loss, but tail sampling doing its job, because `sample/policy.go:keeps` discards
+healthy fast traces and a probe's traces are nothing else. Logs are not tail-sampled, so the
+equality there is clean.
+
+**The re-encode budget is no longer blocked** — M3 landed `net/http/pprof` on the receiver's admin
+listener, so the one remaining blank is now unmeasured rather than unmeasurable.
 
 ### M2 · P1-50, the 24-hour soak
 

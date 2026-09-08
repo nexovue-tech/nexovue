@@ -318,12 +318,37 @@ can move.
 | Receiver memory | < 512 MB under sustained load | **36 MiB peak** (28 MiB at 12k spans/sec, 27 MiB idle) — pass, with two orders of magnitude of room |
 | Span → queryable lag | p99 < 15 s | **p50 12.0 s, max 12.8 s** with tail sampling live (was 0.65–2.2 s write-through) — pass. The 10 s sampling window (ADR 0058) is now the floor, exactly as predicted; ADR 0054 required this be re-measured rather than assumed once the buffer returned |
 | Trace-by-ID query | p95 < 500 ms | **p95 21.8 ms** (p50 16.7, p99 24.9), 60 random traces against an 11.2M-span table — pass. This is the budget `span_trace_lookup` exists for: without the time bound it derives, the query would lean on the bloom filter across every partition |
-| Endpoint stats, 24h window | p95 < 300 ms | — |
-| Log search, 1h window | p95 < 2 s | — |
-| First screen load | < 2 s (PRD AC1.1) | — |
-| Data loss under broker restart | zero | — |
+| Endpoint stats, 24h window | p95 < 300 ms | **p95 53.4 ms** (p50 22.5, p99 80.8), 35 samples over a 24h window on the OpenTelemetry Demo — pass |
+| Log search, 1h window | p95 < 2 s | **p95 126.0 ms** (p50 38.5, p99 162.1), 40 of 40 samples clean, 200 records returned per query — pass with an order of magnitude spare |
+| First screen load | < 2 s (PRD AC1.1) | **LCP 775 ms**, CLS 0.00, TTFB 39 ms — measured in Chrome on the signed-in first screen (`/traces`). **Dev-mode Vite**, which is the slower path: a production build only improves it, so the pass is conservative rather than flattering |
+| Data loss under broker restart | zero | **zero — 299 accepted, 299 stored, 299 distinct**, across `docker restart nexovue-kafka-1` fired mid-run. One export was refused `503` while the broker was down, which is the door declining rather than losing: the receiver acks only after the broker accepts, so a refusal is the contract working. No duplication either — distinct equals stored |
 
-**M1 gave the baseline.** Five budgets measured and passed, all with large margins; §4 said revise once against real numbers and then hold, so these targets now stand as the regression gate. The re-encode budget remains unmeasurable until the receiver exposes a profile endpoint — that is a gap in the receiver, not in the measurement. Disk in dev is bounded by a 3-day ClickHouse TTL rather than the 30-day production setting.
+**M1 gave the baseline. The last four were measured on 2026-09-08 and every one passes**, on a
+freshly seeded store with the OpenTelemetry Demo as the traffic — which is why they were taken that
+day rather than later: a clean store makes a number trustworthy, and it stops being clean as soon as
+test rows accumulate. §4 said revise once against real numbers and then hold, so these targets now
+stand as the regression gate.
+
+**Two corrections to how the first two were taken**, because the first attempt was wrong and the
+wrongness is instructive:
+
+- **A rate-limited request answers fast.** The first endpoint-stats run fired 60 requests as quickly
+  as curl could and recorded only timings, so the `429`s the telemetry tier (60/min) returned in
+  ~6 ms were counted as successes: p50 read 11.1 ms and p95 19.0 ms. Paced to 1.2 s between samples
+  and filtered to `200`s, the same query reads **p50 22.5 ms, p95 53.4 ms**. Both pass; only the
+  second is true. A latency harness that does not record status codes measures its own rate limiter.
+- **A span probe cannot measure data loss.** The broker-restart budget was first run with spans and
+  read **zero stored against 299 accepted**, which looks catastrophic and was not loss at all: tail
+  sampling (ADR 0010) discards healthy fast traces on purpose, and a probe's traces are exactly
+  that. `sample/policy.go:keeps` keeps errors, slow traces and a share of healthy ones — a probe
+  qualifies for none. Re-run on **logs**, which are not tail-sampled, the equality is clean.
+
+**The re-encode budget is no longer blocked.** It has said "unmeasurable until the receiver exposes
+a profile endpoint" since M1; the receiver now mounts `net/http/pprof` on its admin listener behind
+`RECEIVER_PPROF_ENABLED` (M3, 2026-09-08). It is the one budget still without a number, and the
+reason is now that nobody has taken it rather than that nobody could.
+
+Disk in dev is bounded by a 3-day ClickHouse TTL rather than the 30-day production setting.
 
 ---
 
