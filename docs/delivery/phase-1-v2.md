@@ -11,7 +11,7 @@ row in `phase-1-plan.md` disagrees with what the code does, this file says so an
 
 ---
 
-## Status — updated 2026-09-08
+## Status — updated 2026-09-08 (evening)
 
 **Tracked here rather than in a status column elsewhere, so this file answers "what next"
 without a second file to reconcile.** A row is `done` only when something was run and watched,
@@ -29,11 +29,17 @@ never when the code was written.
 | **G5** | ingest kill switch — both halves, proved end to end | ✅ **done** | `10ae52f` `58986ea` |
 | **G6a** | paid-tier browser cap | ⬜ **and larger than this file said** — see §5a | — |
 | **G7** | SDK distribution | ⬜ blocked on a deployment target | — |
-| **C4** | P1-72 profile & security | 🟡 **API done 2026-09-08**; screen, email change and timezone not built | `pending` |
-| **C1–C3, C5–C7** | the rest of the commercial layer | ⬜ **unblocked now G2 is done**; C2 also needed G6c, which is decided | — |
-| **M1** | four blank §4 budgets | ✅ **done 2026-09-08 — all four pass** | `pending` |
+| **C1** | P1-73 payment processor | 🟡 **adapter, webhook, signature and tables done; `begin_checkout` blocked** — the port cannot carry what Cashfree requires, see below | `c089344` |
+| **C2** | P1-74 plan change | ⬜ needs C1 finished | — |
+| **C3** | P1-75 billing screen | ⬜ needs C1 finished | — |
+| **C4** | P1-72 profile & security | 🟡 **API and screen done**; email change and timezone have no API at all | `c089344` |
+| **C5** | P1-76 project management | ⬜ D3's masking and sampling writes land here | — |
+| **C6** | ClickHouse purge path | ✅ **done** — 13 tables, two-tenant proof | `10ae52f` |
+| **C7** | P1-77 account & organization deletion | ✅ **done** — Postgres, object store and ClickHouse, owner only | `7d8f576` |
+| **M1** | four blank §4 budgets | ✅ **done — all four pass** | `7260610` |
 | **M2** | P1-50, the 24-hour soak | ⬜ **last thing before Phase 2** | — |
 | **M3** | pprof on the admin listener | ✅ **done** | `10ae52f` |
+| **T3-7** | the live trace test that compared a windowed grouping against an unwindowed summary | ✅ **fixed** — the docstring described a filter the code never applied | `a7fe829` |
 | **M4** | RUM breakdowns by page and device | ✅ **done** | `10ae52f` `58986ea` |
 | **F1** | T1-5 repricing guard | ✅ **done** | `10ae52f` |
 | **F2** | T1-6 rig cleanup | ✅ **done**, by deleting it | `10ae52f` |
@@ -889,6 +895,62 @@ own configuration — the ingest hostname, the SDK URL scheme, the ingest key fo
 door the moment someone uses it. Those are worth more care now, not less, precisely because
 changing them is free today and expensive on the day after launch.
 
+## 4g. The payments question — the one decision blocking three rows
+
+**C1's adapter is built and the hard half works.** The Cashfree webhook, the signature check, the
+replay guard and the tables all landed. What does not work is `begin_checkout` — the call that
+produces the page a customer pays on — and it is blocked on the *port*, not on the vendor.
+
+**The port promises less than any processor needs.** `billing/processor.py:99`:
+
+```python
+async def begin_checkout(
+    self, *, org_id: uuid.UUID, plan_slug: str, billing_email: str
+) -> Checkout:
+```
+
+Three arguments. Cashfree requires three things none of them carries:
+
+| Missing | Why it cannot be worked around |
+|---|---|
+| **A billing phone** | Non-optional on every Cashfree create call — `CustomerPhone` is required in the generated SDK, not merely recommended |
+| **A price, or a processor-side plan id** | The adapter holds no database, so it cannot read `plan_prices` itself. `plan_slug` names our tier; it does not carry an amount |
+| **A return URL** | Where the customer lands after paying. `subscription_meta.return_url` |
+
+**And a fourth thing that is about Cashfree specifically**: its subscription hosted checkout returns
+a `subscription_session_id` for a JavaScript SDK, not a link. The only call that yields a real
+`link_url` — which is what `Checkout` promises — is `POST /pg/links` carrying a `subscription`
+object. That route works, and still demands the phone.
+
+**Nothing was invented.** `begin_checkout` raises a named error whose message lists all three. A
+placeholder phone number would have produced a checkout that fails at the provider with a message
+nobody could trace back to here.
+
+### The decision, and it is Raj's
+
+**The cheapest shape: `billing_email: str` becomes a billing *contact* — an object carrying at least
+an email and a phone.** That is one dataclass, and it changes a port ADR 0102 established, which is
+why it is not a thing to do quietly.
+
+Two things worth knowing before choosing:
+
+- **A phone is not a Cashfree quirk.** Indian payment rails ask for one generally, and a
+  merchant-of-record (ADR 0102 considered Paddle) collects it too. So this is not a concession to
+  one vendor that a later switch would strand — which is exactly the test ADR 0102 set for anything
+  entering the port.
+- **The price and the return URL are ours, not the customer's.** They do not belong on a contact.
+  The price wants resolving from `plan_prices` before the port is called, and the return URL is a
+  deployment fact — which means it belongs beside `APP_BASE_URL` in settings, and **G7's blocked
+  deployment target is the same missing fact.**
+
+**Rule 14 applies with force here.** Nothing is deployed and nobody has paid, so the port costs one
+edit today and a migration-plus-vendor-conversation later. It is also exactly the kind of decision
+that reason names as worth taking early: a shape a customer never sees, but which every later
+provider has to fit.
+
+**Answering it unblocks C1, C2 and C3 together** — the processor, the plan-change screen and the
+billing screen, which is the whole money half of the product.
+
 ## 4f. Found while building, and not yet rows anywhere
 
 **Everything above was found by reading. This section is what was found by *running*** — nine items
@@ -1046,14 +1108,33 @@ adding one.
 |---|---|---|---|---|
 | **G1–G7** | Gate — nothing ships to a paying customer until these are true | 11 | 9 | **7** |
 | **A1–A3** | Architecture — cheap now, expensive after Phase 2 | 3 | 3 | **3 — complete** |
-| **C1–C7** | Commercial layer (M8 in the plan) | 7 | 7 | 0 |
-| **M1–M4** | Measurements and exit criteria | 4 | 4 | **2** |
+| **C1–C7** | Commercial layer (M8 in the plan) | 7 | 7 | **2**, + 2 partly |
+| **M1–M4** | Measurements and exit criteria | 4 | 4 | **3** |
 | **F1–F5** | Findings and gate defects | 5 | 5 | **4** |
 | **D1–D4** | Decisions — no code was expected, two rows appeared | 4 | 2 *(found by deciding)* | **4 decided — complete**, 2 of 2 built |
 | **X1–X3** | Deferred past Phase 2 deliberately | 3 | 0 | n/a |
-| | **totals** | **37** | **30** | **18 built** |
+| | **totals** | **37** | **30** | **21 built**, 2 partly |
 
-**18 of 30 build items done, as of 2026-09-08**, up from 8 the day before. Three series are
+**21 of 30 build items done, as of the evening of 2026-09-08**, with two more part-built. Up
+from 8 at the start of the day.
+
+**What is left, in full, so this does not have to be inferred from the board:**
+
+| | Item | State |
+|---|---|---|
+| **G6a** | paid-tier browser cap | not started, and larger than this file first said |
+| **G7** | SDK distribution | **blocked** — no deployment target exists |
+| **C1** | payments | `begin_checkout` blocked on a port decision, below |
+| **C2** | plan change | needs C1 |
+| **C3** | billing screen | needs C1 |
+| **C4** | P1-72 | email change and timezone have no API |
+| **C5** | project management | not started |
+| **M2** | the 24-hour soak | not started; last thing before Phase 2 |
+| **F4** | re-run the Tier 2 figures | not started |
+
+**Only one of those is blocked on a decision rather than on work**, and it is C1's — see
+"The payments question" below. Answering it unblocks C1, C2 and C3 together, which is the whole
+money half of the product. Three series are
 complete or nearly so: **A1–A3** the architecture seams, **D1–D4** the four decisions and both
 build rows they turned out to hide, and **F1–F5** bar one — only F4's re-run remains. The gate is
 **7 of 9**, with G6a and G7 left.
