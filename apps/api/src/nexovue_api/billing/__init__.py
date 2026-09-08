@@ -23,21 +23,25 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from nexovue_api.billing.processor import (
+    BillingContact,
     BillingError,
     BillingEvent,
     BillingEventKind,
     Checkout,
+    ContactField,
     PaymentProcessor,
     SignatureInvalidError,
 )
 from nexovue_api.settings import DomesticPaymentProvider, DomesticPaymentSettings
 
 __all__ = [
+    "BillingContact",
     "BillingError",
     "BillingEvent",
     "BillingEventKind",
     "Checkout",
     "ConfiguredProcessor",
+    "ContactField",
     "PaymentProcessor",
     "PaymentsNotConfiguredError",
     "SignatureInvalidError",

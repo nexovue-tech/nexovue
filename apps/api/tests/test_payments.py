@@ -31,8 +31,10 @@ import httpx
 import pytest
 
 from nexovue_api.billing import (
+    BillingContact,
     BillingError,
     BillingEventKind,
+    ContactField,
     PaymentsNotConfiguredError,
     SignatureInvalidError,
     UnhandledBillingEventError,
@@ -390,14 +392,35 @@ class TestConfigurationAndWiring:
                 )
             )
 
-    async def test_checkout_refuses_and_names_what_the_port_does_not_supply(self) -> None:
-        """Deliberately unimplemented. A domestic gateway needs a billing phone,
-        a price or processor-side plan id, and a return URL; none is on the port,
-        and inventing any of them would send fabricated data to a processor."""
-        with pytest.raises(CheckoutInputsUndecidedError, match="phone"):
-            await _processor().begin_checkout(
-                org_id=ORG_ID, plan_slug="pro", billing_email="someone@example.test"
-            )
+    def test_the_processor_declares_the_contact_it_needs(self) -> None:
+        """The phone is the one that costs: this processor requires it on the
+        create call and collects none on its hosted page, where others ask the
+        payer directly. Declared rather than assumed by the port — ADR 0109."""
+        required = _processor().required_contact_fields()
+
+        assert required == {ContactField.NAME, ContactField.EMAIL, ContactField.PHONE}
+
+    async def test_a_contact_missing_a_declared_field_is_refused_here_not_at_the_provider(
+        self,
+    ) -> None:
+        """The screen renders what `required_contact_fields` names, so this
+        should be unreachable — which is exactly why it is worth a test. A caller
+        that skips one learns which, rather than reading a provider's rejection."""
+        without_phone = BillingContact(email="someone@example.test", name="Some One")
+
+        with pytest.raises(BillingError, match="phone"):
+            await _processor().begin_checkout(org_id=ORG_ID, plan_slug="pro", contact=without_phone)
+
+    async def test_checkout_still_refuses_for_the_two_inputs_nobody_has_resolved(self) -> None:
+        """The phone was one of three and is settled. A price is a `plan_prices`
+        lookup that belongs above this module and a return URL is a deployment
+        fact; inventing either would send a fabricated amount to a processor."""
+        complete = BillingContact(
+            email="someone@example.test", name="Some One", phone="+919000000000"
+        )
+
+        with pytest.raises(CheckoutInputsUndecidedError, match="price"):
+            await _processor().begin_checkout(org_id=ORG_ID, plan_slug="pro", contact=complete)
 
     async def test_no_failure_message_carries_the_signing_key_or_the_raw_body(self) -> None:
         """Every one of these strings ends up in a log line or a problem

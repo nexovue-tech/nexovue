@@ -39,10 +39,12 @@ import httpx
 
 from nexovue_api.billing import PaymentsNotConfiguredError, UnhandledBillingEventError
 from nexovue_api.billing.processor import (
+    BillingContact,
     BillingError,
     BillingEvent,
     BillingEventKind,
     Checkout,
+    ContactField,
     SignatureInvalidError,
 )
 from nexovue_api.settings import DOMESTIC_PAYMENT_VARIABLES, DomesticPaymentSettings
@@ -112,23 +114,25 @@ TERMINAL_STATUSES: Final = CANCELLED_STATUSES | frozenset(
 # What the port does not supply and this processor cannot proceed without. Spelled
 # out because "checkout failed" would send whoever reads it looking for a bug.
 CHECKOUT_UNAVAILABLE_DETAIL: Final = (
-    "a domestic gateway cannot start a subscription from an organization, a plan "
-    "slug and an email alone: it needs a billing phone number (required on every "
-    "Cashfree create call), the plan's price or a processor-side plan id, and a "
-    "return URL. None of the three is on `PaymentProcessor.begin_checkout`, and "
-    "supplying an invented value for any of them would send fabricated customer "
-    "data to a payment processor. See the P1-73 report."
+    "this processor needs two things the caller has not resolved yet: the plan's "
+    "price in the smallest currency unit, and the URL to return the customer to "
+    "after paying. The phone was the third and is settled — ADR 0109 put it on "
+    "`BillingContact`, declared through `required_contact_fields`. The price is "
+    "a `plan_prices` lookup that belongs above this module, and the return URL "
+    "is a deployment fact that belongs in settings beside APP_BASE_URL. "
+    "Inventing either would send a fabricated amount to a payment processor."
 )
 
 
 class CheckoutInputsUndecidedError(BillingError):
-    """`begin_checkout` was called and the port does not carry what it needs.
+    """`begin_checkout` was called and two of its inputs are still unresolved.
 
-    Deliberately *not* silent and deliberately not a placeholder request. ADR
-    0102 wrote the port before any vendor, and the domestic branch of that
-    decision turns out to need three inputs the port does not name. The correct
-    fix is a port change, which is an ADR rather than a guess made here — so
-    this refuses in a way that names the missing decision.
+    Deliberately *not* silent and deliberately not a placeholder request. It
+    named three things when it was written; ADR 0109 settled the first by giving
+    the port a `BillingContact` the processor declares its need for. The other
+    two are not port problems: a price is a `plan_prices` lookup that belongs
+    above this module, and a return URL is a deployment fact. This refuses in a
+    way that names what is left rather than failing at the provider.
     """
 
     def __init__(self) -> None:
@@ -152,10 +156,34 @@ class CashfreePaymentProcessor:
         # network, and so a caller that already owns a pool can share it.
         self._client = client
 
+    def required_contact_fields(self) -> frozenset[ContactField]:
+        """Name, email and phone — all three, and the phone is the one that costs.
+
+        Cashfree requires `customer_phone` on the create call and its hosted page
+        does not collect customer details, so the number has to reach us before
+        the redirect. Razorpay's and Stripe's pages ask the customer themselves;
+        this is the outlier, which is why the requirement is declared here rather
+        than assumed by the port. ADR 0109.
+        """
+        return frozenset({ContactField.NAME, ContactField.EMAIL, ContactField.PHONE})
+
     async def begin_checkout(
-        self, *, org_id: uuid.UUID, plan_slug: str, billing_email: str
+        self, *, org_id: uuid.UUID, plan_slug: str, contact: BillingContact
     ) -> Checkout:
-        """Not implemented, on purpose, and loudly. See `CheckoutInputsUndecidedError`."""
+        """Not implemented yet, on purpose and loudly.
+
+        The contact is now checked rather than ignored — a caller that skipped a
+        declared field learns which one here, not from the provider — and then
+        the price and return URL are still missing. See
+        `CheckoutInputsUndecidedError`.
+        """
+        missing = contact.missing(self.required_contact_fields())
+        if missing:
+            raise BillingError(
+                "the billing contact is missing "
+                + ", ".join(sorted(field.value for field in missing))
+                + ", which this processor declared it needs"
+            )
         raise CheckoutInputsUndecidedError
 
     async def cancel(self, *, subscription_ref: str) -> None:

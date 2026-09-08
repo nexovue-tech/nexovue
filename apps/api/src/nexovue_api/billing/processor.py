@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Protocol
 
 
@@ -93,17 +93,80 @@ class Checkout:
     processor_customer_ref: str
 
 
+class ContactField(StrEnum):
+    """A detail a processor needs about the person paying.
+
+    **This exists so the port fixes no field of its own**, and the guard that
+    caught the first draft of this docstring is why it is worded this way: naming
+    the processors that differ would have put their names in the one file that
+    must not carry them.
+
+    Processors disagree about who collects these. Some hosted pages ask the payer
+    directly and need nothing up front; at least one requires them on the create
+    call and collects none itself. Fixing `phone` onto `begin_checkout` would
+    write that one's requirement — itself downstream of one country's regulation
+    — into a contract ADR 0102 built to outlive vendors, so the requirement is
+    declared by the implementation instead. See ADR 0109.
+    """
+
+    NAME = "name"
+    EMAIL = "email"
+    PHONE = "phone"
+
+
+@dataclass(frozen=True, slots=True)
+class BillingContact:
+    """Who is paying, as far as any processor needs to know.
+
+    Every field but the address is optional, because what is required is the
+    processor's answer rather than this module's: a screen asks for exactly what
+    `required_contact_fields` names, and an adapter that needs more than it
+    declared is the defect this shape makes visible.
+
+    **Not stored.** ADR 0109: the processor holds what it needs for the bank's
+    pre-debit notices, and a copy of ours would be personal data kept for the
+    convenience of not retyping.
+    """
+
+    email: str
+    name: str | None = None
+    phone: str | None = None
+
+    def missing(self, required: frozenset[ContactField]) -> frozenset[ContactField]:
+        """What the caller still owes, so a screen can ask before the network does."""
+        held = {
+            ContactField.EMAIL: self.email,
+            ContactField.NAME: self.name,
+            ContactField.PHONE: self.phone,
+        }
+        return frozenset(field for field in required if not held[field])
+
+
 class PaymentProcessor(Protocol):
     """The only way money is taken, and the only way billing events arrive."""
 
+    def required_contact_fields(self) -> frozenset[ContactField]:
+        """What this processor must be told about the payer before it will start.
+
+        Asked rather than assumed, so the billing screen renders one provider's
+        fields and not the union of every provider's. A switch then deletes a
+        field instead of leaving a dead one, and a field nobody collected is a
+        control that was never drawn rather than a 5xx from the provider.
+        """
+        ...
+
     async def begin_checkout(
-        self, *, org_id: uuid.UUID, plan_slug: str, billing_email: str
+        self, *, org_id: uuid.UUID, plan_slug: str, contact: BillingContact
     ) -> Checkout:
         """Start a subscription, and hand back where to send the customer.
 
         `plan_slug` is ours — `pro`, `scale` — matching `plan_prices`. Mapping it
         to whatever the processor calls a price is the implementation's job and
         the only place that mapping may live.
+
+        The contact carries what `required_contact_fields` asked for. An
+        implementation may refuse one that does not, but the screen should have
+        made that impossible.
         """
         ...
 
