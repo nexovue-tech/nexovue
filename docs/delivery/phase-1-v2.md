@@ -27,13 +27,13 @@ never when the code was written.
 | **G3** | poller SSRF boundary | ✅ **done** | `2f06a98` |
 | **G4** | poller certificate verification | ✅ **done** | `f26ec33` |
 | **G5** | ingest kill switch — both halves, proved end to end | ✅ **done** | `10ae52f` `58986ea` |
-| **G6a** | paid-tier browser cap | ✅ **done** — a paid tier is sized on the customer's committed count; T1-4 closed with it | *pending* |
+| **G6a** | paid-tier browser cap | ✅ **done** — a paid tier is sized on the customer's committed count; T1-4 closed with it | `6e8e01b` |
 | **G7** | SDK distribution | ⬜ blocked on a deployment target | — |
 | **C1** | P1-73 payment processor | 🟡 **adapter, webhook, signature, tables and tenant resolution done; `begin_checkout` blocked** — and on a third reason: Cashfree's subscription flow returns a session id for its own SDK, never a link. **`Checkout` promising a URL is the open decision** | `c089344` `dc211fa` `253ae2b` |
 | **C2** | P1-74 plan change | ⬜ needs C1 finished | — |
 | **C3** | P1-75 billing screen | ⬜ needs C1 finished | — |
 | **C4** | P1-72 profile & security | ✅ **done** — the board was stale: `POST /email-change/confirm`, `request_email_change` and `profile/timezones.py` all exist and are tested | `bb141b6` |
-| **C5** | P1-76 project management | 🟡 **API done** — full CRUD and D3's masking in `projects/config.py`; **no screen** | `bb141b6` |
+| **C5** | P1-76 project management | ✅ **done** — API in `bb141b6`, `/settings/projects` screen with sampling, masking and the disable confirmation | `bb141b6` `6e8e01b` |
 | **C6** | ClickHouse purge path | ✅ **done** — 13 tables, two-tenant proof | `10ae52f` |
 | **C7** | P1-77 account & organization deletion | ✅ **done** — Postgres, object store and ClickHouse, owner only | `7d8f576` |
 | **M1** | four blank §4 budgets | ✅ **done — all four pass** | `7260610` |
@@ -1115,7 +1115,7 @@ adding one.
 | **X1–X3** | Deferred past Phase 2 deliberately | 3 | 0 | n/a |
 | | **totals** | **37** | **30** | **21 built**, 2 partly |
 
-**24 of 30 build items done, as of 2026-09-09**, with two more part-built.
+**25 of 30 build items done, as of 2026-09-09**, with one more part-built.
 
 **Two of those three were already done when this section last claimed otherwise.** C4's email
 change and timezone APIs and C5's whole project-management API had landed in `bb141b6` and the
@@ -1131,7 +1131,6 @@ table — which is rule 4 applied to a status board.
 | **C1** | payments | `begin_checkout` blocked on a port decision, below |
 | **C2** | plan change | needs C1 |
 | **C3** | billing screen | needs C1 |
-| **C5** | project management | API done; **screen not built** |
 | **M2** | the 24-hour soak | not started; last thing before Phase 2 |
 | **F4** | re-run the Tier 2 figures | not started |
 
