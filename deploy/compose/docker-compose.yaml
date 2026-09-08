@@ -217,6 +217,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # The API creates its bucket at boot — `lifespan._open_object_store` calls
+      # `ensure_bucket()` — so this is a hard dependency and was missing until
+      # 2026-09-08. Without it a cold start races: the API comes up first, the
+      # bucket call fails, and startup aborts with "could not prepare the bucket"
+      # while SeaweedFS turns healthy seconds later. It only bites after a
+      # `down-hard`, which is why it survived so long.
+      seaweedfs:
+        condition: service_healthy
     deploy:
       resources:
         limits:

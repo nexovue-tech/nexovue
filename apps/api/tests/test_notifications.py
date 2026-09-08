@@ -23,7 +23,7 @@ import nexovue_api
 from nexovue_api.notifications import build_email_sender
 from nexovue_api.notifications.resend import SEND_ENDPOINT, ResendEmailSender
 from nexovue_api.notifications.sender import EmailError, EmailSender, Message
-from nexovue_api.settings import EMAIL_VARIABLES, EmailSettings
+from nexovue_api.settings import EmailSettings
 
 SETTINGS = EmailSettings(
     provider="resend",

@@ -1,8 +1,14 @@
 <clickhouse>
     <!-- ClickHouse reads the host's RAM, not the container's cgroup limit, so
          without an absolute cap it sizes its caches for the whole machine and
-         the container is OOM-killed. 2.5 GiB inside a 3 GiB limit. -->
-    <max_server_memory_usage>2684354560</max_server_memory_usage>
+         the container is OOM-killed. 4 GiB inside a 5 GiB limit.
+
+         The gap between the two is not spare change: the server counts its own
+         RSS against this number, and the allocator keeps pages the caches have
+         already released, so idle RSS sits well above what is in use. At 2.5
+         inside 3 that gap ran out and queries failed MEMORY_LIMIT_EXCEEDED with
+         nothing running. -->
+    <max_server_memory_usage>4294967296</max_server_memory_usage>
 
     <!-- Defaults are sized for a dedicated server. On a laptop sharing memory
          with Kafka, Postgres and the app services they are the largest waste. -->

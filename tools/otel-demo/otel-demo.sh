@@ -36,6 +36,7 @@
 #   ./tools/otel-demo/otel-demo.sh stats   memory, this stack and the demo's
 #   ./tools/otel-demo/otel-demo.sh logs    follow every demo container
 #   ./tools/otel-demo/otel-demo.sh down    stop and remove the demo only
+#   ./tools/otel-demo/otel-demo.sh down-hard  the same, and its anonymous volumes
 #
 # NEXOVUE_INGEST_KEY selects the project the demo lands in. It defaults to the
 # key `just seed` creates, which is also the one our own demo app uses — set it
@@ -240,15 +241,25 @@ cmd_up() {
 
 cmd_down() {
     # Scoped to this compose project by name, so it cannot reach a nexovue-*
-    # container even if one were somehow in the same network — and the same
-    # scoping is what makes `-v` safe.
+    # container even if one were somehow in the same network.
     #
-    # `-v` because the demo declares no named volumes but its images do: the
-    # Postgres data directory and Kafka's log dirs are anonymous volumes, and a
-    # `down` without `-v` orphans a fresh set of them on every run. It is also
-    # the honest behaviour for a demo — the next `up` regenerates every byte of
-    # it, so keeping the old astronomy_db rows and Kafka offsets buys nothing and
-    # makes "is this a clean run?" unanswerable.
+    # **No `-v` here, deliberately** — this is the sibling of `just down`, which
+    # keeps our volumes, and the two should mean the same thing about the demo.
+    # The cost is real and is why `down-hard` exists: the demo declares no named
+    # volumes but its images create anonymous ones for the Postgres data
+    # directory and Kafka's log dirs, so a plain `down` leaves a fresh set behind
+    # on every run.
+    compose down --remove-orphans
+}
+
+cmd_down_hard() {
+    # The same project scoping is what makes `-v` safe: it cannot reach a
+    # nexovue-* volume even if one were somehow in the same network.
+    #
+    # `-v` collects the anonymous volumes `cmd_down` leaves behind. Honest for a
+    # demo, because the next `up` regenerates every byte — keeping the old
+    # astronomy_db rows and Kafka offsets buys nothing and makes "is this a clean
+    # run?" unanswerable.
     compose down -v --remove-orphans
 }
 
@@ -260,8 +271,9 @@ cmd_stats() {
 case "${1:-up}" in
     up) cmd_up ;;
     down) cmd_down ;;
+    down-hard) cmd_down_hard ;;
     stats) cmd_stats ;;
     logs) shift; compose logs -f "$@" ;;
     ps) compose ps ;;
-    *) echo "usage: $0 {up|down|stats|logs|ps}" >&2; exit 2 ;;
+    *) echo "usage: $0 {up|down|down-hard|stats|logs|ps}" >&2; exit 2 ;;
 esac

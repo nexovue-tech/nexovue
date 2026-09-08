@@ -26,12 +26,17 @@ _default:
 # (scheduler-beat runs two replicas and elects a leader).
 # Dev stack: infrastructure + every service, hot reloading, probe workers included
 dev:
-    docker compose -f {{compose}}/docker-compose.yaml up -d --wait
-
+    docker compose -f {{compose}}/docker-compose.yaml up -d --build --wait
+    just topics
+    just migrate
+    just seed
+    just otel-demo up
 # Production replica: same infrastructure, services from built images
 dev-app:
     docker compose -f {{compose}}/docker-compose.app.yaml up -d --wait --build
-
+up:
+    docker compose -f {{compose}}/docker-compose.yaml up -d --wait
+    -./tools/otel-demo/otel-demo.sh up
 # Keeps *our* volumes — stores, broker, caches. The demo's go, because they are
 # anonymous volumes its images create and its next `up` regenerates.
 # Stop everything, keep the volumes. Takes the OpenTelemetry Demo with it.
@@ -44,7 +49,7 @@ down:
 # what you actually want. To keep the data, take a backup first.
 # Stop everything and delete every volume: stores, broker, caches
 down-hard:
-    -./tools/otel-demo/otel-demo.sh down
+    -./tools/otel-demo/otel-demo.sh down-hard
     docker compose -f {{compose}}/docker-compose.yaml down -v
 
 # Run this when the dev stack has drifted into a state you stopped trusting.
@@ -59,15 +64,7 @@ down-hard:
 # follows is the one that fails when an image is missing GOFLAGS=-p=2.
 # Wipe everything and rebuild: down-hard, build, up, topics, migrate, seed
 fresh: down-hard
-    docker compose -f {{compose}}/docker-compose.yaml build
     just dev
-    just topics
-    just migrate
-    just seed
-    @echo
-    @echo "Fresh stack up, migrated and seeded."
-    @echo "  Traffic:  just otel-demo up     five doors; the key defaults to the seeded one"
-    @echo "  App:      http://localhost:15173"
     @echo
     @echo "  Two screens stay empty until you act: RUM needs a page loaded"
     @echo "  (open http://localhost:8080, or run just load), and Database is"

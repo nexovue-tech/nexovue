@@ -17,10 +17,10 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Annotated
 
+import structlog
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from fastapi import Depends
 from nexovue_platform.telemetry.context import bind_tenant
-import structlog
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
@@ -32,7 +32,6 @@ from nexovue_api.errors.exceptions import DependencyUnavailableError, Unauthenti
 from nexovue_api.lifespan import Resources
 from nexovue_api.notifications import EmailSender
 from nexovue_api.settings import EMAIL_VARIABLES, Settings
-
 
 logger = structlog.get_logger(__name__)
 
