@@ -16,6 +16,13 @@ ClickHouse have no transaction, so the fixture erases both of its tenants on the
 way out, including the one the tests prove was untouched — after the assertions
 have run.
 
+**Telemetry is set up only where it is asserted about.** Three tests make a
+claim about ClickHouse and take `two_tenants_with_telemetry`; the rest take
+`two_tenants`, which is Postgres and the object store alone. Fixture rows in a
+telemetry table are not free to clear — each costs a mutation over a store that
+is also holding the OpenTelemetry demo — and writing rows no test reads is how
+a suite starts failing on the server's memory rather than on its own subject.
+
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
 
@@ -243,29 +250,48 @@ async def store() -> ObjectStore:
 
 
 @pytest.fixture
-async def two_tenants(
-    db: AsyncSession, clickhouse: AsyncClient, store: ObjectStore
-) -> AsyncIterator[tuple[Tenant, Tenant]]:
-    """A tenant to delete and a tenant that must survive it.
+async def two_tenants(db: AsyncSession, store: ObjectStore) -> AsyncIterator[tuple[Tenant, Tenant]]:
+    """A tenant to delete and a tenant that must survive it, in Postgres and S3.
 
     Fresh ids every run, so the suite can never collide with the seeded
     organization or with the OpenTelemetry demo's rows in the shared dev store.
+
+    No telemetry. A test that asserts nothing about ClickHouse must not write
+    rows there: every fixture row costs a mutation to clear afterwards, and a
+    store that is also holding the demo has a memory ceiling those mutations
+    reach. `two_tenants_with_telemetry` is what the three tests that do make a
+    claim about the telemetry store ask for.
     """
-    deleted = await _build_tenant(db, clickhouse, store, "deleted")
-    spared = await _build_tenant(db, clickhouse, store, "spared")
+    deleted = await _build_tenant(db, store, "deleted")
+    spared = await _build_tenant(db, store, "spared")
     try:
         yield deleted, spared
     finally:
         for tenant in (deleted, spared):
             await store.delete_prefix(tenant_prefix(tenant.org_id))
+
+
+@pytest.fixture
+async def two_tenants_with_telemetry(
+    two_tenants: tuple[Tenant, Tenant], clickhouse: AsyncClient
+) -> AsyncIterator[tuple[Tenant, Tenant]]:
+    """The same two tenants, with rows in every purged ClickHouse table.
+
+    Both are purged on the way out, including the one the tests prove was
+    untouched — after the assertions have run.
+    """
+    for tenant in two_tenants:
+        await _write_telemetry_rows(clickhouse, str(tenant.org_id))
+    try:
+        yield two_tenants
+    finally:
+        for tenant in two_tenants:
             purge = TenantPurge(TenantScopedPurger(clickhouse, str(tenant.org_id)))
             await purge.run(deadline_seconds=ERASURE_DEADLINE_SECONDS)
 
 
-async def _build_tenant(
-    db: AsyncSession, clickhouse: AsyncClient, store: ObjectStore, label: str
-) -> Tenant:
-    """One organization with a row in every table a deletion is responsible for."""
+async def _build_tenant(db: AsyncSession, store: ObjectStore, label: str) -> Tenant:
+    """One organization with a row in every Postgres table a deletion touches."""
     provisioned = await provision_tenant(
         db,
         organization_name=f"Deletion {label}",
@@ -279,7 +305,6 @@ async def _build_tenant(
         project_id=provisioned.project.id,
     )
     await _write_postgres_rows(db, tenant, store)
-    await _write_telemetry_rows(clickhouse, str(tenant.org_id))
     return tenant
 
 
@@ -483,7 +508,7 @@ async def test_deleting_an_organization_empties_every_table_it_owned(
     db: AsyncSession,
     clickhouse: AsyncClient,
     store: ObjectStore,
-    two_tenants: tuple[Tenant, Tenant],
+    two_tenants_with_telemetry: tuple[Tenant, Tenant],
 ) -> None:
     """The obligation itself, in all three stores.
 
@@ -492,7 +517,7 @@ async def test_deleting_an_organization_empties_every_table_it_owned(
     `test_the_tombstone_keeps_no_words_the_customer_wrote` proves it carries
     nothing of the customer's.
     """
-    deleted, _ = two_tenants
+    deleted, _ = two_tenants_with_telemetry
     assert await _row_counts(db, deleted) == FIXTURE_ROWS
 
     outcome = await _delete_and_erase(
@@ -512,10 +537,10 @@ async def test_deleting_an_organization_leaves_the_other_untouched(
     db: AsyncSession,
     clickhouse: AsyncClient,
     store: ObjectStore,
-    two_tenants: tuple[Tenant, Tenant],
+    two_tenants_with_telemetry: tuple[Tenant, Tenant],
 ) -> None:
     """Every statement filters one tenant; only that tenant may go."""
-    deleted, spared = two_tenants
+    deleted, spared = two_tenants_with_telemetry
     before = await _row_counts(db, spared)
     objects_before = await _stored_keys(store, spared)
     assert before == FIXTURE_ROWS
@@ -670,7 +695,7 @@ async def test_an_unfinished_erasure_stays_owed_and_a_finished_one_does_not(
     db: AsyncSession,
     clickhouse: AsyncClient,
     store: ObjectStore,
-    two_tenants: tuple[Tenant, Tenant],
+    two_tenants_with_telemetry: tuple[Tenant, Tenant],
 ) -> None:
     """The obligation, read back the way a sweep would read it.
 
@@ -678,7 +703,7 @@ async def test_an_unfinished_erasure_stays_owed_and_a_finished_one_does_not(
     tenantless audit entry says it was discharged. This is that pair, asked for
     by `erasures_still_owed`.
     """
-    deleted, _ = two_tenants
+    deleted, _ = two_tenants_with_telemetry
     assert deleted.org_id not in await service.erasures_still_owed(db)
 
     await service.request_deletion(db, org_id=deleted.org_id, actor_user_id=deleted.user_id)
