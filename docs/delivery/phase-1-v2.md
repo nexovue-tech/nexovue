@@ -29,9 +29,9 @@ never when the code was written.
 | **G5** | ingest kill switch — both halves, proved end to end | ✅ **done** | `10ae52f` `58986ea` |
 | **G6a** | paid-tier browser cap | ✅ **done** — a paid tier is sized on the customer's committed count; T1-4 closed with it | `6e8e01b` |
 | **G7** | SDK distribution | ⬜ blocked on a deployment target | — |
-| **C1** | P1-73 payment processor | 🟡 **adapter, webhook, signature, tables and tenant resolution done; `begin_checkout` blocked** — and on a third reason: Cashfree's subscription flow returns a session id for its own SDK, never a link. **`Checkout` promising a URL is the open decision** | `c089344` `dc211fa` `253ae2b` |
-| **C2** | P1-74 plan change | ⬜ needs C1 finished | — |
-| **C3** | P1-75 billing screen | ⬜ needs C1 finished | — |
+| **C1** | P1-73 payment processor | ✅ **done** — `begin_checkout` creates an ON_DEMAND mandate and hands back a URL, proved against the sandbox in a browser. The port needed no change | `dc211fa` `253ae2b` `f7c057d` |
+| **C2** | P1-74 plan change | ✅ **done** — the four routes existed; they work now that C1 does | `f7c057d` |
+| **C3** | P1-75 billing screen | ✅ **done** — `/settings/billing`, with the contact fields the processor declares rather than one vendor's | `f7c057d` |
 | **C4** | P1-72 profile & security | ✅ **done** — the board was stale: `POST /email-change/confirm`, `request_email_change` and `profile/timezones.py` all exist and are tested | `bb141b6` |
 | **C5** | P1-76 project management | ✅ **done** — API in `bb141b6`, `/settings/projects` screen with sampling, masking and the disable confirmation | `bb141b6` `6e8e01b` |
 | **C6** | ClickHouse purge path | ✅ **done** — 13 tables, two-tenant proof | `10ae52f` |
@@ -1115,7 +1115,7 @@ adding one.
 | **X1–X3** | Deferred past Phase 2 deliberately | 3 | 0 | n/a |
 | | **totals** | **37** | **30** | **21 built**, 2 partly |
 
-**25 of 30 build items done, as of 2026-09-09**, with one more part-built.
+**28 of 30 build items done, as of 2026-09-09**, and nothing is part-built.
 
 **Two of those three were already done when this section last claimed otherwise.** C4's email
 change and timezone APIs and C5's whole project-management API had landed in `bb141b6` and the
@@ -1128,15 +1128,15 @@ table — which is rule 4 applied to a status board.
 | | Item | State |
 |---|---|---|
 | **G7** | SDK distribution | **blocked** — no deployment target exists |
-| **C1** | payments | `begin_checkout` blocked on a port decision, below |
-| **C2** | plan change | needs C1 |
-| **C3** | billing screen | needs C1 |
 | **M2** | the 24-hour soak | not started; last thing before Phase 2 |
 | **F4** | re-run the Tier 2 figures | not started |
 
-**Only one of those is blocked on a decision rather than on work**, and it is C1's — see
-"The payments question" below. Answering it unblocks C1, C2 and C3 together, which is the whole
-money half of the product. Three series are
+~~**Only one of those is blocked on a decision rather than on work**, and it is C1's.~~ **There
+was no decision.** The port promised a URL and Cashfree returns a session id for its own browser
+SDK, which looked like an ADR 0102 question. Reading their SDK showed it POSTs a hidden form and
+that the response is a 302 whose `Location` is an ordinary page, so `begin_checkout` makes that POST
+itself — the port stands unchanged and C1, C2 and C3 all landed. **Two build rows remain, and
+neither is blocked on an answer.** Three series are
 complete or nearly so: **A1–A3** the architecture seams, **D1–D4** the four decisions and both
 build rows they turned out to hide, and **F1–F5** bar one — only F4's re-run remains. The gate is
 **8 of 9**, with only G7 left and G7 blocked on a deployment target rather than on work.
