@@ -17,6 +17,7 @@ import {
   describeAllowance,
   describeCost,
   describeSubscription,
+  unfinishedCheckoutNotice,
 } from "./billing-view";
 
 /**
@@ -186,6 +187,7 @@ function Upgrade({ overview }: { overview: BillingOverview }) {
     );
   }
 
+  const unfinished = unfinishedCheckoutNotice(overview);
   const fields = overview.checkout?.required_contact_fields ?? [];
   const count = Number(committed);
   const countError =
@@ -195,6 +197,7 @@ function Upgrade({ overview }: { overview: BillingOverview }) {
   return (
     <section className="flex max-w-md flex-col gap-4">
       <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Upgrade</h2>
+      {unfinished ? <p className="text-ink text-sm leading-relaxed">{unfinished}</p> : null}
       <p className="text-ink-dim text-sm leading-relaxed">
         You choose the ceiling. It is the most you can be charged in a month and the volume you may
         send, and you can raise it later by signing a new mandate. We never bill past it and never

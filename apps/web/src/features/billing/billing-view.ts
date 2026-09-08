@@ -92,9 +92,19 @@ export function describeSubscription(subscription: SubscriptionSummary): string 
 /**
  * Whether the upgrade form should be drawn at all.
  *
- * Three separate reasons not to, and they are different sentences to a
- * customer: nobody can be charged because no processor is configured, they are
- * already on this arrangement, or the mandate is still with their bank.
+ * **A `pending` row does not block one, and that is the correction.** This used
+ * to refuse with "a mandate is already waiting for your bank", which trapped the
+ * customer it was meant to protect: a `pending` row is a checkout that was
+ * *started*, not a mandate that exists. Anyone who closed the tab, lost the
+ * page, or hit an error at the processor was left with the form hidden and
+ * nothing to press but Cancel — on an arrangement their bank had never
+ * authorised.
+ *
+ * The API had it right all along: `begin_plan_change` refuses only an *active*
+ * arrangement on the same plan, so the screen was stricter than the service.
+ *
+ * Two mandates cannot quietly both charge, because only one can reach `active` —
+ * the second checkout is refused once the first activates.
  */
 export function checkoutAvailability(
   overview: BillingOverview,
@@ -102,20 +112,25 @@ export function checkoutAvailability(
   if (overview.checkout === null) {
     return { available: false, reason: "Upgrading is not available on this deployment yet." };
   }
-  const status = overview.subscription?.status;
-  if (status === "pending") {
-    return {
-      available: false,
-      reason: "A mandate is already waiting for your bank. Cancel it before starting another.",
-    };
-  }
-  if (status === "active") {
+  if (overview.subscription?.status === "active") {
     return {
       available: false,
       reason: "This organization already has an active subscription.",
     };
   }
   return { available: true };
+}
+
+/**
+ * The line above the form when a checkout was started and never finished.
+ *
+ * Said rather than hidden: the customer is about to see a form they have already
+ * filled in once, and not explaining why reads as the first attempt having
+ * silently failed.
+ */
+export function unfinishedCheckoutNotice(overview: BillingOverview): string | null {
+  if (overview.subscription?.status !== "pending") return null;
+  return "You started a checkout that was never completed. Nothing has been charged. Starting another replaces it.";
 }
 
 /** The label a contact field is asked for under, keyed by the API's own names. */

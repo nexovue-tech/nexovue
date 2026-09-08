@@ -7,6 +7,7 @@ import {
   describeAllowance,
   describeCost,
   describeSubscription,
+  unfinishedCheckoutNotice,
 } from "./billing-view";
 
 const GIB = 1024 ** 3;
@@ -160,12 +161,31 @@ describe("whether an upgrade can be started", () => {
     expect(answer.available).toBe(false);
   });
 
-  it("cannot be started while a mandate is still with the bank", () => {
+  /**
+   * The trap this used to set. A `pending` row is a checkout that was started,
+   * not a mandate that exists — so anyone who closed the tab or hit an error at
+   * the processor was left with the form hidden and nothing to press but Cancel,
+   * on an arrangement their bank had never authorised.
+   */
+  it("can be started again when an earlier checkout was never finished", () => {
     const answer = checkoutAvailability(
       overview({ subscription: subscription({ status: "pending" }) }),
     );
 
-    expect(answer.available).toBe(false);
+    expect(answer.available).toBe(true);
+  });
+
+  it("says why the form is being shown a second time", () => {
+    const notice = unfinishedCheckoutNotice(
+      overview({ subscription: subscription({ status: "pending" }) }),
+    );
+
+    expect(notice).toContain("Nothing has been charged");
+  });
+
+  it("says nothing extra when no checkout was left unfinished", () => {
+    expect(unfinishedCheckoutNotice(overview())).toBeNull();
+    expect(unfinishedCheckoutNotice(overview({ subscription: subscription() }))).toBeNull();
   });
 
   /** A cancelled arrangement is over, so a customer may start again. */
