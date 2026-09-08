@@ -146,9 +146,9 @@ async def request_password_reset(
     split that keeps both properties: the operator learns the provider is
     refusing, and the caller learns nothing about the address.
 
-    `EmailNotConfiguredError` is deliberately *not* caught here — it is raised by
-    the `EmailDelivery` dependency before this function runs, so it fails the
-    request identically for every address and carries no signal.
+    An unconfigured provider is deliberately *not* handled here either — the
+    `EmailDelivery` dependency answers 503 before this function runs, so it fails
+    the request identically for every address and carries no signal.
     """
     found = await find_active_user_by_email(db, normalize_email(address))
     if found is None:

@@ -1,10 +1,15 @@
 /**
  * Every Phase 1 screen, in one table.
  *
- * The router and the sidebar are both built from this, so a route cannot exist without
- * navigation to it and navigation cannot point at a route that does not exist. The task
- * ids are the ones in docs/delivery/phase-1-plan.md; the placeholder shows them, which
- * is how walking the app tells you what is still missing.
+ * **The sidebar and the placeholder copy are built from this; the routes themselves are
+ * declared in app/router.tsx.** That is why `/login`, `/signup`, `/onboarding` and the
+ * three recovery screens are routes with no `NAV_SECTIONS` entry — a screen nobody
+ * navigates to from inside the app has nothing to put in a sidebar. `route-manifest.test.ts`
+ * is what keeps the two from drifting: it fails if the sidebar offers a path the router
+ * does not serve.
+ *
+ * The task ids are the ones in docs/delivery/phase-1-plan.md; the placeholder shows them,
+ * which is how walking the app tells you what is still missing.
  */
 
 /** Only paths that exist in the tree. Keeps the sidebar from pointing at nothing. */
@@ -20,7 +25,8 @@ export type NavPath =
   | "/database"
   | "/infrastructure"
   | "/usage"
-  | "/settings/api-keys";
+  | "/settings/api-keys"
+  | "/settings/profile";
 
 export interface ScreenDefinition {
   path: string;
@@ -140,6 +146,16 @@ export const SHELL_SCREENS: ScreenDefinition[] = [
     description: "Create, rotate and revoke the keys your services send telemetry with.",
     taskId: "P1-13",
   },
+  // In the sidebar rather than tucked behind an avatar menu, because there is no avatar
+  // menu: this shell has no other way to reach a screen. Beside API keys under Account,
+  // since "the password on my account" is the same errand as "the key my services use".
+  {
+    path: "/settings/profile",
+    title: "Profile & security",
+    description:
+      "Your name, the password on your account, and the one control that ends every session at once.",
+    taskId: "P1-72",
+  },
 ];
 
 /** Rendered outside the shell: there is no project, time range or navigation yet. */
@@ -192,6 +208,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: "/usage", title: "Usage" },
       { path: "/settings/api-keys", title: "API keys" },
+      { path: "/settings/profile", title: "Profile & security" },
     ],
   },
 ];

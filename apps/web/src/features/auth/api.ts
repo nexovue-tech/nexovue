@@ -1,3 +1,5 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
 import { apiClient } from "@/shared/api-client";
 
 /** The identity half of the M1 contract. Shapes are the contract's, not ours. */
@@ -14,6 +16,12 @@ export interface AuthenticatedUser {
   /** Nullable: users.name is nullable in the schema. */
   name: string | null;
   role: string;
+  /**
+   * ISO timestamp, null until the address is proven. Verification gates nothing in
+   * Phase 1, so its absence is invisible without this field — it exists so the shell
+   * knows whether there is anything to offer.
+   */
+  email_verified_at: string | null;
 }
 
 export interface Session {
@@ -50,6 +58,21 @@ export interface PasswordResetConfirmation {
 export const PASSWORD_MIN_LENGTH = 8;
 
 export const sessionQueryKey = ["auth", "me"] as const;
+
+/**
+ * Who is signed in, from the server rather than from what a screen remembered.
+ *
+ * `/auth/me` is deliberately off the API's strict auth rate-limit tier — its policy
+ * comment says in as many words that it is polled by every signed-in screen — so the
+ * shell may hold this open for as long as it is mounted. A 401 here is an expired
+ * session, and app/query-client.ts is what turns it into a trip to /login.
+ */
+export function useSession() {
+  return useQuery({
+    queryKey: sessionQueryKey,
+    queryFn: ({ signal }) => apiClient.get<Session>("auth/me", { signal }),
+  });
+}
 
 export function login(credentials: { email: string; password: string }): Promise<Session> {
   return apiClient.post<Session>("auth/login", credentials);
@@ -89,4 +112,78 @@ export function requestPasswordReset(email: string): Promise<void> {
  */
 export function confirmPasswordReset(reset: PasswordResetConfirmation): Promise<void> {
   return apiClient.post<void>("auth/password-reset/confirm", reset);
+}
+
+/**
+ * Mails a fresh verification link, authenticated, to the signed-in account's own
+ * address. The body carries no recipient on purpose: a caller-chosen one would let
+ * anybody send mail from our verified domain wherever they liked.
+ *
+ * 202, not 204 — the mail has been handed to a provider, not delivered. Nothing on
+ * screen may claim more than that. An address that is already verified answers 202 and
+ * sends nothing.
+ */
+export function resendVerificationEmail(): Promise<void> {
+  return apiClient.post<void>("auth/verify-email/resend");
+}
+
+/* --------------------------------------------------------- the account itself */
+
+/**
+ * The three writes a person can make to their own account. No route takes a user id:
+ * the account being changed is the caller's, taken from the session, so a body that
+ * could name one would be a body that could be forged.
+ */
+
+export interface PasswordChangeInput {
+  current_password: string;
+  new_password: string;
+}
+
+/**
+ * Renames the caller and writes the answer straight into the session cache, because the
+ * answer *is* the identity body every screen reads.
+ *
+ * `null` and an empty name are the same thing to the API — the column's own NULL — so
+ * the screen sends null rather than `""`.
+ */
+export function useRenameSelf() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationKey: ["profile", "rename"],
+    mutationFn: (name: string | null) =>
+      apiClient.patch<AuthenticatedUser>("profile", { name: name?.trim() || null }),
+    onSuccess: (user) =>
+      queryClient.setQueryData<Session>(sessionQueryKey, (session) =>
+        session ? { ...session, user } : session,
+      ),
+  });
+}
+
+/**
+ * Changes the password and ends every *other* session on the account.
+ *
+ * This session survives, and the 204 carries a replacement cookie: the caller proved
+ * they hold the current password, which is the one thing a stolen session cannot do, so
+ * signing them out of the device in front of them protects nobody. Nothing to do with
+ * the response but say so.
+ */
+export function useChangeOwnPassword() {
+  return useMutation({
+    mutationKey: ["profile", "password"],
+    mutationFn: (change: PasswordChangeInput) => apiClient.post<void>("profile/password", change),
+  });
+}
+
+/**
+ * Ends every session on the account *including this one*, and the 204 clears the cookie.
+ * The caller is signed out here as well, which is why the screen navigates to /login on
+ * success rather than treating the next 401 as a lapse.
+ */
+export function useSignOutEverywhere() {
+  return useMutation({
+    mutationKey: ["profile", "sign-out-everywhere"],
+    mutationFn: () => apiClient.post<void>("profile/sign-out-everywhere"),
+  });
 }

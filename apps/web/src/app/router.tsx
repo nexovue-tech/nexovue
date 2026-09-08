@@ -8,6 +8,7 @@ import {
 
 import { ForgotPasswordScreen } from "@/features/auth/ForgotPasswordScreen";
 import { LoginScreen } from "@/features/auth/LoginScreen";
+import { ProfileScreen } from "@/features/auth/ProfileScreen";
 import { ResetPasswordScreen } from "@/features/auth/ResetPasswordScreen";
 import { SignupScreen } from "@/features/auth/SignupScreen";
 import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
@@ -166,6 +167,17 @@ const settingsApiKeysRoute = createRoute({
   component: ApiKeysScreen,
 });
 
+/**
+ * Inside the shell like every other signed-in screen. It reads and writes the caller's
+ * own account, so it is only reachable with a session — and the shell's own `/auth/me`
+ * is what enforces that, the same way it does for the rest.
+ */
+const settingsProfileRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/profile",
+  component: ProfileScreen,
+});
+
 /* Bare screens — outside the shell. */
 
 const loginRoute = createRoute({
@@ -259,6 +271,7 @@ const routeTree = rootRoute.addChildren([
     rumRoute,
     usageRoute,
     settingsApiKeysRoute,
+    settingsProfileRoute,
     notFoundRoute,
   ]),
   loginRoute,

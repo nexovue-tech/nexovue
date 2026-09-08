@@ -1,0 +1,75 @@
+"""Which Postgres tables hold a tenant's data, and how each one is removed.
+
+The counterpart of `purge/tables.py`, and here for the same reason: "what a
+deletion covers" has to be reviewable in the source rather than inferred from
+whatever `DELETE` statements happen to exist. `tests/test_deletion_live.py`
+holds this list against the live catalog, so a table added next month fails the
+deletion test the day it is created rather than leaving rows behind the first
+time somebody is erased.
+
+**Why not one `DELETE FROM organizations`.** Every tenant-scoped table does
+cascade from it — that was checked, not assumed — so a single statement would
+in fact clear them all today. It is not used, for two reasons. The organization
+row is kept (see `TOMBSTONED_TABLE`), so nothing would cascade from it anyway.
+And a cascade is invisible: it covers a new table only if whoever wrote that
+table remembered `ondelete="CASCADE"`, and a table that used `SET NULL`, or
+carried `org_id` with no foreign key at all, would be silently left behind. What
+is enumerated here can be tested; what a cascade does cannot.
+"""
+
+from __future__ import annotations
+
+from typing import Final
+
+# The column a tenant's rows are found by, everywhere it appears.
+TENANT_COLUMN: Final = "org_id"
+
+# Deleted by a statement of their own, in this order — children before parents,
+# so no foreign key is ever left dangling mid-transaction. The two billing
+# tables are here rather than under a cascade because they hang off the
+# organization alone: nothing else erases them once the organization row is the
+# thing being kept.
+DELETED_DIRECTLY: Final[tuple[str, ...]] = (
+    "billing_webhook_deliveries",
+    "billing_subscriptions",
+    "audit_log",
+    "users",
+    "projects",
+)
+
+# Removed because the row that owns them is, with the parent that takes them.
+# Each pair is verified against the live catalog: the child's foreign key to
+# that parent must be `ON DELETE CASCADE` and its column NOT NULL, or a row with
+# a null parent would survive the deletion.
+REMOVED_BY_CASCADE: Final[dict[str, str]] = {
+    "sessions": "users",
+    "api_keys": "projects",
+    "site_keys": "projects",
+    "checks": "projects",
+    "integrations": "projects",
+    "deploy_events": "projects",
+    "project_webhook_secrets": "projects",
+    "project_first_traces": "projects",
+    "source_maps": "projects",
+    "usage_daily": "projects",
+    "usage_daily_services": "projects",
+}
+
+# The organization row itself, which a deletion scrubs and keeps rather than
+# removes. See `organizations/service.py` for why.
+TOMBSTONED_TABLE: Final = "organizations"
+
+# Everything else, with the reason it is left alone. Data rather than prose so
+# the live test can assert that every table in the database is either erased,
+# cascaded, tombstoned or excluded on purpose — an unclassified table is the
+# failure this module exists to prevent.
+EXCLUDED_TABLES: Final[dict[str, str]] = {
+    "plans": "the tiers themselves; reference data every tenant shares and none owns",
+    "plan_prices": "what a tier costs, from a date. Shared reference data, like `plans`",
+    "usage_ingest_offsets": (
+        "keyed by topic and partition, not by tenant — the Postgres twin of the "
+        "ClickHouse watermark tables. Losing a row makes the meter re-count "
+        "ingestion it already counted: a silent, permanent over-count (ADR 0094)"
+    ),
+    "alembic_version": "Alembic's own bookkeeping; holds no customer data",
+}

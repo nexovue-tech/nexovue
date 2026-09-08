@@ -37,6 +37,16 @@ _MAX_ATTEMPTS: Final = 3
 _CONNECT_TIMEOUT_SECONDS: Final = 5
 _READ_TIMEOUT_SECONDS: Final = 30
 
+# The S3 API accepts at most a thousand keys in one DeleteObjects request, and
+# lists at most a thousand at a time. One number, because a page is deleted as
+# it is listed.
+_KEYS_PER_REQUEST: Final = 1000
+
+# A prefix names a folder, never half a key. Without this, `source-maps/<id>`
+# would also match `source-maps/<id-of-someone-else>…`, so a deletion aimed at
+# one tenant could reach another whose id happened to start with the same text.
+_PREFIX_SUFFIX: Final = "/"
+
 
 class ObjectStoreError(Exception):
     """The store refused or could not be reached. Carries no credentials."""
@@ -100,6 +110,43 @@ class ObjectStore:
             lambda: self._client.delete_object(Bucket=self._bucket, Key=key),
             "delete an object",
         )
+
+    async def delete_prefix(self, prefix: str) -> int:
+        """Remove every object under one prefix. Returns how many went.
+
+        A prefix rather than a list of keys taken from rows, because an object
+        whose row was never written is still the customer's data: uploads store
+        the bytes first, so a row-driven deletion would leave exactly those
+        behind. The prefix is built by the caller from ids it owns.
+        """
+        _refuse_unsafe(prefix)
+        if not prefix.endswith(_PREFIX_SUFFIX):
+            raise ObjectStoreError("refused a prefix that does not name a folder")
+        return await self._off_the_loop(
+            lambda: self._delete_everything_under(prefix), "delete objects under a prefix"
+        )
+
+    def _delete_everything_under(self, prefix: str) -> int:
+        """List and delete a page at a time, so a large tenant needs no big list."""
+        deleted = 0
+        pages = self._client.get_paginator("list_objects_v2").paginate(
+            Bucket=self._bucket,
+            Prefix=prefix,
+            PaginationConfig={"PageSize": _KEYS_PER_REQUEST},
+        )
+        for page in pages:
+            keys = [{"Key": stored["Key"]} for stored in page.get("Contents", ())]
+            if not keys:
+                continue
+            refused = self._client.delete_objects(
+                Bucket=self._bucket, Delete={"Objects": keys, "Quiet": True}
+            ).get("Errors", ())
+            # Reported per key rather than raised, so a partial failure would
+            # otherwise be counted as a complete erasure.
+            if refused:
+                raise ObjectStoreError(f"the store kept {len(refused)} object(s) under the prefix")
+            deleted += len(keys)
+        return deleted
 
     async def ensure_bucket(self) -> None:
         """Create the bucket when it does not exist, so a fresh install works.

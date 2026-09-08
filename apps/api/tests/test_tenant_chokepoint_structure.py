@@ -49,6 +49,11 @@ MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset(
         "lifespan",
         "health.checks",
         "auth.dependencies",
+        # The deletion endpoint's wiring, and the only place a `TenantScopedPurger`
+        # is built. It runs no statement: it takes the client from the lifespan and
+        # hands it to the purger, which binds the tenant exactly as the repository
+        # does for reads. `organizations.service` deliberately never sees a client.
+        "organizations.dependencies",
     }
 )
 

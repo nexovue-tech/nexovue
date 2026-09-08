@@ -43,6 +43,14 @@ from nexovue_api.errors.exceptions import PermissionDeniedError
 # policy module importing a domain service inverts the dependency.
 ROLES_THAT_MAY_ADMINISTER: Final = frozenset({"owner", "admin"})
 
+# Ending the organization is the one action that is not administration. An admin
+# rotates a key, edits a check, revokes a secret — all recoverable. Deleting the
+# tenant erases every other member's data along with their own and cannot be
+# undone once the telemetry mutation has run, so it belongs to the person the
+# account belongs to. This is the second policy `MayAdminister`'s note reserved:
+# the two genuinely differ.
+ROLES_THAT_MAY_END_THE_ORGANIZATION: Final = frozenset({"owner"})
+
 
 def require_role(*allowed: str) -> Callable[[Identity], Identity]:
     """Build a dependency that admits only these roles.
@@ -75,7 +83,10 @@ def _refusal(permitted: frozenset[str]) -> str:
     return f"Only {' or '.join(named)} can change this."
 
 
-# The one policy Phase 1 needs. A second belongs here the moment two policies
-# genuinely differ — not before, because a policy per route is a role system
-# nobody designed.
+# Configuration: keys, checks, integrations, deploy secrets.
 MayAdminister = Annotated[Identity, Depends(require_role(*ROLES_THAT_MAY_ADMINISTER))]
+
+# Deletion of the whole tenant, and nothing else.
+MayEndTheOrganization = Annotated[
+    Identity, Depends(require_role(*ROLES_THAT_MAY_END_THE_ORGANIZATION))
+]

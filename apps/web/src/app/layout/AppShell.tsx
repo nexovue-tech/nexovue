@@ -1,6 +1,7 @@
 import { Outlet } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
+import { VerifyEmailBanner } from "@/features/auth/VerifyEmailBanner";
 import { ErrorBoundary } from "@/shared/components/ErrorBoundary";
 import { useOnlineStatus } from "@/shared/hooks/use-online-status";
 
@@ -62,6 +63,10 @@ export function AppShell() {
             Offline — nothing on screen is refreshing.
           </p>
         )}
+
+        {/* Under the offline strip on purpose: offline is why the screen is wrong now,
+            and an unverified address is not urgent enough to sit above that. */}
+        <VerifyEmailBanner />
 
         <main className="min-h-0 flex-1 overflow-y-auto">
           <ErrorBoundary scope="route">

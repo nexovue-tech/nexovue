@@ -10,6 +10,6 @@ Imports flow one direction: **shared → features → app**. A feature may use `
 
 Failure presentation is fixed: toast for transient, inline for a form or field, full screen only for a boundary failure. Loading is a skeleton, never a spinner.
 
-Every unbuilt route renders `ComingSoon` naming its delivering task. Routes and sidebar both come from `app/routes/route-manifest.ts`.
+Every unbuilt route renders `ComingSoon` naming its delivering task. **The sidebar comes from `app/routes/route-manifest.ts`; the routes are declared in `app/router.tsx`** — which is why `/login`, `/signup`, `/onboarding` and the recovery screens are routes with no manifest nav entry. `route-manifest.test.ts` fails if the sidebar offers a path the router does not serve.
 
 `/` is reserved for the Phase 2 findings feed and stays a placeholder for all of Phase 1.

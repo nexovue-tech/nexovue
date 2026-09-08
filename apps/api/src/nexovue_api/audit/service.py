@@ -60,6 +60,11 @@ SITE_KEY_REVOKED: Final = "site_key.revoked"
 SESSION_DENIED: Final = "session.denied"
 DEPLOY_RECORDED: Final = "deploy.recorded"
 DEPLOY_WEBHOOK_SECRET_VIEWED: Final = "deploy.webhook_secret_viewed"
+# The two halves of P1-77. The first is an event in the tenant's own history and
+# is erased with it; the second outlives the tenant on purpose — see
+# `record_organization_erased`.
+ORGANIZATION_DELETION_REQUESTED: Final = "organization.deletion_requested"
+ORGANIZATION_ERASED: Final = "organization.erased"
 
 ORGANIZATION_TARGET: Final = "organization"
 USER_TARGET: Final = "user"
@@ -394,6 +399,50 @@ def record_deploy_webhook_secret_viewed(
         action=DEPLOY_WEBHOOK_SECRET_VIEWED,
         target=_target(PROJECT_TARGET, project_id),
     )
+
+
+def record_organization_deletion_requested(
+    db: AsyncSession, *, org_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """The owner asked for the tenant to be closed and erased.
+
+    Written under the organization, so it is erased along with everything else
+    it names. `record_organization_erased` is what survives.
+    """
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=ORGANIZATION_DELETION_REQUESTED,
+        target=_target(ORGANIZATION_TARGET, org_id),
+    )
+
+
+def record_organization_erased(db: AsyncSession, *, org_id: uuid.UUID) -> None:
+    """The erasure finished. The one entry deliberately left without a tenant.
+
+    Every other row naming this organization has just been deleted, this one
+    included if it carried `org_id` — the column cascades. A null one does not,
+    which is what makes this the certificate that the erasure happened at all.
+    It names an id and a time and nothing else: the actor is gone, and an
+    organization id identifies no person.
+    """
+    _add(
+        db,
+        org_id=None,
+        actor_user_id=None,
+        action=ORGANIZATION_ERASED,
+        target=_target(ORGANIZATION_TARGET, org_id),
+    )
+
+
+def erasure_certificate_target(org_id: uuid.UUID) -> str:
+    """The `target` an `organization.erased` entry carries, for finding one.
+
+    Public so the deletion can ask whether it already certified an organization
+    without restating the format the entry was written with.
+    """
+    return _target(ORGANIZATION_TARGET, org_id)
 
 
 def _add(

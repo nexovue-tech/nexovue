@@ -9,18 +9,25 @@ import { takeReturnTo } from "@/shared/session";
 import { AuthScreenLayout, FormMessage, FormNotice } from "./AuthScreenLayout";
 import { login, sessionQueryKey } from "./api";
 import { describeFormProblem } from "./problem-fields";
-import type { LoginSearch } from "./search";
-import { PASSWORD_WAS_RESET } from "./search";
+import type { LoginNotice, LoginSearch } from "./search";
+import { PASSWORD_WAS_RESET, SIGNED_OUT_EVERYWHERE } from "./search";
 
 /** Where someone lands when they did not arrive from somewhere specific. */
 const DEFAULT_DESTINATION = "/traces";
 
 /**
- * What `/reset-password` sends someone here to read. It says the other sessions are gone
- * as well as the password being changed, because that is the surprising half.
+ * What another screen sends someone here to read.
+ *
+ * Both say the session thing out loud, because in both cases it is the surprising half —
+ * and the second one especially: arriving at a sign-in screen you did not expect reads
+ * as a fault, so the copy has to name it as the control doing its job.
  */
-const PASSWORD_RESET_NOTICE =
-  "Your password is changed. Every other session on this account has been signed out — sign in with the new password.";
+const NOTICE_MESSAGE: Record<LoginNotice, string> = {
+  [PASSWORD_WAS_RESET]:
+    "Your password is changed. Every other session on this account has been signed out — sign in with the new password.",
+  [SIGNED_OUT_EVERYWHERE]:
+    "Every session on this account has been signed out, including this one. That is what you asked for, not a fault — sign in to start a fresh one.",
+};
 
 export function LoginScreen({ notice }: LoginSearch) {
   const navigate = useNavigate();
@@ -67,7 +74,7 @@ export function LoginScreen({ notice }: LoginSearch) {
       }
     >
       <form onSubmit={onSubmit} noValidate>
-        {notice === PASSWORD_WAS_RESET ? <FormNotice message={PASSWORD_RESET_NOTICE} /> : null}
+        {notice ? <FormNotice message={NOTICE_MESSAGE[notice]} /> : null}
         {problem.message ? <FormMessage message={problem.message} /> : null}
 
         <div className="flex flex-col gap-4">

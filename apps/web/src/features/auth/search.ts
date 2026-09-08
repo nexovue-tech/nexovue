@@ -24,17 +24,35 @@ export function parseTokenSearch(search: Record<string, unknown>): TokenSearch {
   return typeof token === "string" && token.length > 0 ? { token } : {};
 }
 
-/** The one thing another screen can ask `/login` to say above the form. */
+/** What another screen can ask `/login` to say above the form. */
 export const PASSWORD_WAS_RESET = "password-reset";
 
+/**
+ * Sign-out-everywhere ends this session too and clears the cookie, so the customer
+ * arrives here having asked for exactly that. Without a notice the screen would look
+ * identical to a session that quietly expired — the control working and the control
+ * failing would be indistinguishable.
+ */
+export const SIGNED_OUT_EVERYWHERE = "signed-out-everywhere";
+
+export type LoginNotice = typeof PASSWORD_WAS_RESET | typeof SIGNED_OUT_EVERYWHERE;
+
+const RECOGNISED_NOTICES: ReadonlySet<string> = new Set<LoginNotice>([
+  PASSWORD_WAS_RESET,
+  SIGNED_OUT_EVERYWHERE,
+]);
+
 export interface LoginSearch {
-  notice?: typeof PASSWORD_WAS_RESET;
+  notice?: LoginNotice;
 }
 
 /**
- * Anything that is not the one notice we recognise is dropped, so an address someone
- * pasted cannot make the sign-in screen say arbitrary words.
+ * Anything that is not a notice we recognise is dropped, so an address someone pasted
+ * cannot make the sign-in screen say arbitrary words.
  */
 export function parseLoginSearch(search: Record<string, unknown>): LoginSearch {
-  return search.notice === PASSWORD_WAS_RESET ? { notice: PASSWORD_WAS_RESET } : {};
+  const { notice } = search;
+  return typeof notice === "string" && RECOGNISED_NOTICES.has(notice)
+    ? { notice: notice as LoginNotice }
+    : {};
 }

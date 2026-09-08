@@ -19,26 +19,10 @@ from nexovue_api.settings import EmailProvider, EmailSettings
 __all__ = [
     "Delivery",
     "EmailError",
-    "EmailNotConfiguredError",
     "EmailSender",
     "Message",
     "build_email_sender",
 ]
-
-
-class EmailNotConfiguredError(EmailError):
-    """Mail was needed and no provider is configured.
-
-    Its own type because the remedy differs from every other `EmailError`: those
-    are a provider refusing or unreachable, where this is an operator who has
-    not set four variables. The message names them, because a caller staring at
-    "could not send" has no way to guess which one is missing.
-    """
-
-    def __init__(self, variables: tuple[str, ...]) -> None:
-        super().__init__(
-            "email is not configured; set " + ", ".join(variables) + " to send transactional mail"
-        )
 
 
 def build_email_sender(settings: EmailSettings) -> EmailSender:

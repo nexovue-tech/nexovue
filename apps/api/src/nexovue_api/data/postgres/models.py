@@ -94,6 +94,20 @@ MINIFIED_PATH_LENGTH: Final = 1024
 # length; generators emit a UUID or a 32-character hex digest.
 DEBUG_ID_LENGTH: Final = 64
 
+# An identifier a payment processor issued or accepted — a subscription
+# reference, a delivery id. Opaque here: nothing parses one or branches on its
+# shape, and the cap is the longest any processor under consideration allows
+# (Cashfree's subscription id is 250 characters), rounded to the next byte.
+PROCESSOR_REFERENCE_LENGTH: Final = 255
+
+# What a subscription is doing, in this product's words rather than a
+# processor's. `pending` is a checkout that was started and not yet authorised;
+# every processor calls that something different and none of it belongs here.
+BILLING_SUBSCRIPTION_STATUSES: Final = ("pending", "active", "cancelled")
+BillingSubscriptionStatus: Final = Enum(
+    *BILLING_SUBSCRIPTION_STATUSES, name="billing_subscription_status"
+)
+
 
 class Organization(Base):
     """The tenant. Billing, membership and isolation boundary; one per company."""
@@ -592,6 +606,107 @@ class PlanPrice(Base):
     # recorded": both doors spend the one allowance.
     browser_share_percent: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     created_at: Mapped[CreatedAt]
+
+
+class BillingSubscription(Base):
+    """One paid arrangement between an organization and a payment processor.
+
+    **What is stored is deliberately the least that works.** ADR 0102 says the
+    processor's customer reference and nothing else avoidable, which is ADR
+    0076's posture applied to money: no card number, no PAN, no last four, no
+    expiry, no bank account, no billing address. `Checkout` returns a URL rather
+    than a form precisely so none of that ever reaches this application, and a
+    column here would be the quiet way it arrived anyway.
+
+    Rows accumulate rather than being edited in place across arrangements: a
+    customer who cancels and later resubscribes gets a second row, because the
+    first one is what a past invoice was raised under.
+    """
+
+    __tablename__ = "billing_subscriptions"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    # Which implementation of the port this arrangement lives at. The vendor's
+    # name is the *value* here and never the column name — ADR 0102's rule, the
+    # same one that keeps `PAYMENTS_DOMESTIC_*` neutral. Two processors is the
+    # expected end state, so a row has to say which one it belongs to.
+    processor: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    # The processor's own name for this subscription, opaque and never parsed.
+    # It is what a later cancel call names, and what every webhook echoes back.
+    subscription_ref: Mapped[str] = mapped_column(
+        String(PROCESSOR_REFERENCE_LENGTH), nullable=False
+    )
+    # The processor's id for the paying customer, when it issues one. NULL until
+    # the first event that carries it, and NULL forever at a processor that has
+    # no customer object — which is not the same statement as "unknown customer".
+    processor_customer_ref: Mapped[str | None] = mapped_column(
+        String(PROCESSOR_REFERENCE_LENGTH), nullable=True
+    )
+    # Ours (`pro`, `scale`), never a processor's price id. A foreign key rather
+    # than free text for `organizations.plan`'s reason: a typo would name a tier
+    # that grants whatever the resolver fell back to.
+    plan_slug: Mapped[str] = mapped_column(
+        String(SHORT_LABEL_LENGTH), ForeignKey("plans.slug", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(BillingSubscriptionStatus, nullable=False)
+    created_at: Mapped[CreatedAt]
+    # When the mandate was authorised, and when it ended. Timestamps rather than
+    # flags, because "since when" is the question an invoice dispute asks.
+    activated_at: Mapped[OptionalTimestamp]
+    cancelled_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        # One arrangement per reference per processor. Two processors may
+        # legitimately mint the same string, which is why the pair is unique
+        # rather than the reference alone.
+        UniqueConstraint("processor", "subscription_ref"),
+        Index("ix_billing_subscriptions_org_id_status", "org_id", "status"),
+    )
+
+
+class BillingWebhookDelivery(Base):
+    """One billing event that arrived, was proved, and was acted on.
+
+    **The row exists to make a replay a no-op**, which is migration 0007's
+    lesson applied to money: a signed request is valid forever unless something
+    records that it already arrived. The processor delivers at least once by
+    design, so a duplicate is ordinary traffic rather than an attack, and both
+    are answered by the same unique index.
+
+    **It holds no body, no signature and no header.** A raw body is the thing the
+    signature covers and the thing a log must never carry; the translated
+    `kind` is everything downstream ever needed from it.
+    """
+
+    __tablename__ = "billing_webhook_deliveries"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    processor: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    # The processor's id for this delivery, unique per unique payload.
+    delivery_id: Mapped[str] = mapped_column(String(PROCESSOR_REFERENCE_LENGTH), nullable=False)
+    # The translated event, in our vocabulary — a `BillingEventKind` value. The
+    # processor's own event name is deliberately not stored: it is the thing the
+    # port exists to keep out of everything above it.
+    kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    subscription_ref: Mapped[str] = mapped_column(
+        String(PROCESSOR_REFERENCE_LENGTH), nullable=False
+    )
+    received_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        # The whole replay defence. Unique across organizations rather than
+        # within one, because the id is the processor's and its uniqueness is
+        # too: scoping it per tenant would let the same delivery be replayed
+        # under a different organization's name.
+        UniqueConstraint("processor", "delivery_id"),
+        Index("ix_billing_webhook_deliveries_org_id_received_at", "org_id", "received_at"),
+    )
 
 
 class Session(Base):

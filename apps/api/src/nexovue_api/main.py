@@ -17,6 +17,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from nexovue_api.apikeys import router as apikeys_router
 from nexovue_api.auth import router as auth_router
+from nexovue_api.billing import router as billing_router
 from nexovue_api.buildinfo import SERVICE_NAME
 from nexovue_api.checks import router as checks_router
 from nexovue_api.dbstats import router as dbstats_router
@@ -32,6 +33,7 @@ from nexovue_api.middleware.correlation import CorrelationIdMiddleware
 from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
 from nexovue_api.middleware.ratelimit import RateLimitMiddleware
 from nexovue_api.middleware.request_log import RequestLogMiddleware
+from nexovue_api.organizations import router as organizations_router
 from nexovue_api.profile import router as profile_router
 from nexovue_api.projects import router as projects_router
 from nexovue_api.rum import router as rum_router
@@ -107,11 +109,13 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(signup_router.router)
     versioned.include_router(auth_router.router)
     versioned.include_router(profile_router.router)
+    versioned.include_router(organizations_router.router)
     versioned.include_router(projects_router.router)
     versioned.include_router(apikeys_router.router)
     versioned.include_router(apikeys_router.site_key_router)
     versioned.include_router(checks_router.router)
     versioned.include_router(deploys_router.router)
+    versioned.include_router(billing_router.router)
     versioned.include_router(integrations_router.router)
     versioned.include_router(services_router.router)
     versioned.include_router(service_map_router.router)

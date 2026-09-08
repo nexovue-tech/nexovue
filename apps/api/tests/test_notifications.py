@@ -20,7 +20,7 @@ import httpx
 import pytest
 
 import nexovue_api
-from nexovue_api.notifications import EmailNotConfiguredError, build_email_sender
+from nexovue_api.notifications import build_email_sender
 from nexovue_api.notifications.resend import SEND_ENDPOINT, ResendEmailSender
 from nexovue_api.notifications.sender import EmailError, EmailSender, Message
 from nexovue_api.settings import EMAIL_VARIABLES, EmailSettings
@@ -189,12 +189,3 @@ def test_nothing_outside_the_composition_root_imports_a_provider() -> None:
         f"{offenders} name a provider directly. Ask `build_email_sender` for an `EmailSender` "
         f"instead; only the composition root chooses."
     )
-
-
-def test_unconfigured_email_names_the_variables_that_are_missing() -> None:
-    """A caller staring at "could not send" cannot guess which of four is unset."""
-    with pytest.raises(EmailNotConfiguredError) as refusal:
-        raise EmailNotConfiguredError(EMAIL_VARIABLES)
-
-    for variable in EMAIL_VARIABLES:
-        assert variable in str(refusal.value)

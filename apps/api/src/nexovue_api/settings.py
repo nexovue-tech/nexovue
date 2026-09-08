@@ -36,6 +36,12 @@ LogFormat = Literal["json", "console"]
 EmailProvider = Literal["resend"]
 DomesticPaymentProvider = Literal["cashfree"]
 
+# A processor runs two estates with two sets of credentials and two hostnames.
+# Named rather than a bool because "is production" is a question about the
+# *account*, not about our own deployment: a staging install may legitimately
+# hold live keys, and a production install may not yet have any.
+PaymentEnvironment = Literal["sandbox", "production"]
+
 # ClickHouse speaks two protocols on two ports. Every service names the store
 # with the same variable and the same scheme; only the port differs, because the
 # API talks HTTP and the Go workers talk the native protocol.
@@ -100,6 +106,34 @@ class EmailSettings:
     reply_to: str
 
 
+@dataclass(frozen=True, slots=True)
+class DomesticPaymentSettings:
+    """A complete domestic-gateway configuration, which is all four values or none.
+
+    Same shape and same reason as `EmailSettings`: a half-filled configuration
+    fails at the first checkout, and a gateway's "authentication failed" tells a
+    reader nothing about which variable was missing.
+
+    Named for the *role* rather than the processor, which is ADR 0102's rule in
+    another file: the likely end state is two of these — a domestic gateway for
+    India and a merchant of record for everywhere else, because a non-EU seller
+    owes EU VAT from the first euro. A type called after one of them would
+    describe half a system.
+    """
+
+    provider: DomesticPaymentProvider
+    # The processor's account identifier. Public-ish, but paired with the key.
+    app_id: str
+    # The signing key. It is both the API credential *and* the key a webhook
+    # signature is verified with, which is why nothing else may hold it.
+    secret_key: str
+    environment: PaymentEnvironment
+    # The processor's API root for that environment. The two differ, and a
+    # production URL with sandbox credentials fails in a way that reads like a
+    # bad key rather than a wrong host.
+    base_url: str
+
+
 # The environment variables an unconfigured email sender tells the caller to
 # set. Spelled once so the message and the fields cannot drift apart.
 EMAIL_VARIABLES: Final = (
@@ -108,6 +142,16 @@ EMAIL_VARIABLES: Final = (
     "EMAIL_SENDING_DOMAIN",
     "EMAIL_FROM_ADDRESS",
     "EMAIL_REPLY_TO",
+)
+
+
+# The environment variables an unconfigured payment processor tells the caller
+# to set. Spelled once so the message and the fields cannot drift apart.
+DOMESTIC_PAYMENT_VARIABLES: Final = (
+    "PAYMENTS_DOMESTIC_PROVIDER",
+    "PAYMENTS_DOMESTIC_APP_ID",
+    "PAYMENTS_DOMESTIC_SECRET_KEY",
+    "PAYMENTS_DOMESTIC_BASE_URL",
 )
 
 
@@ -182,6 +226,15 @@ class Settings(BaseSettings):
     email_from_address: str = ""
     email_reply_to: str = ""
 
+    # --- payments: all of these or none, see DomesticPaymentSettings --------
+    # The vendor's name is the *value*, never the key: `PAYMENTS_DOMESTIC_*`
+    # survives a switch from one gateway to another, which is the point.
+    payments_domestic_provider: DomesticPaymentProvider = "cashfree"
+    payments_domestic_app_id: str = ""
+    payments_domestic_secret_key: str = ""
+    payments_domestic_env: PaymentEnvironment = "sandbox"
+    payments_domestic_base_url: str = ""
+
     # Where a verification or reset link points. It is the customer-facing app,
     # never this API: the link is clicked in a browser and lands on a screen that
     # then calls the endpoint. Two hostnames (ADR 0089), and this is the app one.
@@ -217,6 +270,32 @@ class Settings(BaseSettings):
             sending_domain=self.email_sending_domain,
             from_address=self.email_from_address,
             reply_to=self.email_reply_to,
+        )
+
+    @property
+    def domestic_payments(self) -> DomesticPaymentSettings | None:
+        """The domestic gateway's settings, or None when payments are not configured.
+
+        None rather than an error, for `email`'s reason: an API that cannot take
+        money still serves every screen, and an install that never charges
+        anybody needs no gateway. The routes that need one refuse by variable
+        name instead.
+        """
+        parts = (
+            self.payments_domestic_app_id,
+            self.payments_domestic_secret_key,
+            self.payments_domestic_base_url,
+        )
+        if not all(parts):
+            return None
+        return DomesticPaymentSettings(
+            provider=self.payments_domestic_provider,
+            app_id=self.payments_domestic_app_id,
+            secret_key=self.payments_domestic_secret_key,
+            environment=self.payments_domestic_env,
+            # A trailing slash would make every path double-slashed, which some
+            # gateways answer with a redirect and others with a 404.
+            base_url=self.payments_domestic_base_url.rstrip("/"),
         )
 
     @property

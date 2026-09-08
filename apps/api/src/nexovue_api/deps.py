@@ -20,6 +20,7 @@ from typing import Annotated
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from fastapi import Depends
 from nexovue_platform.telemetry.context import bind_tenant
+import structlog
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
@@ -27,10 +28,13 @@ from starlette.requests import HTTPConnection
 from nexovue_api.auth.sessions import Session, SessionStore, session_token_from_headers
 from nexovue_api.auth.tokens import OneTimeTokenStore
 from nexovue_api.data.objectstore import ObjectStore
-from nexovue_api.errors.exceptions import UnauthenticatedError
+from nexovue_api.errors.exceptions import DependencyUnavailableError, UnauthenticatedError
 from nexovue_api.lifespan import Resources
-from nexovue_api.notifications import EmailNotConfiguredError, EmailSender
+from nexovue_api.notifications import EmailSender
 from nexovue_api.settings import EMAIL_VARIABLES, Settings
+
+
+logger = structlog.get_logger(__name__)
 
 
 def get_app_settings(connection: HTTPConnection) -> Settings:
@@ -76,15 +80,32 @@ def get_object_store(
 def get_email_sender(
     resources: Annotated[Resources, Depends(get_resources)],
 ) -> EmailSender:
-    """The mail sender, or a refusal naming what is unset.
+    """The mail sender, or a 503 that does not pretend we crashed.
 
     Raising here rather than handing back None means a route that needs mail
     cannot forget to check: the dependency either supplies a sender or the
-    request never reaches the handler. `EmailNotConfiguredError` names all four
-    variables, because "could not send" leaves an operator guessing which.
+    request never reaches the handler.
+
+    **It answers 503, not 500, and that was wrong until 2026-09-08.**
+    The error it used to raise had no handler, so it escaped as an unhandled
+    internal error — `POST /auth/verify-email/resend` returned 500 on an
+    unconfigured stack. A 500 tells the caller we crashed; the truth is that a
+    feature is unavailable, which is what 503 says and what a client can
+    sensibly retry.
+
+    **The variable names go to the log, not to the caller.** They are what an
+    operator needs and `/auth/password-reset` is unauthenticated, so listing our
+    environment in a public response tells a stranger about our deployment to no
+    one's benefit.
     """
     if resources.email is None:
-        raise EmailNotConfiguredError(EMAIL_VARIABLES)
+        logger.error(
+            "a route needing mail was called and no provider is configured",
+            variables=list(EMAIL_VARIABLES),
+        )
+        raise DependencyUnavailableError(
+            "Email is not available right now, so this could not be sent. Try again shortly."
+        )
     return resources.email
 
 
