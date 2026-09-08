@@ -137,11 +137,24 @@ AUTHORISATION_AMOUNT: Final = Decimal("1.00")
 # slow network, short enough that a stalled gateway does not hold a request open.
 TIMEOUT_SECONDS: Final = 15.0
 
-# The only scheme this processor will register a return address under. Checked
-# here rather than trusted, because the rule bites at go-live — long after the
-# line that built the URL was written.
+# The only scheme this processor will register a return address under **in
+# production**. Checked here rather than trusted, because the rule bites at
+# go-live — long after the line that built the URL was written.
 # https://www.cashfree.com/docs/payments/online/go-live/whitelist
 SECURE_URL_SCHEME: Final = "https://"
+
+# The environment the rule above applies in. Measured on 2026-09-09 rather than
+# assumed: their sandbox accepts `http://localhost:15173` and answers 200, so
+# refusing it here was this module being stricter than the processor and making
+# the checkout untestable on a developer's machine for a rule that does not
+# apply there.
+#
+# **Nothing is weakened by scoping it.** The return URL carries no token and
+# grants nothing — it is the billing screen, and the plan moves on the webhook
+# (ADR 0110), never on the customer landing back. What it protects against is a
+# production deployment registering a return address the processor will reject,
+# and that is exactly the environment it still fires in.
+SECURE_RETURN_URL_ENVIRONMENT: Final = "production"
 
 
 # Cashfree's own event names, and the statuses that qualify one of them.
@@ -233,13 +246,17 @@ class CashfreePaymentProcessor:
         # Called for that check: this processor takes major units, so an amount
         # it cannot express is a refusal here rather than a wrong charge there.
         authorised_maximum.major_units()
-        if not return_url.startswith(SECURE_URL_SCHEME):
-            # Their own go-live rules refuse anything else, and a link that is
-            # rejected at registration is found months after it was written.
-            # https://www.cashfree.com/docs/payments/online/go-live/whitelist
+        if (
+            self._settings.environment == SECURE_RETURN_URL_ENVIRONMENT
+            and not return_url.startswith(SECURE_URL_SCHEME)
+        ):
+            # Their go-live rules refuse anything else, and a link rejected at
+            # registration is found months after it was written. Sandbox accepts
+            # a loopback address, so a developer is not held to a production rule.
             raise BillingError(
-                f"the return url must begin with {SECURE_URL_SCHEME}, "
-                f"which is the only scheme this processor accepts"
+                f"the return url must begin with {SECURE_URL_SCHEME} in "
+                f"{SECURE_RETURN_URL_ENVIRONMENT}, which is the only scheme this "
+                f"processor will register"
             )
 
         subscription_ref = f"{SUBSCRIPTION_REF_PREFIX}{uuid.uuid4()}"

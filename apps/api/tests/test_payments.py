@@ -25,6 +25,7 @@ import hashlib
 import hmac
 import json
 import uuid
+from dataclasses import replace
 from typing import Any, Final
 
 import httpx
@@ -494,17 +495,47 @@ class TestConfigurationAndWiring:
 
     @pytest.mark.parametrize(
         "return_url",
-        ["http://localhost:5173/settings/billing", "app.example.test/settings/billing"],
+        ["http://localhost:15173/settings/billing", "app.example.test/settings/billing"],
         ids=["plain http", "no scheme"],
     )
-    async def test_a_return_url_the_processor_would_never_register_is_refused(
+    async def test_a_return_url_the_processor_would_never_register_is_refused_in_production(
         self, return_url: str
     ) -> None:
         """Their go-live rules take https only, and a link refused at
         registration is found months after the line that built it was written.
         https://www.cashfree.com/docs/payments/online/go-live/whitelist"""
+        processor = CashfreePaymentProcessor(replace(SETTINGS, environment="production"))
+
         with pytest.raises(BillingError, match=SECURE_URL_SCHEME):
-            await _checkout(return_url=return_url)
+            await processor.begin_checkout(
+                org_id=ORG_ID,
+                plan_slug="pro",
+                contact=COMPLETE_CONTACT,
+                authorised_maximum=AUTHORISED_MAXIMUM,
+                return_url=return_url,
+            )
+
+    async def test_a_loopback_return_url_is_accepted_in_sandbox(self) -> None:
+        """The rule above is the processor's, and it is a *production* rule.
+
+        Measured against their sandbox on 2026-09-09: `http://localhost:15173`
+        creates a subscription and answers 200. Refusing it here made the
+        checkout untestable on a developer's machine over a rule that does not
+        apply there — and nothing is protected by it, because the return URL
+        carries no token and the plan moves on the webhook (ADR 0110), never on
+        the customer landing back.
+        """
+        transport = RecordingCheckout()
+
+        checkout = await _checkout(
+            return_url="http://localhost:15173/settings/billing", handler=transport
+        )
+
+        assert checkout.url == HANDOFF_URL
+        assert (
+            transport.created["subscription_meta"]["return_url"]
+            == "http://localhost:15173/settings/billing"
+        )
 
     async def test_a_checkout_creates_the_mandate_and_hands_back_a_url(self) -> None:
         """P1-73's other half, and what the port promises: a URL, never a form.

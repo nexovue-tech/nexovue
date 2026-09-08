@@ -197,6 +197,16 @@ services:
       S3_BUCKET: nexovue-dev
       S3_ACCESS_KEY_ID: nexovue_dev_access
       S3_SECRET_ACCESS_KEY: nexovue_dev_secret
+      # Where a browser lands: the **app**, never this API. Verification links,
+      # password resets and the return from a payment all point at a screen,
+      # which then calls the endpoint behind it.
+      #
+      # Built from the same `WEB_HOST_PORT` as the published port below, so the
+      # two cannot disagree — a developer who moves the web port and forgets this
+      # would get links to a port nothing is listening on. It is a dev constant
+      # rather than something to put in `.env`, because in this stack the answer
+      # is always "wherever `web` is".
+      APP_BASE_URL: http://localhost:${WEB_HOST_PORT:-15173}
     # The developer's own third-party credentials — the payment gateway
     # (`PAYMENTS_DOMESTIC_*`) and the mail provider (`EMAIL_*`).
     #

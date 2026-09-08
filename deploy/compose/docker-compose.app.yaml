@@ -157,6 +157,11 @@ services:
       S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+      # Where a browser lands after following a verification link, a password
+      # reset or a payment. The app hostname, never the ingest one (ADR 0089).
+      # Demanded rather than defaulted: there is no sensible guess for a
+      # deployment's own hostname, and a wrong one sends customers nowhere.
+      APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL}
       # Third-party credentials, passed through rather than demanded.
       #
       # `:-` and not `:?` on purpose, unlike every variable above: an install
