@@ -8,13 +8,11 @@
  */
 
 import { formatDecimalBytes } from "@/shared/format/bytes";
-import { formatCount } from "@/shared/format/number";
+import { formatMoney } from "@/shared/format/money";
+import { formatCount, NUMBER_LOCALE } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 
 import type { BillingPeriod, CardinalityWarning, PlanPrice, ServiceNameFamily } from "./api";
-
-/** Fixed locale: digit grouping and the currency symbol must not follow the machine. */
-const NUMBER_LOCALE = "en-US";
 
 const dayFormatter = new Intl.DateTimeFormat(NUMBER_LOCALE, {
   day: "numeric",
@@ -29,38 +27,7 @@ export function formatDay(day: string): string {
   return Number.isNaN(at.getTime()) ? day : dayFormatter.format(at);
 }
 
-/* ------------------------------------------------------------------------ money */
-
-const moneyFormatters = new Map<string, Intl.NumberFormat>();
-
-function moneyFormatter(currency: string): Intl.NumberFormat | undefined {
-  const cached = moneyFormatters.get(currency);
-  if (cached) return cached;
-  try {
-    const formatter = new Intl.NumberFormat(NUMBER_LOCALE, { style: "currency", currency });
-    moneyFormatters.set(currency, formatter);
-    return formatter;
-  } catch {
-    return undefined; // not a currency code at all; see formatMoney
-  }
-}
-
-/**
- * A price stored in minor units, in its own currency.
- *
- * The divisor is the currency's own, not a hardcoded hundred: the yen's minor unit is
- * the yen, so ¥1000 is stored as 1000 and dividing by a hundred would quote a bill at a
- * hundredth of its size. `Intl` carries the ISO 4217 exponent, so it is asked rather
- * than guessed. A code `Intl` will not take is a broken row, and the minor units are
- * shown raw beside it rather than converted by a guessed exponent.
- */
-export function formatMoney(minorUnits: number, currency: string): string {
-  const formatter = moneyFormatter(currency);
-  if (!formatter) return `${formatCount(minorUnits)} ${currency}`;
-
-  const exponent = formatter.resolvedOptions().maximumFractionDigits ?? 2;
-  return formatter.format(minorUnits / 10 ** exponent);
-}
+export { formatMoney };
 
 export function formatRate(price: PlanPrice): string {
   return `${formatMoney(price.price_per_service_minor_units, price.currency)} per service`;

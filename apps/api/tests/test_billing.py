@@ -42,6 +42,7 @@ from nexovue_api.billing import (
     BillingEventKind,
     Checkout,
     ConfiguredProcessor,
+    ContactField,
     CurrencyUnknownError,
     Money,
     SignatureInvalidError,
@@ -145,6 +146,12 @@ class StubProcessor:
     subscription_ref: str = SUBSCRIPTION_REF
     checkouts: list[dict[str, Any]] = field(default_factory=list)
     cancelled: list[str] = field(default_factory=list)
+
+    def required_contact_fields(self) -> frozenset[ContactField]:
+        """An email and nothing else — deliberately *not* the domestic
+        processor's three. A double that mirrored one implementation would let a
+        screen hard-code that implementation's fields and still pass."""
+        return frozenset({ContactField.EMAIL})
 
     async def begin_checkout(
         self,
@@ -1161,6 +1168,7 @@ class TestTheBillingScreen:
             session,  # type: ignore[arg-type]
             organization=_organization(),
             today=TODAY,
+            configured=_configured(StubProcessor()),
         )
 
         period = overview.period
@@ -1172,6 +1180,42 @@ class TestTheBillingScreen:
         )
         assert period.allowance_enforced is usage_billing.allowance_is_enforced(_FREE_PRICE, None)
 
+    async def test_the_screen_is_told_which_contact_fields_to_collect(self) -> None:
+        """ADR 0109: the processor declares what it needs and the form renders
+        exactly that. The stub asks for an email alone, deliberately unlike the
+        domestic processor's three — a screen that hard-coded name, email and
+        phone would pass against a double that mirrored one implementation."""
+        session = _overview_session()
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(),
+            today=TODAY,
+            configured=_configured(StubProcessor()),
+        )
+
+        assert overview.checkout is not None
+        assert overview.checkout.required_contact_fields == ["email"]
+
+    async def test_the_plan_and_the_month_are_readable_with_no_processor_configured(
+        self,
+    ) -> None:
+        """Reading what you pay is not the same errand as paying. A free-tier
+        customer must still see the allowance they are being stopped at, and a
+        503 here would take the usage figures away over a gateway they never
+        needed. Null checkout is what the screen reads as "upgrading is off"."""
+        session = _overview_session()
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(),
+            today=TODAY,
+            configured=None,
+        )
+
+        assert overview.checkout is None
+        assert overview.period.allowance_enforced is True
+
     async def test_the_period_is_the_calendar_month_the_day_falls_in(self) -> None:
         """ADR 0083: the bill covers a calendar month, not an anniversary."""
         session = _overview_session()
@@ -1180,6 +1224,7 @@ class TestTheBillingScreen:
             session,  # type: ignore[arg-type]
             organization=_organization(),
             today=TODAY,
+            configured=_configured(StubProcessor()),
         )
 
         assert overview.period.first_day == date(2026, 9, 1)
@@ -1197,6 +1242,7 @@ class TestTheBillingScreen:
             session,  # type: ignore[arg-type]
             organization=_organization(),
             today=TODAY,
+            configured=_configured(StubProcessor()),
         )
 
         assert overview.period.allowance_enforced is True
@@ -1216,6 +1262,7 @@ class TestTheBillingScreen:
             session,  # type: ignore[arg-type]
             organization=_organization(plan="pro"),
             today=TODAY,
+            configured=_configured(StubProcessor()),
         )
 
         assert overview.period.allowance_enforced is False
@@ -1232,6 +1279,7 @@ class TestTheBillingScreen:
             session,  # type: ignore[arg-type]
             organization=_organization(plan="pro"),
             today=TODAY,
+            configured=_configured(StubProcessor()),
         )
 
         per_service = _PRO_PRICE.included_bytes_per_service
@@ -1248,6 +1296,7 @@ class TestTheBillingScreen:
             session,  # type: ignore[arg-type]
             organization=_organization(),
             today=TODAY,
+            configured=_configured(StubProcessor()),
         )
 
         assert overview.subscription is None
@@ -1275,6 +1324,7 @@ class TestTheBillingScreen:
             session,  # type: ignore[arg-type]
             organization=_organization(plan="pro"),
             today=TODAY,
+            configured=_configured(StubProcessor()),
         )
 
         assert overview.subscription is not None
@@ -1293,6 +1343,7 @@ class TestTheBillingScreen:
             session,  # type: ignore[arg-type]
             organization=_organization(),
             today=TODAY,
+            configured=_configured(StubProcessor()),
         )
 
         assert ORG_ID in session.every_bound_value

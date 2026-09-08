@@ -68,6 +68,20 @@ class SubscriptionSummary(BaseModel):
     cancelled_at: datetime | None = None
 
 
+class CheckoutRequirements(BaseModel):
+    """What a screen must collect before it can start a checkout.
+
+    Asked of the processor rather than fixed here, so the form renders one
+    provider's fields and not the union of every provider's. A switch then
+    deletes a field instead of leaving a dead one. ADR 0109, and
+    `PaymentProcessor.required_contact_fields` is where the answer comes from.
+    """
+
+    # `name`, `email`, `phone` — the members of `ContactField`, as strings,
+    # because a screen renders a label per field and does not need our enum.
+    required_contact_fields: list[str]
+
+
 class BillingOverview(BaseModel):
     """Everything the billing screen shows (P1-75).
 
@@ -88,6 +102,10 @@ class BillingOverview(BaseModel):
     # ingestion. `allowance_enforced` is the sentence ADR 0107 requires the
     # screen to be able to write.
     period: BillingPeriodUsage
+    # Null when no payment processor is configured, which is a real state and not
+    # an error: the plan and the month's usage are still readable, and the screen
+    # says upgrading is unavailable rather than drawing a form that would 503.
+    checkout: CheckoutRequirements | None = None
 
 
 class StartCheckoutRequest(BaseModel):

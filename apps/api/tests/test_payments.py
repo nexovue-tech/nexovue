@@ -51,7 +51,6 @@ from nexovue_api.billing.cashfree import (
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
     CashfreePaymentProcessor,
-    CheckoutHandoffUndecidedError,
 )
 from nexovue_api.settings import DomesticPaymentSettings
 
@@ -128,15 +127,63 @@ async def _checkout(
     contact: BillingContact = COMPLETE_CONTACT,
     authorised_maximum: Money = AUTHORISED_MAXIMUM,
     return_url: str = RETURN_URL,
+    handler: Any = None,
 ) -> Any:
-    """One `begin_checkout` with every input valid unless a test says otherwise."""
-    return await _processor().begin_checkout(
+    """One `begin_checkout` with every input valid unless a test says otherwise.
+
+    With no handler the processor has no transport, so the input checks are
+    reachable and anything past them raises rather than reaching a network.
+    """
+    return await _processor(handler).begin_checkout(
         org_id=ORG_ID,
         plan_slug="pro",
         contact=contact,
         authorised_maximum=authorised_maximum,
         return_url=return_url,
     )
+
+
+HANDOFF_URL: Final = "https://payments-test.cashfree.com/subs-checkout/checkout/eyJhbGciOi"
+CHECKOUT_SESSION: Final = "sub_session_OVWwQglf4fEU30wWgkwPA9TW69LsZJ5GERt1zJ1dl5A6uQeFkCGAOp"
+
+
+class RecordingCheckout:
+    """A transport that answers both calls `begin_checkout` makes and keeps them.
+
+    Shaped on responses actually observed against their sandbox on 2026-09-09 —
+    a 200 echoing `subscription_id` back, and a 302 whose `Location` is the page.
+    A handwritten shape here that the provider does not produce would make every
+    assertion below agree with itself and with nothing else.
+    """
+
+    def __init__(self, *, redirect_status: int = 302, location: str | None = HANDOFF_URL) -> None:
+        self.requests: list[httpx.Request] = []
+        self._redirect_status = redirect_status
+        self._location = location
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if request.url.path.endswith("/view/sessions/checkout/subs"):
+            headers = {"location": self._location} if self._location is not None else {}
+            return httpx.Response(self._redirect_status, headers=headers)
+        sent = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "subscription_id": sent["subscription_id"],
+                "cf_subscription_id": "1450943497628520960",
+                "subscription_session_id": CHECKOUT_SESSION,
+                "subscription_status": "INITIALIZED",
+            },
+        )
+
+    @property
+    def created(self) -> dict[str, Any]:
+        return dict(json.loads(self.requests[0].content))
+
+    @property
+    def handoff(self) -> httpx.Request:
+        return self.requests[1]
 
 
 def _processor(handler: Any = None) -> CashfreePaymentProcessor:
@@ -459,23 +506,95 @@ class TestConfigurationAndWiring:
         with pytest.raises(BillingError, match=SECURE_URL_SCHEME):
             await _checkout(return_url=return_url)
 
-    async def test_checkout_refuses_because_this_processor_hands_back_no_link(self) -> None:
-        """Every input is supplied, both earlier reasons are gone, and it still
-        cannot start one.
+    async def test_a_checkout_creates_the_mandate_and_hands_back_a_url(self) -> None:
+        """P1-73's other half, and what the port promises: a URL, never a form.
 
-        The refusal has been re-aimed twice, and each time the old assertion
-        would have kept passing while describing something untrue. First it was
-        about `subscription_tags`, which ADR 0110 deleted. Then it was about an
-        unverified response field, which one sandbox call on 2026-09-09 settled:
-        `subscription_id` is a *request* field, so the reference is ours to mint.
-
-        What that call also showed is the reason now asserted — the response
-        carries a session id for the processor's browser SDK and no link, and the
-        endpoint that does return a URL wants the payment method chosen first.
-        `Checkout` promises a URL, so this is ADR 0102's port to change.
+        The reference is minted here rather than read out of the response —
+        `subscription_id` is a *request* field — which is what lets ADR 0110
+        resolve a tenant from a row this system wrote.
         """
-        with pytest.raises(CheckoutHandoffUndecidedError, match="redirectable link"):
-            await _checkout()
+        transport = RecordingCheckout()
+
+        checkout = await _checkout(handler=transport)
+
+        assert checkout.url == HANDOFF_URL
+        assert checkout.subscription_ref.startswith("nexovue-")
+        assert transport.created["subscription_id"] == checkout.subscription_ref
+
+    async def test_the_mandate_authorises_a_ceiling_rather_than_a_fixed_charge(self) -> None:
+        """ADR 0056 bills per service monitored, so a month moves with the
+        customer's own count. A `PERIODIC` plan debits a fixed amount whatever
+        they run, which would bill a customer with one service for ten."""
+        transport = RecordingCheckout()
+
+        await _checkout(handler=transport)
+
+        plan = transport.created["plan_details"]
+        assert plan["plan_type"] == "ON_DEMAND"
+        assert plan["plan_max_amount"] == float(AUTHORISED_MAXIMUM.major_units())
+        assert plan["plan_currency"] == AUTHORISED_MAXIMUM.currency
+        # Major units, not minor: 400000 paise sent as the ceiling would
+        # authorise a hundred times the amount the customer agreed to.
+        assert plan["plan_max_amount"] != AUTHORISED_MAXIMUM.minor_units
+
+    async def test_the_contact_reaches_the_processor_and_the_return_url_with_it(self) -> None:
+        """The bank's pre-debit notice needs all three, and ADR 0109 is why we
+        keep no copy of them."""
+        transport = RecordingCheckout()
+
+        await _checkout(handler=transport)
+
+        assert transport.created["customer_details"] == {
+            "customer_name": COMPLETE_CONTACT.name,
+            "customer_email": COMPLETE_CONTACT.email,
+            "customer_phone": COMPLETE_CONTACT.phone,
+        }
+        assert transport.created["subscription_meta"]["return_url"] == RETURN_URL
+
+    async def test_the_handoff_is_a_form_post_carrying_only_the_session(self) -> None:
+        """Their endpoint answers 404 to a GET — the session travels in a body.
+
+        No account credentials go with it: the session is already the bearer
+        token for one mandate, and sending the secret to a call that does not
+        need it widens where the secret travels.
+        """
+        transport = RecordingCheckout()
+
+        await _checkout(handler=transport)
+
+        handoff = transport.handoff
+        assert handoff.method == "POST"
+        assert handoff.url.path.endswith("/view/sessions/checkout/subs")
+        assert handoff.content == b"subs_session_id=" + CHECKOUT_SESSION.encode()
+        assert "x-client-secret" not in handoff.headers
+
+    async def test_a_handoff_that_does_not_redirect_is_a_failure_not_a_url(self) -> None:
+        """A 200 here means the page rendered into a response nobody will see.
+        Returning it as `Checkout.url` would send the customer to our own API."""
+        transport = RecordingCheckout(redirect_status=200, location=None)
+
+        with pytest.raises(BillingError, match="redirect"):
+            await _checkout(handler=transport)
+
+    async def test_a_created_mandate_with_no_session_is_refused(self) -> None:
+        """There is nowhere to send the customer, and a `Checkout` with an empty
+        url would be discovered by them rather than here."""
+
+        def without_session(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"subscription_id": "x", "subscription_status": "INIT"})
+
+        with pytest.raises(BillingError, match="nowhere to send"):
+            await _checkout(handler=without_session)
+
+    async def test_a_refused_creation_says_what_the_processor_said(self) -> None:
+        """ "Checkout failed" sends a reader looking for a bug in this code. The
+        processor's own message is the thing that names the real cause."""
+
+        def refuses(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(400, json={"message": "customer_phone is not valid"})
+
+        with pytest.raises(BillingError, match="customer_phone is not valid"):
+            await _checkout(handler=refuses)
 
     async def test_no_failure_message_carries_the_signing_key_or_the_raw_body(self) -> None:
         """Every one of these strings ends up in a log line or a problem

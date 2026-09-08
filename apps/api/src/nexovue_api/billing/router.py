@@ -27,7 +27,7 @@ from fastapi import APIRouter, Request, status
 from nexovue_api.auth.dependencies import CurrentIdentity
 from nexovue_api.auth.policy import MayCommitSpend
 from nexovue_api.billing import service
-from nexovue_api.billing.dependencies import DomesticPayments
+from nexovue_api.billing.dependencies import DomesticPayments, OptionalDomesticPayments
 from nexovue_api.billing.schemas import (
     BillingOverview,
     CheckoutHandoff,
@@ -87,12 +87,16 @@ async def _bounded_body(request: Request) -> bytes:
 async def read_billing_overview(
     identity: CurrentIdentity,
     db: DbSession,
+    payments: OptionalDomesticPayments,
 ) -> BillingOverview:
     """P1-75. Readable by any member: what the organization pays and how close
     it is to the ceiling is not administration, and a member who cannot see it
     finds out that ingestion stopped by noticing the telemetry went quiet."""
     return await service.overview(
-        db, organization=identity.organization, today=datetime.now(UTC).date()
+        db,
+        organization=identity.organization,
+        today=datetime.now(UTC).date(),
+        configured=payments,
     )
 
 

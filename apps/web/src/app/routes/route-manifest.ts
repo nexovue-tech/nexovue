@@ -27,6 +27,7 @@ export type NavPath =
   | "/usage"
   | "/settings/api-keys"
   | "/settings/projects"
+  | "/settings/billing"
   | "/settings/profile";
 
 export interface ScreenDefinition {
@@ -154,6 +155,13 @@ export const SHELL_SCREENS: ScreenDefinition[] = [
       "The projects a key sends to, what each one keeps, and what never leaves your process at all.",
     taskId: "P1-76",
   },
+  {
+    path: "/settings/billing",
+    title: "Billing",
+    description:
+      "The plan, the mandate paying for it, and how much of this month's allowance is spent.",
+    taskId: "P1-75",
+  },
   // In the sidebar rather than tucked behind an avatar menu, because there is no avatar
   // menu: this shell has no other way to reach a screen. Beside API keys under Account,
   // since "the password on my account" is the same errand as "the key my services use".
@@ -217,6 +225,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: "/usage", title: "Usage" },
       { path: "/settings/api-keys", title: "API keys" },
       { path: "/settings/projects", title: "Projects" },
+      { path: "/settings/billing", title: "Billing" },
       { path: "/settings/profile", title: "Profile & security" },
     ],
   },

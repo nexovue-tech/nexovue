@@ -49,6 +49,7 @@ from nexovue_api.billing import (
 from nexovue_api.billing.schemas import (
     BillingOverview,
     CheckoutHandoff,
+    CheckoutRequirements,
     DeliveryAcknowledgement,
     DeliveryOutcome,
     StartCheckoutRequest,
@@ -241,7 +242,11 @@ async def _move_plan(session: AsyncSession, *, org_id: uuid.UUID, to_slug: str) 
 
 
 async def overview(
-    session: AsyncSession, *, organization: Organization, today: date
+    session: AsyncSession,
+    *,
+    organization: Organization,
+    today: date,
+    configured: ConfiguredProcessor | None,
 ) -> BillingOverview:
     """What this organization is on, what pays for it, and where the month stands.
 
@@ -260,6 +265,22 @@ async def overview(
             await queries.latest_subscription(session, org_id=organization.id)
         ),
         period=await _period(session, org_id=organization.id, today=today, price=price),
+        checkout=_checkout_requirements(configured),
+    )
+
+
+def _checkout_requirements(configured: ConfiguredProcessor | None) -> CheckoutRequirements | None:
+    """What the upgrade form must collect, or nothing when nobody can be charged.
+
+    Sorted so the screen renders the fields in a stable order across requests —
+    a form whose boxes move between loads reads as a bug.
+    """
+    if configured is None:
+        return None
+    return CheckoutRequirements(
+        required_contact_fields=sorted(
+            field.value for field in configured.processor.required_contact_fields()
+        )
     )
 
 

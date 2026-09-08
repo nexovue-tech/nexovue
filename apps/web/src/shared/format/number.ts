@@ -14,7 +14,8 @@
 export const UNKNOWN = "—";
 
 /** Fixed locale: the digit grouping must not change with the reader's machine. */
-const NUMBER_LOCALE = "en-US";
+/** Fixed locale: digit grouping and currency symbols must not follow the machine. */
+export const NUMBER_LOCALE = "en-US";
 
 const PERCENT = 100;
 const SMALLEST_SHOWN_PERCENT = 0.1;

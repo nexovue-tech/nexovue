@@ -13,6 +13,7 @@ import { ResetPasswordScreen } from "@/features/auth/ResetPasswordScreen";
 import { SignupScreen } from "@/features/auth/SignupScreen";
 import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
 import { VerifyEmailScreen } from "@/features/auth/VerifyEmailScreen";
+import { BillingScreen } from "@/features/billing/BillingScreen";
 import { DatabaseScreen } from "@/features/database/DatabaseScreen";
 import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
@@ -174,6 +175,12 @@ const settingsProjectsRoute = createRoute({
   component: ProjectsScreen,
 });
 
+const settingsBillingRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/billing",
+  component: BillingScreen,
+});
+
 /**
  * Inside the shell like every other signed-in screen. It reads and writes the caller's
  * own account, so it is only reachable with a session — and the shell's own `/auth/me`
@@ -279,6 +286,7 @@ const routeTree = rootRoute.addChildren([
     usageRoute,
     settingsApiKeysRoute,
     settingsProjectsRoute,
+    settingsBillingRoute,
     settingsProfileRoute,
     notFoundRoute,
   ]),

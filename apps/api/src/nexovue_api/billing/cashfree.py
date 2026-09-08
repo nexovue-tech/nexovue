@@ -33,6 +33,8 @@ import hmac
 import json
 import uuid
 from collections.abc import Mapping
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any, Final
 
 import httpx
@@ -78,7 +80,58 @@ DELIVERY_HEADER: Final = "x-idempotency-header"
 # https://github.com/cashfree/cashfree-pg/blob/main/docs/SubscriptionAPI.md
 SUBSCRIPTION_PATH: Final = "/subscriptions/{subscription_ref}"
 SUBSCRIPTION_MANAGE_PATH: Final = "/subscriptions/{subscription_ref}/manage"
+SUBSCRIPTIONS_PATH: Final = "/subscriptions"
 CANCEL_ACTION: Final = "CANCEL"
+
+# Where a customer is sent to authorise the mandate.
+#
+# **Undocumented, and read out of the processor's own browser SDK rather than
+# guessed.** Their documented path is a JavaScript call: hand `subsSessionId` to
+# `cashfree.subscriptionsCheckout()` and it builds a hidden form and POSTs it
+# here. Reading the SDK showed there is no URL to redirect to because the session
+# id travels in a *body*, and that the response is a 302 whose `Location` is an
+# ordinary page.
+#
+# So this module makes that POST itself and hands the `Location` back. Measured
+# on 2026-09-09, not assumed: a GET here answers 404, the POST answers 302, and
+# the URL it returns loads for a different client with a different user agent —
+# twice — and renders the real mandate page in a browser.
+#
+# **The alternative was running their SDK on our own origin**, which trades this
+# risk for a permanent third-party script on a signed-in page. This endpoint is
+# the one their own SDK depends on, so it will not move casually, and when it
+# does move `begin_checkout` fails loudly rather than behaving differently.
+CHECKOUT_HANDOFF_PATH: Final = "/view/sessions/checkout/subs"
+SESSION_FIELD: Final = "subs_session_id"
+LOCATION_HEADER: Final = "location"
+
+# What the handoff answers with. Every 3xx that carries a `Location` is a place
+# to send the customer; the specific code is the processor's business.
+_REDIRECT_CODES: Final = frozenset({301, 302, 303, 307, 308})
+
+# Our own name for the arrangement, which the create call takes as a *request*
+# field and echoes back. It is what every webhook carries and what ADR 0110
+# resolves a tenant from, so it is minted here and never read out of a response.
+SUBSCRIPTION_REF_PREFIX: Final = "nexovue-"
+
+# ADR 0056 bills per service monitored, so what a month comes to moves with the
+# customer's own count. `PERIODIC` is a fixed debit at a fixed interval and would
+# charge the same amount whatever they ran; `ON_DEMAND` authorises a ceiling and
+# leaves the amount to each charge.
+# https://www.cashfree.com/docs/api-reference/payments/latest/subscription/create-subscription
+PLAN_TYPE_ON_DEMAND: Final = "ON_DEMAND"
+
+# How many monthly debits one mandate authorises before the customer re-signs.
+# A mandate cannot be open-ended, so this is a real choice: a year is long enough
+# not to interrupt anybody and short enough that a forgotten subscription cannot
+# debit an account indefinitely.
+PLAN_MAX_CYCLES: Final = 12
+MANDATE_YEARS: Final = 1
+
+# What the bank verifies the mandate with. The smallest chargeable amount, and
+# refunded by the processor — it proves the account exists without taking money
+# for a service the customer has not used yet.
+AUTHORISATION_AMOUNT: Final = Decimal("1.00")
 
 # A management call is a small POST to a payment processor. Long enough for a
 # slow network, short enough that a stalled gateway does not hold a request open.
@@ -110,65 +163,6 @@ CANCELLED_STATUSES: Final = frozenset({"CANCELLED", "CUSTOMER_CANCELLED"})
 TERMINAL_STATUSES: Final = CANCELLED_STATUSES | frozenset(
     {"COMPLETED", "EXPIRED", "LINK_EXPIRED", "CARD_EXPIRED"}
 )
-
-# Every input this processor was missing is now supplied, and one thing it
-# cannot get from any of them is left. Spelled out because "checkout failed"
-# would send whoever reads it looking for a bug in the code rather than at the
-# provider's two incompatible endpoints.
-#
-# Verified against the documentation on 2026-09-08, not remembered:
-#   - POST /pg/subscriptions returns `subscription_session_id` and no URL, and
-#     its hosted page is reached by handing that id to the vendor's browser SDK
-#     https://www.cashfree.com/docs/payments/subscription/hosted-checkout
-#   - POST /pg/links returns a redirectable `link_url`, and its `subscription`
-#     object carries no `subscription_tags`
-#     https://www.cashfree.com/docs/api-reference/payments/latest/payment-links/create
-CHECKOUT_UNAVAILABLE_DETAIL: Final = (
-    "this processor's subscription flow hands back a session id for its own "
-    "browser SDK, never a redirectable link, and the one call that does answer "
-    "with a URL requires the payment method to be chosen first — which would "
-    "put card selection in this application. `Checkout` promises a URL, so the "
-    "port and this processor disagree about what a handoff is. That is ADR "
-    "0102's wording rather than a gap in this file"
-)
-
-
-class CheckoutHandoffUndecidedError(BillingError):
-    """`begin_checkout` has every input and still cannot start one.
-
-    It named three missing inputs when it was written, then two, then a design
-    question. All of those are answered: ADR 0109 settled the phone, the price
-    and the return URL are resolved above this module and passed in, and ADR
-    0110 removed the last one — asking the processor to echo our organization id
-    back in its own tags. A webhook now names the processor's own subscription
-    and `billing.service` resolves whose it is from the row the checkout wrote,
-    so the call that returns a redirectable link is usable.
-
-    **The measurement has now been taken, and it answered two things.** One
-    sandbox create call on 2026-09-09, watched rather than read:
-
-    *The reference is ours to mint.* `subscription_id` is a request field, echoed
-    back unchanged; the processor's own `cf_subscription_id` is separate and
-    unused here. So `Checkout.subscription_ref` needs no discovery at all — this
-    module chooses it, which makes ADR 0110's correlation stronger than that ADR
-    assumed rather than weaker.
-
-    *There is no redirectable link.* The response carries a
-    `subscription_session_id` for the processor's browser SDK and nothing else a
-    customer can be sent to. The one endpoint that does answer with a URL takes a
-    `payment_method` — card, UPI, enach — so obtaining it means choosing the
-    payment instrument in this application, which is precisely what ADR 0076's
-    posture and `Checkout`'s "a URL rather than a form" exist to prevent.
-
-    **So what remains is a decision about the port, not about this file.**
-    `Checkout` promises a URL; this processor's subscription flow cannot give
-    one. Either the port stops promising a URL and starts describing a handoff
-    the front end completes, or paid subscriptions are taken somewhere else.
-    Both are above this module.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(f"checkout is not available: {CHECKOUT_UNAVAILABLE_DETAIL}")
 
 
 class CashfreePaymentProcessor:
@@ -208,13 +202,20 @@ class CashfreePaymentProcessor:
         authorised_maximum: Money,
         return_url: str,
     ) -> Checkout:
-        """Every input is checked, and then this refuses. See
-        `CheckoutHandoffUndecidedError` for what is left and why.
+        """Create the mandate and hand back where to authorise it.
 
-        The checks run first and in this order so a caller learns which of its
-        own inputs is wrong before it learns the provider cannot be called —
-        a bad amount is a bug to fix here, and finding it only after the
-        handoff question is answered would waste that decision.
+        Two calls, and the second is the one that is not in their documentation.
+        The create call answers with a session id for their browser SDK rather
+        than a link, so `CHECKOUT_HANDOFF_PATH` turns that session into the URL
+        the port promises — see that constant for what was measured and why this
+        is preferred to running their SDK on our own origin.
+
+        **The reference is minted here, not read back.** `subscription_id` is a
+        request field, so this module names the arrangement and the processor
+        merely stores it, which is the opposite of the tags ADR 0110 removed.
+
+        The input checks run first so a caller learns which of its own inputs is
+        wrong before a network call can fail for an unrelated reason.
         """
         missing = contact.missing(self.required_contact_fields())
         if missing:
@@ -240,7 +241,97 @@ class CashfreePaymentProcessor:
                 f"the return url must begin with {SECURE_URL_SCHEME}, "
                 f"which is the only scheme this processor accepts"
             )
-        raise CheckoutHandoffUndecidedError
+
+        subscription_ref = f"{SUBSCRIPTION_REF_PREFIX}{uuid.uuid4()}"
+        created = await self._create_subscription(
+            subscription_ref=subscription_ref,
+            plan_slug=plan_slug,
+            contact=contact,
+            authorised_maximum=authorised_maximum,
+            return_url=return_url,
+        )
+        session_id = _text(created.get("subscription_session_id"))
+        if not session_id:
+            raise BillingError(
+                "the processor created the subscription without a checkout "
+                "session, so there is nowhere to send the customer"
+            )
+        return Checkout(
+            url=await self._handoff_url(session_id),
+            subscription_ref=subscription_ref,
+        )
+
+    async def _create_subscription(
+        self,
+        *,
+        subscription_ref: str,
+        plan_slug: str,
+        contact: BillingContact,
+        authorised_maximum: Money,
+        return_url: str,
+    ) -> dict[str, Any]:
+        """The mandate, as this processor wants it described.
+
+        `plan_details` is sent inline rather than as a `plan_id`: a stored plan
+        would be a second place the price lives, and ADR 0083 puts the rate in
+        `plan_prices` with an effective date. The amount here is the *ceiling*
+        the customer chose, and the plan type is what makes it a ceiling.
+        """
+        # An identifier for the payer that is stable for this arrangement and
+        # says nothing about them. Their name, email and phone go in the call
+        # because the bank's pre-debit notice needs them; ADR 0109 is why we keep
+        # no copy.
+        now = datetime.now(UTC)
+        payload: dict[str, Any] = {
+            "subscription_id": subscription_ref,
+            "customer_details": {
+                "customer_name": contact.name,
+                "customer_email": contact.email,
+                "customer_phone": contact.phone,
+            },
+            "plan_details": {
+                "plan_name": plan_slug,
+                "plan_type": PLAN_TYPE_ON_DEMAND,
+                "plan_currency": authorised_maximum.currency.upper(),
+                "plan_max_amount": float(authorised_maximum.major_units()),
+                "plan_max_cycles": PLAN_MAX_CYCLES,
+            },
+            "authorisation_details": {"authorisation_amount": float(AUTHORISATION_AMOUNT)},
+            "subscription_meta": {"return_url": return_url},
+            "subscription_expiry_time": now.replace(year=now.year + MANDATE_YEARS).isoformat(),
+        }
+        response = await self._send("POST", SUBSCRIPTIONS_PATH, payload=payload)
+        if response.status_code >= httpx.codes.BAD_REQUEST:
+            raise BillingError(f"the processor refused to create the mandate: {_refusal(response)}")
+        try:
+            body = response.json()
+        except ValueError as unreadable:
+            raise BillingError(
+                "the processor answered the create call with something that is not JSON"
+            ) from unreadable
+        if not isinstance(body, dict):
+            raise BillingError("the processor answered the create call with something unusable")
+        return body
+
+    async def _handoff_url(self, session_id: str) -> str:
+        """Turn a checkout session into the URL the port promises.
+
+        A form POST, because that is what their SDK does and the endpoint answers
+        404 to a GET. Redirects are deliberately **not** followed: the `Location`
+        *is* the answer, and following it would fetch a page nobody is looking at.
+
+        The URL that comes back is a bearer credential — whoever holds it can
+        authorise the mandate — so it is returned to the caller and never logged,
+        stored or put in an error message.
+        """
+        response = await self._send_form(CHECKOUT_HANDOFF_PATH, {SESSION_FIELD: session_id})
+        location = _text(response.headers.get(LOCATION_HEADER))
+        if response.status_code not in _REDIRECT_CODES or not location:
+            raise BillingError(
+                "the processor did not answer the checkout handoff with a "
+                "redirect, so there is no page to send the customer to"
+            )
+        return location
 
     async def cancel(self, *, subscription_ref: str) -> None:
         """End a subscription, and treat one that is already over as success.
@@ -340,6 +431,25 @@ class CashfreePaymentProcessor:
         except ValueError:
             return None
         return body if isinstance(body, dict) else None
+
+    async def _send_form(self, path: str, fields: dict[str, str]) -> httpx.Response:
+        """One form POST, and the only call here that is not JSON.
+
+        Redirects are not followed, because the redirect is the result. No API
+        credentials are sent: this endpoint takes a checkout session, which is
+        already the bearer token for exactly one mandate, and adding the account
+        secret to a request that does not need it widens where it travels.
+        """
+        url = f"{self._settings.base_url}{path}"
+        try:
+            if self._client is not None:
+                return await self._client.post(
+                    url, data=fields, timeout=TIMEOUT_SECONDS, follow_redirects=False
+                )
+            async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS, follow_redirects=False) as client:
+                return await client.post(url, data=fields)
+        except httpx.HTTPError as failure:
+            raise BillingError(f"could not reach the payment processor: {failure}") from failure
 
     async def _send(
         self, method: str, path: str, *, payload: dict[str, Any] | None
