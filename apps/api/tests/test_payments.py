@@ -47,8 +47,6 @@ from nexovue_api.billing.cashfree import (
     CLIENT_ID_HEADER,
     CLIENT_SECRET_HEADER,
     DELIVERY_HEADER,
-    ORG_TAG,
-    PLAN_TAG,
     SECURE_URL_SCHEME,
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
@@ -79,26 +77,26 @@ def _payload(
     *,
     event_type: str = "SUBSCRIPTION_STATUS_CHANGED",
     subscription_status: str = "ACTIVE",
-    tags: dict[str, str] | None = None,
+    subscription_ref: str | None = SUBSCRIPTION_REF,
 ) -> bytes:
     """One Cashfree webhook, shaped as the documented 2026-01-01 samples are."""
     document: dict[str, Any] = {
         "data": {
-            "subscription_id": SUBSCRIPTION_REF,
             "cf_subscription_id": "23639356",
             "subscription_details": {
                 "cf_subscription_id": "23639356",
-                "subscription_id": SUBSCRIPTION_REF,
                 "subscription_status": subscription_status,
-                "subscription_tags": (
-                    {ORG_TAG: str(ORG_ID), PLAN_TAG: "pro"} if tags is None else tags
-                ),
                 "next_schedule_date": None,
             },
         },
         "event_time": "2026-09-08T10:31:35+05:30",
         "type": event_type,
     }
+    # Omitted rather than set to null when there is none: a webhook without a
+    # reference has no such key, and a null would test a different refusal.
+    if subscription_ref is not None:
+        document["data"]["subscription_id"] = subscription_ref
+        document["data"]["subscription_details"]["subscription_id"] = subscription_ref
     return json.dumps(document).encode("utf-8")
 
 
@@ -160,16 +158,14 @@ class TestSignatureVerification:
         event = _processor().event_from_webhook(body=body, headers=_headers(body))
 
         assert event.kind is BillingEventKind.SUBSCRIPTION_ACTIVATED
-        assert event.org_id == ORG_ID
         assert event.subscription_ref == SUBSCRIPTION_REF
-        assert event.plan_slug == "pro"
         assert event.delivery_id == DELIVERY_ID
 
     def test_a_body_altered_after_signing_is_refused(self) -> None:
         """The whole point: the signature covers the bytes, not the intent."""
         body = _payload()
         headers = _headers(body)
-        tampered = body.replace(b'"pro"', b'"scale"')
+        tampered = body.replace(b"ACTIVE", b"PAUSED")
 
         assert tampered != body
         with pytest.raises(SignatureInvalidError):
@@ -235,7 +231,10 @@ class TestSignatureVerification:
         body = _payload()
         headers = {name.upper(): value for name, value in _headers(body).items()}
 
-        assert _processor().event_from_webhook(body=body, headers=headers).org_id == ORG_ID
+        assert (
+            _processor().event_from_webhook(body=body, headers=headers).subscription_ref
+            == SUBSCRIPTION_REF
+        )
 
 
 class TestReplayProtection:
@@ -311,20 +310,15 @@ class TestTranslation:
         with pytest.raises(UnhandledBillingEventError):
             _processor().event_from_webhook(body=body, headers=_headers(body))
 
-    def test_a_signed_delivery_naming_no_organization_is_refused(self) -> None:
-        body = _payload(tags={PLAN_TAG: "pro"})
+    def test_a_signed_delivery_naming_no_subscription_is_refused(self) -> None:
+        """The reference is now the whole of what a webhook must carry — ADR
+        0110 — so a delivery without one cannot be attributed to anybody.
 
-        with pytest.raises(BillingError):
-            _processor().event_from_webhook(body=body, headers=_headers(body))
-
-    def test_a_signed_delivery_naming_no_plan_is_refused(self) -> None:
-        body = _payload(tags={ORG_TAG: str(ORG_ID)})
-
-        with pytest.raises(BillingError):
-            _processor().event_from_webhook(body=body, headers=_headers(body))
-
-    def test_a_signed_delivery_with_an_unreadable_organization_is_refused(self) -> None:
-        body = _payload(tags={ORG_TAG: "not-a-uuid", PLAN_TAG: "pro"})
+        This replaces three tests that checked the organization and plan tags.
+        Those fields are gone: the tenant is resolved from our own row, and the
+        plan comes from that row rather than from the processor's storage.
+        """
+        body = _payload(subscription_ref=None)
 
         with pytest.raises(BillingError):
             _processor().event_from_webhook(body=body, headers=_headers(body))
@@ -465,19 +459,22 @@ class TestConfigurationAndWiring:
         with pytest.raises(BillingError, match=SECURE_URL_SCHEME):
             await _checkout(return_url=return_url)
 
-    async def test_checkout_refuses_because_no_call_carries_both_a_url_and_the_tags(
-        self,
-    ) -> None:
-        """Every input is now supplied and it still cannot start one.
+    async def test_checkout_refuses_because_the_response_field_is_unverified(self) -> None:
+        """Every input is now supplied, and the design question is answered.
 
-        Checked against the documentation on 2026-09-08, not remembered: the
-        create call that accepts `subscription_tags` answers with a session id
-        for a browser SDK, and the one that answers with a link accepts no tags.
-        `_translate` reads the organization out of those tags, so satisfying
-        `Checkout.url` and `event_from_webhook` at once is not currently
-        possible — which is a decision about ADR 0102's port, above this file.
+        This test used to assert the refusal was about `subscription_tags` — the
+        call that accepted them answered with a session id rather than a URL, so
+        the port could not be satisfied. ADR 0110 removed the tags entirely, so
+        that reason no longer exists and asserting it would pass while being
+        false.
+
+        What remains is not a decision: the create call has never been made, so
+        which response field names the new subscription is unconfirmed. That
+        value becomes `Checkout.subscription_ref` and is the only thing a webhook
+        is matched on, which is why it is worth refusing over rather than
+        guessing.
         """
-        with pytest.raises(CheckoutHandoffUndecidedError, match="tags"):
+        with pytest.raises(CheckoutHandoffUndecidedError, match="unverified"):
             await _checkout()
 
     async def test_no_failure_message_carries_the_signing_key_or_the_raw_body(self) -> None:

@@ -663,6 +663,11 @@ class BillingSubscription(Base):
         String(SHORT_LABEL_LENGTH), ForeignKey("plans.slug", ondelete="RESTRICT"), nullable=False
     )
     status: Mapped[str] = mapped_column(BillingSubscriptionStatus, nullable=False)
+    # How many services the customer said they would pay for, which is what the
+    # mandate's authorised maximum was computed from — ADR 0107's ceiling, on the
+    # arrangement that carries it rather than on the tenant. Raising the ceiling
+    # means a new mandate at a new maximum, so it is a new row and not an edit.
+    services_committed: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[CreatedAt]
     # When the mandate was authorised, and when it ended. Timestamps rather than
     # flags, because "since when" is the question an invoice dispute asks.

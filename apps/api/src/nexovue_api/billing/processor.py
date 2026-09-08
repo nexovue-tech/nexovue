@@ -68,14 +68,27 @@ class BillingEventKind(Enum):
 
 @dataclass(frozen=True, slots=True)
 class BillingEvent:
-    """One webhook, translated. The only shape billing logic ever sees."""
+    """One webhook, translated. The only shape billing logic ever sees.
+
+    **It names the processor's subscription, not our tenant, and that is a
+    correction made on 2026-09-09.** It carried `org_id` and `plan_slug`, read
+    out of custom tags we asked the processor to echo back — which was us
+    borrowing the provider's storage for our own identifiers, and it cost more
+    than it looked: at the domestic processor, the one create call that returns a
+    redirectable URL cannot carry tags at all, so `Checkout.url` and this
+    translation could not both be satisfied. Which processor that is belongs in
+    ADR 0110, not here.
+
+    A webhook naturally identifies *its own* subscription. Whose it is, is our
+    question, answered from `billing_subscriptions` where we recorded it when the
+    checkout began — one indexed lookup, in the service layer, leaving this a
+    pure translation of bytes into meaning. See ADR 0110.
+    """
 
     kind: BillingEventKind
-    org_id: uuid.UUID
-    # The processor's own subscription identifier, stored so a later call can
-    # name the same subscription. Opaque: nothing parses or branches on it.
+    # The processor's own subscription identifier, and the only identity a
+    # webhook is required to carry. Opaque: nothing parses or branches on it.
     subscription_ref: str
-    plan_slug: str
     # Unique per delivery, so a replayed webhook is detectable — the same
     # property `X-GitHub-Delivery` gives door 4a.
     delivery_id: str
@@ -91,7 +104,15 @@ class Checkout:
     """
 
     url: str
-    processor_customer_ref: str
+    # The processor's own name for the arrangement this checkout starts, and the
+    # identifier its webhooks will echo back. Required, because ADR 0110 makes it
+    # the only thread between the checkout and the event: the row written here is
+    # what later answers *whose* subscription an event is about.
+    subscription_ref: str
+    # The processor's id for the payer, when it issues one at this point. Absent
+    # at a processor with no customer object, and absent at one that only names
+    # the payer later — which is not the same statement as "unknown payer".
+    processor_customer_ref: str | None = None
 
 
 class CurrencyUnknownError(BillingError):

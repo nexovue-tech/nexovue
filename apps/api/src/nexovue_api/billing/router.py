@@ -25,7 +25,7 @@ from typing import Final
 from fastapi import APIRouter, Request, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayCommitSpend
 from nexovue_api.billing import service
 from nexovue_api.billing.dependencies import DomesticPayments
 from nexovue_api.billing.schemas import (
@@ -102,7 +102,7 @@ async def read_billing_overview(
     summary="Start the mandate that moves this organization onto a paid plan",
 )
 async def start_checkout(
-    identity: MayAdminister,
+    identity: MayCommitSpend,
     db: DbSession,
     settings: AppSettings,
     payments: DomesticPayments,
@@ -126,7 +126,7 @@ async def start_checkout(
     summary="Ask the processor to end this organization's subscription",
 )
 async def cancel_subscription(
-    identity: MayAdminister,
+    identity: MayCommitSpend,
     db: DbSession,
     payments: DomesticPayments,
 ) -> None:

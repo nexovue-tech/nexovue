@@ -49,6 +49,32 @@ async def subscription_by_ref(
     return found
 
 
+async def subscription_by_processor_ref(
+    session: AsyncSession, *, processor: str, subscription_ref: str
+) -> BillingSubscription | None:
+    """The arrangement a processor's own reference names, whoever owns it.
+
+    **Unscoped on purpose, and it is what establishes the tenant** — the same
+    shape and the same reason as `find_live_key_by_prefix`. A webhook proves it
+    came from the processor by its signature, and then names a subscription;
+    whose it is, is answered here, from the row written when the checkout began.
+
+    Scoping it by organization would need the caller to tell us the organization,
+    which is the one thing a webhook must not be trusted for. ADR 0110 replaced
+    exactly that arrangement: the org id used to arrive in custom tags we asked
+    the processor to echo back, which was our identifier living in their storage.
+
+    The pair is unique — `uq_billing_subscriptions_processor_subscription_ref` —
+    so this can name at most one organization.
+    """
+    statement = select(BillingSubscription).where(
+        BillingSubscription.processor == processor,
+        BillingSubscription.subscription_ref == subscription_ref,
+    )
+    found: BillingSubscription | None = await session.scalar(statement)
+    return found
+
+
 async def latest_subscription(
     session: AsyncSession, *, org_id: uuid.UUID
 ) -> BillingSubscription | None:

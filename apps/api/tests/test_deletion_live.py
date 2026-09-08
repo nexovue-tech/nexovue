@@ -368,6 +368,7 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectSt
                     subscription_ref=f"sub-{uuid.uuid4()}",
                     plan_slug="free",
                     status="active",
+                    services_committed=3,
                 ),
                 BillingWebhookDelivery(
                     org_id=tenant.org_id,

@@ -90,13 +90,6 @@ TIMEOUT_SECONDS: Final = 15.0
 # https://www.cashfree.com/docs/payments/online/go-live/whitelist
 SECURE_URL_SCHEME: Final = "https://"
 
-# Our two facts, carried on the subscription so every webhook about it brings
-# them back. Cashfree echoes `subscription_tags` on the status and payment
-# events alike, which is what lets `event_from_webhook` name an organization
-# without a database. Prefixed because the field is a shared namespace: up to
-# ten key-value pairs, some of which Cashfree itself gives meaning to.
-ORG_TAG: Final = "nexovue_org_id"
-PLAN_TAG: Final = "nexovue_plan_slug"
 
 # Cashfree's own event names, and the statuses that qualify one of them.
 # https://www.cashfree.com/docs/api-reference/payments/latest/subscription/webhooks
@@ -131,33 +124,38 @@ TERMINAL_STATUSES: Final = CANCELLED_STATUSES | frozenset(
 #     object carries no `subscription_tags`
 #     https://www.cashfree.com/docs/api-reference/payments/latest/payment-links/create
 CHECKOUT_UNAVAILABLE_DETAIL: Final = (
-    "no call this processor offers returns both a redirectable URL and the "
-    "custom tags every webhook must echo back. The tagged call answers with a "
-    "session id for a browser SDK, and the call that answers with a URL cannot "
-    "carry tags — so `Checkout.url` and `event_from_webhook` cannot both be "
-    "satisfied. Choosing between them changes what ADR 0102's port promises, "
-    "which is a decision above this module rather than a gap in it"
+    "the subscription create call has not been exercised against this "
+    "processor, so the field its response names the new subscription in is "
+    "unverified. That field is what `Checkout.subscription_ref` must carry and "
+    "what every webhook is matched on, and a wrong guess would write rows no "
+    "event can ever find — silently, and only discoverable at a customer's "
+    "first renewal. It needs one call against their sandbox, not a decision"
 )
 
 
 class CheckoutHandoffUndecidedError(BillingError):
     """`begin_checkout` has every input and still cannot start one.
 
-    It named three missing inputs when it was written and then two. ADR 0109
-    settled the phone; the price and the return URL are now resolved above this
-    module and passed in. What is left is not an input at all: this processor
-    has two create calls and **neither** satisfies both halves of the port.
+    It named three missing inputs when it was written, then two, then a design
+    question. All of those are answered: ADR 0109 settled the phone, the price
+    and the return URL are resolved above this module and passed in, and ADR
+    0110 removed the last one — asking the processor to echo our organization id
+    back in its own tags. A webhook now names the processor's own subscription
+    and `billing.service` resolves whose it is from the row the checkout wrote,
+    so the call that returns a redirectable link is usable.
 
-    `_translate` reads the organization out of `subscription_tags` on purpose —
-    it is what lets a webhook name a tenant without a database, the same order
-    `deploys` follows. The call that accepts those tags hands back a session id
-    rather than a link. The call that hands back a link accepts no tags.
+    **What is left is not a decision, it is a measurement.** The create call has
+    never been made against this processor, so which field of its response names
+    the new subscription is unconfirmed. That value becomes
+    `Checkout.subscription_ref`, it is written to `billing_subscriptions`, and it
+    is the only thing a later webhook is matched on — so reading the wrong field
+    produces rows that look correct and that no event can ever resolve. The
+    failure surfaces at a customer's first renewal, as money taken with the plan
+    never moving.
 
-    Refusing here is deliberate. Building against the untagged call would mean
-    rewriting a verified, negative-controlled webhook path around a field the
-    documentation does not confirm; building against the untagged-but-linked one
-    would mean `Checkout` stops being a URL, which is ADR 0102's wording and not
-    this file's to change.
+    Guessing it from documentation would be a claim nobody watched. One call
+    against their sandbox settles it, and it is the last thing between this
+    module and a working checkout.
     """
 
     def __init__(self) -> None:
@@ -386,20 +384,30 @@ def _translate(document: Mapping[str, Any], *, delivery_id: str) -> BillingEvent
     """
     data = _object_at(document, "data")
     details = _object_at(data, "subscription_details")
-    tags = _object_at(details, "subscription_tags")
 
+    # No `subscription_tags` are read any more. They carried our organization id
+    # and plan slug, echoed back by the processor — which meant the only create
+    # call that returns a redirectable URL could not be used, because it cannot
+    # carry tags. The tenant is now resolved from our own record of the
+    # subscription, in the service layer. ADR 0110.
     kind = _kind_of(document.get("type"), details.get("subscription_status"))
-    return BillingEvent(
-        kind=kind,
-        org_id=_org_id(tags),
-        # The merchant-side id, which is what every later call names. Read from
-        # `subscription_details` first because that object is present on the
-        # status and payment events alike; the payment events also carry it at
-        # the top of `data`.
-        subscription_ref=_text(details.get("subscription_id") or data.get("subscription_id")),
-        plan_slug=_plan_slug(tags),
-        delivery_id=delivery_id,
-    )
+
+    # The merchant-side id, which is what every later call names. Read from
+    # `subscription_details` first because that object is present on the status
+    # and payment events alike; the payment events also carry it at the top of
+    # `data`.
+    subscription_ref = _text(details.get("subscription_id") or data.get("subscription_id"))
+    if not subscription_ref:
+        # Refused rather than passed on empty. Since ADR 0110 this reference is
+        # the *only* thing tying an event to a tenant, so an empty one is not a
+        # missing detail — it is an event that cannot be attributed to anybody,
+        # and letting it through would hand the resolver a value that matches
+        # whatever row happens to hold a blank reference.
+        raise BillingError(
+            "the delivery names no subscription, so there is nothing to resolve it against"
+        )
+
+    return BillingEvent(kind=kind, subscription_ref=subscription_ref, delivery_id=delivery_id)
 
 
 def _kind_of(event_type: Any, subscription_status: Any) -> BillingEventKind:
@@ -424,32 +432,9 @@ def _kind_of(event_type: Any, subscription_status: Any) -> BillingEventKind:
     raise UnhandledBillingEventError(f"a {name or 'nameless'} event")
 
 
-def _org_id(tags: Mapping[str, Any]) -> uuid.UUID:
-    """The tenant, taken from the tag this product set when the subscription was
-    created and the processor echoed back.
-
-    Trusted only because the signature already proved the bytes are the
-    processor's — the same order `deploys` follows when it reads an organization
-    off the secret that matched rather than off the request.
-    """
-    try:
-        return uuid.UUID(_text(tags.get(ORG_TAG)))
-    except ValueError as error:
-        raise BillingError(
-            f"the subscription carries no usable {ORG_TAG} tag, so the event names no organization"
-        ) from error
-
-
-def _plan_slug(tags: Mapping[str, Any]) -> str:
-    slug = _text(tags.get(PLAN_TAG))
-    if not slug:
-        raise BillingError(f"the subscription carries no {PLAN_TAG} tag")
-    return slug
-
-
 def _object_at(document: Mapping[str, Any], key: str) -> Mapping[str, Any]:
-    """A nested object, or an empty one. Cashfree sends `null` for an unset
-    `subscription_tags`, so an absent branch is normal rather than malformed."""
+    """A nested object, or an empty one. Cashfree sends `null` rather than
+    omitting an unset object, so an absent branch is normal, not malformed."""
     value = document.get(key)
     return value if isinstance(value, Mapping) else {}
 

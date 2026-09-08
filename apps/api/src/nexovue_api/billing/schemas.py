@@ -58,6 +58,10 @@ class SubscriptionSummary(BaseModel):
     # `pending`, `active` or `cancelled` — the row's own status, unmapped: the
     # three words mean what they say and a screen renders them directly.
     status: str
+    # ADR 0107's ceiling: the count the customer committed to, which sized the
+    # mandate. Shown because a ceiling nobody can see is one they cannot act on
+    # before it stops their ingestion.
+    services_committed: int
     # When the mandate was authorised and when it ended. Null is "not yet" and
     # "not ended", which are different facts from a date of zero.
     activated_at: datetime | None = None

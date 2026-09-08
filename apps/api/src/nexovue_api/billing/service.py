@@ -32,6 +32,7 @@ import uuid
 from datetime import UTC, date, datetime
 from typing import Final
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.billing import (
@@ -99,6 +100,9 @@ STATUS_CANCELLED: Final = "cancelled"
 PLAN_WITHOUT_A_SUBSCRIPTION: Final = "free"
 
 
+_log = structlog.get_logger(__name__)
+
+
 async def record_from_webhook(
     session: AsyncSession,
     *,
@@ -118,19 +122,38 @@ async def record_from_webhook(
     except BillingError as malformed:
         raise InvalidRequestError(MALFORMED_DELIVERY_DETAIL) from malformed
 
+    # Whose subscription this is, is our question rather than the processor's —
+    # answered from the row the checkout wrote. ADR 0110.
+    subscription = await queries.subscription_by_processor_ref(
+        session, processor=configured.name, subscription_ref=event.subscription_ref
+    )
+    if subscription is None:
+        # Correctly signed, and about a subscription we have no record of
+        # starting. There is no honest way to attribute it: inventing an owner
+        # would put somebody else's money against a tenant. Acknowledged so the
+        # processor stops redelivering, and loud in the log because a signed
+        # event we cannot place means our record and theirs have diverged.
+        _log.error(
+            "a signed billing event names a subscription this system did not start",
+            processor=configured.name,
+            subscription_ref=event.subscription_ref,
+            kind=event.kind.value,
+        )
+        return DeliveryAcknowledgement(outcome=DeliveryOutcome.IGNORED)
+
     if await queries.delivery_already_recorded(
         session,
-        org_id=event.org_id,
+        org_id=subscription.org_id,
         processor=configured.name,
         delivery_id=event.delivery_id,
     ):
         return DeliveryAcknowledgement(outcome=DeliveryOutcome.DUPLICATE)
 
-    await _apply(session, event=event, processor=configured.name)
+    await _apply(session, event=event, subscription=subscription)
     queries.add_delivery(
         session,
         BillingWebhookDelivery(
-            org_id=event.org_id,
+            org_id=subscription.org_id,
             processor=configured.name,
             delivery_id=event.delivery_id,
             kind=event.kind.value,
@@ -140,30 +163,17 @@ async def record_from_webhook(
     return DeliveryAcknowledgement(outcome=DeliveryOutcome.RECORDED)
 
 
-async def _apply(session: AsyncSession, *, event: BillingEvent, processor: str) -> None:
+async def _apply(
+    session: AsyncSession, *, event: BillingEvent, subscription: BillingSubscription
+) -> None:
     """Bring the arrangement's row in line with what the event said.
 
-    A payment event about a subscription we have never seen still creates the
-    row, in `pending`. The alternative is dropping a proved fact because the
-    checkout that started it did not finish writing, which is the failure mode
-    worth avoiding on this path.
+    The row is resolved by the caller and always exists here. It used to be
+    created on the spot when a webhook named one we had not seen — possible only
+    while the event carried an organization id in the processor's own tags. With
+    that gone (ADR 0110) an unknown reference cannot be attributed at all, so the
+    caller refuses it there rather than inventing an owner here.
     """
-    subscription = await queries.subscription_by_ref(
-        session,
-        org_id=event.org_id,
-        processor=processor,
-        subscription_ref=event.subscription_ref,
-    )
-    if subscription is None:
-        subscription = BillingSubscription(
-            org_id=event.org_id,
-            processor=processor,
-            subscription_ref=event.subscription_ref,
-            plan_slug=event.plan_slug,
-            status=STATUS_PENDING,
-        )
-        queries.add_subscription(session, subscription)
-
     now = datetime.now(UTC)
     match event.kind:
         case BillingEventKind.SUBSCRIPTION_ACTIVATED:
@@ -182,7 +192,7 @@ async def _apply(session: AsyncSession, *, event: BillingEvent, processor: str) 
             # that declined once.
             return
 
-    await _move_plan(session, org_id=event.org_id, to_slug=_plan_after(subscription))
+    await _move_plan(session, org_id=subscription.org_id, to_slug=_plan_after(subscription))
 
 
 def _plan_after(subscription: BillingSubscription) -> str:
@@ -297,6 +307,7 @@ def _subscription_summary(
     return SubscriptionSummary(
         plan_slug=subscription.plan_slug,
         status=subscription.status,
+        services_committed=subscription.services_committed,
         activated_at=subscription.activated_at,
         cancelled_at=subscription.cancelled_at,
     )
@@ -452,6 +463,28 @@ async def begin_plan_change(
             on_day=today,
         ),
         return_url=checkout_return_url(app_base_url),
+    )
+
+    # The row that makes the processor's later events attributable. ADR 0110:
+    # the reference is theirs, but *whose subscription it is* is answered here,
+    # from a row written while an authenticated member was on the call — never
+    # from an organization id handed back by the processor.
+    #
+    # Written even though the customer may abandon the page. A pending row that
+    # never activates is a record of an attempt; the alternative is a webhook
+    # arriving for an arrangement we have no record of starting, which cannot be
+    # attributed at all.
+    queries.add_subscription(
+        session,
+        BillingSubscription(
+            org_id=organization.id,
+            processor=configured.name,
+            subscription_ref=checkout.subscription_ref,
+            processor_customer_ref=checkout.processor_customer_ref,
+            plan_slug=request.plan_slug,
+            status=STATUS_PENDING,
+            services_committed=request.services_committed,
+        ),
     )
     return CheckoutHandoff(url=checkout.url)
 

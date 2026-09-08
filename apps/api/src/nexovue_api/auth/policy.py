@@ -51,6 +51,15 @@ ROLES_THAT_MAY_ADMINISTER: Final = frozenset({"owner", "admin"})
 # the two genuinely differ.
 ROLES_THAT_MAY_END_THE_ORGANIZATION: Final = frozenset({"owner"})
 
+# Committing the organization to a recurring charge, and ending that commitment.
+# An admin administers what the organization already pays for; signing a mandate
+# that debits an account every month is the account holder's own act, and the
+# person who answers for the bill is the person who may create it. Cancelling
+# sits here for the same reason and not out of symmetry: an admin who could end
+# the mandate could stop the organization's ingestion at the next boundary.
+# Reading the overview stays open to every member — see `read_billing_overview`.
+ROLES_THAT_MAY_COMMIT_SPEND: Final = frozenset({"owner"})
+
 
 def require_role(*allowed: str) -> Callable[[Identity], Identity]:
     """Build a dependency that admits only these roles.
@@ -90,3 +99,6 @@ MayAdminister = Annotated[Identity, Depends(require_role(*ROLES_THAT_MAY_ADMINIS
 MayEndTheOrganization = Annotated[
     Identity, Depends(require_role(*ROLES_THAT_MAY_END_THE_ORGANIZATION))
 ]
+
+# Starting or ending a paid subscription.
+MayCommitSpend = Annotated[Identity, Depends(require_role(*ROLES_THAT_MAY_COMMIT_SPEND))]

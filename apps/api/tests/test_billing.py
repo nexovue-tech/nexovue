@@ -51,8 +51,6 @@ from nexovue_api.billing import (
 )
 from nexovue_api.billing.cashfree import (
     DELIVERY_HEADER,
-    ORG_TAG,
-    PLAN_TAG,
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
     CashfreePaymentProcessor,
@@ -84,6 +82,10 @@ OTHER_ORG_ID: Final = uuid.UUID("0198f2a0-0000-7000-8000-0000000000ff")
 SUBSCRIPTION_REF: Final = "nexovue-sub-0198f2a0"
 DELIVERY_ID: Final = "6f1c2d3e4a5b6c7d8e9f0a1b2c3d4e5f"
 PROCESSOR_NAME: Final = "cashfree"
+
+# The count the mandate was sized on. Any number works; a distinctive one makes
+# a wrong value in an assertion read as wrong rather than as a coincidence.
+SERVICES_COMMITTED: Final = 7
 
 SECRET: Final = "test_secret_key_never_a_real_one"
 TIMESTAMP: Final = "1757318400000"
@@ -140,6 +142,7 @@ class StubProcessor:
     failure: Exception | None = None
     seen: list[bytes] | None = None
     checkout_url: str = "https://processor.example.test/pay/abc"
+    subscription_ref: str = SUBSCRIPTION_REF
     checkouts: list[dict[str, Any]] = field(default_factory=list)
     cancelled: list[str] = field(default_factory=list)
 
@@ -161,7 +164,11 @@ class StubProcessor:
                 "return_url": return_url,
             }
         )
-        return Checkout(url=self.checkout_url, processor_customer_ref="cust_1")
+        return Checkout(
+            url=self.checkout_url,
+            subscription_ref=self.subscription_ref,
+            processor_customer_ref="cust_1",
+        )
 
     async def cancel(self, *, subscription_ref: str) -> None:
         self.cancelled.append(subscription_ref)
@@ -178,15 +185,11 @@ class StubProcessor:
 def _event(
     kind: BillingEventKind = BillingEventKind.SUBSCRIPTION_ACTIVATED,
     *,
-    org_id: uuid.UUID = ORG_ID,
+    subscription_ref: str = SUBSCRIPTION_REF,
 ) -> BillingEvent:
-    return BillingEvent(
-        kind=kind,
-        org_id=org_id,
-        subscription_ref=SUBSCRIPTION_REF,
-        plan_slug="pro",
-        delivery_id=DELIVERY_ID,
-    )
+    """ADR 0110: an event carries no organization and no plan. Both come from
+    the row the checkout wrote, which the reference names."""
+    return BillingEvent(kind=kind, subscription_ref=subscription_ref, delivery_id=DELIVERY_ID)
 
 
 def _configured(processor: Any) -> ConfiguredProcessor:
@@ -209,9 +212,30 @@ def _checkout_request(
     )
 
 
+def _pending(
+    *,
+    org_id: uuid.UUID = ORG_ID,
+    plan_slug: str = "pro",
+    status: str = service.STATUS_PENDING,
+) -> BillingSubscription:
+    """The row `begin_plan_change` writes before the customer is redirected.
+
+    ADR 0110 makes it the thing every webhook is resolved against, so a test
+    with no such row is testing an event this system has no record of starting.
+    """
+    return BillingSubscription(
+        org_id=org_id,
+        processor=PROCESSOR_NAME,
+        subscription_ref=SUBSCRIPTION_REF,
+        plan_slug=plan_slug,
+        status=status,
+        services_committed=SERVICES_COMMITTED,
+    )
+
+
 @pytest.fixture
 def session() -> CapturingSession:
-    return CapturingSession()
+    return CapturingSession(answers=[_pending()])
 
 
 # ------------------------------------------------------------------- the tenancy
@@ -324,7 +348,7 @@ async def test_an_event_this_product_does_not_act_on_is_accepted_and_stored_nowh
 
 async def test_a_replayed_delivery_changes_nothing() -> None:
     """The second arrival of the same delivery id must move no state."""
-    already_seen = CapturingSession(answers=[uuid.uuid4()])
+    already_seen = CapturingSession(answers=[_pending(), uuid.uuid4()])
     configured = _configured(StubProcessor(event=_event()))
 
     acknowledgement = await service.record_from_webhook(
@@ -341,9 +365,15 @@ async def test_a_replayed_delivery_changes_nothing() -> None:
 # ------------------------------------------------------------------- what is kept
 
 
-async def test_a_first_activation_creates_the_arrangement_and_records_the_delivery(
-    session: CapturingSession,
-) -> None:
+async def test_an_activation_activates_the_pending_row_and_records_the_delivery() -> None:
+    """The arrangement is not created here — it was created by the checkout.
+
+    ADR 0110: the event carries no organization, so an activation can only ever
+    move a row that already exists. What it proves is that the delivery lands on
+    the tenant the *checkout* named, not one the processor did.
+    """
+    pending = _pending()
+    session = CapturingSession(answers=[pending, None, _organization()])
     configured = _configured(StubProcessor(event=_event()))
 
     acknowledgement = await service.record_from_webhook(
@@ -354,18 +384,33 @@ async def test_a_first_activation_creates_the_arrangement_and_records_the_delive
     )
 
     assert acknowledgement.outcome is DeliveryOutcome.RECORDED
-    subscription = session.staged_of(BillingSubscription)[0]
-    assert subscription.org_id == ORG_ID
-    assert subscription.processor == PROCESSOR_NAME
-    assert subscription.subscription_ref == SUBSCRIPTION_REF
-    assert subscription.plan_slug == "pro"
-    assert subscription.status == service.STATUS_ACTIVE
-    assert subscription.activated_at is not None
+    assert pending.status == service.STATUS_ACTIVE
+    assert pending.activated_at is not None
+    assert session.staged_of(BillingSubscription) == []
 
     delivery = session.staged_of(BillingWebhookDelivery)[0]
     assert delivery.org_id == ORG_ID
     assert delivery.delivery_id == DELIVERY_ID
     assert delivery.kind == BillingEventKind.SUBSCRIPTION_ACTIVATED.value
+
+
+async def test_an_event_naming_a_subscription_no_checkout_started_is_not_attributed() -> None:
+    """The refusal ADR 0110 turns on. Signed, so not a forgery — and about an
+    arrangement this system has no record of starting, which no amount of
+    payload gives an honest owner. Acknowledged so it stops being redelivered,
+    and nothing is written."""
+    session = CapturingSession(answers=[None])
+    configured = _configured(StubProcessor(event=_event()))
+
+    acknowledgement = await service.record_from_webhook(
+        session,  # type: ignore[arg-type]
+        configured=configured,
+        body=b"{}",
+        headers={},
+    )
+
+    assert acknowledgement.outcome is DeliveryOutcome.IGNORED
+    assert session.staged == []
 
 
 async def test_the_stored_delivery_holds_no_body_no_signature_and_no_vendor_name(
@@ -402,8 +447,9 @@ async def test_a_cancellation_ends_the_arrangement_it_names() -> None:
         subscription_ref=SUBSCRIPTION_REF,
         plan_slug="pro",
         status=service.STATUS_ACTIVE,
+        services_committed=SERVICES_COMMITTED,
     )
-    session = CapturingSession(answers=[None, live])
+    session = CapturingSession(answers=[live, None])
     configured = _configured(StubProcessor(event=_event(BillingEventKind.SUBSCRIPTION_CANCELLED)))
 
     await service.record_from_webhook(
@@ -433,8 +479,9 @@ async def test_a_charge_does_not_change_what_the_arrangement_is(
         subscription_ref=SUBSCRIPTION_REF,
         plan_slug="pro",
         status=service.STATUS_ACTIVE,
+        services_committed=SERVICES_COMMITTED,
     )
-    session = CapturingSession(answers=[None, live])
+    session = CapturingSession(answers=[live, None])
 
     await service.record_from_webhook(
         session,  # type: ignore[arg-type]
@@ -457,9 +504,10 @@ async def test_an_already_active_arrangement_keeps_its_first_activation_date() -
         subscription_ref=SUBSCRIPTION_REF,
         plan_slug="pro",
         status=service.STATUS_ACTIVE,
+        services_committed=SERVICES_COMMITTED,
         activated_at=first_activation,
     )
-    session = CapturingSession(answers=[None, live])
+    session = CapturingSession(answers=[live, None])
 
     await service.record_from_webhook(
         session,  # type: ignore[arg-type]
@@ -490,7 +538,6 @@ def _cashfree_body() -> bytes:
                 "subscription_details": {
                     "subscription_id": SUBSCRIPTION_REF,
                     "subscription_status": "ACTIVE",
-                    "subscription_tags": {ORG_TAG: str(ORG_ID), PLAN_TAG: "pro"},
                 }
             },
             "type": "SUBSCRIPTION_STATUS_CHANGED",
@@ -505,7 +552,7 @@ async def test_a_real_signed_delivery_reaches_a_row_and_a_tampered_one_does_not(
     headers = _signed(body)
     configured = _configured(CashfreePaymentProcessor(SETTINGS))
 
-    accepted = CapturingSession()
+    accepted = CapturingSession(answers=[_pending(), None, _organization()])
     outcome = await service.record_from_webhook(
         accepted,  # type: ignore[arg-type]
         configured=configured,
@@ -513,10 +560,10 @@ async def test_a_real_signed_delivery_reaches_a_row_and_a_tampered_one_does_not(
         headers=headers,
     )
     assert outcome.outcome is DeliveryOutcome.RECORDED
-    assert accepted.staged_of(BillingSubscription)[0].org_id == ORG_ID
+    assert accepted.staged_of(BillingWebhookDelivery)[0].org_id == ORG_ID
 
-    tampered_body = body.replace(b'"pro"', b'"fre"')
-    refused = CapturingSession()
+    tampered_body = body.replace(b"ACTIVE", b"PAUSED")
+    refused = CapturingSession(answers=[_pending()])
     with pytest.raises(UnauthenticatedError):
         await service.record_from_webhook(
             refused,  # type: ignore[arg-type]
@@ -614,7 +661,7 @@ async def test_the_door_accepts_a_signed_delivery_at_the_role_named_path() -> No
     """A URL pasted into somebody else's dashboard. Naming the role rather than
     the vendor is what lets the second processor have its own."""
     body = _cashfree_body()
-    session = CapturingSession()
+    session = CapturingSession(answers=[_pending(), None, _organization()])
 
     async with await _client(_build_app(session)) as client:
         response = await client.post(
@@ -623,7 +670,7 @@ async def test_the_door_accepts_a_signed_delivery_at_the_role_named_path() -> No
 
     assert response.status_code == 200
     assert response.json()["outcome"] == DeliveryOutcome.RECORDED.value
-    assert session.staged_of(BillingSubscription)[0].org_id == ORG_ID
+    assert session.staged_of(BillingWebhookDelivery)[0].org_id == ORG_ID
 
 
 async def test_the_door_refuses_a_tampered_delivery_without_writing() -> None:
@@ -631,12 +678,12 @@ async def test_the_door_refuses_a_tampered_delivery_without_writing() -> None:
     FastAPI answer 422 on a forgery before the signature was ever looked at."""
     body = _cashfree_body()
     headers = _signed(body)
-    session = CapturingSession()
+    session = CapturingSession(answers=[_pending()])
 
     async with await _client(_build_app(session)) as client:
         response = await client.post(
             f"{API_PREFIX}/billing/webhook/domestic",
-            content=body.replace(b'"pro"', b'"fre"'),
+            content=body.replace(b"ACTIVE", b"PAUSED"),
             headers=headers,
         )
 
@@ -660,11 +707,12 @@ def _organization(plan: str = "free") -> Organization:
 def _delivery_answers(organization: Organization | None) -> list[Any]:
     """What `record_from_webhook` asks the store for, in the order it asks.
 
-    Three scalars: has this delivery been seen, is there a row for this
-    arrangement, and which organization does the event name. The first two are
-    None for a first activation.
+    Three scalars, in order: which arrangement this reference names, whether
+    this delivery has been seen, and the organization that arrangement belongs
+    to. The reference resolves first — ADR 0110 — because it is what establishes
+    the tenant the other two are asked about.
     """
-    return [None, None, organization]
+    return [_pending(), None, organization]
 
 
 class TestThePlanFollowsTheProcessor:
@@ -880,7 +928,17 @@ class TestStartingACheckout:
         )
 
         assert processor.checkouts[0]["contact"].phone == "+919000000000"
-        assert session.staged == []
+
+        # A row is staged now — ADR 0110 — so "never staged" is checked against
+        # what that row holds rather than against there being no row at all.
+        staged = session.staged_of(BillingSubscription)[0]
+        written = " ".join(
+            str(getattr(staged, column.name, None))
+            for column in BillingSubscription.__table__.columns
+        )
+        assert "+919000000000" not in written
+        assert "someone@example.test" not in written
+        assert "Some One" not in written
 
     async def test_an_unknown_plan_is_refused_before_a_processor_is_called(self) -> None:
         processor = StubProcessor()
@@ -905,6 +963,7 @@ class TestStartingACheckout:
             subscription_ref=SUBSCRIPTION_REF,
             plan_slug="pro",
             status=service.STATUS_ACTIVE,
+            services_committed=SERVICES_COMMITTED,
         )
         processor = StubProcessor()
         session = CapturingSession(answers=[_plan_row(), live])
@@ -929,6 +988,7 @@ class TestEndingASubscription:
             subscription_ref=SUBSCRIPTION_REF,
             plan_slug="pro",
             status=service.STATUS_ACTIVE,
+            services_committed=SERVICES_COMMITTED,
         )
         processor = StubProcessor()
         session = CapturingSession(answers=[live])
@@ -951,6 +1011,7 @@ class TestEndingASubscription:
             subscription_ref=SUBSCRIPTION_REF,
             plan_slug="pro",
             status=service.STATUS_ACTIVE,
+            services_committed=SERVICES_COMMITTED,
         )
         organization = _organization(plan="pro")
         session = CapturingSession(answers=[live])
@@ -982,6 +1043,7 @@ class TestEndingASubscription:
             subscription_ref=SUBSCRIPTION_REF,
             plan_slug="pro",
             status=service.STATUS_ACTIVE,
+            services_committed=SERVICES_COMMITTED,
         )
         processor = StubProcessor()
         session = CapturingSession(answers=[foreign])
@@ -1170,6 +1232,7 @@ class TestTheBillingScreen:
                 subscription_ref=SUBSCRIPTION_REF,
                 plan_slug="pro",
                 status=service.STATUS_ACTIVE,
+                services_committed=SERVICES_COMMITTED,
                 activated_at=datetime(2026, 9, 2, tzinfo=UTC),
             ),
         )

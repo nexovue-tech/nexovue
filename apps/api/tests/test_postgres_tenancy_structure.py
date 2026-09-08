@@ -53,6 +53,11 @@ EXEMPT: Final = {
     # prefix is: the receiver resolves a browser request by this value alone, so
     # two tenants holding one would make that lookup ambiguous.
     "site_key_is_taken",
+    # Resolves a processor's subscription reference to its tenant, exactly as
+    # `find_live_key_by_prefix` resolves an ingest key. It is what *establishes*
+    # the organization, so it cannot be scoped by one — and asking the webhook
+    # to name the organization is the arrangement ADR 0110 removed.
+    "subscription_by_processor_ref",
 }
 
 
