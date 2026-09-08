@@ -2,10 +2,18 @@
 // organization spent the volume its plan includes for the calendar month, at
 // the door this export came through.
 //
-// It is the free tier's boundary, and only the free tier's. A plan that puts no
-// ceiling on the services it bills has no enforced allowance here, so no paying
-// customer is ever refused for volume — see ADR 0093, which is what reconciles
-// that with ADR 0083's refusal to cap a customer to hold their bill down.
+// **Where the allowance comes from depends on the tier.** A plan that puts a
+// ceiling on the services it bills sets it — the free tier. A plan that does not
+// is sized on the count the customer committed to when they authorised their
+// mandate, which is ADR 0107's ceiling: they chose it, they can see it, and they
+// raise it themselves. A paid tier with no active mandate has nothing to size an
+// allowance on and enforces nothing, which is not a ceiling of zero.
+//
+// It used to be the free tier's boundary and only the free tier's, on the
+// reading that ADR 0083 refuses to cap a customer to hold their bill down. That
+// refusal still stands and this still honours it — the difference is that "we
+// will not cap you to protect our margin" is no longer confused with "you have
+// no limit at all". See ADR 0093 §3, amended, and ADR 0107.
 //
 // The allowance is one number for the organization, and where the plan says so
 // the browser door carries a **cap** within it (ADR 0097): a public site key is

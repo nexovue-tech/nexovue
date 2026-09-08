@@ -20,18 +20,24 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 from sqlalchemy import Row, distinct, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
+    BillingSubscription,
     Plan,
     PlanPrice,
     UsageDaily,
     UsageDailyService,
     UsageIngestOffset,
 )
+
+# The one subscription status that may raise a ceiling. Spelled here rather than
+# imported from `billing.service`, which would invert the dependency — that
+# module reads this one.
+ACTIVE_SUBSCRIPTION_STATUS: Final = "active"
 
 
 class MeteringFrontier(NamedTuple):
@@ -276,6 +282,35 @@ async def find_effective_price(
         .limit(1)
     )
     return price
+
+
+async def active_services_committed(session: AsyncSession, *, org_id: uuid.UUID) -> int | None:
+    """How many services this organization has an active mandate for, or None.
+
+    Lives here beside `find_effective_price` because it is the second half of one
+    question — what sizes this month's allowance — and splitting the two across
+    domains would let the screen and the door read different tables. The receiver
+    asks the same question in one SQL statement for the same reason.
+
+    `active` is the whole of what makes it real: a `pending` row is a checkout
+    somebody may never finish and a `cancelled` one has ended, so neither may
+    raise a ceiling. Newest first, so the arrangement in force wins if two are
+    somehow active.
+    """
+    statement = (
+        select(BillingSubscription.services_committed)
+        .where(
+            BillingSubscription.org_id == org_id,
+            BillingSubscription.status == ACTIVE_SUBSCRIPTION_STATUS,
+        )
+        .order_by(
+            BillingSubscription.activated_at.desc().nullslast(),
+            BillingSubscription.created_at.desc(),
+        )
+        .limit(1)
+    )
+    committed: int | None = await session.scalar(statement)
+    return committed
 
 
 async def metering_frontier(session: AsyncSession) -> MeteringFrontier:

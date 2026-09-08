@@ -26,6 +26,7 @@ export type NavPath =
   | "/infrastructure"
   | "/usage"
   | "/settings/api-keys"
+  | "/settings/projects"
   | "/settings/profile";
 
 export interface ScreenDefinition {
@@ -146,6 +147,13 @@ export const SHELL_SCREENS: ScreenDefinition[] = [
     description: "Create, rotate and revoke the keys your services send telemetry with.",
     taskId: "P1-13",
   },
+  {
+    path: "/settings/projects",
+    title: "Projects",
+    description:
+      "The projects a key sends to, what each one keeps, and what never leaves your process at all.",
+    taskId: "P1-76",
+  },
   // In the sidebar rather than tucked behind an avatar menu, because there is no avatar
   // menu: this shell has no other way to reach a screen. Beside API keys under Account,
   // since "the password on my account" is the same errand as "the key my services use".
@@ -208,6 +216,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: "/usage", title: "Usage" },
       { path: "/settings/api-keys", title: "API keys" },
+      { path: "/settings/projects", title: "Projects" },
       { path: "/settings/profile", title: "Profile & security" },
     ],
   },

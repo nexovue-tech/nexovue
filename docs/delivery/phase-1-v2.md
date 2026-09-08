@@ -27,13 +27,13 @@ never when the code was written.
 | **G3** | poller SSRF boundary | ✅ **done** | `2f06a98` |
 | **G4** | poller certificate verification | ✅ **done** | `f26ec33` |
 | **G5** | ingest kill switch — both halves, proved end to end | ✅ **done** | `10ae52f` `58986ea` |
-| **G6a** | paid-tier browser cap | ⬜ **and larger than this file said** — see §5a | — |
+| **G6a** | paid-tier browser cap | ✅ **done** — a paid tier is sized on the customer's committed count; T1-4 closed with it | *pending* |
 | **G7** | SDK distribution | ⬜ blocked on a deployment target | — |
-| **C1** | P1-73 payment processor | 🟡 **adapter, webhook, signature and tables done; `begin_checkout` blocked** — the port cannot carry what Cashfree requires, see below | `c089344` |
+| **C1** | P1-73 payment processor | 🟡 **adapter, webhook, signature, tables and tenant resolution done; `begin_checkout` blocked** — and on a third reason: Cashfree's subscription flow returns a session id for its own SDK, never a link. **`Checkout` promising a URL is the open decision** | `c089344` `dc211fa` `253ae2b` |
 | **C2** | P1-74 plan change | ⬜ needs C1 finished | — |
 | **C3** | P1-75 billing screen | ⬜ needs C1 finished | — |
-| **C4** | P1-72 profile & security | 🟡 **API and screen done**; email change and timezone have no API at all | `c089344` |
-| **C5** | P1-76 project management | ⬜ D3's masking and sampling writes land here | — |
+| **C4** | P1-72 profile & security | ✅ **done** — the board was stale: `POST /email-change/confirm`, `request_email_change` and `profile/timezones.py` all exist and are tested | `bb141b6` |
+| **C5** | P1-76 project management | 🟡 **API done** — full CRUD and D3's masking in `projects/config.py`; **no screen** | `bb141b6` |
 | **C6** | ClickHouse purge path | ✅ **done** — 13 tables, two-tenant proof | `10ae52f` |
 | **C7** | P1-77 account & organization deletion | ✅ **done** — Postgres, object store and ClickHouse, owner only | `7d8f576` |
 | **M1** | four blank §4 budgets | ✅ **done — all four pass** | `7260610` |
@@ -1115,20 +1115,23 @@ adding one.
 | **X1–X3** | Deferred past Phase 2 deliberately | 3 | 0 | n/a |
 | | **totals** | **37** | **30** | **21 built**, 2 partly |
 
-**21 of 30 build items done, as of the evening of 2026-09-08**, with two more part-built. Up
-from 8 at the start of the day.
+**24 of 30 build items done, as of 2026-09-09**, with two more part-built.
+
+**Two of those three were already done when this section last claimed otherwise.** C4's email
+change and timezone APIs and C5's whole project-management API had landed in `bb141b6` and the
+board did not move. That is the second time this file has been stale in the same direction, so
+the rows below were checked against the code rather than against the previous version of this
+table — which is rule 4 applied to a status board.
 
 **What is left, in full, so this does not have to be inferred from the board:**
 
 | | Item | State |
 |---|---|---|
-| **G6a** | paid-tier browser cap | not started, and larger than this file first said |
 | **G7** | SDK distribution | **blocked** — no deployment target exists |
 | **C1** | payments | `begin_checkout` blocked on a port decision, below |
 | **C2** | plan change | needs C1 |
 | **C3** | billing screen | needs C1 |
-| **C4** | P1-72 | email change and timezone have no API |
-| **C5** | project management | not started |
+| **C5** | project management | API done; **screen not built** |
 | **M2** | the 24-hour soak | not started; last thing before Phase 2 |
 | **F4** | re-run the Tier 2 figures | not started |
 
@@ -1137,7 +1140,7 @@ from 8 at the start of the day.
 money half of the product. Three series are
 complete or nearly so: **A1–A3** the architecture seams, **D1–D4** the four decisions and both
 build rows they turned out to hide, and **F1–F5** bar one — only F4's re-run remains. The gate is
-**7 of 9**, with G6a and G7 left.
+**8 of 9**, with only G7 left and G7 blocked on a deployment target rather than on work.
 
 **The status board above was stale until 2026-09-08 and said so in two directions at once** — §1
 recorded G5 as *"Done 2026-09-07, both halves"* while the board still showed it unstarted, and G1,
@@ -1171,7 +1174,7 @@ obligation since August. Only D3 was the shape it looked.
 | G2b · P1-70 verification | ✅ | writes the column that had existed unwritten since 0001 |
 | G2c · P1-71 password reset | ✅ | single-use token, and every live session ended via `sessions_valid_from` |
 | G5 · ingest kill switch | ✅ | valve closed by hand → `429` at t+20s; reopened → `200` |
-| G6a · paid-tier browser cap | ⬜ | **the last unblocked gate item** |
+| G6a · paid-tier browser cap | ✅ | **done 2026-09-09.** `allowanceServiceCount` in Go and `allowance_service_count` in Python are the one rule written twice, which is what closed T1-4 |
 | G7 · SDK distribution | ⬜ | blocked on a deployment target |
 | G6b · the cap number | ⛔ | blocked on real RUM traffic, correctly |
 | ~~G6c · block or bill on overage~~ | ✅ | **decided 2026-09-07 — [ADR 0107](../architecture/decisions/0107-over-the-allowance-we-stop-and-say-so-and-the-customer-may-raise-the-ceiling.md).** Stop and say so, with a ceiling the customer may raise. **P1-74 unblocked** |

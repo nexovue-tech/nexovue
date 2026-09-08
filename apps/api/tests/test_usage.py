@@ -134,6 +134,7 @@ class FakeUsageStore:
         prices: Sequence[PlanPrice] = (),
         counted_through: datetime | None = None,
         unknown_partitions: int = 0,
+        services_committed: int | None = None,
     ) -> None:
         self._rows = rows
         self._plans = plans
@@ -141,6 +142,7 @@ class FakeUsageStore:
         self._prices = prices
         self._counted_through = counted_through
         self._unknown_partitions = unknown_partitions
+        self._services_committed = services_committed
 
     async def scalars(self, statement: Any) -> Any:
         return _Rows(self._counters(_Bound(statement)))
@@ -152,6 +154,10 @@ class FakeUsageStore:
                 return next((p for p in self._prices if p.plan_slug in bound.values), None)
             case "usage_daily_services":
                 return len({(row.project_id, row.service_name) for row in self._services(bound)})
+            case "billing_subscriptions":
+                # None is "no active mandate", which is what every free-tier
+                # test means and what an unpaid paid tier means too.
+                return self._services_committed
             case _:
                 return next((plan for plan in self._plans if plan.slug in bound.values), None)
 
@@ -670,8 +676,15 @@ async def _priced(
     from_day: date = FROM_DAY,
     to_day: date = TO_DAY,
     project_id: uuid.UUID | None = None,
+    services_committed: int | None = None,
 ) -> UsageResponse:
-    store = FakeUsageStore(_ROWS, [PRO_PLAN], services=services, prices=[price] if price else ())
+    store = FakeUsageStore(
+        _ROWS,
+        [PRO_PLAN],
+        services=services,
+        prices=[price] if price else (),
+        services_committed=services_committed,
+    )
     return await service.usage_for_organization(
         store,  # type: ignore[arg-type]
         organization=_organization(ORG_ID),
@@ -810,18 +823,47 @@ async def test_narrowing_to_one_project_does_not_narrow_the_bill() -> None:
 # ------------------------------------------------------------- the allowance
 
 
-async def test_the_allowance_is_bytes_pooled_across_the_billed_services() -> None:
-    """Per service, summed: a quiet service lends its allowance to a busy one."""
+async def test_the_allowance_is_bytes_pooled_across_the_committed_services() -> None:
+    """Per service, summed, and then spent as one pool: a quiet service lends its
+    allowance to a busy one.
+
+    Sized on the commitment rather than on the services actually running, which
+    is the half this test used to have backwards. An allowance that moved with
+    the count would change what a customer may send as services came and went,
+    and would tell a customer refused at 2 GiB that starting a second service is
+    the remedy.
+    """
     services = [
         _service(ORG_ID, PROJECT_ID, TO_DAY, "checkout"),
         _service(ORG_ID, PROJECT_ID, TO_DAY, "payments"),
     ]
 
-    response = await _priced(services, price=_price(included_bytes=1_000_000))
+    response = await _priced(services, price=_price(included_bytes=1_000_000), services_committed=2)
 
     assert response.period.included_bytes == 2_000_000
-    # The month's rows are the two in `_ROWS`, which is what it is measured against.
+    # The month's rows are the two in `_ROWS`, which is what it is measured
+    # against — the whole organization's, not one service's.
     assert response.period.bytes_ingested == 1_500
+
+
+async def test_the_allowance_does_not_move_with_the_running_service_count() -> None:
+    """The property the test above exists to protect, asserted directly.
+
+    One service running or three, the ceiling is the one the customer committed
+    to. `allowance.allowanceServiceCount` in the receiver holds the same line.
+    """
+    price = _price(included_bytes=1_000_000)
+    one = [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")]
+    three = [
+        *one,
+        _service(ORG_ID, PROJECT_ID, TO_DAY, "payments"),
+        _service(ORG_ID, PROJECT_ID, TO_DAY, "shipping"),
+    ]
+
+    quiet = await _priced(one, price=price, services_committed=2)
+    busy = await _priced(three, price=price, services_committed=2)
+
+    assert quiet.period.included_bytes == busy.period.included_bytes == 2_000_000
 
 
 async def test_no_allowance_recorded_is_not_an_allowance_of_zero() -> None:
@@ -966,7 +1008,7 @@ def test_the_two_shares_always_sum_to_the_whole() -> None:
     """
     for share in (0, 1, 25, 33, 50, 99, 100):
         price = _price(ceiling=3, included_bytes=2 * GIB, browser_share=share)
-        cap = billing.browser_cap_bytes(1, price)
+        cap = billing.browser_cap_bytes(price, None)
 
         assert cap is not None
         assert 0 <= cap <= 6 * GIB, share
@@ -974,9 +1016,9 @@ def test_the_two_shares_always_sum_to_the_whole() -> None:
 
 def test_a_share_of_zero_is_not_the_same_statement_as_no_share() -> None:
     """Zero is a plan the browser door may send nothing through; null is pooled."""
-    none_recorded = billing.browser_cap_bytes(1, _price(ceiling=3, included_bytes=2 * GIB))
+    none_recorded = billing.browser_cap_bytes(_price(ceiling=3, included_bytes=2 * GIB), None)
     zero_recorded = billing.browser_cap_bytes(
-        1, _price(ceiling=3, included_bytes=2 * GIB, browser_share=0)
+        _price(ceiling=3, included_bytes=2 * GIB, browser_share=0), None
     )
 
     assert none_recorded is None
@@ -985,23 +1027,45 @@ def test_a_share_of_zero_is_not_the_same_statement_as_no_share() -> None:
 
 def test_a_row_with_no_allowance_has_no_split_to_report() -> None:
     """There is nothing to divide, so a share on such a row divides nothing."""
-    assert billing.browser_cap_bytes(1, _price(ceiling=3, browser_share=25)) is None
-    assert billing.browser_cap_bytes(1, None) is None
+    assert billing.browser_cap_bytes(_price(ceiling=3, browser_share=25), None) is None
+    assert billing.browser_cap_bytes(None, None) is None
 
 
-async def test_a_share_on_an_uncapped_row_splits_a_number_nothing_enforces() -> None:
-    """Pro and scale get no share row, and if one appeared it would refuse nobody.
+async def test_an_uncapped_row_with_no_mandate_reports_no_allowance_at_all() -> None:
+    """A paid tier nobody has committed to has nothing to report and nothing to split.
 
-    The split follows `included_bytes`, which an uncapped tier still reports;
-    what makes it a boundary is `allowance_enforced`, and that stays false. The
-    receiver asserts the same of the same row.
+    This used to assert the opposite — that the screen showed a figure derived
+    from the services counted so far, described as "a description, not a
+    boundary". That figure existed because no paid ceiling did. One does now
+    (G6a), so reporting a number the door would never apply is exactly the
+    divergence `included_bytes` warns about.
     """
     one = [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")]
 
     response = await _priced(one, price=_price(included_bytes=10 * GIB, browser_share=25))
 
     assert response.period.allowance_enforced is False
-    assert response.period.browser_included_bytes == 10 * GIB // 4
+    assert response.period.included_bytes is None
+    assert response.period.browser_included_bytes is None
+
+
+async def test_an_uncapped_row_is_sized_on_the_customers_own_commitment() -> None:
+    """G6a: a paying customer has a ceiling, and it is the one they chose.
+
+    Before this, `max_billed_services` was NULL on every paying tier and nothing
+    else sized the allowance, so a paying customer could send without limit while
+    every free one was stopped. The receiver computes the same two numbers from
+    the same row in `TestAPaidRowIsSizedOnTheCustomersCommittedCount`.
+    """
+    one = [_service(ORG_ID, PROJECT_ID, TO_DAY, "checkout")]
+
+    response = await _priced(
+        one, price=_price(included_bytes=10 * GIB, browser_share=25), services_committed=4
+    )
+
+    assert response.period.allowance_enforced is True
+    assert response.period.included_bytes == 40 * GIB
+    assert response.period.browser_included_bytes == 40 * GIB // 4
 
 
 async def test_the_total_and_the_browser_part_are_selected_in_that_order(

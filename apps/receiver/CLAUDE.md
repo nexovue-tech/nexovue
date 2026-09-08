@@ -16,9 +16,13 @@ exists to protect.
 plan includes a monthly volume, and has spent it, is refused until the 1st. It sits above
 `ratelimit` because it answers from an in-process cache rather than a Valkey round trip, so the
 customer this gate exists for — one sending hard and being refused for all of it — costs
-nothing to turn away. **Only a plan with a ceiling on its billed services has an
-allowance**: `max_billed_services IS NULL` on pro and scale, so nothing that pays is ever
-refused for volume. **Where the plan row records `browser_share_percent`, that is a cap on the
+nothing to turn away. **The allowance is sized on a service count, and where that
+count comes from depends on the tier**: a plan that caps its billed services sets it
+(`max_billed_services`, the free tier), and a plan that does not — pro and scale — is sized on
+the count the customer committed to when they authorised their mandate (ADR 0107). A paid tier
+with no active subscription has nothing to size an allowance on and enforces nothing, which is
+not a ceiling of zero. Until G6a this second half did not exist, so **a paying customer had no
+limit at all** while every free one had one. **Where the plan row records `browser_share_percent`, that is a cap on the
 browser door inside the one allowance, not a partition of it.** The browser's spend comes out of
 the month only as it is actually spent, so an unused cap stays the server's — reserving it
 withdrew a quarter of the free tier for a door nobody could open. Both doors are then judged on

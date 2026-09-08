@@ -331,6 +331,8 @@ async def _period(
     )
     frontier = await usage_queries.metering_frontier(session)
     cost = usage_billing.service_cost_minor_units(services, price)
+    # What sizes the allowance on a paid tier. G6a.
+    services_committed = await usage_queries.active_services_committed(session, org_id=org_id)
 
     return BillingPeriodUsage(
         first_day=month.first_day,
@@ -344,9 +346,9 @@ async def _period(
         # The currency belongs to the amount; without one there is nothing to
         # denominate.
         currency=price.currency if cost is not None and price is not None else None,
-        included_bytes=usage_billing.included_bytes(services, price),
-        browser_included_bytes=usage_billing.browser_cap_bytes(services, price),
-        allowance_enforced=usage_billing.allowance_is_enforced(price),
+        included_bytes=usage_billing.included_bytes(price, services_committed),
+        browser_included_bytes=usage_billing.browser_cap_bytes(price, services_committed),
+        allowance_enforced=usage_billing.allowance_is_enforced(price, services_committed),
     )
 
 

@@ -18,6 +18,7 @@ import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
 import { LogsScreen } from "@/features/logs/LogsScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
+import { ProjectsScreen } from "@/features/projects/ProjectsScreen";
 import { RumScreen } from "@/features/rum/RumScreen";
 import { ServiceDetailScreen } from "@/features/servicedetail/ServiceDetailScreen";
 import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
@@ -167,6 +168,12 @@ const settingsApiKeysRoute = createRoute({
   component: ApiKeysScreen,
 });
 
+const settingsProjectsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/projects",
+  component: ProjectsScreen,
+});
+
 /**
  * Inside the shell like every other signed-in screen. It reads and writes the caller's
  * own account, so it is only reachable with a session — and the shell's own `/auth/me`
@@ -271,6 +278,7 @@ const routeTree = rootRoute.addChildren([
     rumRoute,
     usageRoute,
     settingsApiKeysRoute,
+    settingsProjectsRoute,
     settingsProfileRoute,
     notFoundRoute,
   ]),

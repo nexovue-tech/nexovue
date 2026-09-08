@@ -202,6 +202,9 @@ async def _billing_period(
         session, org_id=org_id, from_day=period.first_day, to_day=period.last_day
     )
     cost = billing.service_cost_minor_units(services, price)
+    # What sizes the allowance on a paid tier — the plan's own ceiling sizes it
+    # on the free one, and then this is unused. G6a.
+    services_committed = await queries.active_services_committed(session, org_id=org_id)
 
     return BillingPeriodUsage(
         first_day=period.first_day,
@@ -217,11 +220,11 @@ async def _billing_period(
         # The currency belongs to the amount; without one there is nothing to
         # denominate.
         currency=price.currency if cost is not None and price is not None else None,
-        included_bytes=billing.included_bytes(services, price),
+        included_bytes=billing.included_bytes(price, services_committed),
         # Null means the row records no split, and the whole is what every door
         # spends. See `billing.browser_cap_bytes`.
-        browser_included_bytes=billing.browser_cap_bytes(services, price),
-        allowance_enforced=billing.allowance_is_enforced(price),
+        browser_included_bytes=billing.browser_cap_bytes(price, services_committed),
+        allowance_enforced=billing.allowance_is_enforced(price, services_committed),
     )
 
 

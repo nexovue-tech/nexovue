@@ -59,6 +59,15 @@ service run still brings its own.
 
 ### 3. `max_billed_services IS NULL` means uncapped, and nothing that pays is ever refused
 
+> **Superseded in part on 2026-09-09 by [0107](0107-over-the-allowance-we-stop-and-say-so-and-the-customer-may-raise-the-ceiling.md), built as G6a.**
+> A paid tier is now sized on the count the customer committed to when they authorised their
+> mandate, and volume past it is refused. What survives unchanged is the reason this section gave:
+> **we do not cap a paying customer to hold our own costs down.** Enforcing a ceiling the customer
+> set for themselves, can see, and can raise is keeping their instruction rather than imposing
+> ours — and ADR 0107 chose it over automatic overage because an unbounded invoice is the thing
+> this product is sold against. A paid tier with **no active subscription** still enforces nothing,
+> which is the rule below, unamended.
+
 `pro` and `scale` record no ceiling. A row with either `max_billed_services` or
 `included_bytes_per_service` NULL enforces nothing, whatever the volume. **Refusing a paying
 customer would be a far larger failure than the hole this closes**, so that rule is asserted at the

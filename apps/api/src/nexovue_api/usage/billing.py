@@ -79,7 +79,29 @@ def service_cost_minor_units(services: int, price: PlanPrice | None) -> int | No
     return billed_services(services, price) * price.price_per_service_minor_units
 
 
-def included_bytes(services: int, price: PlanPrice | None) -> int | None:
+def allowance_service_count(price: PlanPrice | None, services_committed: int | None) -> int | None:
+    """The count the month's allowance is sized on, or None when nothing sizes it.
+
+    **This is the rule, and `allowance.allowanceServiceCount` in the receiver is
+    the same rule in Go. The two have to agree or a customer is refused at a
+    limit this screen never showed them.**
+
+    A plan that caps the services it bills sets the count itself. A plan with no
+    cap — every paying tier — is sized on what the customer committed to when
+    they authorised the mandate, which is ADR 0107's ceiling: they chose it, they
+    can see it, and they raise it themselves.
+
+    None enforces nothing: an unpriced tier, or a paid tier with no active
+    subscription. Deliberately not zero, which is a plan that includes nothing.
+    """
+    if price is None:
+        return None
+    if price.max_billed_services is not None:
+        return price.max_billed_services
+    return services_committed
+
+
+def included_bytes(price: PlanPrice | None, services_committed: int | None) -> int | None:
     """The month's volume allowance, pooled across the organization.
 
     Pooled rather than enforced service by service, which is what the field
@@ -89,31 +111,31 @@ def included_bytes(services: int, price: PlanPrice | None) -> int | None:
     payload carrying several services would have to have its bytes apportioned
     between them by a rule nobody has chosen.
 
-    **Where the plan has a ceiling, the allowance is the ceiling's**, not the
-    running count's: three services' worth on Free whether one service is
-    running or three. That is because this number is enforced at the ingest
-    door (ADR 0093), and an allowance that moved with the service count would
-    change what a customer may send as services came and went — and would tell
-    a customer refused at 2 GiB that starting a second service is the remedy.
-    An uncapped tier has no such number, so each service run brings its own.
+    **The allowance is the ceiling's, never the running service count's.** That
+    is because this number is enforced at the ingest door (ADR 0093), and an
+    allowance that moved with the count would change what a customer may send as
+    services came and went — and would tell a customer refused at 2 GiB that
+    starting a second service is the remedy.
 
-    `allowance.Usage.IncludedBytes` in the receiver computes the same figure
-    from the same row. The two have to agree, or the screen states a limit the
-    door does not apply. Where the row also records a split this is still the
-    whole — `browser_cap_bytes` is the ceiling the browser door alone carries.
+    It used to take the running count and return it on an uncapped tier, as a
+    figure the screen could show a paying customer without implying a door that
+    would refuse them. That was the honest thing to do while no paid ceiling
+    existed. One does now, so the count is gone and this returns the boundary
+    the door actually applies.
 
-    None when no rate is recorded or the rate records no allowance. An
-    allowance nobody set is not an allowance of zero, which would report every
-    byte as overage.
+    None when no rate is recorded, the rate records no allowance, or nothing
+    sizes it. An allowance nobody set is not an allowance of zero, which would
+    report every byte as overage.
     """
     if price is None or price.included_bytes_per_service is None:
         return None
-    if price.max_billed_services is None:
-        return services * price.included_bytes_per_service
-    return price.max_billed_services * price.included_bytes_per_service
+    services = allowance_service_count(price, services_committed)
+    if services is None:
+        return None
+    return services * price.included_bytes_per_service
 
 
-def browser_cap_bytes(services: int, price: PlanPrice | None) -> int | None:
+def browser_cap_bytes(price: PlanPrice | None, services_committed: int | None) -> int | None:
     """The most the browser door may spend of the month, or None when uncapped.
 
     A public site key is printed in the customer's page, so anyone who views
@@ -143,23 +165,27 @@ def browser_cap_bytes(services: int, price: PlanPrice | None) -> int | None:
     paying customer their included volume without implying a door that would
     ever refuse them.
     """
-    included = included_bytes(services, price)
+    included = included_bytes(price, services_committed)
     if included is None or price is None or price.browser_share_percent is None:
         return None
     return included * price.browser_share_percent // PERCENT_WHOLE
 
 
-def allowance_is_enforced(price: PlanPrice | None) -> bool:
+def allowance_is_enforced(price: PlanPrice | None, services_committed: int | None) -> bool:
     """Whether volume past the allowance is refused rather than billed.
 
-    True only where the plan puts a ceiling on the services it bills, which is
-    the free tier and nothing else. ADR 0083 section 6 refuses to cap a paying
-    customer to hold their bill down, and this does not: a tier with no ceiling
-    has no enforced allowance, so nothing that pays is ever refused for volume.
-    ADR 0093 is where the two sit side by side.
+    True wherever something sizes the allowance: the plan's own ceiling on the
+    free tier, or the customer's committed count on a paid one.
+
+    **This used to be true for the free tier and nothing else**, and the reason
+    given was that ADR 0083 section 6 refuses to cap a paying customer to hold
+    their bill down. That reason still stands and this still honours it — what
+    it does not do any more is confuse *"we will not cap you to protect our
+    margin"* with *"you have no limit at all"*. ADR 0107 replaced the second
+    with a ceiling the customer sets for themselves, and enforcing that is
+    keeping their instruction rather than imposing ours.
+
+    False on a paid tier with no active subscription: there is nothing to
+    enforce, which is not a ceiling of zero.
     """
-    return (
-        price is not None
-        and price.included_bytes_per_service is not None
-        and price.max_billed_services is not None
-    )
+    return included_bytes(price, services_committed) is not None

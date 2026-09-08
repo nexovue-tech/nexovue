@@ -15,7 +15,7 @@ import os
 import socket
 import uuid
 from collections.abc import AsyncIterator
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Final
 from urllib.parse import urlsplit
 
@@ -23,7 +23,13 @@ import pytest
 from live import require_stack
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from nexovue_api.data.postgres.models import PlanPrice, Project, UsageDaily, UsageDailyService
+from nexovue_api.data.postgres.models import (
+    BillingSubscription,
+    PlanPrice,
+    Project,
+    UsageDaily,
+    UsageDailyService,
+)
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 from nexovue_api.usage import queries, service
 from nexovue_api.usage.schemas import UsageResponse
@@ -291,6 +297,32 @@ async def _record_price(
     await db.flush()
 
 
+async def _record_mandate(
+    db: AsyncSession,
+    tenant: ProvisionedTenant,
+    *,
+    services_committed: int,
+    status: str = "active",
+) -> None:
+    """A real `billing_subscriptions` row, which is what sizes a paid allowance.
+
+    G6a: on a tier with no `max_billed_services` this row is the only thing that
+    can, so a suite that never writes one can only ever prove the unenforced half.
+    """
+    db.add(
+        BillingSubscription(
+            org_id=tenant.organization.id,
+            processor="test",
+            subscription_ref=f"sub-{uuid.uuid4()}",
+            plan_slug=tenant.organization.plan,
+            status=status,
+            services_committed=services_committed,
+            activated_at=datetime.now(UTC) if status == "active" else None,
+        )
+    )
+    await db.flush()
+
+
 async def test_the_split_is_read_from_a_real_price_row(db: AsyncSession) -> None:
     """Migration 0016's free row, read back through Postgres (ADR 0097).
 
@@ -400,16 +432,45 @@ async def test_the_ceiling_in_a_real_row_holds_the_bill_down(db: AsyncSession) -
 
 
 async def test_the_allowance_is_read_from_the_row_and_pooled(db: AsyncSession) -> None:
+    """An uncapped tier sized by a real mandate row, read back through Postgres.
+
+    It used to be sized on the two services below, because nothing else could
+    size it. G6a made the commitment the ceiling, so the mandate is now what this
+    asserts and the running count is deliberately different from it.
+    """
     tenant = await _new_tenant(db)
     await _record_price(db, tenant, minor_units=1_000, included_bytes=1_000_000)
+    await _record_mandate(db, tenant, services_committed=2)
     await _record_service(db, tenant, day=TO_DAY, name="checkout")
     await _record_service(db, tenant, day=TO_DAY, name="payments")
+    await _record_service(db, tenant, day=TO_DAY, name="shipping")
     await _record(db, tenant, day=TO_DAY, spans=10, byte_count=2_500)
 
     answer = await _read(db, tenant)
 
     assert answer.period.included_bytes == 2_000_000
+    assert answer.period.allowance_enforced is True
+    # Three services running against a commitment of two. The allowance is the
+    # commitment's, and the bytes are the whole organization's.
+    assert answer.period.services == 3
     assert answer.period.bytes_ingested == 2_500
+
+
+async def test_an_uncapped_tier_with_no_active_mandate_is_read_as_unenforced(
+    db: AsyncSession,
+) -> None:
+    """The other half, and the one that keeps a paying customer from being
+    refused for a ceiling they never set. A `pending` row is a checkout somebody
+    may never finish, so it sizes nothing."""
+    tenant = await _new_tenant(db)
+    await _record_price(db, tenant, minor_units=1_000, included_bytes=1_000_000)
+    await _record_mandate(db, tenant, services_committed=9, status="pending")
+    await _record_service(db, tenant, day=TO_DAY, name="checkout")
+
+    answer = await _read(db, tenant)
+
+    assert answer.period.included_bytes is None
+    assert answer.period.allowance_enforced is False
 
 
 async def test_a_capped_tier_reads_the_ceilings_allowance_from_real_postgres(

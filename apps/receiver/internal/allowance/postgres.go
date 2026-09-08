@@ -27,6 +27,7 @@ const readMonthlyUsage = `
 	SELECT price.included_bytes_per_service,
 	       price.max_billed_services,
 	       price.browser_share_percent,
+	       committed.services_committed,
 	       COALESCE(metered.bytes, 0),
 	       COALESCE(metered.browser_bytes, 0),
 	       org.deleted_at IS NOT NULL,
@@ -40,12 +41,25 @@ const readMonthlyUsage = `
 		LIMIT 1
 	) price ON true
 	LEFT JOIN LATERAL (
+		SELECT s.services_committed
+		FROM billing_subscriptions s
+		WHERE s.org_id = org.id AND s.status = 'active'
+		ORDER BY s.activated_at DESC NULLS LAST, s.created_at DESC
+		LIMIT 1
+	) committed ON true
+	LEFT JOIN LATERAL (
 		SELECT sum(u.bytes) AS bytes, sum(u.browser_bytes) AS browser_bytes
 		FROM usage_daily u
 		WHERE u.org_id = org.id AND u.day >= $2 AND u.day <= $3
 	) metered ON true
 	WHERE org.id = $1`
 
+// `status = 'active'` is the whole of what makes the committed count real. A
+// `pending` row is a checkout somebody started and may never finish, and a
+// `cancelled` one is an arrangement that has ended — granting either an
+// allowance would let an abandoned checkout raise a customer's ceiling for
+// free. Ordered so the arrangement in force wins if two are somehow active.
+//
 // The statement deliberately does not filter `deleted_at IS NULL`. It used to,
 // and that is what turned the cap off for a deleted organization: no row came
 // back, the gate read that as "cannot find" and admitted, and the keys went on
@@ -70,17 +84,18 @@ func (u *PostgresUsage) UsageFor(
 	on time.Time,
 ) (Usage, error) {
 	var (
-		perService      *int64
-		maxServices     *int32
-		browserShare    *int16
-		ingested        int64
-		browserIngested int64
-		deleted         bool
-		suspended       bool
+		perService        *int64
+		maxServices       *int32
+		browserShare      *int16
+		servicesCommitted *int32
+		ingested          int64
+		browserIngested   int64
+		deleted           bool
+		suspended         bool
 	)
 	err := u.pool.QueryRow(ctx, readMonthlyUsage,
 		orgID, month.FirstDay, month.LastDay, on.UTC()).
-		Scan(&perService, &maxServices, &browserShare,
+		Scan(&perService, &maxServices, &browserShare, &servicesCommitted,
 			&ingested, &browserIngested, &deleted, &suspended)
 
 	switch {
@@ -104,9 +119,39 @@ func (u *PostgresUsage) UsageFor(
 	// deliberately not compared with now, because reading a future date as
 	// "not yet" would be a scheduling feature nobody asked for and would turn a
 	// mistyped year into a valve that silently never closes.
-	usage := usageFrom(perService, maxServices, browserShare, ingested, browserIngested)
+	usage := usageFrom(
+		perService, maxServices, browserShare, servicesCommitted, ingested, browserIngested)
 	usage.IngestSuspended = suspended
 	return usage, nil
+}
+
+// allowanceServiceCount is the count the month's allowance is sized on, or nil
+// when nothing sizes it. **This is the rule, and it is written once here and
+// once in `nexovue_api.usage.billing`. The two have to agree or a customer is
+// refused at a limit the screen never showed them.**
+//
+// A plan that caps the services it bills sets the count itself: the allowance
+// is the cap's, not the running count's, so three services' worth on Free
+// whether one service is running or three. An allowance that moved with the
+// service count would refuse one export and admit the next as a service came
+// and went, and would tell a customer refused at 2 GiB that starting a second
+// service is the remedy.
+//
+// A plan with no cap — every paying tier — is sized on what the customer
+// committed to when they authorised the mandate. That is ADR 0107's ceiling:
+// the customer chose it, can see it, and raises it themselves. Before that
+// column existed this returned nothing here, which meant **a paying customer
+// had no limit at all** while every free one did.
+//
+// Nil is "nothing recorded" and enforces nothing: an unpriced tier, or a paid
+// tier whose subscription is not active. Deliberately not zero, which is a plan
+// that includes nothing and refuses on the first byte — a real and different
+// statement, and one this honours where a row actually says it.
+func allowanceServiceCount(maxServices, servicesCommitted *int32) *int32 {
+	if maxServices != nil {
+		return maxServices
+	}
+	return servicesCommitted
 }
 
 // usageFrom turns what the statement returned into the gate's inputs. It is a
@@ -114,17 +159,13 @@ func (u *PostgresUsage) UsageFor(
 // the reading that decides whether anyone is refused, and it has to be provable
 // without a database.
 //
-// **Either of the first two columns NULL means no allowance is recorded**, and
-// nothing is enforced. `max_billed_services` is NULL on every paying tier, so
-// this line is what keeps a customer who pays from ever being refused for
-// volume — which would be a much larger failure than the hole this gate closes.
-//
-// The allowance itself is the ceiling's, not the running service count's, so
-// the number is the plan's own: it is enforced at the door, and an allowance
-// that moved with the service count would refuse one export and admit the next
-// as a service came and went. `nexovue_api.usage.billing.included_bytes`
-// computes the same figure for the screen; the two have to agree, or the
-// customer is shown a limit we do not apply.
+// **No rate, or nothing to size the allowance on, means nothing is enforced.**
+// The second half of that used to read "`max_billed_services` is NULL on every
+// paying tier, so this is what keeps a customer who pays from ever being
+// refused for volume". That was true and it was the hole: it kept them from
+// being refused *at any volume whatsoever*. A paid tier is now sized on the
+// customer's own committed count, and a paid tier with no active subscription
+// is still unenforced — there is no ceiling to apply, not a ceiling of zero.
 //
 // An allowance recorded as zero is a plan that includes nothing, and refuses on
 // the first byte. That is a different statement from NULL, and it is honoured.
@@ -135,14 +176,16 @@ func usageFrom(
 	perService *int64,
 	maxServices *int32,
 	browserShare *int16,
+	servicesCommitted *int32,
 	ingested int64,
 	browserIngested int64,
 ) Usage {
-	if perService == nil || maxServices == nil {
+	services := allowanceServiceCount(maxServices, servicesCommitted)
+	if perService == nil || services == nil {
 		return Usage{IngestedBytes: ingested, BrowserIngestedBytes: browserIngested, Found: true}
 	}
 	usage := Usage{
-		IncludedBytes:        *perService * int64(*maxServices),
+		IncludedBytes:        *perService * int64(*services),
 		Enforced:             true,
 		IngestedBytes:        ingested,
 		BrowserIngestedBytes: browserIngested,

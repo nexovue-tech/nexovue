@@ -1088,6 +1088,7 @@ class OverviewSession:
         services: int,
         ingested: tuple[int, int],
         frontier: tuple[datetime | None, int],
+        services_committed: int | None = None,
     ) -> None:
         self.statements: list[Any] = []
         self.staged: list[Any] = []
@@ -1097,11 +1098,18 @@ class OverviewSession:
             BillingSubscription: subscription,
             UsageDailyService: services,
         }
+        # Two reads select from `billing_subscriptions` — the arrangement itself
+        # and, for the allowance, just its committed count. Keyed by the selected
+        # name because the entity alone cannot tell them apart.
+        self._by_column: dict[str, Any] = {"services_committed": services_committed}
         self._rows = [_Rows(ingested), _Rows(frontier)]
 
     async def scalar(self, statement: Any) -> Any:
         self.statements.append(statement)
-        return self._by_entity.get(statement.column_descriptions[0]["entity"])
+        selected = statement.column_descriptions[0]
+        if selected["name"] in self._by_column:
+            return self._by_column[selected["name"]]
+        return self._by_entity.get(selected["entity"])
 
     async def execute(self, statement: Any) -> _Rows:
         self.statements.append(statement)
@@ -1124,6 +1132,7 @@ def _overview_session(
     subscription: BillingSubscription | None = None,
     services: int = 2,
     ingested: tuple[int, int] = (1_000_000, 250_000),
+    services_committed: int | None = None,
 ) -> OverviewSession:
     return OverviewSession(
         plan=_plan_row(plan_slug),
@@ -1132,6 +1141,7 @@ def _overview_session(
         services=services,
         ingested=ingested,
         frontier=(datetime(2026, 10, 1, tzinfo=UTC), 0),
+        services_committed=services_committed,
     )
 
 
@@ -1154,13 +1164,13 @@ class TestTheBillingScreen:
         )
 
         period = overview.period
-        assert period.included_bytes == usage_billing.included_bytes(2, _FREE_PRICE)
-        assert period.browser_included_bytes == usage_billing.browser_cap_bytes(2, _FREE_PRICE)
+        assert period.included_bytes == usage_billing.included_bytes(_FREE_PRICE, None)
+        assert period.browser_included_bytes == usage_billing.browser_cap_bytes(_FREE_PRICE, None)
         assert period.billed_services == usage_billing.billed_services(2, _FREE_PRICE)
         assert period.service_cost_minor_units == usage_billing.service_cost_minor_units(
             2, _FREE_PRICE
         )
-        assert period.allowance_enforced is usage_billing.allowance_is_enforced(_FREE_PRICE)
+        assert period.allowance_enforced is usage_billing.allowance_is_enforced(_FREE_PRICE, None)
 
     async def test_the_period_is_the_calendar_month_the_day_falls_in(self) -> None:
         """ADR 0083: the bill covers a calendar month, not an anniversary."""
@@ -1191,10 +1201,15 @@ class TestTheBillingScreen:
 
         assert overview.period.allowance_enforced is True
 
-    async def test_a_paid_tier_is_not_told_that_it_will_be_stopped(self) -> None:
-        """`max_billed_services` is NULL on every paying tier, so nothing that
-        pays is currently refused for volume. Saying otherwise would promise a
-        door that does not exist."""
+    async def test_a_paid_tier_with_no_mandate_is_not_told_that_it_will_be_stopped(self) -> None:
+        """Nothing sizes the allowance, so there is no ceiling to warn about.
+
+        This used to be the whole story for a paying customer — the docstring
+        said `max_billed_services` is NULL on every paying tier "so nothing that
+        pays is currently refused for volume". That was the G6a hole stated as a
+        fact. It now describes only the case below it: no active mandate, so
+        nothing to enforce, which is not a ceiling of zero.
+        """
         session = _overview_session(plan_slug="pro", price=_PRO_PRICE)
 
         overview = await service.overview(
@@ -1204,6 +1219,25 @@ class TestTheBillingScreen:
         )
 
         assert overview.period.allowance_enforced is False
+        assert overview.period.included_bytes is None
+
+    async def test_a_paid_tier_is_shown_the_ceiling_it_committed_to(self) -> None:
+        """G6a on the screen. ADR 0107 promised the customer a ceiling they set
+        and can see; showing it is the second half of enforcing it, because a
+        customer stopped at a number they were never shown has been surprised
+        into it — which is exactly what that ADR refuses."""
+        session = _overview_session(plan_slug="pro", price=_PRO_PRICE, services_committed=5)
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(plan="pro"),
+            today=TODAY,
+        )
+
+        per_service = _PRO_PRICE.included_bytes_per_service
+        assert per_service is not None, "the fixture must record an allowance to have one enforced"
+        assert overview.period.allowance_enforced is True
+        assert overview.period.included_bytes == 5 * per_service
 
     async def test_an_organization_that_has_never_paid_shows_no_subscription(self) -> None:
         """Null, not an invented row: a free-tier account has no arrangement, and

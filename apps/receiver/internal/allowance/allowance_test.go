@@ -73,7 +73,7 @@ func checkOnce(t *testing.T, usage Reader) Verdict {
 // freeMonth is the seeded free row with a given month metered against it.
 func freeMonth(ingested, browserIngested int64) Usage {
 	perService, ceiling, share := 2*gib, int32(3), int16(freeBrowserShare)
-	return usageFrom(&perService, &ceiling, &share, ingested, browserIngested)
+	return usageFrom(&perService, &ceiling, &share, nil, ingested, browserIngested)
 }
 
 func TestVolumeUnderTheAllowanceIsAdmitted(t *testing.T) {
@@ -101,10 +101,12 @@ func TestVolumePastTheAllowanceIsSpent(t *testing.T) {
 	}
 }
 
-// The one that would be worst to get wrong: a tier that bills every service it
-// sees has no ceiling, so it has no enforced allowance. Blocking a paying
-// customer is a far larger failure than the hole this gate closes.
-func TestAPlanWithNoCeilingIsNeverSpent(t *testing.T) {
+// A plan with nothing to size an allowance on is never spent. That is now a
+// narrower statement than it was: it used to cover every paying tier, because
+// nothing sized a paid allowance at all. It now covers a paid tier with no
+// active subscription — there is no ceiling to apply, which is not a ceiling
+// of zero.
+func TestAPlanWithNothingToSizeAnAllowanceOnIsNeverSpent(t *testing.T) {
 	verdict := checkOnce(t, &fakeUsage{usage: Usage{
 		Enforced: false, IngestedBytes: 900 * gib, Found: true,
 	}})
@@ -285,7 +287,7 @@ func TestTheSeededFreeTierIncludesSixGibibytes(t *testing.T) {
 	perService := 2 * gib
 	ceiling := int32(3)
 
-	usage := usageFrom(&perService, &ceiling, nil, 0, 0)
+	usage := usageFrom(&perService, &ceiling, nil, nil, 0, 0)
 
 	if usage.IncludedBytes != freeIncluded {
 		t.Errorf("included bytes = %d, want %d (2 GiB x 3)", usage.IncludedBytes, freeIncluded)
@@ -295,30 +297,84 @@ func TestTheSeededFreeTierIncludesSixGibibytes(t *testing.T) {
 	}
 }
 
-// The one that would be worst to get wrong, read at the column where it is
-// decided: pro and scale record no `max_billed_services`, and NULL is uncapped.
-func TestARowWithNoCeilingEnforcesNothing(t *testing.T) {
+// G6a, read at the column where it is decided. Pro and scale record no
+// `max_billed_services`, and until the committed count existed that meant a
+// paying customer had **no ceiling at all** while every free one had one.
+func TestAPaidRowIsSizedOnTheCustomersCommittedCount(t *testing.T) {
+	perService, committed := 2*gib, int32(10)
+
+	usage := usageFrom(&perService, nil, nil, &committed, 900*gib, 0)
+
+	if !usage.Enforced {
+		t.Fatal("a paid tier with an active subscription enforced nothing; it has no ceiling at all")
+	}
+	if want := 20 * gib; usage.IncludedBytes != want {
+		t.Errorf("IncludedBytes = %d, want %d: the committed count times the rate",
+			usage.IncludedBytes, want)
+	}
+}
+
+// The other reading of the same row, and the one that keeps a customer who has
+// not committed to anything from being refused: no active subscription is
+// nothing to size an allowance on, not an allowance of zero.
+func TestAPaidRowWithNoActiveSubscriptionEnforcesNothing(t *testing.T) {
 	perService := 2 * gib
 
-	usage := usageFrom(&perService, nil, nil, 900*gib, 0)
+	usage := usageFrom(&perService, nil, nil, nil, 900*gib, 0)
 
 	if usage.Enforced {
-		t.Error("a row with no ceiling enforced an allowance; a paying customer would be refused")
+		t.Error("a row with nothing to size an allowance on enforced one anyway")
 	}
 	if !usage.Found {
 		t.Error("a row that answered was read as no row at all")
 	}
 }
 
-// A share on an uncapped row changes nothing: with no allowance there is
-// nothing to split, and a paying customer stays unrefused at both doors.
-func TestAShareOnAnUncappedRowRefusesNothing(t *testing.T) {
+// A plan's own ceiling wins over the committed count. Free records three billed
+// services, so a customer who somehow carries a commitment of ten is still held
+// to the tier they are on.
+func TestThePlansOwnCeilingWinsOverTheCommittedCount(t *testing.T) {
+	perService, ceiling, committed := 2*gib, int32(3), int32(10)
+
+	usage := usageFrom(&perService, &ceiling, nil, &committed, 0, 0)
+
+	if usage.IncludedBytes != freeIncluded {
+		t.Errorf("IncludedBytes = %d, want %d: the plan's ceiling, not the commitment",
+			usage.IncludedBytes, freeIncluded)
+	}
+}
+
+// A committed customer past their ceiling is refused, which is ADR 0107's whole
+// point — and the browser share applies to a paid allowance exactly as it does
+// to a free one, because it is a share of whatever the allowance turned out
+// to be rather than of the free tier's number.
+func TestACommittedCustomerPastTheirCeilingIsRefused(t *testing.T) {
+	perService, committed, share := 2*gib, int32(10), int16(freeBrowserShare)
+	committedIncluded := 20 * gib
+
+	usage := &fakeUsage{
+		usage: usageFrom(&perService, nil, &share, &committed, committedIncluded+1, 0),
+	}
+
+	if !checkAt(t, usage, serverDoor).Refused() {
+		t.Error("admitted a byte past a paid customer's own ceiling; ADR 0107 says we stop")
+	}
+
+	under := &fakeUsage{usage: usageFrom(&perService, nil, &share, &committed, 1, 1)}
+	if checkAt(t, under, browserDoor).Refused() {
+		t.Error("refused a paid customer well inside their ceiling")
+	}
+}
+
+// A share on a row with nothing to size the allowance on changes nothing: there
+// is no allowance to split, and the customer stays unrefused at both doors.
+func TestAShareOnAnUnsizedRowRefusesNothing(t *testing.T) {
 	perService, share := 2*gib, int16(freeBrowserShare)
 
-	usage := &fakeUsage{usage: usageFrom(&perService, nil, &share, 900*gib, 900*gib)}
+	usage := &fakeUsage{usage: usageFrom(&perService, nil, &share, nil, 900*gib, 900*gib)}
 
 	if checkAt(t, usage, browserDoor).Refused() || checkAt(t, usage, serverDoor).Refused() {
-		t.Error("an uncapped plan was refused because its row also records a split")
+		t.Error("a plan with no allowance was refused because its row also records a split")
 	}
 }
 
@@ -327,7 +383,7 @@ func TestAShareOnAnUncappedRowRefusesNothing(t *testing.T) {
 func TestARowWithNoVolumeFigureEnforcesNothing(t *testing.T) {
 	ceiling := int32(3)
 
-	if usageFrom(nil, &ceiling, nil, 900*gib, 0).Enforced {
+	if usageFrom(nil, &ceiling, nil, nil, 900*gib, 0).Enforced {
 		t.Error("a row recording no allowance enforced one anyway")
 	}
 }
@@ -338,7 +394,7 @@ func TestARowRecordingZeroEnforcesZero(t *testing.T) {
 	none := int64(0)
 	ceiling := int32(3)
 
-	usage := usageFrom(&none, &ceiling, nil, 1, 0)
+	usage := usageFrom(&none, &ceiling, nil, nil, 1, 0)
 
 	if !usage.Enforced || usage.IncludedBytes != 0 {
 		t.Errorf("usage = %+v, want an enforced allowance of zero", usage)
@@ -405,7 +461,7 @@ func TestAnOrganizationThatCannotBeFoundIsStillAdmitted(t *testing.T) {
 // split existed: one allowance, both doors spend it.
 func TestARowRecordingNoShareIsPooledAcrossBothDoors(t *testing.T) {
 	perService, ceiling := 2*gib, int32(3)
-	usage := &fakeUsage{usage: usageFrom(&perService, &ceiling, nil, freeIncluded+1, freeIncluded+1)}
+	usage := &fakeUsage{usage: usageFrom(&perService, &ceiling, nil, nil, freeIncluded+1, freeIncluded+1)}
 
 	for _, door := range []nexovuev1.Door{serverDoor, browserDoor} {
 		verdict := checkAt(t, usage, door)
@@ -533,7 +589,7 @@ func TestEveryDoorButTheBrowsersIsJudgedOnTheWholeAllowance(t *testing.T) {
 func TestNoShareLetsAnyDoorSpendPastThePlanTotal(t *testing.T) {
 	perService, ceiling := 2*gib, int32(3)
 	for _, share := range []int16{0, 1, 25, 33, 50, 99, 100} {
-		cap := usageFrom(&perService, &ceiling, &share, 0, 0).browserIncludedBytes()
+		cap := usageFrom(&perService, &ceiling, &share, nil, 0, 0).browserIncludedBytes()
 		if cap < 0 || cap > freeIncluded {
 			t.Errorf("share %d%%: browser cap of %d is outside the plan's %d", share, cap, freeIncluded)
 		}
@@ -541,7 +597,7 @@ func TestNoShareLetsAnyDoorSpendPastThePlanTotal(t *testing.T) {
 		// One byte past the whole, spent entirely at whichever door the share
 		// does not cover. Both doors must refuse: the browser's own cap is
 		// untouched here, so only the whole-allowance test can catch it.
-		over := usageFrom(&perService, &ceiling, &share, freeIncluded+1, 0)
+		over := usageFrom(&perService, &ceiling, &share, nil, freeIncluded+1, 0)
 		if !over.spent(Pooled) {
 			t.Errorf("share %d%%: server door admitted past the plan's total", share)
 		}
@@ -559,7 +615,7 @@ func TestAShareOfZeroOrOneHundredIsHonoured(t *testing.T) {
 	perService, ceiling := 2*gib, int32(3)
 
 	none := int16(0)
-	nothingForTheBrowser := &fakeUsage{usage: usageFrom(&perService, &ceiling, &none, 1, 1)}
+	nothingForTheBrowser := &fakeUsage{usage: usageFrom(&perService, &ceiling, &none, nil, 1, 1)}
 	if !checkAt(t, nothingForTheBrowser, browserDoor).Refused() {
 		t.Error("a browser share of zero admitted a browser byte")
 	}
@@ -572,7 +628,7 @@ func TestAShareOfZeroOrOneHundredIsHonoured(t *testing.T) {
 	// browser has not. Under the partition this meant the server got nothing,
 	// which is the reading this change replaces.
 	all := int16(100)
-	unspent := &fakeUsage{usage: usageFrom(&perService, &ceiling, &all, 1, 0)}
+	unspent := &fakeUsage{usage: usageFrom(&perService, &ceiling, &all, nil, 1, 0)}
 	if checkAt(t, unspent, serverDoor).Refused() {
 		t.Error("a browser share of one hundred refused a server byte the browser had not spent")
 	}
@@ -585,7 +641,7 @@ func TestAShareOfZeroOrOneHundredIsHonoured(t *testing.T) {
 	// a hundred percent to the browser leaves the server nothing once the
 	// browser has actually taken it.
 	spentByTheBrowser := &fakeUsage{
-		usage: usageFrom(&perService, &ceiling, &all, freeIncluded+1, freeIncluded),
+		usage: usageFrom(&perService, &ceiling, &all, nil, freeIncluded+1, freeIncluded),
 	}
 	if !checkAt(t, spentByTheBrowser, serverDoor).Refused() {
 		t.Error("the server door was admitted after the browser spent the whole plan")
