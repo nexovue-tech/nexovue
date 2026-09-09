@@ -502,6 +502,7 @@ async def begin_plan_change(
     configured: ConfiguredProcessor,
     organization: Organization,
     request: StartCheckoutRequest,
+    billing_email: str,
     app_base_url: str,
     today: date,
 ) -> CheckoutHandoff:
@@ -531,7 +532,9 @@ async def begin_plan_change(
         org_id=organization.id,
         plan_slug=request.plan_slug,
         contact=BillingContact(
-            email=request.contact_email,
+            # The member on the call, unless they gave another. Never stored —
+            # ADR 0109: the processor holds what the bank's notice needs.
+            email=request.contact_email or billing_email,
             name=request.contact_name,
             phone=request.contact_phone,
         ),

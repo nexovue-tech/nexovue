@@ -85,9 +85,14 @@ async def rows_that_dropped_a_browser_share(
 ) -> list[Row[tuple[str, date]]]:
     """Every price row that turns a tier's browser cap back off.
 
-    "A tier that has ever carried a cap" is the earliest `effective_from` on
-    which that tier recorded a share. From that day onwards the tier is capped,
-    so **every** row of that tier from that day on has to carry a share —
+    **Per tier *and* currency**, because since migration 0023 a tier has one
+    price series per currency and they start on different days. Grouping by tier
+    alone made a rupee row's start date govern the dollar series, and flagged a
+    dollar row that migration 0016 had already restated.
+
+    "A series that has ever carried a cap" is the earliest `effective_from` on
+    which it recorded a share. From that day onwards it is capped, so **every**
+    row of that series from that day on has to carry a share —
     including rows dated in the future, which the gate has not started reading
     yet, and rows dated between two capped ones, which would turn the cap off
     for their window alone.
@@ -98,10 +103,11 @@ async def rows_that_dropped_a_browser_share(
     capped_from = (
         select(
             PlanPrice.plan_slug.label("plan_slug"),
+            PlanPrice.currency.label("currency"),
             func.min(PlanPrice.effective_from).label("first_day"),
         )
         .where(PlanPrice.browser_share_percent.is_not(None))
-        .group_by(PlanPrice.plan_slug)
+        .group_by(PlanPrice.plan_slug, PlanPrice.currency)
         .subquery()
     )
     statement = (
@@ -110,6 +116,7 @@ async def rows_that_dropped_a_browser_share(
             capped_from,
             and_(
                 capped_from.c.plan_slug == PlanPrice.plan_slug,
+                capped_from.c.currency == PlanPrice.currency,
                 PlanPrice.effective_from >= capped_from.c.first_day,
             ),
         )

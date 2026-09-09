@@ -85,6 +85,10 @@ SUBSCRIPTION_REF: Final = "nexovue-sub-0198f2a0"
 DELIVERY_ID: Final = "6f1c2d3e4a5b6c7d8e9f0a1b2c3d4e5f"
 PROCESSOR_NAME: Final = "cashfree"
 
+# The signed-in member, whose address the checkout falls back to when the
+# processor asks for one and the screen collected none.
+OWNER_EMAIL: Final = "owner@example.test"
+
 # The count the mandate was sized on. Any number works; a distinctive one makes
 # a wrong value in an assertion read as wrong rather than as a coincidence.
 SERVICES_COMMITTED: Final = 7
@@ -936,6 +940,7 @@ class TestStartingACheckout:
             session,  # type: ignore[arg-type]
             configured=_configured(processor),
             organization=_organization(),
+            billing_email=OWNER_EMAIL,
             request=_checkout_request(services_committed=3),
             app_base_url="https://app.example.test",
             today=TODAY,
@@ -959,6 +964,7 @@ class TestStartingACheckout:
             session,  # type: ignore[arg-type]
             configured=_configured(processor),
             organization=_organization(),
+            billing_email=OWNER_EMAIL,
             request=_checkout_request(),
             app_base_url="https://app.example.test",
             today=TODAY,
@@ -986,6 +992,7 @@ class TestStartingACheckout:
                 session,  # type: ignore[arg-type]
                 configured=_configured(processor),
                 organization=_organization(),
+                billing_email=OWNER_EMAIL,
                 request=_checkout_request(plan_slug="platinum"),
                 app_base_url="https://app.example.test",
                 today=TODAY,
@@ -1010,6 +1017,7 @@ class TestStartingACheckout:
                 session,  # type: ignore[arg-type]
                 configured=_configured(processor),
                 organization=_organization(plan="pro"),
+                billing_email=OWNER_EMAIL,
                 request=_checkout_request(),
                 app_base_url="https://app.example.test",
                 today=TODAY,

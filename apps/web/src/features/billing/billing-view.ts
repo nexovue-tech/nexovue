@@ -2,7 +2,7 @@ import { formatDecimalBytes } from "@/shared/format/bytes";
 import { formatMoney } from "@/shared/format/money";
 import { formatCount } from "@/shared/format/number";
 
-import type { BillingOverview, BillingPeriodUsage, SubscriptionSummary } from "./api";
+import type { BillingOverview, BillingPeriodUsage, PlanOption, SubscriptionSummary } from "./api";
 
 /**
  * The sentences the billing screen says, kept out of the markup so they can be
@@ -131,6 +131,22 @@ export function checkoutAvailability(
 export function unfinishedCheckoutNotice(overview: BillingOverview): string | null {
   if (overview.subscription?.status !== "pending") return null;
   return "You started a checkout that was never completed. Nothing has been charged. Starting another replaces it.";
+}
+
+/**
+ * What a month on a plan comes to, at a given commitment.
+ *
+ * ADR 0111: the bill *is* the commitment. Not "up to" — a customer who commits
+ * to five services and runs three pays for five, and a screen that hedged the
+ * number would be the one place they were told otherwise.
+ */
+export function monthlyTotalMinorUnits(plan: PlanOption, services: number): number {
+  return plan.price_per_service_minor_units * services;
+}
+
+/** The count the picker starts on: what they already committed to, or one. */
+export function initialCommitment(overview: BillingOverview): number {
+  return overview.subscription?.services_committed ?? 1;
 }
 
 /** The label a contact field is asked for under, keyed by the API's own names. */

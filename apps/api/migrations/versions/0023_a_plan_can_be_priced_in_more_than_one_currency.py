@@ -50,9 +50,14 @@ depends_on: str | Sequence[str] | None = None
 CURRENCY_CODE_LENGTH = 3
 GIB = 1024**3
 
-# The day these rates take effect. The USD rows already in the table keep their
-# own `effective_from`, so nothing existing is restated by this.
-EFFECTIVE_FROM = sa.text("DATE '2026-09-10'")
+# The day these rates take effect: the same day 0015 seeded the first prices.
+#
+# **Not "today".** The first draft used the date the migration was written, which
+# was tomorrow in UTC — the machine writing it was on IST and the database was
+# not, so every INR row landed in the future and the API found none of them. A
+# seeded price is not a repricing and has no history to preserve, so it takes the
+# date the table's first rows took and is in force wherever the clock is.
+EFFECTIVE_FROM = sa.text("DATE '2026-09-01'")
 
 # plan_slug, price per service in paise, max billed services, included bytes per
 # service, browser share. The USD rows they mirror are migrations 0015 and 0016.

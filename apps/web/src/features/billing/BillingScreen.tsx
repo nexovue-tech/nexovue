@@ -8,7 +8,7 @@ import { formatDecimalBytes } from "@/shared/format/bytes";
 import { formatMoney } from "@/shared/format/money";
 import { formatCount } from "@/shared/format/number";
 
-import type { BillingOverview } from "./api";
+import type { BillingOverview, PlanOption } from "./api";
 import { useBillingOverview, useCancelSubscription, useStartCheckout } from "./api";
 import {
   allowanceFraction,
@@ -17,6 +17,8 @@ import {
   describeAllowance,
   describeCost,
   describeSubscription,
+  initialCommitment,
+  monthlyTotalMinorUnits,
   unfinishedCheckoutNotice,
 } from "./billing-view";
 
@@ -33,7 +35,10 @@ import {
  * controls, because a control that vanishes teaches nobody who to ask.
  */
 export function BillingScreen() {
-  const overview = useBillingOverview();
+  // Null until the customer picks one, so the API answers with whatever this
+  // organization already pays in rather than a guess made here.
+  const [currency, setCurrency] = useState<string>();
+  const overview = useBillingOverview(currency);
 
   if (overview.isPending) return <SkeletonRows rows={6} label="Loading billing" />;
   if (overview.isError) {
@@ -58,8 +63,9 @@ export function BillingScreen() {
       </header>
 
       <ThisMonth overview={overview.data} />
+      <CurrencyChoice overview={overview.data} onChange={setCurrency} />
       <Arrangement overview={overview.data} />
-      <Upgrade overview={overview.data} />
+      <Upgrade overview={overview.data} currency={overview.data.currency} />
     </div>
   );
 }
@@ -106,6 +112,46 @@ function ThisMonth({ overview }: { overview: BillingOverview }) {
           does not use stays available to your servers.
         </p>
       )}
+    </section>
+  );
+}
+
+/**
+ * Which currency the figures are in, when there is more than one to be in.
+ *
+ * Hidden entirely at one currency rather than shown disabled: a control with a
+ * single option is a question with one answer.
+ *
+ * **A display choice, not a billing one.** Once a mandate is signed it keeps
+ * debiting the currency it was authorised in, so switching here changes what is
+ * quoted and never what an existing subscription charges.
+ */
+function CurrencyChoice({
+  overview,
+  onChange,
+}: {
+  overview: BillingOverview;
+  onChange: (currency: string) => void;
+}) {
+  if (overview.available_currencies.length < 2) return null;
+
+  return (
+    <section className="flex items-baseline gap-3">
+      <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Shown in</span>
+      {overview.available_currencies.map((code) => (
+        <button
+          key={code}
+          type="button"
+          onClick={() => onChange(code)}
+          className={
+            code === overview.currency
+              ? "text-ink text-sm underline underline-offset-4"
+              : "text-ink-dim text-sm hover:text-ink"
+          }
+        >
+          {code}
+        </button>
+      ))}
     </section>
   );
 }
@@ -166,43 +212,106 @@ function Arrangement({ overview }: { overview: BillingOverview }) {
 }
 
 /**
- * The upgrade form, drawn only when a checkout could actually start.
+ * Changing plan: a button, then the tiers, then a count, then the processor.
  *
- * The fields come from `overview.checkout.required_contact_fields` — the
- * processor declares what it needs (ADR 0109), so switching processors deletes
- * a field here rather than leaving a dead one.
+ * **No contact fields unless the processor asks for them.** `required_contact_fields`
+ * comes back empty from a processor whose own page collects them (ADR 0109), and
+ * an empty set draws nothing — so the common path is pick a plan, pick a number,
+ * go. The email is not asked for at all: the API falls back to the signed-in
+ * member's, because a field whose answer the product already holds is a field
+ * nobody should retype.
  */
-function Upgrade({ overview }: { overview: BillingOverview }) {
+function Upgrade({ overview, currency }: { overview: BillingOverview; currency: string }) {
   const start = useStartCheckout();
-  const [committed, setCommitted] = useState("1");
+  const [choosing, setChoosing] = useState(false);
+  const [chosen, setChosen] = useState<PlanOption>();
+  const [committed, setCommitted] = useState(String(initialCommitment(overview)));
   const [contact, setContact] = useState<Record<string, string>>({});
 
   const availability = checkoutAvailability(overview);
   if (!availability.available) {
     return (
       <section className="flex max-w-2xl flex-col gap-2">
-        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Upgrade</h2>
+        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Plan</h2>
         <p className="text-ink-dim text-sm leading-relaxed">{availability.reason}</p>
       </section>
     );
   }
 
   const unfinished = unfinishedCheckoutNotice(overview);
-  const fields = overview.checkout?.required_contact_fields ?? [];
+  const heading = overview.subscription ? "Change plan" : "Upgrade";
+
+  if (!choosing) {
+    return (
+      <section className="flex max-w-2xl flex-col gap-3">
+        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{heading}</h2>
+        {unfinished ? <p className="text-ink text-sm leading-relaxed">{unfinished}</p> : null}
+        <p className="text-ink-dim text-sm leading-relaxed">
+          You choose how many services to commit to. That is what you pay each month and the volume
+          you may send. We never bill past it and never charge overage.
+        </p>
+        <div>
+          <Button onClick={() => setChoosing(true)}>{heading}</Button>
+        </div>
+      </section>
+    );
+  }
+
+  if (!chosen) {
+    return (
+      <section className="flex max-w-2xl flex-col gap-4">
+        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{heading}</h2>
+        {overview.plans.length === 0 ? (
+          <p className="text-ink-dim text-sm leading-relaxed">
+            No other plan is priced in {currency} yet.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-3">
+            {overview.plans.map((plan) => (
+              <li key={plan.slug}>
+                <button
+                  type="button"
+                  className="w-full rounded border border-line px-4 py-3 text-left hover:border-line-strong"
+                  onClick={() => setChosen(plan)}
+                >
+                  <span className="flex items-baseline justify-between gap-4">
+                    <span className="text-ink text-sm">{plan.name}</span>
+                    <span className="text-ink text-sm">
+                      {formatMoney(plan.price_per_service_minor_units, plan.currency)} per service
+                    </span>
+                  </span>
+                  <span className="mt-1 block text-ink-dim text-xs">
+                    {plan.included_bytes_per_service === null
+                      ? "No volume recorded"
+                      : `${formatDecimalBytes(plan.included_bytes_per_service)} a month for every service`}
+                    {" · "}
+                    {plan.raw_retention_days} days raw
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div>
+          <Button variant="secondary" onClick={() => setChoosing(false)}>
+            Cancel
+          </Button>
+        </div>
+      </section>
+    );
+  }
+
   const count = Number(committed);
   const countError =
     !Number.isInteger(count) || count < 1 ? "A whole number of services, one or more." : undefined;
+  const fields = overview.checkout?.required_contact_fields ?? [];
   const incomplete = fields.some((field) => !(contact[field] ?? "").trim());
 
   return (
     <section className="flex max-w-md flex-col gap-4">
-      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Upgrade</h2>
-      {unfinished ? <p className="text-ink text-sm leading-relaxed">{unfinished}</p> : null}
-      <p className="text-ink-dim text-sm leading-relaxed">
-        You choose the ceiling. It is the most you can be charged in a month and the volume you may
-        send, and you can raise it later by signing a new mandate. We never bill past it and never
-        charge overage.
-      </p>
+      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+        {heading} — {chosen.name}
+      </h2>
 
       <form
         className="flex flex-col gap-4"
@@ -210,9 +319,10 @@ function Upgrade({ overview }: { overview: BillingOverview }) {
           event.preventDefault();
           start.mutate(
             {
-              planSlug: "pro",
+              planSlug: chosen.slug,
+              currency: chosen.currency,
               servicesCommitted: count,
-              contactEmail: contact.email ?? "",
+              contactEmail: contact.email,
               contactName: contact.name,
               contactPhone: contact.phone,
             },
@@ -232,8 +342,16 @@ function Upgrade({ overview }: { overview: BillingOverview }) {
           value={committed}
           onChange={setCommitted}
           error={countError}
-          hint="Your ceiling. Both what you can be charged and what you can send."
+          hint="What you pay for each month, and the volume you may send."
         />
+
+        {countError ? null : (
+          <p className="text-ink text-sm leading-relaxed">
+            {formatMoney(monthlyTotalMinorUnits(chosen, count), chosen.currency)} a month —{" "}
+            {formatMoney(chosen.price_per_service_minor_units, chosen.currency)} ×{" "}
+            {formatCount(count)}.
+          </p>
+        )}
 
         {fields.map((field) => {
           const spec = CONTACT_FIELD_LABELS[field];
@@ -249,7 +367,7 @@ function Upgrade({ overview }: { overview: BillingOverview }) {
           );
         })}
 
-        <div>
+        <div className="flex gap-2">
           <Button
             type="submit"
             pending={start.isPending}
@@ -257,6 +375,9 @@ function Upgrade({ overview }: { overview: BillingOverview }) {
             disabled={countError !== undefined || incomplete}
           >
             Continue to payment
+          </Button>
+          <Button variant="secondary" onClick={() => setChosen(undefined)}>
+            Back
           </Button>
         </div>
         <p className="text-ink-dim text-xs leading-relaxed">

@@ -162,10 +162,16 @@ class StartCheckoutRequest(BaseModel):
     # At least one: an arrangement covering no services authorises no charge and
     # grants no allowance, which is not a plan anybody meant to buy.
     services_committed: int = Field(ge=1)
+    # All optional, and all asked for only when the configured processor declares
+    # it needs them — `PaymentProcessor.required_contact_fields`, ADR 0109. One
+    # processor requires all three up front because its page collects none;
+    # another collects them itself and declares nothing, and then a screen that
+    # asked would make a customer type the same thing twice.
+    #
+    # The email falls back to the signed-in member's, because we already know it:
+    # a field whose answer the product holds is a field nobody should retype.
     contact_name: str | None = None
-    contact_email: str
-    # Asked for only when the configured processor declares it. See
-    # `PaymentProcessor.required_contact_fields` and ADR 0109.
+    contact_email: str | None = None
     contact_phone: str | None = None
 
 

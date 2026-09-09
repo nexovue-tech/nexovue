@@ -67,28 +67,62 @@ export interface CheckoutRequirements {
   required_contact_fields: string[];
 }
 
+/** A tier that can be moved to, priced in the currency the overview is quoted in. */
+export interface PlanOption {
+  slug: string;
+  name: string;
+  currency: string;
+  /** Per service, per month, in minor units. The total is this times the count. */
+  price_per_service_minor_units: number;
+  included_bytes_per_service: number | null;
+  max_billed_services: number | null;
+  raw_retention_days: number;
+  derived_retention_days: number;
+}
+
 export interface BillingOverview {
   plan: PlanSummary;
   price: PlanPriceSummary | null;
   subscription: SubscriptionSummary | null;
   period: BillingPeriodUsage;
   checkout: CheckoutRequirements | null;
+  /** What every figure here is stated in. */
+  currency: string;
+  /** Every currency this tier is priced in, so the screen can offer a switch. */
+  available_currencies: string[];
+  /** Excludes the current tier and any with no price in `currency`. */
+  plans: PlanOption[];
 }
 
-export const billingQueryKey = ["billing"] as const;
+/**
+ * Keyed by currency, so switching refetches rather than showing the previous
+ * currency's figures under a new symbol.
+ */
+export const billingQueryKey = (currency?: string) => ["billing", currency ?? null] as const;
 
-export function useBillingOverview() {
+export function useBillingOverview(currency?: string) {
   return useQuery({
-    queryKey: billingQueryKey,
-    queryFn: ({ signal }) => apiClient.get<BillingOverview>("billing", { signal }),
+    queryKey: billingQueryKey(currency),
+    queryFn: ({ signal }) =>
+      apiClient.get<BillingOverview>("billing", {
+        searchParams: currency ? { currency } : undefined,
+        signal,
+      }),
   });
 }
 
 export interface StartCheckoutInput {
   planSlug: string;
-  /** At least one. The ceiling the customer sets for themselves. */
+  /**
+   * What the customer is charged in. Chosen by them, never guessed from where
+   * they connected — tax and settlement follow the payment instrument, not a
+   * network address.
+   */
+  currency: string;
+  /** At least one. The count the customer commits to, which is also the bill. */
   servicesCommitted: number;
-  contactEmail: string;
+  /** Only when the processor declared it needs one. Most collect it themselves. */
+  contactEmail?: string;
   contactName?: string;
   contactPhone?: string;
 }
@@ -111,8 +145,9 @@ export function useStartCheckout() {
     mutationFn: (input: StartCheckoutInput) =>
       apiClient.post<CheckoutHandoff>("billing/checkout", {
         plan_slug: input.planSlug,
+        currency: input.currency,
         services_committed: input.servicesCommitted,
-        contact_email: input.contactEmail,
+        ...(input.contactEmail ? { contact_email: input.contactEmail } : {}),
         ...(input.contactName ? { contact_name: input.contactName } : {}),
         ...(input.contactPhone ? { contact_phone: input.contactPhone } : {}),
       }),
@@ -130,6 +165,7 @@ export function useCancelSubscription() {
   return useMutation({
     mutationKey: ["billing", "cancel"],
     mutationFn: () => apiClient.delete<void>("billing/subscription"),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: billingQueryKey }),
+    // Every currency's copy: the arrangement changed, not one view of it.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["billing"] }),
   });
 }

@@ -124,6 +124,7 @@ async def start_checkout(
         configured=payments,
         organization=identity.organization,
         request=request,
+        billing_email=identity.user.email,
         app_base_url=settings.app_base_url,
         today=datetime.now(UTC).date(),
     )

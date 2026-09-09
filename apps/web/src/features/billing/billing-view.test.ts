@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import type { BillingOverview, BillingPeriodUsage, SubscriptionSummary } from "./api";
+import type { BillingOverview, BillingPeriodUsage, PlanOption, SubscriptionSummary } from "./api";
 import {
   allowanceFraction,
   checkoutAvailability,
   describeAllowance,
   describeCost,
   describeSubscription,
+  initialCommitment,
+  monthlyTotalMinorUnits,
   unfinishedCheckoutNotice,
 } from "./billing-view";
 
@@ -37,6 +39,25 @@ function subscription(overrides: Partial<SubscriptionSummary> = {}): Subscriptio
     services_committed: 5,
     activated_at: "2026-09-01T00:00:00Z",
     cancelled_at: null,
+    ...overrides,
+  };
+}
+
+function overviewWith(overrides: Partial<BillingOverview> = {}): BillingOverview {
+  return {
+    plan: {
+      slug: "free",
+      name: "Free",
+      raw_retention_days: 7,
+      derived_retention_days: 30,
+    },
+    price: null,
+    subscription: null,
+    period: period(),
+    checkout: { required_contact_fields: ["email"] },
+    currency: "USD",
+    available_currencies: ["INR", "USD"],
+    plans: [],
     ...overrides,
   };
 }
@@ -123,30 +144,53 @@ describe("the arrangement", () => {
   });
 });
 
-describe("whether an upgrade can be started", () => {
-  function overview(overrides: Partial<BillingOverview> = {}): BillingOverview {
-    return {
-      plan: {
-        slug: "free",
-        name: "Free",
-        raw_retention_days: 7,
-        derived_retention_days: 30,
-      },
-      price: null,
-      subscription: null,
-      period: period(),
-      checkout: { required_contact_fields: ["email"] },
-      ...overrides,
-    };
-  }
+describe("what a month costs at a commitment", () => {
+  const pro: PlanOption = {
+    slug: "pro",
+    name: "Pro",
+    currency: "INR",
+    price_per_service_minor_units: 39_900,
+    included_bytes_per_service: 10 * 1024 ** 3,
+    max_billed_services: null,
+    raw_retention_days: 30,
+    derived_retention_days: 395,
+  };
 
+  /**
+   * ADR 0111: the bill *is* the commitment, not "up to" it. A customer who
+   * commits to five and runs three pays for five, and the screen must be the
+   * place that says so rather than the invoice.
+   */
+  it("is the rate times the count", () => {
+    expect(monthlyTotalMinorUnits(pro, 5)).toBe(199_500);
+  });
+
+  it("is the rate itself for one service", () => {
+    expect(monthlyTotalMinorUnits(pro, 1)).toBe(39_900);
+  });
+});
+
+describe("where the commitment field starts", () => {
+  /** Changing plan should not silently reset somebody's ceiling to one. */
+  it("is what they already committed to", () => {
+    expect(
+      initialCommitment(overviewWith({ subscription: subscription({ services_committed: 8 }) })),
+    ).toBe(8);
+  });
+
+  it("is one for an organization that has never subscribed", () => {
+    expect(initialCommitment(overviewWith())).toBe(1);
+  });
+});
+
+describe("whether an upgrade can be started", () => {
   it("can be started by an organization with no arrangement", () => {
-    expect(checkoutAvailability(overview())).toEqual({ available: true });
+    expect(checkoutAvailability(overviewWith())).toEqual({ available: true });
   });
 
   /** A form whose submit would 503 is worse than a sentence saying why. */
   it("cannot be started when no processor is configured", () => {
-    const answer = checkoutAvailability(overview({ checkout: null }));
+    const answer = checkoutAvailability(overviewWith({ checkout: null }));
 
     expect(answer.available).toBe(false);
   });
@@ -156,7 +200,7 @@ describe("whether an upgrade can be started", () => {
    * the API refuses it — but the screen should not draw a form that gets a 409.
    */
   it("cannot be started while one is already active", () => {
-    const answer = checkoutAvailability(overview({ subscription: subscription() }));
+    const answer = checkoutAvailability(overviewWith({ subscription: subscription() }));
 
     expect(answer.available).toBe(false);
   });
@@ -169,7 +213,7 @@ describe("whether an upgrade can be started", () => {
    */
   it("can be started again when an earlier checkout was never finished", () => {
     const answer = checkoutAvailability(
-      overview({ subscription: subscription({ status: "pending" }) }),
+      overviewWith({ subscription: subscription({ status: "pending" }) }),
     );
 
     expect(answer.available).toBe(true);
@@ -177,21 +221,21 @@ describe("whether an upgrade can be started", () => {
 
   it("says why the form is being shown a second time", () => {
     const notice = unfinishedCheckoutNotice(
-      overview({ subscription: subscription({ status: "pending" }) }),
+      overviewWith({ subscription: subscription({ status: "pending" }) }),
     );
 
     expect(notice).toContain("Nothing has been charged");
   });
 
   it("says nothing extra when no checkout was left unfinished", () => {
-    expect(unfinishedCheckoutNotice(overview())).toBeNull();
-    expect(unfinishedCheckoutNotice(overview({ subscription: subscription() }))).toBeNull();
+    expect(unfinishedCheckoutNotice(overviewWith())).toBeNull();
+    expect(unfinishedCheckoutNotice(overviewWith({ subscription: subscription() }))).toBeNull();
   });
 
   /** A cancelled arrangement is over, so a customer may start again. */
   it("can be started again after a cancellation", () => {
     const answer = checkoutAvailability(
-      overview({ subscription: subscription({ status: "cancelled" }) }),
+      overviewWith({ subscription: subscription({ status: "cancelled" }) }),
     );
 
     expect(answer.available).toBe(true);
