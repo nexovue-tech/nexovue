@@ -88,6 +88,10 @@ async def read_billing_overview(
     identity: CurrentIdentity,
     db: DbSession,
     payments: OptionalDomesticPayments,
+    # The currency to quote in. Omitted means the one this organization already
+    # pays in, or the default before it has paid at all — never inferred from
+    # where the request came from.
+    currency: str | None = None,
 ) -> BillingOverview:
     """P1-75. Readable by any member: what the organization pays and how close
     it is to the ceiling is not administration, and a member who cannot see it
@@ -97,6 +101,7 @@ async def read_billing_overview(
         organization=identity.organization,
         today=datetime.now(UTC).date(),
         configured=payments,
+        currency=currency,
     )
 
 

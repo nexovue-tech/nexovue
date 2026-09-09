@@ -39,6 +39,14 @@ from nexovue_api.data.postgres.models import (
 # module reads this one.
 ACTIVE_SUBSCRIPTION_STATUS: Final = "active"
 
+# What an organization that has never subscribed is quoted in.
+#
+# A guess, and the screens treat it as one: the billing screen offers every
+# currency the tier is priced in and remembers what the customer picks. It is
+# only the answer before anybody has chosen, and it is never what a *mandate*
+# is signed in — that is stored on the subscription.
+DEFAULT_BILLING_CURRENCY: Final = "USD"
+
 
 class MeteringFrontier(NamedTuple):
     """How far the usage meter has counted, in receive time.
@@ -265,23 +273,97 @@ async def find_plan(session: AsyncSession, *, slug: str) -> Plan | None:
     return plan
 
 
+async def purchasable_plans(
+    session: AsyncSession, *, currency: str, on_day: date
+) -> list[tuple[Plan, PlanPrice]]:
+    """Every tier that can actually be bought today in this currency, with its price.
+
+    A tier and a price, together, because a screen that offered a plan with no
+    row behind it would send somebody to a checkout that refuses. `enterprise` is
+    priced by agreement and therefore never here; a tier priced only in another
+    currency is not here either, which is the honest answer to "what can I buy".
+    """
+    latest = (
+        select(
+            PlanPrice.plan_slug,
+            func.max(PlanPrice.effective_from).label("effective_from"),
+        )
+        .where(PlanPrice.currency == currency.upper(), PlanPrice.effective_from <= on_day)
+        .group_by(PlanPrice.plan_slug)
+        .subquery()
+    )
+    rows = await session.execute(
+        select(Plan, PlanPrice)
+        .join(PlanPrice, PlanPrice.plan_slug == Plan.slug)
+        .join(
+            latest,
+            (latest.c.plan_slug == PlanPrice.plan_slug)
+            & (latest.c.effective_from == PlanPrice.effective_from),
+        )
+        .where(PlanPrice.currency == currency.upper())
+        .order_by(PlanPrice.price_per_service_minor_units, Plan.slug)
+    )
+    return [(plan, price) for plan, price in rows.all()]
+
+
 async def find_effective_price(
-    session: AsyncSession, *, plan_slug: str, on_day: date
+    session: AsyncSession, *, plan_slug: str, currency: str, on_day: date
 ) -> PlanPrice | None:
-    """The price in force on a day: the latest row that had already started.
+    """The price in force on a day, in one currency: the latest row not after it.
 
     Rows are appended and never edited, so this answers the same thing next year
     as it does today — which is the whole reason the price is not a column on
-    `plans`. None means no price has been set for the tier, which is the state
-    the table ships in.
+    `plans`. None means the tier has no row in that currency, which is a real
+    answer: a tier priced by agreement has none in any, and a currency this
+    product does not sell in has none for any tier.
+
+    **Currency is required rather than defaulted.** A default here would pick a
+    currency on behalf of a customer, silently, in the one place that decides
+    what they are charged.
     """
     price: PlanPrice | None = await session.scalar(
         select(PlanPrice)
-        .where(PlanPrice.plan_slug == plan_slug, PlanPrice.effective_from <= on_day)
+        .where(
+            PlanPrice.plan_slug == plan_slug,
+            PlanPrice.currency == currency.upper(),
+            PlanPrice.effective_from <= on_day,
+        )
         .order_by(PlanPrice.effective_from.desc())
         .limit(1)
     )
     return price
+
+
+async def priced_currencies(session: AsyncSession, *, plan_slug: str, on_day: date) -> list[str]:
+    """Which currencies this tier can be bought in today.
+
+    What the screen offers, so a customer is never shown a currency no row backs
+    and no checkout could complete in.
+    """
+    rows = await session.scalars(
+        select(PlanPrice.currency)
+        .where(PlanPrice.plan_slug == plan_slug, PlanPrice.effective_from <= on_day)
+        .distinct()
+        .order_by(PlanPrice.currency)
+    )
+    return list(rows)
+
+
+async def billing_currency(session: AsyncSession, *, org_id: uuid.UUID) -> str | None:
+    """The currency this organization's arrangements are in, or None if it has none.
+
+    The newest subscription's, whatever became of it: a customer who paid in
+    rupees and cancelled is still quoted rupees, because that is the currency
+    they know the product in. An organization that has never subscribed has no
+    answer here, and the caller falls back to `DEFAULT_BILLING_CURRENCY`.
+    """
+    currency: str | None = await session.scalar(
+        select(BillingSubscription.currency)
+        .where(BillingSubscription.org_id == org_id)
+        .order_by(BillingSubscription.created_at.desc(), BillingSubscription.id.desc())
+        .limit(1)
+    )
+    return currency
 
 
 async def active_services_committed(session: AsyncSession, *, org_id: uuid.UUID) -> int | None:

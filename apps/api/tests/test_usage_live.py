@@ -303,6 +303,7 @@ async def _record_mandate(
     *,
     services_committed: int,
     status: str = "active",
+    currency: str = "USD",
 ) -> None:
     """A real `billing_subscriptions` row, which is what sizes a paid allowance.
 
@@ -317,6 +318,7 @@ async def _record_mandate(
             plan_slug=tenant.organization.plan,
             status=status,
             services_committed=services_committed,
+            currency=currency,
             activated_at=datetime.now(UTC) if status == "active" else None,
         )
     )

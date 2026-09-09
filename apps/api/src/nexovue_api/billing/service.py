@@ -53,6 +53,7 @@ from nexovue_api.billing.schemas import (
     CheckoutRequirements,
     DeliveryAcknowledgement,
     DeliveryOutcome,
+    PlanOption,
     StartCheckoutRequest,
     SubscriptionSummary,
 )
@@ -248,6 +249,7 @@ async def overview(
     organization: Organization,
     today: date,
     configured: ConfiguredProcessor | None,
+    currency: str | None = None,
 ) -> BillingOverview:
     """What this organization is on, what pays for it, and where the month stands.
 
@@ -256,18 +258,57 @@ async def overview(
     it a second time in Go because the ingest door cannot call Python; a third
     copy here would be the one that tells a customer a limit nobody enforces.
     """
+    subscription = await queries.latest_subscription(session, org_id=organization.id)
+    # What this organization is quoted in. A caller may ask for one — the screen
+    # offers a switch — and otherwise it is the currency this organization's
+    # arrangements already use, or the default before it has had one.
+    quoted = (
+        (currency or "").upper()
+        or (subscription.currency if subscription else "")
+        or usage_queries.DEFAULT_BILLING_CURRENCY
+    )
     price = await usage_queries.find_effective_price(
-        session, plan_slug=organization.plan, on_day=today
+        session, plan_slug=organization.plan, currency=quoted, on_day=today
     )
     return BillingOverview(
         plan=await _plan_summary(session, organization),
         price=_price_summary(price),
-        subscription=_subscription_summary(
-            await queries.latest_subscription(session, org_id=organization.id)
-        ),
+        subscription=_subscription_summary(subscription),
         period=await _period(session, org_id=organization.id, today=today, price=price),
         checkout=_checkout_requirements(configured),
+        currency=quoted,
+        available_currencies=await usage_queries.priced_currencies(
+            session, plan_slug=organization.plan, on_day=today
+        ),
+        plans=await _plan_options(session, organization=organization, currency=quoted, today=today),
     )
+
+
+async def _plan_options(
+    session: AsyncSession, *, organization: Organization, currency: str, today: date
+) -> list[PlanOption]:
+    """The tiers this organization could move to, priced in what it is quoted in.
+
+    The tier they are already on is left out: it is shown above as the current
+    plan, and offering it as a destination is how a customer signs a second
+    mandate for the arrangement they already have.
+    """
+    return [
+        PlanOption(
+            slug=plan.slug,
+            name=plan.name,
+            currency=price.currency,
+            price_per_service_minor_units=price.price_per_service_minor_units,
+            included_bytes_per_service=price.included_bytes_per_service,
+            max_billed_services=price.max_billed_services,
+            raw_retention_days=plan.raw_retention_days,
+            derived_retention_days=plan.derived_retention_days,
+        )
+        for plan, price in await usage_queries.purchasable_plans(
+            session, currency=currency, on_day=today
+        )
+        if plan.slug != organization.plan and price.price_per_service_minor_units > 0
+    ]
 
 
 def _checkout_requirements(configured: ConfiguredProcessor | None) -> CheckoutRequirements | None:
@@ -423,7 +464,7 @@ def checkout_return_url(app_base_url: str) -> str:
 
 
 async def commitment_for(
-    session: AsyncSession, *, plan_slug: str, services_committed: int, on_day: date
+    session: AsyncSession, *, plan_slug: str, currency: str, services_committed: int, on_day: date
 ) -> Commitment:
     """What the customer is agreeing to buy: a count of services, at a rate each.
 
@@ -438,7 +479,9 @@ async def commitment_for(
     A tier with no price row, or a rate of zero, is not something anybody can
     subscribe to: the free tier is reached by not paying.
     """
-    price = await usage_queries.find_effective_price(session, plan_slug=plan_slug, on_day=on_day)
+    price = await usage_queries.find_effective_price(
+        session, plan_slug=plan_slug, currency=currency, on_day=on_day
+    )
     if price is None:
         raise InvalidRequestError(UNPRICED_PLAN_DETAIL)
     if price.price_per_service_minor_units <= 0:
@@ -476,6 +519,14 @@ async def begin_plan_change(
     if live is not None and live.status == STATUS_ACTIVE and live.plan_slug == request.plan_slug:
         raise ConflictError(ALREADY_ON_PLAN_DETAIL)
 
+    commitment = await commitment_for(
+        session,
+        plan_slug=request.plan_slug,
+        currency=request.currency,
+        services_committed=request.services_committed,
+        on_day=today,
+    )
+
     checkout = await configured.processor.begin_checkout(
         org_id=organization.id,
         plan_slug=request.plan_slug,
@@ -484,12 +535,7 @@ async def begin_plan_change(
             name=request.contact_name,
             phone=request.contact_phone,
         ),
-        commitment=await commitment_for(
-            session,
-            plan_slug=request.plan_slug,
-            services_committed=request.services_committed,
-            on_day=today,
-        ),
+        commitment=commitment,
         return_url=checkout_return_url(app_base_url),
     )
 
@@ -512,6 +558,9 @@ async def begin_plan_change(
             plan_slug=request.plan_slug,
             status=STATUS_PENDING,
             services_committed=request.services_committed,
+            # What the mandate was signed in. Read off the commitment rather than
+            # the request, so the row records the currency actually priced.
+            currency=commitment.rate.currency,
         ),
     )
     return CheckoutHandoff(url=checkout.url)

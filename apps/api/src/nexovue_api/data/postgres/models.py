@@ -602,8 +602,12 @@ class PlanPrice(Base):
         ForeignKey("plans.slug", ondelete="RESTRICT"),
         primary_key=True,
     )
+    # In the key, so one tier can be priced in more than one currency at a time.
+    # It was a plain column and the key was `(plan_slug, effective_from)`, which
+    # meant a plan had exactly one currency and every customer everywhere was
+    # quoted it. An Indian customer paying an Indian seller is charged rupees.
+    currency: Mapped[str] = mapped_column(String(CURRENCY_CODE_LENGTH), primary_key=True)
     effective_from: Mapped[date] = mapped_column(Date, primary_key=True)
-    currency: Mapped[str] = mapped_column(String(CURRENCY_CODE_LENGTH), nullable=False)
     # Minor units, and named as such: the yen's minor unit is the yen, so a name
     # saying "cents" invites a divide by a hundred that misquotes the bill.
     price_per_service_minor_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -668,6 +672,12 @@ class BillingSubscription(Base):
     # arrangement that carries it rather than on the tenant. Raising the ceiling
     # means a new mandate at a new maximum, so it is a new row and not an edit.
     services_committed: Mapped[int] = mapped_column(Integer, nullable=False)
+    # What the mandate was signed in. A subscription keeps debiting the currency
+    # it was authorised in — converting per charge would give a different amount
+    # every month as the rate moved, which is a debit nobody expected and a
+    # chargeback. Stored because the plan's price rows now hold several, so the
+    # tier alone no longer says which one this arrangement used.
+    currency: Mapped[str] = mapped_column(String(CURRENCY_CODE_LENGTH), nullable=False)
     created_at: Mapped[CreatedAt]
     # When the mandate was authorised, and when it ended. Timestamps rather than
     # flags, because "since when" is the question an invoice dispute asks.

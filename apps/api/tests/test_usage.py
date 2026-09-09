@@ -155,8 +155,12 @@ class FakeUsageStore:
             case "usage_daily_services":
                 return len({(row.project_id, row.service_name) for row in self._services(bound)})
             case "billing_subscriptions":
-                # None is "no active mandate", which is what every free-tier
-                # test means and what an unpaid paid tier means too.
+                # Two reads select one column each from this table — the
+                # committed count and the currency a mandate was signed in — so
+                # the table alone cannot tell them apart. None is "no active
+                # mandate", which is what every free-tier test means.
+                if statement.column_descriptions[0]["name"] == "currency":
+                    return None
                 return self._services_committed
             case _:
                 return next((plan for plan in self._plans if plan.slug in bound.values), None)

@@ -82,6 +82,26 @@ class CheckoutRequirements(BaseModel):
     required_contact_fields: list[str]
 
 
+class PlanOption(BaseModel):
+    """A tier the customer could move to, priced in the currency they are seeing.
+
+    Sent with the overview rather than fetched from a second endpoint: the
+    upgrade control and the current plan are read together, and two requests
+    could disagree about the currency between them.
+    """
+
+    slug: str
+    name: str
+    currency: str
+    # Per service, per month, in minor units. What one service costs; the total
+    # is this times the count the customer commits to.
+    price_per_service_minor_units: int
+    included_bytes_per_service: int | None = None
+    max_billed_services: int | None = None
+    raw_retention_days: int
+    derived_retention_days: int
+
+
 class BillingOverview(BaseModel):
     """Everything the billing screen shows (P1-75).
 
@@ -106,6 +126,15 @@ class BillingOverview(BaseModel):
     # an error: the plan and the month's usage are still readable, and the screen
     # says upgrading is unavailable rather than drawing a form that would 503.
     checkout: CheckoutRequirements | None = None
+    # The currency every figure above is stated in.
+    currency: str
+    # Every currency this organization could be quoted in, so the screen can
+    # offer a switch and never one no price row backs.
+    available_currencies: list[str] = Field(default_factory=list)
+    # The tiers that can be moved to, priced in `currency`. Excludes the one the
+    # organization is already on and any tier with no row in this currency — a
+    # plan a customer cannot actually buy is not an option.
+    plans: list[PlanOption] = Field(default_factory=list)
 
 
 class StartCheckoutRequest(BaseModel):
@@ -125,6 +154,11 @@ class StartCheckoutRequest(BaseModel):
     """
 
     plan_slug: str
+    # **Chosen by the customer, never guessed from where they connected.** Tax
+    # and settlement follow the payment instrument, not a network address, so a
+    # traveller or anyone behind a VPN must not be quoted the wrong currency —
+    # the screen offers what the tier is priced in and this is the answer.
+    currency: str = Field(min_length=3, max_length=3)
     # At least one: an arrangement covering no services authorises no charge and
     # grants no allowance, which is not a plan anybody meant to buy.
     services_committed: int = Field(ge=1)

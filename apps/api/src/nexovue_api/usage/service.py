@@ -92,7 +92,15 @@ async def usage_for_organization(
     # The rate in force on the day being read, not on the month's last day: a
     # repricing that starts later this month must not price a month that has
     # not reached it.
-    price = await queries.find_effective_price(session, plan_slug=organization.plan, on_day=to_day)
+    # The currency this organization is billed in, or the default before it has
+    # ever paid. The screen states figures in one currency and has to pick it.
+    currency = (
+        await queries.billing_currency(session, org_id=organization.id)
+        or queries.DEFAULT_BILLING_CURRENCY
+    )
+    price = await queries.find_effective_price(
+        session, plan_slug=organization.plan, currency=currency, on_day=to_day
+    )
 
     return UsageResponse(
         plan=await _plan_of(session, organization),

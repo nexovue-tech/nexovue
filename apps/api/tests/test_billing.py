@@ -77,6 +77,7 @@ from nexovue_api.settings import (
     Settings,
 )
 from nexovue_api.usage import billing as usage_billing
+from nexovue_api.usage import queries as usage_queries
 
 ORG_ID: Final = uuid.UUID("0198f2a0-0000-7000-8000-000000000001")
 OTHER_ORG_ID: Final = uuid.UUID("0198f2a0-0000-7000-8000-0000000000ff")
@@ -209,10 +210,11 @@ def _plan_row(slug: str = "pro") -> Plan:
 
 
 def _checkout_request(
-    *, plan_slug: str = "pro", services_committed: int = 3
+    *, plan_slug: str = "pro", services_committed: int = 3, currency: str = "USD"
 ) -> StartCheckoutRequest:
     return StartCheckoutRequest(
         plan_slug=plan_slug,
+        currency=currency,
         services_committed=services_committed,
         contact_name="Some One",
         contact_email="someone@example.test",
@@ -225,6 +227,7 @@ def _pending(
     org_id: uuid.UUID = ORG_ID,
     plan_slug: str = "pro",
     status: str = service.STATUS_PENDING,
+    currency: str = "USD",
 ) -> BillingSubscription:
     """The row `begin_plan_change` writes before the customer is redirected.
 
@@ -238,6 +241,7 @@ def _pending(
         plan_slug=plan_slug,
         status=status,
         services_committed=SERVICES_COMMITTED,
+        currency=currency,
     )
 
 
@@ -837,6 +841,7 @@ class TestTheCommitment:
         commitment = await service.commitment_for(
             session,  # type: ignore[arg-type]
             plan_slug="pro",
+            currency="USD",
             services_committed=3,
             on_day=TODAY,
         )
@@ -854,6 +859,7 @@ class TestTheCommitment:
         commitment = await service.commitment_for(
             session,  # type: ignore[arg-type]
             plan_slug="pro",
+            currency="USD",
             services_committed=3,
             on_day=TODAY,
         )
@@ -869,6 +875,7 @@ class TestTheCommitment:
         commitment = await service.commitment_for(
             session,  # type: ignore[arg-type]
             plan_slug="pro",
+            currency="USD",
             services_committed=7,
             on_day=TODAY,
         )
@@ -884,6 +891,7 @@ class TestTheCommitment:
             await service.commitment_for(
                 session,  # type: ignore[arg-type]
                 plan_slug="enterprise",
+                currency="USD",
                 services_committed=3,
                 on_day=TODAY,
             )
@@ -895,6 +903,7 @@ class TestTheCommitment:
             await service.commitment_for(
                 session,  # type: ignore[arg-type]
                 plan_slug="free",
+                currency="USD",
                 services_committed=3,
                 on_day=TODAY,
             )
@@ -1089,13 +1098,19 @@ class TestEndingASubscription:
 
 
 class _Rows:
-    """One `execute` result, answering `.one()` with a row a test supplied."""
+    """One result, answering `.one()`, `.all()` or iteration with what a test supplied."""
 
-    def __init__(self, row: tuple[Any, ...]) -> None:
+    def __init__(self, row: Any) -> None:
         self._row = row
 
-    def one(self) -> tuple[Any, ...]:
+    def one(self) -> Any:
         return self._row
+
+    def all(self) -> list[Any]:
+        return list(self._row)
+
+    def __iter__(self) -> Any:
+        return iter(self._row)
 
 
 class OverviewSession:
@@ -1126,11 +1141,20 @@ class OverviewSession:
             BillingSubscription: subscription,
             UsageDailyService: services,
         }
-        # Two reads select from `billing_subscriptions` — the arrangement itself
-        # and, for the allowance, just its committed count. Keyed by the selected
-        # name because the entity alone cannot tell them apart.
-        self._by_column: dict[str, Any] = {"services_committed": services_committed}
+        # Several reads select a single column rather than an entity — the
+        # committed count, the currency a mandate was signed in. Keyed by the
+        # selected name, because the entity alone cannot tell them apart.
+        self._by_column: dict[str, Any] = {
+            "services_committed": services_committed,
+            "currency": subscription.currency if subscription else None,
+        }
         self._rows = [_Rows(ingested), _Rows(frontier)]
+
+    async def scalars(self, statement: Any) -> Any:
+        """Which currencies a tier is priced in. One, here: the suite states
+        figures in a single currency and a second would prove nothing."""
+        self.statements.append(statement)
+        return _Rows([_PRO_PRICE.currency])
 
     async def scalar(self, statement: Any) -> Any:
         self.statements.append(statement)
@@ -1141,6 +1165,13 @@ class OverviewSession:
 
     async def execute(self, statement: Any) -> _Rows:
         self.statements.append(statement)
+        # `purchasable_plans` selects mapped *classes*; the aggregates queued by
+        # the caller select `sum(...)` expressions, which name their parent
+        # entity too — so the column count and the entity both fail to tell them
+        # apart. A description whose `type` is its `entity` is the class itself.
+        first = statement.column_descriptions[0]
+        if first.get("type") is not None and first.get("type") is first.get("entity"):
+            return _Rows([])
         return self._rows.pop(0)
 
     def add(self, instance: Any) -> None:
@@ -1236,6 +1267,54 @@ class TestTheBillingScreen:
 
         assert overview.checkout is None
         assert overview.period.allowance_enforced is True
+
+    async def test_the_figures_are_quoted_in_the_currency_the_mandate_was_signed_in(
+        self,
+    ) -> None:
+        """Not the caller's guess, and not a default. A customer who signed in
+        rupees is quoted rupees, because that is the currency they know the
+        product in and the one their bank will be debited in."""
+        session = _overview_session(
+            subscription=_pending(status=service.STATUS_ACTIVE, currency="INR")
+        )
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(),
+            today=TODAY,
+            configured=_configured(StubProcessor()),
+        )
+
+        assert overview.currency == "INR"
+
+    async def test_a_caller_may_ask_for_a_currency(self) -> None:
+        """The billing screen offers a switch, so somebody who has never paid can
+        see rupees before deciding. It is an argument rather than something read
+        off the request, because tax follows the payment instrument and never a
+        network address."""
+        session = _overview_session()
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(),
+            today=TODAY,
+            configured=_configured(StubProcessor()),
+            currency="inr",
+        )
+
+        assert overview.currency == "INR"
+
+    async def test_an_organization_that_has_never_paid_is_quoted_the_default(self) -> None:
+        session = _overview_session(subscription=None)
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(),
+            today=TODAY,
+            configured=_configured(StubProcessor()),
+        )
+
+        assert overview.currency == usage_queries.DEFAULT_BILLING_CURRENCY
 
     async def test_the_period_is_the_calendar_month_the_day_falls_in(self) -> None:
         """ADR 0083: the bill covers a calendar month, not an anniversary."""
