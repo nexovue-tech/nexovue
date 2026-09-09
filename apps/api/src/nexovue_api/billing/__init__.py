@@ -28,6 +28,7 @@ from nexovue_api.billing.processor import (
     BillingEvent,
     BillingEventKind,
     Checkout,
+    Commitment,
     ContactField,
     CurrencyUnknownError,
     Money,
@@ -42,6 +43,7 @@ __all__ = [
     "BillingEvent",
     "BillingEventKind",
     "Checkout",
+    "Commitment",
     "ConfiguredProcessor",
     "ContactField",
     "CurrencyUnknownError",
@@ -119,3 +121,7 @@ def build_payment_processor(settings: DomesticPaymentSettings) -> PaymentProcess
             from nexovue_api.billing.cashfree import CashfreePaymentProcessor
 
             return CashfreePaymentProcessor(settings)
+        case "razorpay":
+            from nexovue_api.billing.razorpay import RazorpayPaymentProcessor
+
+            return RazorpayPaymentProcessor(settings)

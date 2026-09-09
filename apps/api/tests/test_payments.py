@@ -35,6 +35,7 @@ from nexovue_api.billing import (
     BillingContact,
     BillingError,
     BillingEventKind,
+    Commitment,
     ContactField,
     CurrencyUnknownError,
     Money,
@@ -65,6 +66,7 @@ SETTINGS: Final = DomesticPaymentSettings(
     secret_key=SECRET,
     environment="sandbox",
     base_url=BASE_URL,
+    webhook_secret=SECRET,
 )
 
 ORG_ID: Final = uuid.UUID("0198f2a0-0000-7000-8000-000000000001")
@@ -119,14 +121,16 @@ def _headers(body: bytes, **overrides: str) -> dict[str, str]:
 COMPLETE_CONTACT: Final = BillingContact(
     email="someone@example.test", name="Some One", phone="+919000000000"
 )
-AUTHORISED_MAXIMUM: Final = Money(minor_units=1800, currency="USD")
+# Three services at $6.00 each — the shape the port now carries, so an adapter
+# that needs the rate and the count separately gets both.
+COMMITMENT: Final = Commitment(services=3, rate=Money(minor_units=600, currency="USD"))
 RETURN_URL: Final = "https://app.example.test/settings/billing"
 
 
 async def _checkout(
     *,
     contact: BillingContact = COMPLETE_CONTACT,
-    authorised_maximum: Money = AUTHORISED_MAXIMUM,
+    commitment: Commitment = COMMITMENT,
     return_url: str = RETURN_URL,
     handler: Any = None,
 ) -> Any:
@@ -139,7 +143,7 @@ async def _checkout(
         org_id=ORG_ID,
         plan_slug="pro",
         contact=contact,
-        authorised_maximum=authorised_maximum,
+        commitment=commitment,
         return_url=return_url,
     )
 
@@ -457,6 +461,7 @@ class TestConfigurationAndWiring:
                     secret_key="",
                     environment="sandbox",
                     base_url=BASE_URL,
+                    webhook_secret=SECRET,
                 )
             )
 
@@ -484,14 +489,20 @@ class TestConfigurationAndWiring:
         """A mandate authorising no charge is not a subscription anybody bought,
         and a negative one is arithmetic that went wrong upstream."""
         with pytest.raises(BillingError, match="chargeable amount"):
-            await _checkout(authorised_maximum=Money(minor_units=minor_units, currency="USD"))
+            await _checkout(
+                commitment=Commitment(
+                    services=1, rate=Money(minor_units=minor_units, currency="USD")
+                )
+            )
 
     async def test_an_amount_in_an_unnameable_currency_is_refused_before_the_wire(self) -> None:
         """This processor takes major units, so an amount whose smallest unit
         this product cannot name would have to be divided by a guessed number.
         The yen's minor unit is the yen: a default of a hundred bills 1% of it."""
         with pytest.raises(CurrencyUnknownError, match="JPY"):
-            await _checkout(authorised_maximum=Money(minor_units=600, currency="JPY"))
+            await _checkout(
+                commitment=Commitment(services=1, rate=Money(minor_units=600, currency="JPY"))
+            )
 
     @pytest.mark.parametrize(
         "return_url",
@@ -511,7 +522,7 @@ class TestConfigurationAndWiring:
                 org_id=ORG_ID,
                 plan_slug="pro",
                 contact=COMPLETE_CONTACT,
-                authorised_maximum=AUTHORISED_MAXIMUM,
+                commitment=COMMITMENT,
                 return_url=return_url,
             )
 
@@ -562,11 +573,11 @@ class TestConfigurationAndWiring:
 
         plan = transport.created["plan_details"]
         assert plan["plan_type"] == "ON_DEMAND"
-        assert plan["plan_max_amount"] == float(AUTHORISED_MAXIMUM.major_units())
-        assert plan["plan_currency"] == AUTHORISED_MAXIMUM.currency
+        assert plan["plan_max_amount"] == float(COMMITMENT.total().major_units())
+        assert plan["plan_currency"] == COMMITMENT.rate.currency
         # Major units, not minor: 400000 paise sent as the ceiling would
         # authorise a hundred times the amount the customer agreed to.
-        assert plan["plan_max_amount"] != AUTHORISED_MAXIMUM.minor_units
+        assert plan["plan_max_amount"] != COMMITMENT.total().minor_units
 
     async def test_the_contact_reaches_the_processor_and_the_return_url_with_it(self) -> None:
         """The bank's pre-debit notice needs all three, and ADR 0109 is why we

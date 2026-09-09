@@ -40,6 +40,7 @@ from nexovue_api.billing import (
     BillingError,
     BillingEvent,
     BillingEventKind,
+    Commitment,
     ConfiguredProcessor,
     Money,
     SignatureInvalidError,
@@ -421,31 +422,35 @@ def checkout_return_url(app_base_url: str) -> str:
     return f"{app_base_url.rstrip('/')}{CHECKOUT_RETURN_PATH}"
 
 
-async def authorised_maximum_for(
+async def commitment_for(
     session: AsyncSession, *, plan_slug: str, services_committed: int, on_day: date
-) -> Money:
-    """The most one month of this plan may charge, at the count the customer chose.
+) -> Commitment:
+    """What the customer is agreeing to buy: a count of services, at a rate each.
 
-    **Not a fixed monthly amount.** ADR 0056 prices per service monitored, so
-    what a month comes to moves with the customer's own service count. What is
-    fixed is the ceiling — `services_committed` services at the rate in force —
-    which is ADR 0107's number: the customer sets it, sees it, and is never
-    charged past it.
+    **The rate and the count stay separate all the way to the processor**, because
+    one wants a ceiling for the whole mandate and another wants a per-unit plan
+    with a quantity — and a multiplied total cannot be divided back out by an
+    adapter that does not know the divisor.
 
-    The multiplication is `usage.billing`'s, not this module's, so the ceiling a
-    mandate authorises and the cost the usage screen displays come out of one
-    function. `billed_services` inside it applies the plan's own cap where the
-    plan has one, which is why a commitment above a capped tier's ceiling
-    authorises the ceiling rather than the commitment.
+    The rate is the one in force today (ADR 0083's effective dates), so a
+    repricing next month does not change a mandate signed this month.
+
+    A tier with no price row, or a rate of zero, is not something anybody can
+    subscribe to: the free tier is reached by not paying.
     """
     price = await usage_queries.find_effective_price(session, plan_slug=plan_slug, on_day=on_day)
     if price is None:
         raise InvalidRequestError(UNPRICED_PLAN_DETAIL)
-
-    maximum = usage_billing.service_cost_minor_units(services_committed, price)
-    if maximum is None or maximum <= 0:
+    if price.price_per_service_minor_units <= 0:
         raise InvalidRequestError(FREE_PLAN_DETAIL)
-    return Money(minor_units=maximum, currency=price.currency)
+
+    return Commitment(
+        services=services_committed,
+        rate=Money(
+            minor_units=price.price_per_service_minor_units,
+            currency=price.currency,
+        ),
+    )
 
 
 async def begin_plan_change(
@@ -479,7 +484,7 @@ async def begin_plan_change(
             name=request.contact_name,
             phone=request.contact_phone,
         ),
-        authorised_maximum=await authorised_maximum_for(
+        commitment=await commitment_for(
             session,
             plan_slug=request.plan_slug,
             services_committed=request.services_committed,

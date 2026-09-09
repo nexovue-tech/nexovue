@@ -46,8 +46,8 @@ from nexovue_api.billing.processor import (
     BillingEvent,
     BillingEventKind,
     Checkout,
+    Commitment,
     ContactField,
-    Money,
     SignatureInvalidError,
 )
 from nexovue_api.settings import DOMESTIC_PAYMENT_VARIABLES, DomesticPaymentSettings
@@ -212,7 +212,7 @@ class CashfreePaymentProcessor:
         org_id: uuid.UUID,
         plan_slug: str,
         contact: BillingContact,
-        authorised_maximum: Money,
+        commitment: Commitment,
         return_url: str,
     ) -> Checkout:
         """Create the mandate and hand back where to authorise it.
@@ -237,6 +237,7 @@ class CashfreePaymentProcessor:
                 + ", ".join(sorted(field.value for field in missing))
                 + ", which this processor declared it needs"
             )
+        authorised_maximum = commitment.total()
         if authorised_maximum.minor_units <= 0:
             raise BillingError(
                 "the authorised maximum is not a chargeable amount; a mandate "
@@ -264,7 +265,7 @@ class CashfreePaymentProcessor:
             subscription_ref=subscription_ref,
             plan_slug=plan_slug,
             contact=contact,
-            authorised_maximum=authorised_maximum,
+            commitment=commitment,
             return_url=return_url,
         )
         session_id = _text(created.get("subscription_session_id"))
@@ -284,7 +285,7 @@ class CashfreePaymentProcessor:
         subscription_ref: str,
         plan_slug: str,
         contact: BillingContact,
-        authorised_maximum: Money,
+        commitment: Commitment,
         return_url: str,
     ) -> dict[str, Any]:
         """The mandate, as this processor wants it described.
@@ -309,8 +310,8 @@ class CashfreePaymentProcessor:
             "plan_details": {
                 "plan_name": plan_slug,
                 "plan_type": PLAN_TYPE_ON_DEMAND,
-                "plan_currency": authorised_maximum.currency.upper(),
-                "plan_max_amount": float(authorised_maximum.major_units()),
+                "plan_currency": commitment.rate.currency.upper(),
+                "plan_max_amount": float(commitment.total().major_units()),
                 "plan_max_cycles": PLAN_MAX_CYCLES,
             },
             "authorisation_details": {"authorisation_amount": float(AUTHORISATION_AMOUNT)},

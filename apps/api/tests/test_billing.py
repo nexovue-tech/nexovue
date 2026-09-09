@@ -96,6 +96,7 @@ SETTINGS: Final = DomesticPaymentSettings(
     secret_key=SECRET,
     environment="sandbox",
     base_url="https://sandbox.example.test/pg",
+    webhook_secret=SECRET,
 )
 
 
@@ -159,7 +160,7 @@ class StubProcessor:
         org_id: uuid.UUID,
         plan_slug: str,
         contact: Any,
-        authorised_maximum: Any,
+        commitment: Any,
         return_url: str,
     ) -> Checkout:
         self.checkouts.append(
@@ -167,7 +168,7 @@ class StubProcessor:
                 "org_id": org_id,
                 "plan_slug": plan_slug,
                 "contact": contact,
-                "authorised_maximum": authorised_maximum,
+                "commitment": commitment,
                 "return_url": return_url,
             }
         )
@@ -822,40 +823,57 @@ _FREE_PRICE: Final = PlanPrice(
 TODAY: Final = date(2026, 9, 8)
 
 
-class TestTheAuthorisedMaximum:
+class TestTheCommitment:
     """ADR 0107's ceiling, in money, from the row the usage screen already reads."""
 
-    async def test_the_ceiling_is_the_rate_times_the_count_in_minor_units(self) -> None:
-        """Three services at $6 is $18, and $18 is 1800 — never 18.0. Money is a
-        whole count of the smallest unit, because binary floating point cannot
-        hold a tenth and an amount that drifts is an amount a customer disputes.
+    async def test_the_commitment_carries_the_rate_and_the_count_separately(self) -> None:
+        """Not a multiplied total. One processor wants a ceiling for the whole
+        mandate; another wants a per-unit plan and a quantity, and prints
+        "399.00 x 5 units" from exactly that. A total cannot be divided back out
+        by an adapter that does not know the divisor.
         """
         session = CapturingSession(answers=[_PRO_PRICE])
 
-        maximum = await service.authorised_maximum_for(
+        commitment = await service.commitment_for(
             session,  # type: ignore[arg-type]
             plan_slug="pro",
             services_committed=3,
             on_day=TODAY,
         )
 
-        assert maximum == Money(minor_units=1800, currency="USD")
-        assert isinstance(maximum.minor_units, int)
+        assert commitment.services == 3
+        assert commitment.rate == Money(minor_units=600, currency="USD")
 
-    async def test_the_ceiling_is_the_number_the_usage_screen_would_show(self) -> None:
-        """One function, not two. The screen's cost and the mandate's ceiling
-        come out of `usage.billing`, so a customer cannot be quoted one figure
-        and charged against another."""
+    async def test_a_month_is_the_rate_times_the_count_in_minor_units(self) -> None:
+        """Three services at $6 is $18, and $18 is 1800 — never 18.0. Money is a
+        whole count of the smallest unit, because binary floating point cannot
+        hold a tenth and an amount that drifts is an amount a customer disputes.
+        """
         session = CapturingSession(answers=[_PRO_PRICE])
 
-        maximum = await service.authorised_maximum_for(
+        commitment = await service.commitment_for(
+            session,  # type: ignore[arg-type]
+            plan_slug="pro",
+            services_committed=3,
+            on_day=TODAY,
+        )
+
+        assert commitment.total() == Money(minor_units=1800, currency="USD")
+        assert isinstance(commitment.total().minor_units, int)
+
+    async def test_the_rate_is_the_one_in_force_on_the_day(self) -> None:
+        """ADR 0083 appends price rows with an effective date, so a repricing
+        next month must not change a mandate signed this month."""
+        session = CapturingSession(answers=[_PRO_PRICE])
+
+        commitment = await service.commitment_for(
             session,  # type: ignore[arg-type]
             plan_slug="pro",
             services_committed=7,
             on_day=TODAY,
         )
 
-        assert maximum.minor_units == usage_billing.service_cost_minor_units(7, _PRO_PRICE)
+        assert commitment.rate.minor_units == _PRO_PRICE.price_per_service_minor_units
 
     async def test_a_tier_with_no_list_price_cannot_be_subscribed_to(self) -> None:
         """`enterprise` is priced by agreement and has no row on purpose.
@@ -863,7 +881,7 @@ class TestTheAuthorisedMaximum:
         session = CapturingSession(answers=[None])
 
         with pytest.raises(InvalidRequestError, match="no list price"):
-            await service.authorised_maximum_for(
+            await service.commitment_for(
                 session,  # type: ignore[arg-type]
                 plan_slug="enterprise",
                 services_committed=3,
@@ -874,7 +892,7 @@ class TestTheAuthorisedMaximum:
         session = CapturingSession(answers=[_FREE_PRICE])
 
         with pytest.raises(InvalidRequestError, match="costs nothing"):
-            await service.authorised_maximum_for(
+            await service.commitment_for(
                 session,  # type: ignore[arg-type]
                 plan_slug="free",
                 services_committed=3,
@@ -915,7 +933,10 @@ class TestStartingACheckout:
         )
 
         assert handoff.url == processor.checkout_url
-        assert processor.checkouts[0]["authorised_maximum"] == Money(1800, "USD")
+        commitment = processor.checkouts[0]["commitment"]
+        assert commitment.services == 3
+        assert commitment.rate == Money(600, "USD")
+        assert commitment.total() == Money(1800, "USD")
         assert processor.checkouts[0]["return_url"] == "https://app.example.test/settings/billing"
         assert processor.checkouts[0]["org_id"] == ORG_ID
 

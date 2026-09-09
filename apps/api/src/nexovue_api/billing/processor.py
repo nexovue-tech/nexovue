@@ -172,6 +172,29 @@ class Money:
         return Decimal(self.minor_units) / Decimal(divisor)
 
 
+@dataclass(frozen=True, slots=True)
+class Commitment:
+    """What the customer agreed to buy: a count of services, at a rate each.
+
+    **The count and the rate travel separately because processors disagree about
+    which one they want.** One takes a ceiling for the whole mandate and works
+    the rest out itself; another takes a per-unit plan and a quantity, and prints
+    "399.00 x 5 units" on its own page from exactly that. Handing both a
+    multiplied total would force the second to divide it back out, and it has no
+    way to know the divisor.
+
+    ADR 0056 prices per service monitored, so `services` is the number the
+    customer chose and `rate` is what one costs for a month.
+    """
+
+    services: int
+    rate: Money
+
+    def total(self) -> Money:
+        """A month at this commitment. The most the mandate may ever debit."""
+        return Money(minor_units=self.rate.minor_units * self.services, currency=self.rate.currency)
+
+
 class ContactField(StrEnum):
     """A detail a processor needs about the person paying.
 
@@ -240,7 +263,7 @@ class PaymentProcessor(Protocol):
         org_id: uuid.UUID,
         plan_slug: str,
         contact: BillingContact,
-        authorised_maximum: Money,
+        commitment: Commitment,
         return_url: str,
     ) -> Checkout:
         """Start a subscription, and hand back where to send the customer.
@@ -249,12 +272,16 @@ class PaymentProcessor(Protocol):
         to whatever the processor calls a price is the implementation's job and
         the only place that mapping may live.
 
-        **`authorised_maximum` is the most one billing period may charge**, not
-        a fixed amount to charge every period. ADR 0056 prices per service
-        monitored, so what a month comes to moves with the customer's own
-        service count, and a fixed figure would be wrong the first time they
-        deploy something. It is also ADR 0107's ceiling said in money: a
-        customer can never be charged past a number they chose in advance.
+        **`commitment` is what the customer agreed to buy, and it is also what
+        they are billed.** A month is `rate x services`, every month, whether or
+        not they run that many.
+
+        That is a change: the bill used to move with the services actually
+        monitored, capped at the commitment. It now *is* the commitment. The
+        product is sold on an invoice nobody has to predict, and a number that
+        does not move is the strongest form of that — see ADR 0111. The ceiling
+        ADR 0107 promised is unchanged in effect: a customer can never be charged
+        past a figure they chose in advance, because that figure is the charge.
 
         `return_url` is where the processor sends the customer's browser when
         the payment reaches a terminal state. It carries no outcome and proves

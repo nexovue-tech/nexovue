@@ -16,7 +16,15 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Annotated, Final, Literal
 
-from pydantic import AnyUrl, Field, PostgresDsn, RedisDsn, UrlConstraints, ValidationError
+from pydantic import (
+    AnyUrl,
+    Field,
+    PostgresDsn,
+    RedisDsn,
+    UrlConstraints,
+    ValidationError,
+    field_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings import SettingsError as SettingsSourceError
 
@@ -34,7 +42,7 @@ LogFormat = Literal["json", "console"]
 # merchant of record, because a non-EU seller owes EU VAT from the first euro —
 # which is why the payment one is named for the role it fills.
 EmailProvider = Literal["resend"]
-DomesticPaymentProvider = Literal["cashfree"]
+DomesticPaymentProvider = Literal["cashfree", "razorpay"]
 
 # A processor runs two estates with two sets of credentials and two hostnames.
 # Named rather than a bool because "is production" is a question about the
@@ -128,10 +136,39 @@ class DomesticPaymentSettings:
     # signature is verified with, which is why nothing else may hold it.
     secret_key: str
     environment: PaymentEnvironment
-    # The processor's API root for that environment. The two differ, and a
-    # production URL with sandbox credentials fails in a way that reads like a
-    # bad key rather than a wrong host.
+    # The processor's API root. Derived from the provider unless overridden —
+    # see `PROVIDER_API_ROOTS`, and the misconfiguration that motivated it.
     base_url: str
+    # What a webhook signature is verified with. **Not always the API key.** One
+    # gateway signs with the same secret it authenticates with; another issues a
+    # separate webhook secret in its dashboard, and verifying with the API key
+    # there refuses every delivery with a message that reads like a forgery.
+    # Falls back to `secret_key` for the processors where they are the same.
+    webhook_secret: str
+
+
+# Each provider's API root, per environment.
+#
+# **Derived rather than configured, because it was got wrong the first time it
+# mattered**: the provider was switched to `razorpay` while `base_url` still held
+# the other gateway's sandbox host, which authenticates as a bad key rather than
+# as a wrong address. A value that can only be derived cannot be stale.
+#
+# Still overridable by `PAYMENTS_DOMESTIC_BASE_URL` — a test transport and a
+# vendor's regional host both need it — but nothing has to set it to be right.
+PROVIDER_API_ROOTS: Final[dict[str, dict[str, str]]] = {
+    "cashfree": {
+        "sandbox": "https://sandbox.cashfree.com/pg",
+        "production": "https://api.cashfree.com/pg",
+    },
+    # One host for both, and the key's own prefix decides which books it writes
+    # to: `rzp_test_` is the sandbox, `rzp_live_` is not.
+    # https://razorpay.com/docs/api/
+    "razorpay": {
+        "sandbox": "https://api.razorpay.com/v1",
+        "production": "https://api.razorpay.com/v1",
+    },
+}
 
 
 # The environment variables an unconfigured email sender tells the caller to
@@ -234,6 +271,18 @@ class Settings(BaseSettings):
     payments_domestic_secret_key: str = ""
     payments_domestic_env: PaymentEnvironment = "sandbox"
     payments_domestic_base_url: str = ""
+    payments_domestic_webhook_secret: str = ""
+
+    @field_validator("payments_domestic_provider", "email_provider", mode="before")
+    @classmethod
+    def _folded(cls, value: object) -> object:
+        """A provider name is matched however it was typed.
+
+        `model_config` already folds variable *names*; the values were still
+        case-sensitive, so `PAYMENTS_DOMESTIC_PROVIDER=Razorpay` failed to start
+        with a validation error naming a literal rather than the typo.
+        """
+        return value.strip().lower() if isinstance(value, str) else value
 
     # Where a verification or reset link points. It is the customer-facing app,
     # never this API: the link is clicked in a browser and lands on a screen that
@@ -281,21 +330,24 @@ class Settings(BaseSettings):
         anybody needs no gateway. The routes that need one refuse by variable
         name instead.
         """
-        parts = (
-            self.payments_domestic_app_id,
-            self.payments_domestic_secret_key,
-            self.payments_domestic_base_url,
-        )
-        if not all(parts):
+        provider = self.payments_domestic_provider
+        # Only the credentials have to be supplied; the host follows the provider.
+        if not (self.payments_domestic_app_id and self.payments_domestic_secret_key):
             return None
         return DomesticPaymentSettings(
-            provider=self.payments_domestic_provider,
+            provider=provider,
             app_id=self.payments_domestic_app_id,
             secret_key=self.payments_domestic_secret_key,
             environment=self.payments_domestic_env,
             # A trailing slash would make every path double-slashed, which some
             # gateways answer with a redirect and others with a 404.
-            base_url=self.payments_domestic_base_url.rstrip("/"),
+            base_url=(
+                self.payments_domestic_base_url
+                or PROVIDER_API_ROOTS[provider][self.payments_domestic_env]
+            ).rstrip("/"),
+            webhook_secret=(
+                self.payments_domestic_webhook_secret or self.payments_domestic_secret_key
+            ),
         )
 
     @property
