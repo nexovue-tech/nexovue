@@ -274,6 +274,32 @@ class TestBeginningACheckout:
         assert checkout.handoff.options["redirect"] is True
         assert checkout.subscription_ref == SUBSCRIPTION_REF
 
+    async def test_the_account_holders_address_is_what_the_checkout_starts_with(self) -> None:
+        """The checkout is served from the processor's own origin, shared by
+        every merchant embedding it, so it arrives holding whatever the payer
+        last typed somewhere else. Unsent, that address is written onto the
+        subscription and every mandate notice goes to it."""
+        checkout = await _checkout(RecordingApi())
+
+        assert isinstance(checkout.handoff, EmbeddedCheckout)
+        assert checkout.handoff.options["prefill"]["email"] == CONTACT.email
+
+    async def test_nothing_unknown_is_prefilled(self) -> None:
+        """An empty value overwrites the payer's own answer with nothing, which
+        is worse than the stale one it was meant to replace."""
+        sparse = BillingContact(email="someone@example.test")
+
+        checkout = await _processor(RecordingApi()).begin_checkout(
+            org_id=ORG_ID,
+            plan_slug="pro",
+            contact=sparse,
+            commitment=COMMITMENT,
+            return_url=RETURN_URL,
+        )
+
+        assert isinstance(checkout.handoff, EmbeddedCheckout)
+        assert checkout.handoff.options["prefill"] == {"email": "someone@example.test"}
+
     async def test_the_hosted_page_is_not_the_handoff(self) -> None:
         """The create call answers with one and it is deliberately unused: it
         takes no callback, so a customer who pays on it has nowhere to go."""

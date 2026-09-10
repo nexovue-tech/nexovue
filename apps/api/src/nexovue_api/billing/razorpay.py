@@ -147,12 +147,14 @@ class RazorpayPaymentProcessor:
         self._client = client
 
     def required_contact_fields(self) -> frozenset[ContactField]:
-        """None. This processor's own page asks the payer for what it needs.
+        """None. The checkout asks the payer for what it needs.
 
-        Its documentation is explicit that contact details are not pre-filled
-        even when supplied, so collecting them first would make a customer type
-        the same thing twice. ADR 0109 exists so a screen can find that out by
-        asking rather than by hard-coding one processor's answer.
+        Still none now that the handoff prefills, and for a better reason than
+        before: the one field this processor wants that we could ask for is an
+        email, and the account already has one. A form that asked would be a
+        form asking somebody to retype what they signed up with. ADR 0109 exists
+        so a screen can find that out by asking rather than by hard-coding one
+        processor's answer.
         """
         return frozenset()
 
@@ -226,6 +228,7 @@ class RazorpayPaymentProcessor:
                     # route it posts to answers 303 to the billing screen.
                     "callback_url": return_url,
                     "redirect": True,
+                    "prefill": _prefill(contact),
                 },
             ),
             subscription_ref=subscription_ref,
@@ -392,6 +395,26 @@ class RazorpayPaymentProcessor:
 # A subscription in one of these can never charge again, so a cancel that finds
 # one has already achieved what it was asked for.
 TERMINAL_STATUSES: Final = frozenset({"cancelled", "completed", "expired"})
+
+
+def _prefill(contact: BillingContact) -> dict[str, str]:
+    """What the checkout starts with in its own fields.
+
+    **This is a correction, not a convenience.** The checkout is served from the
+    processor's origin, which is the same origin for every merchant embedding
+    it, so it arrives already holding whatever the payer last typed on *another*
+    merchant's site. Left to itself it writes that address onto the
+    subscription, and the processor then sends every mandate notice — the
+    pre-debit warning, the failed charge, the expiring card — to a mailbox that
+    has nothing to do with this account. Measured on 2026-09-10: an address from
+    an unrelated site reached `customer_email` on two live subscriptions.
+
+    Only what is known is sent. An empty value would overwrite the payer's own
+    answer with nothing, which is worse than the stale one it replaces, and the
+    customer can still type over any of this.
+    """
+    known = {"email": contact.email, "name": contact.name, "contact": contact.phone}
+    return {field: value for field, value in known.items() if value}
 
 
 def _plan_note(*, plan_slug: str, commitment: Commitment) -> str:
