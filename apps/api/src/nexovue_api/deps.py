@@ -15,7 +15,7 @@ from a WebSocket route — the log tail could not reach the session or the pools
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import Annotated, Final
 
 import structlog
 from clickhouse_connect.driver.asyncclient import AsyncClient
@@ -61,12 +61,28 @@ async def get_db_session(
             raise
 
 
+CLICKHOUSE_UNAVAILABLE_DETAIL: Final = (
+    "The store this reads is not available right now, so this screen cannot be shown. "
+    "Nothing has been lost — telemetry is still being received."
+)
+
+
 def get_redis(resources: Annotated[Resources, Depends(get_resources)]) -> Redis:
     return resources.redis
 
 
-def get_clickhouse(resources: Annotated[Resources, Depends(get_resources)]) -> AsyncClient:
-    return resources.clickhouse
+async def get_clickhouse(resources: Annotated[Resources, Depends(get_resources)]) -> AsyncClient:
+    """The analytics client, connected on the first request that needs one.
+
+    Async because the connection is made here rather than at boot — see
+    `ClickHouseConnection`. A store that cannot be reached is a dependency
+    failure, not a bug in this product, and it is reported as one: the route
+    answers 503 naming the dependency instead of a 500 naming nothing.
+    """
+    try:
+        return await resources.clickhouse.client()
+    except Exception as unreachable:
+        raise DependencyUnavailableError(CLICKHOUSE_UNAVAILABLE_DETAIL) from unreachable
 
 
 def get_object_store(

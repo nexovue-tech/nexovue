@@ -27,7 +27,9 @@ from nexovue_api.purge import TenantPurge
 ApplicationResources = Annotated[Resources, Depends(get_resources)]
 
 
-def get_tenant_purge(identity: CurrentIdentity, resources: ApplicationResources) -> TenantPurge:
+async def get_tenant_purge(
+    identity: CurrentIdentity, resources: ApplicationResources
+) -> TenantPurge:
     """The telemetry erasure for the caller's own organization, and no other.
 
     The tenant comes from the session, never from the request, so this endpoint
@@ -35,7 +37,9 @@ def get_tenant_purge(identity: CurrentIdentity, resources: ApplicationResources)
     the client it wraps belongs to the application, not to the connection pool
     entry this request borrowed.
     """
-    return TenantPurge(TenantScopedPurger(resources.clickhouse, str(identity.org_id)))
+    return TenantPurge(
+        TenantScopedPurger(await resources.clickhouse.client(), str(identity.org_id))
+    )
 
 
 TenantErasure = Annotated[TenantPurge, Depends(get_tenant_purge)]

@@ -8,7 +8,8 @@ machine happens to be running.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from typing import Final
@@ -47,6 +48,55 @@ ASYNC_POSTGRES_DRIVER: Final = "postgresql+asyncpg"
 CLICKHOUSE_RESULT_OVERFLOW_MODE: Final = "throw"
 
 
+class ClickHouseConnection:
+    """The analytics store, contacted on first use rather than at boot.
+
+    **Every other dependency here is already lazy.** `create_async_engine` and
+    `ConnectionPool.from_url` open nothing until something asks; only
+    `get_async_client` reaches out during construction, running its own
+    `SELECT version(), timezone()` before it will hand back a client.
+
+    That made a control plane which merely *reads* ClickHouse refuse to start
+    without it. On a developer's machine the cost was concrete: `uvicorn
+    --reload` restarts the process on every edit, and an edit made while
+    ClickHouse was restarting left the API dead — "Application startup failed.
+    Exiting." — until somebody restarted the container by hand.
+
+    Lazy instead, so the API boots and every screen that needs Postgres or Redis
+    keeps working. A screen that needs ClickHouse gets a 503 naming a dependency,
+    which is both true and actionable.
+    """
+
+    def __init__(self, connect: Callable[[], Awaitable[AsyncClient]]) -> None:
+        self._connect = connect
+        self._client: AsyncClient | None = None
+        # One connection, however many requests arrive together on a cold start.
+        self._opening = asyncio.Lock()
+
+    async def client(self) -> AsyncClient:
+        if self._client is not None:
+            return self._client
+        async with self._opening:
+            # Checked again inside the lock: whoever waited may have been
+            # waiting for exactly this.
+            if self._client is None:
+                self._client = await self._connect()
+            return self._client
+
+    async def ping(self) -> bool:
+        """For the health check, which reports *not ready* rather than raising
+        when the store cannot be reached at all."""
+        try:
+            return bool(await (await self.client()).ping())
+        except Exception:
+            return False
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+
+
 @dataclass(slots=True)
 class Resources:
     """Everything with a connection, owned by the application's lifetime."""
@@ -54,7 +104,7 @@ class Resources:
     engine: AsyncEngine
     session_factory: async_sessionmaker[AsyncSession]
     redis: Redis
-    clickhouse: AsyncClient
+    clickhouse: ClickHouseConnection
     sessions: SessionStore
     rate_limiter: RateLimiter
     # None when no object store is configured. Source map upload and
@@ -109,21 +159,22 @@ async def open_resources(settings: Settings) -> Resources:
         decode_responses=True,
     )
 
-    clickhouse = await clickhouse_connect.get_async_client(
-        host=settings.clickhouse_host,
-        port=settings.clickhouse_port,
-        username=settings.clickhouse_dsn.username or "",
-        password=settings.clickhouse_dsn.password or "",
-        database=settings.clickhouse_database,
-        secure=settings.clickhouse_secure,
-        connector_limit=settings.clickhouse_pool_size,
-        connector_limit_per_host=settings.clickhouse_pool_size,
-        settings={
-            "max_execution_time": settings.clickhouse_query_timeout_seconds,
-            "max_result_rows": settings.clickhouse_max_result_rows,
-            "result_overflow_mode": CLICKHOUSE_RESULT_OVERFLOW_MODE,
-        },
-    )
+    async def connect_clickhouse() -> AsyncClient:
+        return await clickhouse_connect.get_async_client(
+            host=settings.clickhouse_host,
+            port=settings.clickhouse_port,
+            username=settings.clickhouse_dsn.username or "",
+            password=settings.clickhouse_dsn.password or "",
+            database=settings.clickhouse_database,
+            secure=settings.clickhouse_secure,
+            connector_limit=settings.clickhouse_pool_size,
+            connector_limit_per_host=settings.clickhouse_pool_size,
+            settings={
+                "max_execution_time": settings.clickhouse_query_timeout_seconds,
+                "max_result_rows": settings.clickhouse_max_result_rows,
+                "result_overflow_mode": CLICKHOUSE_RESULT_OVERFLOW_MODE,
+            },
+        )
 
     return Resources(
         object_store=await _open_object_store(settings),
@@ -131,7 +182,7 @@ async def open_resources(settings: Settings) -> Resources:
         engine=engine,
         session_factory=session_factory,
         redis=redis,
-        clickhouse=clickhouse,
+        clickhouse=ClickHouseConnection(connect_clickhouse),
         sessions=SessionStore(redis, ttl_seconds=settings.session_ttl_seconds),
         rate_limiter=RateLimiter(redis),
     )
