@@ -44,7 +44,7 @@ def _organization() -> Organization:
 def _user(organization: Organization) -> User:
     user = User(
         org_id=organization.id,
-        email="dev@nexovue.local",
+        email="nexovue@nexovue.com",
         name="Dev Owner",
         password_hash=hash_password(PASSWORD),
         role="owner",

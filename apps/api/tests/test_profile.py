@@ -127,7 +127,7 @@ def organization() -> Organization:
 def user(organization: Organization) -> User:
     user = User(
         org_id=organization.id,
-        email="dev@nexovue.local",
+        email="nexovue@nexovue.com",
         name="Dev Owner",
         password_hash=hash_password(PASSWORD),
         role="owner",
@@ -452,7 +452,7 @@ async def test_an_email_change_mails_the_new_address_and_writes_nothing(
     assert response.status_code == 202
     assert len(sender.sent) == 1
     assert sender.sent[0]["to"] == NEW_ADDRESS, "the link went somewhere other than the new address"
-    assert user.email == "dev@nexovue.local", "the address moved before anything was proved"
+    assert user.email == "nexovue@nexovue.com", "the address moved before anything was proved"
     assert user.email_verified_at is None
 
 
@@ -486,7 +486,7 @@ async def test_an_email_change_needs_the_current_password(
 
     assert response.status_code == 422
     assert sender.sent == [], "a link was mailed on an unproved request"
-    assert user.email == "dev@nexovue.local"
+    assert user.email == "nexovue@nexovue.com"
 
 
 async def test_an_account_with_no_password_cannot_move_its_address(

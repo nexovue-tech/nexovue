@@ -28,7 +28,7 @@ import { parseLoginSearch, SIGNED_OUT_EVERYWHERE } from "./search";
  *    working and the session lapsing would look identical.
  */
 
-const ADDRESS = "dev@nexovue.local";
+const ADDRESS = "nexovue@nexovue.com";
 const PASSWORD_PATH = "/api/v1/profile/password";
 const SIGN_OUT_PATH = "/api/v1/profile/sign-out-everywhere";
 

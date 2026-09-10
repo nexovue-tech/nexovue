@@ -40,7 +40,7 @@ def test_a_user_with_no_password_can_never_sign_in() -> None:
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("  Dev@Nexovue.Local  ", "dev@nexovue.local"),
+        ("  Nexovue@Nexovue.Com  ", "nexovue@nexovue.com"),
         ("ALREADY@LOWER.COM", "already@lower.com"),
     ],
 )
@@ -48,7 +48,7 @@ def test_an_address_is_stored_trimmed_and_lowercased(raw: str, expected: str) ->
     assert normalize_email(raw) == expected
 
 
-@pytest.mark.parametrize("address", ["dev@nexovue.local", "a.b+tag@sub.example.co.uk"])
+@pytest.mark.parametrize("address", ["nexovue@nexovue.com", "a.b+tag@sub.example.co.uk"])
 def test_a_usable_address_is_accepted(address: str) -> None:
     assert is_valid_email(address)
 
@@ -64,7 +64,7 @@ def test_a_usable_address_is_accepted(address: str) -> None:
         "dev@.local",
         "dev@nexovue.",
         "dev name@nexovue.local",
-        "dev@nexovue.local\n",
+        "nexovue@nexovue.com\n",
     ],
 )
 def test_an_unusable_address_is_rejected(address: str) -> None:

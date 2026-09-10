@@ -33,7 +33,7 @@ from http.cookiejar import CookieJar
 from typing import Any, Final
 
 API = os.environ.get("NEXOVUE_API_URL", "http://localhost:18000").rstrip("/")
-EMAIL = os.environ.get("NEXOVUE_DEV_EMAIL", "dev@nexovue.local")
+EMAIL = os.environ.get("NEXOVUE_DEV_EMAIL", "nexovue@nexovue.com")
 PASSWORD = os.environ.get("NEXOVUE_DEV_PASSWORD", "nexovue-dev")
 
 # The site key the storefront's pages carry, and the two origins it must allow.

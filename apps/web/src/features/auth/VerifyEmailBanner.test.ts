@@ -21,7 +21,7 @@ import { VerifyEmailBanner } from "./VerifyEmailBanner";
  */
 
 const VERIFIED_AT = "2026-09-01T09:15:00Z";
-const ADDRESS = "dev@nexovue.local";
+const ADDRESS = "nexovue@nexovue.com";
 
 const mounted: Root[] = [];
 

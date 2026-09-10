@@ -29,7 +29,7 @@ from nexovue_api.signup.service import provision_tenant
 
 DEV_ORG_SLUG: Final = "acme"
 DEV_ORG_NAME: Final = "Acme Inc"
-DEV_OWNER_EMAIL: Final = "dev@nexovue.local"
+DEV_OWNER_EMAIL: Final = "nexovue@nexovue.com"
 DEV_OWNER_NAME: Final = "Dev Owner"
 DEV_OWNER_PASSWORD: Final = "nexovue-dev"
 DEV_PROJECT_SLUG: Final = "production"

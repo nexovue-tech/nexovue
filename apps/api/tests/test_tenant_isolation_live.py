@@ -48,7 +48,7 @@ POSTGRES_DSN: Final = os.environ.get(
 
 # The account `just seed` creates. It is the organization with real traffic in
 # it, which makes it the honest "other tenant" to try to read.
-SEEDED_EMAIL: Final = os.environ.get("NEXOVUE_SEED_EMAIL", "dev@nexovue.local")
+SEEDED_EMAIL: Final = os.environ.get("NEXOVUE_SEED_EMAIL", "nexovue@nexovue.com")
 SEEDED_PASSWORD: Final = os.environ.get("NEXOVUE_SEED_PASSWORD", "nexovue-dev")
 
 REACHABILITY_TIMEOUT_SECONDS: Final = 1.0

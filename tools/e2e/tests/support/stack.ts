@@ -15,7 +15,7 @@ export const RECEIVER_ORIGIN = process.env.NEXOVUE_RECEIVER_ORIGIN ?? "http://lo
  * spec signs up for its own organisation so runs cannot see each other's traces.
  */
 export const SEEDED_USER = {
-  email: process.env.NEXOVUE_SEED_EMAIL ?? "dev@nexovue.local",
+  email: process.env.NEXOVUE_SEED_EMAIL ?? "nexovue@nexovue.com",
   password: process.env.NEXOVUE_SEED_PASSWORD ?? "nexovue-dev",
 };
 
