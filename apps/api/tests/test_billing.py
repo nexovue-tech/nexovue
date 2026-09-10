@@ -30,6 +30,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from http import HTTPStatus
 from typing import Any, Final
 
 import httpx
@@ -37,6 +38,7 @@ import pytest
 from environment import TEST_ENVIRONMENT
 
 from nexovue_api.billing import (
+    BillingError,
     BillingEvent,
     BillingEventKind,
     CancellationOutcome,
@@ -67,6 +69,7 @@ from nexovue_api.data.postgres.models import (
 )
 from nexovue_api.errors.exceptions import (
     ConflictError,
+    DependencyUnavailableError,
     InvalidRequestError,
     UnauthenticatedError,
 )
@@ -146,6 +149,10 @@ class StubProcessor:
 
     event: BillingEvent | None = None
     failure: Exception | None = None
+    # Raised by the *call* methods. Separate from `failure`, which is the
+    # webhook's: a processor that refuses a checkout and one that sends an
+    # unreadable delivery are different failures on different paths.
+    refusal: BillingError | None = None
     seen: list[bytes] | None = None
     checkout_url: str = "https://processor.example.test/pay/abc"
     subscription_ref: str = SUBSCRIPTION_REF
@@ -177,6 +184,8 @@ class StubProcessor:
                 "return_url": return_url,
             }
         )
+        if self.refusal is not None:
+            raise self.refusal
         # A hosted page — deliberately *not* the domestic processor's embedded
         # script. A double that mirrored the one real implementation would let a
         # screen that only handles one shape pass every test here.
@@ -187,6 +196,8 @@ class StubProcessor:
         )
 
     async def cancel(self, *, subscription_ref: str) -> CancellationOutcome:
+        if self.refusal is not None:
+            raise self.refusal
         self.cancelled.append(subscription_ref)
         return self.cancellation
 
@@ -1126,6 +1137,57 @@ class TestEndingASubscription:
         assert live.status == service.STATUS_CANCELLED
         assert live.cancelled_at is not None
         assert organization.plan == service.PLAN_WITHOUT_A_SUBSCRIPTION
+
+    async def test_a_processor_that_refuses_is_not_reported_as_our_crash(self) -> None:
+        """503, not 500. Every refusal used to reach the unhandled-exception
+        handler: a currency the account cannot take answered "The request could
+        not be completed", and the processor's actual words — which were in the
+        log — never reached the person who could act on them."""
+        live = BillingSubscription(
+            org_id=ORG_ID,
+            processor=PROCESSOR_NAME,
+            subscription_ref=SUBSCRIPTION_REF,
+            plan_slug="pro",
+            status=service.STATUS_ACTIVE,
+            services_committed=SERVICES_COMMITTED,
+        )
+        processor = StubProcessor(refusal=BillingError("the processor refused the call: teapot"))
+        session = CapturingSession(answers=[live])
+
+        with pytest.raises(DependencyUnavailableError) as refused:
+            await service.end_subscription(
+                session,  # type: ignore[arg-type]
+                configured=_configured(processor),
+                organization=_organization(plan="pro"),
+            )
+
+        assert refused.value.problem.status == HTTPStatus.SERVICE_UNAVAILABLE
+
+    async def test_the_processors_own_words_are_not_published(self) -> None:
+        """`DomainError.detail` goes on the wire. A vendor's message is
+        unbounded text we did not write and did not review."""
+        live = BillingSubscription(
+            org_id=ORG_ID,
+            processor=PROCESSOR_NAME,
+            subscription_ref=SUBSCRIPTION_REF,
+            plan_slug="pro",
+            status=service.STATUS_ACTIVE,
+            services_committed=SERVICES_COMMITTED,
+        )
+        processor = StubProcessor(refusal=BillingError("account 42 is suspended, ref XYZ"))
+        session = CapturingSession(answers=[live])
+
+        with pytest.raises(DependencyUnavailableError) as refused:
+            await service.end_subscription(
+                session,  # type: ignore[arg-type]
+                configured=_configured(processor),
+                organization=_organization(plan="pro"),
+            )
+
+        assert "account 42" not in refused.value.detail
+        assert "XYZ" not in refused.value.detail
+        # And it does not claim the arrangement ended, because it did not.
+        assert "still active" in refused.value.detail
 
     async def test_the_plan_is_not_moved_here(self) -> None:
         """The processor decides when the arrangement ends, at its own period

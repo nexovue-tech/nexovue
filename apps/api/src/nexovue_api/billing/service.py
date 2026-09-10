@@ -66,6 +66,7 @@ from nexovue_api.data.postgres.models import (
 )
 from nexovue_api.errors.exceptions import (
     ConflictError,
+    DependencyUnavailableError,
     InternalError,
     InvalidRequestError,
     UnauthenticatedError,
@@ -467,6 +468,28 @@ ALREADY_ON_PLAN_DETAIL: Final = "This organization already has a live subscripti
 NOTHING_TO_CANCEL_DETAIL: Final = "This organization has no live subscription to cancel."
 
 
+# What a customer is told when the processor refuses or cannot be reached.
+#
+# **The processor's own words never reach the wire.** They are a vendor's text,
+# unbounded and unreviewed — "Currency provided is not supported" today, an
+# account-status message or an internal id tomorrow — and `DomainError.detail`
+# is published to whoever asked. The refusal is chained with `from`, so the
+# correlation id still leads to it in the log.
+#
+# It says nothing has been charged because at this point nothing has: the money
+# moves when the customer authorises on the processor's own page, which is after
+# this call.
+PROCESSOR_UNAVAILABLE_DETAIL: Final = (
+    "The payment provider could not start this checkout. Nothing has been charged."
+)
+
+# Cancelling is the other direction and needs its own sentence: an arrangement
+# that is still live must not be reported as ended.
+CANCEL_UNAVAILABLE_DETAIL: Final = (
+    "The payment provider could not be reached, so this subscription is still active. "
+    "Try again in a moment."
+)
+
 NO_APP_BASE_URL_DETAIL: Final = (
     "APP_BASE_URL is not set, so there is nowhere to return the customer to after paying."
 )
@@ -549,19 +572,34 @@ async def begin_plan_change(
         on_day=today,
     )
 
-    checkout = await configured.processor.begin_checkout(
-        org_id=organization.id,
-        plan_slug=request.plan_slug,
-        contact=BillingContact(
-            # The member on the call, unless they gave another. Never stored —
-            # ADR 0109: the processor holds what the bank's notice needs.
-            email=request.contact_email or billing_email,
-            name=request.contact_name,
-            phone=request.contact_phone,
-        ),
-        commitment=commitment,
-        return_url=checkout_return_url(app_base_url),
-    )
+    # The webhook path has translated a processor failure since it was written;
+    # this one did not, so every refusal here — a currency the account cannot
+    # take, an unreachable host, a rate limit — reached the unhandled-exception
+    # handler and was answered 500. A customer read "nexovue is broken" when the
+    # truth was "your provider said no", and the reason sat in the log.
+    try:
+        checkout = await configured.processor.begin_checkout(
+            org_id=organization.id,
+            plan_slug=request.plan_slug,
+            contact=BillingContact(
+                # The member on the call, unless they gave another. Never stored —
+                # ADR 0109: the processor holds what the bank's notice needs.
+                email=request.contact_email or billing_email,
+                name=request.contact_name,
+                phone=request.contact_phone,
+            ),
+            commitment=commitment,
+            return_url=checkout_return_url(app_base_url),
+        )
+    except BillingError as refused:
+        _log.warning(
+            "a checkout could not be started",
+            processor=configured.name,
+            plan_slug=request.plan_slug,
+            currency=commitment.rate.currency,
+            reason=str(refused),
+        )
+        raise DependencyUnavailableError(PROCESSOR_UNAVAILABLE_DETAIL) from refused
 
     # The row that makes the processor's later events attributable. ADR 0110:
     # the reference is theirs, but *whose subscription it is* is answered here,
@@ -612,7 +650,15 @@ async def end_subscription(
             "This subscription was not taken out through the processor this "
             "deployment is configured with, so it cannot be cancelled here."
         )
-    outcome = await configured.processor.cancel(subscription_ref=subscription.subscription_ref)
+    try:
+        outcome = await configured.processor.cancel(subscription_ref=subscription.subscription_ref)
+    except BillingError as refused:
+        _log.warning(
+            "a subscription could not be cancelled",
+            processor=configured.name,
+            reason=str(refused),
+        )
+        raise DependencyUnavailableError(CANCEL_UNAVAILABLE_DETAIL) from refused
     if outcome is CancellationOutcome.ALREADY_ENDED:
         # No event is coming — the processor was asked and said it is already
         # over. Waiting for one would leave the organization on a paid tier
