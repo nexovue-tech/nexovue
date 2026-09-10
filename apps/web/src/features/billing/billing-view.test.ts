@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BillingOverview, BillingPeriodUsage, PlanOption, SubscriptionSummary } from "./api";
+import { CONFIRMATION_POLL_MS, CONFIRMATION_WINDOW_MS, confirmationPoll } from "./api";
 import {
   allowanceFraction,
   cancellationLabel,
@@ -276,5 +277,31 @@ describe("whether an upgrade can be started", () => {
     );
 
     expect(answer.available).toBe(true);
+  });
+});
+
+describe("waiting for the processor to confirm", () => {
+  /**
+   * The race a paying customer can lose: the processor redirects their browser
+   * back while its webhook is still in flight. Measured on 2026-09-10, both
+   * landed within four seconds of each other.
+   */
+  it("keeps asking while an arrangement is unsettled", () => {
+    expect(confirmationPoll("pending", 0)).toBe(CONFIRMATION_POLL_MS);
+    expect(confirmationPoll("pending", CONFIRMATION_WINDOW_MS - 1)).toBe(CONFIRMATION_POLL_MS);
+  });
+
+  it("stops the moment there is an answer", () => {
+    expect(confirmationPoll("active", 0)).toBe(false);
+    expect(confirmationPoll("cancelled", 0)).toBe(false);
+    expect(confirmationPoll(undefined, 0)).toBe(false);
+  });
+
+  /**
+   * `pending` is also where an abandoned checkout rests, and that page can sit
+   * open all day. It must not ask all day.
+   */
+  it("gives up on a mandate that was never going to be confirmed", () => {
+    expect(confirmationPoll("pending", CONFIRMATION_WINDOW_MS)).toBe(false);
   });
 });

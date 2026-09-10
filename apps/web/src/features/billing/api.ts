@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRef } from "react";
 
 import { apiClient } from "@/shared/api-client";
 
@@ -100,7 +101,33 @@ export interface BillingOverview {
  */
 export const billingQueryKey = (currency?: string) => ["billing", currency ?? null] as const;
 
+/**
+ * How often a `pending` arrangement is asked about again, and for how long.
+ *
+ * **A customer who has just paid arrives here in a race they can lose.** The
+ * processor redirects their browser back at the same moment its webhook is in
+ * flight; measured on 2026-09-10, the redirect and the delivery landed within
+ * the same four seconds. Render once and the screen says "not finished" and
+ * "nothing has been charged" to somebody holding a receipt, until they think to
+ * reload.
+ *
+ * The window is bounded because `pending` is also the resting state of a
+ * checkout nobody completed — that page can sit open all day and must not poll
+ * all day. A mandate that has not been confirmed within two minutes is not
+ * about to be, and the screen already says what to do.
+ */
+export const CONFIRMATION_POLL_MS = 3_000;
+export const CONFIRMATION_WINDOW_MS = 120_000;
+
+/** How long to wait before asking again, or `false` to stop asking. */
+export function confirmationPoll(status: string | undefined, elapsedMs: number): number | false {
+  if (status !== "pending") return false;
+  return elapsedMs < CONFIRMATION_WINDOW_MS ? CONFIRMATION_POLL_MS : false;
+}
+
 export function useBillingOverview(currency?: string) {
+  const startedAt = useRef(Date.now());
+
   return useQuery({
     queryKey: billingQueryKey(currency),
     queryFn: ({ signal }) =>
@@ -108,6 +135,10 @@ export function useBillingOverview(currency?: string) {
         searchParams: currency ? { currency } : undefined,
         signal,
       }),
+    // Only while the tab is in front of somebody: `refetchIntervalInBackground`
+    // stays off by default, so a forgotten tab costs nothing.
+    refetchInterval: (query) =>
+      confirmationPoll(query.state.data?.subscription?.status, Date.now() - startedAt.current),
   });
 }
 
