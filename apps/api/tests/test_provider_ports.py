@@ -29,8 +29,10 @@ PORT_MODULES: Final = (
 )
 
 # Names no port may contain. Not an exhaustive list of vendors — a list of the
-# ones actually under consideration on 2026-09-07, so a hasty import shows up.
-# A vendor added later must be added here in the same change.
+# ones actually under consideration, so a hasty import shows up. A vendor added
+# later must be added here in the same change, and one dropped **stays**: this
+# is a list of forbidden words, not of supported providers, and shortening it
+# when an adapter is deleted only removes a guard.
 VENDOR_NAMES: Final = (
     "postmark",
     "resend",

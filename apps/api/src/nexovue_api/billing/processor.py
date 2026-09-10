@@ -1,11 +1,11 @@
 """The port every payment leaves and every billing event arrives through.
 
-No processor is chosen yet. This interface exists first because the choice is
-genuinely open and genuinely consequential: a domestic Indian gateway
-(Cashfree, Razorpay) leaves us the legal seller and therefore liable for foreign
-VAT registration, while a merchant of record becomes the seller and carries that
-instead. Those are different companies, different compliance, and possibly both
-— one for India and one for everywhere else.
+The domestic processor is Razorpay. This interface existed before that choice
+and outlives it — it has already survived one switch and back — because a
+domestic Indian gateway leaves us the legal seller and therefore liable for
+foreign VAT registration, while a merchant of record becomes the seller and
+carries that instead. Those are different companies, different compliance, and
+probably both — one for India and one for everywhere else.
 
 **That is why this is a Protocol and not a client.** Two implementations chosen
 per customer is a normal outcome here, not a compromise, and it is only cheap if

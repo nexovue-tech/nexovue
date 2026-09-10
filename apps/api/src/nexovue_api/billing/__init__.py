@@ -115,13 +115,9 @@ def build_payment_processor(settings: DomesticPaymentSettings) -> PaymentProcess
     """
     provider: DomesticPaymentProvider = settings.provider
     match provider:
-        case "cashfree":
+        case "razorpay":
             # Imported here rather than at module scope so adding a processor
             # does not make every caller import every vendor's client.
-            from nexovue_api.billing.cashfree import CashfreePaymentProcessor
-
-            return CashfreePaymentProcessor(settings)
-        case "razorpay":
             from nexovue_api.billing.razorpay import RazorpayPaymentProcessor
 
             return RazorpayPaymentProcessor(settings)

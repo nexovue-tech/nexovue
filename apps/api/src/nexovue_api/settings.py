@@ -42,7 +42,7 @@ LogFormat = Literal["json", "console"]
 # merchant of record, because a non-EU seller owes EU VAT from the first euro —
 # which is why the payment one is named for the role it fills.
 EmailProvider = Literal["resend"]
-DomesticPaymentProvider = Literal["cashfree", "razorpay"]
+DomesticPaymentProvider = Literal["razorpay"]
 
 # A processor runs two estates with two sets of credentials and two hostnames.
 # Named rather than a bool because "is production" is a question about the
@@ -157,10 +157,6 @@ class DomesticPaymentSettings:
 # Still overridable by `PAYMENTS_DOMESTIC_BASE_URL` — a test transport and a
 # vendor's regional host both need it — but nothing has to set it to be right.
 PROVIDER_API_ROOTS: Final[dict[str, dict[str, str]]] = {
-    "cashfree": {
-        "sandbox": "https://sandbox.cashfree.com/pg",
-        "production": "https://api.cashfree.com/pg",
-    },
     # One host for both, and the key's own prefix decides which books it writes
     # to: `rzp_test_` is the sandbox, `rzp_live_` is not.
     # https://razorpay.com/docs/api/
@@ -266,7 +262,7 @@ class Settings(BaseSettings):
     # --- payments: all of these or none, see DomesticPaymentSettings --------
     # The vendor's name is the *value*, never the key: `PAYMENTS_DOMESTIC_*`
     # survives a switch from one gateway to another, which is the point.
-    payments_domestic_provider: DomesticPaymentProvider = "cashfree"
+    payments_domestic_provider: DomesticPaymentProvider = "razorpay"
     payments_domestic_app_id: str = ""
     payments_domestic_secret_key: str = ""
     payments_domestic_env: PaymentEnvironment = "sandbox"

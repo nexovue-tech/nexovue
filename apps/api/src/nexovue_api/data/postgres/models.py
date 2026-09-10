@@ -102,7 +102,7 @@ DEBUG_ID_LENGTH: Final = 64
 # An identifier a payment processor issued or accepted — a subscription
 # reference, a delivery id. Opaque here: nothing parses one or branches on its
 # shape, and the cap is the longest any processor under consideration allows
-# (Cashfree's subscription id is 250 characters), rounded to the next byte.
+# (250 characters, from a gateway evaluated in 2026-09), rounded to the next byte.
 PROCESSOR_REFERENCE_LENGTH: Final = 255
 
 # What a subscription is doing, in this product's words rather than a

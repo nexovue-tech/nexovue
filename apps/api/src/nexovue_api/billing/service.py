@@ -422,13 +422,17 @@ async def _period(
 # Where the processor sends the customer's browser when its page is done, and
 # the only deployment fact `begin_checkout` needs beyond the price.
 #
-# **It is this API, not a screen.** Cashfree returns the customer by `POST` —
-# its redirection payload arrives as form fields — and nothing that serves a
-# single-page app answers a POST to a client route: the dev server falls through
-# to 404 and a static host refuses it. Only a server can take that POST, so the
-# API takes it and sends the browser on to the screen. The browser knows one
-# origin and reaches this API under `/api/v1/`, so one `APP_BASE_URL` still
-# builds both, exactly as `auth/recovery._link` builds verification links.
+# **It is this API, not a screen.** A processor returns the customer by `POST`,
+# its result arriving as form fields, and nothing that serves a single-page app
+# answers a POST to a client route: the dev server falls through to 404 and a
+# static host refuses it. Only a server can take that POST, so the API takes it
+# and sends the browser on to the screen. The browser knows one origin and
+# reaches this API under `/api/v1/`, so one `APP_BASE_URL` builds both, exactly
+# as `auth/recovery._link` builds verification links.
+#
+# The present processor ignores this value and redirects to a callback set in
+# its own dashboard — which must name this same route, for the same reason.
+# https://razorpay.com/docs/payments/payment-gateway/callback-url/
 CHECKOUT_RETURN_PATH: Final = f"{API_PREFIX}/billing/checkout/return"
 
 # Where that hand-off puts the customer, relative so it resolves against

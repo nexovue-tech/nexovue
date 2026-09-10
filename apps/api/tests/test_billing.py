@@ -22,7 +22,6 @@ proves the filter is there.
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import json
@@ -50,11 +49,10 @@ from nexovue_api.billing import (
     queries,
     service,
 )
-from nexovue_api.billing.cashfree import (
+from nexovue_api.billing.razorpay import (
     DELIVERY_HEADER,
     SIGNATURE_HEADER,
-    TIMESTAMP_HEADER,
-    CashfreePaymentProcessor,
+    RazorpayPaymentProcessor,
 )
 from nexovue_api.billing.schemas import DeliveryOutcome, StartCheckoutRequest
 from nexovue_api.data.postgres.models import (
@@ -81,9 +79,9 @@ from nexovue_api.usage import queries as usage_queries
 
 ORG_ID: Final = uuid.UUID("0198f2a0-0000-7000-8000-000000000001")
 OTHER_ORG_ID: Final = uuid.UUID("0198f2a0-0000-7000-8000-0000000000ff")
-SUBSCRIPTION_REF: Final = "nexovue-sub-0198f2a0"
+SUBSCRIPTION_REF: Final = "sub_0198f2a01b2c3d"
 DELIVERY_ID: Final = "6f1c2d3e4a5b6c7d8e9f0a1b2c3d4e5f"
-PROCESSOR_NAME: Final = "cashfree"
+PROCESSOR_NAME: Final = "razorpay"
 
 # The signed-in member, whose address the checkout falls back to when the
 # processor asks for one and the screen collected none.
@@ -94,9 +92,8 @@ OWNER_EMAIL: Final = "owner@example.test"
 SERVICES_COMMITTED: Final = 7
 
 SECRET: Final = "test_secret_key_never_a_real_one"
-TIMESTAMP: Final = "1757318400000"
 SETTINGS: Final = DomesticPaymentSettings(
-    provider="cashfree",
+    provider="razorpay",
     app_id="TEST_APP_ID",
     secret_key=SECRET,
     environment="sandbox",
@@ -539,24 +536,20 @@ async def test_an_already_active_arrangement_keeps_its_first_activation_date() -
 
 
 def _signed(body: bytes) -> dict[str, str]:
-    digest = hmac.new(SECRET.encode(), TIMESTAMP.encode() + body, hashlib.sha256)
+    """The processor's scheme: hex over the raw bytes, webhook secret, no
+    timestamp in the digest."""
+    digest = hmac.new(SECRET.encode(), body, hashlib.sha256)
     return {
-        TIMESTAMP_HEADER: TIMESTAMP,
-        SIGNATURE_HEADER: base64.b64encode(digest.digest()).decode("ascii"),
+        SIGNATURE_HEADER: digest.hexdigest(),
         DELIVERY_HEADER: DELIVERY_ID,
     }
 
 
-def _cashfree_body() -> bytes:
+def _delivery_body() -> bytes:
     return json.dumps(
         {
-            "data": {
-                "subscription_details": {
-                    "subscription_id": SUBSCRIPTION_REF,
-                    "subscription_status": "ACTIVE",
-                }
-            },
-            "type": "SUBSCRIPTION_STATUS_CHANGED",
+            "event": "subscription.activated",
+            "payload": {"subscription": {"entity": {"id": SUBSCRIPTION_REF, "status": "active"}}},
         }
     ).encode()
 
@@ -564,9 +557,9 @@ def _cashfree_body() -> bytes:
 async def test_a_real_signed_delivery_reaches_a_row_and_a_tampered_one_does_not() -> None:
     """End to end through the real processor: bytes in, a row staged — and the
     same bytes with one character changed reach nothing at all."""
-    body = _cashfree_body()
+    body = _delivery_body()
     headers = _signed(body)
-    configured = _configured(CashfreePaymentProcessor(SETTINGS))
+    configured = _configured(RazorpayPaymentProcessor(SETTINGS))
 
     accepted = CapturingSession(answers=[_pending(), None, _organization()])
     outcome = await service.record_from_webhook(
@@ -578,7 +571,7 @@ async def test_a_real_signed_delivery_reaches_a_row_and_a_tampered_one_does_not(
     assert outcome.outcome is DeliveryOutcome.RECORDED
     assert accepted.staged_of(BillingWebhookDelivery)[0].org_id == ORG_ID
 
-    tampered_body = body.replace(b"ACTIVE", b"PAUSED")
+    tampered_body = body.replace(b"activated", b"cancelled")
     refused = CapturingSession(answers=[_pending()])
     with pytest.raises(UnauthenticatedError):
         await service.record_from_webhook(
@@ -664,7 +657,7 @@ def _build_app(session: CapturingSession) -> Any:
     app.dependency_overrides[get_app_settings] = lambda: settings
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_domestic_payments] = lambda: _configured(
-        CashfreePaymentProcessor(SETTINGS)
+        RazorpayPaymentProcessor(SETTINGS)
     )
     return app
 
@@ -676,7 +669,7 @@ async def _client(app: Any) -> httpx.AsyncClient:
 async def test_the_door_accepts_a_signed_delivery_at_the_role_named_path() -> None:
     """A URL pasted into somebody else's dashboard. Naming the role rather than
     the vendor is what lets the second processor have its own."""
-    body = _cashfree_body()
+    body = _delivery_body()
     session = CapturingSession(answers=[_pending(), None, _organization()])
 
     async with await _client(_build_app(session)) as client:
@@ -692,14 +685,14 @@ async def test_the_door_accepts_a_signed_delivery_at_the_role_named_path() -> No
 async def test_the_door_refuses_a_tampered_delivery_without_writing() -> None:
     """The body is read as raw bytes: a pydantic body parameter would have
     FastAPI answer 422 on a forgery before the signature was ever looked at."""
-    body = _cashfree_body()
+    body = _delivery_body()
     headers = _signed(body)
     session = CapturingSession(answers=[_pending()])
 
     async with await _client(_build_app(session)) as client:
         response = await client.post(
             f"{API_PREFIX}/billing/webhook/domestic",
-            content=body.replace(b"ACTIVE", b"PAUSED"),
+            content=body.replace(b"activated", b"cancelled"),
             headers=headers,
         )
 
@@ -708,7 +701,7 @@ async def test_the_door_refuses_a_tampered_delivery_without_writing() -> None:
 
 
 async def test_the_customer_returns_by_post_and_is_sent_to_the_billing_screen() -> None:
-    """Cashfree returns a customer by POST. Pointing that at the single-page
+    """The processor returns a customer by POST. Pointing that at the single-page
     app's own path put a 404 in front of somebody who had just paid, because no
     host serving a SPA answers a POST to a client route — the dev server falls
     through and a static host refuses. 303, so the browser follows it as a GET.
@@ -716,7 +709,7 @@ async def test_the_customer_returns_by_post_and_is_sent_to_the_billing_screen() 
     async with await _client(_build_app(CapturingSession(answers=[]))) as client:
         response = await client.post(
             f"{API_PREFIX}/billing/checkout/return",
-            data={"cf_status": "ACTIVE", "cf_subReferenceId": "9182"},
+            data={"razorpay_subscription_id": SUBSCRIPTION_REF, "razorpay_signature": "x"},
         )
 
     assert response.status_code == 303
