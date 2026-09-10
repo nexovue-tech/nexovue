@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { BillingOverview, BillingPeriodUsage, PlanOption, SubscriptionSummary } from "./api";
 import {
   allowanceFraction,
+  cancellationLabel,
   checkoutAvailability,
   describeAllowance,
+  describeCancellation,
   describeCost,
   describeSubscription,
   initialCommitment,
@@ -129,10 +131,45 @@ describe("the arrangement", () => {
   });
 
   /** Nothing has been charged yet, and saying otherwise would alarm somebody. */
-  it("says a pending mandate has charged nothing", () => {
+  it("says a pending checkout has charged nothing", () => {
     expect(describeSubscription(subscription({ status: "pending" }))).toContain(
       "Nothing has been charged",
     );
+  });
+
+  /**
+   * The row is written when the customer is handed to the processor, so it is
+   * also the state of somebody who pressed back. Telling that person their bank
+   * is confirming a mandate describes an arrangement they never made.
+   */
+  it("does not claim a bank is confirming a pending checkout", () => {
+    const said = describeSubscription(subscription({ status: "pending" }));
+
+    expect(said).not.toContain("your bank");
+    expect(said).toContain("not finished");
+  });
+
+  it("offers to discard a pending checkout rather than cancel a subscription", () => {
+    const pending = subscription({ status: "pending" });
+
+    expect(cancellationLabel(pending)).toBe("Discard this checkout");
+    expect(describeCancellation(pending)).toContain("never completed");
+  });
+
+  /** A live arrangement really does end at the processor's period boundary. */
+  it("still warns about losing the allowance when there is something to lose", () => {
+    const active = subscription({ status: "active" });
+
+    expect(cancellationLabel(active)).toBe("Cancel subscription");
+    expect(describeCancellation(active)).toContain("free tier");
+  });
+
+  /**
+   * The free tier is where a pending customer already is, so warning them they
+   * will be returned to it names a loss they cannot take.
+   */
+  it("does not threaten a pending customer with the free tier", () => {
+    expect(describeCancellation(subscription({ status: "pending" }))).not.toContain("free tier");
   });
 
   /**

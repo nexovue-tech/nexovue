@@ -13,8 +13,11 @@ import { useBillingOverview, useCancelSubscription, useStartCheckout } from "./a
 import {
   allowanceFraction,
   CONTACT_FIELD_LABELS,
+  cancellationConfirmLabel,
+  cancellationLabel,
   checkoutAvailability,
   describeAllowance,
+  describeCancellation,
   describeCost,
   describeSubscription,
   initialCommitment,
@@ -179,18 +182,14 @@ function Arrangement({ overview }: { overview: BillingOverview }) {
 
       {subscription.status === "cancelled" ? null : confirming ? (
         <div className="rounded border border-warning-border bg-warning-subtle p-4 text-sm">
-          <p className="text-warning-text">
-            Cancelling returns this organization to the free tier when the processor&rsquo;s current
-            period ends. The free tier&rsquo;s allowance is smaller, and ingestion stops when it is
-            reached.
-          </p>
+          <p className="text-warning-text">{describeCancellation(subscription)}</p>
           <div className="mt-3 flex gap-2">
             <Button
               pending={cancel.isPending}
               pendingLabel="Cancelling"
               onClick={() => cancel.mutate(undefined, { onSuccess: () => setConfirming(false) })}
             >
-              Yes, cancel the subscription
+              {cancellationConfirmLabel(subscription)}
             </Button>
             <Button variant="secondary" onClick={() => setConfirming(false)}>
               Keep it
@@ -200,7 +199,7 @@ function Arrangement({ overview }: { overview: BillingOverview }) {
       ) : (
         <div>
           <Button variant="secondary" onClick={() => setConfirming(true)}>
-            Cancel subscription
+            {cancellationLabel(subscription)}
           </Button>
         </div>
       )}

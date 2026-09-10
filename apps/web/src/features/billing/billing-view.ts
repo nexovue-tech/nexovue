@@ -80,13 +80,42 @@ export function describeSubscription(subscription: SubscriptionSummary): string 
   switch (subscription.status) {
     case "active":
       return `Active on ${subscription.plan_slug}, ${ceiling}.`;
+    // Not "waiting for your bank". A `pending` row is written when the customer
+    // is handed to the processor, so it is equally the state of somebody who
+    // walked back without authorising anything — and this row cannot tell the
+    // two apart, because the only thing that ever reports an authorisation is
+    // the webhook, and that moves the row to `active`. Naming a bank that was
+    // never asked describes an arrangement the customer does not have.
     case "pending":
-      return `Waiting for your bank to confirm the mandate. Nothing has been charged, and the plan moves when they confirm.`;
+      return `A checkout was started and is not finished. Nothing has been charged — if you authorised the mandate, the plan moves when the processor confirms it.`;
     case "cancelled":
       return `Cancelled. The plan returns to the free tier at the end of the period the processor is billing.`;
     default:
       return `${subscription.status} on ${subscription.plan_slug}, ${ceiling}.`;
   }
+}
+
+/**
+ * What ending this arrangement actually does, which depends on whether it ever
+ * began. A `pending` row bills nothing and holds no plan, so the free tier is
+ * where the customer already is — warning them about losing it names a loss
+ * they cannot take, and reads as a threat over a checkout they abandoned.
+ */
+export function describeCancellation(subscription: SubscriptionSummary): string {
+  if (subscription.status === "pending") {
+    return "This discards a checkout that was never completed. Nothing has been charged, and the plan does not change.";
+  }
+  return "Cancelling returns this organization to the free tier when the processor's current period ends. The free tier's allowance is smaller, and ingestion stops when it is reached.";
+}
+
+/** What the button ends: an arrangement, or an attempt at one. */
+export function cancellationLabel(subscription: SubscriptionSummary): string {
+  return subscription.status === "pending" ? "Discard this checkout" : "Cancel subscription";
+}
+
+/** The confirming button, worded to match what is being ended. */
+export function cancellationConfirmLabel(subscription: SubscriptionSummary): string {
+  return subscription.status === "pending" ? "Yes, discard it" : "Yes, cancel the subscription";
 }
 
 /**
