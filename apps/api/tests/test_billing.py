@@ -39,6 +39,7 @@ from environment import TEST_ENVIRONMENT
 from nexovue_api.billing import (
     BillingEvent,
     BillingEventKind,
+    CancellationOutcome,
     Checkout,
     ConfiguredProcessor,
     ContactField,
@@ -149,6 +150,7 @@ class StubProcessor:
     subscription_ref: str = SUBSCRIPTION_REF
     checkouts: list[dict[str, Any]] = field(default_factory=list)
     cancelled: list[str] = field(default_factory=list)
+    cancellation: CancellationOutcome = CancellationOutcome.REQUESTED
 
     def required_contact_fields(self) -> frozenset[ContactField]:
         """An email and nothing else — deliberately *not* the domestic
@@ -180,8 +182,9 @@ class StubProcessor:
             processor_customer_ref="cust_1",
         )
 
-    async def cancel(self, *, subscription_ref: str) -> None:
+    async def cancel(self, *, subscription_ref: str) -> CancellationOutcome:
         self.cancelled.append(subscription_ref)
+        return self.cancellation
 
     def event_from_webhook(self, *, body: bytes, headers: dict[str, str]) -> BillingEvent:
         if self.seen is not None:
@@ -1090,6 +1093,34 @@ class TestEndingASubscription:
         )
 
         assert processor.cancelled == [SUBSCRIPTION_REF]
+
+    async def test_an_arrangement_already_over_is_ended_here_and_not_waited_for(self) -> None:
+        """The processor was asked and answered "already over", so no event is
+        coming. This is the state a customer reaches by cancelling in the
+        processor's own dashboard — or by cancelling before anything was
+        listening — and waiting for a webhook leaves them on a paid tier forever.
+        """
+        live = BillingSubscription(
+            org_id=ORG_ID,
+            processor=PROCESSOR_NAME,
+            subscription_ref=SUBSCRIPTION_REF,
+            plan_slug="pro",
+            status=service.STATUS_ACTIVE,
+            services_committed=SERVICES_COMMITTED,
+        )
+        processor = StubProcessor(cancellation=CancellationOutcome.ALREADY_ENDED)
+        organization = _organization(plan="pro")
+        session = CapturingSession(answers=[live, organization])
+
+        await service.end_subscription(
+            session,  # type: ignore[arg-type]
+            configured=_configured(processor),
+            organization=organization,
+        )
+
+        assert live.status == service.STATUS_CANCELLED
+        assert live.cancelled_at is not None
+        assert organization.plan == service.PLAN_WITHOUT_A_SUBSCRIPTION
 
     async def test_the_plan_is_not_moved_here(self) -> None:
         """The processor decides when the arrangement ends, at its own period

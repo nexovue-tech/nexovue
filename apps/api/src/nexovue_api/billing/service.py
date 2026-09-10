@@ -40,6 +40,7 @@ from nexovue_api.billing import (
     BillingError,
     BillingEvent,
     BillingEventKind,
+    CancellationOutcome,
     Commitment,
     ConfiguredProcessor,
     Money,
@@ -187,8 +188,7 @@ async def _apply(
             # first one.
             subscription.activated_at = subscription.activated_at or now
         case BillingEventKind.SUBSCRIPTION_CANCELLED:
-            subscription.status = STATUS_CANCELLED
-            subscription.cancelled_at = now
+            _mark_ended(subscription, at=now)
         case BillingEventKind.PAYMENT_SUCCEEDED | BillingEventKind.PAYMENT_FAILED:
             # A charge does not change what the arrangement *is*. A failed one
             # ends a subscription only when the processor says so, in its own
@@ -197,6 +197,14 @@ async def _apply(
             return
 
     await _move_plan(session, org_id=subscription.org_id, to_slug=_plan_after(subscription))
+
+
+def _mark_ended(subscription: BillingSubscription, *, at: datetime) -> None:
+    """The arrangement is over. Written in one place because two things end one:
+    the processor's event, and the processor answering "already over" when asked
+    — which is the same fact, learned a different way."""
+    subscription.status = STATUS_CANCELLED
+    subscription.cancelled_at = at
 
 
 def _plan_after(subscription: BillingSubscription) -> str:
@@ -604,4 +612,10 @@ async def end_subscription(
             "This subscription was not taken out through the processor this "
             "deployment is configured with, so it cannot be cancelled here."
         )
-    await configured.processor.cancel(subscription_ref=subscription.subscription_ref)
+    outcome = await configured.processor.cancel(subscription_ref=subscription.subscription_ref)
+    if outcome is CancellationOutcome.ALREADY_ENDED:
+        # No event is coming — the processor was asked and said it is already
+        # over. Waiting for one would leave the organization on a paid tier
+        # forever over a cancellation that happened where we were not listening.
+        _mark_ended(subscription, at=datetime.now(UTC))
+        await _move_plan(session, org_id=subscription.org_id, to_slug=_plan_after(subscription))

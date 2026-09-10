@@ -216,6 +216,24 @@ class ContactField(StrEnum):
     PHONE = "phone"
 
 
+class CancellationOutcome(StrEnum):
+    """What asking a processor to end a subscription actually achieved.
+
+    The distinction is not bookkeeping. `REQUESTED` means the processor accepted
+    the request and will report the ending in its own event, which is the only
+    thing that moves a plan (ADR 0110). `ALREADY_ENDED` means it reported the
+    subscription as over *when asked* — cancelled in the processor's own
+    dashboard, ended by the bank, or cancelled here before anything was
+    listening. No event follows that, because nothing is about to change.
+
+    Collapsing the two is how an organization stays on a paid tier forever after
+    a cancellation nobody's webhook witnessed.
+    """
+
+    REQUESTED = "requested"
+    ALREADY_ENDED = "already_ended"
+
+
 @dataclass(frozen=True, slots=True)
 class BillingContact:
     """Who is paying, as far as any processor needs to know.
@@ -299,9 +317,15 @@ class PaymentProcessor(Protocol):
         """
         ...
 
-    async def cancel(self, *, subscription_ref: str) -> None:
+    async def cancel(self, *, subscription_ref: str) -> CancellationOutcome:
         """End a subscription. Idempotent: cancelling a cancelled one is not an
-        error, because a customer pressing twice must not see a failure."""
+        error, because a customer pressing twice must not see a failure.
+
+        **The outcome says whether an event is still coming**, and the caller
+        needs it: a subscription the processor reports as already over will
+        never produce another event, so a caller that waits for one waits
+        forever. See `CancellationOutcome`.
+        """
         ...
 
     def event_from_webhook(self, *, body: bytes, headers: dict[str, str]) -> BillingEvent:

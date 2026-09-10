@@ -40,6 +40,7 @@ from nexovue_api.billing.processor import (
     BillingError,
     BillingEvent,
     BillingEventKind,
+    CancellationOutcome,
     Checkout,
     Commitment,
     ContactField,
@@ -234,7 +235,7 @@ class RazorpayPaymentProcessor:
             raise BillingError("the processor created a plan without an id")
         return plan_ref
 
-    async def cancel(self, *, subscription_ref: str) -> None:
+    async def cancel(self, *, subscription_ref: str) -> CancellationOutcome:
         """End a subscription, and treat one that is already over as success.
 
         `cancel_at_cycle_end` is 0: the customer asked to stop, and the plan
@@ -255,6 +256,9 @@ class RazorpayPaymentProcessor:
             status = await self._status_of(subscription_ref)
             if status not in TERMINAL_STATUSES:
                 raise
+            # Reported over rather than cancelled just now, so no event follows.
+            return CancellationOutcome.ALREADY_ENDED
+        return CancellationOutcome.REQUESTED
 
     async def _status_of(self, subscription_ref: str) -> str:
         """This subscription's status, or "" when it cannot be read."""

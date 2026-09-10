@@ -26,6 +26,7 @@ from nexovue_api.billing import (
     BillingContact,
     BillingError,
     BillingEventKind,
+    CancellationOutcome,
     Commitment,
     Money,
     PaymentsNotConfiguredError,
@@ -369,3 +370,44 @@ class TestConfigurationAndWiring:
         for message in messages:
             assert API_SECRET not in message
             assert WEBHOOK_SECRET not in message
+
+
+class TestCancelling:
+    """What the caller is told, because the answer decides whether it waits."""
+
+    async def test_a_live_subscription_is_cancelled_and_an_event_is_expected(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path.endswith("/cancel")
+            return httpx.Response(200, json={"id": SUBSCRIPTION_REF, "status": "cancelled"})
+
+        outcome = await _processor(handler).cancel(subscription_ref=SUBSCRIPTION_REF)
+
+        assert outcome is CancellationOutcome.REQUESTED
+
+    async def test_one_already_over_says_so_rather_than_promising_an_event(self) -> None:
+        """The processor refuses the cancel and reports a terminal status. That
+        is not a failure — it is the answer — and it is the case that used to
+        leave an organization on a paid tier waiting for an event that could
+        never arrive.
+        """
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/cancel"):
+                return httpx.Response(400, json={"error": {"description": "already cancelled"}})
+            return httpx.Response(200, json={"id": SUBSCRIPTION_REF, "status": "cancelled"})
+
+        outcome = await _processor(handler).cancel(subscription_ref=SUBSCRIPTION_REF)
+
+        assert outcome is CancellationOutcome.ALREADY_ENDED
+
+    async def test_a_refusal_on_a_live_subscription_is_still_a_failure(self) -> None:
+        """Only a terminal status makes a refused cancel a success. A live one
+        that would not cancel has to be reported, not silently swallowed."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/cancel"):
+                return httpx.Response(500, json={"error": {"description": "upstream"}})
+            return httpx.Response(200, json={"id": SUBSCRIPTION_REF, "status": "active"})
+
+        with pytest.raises(BillingError):
+            await _processor(handler).cancel(subscription_ref=SUBSCRIPTION_REF)
