@@ -290,15 +290,61 @@ class TestSignatureVerification:
 
 
 class TestReplayProtection:
-    def test_a_delivery_with_no_delivery_id_is_refused(self) -> None:
-        """Without it a captured delivery cannot be told from a redelivery, and
-        the processor redelivers by design. Refusing is the deliberate choice."""
+    def test_a_delivery_with_no_delivery_header_falls_back_to_the_signature(self) -> None:
+        """**Subscription webhooks carry no `x-idempotency-header`**, measured
+        against a real delivery on 2026-09-10: correctly signed, and without it.
+
+        This test used to assert the opposite — that such a delivery is refused —
+        on the strength of a documentation page covering the *payment gateway's*
+        webhooks rather than these. It refused every subscription event, and the
+        first one Cashfree ever sent us was rejected 401.
+        """
         body = _payload()
         headers = _headers(body)
         del headers[DELIVERY_HEADER]
 
-        with pytest.raises(SignatureInvalidError):
-            _processor().event_from_webhook(body=body, headers=headers)
+        event = _processor().event_from_webhook(body=body, headers=headers)
+
+        assert event.delivery_id == headers[SIGNATURE_HEADER]
+
+    def test_the_processors_own_header_is_preferred_when_it_sends_one(self) -> None:
+        """The payment gateway's webhooks do carry it, and it is the better key:
+        it is stable across a redelivery where the signature is not."""
+        body = _payload()
+
+        event = _processor().event_from_webhook(body=body, headers=_headers(body))
+
+        assert event.delivery_id == DELIVERY_ID
+
+    def test_a_replayed_delivery_presents_the_same_id(self) -> None:
+        """The property that matters. An attacker replaying captured bytes cannot
+        change the signature without the secret, so the identical delivery yields
+        the identical id and the service refuses it as a duplicate."""
+        body = _payload()
+        headers = _headers(body)
+        del headers[DELIVERY_HEADER]
+
+        first = _processor().event_from_webhook(body=body, headers=headers)
+        replayed = _processor().event_from_webhook(body=body, headers=dict(headers))
+
+        assert first.delivery_id == replayed.delivery_id
+
+    def test_a_different_event_yields_a_different_id(self) -> None:
+        """A cancellation must not be mistaken for a redelivery of the
+        activation before it — they sign differently because the body differs."""
+        activated = _payload(subscription_status="ACTIVE")
+        cancelled = _payload(subscription_status="CANCELLED")
+
+        first = _processor().event_from_webhook(
+            body=activated,
+            headers={k: v for k, v in _headers(activated).items() if k != DELIVERY_HEADER},
+        )
+        second = _processor().event_from_webhook(
+            body=cancelled,
+            headers={k: v for k, v in _headers(cancelled).items() if k != DELIVERY_HEADER},
+        )
+
+        assert first.delivery_id != second.delivery_id
 
     def test_the_delivery_id_travels_onto_the_event(self) -> None:
         body = _payload()

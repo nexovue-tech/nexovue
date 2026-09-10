@@ -246,9 +246,20 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
       <section className="flex max-w-2xl flex-col gap-3">
         <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{heading}</h2>
         {unfinished ? <p className="text-ink text-sm leading-relaxed">{unfinished}</p> : null}
+        {/* Says what the code does today, which is bill the commitment (ADR
+            0111). ADR 0112 moves the bill back to services actually monitored
+            once the charge can be raised; this copy changes with it. What it
+            must not do meanwhile is imply the number limits services — it does
+            not, and a customer reading it as a limit would be wrong. */}
         <p className="text-ink-dim text-sm leading-relaxed">
-          You choose how many services to commit to. That is what you pay each month and the volume
-          you may send. We never bill past it and never charge overage.
+          You choose how many services to pay for. That number sets your monthly bill and your
+          monthly volume — each plan below says how much volume one service buys. We never bill past
+          it and never charge overage.
+        </p>
+        <p className="text-ink-dim text-sm leading-relaxed">
+          <strong className="text-ink">It is not a limit on how many services you run.</strong> Send
+          from as many as you like; they share the same monthly volume, so a quiet service leaves
+          more for a busy one.
         </p>
         <div>
           <Button onClick={() => setChoosing(true)}>{heading}</Button>
@@ -337,12 +348,12 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
         }}
       >
         <TextField
-          label="Services to commit to"
+          label="Services to pay for"
           name="services_committed"
           value={committed}
           onChange={setCommitted}
           error={countError}
-          hint="What you pay for each month, and the volume you may send."
+          hint="Sets the bill and the monthly volume. Not a cap on how many services report."
         />
 
         {countError ? null : (

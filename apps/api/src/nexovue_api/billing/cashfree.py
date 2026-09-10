@@ -38,6 +38,7 @@ from decimal import Decimal
 from typing import Any, Final
 
 import httpx
+import structlog
 
 from nexovue_api.billing import PaymentsNotConfiguredError, UnhandledBillingEventError
 from nexovue_api.billing.processor import (
@@ -51,6 +52,8 @@ from nexovue_api.billing.processor import (
     SignatureInvalidError,
 )
 from nexovue_api.settings import DOMESTIC_PAYMENT_VARIABLES, DomesticPaymentSettings
+
+_log = structlog.get_logger(__name__)
 
 # Pinned, never "latest". Cashfree versions its API by date in a header, and an
 # unpinned integration changes shape underneath us on the vendor's schedule.
@@ -67,11 +70,20 @@ CLIENT_SECRET_HEADER: Final = "x-client-secret"
 SIGNATURE_HEADER: Final = "x-webhook-signature"
 TIMESTAMP_HEADER: Final = "x-webhook-timestamp"
 
-# Unique per unique payload, from webhook version 2025-01-01 onwards. It is what
-# makes a redelivery distinguishable from a second real event, the same property
-# `X-GitHub-Delivery` gives door 4a — and Cashfree delivers **at least once**, so
-# duplicates are expected rather than exceptional.
+# Unique per unique payload, and what tells a redelivery from a second real
+# event — the property `X-GitHub-Delivery` gives door 4a. Cashfree delivers **at
+# least once**, so duplicates are expected rather than exceptional.
 # https://www.cashfree.com/docs/payments/online/webhooks/overview
+#
+# **Subscription webhooks do not carry it.** Measured on 2026-09-10 against a
+# real delivery at webhook version 2026-01-01: correctly signed, carrying
+# `x-webhook-signature` and `x-webhook-timestamp`, and no `x-idempotency-header`.
+# The page documenting it covers the *payment gateway's* webhooks; this
+# integration read that page and assumed it applied here.
+#
+# Requiring it refused every subscription delivery — the whole money path, and
+# silently, because a 401 to a processor looks like a configuration problem.
+# `_delivery_id` is what stands in.
 DELIVERY_HEADER: Final = "x-idempotency-header"
 
 # Ends a mandate. The path names the *merchant's* subscription id, which is the
@@ -383,19 +395,7 @@ class CashfreePaymentProcessor:
         present = _lowercased(headers)
         self._verify(body=body, headers=present)
 
-        delivery_id = present.get(DELIVERY_HEADER, "")
-        if not delivery_id:
-            # Without it a captured delivery is indistinguishable from a genuine
-            # retry, and Cashfree retries by design. Refusing is the deliberate
-            # choice: this is the money path, and replay protection is not
-            # optional on it. The header exists from webhook version 2025-01-01,
-            # which is below the version this integration pins.
-            raise SignatureInvalidError(
-                f"the delivery carried no {DELIVERY_HEADER}, so a replay of it "
-                f"could not be told apart from a redelivery"
-            )
-
-        return _translate(_parsed(body), delivery_id=delivery_id)
+        return _translate(_parsed(body), delivery_id=_delivery_id(present))
 
     def _verify(self, *, body: bytes, headers: Mapping[str, str]) -> None:
         """Refuse anything this account's secret did not sign.
@@ -409,6 +409,7 @@ class CashfreePaymentProcessor:
         timestamp = headers.get(TIMESTAMP_HEADER)
         presented = headers.get(SIGNATURE_HEADER)
         if not timestamp or not presented:
+            _log_refusal("a required signing header was absent", headers)
             raise SignatureInvalidError(_REFUSED_DETAIL)
 
         signed = timestamp.encode("utf-8") + body
@@ -420,6 +421,7 @@ class CashfreePaymentProcessor:
         # Compared as bytes because a header is arbitrary text and the str form
         # raises on anything outside ASCII.
         if not hmac.compare_digest(expected, presented.encode("utf-8")):
+            _log_refusal("the signature did not match this account's secret", headers)
             raise SignatureInvalidError(_REFUSED_DETAIL)
 
     async def _status_of(self, subscription_ref: str) -> str:
@@ -493,6 +495,47 @@ class CashfreePaymentProcessor:
 # no cause on purpose: an unsigned request and a wrongly signed one are the same
 # answer, and saying which would tell a forger how close they got.
 _REFUSED_DETAIL: Final = "the delivery was not signed by the configured payment account"
+
+
+def _delivery_id(headers: Mapping[str, str]) -> str:
+    """What tells a redelivery from a second real event.
+
+    The processor's own header when it sends one, and **the signature when it
+    does not** — which is every subscription webhook.
+
+    The signature is `HMAC(secret, timestamp + body)`, unique per delivery and
+    unproducible without the account's secret. That gives replay protection the
+    property it actually needs: **an attacker replaying captured bytes presents
+    the identical signature and is caught as a duplicate**, and a genuinely
+    different event signs differently.
+
+    What it does not catch is the processor redelivering one event under a *new*
+    timestamp, which signs differently and reads as new. That is survivable where
+    refusing is not: `_apply` keeps an already-active arrangement's first
+    activation date and treats cancelling a cancelled one as a no-op, so acting
+    twice on one event changes nothing — while refusing loses the event forever,
+    and Cashfree does not replay.
+    """
+    return headers.get(DELIVERY_HEADER) or headers.get(SIGNATURE_HEADER, "")
+
+
+def _log_refusal(reason: str, headers: Mapping[str, str]) -> None:
+    """Say in the log which check refused, and never in the response.
+
+    A 401 that distinguishes "unsigned" from "wrongly signed" tells a forger how
+    close they got, so `REFUSED_DETAIL` stays one sentence for every cause. But
+    an operator staring at a gateway's failing test ping needs to know *which*
+    header was missing, and has no other way to find out.
+
+    **Header names only, never values.** A signature is not a secret the way a
+    key is, but it is the one thing an attacker is trying to produce, and a log
+    is a place things get copied out of.
+    """
+    _log.warning(
+        "a billing webhook was refused",
+        reason=reason,
+        headers_present=sorted(headers),
+    )
 
 
 def _lowercased(headers: Mapping[str, str]) -> dict[str, str]:
