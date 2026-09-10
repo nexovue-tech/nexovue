@@ -220,8 +220,10 @@ def _event(
     return BillingEvent(kind=kind, subscription_ref=subscription_ref, delivery_id=DELIVERY_ID)
 
 
-def _configured(processor: Any) -> ConfiguredProcessor:
-    return ConfiguredProcessor(name=PROCESSOR_NAME, processor=processor)
+def _configured(processor: Any, currencies: frozenset[str] = frozenset()) -> ConfiguredProcessor:
+    return ConfiguredProcessor(
+        name=PROCESSOR_NAME, processor=processor, processor_currencies=currencies
+    )
 
 
 def _plan_row(slug: str = "pro") -> Plan:
@@ -988,6 +990,42 @@ class TestTheReturnUrl:
             service.checkout_return_url("   ")
 
 
+class TestWhatTheScreenMayOffer:
+    """A currency is offerable only if a row prices it *and* the account can
+    charge in it. A row alone sends the customer through the whole picker to be
+    turned away at the last button."""
+
+    def test_a_priced_currency_the_account_cannot_take_is_not_offered(self) -> None:
+        offered = service._offerable(
+            priced=["INR", "USD"],
+            configured=_configured(StubProcessor(), currencies=frozenset({"INR"})),
+            already_paying_in=None,
+        )
+
+        assert offered == ["INR"]
+
+    def test_everything_priced_is_offered_when_no_restriction_is_known(self) -> None:
+        """Empty is "nobody has told us", not "nothing is allowed". A deployment
+        that has not answered must not silently sell nothing."""
+        offered = service._offerable(
+            priced=["INR", "USD"], configured=_configured(StubProcessor()), already_paying_in=None
+        )
+
+        assert offered == ["INR", "USD"]
+
+    def test_what_a_customer_already_pays_in_is_never_taken_away(self) -> None:
+        """Their subscription is denominated in it and their bill is quoted in
+        it. A restriction that arrives after they bought must not leave them
+        unable to read their own arrangement."""
+        offered = service._offerable(
+            priced=["INR", "USD"],
+            configured=_configured(StubProcessor(), currencies=frozenset({"INR"})),
+            already_paying_in="USD",
+        )
+
+        assert offered == ["INR", "USD"]
+
+
 class TestStartingACheckout:
     async def test_the_processor_is_handed_the_resolved_price_and_return_url(self) -> None:
         """The two inputs `begin_checkout` used to refuse for, resolved above the
@@ -1087,6 +1125,39 @@ class TestStartingACheckout:
                 today=TODAY,
             )
         assert processor.checkouts == []
+
+
+class TestACurrencyTheAccountCannotTake:
+    async def test_the_checkout_names_the_currency_rather_than_blaming_the_provider(
+        self,
+    ) -> None:
+        """The picker hides it; this is the same refusal at the door. A 503
+        about a provider would be true and useless — the customer can pick a
+        different currency, and only this message tells them so."""
+        session = CapturingSession(answers=[_PRO_PRICE])
+
+        with pytest.raises(InvalidRequestError, match="USD"):
+            await service.commitment_for(
+                session,  # type: ignore[arg-type]
+                plan_slug="pro",
+                currency="USD",
+                services_committed=3,
+                on_day=TODAY,
+                allowed_currencies=frozenset({"INR"}),
+            )
+
+    async def test_nothing_is_refused_when_no_restriction_is_known(self) -> None:
+        session = CapturingSession(answers=[_PRO_PRICE])
+
+        commitment = await service.commitment_for(
+            session,  # type: ignore[arg-type]
+            plan_slug="pro",
+            currency="USD",
+            services_committed=3,
+            on_day=TODAY,
+        )
+
+        assert commitment.rate.currency == "USD"
 
 
 class TestEndingASubscription:

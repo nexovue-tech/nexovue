@@ -75,6 +75,11 @@ class ConfiguredProcessor:
 
     name: str
     processor: PaymentProcessor
+    # What this deployment's account may charge in, empty when no restriction is
+    # known. Carried here rather than asked of the port because it is a fact
+    # about the *arrangement* with a processor — an approval that is applied for
+    # and waited on — not about the implementation.
+    processor_currencies: frozenset[str] = frozenset()
 
 
 class PaymentsNotConfiguredError(BillingError):

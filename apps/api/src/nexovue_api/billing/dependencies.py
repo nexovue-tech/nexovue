@@ -35,7 +35,9 @@ def find_domestic_payments(settings: AppSettings) -> ConfiguredProcessor | None:
     if configured is None:
         return None
     return ConfiguredProcessor(
-        name=configured.provider, processor=build_payment_processor(configured)
+        name=configured.provider,
+        processor=build_payment_processor(configured),
+        processor_currencies=configured.currencies,
     )
 
 

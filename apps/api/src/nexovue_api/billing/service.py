@@ -287,11 +287,43 @@ async def overview(
         period=await _period(session, org_id=organization.id, today=today, price=price),
         checkout=_checkout_requirements(configured),
         currency=quoted,
-        available_currencies=await usage_queries.priced_currencies(
-            session, plan_slug=organization.plan, on_day=today
+        available_currencies=_offerable(
+            priced=await usage_queries.priced_currencies(
+                session, plan_slug=organization.plan, on_day=today
+            ),
+            configured=configured,
+            already_paying_in=subscription.currency if subscription else None,
         ),
         plans=await _plan_options(session, organization=organization, currency=quoted, today=today),
     )
+
+
+def _offerable(
+    *,
+    priced: list[str],
+    configured: ConfiguredProcessor | None,
+    already_paying_in: str | None,
+) -> list[str]:
+    """The currencies a checkout could actually complete in.
+
+    `priced_currencies` answers which ones a *row* backs, and promises the
+    screen never offers one "no checkout could complete in" — but a row is only
+    half of that. An Indian account charges rupees from the day it opens and
+    dollars only once the provider approves international payments, so a
+    deployment can have a priced currency its own account will refuse. Offering
+    it sends a customer through the whole picker to be turned away at the last
+    button.
+
+    **What the customer already pays in is never removed.** Their subscription
+    is denominated in it and their bill is quoted in it; hiding it would leave
+    them unable to see their own arrangement over a restriction that arrived
+    after they bought.
+    """
+    allowed = configured.processor_currencies if configured else frozenset()
+    if not allowed:
+        return priced
+    keep = {already_paying_in} if already_paying_in else set()
+    return [currency for currency in priced if currency in allowed or currency in keep]
 
 
 async def _plan_options(
@@ -458,6 +490,17 @@ UNPRICED_PLAN_DETAIL: Final = (
     "This plan has no list price, so a subscription for it cannot be started here."
 )
 
+
+def unchargeable_currency_detail(currency: str) -> str:
+    """Named rather than generic, because the customer can act on it: a
+    different currency is a click away, and a vague refusal is not."""
+    return (
+        f"This organization cannot be charged in {currency.upper()} yet. "
+        f"Choose another currency, or come back once the payment provider has "
+        f"approved international payments for this account."
+    )
+
+
 FREE_PLAN_DETAIL: Final = (
     "This plan costs nothing, so there is no mandate to authorise. Cancel the "
     "current subscription instead."
@@ -508,7 +551,13 @@ def checkout_return_url(app_base_url: str) -> str:
 
 
 async def commitment_for(
-    session: AsyncSession, *, plan_slug: str, currency: str, services_committed: int, on_day: date
+    session: AsyncSession,
+    *,
+    plan_slug: str,
+    currency: str,
+    services_committed: int,
+    on_day: date,
+    allowed_currencies: frozenset[str] = frozenset(),
 ) -> Commitment:
     """What the customer is agreeing to buy: a count of services, at a rate each.
 
@@ -530,6 +579,13 @@ async def commitment_for(
         raise InvalidRequestError(UNPRICED_PLAN_DETAIL)
     if price.price_per_service_minor_units <= 0:
         raise InvalidRequestError(FREE_PLAN_DETAIL)
+    # The picker already hides what the account cannot take; this is the same
+    # refusal at the door, for a tab that was open before the restriction or a
+    # caller that never saw a picker. Refused here rather than at the processor:
+    # its answer would be a 503 about a provider, when the truth is that this
+    # account has not been approved for that currency.
+    if allowed_currencies and price.currency.upper() not in allowed_currencies:
+        raise InvalidRequestError(unchargeable_currency_detail(price.currency))
 
     return Commitment(
         services=services_committed,
@@ -570,6 +626,7 @@ async def begin_plan_change(
         currency=request.currency,
         services_committed=request.services_committed,
         on_day=today,
+        allowed_currencies=configured.processor_currencies,
     )
 
     # The webhook path has translated a processor failure since it was written;

@@ -145,6 +145,13 @@ class DomesticPaymentSettings:
     # there refuses every delivery with a message that reads like a forgery.
     # Falls back to `secret_key` for the processors where they are the same.
     webhook_secret: str
+    # Which currencies this *account* may actually charge in. Not a property of
+    # the gateway — a property of the arrangement with it: an Indian account
+    # takes rupees from the day it opens and dollars only once the provider has
+    # approved international payments, which is an application with a waiting
+    # time. Empty means no restriction is known, and everything priced is
+    # offered.
+    currencies: frozenset[str] = frozenset()
 
 
 # Each provider's API root, per environment.
@@ -268,6 +275,9 @@ class Settings(BaseSettings):
     payments_domestic_env: PaymentEnvironment = "sandbox"
     payments_domestic_base_url: str = ""
     payments_domestic_webhook_secret: str = ""
+    # Comma-separated, e.g. "INR" or "INR,USD". Empty until a deployment knows
+    # its own answer; see `DomesticPaymentSettings.currencies`.
+    payments_domestic_currencies: str = ""
 
     @field_validator("payments_domestic_provider", "email_provider", mode="before")
     @classmethod
@@ -343,6 +353,11 @@ class Settings(BaseSettings):
             ).rstrip("/"),
             webhook_secret=(
                 self.payments_domestic_webhook_secret or self.payments_domestic_secret_key
+            ),
+            currencies=frozenset(
+                part.strip().upper()
+                for part in self.payments_domestic_currencies.split(",")
+                if part.strip()
             ),
         )
 
