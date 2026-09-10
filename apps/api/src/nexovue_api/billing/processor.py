@@ -285,8 +285,13 @@ class PaymentProcessor(Protocol):
 
         `return_url` is where the processor sends the customer's browser when
         the payment reaches a terminal state. It carries no outcome and proves
-        nothing — the webhook is what this product believes — so it is only
-        somewhere sensible to land.
+        nothing — the webhook is what this product believes.
+
+        **It is always one of this API's own routes, never a screen.** A
+        processor may return the customer by POST — the domestic one does — and
+        nothing serving a single-page app answers a POST to a client route, so
+        the customer meets a 404 after their money has moved. An adapter must
+        not rewrite it into an app path.
 
         The contact carries what `required_contact_fields` asked for. An
         implementation may refuse one that does not, but the screen should have

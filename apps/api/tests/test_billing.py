@@ -707,6 +707,44 @@ async def test_the_door_refuses_a_tampered_delivery_without_writing() -> None:
     assert session.staged == []
 
 
+async def test_the_customer_returns_by_post_and_is_sent_to_the_billing_screen() -> None:
+    """Cashfree returns a customer by POST. Pointing that at the single-page
+    app's own path put a 404 in front of somebody who had just paid, because no
+    host serving a SPA answers a POST to a client route — the dev server falls
+    through and a static host refuses. 303, so the browser follows it as a GET.
+    """
+    async with await _client(_build_app(CapturingSession(answers=[]))) as client:
+        response = await client.post(
+            f"{API_PREFIX}/billing/checkout/return",
+            data={"cf_status": "ACTIVE", "cf_subReferenceId": "9182"},
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == service.BILLING_SCREEN_PATH
+
+
+async def test_the_return_needs_no_session_and_writes_nothing() -> None:
+    """The browser arrives from the processor's origin, so a SameSite cookie is
+    not sent: requiring one would answer the paying customer with a 401. It
+    reads no body either — the subscription moves on the signed webhook."""
+    session = CapturingSession(answers=[])
+
+    async with await _client(_build_app(session)) as client:
+        response = await client.post(f"{API_PREFIX}/billing/checkout/return")
+
+    assert response.status_code == 303
+    assert session.staged == []
+
+
+async def test_a_refreshed_return_lands_on_the_screen_rather_than_a_405() -> None:
+    """A back button or a reload re-issues the landing as a GET."""
+    async with await _client(_build_app(CapturingSession(answers=[]))) as client:
+        response = await client.get(f"{API_PREFIX}/billing/checkout/return")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == service.BILLING_SCREEN_PATH
+
+
 # --------------------------------------------------- the plan change (P1-74)
 
 
@@ -914,13 +952,24 @@ class TestTheCommitment:
 
 
 class TestTheReturnUrl:
-    def test_it_points_at_the_app_and_carries_no_outcome(self) -> None:
+    def test_it_points_at_an_endpoint_and_carries_no_outcome(self) -> None:
         """The webhook is what this product believes. A return URL carrying a
-        result would be a result the customer could type into the address bar."""
+        result would be a result the customer could type into the address bar.
+
+        It names an API route, not a screen: the processor returns the customer
+        by POST, and only a server answers one.
+        """
         url = service.checkout_return_url("https://app.example.test/")
 
-        assert url == "https://app.example.test/settings/billing"
+        assert url == "https://app.example.test/api/v1/billing/checkout/return"
         assert "?" not in url
+
+    def test_it_is_not_a_client_route(self) -> None:
+        """The bug this shape exists for: a POST to the single-page app's own
+        path is served by nothing, so the customer met a 404 after paying."""
+        assert not service.checkout_return_url("https://app.example.test").endswith(
+            service.BILLING_SCREEN_PATH
+        )
 
     def test_an_unset_app_base_url_is_refused_rather_than_guessed(self) -> None:
         """A guessed host is a link to nowhere, met after the money has moved."""
@@ -951,7 +1000,10 @@ class TestStartingACheckout:
         assert commitment.services == 3
         assert commitment.rate == Money(600, "USD")
         assert commitment.total() == Money(1800, "USD")
-        assert processor.checkouts[0]["return_url"] == "https://app.example.test/settings/billing"
+        assert (
+            processor.checkouts[0]["return_url"]
+            == "https://app.example.test/api/v1/billing/checkout/return"
+        )
         assert processor.checkouts[0]["org_id"] == ORG_ID
 
     async def test_the_contact_reaches_the_processor_and_is_never_staged(self) -> None:

@@ -1,4 +1,9 @@
-"""Billing: one public door, and nothing else yet.
+"""Billing: two unauthenticated doors, and both are reached by the processor.
+
+``POST /billing/checkout/return`` is where the customer's own browser lands when
+the processor's page is finished. It authorises nothing and reads nothing — it
+answers 303 to the billing screen — and it exists because a payment processor
+returns a customer by POST, which no host serving a single-page app will accept.
 
 ``POST /billing/webhook/domestic`` is unauthenticated, like the deploy webhook,
 and for the same reason: the sender is a payment processor and has no session.
@@ -23,6 +28,7 @@ from datetime import UTC, datetime
 from typing import Final
 
 from fastapi import APIRouter, Request, status
+from fastapi.responses import RedirectResponse
 
 from nexovue_api.auth.dependencies import CurrentIdentity
 from nexovue_api.auth.policy import MayCommitSpend
@@ -128,6 +134,51 @@ async def start_checkout(
         app_base_url=settings.app_base_url,
         today=datetime.now(UTC).date(),
     )
+
+
+CHECKOUT_RETURN_PATH: Final = "/checkout/return"
+CHECKOUT_RETURN_SUMMARY: Final = "Land the customer back on the billing screen after paying"
+
+
+def _to_the_billing_screen() -> RedirectResponse:
+    """303 rather than 302: it is the status that turns the processor's POST into
+    a GET. On a 302 the method is the agent's choice, and an agent that re-POSTs
+    lands on the missing route this exists to fix."""
+    return RedirectResponse(url=service.BILLING_SCREEN_PATH, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post(
+    CHECKOUT_RETURN_PATH,
+    status_code=status.HTTP_303_SEE_OTHER,
+    response_class=RedirectResponse,
+    summary=CHECKOUT_RETURN_SUMMARY,
+)
+async def return_from_checkout() -> RedirectResponse:
+    """Unauthenticated, like the webhook, and for a stricter reason: the browser
+    arrives from the processor's origin, so a `SameSite` session cookie is not
+    sent and there is nobody to identify. Nothing is authorised here — the
+    response reads neither the body nor the session.
+
+    **POST, because that is how a processor returns a customer.** The body is
+    never read: its contents are the processor's claim about a subscription, and
+    the subscription moves on the signed webhook alone (ADR 0110).
+    """
+    return _to_the_billing_screen()
+
+
+# A separate route rather than one `api_route` taking both methods: FastAPI
+# derives a route's operation id once, so a two-method route publishes the same
+# id twice and warns while building the schema.
+@router.get(
+    CHECKOUT_RETURN_PATH,
+    status_code=status.HTTP_303_SEE_OTHER,
+    response_class=RedirectResponse,
+    summary=CHECKOUT_RETURN_SUMMARY,
+)
+async def return_from_checkout_by_get() -> RedirectResponse:
+    """The same landing for a processor that redirects by GET — ADR 0102 expects
+    a second one — and for a reload, which would otherwise meet a 405."""
+    return _to_the_billing_screen()
 
 
 @router.delete(

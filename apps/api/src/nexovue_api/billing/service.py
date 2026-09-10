@@ -69,6 +69,7 @@ from nexovue_api.errors.exceptions import (
     InvalidRequestError,
     UnauthenticatedError,
 )
+from nexovue_api.settings import API_PREFIX
 
 # The screen and the meter must state one number, so both take it from the same
 # functions. `usage.billing` holds the rule ADR 0083 fixed and the receiver's
@@ -418,17 +419,25 @@ async def _period(
 # ------------------------------------------------------------ the plan change
 
 
-# Where a customer lands after the processor's page, and the only deployment
-# fact `begin_checkout` needs beyond the price. It is the **app**, not this API —
-# `auth/recovery._link` builds verification and reset links the same way, off
-# the same `APP_BASE_URL`, for the same reason: a browser lands on a screen,
-# which then calls an endpoint.
+# Where the processor sends the customer's browser when its page is done, and
+# the only deployment fact `begin_checkout` needs beyond the price.
 #
-# It is the billing screen itself, and it carries nothing. A returning customer
-# is shown the state `GET /billing` reports — `pending` while the mandate is
-# being confirmed — so the outcome comes from the webhook rather than from a
-# query parameter the customer could edit in the address bar.
-CHECKOUT_RETURN_PATH: Final = "/settings/billing"
+# **It is this API, not a screen.** Cashfree returns the customer by `POST` —
+# its redirection payload arrives as form fields — and nothing that serves a
+# single-page app answers a POST to a client route: the dev server falls through
+# to 404 and a static host refuses it. Only a server can take that POST, so the
+# API takes it and sends the browser on to the screen. The browser knows one
+# origin and reaches this API under `/api/v1/`, so one `APP_BASE_URL` still
+# builds both, exactly as `auth/recovery._link` builds verification links.
+CHECKOUT_RETURN_PATH: Final = f"{API_PREFIX}/billing/checkout/return"
+
+# Where that hand-off puts the customer, relative so it resolves against
+# whichever host they actually used. It is the billing screen itself, and it
+# carries nothing: a returning customer is shown the state `GET /billing`
+# reports — `pending` while the mandate is being confirmed — so the outcome
+# comes from the webhook, never from a payload the processor's own docs say not
+# to read the subscription's state from.
+BILLING_SCREEN_PATH: Final = "/settings/billing"
 
 PLAN_UNKNOWN_DETAIL: Final = "No such plan."
 
