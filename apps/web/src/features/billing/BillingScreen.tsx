@@ -92,8 +92,13 @@ function ThisMonth({ overview }: { overview: BillingOverview }) {
               : "Priced by agreement"
           }
         />
-        <Row label="Services" value={formatCount(period.services)} />
-        <Row label="Cost" value={describeCost(period)} />
+        {/* Monitored, not billed: on a capped tier the two differ, and the row
+            that says only "Services" is the one a customer reads as both. */}
+        <Row label="Services monitored" value={formatCount(period.services)} />
+        <Row
+          label="Cost"
+          value={describeCost(period, price?.price_per_service_minor_units ?? null)}
+        />
       </dl>
 
       {fraction === null ? null : (

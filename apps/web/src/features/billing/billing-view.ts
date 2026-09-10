@@ -63,10 +63,21 @@ function monthTurns(period: BillingPeriodUsage): string {
  * customer shown "$0.00" for a tier priced by agreement has been told something
  * false rather than something incomplete.
  */
-export function describeCost(period: BillingPeriodUsage): string {
+export function describeCost(
+  period: BillingPeriodUsage,
+  ratePerServiceMinorUnits: number | null,
+): string {
   if (period.service_cost_minor_units === null || period.currency === null) {
     return "Priced by agreement.";
   }
+
+  // **A rate of zero is a tier that is not billed, and it needs no quantity.**
+  // The free tier caps the count it would bill at three, so this row read
+  // "₹0.00 for 3 billed" beside a Services row saying 26 — two numbers that
+  // disagree, about a bill that does not exist. The cap is doing real work, but
+  // it is sizing the month's *volume*, and the allowance line below says so.
+  if (ratePerServiceMinorUnits === 0) return "Nothing to pay on this plan.";
+
   const amount = formatMoney(period.service_cost_minor_units, period.currency);
   const services = `${formatCount(period.billed_services)} billed`;
   return period.settled

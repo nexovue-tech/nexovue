@@ -104,25 +104,46 @@ describe("the proportion spent", () => {
   });
 });
 
+/** Any non-zero rate: this suite is about the sentence, not the arithmetic. */
+const RATE = 600;
+
 describe("the month's cost", () => {
   /**
    * An unpriced tier is not a free one. "$0.00" is a different statement from
    * "priced by agreement", and it is the one that is false.
    */
   it("says priced by agreement rather than zero", () => {
-    const said = describeCost(period({ service_cost_minor_units: null, currency: null }));
+    const said = describeCost(period({ service_cost_minor_units: null, currency: null }), null);
 
     expect(said).toBe("Priced by agreement.");
     expect(said).not.toContain("0");
   });
 
   it("divides by the currency's own minor unit", () => {
-    expect(describeCost(period())).toContain("$30.00");
+    expect(describeCost(period(), RATE)).toContain("$30.00");
   });
 
   /** A figure that is still being counted must not read as a final bill. */
   it("says a month still being metered is not finished", () => {
-    expect(describeCost(period({ settled: false }))).toContain("still being metered");
+    expect(describeCost(period({ settled: false }), RATE)).toContain("still being metered");
+  });
+
+  /**
+   * The free tier caps the count it would bill at three. Beside a Services row
+   * reading 26, this row said "for 3 billed" — two numbers disagreeing about a
+   * bill that does not exist, because the rate is zero.
+   */
+  it("names no billed quantity on a tier that is not billed", () => {
+    const said = describeCost(period({ billed_services: 3, service_cost_minor_units: 0 }), 0);
+
+    expect(said).toBe("Nothing to pay on this plan.");
+    expect(said).not.toContain("3");
+    expect(said).not.toContain("billed");
+  });
+
+  /** The quantity is exactly what a paying customer needs to check their bill. */
+  it("still names it when there is something to pay", () => {
+    expect(describeCost(period({ billed_services: 26 }), RATE)).toContain("26 billed");
   });
 });
 
