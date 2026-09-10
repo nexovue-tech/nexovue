@@ -127,17 +127,17 @@ export interface StartCheckoutInput {
   contactPhone?: string;
 }
 
-interface CheckoutHandoff {
-  url: string;
-}
+import type { CheckoutHandoff } from "./checkout-handoff";
+
+export type { CheckoutHandoff } from "./checkout-handoff";
 
 /**
- * Answers with somewhere to authorise a mandate and changes no plan.
+ * Answers with a way to authorise a mandate and changes no plan.
  *
- * **The URL is a bearer credential** — whoever holds it can authorise the
- * mandate — so it is navigated to and never stored, logged or put in a query
- * cache. The plan moves when the processor says the mandate became active, not
- * when this returns.
+ * **The answer is a bearer credential** — whoever holds it can authorise this
+ * one mandate — so it is used immediately and never stored, logged or put in a
+ * query cache. The plan moves when the processor says the mandate became
+ * active, not when this returns.
  */
 export function useStartCheckout() {
   return useMutation({

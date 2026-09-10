@@ -8,9 +8,12 @@ changing with it — ADR 0102.
 Three things differ from the other adapter and each was measured rather than
 assumed, on 2026-09-10 against the sandbox:
 
-- **The hosted page comes free.** Creating a subscription answers with a
-  `short_url`, so `Checkout.url` is satisfied by a documented field. No browser
-  SDK, no undocumented form post.
+- **The hosted page comes free and is not used.** Creating a subscription
+  answers with a `short_url`, and it was the first handoff here. But the create
+  call takes no callback parameter, so a customer who pays on that page has
+  nowhere to go and stays on it. The checkout script does take one, so the
+  handoff is embedded — still no undocumented form post, and still no card
+  through this application.
 - **The page collects the payer's details itself**, so this processor declares no
   required contact fields — ADR 0109's whole point, and the billing screen draws
   no contact form when the set is empty.
@@ -44,12 +47,22 @@ from nexovue_api.billing.processor import (
     Checkout,
     Commitment,
     ContactField,
+    EmbeddedCheckout,
     SignatureInvalidError,
 )
 from nexovue_api.settings import DOMESTIC_PAYMENT_VARIABLES, DomesticPaymentSettings
 
 PLANS_PATH: Final = "/plans"
 SUBSCRIPTIONS_PATH: Final = "/subscriptions"
+
+# The processor's own checkout script, served by the processor so it can change
+# what a card form does without a release here. Not on the API host: this is a
+# browser asset and has nothing to do with `base_url`, which is where the server
+# authenticates.
+CHECKOUT_SCRIPT_URL: Final = "https://checkout.razorpay.com/v1/checkout.js"
+
+# The constructor that script defines on `window`.
+CHECKOUT_GLOBAL: Final = "Razorpay"
 SUBSCRIPTION_CANCEL_PATH: Final = "/subscriptions/{subscription_ref}/cancel"
 
 # https://razorpay.com/docs/webhooks/validate-test/
@@ -152,17 +165,18 @@ class RazorpayPaymentProcessor:
         commitment: Commitment,
         return_url: str,
     ) -> Checkout:
-        """Create the subscription and hand back its hosted page.
+        """Create the subscription and hand back what opens this processor's
+        checkout on our own page.
 
         Two calls: find or create the plan for this tier at this rate, then a
         subscription against it with the customer's committed count as
-        `quantity`. The `short_url` in the response is the page.
+        `quantity`.
 
-        `return_url` is unused here and that is not an oversight — the hosted
-        page returns the customer to the merchant's own site as configured in the
-        dashboard. The port passes it because another processor takes it per
-        checkout; a parameter one implementation ignores is cheaper than two
-        shapes of the same method.
+        **Not the `short_url`.** The response carries a hosted page and it was
+        used first, but nothing returns the customer from it: the create call
+        takes no callback parameter, so the customer finishes on the processor's
+        screen and stays there. The script does take one, which is why the
+        handoff is embedded and `return_url` is passed to it.
         """
         if commitment.services < 1:
             raise BillingError(
@@ -191,13 +205,31 @@ class RazorpayPaymentProcessor:
             },
         )
         subscription_ref = _text(created.get("id"))
-        url = _text(created.get("short_url"))
-        if not subscription_ref or not url:
+        if not subscription_ref:
             raise BillingError(
-                "the processor created a subscription without an id or a hosted "
-                "page, so there is nowhere to send the customer"
+                "the processor created a subscription without an id, so there is "
+                "nothing for the customer to authorise and nothing for a webhook "
+                "to name"
             )
-        return Checkout(url=url, subscription_ref=subscription_ref)
+        return Checkout(
+            handoff=EmbeddedCheckout(
+                script_url=CHECKOUT_SCRIPT_URL,
+                global_name=CHECKOUT_GLOBAL,
+                options={
+                    # The key *id*. It is published in the page, which is what
+                    # this half of the pair is for; `secret_key` never appears
+                    # here and the test named for it says so.
+                    "key": self._settings.app_id,
+                    "subscription_id": subscription_ref,
+                    # `redirect` is what makes the script POST to `callback_url`
+                    # instead of calling a handler we would have to write. The
+                    # route it posts to answers 303 to the billing screen.
+                    "callback_url": return_url,
+                    "redirect": True,
+                },
+            ),
+            subscription_ref=subscription_ref,
+        )
 
     async def _plan_for(self, *, plan_slug: str, commitment: Commitment) -> str:
         """This tier's plan at this rate, created once and found thereafter.

@@ -28,10 +28,11 @@ and nothing downstream ever sees the original.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum, StrEnum
-from typing import Final, Protocol
+from typing import Any, Final, Protocol
 
 
 class BillingError(Exception):
@@ -95,15 +96,59 @@ class BillingEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class Checkout:
-    """Where to send a customer to pay.
+class HostedPage:
+    """The processor owns a whole page; send the browser to it.
 
-    A URL rather than a form, because the card details must never reach this
-    application: what we hold is the processor's customer reference and nothing
-    else avoidable, which is ADR 0076's posture applied to money.
+    Simple, and it costs the customer the end of the journey: a processor whose
+    page takes no return address leaves them standing on it, having just paid,
+    with nothing to press.
     """
 
     url: str
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddedCheckout:
+    """The processor's own script takes over our page, and gives it back.
+
+    **The card is no closer to us than in a hosted page.** The script renders
+    the processor's own fields and posts them to the processor; this
+    application sees a reference and never a number, which is ADR 0076's
+    posture unchanged. What is gained is the ending: the customer stays on our
+    domain, and `return_url` is where the processor puts them when it is done.
+    """
+
+    # Loaded on our page. The processor serves it, so the processor can change
+    # what a card form does without a release here — which is the whole reason
+    # such a form is never ours to write.
+    script_url: str
+    # The constructor that script defines on `window`. Sent rather than known,
+    # because a screen that hard-codes it has learned which processor it is
+    # talking to, and unlearning that is the switch this port exists to make
+    # cheap.
+    global_name: str
+    # What to construct it with. **Opaque above the adapter**: these are the
+    # script's own option names, the script is their only reader, and nothing
+    # between here and the browser interprets one. That is what keeps the
+    # processor's vocabulary out of the screen.
+    #
+    # It is rendered into a page, so everything in it is published. The
+    # publishable half of a credential pair belongs here; **the secret half
+    # never does.**
+    options: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class Checkout:
+    """Where a customer authorises the mandate, however this processor does it.
+
+    The two shapes are not a preference. A processor whose subscription API takes
+    no return address can only be a `HostedPage`, and one whose script accepts a
+    callback can be an `EmbeddedCheckout`; the screen draws whichever it is told
+    and nothing above this file chooses.
+    """
+
+    handoff: HostedPage | EmbeddedCheckout
     # The name this arrangement is known by at the processor, and the identifier
     # its webhooks echo back. Required, because ADR 0110 makes it the only thread
     # between the checkout and the event: the row written here is what later

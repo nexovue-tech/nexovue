@@ -28,6 +28,7 @@ from nexovue_api.billing import (
     BillingEventKind,
     CancellationOutcome,
     Commitment,
+    EmbeddedCheckout,
     Money,
     PaymentsNotConfiguredError,
     SignatureInvalidError,
@@ -35,6 +36,7 @@ from nexovue_api.billing import (
     build_payment_processor,
 )
 from nexovue_api.billing.razorpay import (
+    CHECKOUT_SCRIPT_URL,
     DELIVERY_HEADER,
     PLAN_NOTE,
     SIGNATURE_HEADER,
@@ -258,13 +260,36 @@ class TestTranslation:
 
 
 class TestBeginningACheckout:
-    async def test_a_checkout_creates_the_subscription_and_hands_back_the_url(self) -> None:
+    async def test_a_checkout_creates_the_subscription_and_hands_back_the_script(self) -> None:
         api = RecordingApi()
 
         checkout = await _checkout(api)
 
-        assert checkout.url == SHORT_URL
+        assert isinstance(checkout.handoff, EmbeddedCheckout)
+        assert checkout.handoff.script_url == CHECKOUT_SCRIPT_URL
+        assert checkout.handoff.options["subscription_id"] == SUBSCRIPTION_REF
+        # `redirect` is what sends the customer to the callback rather than to a
+        # handler function this product would have to write.
+        assert checkout.handoff.options["callback_url"] == RETURN_URL
+        assert checkout.handoff.options["redirect"] is True
         assert checkout.subscription_ref == SUBSCRIPTION_REF
+
+    async def test_the_hosted_page_is_not_the_handoff(self) -> None:
+        """The create call answers with one and it is deliberately unused: it
+        takes no callback, so a customer who pays on it has nowhere to go."""
+        checkout = await _checkout(RecordingApi())
+
+        assert SHORT_URL not in repr(checkout)
+
+    async def test_only_the_publishable_key_reaches_the_browser(self) -> None:
+        """This handoff is rendered into a page. The API secret in it would be
+        published to every visitor of that page."""
+        checkout = await _checkout(RecordingApi())
+
+        assert isinstance(checkout.handoff, EmbeddedCheckout)
+        assert checkout.handoff.options["key"] == SETTINGS.app_id
+        assert API_SECRET not in repr(checkout)
+        assert SETTINGS.webhook_secret not in repr(checkout)
 
     async def test_the_plan_is_priced_per_service_and_the_count_is_the_quantity(self) -> None:
         """ADR 0111. The processor multiplies, and renders both halves on its own

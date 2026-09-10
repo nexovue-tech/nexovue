@@ -587,7 +587,7 @@ async def begin_plan_change(
             currency=commitment.rate.currency,
         ),
     )
-    return CheckoutHandoff(url=checkout.url)
+    return CheckoutHandoff.of(checkout.handoff)
 
 
 async def end_subscription(

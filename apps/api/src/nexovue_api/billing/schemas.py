@@ -17,10 +17,23 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
+from nexovue_api.billing.processor import EmbeddedCheckout, HostedPage
 from nexovue_api.usage.schemas import BillingPeriodUsage, PlanPriceSummary, PlanSummary
+
+
+class CheckoutStyle(StrEnum):
+    """Which of the two handoffs the screen has been given.
+
+    The screen branches on this and on nothing else — never on the processor's
+    name, which it is not told and must not learn.
+    """
+
+    HOSTED_PAGE = "hosted_page"
+    EMBEDDED = "embedded"
 
 
 class DeliveryOutcome(StrEnum):
@@ -176,10 +189,38 @@ class StartCheckoutRequest(BaseModel):
 
 
 class CheckoutHandoff(BaseModel):
-    """Where to send the customer to authorise the mandate.
+    """How to put the customer in front of the processor's own card form.
 
-    A URL and nothing else. The card details never reach this application, which
-    is why ADR 0102 made the port answer with one.
+    Two shapes, discriminated by `style`, because processors differ in a way the
+    screen cannot paper over: one owns a whole page, another owns a script that
+    runs on ours. Never a form of our own — the card details do not reach this
+    application in either shape, which is ADR 0102's reason for a port at all.
+
+    **Everything here is published to a browser.** A field is added to this model
+    only if it is safe in a page's source; the processor's secret key is not, and
+    the publishable key is exactly what `public_key` is named for.
     """
 
-    url: str
+    style: CheckoutStyle
+
+    # style=hosted_page: where to send the browser.
+    url: str | None = None
+
+    # style=embedded: the processor's script, the constructor it defines, and
+    # what to construct it with. `options` is opaque here and in the browser —
+    # the script is the only thing that reads a key of it.
+    script_url: str | None = None
+    global_name: str | None = None
+    options: dict[str, Any] | None = None
+
+    @classmethod
+    def of(cls, handoff: HostedPage | EmbeddedCheckout) -> CheckoutHandoff:
+        """The port's answer as the browser receives it."""
+        if isinstance(handoff, HostedPage):
+            return cls(style=CheckoutStyle.HOSTED_PAGE, url=handoff.url)
+        return cls(
+            style=CheckoutStyle.EMBEDDED,
+            script_url=handoff.script_url,
+            global_name=handoff.global_name,
+            options=dict(handoff.options),
+        )

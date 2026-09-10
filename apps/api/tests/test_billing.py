@@ -44,6 +44,7 @@ from nexovue_api.billing import (
     ConfiguredProcessor,
     ContactField,
     CurrencyUnknownError,
+    HostedPage,
     Money,
     SignatureInvalidError,
     UnhandledBillingEventError,
@@ -55,7 +56,7 @@ from nexovue_api.billing.razorpay import (
     SIGNATURE_HEADER,
     RazorpayPaymentProcessor,
 )
-from nexovue_api.billing.schemas import DeliveryOutcome, StartCheckoutRequest
+from nexovue_api.billing.schemas import CheckoutStyle, DeliveryOutcome, StartCheckoutRequest
 from nexovue_api.data.postgres.models import (
     BillingSubscription,
     BillingWebhookDelivery,
@@ -176,8 +177,11 @@ class StubProcessor:
                 "return_url": return_url,
             }
         )
+        # A hosted page — deliberately *not* the domestic processor's embedded
+        # script. A double that mirrored the one real implementation would let a
+        # screen that only handles one shape pass every test here.
         return Checkout(
-            url=self.checkout_url,
+            handoff=HostedPage(url=self.checkout_url),
             subscription_ref=self.subscription_ref,
             processor_customer_ref="cust_1",
         )
@@ -991,6 +995,7 @@ class TestStartingACheckout:
             today=TODAY,
         )
 
+        assert handoff.style is CheckoutStyle.HOSTED_PAGE
         assert handoff.url == processor.checkout_url
         commitment = processor.checkouts[0]["commitment"]
         assert commitment.services == 3

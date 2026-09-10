@@ -24,6 +24,7 @@ import {
   monthlyTotalMinorUnits,
   unfinishedCheckoutNotice,
 } from "./billing-view";
+import { openCheckout, SCRIPT_BLOCKED } from "./checkout-handoff";
 
 /**
  * P1-75. What this organization is on, what pays for it, and where the month
@@ -225,6 +226,11 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
   const [choosing, setChoosing] = useState(false);
   const [chosen, setChosen] = useState<PlanOption>();
   const [committed, setCommitted] = useState(String(initialCommitment(overview)));
+  // The mutation succeeded and the processor's own script then failed to load
+  // or to start. Held apart from `start.error` because it is a different
+  // failure with a different remedy, and the customer is shown one line either
+  // way rather than a button that silently does nothing.
+  const [handoffError, setHandoffError] = useState<Error | undefined>(undefined);
   const [contact, setContact] = useState<Record<string, string>>({});
 
   const availability = checkoutAvailability(overview);
@@ -337,10 +343,13 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
               contactPhone: contact.phone,
             },
             {
-              // Navigated to, never stored: the URL is a bearer credential for
-              // exactly one mandate.
+              // Used immediately, never stored: this answer is a bearer
+              // credential for exactly one mandate. Which of the two shapes it
+              // is, is the processor's business and not this screen's.
               onSuccess: (handoff) => {
-                window.location.href = handoff.url;
+                openCheckout(handoff, window).catch((failure: unknown) => {
+                  setHandoffError(failure instanceof Error ? failure : new Error(SCRIPT_BLOCKED));
+                });
               },
             },
           );
@@ -391,11 +400,14 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
           </Button>
         </div>
         <p className="text-ink-dim text-xs leading-relaxed">
-          You will authorise the mandate on your payment provider&rsquo;s own page. Your card and
-          bank details never reach us.
+          You will authorise the mandate with your payment provider. Your card and bank details
+          never reach us.
         </p>
-        {start.error ? (
-          <InlineFailure title="The checkout could not be started" error={start.error} />
+        {start.error || handoffError ? (
+          <InlineFailure
+            title="The checkout could not be started"
+            error={start.error ?? handoffError}
+          />
         ) : null}
       </form>
     </section>
