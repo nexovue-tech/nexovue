@@ -54,7 +54,6 @@ from nexovue_api.data.postgres.models import (
     Check,
     DeployEvent,
     Integration,
-    Session,
     SiteKey,
     SourceMap,
     UsageDaily,
@@ -117,11 +116,10 @@ RECEIVER_READS_DELETION: Final = text(
 
 # One statement per table the deletion is responsible for, written out here and
 # not taken from `queries.py`. A check that used the code under test to prove
-# the code under test would agree with it when both are wrong. `sessions` and
-# `project_first_traces` carry no `org_id`, so they are counted by the ids the
-# fixture captured before anything was deleted — a join through `projects` would
-# report zero once the projects had gone, hiding exactly the orphan this suite
-# is looking for.
+# the code under test would agree with it when both are wrong. `project_first_traces`
+# carries no `org_id`, so it is counted by the project id the fixture captured
+# before anything was deleted — a join through `projects` would report zero once
+# the projects had gone, hiding exactly the orphan this suite is looking for.
 _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "billing_subscriptions",
     "billing_webhook_deliveries",
@@ -158,7 +156,6 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "project_first_traces": 1,
     "project_webhook_secrets": 1,
     "projects": 1,
-    "sessions": ROWS_PER_TABLE,
     "site_keys": ROWS_PER_TABLE,
     "source_maps": MAPS_PER_TENANT,
     "usage_daily": ROWS_PER_TABLE,
@@ -358,10 +355,6 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectSt
                     day=day - timedelta(days=index),
                     service_name=f"service-{index}",
                 ),
-                Session(
-                    user_id=tenant.user_id,
-                    expires_at=datetime.now(UTC) + timedelta(days=1),
-                ),
                 BillingSubscription(
                     org_id=tenant.org_id,
                     processor="test",
@@ -441,9 +434,6 @@ async def _row_counts(db: AsyncSession, tenant: Tenant) -> dict[str, int]:
         counts[table] = await _count(
             db, f"SELECT count(*) FROM {table} WHERE org_id = :org_id", {"org_id": tenant.org_id}
         )
-    counts["sessions"] = await _count(
-        db, "SELECT count(*) FROM sessions WHERE user_id = :user_id", {"user_id": tenant.user_id}
-    )
     counts["project_first_traces"] = await _count(
         db,
         "SELECT count(*) FROM project_first_traces WHERE project_id = :project_id",

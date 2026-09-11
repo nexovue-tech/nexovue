@@ -115,10 +115,7 @@ Auto-creation is disabled on the broker; topics are created explicitly by `deplo
 | `spans-raw` | 12 | `apps/receiver` | `apps/workers` (trace assembly), `nexovue-workers-usage` (metering) | trace id — every partition is one trace-assembler's whole world |
 | `logs-raw` | 4 | `apps/receiver`, `apps/scheduler` (browser-flow check results) | `apps/workers` (log writing), `nexovue-workers-logs-usage` | tenant (organization) id |
 | `metrics-raw` | 4 | `apps/receiver`, `apps/scheduler` (HTTP check results, cloud/database poller results) | `apps/workers` (metric ingest), `nexovue-workers-metrics-usage` | tenant id |
-| `synthetic-results` | 4 | none found | — | — |
 | `spans-dlq` / `logs-dlq` / `metrics-dlq` | 1 each | `apps/workers`, on decode/processing failure | none — nothing drains a dead-letter topic automatically | inherits the source record's key |
-
-`synthetic-results` is created by the topic script but no code in this repository produces to it or consumes from it — synthetic check results actually flow through `metrics-raw`/`logs-raw` like any other metric or log envelope.
 
 Every raw topic: 7-day retention, roughly 16 MiB max message size (sized to the receiver's decoded-body cap plus envelope overhead — a previous 1 MiB default silently dropped any oversized trace, with the sender retrying an unshrinkable batch forever), `zstd` compression.
 
@@ -644,16 +641,12 @@ These are the standards actually enforced by the repository's own lint configura
 
 ## 18. Known gaps and inconsistencies found in the code
 
-Recorded here because they were found while tracing the flows above, not because they were documented anywhere else:
+Recorded here because they were found while tracing the flows above, not because they were documented anywhere else. Re-verified against the source on 2026-09-12. Gaps that turned out to be removable were removed from the code rather than from this list: the `synthetic-results` topic nothing produced to or consumed from, the `sessions` Postgres table nothing wrote (the session store is Redis, §6.5), a development retention-override script written against a schema that no longer exists, and two query helpers (`deploys.queries.webhook_keys`, `integrations.queries.find_integration`) no service called.
 
-- **`synthetic-results` Kafka topic** is created but has no producer or consumer anywhere in the codebase; synthetic results actually travel through `metrics-raw`/`logs-raw` like any other envelope.
-- **The `DOOR_WEBHOOK` envelope value** is defined in the protobuf contract but is never constructed by any code path found in this pass.
-- **Three of the five raw OTLP metric tables** (`metrics_histogram`, `metrics_exp_histogram`, `metrics_summary`) are written, masked, and retained, but have no API reader anywhere — a customer sending an OTLP histogram or summary metric today has it stored with nothing in the product reading it back.
-- **`logs.timestamp_source`** is written by every log insert but is not read by any API endpoint or screen found in this pass.
-- **A local development retention-override script** references a table named `metrics` and the `timestamp` column for its TTL override; neither matches the current schema (there are five separate metric tables, and the production TTL is keyed on `received_at`, not `timestamp`) — the script as written would not run correctly against the current schema.
-- **Two small pieces of dead code** were found and flagged by their own test suites as unused: an older webhook-key lookup helper in the deploys package, and an unused integration lookup helper.
-- **The production nginx configuration for the web console** proxies no `/api` path — only the local development server's proxy does. Whatever fronts a real deployment needs to route `/api/v1/*` to the control-plane API itself; nothing in the web image's own configuration does this.
-- **A `sessions` table exists in Postgres** but appears to be dead schema — the actual session store, read by every authentication code path traced in this pass, is Redis.
+- **The `DOOR_WEBHOOK` envelope value** is defined in the protobuf contract but is never constructed by any code path. Deploy webhooks are written to Postgres by `apps/api` and never enter the envelope path.
+- **Three of the five raw OTLP metric tables** (`metrics_histogram`, `metrics_exp_histogram`, `metrics_summary`) are written, masked, and retained, but the only API code that touches them is tenant erasure — a customer sending an OTLP histogram or summary metric today has it stored with nothing in the product reading it back.
+- **`logs.timestamp_source`** is written by every log insert but is not read by any API endpoint or screen.
+- **The web image's own nginx configuration proxies no `/api` path.** The on-premise Caddyfile routes `/api/*` to the control-plane API in front of it, and the local Vite dev server proxies it too, but a deployment that fronts the web image directly must route `/api/v1/*` itself; nothing inside the image does.
 
 ---
 

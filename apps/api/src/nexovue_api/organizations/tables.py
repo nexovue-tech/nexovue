@@ -42,7 +42,6 @@ DELETED_DIRECTLY: Final[tuple[str, ...]] = (
 # that parent must be `ON DELETE CASCADE` and its column NOT NULL, or a row with
 # a null parent would survive the deletion.
 REMOVED_BY_CASCADE: Final[dict[str, str]] = {
-    "sessions": "users",
     "api_keys": "projects",
     "site_keys": "projects",
     "checks": "projects",

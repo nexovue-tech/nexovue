@@ -27,16 +27,6 @@ async def list_integrations(
     return (await session.scalars(statement)).all()
 
 
-async def find_integration(
-    session: AsyncSession, *, org_id: uuid.UUID, integration_id: uuid.UUID
-) -> Integration | None:
-    statement = select(Integration).where(
-        Integration.id == integration_id, Integration.org_id == org_id
-    )
-    integration: Integration | None = await session.scalar(statement)
-    return integration
-
-
 def add_integration(session: AsyncSession, integration: Integration) -> None:
     """Stage a new connector. The caller's transaction commits it."""
     session.add(integration)

@@ -58,12 +58,6 @@ async def test_listing_connectors_binds_the_organization(session: CapturingSessi
     assert OTHER_ORG_ID not in session.bound_values
 
 
-async def test_finding_one_connector_binds_the_organization(session: CapturingSession) -> None:
-    await queries.find_integration(session, org_id=ORG_ID, integration_id=INTEGRATION_ID)  # type: ignore[arg-type]
-
-    assert {ORG_ID, INTEGRATION_ID} <= session.bound_values
-
-
 async def test_deleting_a_connector_binds_the_organization(session: CapturingSession) -> None:
     """Deleting by id alone would remove another tenant's connector."""
     await queries.delete_integration(session, org_id=ORG_ID, integration_id=INTEGRATION_ID)  # type: ignore[arg-type]

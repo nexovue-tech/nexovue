@@ -736,25 +736,6 @@ class BillingWebhookDelivery(Base):
     )
 
 
-class Session(Base):
-    """A browser session. Kept server-side so revoking one is immediate."""
-
-    __tablename__ = "sessions"
-
-    id: Mapped[UuidPrimaryKey]
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UuidType, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    expires_at: Mapped[RequiredTimestamp]
-    created_at: Mapped[CreatedAt]
-
-    __table_args__ = (
-        Index("ix_sessions_user_id", "user_id"),
-        # Sweeping expired rows must not scan the table.
-        Index("ix_sessions_expires_at", "expires_at"),
-    )
-
-
 class AuditLogEntry(Base):
     """Who changed what.
 
