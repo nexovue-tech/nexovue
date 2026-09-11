@@ -494,10 +494,10 @@ def test_no_live_materialized_view_fills_the_table_these_statements_read() -> No
 
     A materialized view over `spans` sits *downstream* of tail sampling, which
     keeps every failed trace, every slow trace and one healthy trace in ten. The
-    rollup is filled by the worker's `derive` stage instead, before the sampler
-    (ADR 0010). Recreating a view over `spans` would silently restore the defect
-    — the numbers would still look plausible — so nothing may create one that a
-    later migration does not drop.
+    rollup is filled by the worker's `derive` stage instead, before the sampler.
+    Recreating a view over `spans` would silently restore the defect — the
+    numbers would still look plausible — so nothing may create one that a later
+    migration does not drop.
     """
     creates = {
         path.name

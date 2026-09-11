@@ -22,7 +22,7 @@ import (
 const attrServiceName = "service.name"
 
 // temporalityPrefix is stripped from OTLP's enum to leave DELTA or CUMULATIVE,
-// the short form ADR 0066 chose and the one derive already writes.
+// the short form the metrics schema chose and the one derive already writes.
 const temporalityPrefix = "AGGREGATION_TEMPORALITY_"
 
 // decoded is one Kafka message unpacked: our envelope and the OTLP request it
@@ -152,7 +152,7 @@ func appendSum(out *rows, described point, sum *metricspb.Sum) {
 			Value: numberValue(dataPoint),
 			// Written exactly as received. Converting cumulative to delta here
 			// would need counter-reset detection, and a guess at that is baked
-			// into stored data forever (ADR 0066).
+			// into stored data forever.
 			Temporality: temporality,
 			Monotonic:   sum.GetIsMonotonic(),
 		})

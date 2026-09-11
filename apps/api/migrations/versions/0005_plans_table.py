@@ -1,6 +1,6 @@
 """plan tiers, and the retention each one grants
 
-ADR 0071 decided the tiers; this is where their numbers live. They are rows
+The tiers were decided up front; this is where their numbers live. They are rows
 rather than constants deliberately — retention days and, later, prices are the
 values most likely to change after contact with customers, and changing a row
 should not need a deploy.
@@ -28,8 +28,8 @@ down_revision: str | None = "0004"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# ADR 0071. Seeded, not hardcoded anywhere else: these rows are the source of
-# truth and are expected to be edited before launch.
+# Seeded, not hardcoded anywhere else: these rows are the source of truth and
+# are expected to be edited before launch.
 SEED: Sequence[tuple[str, str, int, int]] = (
     ("free", "Free", 7, 30),
     ("pro", "Pro", 30, 395),

@@ -18,7 +18,7 @@ database it ran in, and a person matches it back by querying their own
 `pg_stat_statements`.
 
 The table is partitioned on `received_at`, our own receive clock, not on the
-`timestamp` a caller asks about (ADR 0067), so both are bounded.
+`timestamp` a caller asks about, so both are bounded.
 """
 
 from __future__ import annotations

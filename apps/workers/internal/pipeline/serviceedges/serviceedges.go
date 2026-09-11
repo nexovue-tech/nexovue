@@ -18,7 +18,7 @@
 // problem: both its spans are in one trace, on one partition.
 //
 // It runs before the sampler, over every span of every trace, for the same
-// reason the counters do (ADR 0010): tail sampling keeps roughly one healthy
+// reason the counters do: tail sampling keeps roughly one healthy
 // trace in ten, so a graph measured after it would report a tenth of the real
 // call rate — and a dependency that only ever succeeds would look like a tenth
 // of itself while one that always errors looked whole.
@@ -185,7 +185,7 @@ type Span struct {
 	// Partition is the Kafka partition this span's record arrived on. It is
 	// provenance rather than a dimension — no row carries it — but the pairing
 	// buffer and the minute buckets keep it so that a partition handed to
-	// another worker can have its contribution taken back out (ADR 0094). An
+	// another worker can have its contribution taken back out. An
 	// edge belongs to its caller's partition, because the caller is what the
 	// edge is bucketed on.
 	Partition int32

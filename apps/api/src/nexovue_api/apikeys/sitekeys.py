@@ -5,7 +5,7 @@ is printed in the page that carries it, so hashing it at rest would protect a
 value anyone can already read while costing three things that matter: the
 exact-match index the browser door's lookup needs, the ability to show the key
 again to a customer redeploying their site, and the plain statement — visible in
-the schema — that this table holds nothing secret. ADR 0086.
+the schema — that this table holds nothing secret.
 
 The value is still high-entropy random. Not secret is not the same as guessable:
 twenty-two base62 characters is what stops somebody enumerating projects and

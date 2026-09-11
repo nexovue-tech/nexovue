@@ -12,8 +12,8 @@ const (
 	usageMoved int32 = 1
 )
 
-// The billing half of ADR 0090's root, asserted on the counters the store
-// actually holds.
+// The billing half of the rebalance defect's root, asserted on the counters the
+// store actually holds.
 //
 // The meter sums across partitions into one tenant-day, so a partition handed
 // to another worker leaves its bytes and spans behind in the unflushed bucket.
@@ -21,7 +21,7 @@ const (
 // worker that took the partition over has already read the old watermark and
 // counted the same records. `usage_daily` adds on conflict, so the two land as a
 // sum — and this is the number a customer is billed on and the free tier is cut
-// off by (ADR 0083).
+// off by.
 //
 // The store's own guard does not stop it. `WHERE counted_through < excluded`
 // gates a partition's row, but one flush carries every partition it owns: the
@@ -68,7 +68,7 @@ func TestARevokedPartitionsUsageIsNotBilledTwice(t *testing.T) {
 	}
 }
 
-// Both halves or neither, exactly as the span buffer needs (ADR 0090). Dropping
+// Both halves or neither, exactly as the span buffer needs. Dropping
 // the counters while the in-process watermark still remembers their offsets
 // would make this worker skip those records if the partition came back — and
 // they were dropped, not counted, so that is an under-bill rather than the

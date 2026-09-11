@@ -27,7 +27,7 @@ COOKIE_PATH: Final = "/"
 # would send this session token to `ingest.nexovue.com` on every browser-door
 # beacon — our own users' sessions, arriving at the endpoint that accepts
 # unauthenticated public traffic from thousands of other people's pages.
-# ADR 0089 names that as a privacy requirement rather than a preference.
+# That is a privacy requirement rather than a preference.
 # Do not add a Domain here.
 
 

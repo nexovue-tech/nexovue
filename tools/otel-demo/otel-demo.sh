@@ -19,7 +19,7 @@
 #
 #   door 4b is **not** opened. `astronomy-db` has pg_stat_statements preloaded
 #           and a monitoring_user granted, and the poller refuses password auth
-#           for self-hosted Postgres (ADR 0076). The Database screen stays empty.
+#           for self-hosted Postgres. The Database screen stays empty.
 #
 # Deliberately a separate command. It is not in `just check` — that gate must
 # never need Docker — and not in `just e2e`, which runs against a stack this

@@ -1,4 +1,4 @@
-"""What a probe records about a URL, per ADR 0103.
+"""What a probe records about a URL.
 
 The probe keeps the query and the fragment where the browser SDK trims them,
 because `browser.py` reports where the browser *ended up* and a redirect to a

@@ -25,7 +25,7 @@ import "strings"
 // mentioned mid-sentence — "using Bearer abc… to call payments" — is **not**
 // masked by default. That is the deliberate side to err on, because masking is
 // irreversible and this record's bar is that a default must never destroy
-// something a developer could legitimately need (ADR 0059). A project that logs
+// something a developer could legitimately need. A project that logs
 // credentials that way can name the attribute in its own key rules.
 const (
 	// schemeBearer and schemeBasic are the two RFC 7235 schemes that carry the

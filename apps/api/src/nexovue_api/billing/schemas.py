@@ -60,7 +60,7 @@ class DeliveryAcknowledgement(BaseModel):
 class SubscriptionSummary(BaseModel):
     """The paid arrangement behind the plan, as far as a customer needs it.
 
-    **No processor reference and no processor name.** ADR 0102 keeps the vendor
+    **No processor reference and no processor name.** The port keeps the vendor
     out of everything above the adapter, and a subscription id is useful to
     exactly nobody reading a screen — it is what a support conversation asks
     for, and support has the database. What a customer needs is which tier,
@@ -71,7 +71,7 @@ class SubscriptionSummary(BaseModel):
     # `pending`, `active` or `cancelled` — the row's own status, unmapped: the
     # three words mean what they say and a screen renders them directly.
     status: str
-    # ADR 0107's ceiling: the count the customer committed to, which sized the
+    # The ceiling the customer chose: the count they committed to, which sized the
     # mandate. Shown because a ceiling nobody can see is one they cannot act on
     # before it stops their ingestion.
     services_committed: int
@@ -86,7 +86,7 @@ class CheckoutRequirements(BaseModel):
 
     Asked of the processor rather than fixed here, so the form renders one
     provider's fields and not the union of every provider's. A switch then
-    deletes a field instead of leaving a dead one. ADR 0109, and
+    deletes a field instead of leaving a dead one.
     `PaymentProcessor.required_contact_fields` is where the answer comes from.
     """
 
@@ -132,8 +132,8 @@ class BillingOverview(BaseModel):
     # Null when this organization has never had one — every free-tier account.
     subscription: SubscriptionSummary | None = None
     # The calendar month's allowance, spend and whether going past it stops
-    # ingestion. `allowance_enforced` is the sentence ADR 0107 requires the
-    # screen to be able to write.
+    # ingestion. `allowance_enforced` is the sentence the screen has to be able
+    # to write.
     period: BillingPeriodUsage
     # Null when no payment processor is configured, which is a real state and not
     # an error: the plan and the month's usage are still readable, and the screen
@@ -153,16 +153,15 @@ class BillingOverview(BaseModel):
 class StartCheckoutRequest(BaseModel):
     """A customer asking to move onto a paid tier.
 
-    **`services_committed` is ADR 0107's ceiling**, chosen by the customer and
-    not by us. ADR 0056 prices per service monitored, so the number of services
-    a customer commits to is at once the most they can be charged in a month and
-    the volume they may send — `plan_prices.included_bytes_per_service`
-    multiplies the same figure. One number, both meanings, and the customer sets
-    it: 0107's "an amount the customer sets and can see, above which we still
-    stop".
+    **`services_committed` is the ceiling**, chosen by the customer and not by
+    us. Pricing is per service monitored, so the number of services a customer
+    commits to is at once the most they can be charged in a month and the volume
+    they may send — `plan_prices.included_bytes_per_service` multiplies the same
+    figure. One number, both meanings, and the customer sets it: "an amount the
+    customer sets and can see, above which we still stop".
 
     **The contact is not stored** and exists only for the length of one call.
-    ADR 0109: the processor holds what the bank's pre-debit notice needs, and a
+    The processor holds what the bank's pre-debit notice needs, and a
     copy of ours would be personal data kept so nobody has to retype.
     """
 
@@ -176,7 +175,7 @@ class StartCheckoutRequest(BaseModel):
     # grants no allowance, which is not a plan anybody meant to buy.
     services_committed: int = Field(ge=1)
     # All optional, and all asked for only when the configured processor declares
-    # it needs them — `PaymentProcessor.required_contact_fields`, ADR 0109. One
+    # it needs them — `PaymentProcessor.required_contact_fields`. One
     # processor requires all three up front because its page collects none;
     # another collects them itself and declares nothing, and then a screen that
     # asked would make a customer type the same thing twice.
@@ -194,7 +193,7 @@ class CheckoutHandoff(BaseModel):
     Two shapes, discriminated by `style`, because processors differ in a way the
     screen cannot paper over: one owns a whole page, another owns a script that
     runs on ours. Never a form of our own — the card details do not reach this
-    application in either shape, which is ADR 0102's reason for a port at all.
+    application in either shape, which is the reason for a port at all.
 
     **Everything here is published to a browser.** A field is added to this model
     only if it is safe in a page's source; the processor's secret key is not, and

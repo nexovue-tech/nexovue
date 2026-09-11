@@ -24,8 +24,9 @@ export interface NexovueOptions {
    * Off by default, and it is one switch rather than two because they are one
    * exposure. Masking in the pipeline matches attribute *keys*, not values, so a
    * token in a query string is stored verbatim for the whole retention period —
-   * and a fragment is where an OAuth implicit flow puts an access token. ADR
-   * 0103 has the page-view URL that carried a postal address while this was off.
+   * and a fragment is where an OAuth implicit flow puts an access token. The
+   * default was settled by a page-view URL that carried a postal address while
+   * this was off.
    */
   captureQueryAndFragment?: boolean;
   sessionIdleTimeoutMs?: number;

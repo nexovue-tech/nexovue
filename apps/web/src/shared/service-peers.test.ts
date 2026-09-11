@@ -201,7 +201,7 @@ describe("collapseAddressPeers", () => {
 
 describe("isPlaceholderService", () => {
   it("recognises a peer by its parentheses, not by a fixed list of two names", () => {
-    // ADR 0080: a callee that never reported is named from what the caller asserted,
+    // A callee that never reported is named from what the caller asserted,
     // so the set of these names is open and a closed list would link `(valkey-cart)`
     // to a service screen that can never have anything on it.
     expect(isPlaceholderService("(valkey-cart)")).toBe(true);

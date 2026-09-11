@@ -13,7 +13,7 @@
 // it become queryable?
 //
 // Exact counters are the thing compared, not stored spans. Counters are derived
-// before the sampler (ADR 0010), so they are the pre-sampling truth; stored spans
+// before the sampler, so they are the pre-sampling truth; stored spans
 // are 10% of healthy traces by design and would make a loss and a sampling
 // decision indistinguishable.
 package chaos
@@ -41,7 +41,7 @@ const (
 	killKafkaAt  = 40 * time.Second
 	killStoreAt  = 110 * time.Second
 
-	// Generous: the worker holds a trace for the 10s sampling window (ADR 0058),
+	// Generous: the worker holds a trace for the 10s sampling window,
 	// then commits only once the minute's counters are written, so offsets trail
 	// ingest by up to about 70s even when nothing is broken.
 	drainTimeout = 5 * time.Minute

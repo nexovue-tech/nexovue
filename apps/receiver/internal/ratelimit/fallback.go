@@ -5,9 +5,9 @@ import (
 	"time"
 )
 
-// The bound the door falls back to when the shared counter cannot answer at all
-// (ADR 0104). The door stays open on a Valkey error — losing a customer's
-// telemetry costs more than briefly losing the protection — and this is what
+// The bound the door falls back to when the shared counter cannot answer at all.
+// The door stays open on a Valkey error — losing a customer's telemetry costs
+// more than briefly losing the protection — and this is what
 // stops "open" meaning "unbounded" for the length of the outage.
 //
 // **It is per receiver instance, and that is stated rather than glossed.** The
@@ -26,8 +26,8 @@ import (
 // fallback exists to stop a burst large enough to hurt every other tenant, not
 // to reproduce a limit it cannot see the rest of.
 //
-// Provisional: ADR 0104 says the multiple is a number somebody watches rather
-// than a number somebody picks, and what would revise it is a measured outage.
+// Provisional: the multiple is a number somebody watches rather than a number
+// somebody picks, and what would revise it is a measured outage.
 const fallbackBurstMultiple = 10
 
 // fallbackMaxSubjects bounds the map, for the reason `cache.go` already gives:

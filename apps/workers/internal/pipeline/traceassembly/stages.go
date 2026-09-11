@@ -208,9 +208,9 @@ type handling struct {
 	// store lets its spans into the sampling buffer, and so to ClickHouse.
 	store bool
 	// partition is the one the record arrived on. Every stage that holds
-	// something across messages keeps it — the sampling buffer with each span
-	// (ADR 0090), the counters and the edge rollup with each minute's share
-	// (ADR 0094) — so that a partition leaving for another worker can take its
+	// something across messages keeps it — the sampling buffer with each span,
+	// the counters and the edge rollup with each minute's share — so that a
+	// partition leaving for another worker can take its
 	// whole contribution back out.
 	partition int32
 }
@@ -237,8 +237,7 @@ func (s *stages) absorbMessage(now time.Time, message []byte, run handling) (abs
 		row.ReceivedAt = receivedAt
 		row.RetentionDays, row.DerivedRetentionDays = rawDays, derivedDays
 		// Derive before sample: the counters and the endpoint rollup see every
-		// span, whatever the sampler decides about the trace it belongs to
-		// (ADR 0010).
+		// span, whatever the sampler decides about the trace it belongs to.
 		if run.count {
 			countable := row.countable(receivedAt, derivedDays, run.partition)
 			minute, discarded := s.counters.Observe(now, countable)
@@ -249,7 +248,7 @@ func (s *stages) absorbMessage(now time.Time, message []byte, run handling) (abs
 
 			// Edges see every span too, and for the same reason: the sampler
 			// keeps about one healthy trace in ten, so an edge rate measured
-			// after it would be a tenth of the truth (ADR 0010).
+			// after it would be a tenth of the truth.
 			edgeMinute, _ := s.edges.Observe(now,
 				row.edgeSpan(receivedAt, derivedDays, run.partition))
 			result.latestEdgeMinute = later(result.latestEdgeMinute, edgeMinute)

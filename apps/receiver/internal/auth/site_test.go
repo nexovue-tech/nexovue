@@ -179,8 +179,8 @@ func TestTheSiteKeyCacheSparesRepeatedLookups(t *testing.T) {
 	}
 }
 
-// The throttle ADR 0081 established for the secret door holds here too: one write
-// per key per cache period, never one per request.
+// The throttle the secret door already has holds here too: one write per key
+// per cache period, never one per request.
 func TestSiteKeyUseIsRecordedOncePerCachePeriod(t *testing.T) {
 	uses := &recordedUses{}
 	auth := NewSite(seededSiteKeys(validSiteKey), Options{

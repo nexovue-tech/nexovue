@@ -28,9 +28,9 @@ type Facts struct {
 
 	// Partition is the Kafka partition the span's record arrived on. It is
 	// provenance rather than a sampling input: the buffer keeps it so that a
-	// partition handed to another worker can have its spans taken back out
-	// (ADR 0090). The topic is implicit — one buffer serves one pipeline, and a
-	// pipeline consumes one topic.
+	// partition handed to another worker can have its spans taken back out. The
+	// topic is implicit — one buffer serves one pipeline, and a pipeline consumes
+	// one topic.
 	Partition int32
 }
 
@@ -106,10 +106,9 @@ type Stats struct {
 // Buffer holds spans by trace until the trace can be judged whole.
 //
 // It needs no lock and no shared store: the receiver keys every span by
-// trace_id, so Kafka delivers a whole trace to one partition and one consumer
-// (ADR 0009). A worker restart loses the buffer, which the query-time join
-// covers, and a partition handed to another worker loses it on purpose — see
-// Disown.
+// trace_id, so Kafka delivers a whole trace to one partition and one consumer.
+// A worker restart loses the buffer, which the query-time join covers, and a
+// partition handed to another worker loses it on purpose — see Disown.
 //
 // Not concurrency-safe. The consume loop calls every method from one goroutine,
 // and the rebalance callback that calls Disown holds the lock that loop takes
@@ -331,7 +330,7 @@ func (b *Buffer[T]) close(now time.Time, key traceKey, trace *openTrace[T], rele
 // closed, so everything still buffered belongs to records the broker has not
 // been told about. The worker that takes the partition over reads those same
 // records and writes the rows this one was holding. Keeping them is what writes
-// them twice (ADR 0090).
+// them twice.
 //
 // Remembered verdicts are left alone. They carry no partition, they are policy
 // rather than data, and a trace dropped here was never closed, so it never

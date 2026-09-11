@@ -38,9 +38,9 @@ func exportsUntilTheFallbackRefuses(
 	return nil, attempts
 }
 
-// ADR 0104's first property, and the one that must not regress: the door stays
-// open when the shared counter cannot answer. The fallback bounds what "open"
-// costs; it does not close the door.
+// The fallback's first property, and the one that must not regress: the door
+// stays open when the shared counter cannot answer. The fallback bounds what
+// "open" costs; it does not close the door.
 func TestTheFallbackStillAdmitsTheFirstExportsOfAnOutage(t *testing.T) {
 	const configured = 3
 	d := newDoor(t, doorOptions{counter: brokenCounter{}, requestsPerSec: configured})
@@ -79,9 +79,9 @@ func TestTheFallbackBoundsABurstWhileTheCounterIsDown(t *testing.T) {
 	}
 }
 
-// "A refusal during an outage will not match the configured number. The log
-// line has to name which limit refused, or the first support conversation about
-// it is unanswerable." — ADR 0104, Consequences.
+// A refusal during an outage will not match the configured number. The log line
+// has to name which limit refused, or the first support conversation about it
+// is unanswerable.
 func TestTheFallbackRefusalNamesWhichLimitRefused(t *testing.T) {
 	const configured = 2
 	written := &bytes.Buffer{}

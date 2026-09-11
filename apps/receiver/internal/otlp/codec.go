@@ -20,8 +20,8 @@ const (
 	contentTypeJSON     = "application/json"
 
 	// contentTypeText is not an OTLP encoding. It is the CORS safelist's, and
-	// the browser door alone reads it as OTLP/JSON — see ADR 0089 and
-	// browserContentTypes below.
+	// the browser door alone reads it as OTLP/JSON — see browserContentTypes
+	// below.
 	contentTypeText = "text/plain"
 )
 
@@ -64,9 +64,9 @@ var jsonCodec = codec{
 
 // contentTypes is the set of request encodings one door reads, keyed by media
 // type. A door is built with one set and cannot be talked into another by a
-// request, which is the same reason ADR 0086 gives each door one gatekeeper: an
-// affordance that exists for one entrance should be absent from the other's
-// code, not guarded by a condition somebody has to remember.
+// request, which is the same reason each door has one gatekeeper: an affordance
+// that exists for one entrance should be absent from the other's code, not
+// guarded by a condition somebody has to remember.
 type contentTypes map[string]codec
 
 // serverContentTypes is OTLP/HTTP's own pair, and nothing else. There is no
@@ -83,9 +83,9 @@ var serverContentTypes = contentTypes{
 // set no headers, and it fixes the request's credentials mode to "include" — so
 // a body typed application/json is preflighted, and the POST behind the
 // preflight is then failed by the browser because we deliberately never send
-// Access-Control-Allow-Credentials (ADR 0087 §4). text/plain is CORS-safelisted,
+// Access-Control-Allow-Credentials. text/plain is CORS-safelisted,
 // so the beacon is delivered instead of refused. The body is still parsed as
-// JSON and a body that is not JSON is still refused (ADR 0089).
+// JSON and a body that is not JSON is still refused.
 var browserContentTypes = contentTypes{
 	contentTypeProtobuf: protobufCodec,
 	contentTypeJSON:     jsonCodec,

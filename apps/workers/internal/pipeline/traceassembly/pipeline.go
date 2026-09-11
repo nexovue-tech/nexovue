@@ -55,7 +55,7 @@ func (s staticRetention) Retention(string) (uint16, uint16) { return s.raw, s.de
 // comes first because an unmasked value must never reach a counter, a buffer or
 // the store. `derive` comes before `sample` because counters are computed from
 // every trace, which is what keeps them exact while storage keeps a tenth of
-// the healthy ones (ADR 0010).
+// the healthy ones.
 //
 // Offsets commit only after everything a batch produced has been stored —
 // spans out of the sampling buffer, counters out of their minute bucket, which
@@ -88,8 +88,7 @@ type Pipeline struct {
 
 	// ingest is the durable half of `seen`: the per-partition record of what has
 	// already been counted and what has already been written, which unlike the
-	// in-process watermark survives both this process and the store restarting
-	// (ADR 0061).
+	// in-process watermark survives both this process and the store restarting.
 	ingest *ingeststate.Guard
 
 	// alreadyStoredSpans counts spans a replay did not write because the
@@ -110,13 +109,13 @@ type Pipeline struct {
 	// disownedSpans counts spans taken back out of the sampling buffer because
 	// their partition left for another worker. It steps at every handover and
 	// is flat otherwise; each one is a row this process would have written and
-	// the new owner would have written again (ADR 0090).
+	// the new owner would have written again.
 	disownedSpans int
 
 	// disownedCountedSpans and disownedEdgeCalls are the same evidence for the
 	// derived rollups: the counts and the calls that left with their partition
 	// instead of being summed into `metrics_sum` and `service_edges_1m` here and
-	// again by the new owner (ADR 0094).
+	// again by the new owner.
 	disownedCountedSpans uint64
 	disownedEdgeCalls    uint64
 
@@ -198,9 +197,9 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 // taken back while the session is live: the buffered spans, and the shares of
 // every open minute those partitions counted.
 //
-// All of it or none of it. The buffer alone was ADR 0090 and left the counters
-// over-summing (ADR 0094); a span row written twice can be collapsed, but a
-// counter summed twice has no individual contribution left to remove.
+// All of it or none of it. Dropping the buffer alone left the counters
+// over-summing; a span row written twice can be collapsed, but a counter summed
+// twice has no individual contribution left to remove.
 func (p *Pipeline) release(disowned map[string][]int32) {
 	partitions := disowned[p.topic]
 	if len(partitions) == 0 {
@@ -523,7 +522,7 @@ func spansStored(now time.Time) func(spanStorage) bool {
 // settleDerived writes one drain of counters, bracketed by the durable record
 // of the offsets it makes exact, and records how far the spans are written.
 //
-// The order is the whole point (ADR 0061): BEFORE says an insert of this range
+// The order is the whole point: BEFORE says an insert of this range
 // is in flight, AFTER says the store took it, and the Kafka offsets move only
 // after that — so a worker that comes back to a restarted store can tell a
 // finished insert from an interrupted one instead of guessing.
@@ -586,8 +585,7 @@ func (p *Pipeline) Drain(ctx context.Context, now time.Time) error {
 // and the store settles it: `service_edges_1m` carries a deduplication window,
 // and the drain sorts its rows so a re-derived block is byte-identical. This
 // used to read the table back first as well, which could not tell a retry from
-// a minute legitimately reopened by late data, and dropped the late row
-// (ADR 0075).
+// a minute legitimately reopened by late data, and dropped the late row.
 func (p *Pipeline) insertEdges(ctx context.Context, edges []serviceedges.Edge) error {
 	if len(edges) == 0 {
 		return nil

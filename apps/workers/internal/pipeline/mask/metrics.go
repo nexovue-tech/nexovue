@@ -73,9 +73,10 @@ func maskMetric(rules Rules, metric *metricspb.Metric) int {
 
 // maskExemplars covers the attributes an exemplar filtered out of its series.
 //
-// ADR 0066 drops FilteredAttributes on the way to storage, so these values are
-// discarded moments later — but they are masked anyway, because "it is dropped
-// downstream" is a reason that stops being true the day someone stores it.
+// The metric writer drops FilteredAttributes on the way to storage, so these
+// values are discarded moments later — but they are masked anyway, because "it
+// is dropped downstream" is a reason that stops being true the day someone
+// stores it.
 func maskExemplars(rules Rules, exemplars []*metricspb.Exemplar) int {
 	masked := 0
 	for _, exemplar := range exemplars {

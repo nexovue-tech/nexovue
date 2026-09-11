@@ -205,7 +205,7 @@ export function ServiceDetailView({
 
   const plots = useMemo(() => buildTrendPlots(points), [points]);
   // Address-named peers are folded before the lists are sliced, so this panel and the
-  // service map agree about how many dependencies there are (ADR 0082).
+  // service map agree about how many dependencies there are.
   const peers = useMemo(() => collapseAddressPeers(dependencies.data), [dependencies.data]);
   const neighbours = useMemo(
     () => neighboursOf(peers.edges, serviceName),

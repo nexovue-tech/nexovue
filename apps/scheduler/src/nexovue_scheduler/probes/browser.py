@@ -59,14 +59,14 @@ PROXY_BYPASS_NOTHING: Final = "<-loopback>"
 # WebRTC sends UDP straight to an address a page names, which no HTTP proxy can
 # carry. Chromium ignores a switch it does not recognise, and the two builds
 # Playwright chooses between spell this one differently — so both are passed and
-# the boundary does not depend on which binary launched. See ADR 0096.
+# the boundary does not depend on which binary launched.
 WEBRTC_PROXIED_ONLY: Final = "disable_non_proxied_udp"
 
 CHROMIUM_EGRESS_ARGUMENTS: Final = (
     # Chromium's own resolver answers "no such name" for everything but the
     # proxy's address. A proxied load never asks it — an HTTP proxy is handed
     # the name, not an address — so this reaches only what resolves locally.
-    # Nothing was observed slipping past without it (ADR 0096); it is kept
+    # Nothing was observed slipping past without it; it is kept
     # because a resolver that cannot answer cannot leak one.
     f"--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE {LISTEN_HOST}",
     f"--force-webrtc-ip-handling-policy={WEBRTC_PROXIED_ONLY}",
@@ -512,7 +512,7 @@ def _add_failure_record(scope_logs: logs_pb2.ScopeLogs, failure: StepFailure) ->
                 # screenshot was not kept: an empty ref reads as a broken link.
                 ATTR_SCREENSHOT_REF: failure.screenshot_ref,
                 # Credentials removed and signatures redacted at the one point the
-                # URL leaves us, so both StepFailure sites are covered. ADR 0103.
+                # URL leaves us, so both StepFailure sites are covered.
                 ATTR_URL_FULL: reportable_url(failure.url),
                 ATTR_BROWSER_NAME: BROWSER_NAME,
                 ATTR_BROWSER_VERSION: failure.browser_version,

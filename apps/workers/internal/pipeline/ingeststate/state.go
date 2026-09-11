@@ -2,11 +2,11 @@
 // row per partition carries both watermarks: how far its counters are exact,
 // and how far its span rows are in the store.
 //
-// ADR 0060 leaned on ClickHouse's own insert deduplication to recognise a
-// replayed counter block. ADR 0061 measured what that misses: the deduplication
-// log does not survive a restart of the store, which is the very event that
-// causes the replay. Keeper does survive it, so the record of what each
-// partition has already counted lives in a KeeperMap table.
+// The first design leaned on ClickHouse's own insert deduplication to recognise
+// a replayed counter block. Measurement showed what that misses: the
+// deduplication log does not survive a restart of the store, which is the very
+// event that causes the replay. Keeper does survive it, so the record of what
+// each partition has already counted lives in a KeeperMap table.
 //
 // The counter protocol is ClickHouse's own, from the design of their Kafka
 // connector
@@ -194,7 +194,7 @@ type Decision struct {
 	// StoreFrom is the lowest offset whose spans still have to be written.
 	StoreFrom int64
 	// Ambiguous marks the one case a duplicate counter is still possible: the
-	// settled range was left at BEFORE, so it is counted again and ADR 0060's
+	// settled range was left at BEFORE, so it is counted again and ClickHouse's
 	// insert deduplication is what drops the copy when the store stayed up. It
 	// says nothing about StoreFrom, which is never written before its insert.
 	Ambiguous bool

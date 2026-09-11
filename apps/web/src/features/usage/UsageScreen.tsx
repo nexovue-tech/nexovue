@@ -356,7 +356,7 @@ function Ingested({ term, value }: { term: string; value: string }) {
  * A price, or the fact that there is not one.
  *
  * An absent price is words. A zero would read as free, and free is a different claim
- * from unpriced — the table ships empty on purpose (ADR 0077).
+ * from unpriced — the table ships empty on purpose.
  */
 function Rate({ price, planName }: { price: PlanPrice | null; planName: string }) {
   if (price === null) {

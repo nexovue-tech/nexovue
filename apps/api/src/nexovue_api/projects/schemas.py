@@ -25,7 +25,7 @@ ProjectName = Annotated[str, Field(min_length=1, max_length=NAME_MAX_LENGTH)]
 ProjectSlug = Annotated[str, Field(min_length=1, max_length=SLUG_MAX_LENGTH, pattern=SLUG_PATTERN)]
 
 # Said on every masking write, because the screen must not imply that turning a
-# rule on cleans up history (ADR 0105). Masking runs before anything downstream
+# rule on cleans up history. Masking runs before anything downstream
 # sees a value, so a value already stored was stored as it arrived.
 MASKING_NOTICE: Final = (
     "Masking applies to telemetry received from now on. Telemetry already stored keeps "

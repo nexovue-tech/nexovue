@@ -32,7 +32,7 @@ def test_the_limit_is_clamped_to_the_documented_range(requested: int | None, exp
 
 
 def test_the_receive_window_is_wider_than_the_window_it_was_derived_from() -> None:
-    """A bound on the customer's clock prunes no partition on ours (ADR 0067)."""
+    """A bound on the customer's clock prunes no partition on ours."""
     received_from, received_to = window.receive_window(_START, _END)
 
     assert received_from == _START - window.RECEIVE_CLOCK_SLACK

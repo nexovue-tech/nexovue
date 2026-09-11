@@ -1,7 +1,7 @@
 """a paid arrangement, and a billing delivery that cannot be replayed
 
-P1-73 puts a real payment processor behind ADR 0102's port, and two facts have to
-survive a restart for that to be worth anything.
+P1-73 puts a real payment processor behind the payments port, and two facts have
+to survive a restart for that to be worth anything.
 
 **Which arrangement an organization has, and with whom.** `organizations.plan`
 says what tier a tenant is on; it says nothing about the subscription that pays
@@ -11,12 +11,13 @@ accumulate rather than being edited across arrangements, because a customer who
 cancels and resubscribes has two, and the first is what a past invoice was
 raised under.
 
-**What is deliberately absent is the more important half.** ADR 0102 says the
-processor's customer reference and nothing else avoidable, which is
-[ADR 0076](0076)'s posture applied to money: there is no card number here, no
-last four, no expiry, no PAN, no bank account, no billing address. `Checkout`
-returns a **URL** rather than a form precisely so none of that reaches this
-application, and a column here would be the quiet way it arrived anyway.
+**What is deliberately absent is the more important half.** The rule is the
+processor's customer reference and nothing else avoidable, which is the
+integrations' posture — hold no credential we can avoid — applied to money:
+there is no card number here, no last four, no expiry, no PAN, no bank account,
+no billing address. `Checkout` returns a **URL** rather than a form precisely so
+none of that reaches this application, and a column here would be the quiet way
+it arrived anyway.
 
 **And a signed delivery is replayable forever unless something remembers it.**
 That is migration 0007's lesson on the deploy webhook, and it costs more here:
@@ -85,7 +86,7 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=UUIDV7),
         _org_fk(),
         # Which implementation of the port this arrangement lives at. The
-        # vendor's name is the *value*, never the column name — ADR 0102's rule,
+        # vendor's name is the *value*, never the column name — the port's rule,
         # the same one that keeps `PAYMENTS_DOMESTIC_*` neutral. Two processors
         # is the expected end state, so a row has to say which one it belongs to.
         sa.Column("processor", sa.String(SHORT_LABEL_LENGTH), nullable=False),

@@ -18,7 +18,7 @@ import {
  * survives: `q=shoes&sig=REDACTED`.
  *
  * It is short because it is the presigned-URL list — AWS and Google signatures.
- * It is not what makes ADR 0103 safe; trimming by default is.
+ * It is not what makes the URL safe; trimming by default is.
  *
  * Restated in `nexovue_scheduler.probes.urls` for the synthetic probe, and
  * asserted equal by `test_cross_service_contracts.py`, because TypeScript and
@@ -37,7 +37,7 @@ const REDACTED = "REDACTED";
 /**
  * The page's URL, as much of it as the page's owner allowed off the page.
  *
- * **Off — the default — is scheme, host and path.** ADR 0103: with the option
+ * **Off — the default — is scheme, host and path.** With the option
  * off, our own store held a page-view URL carrying an order and a postal
  * address, because `location.href` is the query string and the fragment whatever
  * a separate `url.query` option says. An OAuth fragment is the same exposure
@@ -129,7 +129,7 @@ export function pageViewAttributes(config: ResolvedConfig, sessionId: string): A
   };
   // One switch for everything after the path: url.full is trimmed to it and this
   // attribute is absent, so a token in a query string or an OAuth fragment
-  // cannot leave the page by the other door. See ADR 0103.
+  // cannot leave the page by the other door.
   const query = reportableQuery(config);
   if (query !== "") attributes[ATTR_URL_QUERY] = query;
   // Spelled again rather than shared: a span carries the tracer's own attribute

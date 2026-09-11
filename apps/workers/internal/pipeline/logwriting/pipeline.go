@@ -64,8 +64,7 @@ func (s staticRetention) Retention(string) (uint16, uint16) { return s.raw, 0 }
 type Options struct {
 	// Masking is required. A pipeline with no masker would write customer
 	// values to a store that has no way to take them back, so it refuses to
-	// start rather than running unmasked — see the mask-first invariant in
-	// apps/workers/CLAUDE.md.
+	// start rather than running unmasked: mask runs before every other stage.
 	Masking Masker
 
 	// Retention is optional: without it every project is stamped with the

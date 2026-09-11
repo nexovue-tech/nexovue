@@ -80,7 +80,7 @@ class TraceWindow:
     """When a trace happened, and when it reached us.
 
     `received_from` and `received_to` are our own clock, which is what every
-    telemetry table is partitioned by (ADR 0067). They are what lets a read
+    telemetry table is partitioned by. They are what lets a read
     keyed on a trace id prune partitions instead of scanning the retention
     window; the span timestamps cannot, because the customer supplies them.
     """

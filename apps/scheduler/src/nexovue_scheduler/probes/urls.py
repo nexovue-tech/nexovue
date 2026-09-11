@@ -1,7 +1,7 @@
 """What a probe is allowed to record about a URL it visited.
 
 The browser SDK trims a page URL to its path by default, because the visitor
-never chose to send us their query string (ADR 0103). **A probe is the other
+never chose to send us their query string. **A probe is the other
 case**: the URL is one the customer configured us to open, and `browser.py`
 reports where the browser actually ended up — *"a redirect to a login page is
 exactly the thing worth seeing"*. Trimming that to a path deletes the diagnosis

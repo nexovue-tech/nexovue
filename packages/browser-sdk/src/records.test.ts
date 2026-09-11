@@ -17,8 +17,8 @@ const SESSION_ID = "0089dddd0089dddd0089dddd0089dddd";
 
 /**
  * The default configuration, which is the one that matters here: the page below
- * has a query string and a fragment, and ADR 0103 says neither reaches a record
- * unless the page asked. `TRIMMED_URL` is what url.full must be instead.
+ * has a query string and a fragment, and neither reaches a record unless the
+ * page asked. `TRIMMED_URL` is what url.full must be instead.
  */
 function config(captureQueryAndFragment = false, route?: string): ResolvedConfig {
   return {

@@ -274,7 +274,7 @@ async def _wait_until_empty(client: AsyncClient, tenant_id: str, tables: tuple[s
 async def test_the_watermark_tables_are_untouched_by_a_purge(
     clickhouse: AsyncClient, two_tenants: tuple[str, str]
 ) -> None:
-    """Deleting from them causes a silent, permanent over-count (ADR 0094).
+    """Deleting from them causes a silent, permanent over-count.
 
     They have no tenant column, so the only way a purge could reach them is by
     someone adding them to the inventory. Counted across the whole table,

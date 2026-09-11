@@ -1,9 +1,9 @@
 """Regenerate the golden fixtures in ../fixtures.
 
 One committed envelope per shape a door sends — door 3 sends two signals from one
-page view, so it has two — per docs/architecture/ingestion-envelope.md. Every
-value here is fixed — no clocks, no randomness — so a rebuild that changes a byte
-means the contract or the payload shape changed, and the diff says which.
+page view, so it has two. Every value here is fixed — no clocks, no randomness —
+so a rebuild that changes a byte means the contract or the payload shape changed,
+and the diff says which.
 
 Run: uv run --no-project --with protobuf --with opentelemetry-proto \
          python packages/contracts/tools/build_fixtures.py

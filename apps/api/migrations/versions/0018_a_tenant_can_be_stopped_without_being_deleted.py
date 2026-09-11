@@ -5,7 +5,7 @@ allowance, and deletion. Neither is the one an operator needs at 3am.
 
 The allowance is a **billing** boundary — it refuses an organization that has
 spent the volume its month includes, it applies to the free tier and nothing
-else (ADR 0093), and it comes back on the 1st. Deletion is final. Between them
+else, and it comes back on the 1st. Deletion is final. Between them
 sits the case that has no answer: a tenant well inside its allowance, possibly a
 paying one the allowance never touches, sending hard enough to hurt every other
 tenant on the platform. There was no way to stop it. P1-52, and the gap

@@ -99,7 +99,7 @@ export function describeCostBasis(period: BillingPeriod, planName: string): stri
  * The one thing the figure leaves out, which is not the same sentence on every tier.
  *
  * Where the allowance is enforced there is no overage to bill, because there is no
- * overage: it is refused (ADR 0093). Where it is not, what volume above the allowance
+ * overage: it is refused. Where it is not, what volume above the allowance
  * costs is still undecided, and saying so is the difference between a partial number
  * and a misleading one.
  */

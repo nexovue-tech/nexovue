@@ -1,7 +1,7 @@
 """per-project masking rules
 
 The worker's masking stage reads its rules from here, cached and refreshed on a
-ticker rather than queried per span. Empty means the defaults in ADR 0059 apply:
+ticker rather than queried per span. Empty means the shipped defaults apply:
 authorization headers, cookies, Luhn-valid card numbers, and attribute keys that
 name a credential. Everything else is opt-in, because masking is irreversible and
 the bar for a default rule is that a developer could never legitimately need the

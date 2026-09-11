@@ -102,8 +102,8 @@ export function DatabaseScreen() {
  *
  * `pollers/tasks.py` polls a row of `integrations`; `integrations/router.py` is how one
  * is created; `postgres_connect.py` refuses every auth mode except RDS IAM and says so
- * in its own error, because ADR 0076 decided this system stores no customer database
- * password. Telling someone to paste a connection string would be telling them to do
+ * in its own error, because this system stores no customer database password by
+ * design. Telling someone to paste a connection string would be telling them to do
  * something that cannot work.
  */
 function NothingPolled() {

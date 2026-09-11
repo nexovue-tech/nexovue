@@ -164,10 +164,10 @@ def _poll_postgres(
             integration_id=integration_id,
             region=region,
             ca_bundle_path=settings.rds_ca_bundle_path,
-            # The same two-condition escape ADR 0098 gives the probes: the flag
-            # alone is not enough, `env` must also say development. A staging
-            # deployment that inherited the variable from a copied compose file
-            # still refuses.
+            # The same two-condition escape the probes have: the flag alone is
+            # not enough, `env` must also say development. A staging deployment
+            # that inherited the variable from a copied compose file still
+            # refuses.
             private_allowed=settings.private_probe_targets_allowed,
         )
     )

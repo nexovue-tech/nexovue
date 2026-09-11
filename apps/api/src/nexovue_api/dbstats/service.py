@@ -77,7 +77,7 @@ async def connection_health(
 
 def _window_parameters(project_id: str, from_time: datetime, to_time: datetime) -> dict[str, Any]:
     """Both clocks. `received_at` is what prunes partitions; `timestamp` is what
-    the caller asked about (ADR 0067)."""
+    the caller asked about."""
     received_from, received_to = receive_window(from_time, to_time)
     return {
         "project_id": project_id,

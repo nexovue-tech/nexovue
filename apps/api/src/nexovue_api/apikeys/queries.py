@@ -1,7 +1,7 @@
 """Ingest key reads, for both kinds.
 
 Secret keys are read out of `api_keys`, public site keys out of `site_keys`, and
-no statement here reads both. That is the whole safety argument of ADR 0086 in
+no statement here reads both. That is the whole safety argument for two tables in
 one file: a list or a lookup cannot return the other kind by accident, because
 the kind is which table the `select` names.
 

@@ -116,7 +116,7 @@ def test_a_self_hosted_postgres_connector_is_refused_at_creation() -> None:
 
     message = str(refusal.value)
     # Both halves, because a refusal that only says "no" sends a customer away
-    # for nothing when ADR 0100 gives them a route that works.
+    # for nothing when the collector gives them a route that works.
     assert "IAM" in message, "the refusal must say what IS supported"
     assert "Collector" in message, "the refusal must name the route that works"
 

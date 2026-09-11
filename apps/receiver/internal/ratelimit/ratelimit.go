@@ -69,8 +69,7 @@ func New(counter Counter, perSecond int) *Limiter {
 //
 // The subject is the key, never the caller's address: one address is one
 // customer for server traffic and one visitor for browser traffic, so counting
-// addresses would stop bounding the thing the limit exists to bound. See ADR
-// 0087.
+// addresses would stop bounding the thing the limit exists to bound.
 //
 // An error means the counter could not be read; the caller decides what to do
 // about that, because whether ingest fails open or closed is a policy question

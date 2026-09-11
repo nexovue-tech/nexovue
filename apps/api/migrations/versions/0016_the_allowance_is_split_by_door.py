@@ -1,13 +1,13 @@
 """the allowance is split between the two doors, so a scraped site key cannot end the month
 
 A public site key is printed in the customer's page, so anyone who views source
-can send through the browser door as that customer. ADR 0087 costed that at the
-key's per-second rate ceiling; ADR 0093 then made the month's allowance one
-pooled number for the organization, refused at every door once spent — and with
-that, a scraped key could spend the whole month in under a second and silence
-the customer's servers until the 1st. Neither ADR had referenced the other.
+can send through the browser door as that customer. The rate limit costed that
+at the key's per-second ceiling; the pooled allowance then made the month one
+number for the organization, refused at every door once spent — and with that,
+a scraped key could spend the whole month in under a second and silence the
+customer's servers until the 1st. Neither decision had mentioned the other.
 
-**Two columns, one on each side of the gate** (ADR 0097).
+**Two columns, one on each side of the gate**.
 
 `plan_prices.browser_share_percent` is how much of a plan's allowance the
 browser door may spend, as a whole-number percentage; the server door has the
@@ -27,11 +27,11 @@ inventing browser traffic.
 
 **The free tier's split is a new row, not an edit.** A later change to a price
 row is a row with a later `effective_from`, never an edit to the one in force
-(0015, ADR 0083). The row seeded here is 0015's free row with a share of 25%,
-effective from the day ADR 0097 was accepted. **25% is a guess dressed as a
-ratio** — Raj's words — and the ADR names the evidence that would revise it.
-Pro and scale get no row: they enforce no allowance (`max_billed_services` is
-NULL), so a split on them would be a number nobody decided.
+(0015). The row seeded here is 0015's free row with a share of 25%, effective
+from the day the split was decided. **25% is a guess dressed as a ratio** —
+Raj's words — and it stands until evidence revises it. Pro and scale get no
+row: they enforce no allowance (`max_billed_services` is NULL), so a split on
+them would be a number nobody decided.
 
 **A mid-month `effective_from` moves two lines at once, and both cost
 something.** The gate reads the row in force *today* against the *whole*
@@ -40,7 +40,7 @@ zero, so they all read as the server's. On the day this lands:
 
 - a free organization that has already spent between 75% and 100% of its 6 GiB
   is **refused at the server door immediately** — their backend goes dark,
-  which is the harm ADR 0097 exists to prevent, inflicted by the fix;
+  which is the harm this split exists to prevent, inflicted by the fix;
 - a free organization already past the whole 6 GiB has its **browser door
   reopened for 1.5 GiB**, because its historical browser bytes read as zero —
   so for the transition month the plan total is effectively 7.5 GiB, and
@@ -48,13 +48,13 @@ zero, so they all read as the server's. On the day this lands:
   for that month.
 
 A `effective_from` of the 1st of a month has neither consequence, and leaves
-the pooled allowance — and the scraped-key exposure 0097 closes — in force
-until then. **Which of the two is wanted is a customer decision and is
-recorded in ADR 0097's open questions; this date is not settled.** In the dev
-control plane the choice costs nothing either way — read on 2026-09-04, its one
-organization had spent 11.88 MB of 6 GiB, 0.18% of the month. That is a reading
-of a development stack on one day, not a fact about production, and the
-consequences above are what the date has to be chosen against.
+the pooled allowance — and the scraped-key exposure this split closes — in
+force until then. **Which of the two is wanted is a customer decision that has
+not been made; this date is not settled.** In the dev control plane the choice
+costs nothing either way — read on 2026-09-04, its one organization had spent
+11.88 MB of 6 GiB, 0.18% of the month. That is a reading of a development stack
+on one day, not a fact about production, and the consequences above are what
+the date has to be chosen against.
 
 Revision ID: 0016
 Revises: 0015
@@ -74,15 +74,15 @@ branch_labels = None
 depends_on = None
 
 # The day the split first takes effect. A later change is a new row with a later
-# `effective_from`, never an edit to this one (ADR 0083). Mid-month is not a
-# free choice — see the two consequences in the docstring above, and ADR 0097's
-# first open question, which this date is waiting on.
+# `effective_from`, never an edit to this one. Mid-month is not a free choice —
+# see the two consequences in the docstring above, and the customer decision
+# this date is waiting on.
 _EFFECTIVE_FROM = date(2026, 9, 4)
 
 _GIB = 1024**3
 
-# 0015's free row, restated whole, plus the share. Provisional: see ADR 0097 for
-# what would revise it.
+# 0015's free row, restated whole, plus the share. Provisional: the share is a
+# guess until evidence revises it.
 _FREE_PRICE = {
     "plan_slug": "free",
     "effective_from": _EFFECTIVE_FROM,
@@ -104,7 +104,7 @@ def upgrade() -> None:
             comment=(
                 "Share of the month's allowance the browser door may spend, as a "
                 "whole percentage; the server door has the rest. NULL is no split "
-                "recorded: both doors spend the one allowance. See ADR 0097."
+                "recorded: both doors spend the one allowance."
             ),
         ),
     )
@@ -124,7 +124,7 @@ def upgrade() -> None:
             comment=(
                 "The part of bytes that came through the browser door. Rows from "
                 "before the door was recorded hold zero and are read as the "
-                "server's. See ADR 0097."
+                "server's."
             ),
         ),
     )

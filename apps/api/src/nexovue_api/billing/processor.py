@@ -78,12 +78,12 @@ class BillingEvent:
     than it looked: at the domestic processor, the one create call that returns a
     redirectable URL cannot carry tags at all, so `Checkout.url` and this
     translation could not both be satisfied. Which processor that is belongs in
-    ADR 0110, not here.
+    the adapter, not here.
 
     A webhook naturally identifies *its own* subscription. Whose it is, is our
     question, answered from `billing_subscriptions` where we recorded it when the
     checkout began — one indexed lookup, in the service layer, leaving this a
-    pure translation of bytes into meaning. See ADR 0110.
+    pure translation of bytes into meaning.
     """
 
     kind: BillingEventKind
@@ -113,8 +113,8 @@ class EmbeddedCheckout:
 
     **The card is no closer to us than in a hosted page.** The script renders
     the processor's own fields and posts them to the processor; this
-    application sees a reference and never a number, which is ADR 0076's
-    posture unchanged. What is gained is the ending: the customer stays on our
+    application sees a reference and never a number, which is the
+    hold-no-credential posture unchanged. What is gained is the ending: the customer stays on our
     domain, and `return_url` is where the processor puts them when it is done.
     """
 
@@ -150,9 +150,9 @@ class Checkout:
 
     handoff: HostedPage | EmbeddedCheckout
     # The name this arrangement is known by at the processor, and the identifier
-    # its webhooks echo back. Required, because ADR 0110 makes it the only thread
-    # between the checkout and the event: the row written here is what later
-    # answers *whose* subscription an event is about.
+    # its webhooks echo back. Required, because it is the only thread between
+    # the checkout and the event: the row written here is what later answers
+    # *whose* subscription an event is about.
     #
     # An implementation may mint it rather than receive it — at the domestic
     # processor the create call takes it as a request field — which is why it is
@@ -228,7 +228,7 @@ class Commitment:
     multiplied total would force the second to divide it back out, and it has no
     way to know the divisor.
 
-    ADR 0056 prices per service monitored, so `services` is the number the
+    Pricing is per service monitored, so `services` is the number the
     customer chose and `rate` is what one costs for a month.
     """
 
@@ -252,8 +252,8 @@ class ContactField(StrEnum):
     directly and need nothing up front; at least one requires them on the create
     call and collects none itself. Fixing `phone` onto `begin_checkout` would
     write that one's requirement — itself downstream of one country's regulation
-    — into a contract ADR 0102 built to outlive vendors, so the requirement is
-    declared by the implementation instead. See ADR 0109.
+    — into a contract built to outlive vendors, so the requirement is
+    declared by the implementation instead.
     """
 
     NAME = "name"
@@ -266,7 +266,7 @@ class CancellationOutcome(StrEnum):
 
     The distinction is not bookkeeping. `REQUESTED` means the processor accepted
     the request and will report the ending in its own event, which is the only
-    thing that moves a plan (ADR 0110). `ALREADY_ENDED` means it reported the
+    thing that moves a plan. `ALREADY_ENDED` means it reported the
     subscription as over *when asked* — cancelled in the processor's own
     dashboard, ended by the bank, or cancelled here before anything was
     listening. No event follows that, because nothing is about to change.
@@ -288,7 +288,7 @@ class BillingContact:
     `required_contact_fields` names, and an adapter that needs more than it
     declared is the defect this shape makes visible.
 
-    **Not stored.** ADR 0109: the processor holds what it needs for the bank's
+    **Not stored.** The processor holds what it needs for the bank's
     pre-debit notices, and a copy of ours would be personal data kept for the
     convenience of not retyping.
     """
@@ -342,9 +342,9 @@ class PaymentProcessor(Protocol):
         That is a change: the bill used to move with the services actually
         monitored, capped at the commitment. It now *is* the commitment. The
         product is sold on an invoice nobody has to predict, and a number that
-        does not move is the strongest form of that — see ADR 0111. The ceiling
-        ADR 0107 promised is unchanged in effect: a customer can never be charged
-        past a figure they chose in advance, because that figure is the charge.
+        does not move is the strongest form of that. The ceiling promised to the
+        customer is unchanged in effect: a customer can never be charged past a
+        figure they chose in advance, because that figure is the charge.
 
         `return_url` is where the processor sends the customer's browser when
         the payment reaches a terminal state. It carries no outcome and proves

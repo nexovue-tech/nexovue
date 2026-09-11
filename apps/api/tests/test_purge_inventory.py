@@ -99,7 +99,7 @@ def test_the_offset_tables_are_excluded_with_their_reason() -> None:
 
     They are keyed by topic and partition. Deleting rows from them makes the
     worker re-derive counters it has already stored — a silent, permanent
-    over-count and an over-bill (ADR 0094). Named here so removing the
+    over-count and an over-bill. Named here so removing the
     exclusion is a test failure rather than a quiet change.
     """
     watermarks = ("span_ingest_offsets", "span_written_offsets", "ingest_written_offsets")

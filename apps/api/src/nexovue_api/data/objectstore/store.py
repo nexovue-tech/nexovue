@@ -1,12 +1,12 @@
 """The object store, over the generic S3 API only.
 
-ADR 0037 fixes the store as the S3 API rather than any one vendor's: SeaweedFS
-locally, AWS S3 in deployment. Nothing here may use a feature outside that API,
-because the two have to be the same store from this side.
+The store is the S3 API rather than any one vendor's: SeaweedFS locally, AWS S3
+in deployment. Nothing here may use a feature outside that API, because the two
+have to be the same store from this side.
 
 boto3 rather than an async wrapper. `aiobotocore` pins `botocore<1.43.57` and
 `aioboto3` pins `aiobotocore==2.25.1`, either of which drags the whole
-workspace's AWS SDK backwards and couples the scheduler's STS code (ADR 0076) to
+workspace's AWS SDK backwards and couples the scheduler's STS code to
 a third party's release cadence. boto3's calls are blocking, so every one of
 them runs on a worker thread through anyio — which Starlette already ships —
 rather than on the event loop where it would stall every other request.

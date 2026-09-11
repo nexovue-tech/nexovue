@@ -100,7 +100,8 @@ async def _record(
     browser_byte_count: int = 0,
 ) -> None:
     # `browser_bytes` is a part of `bytes`, so the default is a day nothing came
-    # through the browser door — which is every row before ADR 0097.
+    # through the browser door — which is every row written before the browser
+    # door was metered on its own.
     db.add(
         UsageDaily(
             org_id=tenant.organization.id,
@@ -180,7 +181,7 @@ async def test_days_outside_the_range_are_not_counted(db: AsyncSession) -> None:
 async def test_the_plan_a_new_tenant_lands_on_is_read_from_the_plans_table(
     db: AsyncSession,
 ) -> None:
-    """Signup does not set a tier, so the column default applies (ADR 0071)."""
+    """Signup does not set a tier, so the column default applies."""
     tenant = await _new_tenant(db)
 
     answer = await _read(db, tenant)
@@ -280,8 +281,8 @@ async def _record_price(
 ) -> None:
     """A real price row, in the transaction this suite rolls back.
 
-    ADR 0077 shipped `plan_prices` empty and recorded that no rate had ever been
-    read from real Postgres. These are the tests that read one.
+    `plan_prices` shipped empty, with a note that no rate had ever been read
+    from real Postgres. These are the tests that read one.
     """
     db.add(
         PlanPrice(
@@ -326,7 +327,7 @@ async def _record_mandate(
 
 
 async def test_the_split_is_read_from_a_real_price_row(db: AsyncSession) -> None:
-    """Migration 0016's free row, read back through Postgres (ADR 0097).
+    """Migration 0016's free row, read back through Postgres.
 
     The offline suite builds the row in Python, so it cannot prove the column
     exists or that a value survives the round trip. This can.
@@ -480,7 +481,7 @@ async def test_a_capped_tier_reads_the_ceilings_allowance_from_real_postgres(
 ) -> None:
     """The free tier as migration 0015 seeds it: 2 GiB x 3, whatever is running.
 
-    Enforced at the ingest door (ADR 0093), so the number the screen states has
+    Enforced at the ingest door, so the number the screen states has
     to be the number the door applies — and it must not shrink to one service's
     worth because only one service happens to be reporting.
     """

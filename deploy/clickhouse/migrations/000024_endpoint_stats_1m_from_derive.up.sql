@@ -9,7 +9,7 @@
 -- displayed about 9%.
 --
 -- That breaks the Phase 1 invariant "metrics derived from all traces before
--- sampling" (ADR 0010), which the counter points in `metrics_sum` and
+-- sampling", which the counter points in `metrics_sum` and
 -- `service_edges_1m` have always honoured because the worker derives them in
 -- the pipeline, before the sampler, and inserts them itself.
 --

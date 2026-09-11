@@ -10,10 +10,10 @@
 #
 # `usage_ingest_offsets` is emptied after the restore. It is the meter's Kafka
 # watermark and it is the same class of state as ClickHouse's KeeperMap tables,
-# which ADR 0068 already refuses to restore; ADR 0095 extends that rule to this
-# store. Restored, it would sit above a rebuilt broker's offsets and the meter
-# would silently never count the records below it — `counted_through` only ever
-# moves forward.
+# which the ClickHouse restore already refuses to bring back; the same rule
+# applies to this store. Restored, it would sit above a rebuilt broker's offsets
+# and the meter would silently never count the records below it —
+# `counted_through` only ever moves forward.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,7 +47,7 @@ discarded=$(pg_scalar "SELECT count(*) FROM $POSTGRES_WATERMARK_TABLE")
 echo "the meter's watermark as restored, before it is discarded:"
 pg -c "SELECT topic, partition_id, counted_through FROM $POSTGRES_WATERMARK_TABLE ORDER BY topic, partition_id"
 pg -c "TRUNCATE $POSTGRES_WATERMARK_TABLE" > /dev/null
-echo "discarded $discarded watermark row(s) — ADR 0095"
+echo "discarded $discarded watermark row(s)"
 
 echo
 echo "postgres restored from $snapshot"

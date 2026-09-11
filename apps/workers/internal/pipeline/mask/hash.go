@@ -50,7 +50,7 @@ func NewHashKey(secret []byte) (HashKey, error) {
 // pseudonym in every tenant's data, so anyone able to read two tenants could
 // join them on it — the tenant-isolation invariant leaking out through a privacy
 // feature. Deriving costs a customer correlation across their own projects, and
-// a project is an environment (ADR 0042), so what is lost is correlating one
+// a project is an environment, so what is lost is correlating one
 // person between staging and production. Nobody needs that.
 //
 // HMAC as a key-derivation step: the master secret is the key, the project id

@@ -3,7 +3,7 @@
 **Nothing above this module knows this file exists.** It is selected by
 `PAYMENTS_DOMESTIC_PROVIDER` and reached only through the port, which is what
 lets the processor change without the billing service, the routes or the screen
-changing with it — ADR 0102.
+changing with it.
 
 Three things differ from the other adapter and each was measured rather than
 assumed, on 2026-09-10 against the sandbox:
@@ -15,14 +15,14 @@ assumed, on 2026-09-10 against the sandbox:
   handoff is embedded — still no undocumented form post, and still no card
   through this application.
 - **The page collects the payer's details itself**, so this processor declares no
-  required contact fields — ADR 0109's whole point, and the billing screen draws
+  required contact fields — the whole point of asking, and the billing screen draws
   no contact form when the set is empty.
 - **A webhook is signed with a separate secret**, hex-encoded, over the raw body
   alone. The other adapter signs `timestamp + body` in base64 with the API key.
 
 **The bill is the commitment.** A plan here is priced per *service*, and the
 subscription carries a `quantity` — so the processor's own page renders
-"399.00 x 5 units" and charges that every month. ADR 0111.
+"399.00 x 5 units" and charges that every month.
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ PROCESSOR_NOTIFIES_CUSTOMER: Final = 1
 
 # The note that makes a plan findable again.
 #
-# **Our identifier in their storage, which ADR 0110 refused for tenancy — and
+# **Our identifier in their storage, which was refused for tenancy — and
 # this is the case that rule does not cover.** A tenant read out of a webhook is
 # a claim about whose money it is; a plan note is a lookup key for a row nobody
 # is authorised by. Nothing branches on it, and a wrong value creates a duplicate
@@ -152,9 +152,9 @@ class RazorpayPaymentProcessor:
         Still none now that the handoff prefills, and for a better reason than
         before: the one field this processor wants that we could ask for is an
         email, and the account already has one. A form that asked would be a
-        form asking somebody to retype what they signed up with. ADR 0109 exists
-        so a screen can find that out by asking rather than by hard-coding one
-        processor's answer.
+        form asking somebody to retype what they signed up with. The contact-field
+        declaration exists so a screen can find that out by asking rather than by
+        hard-coding one processor's answer.
         """
         return frozenset()
 
@@ -202,7 +202,7 @@ class RazorpayPaymentProcessor:
                 "customer_notify": PROCESSOR_NOTIFIES_CUSTOMER,
                 # Ours, and read by nobody: the tenant is resolved from the row
                 # this checkout writes, never from what the processor echoes
-                # back. ADR 0110.
+                # back.
                 "notes": {"org_id": str(org_id), "plan_slug": plan_slug},
             },
         )
@@ -239,8 +239,8 @@ class RazorpayPaymentProcessor:
 
         Keyed on the rate as well as the tier, because a repricing appends a
         `plan_prices` row rather than editing one — so an old mandate keeps
-        charging the rate it was signed at, which is the behaviour ADR 0083's
-        effective dates exist to give.
+        charging the rate it was signed at, which is the behaviour the effective
+        dates exist to give.
         """
         note = _plan_note(plan_slug=plan_slug, commitment=commitment)
         existing = await self._call("GET", f"{PLANS_PATH}?count={PLAN_PAGE_SIZE}")

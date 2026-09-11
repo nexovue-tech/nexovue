@@ -213,7 +213,7 @@ func TestAPlanRefusalIsCountedApartFromARateLimit(t *testing.T) {
 
 // On a row recording no split, the one allowance belongs to the organization
 // and cannot be sidestepped by sending from a page instead of a server. That is
-// every row seeded before ADR 0097, and it stays true; where a row does record
+// every row seeded before the split, and it stays true; where a row does record
 // a split, the two doors are judged apart — see below.
 func TestOnAPooledRowTheBrowserDoorIsHeldToTheSameAllowance(t *testing.T) {
 	d := newDoor(t, doorOptions{allowanceUsage: spentFreeMonth})
@@ -233,7 +233,7 @@ func TestOnAPooledRowTheBrowserDoorIsHeldToTheSameAllowance(t *testing.T) {
 // The free month as migration 0016 seeds it: a quarter of the 6 GiB is the
 // browser door's, the rest the server's. The figures below are the row's own
 // columns, not a verdict, so the arithmetic that decides a refusal runs in the
-// gate under test rather than in this file (the trap ADR 0093 recorded).
+// gate under test rather than in this file.
 const (
 	freeBrowserShare = 25
 	freeBrowserBytes = freeMonthIncluded / 4
@@ -252,7 +252,7 @@ func splitFreeMonth(ingested, browserIngested int64) staticUsage {
 	}}
 }
 
-// browserShareSpent is the attack ADR 0097 closes: a public key, scraped from
+// browserShareSpent is the attack the split closes: a public key, scraped from
 // the page it is printed in, has sent many months' worth through the browser
 // door, and the customer's servers have sent nothing.
 var browserShareSpent = splitFreeMonth(50*freeMonthIncluded, 50*freeMonthIncluded)

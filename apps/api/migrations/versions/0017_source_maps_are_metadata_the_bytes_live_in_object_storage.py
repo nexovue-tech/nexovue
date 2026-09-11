@@ -11,9 +11,9 @@ bundle it describes — tens of megabytes for a large application, and one per
 build. Postgres is the control plane's transactional store, not a blob store;
 putting map bytes in it would grow the database that every screen's latency
 depends on, and back them up on every dump. `storage_key` names the object
-instead. ADR 0015 fixes that store as the generic S3 API — SeaweedFS locally,
-AWS S3 in deployment — so this column holds a key, never a URL: a URL would
-bake the endpoint of one deployment into rows that outlive it.
+instead. That store is the generic S3 API — SeaweedFS locally, AWS S3 in
+deployment — so this column holds a key, never a URL: a URL would bake the
+endpoint of one deployment into rows that outlive it.
 
 **Two ways to find the map for a stack frame, because the reliable one is not
 always present.**

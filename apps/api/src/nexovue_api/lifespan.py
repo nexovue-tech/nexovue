@@ -191,7 +191,7 @@ async def open_resources(settings: Settings) -> Resources:
 def _open_email(settings: Settings) -> EmailSender | None:
     """The mail sender, or None when mail is not configured.
 
-    `build_email_sender` is ADR 0102's composition root and the only place a
+    `build_email_sender` is the composition root and the only place a
     provider is chosen; this is the only place it is called. Nothing here learns
     which provider answered.
     """

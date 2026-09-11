@@ -71,7 +71,7 @@ func siteIdentity() auth.Identity {
 	}
 }
 
-// The door is what the usage meter bills a message's bytes against (ADR 0097):
+// The door is what the usage meter bills a message's bytes against:
 // a public key's bytes go to the browser budget, so its envelope has to name
 // the browser door — and the server kind has to keep naming the OTLP door, or
 // every server export would be billed as a page's.

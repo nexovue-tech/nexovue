@@ -142,7 +142,7 @@ SETTINGS max_bytes_before_external_group_by = 268435456"
 #
 # Running this twice writes the same rows twice, and that changes nothing the
 # reader sees. Every measure on `trace_summaries` merges with max, anyLast or
-# set union and deliberately none with sum (ADR 0084), and every statement here
+# set union and deliberately none with sum, and every statement here
 # emits a *complete* trace rather than a delta — so a row and its repeat reduce
 # to one another, whether a background merge has collapsed them yet or not.
 #

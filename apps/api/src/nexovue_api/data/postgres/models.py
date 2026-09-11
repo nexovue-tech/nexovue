@@ -1,6 +1,5 @@
 """The control-plane schema.
 
-Shape and rationale: docs/architecture/tenancy-and-data-model.md.
 
 Two rules run through every table here:
 
@@ -64,7 +63,7 @@ API_KEY_PREFIX_LENGTH: Final = 16
 
 # `nvp_live_<22 chars>` in full. Stored whole and in the clear, because a site key
 # is printed in the page that carries it — there is no secret half to withhold, so
-# there is no prefix to split off. See ADR 0086.
+# there is no prefix to split off.
 SITE_KEY_LENGTH: Final = 31
 
 # Long enough for an email address, the longest thing an actor label holds.
@@ -122,7 +121,7 @@ class Organization(Base):
     id: Mapped[UuidPrimaryKey]
     slug: Mapped[str] = mapped_column(String(SLUG_MAX_LENGTH), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
-    # The tier this organization is on (ADR 0071). A foreign key rather than
+    # The tier this organization is on. A foreign key rather than
     # free text, because a typo here would silently grant whichever retention
     # the resolver fell back to. What each tier grants lives in `plans`; what a
     # project actually gets is resolved against it, never taken from here.
@@ -192,7 +191,7 @@ class User(Base):
 class Plan(Base):
     """What a tier grants. Rows, not constants: these are the numbers most
     likely to change after contact with customers, and changing one should not
-    need a deploy. Seeded from ADR 0071."""
+    need a deploy. Seeded by migration 0005."""
 
     __tablename__ = "plans"
 
@@ -223,7 +222,7 @@ class Project(Base):
     # What this project asks to keep. The plan grants a ceiling and this may sit
     # below it — staging rarely wants thirty days — but never above it. The
     # effective value is resolved in `plans.service`, and it is that value the
-    # worker stamps on every row so a part can expire as a whole (ADR 0072).
+    # worker stamps on every row so a part can expire as a whole.
     retention_days: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text(str(DEFAULT_RETENTION_DAYS))
     )
@@ -231,7 +230,7 @@ class Project(Base):
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     # Which default masking rules this project switches off, and what it adds.
-    # Empty means the defaults in ADR 0059 apply, which is the intended state for
+    # Empty means the shipped defaults apply, which is the intended state for
     # most projects — masking is irreversible, so the shipped rules cover only
     # what could never be legitimately needed to debug.
     masking_config: Mapped[dict[str, Any]] = mapped_column(
@@ -251,7 +250,7 @@ class ApiKey(Base):
     table holds. Carries both ids so the receiver's hot path is one cached lookup
     rather than a key → project → org chain.
 
-    The kind is the table, not a column (ADR 0086). Browser keys live in
+    The kind is the table, not a column. Browser keys live in
     `site_keys`, so the receiver's server-door lookup — which reads this table and
     then compares a hash — cannot return a public key even if someone forgot a
     filter. `key_hash` therefore stays NOT NULL: nothing here lacks one.
@@ -290,7 +289,7 @@ class SiteKey(Base):
     than by secrecy, and it is stored whole and in the clear. There is no
     `key_hash` column and that is the point: hashing a value printed in every
     page's source protects nothing, and it would cost the exact-match index that
-    makes the browser door's lookup a single probe. ADR 0086.
+    makes the browser door's lookup a single probe.
 
     A separate table from `api_keys` for the same reason: it makes "a public key
     is accepted where a secret one was expected" unreachable at the SQL level
@@ -354,7 +353,7 @@ class Integration(Base):
 
     Holds no credential. The customer grants a role our account may assume and
     we keep its ARN plus an ExternalId we generated — neither is secret, so
-    there is nothing here to encrypt (ADR 0076)."""
+    there is nothing here to encrypt."""
 
     __tablename__ = "integrations"
 
@@ -367,8 +366,8 @@ class Integration(Base):
     )
     kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
     # Plain JSON, and named for what it is. It held no ciphertext even when it
-    # was called `config_encrypted`, and ADR 0076 removed the reason it would
-    # ever need to: a role ARN and an ExternalId are not secrets.
+    # was called `config_encrypted`, and the assume-role design removed the reason
+    # it would ever need to: a role ARN and an ExternalId are not secrets.
     config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
@@ -463,7 +462,7 @@ class SourceMap(Base):
     Metadata only. A source map is routinely larger than the bundle it describes
     and there is one per build, so the bytes live in object storage and
     `storage_key` names them. A key rather than a URL: a URL would bake one
-    deployment's endpoint into rows that outlive it (ADR 0015).
+    deployment's endpoint into rows that outlive it.
 
     Two ways to find the map for a stack frame. `debug_id` is the ECMA-426 id a
     build stamps into both the bundle and its map, which makes the lookup exact;
@@ -514,7 +513,7 @@ class SourceMap(Base):
 
 class UsageDaily(Base):
     """Ingestion counters rolled up per day. The guardrail meter, not the bill:
-    ADR 0056 prices per service, and these counters are what shows a customer
+    Pricing is per service, and these counters are what shows a customer
     the volume behind that — so nobody is surprised by either number.
     `browser_bytes` is a part of `bytes`, not a fifth unit beside it."""
 
@@ -532,7 +531,7 @@ class UsageDaily(Base):
     metric_points: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
     # The part of `bytes` that came through the browser door, which the plan
-    # budgets on its own (ADR 0097). Never more than `bytes`.
+    # budgets on its own. Never more than `bytes`.
     browser_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
 
 
@@ -561,12 +560,13 @@ class UsageDailyService(Base):
 class UsageIngestOffset(Base):
     """How far the usage meter has counted each ingestion partition.
 
-    Written by the worker, in the same transaction as the counters (ADR 0060's
-    problem, solved by a transaction Postgres has and ClickHouse does not). The
-    control plane reads one thing from it: `counted_through_received_at`, which
-    is how far the meter has reached in *receive* time and therefore which days
-    are finished. A null means a partition nothing has metered yet, which is why
-    no day can be called settled while one exists.
+    Written by the worker, in the same transaction as the counters (the
+    ClickHouse counters' problem, solved by a transaction Postgres has and
+    ClickHouse does not). The control plane reads one thing from it:
+    `counted_through_received_at`, which is how far the meter has reached in
+    *receive* time and therefore which days are finished. A null means a
+    partition nothing has metered yet, which is why no day can be called settled
+    while one exists.
     """
 
     __tablename__ = "usage_ingest_offsets"
@@ -586,7 +586,7 @@ class PlanPrice(Base):
     while a row appended with a later `effective_from` leaves history alone. The
     price in force on a day is the latest row not after it.
 
-    ADR 0056 fixed the unit — one service monitored, with a ceiling on the
+    The unit is fixed — one service monitored, with a ceiling on the
     service-count component — and did not fix the amounts: they are rows for a
     person to insert, not constants for us to invent. ~~Empty on purpose.~~ It
     has not been empty since 0015 seeded three tiers and 0016 restated `free`
@@ -613,11 +613,11 @@ class PlanPrice(Base):
     price_per_service_minor_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
     # NULL is uncapped, which is not the same statement as a cap of zero.
     max_billed_services: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # ADR 0056's volume allowance, in ingested bytes per billed service per
+    # The volume allowance, in ingested bytes per billed service per
     # calendar month. NULL is "no allowance recorded", not an allowance of zero.
     included_bytes_per_service: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # The share of that allowance the browser door may spend, as a whole
-    # percentage; the server door has the rest (ADR 0097). NULL is "no split
+    # percentage; the server door has the rest. NULL is "no split
     # recorded": both doors spend the one allowance.
     browser_share_percent: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     created_at: Mapped[CreatedAt]
@@ -626,12 +626,13 @@ class PlanPrice(Base):
 class BillingSubscription(Base):
     """One paid arrangement between an organization and a payment processor.
 
-    **What is stored is deliberately the least that works.** ADR 0102 says the
-    processor's customer reference and nothing else avoidable, which is ADR
-    0076's posture applied to money: no card number, no PAN, no last four, no
-    expiry, no bank account, no billing address. `Checkout` returns a URL rather
-    than a form precisely so none of that ever reaches this application, and a
-    column here would be the quiet way it arrived anyway.
+    **What is stored is deliberately the least that works.** The rule is the
+    processor's customer reference and nothing else avoidable, which is the
+    integrations' posture — hold no credential we can avoid — applied to money:
+    no card number, no PAN, no last four, no expiry, no bank account, no billing
+    address. `Checkout` returns a URL rather than a form precisely so none of
+    that ever reaches this application, and a column here would be the quiet
+    way it arrived anyway.
 
     Rows accumulate rather than being edited in place across arrangements: a
     customer who cancels and later resubscribes gets a second row, because the
@@ -645,7 +646,7 @@ class BillingSubscription(Base):
         UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
     )
     # Which implementation of the port this arrangement lives at. The vendor's
-    # name is the *value* here and never the column name — ADR 0102's rule, the
+    # name is the *value* here and never the column name — the port's rule, the
     # same one that keeps `PAYMENTS_DOMESTIC_*` neutral. Two processors is the
     # expected end state, so a row has to say which one it belongs to.
     processor: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
@@ -668,7 +669,7 @@ class BillingSubscription(Base):
     )
     status: Mapped[str] = mapped_column(BillingSubscriptionStatus, nullable=False)
     # How many services the customer said they would pay for, which is what the
-    # mandate's authorised maximum was computed from — ADR 0107's ceiling, on the
+    # mandate's authorised maximum was computed from — the customer's ceiling, on the
     # arrangement that carries it rather than on the tenant. Raising the ceiling
     # means a new mandate at a new maximum, so it is a new row and not an edit.
     services_committed: Mapped[int] = mapped_column(Integer, nullable=False)

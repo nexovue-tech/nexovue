@@ -1,4 +1,4 @@
-"""We hold no customer credential we can avoid holding (P1-37, ADR 0076).
+"""We hold no customer credential we can avoid holding (P1-37).
 
 The claim these tests defend is a negative one — that no code path stores or
 requires a customer's AWS access key or database password — so most of them
@@ -163,10 +163,10 @@ def test_self_hosted_password_auth_is_refused_and_points_somewhere() -> None:
 
     We still store no database password: that needs a key-management scheme this
     project has not decided on, and inventing one badly is worse than the feature
-    being absent. What changed with ADR 0100 is that this is no longer a dead end
-    — the customer's own collector reads the same two queries inside their
-    network — so the refusal has to name that route. Asserted on both halves,
-    because a refusal that only says "no" sends them away for nothing.
+    being absent. What changed is that this is no longer a dead end — the
+    customer's own collector reads the same two queries inside their network — so
+    the refusal has to name that route. Asserted on both halves, because a
+    refusal that only says "no" sends them away for nothing.
     """
     config = _postgres_config() | {"auth": AUTH_PASSWORD}
     with pytest.raises(DatabaseAuthError) as refusal:
@@ -294,8 +294,8 @@ async def test_a_host_resolving_to_loopback_is_refused() -> None:
 async def test_the_metadata_endpoint_is_refused_even_in_development() -> None:
     """169.254.169.254 is where every major cloud serves instance credentials.
 
-    ADR 0098's line, restated for this door: link-local does not become safe to
-    reach because somebody is developing, and a developer's laptop is exactly
+    The probes' line, restated for this door: link-local does not become safe
+    to reach because somebody is developing, and a developer's laptop is exactly
     where a stolen role would be used. Asserted with the escape *on*, because
     that is the setting where a weaker rule would show.
     """
@@ -304,7 +304,7 @@ async def test_the_metadata_endpoint_is_refused_even_in_development() -> None:
 
 
 async def test_loopback_stays_refused_with_the_development_escape_on() -> None:
-    """The other half of ADR 0098's line: loopback is the worker's own container."""
+    """The other half of the probes' line: loopback is the worker's own container."""
     with pytest.raises(DatabaseAddressError, match=re.escape("127.0.0.1")):
         await refuse_unreachable_host("127.0.0.1", 5432, private_allowed=True)
 

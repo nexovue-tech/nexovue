@@ -128,10 +128,10 @@ func (o Options) authenticate(ctx context.Context, presentedKey string) (context
 // it.
 //
 // Only a plan with a ceiling on its billed services has an allowance to spend,
-// so nothing paying is ever refused here. ADR 0093.
+// so nothing paying is ever refused here.
 //
 // The door asked about is the one the envelope will be stamped with, so the
-// budget judged here is the budget the meter charges (ADR 0097).
+// budget judged here is the budget the meter charges.
 //
 // The same answer carries the operator's stop valve (P1-52), which is not a
 // plan question at all: it is how a tenant that is inside its allowance and
@@ -209,7 +209,7 @@ func (o Options) throttle(ctx context.Context) *refusal {
 		// a customer's telemetry costs more than briefly losing the protection,
 		// and the broker and payload caps still bound the damage.
 		//
-		// Open, not unbounded (ADR 0104). The body cap and the broker limit one
+		// Open, not unbounded. The body cap and the broker limit one
 		// request and the throughput behind it; neither limits requests per
 		// second, and an outage is exactly when the platform has least headroom
 		// to absorb a burst. The bound below is per receiver instance and sized

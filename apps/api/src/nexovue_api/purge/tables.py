@@ -55,11 +55,11 @@ EXCLUDED_TABLES: Final[dict[str, str]] = {
     "span_ingest_offsets": (
         "keyed by topic and partition, not by tenant. Losing a watermark makes the "
         "worker re-derive counters it already stored — a silent, permanent over-count "
-        "(ADR 0094), and an over-bill"
+        ", and an over-bill"
     ),
     "span_written_offsets": (
         "keyed by topic and partition, not by tenant. Losing it replays spans that "
-        "were already written (ADR 0079 / migration 000026)"
+        "were already written (migration 000026)"
     ),
     "ingest_written_offsets": (
         "keyed by topic and partition, not by tenant. Same replay as "

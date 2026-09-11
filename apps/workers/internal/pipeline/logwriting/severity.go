@@ -8,7 +8,7 @@ import (
 
 // severityUnspecified is what a record with no severity at all stores. It sorts
 // ahead of every real level, which is where an unknown belongs: "warn and
-// above" excludes it by the same comparison that excludes DEBUG (ADR 0069).
+// above" excludes it by the same comparison that excludes DEBUG.
 const severityUnspecified int32 = 0
 
 // severityLevelSpan is how many numbers OTLP gives each named level — INFO is

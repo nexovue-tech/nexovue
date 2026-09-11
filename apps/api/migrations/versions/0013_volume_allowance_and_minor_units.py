@@ -1,15 +1,15 @@
-"""the volume allowance ADR 0056 required, and the rename ADR 0077 asked for
+"""the volume allowance the pricing model required, and the rename to minor units
 
-**`plan_prices.included_bytes_per_service`** — the allowance ADR 0056 priced
-against and never gave a unit for. Bytes: the only unit that spans traces, logs
-and metrics, and the one that actually costs storage and transfer. Counting
-spans instead would charge a well-instrumented service more for being well
-instrumented, which is the opposite of what this product wants to encourage.
-NULL means no allowance has been recorded — not an allowance of zero — and the
-table ships empty anyway, so nothing is invented here.
+**`plan_prices.included_bytes_per_service`** — the allowance the pricing model
+priced against and never gave a unit for. Bytes: the only unit that spans
+traces, logs and metrics, and the one that actually costs storage and transfer.
+Counting spans instead would charge a well-instrumented service more for being
+well instrumented, which is the opposite of what this product wants to
+encourage. NULL means no allowance has been recorded — not an allowance of zero
+— and the table ships empty anyway, so nothing is invented here.
 
 **`price_per_service_cents` → `price_per_service_minor_units`** — the rename
-ADR 0077 asked the next migration touching this table to make. The column holds
+that was waiting for the next migration touching this table. The column holds
 minor units, and the yen's minor unit is the yen: the old name invites a divide
 by a hundred that would quote a yen bill at a hundredth of its size. The table
 has never held a row in any database, so the rename moves no data.

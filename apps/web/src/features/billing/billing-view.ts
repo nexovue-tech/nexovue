@@ -25,10 +25,9 @@ export function allowanceFraction(period: BillingPeriodUsage): number | null {
 /**
  * What happens at the ceiling, in the customer's own terms.
  *
- * ADR 0107 requires the screen to be able to write this before it happens as
- * well as after: telemetry that stops is indistinguishable from a service that
- * went quiet, and that is the one failure an observability product must not
- * cause.
+ * The screen must be able to write this before it happens as well as after:
+ * telemetry that stops is indistinguishable from a service that went quiet, and
+ * that is the one failure an observability product must not cause.
  */
 export function describeAllowance(period: BillingPeriodUsage): string {
   if (period.included_bytes === null) {
@@ -176,7 +175,7 @@ export function unfinishedCheckoutNotice(overview: BillingOverview): string | nu
 /**
  * What a month on a plan comes to, at a given commitment.
  *
- * ADR 0111: the bill *is* the commitment. Not "up to" — a customer who commits
+ * The bill *is* the commitment. Not "up to" — a customer who commits
  * to five services and runs three pays for five, and a screen that hedged the
  * number would be the one place they were told otherwise.
  */

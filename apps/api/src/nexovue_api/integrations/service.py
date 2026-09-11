@@ -1,7 +1,7 @@
 """Connector logic, and the one value the customer must never supply.
 
 A connector is how door 4b reaches a customer's cloud account. It holds no
-credential (ADR 0076): the customer creates a role their side that trusts ours,
+credential: the customer creates a role their side that trusts ours,
 and we keep its ARN plus an `ExternalId`.
 
 **That ExternalId is generated here and never accepted from a request.** Its
@@ -55,7 +55,7 @@ async def list_for_project(
 SUPPORTED_POSTGRES_AUTH: Final = "rds_iam"
 
 # Phrased for the person reading it, not for us. It says what *is* supported and
-# where the other route is, because since ADR 0100 "not supported" is the wrong
+# where the other route is, because "not supported" is now the wrong
 # answer — a database anywhere else is reachable through the customer's own
 # collector, and a refusal that does not say so sends them away for nothing.
 _UNSUPPORTED_POSTGRES_AUTH: Final = (

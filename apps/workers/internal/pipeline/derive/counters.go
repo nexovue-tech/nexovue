@@ -3,7 +3,7 @@
 // `metrics_sum`, and the endpoint rollup `endpoint_stats_1m`.
 //
 // It runs before the sampler, over every span of every trace. That order is the
-// whole point (ADR 0010): storage can drop nine healthy traces in ten and the
+// whole point: storage can drop nine healthy traces in ten and the
 // counts, error rates and totals stay exact, because they were computed before
 // anything was dropped. `endpoint_stats_1m` was filled by a materialized view
 // over `spans` until 000024, which put it *downstream* of the sampler and made
@@ -86,7 +86,7 @@ type Span struct {
 	// Partition is the Kafka partition the span's record arrived on. It is
 	// provenance rather than a dimension — no row carries it — but the buckets
 	// keep each partition's share apart so that a partition handed to another
-	// worker can have its contribution taken back out (ADR 0094). The topic is
+	// worker can have its contribution taken back out. The topic is
 	// implicit: one set of counters serves one pipeline, and a pipeline consumes
 	// one topic.
 	Partition int32
@@ -345,7 +345,7 @@ type Disowned struct {
 // worker that takes the partition over reads those records again and counts
 // them. Keeping them is what counts them twice, and a counter counted twice
 // cannot be repaired: `metrics_sum` is summed on read and the individual
-// contributions are gone (ADR 0094).
+// contributions are gone.
 func (c *Counters) Disown(partitions []int32) Disowned {
 	if len(partitions) == 0 {
 		return Disowned{}

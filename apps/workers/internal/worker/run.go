@@ -484,7 +484,7 @@ func serveUntilSignal(
 // tenant's data, so anyone able to read two tenants could join them — which is
 // the tenant-isolation invariant leaking through a privacy feature. Deriving
 // per project costs a customer the ability to correlate one person across their
-// own projects, and a project is an environment (ADR 0042), so that is
+// own projects, and a project is an environment, so that is
 // correlating across staging and production: not a thing anyone needs.
 func maskSecret(cfg config.Config, log *slog.Logger) []byte {
 	if cfg.Masking.HashSecret == "" {

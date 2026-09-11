@@ -145,8 +145,7 @@ class IngestedBytes(NamedTuple):
     """What the meter counted over a range, and the browser door's part of it.
 
     `browser` is a part of `total`, never beside it, so the two must not be
-    added together. It is what the browser door's own share is spent against
-    (ADR 0097).
+    added together. It is what the browser door's own share is spent against.
     """
 
     total: int

@@ -103,9 +103,9 @@ func TestAFutureDatedSpanDoesNotWedgeOffsetCommits(t *testing.T) {
 	}
 }
 
-// Discarding the span would cost a count, and counts are exact by invariant
-// (ADR 0010). It is counted at the moment we received it instead — our own
-// clock is the only one in the path we control.
+// Discarding the span would cost a count, and counts are exact by invariant. It
+// is counted at the moment we received it instead — our own clock is the only
+// one in the path we control.
 func TestAnUntrustedSpanTimestampIsCountedAtReceiveTime(t *testing.T) {
 	stages := stagesFor(t, 100)
 	receivedAt := time.Date(2026, 8, 27, 10, 0, 30, 0, time.UTC)

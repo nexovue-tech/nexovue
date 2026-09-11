@@ -499,7 +499,7 @@ SELECT
     count() AS matches,
     toUnixTimestamp64Nano(min(span_start)) AS min_nanos,
     toUnixTimestamp64Nano(max(span_end)) AS max_nanos,
-    -- Our own clock, which is what `spans` is partitioned by (ADR 0067). The
+    -- Our own clock, which is what `spans` is partitioned by. The
     -- span timestamps above cannot prune a partition, because the client
     -- supplies them and ClickHouse cannot relate the two.
     toUnixTimestamp64Nano(min(received_at)) AS received_from_nanos,

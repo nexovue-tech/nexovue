@@ -7,8 +7,7 @@ AssumeRole and receive credentials that expire in fifteen minutes.
 
 Neither the role ARN nor the ExternalId is a secret, so the `integrations` row
 holds nothing worth stealing, and revocation is the customer deleting a role
-rather than us rotating a key we should never have had. ADR 0076 records the
-decision and what it rejected.
+rather than us rotating a key we should never have had.
 
 The ExternalId is the part that is easy to leave out and expensive to omit:
 without it, anyone who learns another customer's role ARN can ask us to poll it

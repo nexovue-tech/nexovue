@@ -10,7 +10,7 @@ endpoint pair. P1-43 was scoped to new files in this package, so folding these
 back into the existing four is a follow-up, not a decision.
 
 **What bounds the read.** `logs` is partitioned on `received_at`, our own clock,
-while the caller asks about `timestamp`, the customer's (ADR 0067). Both
+while the caller asks about `timestamp`, the customer's. Both
 predicates are present and neither is redundant: `received_at` prunes partitions
 and `timestamp` answers the question that was asked.
 

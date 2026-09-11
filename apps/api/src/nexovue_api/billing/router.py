@@ -15,7 +15,7 @@ and for the same reason: the sender is a payment processor and has no session.
 * the read is bounded before it is buffered, because an unauthenticated caller
   chooses how much it sends.
 
-**The path names the role, not the vendor.** ADR 0102 expects a second processor
+**The path names the role, not the vendor.** A second processor is expected
 — a merchant of record for customers outside India — and it will need its own
 URL, registered in its own dashboard. A URL is pasted into somebody else's
 configuration and is expensive to change afterwards, which is exactly the kind
@@ -161,7 +161,7 @@ async def return_from_checkout() -> RedirectResponse:
 
     **POST, because that is how a processor returns a customer.** The body is
     never read: its contents are the processor's claim about a subscription, and
-    the subscription moves on the signed webhook alone (ADR 0110).
+    the subscription moves on the signed webhook alone.
     """
     return _to_the_billing_screen()
 
@@ -176,8 +176,8 @@ async def return_from_checkout() -> RedirectResponse:
     summary=CHECKOUT_RETURN_SUMMARY,
 )
 async def return_from_checkout_by_get() -> RedirectResponse:
-    """The same landing for a processor that redirects by GET — ADR 0102 expects
-    a second one — and for a reload, which would otherwise meet a 405."""
+    """The same landing for a processor that redirects by GET — a second one is
+    expected — and for a reload, which would otherwise meet a 405."""
     return _to_the_billing_screen()
 
 

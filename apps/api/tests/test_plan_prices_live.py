@@ -4,10 +4,10 @@ The allowance gate reads exactly one price row — the newest `effective_from`
 not after today — and a NULL `browser_share_percent` in it means *no split
 recorded*, so both doors spend the one allowance
 (`receiver/internal/allowance/postgres.go`, `usage.billing.browser_cap_bytes`).
-That reading is correct for every row written before ADR 0097.
+That reading is correct for every row written before the split existed.
 
 The hazard is what comes after. A repricing here is **a new row restating every
-column**, never an edit (0015, 0016, ADR 0083) — and nothing in the schema
+column**, never an edit (0015, 0016) — and nothing in the schema
 enforces the "every column" half. A future `free` row that carries the new
 price and forgets the share is accepted by Postgres, reverts the tier to the
 pooled allowance, and lifts the cap that stops a scraped site key spending the
@@ -132,10 +132,10 @@ def _forgotten_column_message(dropped: list[Row[tuple[str, date]]]) -> str:
     return (
         f"these plan_prices rows omit browser_share_percent on a tier that already "
         f"carries a browser cap: {listed}. A repricing is a new row restating "
-        f"EVERY column (0015, 0016, ADR 0083) — this one restates the price and "
+        f"EVERY column (0015, 0016) — this one restates the price and "
         f"drops the split, which silently returns the tier to the pooled allowance "
         f"and lifts the cap that stops a scraped site key spending the whole month "
-        f"at the browser door (ADR 0097). Add browser_share_percent to the row."
+        f"at the browser door. Add browser_share_percent to the row."
     )
 
 

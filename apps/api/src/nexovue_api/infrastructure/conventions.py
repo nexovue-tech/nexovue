@@ -10,8 +10,8 @@ specification produced a wrong answer.** Semconv v1.27.0 renamed
 `system.cpu.state` to `cpu.mode` and moved the sibling keys under namespaces,
 but no producer followed: the Collector's `hostmetrics` cpuscraper and the
 OpenTelemetry Python `SystemMetricsInstrumentor` both still emit a flat `state`,
-a flat `cpu`, and flat `device`/`direction` (sources in
-`docs/architecture/decisions` and verified against our own store below). Reading
+a flat `cpu`, and flat `device`/`direction` (verified against our own store
+below). Reading
 only the namespaced spelling matched *no real traffic*, so every attribute below
 is a tuple: the spelling producers actually send, then the spec's, then the
 superseded one. First match wins.

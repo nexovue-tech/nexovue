@@ -89,7 +89,7 @@ func TestABrowserExportFromAnAllowedOriginIsPublished(t *testing.T) {
 	// The payload is still OTLP, and the envelope names the entrance: the usage
 	// meter bills a page's bytes to the browser budget by this field, so an
 	// export from a public key stamped as the server door would spend the
-	// budget this split exists to protect (ADR 0097).
+	// budget this split exists to protect.
 	if envelope.GetDoor() != nexovuev1.Door_DOOR_RUM {
 		t.Errorf("door = %v, want DOOR_RUM", envelope.GetDoor())
 	}
@@ -318,8 +318,8 @@ func TestABrowserExportIsLoggedUnderItsOwnPath(t *testing.T) {
 // navigator.sendBeacon is the only export that survives a page unload, and it
 // can reach this door only as text/plain: it sets no headers, and it fixes the
 // request's credentials mode to "include", so any content type outside the CORS
-// safelist is preflighted and then failed by the browser because ADR 0087
-// deliberately never answers Access-Control-Allow-Credentials. ADR 0089.
+// safelist is preflighted and then failed by the browser because the browser
+// door deliberately never answers Access-Control-Allow-Credentials.
 
 // beaconContentType is what a browser stamps on a text/plain beacon, charset
 // and all, so the parse of the parameter is exercised rather than assumed.

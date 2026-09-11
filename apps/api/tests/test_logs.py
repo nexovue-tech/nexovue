@@ -209,7 +209,7 @@ async def test_a_log_with_no_trace_context_is_told_so_rather_than_searched_for()
 
 
 async def test_a_known_trace_bounds_the_read_by_when_that_trace_arrived() -> None:
-    """`logs` is partitioned on `received_at`, so only this prunes (ADR 0067).
+    """`logs` is partitioned on `received_at`, so only this prunes.
 
     The bounds come from when the *trace* arrived, not from the window the
     caller asked about — opening a trace from three weeks ago must not read

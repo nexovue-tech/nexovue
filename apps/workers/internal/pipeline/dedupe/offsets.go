@@ -23,7 +23,7 @@ import "sync"
 // would be replayed with nothing to recognise them.
 //
 // That gap is closed by internal/pipeline/ingeststate, which keeps the same
-// facts durably in Keeper: how far each partition is counted (ADR 0061), how far
+// facts durably in Keeper: how far each partition is counted, how far
 // its spans are written (migration 000026), and how far the log and metric
 // pipelines have written theirs (migration 000029). This type remains the cheap
 // in-process half — a map lookup rather than a cache of a remote table — and for
@@ -70,7 +70,7 @@ func (o *Offsets) FirstDelivery(topic string, id int32, offset int64) bool {
 // place, a partition that came back would have its uncommitted records
 // recognised as replays and skipped — and those spans were dropped rather than
 // stored, so that is a hole. The duplicate this type exists to stop is
-// recoverable; a hole is not (ADR 0090).
+// recoverable; a hole is not.
 func (o *Offsets) Forget(topic string, ids []int32) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

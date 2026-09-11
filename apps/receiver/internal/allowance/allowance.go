@@ -5,18 +5,18 @@
 // **Where the allowance comes from depends on the tier.** A plan that puts a
 // ceiling on the services it bills sets it — the free tier. A plan that does not
 // is sized on the count the customer committed to when they authorised their
-// mandate, which is ADR 0107's ceiling: they chose it, they can see it, and they
-// raise it themselves. A paid tier with no active mandate has nothing to size an
-// allowance on and enforces nothing, which is not a ceiling of zero.
+// mandate, which is a ceiling of their own: they chose it, they can see it, and
+// they raise it themselves. A paid tier with no active mandate has nothing to
+// size an allowance on and enforces nothing, which is not a ceiling of zero.
 //
 // It used to be the free tier's boundary and only the free tier's, on the
-// reading that ADR 0083 refuses to cap a customer to hold their bill down. That
+// reading that the plan never caps a customer to hold their bill down. That
 // refusal still stands and this still honours it — the difference is that "we
 // will not cap you to protect our margin" is no longer confused with "you have
-// no limit at all". See ADR 0093 §3, amended, and ADR 0107.
+// no limit at all".
 //
 // The allowance is one number for the organization, and where the plan says so
-// the browser door carries a **cap** within it (ADR 0097): a public site key is
+// the browser door carries a **cap** within it: a public site key is
 // printed in the customer's page, so anyone who reads the source can spend at
 // that door, and bounding what it can spend is what keeps the customer's backend
 // reporting whatever happens to their website.
@@ -36,10 +36,10 @@
 // path a second query, and because it then inherits the cache TTL — which is
 // also how long it takes to bite.
 //
-// The month, the pooling and the arithmetic are ADR 0083's, and the same rule is
-// written a second time in `nexovue_api.usage.billing` for the screen that shows
-// it. Two languages, one policy: change one and the customer is told a number we
-// do not enforce. The tests on both sides use the same figures for that reason.
+// The month, the pooling and the arithmetic are one rule, written a second time
+// in `nexovue_api.usage.billing` for the screen that shows it. Two languages, one
+// policy: change one and the customer is told a number we do not enforce. The
+// tests on both sides use the same figures for that reason.
 package allowance
 
 import (
@@ -88,7 +88,7 @@ type Usage struct {
 	// BrowserSharePercent is how much of IncludedBytes the browser door may
 	// spend, as the plan row records it, and Split says whether the row records
 	// one at all. A row that records no share is pooled: both doors spend the
-	// one allowance, which is how every row before ADR 0097 reads.
+	// one allowance, which is how every row written before the split reads.
 	BrowserSharePercent int64
 	Split               bool
 
@@ -217,7 +217,7 @@ func (u Usage) budgetFor(door nexovuev1.Door) Budget {
 // Three rules, and the order matters.
 //
 // A row recording no share has no browser accounting at all: one allowance, one
-// number, which is what every row before ADR 0097 meant.
+// number, which is what every row written before the split meant.
 //
 // Otherwise the browser door is refused past its own cap, and then **both**
 // doors are refused past the plan's charged total. The second test is what

@@ -15,10 +15,10 @@ import (
 // whether an operator has closed the stop valve on this organization.
 //
 // The rate is the one in force *today*, not on the month's last day — a
-// repricing that starts on the 20th must not govern a month sitting on the 15th
-// (ADR 0083). The bytes are the whole organization's, because the allowance is
-// pooled across it; the browser's bytes are the part of them the meter counted
-// through the browser door (ADR 0097).
+// repricing that starts on the 20th must not govern a month sitting on the 15th.
+// The bytes are the whole organization's, because the allowance is pooled
+// across it; the browser's bytes are the part of them the meter counted
+// through the browser door.
 //
 // Both halves are LATERAL subqueries rather than joins with a GROUP BY, so an
 // organization with no price row and no metered day still returns its row and
@@ -138,8 +138,8 @@ func (u *PostgresUsage) UsageFor(
 // service is the remedy.
 //
 // A plan with no cap — every paying tier — is sized on what the customer
-// committed to when they authorised the mandate. That is ADR 0107's ceiling:
-// the customer chose it, can see it, and raises it themselves. Before that
+// committed to when they authorised the mandate. That is the customer's own
+// ceiling: they chose it, can see it, and raise it themselves. Before that
 // column existed this returned nothing here, which meant **a paying customer
 // had no limit at all** while every free one did.
 //
@@ -171,7 +171,7 @@ func allowanceServiceCount(maxServices, servicesCommitted *int32) *int32 {
 // the first byte. That is a different statement from NULL, and it is honoured.
 //
 // `browser_share_percent` NULL means the row records no split, and both doors
-// spend the one allowance — every row seeded before ADR 0097 reads that way.
+// spend the one allowance — every row seeded before the split reads that way.
 func usageFrom(
 	perService *int64,
 	maxServices *int32,

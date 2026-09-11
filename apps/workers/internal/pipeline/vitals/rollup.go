@@ -66,7 +66,7 @@ func NewRollup() *Rollup { return &Rollup{buckets: make(map[statKey]*bucket)} }
 // Add folds one reading into its minute.
 //
 // The minute comes from `received_at`, not from the browser's timestamp. A
-// visitor's device clock can be set to any year at all (ADR 0067), and a rollup
+// visitor's device clock can be set to any year at all, and a rollup
 // bucketed on it would scatter one page's readings across decades of partitions
 // — where the raw table merely stores the wrong `timestamp` beside a correct
 // `received_at`.
@@ -97,7 +97,7 @@ func (r *Rollup) Add(reading Reading) {
 // Sorted for the reason the endpoint rollup's rows are: the block ClickHouse
 // receives must be byte-identical when a restart re-derives the same minute
 // from the same offsets, or the insert deduplication token cannot recognise the
-// retry and the rollup double-counts (ADR 0060).
+// retry and the rollup double-counts.
 func (r *Rollup) Rows() []Stat {
 	rows := make([]Stat, 0, len(r.buckets))
 	for key, held := range r.buckets {

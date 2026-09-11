@@ -3,9 +3,9 @@
 `127.0.0.1.nip.io` is a public name that answers 127.0.0.1. The API accepts it
 at creation — it is a name, not an address — and before the proxy existed a
 browser check pointed at it opened a page served on loopback *inside the
-worker* and `expect_text` reported back what it found. ADR 0096 quotes both
-arms of that control: the loopback service recording a hit and handing over its
-secret without the boundary, and no hit at all with it.
+worker* and `expect_text` reported back what it found. Both arms of that
+control were observed: the loopback service recording a hit and handing over
+its secret without the boundary, and no hit at all with it.
 
 Needs Playwright with its Chromium, and DNS. It fails rather than skips when
 either is missing, for the reason `live.py` gives: a boundary test that quietly
@@ -251,7 +251,7 @@ def test_webrtc_gathers_no_candidate_the_proxy_could_not_carry() -> None:
 
     WebRTC opens UDP sockets to addresses a page names. An HTTP proxy carries
     none of that, so a page loaded through the boundary can still reach the
-    worker's own network over ICE — the leak the switches close (ADR 0096).
+    worker's own network over ICE — the leak the switches close.
     No STUN server and no network are needed to see it: with the switches gone
     Chromium gathers host candidates by itself, and each one is a live UDP
     socket outside the proxy.

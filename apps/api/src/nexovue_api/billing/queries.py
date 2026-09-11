@@ -60,7 +60,7 @@ async def subscription_by_processor_ref(
     whose it is, is answered here, from the row written when the checkout began.
 
     Scoping it by organization would need the caller to tell us the organization,
-    which is the one thing a webhook must not be trusted for. ADR 0110 replaced
+    which is the one thing a webhook must not be trusted for. This lookup replaced
     exactly that arrangement: the org id used to arrive in custom tags we asked
     the processor to echo back, which was our identifier living in their storage.
 
@@ -86,7 +86,7 @@ async def latest_subscription(
     Rows accumulate rather than being edited across arrangements, so the newest
     is the one the customer is living in.
 
-    Not narrowed by processor: ADR 0102 expects two, and an organization pays
+    Not narrowed by processor: two are expected, and an organization pays
     through one of them at a time. Narrowing here would hide the arrangement
     from a screen that has no business knowing which processor answered.
     """

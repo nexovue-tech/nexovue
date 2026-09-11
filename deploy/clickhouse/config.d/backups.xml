@@ -4,7 +4,7 @@
          backs up here, copies the archive to the host and deletes the staged
          copy. A backup left in the volume it protects is not a backup.
 
-         Procedure: docs/delivery/runbooks/restore-from-backup.md, run end to end
+         Procedure: the restore recipes in the justfile, run end to end
          2026-09-04. Where backups land off this machine, on what schedule, kept
          how long, and whether encrypted are still undecided — P1-51 built and
          rehearsed the mechanism and deliberately did not invent that policy. -->

@@ -142,7 +142,7 @@ func rollupTotals(drained derive.Derived) (requests, errors uint64, sampled int)
 	return requests, errors, sampled
 }
 
-// THE invariant of ADR 0010. Storage keeps a tenth of the healthy traces; the
+// THE invariant of tail sampling. Storage keeps a tenth of the healthy traces; the
 // counters keep all of them. If this test ever fails, every dashboard and every
 // anomaly detector downstream is lying by roughly a factor of ten.
 func TestCountersStayExactWhileStorageIsSampledAtTenPercent(t *testing.T) {

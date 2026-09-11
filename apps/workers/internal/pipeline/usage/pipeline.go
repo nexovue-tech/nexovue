@@ -83,7 +83,7 @@ func New(cfg config.Config, signal Signal, log *slog.Logger, opts Options) (*Pip
 		OnAssigned: func() { pipeline.counting.invalidate() },
 		// The other half of the same fact. A partition leaving takes the
 		// counters this process has metered but not flushed with it, or they are
-		// billed here and again by the worker that took it over (ADR 0094).
+		// billed here and again by the worker that took it over.
 		OnRevoked: pipeline.release,
 		OnLost:    pipeline.releaseLost,
 	}, log)
@@ -155,14 +155,14 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Int64("logs_metered", totals.counters.Logs),
 		slog.Int64("metric_points_metered", totals.counters.MetricPoints),
 		slog.Int64("bytes_metered", totals.counters.Bytes),
-		// The part of bytes_metered the browser door's budget is charged for
-		// (ADR 0097). Flat at zero until a page exports.
+		// The part of bytes_metered the browser door's budget is charged for. Flat
+		// at zero until a page exports.
 		slog.Int64("browser_bytes_metered", totals.counters.BrowserBytes),
 		slog.Int64("usage_rows_written", totals.rowsWritten),
 		slog.Int64("usage_rows_unattributed", totals.rowsUnmatched),
 		slog.Int64("services_recorded", totals.servicesFound),
 		// What a handover took back rather than billing twice. It steps at each
-		// rebalance and is flat otherwise (ADR 0094).
+		// rebalance and is flat otherwise.
 		slog.Int64("tenant_days_disowned", totals.disownedTenantDays),
 		slog.Int64("bytes_disowned", totals.disownedBytes),
 	}

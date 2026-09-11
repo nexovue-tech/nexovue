@@ -1,13 +1,13 @@
 """site keys become the usable public kind, and each key table says which kind it holds
 
-An ingest credential now has a *kind*, and the kind is the table (ADR 0086).
+An ingest credential now has a *kind*, and the kind is the table.
 `api_keys` holds the secret, server-side kind: hashed, compared in constant time,
 carrying full ingest rights for a project. `site_keys` holds the public,
 browser-side kind: printed in the page that carries it, stored in the clear,
 restricted by origin instead of by secrecy.
 
 `site_keys` has existed since migration 0001 and has never had a reader or a
-writer — the same shape of gap ADR 0081 found in `api_keys.last_used_at`. This
+writer — the same shape of gap `api_keys.last_used_at` once had. This
 migration makes it usable rather than inventing a discriminator column on
 `api_keys`, which would have forced `key_hash` nullable and turned the receiver's
 unconditional hash comparison into a branch.
@@ -15,7 +15,7 @@ unconditional hash comparison into a branch.
 **Every existing `api_keys` row is secret, and this says so rather than assuming
 it.** There is no backfill to run and no default to pick, because the statement is
 true of the table and not of a column: a table comment records it, so somebody
-reading the schema is told which kind lives where without having to find the ADR.
+reading the schema is told which kind lives where without looking further.
 
 `name` is added NOT NULL through a server default that is then dropped. The
 default is expected to name **zero** rows: nothing in this codebase has ever
@@ -50,13 +50,13 @@ PLACEHOLDER_LENGTH = 64
 API_KEYS_COMMENT = (
     "Secret, server-side ingest keys only. Stored as a SHA-256 hash and verified "
     "in constant time. Public browser keys live in site_keys; the kind is the "
-    "table, so this lookup cannot return one. See ADR 0086."
+    "table, so this lookup cannot return one."
 )
 SITE_KEYS_COMMENT = (
     "Public, browser-side ingest keys only. Stored in the clear because the value "
     "ships in the page that carries it; restricted by allowed_origins rather than "
     "by secrecy, and it may accept browser telemetry for its project and nothing "
-    "else. Secret server keys live in api_keys. See ADR 0086."
+    "else. Secret server keys live in api_keys."
 )
 
 # Names zero rows: nothing has ever inserted into site_keys. Dropped immediately
@@ -76,8 +76,8 @@ def upgrade() -> None:
     )
     op.alter_column("site_keys", "name", server_default=None)
 
-    # The same reading api_keys got in ADR 0081: whether anything is still using
-    # this key is the question asked before withdrawing it.
+    # The same reading api_keys already carries: whether anything is still
+    # using this key is the question asked before withdrawing it.
     op.add_column("site_keys", sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True))
 
     op.alter_column(

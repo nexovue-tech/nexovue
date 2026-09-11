@@ -6,10 +6,10 @@ is a message whose non-arrival is a lost account rather than a lower open rate,
 so the provider will be judged on deliverability and may well be replaced. This
 interface is what makes replacing it an afternoon.
 
-**The interface speaks our domain, never a provider's.** ADR 0015 fixed the
-object store as the generic S3 API rather than any one vendor's, and
-`data/objectstore/store.py` carries the rule that follows from it — *"nothing
-here may use a feature outside that API"*. The same rule applies here: a
+**The interface speaks our domain, never a provider's.** The object store is
+the generic S3 API rather than any one vendor's, and `data/objectstore/store.py`
+carries the rule that follows from it — *"nothing here may use a feature outside
+that API"*. The same rule applies here: a
 `message_stream`, a `template_alias`, a `sending_domain_id` are Postmark's
 vocabulary, Resend's, SES's. If one of those words reaches this module, the
 abstraction has already failed and nobody will notice until the second provider.

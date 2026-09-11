@@ -15,8 +15,8 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/derive"
 )
 
-// The counter half of ADR 0090's root, asserted on the values that reach
-// ClickHouse rather than on anything a double could set.
+// The counter half of the rebalance defect's root, asserted on the values that
+// reach ClickHouse rather than on anything a double could set.
 //
 // A minute bucket sums across partitions, so a partition handed to another
 // worker leaves its contribution behind in an open bucket. The bucket is

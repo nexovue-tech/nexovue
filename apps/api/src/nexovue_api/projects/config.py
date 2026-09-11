@@ -5,7 +5,7 @@ worker that enforces it — `pipeline/mask/rules.go` and `pipeline/sample/policy
 Neither language can import the other, so `tests/test_cross_service_contracts.py`
 asserts the names below are the ones those two files accept.
 
-**Why the API validates at all** (ADR 0105). `projectconfig/refresh.go` keeps the
+**Why the API validates at all**. `projectconfig/refresh.go` keeps the
 last-good masking rules when a document fails to parse, but only for a worker
 that has already loaded that project. A cold start falls back to defaults that
 name *no custom keys*, so the first restart after a bad edit is when a project

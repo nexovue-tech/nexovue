@@ -5,13 +5,13 @@
 # would leak into docker-compose.app.yaml and a "production replica" would be
 # running the developer's working tree.
 #
-# Profiles (docs/delivery/dev-environment.md rule 2):
+# Profiles:
 #   default  infrastructure + the services on the walking-skeleton path
 #   doors    Celery probes and pollers, including the Playwright browser queue
 #   tools    demo app and load generator
 #
-# Every service is capped per docs/delivery/dev-environment.md. Core total is
-# ~10 GB inside a ~13 GB Docker VM allocation.
+# Every service is capped to the laptop budget. Core total is ~10 GB inside a
+# ~13 GB Docker VM allocation.
 
 name: nexovue
 
@@ -109,7 +109,7 @@ services:
 
   # One worker process runs every pipeline. WORKER_PIPELINES narrows the set,
   # so the same image can be deployed several times with different selections
-  # once load justifies separating them — see ADR 0050.
+  # once load justifies separating them.
   worker:
     build:
       context: ../..
@@ -189,7 +189,7 @@ services:
       # shape the workers use, and derives the port from it.
       CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
       REDIS_URL: redis://redis:6379/0
-      # Source map bytes. The generic S3 API only (ADR 0015) — SeaweedFS here,
+      # Source map bytes. The generic S3 API only — SeaweedFS here,
       # AWS S3 in deployment. The dev credentials are the ones in
       # deploy/seaweedfs/s3.json; the API creates the bucket at boot in
       # development only.

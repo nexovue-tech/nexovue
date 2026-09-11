@@ -50,7 +50,7 @@ type logRow struct {
 	Severity       string
 	SeverityNumber int32
 	// Body is the rendered text the index searches; BodyStructured is the map
-	// form, or `{}` for every other shape (ADR 0062).
+	// form, or `{}` for every other shape.
 	Body             string
 	BodyStructured   string
 	ResourceAttrs    string
@@ -209,7 +209,7 @@ func recordTime(record *logspb.LogRecord, receivedAt time.Time) (time.Time, stri
 	return receivedAt, timestampSourceReceived
 }
 
-// renderBody splits an OTLP body into the two columns ADR 0062 defined: the
+// renderBody splits an OTLP body into the two columns the log schema defines: the
 // text the index searches, and the typed map when the body was one.
 //
 // A structured logger emits a map, and flattening that to text would throw away

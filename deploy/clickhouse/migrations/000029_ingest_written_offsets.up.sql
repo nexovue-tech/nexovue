@@ -27,10 +27,10 @@
 -- of merging is a hole in span idempotency, which is exactly what 000026 was
 -- written to prevent.
 --
--- No BEFORE/AFTER bracket, for the reason ADR 0079 gives: this is a plain fact
--- recorded only once ClickHouse has acknowledged the insert, not a counter that
--- would be wrong if applied twice. Losing the write costs a duplicate on the
--- next replay, which is today's behaviour, and never a hole.
+-- No BEFORE/AFTER bracket, because this is a plain fact recorded only once
+-- ClickHouse has acknowledged the insert, not a counter that would be wrong if
+-- applied twice. Losing the write costs a duplicate on the next replay, which is
+-- today's behaviour, and never a hole.
 --
 -- KeeperMap because the state has to survive the restart that causes the
 -- replay, and Keeper does where the store's own deduplication log does not.

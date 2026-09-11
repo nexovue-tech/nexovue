@@ -32,7 +32,7 @@ these metrics are monotonic counters whose only readable form is a rate, and a
 rate needs two points.
 
 **Partition pruning.** Both tables are partitioned on `received_at`, our clock,
-while the caller asks about `timestamp`, the customer's (ADR 0067). ClickHouse
+while the caller asks about `timestamp`, the customer's. ClickHouse
 cannot relate the two, so both bounds are present and the service widens the
 requested window by `window.RECEIVE_CLOCK_SLACK` to get the `received_at` range.
 
@@ -48,8 +48,7 @@ identified by the *process that reported it* — `service_name`, promoted to a
 column by the worker, and `resource_attrs.service.instance.id`. The cost is an
 over-counted inventory: three instrumented services on one machine are three
 rows. That is the lesser evil, because each row's numbers stay coherent, and
-presentation can aggregate upward where it can never recover discarded detail
-(ADR 0082).
+presentation can aggregate upward where it can never recover discarded detail.
 
 **The reporter is blanked whenever the resource named itself**, in the inner
 read rather than in Python, so the SQL grain and the node grain are the same

@@ -25,7 +25,7 @@ import (
 // separate type over a separate reader over a separate table, so no arrangement
 // of this code can answer a browser request with a secret key's tenancy or a
 // server request with a public key's. That is the guarantee a `kind` column on
-// one table could not have given. See ADR 0086.
+// one table could not have given.
 //
 // **What it grants is narrow, and named rather than assumed.** The identity it
 // returns carries KindPublic, so MayIngestServerTelemetry is false on it: it may
@@ -100,8 +100,8 @@ func (a *SiteAuthenticator) Authenticate(ctx context.Context, presented string) 
 	// also waits for the hash comparison so a guessed prefix cannot make a key
 	// look busy; here the match is total, so arriving at this line already means
 	// the caller holds the whole key. The reading is weaker for a different
-	// reason, recorded in ADR 0086: the key is public, so a stranger who read the
-	// page can make it look busy. That errs towards "still in use", never towards
+	// reason: the key is public, so a stranger who read the page can make it
+	// look busy. That errs towards "still in use", never towards
 	// "safe to revoke", so it cannot mislead the decision it informs.
 	if !cached {
 		a.uses.Record(presented, time.Now())

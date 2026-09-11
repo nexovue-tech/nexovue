@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 class UsageCounters(BaseModel):
     """What was ingested. Four counters, in the units they are metered in.
 
-    The guardrail meter, not the bill: ADR 0056 prices per service, and these
+    The guardrail meter, not the bill: pricing is per service, and these
     are the volume behind that price.
 
     `bytes_ingested` rather than `bytes`: the column is `usage_daily.bytes`, but
@@ -30,7 +30,7 @@ class ProjectDayUsage(UsageCounters):
     project_id: uuid.UUID
     day: date
 
-    # ADR 0056's unit: distinct `service.name` this project sent something for
+    # The billing unit: distinct `service.name` this project sent something for
     # on this day.
     services: int = 0
 
@@ -51,7 +51,7 @@ class UsageTotals(UsageCounters):
 
 
 class PlanSummary(BaseModel):
-    """The tier this organization is on, and what it grants (ADR 0071).
+    """The tier this organization is on, and what it grants.
 
     Retention is here because it is the plan attribute a usage screen needs
     beside the counters: how long what was ingested will still be readable.
@@ -67,7 +67,7 @@ class PlanPriceSummary(BaseModel):
     """The price in force at the end of the range being read.
 
     Null on the response when the tier has no price row yet, which is what the
-    table ships as — ADR 0056 fixed the unit and not the amounts.
+    table ships as — the unit is fixed and the amounts are not.
     """
 
     effective_from: date
@@ -75,7 +75,7 @@ class PlanPriceSummary(BaseModel):
     # Minor units of `currency`, and named as such: the yen's minor unit is the
     # yen, so anything dividing by a hardcoded hundred misquotes a yen bill.
     price_per_service_minor_units: int
-    # Null is uncapped. ADR 0056's ceiling applies to the service-count
+    # Null is uncapped. The ceiling applies to the service-count
     # component of the bill.
     max_billed_services: int | None = None
     # Ingested bytes each billed service brings, per calendar month, pooled
@@ -83,7 +83,7 @@ class PlanPriceSummary(BaseModel):
     # allowance of zero.
     included_bytes_per_service: int | None = None
     # How much of that allowance the browser door may spend, as a whole
-    # percentage; the server door has the rest (ADR 0097). Null is "no split
+    # percentage; the server door has the rest. Null is "no split
     # recorded": both doors spend the one allowance.
     browser_share_percent: int | None = None
 
@@ -121,7 +121,7 @@ class BillingPeriodUsage(BaseModel):
     # none. Overage above it is deliberately not priced — see `service`.
     included_bytes: int | None = None
 
-    # The browser door's cap and what it has spent of it (ADR 0097). The cap is
+    # The browser door's cap and what it has spent of it. The cap is
     # null where the plan row records no split, which is when every door spends
     # `included_bytes` itself.
     #
@@ -142,7 +142,7 @@ class BillingPeriodUsage(BaseModel):
     browser_included_bytes: int | None = None
 
     # True when going past `included_bytes` refuses further ingest for the rest
-    # of the month, which is the free tier and nothing else (ADR 0093). The API
+    # of the month, which is the free tier and nothing else. The API
     # decides this rather than the browser: which tiers are capped is policy,
     # and a screen that worked it out from the price row would be a second place
     # for it to be wrong.

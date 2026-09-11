@@ -767,7 +767,7 @@ async def test_an_invalid_sampling_document_never_reaches_the_row(
 async def test_sampling_takes_no_confirmation_and_leaves_no_audit_row(
     db: FakeControlPlane, acme: Tenant
 ) -> None:
-    """ADR 0105: a dialogue on a reversible setting teaches people to click
+    """A dialogue on a reversible setting teaches people to click
     through the one that matters."""
     await service.write_sampling_config(
         _store(db),
@@ -942,7 +942,7 @@ async def test_the_create_route_answers_201(db: FakeControlPlane, acme: Tenant) 
 async def test_the_masking_route_answers_422_naming_what_is_wrong(
     db: FakeControlPlane, acme: Tenant
 ) -> None:
-    """The status ADR 0105 asks for, at the moment somebody typed the line."""
+    """The status the masking contract asks for, at the moment somebody typed the line."""
     app = _build_app(db, acme.identity)
 
     async with _client(app) as client:

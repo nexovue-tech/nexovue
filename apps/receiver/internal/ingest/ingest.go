@@ -3,7 +3,7 @@
 //
 // This is the last gate. Downstream sees one payload format whatever door the
 // data came from; the envelope's door names the entrance, and the usage meter
-// bills by it (ADR 0097). The HTTP request is not acknowledged until the broker
+// bills by it. The HTTP request is not acknowledged until the broker
 // has the message — the receiver never accepts data it has not managed to hand
 // on.
 package ingest
@@ -31,9 +31,9 @@ type Producer interface {
 
 // DoorFor is the entrance an identity's telemetry is stamped as having come
 // through, and it is decided by the kind of key that opened it: a public key is
-// printed in a web page and can only open the browser door (ADR 0086), so its
+// printed in a web page and can only open the browser door, so its
 // bytes are the browser door's. The usage meter bills the browser door to its
-// own budget (ADR 0097), and the allowance gate asks about the same door this
+// own budget, and the allowance gate asks about the same door this
 // stamps, so the two cannot disagree about which budget an export spends.
 //
 // Written as an allow-list because auth.Kind has no safe zero: a kind nobody
@@ -231,8 +231,7 @@ func (p *Publisher) batchRecord(
 	batch Batch,
 ) (*kgo.Record, error) {
 	// Keyed by tenant so one customer's batches stay in order relative to each
-	// other; the envelope contract fixes this key
-	// (docs/architecture/ingestion-envelope.md).
+	// other; the envelope contract fixes this key.
 	return recordFor(topic, identity.OrgID, identity, receivedAt, batch)
 }
 

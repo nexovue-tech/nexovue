@@ -54,7 +54,7 @@ const (
 
 	// Named apart from messageThrottled because the number this refused at is
 	// not the configured one: the shared counter is unreachable, so each
-	// receiver is bounding itself at a multiple of the limit (ADR 0104). A
+	// receiver is bounding itself at a multiple of the limit. A
 	// customer told only "rate limit exceeded" would check their configured
 	// limit, find themselves under it, and be right.
 	messageThrottledInProcess = "ingest rate limit exceeded: the shared rate counter is " +
@@ -142,7 +142,7 @@ type Options struct {
 	// Allowance is the plan gate: whether this organization has volume left in
 	// the month its plan includes, at this door. Shared by both doors and both
 	// transports — the total belongs to the organization, and the checker
-	// splits it per door, so one read serves every entrance (ADR 0097).
+	// splits it per door, so one read serves every entrance.
 	Allowance *allowance.Checker
 
 	Publisher *ingest.Publisher
@@ -170,11 +170,12 @@ func (o Options) limits() bodyLimits {
 //
 // A separate path rather than the server paths served by whichever
 // authenticator the presented key looks like it wants. Choosing per request is
-// the branch ADR 0086's two tables removed, one level up: a route mounted with
-// one Gatekeeper cannot have it, so a secret key on a browser path and a public
-// key on a server path both fail the scheme check before any lookup runs. It is
-// also what confines the query-string read — the only place a credential may
-// arrive outside a header — to routes that can resolve nothing but public keys.
+// the branch that splitting the keys into two tables removed, one level up: a
+// route mounted with one Gatekeeper cannot have it, so a secret key on a browser
+// path and a public key on a server path both fail the scheme check before any
+// lookup runs. It is also what confines the query-string read — the only place a
+// credential may arrive outside a header — to routes that can resolve nothing
+// but public keys.
 const BrowserPathPrefix = "/browser"
 
 // Doors are the two entrances the one OTLP/HTTP listener serves. Named rather

@@ -8,8 +8,8 @@
  * is what keeps the two from drifting: it fails if the sidebar offers a path the router
  * does not serve.
  *
- * The task ids are the ones in docs/delivery/phase-1-plan.md; the placeholder shows them,
- * which is how walking the app tells you what is still missing.
+ * The task ids are the delivery plan's; the placeholder shows them, which is how
+ * walking the app tells you what is still missing.
  */
 
 /** Only paths that exist in the tree. Keeps the sidebar from pointing at nothing. */

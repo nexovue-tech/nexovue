@@ -1,9 +1,9 @@
 """No vendor's vocabulary reaches a port, and no caller reaches a vendor.
 
-`data/objectstore/store.py` holds the rule these two ports inherit — ADR 0015
-fixed the object store as the generic S3 API and said *"nothing here may use a
-feature outside that API"*. An interface is only worth having if that rule is
-checked, because the failure is silent: the abstraction keeps compiling while a
+`data/objectstore/store.py` holds the rule these two ports inherit — the object
+store is fixed as the generic S3 API and *"nothing here may use a feature
+outside that API"*. An interface is only worth having if that rule is checked,
+because the failure is silent: the abstraction keeps compiling while a
 provider's noun spreads through the code that was supposed to be free of it.
 
 Structural, like `test_tenant_chokepoint_structure.py`. It cannot prove an

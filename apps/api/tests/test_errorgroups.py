@@ -473,7 +473,7 @@ async def test_an_occurrence_carries_the_build_it_came_from() -> None:
 
 
 async def test_the_query_is_bounded_on_our_receive_clock_as_well_as_the_customers() -> None:
-    """A bound on `timestamp` alone prunes no partition (ADR 0067)."""
+    """A bound on `timestamp` alone prunes no partition."""
     start, end = _window()
     store = FakeErrorStore({TENANT_A: GROUP_A})
 

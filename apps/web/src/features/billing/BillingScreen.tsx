@@ -33,9 +33,9 @@ import { openCheckout, SCRIPT_BLOCKED } from "./checkout-handoff";
  * **Readable by every member, changeable by the owner alone.** A member who
  * cannot see how close the organization is to the ceiling finds out that
  * ingestion stopped by noticing the telemetry went quiet, which is the failure
- * ADR 0107 exists to prevent. Starting and ending a mandate is the account
- * holder's own act — `MayCommitSpend` — so those two calls answer 403 for
- * anybody else and the screen shows their refusal rather than hiding the
+ * the allowance design exists to prevent. Starting and ending a mandate is the
+ * account holder's own act — `MayCommitSpend` — so those two calls answer 403
+ * for anybody else and the screen shows their refusal rather than hiding the
  * controls, because a control that vanishes teaches nobody who to ask.
  */
 export function BillingScreen() {
@@ -220,7 +220,7 @@ function Arrangement({ overview }: { overview: BillingOverview }) {
  * Changing plan: a button, then the tiers, then a count, then the processor.
  *
  * **No contact fields unless the processor asks for them.** `required_contact_fields`
- * comes back empty from a processor whose own page collects them (ADR 0109), and
+ * comes back empty from a processor whose own page collects them, and
  * an empty set draws nothing — so the common path is pick a plan, pick a number,
  * go. The email is not asked for at all: the API falls back to the signed-in
  * member's, because a field whose answer the product already holds is a field
@@ -256,11 +256,11 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
       <section className="flex max-w-2xl flex-col gap-3">
         <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{heading}</h2>
         {unfinished ? <p className="text-ink text-sm leading-relaxed">{unfinished}</p> : null}
-        {/* Says what the code does today, which is bill the commitment (ADR
-            0111). ADR 0112 moves the bill back to services actually monitored
-            once the charge can be raised; this copy changes with it. What it
-            must not do meanwhile is imply the number limits services — it does
-            not, and a customer reading it as a limit would be wrong. */}
+        {/* Says what the code does today, which is bill the commitment. A later
+            change moves the bill back to services actually monitored once the
+            charge can be raised; this copy changes with it. What it must not do
+            meanwhile is imply the number limits services — it does not, and a
+            customer reading it as a limit would be wrong. */}
         <p className="text-ink-dim text-sm leading-relaxed">
           You choose how many services to pay for. That number sets your monthly bill and your
           monthly volume — each plan below says how much volume one service buys. We never bill past

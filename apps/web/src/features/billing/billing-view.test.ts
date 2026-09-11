@@ -67,7 +67,7 @@ function overviewWith(overrides: Partial<BillingOverview> = {}): BillingOverview
 
 describe("what happens at the ceiling", () => {
   /**
-   * ADR 0107: telemetry that stops is indistinguishable from a service that went
+   * Telemetry that stops is indistinguishable from a service that went
    * quiet, so the screen has to be able to say this *before* it happens.
    */
   it("says ingestion stops, and names the day the allowance resets", () => {
@@ -216,7 +216,7 @@ describe("what a month costs at a commitment", () => {
   };
 
   /**
-   * ADR 0111: the bill *is* the commitment, not "up to" it. A customer who
+   * The bill *is* the commitment, not "up to" it. A customer who
    * commits to five and runs three pays for five, and the screen must be the
    * place that says so rather than the invoice.
    */

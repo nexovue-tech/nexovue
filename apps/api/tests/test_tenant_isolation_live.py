@@ -60,7 +60,7 @@ REQUEST_TIMEOUT_SECONDS: Final = 30.0
 INGEST_DEADLINE_SECONDS: Final = 60
 INGEST_POLL_SECONDS: Final = 3
 
-# Tail sampling keeps every errored trace whole (ADR 0010) and one healthy
+# Tail sampling keeps every errored trace whole and one healthy
 # trace in ten. A probe span therefore reports an error, so that whether it is
 # stored is a decision and not a coin toss.
 OTLP_STATUS_ERROR: Final = 2

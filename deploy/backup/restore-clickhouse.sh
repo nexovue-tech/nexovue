@@ -7,11 +7,10 @@
 #
 # The database must be empty. The backup carries the schema AND the
 # `schema_migrations` row that records which migrations produced it, so running
-# `just migrate-ch` first does not help and makes the restore fail — see the
-# runbook, docs/delivery/runbooks/restore-from-backup.md.
+# `just migrate-ch` first does not help and makes the restore fail.
 #
 # The three KeeperMap watermark tables are recreated EMPTY, never with their
-# rows. ADR 0068: a watermark ahead of the broker it names silently skips every
+# rows. A watermark ahead of the broker it names silently skips every
 # record below it, and no later flush moves a watermark backwards.
 set -euo pipefail
 

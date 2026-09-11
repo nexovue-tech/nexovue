@@ -174,7 +174,7 @@ func TestPipelinesDefaultToAllOfThem(t *testing.T) {
 }
 
 // Compose sets none of these either, so the M2 stages must all boot on their
-// defaults — including the ADR 0010 policy, which is the shipped behaviour.
+// defaults — including the sampling policy, which is the shipped behaviour.
 func TestPipelineStageDefaultsMatchTheRecordedDecisions(t *testing.T) {
 	applyEnvironment(t, completeEnvironment())
 
@@ -187,15 +187,15 @@ func TestPipelineStageDefaultsMatchTheRecordedDecisions(t *testing.T) {
 		t.Errorf("Spans.DLQTopic = %q, want spans-dlq: it must match deploy/kafka/topics.sh",
 			cfg.Spans.DLQTopic)
 	}
-	// ADR 0054 gave P1-21 the window; 10s is what the p99 < 15s budget leaves.
+	// The window is P1-21's; 10s is what the p99 < 15s budget leaves.
 	if cfg.Sampling.Window != 10*time.Second {
 		t.Errorf("Sampling.Window = %s, want 10s", cfg.Sampling.Window)
 	}
 	if cfg.Sampling.HealthyPercent != 10 {
-		t.Errorf("Sampling.HealthyPercent = %d, want ADR 0010's 10", cfg.Sampling.HealthyPercent)
+		t.Errorf("Sampling.HealthyPercent = %d, want the policy's 10", cfg.Sampling.HealthyPercent)
 	}
 	if cfg.Sampling.SlowThreshold != 2*time.Second {
-		t.Errorf("Sampling.SlowThreshold = %s, want ADR 0010's 2s", cfg.Sampling.SlowThreshold)
+		t.Errorf("Sampling.SlowThreshold = %s, want the policy's 2s", cfg.Sampling.SlowThreshold)
 	}
 	// The carve-out that keeps a new customer's first span out of the 10%.
 	if cfg.Sampling.FirstTraces != 100 {

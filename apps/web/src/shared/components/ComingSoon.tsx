@@ -27,10 +27,6 @@ export function ComingSoon({ title, description, taskId }: ComingSoonProps) {
           <dt className="w-32 shrink-0 text-ink-dim">Delivered by</dt>
           <dd className="font-mono text-brand-text">{taskId}</dd>
         </div>
-        <div className="flex gap-4 py-1">
-          <dt className="w-32 shrink-0 text-ink-dim">Tracked in</dt>
-          <dd className="text-ink-dim">docs/delivery/phase-1-plan.md</dd>
-        </div>
       </dl>
     </section>
   );

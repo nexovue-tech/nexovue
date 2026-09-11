@@ -5,8 +5,8 @@ trust policy is missing our account, or that the ExternalId does not match.
 Those are the two things that actually go wrong here and both are fixed in the
 customer's own AWS account, so the message has to reach them.
 
-Nothing secret goes in this column. ADR 0076 means we hold no credential to
-leak, and the text comes from AWS describing a permission decision.
+Nothing secret goes in this column. We hold no credential to leak, and the text
+comes from AWS describing a permission decision.
 
 Revision ID: 0008
 Revises: 0007

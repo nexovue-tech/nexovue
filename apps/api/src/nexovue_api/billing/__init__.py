@@ -12,7 +12,7 @@ environment, so switching one is configuration rather than a code change. The
 vendor's name is the *value* — every other `PAYMENTS_DOMESTIC_*` variable stays
 neutral and survives the switch.
 
-ADR 0102 expects a *second* root here eventually — a merchant of record for
+A *second* root is expected here eventually — a merchant of record for
 customers outside India, because a non-EU seller owes EU VAT from the first
 euro. That is why this one says `domestic` in its name rather than owning the
 word "payments" outright.
@@ -68,9 +68,9 @@ class ConfiguredProcessor:
 
     Two fields because the port deliberately cannot say who it is: every caller
     talks to `processor` and never learns what answered, while a stored row has
-    to record which processor an arrangement lives at — ADR 0102 expects two of
-    them. `name` is the settings *value*, so it is the one place a vendor's name
-    crosses out of this package, and it crosses as data rather than as code.
+    to record which processor an arrangement lives at — two of them are
+    expected. `name` is the settings *value*, so it is the one place a vendor's
+    name crosses out of this package, and it crosses as data rather than as code.
     """
 
     name: str

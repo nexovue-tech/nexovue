@@ -108,7 +108,7 @@ describe("nodeName", () => {
 
   it("never presents a reporter as a host, because it is not one", () => {
     // `service.instance.id` identifies a process. Naming a machine after one
-    // would invent a host nobody told us about (ADR 0080).
+    // would invent a host nobody told us about.
     const named = nodeName(reporterNode());
 
     expect(named).not.toBe("recommendation");

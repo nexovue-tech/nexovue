@@ -679,7 +679,7 @@ async def test_retiring_a_site_key_stops_the_browser_door_resolving_it(db: Async
 
 
 async def test_neither_doors_statement_can_return_the_other_kinds_key(db: AsyncSession) -> None:
-    """The claim ADR 0086 rests on, executed rather than argued.
+    """The claim the two key tables rest on, executed rather than argued.
 
     Both live keys exist in one project. The server door's statement is run with
     the public key as its parameter, and the browser door's with the secret key's

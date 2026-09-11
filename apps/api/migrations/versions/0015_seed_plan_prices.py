@@ -28,11 +28,11 @@ arithmetic: 25GB would have been $7.50 of ingest inside a $6 price.
 price, and inventing one would make the usage screen state a number no contract
 uses. With no row the screen shows no cost, which is the truth for that tier.
 
-~~**What this does not settle.**~~ **Settled 2026-09-07 by ADR 0107.** This note
-recorded that ADR 0056 says both that we block above the allowance and that
+~~**What this does not settle.**~~ **Settled 2026-09-07.** This note recorded
+that the pricing model said both that we block above the allowance and that
 overage stays live and bills — two different products — and refused to guess
 between them. The answer is **stop and say so**, with a ceiling the customer may
-raise in advance to a number they choose; 0056's "overage stays live" clause is
+raise in advance to a number they choose; the "overage stays live" clause is
 withdrawn. `max_billed_services` still caps the free tier at three, and the
 figures for a paid tier remain blocked on usage data that does not exist.
 
@@ -55,7 +55,7 @@ depends_on = None
 
 # The day these first take effect. A later change is a new row with a later
 # `effective_from`, never an edit to this one — that is what stops a repricing
-# restating what a past invoice was computed from (ADR 0083).
+# restating what a past invoice was computed from.
 _EFFECTIVE_FROM = date(2026, 9, 1)
 
 _GIB = 1024**3

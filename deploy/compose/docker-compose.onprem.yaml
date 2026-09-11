@@ -35,10 +35,9 @@ include:
 
 services:
   # ---------- infrastructure ----------
-  # TODO(sizing): every limit below is the laptop budget from
-  #   docs/delivery/dev-environment.md. Server specs are unknown, so ClickHouse
-  #   and Kafka are certainly undersized here. Resize against the real host and
-  #   re-measure the budgets in docs/delivery/phase-1-plan.md section 4 there.
+  # TODO(sizing): every limit below is the laptop budget. Server specs are
+  #   unknown, so ClickHouse and Kafka are certainly undersized here. Resize
+  #   against the real host and re-measure the latency budgets there.
   kafka:
     <<: *service-defaults
     environment:
@@ -77,8 +76,8 @@ services:
       - "443:443"
     environment:
       # Two names, not one: a session cookie scoped to a parent domain reaches
-      # every child, so one name would deliver it on every browser-door beacon
-      # (ADR 0089). Caddy obtains a certificate for each.
+      # every child, so one name would deliver it on every browser-door beacon.
+      # Caddy obtains a certificate for each.
       NEXOVUE_APP_HOST: ${NEXOVUE_APP_HOST:?set NEXOVUE_APP_HOST}
       NEXOVUE_INGEST_HOST: ${NEXOVUE_INGEST_HOST:?set NEXOVUE_INGEST_HOST}
       NEXOVUE_TLS_EMAIL: ${NEXOVUE_TLS_EMAIL:?set NEXOVUE_TLS_EMAIL}
@@ -128,7 +127,7 @@ services:
 
   # One worker process runs every pipeline; WORKER_PIPELINES narrows the set.
   # Deploy this image more than once with different selections when load
-  # justifies separating them — see ADR 0050.
+  # justifies separating them.
   worker:
     <<: *service-defaults
     image: *image-base
@@ -164,7 +163,7 @@ services:
       # ten failed logins a minute lock out the whole deployment.
       TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
       # Object storage: AWS S3, or the SeaweedFS service above for an
-      # air-gapped install. Generic S3 API only (ADR 0015). Holds source map
+      # air-gapped install. Generic S3 API only. Holds source map
       # bytes today and the cold tier when it is built. The bucket must exist —
       # outside development the API does not create its own.
       S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT}

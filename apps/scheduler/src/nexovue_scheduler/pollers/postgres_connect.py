@@ -5,11 +5,11 @@ RDS to sign a token for a database user they created, and use that token as the
 password. The token is valid for fifteen minutes and we never store it, so there
 is no customer database password anywhere in this system.
 
-Self-hosted Postgres has no equivalent, and is **not implemented** — see ADR
-0076. Storing a password would need envelope encryption and a key-management
-scheme we have not decided on, and inventing one badly is worse than the feature
-being absent. Configuring that auth mode fails loudly here rather than falling
-back to something weaker.
+Self-hosted Postgres has no equivalent, and is **not implemented**. Storing a
+password would need envelope encryption and a key-management scheme we have not
+decided on, and inventing one badly is worse than the feature being absent.
+Configuring that auth mode fails loudly here rather than falling back to
+something weaker.
 """
 
 from __future__ import annotations
@@ -42,9 +42,10 @@ READ_ONLY_SESSION: Final = {"default_transaction_read_only": "on"}
 # is why it went unnoticed: RDS rejects an unencrypted connection, so the weakest
 # mode that gets past RDS looks like it worked.
 #
-# It matters because of what this connection carries. ADR 0076's whole argument
-# is that we hold no standing credential and mint a 15-minute token per poll; a
-# token that can be intercepted in transit is a token we may as well have stored.
+# It matters because of what this connection carries. The whole argument for
+# IAM authentication is that we hold no standing credential and mint a
+# 15-minute token per poll; a token that can be intercepted in transit is a
+# token we may as well have stored.
 #
 # `verify-full` also checks the hostname against the certificate, which is what
 # makes pinning an address safe — the objection recorded against T1-2 was that
@@ -98,9 +99,9 @@ class DatabaseTarget:
         if self.auth == AUTH_PASSWORD:
             # Reachable only by a connector created before the API began refusing
             # this, so it is phrased for whoever reads the row's `last_error` —
-            # which is a customer. No ADR number: that is a document they cannot
-            # read, and since ADR 0100 "not implemented" is the wrong answer
-            # anyway, because their own collector can send the same data.
+            # which is a customer. It cites nothing internal they cannot read,
+            # and now that their own collector can send the same data,
+            # "not implemented" is the wrong answer anyway.
             raise DatabaseAuthError(
                 f"{self.host}: this connector reads AWS RDS PostgreSQL with IAM "
                 "database authentication, which is why it needs no password. For a "
@@ -225,9 +226,9 @@ async def connect_read_only(
     """A connection that cannot write, authenticated without a stored secret.
 
     `ca_bundle_path` is passed rather than read from the environment here, for
-    the reason ADR 0098 gives about threading `private_allowed` through the probe
-    boundary: a hidden module-level environment read is the kind of thing that
-    survives into production without anyone choosing it.
+    the same reason `private_allowed` is threaded through the probe boundary: a
+    hidden module-level environment read is the kind of thing that survives into
+    production without anyone choosing it.
     """
     await refuse_unreachable_host(target.host, target.port, private_allowed=private_allowed)
     password = rds_auth_token(target, integration_id=integration_id, region=region)

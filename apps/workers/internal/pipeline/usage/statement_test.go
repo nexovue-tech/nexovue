@@ -13,7 +13,7 @@ import (
 // and never moves again: the column keeps a plausible number, no test that goes
 // through `columnsOf` or the meter notices, and the door it feeds silently
 // stops refusing. That is what happened to `browser_bytes` — deleting its line
-// from the SET clause left the whole suite green (ADR 0097).
+// from the SET clause left the whole suite green.
 //
 // Proving it against a real table needs Postgres; `storeprobe_test.go` is that
 // test. This one runs everywhere and covers the whole class, not one column.

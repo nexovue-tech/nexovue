@@ -43,7 +43,7 @@ const markUsed = `
 
 // The browser door's lookup. It names site_keys, and only site_keys, which is
 // what makes "a public key answered where a secret one was expected" unreachable
-// rather than merely unintended (ADR 0086).
+// rather than merely unintended.
 //
 // There is no key_hash to select because the table has no such column: a site key
 // is stored whole and in the clear, so this exact match on the unique index is

@@ -11,12 +11,12 @@
 -- over `spans`, after `endpoint_stats_1m` (000024) and `service_edges_1m`
 -- (000014). Unlike those two it is written *after* the sampler, deliberately:
 -- it indexes stored spans, so a row here names a trace that can be opened.
--- ADR 0010's "metrics from all traces before sampling" is about metrics; a
+-- The rule "metrics from all traces before sampling" is about metrics; a
 -- list of traces you cannot open would be worse than useless.
 --
 -- ORDER BY puts `start_time` before `trace_id` so the page is a reverse read
 -- of the key with no aggregate at all. `received_at` — our own clock — carries
--- the partition and the TTL, as on `spans` and `span_trace_lookup` (ADR 0067):
+-- the partition and the TTL, as on `spans` and `span_trace_lookup`:
 -- the customer supplies `start_time` and it cannot be trusted to expire data.
 -- `retention_days` is the raw one, not the derived one, because a summary
 -- outliving the spans it points at is a row that claims a trace exists after

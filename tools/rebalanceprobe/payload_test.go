@@ -81,11 +81,11 @@ func blockFrom(t *testing.T, holds func(int32) bool, reaches func(*tracepb.Span)
 // TestTwoWorkersSharesOfAMinuteDeriveDifferentBlocks is the probe's guard
 // against being the thing it measures.
 //
-// ClickHouse deduplicates an insert by the block's content (ADRs 0060 and
-// 0075), and `metrics_sum`, `endpoint_stats_1m` and `service_edges_1m` all have
-// that window on. Two workers holding an even split of one series-minute each
-// insert a partial block for it. If those two blocks are identical the store
-// keeps one and silently drops the other — and the run reads as loss that the
+// ClickHouse deduplicates an insert by the block's content, and `metrics_sum`,
+// `endpoint_stats_1m` and `service_edges_1m` all have that window on. Two
+// workers holding an even split of one series-minute each insert a partial
+// block for it. If those two blocks are identical the store keeps one and
+// silently drops the other — and the run reads as loss that the
 // handover fix did not cause. Counts cannot tell them apart, because an even
 // split is the case being measured; the durations behind them have to.
 func TestTwoWorkersSharesOfAMinuteDeriveDifferentBlocks(t *testing.T) {

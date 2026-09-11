@@ -30,7 +30,7 @@ const (
 	reasonAllowanceSpent = "allowance_spent"
 
 	// reasonBrowserAllowanceSpent is the browser door's share of a split
-	// allowance used up (ADR 0097). Its own tally because it is its own
+	// allowance used up. Its own tally because it is its own
 	// conversation: the server refusal means the free tier is over, this one
 	// means the customer's site — or whoever copied its key — spent the
 	// site's share, and the backend is still reporting.
@@ -50,7 +50,7 @@ const (
 	reasonIngestSuspended = "ingest_suspended"
 
 	// reasonThrottledInProcess is the fallback bound refusing while the shared
-	// rate counter is unreachable (ADR 0104). Counted apart from
+	// rate counter is unreachable. Counted apart from
 	// reasonThrottled because the number it refused at is not the configured
 	// one — it is a multiple of it, per receiver instance — and a support
 	// conversation that cannot tell the two apart is unanswerable.

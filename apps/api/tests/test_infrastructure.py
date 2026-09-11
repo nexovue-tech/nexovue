@@ -198,7 +198,7 @@ def test_both_instrument_tables_are_read() -> None:
 
 
 def test_the_read_is_bounded_on_both_clocks() -> None:
-    """`timestamp` is the customer's clock and `received_at` is ours (ADR 0067).
+    """`timestamp` is the customer's clock and `received_at` is ours.
 
     Only the second prunes partitions, so a statement carrying just the first
     reads every partition in the retention period on every request.
@@ -752,7 +752,7 @@ async def test_a_resource_naming_no_machine_is_named_by_the_process_that_reporte
     """It is not a host, and must never be presented as one.
 
     `service.instance.id` identifies a process. Calling that a host would invent
-    a machine nobody told us about — the mistake ADR 0080 rejected for IP-named
+    a machine nobody told us about — the mistake already rejected for IP-named
     peers — so the kind says `reporter` and the readings stay attached to it.
     """
     node = await _one_node(

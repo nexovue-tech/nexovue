@@ -14,7 +14,7 @@ import (
 const metricsTable = "metrics_sum"
 
 // Every counter here is a per-minute bucket of a quantity that only accumulates
-// within its window, which is OTLP's delta sum exactly (ADR 0066). Stating both
+// within its window, which is OTLP's delta sum exactly. Stating both
 // is what lets a reader turn these rows into a rate without guessing.
 const (
 	deltaTemporality = "DELTA"

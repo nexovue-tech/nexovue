@@ -242,7 +242,7 @@ class TestTranslation:
             _processor().event_from_webhook(body=body, headers=_headers(body))
 
     def test_a_signed_delivery_naming_no_subscription_is_refused(self) -> None:
-        """ADR 0110: the reference is the whole of what a webhook must carry, so
+        """The reference is the whole of what a webhook must carry, so
         one without it cannot be attributed to anybody."""
         body = _payload(subscription_ref=None)
 
@@ -318,9 +318,9 @@ class TestBeginningACheckout:
         assert SETTINGS.webhook_secret not in repr(checkout)
 
     async def test_the_plan_is_priced_per_service_and_the_count_is_the_quantity(self) -> None:
-        """ADR 0111. The processor multiplies, and renders both halves on its own
-        page — so sending a multiplied total would show the customer one service
-        at five times the price."""
+        """The processor multiplies, and renders both halves on its own page —
+        so sending a multiplied total would show the customer one service at
+        five times the price."""
         api = RecordingApi()
 
         await _checkout(api)
@@ -346,8 +346,8 @@ class TestBeginningACheckout:
         assert api.body_of(1)["plan_id"] == "plan_existing"
 
     async def test_a_repricing_makes_a_new_plan_rather_than_reusing_the_old(self) -> None:
-        """ADR 0083 appends price rows, so an old mandate keeps charging the rate
-        it was signed at. Reusing a plan across rates would silently reprice it."""
+        """Price rows are appended, so an old mandate keeps charging the rate it
+        was signed at. Reusing a plan across rates would silently reprice it."""
         stale = f"pro:INR:{COMMITMENT.rate.minor_units - 100}"
         api = RecordingApi(existing_plans=[{"id": "plan_old", "notes": {PLAN_NOTE: stale}}])
 
@@ -387,7 +387,7 @@ class TestConfigurationAndWiring:
     def test_this_processor_asks_for_no_contact_details(self) -> None:
         """Its own page collects them, and its documentation says they are not
         pre-filled even when supplied — so asking first makes a customer type the
-        same thing twice. ADR 0109 is why the screen can find this out."""
+        same thing twice. Declaring it here is how the screen can find this out."""
         assert _processor().required_contact_fields() == frozenset()
 
     def test_the_provider_name_selects_this_implementation(self) -> None:

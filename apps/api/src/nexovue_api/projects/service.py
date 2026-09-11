@@ -13,12 +13,12 @@ effect of this endpoint. It does **not** touch telemetry already in ClickHouse.
 Nothing here can: `TenantScopedPurger` binds an organization and there is no
 project-scoped equivalent, an `ALTER TABLE ... DELETE` cannot be recalled once
 submitted, and the rows expire on their own because retention is stamped on each
-one when it is written (ADR 0072). So the stored data becomes unreadable — every
+one when it is written. So the stored data becomes unreadable — every
 read goes through `require_project`, which refuses a deleted project — and
 expires with the retention window. `ProjectDeleted` says exactly that rather than
 letting "deleted" imply more.
 
-**Both configuration documents are validated before they are stored** (ADR 0105),
+**Both configuration documents are validated before they are stored**,
 and only the masking off-switch is guarded. See `config.py` for the grammar and
 why the check belongs here rather than in the worker.
 """
@@ -89,7 +89,7 @@ async def create(
 
     Empty means the shipped defaults apply, which is the state most projects
     should stay in: masking is irreversible, so the rules that are on by default
-    are only the ones that can never be legitimately needed to debug (ADR 0059).
+    are only the ones that can never be legitimately needed to debug.
     """
     slug = await _slug_for(session, org_id=org_id, requested=request.slug, name=request.name)
     # Written rather than left to the column defaults: a flush does not read a
@@ -186,7 +186,7 @@ async def write_sampling_config(
 
     Sampling is reversible — it changes only what is kept from the next trace
     onward — and a confirmation dialogue on a reversible setting teaches people
-    to click through the one that matters (ADR 0105).
+    to click through the one that matters.
     """
     project = await _lock_or_404(session, org_id=org_id, project_id=project_id)
     project.sampling_config = config.validate_sampling_document(document)

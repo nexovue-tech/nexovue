@@ -88,7 +88,7 @@ echo "manifest: measuring"
 
     # Recorded and never restored, in either store. Here so an operator can see
     # what the pipeline had reached, and so a cold-start rebuild has a number to
-    # start from — ADR 0068 and ADR 0095.
+    # start from.
     for table in "${KEEPERMAP_TABLES[@]}"; do
         echo "watermark.ch.$table=$(ch --query "SELECT count() FROM \`$table\`")"
     done

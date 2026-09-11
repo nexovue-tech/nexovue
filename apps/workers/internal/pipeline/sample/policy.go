@@ -3,7 +3,7 @@
 //
 // It sits *after* metric derivation on purpose. Counters are computed from
 // every trace, so dropping 90% of healthy traces from storage leaves every
-// count, rate and total exact (ADR 0010).
+// count, rate and total exact.
 package sample
 
 import (
@@ -36,8 +36,8 @@ type Policy struct {
 	KeepingFirstTraces bool
 }
 
-// DefaultPolicy is ADR 0010's default: every error, every trace slower than the
-// threshold, one healthy trace in ten.
+// DefaultPolicy is the shipped sampling policy: every error, every trace slower
+// than the threshold, one healthy trace in ten.
 func DefaultPolicy(slowThreshold time.Duration, healthyPercent int) Policy {
 	return Policy{
 		KeepErrors:     true,

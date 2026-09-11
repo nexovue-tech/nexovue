@@ -69,7 +69,7 @@ EXCLUDED_TABLES: Final[dict[str, str]] = {
     "usage_ingest_offsets": (
         "keyed by topic and partition, not by tenant — the Postgres twin of the "
         "ClickHouse watermark tables. Losing a row makes the meter re-count "
-        "ingestion it already counted: a silent, permanent over-count (ADR 0094)"
+        "ingestion it already counted: a silent, permanent over-count"
     ),
     "alembic_version": "Alembic's own bookkeeping; holds no customer data",
 }

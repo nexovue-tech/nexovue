@@ -12,10 +12,10 @@ import (
 
 // Counter idempotency, proven deterministically rather than raced.
 //
-// ADR 0060 made a replayed counter block harmless by opening ClickHouse's insert
-// deduplication window, and recorded that the log might not survive a restart of
-// ClickHouse itself. ADR 0061 confirmed it does not. The durable per-partition
-// state in KeeperMap is what replaced it.
+// The first design made a replayed counter block harmless by opening
+// ClickHouse's insert deduplication window, and recorded that the log might not
+// survive a restart of ClickHouse itself. Measurement confirmed it does not.
+// The durable per-partition state in KeeperMap is what replaced it.
 //
 // The chaos test cannot prove this: whether a replay even happens there depends on
 // where the outage lands, and its overcount signal is confounded by the receiver
@@ -42,7 +42,7 @@ func TestReplayedOffsetsAreNotCountedTwice(t *testing.T) {
 	// Restarting the store is what makes this a real test of the durable state:
 	// it discards the in-memory deduplication log that would otherwise catch a
 	// replayed block and hide whether the state machine works at all.
-	t.Log("restarting clickhouse (which does NOT discard its deduplication log — measured, ADR 0075; the rewind below is what removes that protection)")
+	t.Log("restarting clickhouse (which does NOT discard its deduplication log — measured; the rewind below is what removes that protection)")
 	compose(t, "restart", "clickhouse")
 	waitForStore(t)
 

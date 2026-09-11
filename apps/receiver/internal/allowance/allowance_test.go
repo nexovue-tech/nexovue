@@ -24,7 +24,7 @@ const (
 	freeServerBytes  = freeIncluded - freeBrowserBytes
 )
 
-// The two doors as the envelope names them (ADR 0097).
+// The two doors as the envelope names them.
 const (
 	serverDoor  = nexovuev1.Door_DOOR_OTLP
 	browserDoor = nexovuev1.Door_DOOR_RUM
@@ -264,8 +264,7 @@ func TestTheAllowanceResetsOnTheFirstOfTheNextMonth(t *testing.T) {
 }
 
 // The rate applied is the one in force today, not on the month's last day: a
-// repricing that starts on the 20th must not govern a month sitting on the 15th
-// (ADR 0083).
+// repricing that starts on the 20th must not govern a month sitting on the 15th.
 func TestThePriceIsAskedForAsOfTodayNotTheMonthsEnd(t *testing.T) {
 	usage := &fakeUsage{usage: Usage{Found: true}}
 	checker := newChecker(usage)
@@ -344,10 +343,10 @@ func TestThePlansOwnCeilingWinsOverTheCommittedCount(t *testing.T) {
 	}
 }
 
-// A committed customer past their ceiling is refused, which is ADR 0107's whole
-// point — and the browser share applies to a paid allowance exactly as it does
-// to a free one, because it is a share of whatever the allowance turned out
-// to be rather than of the free tier's number.
+// A committed customer past their ceiling is refused, which is the whole point
+// of the commitment — and the browser share applies to a paid allowance exactly
+// as it does to a free one, because it is a share of whatever the allowance
+// turned out to be rather than of the free tier's number.
 func TestACommittedCustomerPastTheirCeilingIsRefused(t *testing.T) {
 	perService, committed, share := 2*gib, int32(10), int16(freeBrowserShare)
 	committedIncluded := 20 * gib
@@ -357,7 +356,7 @@ func TestACommittedCustomerPastTheirCeilingIsRefused(t *testing.T) {
 	}
 
 	if !checkAt(t, usage, serverDoor).Refused() {
-		t.Error("admitted a byte past a paid customer's own ceiling; ADR 0107 says we stop")
+		t.Error("admitted a byte past a paid customer's own ceiling; that ceiling is where we stop")
 	}
 
 	under := &fakeUsage{usage: usageFrom(&perService, nil, &share, &committed, 1, 1)}
@@ -473,7 +472,8 @@ func TestARowRecordingNoShareIsPooledAcrossBothDoors(t *testing.T) {
 
 // The property the split exists for: a public key is printed in the page, so
 // anyone can spend the browser's share — and however far they spend it, the
-// server door still answers. The DoS ADR 0093 opened is closed here or nowhere.
+// server door still answers. The DoS the pooled allowance opened is closed here
+// or nowhere.
 func TestASpentBrowserShareDoesNotSpendTheServers(t *testing.T) {
 	cases := []struct {
 		name            string
@@ -527,7 +527,7 @@ func TestTheBrowserDoorCannotSpendPastAPlanTheServerAlreadyFilled(t *testing.T) 
 	verdict := checkAt(t, spentOnTheServer, browserDoor)
 	if !verdict.Refused() {
 		t.Error("the browser door was admitted on a plan the server door had already spent; " +
-			"the two now sum past the month, which is what ADR 0093 refuses")
+			"the two now sum past the month, which the plan's total refuses")
 	}
 }
 

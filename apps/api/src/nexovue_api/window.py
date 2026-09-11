@@ -14,7 +14,7 @@ from nexovue_api.errors.exceptions import InvalidRequestError
 DEFAULT_WINDOW: Final = timedelta(hours=1)
 
 # Every telemetry table is partitioned on `received_at`, our own clock, while
-# callers ask questions about `timestamp`, the customer's (ADR 0067). ClickHouse
+# callers ask questions about `timestamp`, the customer's. ClickHouse
 # cannot relate the two, so a bound on one prunes nothing on the other. A query
 # that wants partition pruning therefore widens its window by this much and
 # bounds `received_at` with it as well.

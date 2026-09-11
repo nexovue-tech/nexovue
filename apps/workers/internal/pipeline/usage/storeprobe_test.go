@@ -17,7 +17,7 @@ import (
 // inserted and never accumulated. This runs the statement twice against a real
 // `usage_daily` and reads the row back, which is the only thing that proves the
 // column exists, the check constraint admits the values, and a second flush
-// adds rather than replaces (ADR 0097).
+// adds rather than replaces.
 //
 // Behind a build tag: it needs a running Postgres with the migrations applied,
 // which `go test ./...` does not have. Run it with

@@ -7,7 +7,7 @@ import "time"
 //
 // Nothing here is derived or converted. A point is written with the temporality,
 // start time and flags the SDK sent, because none of them can be recovered later
-// and a guess baked into stored data is not recoverable at all (ADR 0066).
+// and a guess baked into stored data is not recoverable at all.
 type point struct {
 	// Timestamp is the client's own clock: when the point was recorded.
 	Timestamp time.Time
@@ -16,11 +16,10 @@ type point struct {
 	// counter that fell, so it is stored even when the SDK left it zero.
 	StartTimestamp time.Time
 	// ReceivedAt is our own clock. The row partitions and expires on it, so a
-	// client's wrong clock cannot pin a row in storage or delete it early
-	// (ADR 0067).
+	// client's wrong clock cannot pin a row in storage or delete it early.
 	ReceivedAt time.Time
 	// RetentionDays is the project's derived-signal retention, in the partition
-	// key so a part holds one retention and drops whole (ADR 0072).
+	// key so a part holds one retention and drops whole.
 	RetentionDays uint16
 
 	TenantID  string
@@ -48,7 +47,7 @@ type point struct {
 
 // exemplars is the Nested group as ClickHouse stores it: four parallel arrays,
 // one row's worth. An exemplar is the only link from a metric point back to a
-// trace, which is why they are stored at all (ADR 0066).
+// trace, which is why they are stored at all.
 type exemplars struct {
 	Timestamps []time.Time
 	Values     []float64

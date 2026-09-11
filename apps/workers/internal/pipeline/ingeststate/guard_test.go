@@ -91,7 +91,7 @@ func counting(guard *ingeststate.Guard, incoming ingeststate.Range) ingeststate.
 	return guard.Counting(map[ingeststate.Partition]ingeststate.Range{partition: incoming})[partition]
 }
 
-// The failure ADR 0061 measured, in one test: counters reach the store, the
+// The measured failure, in one test: counters reach the store, the
 // offsets never commit, and the replay after the restart must not count them
 // again.
 func TestAReplayAfterAConfirmedSettlementIsNotCountedAgain(t *testing.T) {
@@ -119,7 +119,7 @@ func TestAReplayAfterAConfirmedSettlementIsNotCountedAgain(t *testing.T) {
 }
 
 // The ambiguous half: the insert was in flight when everything died, so nobody
-// knows whether it landed. Counting again risks a duplicate that ADR 0060's
+// knows whether it landed. Counting again risks a duplicate that ClickHouse's
 // insert deduplication drops; skipping guarantees a hole nothing can fill.
 func TestAnInterruptedSettlementIsCountedAgain(t *testing.T) {
 	store := newFakeStore()

@@ -143,8 +143,8 @@ class CapturingSession:
 class StubProcessor:
     """A `PaymentProcessor` that never imports one.
 
-    This class existing at all is what ADR 0102's "Protocol rather than a base
-    class" bought: structural typing means a double does not inherit from us.
+    This class existing at all is what "Protocol rather than a base class"
+    bought: structural typing means a double does not inherit from us.
     """
 
     event: BillingEvent | None = None
@@ -215,7 +215,7 @@ def _event(
     *,
     subscription_ref: str = SUBSCRIPTION_REF,
 ) -> BillingEvent:
-    """ADR 0110: an event carries no organization and no plan. Both come from
+    """An event carries no organization and no plan. Both come from
     the row the checkout wrote, which the reference names."""
     return BillingEvent(kind=kind, subscription_ref=subscription_ref, delivery_id=DELIVERY_ID)
 
@@ -252,8 +252,8 @@ def _pending(
 ) -> BillingSubscription:
     """The row `begin_plan_change` writes before the customer is redirected.
 
-    ADR 0110 makes it the thing every webhook is resolved against, so a test
-    with no such row is testing an event this system has no record of starting.
+    It is the thing every webhook is resolved against, so a test with no such
+    row is testing an event this system has no record of starting.
     """
     return BillingSubscription(
         org_id=org_id,
@@ -401,7 +401,7 @@ async def test_a_replayed_delivery_changes_nothing() -> None:
 async def test_an_activation_activates_the_pending_row_and_records_the_delivery() -> None:
     """The arrangement is not created here — it was created by the checkout.
 
-    ADR 0110: the event carries no organization, so an activation can only ever
+    The event carries no organization, so an activation can only ever
     move a row that already exists. What it proves is that the delivery lands on
     the tenant the *checkout* named, not one the processor did.
     """
@@ -428,9 +428,9 @@ async def test_an_activation_activates_the_pending_row_and_records_the_delivery(
 
 
 async def test_an_event_naming_a_subscription_no_checkout_started_is_not_attributed() -> None:
-    """The refusal ADR 0110 turns on. Signed, so not a forgery — and about an
-    arrangement this system has no record of starting, which no amount of
-    payload gives an honest owner. Acknowledged so it stops being redelivered,
+    """The refusal that webhook attribution rests on. Signed, so not a forgery — and
+    about an arrangement this system has no record of starting, which no amount
+    of payload gives an honest owner. Acknowledged so it stops being redelivered,
     and nothing is written."""
     session = CapturingSession(answers=[None])
     configured = _configured(StubProcessor(event=_event()))
@@ -776,8 +776,8 @@ def _delivery_answers(organization: Organization | None) -> list[Any]:
 
     Three scalars, in order: which arrangement this reference names, whether
     this delivery has been seen, and the organization that arrangement belongs
-    to. The reference resolves first — ADR 0110 — because it is what establishes
-    the tenant the other two are asked about.
+    to. The reference resolves first because it is what establishes the tenant
+    the other two are asked about.
     """
     return [_pending(), None, organization]
 
@@ -883,7 +883,7 @@ TODAY: Final = date(2026, 9, 8)
 
 
 class TestTheCommitment:
-    """ADR 0107's ceiling, in money, from the row the usage screen already reads."""
+    """The customer's ceiling, in money, from the row the usage screen already reads."""
 
     async def test_the_commitment_carries_the_rate_and_the_count_separately(self) -> None:
         """Not a multiplied total. One processor wants a ceiling for the whole
@@ -923,8 +923,8 @@ class TestTheCommitment:
         assert isinstance(commitment.total().minor_units, int)
 
     async def test_the_rate_is_the_one_in_force_on_the_day(self) -> None:
-        """ADR 0083 appends price rows with an effective date, so a repricing
-        next month must not change a mandate signed this month."""
+        """Price rows are appended with an effective date, so a repricing next
+        month must not change a mandate signed this month."""
         session = CapturingSession(answers=[_PRO_PRICE])
 
         commitment = await service.commitment_for(
@@ -1057,7 +1057,7 @@ class TestStartingACheckout:
         assert processor.checkouts[0]["org_id"] == ORG_ID
 
     async def test_the_contact_reaches_the_processor_and_is_never_staged(self) -> None:
-        """ADR 0109: the processor holds what the bank's notice needs and we hold
+        """The processor holds what the bank's notice needs and we hold
         no copy. Nothing carrying a phone number may be staged for the store."""
         processor = StubProcessor()
         session = CapturingSession(answers=[_plan_row(), None, _PRO_PRICE])
@@ -1074,8 +1074,8 @@ class TestStartingACheckout:
 
         assert processor.checkouts[0]["contact"].phone == "+919000000000"
 
-        # A row is staged now — ADR 0110 — so "never staged" is checked against
-        # what that row holds rather than against there being no row at all.
+        # A row is staged now, so "never staged" is checked against what that
+        # row holds rather than against there being no row at all.
         staged = session.staged_of(BillingSubscription)[0]
         written = " ".join(
             str(getattr(staged, column.name, None))
@@ -1294,8 +1294,9 @@ class TestEndingASubscription:
             )
 
     async def test_an_arrangement_at_another_processor_is_not_cancelled_here(self) -> None:
-        """ADR 0102 expects two. Naming this subscription at the wrong one would
-        get a "not found" reported to the customer as a failed cancellation."""
+        """The design expects two processors. Naming this subscription at the
+        wrong one would get a "not found" reported to the customer as a failed
+        cancellation."""
         foreign = BillingSubscription(
             org_id=ORG_ID,
             processor="a-different-processor",
@@ -1455,7 +1456,7 @@ class TestTheBillingScreen:
         assert period.allowance_enforced is usage_billing.allowance_is_enforced(_FREE_PRICE, None)
 
     async def test_the_screen_is_told_which_contact_fields_to_collect(self) -> None:
-        """ADR 0109: the processor declares what it needs and the form renders
+        """The processor declares what it needs and the form renders
         exactly that. The stub asks for an email alone, deliberately unlike the
         domestic processor's three — a screen that hard-coded name, email and
         phone would pass against a double that mirrored one implementation."""
@@ -1539,7 +1540,7 @@ class TestTheBillingScreen:
         assert overview.currency == usage_queries.DEFAULT_BILLING_CURRENCY
 
     async def test_the_period_is_the_calendar_month_the_day_falls_in(self) -> None:
-        """ADR 0083: the bill covers a calendar month, not an anniversary."""
+        """The bill covers a calendar month, not an anniversary."""
         session = _overview_session()
 
         overview = await service.overview(
@@ -1555,9 +1556,10 @@ class TestTheBillingScreen:
     async def test_a_free_tier_is_told_that_going_past_the_allowance_stops_ingestion(
         self,
     ) -> None:
-        """ADR 0107's sentence, and the screen cannot write it without this flag.
-        Sent rather than derived: which tiers are capped is policy, and a screen
-        working it out from the price row is a second place for it to be wrong."""
+        """The sentence the customer must be shown, and the screen cannot write
+        it without this flag. Sent rather than derived: which tiers are capped
+        is policy, and a screen working it out from the price row is a second
+        place for it to be wrong."""
         session = _overview_session(price=_FREE_PRICE)
 
         overview = await service.overview(
@@ -1591,10 +1593,10 @@ class TestTheBillingScreen:
         assert overview.period.included_bytes is None
 
     async def test_a_paid_tier_is_shown_the_ceiling_it_committed_to(self) -> None:
-        """G6a on the screen. ADR 0107 promised the customer a ceiling they set
-        and can see; showing it is the second half of enforcing it, because a
+        """G6a on the screen. The customer was promised a ceiling they set and
+        can see; showing it is the second half of enforcing it, because a
         customer stopped at a number they were never shown has been surprised
-        into it — which is exactly what that ADR refuses."""
+        into it — which is exactly what the design refuses."""
         session = _overview_session(plan_slug="pro", price=_PRO_PRICE, services_committed=5)
 
         overview = await service.overview(
@@ -1626,7 +1628,7 @@ class TestTheBillingScreen:
     async def test_the_subscription_is_shown_without_the_processors_name_or_reference(
         self,
     ) -> None:
-        """ADR 0102 keeps the vendor out of everything above the adapter, and a
+        """The vendor is kept out of everything above the adapter, and a
         subscription id is of use to nobody reading a screen."""
         session = _overview_session(
             plan_slug="pro",

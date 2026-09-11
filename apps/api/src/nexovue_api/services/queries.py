@@ -11,7 +11,7 @@ disagree.
 
 **The rows are counted before sampling.** The trace pipeline's `derive` stage
 fills this table itself, over every span of every trace, and the sampler runs
-after it (ADR 0010). Until 000024 a materialized view over `spans` filled it
+after it. Until 000024 a materialized view over `spans` filled it
 instead, which put it *downstream* of tail sampling — so these statements
 returned about a tenth of the real request rate at about ten times the real
 error rate, because the sampler keeps every failed and every slow trace but
@@ -20,7 +20,7 @@ did.
 
 **Partition pruning.** Unlike `spans`, this table is partitioned on `minute` —
 the bucket itself — so a bound on `minute` prunes directly and there is no
-receive-clock window to widen. ADR 0067 applies to the raw signals, which are
+receive-clock window to widen. The widening applies to the raw signals, which are
 partitioned on our clock and queried on the customer's; a rollup keyed on the
 bucket has only one clock.
 

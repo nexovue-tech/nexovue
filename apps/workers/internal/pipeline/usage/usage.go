@@ -1,10 +1,10 @@
 // Package usage meters what each tenant ingested, per day, into the control
 // plane. Two tables, because a bill and a guardrail are different numbers:
 // `usage_daily` holds the counters — spans, logs, points, bytes — and
-// `usage_daily_services` holds the billing unit ADR 0056 chose, the distinct
-// `service.name` a project sent something for on a day. Nothing else writes
-// either, so without this the usage screen reports zeros and no bill has a
-// basis.
+// `usage_daily_services` holds the billing unit the pricing model chose, the
+// distinct `service.name` a project sent something for on a day. Nothing else
+// writes either, so without this the usage screen reports zeros and no bill has
+// a basis.
 //
 // It counts what ARRIVED, not what was stored. The job consumes the ingestion
 // topics themselves, which sit before tail sampling, so a tenant whose healthy
@@ -12,8 +12,8 @@
 // That is what the control plane already claims these counters mean —
 // apps/api/src/nexovue_api/usage/router.py says re-counting telemetry would
 // report "what survived sampling and retention rather than what arrived" — and
-// what the pipeline invariant in apps/workers/CLAUDE.md says about deriving
-// before sampling. Counting at the ClickHouse sink instead would meter roughly
+// it is the same rule that makes the pipeline derive counters before sampling.
+// Counting at the ClickHouse sink instead would meter roughly
 // a seventh of a customer's traces, in the customer's favour.
 //
 // It is its own consumer group per topic rather than a stage inside the three
@@ -44,11 +44,11 @@ import (
 //
 // Bytes is the OTLP payload the customer sent, not the Kafka record: the
 // envelope around it is our own metadata, and metering a customer on our
-// wrapper would meter our own overhead. It is the same measurement ADR 0056
-// costed the pricing model against — bytes on the ingestion topic.
+// wrapper would meter our own overhead. It is the same measurement the pricing
+// model was costed against — bytes on the ingestion topic.
 //
 // BrowserBytes is the part of Bytes that came through the browser door, which
-// the plan's allowance budgets on its own (ADR 0097): a public site key is
+// the plan's allowance budgets on its own: a public site key is
 // printed in the customer's page, so anyone can spend the browser's share, and
 // the door keeps that spending out of the server's share only if the meter
 // records which door each byte came through.
@@ -76,7 +76,7 @@ func (c Counts) empty() bool {
 }
 
 // Metered is one message: the four guardrail counters, and the services that
-// carried them. The services are the bill — ADR 0056 prices per service
+// carried them. The services are the bill — the plan prices per service
 // monitored — and the counters are what shows the volume behind it.
 type Metered struct {
 	Counts
@@ -207,7 +207,7 @@ var (
 	}
 
 	// Metrics meters customer-sent OTLP metrics, counted in data points because
-	// that is the unit the five metric tables store a row per (ADR 0066).
+	// that is the unit the five metric tables store a row per.
 	Metrics = Signal{
 		Name: "usage-counting-metrics",
 		wire: nexovuev1.Signal_SIGNAL_METRICS,
@@ -251,7 +251,7 @@ func (s Signal) meter(message []byte) (*nexovuev1.Envelope, Metered, error) {
 // is charged: all of it when the envelope names the browser door, none
 // otherwise. Every other entrance — the server door, the scheduler's doors, and
 // an envelope that names none — is the server's, because a byte the browser
-// door cannot spend is what the split protects (ADR 0097).
+// door cannot spend is what the split protects.
 func browserBytesOf(door nexovuev1.Door, payloadBytes int64) int64 {
 	if door == nexovuev1.Door_DOOR_RUM {
 		return payloadBytes

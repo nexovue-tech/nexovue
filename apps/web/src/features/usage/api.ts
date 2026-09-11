@@ -8,7 +8,7 @@ import type { DayRange } from "./usage-range";
  * The usage endpoint, unchanged. Field names are the API's.
  *
  * Read for the whole organization and never narrowed to the selected project: the
- * billing unit is distinct services per project (ADR 0056), so one project's slice of
+ * billing unit is distinct services per project, so one project's slice of
  * it is not a smaller bill — it is a different number, and a customer reading this
  * screen is reading a bill.
  */

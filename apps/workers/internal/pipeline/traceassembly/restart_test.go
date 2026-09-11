@@ -9,7 +9,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
 )
 
-// samplingWindow is what the deployment default holds a trace for (ADR 0058).
+// samplingWindow is what the deployment default holds a trace for.
 const samplingWindow = 10 * time.Second
 
 // The ordering the whole fix rests on: the span watermark may only claim

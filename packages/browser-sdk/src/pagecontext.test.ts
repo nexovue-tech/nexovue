@@ -6,7 +6,7 @@ import type { ResolvedConfig } from "./config";
 import { pageViewAttributes, reportableUrl } from "./pagecontext";
 
 /**
- * ADR 0103, asserted rather than trusted.
+ * URL trimming, asserted rather than trusted.
  *
  * The defect this covers was in the store, not in a review: with the option off,
  * ten records from our own SDK had an empty `url.query` and two of them still

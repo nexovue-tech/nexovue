@@ -84,8 +84,7 @@ func (q *Queue[S]) Ready(stored func(S) bool) []Position {
 // It scans the same prefix Ready does and stops at the same place. A pipeline
 // whose batches produce several things asks with one of them: a batch's rows
 // can still be buffered while its counters are already exact, and a durable
-// record of the counted offsets needs to be written before the offsets move
-// (ADR 0061).
+// record of the counted offsets needs to be written before the offsets move.
 func (q *Queue[S]) Reached(stored func(S) bool) []Position {
 	reached, _ := q.prefix(stored)
 	return reached

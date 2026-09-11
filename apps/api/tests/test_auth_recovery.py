@@ -52,9 +52,9 @@ class RecordingSender:
     """Captures what would have been mailed.
 
     Annotated to satisfy `EmailSender` structurally rather than by inheritance,
-    which is the property ADR 0102's port exists for — a double with no import
-    of any provider. mypy checks the assignment below, so a drifted signature is
-    a type error here rather than a surprise at a call site.
+    which is the property the port exists for — a double with no import of any
+    provider. mypy checks the assignment below, so a drifted signature is a type
+    error here rather than a surprise at a call site.
     """
 
     def __init__(self) -> None:

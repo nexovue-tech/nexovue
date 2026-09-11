@@ -132,7 +132,7 @@ _QUOTED: Final = re.compile(r'"([^"]+)"')
 
 
 def test_the_sensitive_query_parameters_are_the_same_list_in_both_languages() -> None:
-    """ADR 0103 puts one list in two languages, and neither can import the other.
+    """One list lives in two languages, and neither can import the other.
 
     The failure it prevents is quiet in the way this file's header describes: a
     parameter added on the SDK side and not on the probe's is a signature that
@@ -175,7 +175,7 @@ def _document_keys(source: Path, struct: str) -> list[str]:
 
 
 def test_the_masking_document_keys_are_the_ones_the_worker_binds() -> None:
-    """ADR 0105 puts one grammar in two languages, and neither can import the other.
+    """One grammar lives in two languages, and neither can import the other.
 
     The API refuses a document the worker would reject, which is the whole point
     of validating on write: `refresh.go` falls back to defaults that name no

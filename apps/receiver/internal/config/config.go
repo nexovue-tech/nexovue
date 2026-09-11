@@ -104,7 +104,7 @@ type Config struct {
 
 	// Pool sizes are stated rather than inherited: pgx defaults to one
 	// connection per CPU, which is far more than a cached key lookup needs and
-	// scales with the host rather than with the workload (ADR 0055).
+	// scales with the host rather than with the workload.
 	PostgresMaxConns int32 `env:"RECEIVER_POSTGRES_MAX_CONNS" envDefault:"10"`
 	PostgresMinConns int32 `env:"RECEIVER_POSTGRES_MIN_CONNS" envDefault:"2"`
 

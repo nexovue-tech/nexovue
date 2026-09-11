@@ -11,7 +11,7 @@ but cannot use the sort key to get there, which is why the metric names are
 listed rather than matched by prefix.
 
 The table is partitioned on `received_at`, our own receive clock, not on the
-customer `timestamp` a caller asks questions about (ADR 0067). A bound on
+customer `timestamp` a caller asks questions about. A bound on
 `timestamp` therefore prunes no partitions, and every statement below carries a
 `received_at` range as well — widened by `window.RECEIVE_CLOCK_SLACK`.
 

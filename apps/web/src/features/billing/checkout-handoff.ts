@@ -5,7 +5,8 @@
  * with a style, a script and an options object; this file loads the script and
  * constructs whatever the script defined, using names the API supplied. A
  * switch of processor is then a change to one adapter on the server, which is
- * what ADR 0102 bought and what a hard-coded option name here would spend.
+ * what the processor-agnostic port bought and what a hard-coded option name
+ * here would spend.
  *
  * The options object is opaque on purpose. Reading a key of it — to prefill a
  * field, to change an amount — is how this file learns whose processor it is,

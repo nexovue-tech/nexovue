@@ -318,7 +318,8 @@ def _usage(
     browser_byte_count: int = 0,
 ) -> UsageDaily:
     # `browser_bytes` is a part of `bytes`, so the default is a day nothing was
-    # sent through the browser door — which is every row before ADR 0097.
+    # sent through the browser door — which is every row written before the
+    # browser door was metered on its own.
     return UsageDaily(
         org_id=org_id,
         project_id=project_id,
@@ -388,7 +389,7 @@ async def test_the_days_carry_the_counters_the_row_held() -> None:
 
 async def test_the_plan_comes_from_the_database_and_not_from_a_constant() -> None:
     """Retention is what a usage screen shows beside the counters: how long what
-    was ingested stays readable. Tiers change without a deploy (ADR 0071)."""
+    was ingested stays readable. Tiers change without a deploy."""
     on_free = await _read(ORG_ID, plan="free")
     on_pro = await _read(ORG_ID, plan="pro")
 
@@ -761,7 +762,7 @@ async def test_no_price_recorded_means_no_cost_and_never_a_zero() -> None:
 
 
 async def test_the_ceiling_holds_the_billed_quantity_down() -> None:
-    """ADR 0056's cap is on the service-count component, and this is it."""
+    """The cap is on the service-count component, and this is it."""
     many = [_service(ORG_ID, PROJECT_ID, TO_DAY, f"service-{index}") for index in range(10)]
 
     response = await _priced(many, price=_price(ceiling=4))
@@ -892,7 +893,7 @@ async def test_the_allowance_follows_the_ceiling_not_the_raw_count() -> None:
 async def test_a_capped_tier_grants_the_whole_ceiling_below_it_too() -> None:
     """The allowance is the plan's, not the running count's.
 
-    It is enforced at the ingest door (ADR 0093), so it must not move with the
+    It is enforced at the ingest door, so it must not move with the
     service count: a customer refused at one service's worth would otherwise be
     told that starting a second service is the remedy.
     """
@@ -988,7 +989,7 @@ async def test_an_unused_browser_cap_is_not_withheld_from_the_month() -> None:
 
 
 async def test_a_row_recording_no_share_reports_no_split() -> None:
-    """Every row before ADR 0097, and what they still mean: one allowance.
+    """Every row written before a split existed, and what they still mean: one allowance.
 
     A null cap rather than a copy of the whole, because the screen has to be
     able to tell "every door spends this" from "the browser door may spend all

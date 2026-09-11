@@ -48,9 +48,9 @@
 -- in — a data loss between receiver and storage, which Phase 1 forbids.
 --
 -- `received_at` is our clock and carries both the partition key and the TTL;
--- `timestamp` is the browser's and is never trusted to expire data. ADR 0067
--- names door 3 as the reason, and this is the table it was written about: a
--- visitor's device clock can be set to any year at all.
+-- `timestamp` is the browser's and is never trusted to expire data. Door 3 is
+-- the reason, and this is the table that rule was written about: a visitor's
+-- device clock can be set to any year at all.
 --
 -- The deduplication window is necessary and not sufficient. Measured on this
 -- server: a repeated `INSERT ... VALUES` is dropped, a repeated `INSERT ...

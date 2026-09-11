@@ -14,9 +14,9 @@ Creating answers 201 with the plaintext key in the body. That body is the only
 place the secret ever exists outside the customer's own configuration, and there
 is no second route that could read it back.
 
-**Site keys are separate routes, not a `kind` parameter on these ones** (ADR
-0086). `/api-keys` mints and lists the secret, server-side kind; `/site-keys`
-mints and lists the public, browser-side kind, and neither can produce the other.
+**Site keys are separate routes, not a `kind` parameter on these ones**.
+`/api-keys` mints and lists the secret, server-side kind; `/site-keys` mints and
+lists the public, browser-side kind, and neither can produce the other.
 The distinction is carried onto the wire as a fixed `kind` on every response, so
 the console never has to infer which it is holding from the route it called.
 """

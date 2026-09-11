@@ -17,12 +17,12 @@ import (
 // The two halves are one transaction on purpose. Delivery is at-least-once, so
 // a replay is not an error case but the normal consequence of a crash between
 // a write and a commit; and an addition applied twice is a customer billed
-// twice. ADR 0060 and 0061 had to solve that for the ClickHouse counters with a
-// BEFORE/AFTER bracket around the insert, because ClickHouse has no transaction
-// to put both writes in, and 0075 then leaned on the store's own block
-// deduplication for the window that bracket leaves open. Postgres does have the
-// transaction, so the same problem here has no such window: the offsets and the
-// counters move together or neither moves.
+// twice. The ClickHouse counters had to solve that with a BEFORE/AFTER bracket
+// around the insert, because ClickHouse has no transaction to put both writes
+// in, and then leaned on the store's own block deduplication for the window
+// that bracket leaves open. Postgres does have the transaction, so the same
+// problem here has no such window: the offsets and the counters move together
+// or neither moves.
 type Store interface {
 	// CountedThrough reads the highest offset already applied, per partition.
 	CountedThrough(ctx context.Context) (map[int32]int64, error)
@@ -111,7 +111,7 @@ const advanceOffsets = `
 //
 // `browser_bytes` is the part of `bytes` that came through the browser door,
 // added beside it rather than instead of it, so `bytes` stays the whole month
-// the usage screen shows (ADR 0097).
+// the usage screen shows.
 const addCounters = `
 	INSERT INTO usage_daily AS existing
 		(org_id, project_id, day, spans, logs, metric_points, bytes, browser_bytes)

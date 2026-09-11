@@ -8,7 +8,7 @@ import (
 // Where each door is willing to read a credential from, and what resolves it.
 //
 // This is a decision about the credential, not about the transport, so it lives
-// here rather than in whichever handler happens to call it (ADR 0086).
+// here rather than in whichever handler happens to call it.
 //
 // **The server door reads the header and nothing else.** A secret key in a URL
 // is a secret key in an access log, in a proxy's log, and in anything that
@@ -39,7 +39,7 @@ const SiteKeyQueryParam = "nexovue_site_key"
 // Both authenticators satisfy it and neither can satisfy the other's half. A
 // door is handed exactly one of them when it is mounted, so nothing on the
 // request path ever chooses an authenticator by inspecting the key presented.
-// That branch is what two tables exist to prevent (ADR 0086) and it must not
+// That branch is what two tables exist to prevent and it must not
 // reappear one level up.
 type Gatekeeper interface {
 	PresentedKey(*http.Request) string

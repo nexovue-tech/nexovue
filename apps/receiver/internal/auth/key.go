@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 )
 
-// The ingest key format, documented in docs/architecture/tenancy-and-data-model.md:
+// The ingest key format:
 //
 //	nvk_live_<22 chars base62>
 //	└──┬───┘ └────────┬───────┘

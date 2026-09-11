@@ -5,7 +5,7 @@
 // Reproducible is the hard requirement. A worker that crashes between the
 // insert and the offset commit re-derives the same minute from the same
 // offsets, and the store only recognises the repeat if the block is
-// byte-identical (ADR 0060) — so the sample cannot come from a random
+// byte-identical — so the sample cannot come from a random
 // generator. Each duration is weighted by a hash of its own span id and the
 // smallest weights win: the same spans always produce the same sample, whatever
 // order they arrive in.
@@ -73,9 +73,9 @@ func (r *Reservoir) Observe(weight uint64, ms float64) {
 // two together.
 //
 // It exists because a bucket accumulates one sample per Kafka partition, so
-// that a partition handed to another worker can have its share dropped
-// (ADR 0094). The result is the same sample the whole bucket would have built
-// on its own: the weights decide what is kept, so which partition a duration
+// that a partition handed to another worker can have its share dropped. The
+// result is the same sample the whole bucket would have built on its own: the
+// weights decide what is kept, so which partition a duration
 // arrived on cannot change the answer.
 func (r *Reservoir) Merge(other Reservoir) {
 	for _, sample := range other.kept {

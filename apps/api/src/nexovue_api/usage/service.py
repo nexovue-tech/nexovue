@@ -2,11 +2,11 @@
 
 No SQL text and no HTTP.
 
-**The billable number.** ADR 0056 prices per service monitored; ADR 0077 makes
-that countable, as `usage_daily_services` — one row per service a project sent
-something for on a day. The count here is `count(*)` over that set, and the
-range total is a union rather than a sum, because a service running all month is
-one service that month.
+**The billable number.** Pricing is per service monitored; `usage_daily_services`
+makes that countable — one row per service a project sent something for on a
+day. The count here is `count(*)` over that set, and the range total is a union
+rather than a sum, because a service running all month is one service that
+month.
 
 **The cost.** The period is the calendar month, the quantity is the union of
 services over it, and the rate is the row in force — so the cost is one
@@ -18,8 +18,8 @@ multiplication, and `billing` is where it happens. Four refusals survive it:
   number. The frontier says which, exactly as it does per day.
 - **the cost is the service-count component only.** Volume above the allowance
   is not in it, because neither the allowance amount nor what happens above it
-  is decided — ADR 0056 promises "block and say so" in one paragraph and "stays
-  live, so growth still pays" in another.
+  is decided — the pricing model promises "block and say so" in one paragraph
+  and "stays live, so growth still pays" in another.
 - **it is the organization's**, even when the day table is narrowed to one
   project. A narrowed cost is a number nobody is ever charged.
 """
@@ -51,7 +51,7 @@ from nexovue_api.usage.schemas import (
 
 DEFAULT_DAYS: Final = 30
 
-# Just past the longest retention any tier grants (395 days, ADR 0071), so every
+# Just past the longest retention any tier grants (395 days), so every
 # window that could still hold data is askable and nothing beyond it is.
 MAX_DAYS: Final = 400
 

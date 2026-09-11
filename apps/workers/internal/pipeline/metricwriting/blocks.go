@@ -18,7 +18,7 @@ const (
 
 // The insert targets, named once so each statement and its column list cannot
 // drift apart. Five tables because the five OTLP point shapes genuinely do not
-// share a row (ADR 0066).
+// share a row.
 const (
 	gaugeTable        = "metrics_gauge"
 	sumTable          = "metrics_sum"

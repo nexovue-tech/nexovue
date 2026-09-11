@@ -25,7 +25,7 @@ SEMCONV_VERSION: Final = "1.44.0"
 NANOS_PER_MILLISECOND: Final = 1_000_000
 BASE_UNIX_NANO: Final = 1787649300 * 1_000_000_000
 
-# One row per shape a door sends, the list in docs/architecture/ingestion-envelope.md:
+# One row per shape a door sends:
 # filename, door, signal, ingest_id, offset from BASE_UNIX_NANO in milliseconds.
 # Door 3 has two rows: one page view produces both log records and a span, and an
 # envelope carries one signal.

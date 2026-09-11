@@ -69,7 +69,7 @@ type Config struct {
 	Logs LogIngest
 
 	// MetricIngest configures the metric-ingest pipeline, which writes
-	// customer-sent OTLP metrics to the five metric tables (ADR 0066).
+	// customer-sent OTLP metrics to the five metric tables.
 	MetricIngest MetricIngest
 
 	// Postgres is the optional control-plane connection the mask and sample

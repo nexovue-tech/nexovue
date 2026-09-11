@@ -39,7 +39,7 @@ type fixtureExpectation struct {
 	minPayloadEntryCount int
 }
 
-// One row per shape a door sends, the list in docs/architecture/ingestion-envelope.md.
+// One row per shape a door sends.
 // Door 3 has two: one page view produces both log records and a span, and an
 // envelope carries one signal.
 var expectations = []fixtureExpectation{

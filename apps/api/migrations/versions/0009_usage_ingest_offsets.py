@@ -4,12 +4,11 @@
 job that fills it is at-least-once like everything else reading Kafka, so a
 redelivered batch would add a customer's traffic to their usage a second time.
 
-ADR 0060 and 0061 solved the same problem for ClickHouse counters with a
-BEFORE/AFTER bracket, because ClickHouse has no transaction to hold the counters
-and the offsets together. **Postgres does**, so this is simpler: one transaction
-advances the watermark and adds the counters, and a flush retried after its
-transaction already committed updates no rows — which is the signal not to add
-them again.
+The ClickHouse counters solved the same problem with a BEFORE/AFTER bracket,
+because ClickHouse has no transaction to hold the counters and the offsets
+together. **Postgres does**, so this is simpler: one transaction advances the
+watermark and adds the counters, and a flush retried after its transaction
+already committed updates no rows — which is the signal not to add them again.
 
 Keyed by (topic, partition) rather than by consumer group: the meter reads each
 ingestion topic on its own group, and a partition is the unit Kafka rebalances,

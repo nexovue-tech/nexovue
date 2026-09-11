@@ -5,7 +5,7 @@
  * Shared rather than owned by a screen because two screens draw the same edges. The
  * map draws them as a graph and the service detail panel as two lists, and when only
  * one of them collapsed addresses the same pair of peers was one dependency on one
- * screen and two on the other (ADR 0082).
+ * screen and two on the other.
  */
 
 /**
@@ -153,7 +153,7 @@ export interface CollapsedEdges {
  * The edge list with address-named peers folded into one peer per technology.
  *
  * A callee that never reported for itself is named from what the caller's own span
- * asserted (ADR 0080), and sometimes that assertion is an IP. Measured live against the
+ * asserted, and sometimes that assertion is an IP. Measured live against the
  * OpenTelemetry Demo, `checkout` reached `(172.19.0.11)` and `(172.19.0.19)` — one
  * dependency wearing two names, and two more after the next restart.
  *

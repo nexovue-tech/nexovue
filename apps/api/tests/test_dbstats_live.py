@@ -6,9 +6,9 @@ the premise was written as an assertion with an instruction attached: *"if this
 fails, a database has been polled for the first time — and the tests below
 should be replaced with ones that assert on real readings."*
 
-It failed. ADR 0100 — a database we cannot reach is polled by the customer's own
-collector — made the demo's own Postgres reachable that way, so
-real readings exist and these are the assertions the old ones asked for.
+It failed. Polling a database we cannot reach through the customer's own
+collector made the demo's own Postgres reachable that way, so real readings
+exist and these are the assertions the old ones asked for.
 
 The suite is deliberately tolerant of *how much* data there is — it runs against
 whatever the demo happens to have published — and strict about its shape. A
@@ -121,10 +121,10 @@ def _window() -> tuple[datetime, datetime]:
 async def test_both_metric_names_have_readings_in_the_store(client: AsyncClient) -> None:
     """The premise, still stated as an assertion — now the other way round.
 
-    This replaced a test asserting the opposite, which failed the day ADR 0100
-    made a database reachable. Keeping the premise asserted is the point: if
-    these rows disappear, the suite below would go green against nothing, which
-    is the failure `require_stack` exists to prevent one level up.
+    This replaced a test asserting the opposite, which failed the day the
+    collector route made a database reachable. Keeping the premise asserted is
+    the point: if these rows disappear, the suite below would go green against
+    nothing, which is the failure `require_stack` exists to prevent one level up.
     """
     result = await client.query(
         """

@@ -78,7 +78,7 @@ ORGANIZATION_ERASED: Final = "organization.erased"
 PROJECT_CREATED: Final = "project.created"
 PROJECT_UPDATED: Final = "project.updated"
 PROJECT_DELETED: Final = "project.deleted"
-# The one guarded edit in ADR 0105: switching a shipped masking rule off widens
+# The one guarded edit: switching a shipped masking rule off widens
 # what leaves the customer's process, and it is the only edit here whose blast
 # radius is other people's secrets.
 PROJECT_MASKING_RULE_DISABLED: Final = "project.masking_rule_disabled"

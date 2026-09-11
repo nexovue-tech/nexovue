@@ -21,7 +21,7 @@
 -- save one small write per settle. Separate is also honest: these are two
 -- durable facts that move at different speeds.
 --
--- No BEFORE/AFTER bracket, unlike the counters (ADR 0061). A counter
+-- No BEFORE/AFTER bracket, unlike the counters. A counter
 -- re-applied is a wrong number, while this is a plain fact recorded only once
 -- ClickHouse has acknowledged the insert. Losing the write costs a duplicate
 -- on the next replay — which is today's behaviour — and never a hole.

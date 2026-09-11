@@ -110,9 +110,9 @@ describe("neighboursOf", () => {
   });
 
   it("lists two address-named peers of one technology as one dependency", () => {
-    // ADR 0082. The map collapses these into one node; a panel that listed them
-    // separately would make the same pair of peers one dependency on one screen and
-    // two on another.
+    // The map collapses these into one node; a panel that listed them separately
+    // would make the same pair of peers one dependency on one screen and two on
+    // another.
     const addressed = (callee: string) => ({
       ...edge("checkout", callee),
       callee_kind: "grpc",

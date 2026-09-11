@@ -1,8 +1,8 @@
 """Resend, behind `EmailSender`.
 
-**The only module in the API that knows a mail provider exists.** ADR 0102 puts
-the port next door and `tests/test_provider_ports.py` refuses a vendor's name
-there; every piece of Resend-shaped knowledge belongs here and nowhere above.
+**The only module in the API that knows a mail provider exists.** The port is
+next door and `tests/test_provider_ports.py` refuses a vendor's name there;
+every piece of Resend-shaped knowledge belongs here and nowhere above.
 
 **Why the HTTP call and not Resend's SDK.** Resend recommends its SDK, and for
 most callers that is right — it handles auth, the User-Agent, serialization and

@@ -12,7 +12,7 @@ therefore a `UNION ALL` of the two tables, and the count de-duplicates; see
 `occurrence_key` below.
 
 **Partition pruning.** Both tables are partitioned on `received_at`, our clock,
-while the caller asks about `timestamp`, the customer's (ADR 0067). ClickHouse
+while the caller asks about `timestamp`, the customer's. ClickHouse
 cannot relate the two, so every statement here bounds both — the service widens
 the requested window by `window.RECEIVE_CLOCK_SLACK` to get the `received_at`
 range. Without that a one-hour question reads every partition in the retention

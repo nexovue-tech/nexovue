@@ -18,7 +18,7 @@ type Row struct {
 	SamplingConfig []byte
 	// Days this project's raw signals and derived rollups are kept for. Stamped
 	// on every row written, so a whole part shares one value and can expire as
-	// a unit rather than being rewritten row by row (ADR 0072).
+	// a unit rather than being rewritten row by row.
 	RawRetentionDays     uint16
 	DerivedRetentionDays uint16
 

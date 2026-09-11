@@ -13,7 +13,7 @@
 # ingest is machine traffic, and several of the console's headers are actively
 # wrong on the OTLP path. `Cross-Origin-Resource-Policy: same-origin` is the
 # clearest case — door 3 exports from the customer's own page, so same-origin
-# would refuse the traffic ingest exists to accept (ADR 0089).
+# would refuse the traffic ingest exists to accept.
 # ---------------------------------------------------------------------------
 
 # Everything both hosts send. HSTS belongs on ingest too: the browser SDK's
@@ -91,9 +91,9 @@
 #
 # Two names, decided 2026-09-07. Ingest is machine traffic at high volume; the
 # console is browser traffic, and they want different rate limits, different
-# logs and a CSP that means nothing on the OTLP path. ADR 0089 makes it a
-# privacy requirement rather than a preference: the ingest host must not share
-# a cookie domain with the console.
+# logs and a CSP that means nothing on the OTLP path. Session-cookie isolation
+# makes it a privacy requirement rather than a preference: the ingest host must
+# not share a cookie domain with the console.
 #
 # **Two names are necessary and not sufficient.** The session cookie must stay
 # host-only — `auth/cookies.py` sets no Domain attribute, deliberately —
@@ -118,7 +118,7 @@
 
 	# OTLP: the receiver speaks the protocol's own error semantics, so nothing
 	# here may rewrite a response body. The receiver also owns CORS for door 3
-	# (ADR 0087) — the edge must not answer a preflight on its behalf.
+	# — the edge must not answer a preflight on its behalf.
 	handle /v1/* {
 		reverse_proxy receiver:4318
 	}

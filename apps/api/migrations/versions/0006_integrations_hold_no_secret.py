@@ -1,8 +1,8 @@
 """integrations stop pretending to hold an encrypted secret, and gain what a poll needs
 
-ADR 0076 decided door 4b holds no customer credential it can avoid holding: the
-customer grants a role we assume, and we keep a role ARN and an ExternalId,
-neither of which is secret. That leaves three problems in this table.
+Door 4b holds no customer credential it can avoid holding: the customer grants a
+role we assume, and we keep a role ARN and an ExternalId, neither of which is
+secret. That leaves three problems in this table.
 
 `config_encrypted` holds plain UTF-8 JSON. A column named `_encrypted` that is
 not is worse than either honest name — a future reader assumes a protection that

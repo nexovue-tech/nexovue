@@ -8,7 +8,7 @@ does not, and the value is bound there from the session rather than passed in.
 id is not in the sort key and cannot narrow the scan by itself. Two things do:
 the bloom filter on `trace_id` skips granules, and the `received_at` bounds skip
 whole partitions — `logs` is partitioned on our receive clock, not the
-customer's `timestamp` (ADR 0067), so a bound on `timestamp` prunes nothing.
+customer's `timestamp`, so a bound on `timestamp` prunes nothing.
 
 The service derives those bounds from `span_trace_lookup`, which answers "when
 did trace X reach us" without touching `spans`, and widens them by

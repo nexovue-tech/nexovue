@@ -3,7 +3,7 @@
 Both kinds carry a `kind` on every response. It is a `Literal`, fixed per class
 rather than a field somebody sets, so a secret key cannot be serialized as public
 or the reverse: the label travels with the value, the way `SecretStr` makes the
-redaction travel with the secret. ADR 0086.
+redaction travel with the secret.
 """
 
 from __future__ import annotations

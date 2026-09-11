@@ -40,9 +40,9 @@ const drainTimeout = 15 * time.Second
 // and then nothing. Periodic rather than per-batch, because a batch closes every
 // couple of seconds and a line each would be unreadable under load.
 //
-// Operational logging to stdout, not the self-instrumentation ADR 0053 defers —
-// it is the container-log fallback that ADR's second rule keeps independent of
-// the OTel pipeline, for reading when that pipeline is the broken thing.
+// Operational logging to stdout, not the deferred self-instrumentation — it is
+// the container-log fallback kept independent of the OTel pipeline, for reading
+// when that pipeline is the broken thing.
 const heartbeatInterval = 30 * time.Second
 
 // defaultMaxBytes bounds one batch's messages when a pipeline names no bound of
@@ -137,7 +137,7 @@ type Settings struct {
 	// still live, before the handover completes. Whatever a stage is still
 	// holding for them has to be released here: their records are uncommitted,
 	// so the worker taking the partition over reads them again, and anything
-	// this one writes afterwards is a second copy (ADR 0090).
+	// this one writes afterwards is a second copy.
 	//
 	// It runs on the client's goroutine while the whole group's rebalance
 	// waits, so it must be memory work. The loop makes no call out of the

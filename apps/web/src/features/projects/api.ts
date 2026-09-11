@@ -169,8 +169,8 @@ export interface MaskingSaveInput {
   config: MaskingDocument;
   /**
    * Rule families being switched off that were not off before. The API refuses
-   * the write unless each one is named here — ADR 0105 guards the off switch and
-   * nothing else, and it records an audit row for every name.
+   * the write unless each one is named here — the confirmation guards the off
+   * switch and nothing else, and the API records an audit row for every name.
    */
   confirmDisabling: string[];
 }

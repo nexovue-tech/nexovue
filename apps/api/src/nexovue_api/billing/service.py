@@ -74,7 +74,7 @@ from nexovue_api.errors.exceptions import (
 from nexovue_api.settings import API_PREFIX
 
 # The screen and the meter must state one number, so both take it from the same
-# functions. `usage.billing` holds the rule ADR 0083 fixed and the receiver's
+# functions. `usage.billing` holds the allowance rule and the receiver's
 # `allowance` package implements a second time in Go; a third arithmetic here
 # would tell a customer a limit the ingest door does not apply.
 from nexovue_api.usage import billing as usage_billing
@@ -129,7 +129,7 @@ async def record_from_webhook(
         raise InvalidRequestError(MALFORMED_DELIVERY_DETAIL) from malformed
 
     # Whose subscription this is, is our question rather than the processor's —
-    # answered from the row the checkout wrote. ADR 0110.
+    # answered from the row the checkout wrote.
     subscription = await queries.subscription_by_processor_ref(
         session, processor=configured.name, subscription_ref=event.subscription_ref
     )
@@ -177,7 +177,7 @@ async def _apply(
     The row is resolved by the caller and always exists here. It used to be
     created on the spot when a webhook named one we had not seen — possible only
     while the event carried an organization id in the processor's own tags. With
-    that gone (ADR 0110) an unknown reference cannot be attributed at all, so the
+    that gone an unknown reference cannot be attributed at all, so the
     caller refuses it there rather than inventing an owner here.
     """
     now = datetime.now(UTC)
@@ -227,7 +227,7 @@ def _plan_after(subscription: BillingSubscription) -> str:
     tier changes on the event that says it did.
 
     **Nothing stored is deleted by a downgrade.** Retention is stamped on each
-    row as it is written (ADR 0072), so telemetry kept under a longer plan keeps
+    row as it is written, so telemetry kept under a longer plan keeps
     it and only new rows get the shorter one. That is forward-only, which
     phase-1-plan §9 already settled and this does not reopen.
     """
@@ -264,7 +264,7 @@ async def overview(
     """What this organization is on, what pays for it, and where the month stands.
 
     Every figure about the allowance comes from `usage.billing`, which is the
-    one place ADR 0083's arithmetic lives on this side. The receiver implements
+    one place the allowance arithmetic lives on this side. The receiver implements
     it a second time in Go because the ingest door cannot call Python; a third
     copy here would be the one that tells a customer a limit nobody enforces.
     """
@@ -566,7 +566,7 @@ async def commitment_for(
     with a quantity — and a multiplied total cannot be divided back out by an
     adapter that does not know the divisor.
 
-    The rate is the one in force today (ADR 0083's effective dates), so a
+    The rate is the one in force today (the `effective_from` dates), so a
     repricing next month does not change a mandate signed this month.
 
     A tier with no price row, or a rate of zero, is not something anybody can
@@ -640,7 +640,7 @@ async def begin_plan_change(
             plan_slug=request.plan_slug,
             contact=BillingContact(
                 # The member on the call, unless they gave another. Never stored —
-                # ADR 0109: the processor holds what the bank's notice needs.
+                # The processor holds what the bank's notice needs.
                 email=request.contact_email or billing_email,
                 name=request.contact_name,
                 phone=request.contact_phone,
@@ -658,7 +658,7 @@ async def begin_plan_change(
         )
         raise DependencyUnavailableError(PROCESSOR_UNAVAILABLE_DETAIL) from refused
 
-    # The row that makes the processor's later events attributable. ADR 0110:
+    # The row that makes the processor's later events attributable:
     # the reference is theirs, but *whose subscription it is* is answered here,
     # from a row written while an authenticated member was on the call — never
     # from an organization id handed back by the processor.
@@ -700,7 +700,7 @@ async def end_subscription(
     if subscription is None or subscription.status == STATUS_CANCELLED:
         raise ConflictError(NOTHING_TO_CANCEL_DETAIL)
     if subscription.processor != configured.name:
-        # ADR 0102 expects two processors. Cancelling an arrangement through the
+        # Two processors are expected. Cancelling an arrangement through the
         # wrong one would name a subscription the processor has never heard of,
         # and its "not found" would be reported as a failed cancellation.
         raise ConflictError(

@@ -20,12 +20,12 @@ whole month's bill. Predictable beats optimal for a first product.
 logs and metrics, and they are what costs storage and transfer. Counting spans
 would charge a well-instrumented service more for being well instrumented.
 
-**What happens above the allowance is settled for the free tier only.** ADR 0056
-promised both "block and say so rather than bill" and "overage stays live, so
-growth still pays", in different paragraphs. ADR 0093 chooses the first where the
-plan caps the services it bills — the free tier — and leaves the second open for
-the tiers that pay. So the cost here is still the service-count component only,
-and it says so.
+**What happens above the allowance is settled for the free tier only.** The
+pricing model promised both "block and say so rather than bill" and "overage
+stays live, so growth still pays", in different paragraphs. The pooled
+allowance chooses the first where the plan caps the services it bills — the
+free tier — and leaves the second open for the tiers that pay. So the cost
+here is still the service-count component only, and it says so.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def calendar_month_of(day: date) -> BillingPeriod:
 def billed_services(services: int, price: PlanPrice | None) -> int:
     """The quantity actually charged: the union, held down by the ceiling.
 
-    ADR 0056's cap applies to the service-count component of the bill. A null
+    The cap applies to the service-count component of the bill. A null
     ceiling is uncapped, which is not a ceiling of zero — without the price row
     there is no ceiling to apply and the quantity stands as counted.
     """
@@ -88,7 +88,7 @@ def allowance_service_count(price: PlanPrice | None, services_committed: int | N
 
     A plan that caps the services it bills sets the count itself. A plan with no
     cap — every paying tier — is sized on what the customer committed to when
-    they authorised the mandate, which is ADR 0107's ceiling: they chose it, they
+    they authorised the mandate, which is their own ceiling: they chose it, they
     can see it, and they raise it themselves.
 
     None enforces nothing: an unpriced tier, or a paid tier with no active
@@ -112,7 +112,7 @@ def included_bytes(price: PlanPrice | None, services_committed: int | None) -> i
     between them by a rule nobody has chosen.
 
     **The allowance is the ceiling's, never the running service count's.** That
-    is because this number is enforced at the ingest door (ADR 0093), and an
+    is because this number is enforced at the ingest door, and an
     allowance that moved with the count would change what a customer may send as
     services came and went — and would tell a customer refused at 2 GiB that
     starting a second service is the remedy.
@@ -139,7 +139,7 @@ def browser_cap_bytes(price: PlanPrice | None, services_committed: int | None) -
     """The most the browser door may spend of the month, or None when uncapped.
 
     A public site key is printed in the customer's page, so anyone who views
-    source can spend at that door. ADR 0097 caps it so a scraped key cannot
+    source can spend at that door. The cap is there so a scraped key cannot
     silence the customer's servers.
 
     **A cap, not a share of a partition.** The server door's limit stays the
@@ -178,12 +178,12 @@ def allowance_is_enforced(price: PlanPrice | None, services_committed: int | Non
     free tier, or the customer's committed count on a paid one.
 
     **This used to be true for the free tier and nothing else**, and the reason
-    given was that ADR 0083 section 6 refuses to cap a paying customer to hold
+    given was that the allowance rule refuses to cap a paying customer to hold
     their bill down. That reason still stands and this still honours it — what
     it does not do any more is confuse *"we will not cap you to protect our
-    margin"* with *"you have no limit at all"*. ADR 0107 replaced the second
-    with a ceiling the customer sets for themselves, and enforcing that is
-    keeping their instruction rather than imposing ours.
+    margin"* with *"you have no limit at all"*. The second was replaced with a
+    ceiling the customer sets for themselves, and enforcing that is keeping their
+    instruction rather than imposing ours.
 
     False on a paid tier with no active subscription: there is nothing to
     enforce, which is not a ceiling of zero.

@@ -1,7 +1,7 @@
 <clickhouse>
     <!-- Keeper, embedded in the ClickHouse process rather than run beside it.
          Same binary, same container, so the production container inventory
-         (ADR 0052) is unchanged.
+ is unchanged.
 
          It exists for KeeperMap, which is what holds the ingest pipeline's
          per-partition offset state. That state has to be strongly consistent and

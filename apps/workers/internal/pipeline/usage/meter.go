@@ -7,7 +7,7 @@ import (
 
 // A day is a day in UTC. Every tenant's usage day therefore starts at the same
 // instant, whatever timezone they read it in, and the boundary is our own clock
-// rather than a client's — the same choice storage partitions make (ADR 0067),
+// rather than a client's — the same choice storage partitions make,
 // for the same reason: a wrong clock on a customer's host must not be able to
 // move a number we bill on.
 const day = 24 * time.Hour
@@ -24,8 +24,7 @@ type tenantDay struct {
 // counted is one partition's share of one tenant-day. The meter is keyed by it
 // rather than by the tenant-day alone so that a partition handed to another
 // worker can have its share dropped before it is ever billed; the shares are
-// summed back together at drain time, and no row carries the partition
-// (ADR 0094).
+// summed back together at drain time, and no row carries the partition.
 type counted struct {
 	tenantDay
 	partition int32
@@ -149,8 +148,8 @@ func (m *Meter) Drain() []Row {
 }
 
 // Disowned is what leaving a partition cost the meter: the shares dropped, and
-// the bytes that went with them — the unit the plan's allowance is spent in
-// (ADR 0083), so the one worth naming in a log line.
+// the bytes that went with them — the unit the plan's allowance is spent in, so
+// the one worth naming in a log line.
 type Disowned struct {
 	TenantDays int
 	Bytes      int64

@@ -271,7 +271,7 @@ func TestAnUndecodableMessageIsRejectedWithItsTenant(t *testing.T) {
 // --------------------------------------------- which door the bytes came through
 
 // The browser door's bytes are charged to the browser's share of the allowance
-// and to nothing else (ADR 0097). Every other door — the server's, the
+// and to nothing else. Every other door — the server's, the
 // scheduler's, and an envelope naming none — is the server's, because a byte
 // the browser door cannot spend is what the split protects. The whole count
 // still carries every byte, so the usage screen's total does not change.
@@ -351,7 +351,7 @@ func TestTheFlushCarriesBrowserBytesInTheirOwnColumn(t *testing.T) {
 
 // ------------------------------------------------------ the billing unit
 
-// The unit ADR 0056 prices on. One export can carry several services, and each
+// The unit the plan prices on. One export can carry several services, and each
 // one of them is billable.
 func TestEveryServiceInATraceExportIsMetered(t *testing.T) {
 	metered, err := countSpans(spansFrom(t, 2, "checkout", "payments"))

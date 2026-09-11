@@ -4,8 +4,8 @@
 # `-f` merges sequences by APPENDING, so a dev bind mount added in one file
 # would survive into the production file. `include:` keeps one definition.
 #
-# Memory limits come from docs/delivery/dev-environment.md and use
-# `deploy.resources.limits`, which Compose v2+ applies without Swarm.
+# Memory limits are the laptop budget and use `deploy.resources.limits`, which
+# Compose v2+ applies without Swarm.
 #
 # Credentials default to development values. Deployment targets redeclare them
 # with the `:?` required form so a real environment cannot inherit a dev secret.

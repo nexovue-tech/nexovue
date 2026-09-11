@@ -42,8 +42,8 @@ const (
 // One duration for all of them would make the probe the thing it measures: two
 // workers holding an even split of a series-minute derive counter blocks whose
 // counts are equal by definition, so only the durations can separate them — and
-// identical blocks are what ClickHouse silently drops as a retry (ADRs 0060 and
-// 0075). Hashed rather than linear in the sequence, because the rig's partition
+// identical blocks are what ClickHouse silently drops as a retry. Hashed rather
+// than linear in the sequence, because the rig's partition
 // is that sequence modulo the partition count, and any linear function of it
 // totals the same over both halves.
 func durationOf(sequence uint32, index int) time.Duration {

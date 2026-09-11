@@ -1,7 +1,7 @@
 // Command rebalanceprobe writes uniquely identified spans and logs straight to
 // the broker, so that what a worker stores can be counted exactly against what
-// the broker accepted — the measurement ADRs 0079 and 0085 both record as
-// missing for a consumer-group rebalance across two workers.
+// the broker accepted — the measurement that was still missing for a
+// consumer-group rebalance across two workers.
 //
 // It produces envelopes rather than posting OTLP at the receiver for one
 // reason: the receiver keys log and metric records by tenant id, so every
@@ -23,8 +23,7 @@
 // its `service_edges_1m` figure disputed — +13 by subtraction against the +14 a
 // reviewer derives from `+70 spans / 5 spans-per-trace` — and neither can now be
 // settled, because the output was never saved and the rows were deleted here.
-// ADR 0094 records the disagreement in the place it should have recorded an
-// answer.
+// The disagreement was recorded where an answer should have been.
 //
 // The report is JSON on stdout and the progress line goes to stderr, so one
 // redirect captures what was produced and nothing else:
@@ -81,7 +80,7 @@
 // was deleted rather than kept.** `ingeststate.Partition.Key` is
 // `topic + ":" + partition`, so without it `'spans'` matches `spans:0` and the
 // statement wipes the live watermarks — the durable counted-through offsets
-// whose loss is the silent permanent over-count ADR 0094 describes (T1-6).
+// whose loss is the silent permanent over-count (T1-6).
 //
 // A run also leaves a consumer group and a topic behind, and those are what the
 // rest of the teardown was missing until 2026-09-08 — the scratchpad script that
@@ -267,7 +266,7 @@ func pace(ctx context.Context, perSecond int, send func(sequence uint32) error) 
 // report is the run's own half of the measurement: what the broker accepted,
 // and the identities the stored rows are counted under. The payload bytes are
 // the denominator for `usage_daily.bytes`, which is what the free tier ends on
-// (ADR 0083) — a rebalance that over-counts them over-bills.
+// — a rebalance that over-counts them over-bills.
 //
 // Each counter stage gets its own denominator by name rather than leaving the
 // reader to work it out: the shape of a probe trace (one CLIENT, the rest

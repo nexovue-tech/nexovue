@@ -64,9 +64,9 @@ func projectFacts(projectID, traceID string) sample.Facts {
 	return sample.Facts{TraceID: traceID, ProjectID: projectID, Start: base}
 }
 
-// The defect, stated as a test: at ADR 0010's 10% a new customer's first span
-// had a nine in ten chance of never being stored, and the onboarding screen
-// polls storage.
+// The defect, stated as a test: at the default policy's 10% a new customer's
+// first span had a nine in ten chance of never being stored, and the onboarding
+// screen polls storage.
 func TestANewProjectsFirstHealthyTraceIsStoredDespiteThePercentage(t *testing.T) {
 	source := newCountingSource(10)
 	buffer := newCountingBuffer(t, source, firstTraces)

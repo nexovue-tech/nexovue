@@ -1,4 +1,4 @@
--- ADR 0066 stores OTLP's data and drops only its envelope bookkeeping.
+-- The schema stores OTLP's data and drops only its envelope bookkeeping.
 -- `zero_threshold` is data: it defines the width of the zero region an
 -- exponential histogram's `zero_count` counts, so without it that count says
 -- how many values were near zero without saying what "near" meant. The bucket

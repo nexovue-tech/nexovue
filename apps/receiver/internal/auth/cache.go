@@ -24,7 +24,7 @@ func (c Credential) Exists() bool { return c.Found }
 // It has no hash field, and that is the whole difference: a site key is stored
 // in the clear because it ships inside the page that carries it, so the lookup
 // matching *is* the verification. There is nothing left to compare, and no
-// constant-time comparison to get wrong. See ADR 0086.
+// constant-time comparison to get wrong.
 type SiteCredential struct {
 	Identity Identity
 

@@ -191,7 +191,7 @@ func TestCallsToTheSameServicesShareOneRow(t *testing.T) {
 }
 
 // A restart re-derives the same minute from the same offsets, and the store only
-// recognises the repeat if the block is byte-identical (ADR 0060). Go randomises
+// recognises the repeat if the block is byte-identical. Go randomises
 // map iteration, so this is the guard on the sort.
 func TestTheSameSpansAlwaysDrainToTheSameRows(t *testing.T) {
 	build := func() []Edge {

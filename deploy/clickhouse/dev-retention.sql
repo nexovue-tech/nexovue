@@ -2,7 +2,7 @@
 --
 -- The migrations carry the production TTLs (30d raw, 90d metrics). Three days
 -- of spans on a laptop SSD is the point at which the disk stops being the
--- developer's problem — docs/delivery/dev-environment.md rule 3.
+-- developer's problem.
 --
 -- MODIFY TTL is the same mechanism the per-tenant retention job uses, and with
 -- ttl_only_drop_parts=1 it drops whole parts rather than running a mutation.

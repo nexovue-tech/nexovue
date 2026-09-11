@@ -1,6 +1,6 @@
 // Package metricwriting runs the metric-ingest pipeline: it consumes the OTLP
 // metric envelopes customers send, and writes each point to the table its shape
-// belongs in (ADR 0066).
+// belongs in.
 //
 // It converts nothing. Aggregation temporality, start timestamp, monotonicity
 // and the no-recorded-value flag are stored exactly as they arrived, because

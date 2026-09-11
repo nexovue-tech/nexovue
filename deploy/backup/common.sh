@@ -27,12 +27,12 @@ CLICKHOUSE_BACKUP_STAGE="/var/lib/clickhouse/backups"
 CLICKHOUSE_BACKUP_DISK="backups"
 
 # The three KeeperMap tables holding the ingest pipeline's watermarks. Backed up
-# and never restored with their rows — ADR 0068, and ADR 0095 for the Postgres
-# half of the same rule.
+# and never restored with their rows; the same rule covers the Postgres half
+# below.
 KEEPERMAP_TABLES=(span_ingest_offsets span_written_offsets ingest_written_offsets)
 
 # The Postgres table holding the meter's watermark. Same class of state as the
-# three above, in the store that does get restored (ADR 0095).
+# three above, in the store that does get restored.
 POSTGRES_WATERMARK_TABLE="usage_ingest_offsets"
 
 # None of these three take stdin, and `docker exec -i` would swallow it. Called

@@ -1,6 +1,6 @@
 """Minting keys, listing them, and withdrawing one — for both kinds.
 
-**A key has a kind, and the kind is which table it lives in** (ADR 0086). The
+**A key has a kind, and the kind is which table it lives in**. The
 secret, server-side kind is an `ApiKey`: hashed, verified in constant time,
 disclosed once. The public, browser-side kind is a `SiteKey`: stored in the
 clear, restricted by origin, readable back as often as the customer asks.

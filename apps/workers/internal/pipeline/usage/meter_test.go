@@ -7,7 +7,7 @@ import (
 )
 
 // onePartition is where the messages in these tests arrived. The meter keeps a
-// share per partition so a handover can drop one (ADR 0094); nothing below is
+// share per partition so a handover can drop one; nothing below is
 // about that, so they all use the same one and the shares never split.
 const onePartition int32 = 0
 
@@ -27,7 +27,7 @@ func TestOneTenantDayIsOneRow(t *testing.T) {
 
 // Browser bytes accumulate beside the whole count, never instead of it: a day
 // that took a page's export and a server's carries both in `bytes` and only the
-// page's in `browser_bytes` (ADR 0097).
+// page's in `browser_bytes`.
 func TestBrowserBytesAccumulateBesideTheWholeCount(t *testing.T) {
 	meter := NewMeter()
 	meter.Observe(onePartition, testOrg, testProject, testReceivedAt,

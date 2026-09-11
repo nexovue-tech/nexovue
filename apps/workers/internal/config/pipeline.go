@@ -45,14 +45,14 @@ func (m Masking) validate() error {
 // nominal strength: SHA-256's block-equivalent security is 256 bits.
 const maskHashSecretMinBytes = 32
 
-// Sampling is the tail-sampling stage's settings: ADR 0010's policy plus the
+// Sampling is the tail-sampling stage's settings: the sampling policy plus the
 // bounds that keep the buffer from becoming a memory leak with a traffic spike
 // in front of it.
 type Sampling struct {
 	// Window is how long a trace waits for the rest of its spans before it is
 	// judged. It is a floor under the span-to-queryable lag, so it is traded
-	// against that budget and not chosen for sampling accuracy alone. ADR 0009
-	// proposed ~30s; 10s is what the p99 < 15s budget leaves room for.
+	// against that budget and not chosen for sampling accuracy alone. The first
+	// proposal was ~30s; 10s is what the p99 < 15s budget leaves room for.
 	Window time.Duration `env:"WORKERS_SAMPLING_WINDOW" envDefault:"10s"`
 
 	// DecisionTTL is how long a decided trace is remembered so a span arriving
@@ -60,8 +60,8 @@ type Sampling struct {
 	DecisionTTL time.Duration `env:"WORKERS_SAMPLING_DECISION_TTL" envDefault:"60s"`
 
 	// SlowThreshold is the fixed duration above which a trace is kept whole.
-	// Per-endpoint baselines replace it later; per ADR 0010 the first version
-	// is a fixed number.
+	// Per-endpoint baselines replace it later; the first version is a fixed
+	// number.
 	SlowThreshold time.Duration `env:"WORKERS_SAMPLING_SLOW_THRESHOLD" envDefault:"2s"`
 
 	// HealthyPercent is the share of traces that are neither failed nor slow
@@ -99,7 +99,7 @@ func (s Sampling) validate() error {
 // Retention is what a row is stamped with when the control plane has not said
 // otherwise — a project the refresher has not seen yet, or a deployment with no
 // control plane at all. Every row carries its own retention so a whole part can
-// expire at once instead of being rewritten row by row (ADR 0072).
+// expire at once instead of being rewritten row by row.
 type Retention struct {
 	// Spans and logs.
 	RawDays uint16 `env:"WORKERS_RETENTION_RAW_DAYS" envDefault:"30"`

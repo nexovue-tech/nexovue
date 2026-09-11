@@ -1,6 +1,6 @@
 """how many traces a project has stored under its first-traces carve-out
 
-Tail sampling keeps one healthy trace in ten (ADR 0010). A customer's very first
+Tail sampling keeps one healthy trace in ten. A customer's very first
 span is a hello-world request that worked — healthy, fast — so it had a nine in
 ten chance of being dropped, and "Your first span arrived." never appeared. The
 onboarding screen reads the ordinary trace list, which is downstream of the

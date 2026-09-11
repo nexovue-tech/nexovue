@@ -56,11 +56,11 @@ receivers:
     collection_interval: 30s
 
   # Door 4b's query-level reads, produced by the *customer's* collector rather
-  # than by our poller. This is the route ADR 0076 leaves open: it refuses to
-  # store a self-hosted database's password, and here nobody has to — the
-  # credential lives in this file, on the customer's side, and never reaches us.
-  # `sqlquery` speaks PostgreSQL, MySQL, Oracle, SQL Server and ClickHouse, so
-  # one shape covers engines our own poller does not.
+  # than by our poller. This is the route left open by our refusal to store a
+  # self-hosted database's password: here nobody has to — the credential lives
+  # in this file, on the customer's side, and never reaches us. `sqlquery`
+  # speaks PostgreSQL, MySQL, Oracle, SQL Server and ClickHouse, so one shape
+  # covers engines our own poller does not.
   #
   # **Every name below is a contract, not a choice.** The metric names, units and
   # attribute keys are what `apps/api/.../dbstats/queries.py` reads. The column
@@ -122,7 +122,7 @@ processors:
   resource:
     attributes:
       # A node is identified by `host.name`, else `container.name`, else the
-      # process that reported it (ADR 0082). Falling through to the third costs
+      # process that reported it. Falling through to the third costs
       # an over-counted inventory, and every reading this store has ever held
       # fell through — the collector does not invent a name, so it is set here.
       - key: host.name

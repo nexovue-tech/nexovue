@@ -38,7 +38,7 @@ LogFormat = Literal["json", "console"]
 # string so an unknown value fails when settings are read, at start-up, rather
 # than at the first send in front of somebody waiting for a password reset.
 #
-# ADR 0102 expects payments to end up as two of these — a domestic gateway and a
+# Payments are expected to end up as two of these — a domestic gateway and a
 # merchant of record, because a non-EU seller owes EU VAT from the first euro —
 # which is why the payment one is named for the role it fills.
 EmailProvider = Literal["resend"]
@@ -97,7 +97,7 @@ class EmailSettings:
     configuration fails at the first send, and a provider's "domain not
     verified" tells a reader nothing about which variable was missing.
 
-    No provider is named. ADR 0102 keeps a vendor's vocabulary out of the port,
+    No provider is named. A vendor's vocabulary stays out of the port,
     and a vendor's name in a settings field is that leak in another file — the
     key's own prefix already identifies which one it is.
     """
@@ -122,7 +122,7 @@ class DomesticPaymentSettings:
     fails at the first checkout, and a gateway's "authentication failed" tells a
     reader nothing about which variable was missing.
 
-    Named for the *role* rather than the processor, which is ADR 0102's rule in
+    Named for the *role* rather than the processor, which is the port's rule in
     another file: the likely end state is two of these — a domestic gateway for
     India and a merchant of record for everywhere else, because a non-EU seller
     owes EU VAT from the first euro. A type called after one of them would
@@ -246,7 +246,7 @@ class Settings(BaseSettings):
     cors_allowed_origins: list[str] = Field(default_factory=list)
 
     # --- object storage: source map bytes now, the cold tier later ----------
-    # The generic S3 API only (ADR 0015): SeaweedFS locally, AWS S3 in
+    # The generic S3 API only: SeaweedFS locally, AWS S3 in
     # deployment. Optional as a group, and deliberately not required at boot —
     # a deployment that uploads no source maps needs no object store, and an
     # API that refused to start without one would break every existing install
@@ -292,7 +292,7 @@ class Settings(BaseSettings):
 
     # Where a verification or reset link points. It is the customer-facing app,
     # never this API: the link is clicked in a browser and lands on a screen that
-    # then calls the endpoint. Two hostnames (ADR 0089), and this is the app one.
+    # then calls the endpoint. Two hostnames, and this is the app one.
     # No default — a link built against a guessed host is a link to nowhere, and
     # the failure is a customer who cannot verify rather than a stack trace.
     app_base_url: str = ""

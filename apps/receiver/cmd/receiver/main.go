@@ -94,9 +94,9 @@ func run() error {
 	shared := otlp.Options{
 		Limiter: ratelimit.New(ratelimit.NewValkeyCounter(dependencies.valkey), cfg.RateLimitPerSecond),
 		// One checker for both doors and both transports: the plan's total is
-		// the organization's, read once and split per door inside the checker
-		// (ADR 0097), so a customer cannot buy more month by changing which
-		// entrance they send to — and a spent browser share cannot spend the
+		// the organization's, read once and split per door inside the checker,
+		// so a customer cannot buy more month by changing which entrance they
+		// send to — and a spent browser share cannot spend the
 		// server's.
 		Allowance: allowance.New(
 			allowance.NewPostgresUsage(dependencies.postgres),
@@ -115,7 +115,7 @@ func run() error {
 		MaxDecodedBodyBytes: cfg.MaxDecodedBodyBytes,
 	}
 	// Both caches are tuned by the same settings, so a revoked key of either
-	// kind stops working within the same window (ADR 0086).
+	// kind stops working within the same window.
 	credentialCache := auth.Options{
 		CacheTTL:        cfg.APIKeyCacheTTL,
 		CacheMaxEntries: cfg.APIKeyCacheMaxEntries,

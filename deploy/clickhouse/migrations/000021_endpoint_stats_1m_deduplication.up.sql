@@ -1,7 +1,6 @@
 -- 000016 said this table was "deliberately left without it" because a
 -- materialized view fills it from `spans`, so it "can only double-count if
--- `spans` does". Both halves were wrong, and the code is the authority
--- (CLAUDE.md rule 4).
+-- `spans` does". Both halves were wrong, and the code is the authority.
 --
 -- `spans` had no guard at all until 000019. And a window on the source does not
 -- reach the view: deduplication drops the duplicate part on `spans`, but the

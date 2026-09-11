@@ -33,7 +33,7 @@ export interface SubscriptionSummary {
   plan_slug: string;
   /** `pending`, `active` or `cancelled` — rendered as written. */
   status: string;
-  /** ADR 0107's ceiling: the count the customer chose, which sized the mandate. */
+  /** The ceiling: the count the customer chose, which sized the mandate. */
   services_committed: number;
   activated_at: string | null;
   cancelled_at: string | null;
@@ -52,7 +52,7 @@ export interface BillingPeriodUsage {
   /** Null when nothing sizes the allowance. Not zero — that would read as none. */
   included_bytes: number | null;
   browser_included_bytes: number | null;
-  /** Whether going past the allowance stops ingestion. ADR 0107's sentence. */
+  /** Whether going past the allowance stops ingestion. */
   allowance_enforced: boolean;
 }
 

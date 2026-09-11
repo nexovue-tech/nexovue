@@ -7,7 +7,7 @@ import (
 )
 
 // The numeric column is the one the sort key orders by, so a level the mapping
-// does not recognise costs a filter, not just a label (ADR 0069).
+// does not recognise costs a filter, not just a label.
 func TestSeverityTextMapsOntoTheOTLPScale(t *testing.T) {
 	cases := map[string]int32{
 		"TRACE": 1, "trace": 1, "  Trace  ": 1,

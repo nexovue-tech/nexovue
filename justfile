@@ -68,7 +68,7 @@ fresh: down-hard
     @echo
     @echo "  Two screens stay empty until you act: RUM needs a page loaded"
     @echo "  (open http://localhost:8080, or run just load), and Database is"
-    @echo "  blocked on ADR 0076."
+    @echo "  blocked on the self-hosted Postgres integration."
 
 logs service="":
     docker compose -f {{compose}}/docker-compose.yaml logs -f {{service}}
@@ -201,7 +201,7 @@ migrate-ch:
 # store, so "one step back in each" is never a coherent operation — it just took
 # the other store down a version and back, recreating whatever tables that
 # migration owns and losing their rows. It caught two people and cost
-# `project_first_traces` its rows (ADR 0079). Name the store you mean.
+# `project_first_traces` its rows. Name the store you mean.
 
 migrate-down-pg:
     POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api alembic -c apps/api/alembic.ini downgrade -1
@@ -254,8 +254,8 @@ backups:
 # which one they mean.
 #
 # Neither takes a migration first — both snapshots carry their own schema and the
-# revision that produced it. Stop the writers, restore, then check, in the order
-# docs/delivery/runbooks/restore-from-backup.md gives.
+# revision that produced it. Stop the writers, restore, then check, in that
+# order.
 
 # Restore the control plane from a snapshot
 restore-pg snapshot:
@@ -278,7 +278,7 @@ backup-verify snapshot:
 # endpoint defaults to localhost:14318, which is the receiver's published port
 # here and nothing at all inside a container. A `just dev-tools` that got this
 # wrong shipped for months sending zero spans.
-# Measure against the budgets in docs/delivery/phase-1-plan.md section 4
+# Measure against the latency budgets
 load:
     go run ./tools/loadgen
 

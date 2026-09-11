@@ -1,8 +1,8 @@
-"""the billing unit ADR 0056 chose, and a price that does not rewrite history
+"""the billing unit, and a price that does not rewrite history
 
 Three things, all of them missing before this:
 
-**`usage_daily_services`** — the billable quantity. ADR 0056 prices per service
+**`usage_daily_services`** — the billable quantity. Pricing is per service
 monitored, and `usage_daily` counts spans, logs, points and bytes: the four
 numbers a per-GB bill would want and none the chosen model needs. A distinct
 count is not a sum, so it cannot be a column that a flush adds to. It is a set,
@@ -14,7 +14,7 @@ at-least-once redelivery harmless: inserting a name twice leaves the same set.
 than a column on `plans`. A price column is an UPDATE, and an UPDATE restates
 what every past invoice was computed from. Rows here are appended and never
 edited, so the bill for a day reads the row that was in force on that day.
-**Seeded with nothing on purpose**: ADR 0056 fixed the unit and not the amounts,
+**Seeded with nothing on purpose**: the unit is fixed and the amounts are not,
 and an invented price is a number a customer would read as a bill.
 
 **`usage_ingest_offsets.counted_through_received_at`** — how far the meter has
@@ -90,9 +90,9 @@ def upgrade() -> None:
         sa.Column("effective_from", sa.Date(), primary_key=True),
         sa.Column("currency", sa.String(CURRENCY_CODE_LENGTH), nullable=False),
         # Minor units, not a float: money in binary floating point rounds, and
-        # cents are whole. ADR 0056's unit — one service monitored.
+        # cents are whole. The unit is one service monitored.
         sa.Column("price_per_service_cents", sa.BigInteger(), nullable=False),
-        # ADR 0056's ceiling on the service-count component. NULL is uncapped,
+        # The ceiling on the service-count component. NULL is uncapped,
         # which is a different statement from a cap of zero.
         sa.Column("max_billed_services", sa.Integer(), nullable=True),
         sa.Column(
