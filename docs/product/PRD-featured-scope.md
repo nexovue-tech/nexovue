@@ -1,17 +1,12 @@
 # Product Requirements Document (PRD)
 
 > **Owner:** Raj · **Status:** Draft — living document
-> **Companion docs:** `vision-and-scope.md` (scope) · `../architecture/system-architecture.md` (technical design) · `../research/market-analysis-2026.md` (research)
 > **How to use this doc:** every feature gets the same structure as F1 (the template): Description → User stories → Acceptance criteria → UI notes → Dependencies → Open questions. We fill features in one by one; a feature is "specified" when its acceptance criteria are testable.
 
 > ⚠️ **The markers here mean *specified*, not *built*, and the two do not track each other.**
 > `🔲 TO SPECIFY` means nobody has written this feature's acceptance criteria yet. Several such
 > features are already shipping — the Logs, Errors, Traces, Services, Service Map, Infrastructure,
 > Database, Synthetics and Usage screens all exist. Conversely, F1 is the only fully specified
-> feature and is **not** built: `/` is deliberately an empty placeholder for the whole of Phase 1
-> (`apps/web/src/app/routes/route-manifest.ts`), so that no dashboard drifts into being the front
-> door. **`../delivery/phase-1-plan.md` is the authority on what exists.** Nothing in this file is.
->
 > Acceptance criteria are written in the present tense because that is what an acceptance criterion
 > is — a statement to test against once built. Read every `AC` below as *must*, never as *does*.
 
@@ -189,7 +184,6 @@ UI lens for customers building on LLMs: token usage, model latency and cost per 
 
 **Scope line, so this is not read as "build MLflow".** An app *calling* a model in production is ours. *Building* models — experiment tracking, model registry, artifacts, evaluation — is a different product, a different buyer and not observability. MLflow exports OTLP `gen_ai.*` (`MLFLOW_ENABLE_OTEL_GENAI_SEMCONV`), so it is a **producer feeding door 1**, not a competitor.
 
-**Timing:** the `gen_ai.*` conventions are still Development status. Building against a moving spec is how `INFRASTRUCTURE_METRIC_NAMES` came to hold five `container.*` names that no producer emits. See [phase-1-v2 §4b](../delivery/phase-1-v2.md).
 
 ### F30 — Public Status Page 🔲 TO SPECIFY
 Customer-publishable status.mysite.com: components, current status, incident history, subscribe-to-updates. Table stakes per market analysis; shares the plain-language engine with F7 (owner view = private; this = public).
