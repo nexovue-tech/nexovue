@@ -2,9 +2,19 @@
 
 > **Status:** Awaiting approval. Produced by `task-plan` on 2026-09-13. No file edited yet.
 >
-> Covers the thin path in [`plan.md`](plan.md) — `/services` on the ranked-entity row, end to end.
-> The later steps are not expanded here: expanding them before the first screen is built would be
-> fiction with checkboxes, and this document is re-expanded as the work moves on.
+> Covers the **whole feature** — all 21 routes — so total scope is visible in files, once.
+>
+> **Confidence is marked per task, because it is not uniform.**
+>
+> | | Meaning |
+> |---|---|
+> | **E** | Exact. The files were read; this is what changes. |
+> | **P** | Provisional. Files named from structure, not yet read. Re-expanded before that work starts. |
+>
+> Everything downstream of the first screen is **P** on purpose: if the archetype does not survive
+> contact with real data, those tasks change. Marking that is cheaper than pretending otherwise, and
+> the difference between these tasks and the **Outcome** is the measure of how well this planning
+> works.
 
 ## Current system
 
@@ -33,15 +43,16 @@ plan and those disagree, the disagreement is in **Questions** below.
 
 ## Impact
 
+Whole feature. Per-area totals, so the size is visible before the first edit.
+
 | Area | What changes |
 |---|---|
-| Files | `shared/components/Sparkline.tsx` (new) · `features/services/api.ts` · `features/services/ServicesScreen.tsx` · `features/services/service-rows.ts` |
-| Services | none |
-| Schema / migrations | none |
-| UI | `/services` only |
-| Tests | `Sparkline.test.ts` (new) · `ServicesView.test.ts` · `service-rows.test.ts` |
-
-**No backend change.** Both API steps the plan originally listed turned out to be built.
+| New shared components | `Sparkline` · `VirtualTable` · `TimeRangePicker` · `FilterBar` · `KeyValueList` · `StackTrace` · `JsonTree` · `SeverityBadge` · `StatusDot` · `Drawer` — ten, all named in `design-system.md` as designed-but-never-built |
+| Web features touched | all 15 folders under `apps/web/src/features/`, plus `app/layout/` and `app/routes/route-manifest.ts` |
+| New route | `/` Overview, and a Metrics reader |
+| API domains touched | `traces` · `logs` · `errorgroups` · `synthetics` · `dbstats` · `infrastructure` · `rum` · `servicemap` · `usage` — schema and query widening for filters, deltas and unshown columns |
+| Schema / migrations | **none** — no ClickHouse or Postgres change. The heatmap's alternative was rejected for exactly this reason |
+| Tests | one suite per rebuilt screen, plus `Sparkline.test.ts` and a structural test for AC21 |
 
 ## Reuse
 
@@ -63,28 +74,127 @@ plan and those disagree, the disagreement is in **Questions** below.
 
 ## Tasks
 
-- [ ] **T1** — `shared/components/Sparkline.tsx`. Inline SVG, no axes or legend, single stroke plus
-      an emphasized endpoint. Takes an explicit `max` so the scale is the caller's, never per-row.
-      Below a minimum bucket count renders `UNKNOWN` rather than a line.
-      Proved by `Sparkline.test.ts`: identical series at different `max` render different heights;
-      too-few-buckets renders the em dash; an empty series does not throw.
-- [ ] **T2** — `features/services/api.ts`: `useServiceTrend(projectId, timeWindow)` calling
-      `services/trend`, returning a `ReadonlyMap<string, readonly TrendPoint[]>` so a row looks up by
-      name. One request for the whole list.
-      Proved by extending `ServicesView.test.ts` with a fixture map.
-- [ ] **T3** — `ServicesScreen.tsx`: pass `trendByService` into `ServicesView`, add the trend column
-      to `MetricCells`, and compute one screen-wide `max` across every service's series.
-      Proved by `ServicesView.test.ts`: two services with different magnitudes render against the
-      same scale; a service absent from the map renders the em dash and still renders its row.
-- [ ] **T4** — the severity mark. A row with errors carries a mark; a healthy row carries none.
-      Critical and warning differ by **shape as well as hue** (`design-system.md`).
-      Proved by `ServicesView.test.ts`: a healthy row has no mark.
-- [ ] **T5** — split the empty state. "Nothing has ever arrived" offers setup; "nothing in this
-      window" offers a wider range. Today's copy is the second only.
-      Proved by `ServicesView.test.ts`, one case each.
-- [ ] **T6** — a test fixing the ranking: 50% of 96 requests ranks below 4.1% of 1,204. The order is
-      the API's and `service-rows.ts` must not resort it under `worst`.
-      Proved by `service-rows.test.ts`.
+Ordered by `plan.md`. `E` and `P` as above.
+
+### The thin path — `/services`, judged before anything else starts
+
+- [ ] **T1** `E` — `shared/components/Sparkline.tsx` (new). Inline SVG, no axes or legend, single
+      stroke plus an emphasized endpoint. Explicit `max` so the scale is the caller's, never per-row.
+      Below a minimum bucket count renders `UNKNOWN`.
+      → `Sparkline.test.ts`: same series at different `max` differ; too-few renders the em dash; an
+      empty series does not throw.
+- [ ] **T2** `E` — `features/services/api.ts`: `useServiceTrend` → `ReadonlyMap<string, TrendPoint[]>`.
+      One request for the whole list. → fixture in `ServicesView.test.ts`.
+- [ ] **T3** `E` — `features/services/ServicesScreen.tsx`: `trendByService` prop, trend column in
+      `MetricCells`, one screen-wide `max`. → `ServicesView.test.ts`: two magnitudes, one scale; a
+      missing series renders the em dash and still renders its row.
+- [ ] **T4** `E` — the severity mark; healthy carries none; critical and warning differ by shape as
+      well as hue. → `ServicesView.test.ts`.
+- [ ] **T5** `E` — split the empty state into never-arrived and none-in-window.
+      → `ServicesView.test.ts`, one case each.
+- [ ] **T6** `E` — ranking test: 50% of 96 ranks below 4.1% of 1,204, and `service-rows.ts` does not
+      resort under `worst`. → `service-rows.test.ts`.
+
+**Stop. Judge the screen against the prototype before T7.**
+
+### Widen the archetype — four screens
+
+- [ ] **T7** `P` — `errorgroups`: an occurrences-per-bucket series per group. → API test.
+- [ ] **T8** `P` — `features/errors/ErrorsScreen.tsx` on the row; three-line rows; `NEW` derived from
+      `first_seen` inside the window.
+- [ ] **T9** `P` — `synthetics`: uptime/duration series per check. → API test.
+- [ ] **T10** `P` — `features/synthetics/SyntheticsScreen.tsx` on the row; **a failed run is a gap in
+      the line, never a zero**; `tls.days_remaining` as a column.
+- [ ] **T11** `P` — `infrastructure` + `dbstats`: utilization series per node, cost series per
+      statement. → API tests.
+- [ ] **T12** `P` — merge `features/database/` into `features/infrastructure/` as two views (IA2);
+      `route-manifest.ts` loses `/database`. → `route-manifest.test.ts` still passes.
+- [ ] **T13** `P` — stale is **critical**, measured against `reporting_interval_seconds`, not a fixed
+      timeout; `truncated` surfaced. → `node-readings.test.ts`.
+- [ ] **T14** `P` — `shared/components/VirtualTable.tsx` (new), overdue at nine `useVirtualizer`
+      callers. → its own test plus the migrated screens'.
+
+### Make the screens answerable — filters and context
+
+- [ ] **T15** `P` — `shared/components/FilterBar.tsx` and `TimeRangePicker.tsx` (new).
+- [ ] **T16** `P` — filters on `servicemap`, `synthetics`, `dbstats`, `infrastructure`, `rum`, `usage`
+      — API query params over columns already stored. → one API test each.
+- [ ] **T17** `P` — `rum`: `device_class` and `route` become filters, not only breakdown dimensions.
+- [ ] **T18** `P` — filtered-empty vs never-had-data on every screen that gained a filter (AC15).
+- [ ] **T19** `P` — previous-period delta: a second read over the shifted window, one threshold per
+      measure, rendered **only where significant** (AC13, AC14). → tests that an unremarkable reading
+      carries no annotation.
+- [ ] **T20** `P` — a structural test that no feature interprets an HTTP status itself (AC21).
+
+**A reasonable stopping point. Five screens rebuilt, filterable, carrying context.**
+
+### Investigation core — five screens
+
+- [ ] **T21** `P` — `traces/schemas.py`: `SpanDetail` exposes `exception_type`, `exception_message`,
+      `deployment_version`; `TraceSummary` exposes `span_services`, `span_endpoints`,
+      `worst_severity`. → API tests.
+- [ ] **T22** `P` — span `events` as a timeline and `links` as navigation in
+      `features/traces/SpanDetail.tsx` (AC17).
+- [ ] **T23** `P` — `features/logs/LogsScreen.tsx`: facets as counts; the trace arrow only when
+      `trace_id` is non-empty; Live as a toggle sharing the search filters.
+- [ ] **T24** `P` — `features/traces/TraceListScreen.tsx`: duration bar on a window-wide scale;
+      selection arrives pre-applied.
+- [ ] **T25** `P` — `features/traces/TraceScreen.tsx` + `TraceWaterfall.tsx`: detail pane subordinate
+      to the waterfall; `TraceLink.exists: false` as its own state, not a load failure.
+- [ ] **T26** `P` — `features/servicedetail/`: one real chart, deploy markers (IA3), endpoints on the
+      row.
+- [ ] **T27** `P` — `features/servicemap/`: volume floor and failing-only; `callee_kind` labels the
+      node; `edge_kind` distinguishes a queue edge from a call.
+- [ ] **T28** `P` — selection travels (IA1): a shared scope in `shared/selection.ts`, applied on
+      arrival rather than re-chosen. → `selection.test.ts`.
+
+### The dashboard surface
+
+- [ ] **T29** `P` — `features/overview/` (new) + route at `/`; three RED panels from
+      `endpoint_stats_1m`; ranked-entity row reused.
+- [ ] **T30** `P` — one deploy marker spanning all three panels; `deploys` API consumed for the first
+      time.
+- [ ] **T31** `P` — `route-manifest.ts`: Overview above Signals, Findings its own entry; **the "never
+      the front door" comment records a superseded decision** — update it and
+      `route-manifest.test.ts` together.
+- [ ] **T32** `P` — service detail expanded to the full RED set: distribution, operations,
+      dependencies from `service_edges_1m`.
+- [ ] **T33** `P` — infrastructure USE panels, honest about having no saturation measure.
+
+### Surfaces and account — six screens
+
+- [ ] **T34** `P` — `features/rum/RumScreen.tsx`: `readings` as a column, `is_route_template`
+      labelled, ratings named in words not only colour.
+- [ ] **T35** `P` — `infrastructure/signals` widened past host metrics into a metric catalogue.
+- [ ] **T36** `P` — `features/metrics/` (new): the catalogue plus a histogram reader over
+      `bucket_counts`/`explicit_bounds` (AC5); the heatmap **only** where a customer sends OTLP
+      histograms.
+- [ ] **T37** `P` — `features/usage/UsageScreen.tsx`: `settled: false` rendered, `services` beside
+      `billed_services`.
+- [ ] **T38** `P` — settings ×4 — `ApiKeysScreen`, `ProjectsScreen`, `BillingScreen`, `ProfileScreen`
+      — where the dangerous state does most of the work.
+- [ ] **T39** `P` — unsaved-changes warning on every editable form (AC19).
+      → one test per form.
+
+### Gateway and the Findings shell
+
+- [ ] **T40** `P` — `features/onboarding/OnboardingScreen.tsx` ends in a confirmation naming the
+      service that arrived (IA4), not the trace list.
+- [ ] **T41** `P` — `features/auth/`: login, signup, recovery on the Gateway archetype.
+- [ ] **T42** `P` — `features/findings/` (new): feed structure, ordering, acknowledge/resolve; the
+      card provisional.
+- [ ] **T43** `P` — the healthy state carrying the RED summary, and **visibly distinct from
+      failed-to-load** (AC18). → a test asserting the two differ.
+
+### Closing
+
+- [ ] **T44** — `/review-diff`.
+- [ ] **T45** — Design QA: every rebuilt screen against its wireframe and the prototype. *Nothing
+      implements this gate today.*
+- [ ] **T46** — `docs/architecture/frontend.md` updated to current truth.
+- [ ] **T47** — `docs/product/vision.md` and `feature-catalog.md` F20: both still record
+      "insight-first, not dashboard-first", superseded 2026-09-12.
+- [ ] **T48** — **Outcome** filled in; `status.md` final.
 
 ## New risks
 
@@ -92,6 +202,11 @@ plan and those disagree, the disagreement is in **Questions** below.
 services the scale is correct for what is shown, but adding a 101st taller service would rescale
 every sparkline. Acceptable here and worth remembering when filters arrive, which change what is
 loaded.
+
+**Forty-eight tasks is the real size of this feature**, and only six are exact. That ratio is the
+honest picture: the thin path is known, and everything after it depends on whether the archetype
+survives. The two tasks with no code behind them at all — T45's Design QA gate, and T36's Metrics
+screen — are the ones most likely to grow.
 
 **`useServiceTrend` doubles the screen's requests** — list and trend, in parallel. Both are bounded
 and cached on the same key shape, but a slow trend must not block the list from rendering: the rows

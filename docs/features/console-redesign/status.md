@@ -6,7 +6,12 @@ Approved
 
 ## Current task
 
-**Awaiting approval of [`task-plan.md`](task-plan.md).** Six tasks, four files, no backend change. `design.md`, the wireframes and `plan.md` are approved; this is the last gate before the
+**Awaiting approval of [`task-plan.md`](task-plan.md).** **48 tasks across the whole feature** — six
+exact, 37 provisional, five closing. No schema change anywhere.
+
+Six exact out of 48 is the honest picture, not a weakness of the plan: the thin path was read from
+the code, and everything after it depends on whether the archetype survives contact with real data.
+Marking that costs nothing and is cheaper than pretending otherwise. `design.md`, the wireframes and `plan.md` are approved; this is the last gate before the
 first edited file.
 
 One blocking question in it: `formatErrors` renders "no errors" and "unknown errors" identically,
