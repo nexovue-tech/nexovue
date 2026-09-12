@@ -121,27 +121,40 @@ interface ServicesViewProps {
 }
 
 /**
- * The top of the scale every sparkline on this screen is drawn against.
+ * A failing row plots what it is failing at; a healthy one plots what it is doing.
  *
- * One number for the whole list, not one per row: a per-row maximum makes a flat service
- * and a spiking one fill their boxes identically, and the column stops being readable
- * across rows — which is the only reason to put a trend in a list.
+ * The first version drew request rate on every row and stroked it with the row's
+ * severity, so a service with errors showed a *red* line that was its traffic. A red
+ * line reads as errors, and that one said something the data did not. Colour and data
+ * now agree, because the colour picks the series rather than decorating it.
  *
- * It is computed from the services actually loaded. A page cap of 100 means the scale is
- * right for what is shown; a taller service arriving on a later page would rescale the
- * column, which is worth remembering when filters start changing what is loaded.
+ * **Two ceilings, not one.** An error rate is a fraction and a request rate is a count
+ * per minute, so no single number can scale both. Each kind therefore shares a ceiling
+ * with its own kind, which is the only comparability that ever meant anything —
+ * `checkout`'s request rate was never comparable to `flagd`'s error rate.
  */
-export function trendCeiling(
+export interface TrendCeilings {
+  rate: number;
+  errorRate: number;
+}
+
+/**
+ * Computed from the services actually loaded. A page cap of 100 means the scale is right
+ * for what is shown; a taller service arriving on a later page would rescale its column,
+ * which is worth remembering when filters start changing what is loaded.
+ */
+export function trendCeilings(
   services: readonly ServiceHealth[],
   trendByService: ReadonlyMap<string, readonly TrendPoint[]> | undefined,
-): number {
-  let ceiling = 0;
+): TrendCeilings {
+  const ceilings: TrendCeilings = { rate: 0, errorRate: 0 };
   for (const service of services) {
     for (const point of trendByService?.get(service.service_name) ?? []) {
-      if (point.requests_per_minute > ceiling) ceiling = point.requests_per_minute;
+      if (point.requests_per_minute > ceilings.rate) ceilings.rate = point.requests_per_minute;
+      if (point.error_rate > ceilings.errorRate) ceilings.errorRate = point.error_rate;
     }
   }
-  return ceiling;
+  return ceilings;
 }
 
 /** Everything the screen shows, with no query client and no clock behind it. */
@@ -161,7 +174,7 @@ export function ServicesView({
   trendByService,
 }: ServicesViewProps) {
   const rows = buildServiceRows(services, order, expanded, endpointsByService);
-  const ceiling = trendCeiling(services, trendByService);
+  const ceilings = trendCeilings(services, trendByService);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -211,7 +224,7 @@ export function ServicesView({
                   onToggleService={onToggleService}
                   endpointsByService={endpointsByService}
                   trendByService={trendByService}
-                  ceiling={ceiling}
+                  ceilings={ceilings}
                 />
               ))}
             </div>
@@ -315,7 +328,7 @@ function VirtualRow({
   onToggleService,
   endpointsByService,
   trendByService,
-  ceiling,
+  ceilings,
 }: {
   row: ServiceRow;
   offsetTop: number;
@@ -323,7 +336,7 @@ function VirtualRow({
   onToggleService: (serviceName: string) => void;
   endpointsByService: ReadonlyMap<string, EndpointGroup>;
   trendByService?: ReadonlyMap<string, readonly TrendPoint[]>;
-  ceiling: number;
+  ceilings: TrendCeilings;
 }) {
   return (
     <div
@@ -336,7 +349,7 @@ function VirtualRow({
           expanded={row.expanded}
           onToggle={() => onToggleService(row.service.service_name)}
           trend={trendByService?.get(row.service.service_name)}
-          ceiling={ceiling}
+          ceilings={ceilings}
         />
       ) : row.kind === "endpoint" ? (
         <EndpointLine endpoint={row.endpoint} />
@@ -355,14 +368,16 @@ function ServiceLine({
   expanded,
   onToggle,
   trend,
-  ceiling,
+  ceilings,
 }: {
   service: ServiceHealth;
   expanded: boolean;
   onToggle: () => void;
   trend?: readonly TrendPoint[];
-  ceiling: number;
+  ceilings: TrendCeilings;
 }) {
+  const failing = service.error_count > 0;
+
   return (
     <button
       type="button"
@@ -382,10 +397,12 @@ function ServiceLine({
       <MetricCells metrics={service} />
       <span className={TREND_COLUMN}>
         <Sparkline
-          points={(trend ?? []).map((point) => point.requests_per_minute)}
-          max={ceiling}
-          tone={service.error_count > 0 ? "critical" : "series"}
-          label={`${service.service_name} request rate over the window`}
+          points={(trend ?? []).map((point) =>
+            failing ? point.error_rate : point.requests_per_minute,
+          )}
+          max={failing ? ceilings.errorRate : ceilings.rate}
+          tone={failing ? "critical" : "series"}
+          label={`${service.service_name} ${failing ? "error rate" : "request rate"} over the window`}
         />
       </span>
     </button>

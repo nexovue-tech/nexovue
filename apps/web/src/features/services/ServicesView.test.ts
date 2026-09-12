@@ -83,15 +83,18 @@ interface Overrides {
   widestWindow?: boolean;
 }
 
-/** `count` buckets climbing to `peak`, which is all a sparkline reads. */
-function series(peak: number, count = 6): readonly TrendPoint[] {
+/** `count` buckets climbing to `peak` on each series, which is all a sparkline reads. */
+function series(peak: number, { errorPeak = 0, count = 6 } = {}): readonly TrendPoint[] {
   return Array.from({ length: count }, (_, index) => ({
     bucket: new Date(index * 60_000).toISOString(),
     requests_per_minute: (peak / count) * (index + 1),
-    error_rate: 0,
+    error_rate: (errorPeak / count) * (index + 1),
     p95_ms: 10,
   }));
 }
+
+/** Two services that are both healthy, so both rows plot the same series. */
+const QUIET: ServiceHealth = { ...HEALTHY, service_name: "demo-quiet" };
 
 function render(overrides: Overrides = {}): HTMLElement {
   const container = document.createElement("div");
@@ -250,11 +253,12 @@ function sparklineHeights(container: HTMLElement, index: number): number[] {
 }
 
 describe("ServicesView trends", () => {
-  it("draws every row against one scale, so two rows can be compared", () => {
+  it("draws rows of the same kind against one scale, so two can be compared", () => {
     const container = render({
+      services: [HEALTHY, QUIET],
       trendByService: new Map([
-        ["demo-storefront", series(100)],
-        ["demo-catalog", series(10)],
+        ["demo-catalog", series(100)],
+        ["demo-quiet", series(10)],
       ]),
     });
 
@@ -267,10 +271,46 @@ describe("ServicesView trends", () => {
     expect(busy[busy.length - 1]).toBeLessThan(quiet[quiet.length - 1]);
   });
 
-  it("keeps a row whose trend never arrived, and rules the cell", () => {
-    const container = render({ trendByService: new Map([["demo-storefront", series(100)]]) });
+  it("plots what the colour claims: a failing row draws its errors, not its traffic", () => {
+    // Traffic falling while errors climb. If the row plotted traffic it would slope down;
+    // a red line that slopes down while a service is breaking is a lie the colour tells.
+    const falling = [...series(60, { errorPeak: 0.4 })].reverse().map((point, index, all) => ({
+      ...point,
+      error_rate: all[all.length - 1 - index].error_rate,
+    }));
+    const container = render({
+      services: [STOREFRONT],
+      trendByService: new Map([["demo-storefront", falling]]),
+    });
 
-    expect(readable(container)).toContain("demo-catalog");
+    const drawn = sparklineHeights(container, 0);
+
+    expect(container.innerHTML).toContain("stroke-critical-solid");
+    expect(drawn[drawn.length - 1]).toBeLessThan(drawn[0]);
+    expect(container.querySelector('svg[role="img"]')?.getAttribute("aria-label")).toContain(
+      "error rate",
+    );
+  });
+
+  it("says which series a healthy row is showing", () => {
+    const container = render({
+      services: [HEALTHY],
+      trendByService: new Map([["demo-catalog", series(100)]]),
+    });
+
+    expect(container.querySelector('svg[role="img"]')?.getAttribute("aria-label")).toContain(
+      "request rate",
+    );
+    expect(container.innerHTML).toContain("stroke-series-1");
+  });
+
+  it("keeps a row whose trend never arrived, and rules the cell", () => {
+    const container = render({
+      services: [HEALTHY, QUIET],
+      trendByService: new Map([["demo-catalog", series(100)]]),
+    });
+
+    expect(readable(container)).toContain("demo-quiet");
     // One sparkline drawn, one cell ruled: a missing series must not remove the row.
     expect(container.querySelectorAll("polyline")).toHaveLength(1);
     expect(readable(container)).toContain(UNKNOWN);

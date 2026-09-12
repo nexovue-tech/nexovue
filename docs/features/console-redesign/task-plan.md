@@ -217,13 +217,17 @@ appear with em dashes and fill in.
 | # | Question | Blocking | Where the answer will live |
 |---|---|---|---|
 | Q1 | ~~`formatErrors` renders zero and unknown identically~~ | **RESOLVED 2026-09-13** | `docs/design/principles.md` rule 2 |
-| Q2 | Does the trend sparkline show **rate** or **error rate**? Assumed rate. **Design QA shows the assumption is wrong**: `flagd` draws a jagged *red* line that is its request rate, and a reader will read a red line as errors. Colour and data disagree. | **Yes, now** | [`design.md`](design.md) §6 |
-| Q3 | **Ten of sixteen sparklines are nearly flat** — under 2px of movement in a 15px box — because one shared scale is dominated by the two busiest services. Comparability works exactly as designed; the cost on real data is that 62% of the column carries ink and no information. | **Yes** | [`design.md`](design.md) §6 |
+| Q2 | ~~rate or error rate?~~ **RESOLVED 2026-09-13: the colour picks the series.** A failing row plots its error rate, a healthy one its request rate, so a red line always means errors. Verified live: `flagd` now draws `flagd error rate` in `stroke-critical-solid`. | Resolved | [`design.md`](design.md) §6 |
+| Q3 | ~~ten of sixteen sparklines nearly flat~~ **RESOLVED 2026-09-13: left as designed.** The flat lines are true — those services really are quiet — and the alternative is the per-row scaling the archetype exists to refuse. | Resolved | [`design.md`](design.md) §6 |
 
-**Q2 and Q3 are what the thin path was built to find.** Both are visible only against real data —
+**Q2 and Q3 were what the thin path was built to find.** Both were visible only against real data —
 sixteen services where two carry all the traffic — and neither would have surfaced from the
-prototype's eight invented rows. Options for each are in the report; both are founder decisions,
-and both would change the archetype the other four screens inherit.
+prototype's eight invented rows.
+
+**Q2's fix needed two ceilings, not one.** An error rate is a fraction and a request rate is a count
+per minute, so no single number scales both. Each kind now shares a ceiling with its own kind, which
+is the only comparability that ever meant anything: `checkout`'s request rate was never comparable
+to `flagd`'s error rate. One shared scale per screen was the right rule and it was one rule short.
 
 **Q1 resolved: the code stands, and the principle now names the exception.** The ambiguous case
 cannot occur — `error_count` is `number` in the contract and `int()` from a SQL `SUM` on the server,
@@ -290,4 +294,5 @@ carrying a 12px gutter, so the drawing pushed into the row's own right padding a
 edge where every other column sat 16px in**. Now `w-29`; measured at 16px, matching its neighbours.
 No test could have caught this: jsdom performs no layout.
 
-**Two findings that are design decisions, not defects — see Questions.**
+**Two design findings, both since resolved and re-verified live.** The sparkline now plots the series
+its colour claims, and the flat lines stay. See Questions.
