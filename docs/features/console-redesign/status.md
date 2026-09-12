@@ -6,7 +6,7 @@ Approved
 
 ## Current task
 
-`wireframes-ranked-entities.md` — batch 1 of 3, awaiting founder review. `design.md` still awaits
+Batches 1 and 2 of the wireframes await founder review. `design.md` still awaits
 approval alongside it.
 
 OD1 and OD2 remain open. They do not block the layout system, which is common to every screen, but
@@ -23,8 +23,9 @@ they do block two specific wireframes: the Findings feed and the dashboard surfa
   core loop is four hops with context lost at each.
 - `prototype-ranked-entities.html` built and published: the row rendered from the real tokens,
   because a markdown wireframe cannot answer whether the density is right. Founder reviewed it.
-- `wireframes-ranked-entities.md` written: five screens on one archetype, every field taken from the
-  API's own response schemas.
+- `wireframes-ranked-entities.md` (batch 1) and `wireframes-investigation.md` (batch 2) written:
+  ten of the twenty screens, every field taken from the API's own response schemas.
+- Founder decided 2026-09-12: widen `ServiceHealth` with p95, and absolute-impact ranking stands.
 - `design.md` written: the layout system — nine archetypes covering twenty routes, the
   ranked-entity row anatomy, the `Sparkline` contract, a three-step density scale, the shell change,
   and states defined per archetype rather than per screen.
@@ -32,8 +33,15 @@ they do block two specific wireframes: the Findings feed and the dashboard surfa
 ## Next action
 
 Founder reviews `design.md` and batch 1. Three questions in the wireframes need answers before
-implementation: whether to widen `ServiceHealth` with p95, whether absolute-impact ranking is right
-for a small customer, and whether a stale node is a warning or a critical.
+implementation: **whether a stale infrastructure node is a warning or a critical** — still unanswered, and the
+only batch-1 question outstanding. Batch 2 adds three more: exposing latency quantiles across all
+three schemas at once, whether span `events` and `links` are in scope, and where a deploy list lives
+once markers exist.
+
+**Batch 2 turned the p95 gap into a systemic finding.** `ServiceEdge` carries no latency either,
+while `service_edges_1m` stores the same `latency_quantiles(0.5, 0.95, 0.99)` as
+`endpoint_stats_1m`. Quantiles are computed pre-sampling into every rollup and exposed by no list
+endpoint — one pattern to fix once, not three screens to patch.
 
 **Batch 1 confirmed a risk as fact: none of the five list endpoints returns a time series, and
 `ServiceHealth` carries no latency at all.** The archetype needs backend work on every screen. The
