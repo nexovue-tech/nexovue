@@ -1,0 +1,424 @@
+<title>Ranked Entities</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* ============================================================
+   nexovue design tokens — transcribed from packages/ui/tokens.css.
+   Dark is :root because the product is dark-first. Light arrives
+   two ways: the OS, guarded so an explicit dark choice still wins,
+   and the [data-theme="light"] stamp.
+   ============================================================ */
+:root {
+  --n-1:oklch(.150 .001 157.1); --n-2:oklch(.185 .002 157.1); --n-3:oklch(.225 .003 157.1);
+  --n-4:oklch(.265 .003 157.1); --n-5:oklch(.305 .005 157.1); --n-6:oklch(.355 .005 157.1);
+  --n-7:oklch(.420 .006 157.1); --n-8:oklch(.510 .007 157.1); --n-9:oklch(.620 .010 157.1);
+  --n-10:oklch(.700 .009 157.1); --n-11:oklch(.775 .006 157.1); --n-12:oklch(.960 .003 157.1);
+  --brand-3:oklch(.225 .049 157.1); --brand-7:oklch(.420 .100 157.1);
+  --brand-9:oklch(.825 .195 157.1); --brand-11:oklch(.816 .117 157.1);
+  --crit-subtle:oklch(.205 .045 25); --crit-border:oklch(.355 .075 25);
+  --crit-solid:oklch(.620 .200 25);  --crit-text:oklch(.779 .129 25);
+  --warn-subtle:oklch(.205 .044 70); --warn-border:oklch(.355 .075 70);
+  --warn-solid:oklch(.800 .162 70);  --warn-text:oklch(.782 .167 70);
+  --info-subtle:oklch(.205 .045 240);--info-border:oklch(.355 .075 240);
+  --info-solid:oklch(.700 .160 240); --info-text:oklch(.760 .137 240);
+  --series-1:oklch(.800 .136 200);
+
+  --color-page:var(--n-1); --color-surface:var(--n-2); --color-raised:var(--n-3);
+  --color-hover:var(--n-4); --color-line-subtle:var(--n-6); --color-line:var(--n-7);
+  --color-line-strong:var(--n-8); --color-solid:var(--n-9);
+  --color-ink-dim:var(--n-11); --color-ink:var(--n-12);
+  --color-brand:var(--brand-9); --color-brand-text:var(--brand-11);
+  --color-brand-surface:var(--brand-3); --color-brand-line:var(--brand-7);
+  --color-brand-contrast:#000; --color-healthy:var(--n-11);
+  --skeleton:var(--n-4);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --n-1:oklch(.995 .001 157.1); --n-2:oklch(.980 .002 157.1); --n-3:oklch(.955 .003 157.1);
+    --n-4:oklch(.930 .003 157.1); --n-5:oklch(.905 .005 157.1); --n-6:oklch(.875 .005 157.1);
+    --n-7:oklch(.830 .006 157.1); --n-8:oklch(.760 .007 157.1); --n-9:oklch(.620 .010 157.1);
+    --n-10:oklch(.560 .009 157.1); --n-11:oklch(.563 .006 157.1); --n-12:oklch(.310 .003 157.1);
+    --brand-3:oklch(.955 .049 157.1); --brand-7:oklch(.830 .107 157.1);
+    --brand-11:oklch(.505 .117 157.1);
+    --crit-subtle:oklch(.965 .017 25); --crit-border:oklch(.860 .075 25);
+    --crit-solid:oklch(.560 .200 25);  --crit-text:oklch(.553 .170 25);
+    --warn-subtle:oklch(.965 .025 70); --warn-border:oklch(.860 .075 70);
+    --warn-solid:oklch(.660 .143 70);  --warn-text:oklch(.547 .119 70);
+    --info-subtle:oklch(.965 .019 240);--info-border:oklch(.860 .075 240);
+    --info-solid:oklch(.480 .110 240); --info-text:oklch(.540 .124 240);
+    --series-1:oklch(.600 .102 200);
+    --skeleton:var(--n-4);
+  }
+}
+:root[data-theme="light"] {
+  --n-1:oklch(.995 .001 157.1); --n-2:oklch(.980 .002 157.1); --n-3:oklch(.955 .003 157.1);
+  --n-4:oklch(.930 .003 157.1); --n-5:oklch(.905 .005 157.1); --n-6:oklch(.875 .005 157.1);
+  --n-7:oklch(.830 .006 157.1); --n-8:oklch(.760 .007 157.1); --n-9:oklch(.620 .010 157.1);
+  --n-10:oklch(.560 .009 157.1); --n-11:oklch(.563 .006 157.1); --n-12:oklch(.310 .003 157.1);
+  --brand-3:oklch(.955 .049 157.1); --brand-7:oklch(.830 .107 157.1);
+  --brand-11:oklch(.505 .117 157.1);
+  --crit-subtle:oklch(.965 .017 25); --crit-border:oklch(.860 .075 25);
+  --crit-solid:oklch(.560 .200 25);  --crit-text:oklch(.553 .170 25);
+  --warn-subtle:oklch(.965 .025 70); --warn-border:oklch(.860 .075 70);
+  --warn-solid:oklch(.660 .143 70);  --warn-text:oklch(.547 .119 70);
+  --info-subtle:oklch(.965 .019 240);--info-border:oklch(.860 .075 240);
+  --info-solid:oklch(.480 .110 240); --info-text:oklch(.540 .124 240);
+  --series-1:oklch(.600 .102 200);
+  --skeleton:var(--n-4);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--color-page); color: var(--color-ink);
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  font-size: 13px; line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 72px; }
+h1, h2, h3 { margin: 0; font-weight: 600; text-wrap: balance; }
+
+/* ---- page chrome ---------------------------------------------------- */
+.masthead { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end;
+  justify-content: space-between; border-bottom: 1px solid var(--color-line);
+  padding-bottom: 14px; margin-bottom: 6px; }
+.masthead h1 { font-size: 19px; letter-spacing: -0.01em; }
+.stamp { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px;
+  color: var(--color-ink-dim); letter-spacing: .04em; text-transform: uppercase; }
+.note { color: var(--color-ink-dim); max-width: 68ch; margin: 14px 0 0; }
+.note strong { color: var(--color-ink); font-weight: 500; }
+.themebtn { font: inherit; font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  background: var(--color-raised); color: var(--color-ink-dim);
+  border: 1px solid var(--color-line); padding: 5px 11px; cursor: pointer; border-radius: 3px; }
+.themebtn:hover { color: var(--color-ink); border-color: var(--color-line-strong); }
+.themebtn:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 2px; }
+
+/* ---- section rhythm -------------------------------------------------- */
+section { margin-top: 44px; }
+.secthead { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; }
+.secthead h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase;
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 500;
+  color: var(--color-ink-dim); }
+.secthead .rule { flex: 1; height: 1px; background: var(--color-line-subtle); }
+.sublede { color: var(--color-ink-dim); margin: 0 0 16px; max-width: 72ch; }
+
+/* ---- THE ROW — the archetype under review ---------------------------- */
+.list { border-top: 1px solid var(--color-line); }
+.colhead, .row {
+  display: grid; align-items: center; gap: 14px;
+  grid-template-columns: 12px minmax(0,1fr) 78px 104px 82px 104px;
+}
+.colhead { padding: 7px 10px; border-bottom: 1px solid var(--color-line-subtle);
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px;
+  letter-spacing: .05em; text-transform: uppercase; color: var(--color-ink-dim); }
+.row { padding: 9px 10px; border-bottom: 1px solid var(--color-line-subtle);
+  text-decoration: none; color: inherit; }
+a.row:hover { background: var(--color-hover); }
+a.row:focus-visible { outline: 2px solid var(--color-brand); outline-offset: -2px; }
+
+/* health is the ABSENCE of colour — no dot on a healthy row */
+.dot { width: 7px; height: 7px; border-radius: 50%; justify-self: center; }
+.dot.crit { background: var(--crit-solid); }
+.dot.warn { background: var(--warn-solid); border-radius: 1px; }   /* shape, not only hue */
+
+.name { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.name .kind { color: var(--color-ink-dim); font-weight: 400; }
+.num { font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.num .unit { color: var(--color-ink-dim); font-size: 11px; }
+.num.crit { color: var(--crit-text); }
+.num.warn { color: var(--warn-text); }
+.dim { color: var(--color-ink-dim); }
+.spark { display: block; }
+.colhead .num { font-family: inherit; }
+
+/* ---- states ---------------------------------------------------------- */
+.panel { border: 1px solid var(--color-line); border-radius: 4px;
+  background: var(--color-surface); overflow: hidden; }
+.panel-label { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px;
+  letter-spacing: .05em; text-transform: uppercase; color: var(--color-ink-dim);
+  padding: 8px 12px; border-bottom: 1px solid var(--color-line-subtle);
+  background: var(--color-raised); }
+.panel-body { padding: 22px 16px; }
+.states { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(288px, 1fr)); }
+
+.sk { height: 9px; border-radius: 2px; background: var(--skeleton); }
+.skrow { display: grid; gap: 14px; align-items: center; padding: 9px 10px;
+  grid-template-columns: 12px minmax(0,1fr) 78px 82px; border-bottom: 1px solid var(--color-line-subtle); }
+
+.empty { text-align: left; }
+.empty h3 { font-size: 14px; margin-bottom: 6px; }
+.empty p { color: var(--color-ink-dim); margin: 0 0 14px; max-width: 46ch; }
+.btn { display: inline-block; font: inherit; font-weight: 500; cursor: pointer;
+  background: var(--color-brand); color: var(--color-brand-contrast);
+  border: 0; border-radius: 3px; padding: 7px 13px; text-decoration: none; }
+.btn:focus-visible { outline: 2px solid var(--color-brand); outline-offset: 2px; }
+.btn.quiet { background: transparent; color: var(--color-ink);
+  border: 1px solid var(--color-line-strong); }
+.btn.danger { background: var(--crit-solid); color: #fff; }
+
+.failure { border-left: 2px solid var(--crit-solid); padding-left: 12px; }
+.failure h3 { font-size: 14px; margin-bottom: 6px; color: var(--crit-text); }
+.failure p { color: var(--color-ink-dim); margin: 0 0 12px; max-width: 46ch; }
+.cid { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px;
+  color: var(--color-ink-dim); background: var(--color-raised);
+  border: 1px solid var(--color-line-subtle); border-radius: 3px; padding: 2px 6px; }
+
+.callout { border: 1px solid var(--color-brand-line); background: var(--color-brand-surface);
+  border-radius: 4px; padding: 14px 16px; }
+.callout p { margin: 0; max-width: 74ch; }
+.callout .k { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px;
+  letter-spacing: .05em; text-transform: uppercase; color: var(--color-brand-text);
+  display: block; margin-bottom: 5px; }
+
+/* ---- shared-vs-per-row sparkline comparison -------------------------- */
+.cmp { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); }
+.cmprow { display: grid; grid-template-columns: minmax(0,1fr) 104px; gap: 12px;
+  align-items: center; padding: 7px 0; border-bottom: 1px solid var(--color-line-subtle); }
+.verdict { font-size: 12px; color: var(--color-ink-dim); margin: 10px 0 0; }
+.verdict.good { color: var(--color-brand-text); }
+.verdict.bad { color: var(--crit-text); }
+
+@media (max-width: 720px) {
+  .colhead { display: none; }
+  .row { grid-template-columns: 12px minmax(0,1fr) 104px;
+    grid-template-areas: "d n s" ". m s"; row-gap: 4px; }
+  .row .dot { grid-area: d; align-self: start; margin-top: 5px; }
+  .row .name { grid-area: n; white-space: normal; }
+  .row .spark { grid-area: s; align-self: center; }
+  .row .metrics { grid-area: m; display: flex; gap: 12px; flex-wrap: wrap; }
+  .num { text-align: left; }
+}
+@media (min-width: 721px) { .row .metrics { display: contents; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <div class="masthead">
+    <div>
+      <h1>Ranked entities</h1>
+      <div class="stamp">Console redesign · archetype 2 of 9 · covers 5 screens</div>
+    </div>
+    <button class="themebtn" id="theme" type="button">Switch theme</button>
+  </div>
+
+  <p class="note">
+    The archetype behind <strong>Services, Errors, Synthetics, and the merged
+    Database/Infrastructure screen</strong> — a quarter of the console. Example data, not real
+    readings. Every colour, font and size here is read from
+    <span class="stamp" style="text-transform:none">packages/ui/tokens.css</span>, so what you see is
+    what the product would render.
+  </p>
+
+  <!-- ============ THE ROW ============ -->
+  <section>
+    <div class="secthead"><h2>The row</h2><span class="rule"></span></div>
+    <p class="sublede">
+      Reads left to right as a sentence: <em>checkout-api, twelve hundred a minute, 4.1% failing,
+      p95 340 ms, and rising.</em> The sparkline is the evidence for “and rising” — inside the
+      sentence, not in a panel beside it. Ranked by <strong>absolute error count</strong>, so a
+      50% failure rate on 4 requests sits below 4% on 12,000.
+    </p>
+
+    <div class="list" id="live">
+      <div class="colhead">
+        <span></span><span>Service</span>
+        <span class="num">Rate</span><span class="num">Errors</span>
+        <span class="num">p95</span><span class="num">1h</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SHARED SCALE ============ -->
+  <section>
+    <div class="secthead"><h2>One scale, not one per row</h2><span class="rule"></span></div>
+    <p class="sublede">
+      The decision worth your scrutiny. Same four services, same data, drawn both ways.
+    </p>
+    <div class="cmp">
+      <div class="panel">
+        <div class="panel-label">Shared scale — proposed</div>
+        <div class="panel-body" id="cmp-shared"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-label">Per-row auto-scale — rejected</div>
+        <div class="panel-body" id="cmp-auto"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STATES ============ -->
+  <section>
+    <div class="secthead"><h2>The states</h2><span class="rule"></span></div>
+    <p class="sublede">
+      Defined once per archetype, inherited by all five screens. Note that <em>empty</em> is two
+      different screens — a project with no telemetry is an onboarding moment; a filter with no
+      matches is a dead end. Collapsing them is the usual mistake.
+    </p>
+
+    <div class="states">
+      <div class="panel">
+        <div class="panel-label">Loading — skeleton, not spinner</div>
+        <div>
+          <div class="skrow"><span></span><span class="sk" style="width:52%"></span><span class="sk"></span><span class="sk"></span></div>
+          <div class="skrow"><span></span><span class="sk" style="width:71%"></span><span class="sk"></span><span class="sk"></span></div>
+          <div class="skrow"><span></span><span class="sk" style="width:38%"></span><span class="sk"></span><span class="sk"></span></div>
+          <div class="skrow" style="border-bottom:0"><span></span><span class="sk" style="width:60%"></span><span class="sk"></span><span class="sk"></span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-label">Empty — nothing has ever arrived</div>
+        <div class="panel-body empty">
+          <h3>No services yet</h3>
+          <p>Point an OpenTelemetry SDK at your endpoint and the first service appears here within
+             about a minute.</p>
+          <a class="btn" href="#">Set up a service</a>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-label">Empty — the filter excluded everything</div>
+        <div class="panel-body empty">
+          <h3>No services match <span class="cid">env:staging</span></h3>
+          <p>Eleven services reported in this window. None of them carry that attribute.</p>
+          <button class="btn quiet" type="button">Clear filter</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-label">Error — names the failure and the id</div>
+        <div class="panel-body">
+          <div class="failure">
+            <h3>Couldn’t load services</h3>
+            <p>The telemetry store didn’t answer in time. Your data is unaffected — this is a read
+               that failed.</p>
+            <button class="btn quiet" type="button">Try again</button>
+            <span class="cid" style="margin-left:8px">01JQ6F3K2M</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-label">Partial — a row without a trend still renders</div>
+        <div id="partial"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-label">Dangerous — blast radius in real numbers</div>
+        <div class="panel-body empty">
+          <h3>Delete project “production”?</h3>
+          <p>This erases <strong>11 services</strong>, <strong>2.4 million spans</strong> and
+             <strong>18 days</strong> of history. It revokes 3 API keys immediately. It cannot be
+             undone.</p>
+          <button class="btn danger" type="button">Delete 2.4M spans</button>
+          <button class="btn quiet" type="button" style="margin-left:6px">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="callout">
+      <span class="k">What to look at</span>
+      <p>Density, whether the row reads as a sentence, and whether the sparkline earns its column.
+        If the answer is no, one HTML file gets thrown away instead of five rebuilt screens.</p>
+    </div>
+  </section>
+
+</div>
+
+<script>
+// Example readings. The incident is checkout-api, which matches the design system's
+// own worked example: "Checkout is 4x slower than normal since 15:04."
+const SERVICES = [
+  { name:"checkout-api",        kind:"http",  rate:1204, errPct:4.1,  p95:340, sev:"crit",
+    series:[38,41,39,44,42,40,46,58,92,148,196,214] },
+  { name:"payment-gateway",     kind:"http",  rate:1187, errPct:1.8,  p95:512, sev:"warn",
+    series:[19,22,20,24,21,23,20,26,24,29,33,31] },
+  { name:"cart-service",        kind:"http",  rate:3140, errPct:0.4,  p95:88,  sev:null,
+    series:[12,14,13,11,15,12,14,13,12,14,13,15] },
+  { name:"inventory-sync",      kind:"queue", rate:212,  errPct:9.4,  p95:1840,sev:"warn",
+    series:[18,20,17,21,19,22,20,18,21,19,20,22] },
+  { name:"catalog-api",         kind:"http",  rate:2610, errPct:0.1,  p95:64,  sev:null,
+    series:[3,2,4,3,2,3,4,2,3,3,2,4] },
+  { name:"search-service",      kind:"http",  rate:1890, errPct:0.2,  p95:126, sev:null,
+    series:[4,5,3,4,6,4,5,4,3,5,4,4] },
+  { name:"notification-worker", kind:"queue", rate:96,   errPct:50.0, p95:220, sev:null,
+    series:[2,1,2,2,1,2,2,1,2,2,1,2] },
+  { name:"user-auth",           kind:"http",  rate:4020, errPct:0.0,  p95:41,  sev:null,
+    series:[0,0,0,0,0,0,0,0,0,0,0,0] },
+];
+
+const fmtRate = n => n >= 1000 ? (n/1000).toFixed(1) + "k" : String(n);
+const EM = "—"; // a missing reading is never "0"
+
+// One window for the whole screen, so two rows are actually comparable.
+function spark(series, max, cls) {
+  if (!series || series.length < 4) return '<span class="num dim">' + EM + "</span>";
+  const W = 104, H = 20, P = 2, top = max || Math.max(...series, 1);
+  const step = (W - P*2) / (series.length - 1);
+  const pts = series.map((v,i) => {
+    const x = P + i*step;
+    const y = H - P - (v / top) * (H - P*2);
+    return x.toFixed(1) + "," + y.toFixed(1);
+  }).join(" ");
+  const last = pts.split(" ").pop().split(",");
+  const stroke = cls === "crit" ? "var(--crit-solid)" : "var(--series-1)";
+  return '<svg class="spark" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H +
+    '" aria-hidden="true"><polyline fill="none" stroke="' + stroke +
+    '" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" points="' + pts +
+    '"/><circle cx="' + last[0] + '" cy="' + last[1] + '" r="1.9" fill="' + stroke + '"/></svg>';
+}
+
+function rowHTML(s, max) {
+  const dot = s.sev ? '<span class="dot ' + s.sev + '"></span>' : "<span></span>";
+  const errCls = s.sev === "crit" ? " crit" : s.sev === "warn" ? " warn" : " dim";
+  const errTxt = s.errPct === 0 ? "0" : s.errPct.toFixed(1);
+  return '<a class="row" href="#">' + dot +
+    '<span class="name">' + s.name + ' <span class="kind">' + s.kind + "</span></span>" +
+    '<span class="metrics">' +
+      '<span class="num">' + fmtRate(s.rate) + '<span class="unit">/min</span></span>' +
+      '<span class="num' + errCls + '">' + errTxt + '<span class="unit">% err</span></span>' +
+      '<span class="num dim">' + s.p95 + '<span class="unit">ms</span></span>' +
+    "</span>" +
+    spark(s.series, max, s.sev) + "</a>";
+}
+
+// Rank by ABSOLUTE error count, not rate: 50% of 96 ranks below 4.1% of 1204.
+const ranked = [...SERVICES].sort((a,b) => (b.rate*b.errPct) - (a.rate*a.errPct));
+const SCREEN_MAX = Math.max(...SERVICES.flatMap(s => s.series), 1);
+document.getElementById("live").insertAdjacentHTML("beforeend",
+  ranked.map(s => rowHTML(s, SCREEN_MAX)).join(""));
+
+// Partial state: two rows whose rollup is too thin to draw honestly.
+const partial = [
+  { ...ranked[0] },
+  { ...ranked[2], series: [4,6] },
+  { ...ranked[4], series: null },
+];
+document.getElementById("partial").insertAdjacentHTML("beforeend",
+  partial.map(s => rowHTML(s, SCREEN_MAX)).join(""));
+
+// Shared vs per-row scale, same four services both times.
+const cmp = ranked.slice(0,4);
+const cmpMax = Math.max(...cmp.flatMap(s => s.series));
+const cmpRow = (s, max) => '<div class="cmprow"><span class="name">' + s.name + "</span>" +
+  spark(s.series, max, s.sev) + "</div>";
+document.getElementById("cmp-shared").insertAdjacentHTML("afterbegin",
+  cmp.map(s => cmpRow(s, cmpMax)).join("") +
+  '<p class="verdict good">checkout-api is visibly the incident. The other three are visibly flat.</p>');
+document.getElementById("cmp-auto").insertAdjacentHTML("afterbegin",
+  cmp.map(s => cmpRow(s, Math.max(...s.series))).join("") +
+  '<p class="verdict bad">All four look like they are spiking. Three of them are not.</p>');
+
+// Theme toggle, so both themes can be judged side by side.
+const btn = document.getElementById("theme");
+btn.addEventListener("click", () => {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const cur = document.documentElement.getAttribute("data-theme") || (dark ? "dark" : "light");
+  document.documentElement.setAttribute("data-theme", cur === "dark" ? "light" : "dark");
+});
+</script>
