@@ -275,7 +275,7 @@ a.row:focus-visible { outline: 2px solid var(--color-brand); outline-offset: -2p
           <h3>No services yet</h3>
           <p>Point an OpenTelemetry SDK at your endpoint and the first service appears here within
              about a minute.</p>
-          <a class="btn" href="#">Set up a service</a>
+          <a class="btn" href="/onboarding">Set up a service</a>
         </div>
       </div>
 
@@ -375,9 +375,11 @@ function spark(series, max, cls) {
 
 function rowHTML(s, max) {
   const dot = s.sev ? '<span class="dot ' + s.sev + '"></span>' : "<span></span>";
+  // The real destination, not "#": a row navigates to its service (IA1, selection travels).
+  const href = "/services/" + encodeURIComponent(s.name);
   const errCls = s.sev === "crit" ? " crit" : s.sev === "warn" ? " warn" : " dim";
   const errTxt = s.errPct === 0 ? "0" : s.errPct.toFixed(1);
-  return '<a class="row" href="#">' + dot +
+  return '<a class="row" href="' + href + '">' + dot +
     '<span class="name">' + s.name + ' <span class="kind">' + s.kind + "</span></span>" +
     '<span class="metrics">' +
       '<span class="num">' + fmtRate(s.rate) + '<span class="unit">/min</span></span>' +
@@ -413,6 +415,13 @@ document.getElementById("cmp-shared").insertAdjacentHTML("afterbegin",
 document.getElementById("cmp-auto").insertAdjacentHTML("afterbegin",
   cmp.map(s => cmpRow(s, Math.max(...s.series))).join("") +
   '<p class="verdict bad">All four look like they are spiking. Three of them are not.</p>');
+
+// The rows carry their real destinations so the markup is what the app would ship
+// and hovering shows where a row goes. This is a prototype, so it does not travel.
+document.addEventListener("click", (e) => {
+  const row = e.target.closest("a.row, a.btn");
+  if (row) e.preventDefault();
+});
 
 // Theme toggle, so both themes can be judged side by side.
 const btn = document.getElementById("theme");
