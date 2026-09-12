@@ -8,3 +8,6 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 
 - [SDD adoption](sdd-adoption/change.md) — documentation structure, agent instructions, templates, and the current-state baseline.
 - [Signup session before commit](signup-session-before-commit/bug.md) — signup minted a session before the tenant it named was durable.
+- [Agent skills](agent-skills/change.md) — the development workflow moved to an agent-agnostic document, and four Claude Code skills that run it.
+- [Design system restore](design-system-restore/change.md) — the design system specification was deleted while four references to it survived in shipped code.
+- [Decision log](decision-log/change.md) — an index for the 112 decision records deleted in `e0f11a0`, and the contradiction one of them exposes.

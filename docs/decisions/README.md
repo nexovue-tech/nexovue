@@ -8,6 +8,19 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-002 — Acknowledge only durable boundaries](ADR-002-at-least-once-delivery.md)
 - [ADR-003 — Use OpenTelemetry as the primary collection contract](ADR-003-otel-first-collection.md)
 
+## Earlier decisions, 0001–0112
+
+Before this series, 112 decision records lived under `docs/architecture/decisions/`. They were
+deleted in `e0f11a0`; their full text is intact in git history.
+
+**[decision-log.md](decision-log.md)** indexes all 112 — what each decided, whether it still stands,
+and the ten chains where a decision was superseded or reversed. Read it before proposing anything
+that sounds like a fresh architecture choice; several already have an answer, including one that was
+decided, reversed, and reversed back in a day.
+
+It also records a contradiction worth fixing: the 0060 → 0061 → 0075 chain measured a reproducible
+span overcount that `docs/architecture/current-system-reference.md` currently says does not happen.
+
 ## Not yet written
 
 Tenant-isolation chokepoints and the ClickHouse/Postgres control-plane split are settled in code but have no ADR. Write them when the reasoning next needs to be defended or changed.
