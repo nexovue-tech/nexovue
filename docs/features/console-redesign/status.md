@@ -2,12 +2,17 @@
 
 ## Lifecycle status
 
-Approved
+In development
 
 ## Current task
 
-**Awaiting approval of [`task-plan.md`](task-plan.md).** **48 tasks across the whole feature** — six
-exact, 37 provisional, five closing. No schema change anywhere.
+**T1–T6 complete** — the thin path. `/services` now carries the ranked-entity row: `Sparkline`, the
+shared-scale trend column, the severity mark, and two empty states instead of one. 17 tests added,
+`just check` green.
+
+**Next: the founder judges the screen against the prototype before T7.** `plan.md` says to stop
+here, and that stop is the entire value of building one screen first. The remaining 42 tasks are
+still provisional and are re-expanded once the archetype is confirmed.
 
 Six exact out of 48 is the honest picture, not a weakness of the plan: the thin path was read from
 the code, and everything after it depends on whether the archetype survives contact with real data.

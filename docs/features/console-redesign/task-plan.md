@@ -78,21 +78,21 @@ Ordered by `plan.md`. `E` and `P` as above.
 
 ### The thin path — `/services`, judged before anything else starts
 
-- [ ] **T1** `E` — `shared/components/Sparkline.tsx` (new). Inline SVG, no axes or legend, single
+- [x] **T1** `E` — `shared/components/Sparkline.tsx` (new). Inline SVG, no axes or legend, single
       stroke plus an emphasized endpoint. Explicit `max` so the scale is the caller's, never per-row.
       Below a minimum bucket count renders `UNKNOWN`.
       → `Sparkline.test.ts`: same series at different `max` differ; too-few renders the em dash; an
       empty series does not throw.
-- [ ] **T2** `E` — `features/services/api.ts`: `useServiceTrend` → `ReadonlyMap<string, TrendPoint[]>`.
+- [x] **T2** `E` — `features/services/api.ts`: `useServiceTrend` → `ReadonlyMap<string, TrendPoint[]>`.
       One request for the whole list. → fixture in `ServicesView.test.ts`.
-- [ ] **T3** `E` — `features/services/ServicesScreen.tsx`: `trendByService` prop, trend column in
+- [x] **T3** `E` — `features/services/ServicesScreen.tsx`: `trendByService` prop, trend column in
       `MetricCells`, one screen-wide `max`. → `ServicesView.test.ts`: two magnitudes, one scale; a
       missing series renders the em dash and still renders its row.
-- [ ] **T4** `E` — the severity mark; healthy carries none; critical and warning differ by shape as
+- [x] **T4** `E` — the severity mark; healthy carries none; critical and warning differ by shape as
       well as hue. → `ServicesView.test.ts`.
-- [ ] **T5** `E` — split the empty state into never-arrived and none-in-window.
+- [x] **T5** `E` — split the empty state into never-arrived and none-in-window.
       → `ServicesView.test.ts`, one case each.
-- [ ] **T6** `E` — ranking test: 50% of 96 ranks below 4.1% of 1,204, and `service-rows.ts` does not
+- [x] **T6** `E` — ranking test: 50% of 96 ranks below 4.1% of 1,204, and `service-rows.ts` does not
       resort under `worst`. → `service-rows.test.ts`.
 
 **Stop. Judge the screen against the prototype before T7.**
@@ -240,4 +240,39 @@ so this is a manual look.
 
 ## Outcome
 
-_Filled in when the work completes._
+**T1–T6 complete, 2026-09-13.** `just check` exit 0: 2277 Python, 120 browser-SDK, **630 web across
+48 files** — up from 613/47, so 17 tests were added.
+
+### What changed from this plan
+
+| Planned | Actual |
+|---|---|
+| Four files | **Six** — `Sparkline.tsx` and `Sparkline.test.ts` were counted as one line in Impact |
+| T4 draws critical *and* warning, distinguished by shape | **Critical only.** No error-rate threshold for a "warning" service exists anywhere in the code, and inventing one would have decided product behavior in a component. The mark is binary, exactly as the errors cell beside it already was. Recorded as a question below |
+| T5 splits on whether data ever arrived | **Splits on whether the widest range is already selected.** No API says whether a project has ever received telemetry. The proxy is wrong in one direction only — a project silent for over seven days reads as never having reported — which costs a reader a sentence, where the opposite error would send a customer with working instrumentation back to setup |
+
+### What the work found
+
+- **`Overrides` in `ServicesView.test.ts` had no `windowLabel`,** and vitest does not typecheck, so
+  the tests passed while the build failed. `lint-web`'s own comment predicted exactly this: *"biome
+  does not typecheck, so without this a type error passes every gate."*
+- **One pre-existing test asserted the superseded empty-state copy** and was updated rather than
+  deleted — its intent still holds, only the wording moved.
+- **jsdom does no layout**, so no test could have caught an invalid Tailwind class. The four new
+  utilities were verified against the built CSS instead: `size-1.75` resolves to 7px, matching the
+  prototype exactly.
+
+### Left for the founder
+
+- **A warning tier for services.** Today a service is failing or it is not. Whether an error rate
+  below some threshold should read as warning rather than critical is undecided, and the shape
+  distinction in `design-system.md` waits on it.
+- **A "has this project ever reported" signal.** It would replace the heuristic in `EmptyServices`
+  with a fact.
+
+### Not done
+
+**Design QA.** The built screen has not been compared against
+[`prototype-ranked-entities.html`](prototype-ranked-entities.html). `plan.md` names the gate; nothing
+implements it; `just dev` was not run. This is the one validation step this work claims and did not
+perform.

@@ -219,3 +219,46 @@ describe("describeVolume", () => {
     expect(describeVolume(1)).toBe("1 request in this window");
   });
 });
+
+describe("the API's ranking is the product", () => {
+  /**
+   * Ranked by absolute harm, not by rate. An endpoint failing 4.1% of 1,204 calls has
+   * hurt fifty people; one failing 50% of 96 has hurt forty-eight, and it is the busy one
+   * a reader has to see first. `queries.py` orders on `error_count DESC` for exactly this
+   * reason, and the screen must not quietly reverse it by sorting on a rate.
+   */
+  const CHECKOUT = service("checkout-api", {
+    request_count: 1204,
+    error_count: 49,
+    error_rate: 49 / 1204,
+    requests_per_minute: 20,
+  });
+  const NOTIFICATIONS = service("notification-worker", {
+    request_count: 96,
+    error_count: 48,
+    error_rate: 0.5,
+    requests_per_minute: 1.6,
+  });
+
+  it("keeps the server's order under `worst`, however tempting the rate looks", () => {
+    const asServed = [CHECKOUT, NOTIFICATIONS];
+
+    expect(applyOrder(asServed, "worst").map((row) => row.service_name)).toEqual([
+      "checkout-api",
+      "notification-worker",
+    ]);
+  });
+
+  it("does not resort by error rate under any order", () => {
+    // `slowest` is the one escape hatch, and it sorts on the tail — never on error rate.
+    const asServed = [
+      service("fast-but-failing", { p95_ms: 10, error_rate: 0.9, error_count: 90 }),
+      service("slow-and-fine", { p95_ms: 900, error_rate: 0, error_count: 0 }),
+    ];
+
+    expect(applyOrder(asServed, "slowest").map((row) => row.service_name)).toEqual([
+      "slow-and-fine",
+      "fast-but-failing",
+    ]);
+  });
+});

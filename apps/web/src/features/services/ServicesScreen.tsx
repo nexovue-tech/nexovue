@@ -5,13 +5,20 @@ import { useMemo, useRef, useState } from "react";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows, SkeletonText } from "@/shared/components/Skeleton";
+import { Sparkline } from "@/shared/components/Sparkline";
 import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatRatePerMinute } from "@/shared/format/rate";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { TIME_RANGES, timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
-import type { EndpointGroup, EndpointHealth, HealthMetrics, ServiceHealth } from "./api";
-import { useEndpointsByService, useServiceList } from "./api";
+import type {
+  EndpointGroup,
+  EndpointHealth,
+  HealthMetrics,
+  ServiceHealth,
+  TrendPoint,
+} from "./api";
+import { useEndpointsByService, useServiceList, useServiceTrend } from "./api";
 import type { ServiceOrder, ServiceRow } from "./service-rows";
 import {
   buildServiceRows,
@@ -33,6 +40,11 @@ const PENDING_ENDPOINT_ROWS = [
 const RATE_COLUMN = "w-20 shrink-0 text-right";
 const ERRORS_COLUMN = "w-28 shrink-0 text-right";
 const LATENCY_COLUMN = "w-16 shrink-0 text-right";
+/* Wide enough for the sparkline it holds, and reserved on every row so the columns to its
+   left do not shift when one service has no trend to draw. */
+const TREND_COLUMN = "w-26 shrink-0 pl-3";
+/* Reserved on every row, marked or not, so the names below each other line up. */
+const MARK_COLUMN = "flex w-2 shrink-0 justify-center";
 const WIDE_ONLY = "hidden lg:block";
 
 /**
@@ -50,6 +62,7 @@ export function ServicesScreen() {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
 
   const services = useServiceList(projectId, timeWindow);
+  const trendByService = useServiceTrend(projectId, timeWindow);
 
   // Sorted so the request set is a function of *which* services are open, not the
   // order they were opened in — otherwise every toggle rebuilds every query.
@@ -69,6 +82,7 @@ export function ServicesScreen() {
       order={order}
       onOrderChange={setOrder}
       windowLabel={timeRangeById(rangeId).label}
+      widestWindow={rangeId === TIME_RANGES[TIME_RANGES.length - 1].id}
       services={services.data?.services ?? []}
       isPending={services.isPending}
       isError={services.isError}
@@ -77,6 +91,7 @@ export function ServicesScreen() {
       expanded={expanded}
       onToggleService={toggleService}
       endpointsByService={endpointsByService}
+      trendByService={trendByService}
     />
   );
 }
@@ -86,6 +101,11 @@ interface ServicesViewProps {
   onOrderChange: (order: ServiceOrder) => void;
   /** "hour", "24 hours" — the range picker's own word, so the two agree. */
   windowLabel: string;
+  /**
+   * Whether the widest range is already selected, which is what separates the two empty
+   * screens. See `EmptyServices`.
+   */
+  widestWindow?: boolean;
   services: readonly ServiceHealth[];
   isPending: boolean;
   isError: boolean;
@@ -94,6 +114,32 @@ interface ServicesViewProps {
   expanded: ReadonlySet<string>;
   onToggleService: (serviceName: string) => void;
   endpointsByService: ReadonlyMap<string, EndpointGroup>;
+  /** Keyed by service name. A service missing from it has no trend and renders the rule. */
+  trendByService?: ReadonlyMap<string, readonly TrendPoint[]>;
+}
+
+/**
+ * The top of the scale every sparkline on this screen is drawn against.
+ *
+ * One number for the whole list, not one per row: a per-row maximum makes a flat service
+ * and a spiking one fill their boxes identically, and the column stops being readable
+ * across rows — which is the only reason to put a trend in a list.
+ *
+ * It is computed from the services actually loaded. A page cap of 100 means the scale is
+ * right for what is shown; a taller service arriving on a later page would rescale the
+ * column, which is worth remembering when filters start changing what is loaded.
+ */
+export function trendCeiling(
+  services: readonly ServiceHealth[],
+  trendByService: ReadonlyMap<string, readonly TrendPoint[]> | undefined,
+): number {
+  let ceiling = 0;
+  for (const service of services) {
+    for (const point of trendByService?.get(service.service_name) ?? []) {
+      if (point.requests_per_minute > ceiling) ceiling = point.requests_per_minute;
+    }
+  }
+  return ceiling;
 }
 
 /** Everything the screen shows, with no query client and no clock behind it. */
@@ -101,6 +147,7 @@ export function ServicesView({
   order,
   onOrderChange,
   windowLabel,
+  widestWindow = false,
   services,
   isPending,
   isError,
@@ -109,8 +156,10 @@ export function ServicesView({
   expanded,
   onToggleService,
   endpointsByService,
+  trendByService,
 }: ServicesViewProps) {
   const rows = buildServiceRows(services, order, expanded, endpointsByService);
+  const ceiling = trendCeiling(services, trendByService);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -144,10 +193,7 @@ export function ServicesView({
           <InlineFailure title="Services could not be loaded" error={error} onRetry={onRetry} />
         </div>
       ) : services.length === 0 ? (
-        <EmptyState
-          title="No services in this window"
-          detail="Nothing has sent a trace in the selected period. Widen the time range, or check that your services are still exporting — a service that stops reporting disappears from this list rather than turning red."
-        />
+        <EmptyServices widestWindow={widestWindow} windowLabel={windowLabel} />
       ) : (
         <>
           <ColumnHeader />
@@ -162,6 +208,8 @@ export function ServicesView({
                   height={item.size}
                   onToggleService={onToggleService}
                   endpointsByService={endpointsByService}
+                  trendByService={trendByService}
+                  ceiling={ceiling}
                 />
               ))}
             </div>
@@ -169,6 +217,45 @@ export function ServicesView({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Two empty screens, not one.
+ *
+ * "Nothing has ever arrived" and "nothing arrived in these five minutes" are different
+ * facts and want different actions: the first is an onboarding moment and should offer
+ * setup; the second is a window too narrow and should offer to widen it. A single screen
+ * covering both tells a customer with eleven services that they have none.
+ *
+ * **The signal is a heuristic, and deliberately a conservative one.** Nothing in the API
+ * says whether a project has ever received telemetry, so the widest range coming back
+ * empty is the closest available proxy. It is wrong in one direction only — a project
+ * silent for more than seven days reads as never having reported — and that error costs
+ * a reader a sentence, where the opposite error would send a customer with working
+ * instrumentation back to the setup page.
+ */
+function EmptyServices({
+  widestWindow,
+  windowLabel,
+}: {
+  widestWindow: boolean;
+  windowLabel: string;
+}) {
+  if (widestWindow) {
+    return (
+      <EmptyState
+        title="No services yet"
+        detail="Nothing has sent a trace to this project. Point an OpenTelemetry SDK at your endpoint and the first service appears here within about a minute."
+      />
+    );
+  }
+
+  return (
+    <EmptyState
+      title={`No services in the last ${windowLabel}`}
+      detail="Nothing reported in the selected period. Widen the time range, or check that your services are still exporting — a service that stops reporting disappears from this list rather than turning red."
+    />
   );
 }
 
@@ -214,6 +301,7 @@ function ColumnHeader() {
       <span className={`${LATENCY_COLUMN} ${WIDE_ONLY}`}>p50</span>
       <span className={LATENCY_COLUMN}>p95</span>
       <span className={`${LATENCY_COLUMN} ${WIDE_ONLY}`}>p99</span>
+      <span className={TREND_COLUMN}>Trend</span>
     </div>
   );
 }
@@ -224,12 +312,16 @@ function VirtualRow({
   height,
   onToggleService,
   endpointsByService,
+  trendByService,
+  ceiling,
 }: {
   row: ServiceRow;
   offsetTop: number;
   height: number;
   onToggleService: (serviceName: string) => void;
   endpointsByService: ReadonlyMap<string, EndpointGroup>;
+  trendByService?: ReadonlyMap<string, readonly TrendPoint[]>;
+  ceiling: number;
 }) {
   return (
     <div
@@ -241,6 +333,8 @@ function VirtualRow({
           service={row.service}
           expanded={row.expanded}
           onToggle={() => onToggleService(row.service.service_name)}
+          trend={trendByService?.get(row.service.service_name)}
+          ceiling={ceiling}
         />
       ) : row.kind === "endpoint" ? (
         <EndpointLine endpoint={row.endpoint} />
@@ -258,10 +352,14 @@ function ServiceLine({
   service,
   expanded,
   onToggle,
+  trend,
+  ceiling,
 }: {
   service: ServiceHealth;
   expanded: boolean;
   onToggle: () => void;
+  trend?: readonly TrendPoint[];
+  ceiling: number;
 }) {
   return (
     <button
@@ -276,10 +374,43 @@ function ServiceLine({
           size={12}
           className={`shrink-0 text-solid transition-transform ${expanded ? "rotate-90" : ""}`}
         />
+        <SeverityMark failing={service.error_count > 0} />
         <span className="truncate text-ink">{service.service_name}</span>
       </span>
       <MetricCells metrics={service} />
+      <span className={TREND_COLUMN}>
+        <Sparkline
+          points={(trend ?? []).map((point) => point.requests_per_minute)}
+          max={ceiling}
+          tone={service.error_count > 0 ? "critical" : "series"}
+          label={`${service.service_name} request rate over the window`}
+        />
+      </span>
     </button>
+  );
+}
+
+/**
+ * Health is the absence of a mark.
+ *
+ * A healthy row carries nothing: colour means something needs you, and a column of marks
+ * on every row is a tool shouting that nothing is happening. The space is still reserved,
+ * so the names line up whether a row is marked or not.
+ *
+ * **One tier, not two.** `design-system.md` distinguishes critical from warning by shape
+ * as well as hue, and nothing in this product defines what a *warning* service is — no
+ * error-rate threshold exists anywhere in the code, and inventing one here would be
+ * deciding product behavior in a component. The mark is therefore binary, exactly as the
+ * errors cell beside it already is, and the shape distinction waits for a threshold
+ * somebody has actually decided.
+ */
+function SeverityMark({ failing }: { failing: boolean }) {
+  return (
+    <span className={MARK_COLUMN} aria-hidden>
+      {failing ? (
+        <span data-severity="critical" className="size-1.75 rounded-full bg-critical-solid" />
+      ) : null}
+    </span>
   );
 }
 
@@ -295,6 +426,9 @@ function EndpointLine({ endpoint }: { endpoint: EndpointHealth }) {
         <span className="truncate text-ink-dim">{endpoint.endpoint}</span>
       </span>
       <MetricCells metrics={endpoint} />
+      {/* No per-endpoint series exists; the column is reserved so the numbers stay aligned
+          with the service row above. */}
+      <span className={TREND_COLUMN} aria-hidden />
     </div>
   );
 }

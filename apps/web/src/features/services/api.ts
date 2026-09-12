@@ -1,4 +1,5 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
@@ -41,6 +42,27 @@ interface EndpointListResponse {
   endpoints: EndpointHealth[];
 }
 
+/** One bucket of a service's history. The same numbers the row carries. */
+export interface TrendPoint {
+  bucket: string;
+  requests_per_minute: number;
+  error_rate: number;
+  p95_ms: number;
+}
+
+interface ServiceTrend {
+  service_name: string;
+  points: TrendPoint[];
+}
+
+interface ServiceTrendResponse {
+  window_start: string;
+  window_end: string;
+  /** The server picks it from the window length; a client that assumed a minute would mis-scale. */
+  bucket_seconds: number;
+  services: ServiceTrend[];
+}
+
 /** What one expanded service knows about its endpoints. */
 export interface EndpointGroup {
   status: "pending" | "error" | "success";
@@ -72,6 +94,41 @@ export function useServiceList(projectId: string | undefined, timeWindow: TimeWi
         signal,
       }),
   });
+}
+
+export const serviceTrendQueryKey = (projectId: string, timeWindow: TimeWindow) =>
+  ["service-trend", projectId, timeWindow.from, timeWindow.to] as const;
+
+/**
+ * Every service's history, in one request rather than one per row.
+ *
+ * The endpoint returns all of them together and the server chooses the bucket, so a
+ * fifty-row list costs one read. Keyed by name because that is how a row looks its own
+ * series up; a service missing from the map has no trend to draw and renders the em dash
+ * rather than disappearing.
+ *
+ * Deliberately a separate query from the list: the rows must appear as soon as the list
+ * lands, and fill in their trends when this arrives. A screen that waited for both would
+ * be slower than the one it replaces.
+ */
+export function useServiceTrend(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+): ReadonlyMap<string, readonly TrendPoint[]> {
+  const { data } = useQuery({
+    queryKey: serviceTrendQueryKey(projectId ?? "", timeWindow),
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<ServiceTrendResponse>("services/trend", {
+        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        signal,
+      }),
+  });
+
+  return useMemo(
+    () => new Map((data?.services ?? []).map((trend) => [trend.service_name, trend.points])),
+    [data],
+  );
 }
 
 /**
