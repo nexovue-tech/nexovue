@@ -6,7 +6,8 @@ Approved
 
 ## Current task
 
-Batches 1 and 2 of the wireframes await founder review. `design.md` still awaits
+All three wireframe batches await founder review. Twenty of twenty screens are covered,
+except the two blocked on OD1 and OD2. `design.md` still awaits
 approval alongside it.
 
 OD1 and OD2 remain open. They do not block the layout system, which is common to every screen, but
@@ -23,9 +24,13 @@ they do block two specific wireframes: the Findings feed and the dashboard surfa
   core loop is four hops with context lost at each.
 - `prototype-ranked-entities.html` built and published: the row rendered from the real tokens,
   because a markdown wireframe cannot answer whether the density is right. Founder reviewed it.
-- `wireframes-ranked-entities.md` (batch 1) and `wireframes-investigation.md` (batch 2) written:
-  ten of the twenty screens, every field taken from the API's own response schemas.
+- Wireframes written for every screen: `wireframes-ranked-entities.md` (batch 1),
+  `wireframes-investigation.md` (batch 2), `wireframes-surfaces.md` (batch 3). Every field was taken
+  from the API's own response schemas, which is what turned three assumptions into corrections.
 - Founder decided 2026-09-12: widen `ServiceHealth` with p95, and absolute-impact ranking stands.
+- Founder decided 2026-09-13: a stale infrastructure node is **critical**. Implementation note: the
+  threshold is measured against `NodeSummary.reporting_interval_seconds`, the node's own cadence, so
+  an autoscaling fleet does not render as a wall of red.
 - `design.md` written: the layout system — nine archetypes covering twenty routes, the
   ranked-entity row anatomy, the `Sparkline` contract, a three-step density scale, the shell change,
   and states defined per archetype rather than per screen.
@@ -33,8 +38,7 @@ they do block two specific wireframes: the Findings feed and the dashboard surfa
 ## Next action
 
 Founder reviews `design.md` and batch 1. Three questions in the wireframes need answers before
-implementation: **whether a stale infrastructure node is a warning or a critical** — still unanswered, and the
-only batch-1 question outstanding. Batch 2 adds three more: exposing latency quantiles across all
+implementation: batch 3's AC4 correction below. Batch 2 asks three: exposing latency quantiles across all
 three schemas at once, whether span `events` and `links` are in scope, and where a deploy list lives
 once markers exist.
 
@@ -58,6 +62,14 @@ Ranked entities archetype, which covers five screens and is the highest-leverage
 
 **OD1 and OD2 still block two wireframes** — the Findings feed, and the dashboard surface and its
 place in the sidebar. Neither blocks the layout system or the first batch.
+
+## Specification impact
+
+**AC4 must be amended from twelve dimensions to eleven.** `web_vitals.country` is a promoted column
+with no producer — `BreakdownDimension`'s docstring states there is no GeoIP anywhere in the system,
+so a `GEO` member would name a question the store cannot answer. The column cannot be shown,
+filtered, or deliberately hidden for a design reason; it is a schema question. Drop the column or add
+GeoIP, both founder decisions.
 
 ## Blocked
 
