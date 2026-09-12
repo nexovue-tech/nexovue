@@ -40,7 +40,10 @@ trend, does the archetype survive contact with real data? If it is wrong, one sc
 - [ ] `/errors`, `/synthetics`, merged `/infrastructure` with Databases (IA2)
 - [ ] Stale is critical, measured against `reporting_interval_seconds`, not a fixed timeout
 - [ ] `NodeListResponse.truncated` surfaced
-- [ ] `VirtualTable`, overdue at nine `useVirtualizer` callers
+- [ ] ~~`VirtualTable`~~ — **deferred to its own change record, 2026-09-13.** Nine screens call
+      `useVirtualizer` directly and six carry bespoke table markup; extracting the shared table is a
+      refactor with no user-visible change, and doing it from four examples while nine exist would
+      guess at the shape. It happens once every screen is rebuilt and all nine callers are known.
 
 ### Make the screens answerable — filters and context
 

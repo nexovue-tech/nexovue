@@ -109,3 +109,60 @@ describe("Sparkline", () => {
     );
   });
 });
+
+describe("Sparkline absent readings", () => {
+  /** How many separate strokes the drawing is made of. */
+  const strokes = (container: HTMLElement) => container.querySelectorAll("polyline").length;
+
+  it("floors an absent reading by default, because a rate really was near zero", () => {
+    const container = render({ points: [10, 20, null, 40, 50, 60], max: 60, label: "rate" });
+
+    expect(strokes(container)).toBe(1);
+    expect(drawnHeights(container)).toHaveLength(6);
+  });
+
+  it("breaks the line when a reading means nothing was measured", () => {
+    // A synthetic check that failed has no response time. Drawn at zero it would read as
+    // "the site got instantly fast", which is the opposite of what happened.
+    const container = render({
+      points: [180, 175, 182, null, null, 178, 181],
+      max: 200,
+      absent: "gap",
+      label: "duration",
+    });
+
+    expect(strokes(container)).toBe(2);
+  });
+
+  it("does not draw a stub for a single reading stranded between gaps", () => {
+    const container = render({
+      points: [180, 175, null, 190, null, 178, 181],
+      max: 200,
+      absent: "gap",
+      label: "duration",
+    });
+
+    // The lone 190 has nothing to join to; a one-point polyline draws nothing anyway and
+    // must not be emitted as an empty element.
+    expect(strokes(container)).toBe(2);
+  });
+
+  it("omits the endpoint dot when the series ends in a gap", () => {
+    const ending = render({
+      points: [180, 175, 182, 178, null, null],
+      max: 200,
+      absent: "gap",
+      label: "down now",
+    });
+    const running = render({
+      points: [180, 175, 182, 178, 181, 179],
+      max: 200,
+      absent: "gap",
+      label: "up now",
+    });
+
+    // No dot is itself the reading: the check is down right now.
+    expect(ending.querySelectorAll("circle")).toHaveLength(0);
+    expect(running.querySelectorAll("circle")).toHaveLength(1);
+  });
+});

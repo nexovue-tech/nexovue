@@ -144,9 +144,11 @@ column.
 - [ ] **T13** `E` — `node-readings.ts`: stale becomes **critical**, measured against
       `reporting_interval_seconds` rather than a fixed timeout, so an autoscaling fleet is not a wall
       of red; `NodeListResponse.truncated` surfaced. → `node-readings.test.ts`.
-- [ ] **T14** `P` — `shared/components/VirtualTable.tsx`. **Still provisional, and it is a refactor
-      rather than a column:** four screens carry bespoke table markup and nine call `useVirtualizer`
-      directly. See Q4.
+- [ ] ~~**T14** — `shared/components/VirtualTable.tsx`~~ **Removed from this feature, 2026-09-13
+      (Q4).** It is a refactor with no user-visible change, and extracting a shared table from four
+      examples while nine exist is guessing at a shape. It becomes its own change record after the
+      screens are rebuilt, when all nine callers are known. The four screens here are touched twice
+      as a result, which is the accepted cost.
 
 ### Make the screens answerable — filters and context
 
@@ -253,8 +255,8 @@ appear with em dashes and fill in.
 | Q1 | ~~`formatErrors` renders zero and unknown identically~~ | **RESOLVED 2026-09-13** | `docs/design/principles.md` rule 2 |
 | Q2 | ~~rate or error rate?~~ **RESOLVED 2026-09-13: the colour picks the series.** A failing row plots its error rate, a healthy one its request rate, so a red line always means errors. Verified live: `flagd` now draws `flagd error rate` in `stroke-critical-solid`. | Resolved | [`design.md`](design.md) §6 |
 | Q3 | ~~ten of sixteen sparklines nearly flat~~ **RESOLVED 2026-09-13: left as designed.** The flat lines are true — those services really are quiet — and the alternative is the per-row scaling the archetype exists to refuse. | Resolved | [`design.md`](design.md) §6 |
-| Q4 | **Is `VirtualTable` in this group or its own change?** Nine screens call `useVirtualizer` directly and four carry bespoke table markup, so extracting a shared table is a refactor touching every one of them — not the column-sized task the plan implies. Doing it here doubles this group; doing it after all screens are rebuilt means migrating them twice. | **Yes** | [`plan.md`](plan.md) |
-| Q5 | **A failed synthetic run must be a gap, not a zero.** `Sparkline` currently floors an absent reading, which is right for a request rate and wrong for a duration — a down check drawn at 0 ms reads as instant. Does `Sparkline` gain a null-aware mode, or does synthetics pass a sentinel and break the line itself? | No — assume `Sparkline` gains the mode, since a second screen will want it | [`design.md`](design.md) §6 |
+| Q4 | ~~`VirtualTable` in this group or its own change?~~ **RESOLVED 2026-09-13: later, its own change.** Zero user-visible benefit, and a shared table extracted from four examples while nine exist is a guess. | Resolved | [`plan.md`](plan.md) |
+| Q5 | ~~a failed run drawn as a gap or a zero?~~ **RESOLVED 2026-09-13: `Sparkline` gains a gap mode.** RUM page timings and database query durations will both want it, so it belongs in the component rather than worked around in one screen. | Resolved | [`design.md`](design.md) §6 |
 
 **Q2 and Q3 were what the thin path was built to find.** Both were visible only against real data —
 sixteen services where two carry all the traffic — and neither would have surfaced from the
