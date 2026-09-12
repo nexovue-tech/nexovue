@@ -219,6 +219,18 @@ distinguishable from a failing one.
 
 ---
 
+## Filters and deltas — added by OD8/OD9 (accepted 2026-09-13)
+
+Traces and logs are the two screens that already filter well — seven and five respectively — and
+they are the reference the Event-stream contract was written from, not screens needing work.
+
+**The service map has none, and needs two**: a volume floor and a failing-only toggle. An unfiltered
+map of fifty services is a hairball, and `calls_per_minute` and `error_rate` are already on every
+edge.
+
+**Entity detail screens take no filters of their own** — they inherit the selection that brought the
+reader there. Adding filters to a detail screen would let it disagree with the list it came from.
+
 ## Open questions for this batch
 
 1. **Expose `latency_quantiles` once, across `ServiceHealth`, `EndpointHealth` and `ServiceEdge`?**

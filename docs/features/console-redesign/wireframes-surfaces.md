@@ -200,6 +200,20 @@ customer edits a deploy config, and it must not look stalled.
 
 ---
 
+## Filters and deltas — added by OD8/OD9 (accepted 2026-09-13)
+
+**RUM's gap is the sharpest in the product.** `device_class` and `route` can group the readings and
+cannot narrow them: a customer can see mobile beside desktop but cannot ask for mobile alone. The
+Distribution contract requires every breakdown dimension to work as a filter, so both become filters
+as well as dimensions.
+
+**Usage** gains a per-project filter; today `ProjectDayUsage` is returned per project and the screen
+cannot isolate one.
+
+**Deltas on RUM are the most valuable in the console** — a p75 LCP of 2.8 s means little alone and a
+great deal beside "up 40% since Tuesday". Core Web Vitals are exactly the measure a customer tracks
+over time rather than in the moment.
+
 ## Open questions for this batch
 
 1. **`country`: drop the column, or add GeoIP?** AC4 needs amending either way.

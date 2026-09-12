@@ -47,6 +47,14 @@ Also in scope:
   `events` on spans; `timestamp_source` on logs; `server_peer_kind` on edges.
 - **A reader for `metrics_histogram`, `metrics_exp_histogram`, `metrics_summary`**, which are
   written, masked and retained today with no screen.
+- **A previous-period delta on every number that has a rollup behind it** (OD8, accepted
+  2026-09-13). No number in the console currently carries context; a customer cannot tell whether
+  4.1% errors is normal. The rollups already hold every prior window, so this is a second read over
+  the shifted window, not new storage.
+- **Filters on the seven screens that have none** (OD9, accepted 2026-09-13). Traces accepts seven
+  filters and logs five; service map, synthetics, database, infrastructure, RUM and usage accept none
+  beyond time and limit. Every filter they lack is over a column already stored. See
+  [data-and-filter-gaps.md](data-and-filter-gaps.md).
 - **The dashboard surface** — a top-level Overview and an expanded per-service panel set, composed
   from `endpoint_stats_1m` (RED) and `NodeSummary` (USE). No builder, no query language, no template
   variables. **[added 2026-09-13]**
@@ -137,6 +145,15 @@ Promoted typed columns are preferred over JSON attribute lookups on anything fil
 - **AC11:** No screen may import another feature, and no raw colour may appear in any component.
 - **AC12:** Each screen's wireframe must state the question it answers and what it deliberately does
   not show.
+- **AC13:** Every reading with a rollup behind it must be able to show its change against the
+  previous equivalent window. A reading whose prior window is absent or too thin must render no
+  delta rather than a misleading one.
+- **AC14:** A delta must be rendered only where the change is significant. An unremarkable reading
+  carries no annotation, on the same principle that a healthy row carries no status mark.
+- **AC15:** Every screen must accept at least one filter over a column it already displays, beyond
+  time range and limit. Each archetype's filter contract must be stated in its design, and a filter
+  that excludes everything must produce the filtered-empty state naming the filter — never the
+  never-had-data state.
 
 ## Dependencies and constraints
 
@@ -169,6 +186,15 @@ unvalidated, and do not let it silently become the engine's specification.
 **OD2 — RESOLVED 2026-09-13.** Auto-composed RED/USE from rollups that already exist; no builder.
 Overview is its own top-level entry and holds `/` until the insight engine exists. The builder (F20)
 is not foreclosed — an auto-composed dashboard is a fixed instance of what a builder would produce.
+
+**OD8 — ACCEPTED 2026-09-13, in scope.** Previous-period delta, as above.
+
+**OD9 — ACCEPTED 2026-09-13, in scope.** Filters on the seven screens that have none.
+
+**Category C gaps are deliberately out of scope**, and named in `data-and-filter-gaps.md`: service
+ownership, a session dimension on spans, cross-project comparison, saved views, export, and
+alerting. Each needs its own record. Folding them in turns a console redesign into a platform
+redesign that never ships.
 
 **OD7 — The duration heatmap needs a decision.** It cannot be drawn from what is stored:
 `latency_quantiles` keeps three quantiles, not buckets, and `spans.duration_ms` is post-sampling.

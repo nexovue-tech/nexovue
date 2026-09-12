@@ -99,7 +99,60 @@ Rules that follow:
   twelve thousand. The services API already ranks worst-first by absolute error count; the row makes
   that visible rather than leaving it implied.
 
-### 4. Sparkline — the component the design system named and never built
+### 4. Context: the delta, and why most numbers carry none
+
+OD8 accepted: a reading with a rollup behind it can show its change against the previous equivalent
+window. The rollups already hold that window, so this is a second read, not new storage.
+
+**The delta appears only where the change is significant.** This is the harder half of the decision
+and it follows from the same rule as health:
+
+```
+●  checkout-api        1.2k/min      4.1% err ↑2.8×      340 ms       ▁▂▃▅▇▅▃▂
+   │                   │             │                   │
+   unremarkable —      unremarkable  changed, and        unremarkable
+   no annotation                     says so
+```
+
+Annotating every number would put three arrows on every row of a fifty-row list, and a reader
+scanning for what moved would have to read all one hundred and fifty to find out nothing moved. An
+absent delta is information: **this is normal.** That is the same argument as a healthy row carrying
+no status mark, applied to change instead of state.
+
+Three rules:
+
+- **A delta is a ratio or a percentage, never a bare difference.** "4.1% errors, up 2.8×" is
+  readable; "up 2.6 percentage points" is arithmetic the reader has to finish.
+- **No prior window, or one too thin to compare, renders no delta** — never zero, never "0%". The
+  em-dash rule applied to change.
+- **What counts as significant is one threshold defined per measure, not per screen**, so the same
+  movement reads the same way everywhere.
+
+### 5. Filters: one contract per archetype
+
+OD9 accepted. Today traces accepts seven filters and logs five, while service map, synthetics,
+database, infrastructure, RUM and usage accept none beyond time and limit — an asymmetry invisible
+from inside and glaring from outside.
+
+Each archetype declares its filter contract once, and its screens inherit it:
+
+| Archetype | Filter contract |
+|---|---|
+| **Ranked entities** | a state filter (only unhealthy) · a sort choice · a kind filter where the entity has kinds |
+| **Event stream** | free text · entity · a severity or status floor · a magnitude floor |
+| **Entity detail** | inherits the parent's selection; no filters of its own |
+| **Graph** | a volume floor and a failing-only toggle, because an unfiltered map of fifty services is a hairball |
+| **Distribution** | every breakdown dimension must also work as a filter — on RUM today `device_class` and `route` can group but cannot narrow |
+| **Meter, Form, Gateway, Dashboard** | none; these are not lists |
+
+**A filter that excludes everything produces the filtered-empty state**, which names the filter and
+offers to clear it — never the never-had-data state, which would tell a customer with eleven services
+that they have none.
+
+**Selection travelling (IA1) is not a filter.** Scope arrives from the previous screen and is shown
+as context, not as a chip the reader has to notice they set.
+
+### 6. Sparkline — the component the design system named and never built
 
 One component, used by at least eight screens (AC2). Deliberately minimal:
 
@@ -116,7 +169,7 @@ One component, used by at least eight screens (AC2). Deliberately minimal:
 hand-drawn SVG is an implementation choice for the plan, not a design decision — it is a stroke over
 a fixed window either way.
 
-### 5. Density scale
+### 7. Density scale
 
 Three row densities, chosen by archetype rather than by user preference:
 
@@ -130,7 +183,7 @@ This is the reading-product thesis made concrete: the sentence gets room, the ev
 A user-switchable density was considered and rejected in the specification; it can return as a
 reader preference later without changing this scale.
 
-### 6. The shell
+### 8. The shell
 
 The sidebar's three groups become four, because the front door is no longer a placeholder:
 
@@ -152,7 +205,7 @@ Unchanged: the drawer below `md`, the dark scrim in both themes, the 404 renderi
 and the command palette. Those were decided, are built, and the redesign gives no reason to revisit
 them.
 
-### 7. Six states, defined per archetype
+### 9. Six states, defined per archetype
 
 Defining states nine times instead of twenty is the point of having archetypes. Each archetype
 specifies all six once; a screen inherits them and overrides only where its data genuinely differs —

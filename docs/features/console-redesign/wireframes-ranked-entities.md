@@ -185,6 +185,24 @@ nullable. *Truncated* — `NodeListResponse.truncated` must be surfaced; a silen
 The column *meanings* differ; the column *positions* and the row's grammar do not. That is what makes
 five screens one design.
 
+## Filters and deltas — added by OD8/OD9 (accepted 2026-09-13)
+
+Every screen in this batch had at most one filter. Each now inherits the Ranked-entities contract:
+a state filter, a sort choice, and a kind filter where the entity has kinds. Every column below is
+already stored.
+
+| Screen | Filters to expose | Column |
+|---|---|---|
+| Services | only-with-errors · sort by rate/errors/latency · HTTP vs queue | `error_count`, `latency_quantiles`, `span_kind` |
+| Errors | only new in window · sort by first-seen | `first_seen`, `last_seen` |
+| Synthetics | only down · check type · TLS expiring | `up`, `check_type`, `tls.days_remaining` |
+| Infra · Hosts | host vs container · only stale · over N% | `kind`, `stale`, `cpu_utilization` |
+| Infra · Databases | by server · slower than N ms | `server`, `latest_mean_ms` |
+
+**Deltas** attach to the error and latency columns, shown only where the change is significant. A
+service whose error rate is unchanged carries no arrow, so a reader scanning fifty rows sees only
+what moved.
+
 ## Open questions for this batch
 
 1. **Widen `ServiceHealth` with p95?** Recommended yes — the prototype assumes it and the rollup

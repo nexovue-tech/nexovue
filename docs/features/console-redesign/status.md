@@ -72,16 +72,20 @@ place in the sidebar. Neither blocks the layout system or the first batch.
 fail to draw" but "what would a customer want, and can the product answer it at all?" Two findings
 change the shape of this feature.
 
-**OD8 — no number on any screen has context.** There is no period-over-period comparison anywhere in
+**OD8 — ACCEPTED 2026-09-13, in scope.** No number on any screen has context. There is no period-over-period comparison anywhere in
 the API; every apparent match for *compare* or *baseline* is `hmac.compare_digest` or a comment. A
 customer cannot tell whether 4.1% errors is bad, which is the knowledge a monitoring product exists
 to supply. One extra read against rollups that already exist would answer "worse than yesterday" for
-every screen. Recommended into this feature.
+every screen. Now in scope.
 
-**OD9 — seven screens have no filters at all.** Traces accepts seven, logs five; service map,
+**OD9 — ACCEPTED 2026-09-13, in scope.** Seven screens have no filters at all. Traces accepts seven, logs five; service map,
 synthetics, database, infrastructure, RUM and usage accept none beyond time and limit. Every filter
 they lack is over a column already stored and already in a sort key, so this is pure API work.
-Recommended into this feature as the cheapest work in it.
+Now in scope, and the cheapest work in the feature.
+
+`spec.md` gains AC13–AC15 and `design.md` gains two sections: how a delta is shown, and one filter
+contract per archetype. The three wireframe batches name the concrete filters and columns per screen
+rather than being redrawn.
 
 Category C gaps — service ownership, a session dimension on spans, cross-project comparison, saved
 views, export, alerting — are named in the analysis and recommended **out** of this feature. Folding
