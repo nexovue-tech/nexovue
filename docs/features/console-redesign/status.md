@@ -6,7 +6,8 @@ Approved
 
 ## Current task
 
-`design.md` — the layout system. Approved by the founder on 2026-09-12.
+`wireframes-ranked-entities.md` — batch 1 of 3, awaiting founder review. `design.md` still awaits
+approval alongside it.
 
 OD1 and OD2 remain open. They do not block the layout system, which is common to every screen, but
 they do block two specific wireframes: the Findings feed and the dashboard surface.
@@ -17,13 +18,30 @@ they do block two specific wireframes: the Findings feed and the dashboard surfa
   rather than from the existing screens.
 - Screen inventory taken from `apps/web/src/app/routes/route-manifest.ts`: 20 routes.
 - `spec.md` written and **approved 2026-09-12**.
+- `user-flows.md` written: three personas traced against screens that exist. Found that P3 has no
+  console surface, that `deploy_events` is served with no screen consuming it, and that the Dev's
+  core loop is four hops with context lost at each.
+- `prototype-ranked-entities.html` built and published: the row rendered from the real tokens,
+  because a markdown wireframe cannot answer whether the density is right. Founder reviewed it.
+- `wireframes-ranked-entities.md` written: five screens on one archetype, every field taken from the
+  API's own response schemas.
 - `design.md` written: the layout system — nine archetypes covering twenty routes, the
   ranked-entity row anatomy, the `Sparkline` contract, a three-step density scale, the shell change,
   and states defined per archetype rather than per screen.
 
 ## Next action
 
-Founder reviews `design.md` — the layout system. The decisions worth the most scrutiny are the nine
+Founder reviews `design.md` and batch 1. Three questions in the wireframes need answers before
+implementation: whether to widen `ServiceHealth` with p95, whether absolute-impact ranking is right
+for a small customer, and whether a stale node is a warning or a critical.
+
+**Batch 1 confirmed a risk as fact: none of the five list endpoints returns a time series, and
+`ServiceHealth` carries no latency at all.** The archetype needs backend work on every screen. The
+p95 column in the prototype is currently unservable.
+
+After batch 1, batches 2 and 3 cover the remaining archetypes.
+
+The layout-system decisions worth the most scrutiny are the nine
 archetypes, the ranked-entity row, and the rule that a sparkline shares one window across a screen
 rather than auto-scaling per row.
 
