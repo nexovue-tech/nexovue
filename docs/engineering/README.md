@@ -1,5 +1,6 @@
 # Engineering standards index
 
+- [Development workflow](workflow.md) — the lifecycle every change follows.
 - [Coding standards](coding-standards.md)
 - [Code structure](code-structure.md)
 - [Backend](backend.md)
