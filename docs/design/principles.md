@@ -33,6 +33,21 @@ product can have, because the interface is confident and wrong.
 **Check:** enforced in the formatters under `apps/web/src/shared/format/`. A new formatter that
 returns `0` for an absent reading is a defect, not a style choice.
 
+### The one named exception: the errors cell
+
+`formatErrors` in `shared/format/health.ts` renders the em dash for **zero errors**, not only for an
+absent count. That is deliberate: a wall of `0` down a fifty-row list is noise a reader has to scan
+past, and health being the absence of colour reasonably extends to the absence of a number.
+
+**It is safe only because the ambiguous case cannot occur.** `error_count` is `number` in the API
+contract and `int(row["error_count"])` from a SQL `SUM` on the server — a service that appears in a
+list always has a real count. The em dash in that column therefore always means zero, and a reader
+is never left unable to tell "nothing broke" from "we cannot see it".
+
+**The condition is the important half.** If `error_count` ever becomes optional on any endpoint that
+feeds this cell, the em dash becomes ambiguous and this exception stops being safe. Changing that
+field's optionality means changing this formatter in the same commit.
+
 ## 3. Every screen owes its states, and some it must not write
 
 A screen is not designed until every state it owns is. There are two kinds, and confusing them is

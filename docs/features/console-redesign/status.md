@@ -14,9 +14,10 @@ the code, and everything after it depends on whether the archetype survives cont
 Marking that costs nothing and is cheaper than pretending otherwise. `design.md`, the wireframes and `plan.md` are approved; this is the last gate before the
 first edited file.
 
-One blocking question in it: `formatErrors` renders "no errors" and "unknown errors" identically,
-which `docs/design/principles.md` rule 2 forbids. The code's reasoning predates the principle and is
-written in `health.ts`. Either the principle is too absolute or that cell is a named exception. Twenty of twenty screens are covered,
+**No blocking questions remain.** Q1 — `formatErrors` rendering zero and unknown identically — was
+resolved on 2026-09-13: the code stands and `principles.md` rule 2 now names the exception, because
+`error_count` is never absent and the ambiguous case cannot occur. The exception carries its
+condition, so making that field optional would have to change the formatter in the same commit. Twenty of twenty screens are covered,
 except the two blocked on OD1 and OD2. `design.md` still awaits
 approval alongside it.
 

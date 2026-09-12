@@ -216,13 +216,16 @@ appear with em dashes and fill in.
 
 | # | Question | Blocking | Where the answer will live |
 |---|---|---|---|
-| Q1 | `formatErrors` (`shared/format/health.ts`) returns the em dash when `error_count === 0` — so "no errors" and "unknown errors" render identically. `principles.md` rule 2 says a real zero and an unknown must never look alike. One of the two is wrong. | **Yes** — T4 and T5 both touch this cell | `docs/design/principles.md`, or `health.ts` |
+| Q1 | ~~`formatErrors` renders zero and unknown identically~~ | **RESOLVED 2026-09-13** | `docs/design/principles.md` rule 2 |
 | Q2 | Does the trend sparkline show **rate** or **error rate**? The wireframe's row says rate; the design says a critical row's sparkline is stroked with the critical colour, which only reads if it is the error series. | No — assume rate, stroke critical on a failing row | [`design.md`](design.md) §6 |
 
-**Q1 is worth a moment.** The code's reasoning is written in `health.ts`: *"a service that failed
-nothing gets a rule, not a zero to read past."* That is a deliberate choice about noise, and it
-predates the principle. Either the principle is too absolute, or this cell is an exception that
-should be named in it. Both are defensible; it is not mine to pick.
+**Q1 resolved: the code stands, and the principle now names the exception.** The ambiguous case
+cannot occur — `error_count` is `number` in the contract and `int()` from a SQL `SUM` on the server,
+so a service in a list always has a real count and the em dash there always means zero. The
+exception is recorded with its condition: if `error_count` ever becomes optional on any endpoint
+feeding this cell, the em dash becomes ambiguous and the formatter must change in the same commit.
+
+**T4 and T5 are unblocked.**
 
 ## Validation
 
