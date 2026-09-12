@@ -8,4 +8,4 @@ Imports flow `shared → features → app`. Features do not import other feature
 
 The console implements services, service map, traces, errors, logs, RUM, synthetics, database, infrastructure, usage, and account/settings screens. The root Findings route is deliberately a Phase 2 placeholder; it is not an implemented insight feed.
 
-UI tokens come from `@nexovue/ui`; loading uses skeletons, failures use context-appropriate toast/inline/boundary presentation, and missing readings display an em dash rather than zero.
+UI tokens come from `@nexovue/ui`, specified in [`../design/design-system.md`](../design/design-system.md); loading uses skeletons, failures use context-appropriate toast/inline/boundary presentation, and missing readings display an em dash rather than zero.

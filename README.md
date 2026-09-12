@@ -31,6 +31,7 @@ docs/       product, architecture, engineering standards, quality, operations,
 - [Feature catalog](docs/product/feature-catalog.md) — feature queue; selected work lives in `docs/features/`.
 - [Architecture](docs/architecture/system.md) — verified current-system design.
 - [Engineering standards](docs/engineering/README.md) — coding and testing rules.
+- [Design system and principles](docs/design/design-system.md) — the visual system `packages/ui` implements, and the rules for a screen nobody has designed yet.
 - [Quality gates](docs/quality/quality-gates.md) — review, validation, and release expectations.
 - [Operations](docs/operations/README.md) — verified runbooks and production gaps.
 - [Decision records](docs/decisions/README.md) — why material technical decisions were made.
