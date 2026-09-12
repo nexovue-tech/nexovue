@@ -6,8 +6,10 @@ account nobody can sign into or send data to, and there is no repair path for
 one. `seed.py` calls straight into here so local development and a real signup
 cannot drift apart.
 
-The caller owns the transaction: this flushes to obtain ids and never commits,
-so the request-scoped session dependency stays the one place a commit happens.
+The caller owns the transaction: this flushes to obtain ids and never commits.
+`signup/router.py` commits before minting a session, because a session must not
+name rows that are not durable yet; `seed.py` and everything else leave the
+commit to the request-scoped session dependency.
 """
 
 from __future__ import annotations

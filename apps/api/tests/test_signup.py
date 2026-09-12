@@ -108,3 +108,124 @@ def test_the_seed_site_key_allows_every_origin_the_dev_stack_serves() -> None:
     # holds, and they are different origins to the receiver.
     assert any("localhost" in origin for origin in DEV_SITE_KEY_ORIGINS)
     assert any("127.0.0.1" in origin for origin in DEV_SITE_KEY_ORIGINS)
+
+
+class _OrderLog:
+    """What the signup route did, in the order it did it."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+
+class _RecordingDbSession:
+    """A transaction that records its commit rather than performing one."""
+
+    def __init__(self, log: _OrderLog) -> None:
+        self._log = log
+
+    def add(self, entity: object) -> None:
+        """Audit rows the route writes."""
+
+    async def commit(self) -> None:
+        self._log.events.append("commit")
+
+
+class _RecordingSessionStore:
+    def __init__(self, log: _OrderLog) -> None:
+        self._log = log
+
+    async def create(self, *, user_id: str, org_id: str) -> tuple[str, object]:
+        from datetime import UTC, datetime
+
+        from nexovue_api.auth.sessions import Session
+
+        self._log.events.append("session")
+        return "token", Session(user_id=user_id, org_id=org_id, created_at=datetime.now(UTC))
+
+
+async def test_the_tenant_is_committed_before_its_session_is_minted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1-71 follow-on: the session store is not in the request's transaction.
+
+    A session written to Redis before the rows it names are committed resolves
+    to no tenant until the commit lands, and every call in that window is a 401
+    on a brand-new account. Order is the fix, so order is what this pins.
+    """
+    import uuid
+    from collections.abc import AsyncIterator
+    from typing import Any
+
+    import httpx
+    from environment import TEST_ENVIRONMENT
+    from pydantic import SecretStr
+
+    from nexovue_api.data.postgres.models import Organization, Project, User
+    from nexovue_api.deps import (
+        get_app_settings,
+        get_db_session,
+        get_one_time_tokens,
+        get_optional_email_sender,
+        get_session_store,
+    )
+    from nexovue_api.main import create_app
+    from nexovue_api.settings import API_PREFIX, Settings
+    from nexovue_api.signup import service
+
+    log = _OrderLog()
+    settings = Settings(**TEST_ENVIRONMENT)  # type: ignore[arg-type]
+
+    organization = Organization(slug="acme", name="Acme Inc")
+    organization.id = uuid.uuid4()
+    user = User(
+        org_id=organization.id,
+        email="owner@acme.test",
+        name="Owner",
+        password_hash="x",
+        role="owner",
+    )
+    user.id = uuid.uuid4()
+    project = Project(org_id=organization.id, slug="default", name="Default")
+    project.id = uuid.uuid4()
+
+    async def provision(_db: Any, **_kwargs: Any) -> service.ProvisionedTenant:
+        log.events.append("provision")
+        return service.ProvisionedTenant(
+            organization=organization,
+            user=user,
+            project=project,
+            api_key=SecretStr("nxv_key"),
+        )
+
+    async def db_override() -> AsyncIterator[Any]:
+        yield _RecordingDbSession(log)
+
+    app = create_app(settings)
+    app.dependency_overrides[get_app_settings] = lambda: settings
+    app.dependency_overrides[get_db_session] = db_override
+    app.dependency_overrides[get_session_store] = lambda: _RecordingSessionStore(log)
+    # No mail provider: signup logs and carries on, which is its documented
+    # behaviour and keeps this test about ordering.
+    app.dependency_overrides[get_optional_email_sender] = lambda: None
+    app.dependency_overrides[get_one_time_tokens] = lambda: None
+
+    # The route looks the function up on the module at call time, so patching
+    # the module is enough and the real provisioning stays out of this test.
+    monkeypatch.setattr(service, "provision_tenant", provision)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            f"{API_PREFIX}/signup",
+            json={
+                "organization_name": "Acme Inc",
+                "email": "owner@acme.test",
+                "password": "correct-horse-battery",
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert "commit" in log.events, "signup never committed the tenant it created"
+    assert log.events.index("commit") < log.events.index("session"), (
+        f"the session was minted before the tenant was durable: {log.events}"
+    )

@@ -55,6 +55,11 @@ async def sign_up(
         name=payload.name,
     )
 
+    # The session lands in Redis at once, but these rows commit only when the
+    # request ends: mint it after the tenant is durable, or a fast next call
+    # finds a session naming a tenant Postgres cannot see yet.
+    await db.commit()
+
     token = await start_session(db, sessions, user=tenant.user)
     set_session_cookie(response, token, settings)
     await _mail_verification(tenant.user, tokens, email, settings)

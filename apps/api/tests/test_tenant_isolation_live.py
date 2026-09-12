@@ -471,13 +471,17 @@ def test_a_session_for_an_organization_that_has_been_deleted_is_refused() -> Non
     """The token outlives the row in Redis, so the identity lookup must not."""
     doomed = _sign_up()
     try:
-        assert doomed.client.get("/auth/me").status_code == 200
+        # The body, not just the code: the three 401s this endpoint can answer
+        # mean different things, and a bare status hides which one arrived.
+        before = doomed.client.get("/auth/me")
+        assert before.status_code == 200, before.text
 
         _soft_delete(doomed.org_id)
 
-        assert doomed.client.get("/auth/me").status_code == 401
+        after = doomed.client.get("/auth/me")
+        assert after.status_code == 401, after.text
         traces = doomed.client.get("/traces", params={"project_id": doomed.project_id})
-        assert traces.status_code == 401
+        assert traces.status_code == 401, traces.text
     finally:
         doomed.client.close()
         _soft_delete(doomed.org_id)
