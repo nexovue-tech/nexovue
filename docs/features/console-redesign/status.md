@@ -66,6 +66,27 @@ Ranked entities archetype, which covers five screens and is the highest-leverage
 **OD1 and OD2 still block two wireframes** — the Findings feed, and the dashboard surface and its
 place in the sidebar. Neither blocks the layout system or the first batch.
 
+## Open decisions raised by the gap analysis
+
+`data-and-filter-gaps.md` asks the inverse question the wireframes asked: not "what do we store and
+fail to draw" but "what would a customer want, and can the product answer it at all?" Two findings
+change the shape of this feature.
+
+**OD8 — no number on any screen has context.** There is no period-over-period comparison anywhere in
+the API; every apparent match for *compare* or *baseline* is `hmac.compare_digest` or a comment. A
+customer cannot tell whether 4.1% errors is bad, which is the knowledge a monitoring product exists
+to supply. One extra read against rollups that already exist would answer "worse than yesterday" for
+every screen. Recommended into this feature.
+
+**OD9 — seven screens have no filters at all.** Traces accepts seven, logs five; service map,
+synthetics, database, infrastructure, RUM and usage accept none beyond time and limit. Every filter
+they lack is over a column already stored and already in a sort key, so this is pure API work.
+Recommended into this feature as the cheapest work in it.
+
+Category C gaps — service ownership, a session dimension on spans, cross-project comparison, saved
+views, export, alerting — are named in the analysis and recommended **out** of this feature. Folding
+them in turns a console redesign into a platform redesign that never ships.
+
 ## Open decision raised by batch 4
 
 **OD7 — the duration heatmap.** It cannot be drawn from what is stored. `endpoint_stats_1m` keeps
