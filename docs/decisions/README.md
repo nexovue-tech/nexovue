@@ -18,8 +18,10 @@ and the ten chains where a decision was superseded or reversed. Read it before p
 that sounds like a fresh architecture choice; several already have an answer, including one that was
 decided, reversed, and reversed back in a day.
 
-It also records a contradiction worth fixing: the 0060 → 0061 → 0075 chain measured a reproducible
-span overcount that `docs/architecture/current-system-reference.md` currently says does not happen.
+Three of the 112 are restored in full here — **0060 → 0061 → 0075**, the counter-idempotency chain —
+because they record a measured, open defect: a reproducible span overcount across a ClickHouse
+restart whose stated cause was later falsified. `docs/architecture/current-system-reference.md` §18
+now carries that finding.
 
 ## Not yet written
 

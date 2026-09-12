@@ -8,7 +8,11 @@
 ## What this is
 
 Between 2026-08 and 2026-09-10, 112 decision records were written under
-`docs/architecture/decisions/` — 10,206 lines. They were deleted in commit `e0f11a0`. This is the
+`docs/architecture/decisions/` — 10,206 lines. They were deleted in commit `e0f11a0`. **Three have
+since been restored** — [0060](0060-counter-idempotency-via-clickhouse-dedup.md),
+[0061](0061-counter-overcount-across-a-store-restart.md) and
+[0075](0075-block-deduplication-replaces-the-read-before-retry.md), the counter-idempotency chain —
+because they record an open, measured defect. The other 109 live in git history. This is the
 index of what they decided, so a question can be answered without reading 112 files, and so a settled
 decision is not re-litigated by someone who never knew it was settled.
 
@@ -60,7 +64,7 @@ These are the highest-value entries, because they are the ones someone will othe
 | 0111 → **0112** | A month's bill reverted from `rate x committed` back to what was actually monitored, after the payment processor changed. |
 | 0032 | Base UI + shadcn/ui as the primitive layer — **decided, never installed**, withdrawn rather than deleted so the decision is not silently re-made. |
 
-## One chain contradicts a current document
+## The chain that contradicted a current document — resolved 2026-09-12
 
 `0061` recorded a reproducible **+512 span overcount** across a ClickHouse restart and attributed it
 to the deduplication log being lost. `0075` then measured that premise false — the log survives both
@@ -69,10 +73,13 @@ of the fix meant to address it, across three chaos runs. `0061`'s own status car
 
 The overcount is therefore real, bounded by KeeperMap, attributed to a different cause, and **open**.
 
-[`../architecture/current-system-reference.md`](../architecture/current-system-reference.md) states
-that the durable watermarks let workers "survive a restart without losing or double-counting data."
-That overclaims. Correcting it needs its own change record; it is named here so the contradiction is
-not lost a second time.
+[`../architecture/current-system-reference.md`](../architecture/current-system-reference.md) stated
+that the durable watermarks let workers "survive a restart without losing or double-counting data,"
+and that replay duplicates "are absorbed" by one of two mechanisms. **Both were corrected on
+2026-09-12**: the watermarks bound double-counting rather than eliminating it, duplicates are
+*normally* absorbed, and §18 of that document now carries the measurement, the falsified premise, and
+the reason the overcount is accepted rather than chased. All three records in the chain are restored
+above, so the evidence is in the repository rather than only in git history.
 
 ## Records that should be restored in full
 
@@ -88,14 +95,14 @@ cannot be re-derived from code and that this index can only gesture at:
 | 0090 | 221 | Rebalance drops buffered spans |
 | 0080 | 209 | Naming an unanswered call's callee |
 | 0081 | 206 | Leaked-key recovery and `last_used_at` throttling |
-| 0061 | 138 | The overcount, and its withdrawn causal claim |
-| 0075 | 120 | The falsified premise and three chaos runs |
+| 0061 | 138 | **Restored.** The overcount, and its withdrawn causal claim |
+| 0075 | 120 | **Restored.** The falsified premise and three chaos runs |
 | 0104 | 86 | Limiter fallback bound |
 | 0056 | 72 | Pricing unit measurement |
 | 0065 | 71 | Per-column compression codecs chosen by measurement |
 
-Restoring these is roughly 2,500 lines and is a separate change. The other 100 are adequately served
-by this index plus git.
+Restoring these is roughly 2,500 lines and is a separate change. Three are already back — 0060, 0061
+and 0075 — leaving nine. The other 100 records are adequately served by this index plus git.
 
 ## The full index
 
