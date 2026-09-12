@@ -1,4 +1,4 @@
-# Product Requirements Document (PRD)
+# Feature catalog
 
 > **Owner:** Raj · **Status:** Draft — living document
 > **How to use this doc:** every feature gets the same structure as F1 (the template): Description → User stories → Acceptance criteria → UI notes → Dependencies → Open questions. We fill features in one by one; a feature is "specified" when its acceptance criteria are testable.
@@ -7,6 +7,8 @@
 > `🔲 TO SPECIFY` means nobody has written this feature's acceptance criteria yet. Several such
 > features are already shipping — the Logs, Errors, Traces, Services, Service Map, Infrastructure,
 > Database, Synthetics and Usage screens all exist. Conversely, F1 is the only fully specified
+> feature, and it is not built.
+>
 > Acceptance criteria are written in the present tense because that is what an acceptance criterion
 > is — a statement to test against once built. Read every `AC` below as *must*, never as *does*.
 
@@ -35,16 +37,39 @@
 ## 3. Scope
 
 **In scope:** all end-user-facing features listed in §5 (full observability platform + insight layer + owner layer).
-**Out of scope (for this PRD):** internal architecture (see architecture doc) · pricing amounts · go-to-market · agency/white-label channel (parked) · timelines.
+**Out of scope (for this catalog):** internal architecture (see architecture doc) · pricing amounts · go-to-market · agency/white-label channel (parked) · timelines.
 
 ---
 
-## 4. Feature Index
+## 4. Current High-Level Capability Baseline
+
+> **Purpose:** This is a concise, current-state inventory of important capabilities that exist in the
+> repository. It is not a set of completed acceptance criteria and does not make an item
+> "specified." The feature index below remains the product queue; individual `docs/features/`
+> workspaces are created only when a capability is selected for change or fuller specification.
+
+| Capability | Current verified scope | Product-catalog relationship |
+|---|---|---|
+| Account, organization, and project access | Signup creates an organization, owner, first project, and secret API key; login, logout, email verification, password recovery/reset, profile, and session invalidation exist. | **F32** added below. Membership/RBAC is not built (F26). |
+| Project setup and credentials | Projects, server API keys, browser site keys, origin allowlists, masking/retention configuration, and first-span onboarding exist. | F23 is partly implemented; F24 covers settings/integrations. |
+| Telemetry intake and protection | OTLP HTTP/gRPC, browser RUM intake, Kafka buffering, masking, tail sampling, retention, and tenant isolation are implemented platform capabilities. | **F33** added below; this is a customer-facing setup/data-handling foundation, not an extra console screen. |
+| Telemetry investigation console | Services, service map, trace list/waterfall, errors, logs with live tail, infrastructure, database, RUM, synthetics, usage, billing, and settings screens exist. | F8–F15, F18, and F25 have implemented surfaces but remain mostly unspecified. |
+| Synthetic checks and pull integrations | HTTP, SSL-expiry, and browser-flow checks; CloudWatch RDS and Postgres statistics pollers; integration health; and deploy-webhook intake exist. | F18 and F24 are partly implemented. F28's full release-analysis UI is not. |
+| Usage and billing controls | Usage/service counts, plan allowances, rate/allowance enforcement, billing screen, checkout handoff, and signed idempotent payment-webhook handling exist. | F25 is partly implemented; payment-provider/reconciliation scope remains incomplete. |
+| Data lifecycle controls | Project masking configuration, plan-derived retention, tenant data purge, and source-map storage controls exist. | F27 is partly implemented; customer-facing export/archive controls are not complete. |
+
+**Not implemented:** findings/insight engine, AI/RAG, owner/public status pages, session replay,
+continuous profiling, SLOs, dashboard builder, alert connectors, case management, RBAC, and the
+internal admin console. The root Findings route is intentionally a placeholder, not a shipped feature.
+
+---
+
+## 5. Feature Index
 
 **Insight-first core:** F1 Findings feed · F2 Finding detail · F3 AI insights · F4 AI chatbot (RAG) · F5 AI solution · F6 Anomaly detection (user-facing surface)
 **Owner layer:** F7 Owner status page
 **Observability screens:** F8 Service overview · F9 Service map · F10 Trace waterfall · F11 Errors screen · F12 Logs screen (search + live tail) · F13 Infrastructure monitoring · F14 Database monitoring · F15 RUM / Core Web Vitals · F16 Session replay · F17 Continuous profiling · F18 Synthetic checks · F19 SLO tracking · F20 Dashboards (optional mode) · F28 Deployment/release tracking · F29 LLM/AI-app observability
-**Workflow & operations:** F21 Alerts & notification connectors · F22 Case management · F23 Onboarding · F24 Integration settings · F25 Usage & cost view · F26 RBAC / user management · F27 Data controls (retention, PII masking rules) · F30 Public status page
+**Workflow & operations:** F21 Alerts & notification connectors · F22 Case management · F23 Onboarding · F24 Integration settings · F25 Usage & cost view · F26 RBAC / user management · F27 Data controls (retention, PII masking rules) · F30 Public status page · F32 Account, organization & project access · F33 Telemetry intake & data protection
 **Internal (not customer-facing):** F31 Admin console
 
 **Named capabilities inside features (so they aren't lost):** BubbleUp-style attribute/outlier analysis → F20 + F2 evidence · service ownership metadata → F8/F9 · telemetry-value transparency ("what data is worth keeping") → F25 · cross-signal global search → F1/F4 · suspect-commit/release linkage on errors → F11 + F28 · log archival tiers → F27 · **sustainability/carbon panel → F13** (derived metric: CPU utilization × instance type × grid carbon intensity from public datasets — Cloud Carbon Footprint / Kepler approach; no new data collection).
@@ -53,7 +78,7 @@
 
 ---
 
-## 5. Features
+## 6. Features
 
 ### F1 — Findings Feed (home screen) ✅ SPECIFIED — TEMPLATE FEATURE
 
@@ -157,7 +182,7 @@ Connect Slack, Teams, WhatsApp, email, SMS, webhooks; what-triggers-what rules; 
 ### F22 — Case Management 🔲 TO SPECIFY
 Auto-created cases from findings; list/detail with lifecycle (open → investigating → resolved); GitHub Issues/Jira connectors (create + status sync); case timeline.
 
-> **Not a helpdesk.** A case here is an *incident* raised from a finding, never a customer support ticket. Customer support tooling is unplaced — see the commercial-model open questions in `vision-and-scope.md` §7.
+> **Not a helpdesk.** A case here is an *incident* raised from a finding, never a customer support ticket. Customer support tooling is unplaced — see the commercial-model open questions in `vision.md` §7.
 
 ### F23 — Onboarding 🔲 TO SPECIFY
 Signup → project → "2 env vars" screen → live first-span celebration → auto-created defaults (service overview, suggested synthetic check from domain, alert presets). The 10-minute promise, specified.
@@ -190,16 +215,30 @@ Customer-publishable status.mysite.com: components, current status, incident his
 
 ---
 
-## 6. Non-Functional Requirements (pointer)
-
-To be written as a companion one-pager: performance targets (feed load, query latency, finding freshness), availability, durability (no data loss between receiver and storage), multi-tenant isolation guarantees, security & privacy commitments. *(Referenced by acceptance criteria such as AC1.1 and AC1.4.)*
-
 ### F31 — Admin Console (internal) 🔲 TO SPECIFY
 Our own back-office, not a customer surface: find an organization, see its usage against plan, comp or suspend an account, and **impersonate a user to reproduce what they are seeing**. Impersonation is reported as the highest-value piece and the one most often missed early — it requires explicit consent, a time bound, and a full audit trail.
 
 **Schema hook — taken.** ✅ Migration `0004_audit_log_non_user_actors` added `audit_log.impersonation_context` (the impersonation session id) and `audit_log.actor_label` (for actors who are not rows in `users`, such as our own staff). The window closed correctly: the field was in place before audit entries started being written, so nothing has to be backfilled. F31 still has to *use* it — nothing sets the column today.
 
-## 7. Glossary
+### F32 — Account, Organization & Project Access 🟨 EXISTS — TO SPECIFY
+
+The entry and workspace-management flow: signup, email verification, login/logout, password
+recovery/reset, profile/session security, organization creation, first project, and project selection.
+Signup currently creates the organization, owner, first project, and first secret key in one
+transaction. This feature does **not** imply multi-user membership or roles; those remain F26.
+
+### F33 — Telemetry Intake & Data Protection 🟨 EXISTS — TO SPECIFY
+
+Customer setup and trust boundary for sending telemetry: secret server keys, public browser site
+keys with origin allowlists, OTLP HTTP/gRPC intake, browser RUM intake, project masking rules,
+tail-sampling/retention behavior, and tenant data isolation. This is the product-facing contract for
+getting data safely into Nexovue; its internal pipeline architecture belongs in `docs/architecture/`.
+
+## 7. Non-Functional Requirements (pointer)
+
+To be written as a companion one-pager: performance targets (feed load, query latency, finding freshness), availability, durability (no data loss between receiver and storage), multi-tenant isolation guarantees, security & privacy commitments. *(Referenced by acceptance criteria such as AC1.1 and AC1.4.)*
+
+## 8. Glossary
 
 **Finding** — a generated, plain-language statement of a detected problem with evidence. **Case** — the workflow object created from a finding. **Signal** — traces, logs, metrics, events. **Owner view** — the P3-facing plain-language surface.
 

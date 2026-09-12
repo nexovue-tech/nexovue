@@ -1,9 +1,9 @@
 # Product Vision & Scope
 
 > **Owner:** Raj
-> **Status:** Product intent. Written during scoping and kept as the statement of *what we mean to build* — it is not a status report. Phase 1 has since been built through M8; `../delivery/phase-1-plan.md` is the authority on what exists.
+> **Status:** Product intent. Written during scoping and kept as the statement of *what we mean to build* — it is not a status report. The source-derived `README.md` and `../architecture/` documents are the authority on what exists.
 > **Purpose:** What we are building, for whom, and what is in or out of scope. Update as thinking evolves.
-> **Companion docs:** `../architecture/system-architecture.md` (technical design) · `requirements.md` (features) · `../research/market-analysis-2026.md` (research)
+> **Companion docs:** `../architecture/system.md` (current architecture) · `feature-catalog.md` (features) · `../research/market-analysis-2026.md` (research)
 > **Last updated:** 2026-09-04 — the pricing and open-question sections reconciled against the code.
 >
 > **How to read this file.** Everything here is intent unless it says otherwise. Nothing in it is evidence that a thing is built. Where a decision has since been implemented, the section says so and names the migration.
