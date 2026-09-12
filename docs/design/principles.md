@@ -33,25 +33,45 @@ product can have, because the interface is confident and wrong.
 **Check:** enforced in the formatters under `apps/web/src/shared/format/`. A new formatter that
 returns `0` for an absent reading is a defect, not a style choice.
 
-## 3. Every screen owes six states
+## 3. Every screen owes its states, and some it must not write
 
-Success is one of six. A screen is not designed until all six are:
+A screen is not designed until every state it owns is. There are two kinds, and confusing them is
+how the same rule gets implemented eleven different ways.
+
+### Owned by the screen
 
 | State | What it must do |
 |---|---|
 | **Loading** | A skeleton that holds the layout still and says what is coming — never a spinner |
-| **Empty** | Say why it is empty and what to do next; an empty new project and an empty filter are different screens |
-| **Error** | Name what failed, offer the retry, carry the correlation id |
-| **Partial** | Some readings missing — rule 2 applies per cell, and the screen still renders |
-| **Dangerous** | Any irreversible action states its blast radius in real numbers before it is possible to confirm |
+| **Empty** | Say why it is empty and what to do next |
+| **Zero results** | A filter that matched nothing is *not* the empty state. Name the filter, offer to clear it. A customer with eleven services must never be told they have none |
+| **Partial** | Some readings missing — rule 2 applies per cell, and the screen still renders. Never hide a row because its evidence is incomplete |
+| **Validation** | Inline, beside the field, and in a summary when a form has several |
+| **Unsaved changes** | Editing and navigating away warns before the work is lost |
+| **Dangerous** | An irreversible action states its blast radius in real numbers before it is possible to confirm |
 | **Success** | Say what happened and where it went, not just that it worked |
 
-**Without it:** the states get invented per screen under time pressure, and they disagree. The empty
-state is where a new customer spends their first ten minutes, and it is the state least likely to be
-designed.
+### Owned centrally — a screen must not reimplement these
+
+`app/query-client.ts` is the single place HTTP status is interpreted, and `AppShell` owns
+connectivity. A feature that writes `if (error.status === 401)` has duplicated a rule rather than
+followed it.
+
+| State | Where it lives |
+|---|---|
+| **401 session expired** | Clears the session, goes to login, and returns the reader to where they were |
+| **403 forbidden** | The route boundary renders it — a property of the screen, not a passing event |
+| **404 not found** | Rendered inside the shell, because someone who mistypes a URL is already inside the app |
+| **429 rate limited** | A toast honouring `Retry-After` |
+| **5xx server error** | A toast with a retry, carrying the correlation id |
+| **Offline** | One shell banner, and no toast on top of it |
+
+**Without it:** the states get invented per screen under time pressure and disagree with each other.
+The empty state is where a new customer spends their first ten minutes and is the state least likely
+to be designed; the zero-result state is the one most often collapsed into it.
 
 **Check:** `docs/engineering/frontend.md` requires loading, empty, error and mobile. This extends it
-to partial and dangerous, which are the two an observability product needs most.
+to the full set, and names the six a screen must *not* write itself.
 
 ## 4. Reuse before invention
 

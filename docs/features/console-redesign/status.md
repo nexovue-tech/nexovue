@@ -6,7 +6,8 @@ Approved
 
 ## Current task
 
-All four wireframe batches await founder review. Twenty of twenty screens are covered,
+**Awaiting approval of `design.md`, the five wireframe batches, and `plan.md`.** Nothing is
+implemented and nothing begins until all three gates clear. Twenty of twenty screens are covered,
 except the two blocked on OD1 and OD2. `design.md` still awaits
 approval alongside it.
 
@@ -31,12 +32,28 @@ they do block two specific wireframes: the Findings feed and the dashboard surfa
   `wireframes-investigation.md` (batch 2), `wireframes-surfaces.md` (batch 3). Every field was taken
   from the API's own response schemas, which is what turned three assumptions into corrections.
 - Founder decided 2026-09-12: widen `ServiceHealth` with p95, and absolute-impact ranking stands.
+- `plan.md` written: seven phases, sequenced so phase 1 is one screen end to end. `docs/design/principles.md`
+  rule 3 extended from six states to the full set, split into the states a screen owns and the six it
+  must never reimplement because `app/query-client.ts` owns them.
 - Founder decided 2026-09-13: a stale infrastructure node is **critical**. Implementation note: the
   threshold is measured against `NodeSummary.reporting_interval_seconds`, the node's own cadence, so
   an autoscaling fleet does not render as a wall of red.
 - `design.md` written: the layout system — nine archetypes covering twenty routes, the
   ranked-entity row anatomy, the `Sparkline` contract, a three-step density scale, the shell change,
   and states defined per archetype rather than per screen.
+
+## The scope problem, stated plainly
+
+The feature grew four times, each time on a founder question that was right to ask. It is now 21
+routes, 21 acceptance criteria, backend work on nearly every read endpoint, one new screen and ten
+unbuilt components. As one branch it would be months long and would prove the archetype only at the
+end, where every wrong assumption surfaces together.
+
+`plan.md` answers that with [ADR-0019](../../decisions/decision-log.md)'s own rule — walking
+skeleton, then widen. **Phase 1 is the Services screen alone, end to end, and exists to be wrong
+cheaply.** Its recommended stop point is after phase 3: five screens rebuilt, filterable and
+carrying context is a usable product, and the rest can be re-judged then rather than committed to
+now.
 
 ## Next action
 

@@ -151,6 +151,12 @@ Promoted typed columns are preferred over JSON attribute lookups on anything fil
   quantiles their rollup already stores.
 - **AC17:** A span's `events` must be reachable as a timeline and its `links` as navigation, on the
   trace detail screen.
+- **AC19:** A screen with an editable form must warn before navigating away from unsaved changes.
+- **AC20:** A screen whose readings are individually nullable must render the partial state per cell
+  rather than hiding the row. `NodeSummary` and RUM rows below the reading threshold are the cases
+  that must be covered by tests.
+- **AC21:** No feature may interpret an HTTP status itself. `app/query-client.ts` remains the single
+  interpretation point, and a test must fail if a feature reimplements one.
 - **AC18:** The Findings feed's healthy state must be visibly distinct from its failed-to-load state.
   A reader must never be shown "all systems normal" when the truth is that the feed could not be
   read.
