@@ -4,10 +4,19 @@
 
 Approved
 
+## Current phase
+
+Phase 1 of `plan.md` — the Services screen, end to end.
+
 ## Current task
 
-**Awaiting approval of `design.md`, the five wireframe batches, and `plan.md`.** Nothing is
-implemented and nothing begins until all three gates clear. Twenty of twenty screens are covered,
+**Awaiting approval of [`tasks/phase-1.md`](tasks/phase-1.md).** Six tasks, four files, no backend
+change. `design.md`, the wireframes and `plan.md` are approved; this is the last gate before the
+first edited file.
+
+One blocking question in it: `formatErrors` renders "no errors" and "unknown errors" identically,
+which `docs/design/principles.md` rule 2 forbids. The code's reasoning predates the principle and is
+written in `health.ts`. Either the principle is too absolute or that cell is a named exception. Twenty of twenty screens are covered,
 except the two blocked on OD1 and OD2. `design.md` still awaits
 approval alongside it.
 
