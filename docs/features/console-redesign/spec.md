@@ -55,10 +55,10 @@ Also in scope:
   filters and logs five; service map, synthetics, database, infrastructure, RUM and usage accept none
   beyond time and limit. Every filter they lack is over a column already stored. See
   [data-and-filter-gaps.md](data-and-filter-gaps.md).
-- **Latency quantiles exposed once, across `ServiceHealth`, `EndpointHealth` and `ServiceEdge`**
-  (accepted 2026-09-13). `endpoint_stats_1m` and `service_edges_1m` both store
-  `latency_quantiles(0.5, 0.95, 0.99)` pre-sampling and no list endpoint returns them. One pattern,
-  fixed once, not three screens patched separately.
+- ~~Latency quantiles exposed across `ServiceHealth`, `EndpointHealth` and `ServiceEdge`~~
+  **[withdrawn 2026-09-13 — already built.]** All four schemas, `TrendPoint` included, already carry
+  `p50_ms`, `p95_ms` and `p99_ms`, merged from the stored state by `quantilesMerge`. The gap was a
+  misreading: a grep pattern skipped fields declared after a comment line. No work is required.
 - **Span `events` and `links` on the trace detail screen** (accepted 2026-09-13). Both stored on
   `spans`, neither on `SpanDetail`. Events become a timeline within the selected span; links become
   "triggered by" navigation, which is what makes the waterfall and the service map agree about queues
@@ -147,8 +147,9 @@ Promoted typed columns are preferred over JSON attribute lookups on anything fil
   wireframe as deliberately hidden with a reason.
 - **AC5:** `metrics_histogram`, `metrics_exp_histogram` and `metrics_summary` must each have a
   reader, or a recorded decision to stop storing them.
-- **AC16:** `ServiceHealth`, `EndpointHealth` and `ServiceEdge` must each expose the latency
-  quantiles their rollup already stores.
+- **AC16:** ~~expose latency quantiles~~ **[satisfied on arrival, 2026-09-13.]** `ServiceHealth`,
+  `EndpointHealth`, `ServiceEdge` and `TrendPoint` already expose `p50_ms`/`p95_ms`/`p99_ms`.
+  Retained as a criterion so a future change that drops them fails a stated requirement.
 - **AC17:** A span's `events` must be reachable as a timeline and its `links` as navigation, on the
   trace detail screen.
 - **AC19:** A screen with an editable form must warn before navigating away from unsaved changes.

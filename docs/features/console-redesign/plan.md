@@ -32,8 +32,9 @@ and it applies unchanged here.
 
 Services only. Nothing else starts until this ships and is judged.
 
-- [ ] `ServiceHealth` and `EndpointHealth` expose the `latency_quantiles` their rollup already stores (AC16)
-- [ ] The service list returns its per-entity series in one response, not N requests
+- [x] ~~`ServiceHealth`/`EndpointHealth` expose latency~~ — **already built**, found 2026-09-13
+- [x] ~~The service list returns its series in one response~~ — **already built**: `GET /services/trend`
+      with no service named returns one `ServiceTrend` per service, server-bucketed
 - [ ] `Sparkline` in `shared/components/`, shared window across a screen (AC2, AC3)
 - [ ] `/services` rebuilt on the ranked-entity row: status, rate, errors, p95, trend
 - [ ] Its owned states, each covered by a test: loading, empty, zero-results, partial, dangerous (AC6, AC20)
@@ -47,7 +48,6 @@ is the batched series read fast enough, and does the archetype survive contact w
 
 ### Phase 2 — Widen the archetype *(four screens)*
 
-- [ ] `ServiceEdge` exposes its quantiles (AC16) — completes the one pattern
 - [ ] Series reads for errors, synthetics, database, infrastructure
 - [ ] `/errors`, `/synthetics`, merged `/infrastructure` with Databases (IA2)
 - [ ] Stale is critical, measured against `reporting_interval_seconds`, not a fixed timeout

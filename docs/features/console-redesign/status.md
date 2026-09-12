@@ -62,14 +62,19 @@ implementation: batch 3's AC4 correction below. Batch 2 asks three: exposing lat
 three schemas at once, whether span `events` and `links` are in scope, and where a deploy list lives
 once markers exist.
 
-**Batch 2 turned the p95 gap into a systemic finding.** `ServiceEdge` carries no latency either,
-while `service_edges_1m` stores the same `latency_quantiles(0.5, 0.95, 0.99)` as
-`endpoint_stats_1m`. Quantiles are computed pre-sampling into every rollup and exposed by no list
-endpoint — one pattern to fix once, not three screens to patch.
+**Correction, 2026-09-13.** Batches 1 and 2 reported that no list endpoint returns latency and that
+the prototype's p95 column was unservable. Both were wrong, and the error propagated into AC16, the
+plan's first two tasks and several commit messages. `ServiceHealth`, `EndpointHealth`, `ServiceEdge`
+and `TrendPoint` all already carry `p50_ms`/`p95_ms`/`p99_ms`, merged by `quantilesMerge` in
+`queries.py`. The cause was a grep pattern that skipped fields declared after a comment line; the
+lesson is to read a schema rather than pattern-match it.
 
-**Batch 1 confirmed a risk as fact: none of the five list endpoints returns a time series, and
-`ServiceHealth` carries no latency at all.** The archetype needs backend work on every screen. The
-p95 column in the prototype is currently unservable.
+`GET /services/trend` with no service named also already returns one `ServiceTrend` per service in a
+single response — the batched series read the plan listed as work. **Phase 1's first two tasks are
+already done**, and what remains genuinely missing for the archetype is the `Sparkline` component and
+the screens.
+
+The corrections are recorded in the affected documents rather than deleted.
 
 After batch 1, batches 2 and 3 cover the remaining archetypes.
 

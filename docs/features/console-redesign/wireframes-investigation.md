@@ -3,20 +3,23 @@
 > **Status:** Awaiting approval. Five screens across three archetypes — Event stream, Entity detail,
 > Graph. Every field below was read from the API's own response schemas.
 
-## The systemic finding, now confirmed twice
+## Correction, 2026-09-13: there was no systemic gap
 
-Batch 1 found `ServiceHealth` carries no latency. Batch 2 finds **`ServiceEdge` carries none either**
-— `call_count`, `error_count`, `calls_per_minute`, `error_rate`, and nothing more — while
-`service_edges_1m` has stored `latency_quantiles(0.5, 0.95, 0.99)` all along, exactly as
-`endpoint_stats_1m` does.
+This batch originally reported that `ServiceEdge` carries no latency and called it one pattern with
+`ServiceHealth`. **Both readings were wrong.** `ServiceEdge` carries `p50_ms`, `p95_ms` and `p99_ms`,
+with a comment explaining that on a queue edge the duration is the publish and not the delivery lag.
 
-**Latency quantiles are computed pre-sampling into every rollup and exposed by none of the list
-endpoints.** That is one pattern, not two bugs, and it should be fixed once rather than per screen.
-
-Three more stored-but-unshown items surface here, all AC4 entries:
+The genuine stored-but-unshown items in this batch stand, and were read from the schemas correctly:
 
 | Stored | Not on the schema |
 |---|---|
+| `trace_summaries.span_services[]`, `span_endpoints[]`, `worst_severity` | `TraceSummary` |
+| `spans.exception_type`, `exception_message`, `events`, `links`, `deployment_version` | `SpanDetail` |
+
+`SpanDetail` does expose `rpc_system`, `rpc_method`, `rpc_status`, and `ServiceEdge` exposes
+`callee_kind` — four AC4 dimensions already served and simply not drawn.
+
+---|---|
 | `trace_summaries.span_services[]`, `span_endpoints[]`, `worst_severity` | `TraceSummary` |
 | `spans.exception_type`, `exception_message`, `events`, `links`, `deployment_version` | `SpanDetail` |
 | `service_edges_1m.latency_quantiles` | `ServiceEdge` |

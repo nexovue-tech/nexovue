@@ -6,19 +6,23 @@
 >
 > Every field named below was read from the API's own response schemas, not assumed.
 
-## What this batch found: the archetype needs backend work
+## Correction, 2026-09-13: the backend gap was a misreading
 
-**None of the five list endpoints returns a time series.** The ranked-entity row requires one, so
-every screen in this batch needs a widened read. This was named as a risk in `design.md`; it is now
-confirmed, with the exact shape of the gap per screen.
+This batch originally reported that no list endpoint returns latency and that the prototype's p95
+column was unservable. **That was wrong.** `ServiceHealth`, `EndpointHealth` and `TrendPoint` already
+carry `p50_ms`, `p95_ms` and `p99_ms`; `queries.py` merges the stored quantile state with
+`quantilesMerge` in all three statements. The error came from a grep pattern that skipped fields
+declared after a comment line, and the correction is recorded here rather than quietly deleted.
 
-**`ServiceHealth` carries no latency at all** — `request_count`, `error_count`,
-`requests_per_minute`, `error_rate`, and nothing else. `endpoint_stats_1m` stores
-`latency_quantiles(0.5, 0.95, 0.99)`, so p95 exists in the rollup and is not exposed.
+Two consequences, both good:
 
-The prototype shows a p95 column. **That column is currently unservable.** Either the API widens, or
-the column goes. Recommendation: widen — the data is already computed, pre-sampling, and latency is
-half of why anyone opens a service list.
+- **The p95 column is servable today.** The prototype was right.
+- **The batched series read already exists.** `GET /services/trend` with no service named returns one
+  `ServiceTrend` per service in a single response, bucketed by a server-chosen interval — which is
+  exactly what the row needs and what this batch listed as work.
+
+What remains genuinely missing for this archetype is the **`Sparkline` component** and the screens
+themselves.
 
 ---
 
