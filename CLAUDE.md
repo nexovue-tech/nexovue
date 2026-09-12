@@ -12,6 +12,7 @@ workflow document is the agent-agnostic source both they and other agents read.
 
 | Skill | Use for |
 |---|---|
+| `/explore` | An idea that is not yet a requirement — think it through before any spec exists. |
 | `/feature-work` | A new or changed customer-facing capability, through spec → design → plan → implement. |
 | `/change-work` | A bug fix, refactor, migration, or infrastructure change, through a change record. |
 | `/review-diff` | The implementation self-review before any handoff. |

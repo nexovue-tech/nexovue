@@ -4,6 +4,19 @@ The lifecycle every change follows, from a stated outcome to a recorded status. 
 agent-agnostic: Claude Code skills, other agents, and human contributors all follow it. `AGENTS.md`
 holds the permanent working rules and points here for the procedure.
 
+## Before the lifecycle: exploration
+
+An idea that is not yet a requirement has no workspace and no gate. Exploring it — weighing
+approaches, working out what something should be, deciding whether it is worth building — happens
+before `Proposed` and produces no spec, no design, and no code.
+
+It ends in one of four outcomes, each with an existing home: a decision recorded as an ADR or in the
+feature catalog, a handoff to a specification, a recorded decision not to build, or the naming of
+something missing that has to exist first. An exploration that ends in none of these is lost work.
+
+Claude Code runs this as the `explore` skill. Other agents and human contributors follow the same
+rule: nothing enters the lifecycle below until the requirement is stated.
+
 ## Starting or resuming work
 
 1. Inspect `git status --short`; preserve unrelated user changes.
