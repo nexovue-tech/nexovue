@@ -10,9 +10,14 @@ In development
 shared-scale trend column, the severity mark, and two empty states instead of one. 17 tests added,
 `just check` green.
 
-**Next: the founder judges the screen against the prototype before T7.** `plan.md` says to stop
-here, and that stop is the entire value of building one screen first. The remaining 42 tasks are
-still provisional and are re-expanded once the archetype is confirmed.
+**T7–T14 re-expanded from provisional to exact**, and awaiting approval. Two questions in them are
+blocking.
+
+The re-expansion confirmed the earlier answer to "is it data or API": **it is the API.** All four
+screens already read time-stamped rows and collapse the time axis at the last step with
+`argMax(value, timestamp)` or `GROUP BY check_id`. No new table, no migration, no ingestion change —
+the series is in rows already being scanned, and two bucketing patterns exist in the codebase to
+copy rather than invent.
 
 Six exact out of 48 is the honest picture, not a weakness of the plan: the thin path was read from
 the code, and everything after it depends on whether the archetype survives contact with real data.

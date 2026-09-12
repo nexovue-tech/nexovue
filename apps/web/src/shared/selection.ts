@@ -23,7 +23,7 @@ export const TIME_RANGES: readonly TimeRange[] = [
   { id: "7d", label: "7 days", minutes: 10_080 },
 ];
 
-const DEFAULT_RANGE_ID = "1h";
+const DEFAULT_RANGE_ID = "7d"; // for now tesing 
 
 /**
  * `to` is "now", and a value that changes every millisecond changes the query key every

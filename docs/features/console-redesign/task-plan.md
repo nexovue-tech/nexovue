@@ -11,9 +11,11 @@
 > | **E** | Exact. The files were read; this is what changes. |
 > | **P** | Provisional. Files named from structure, not yet read. Re-expanded before that work starts. |
 >
-> Everything downstream of the first screen is **P** on purpose: if the archetype does not survive
-> contact with real data, those tasks change. Marking that is cheaper than pretending otherwise, and
-> the difference between these tasks and the **Outcome** is the measure of how well this planning
+> **T1–T6 are complete and T7–T14 re-expanded to `E` on 2026-09-13**, now that the archetype survived
+> contact with real data. Fourteen exact, thirty-three still provisional. The rest are re-expanded
+> the same way, when their turn comes.
+>
+> The difference between these tasks and the **Outcome** is the measure of how well this planning
 > works.
 
 ## Current system
@@ -97,22 +99,54 @@ Ordered by `plan.md`. `E` and `P` as above.
 
 **Stop. Judge the screen against the prototype before T7.**
 
-### Widen the archetype — four screens
+### Widen the archetype — four screens *(re-expanded to `E`, 2026-09-13)*
 
-- [ ] **T7** `P` — `errorgroups`: an occurrences-per-bucket series per group. → API test.
-- [ ] **T8** `P` — `features/errors/ErrorsScreen.tsx` on the row; three-line rows; `NEW` derived from
-      `first_seen` inside the window.
-- [ ] **T9** `P` — `synthetics`: uptime/duration series per check. → API test.
-- [ ] **T10** `P` — `features/synthetics/SyntheticsScreen.tsx` on the row; **a failed run is a gap in
-      the line, never a zero**; `tls.days_remaining` as a column.
-- [ ] **T11** `P` — `infrastructure` + `dbstats`: utilization series per node, cost series per
-      statement. → API tests.
-- [ ] **T12** `P` — merge `features/database/` into `features/infrastructure/` as two views (IA2);
-      `route-manifest.ts` loses `/database`. → `route-manifest.test.ts` still passes.
-- [ ] **T13** `P` — stale is **critical**, measured against `reporting_interval_seconds`, not a fixed
-      timeout; `truncated` surfaced. → `node-readings.test.ts`.
-- [ ] **T14** `P` — `shared/components/VirtualTable.tsx` (new), overdue at nine `useVirtualizer`
-      callers. → its own test plus the migrated screens'.
+**What the reading found.** All four APIs already read time-stamped rows and collapse the time axis
+at the last step — `argMax(value, timestamp)` in `NODE_READINGS_SQL` (`infrastructure/queries.py:114`)
+and `SLOW_STATEMENTS_SQL` (`dbstats/queries.py:55`), `GROUP BY check_id` in `CHECK_SUMMARIES_SQL`
+(`synthetics/queries.py:69`). **No new table, no migration, no ingestion change** — the series is in
+the rows already being scanned.
+
+Two patterns exist to copy rather than invent:
+
+- `synthetics/queries.py:49` defines **`_BUCKET_NANOS`**, a reusable bucket expression, and
+  `PHASE_BREAKDOWN_SQL:99` already uses it. Its comment explains the integer-division form: the
+  width is a bound parameter, which `INTERVAL {n} SECOND` cannot take.
+- `errorgroups/queries.py:206` defines **`_GROUPED_WITH_DETAIL`**, which already assigns a
+  `group_id` to every occurrence. A per-group series groups that same subquery by bucket, so it is
+  the scan the list already performs, grouped differently.
+
+**And one that does not.** Only `services` and `servicedetail` share `MetricCells`; errors,
+synthetics, infrastructure and database each carry their own table markup. There is no shared row to
+extend, so each screen adds the column itself. That is what makes T14 a refactor rather than a
+column.
+
+- [ ] **T7** `E` — `errorgroups/queries.py`: `GROUP_TREND_SQL` over `_GROUPED_WITH_DETAIL`, bucketed
+      by the same integer-division form synthetics uses; `schemas.py` gains `GroupTrendResponse`;
+      `router.py` a `/trend` route. → `test_errorgroups.py`: buckets sum to the group's
+      `occurrences`.
+- [ ] **T8** `E` — `features/errors/`: `api.ts` gains `useErrorGroupTrend`; `ErrorsScreen.tsx` gains
+      the sparkline column and three-line rows; `NEW` derived from `first_seen` inside the window.
+      → `ErrorsView.test.ts`.
+- [ ] **T9** `E` — `synthetics/queries.py`: `CHECK_TREND_SQL` reusing `_BUCKET_NANOS` over
+      `METRIC_STATUS` and `METRIC_DURATION`, grouped by `bucket_nanos, check_id`. → `test_synthetics.py`.
+- [ ] **T10** `E` — `features/synthetics/SyntheticsScreen.tsx` on the row. **A failed run is a gap in
+      the duration line, never a zero** — `Sparkline` puts an absent reading on the floor today, so
+      this needs a null-aware variant or the screen must pass a sentinel. `tls.days_remaining` gains
+      a column. → `check-health.test.ts`.
+- [ ] **T11** `E` — `infrastructure/queries.py` and `dbstats/queries.py`: add the bucket to the
+      existing `GROUP BY` rather than a new statement; schemas gain the series. Infrastructure
+      returns one series **per node per metric**, which is the largest response in this group.
+      → `test_infrastructure.py`, `test_dbstats.py`.
+- [ ] **T12** `E` — merge `features/database/` into `features/infrastructure/` as two views (IA2);
+      `route-manifest.ts` drops `/database` from `NavPath`, `SHELL_SCREENS` and `NAV_SECTIONS`.
+      → `route-manifest.test.ts` must still pass; it is what stops the sidebar offering a dead path.
+- [ ] **T13** `E` — `node-readings.ts`: stale becomes **critical**, measured against
+      `reporting_interval_seconds` rather than a fixed timeout, so an autoscaling fleet is not a wall
+      of red; `NodeListResponse.truncated` surfaced. → `node-readings.test.ts`.
+- [ ] **T14** `P` — `shared/components/VirtualTable.tsx`. **Still provisional, and it is a refactor
+      rather than a column:** four screens carry bespoke table markup and nine call `useVirtualizer`
+      directly. See Q4.
 
 ### Make the screens answerable — filters and context
 
@@ -219,6 +253,8 @@ appear with em dashes and fill in.
 | Q1 | ~~`formatErrors` renders zero and unknown identically~~ | **RESOLVED 2026-09-13** | `docs/design/principles.md` rule 2 |
 | Q2 | ~~rate or error rate?~~ **RESOLVED 2026-09-13: the colour picks the series.** A failing row plots its error rate, a healthy one its request rate, so a red line always means errors. Verified live: `flagd` now draws `flagd error rate` in `stroke-critical-solid`. | Resolved | [`design.md`](design.md) §6 |
 | Q3 | ~~ten of sixteen sparklines nearly flat~~ **RESOLVED 2026-09-13: left as designed.** The flat lines are true — those services really are quiet — and the alternative is the per-row scaling the archetype exists to refuse. | Resolved | [`design.md`](design.md) §6 |
+| Q4 | **Is `VirtualTable` in this group or its own change?** Nine screens call `useVirtualizer` directly and four carry bespoke table markup, so extracting a shared table is a refactor touching every one of them — not the column-sized task the plan implies. Doing it here doubles this group; doing it after all screens are rebuilt means migrating them twice. | **Yes** | [`plan.md`](plan.md) |
+| Q5 | **A failed synthetic run must be a gap, not a zero.** `Sparkline` currently floors an absent reading, which is right for a request rate and wrong for a duration — a down check drawn at 0 ms reads as instant. Does `Sparkline` gain a null-aware mode, or does synthetics pass a sentinel and break the line itself? | No — assume `Sparkline` gains the mode, since a second screen will want it | [`design.md`](design.md) §6 |
 
 **Q2 and Q3 were what the thin path was built to find.** Both were visible only against real data —
 sixteen services where two carry all the traffic — and neither would have surfaced from the
