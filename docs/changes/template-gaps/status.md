@@ -14,7 +14,9 @@ None.
 
 ## Completed
 
-- `spec.md` gains Problem, Users, and Business rules.
+- `spec.md` gains Problem, Goal, Target users, User requirements, Business rules and **Error
+  cases** — fourteen sections, with a header instructing the author to delete what does not apply
+  rather than answer it "N/A".
 - `design.md` gains User experience and UI structure — the two the backend-shaped form lacked, and
   the reason console-redesign's UX work lives in unreferenced sibling files.
 - `plan.md` gains Phases, carrying ADR-0019's sequencing rule, and a Design QA gate.
@@ -42,7 +44,7 @@ Nothing.
 
 ## Risks
 
-**A longer form invites box-filling.** A section answered "N/A" is worse than one never asked,
+**Fourteen sections on `spec.md` invites box-filling.** A section answered "N/A" is worse than one never asked,
 because it reads as considered. Whether the prompts prevent that is an observation to make over the
 next two or three features, not something this change can prove.
 

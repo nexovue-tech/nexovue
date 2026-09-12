@@ -19,6 +19,8 @@ The specific gaps, and what each cost:
 | `spec.md` | **Problem**, distinct from Business objective | The objective was recorded; what was actually wrong was not |
 | `spec.md` | **Users** | That P3 Owner has no console surface — F7 is unbuilt — was discovered during wireframing, four documents late. A Users section asks that question at spec time |
 | `spec.md` | **Business rules** | Invariants that hold across every path had to live among functional requirements that describe one |
+| `spec.md` | **User requirements**, distinct from functional | Every requirement was written in the system's voice; nothing stated what a *user* must be able to do |
+| `spec.md` | **Error cases** | Nothing asked what can go wrong from the user's side. Console-redesign's stale-node rule — unknown, never zero — is a product decision that had no home and was settled four documents later, in a wireframe |
 | `design.md` | **User experience**, **UI structure** | The template is backend-shaped: *Data flow*, *Performance*, *Failure handling*, and nothing for the user. So `user-flows.md` and five `wireframes-*.md` exist as ad-hoc siblings the design does not reference |
 | `plan.md` | **Phases** | Its tasks were generic placeholders; nothing said a plan should ship something judgeable before the end |
 | `status.md` | **Open decisions**, **Risks**, **Specification impact**, **Documentation impact** | All four were added by hand, differently each time |
@@ -30,8 +32,13 @@ there — the prompts are the part that stops the section being filled with the 
 
 Three additions carry more than a heading:
 
-- **`spec.md` Users** asks explicitly which persona a feature *does not* serve, so scope does not
-  later widen to a user with nowhere to stand.
+- **`spec.md` Target users** asks explicitly which persona a feature *does not* serve, so scope does
+  not later widen to a user with nowhere to stand.
+- **`spec.md` Error cases** asks what the product owes a user when something fails — what they see,
+  whether they can recover, and whether we can distinguish the failure from a normal empty result.
+  That last question is the one console-redesign kept answering ad hoc: a filter matching nothing
+  and a project with no telemetry are different screens, and so are a healthy feed and a feed that
+  could not be read.
 - **`design.md` UI structure** requires naming separate wireframe documents rather than leaving them
   as unreferenced siblings, which is exactly what console-redesign did.
 - **`plan.md` Phases** records the repository's own sequencing rule from ADR-0019 — one thin
@@ -51,9 +58,15 @@ sections under its own headings.
 
 ## Risks and rollback
 
-**A longer template invites box-filling.** A section answered with "N/A" is worse than one that was
-never asked, because it looks considered. The prompts are written to make an empty section obviously
-empty rather than plausibly complete.
+**A longer template invites box-filling.** `spec.md` now carries fourteen sections. A section
+answered "N/A" is worse than one never asked, because it looks considered. Two guards: each section
+carries a prompt saying what belongs in it, and the template's own header says to **delete** a
+section that does not apply rather than answer it.
+
+**User requirements and Functional requirements can duplicate each other.** They are separated
+because one is the user's voice and the other the system's, and the prompt says to delete a line
+that only restates the other. Whether that holds under time pressure is an observation for the next
+few features.
 
 Rollback is `git revert`; nothing depends on the templates at runtime.
 
