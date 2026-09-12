@@ -1,8 +1,10 @@
-# Task plan: console-redesign — phase 1, the Services screen
+# Task plan: console-redesign
 
 > **Status:** Awaiting approval. Produced by `task-plan` on 2026-09-13. No file edited yet.
 >
-> Phase 1 of `../plan.md`: one screen end to end, so the archetype can be wrong cheaply.
+> Covers the thin path in [`plan.md`](plan.md) — `/services` on the ranked-entity row, end to end.
+> The later steps are not expanded here: expanding them before the first screen is built would be
+> fiction with checkboxes, and this document is re-expanded as the work moves on.
 
 ## Current system
 
@@ -25,8 +27,9 @@ Read from the code, not from this feature's own documents.
 
 ## Change required
 
-`../design.md` §3 (the row), §6 (Sparkline), and `../wireframes-ranked-entities.md` §1. Not restated
-here. Where this plan and those disagree, the disagreement is in **Questions** below.
+[`design.md`](design.md) §3 (the row), §6 (Sparkline), and
+[`wireframes-ranked-entities.md`](wireframes-ranked-entities.md) §1. Not restated here. Where this
+plan and those disagree, the disagreement is in **Questions** below.
 
 ## Impact
 
@@ -38,7 +41,7 @@ here. Where this plan and those disagree, the disagreement is in **Questions** b
 | UI | `/services` only |
 | Tests | `Sparkline.test.ts` (new) · `ServicesView.test.ts` · `service-rows.test.ts` |
 
-**No backend change in this phase.** Both API tasks the plan listed turned out to be built.
+**No backend change.** Both API steps the plan originally listed turned out to be built.
 
 ## Reuse
 
@@ -60,8 +63,8 @@ here. Where this plan and those disagree, the disagreement is in **Questions** b
 
 ## Tasks
 
-- [ ] **T1** — `shared/components/Sparkline.tsx`. Inline SVG, no axes or legend, single stroke plus an
-      emphasized endpoint. Takes an explicit `max` so the scale is the caller's, never per-row.
+- [ ] **T1** — `shared/components/Sparkline.tsx`. Inline SVG, no axes or legend, single stroke plus
+      an emphasized endpoint. Takes an explicit `max` so the scale is the caller's, never per-row.
       Below a minimum bucket count renders `UNKNOWN` rather than a line.
       Proved by `Sparkline.test.ts`: identical series at different `max` render different heights;
       too-few-buckets renders the em dash; an empty series does not throw.
@@ -87,8 +90,8 @@ here. Where this plan and those disagree, the disagreement is in **Questions** b
 
 **The screen-wide `max` is computed from the loaded page, not the project.** With a `limit` of 100
 services the scale is correct for what is shown, but adding a 101st taller service would rescale
-every sparkline. Acceptable here and worth remembering when filters arrive in phase 3, which change
-what is loaded.
+every sparkline. Acceptable here and worth remembering when filters arrive, which change what is
+loaded.
 
 **`useServiceTrend` doubles the screen's requests** — list and trend, in parallel. Both are bounded
 and cached on the same key shape, but a slow trend must not block the list from rendering: the rows
@@ -96,10 +99,10 @@ appear with em dashes and fill in.
 
 ## Questions
 
-| # | Question | Blocking | Where the answer lives |
+| # | Question | Blocking | Where the answer will live |
 |---|---|---|---|
 | Q1 | `formatErrors` (`shared/format/health.ts`) returns the em dash when `error_count === 0` — so "no errors" and "unknown errors" render identically. `principles.md` rule 2 says a real zero and an unknown must never look alike. One of the two is wrong. | **Yes** — T4 and T5 both touch this cell | `docs/design/principles.md`, or `health.ts` |
-| Q2 | Does the trend sparkline show **rate** or **error rate**? The wireframe's row says rate; the design says a critical row's sparkline is stroked with the critical colour, which only reads if it is the error series. | No — assume rate, stroke critical on a failing row | `../design.md` §6 |
+| Q2 | Does the trend sparkline show **rate** or **error rate**? The wireframe's row says rate; the design says a critical row's sparkline is stroked with the critical colour, which only reads if it is the error series. | No — assume rate, stroke critical on a failing row | [`design.md`](design.md) §6 |
 
 **Q1 is worth a moment.** The code's reasoning is written in `health.ts`: *"a service that failed
 nothing gets a rule, not a zero to read past."* That is a deliberate choice about noise, and it
@@ -113,10 +116,10 @@ should be named in it. Both are defensible; it is not mine to pick.
 Phone width at 375px checked on the rebuilt screen — the sparkline column is the first thing that
 would overflow.
 
-The built screen compared against `../prototype-ranked-entities.html`. **Nothing performs this check
-today** — `plan.md` names a Design QA gate and no skill implements it, so for this phase it is a
-manual look.
+The built screen compared against [`prototype-ranked-entities.html`](prototype-ranked-entities.html).
+**Nothing performs this check today** — `plan.md` names a Design QA gate and no skill implements it,
+so this is a manual look.
 
 ## Outcome
 
-_Filled in when the phase completes._
+_Filled in when the work completes._

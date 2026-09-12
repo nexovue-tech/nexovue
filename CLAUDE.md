@@ -15,7 +15,7 @@ workflow document is the agent-agnostic source both they and other agents read.
 | `/explore` | An idea that is not yet a requirement — think it through before any spec exists. |
 | `/feature-work` | A new or changed customer-facing capability, through spec → design → plan → implement. |
 | `/change-work` | A bug fix, refactor, migration, or infrastructure change, through a change record. |
-| `/task-plan` | Expand one approved phase into named files and tests, before any edit. |
+| `/task-plan` | Expand an approved plan into named files and tests, before any edit. |
 | `/review-diff` | The implementation self-review before any handoff. |
 | `/readiness-check` | Whether a change or the repository is ready for a production rollout. |
 

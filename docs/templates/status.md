@@ -4,10 +4,6 @@
 
 Proposed | Approved | In development | Implemented | Verified | Released
 
-## Current phase
-
-Which phase of `plan.md`, when there is one.
-
 ## Current task
 
 ## Completed

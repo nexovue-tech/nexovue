@@ -22,7 +22,7 @@ The specific gaps, and what each cost:
 | `spec.md` | **User requirements**, distinct from functional | Every requirement was written in the system's voice; nothing stated what a *user* must be able to do |
 | `spec.md` | **Error cases** | Nothing asked what can go wrong from the user's side. Console-redesign's stale-node rule — unknown, never zero — is a product decision that had no home and was settled four documents later, in a wireframe |
 | `design.md` | **User experience**, **UI structure** | The template is backend-shaped: *Data flow*, *Performance*, *Failure handling*, and nothing for the user. So `user-flows.md` and five `wireframes-*.md` exist as ad-hoc siblings the design does not reference |
-| `plan.md` | **Phases** | Its tasks were generic placeholders; nothing said a plan should ship something judgeable before the end |
+| `plan.md` | **A sequencing rule** | Its tasks were generic placeholders; nothing said a plan should ship something judgeable before the end |
 | `status.md` | **Open decisions**, **Risks**, **Specification impact**, **Documentation impact** | All four were added by hand, differently each time |
 
 ## Intended behavior
@@ -41,9 +41,9 @@ Three additions carry more than a heading:
   could not be read.
 - **`design.md` UI structure** requires naming separate wireframe documents rather than leaving them
   as unreferenced siblings, which is exactly what console-redesign did.
-- **`plan.md` Phases** records the repository's own sequencing rule from ADR-0019 — one thin
-  end-to-end path, then widen — and says to expand a phase into tasks when that phase starts rather
-  than writing later phases as fiction with checkboxes.
+- **`plan.md`** records the repository's own sequencing rule from ADR-0019 — one thin end-to-end
+  path, then widen — so the first steps ship something judgeable rather than the first result
+  arriving at the end.
 
 `plan.md` also gains a **Design QA** gate: comparing the built screen against the approved design.
 Nothing in the repository does that today. `review-diff` checks invariants, not fidelity.

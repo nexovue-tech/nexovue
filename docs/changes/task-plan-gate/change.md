@@ -9,15 +9,15 @@ Operations (engineering system)
 `feature-work` step 5 read "Implement" and then listed standards to read. Nothing sat between an
 approved plan and the first edited file.
 
-That gap is not theoretical. `plan.md` approves work at **phase** granularity: console-redesign's
-phase 1 is six checkboxes, one of which — *"/services rebuilt on the ranked-entity row"* — is a day
-of work across six files. A founder reviewing that checkbox cannot see which files change; they find
+That gap is not theoretical. `plan.md` approves work as an **ordering of steps**, and one of
+console-redesign's — *"/services rebuilt on the ranked-entity row"* — is a day of work across four
+files. A founder reviewing that checkbox cannot see which files change; they find
 out when the diff arrives, which is the same objection already raised about wireframes, one level
 down.
 
 The gap has a second cost, and this feature demonstrated it twice:
 
-- **Work already done was planned as work.** Two of phase 1's tasks — exposing latency quantiles and
+- **Work already done was planned as work.** Two of the first steps — exposing latency quantiles and
   batching the series read — turned out to be implemented already. They were listed as work because
   nothing required reading the code before writing the plan.
 - **A misreading propagated.** A grep anchored to indentation skipped every schema field declared
@@ -28,22 +28,19 @@ Both are the same failure: planning from documents about the code rather than fr
 
 ## Intended behavior
 
-A gate, once per phase, producing `docs/features/<feature>/tasks/phase-N.md`.
+A gate, once per feature or change, producing `task-plan.md` beside the plan.
 
 Its sections are Current system, Change required, Impact, Reuse, Gaps, Tasks, New risks, Questions,
 Validation and Outcome. Three rules carry most of the value:
 
 - **Current system is read from the code with `file:line`**, never from the design documents. Where
   the two disagree, that disagreement is the finding.
-- **A task names a file and the test that proves it.** "Rebuild the services screen" is a phase.
-- **Questions route rather than accumulate.** A blocking question stops the phase and its answer
+- **A task names a file and the test that proves it.** "Rebuild the services screen" is a step.
+- **Questions route rather than accumulate.** A blocking question stops the work and its answer
   goes to `spec.md` Open decisions or an ADR — never into the task plan, where a decision would be
   made by default.
 
-One phase at a time. Expanding phase 5 before phase 1 is built contradicts ADR-0019, which this
-repository already follows.
-
-**Outcome is filled in after the phase**, and the difference between Tasks and Outcome is the only
+**Outcome is filled in after the work**, and the difference between Tasks and Outcome is the only
 honest measure anyone will have of whether this planning works.
 
 ## Affected specifications and architecture
@@ -56,9 +53,9 @@ Claude Code; into `feature-work` as a gate before implementation; and named in
 
 ## Risks and rollback
 
-**A fourth gate on a feature that already has three.** For phase 1 — one day, six files — it may
-cost more than it saves. It earns its cost on phases 4 and 5, which are five screens each. Phase 1
-is nonetheless the cheapest place to discover whether the format is right.
+**A fourth gate on a feature that already has three.** For the first screen — one day, four files —
+it may cost more than it saves. It earns its cost on the larger steps, five screens each. The first
+screen is nonetheless the cheapest place to discover whether the format is right.
 
 **Web research was deliberately narrowed.** The skill checks that a library or pinned version has
 not changed, and explicitly refuses to research *scope* here: "is this the right feature" was settled
@@ -73,7 +70,7 @@ Rollback is deleting one skill, one template, and five wiring edits.
 1. Write `docs/templates/task-plan.md` and the `task-plan` skill.
 2. Wire the gate into `workflow.md`, `feature-work`, the plan template, the templates index, and
    `CLAUDE.md`.
-3. Run it on console-redesign phase 1 — the first real use, and the test of whether the format holds.
+3. Run it on console-redesign — the first real use, and the test of whether the format holds.
 4. `just check`.
 
 ## Status

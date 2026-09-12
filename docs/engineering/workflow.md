@@ -62,13 +62,11 @@ then identifies the relevant product/catalog entry and the smallest suitable wor
 
 ## Before code: the task plan
 
-A plan's phase is approved as a phase, not as a list of files. Before the first file of a phase is
-edited, that phase is expanded into named files and named tests — read from the code rather than
-from the documents about the code — and that expansion is approved.
+A plan is approved as an ordering of work, not as a list of files. Before the first file is edited,
+that plan is expanded into named files and named tests — read from the code rather than from the
+documents about the code — and that expansion is approved.
 
-It lives at `docs/features/<feature>/tasks/phase-N.md`, from `../templates/task-plan.md`, and is
-written **one phase at a time**: expanding a later phase before an earlier one has been built is
-fiction with checkboxes.
+It lives beside the plan as `task-plan.md`, from `../templates/task-plan.md`.
 
 Its most valuable output is not the task list. It is the two things the reading turns up — work that
 is already done, and places where the code disagrees with an approved document. Both are cheapest to

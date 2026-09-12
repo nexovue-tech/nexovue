@@ -4,10 +4,6 @@
 
 Verified
 
-## Current phase
-
-None — a single-phase change.
-
 ## Current task
 
 None.
@@ -19,8 +15,9 @@ None.
   rather than answer it "N/A".
 - `design.md` gains User experience and UI structure — the two the backend-shaped form lacked, and
   the reason console-redesign's UX work lives in unreferenced sibling files.
-- `plan.md` gains Phases, carrying ADR-0019's sequencing rule, and a Design QA gate.
-- `status.md` gains Current phase, Open decisions, Risks, Specification impact and Documentation
+- `plan.md` gains a sequencing rule from ADR-0019 — the first steps ship something judgeable — and
+  a Design QA gate.
+- `status.md` gains Open decisions, Risks, Specification impact and Documentation
   impact — every one of which was invented by hand while writing console-redesign.
 - Each new section carries a one-line prompt, so an empty one reads as empty rather than as
   considered.
@@ -32,7 +29,7 @@ None for this change.
 Raised by it and not done here: **there is no Design QA step anywhere.** `plan.md` now names the gate
 and nothing performs it. `review-diff` checks invariants — tenancy, ordering, tokens, states — not
 whether a built screen matches its approved design. That is a separate record, and console-redesign
-phase 1 is the first work that will need it.
+is the first work that will need it.
 
 ## Open decisions
 

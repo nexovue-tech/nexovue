@@ -53,11 +53,11 @@ Copy `docs/templates/plan.md`. Ordered, checkable steps. Create `status.md` from
 **Stop for a major feature or a material migration/security/infrastructure change.** A medium
 feature may proceed once the design is approved.
 
-## 5. Task plan — **gate**, once per phase
+## 5. Task plan — **gate**
 
-Before editing a file, expand the phase you are about to build into named files and named tests with
-`/task-plan`. It reads the code rather than the documents about the code, and lists what already
-exists so tasks that are already done are deleted at their cheapest moment.
+Before editing a file, expand the approved plan into named files and named tests with `/task-plan`.
+It reads the code rather than the documents about the code, and lists what already exists so tasks
+that are already done are deleted at their cheapest moment.
 
 **Stop. The founder approves the task plan before any file is edited.** A list of files is
 reviewable in a minute; the code it describes is not.
@@ -91,5 +91,5 @@ Run the proportionate integration, E2E, or chaos checks for the risks this chang
 
 Then run `/review-diff` before reporting completion.
 
-Fill in the task plan's **Outcome**, tick the phase in `plan.md`, and update `status.md`: lifecycle state, what was validated and how, residual risks, specification and
+Fill in the task plan's **Outcome**, tick the steps in `plan.md`, and update `status.md`: lifecycle state, what was validated and how, residual risks, specification and
 documentation impact, and the next action.
