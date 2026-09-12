@@ -24,13 +24,14 @@ surface are first-class.
 
 ## Scope
 
-**All 20 routes**, redesigned in place. No rewrite: the `shared → features → app` import direction,
+**All 21 routes**, redesigned in place. **[amended 2026-09-13]** Twenty existed; Overview is new, resolving OD2 — see [wireframes-dashboard.md](wireframes-dashboard.md). No rewrite: the `shared → features → app` import direction,
 `shared/api-client.ts`, `app/query-client.ts`, virtualization, tenancy handling and the token layer
 are retained. What changes is layout, composition, what each screen shows, and whether it charts.
 
 | Group | Routes |
 |---|---|
-| Front door | `/` (Findings) |
+| Front door | `/` (**Overview** — auto-composed RED/USE; holds `/` until the insight engine exists, then Findings takes it) |
+| Insight | Findings, its own entry from the start |
 | Signals | `/services`, `/services/$name`, `/service-map`, `/traces`, `/traces/$traceId`, `/errors`, `/logs` |
 | Surfaces | `/rum`, `/synthetics`, `/database`, `/infrastructure` |
 | Account | `/usage`, `/settings/api-keys`, `/settings/projects`, `/settings/billing`, `/settings/profile` |
@@ -46,6 +47,9 @@ Also in scope:
   `events` on spans; `timestamp_source` on logs; `server_peer_kind` on edges.
 - **A reader for `metrics_histogram`, `metrics_exp_histogram`, `metrics_summary`**, which are
   written, masked and retained today with no screen.
+- **The dashboard surface** — a top-level Overview and an expanded per-service panel set, composed
+  from `endpoint_stats_1m` (RED) and `NodeSummary` (USE). No builder, no query language, no template
+  variables. **[added 2026-09-13]**
 - **Backend work required by the above** — new or widened API endpoints, and the queries behind
   them. No ingestion, schema or storage change is anticipated; if one proves necessary it is raised
   rather than assumed.
@@ -105,13 +109,17 @@ Promoted typed columns are preferred over JSON attribute lookups on anything fil
 
 ## Acceptance criteria
 
-- **AC1:** Every one of the 20 routes has an approved wireframe naming its data sources, its
+- **AC1:** Every one of the 21 routes has an approved wireframe naming its data sources, its
   components, and all six states, before that screen's implementation begins.
 - **AC2:** `Sparkline` must exist in `shared/components/` and must be used by at least the services,
   service detail, errors, RUM, synthetics, database, infrastructure and usage screens.
 - **AC3:** Every screen reading a rollup must render a time series or sparkline from it. A screen
   that deliberately does not must record why in its wireframe.
-- **AC4:** Each of `device_class`, `country`, `navigation_type`, `span_kind`, `rpc_system`,
+- **AC4:** **[amended 2026-09-13 — eleven dimensions, not twelve.** `web_vitals.country` is a
+  promoted column with no producer: `BreakdownDimension`'s docstring records that there is no GeoIP
+  anywhere in the system, so it can be neither shown nor deliberately hidden for a design reason.
+  Dropping the column or adding GeoIP is a schema decision tracked outside this feature.**]
+  Each of `device_class`, `navigation_type`, `span_kind`, `rpc_system`,
   `rpc_method`, `rpc_status`, `deployment_version`, `links`, `events`, `timestamp_source` and
   `server_peer_kind` must be visible or filterable on a named screen, or listed in that screen's
   wireframe as deliberately hidden with a reason.
@@ -158,9 +166,14 @@ the card. That description would become the de facto requirement for an insight 
 designed. Recommendation: design the shell and the feed's structure, mark the card provisional and
 unvalidated, and do not let it silently become the engine's specification.
 
-**OD2 — What is the dashboard surface, concretely?** "Both first-class" is a direction, not a
-screen. Options: a per-service overview auto-composed from rollups; a builder (F20); or a fixed
-overview page. These differ by an order of magnitude in cost.
+**OD2 — RESOLVED 2026-09-13.** Auto-composed RED/USE from rollups that already exist; no builder.
+Overview is its own top-level entry and holds `/` until the insight engine exists. The builder (F20)
+is not foreclosed — an auto-composed dashboard is a fixed instance of what a builder would produce.
+
+**OD7 — The duration heatmap needs a decision.** It cannot be drawn from what is stored:
+`latency_quantiles` keeps three quantiles, not buckets, and `spans.duration_ms` is post-sampling.
+Either draw it only for customers sending OTLP histograms, add a pre-sampling `duration_histogram_1m`
+rollup — the only schema change this redesign would require — or drop the panel.
 
 **OD3 — Sequencing against the insight engine.** This feature is large and competes directly with
 building the differentiator. Whether it ships first, second, or interleaved is a founder decision.

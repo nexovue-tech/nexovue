@@ -6,7 +6,7 @@ Approved
 
 ## Current task
 
-All three wireframe batches await founder review. Twenty of twenty screens are covered,
+All four wireframe batches await founder review. Twenty of twenty screens are covered,
 except the two blocked on OD1 and OD2. `design.md` still awaits
 approval alongside it.
 
@@ -24,6 +24,9 @@ they do block two specific wireframes: the Findings feed and the dashboard surfa
   core loop is four hops with context lost at each.
 - `prototype-ranked-entities.html` built and published: the row rendered from the real tokens,
   because a markdown wireframe cannot answer whether the density is right. Founder reviewed it.
+- OD2 resolved 2026-09-13: auto-composed RED/USE dashboards, no builder; Overview is its own entry
+  and holds `/` until the insight engine exists. `wireframes-dashboard.md` written; `spec.md` and
+  `design.md` amended to match rather than left to disagree.
 - Wireframes written for every screen: `wireframes-ranked-entities.md` (batch 1),
   `wireframes-investigation.md` (batch 2), `wireframes-surfaces.md` (batch 3). Every field was taken
   from the API's own response schemas, which is what turned three assumptions into corrections.
@@ -63,13 +66,36 @@ Ranked entities archetype, which covers five screens and is the highest-leverage
 **OD1 and OD2 still block two wireframes** — the Findings feed, and the dashboard surface and its
 place in the sidebar. Neither blocks the layout system or the first batch.
 
+## Open decision raised by batch 4
+
+**OD7 — the duration heatmap.** It cannot be drawn from what is stored. `endpoint_stats_1m` keeps
+`AggregateFunction(quantiles(0.5, 0.95, 0.99))` — three points, not a distribution — and
+`spans.duration_ms` is post-sampling, so its shape would be wrong. Only `metrics_histogram` carries
+`bucket_counts` and `explicit_bounds`, and only when a customer sends OTLP histograms.
+
+Three options: draw it conditionally for those customers; add a pre-sampling `duration_histogram_1m`
+rollup, which is **the only schema change this redesign would require**; or drop the panel.
+Recommendation is the first, with the second only if customers ask — adding a write to the
+pre-sampling path trades correctness risk in the most load-bearing part of the system for a panel
+nobody has requested.
+
 ## Specification impact
 
-**AC4 must be amended from twelve dimensions to eleven.** `web_vitals.country` is a promoted column
+Both amendments below are now applied to `spec.md`, marked with their date.
+
+**AC4 amended from twelve dimensions to eleven.** `web_vitals.country` is a promoted column
 with no producer — `BreakdownDimension`'s docstring states there is no GeoIP anywhere in the system,
 so a `GEO` member would name a question the store cannot answer. The column cannot be shown,
 filtered, or deliberately hidden for a design reason; it is a schema question. Drop the column or add
 GeoIP, both founder decisions.
+
+**Scope widened from 20 routes to 21**, and `design.md` from nine archetypes to ten. The chart count
+goes from 6 to roughly 20 — the deficit the founder identified was OD2 left unanswered, not a
+decision to keep the console sparse.
+
+`apps/web/src/app/routes/route-manifest.ts` carries a comment saying "a dashboard must never become
+the front door". That records the superseded stance and must be updated in implementation, together
+with `route-manifest.test.ts`, which enforces router/sidebar agreement.
 
 ## Blocked
 

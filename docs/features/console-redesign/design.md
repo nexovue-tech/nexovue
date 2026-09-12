@@ -54,11 +54,12 @@ becomes a confirmation.
 option to regroup around the user's job — Investigate / Watch / Operate — was considered and
 deferred, not rejected; it is the right conversation once real users report where they get lost.
 
-### 2. Nine archetypes cover twenty routes
+### 2. Ten archetypes cover twenty-one routes
 
 | Archetype | Data shape it serves | Routes |
 |---|---|---|
-| **Feed** | ordered statements, newest first | `/` |
+| **Dashboard** | composed RED/USE panels over an entity or the whole system | `/` (Overview), `/services/$name` |
+| **Feed** | ordered statements, newest first | Findings — takes `/` once the insight engine exists |
 | **Ranked entities** | one row per entity + its rollup | `/services`, `/errors`, `/synthetics`, and the merged database/infrastructure destination (IA2) |
 | **Event stream** | high-volume rows, time-ordered | `/logs`, `/traces` |
 | **Entity detail** | one entity, its series, its children | `/services/$name`, `/traces/$traceId` |
@@ -69,7 +70,8 @@ deferred, not rejected; it is the right conversation once real users report wher
 | **Gateway** | outside the shell, no project context | `/login`, `/signup`, `/onboarding`, recovery |
 
 **Ranked entities is the highest-leverage archetype** — five screens, a quarter of the product.
-Getting its row right is most of the redesign.
+Getting its row right is most of the redesign. Overview reuses it rather than inventing a second way
+to list services, which is what makes a new screen cost three panels instead of a new design.
 
 ### 3. The row is a sentence
 
@@ -133,7 +135,8 @@ reader preference later without changing this scale.
 The sidebar's three groups become four, because the front door is no longer a placeholder:
 
 ```
-  ── (no label)        Findings          ← the front door, first-class
+  ── (no label)        Overview          ← holds / until the insight engine exists
+  ── (no label)        Findings          ← its own entry from the start
   SIGNALS              Services · Service map · Traces · Errors · Logs
   SURFACES             RUM · Synthetics · Infrastructure    ← Database merged in (IA2)
   ACCOUNT              Usage · API keys · Projects · Billing · Profile
