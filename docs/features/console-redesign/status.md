@@ -66,6 +66,22 @@ Ranked entities archetype, which covers five screens and is the highest-leverage
 **OD1 and OD2 still block two wireframes** — the Findings feed, and the dashboard surface and its
 place in the sidebar. Neither blocks the layout system or the first batch.
 
+## Everything open is now decided
+
+As of 2026-09-13 there are no open decisions in this feature. The four that remained were accepted
+together:
+
+- **OD1** — the Findings feed is wireframed with its structure committed and its card contents marked
+  provisional, so the drawing does not become the insight engine's specification by default.
+- **OD7** — the duration heatmap is conditional, drawn only for customers sending OTLP histograms.
+  The rejected alternative was a pre-sampling `duration_histogram_1m` rollup, which would have been
+  the only schema change in this redesign and would have put a new write in the most
+  correctness-critical path in the system. **Most customers will not see this panel.**
+- **Latency quantiles** exposed once across `ServiceHealth`, `EndpointHealth` and `ServiceEdge`.
+- **Span `events` and `links`** in scope on trace detail.
+
+`spec.md` gains AC16–AC18. The feature now carries 18 acceptance criteria over 21 routes.
+
 ## Open decisions raised by the gap analysis
 
 `data-and-filter-gaps.md` asks the inverse question the wireframes asked: not "what do we store and
@@ -91,7 +107,7 @@ Category C gaps — service ownership, a session dimension on spans, cross-proje
 views, export, alerting — are named in the analysis and recommended **out** of this feature. Folding
 them in turns a console redesign into a platform redesign that never ships.
 
-## Open decision raised by batch 4
+## Decision record — heatmap (was OD7)
 
 **OD7 — the duration heatmap.** It cannot be drawn from what is stored. `endpoint_stats_1m` keeps
 `AggregateFunction(quantiles(0.5, 0.95, 0.99))` — three points, not a distribution — and

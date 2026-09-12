@@ -55,6 +55,20 @@ Also in scope:
   filters and logs five; service map, synthetics, database, infrastructure, RUM and usage accept none
   beyond time and limit. Every filter they lack is over a column already stored. See
   [data-and-filter-gaps.md](data-and-filter-gaps.md).
+- **Latency quantiles exposed once, across `ServiceHealth`, `EndpointHealth` and `ServiceEdge`**
+  (accepted 2026-09-13). `endpoint_stats_1m` and `service_edges_1m` both store
+  `latency_quantiles(0.5, 0.95, 0.99)` pre-sampling and no list endpoint returns them. One pattern,
+  fixed once, not three screens patched separately.
+- **Span `events` and `links` on the trace detail screen** (accepted 2026-09-13). Both stored on
+  `spans`, neither on `SpanDetail`. Events become a timeline within the selected span; links become
+  "triggered by" navigation, which is what makes the waterfall and the service map agree about queues
+  — ADR-0078 already derives queue edges from links.
+- **The duration heatmap, conditionally** (OD7, accepted 2026-09-13). Drawn only where a customer
+  sends OTLP histograms, since `metrics_histogram` is the only source carrying `bucket_counts` and
+  `explicit_bounds`. It is absent, not empty, for everyone else, and gives the three unread metric
+  tables a second reader.
+- **The Findings feed** (OD1, accepted 2026-09-13), with its card contents explicitly provisional.
+  See [wireframes-findings.md](wireframes-findings.md).
 - **The dashboard surface** — a top-level Overview and an expanded per-service panel set, composed
   from `endpoint_stats_1m` (RED) and `NodeSummary` (USE). No builder, no query language, no template
   variables. **[added 2026-09-13]**
@@ -133,6 +147,13 @@ Promoted typed columns are preferred over JSON attribute lookups on anything fil
   wireframe as deliberately hidden with a reason.
 - **AC5:** `metrics_histogram`, `metrics_exp_histogram` and `metrics_summary` must each have a
   reader, or a recorded decision to stop storing them.
+- **AC16:** `ServiceHealth`, `EndpointHealth` and `ServiceEdge` must each expose the latency
+  quantiles their rollup already stores.
+- **AC17:** A span's `events` must be reachable as a timeline and its `links` as navigation, on the
+  trace detail screen.
+- **AC18:** The Findings feed's healthy state must be visibly distinct from its failed-to-load state.
+  A reader must never be shown "all systems normal" when the truth is that the feed could not be
+  read.
 - **AC6:** Every screen must render all six states, and each state must be covered by a test.
 - **AC7:** A missing or negative reading must render as an em dash on every screen. A real zero must
   be distinguishable from an unknown.
@@ -178,10 +199,9 @@ integrations, deploy events, usage and billing.
 
 ## Open decisions
 
-**OD1 — What is on a finding card, given nothing produces findings?** F1's specification describes
-the card. That description would become the de facto requirement for an insight engine nobody has
-designed. Recommendation: design the shell and the feed's structure, mark the card provisional and
-unvalidated, and do not let it silently become the engine's specification.
+**OD1 — RESOLVED 2026-09-13.** The feed's structure, ordering, actions and healthy state are
+committed; the card's contents are provisional and marked as such, so the drawing does not become the
+engine's specification by default. `wireframes-findings.md` records which half is which.
 
 **OD2 — RESOLVED 2026-09-13.** Auto-composed RED/USE from rollups that already exist; no builder.
 Overview is its own top-level entry and holds `/` until the insight engine exists. The builder (F20)
@@ -196,10 +216,15 @@ ownership, a session dimension on spans, cross-project comparison, saved views, 
 alerting. Each needs its own record. Folding them in turns a console redesign into a platform
 redesign that never ships.
 
-**OD7 — The duration heatmap needs a decision.** It cannot be drawn from what is stored:
-`latency_quantiles` keeps three quantiles, not buckets, and `spans.duration_ms` is post-sampling.
-Either draw it only for customers sending OTLP histograms, add a pre-sampling `duration_histogram_1m`
-rollup — the only schema change this redesign would require — or drop the panel.
+**OD7 — RESOLVED 2026-09-13: conditional.** Drawn only for customers sending OTLP histograms.
+`latency_quantiles` keeps three quantiles rather than buckets and `spans.duration_ms` is
+post-sampling, so those cannot produce it. The rejected alternative — a pre-sampling
+`duration_histogram_1m` rollup — would be the only schema change this redesign requires and would put
+a new write in the most correctness-critical path in the system, for a panel no customer has asked
+for. Revisit if one does.
+
+**Consequence, stated plainly:** most customers will not see this panel, because most do not send
+OTLP histograms. The three duration percentile lines carry the common case.
 
 **OD3 — Sequencing against the insight engine.** This feature is large and competes directly with
 building the differentiator. Whether it ships first, second, or interleaved is a founder decision.

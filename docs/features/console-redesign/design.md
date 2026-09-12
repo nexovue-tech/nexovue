@@ -60,6 +60,10 @@ deferred, not rejected; it is the right conversation once real users report wher
 |---|---|---|
 | **Dashboard** | composed RED/USE panels over an entity or the whole system | `/` (Overview), `/services/$name` |
 | **Feed** | ordered statements, newest first | Findings — takes `/` once the insight engine exists |
+
+The duration heatmap does **not** become an eleventh archetype. OD7 resolved it as a conditional
+panel inside Dashboard, drawn only where a customer sends OTLP histograms, so it is a panel variant
+rather than a shape of screen.
 | **Ranked entities** | one row per entity + its rollup | `/services`, `/errors`, `/synthetics`, and the merged database/infrastructure destination (IA2) |
 | **Event stream** | high-volume rows, time-ordered | `/logs`, `/traces` |
 | **Entity detail** | one entity, its series, its children | `/services/$name`, `/traces/$traceId` |
