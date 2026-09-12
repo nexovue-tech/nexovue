@@ -14,3 +14,4 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 - [Counter overcount record](counter-overcount-record/change.md) — the architecture reference claimed a measured span overcount does not happen.
 - [Explore skill](explore-skill/change.md) — the workflow had no step for an idea that is not yet a requirement.
 - [Template gaps](template-gaps/change.md) — the four forms had no section for work every feature kept doing.
+- [Task plan gate](task-plan-gate/change.md) — nothing sat between an approved plan and the first edited file.

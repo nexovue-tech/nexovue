@@ -10,9 +10,9 @@ Ordered, and each one **ships something judgeable**. A plan whose first result a
 proves its assumptions where they are most expensive to be wrong — `ADR-0019` settled this for the
 repository: one thin end-to-end path first, then widen.
 
-Expand a phase into named files and tests **when that phase starts**, not all of them upfront. A
-task list for a later phase, written before the first has taught anything, is fiction with
-checkboxes.
+Expand a phase into named files and tests **when that phase starts**, not all of them upfront —
+see [task-plan.md](task-plan.md). A task list for a later phase, written before the first has taught
+anything, is fiction with checkboxes.
 
 ### Phase 1 — <the thin path>
 
@@ -27,6 +27,7 @@ checkboxes.
 - [ ] Specification approval
 - [ ] Design approval
 - [ ] Plan approval
+- [ ] Task plan approval — once per phase, before its first edit
 - [ ] Implementation
 - [ ] Tests
 - [ ] Review

@@ -53,7 +53,16 @@ Copy `docs/templates/plan.md`. Ordered, checkable steps. Create `status.md` from
 **Stop for a major feature or a material migration/security/infrastructure change.** A medium
 feature may proceed once the design is approved.
 
-## 5. Implement
+## 5. Task plan — **gate**, once per phase
+
+Before editing a file, expand the phase you are about to build into named files and named tests with
+`/task-plan`. It reads the code rather than the documents about the code, and lists what already
+exists so tasks that are already done are deleted at their cheapest moment.
+
+**Stop. The founder approves the task plan before any file is edited.** A list of files is
+reviewable in a minute; the code it describes is not.
+
+## 6. Implement
 
 Read the standards `AGENTS.md` routes you to for the paths you are touching, *before* writing code.
 Then, whichever applies:
@@ -75,12 +84,12 @@ Then, whichever applies:
 
 Do not modify unrelated code. Do not rewrite working code the feature did not require.
 
-## 6. Verify and hand off
+## 7. Verify and hand off
 
 Run `just check` and **read the output and the test counts** — exit zero alone is not evidence.
 Run the proportionate integration, E2E, or chaos checks for the risks this change actually adds.
 
 Then run `/review-diff` before reporting completion.
 
-Update `status.md`: lifecycle state, what was validated and how, residual risks, specification and
+Fill in the task plan's **Outcome**, tick the phase in `plan.md`, and update `status.md`: lifecycle state, what was validated and how, residual risks, specification and
 documentation impact, and the next action.
