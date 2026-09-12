@@ -217,7 +217,13 @@ appear with em dashes and fill in.
 | # | Question | Blocking | Where the answer will live |
 |---|---|---|---|
 | Q1 | ~~`formatErrors` renders zero and unknown identically~~ | **RESOLVED 2026-09-13** | `docs/design/principles.md` rule 2 |
-| Q2 | Does the trend sparkline show **rate** or **error rate**? The wireframe's row says rate; the design says a critical row's sparkline is stroked with the critical colour, which only reads if it is the error series. | No — assume rate, stroke critical on a failing row | [`design.md`](design.md) §6 |
+| Q2 | Does the trend sparkline show **rate** or **error rate**? Assumed rate. **Design QA shows the assumption is wrong**: `flagd` draws a jagged *red* line that is its request rate, and a reader will read a red line as errors. Colour and data disagree. | **Yes, now** | [`design.md`](design.md) §6 |
+| Q3 | **Ten of sixteen sparklines are nearly flat** — under 2px of movement in a 15px box — because one shared scale is dominated by the two busiest services. Comparability works exactly as designed; the cost on real data is that 62% of the column carries ink and no information. | **Yes** | [`design.md`](design.md) §6 |
+
+**Q2 and Q3 are what the thin path was built to find.** Both are visible only against real data —
+sixteen services where two carry all the traffic — and neither would have surfaced from the
+prototype's eight invented rows. Options for each are in the report; both are founder decisions,
+and both would change the archetype the other four screens inherit.
 
 **Q1 resolved: the code stands, and the principle now names the exception.** The ambiguous case
 cannot occur — `error_count` is `number` in the contract and `int()` from a SQL `SUM` on the server,
@@ -270,9 +276,18 @@ so this is a manual look.
 - **A "has this project ever reported" signal.** It would replace the heuristic in `EmptyServices`
   with a fact.
 
-### Not done
+### Design QA — done 2026-09-13, against the running app
 
-**Design QA.** The built screen has not been compared against
-[`prototype-ranked-entities.html`](prototype-ranked-entities.html). `plan.md` names the gate; nothing
-implements it; `just dev` was not run. This is the one validation step this work claims and did not
-perform.
+Opened `/services` in the running stack, both themes, and measured the layout rather than judging it
+by eye. Sixteen real services from the demo stack.
+
+**Verified.** The severity dot measures exactly 7×7, the prototype's size, and appears on 2 of 16
+rows — only the two with errors. Both themes render from the tokens. No horizontal overflow. All
+sixteen sparklines draw, stroked `stroke-series-1` or `stroke-critical-solid`.
+
+**One defect found and fixed.** The trend cell was `w-26` — 104px, exactly the sparkline — while also
+carrying a 12px gutter, so the drawing pushed into the row's own right padding and sat **4px from the
+edge where every other column sat 16px in**. Now `w-29`; measured at 16px, matching its neighbours.
+No test could have caught this: jsdom performs no layout.
+
+**Two findings that are design decisions, not defects — see Questions.**

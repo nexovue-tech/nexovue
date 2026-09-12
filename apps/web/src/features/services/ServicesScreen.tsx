@@ -40,9 +40,11 @@ const PENDING_ENDPOINT_ROWS = [
 const RATE_COLUMN = "w-20 shrink-0 text-right";
 const ERRORS_COLUMN = "w-28 shrink-0 text-right";
 const LATENCY_COLUMN = "w-16 shrink-0 text-right";
-/* Wide enough for the sparkline it holds, and reserved on every row so the columns to its
-   left do not shift when one service has no trend to draw. */
-const TREND_COLUMN = "w-26 shrink-0 pl-3";
+/* The sparkline is 104px and the gutter before it 12px, so the cell is 116px — `w-26` held
+   only the drawing and pushed it 12px into the row's own right padding, which put the
+   column 4px from the edge while every other column sat 16px in. Reserved on every row so
+   the columns to its left do not shift when one service has no trend to draw. */
+const TREND_COLUMN = "w-29 shrink-0 pl-3";
 /* Reserved on every row, marked or not, so the names below each other line up. */
 const MARK_COLUMN = "flex w-2 shrink-0 justify-center";
 const WIDE_ONLY = "hidden lg:block";
