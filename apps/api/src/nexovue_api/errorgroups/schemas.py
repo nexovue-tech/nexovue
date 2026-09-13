@@ -12,6 +12,26 @@ GROUPED_BY_SDK: str = "sdk_fingerprint"
 GROUPED_BY_TEMPLATE: str = "type_and_message_template"
 
 
+class PrecedingDeploy(BaseModel):
+    """The last deploy to reach this group's services before it first appeared.
+
+    **Before, not because.** Nothing here establishes cause. It is the most
+    recent change we were *told* about, and an exception that began four minutes
+    after one may have come from traffic, from a dependency, or from a change
+    that never sent a deploy notification. Order is the fact; cause is not.
+
+    Every screen that renders this must say what it is — the deploy before this
+    appeared — and must never say, or let a reader infer, that it caused
+    anything. `null` means no deploy of these services is recorded before that
+    instant, which is also what a project that sends no deploy notifications
+    reads as.
+    """
+
+    version: str
+    service_name: str
+    deployed_at: IsoTimestamp
+
+
 class ErrorGroupSummary(BaseModel):
     """One exception, however many times and wherever it happened."""
 
@@ -38,6 +58,9 @@ class ErrorGroupSummary(BaseModel):
     sample_span_id: str
     # "span" or "log" — which shape the newest instance arrived in.
     sample_source: str
+    # The deploy before this group appeared, when one is recorded. Correlation
+    # and nothing more; see `PrecedingDeploy`.
+    preceding_deploy: PrecedingDeploy | None = None
 
 
 class ErrorGroupListResponse(BaseModel):

@@ -8,12 +8,16 @@ isolation tests below fail rather than quietly passing.
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
+from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TENANT_BINDING, TenantScopedRepository
+from nexovue_api.deploys.schemas import DeployEventSummary
+from nexovue_api.deploys.service import DeployHistory
 from nexovue_api.errorgroups import queries, service
 from nexovue_api.errorgroups.schemas import GROUPED_BY_SDK, GROUPED_BY_TEMPLATE
 from nexovue_api.errors.exceptions import NotFoundError
@@ -492,3 +496,83 @@ async def test_the_query_is_bounded_on_our_receive_clock_as_well_as_the_customer
     assert store.last_parameters["to_time"] == end
     assert store.last_parameters["received_from"] == start - RECEIVE_CLOCK_SLACK
     assert store.last_parameters["received_to"] == end + RECEIVE_CLOCK_SLACK
+
+
+# ------------------------------------------------- the deploy before a group
+
+
+FIRST_SEEN = values.nanos_to_datetime(_OCCURRED_NANOS)
+
+
+def _deploy(version: str, service_name: str, at: datetime) -> DeployEventSummary:
+    return DeployEventSummary(
+        id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        version=version,
+        service_name=service_name,
+        deployed_at=at,
+        source="webhook",
+        metadata={},
+    )
+
+
+async def _one_group(deploys: DeployHistory) -> Any:
+    start, end = _window()
+    page = await service.list_error_groups(
+        _repository(TENANT_A),
+        project_id=PROJECT,
+        service_name=None,
+        from_time=start,
+        to_time=end,
+        limit=50,
+        deploys=deploys,
+    )
+    return page.groups[0]
+
+
+async def test_a_group_carries_the_last_deploy_to_ship_before_it_appeared() -> None:
+    group = await _one_group(
+        DeployHistory(
+            [
+                _deploy("1.0.0", "checkout", FIRST_SEEN - timedelta(hours=2)),
+                _deploy("1.1.0", "checkout", FIRST_SEEN - timedelta(minutes=4)),
+            ]
+        )
+    )
+
+    assert group.preceding_deploy is not None
+    assert group.preceding_deploy.version == "1.1.0"
+    assert group.preceding_deploy.service_name == "checkout"
+    assert group.first_seen - group.preceding_deploy.deployed_at == timedelta(minutes=4)
+
+
+async def test_a_deploy_that_shipped_after_the_group_appeared_is_not_reported() -> None:
+    """It cannot have come first, and saying it did would invert the claim."""
+    group = await _one_group(
+        DeployHistory([_deploy("1.2.0", "checkout", FIRST_SEEN + timedelta(minutes=10))])
+    )
+
+    assert group.preceding_deploy is None
+
+
+async def test_a_deploy_of_a_service_this_group_never_touched_is_not_reported() -> None:
+    group = await _one_group(
+        DeployHistory([_deploy("9.9.9", SILENT_SERVICE, FIRST_SEEN - timedelta(minutes=1))])
+    )
+
+    assert group.preceding_deploy is None
+
+
+async def test_a_project_that_records_no_deploys_reports_none_rather_than_guessing() -> None:
+    """The default, and the ordinary case: most projects never post a deploy."""
+    start, end = _window()
+    page = await service.list_error_groups(
+        _repository(TENANT_A),
+        project_id=PROJECT,
+        service_name=None,
+        from_time=start,
+        to_time=end,
+        limit=50,
+    )
+
+    assert page.groups[0].preceding_deploy is None

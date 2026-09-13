@@ -15,6 +15,13 @@ export interface Project {
   id: string;
   slug: string;
   name: string;
+  /**
+   * The first day anything this project sent reached us, or null when nothing
+   * ever has. Read by the API from the ingest meter, whose rows outlive every
+   * retention window — so a project that reported once answers with a date for
+   * ever, however long it has been quiet since.
+   */
+  first_reported_on: string | null;
 }
 
 interface ProjectsResponse {
@@ -29,6 +36,25 @@ export function useProjects() {
     queryFn: () => apiClient.get<ProjectsResponse>("projects"),
     select: (response) => response.projects,
   });
+}
+
+/**
+ * Whether anything has ever arrived for this project — the fact an empty screen
+ * needs before it decides which empty screen it is.
+ *
+ * `undefined` until the list has answered, and a screen must treat that as "do
+ * not know" rather than as "never": telling a customer with working
+ * instrumentation to go and instrument it is the one mistake here that costs
+ * something. The opposite mistake costs a sentence.
+ *
+ * No request of its own. The project list is fetched once by the top bar and
+ * carries this, which is why the field lives on the summary rather than on the
+ * project's settings document.
+ */
+export function useEverReported(projectId: string | undefined): boolean | undefined {
+  const { data: projects } = useProjects();
+  const project = projects?.find((candidate) => candidate.id === projectId);
+  return project === undefined ? undefined : project.first_reported_on !== null;
 }
 
 /**

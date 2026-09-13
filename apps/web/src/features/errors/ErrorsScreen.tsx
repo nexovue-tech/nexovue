@@ -10,14 +10,16 @@ import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
 import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
-import { formatCount } from "@/shared/format/number";
+import { formatCount, UNKNOWN } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 import type { ErrorGroupDetail, ErrorGroupSummary, GroupTrendPoint } from "./api";
 import { useErrorGroup, useErrorGroups, useErrorGroupTrend } from "./api";
 import { ErrorGroupPanel } from "./ErrorGroupDetail";
 import {
+  DEPLOY_IS_NOT_A_CAUSE,
   describeErrors,
+  describePrecedingDeploy,
   describeServices,
   firstWithStacktrace,
   isNewInWindow,
@@ -31,6 +33,9 @@ const OVERSCAN_ROWS = 8;
 
 /* Column widths, declared once so the header and every row cannot drift apart. */
 const SERVICES_COLUMN = "hidden w-40 shrink-0 lg:block";
+/* The last column to earn its width: a deploy is a lead, and the two facts beside it —
+   what threw and when it started — are the ones nobody may lose to make room. */
+const DEPLOY_COLUMN = "hidden w-32 shrink-0 xl:block";
 const COUNT_COLUMN = "w-16 shrink-0 text-right";
 const STARTED_COLUMN = "w-28 shrink-0 text-right";
 const LAST_SEEN_COLUMN = "hidden w-24 shrink-0 text-right sm:block";
@@ -266,6 +271,7 @@ function ColumnHeader() {
   return (
     <div className="flex shrink-0 items-center border-line border-b bg-surface px-4 py-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps">
       <span className="min-w-0 flex-1">Exception</span>
+      <span className={DEPLOY_COLUMN}>Deploy before</span>
       <span className={SERVICES_COLUMN}>Services</span>
       <span className={COUNT_COLUMN}>Count</span>
       <span className={STARTED_COLUMN}>Started</span>
@@ -316,6 +322,8 @@ function GroupRow({
   ceiling: number;
 }) {
   const startedHere = isNewInWindow(group);
+  const deploy = group.preceding_deploy;
+  const afterDeploy = describePrecedingDeploy(group);
 
   return (
     <div
@@ -339,6 +347,17 @@ function GroupRow({
           <span className="truncate text-ink-dim text-xs" title={group.message_template}>
             {group.message_template}
           </span>
+        </span>
+
+        {/* The deploy before it, on the row rather than only in the panel: "did we
+            ship something" is asked while scanning the list, not after opening one.
+            Dimmed and abbreviated to the version, because it is a lead and not a
+            finding — the panel carries the sentence saying what it is not. */}
+        <span
+          className={`${DEPLOY_COLUMN} truncate pl-3 font-mono text-2xs text-ink-dim`}
+          title={afterDeploy === undefined ? undefined : `${afterDeploy}. ${DEPLOY_IS_NOT_A_CAUSE}`}
+        >
+          {deploy === null ? UNKNOWN : `after ${deploy.version}`}
         </span>
 
         <span className={`${SERVICES_COLUMN} truncate pl-3 font-mono text-2xs text-ink-dim`}>

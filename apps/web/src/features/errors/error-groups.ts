@@ -8,6 +8,7 @@
 
 import { formatCount, UNKNOWN } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
+import { formatGap } from "@/shared/format/time";
 
 import type { ErrorGroupSummary } from "./api";
 
@@ -52,6 +53,36 @@ export function describeErrors(groups: readonly ErrorGroupSummary[], windowLabel
   return fresh === 0
     ? `${opening}. None of them started here.`
     : `${opening}, ${fresh} of which started inside it.`;
+}
+
+/**
+ * Said wherever the deploy below is shown, and not optional.
+ *
+ * The link is an ordering and nothing else. A reader who takes "the deploy before
+ * this" for "the deploy that did this" reverts a release that was never the
+ * problem, so the sentence that prevents it travels with the fact.
+ */
+export const DEPLOY_IS_NOT_A_CAUSE =
+  "The last deploy to reach this group's services before it appeared. That it came " +
+  "first is not evidence that it caused this.";
+
+/**
+ * "4 minutes after deploy 2026.09.06-1 on demo-payments", or nothing.
+ *
+ * Nothing when the API recorded no deploy before this group — which is the ordinary
+ * case, because most projects never post a deploy notification, and an absent
+ * reading is left absent rather than filled in with a sentence about not knowing.
+ *
+ * The wording is deliberate and is the same everywhere it appears: it states the
+ * order, and `DEPLOY_IS_NOT_A_CAUSE` states what the order is not.
+ */
+export function describePrecedingDeploy(group: ErrorGroupSummary): string | undefined {
+  const deploy = group.preceding_deploy;
+  if (!deploy) return undefined;
+
+  const gap = formatGap(deploy.deployed_at, group.first_seen);
+  const shipped = `deploy ${deploy.version} on ${deploy.service_name}`;
+  return gap === undefined ? `After ${shipped}` : `${gap} after ${shipped}`;
 }
 
 /** The services column: one name, or a count once the list stops being readable. */

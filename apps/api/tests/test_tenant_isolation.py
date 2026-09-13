@@ -360,9 +360,16 @@ class FakeControlPlane:
         """Rows the request wrote — audit entries here. Kept so nothing is lost silently."""
         self.written.append(entity)
 
-    async def execute(self, statement: Any) -> _Row:
-        """`load_identity` and `find_active_user_by_email`: a (user, org) pair."""
+    async def execute(self, statement: Any) -> Any:
+        """`load_identity` and `find_active_user_by_email`: a (user, org) pair.
+
+        `first_reported_days` also arrives here. These tenants have no metered
+        rows, so every project reads as one nothing has ever arrived for — which
+        is what the listing test asserts about, and it asserts about ids.
+        """
         values = _bound_values(statement)
+        if "usage_daily" in str(statement.get_final_froms()[0]):
+            return _Rows([])
         for tenant in self._tenants:
             if tenant.organization.id in self._deleted:
                 continue

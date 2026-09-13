@@ -65,10 +65,23 @@ NOTHING_TO_CHANGE: Final = "Give a name or an identifier to change."
 
 
 async def list_for_organization(session: AsyncSession, org_id: uuid.UUID) -> ProjectListResponse:
+    """Every live project, each carrying whether anything has ever arrived for it.
+
+    A second statement rather than an aggregate joined onto the first, so
+    `list_projects` remains the one definition of "this organization's live
+    projects" and the meter read stays additive to it. Both are one index read
+    apiece on `(org_id, …)`.
+    """
     projects = await queries.list_projects(session, org_id)
+    first_reported = await queries.first_reported_days(session, org_id)
     return ProjectListResponse(
         projects=[
-            ProjectSummary(id=project.id, slug=project.slug, name=project.name)
+            ProjectSummary(
+                id=project.id,
+                slug=project.slug,
+                name=project.name,
+                first_reported_on=first_reported.get(project.id),
+            )
             for project in projects
         ]
     )

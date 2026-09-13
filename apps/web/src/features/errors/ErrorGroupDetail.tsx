@@ -11,7 +11,9 @@ import { formatClockTime, formatTimestamp } from "@/shared/format/time";
 import type { ErrorGroupDetail, ErrorGroupSummary, ErrorOccurrence } from "./api";
 import { GROUPED_BY_SDK } from "./api";
 import {
+  DEPLOY_IS_NOT_A_CAUSE,
   describeOccurrences,
+  describePrecedingDeploy,
   describeServices,
   firstWithStacktrace,
   stackFrames,
@@ -92,6 +94,8 @@ export function ErrorGroupPanel({
           </dl>
         </Section>
 
+        <PrecedingDeploySection group={group} />
+
         {/* The template is the group; the message is what one instance said. Showing
             both only earns its space when the tokens actually collapsed something. */}
         {group.latest_message && group.latest_message !== group.message_template ? (
@@ -112,6 +116,32 @@ export function ErrorGroupPanel({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * What shipped last before this started — the first thing anybody checks.
+ *
+ * **The caveat is rendered, not left to the reader.** The product knows an ordering
+ * and nothing more: a deploy four minutes earlier is the most recent change we were
+ * told about, and the exception may have come from traffic, from a dependency, or
+ * from a change that sent no notification at all. Somebody who reads this as blame
+ * reverts a release that was never the problem, so the sentence saying what this is
+ * not sits beside the fact rather than in a tooltip.
+ *
+ * Absent when no deploy precedes the group, which is most of them — a project that
+ * posts no deploy notifications has nothing here, and a section explaining that it
+ * has nothing would be on every panel in the product.
+ */
+function PrecedingDeploySection({ group }: { group: ErrorGroupSummary }) {
+  const afterDeploy = describePrecedingDeploy(group);
+  if (afterDeploy === undefined) return null;
+
+  return (
+    <Section title="Deploy before">
+      <p className="break-words text-ink text-sm">First seen {afterDeploy}.</p>
+      <p className="mt-1 text-ink-dim text-xs leading-relaxed">{DEPLOY_IS_NOT_A_CAUSE}</p>
+    </Section>
   );
 }
 

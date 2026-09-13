@@ -16,6 +16,7 @@ import { ApiError } from "@/shared/api-client";
 
 import type { ErrorGroupDetail, ErrorGroupSummary, ErrorOccurrence } from "./api";
 import { ErrorsView } from "./ErrorsScreen";
+import { DEPLOY_IS_NOT_A_CAUSE } from "./error-groups";
 import { errorFilters } from "./filters";
 
 const DECLINED: ErrorGroupSummary = {
@@ -32,6 +33,7 @@ const DECLINED: ErrorGroupSummary = {
   sample_trace_id: "89862496c280c749485ae30629e9737f",
   sample_span_id: "c8f8acc1e53ceb86",
   sample_source: "log",
+  preceding_deploy: null,
 };
 
 /** Running since before the window opened: a long-standing bug, not an incident. */
@@ -316,5 +318,50 @@ describe("ErrorsView trends", () => {
 
     expect(container.querySelectorAll("polyline")).toHaveLength(1);
     expect(readable(container)).toContain(DECLINED.exception_type);
+  });
+});
+
+describe("ErrorsView and the deploy before a group", () => {
+  const SHIPPED: ErrorGroupSummary = {
+    ...DECLINED,
+    preceding_deploy: {
+      version: "2026.09.06-1",
+      service_name: "demo-payments",
+      // Four minutes before DECLINED's first_seen.
+      deployed_at: "2026-08-28T19:54:31.447Z",
+    },
+  };
+
+  it("names the build on the row, so the list answers 'did we ship something'", async () => {
+    const rendered = readable(await render({ groups: [SHIPPED] }));
+
+    expect(rendered).toContain("after 2026.09.06-1");
+  });
+
+  it("rules the cell rather than reading as no deploy having ever happened", async () => {
+    const rendered = readable(await render({ groups: [DECLINED] }));
+
+    expect(rendered).toContain("—");
+    expect(rendered).not.toContain("after 2026.09.06-1");
+  });
+
+  it("puts the caveat beside the fact, not behind a tooltip", async () => {
+    const rendered = readable(
+      await render({ groups: [SHIPPED], selected: SHIPPED, detailIsPending: false }),
+    );
+
+    expect(rendered).toContain("First seen 4 minutes after deploy 2026.09.06-1 on demo-payments.");
+    expect(rendered).toContain(DEPLOY_IS_NOT_A_CAUSE);
+  });
+
+  it("says nothing about deploys on a group no deploy preceded", async () => {
+    const rendered = readable(
+      await render({ groups: [DECLINED], selected: DECLINED, detailIsPending: false }),
+    );
+
+    // The column header carries those two words on every screen; what must be
+    // absent is the claim, and the caveat that would come with it.
+    expect(rendered).not.toContain("after deploy");
+    expect(rendered).not.toContain(DEPLOY_IS_NOT_A_CAUSE);
   });
 });

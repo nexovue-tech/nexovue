@@ -81,7 +81,7 @@ interface Overrides {
   endpointsByService?: ReadonlyMap<string, EndpointGroup>;
   trendByService?: ReadonlyMap<string, readonly TrendPoint[]>;
   previousByService?: ReadonlyMap<string, ServiceHealth>;
-  widestWindow?: boolean;
+  everReported?: boolean;
 }
 
 /** `count` buckets climbing to `peak` on each series, which is all a sparkline reads. */
@@ -120,7 +120,7 @@ function render(overrides: Overrides = {}): HTMLElement {
         expanded: new Set<string>(),
         onToggleService: () => {},
         endpointsByService: new Map<string, EndpointGroup>(),
-        widestWindow: false,
+        everReported: true,
         ...overrides,
       }),
     ),
@@ -349,22 +349,38 @@ describe("ServicesView severity", () => {
 });
 
 describe("ServicesView empty states", () => {
-  it("offers setup when the widest window is still empty", () => {
-    const container = render({ services: [], widestWindow: true });
+  it("offers setup only when the project has never reported", () => {
+    const container = render({ services: [], everReported: false });
     const text = readable(container);
 
     expect(text).toContain("No services yet");
     expect(text).toContain("OpenTelemetry SDK");
   });
 
-  it("offers a wider range when a narrow window is empty", () => {
-    const container = render({ services: [], widestWindow: false, windowLabel: "15 minutes" });
+  it("offers a wider range when a project that has reported is quiet now", () => {
+    const container = render({ services: [], everReported: true, windowLabel: "15 minutes" });
     const text = readable(container);
 
     // A customer with eleven services must never be told they have none.
     expect(text).toContain("No services in the last 15 minutes");
     expect(text).toContain("Widen the time range");
     expect(text).not.toContain("No services yet");
+  });
+
+  it("never offers setup on a project silent for longer than any range reaches", () => {
+    // The whole point of replacing the old widest-window guess: eight days of
+    // silence is not a project that was never instrumented.
+    const container = render({ services: [], everReported: true, windowLabel: "7 days" });
+
+    expect(readable(container)).not.toContain("No services yet");
+  });
+
+  it("does not claim never while the project list has not answered", () => {
+    const container = render({ services: [], everReported: undefined });
+    const text = readable(container);
+
+    expect(text).not.toContain("No services yet");
+    expect(text).toContain("Widen the time range");
   });
 });
 

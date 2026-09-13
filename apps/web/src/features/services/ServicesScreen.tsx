@@ -16,13 +16,8 @@ import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatRatePerMinute } from "@/shared/format/rate";
-import {
-  previousWindow,
-  TIME_RANGES,
-  timeRangeById,
-  useLiveWindow,
-  useSelection,
-} from "@/shared/selection";
+import { useEverReported } from "@/shared/projects";
+import { previousWindow, timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
 import type {
   EndpointGroup,
@@ -104,6 +99,9 @@ export function ServicesScreen() {
   const services = useServiceList(projectId, timeWindow, narrowing);
   const trendByService = useServiceTrend(projectId, timeWindow);
 
+  // A fact, not a guess about the selected range. See `EmptyServices`.
+  const everReported = useEverReported(projectId);
+
   // The same read over the hour before this one. A second request rather than a
   // wider one: comparing two windows means asking the rollup for two windows,
   // and the ranking of the earlier one is irrelevant — only its numbers are.
@@ -134,7 +132,7 @@ export function ServicesScreen() {
       onFilterChange={(key, value) => show(withFilter(filters, key, value))}
       onClearFilters={() => show({})}
       windowLabel={timeRangeById(rangeId).label}
-      widestWindow={rangeId === TIME_RANGES[TIME_RANGES.length - 1].id}
+      everReported={everReported}
       services={services.data?.services ?? []}
       isPending={services.isPending}
       isError={services.isError}
@@ -158,10 +156,10 @@ interface ServicesViewProps {
   /** "hour", "24 hours" — the range picker's own word, so the two agree. */
   windowLabel: string;
   /**
-   * Whether the widest range is already selected, which is what separates the two empty
-   * screens. See `EmptyServices`.
+   * Whether anything has ever arrived for this project, which is what separates the two
+   * empty screens. `undefined` while unknown. See `EmptyServices`.
    */
-  widestWindow?: boolean;
+  everReported?: boolean;
   services: readonly ServiceHealth[];
   isPending: boolean;
   isError: boolean;
@@ -226,7 +224,7 @@ export function ServicesView({
   onFilterChange,
   onClearFilters,
   windowLabel,
-  widestWindow = false,
+  everReported,
   services,
   isPending,
   isError,
@@ -282,7 +280,7 @@ export function ServicesView({
         </div>
       ) : services.length === 0 ? (
         <EmptyServices
-          widestWindow={widestWindow}
+          everReported={everReported}
           windowLabel={windowLabel}
           narrowed={narrowed}
           onClearFilters={onClearFilters}
@@ -315,34 +313,29 @@ export function ServicesView({
 }
 
 /**
- * Two empty screens, not one.
- *
- * "Nothing has ever arrived" and "nothing arrived in these five minutes" are different
- * facts and want different actions: the first is an onboarding moment and should offer
- * setup; the second is a window too narrow and should offer to widen it. A single screen
- * covering both tells a customer with eleven services that they have none.
- *
- * **The signal is a heuristic, and deliberately a conservative one.** Nothing in the API
- * says whether a project has ever received telemetry, so the widest range coming back
- * empty is the closest available proxy. It is wrong in one direction only — a project
- * silent for more than seven days reads as never having reported — and that error costs
- * a reader a sentence, where the opposite error would send a customer with working
- * instrumentation back to the setup page.
- */
-/**
  * Why the list is empty, which is three different situations and not one.
  *
- * "Nothing matches these filters" and "nothing has ever arrived" ask for
- * opposite actions from the reader, and a screen that says "no services" to both
- * sends half of them to the wrong one.
+ * "Nothing matches these filters", "nothing has ever arrived" and "nothing arrived in
+ * these five minutes" ask for opposite actions from the reader, and a screen that says
+ * "no services" to all three sends two thirds of them to the wrong one.
+ *
+ * **`everReported` is a fact from the API, not a guess.** This used to read an empty
+ * widest range as a project that had never reported, which told a customer whose
+ * services had been quiet for eight days to go and instrument them again. The project
+ * list now carries the first day anything arrived, read from the ingest meter, whose
+ * rows no retention window expires.
+ *
+ * `undefined` — the list has not answered yet — is deliberately not "never". Offering
+ * setup to somebody who has working instrumentation is the expensive mistake here;
+ * offering a wider range to somebody with nothing costs a sentence.
  */
 function EmptyServices({
-  widestWindow,
+  everReported,
   windowLabel,
   narrowed,
   onClearFilters,
 }: {
-  widestWindow: boolean;
+  everReported: boolean | undefined;
   windowLabel: string;
   narrowed: boolean;
   onClearFilters: () => void;
@@ -361,11 +354,11 @@ function EmptyServices({
     );
   }
 
-  if (widestWindow) {
+  if (everReported === false) {
     return (
       <EmptyState
         title="No services yet"
-        detail="Nothing has sent a trace to this project. Point an OpenTelemetry SDK at your endpoint and the first service appears here within about a minute."
+        detail="Nothing has ever sent telemetry to this project. Point an OpenTelemetry SDK at your endpoint and the first service appears here within about a minute."
       />
     );
   }

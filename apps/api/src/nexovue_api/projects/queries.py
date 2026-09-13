@@ -3,15 +3,17 @@
 The statements that close a project's doors name other domains' tables —
 `api_keys`, `site_keys`, `project_webhook_secrets` — and are here rather than in
 those packages because what they express is one fact about a project, not four
-facts about credentials. Each still filters `org_id` as well as `project_id`, so
-the tenancy is in the statement and not in a check somebody remembered.
+facts about credentials. `usage_daily` is named for the same reason: read here it
+answers "has this project ever reported", which is a fact about the project
+rather than about the bill. Each still filters `org_id` as well as `project_id`,
+so the tenancy is in the statement and not in a check somebody remembered.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, exists, func, select, update
@@ -24,6 +26,7 @@ from nexovue_api.data.postgres.models import (
     Project,
     ProjectWebhookSecret,
     SiteKey,
+    UsageDaily,
 )
 
 
@@ -35,6 +38,29 @@ async def list_projects(session: AsyncSession, org_id: uuid.UUID) -> Sequence[Pr
         .order_by(Project.created_at, Project.slug)
     )
     return (await session.scalars(statement)).all()
+
+
+async def first_reported_days(session: AsyncSession, org_id: uuid.UUID) -> dict[uuid.UUID, date]:
+    """The first day each of this organization's projects sent us anything.
+
+    Read from the ingest meter, not from ClickHouse. The meter counts what
+    *arrived*, its rows outlive every retention window, and one row exists for
+    any signal — so it still answers for a project whose telemetry has since
+    expired. A `min(timestamp)` over the telemetry store would call that project
+    one that never reported, which is the mistake this read exists to end.
+
+    A project reporting for the first time right now is absent until the meter
+    flushes. That is the harmless direction: it is new, and reads as new.
+    """
+    statement = (
+        select(UsageDaily.project_id, func.min(UsageDaily.day))
+        .where(UsageDaily.org_id == org_id)
+        .group_by(UsageDaily.project_id)
+    )
+    first_days: dict[uuid.UUID, date] = {}
+    for project_id, first_day in (await session.execute(statement)).all():
+        first_days[project_id] = first_day
+    return first_days
 
 
 async def find_project(

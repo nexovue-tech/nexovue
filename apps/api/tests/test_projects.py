@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -112,6 +112,15 @@ class Tenant:
         # and a test that wants the refusal adds one.
         self.checks: list[Check] = []
         self.integrations: list[Integration] = []
+
+        # The days the ingest meter recorded for each project — `usage_daily`
+        # reduced to the one column the project list reads. Empty by default,
+        # which is a project nothing has ever reported for.
+        self.metered_days: dict[uuid.UUID, list[date]] = {}
+
+    def record_arrival(self, project: Project, day: date) -> None:
+        """One day the meter counted something for this project."""
+        self.metered_days.setdefault(project.id, []).append(day)
 
     def _project(self, slug: str, name: str) -> Project:
         project = Project(org_id=self.organization.id, slug=slug, name=name)
@@ -236,8 +245,11 @@ class FakeControlPlane:
             return _Rows([project.slug for project in matched if project.slug.startswith(prefix)])
         return _Rows([project for project in matched if project.deleted_at is None])
 
-    async def execute(self, statement: Any) -> _Changed:
-        """The three revocations. Each is an UPDATE naming one door's table."""
+    async def execute(self, statement: Any) -> Any:
+        """The three revocations, and the ingest meter the project list reads."""
+        if statement.is_select:
+            return _Rows(self._metered_days(_bound_values(statement)))
+
         values = _bound_values(statement)
         doors = {
             "ApiKey": "api_keys",
@@ -266,6 +278,20 @@ class FakeControlPlane:
         return [row for row in self.written if isinstance(row, Project)]
 
     # -- internals ----------------------------------------------------------
+
+    def _metered_days(self, values: set[Any]) -> list[tuple[uuid.UUID, date]]:
+        """`first_reported_days`: the earliest metered day of each project.
+
+        Answered from the tenant the statement bound, like everything else here,
+        so a read that dropped its `org_id` predicate reports that nothing has
+        ever arrived for anyone.
+        """
+        return [
+            (project_id, min(days))
+            for tenant in self._tenants_binding(values)
+            for project_id, days in tenant.metered_days.items()
+            if days
+        ]
 
     def _tenants_binding(self, values: set[Any]) -> list[Tenant]:
         """Only tenants the statement actually named. This is what makes a query
@@ -619,6 +645,56 @@ async def test_deleting_records_who_closed_it(db: FakeControlPlane, acme: Tenant
     (entry,) = db.entries
     assert entry.action == audit.PROJECT_DELETED
     assert entry.target == f"{audit.PROJECT_TARGET}:{acme.project.id}"
+
+
+# ------------------------------------------- has this project ever reported
+
+
+async def _listed(db: FakeControlPlane, tenant: Tenant) -> dict[uuid.UUID, date | None]:
+    listing = await service.list_for_organization(_store(db), tenant.organization.id)
+    return {project.id: project.first_reported_on for project in listing.projects}
+
+
+async def test_a_project_reports_the_first_day_anything_arrived_for_it(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    acme.record_arrival(acme.project, date(2026, 3, 2))
+    acme.record_arrival(acme.project, date(2026, 3, 9))
+
+    assert (await _listed(db, acme))[acme.project.id] == date(2026, 3, 2)
+
+
+async def test_a_long_silence_does_not_erase_that_a_project_once_reported(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    """The whole reason this field exists.
+
+    The screens used to read "nothing in the widest range" as "nothing ever",
+    which tells a customer whose services went quiet a fortnight ago to go and
+    instrument them again. The meter's rows outlive every window, so a project
+    that reported once answers with a date for ever.
+    """
+    acme.record_arrival(acme.project, date(2025, 1, 1))
+
+    assert (await _listed(db, acme))[acme.project.id] == date(2025, 1, 1)
+
+
+async def test_a_project_nothing_ever_arrived_for_reports_no_day(
+    db: FakeControlPlane, acme: Tenant
+) -> None:
+    """Null, not a date in the past — the one state that may offer setup."""
+    acme.record_arrival(acme.project, date(2026, 3, 2))
+
+    assert (await _listed(db, acme))[acme.second_project.id] is None
+
+
+async def test_another_organizations_arrivals_are_never_read_as_this_ones(
+    db: FakeControlPlane, acme: Tenant, globex: Tenant
+) -> None:
+    globex.record_arrival(globex.project, date(2026, 3, 2))
+
+    assert all(day is None for day in (await _listed(db, acme)).values())
+    assert (await _listed(db, globex))[globex.project.id] == date(2026, 3, 2)
 
 
 # ------------------------------------------------- the masking grammar

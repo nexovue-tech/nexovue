@@ -14,6 +14,21 @@ export const GROUPED_BY_TEMPLATE = "type_and_message_template";
 /** Which signal the instance arrived on, as the API spells it. */
 export const SOURCE_LOG = "log";
 
+/**
+ * The last deploy to reach this group's services before it first appeared.
+ *
+ * **Before, not because.** The API says only that a change shipped and then this
+ * started; it establishes no cause, and an exception four minutes after a deploy
+ * may have come from traffic, a dependency, or a change nobody told us about.
+ * Every rendering of this has to say "the deploy before this", and none of them
+ * may say or imply "the deploy that caused this".
+ */
+export interface PrecedingDeploy {
+  version: string;
+  service_name: string;
+  deployed_at: string;
+}
+
 export interface ErrorGroupSummary {
   group_id: string;
   exception_type: string;
@@ -38,6 +53,8 @@ export interface ErrorGroupSummary {
   sample_trace_id: string;
   sample_span_id: string;
   sample_source: string;
+  /** Null when no deploy of these services is recorded before this appeared. */
+  preceding_deploy: PrecedingDeploy | null;
 }
 
 export interface ErrorOccurrence {

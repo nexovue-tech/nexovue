@@ -24,11 +24,13 @@ import hmac
 import json
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import pytest
 
 from nexovue_api.deploys import queries, service, signatures
+from nexovue_api.deploys.schemas import DeployEventSummary
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, UnauthenticatedError
 
 ORG_ID = uuid.uuid4()
@@ -480,3 +482,128 @@ async def test_a_deploy_without_a_time_is_stamped_on_arrival(store: RecordingSes
     )
 
     assert summary.deployed_at.tzinfo is not None
+
+
+# ------------------------------------------------- the deploy before something
+
+
+def _deployed(version: str, service_name: str, at: datetime) -> DeployEventSummary:
+    return DeployEventSummary(
+        id=uuid.uuid4(),
+        project_id=PROJECT_ID,
+        version=version,
+        service_name=service_name,
+        deployed_at=at,
+        source="webhook",
+        metadata={},
+    )
+
+
+NOON: Final = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
+
+CHECKOUT_OLD: Final = _deployed("1.0.0", "checkout", NOON - timedelta(hours=3))
+CHECKOUT_NEW: Final = _deployed("1.1.0", "checkout", NOON - timedelta(minutes=4))
+PAYMENTS: Final = _deployed("7.2.1", "payments", NOON - timedelta(minutes=1))
+AFTERWARDS: Final = _deployed("1.2.0", "checkout", NOON + timedelta(minutes=30))
+
+HISTORY: Final = service.DeployHistory([CHECKOUT_OLD, CHECKOUT_NEW, PAYMENTS, AFTERWARDS])
+
+
+def test_the_deploy_before_an_instant_is_the_most_recent_one_of_that_service() -> None:
+    found = HISTORY.preceding(services=["checkout"], at=NOON)
+
+    assert found is not None
+    assert found.version == CHECKOUT_NEW.version
+
+
+def test_a_deploy_after_the_instant_never_precedes_it() -> None:
+    """It shipped later. Naming it would invert the only thing this claims."""
+    found = HISTORY.preceding(services=["checkout"], at=CHECKOUT_NEW.deployed_at)
+
+    assert found is not None
+    assert found.version == CHECKOUT_NEW.version
+
+    nothing_yet = HISTORY.preceding(services=["checkout"], at=NOON - timedelta(hours=4))
+    assert nothing_yet is None
+
+
+def test_a_deploy_exactly_at_the_instant_counts_as_preceding_it() -> None:
+    """At or before: a deploy and the first error of the build it shipped can
+    share a second, and calling that "no deploy" loses the likeliest case."""
+    found = HISTORY.preceding(services=["payments"], at=PAYMENTS.deployed_at)
+
+    assert found is not None
+    assert found.version == PAYMENTS.version
+
+
+def test_another_services_deploy_is_never_the_deploy_before_this_one() -> None:
+    """`payments` is more recent, and shipped none of `checkout`'s code."""
+    found = HISTORY.preceding(services=["checkout"], at=NOON)
+
+    assert found is not None
+    assert found.service_name == "checkout"
+
+
+def test_a_group_spanning_services_takes_the_most_recent_of_any_of_them() -> None:
+    found = HISTORY.preceding(services=["checkout", "payments"], at=NOON)
+
+    assert found is not None
+    assert found.version == PAYMENTS.version
+
+
+def test_something_naming_no_service_has_no_deploy_before_it() -> None:
+    assert HISTORY.preceding(services=[], at=NOON) is None
+
+
+def test_a_project_with_no_recorded_deploys_answers_nothing() -> None:
+    """Most projects never send a deploy notification, and that is not a failure."""
+    assert service.EMPTY_DEPLOY_HISTORY.preceding(services=["checkout"], at=NOON) is None
+
+
+async def test_both_history_statements_bind_the_organization(
+    session: CapturingSession,
+) -> None:
+    """Either one scoped by project alone would read another tenant's deploys."""
+    await service.history_for_window(
+        session,  # type: ignore[arg-type]
+        org_id=ORG_ID,
+        project_id=PROJECT_ID,
+        from_time=NOON - timedelta(hours=1),
+        to_time=NOON,
+    )
+
+    bound = [set(statement.compile().params.values()) for statement in session.statements]
+    assert len(bound) == 2
+    assert all(ORG_ID in values and PROJECT_ID in values for values in bound)
+    assert all(OTHER_ORG_ID not in values for values in bound)
+
+
+def test_a_window_that_overflows_the_cap_answers_nothing_rather_than_the_wrong_deploy() -> None:
+    """Beyond the cap the oldest of the window's deploys were never read, so the
+    last deploy before an early instant is one this cannot see. Naming the
+    pre-window deploy instead would name one that is provably not the last."""
+    horizon = NOON - timedelta(minutes=30)
+    capped = service.DeployHistory([CHECKOUT_NEW, PAYMENTS], known_from=horizon)
+
+    assert capped.preceding(services=["checkout"], at=horizon - timedelta(minutes=1)) is None
+
+    still_answered = capped.preceding(services=["checkout"], at=NOON)
+    assert still_answered is not None
+    assert still_answered.version == CHECKOUT_NEW.version
+
+
+async def test_the_windows_own_deploys_are_read_under_a_cap(
+    session: CapturingSession,
+) -> None:
+    """`deploy_events` is written by a customer's CI, so how many a window holds
+    is their decision and not ours. Every request is bounded."""
+    await service.history_for_window(
+        session,  # type: ignore[arg-type]
+        org_id=ORG_ID,
+        project_id=PROJECT_ID,
+        from_time=NOON - timedelta(hours=1),
+        to_time=NOON,
+    )
+
+    inside = session.statements[0].compile()
+    assert service.MAX_CORRELATED_DEPLOYS in inside.params.values()

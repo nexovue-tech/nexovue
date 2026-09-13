@@ -7,6 +7,10 @@ runs through is bound to the session's tenant, never to anything in the URL.
 
 `service_name` is a caller value too, but it only narrows a read the tenant is
 already entitled to, so it is bound as a parameter rather than checked.
+
+The deploy history is read here rather than inside the error-group service for
+the same reason `require_project` is called here: one is a control-plane read
+and the other is a telemetry read, and the route is where the two meet.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.deploys import service as deploys
 from nexovue_api.deps import DbSession
 from nexovue_api.errorgroups import service
 from nexovue_api.errorgroups.schemas import (
@@ -59,6 +64,13 @@ async def list_error_groups(
         to_time=window_end,
         limit=clamp_limit(limit, default=service.DEFAULT_LIMIT, maximum=service.MAX_LIMIT),
         new_only=new_only,
+        deploys=await deploys.history_for_window(
+            db,
+            org_id=identity.org_id,
+            project_id=project.id,
+            from_time=window_start,
+            to_time=window_end,
+        ),
     )
 
 
@@ -101,4 +113,11 @@ async def get_error_group(
         group_id=group_id,
         from_time=window_start,
         to_time=window_end,
+        deploys=await deploys.history_for_window(
+            db,
+            org_id=identity.org_id,
+            project_id=project.id,
+            from_time=window_start,
+            to_time=window_end,
+        ),
     )

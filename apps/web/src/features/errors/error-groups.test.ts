@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { ErrorGroupSummary } from "./api";
 import {
   countNewInWindow,
+  DEPLOY_IS_NOT_A_CAUSE,
   describeErrors,
   describeOccurrences,
+  describePrecedingDeploy,
   describeServices,
   firstWithStacktrace,
   isNewInWindow,
@@ -27,6 +29,8 @@ function group(overrides: Partial<ErrorGroupSummary> = {}): ErrorGroupSummary {
     sample_trace_id: "89862496c280c749485ae30629e9737f",
     sample_span_id: "c8f8acc1e53ceb86",
     sample_source: "log",
+    // The ordinary case: a project that posts no deploy notifications.
+    preceding_deploy: null,
     ...overrides,
   };
 }
@@ -165,5 +169,56 @@ describe("describeOccurrences", () => {
 
     expect(described.map((entry) => entry.id)).toEqual(["occurrence-0", "occurrence-1"]);
     expect(described.map((entry) => entry.occurrence)).toEqual([duplicate, duplicate]);
+  });
+});
+
+describe("describePrecedingDeploy", () => {
+  const deployed = (deployedAt: string) => ({
+    version: "2026.09.06-1",
+    service_name: "demo-payments",
+    deployed_at: deployedAt,
+  });
+
+  it("states the order and the gap, and never a cause", () => {
+    const described = describePrecedingDeploy(
+      group({
+        first_seen: "2026-08-28T19:58:31.447Z",
+        preceding_deploy: deployed("2026-08-28T19:54:31.447Z"),
+      }),
+    );
+
+    expect(described).toBe("4 minutes after deploy 2026.09.06-1 on demo-payments");
+    expect(described).not.toContain("caus");
+  });
+
+  it("says nothing at all when no deploy preceded the group", () => {
+    // Most projects post no deploy notification, and a sentence explaining the
+    // absence would then be on every row in the product.
+    expect(describePrecedingDeploy(group({ preceding_deploy: null }))).toBeUndefined();
+  });
+
+  it("keeps the fact when the gap is too long to be a coincidence worth timing", () => {
+    const described = describePrecedingDeploy(
+      group({
+        first_seen: "2026-08-28T19:58:31.447Z",
+        preceding_deploy: deployed("2026-08-19T19:58:31.447Z"),
+      }),
+    );
+
+    expect(described).toBe("9 days after deploy 2026.09.06-1 on demo-payments");
+  });
+
+  it("names the deploy even when the two instants cannot be subtracted", () => {
+    const described = describePrecedingDeploy(
+      group({ first_seen: "not a timestamp", preceding_deploy: deployed("also not one") }),
+    );
+
+    expect(described).toBe("After deploy 2026.09.06-1 on demo-payments");
+  });
+});
+
+describe("DEPLOY_IS_NOT_A_CAUSE", () => {
+  it("says what the link is not, because a reader who guesses reverts the wrong release", () => {
+    expect(DEPLOY_IS_NOT_A_CAUSE).toContain("not evidence that it caused this");
   });
 });

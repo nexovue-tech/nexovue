@@ -583,13 +583,13 @@ That rule is what separates T48–T54 from "make the refresh quieter".
 - [ ] **T61** `P` — a warning tier for services. One error in a hundred thousand requests currently
       draws the same mark as forty percent failing. **Blocked on the threshold**, which is a founder
       decision and is recorded under Questions.
-- [ ] **T62** `P` — a "has this project ever reported" signal, replacing the widest-window heuristic
+- [x] **T62** `E` — a "has this project ever reported" signal, replacing the widest-window heuristic
       that reads a project silent for eight days as one that never reported.
 - [ ] **T63** `P` — export a filtered result from logs and traces. The commonest ask after search.
 - [ ] **T64** `P` — an active-session list beside "sign out everywhere", and second-factor
       authentication. Today a customer can end every session but cannot see what is signed in, which
       is the thing they actually want when they suspect somebody else is.
-- [ ] **T65** `P` — link an error group to the deploy that preceded it. `deploy_events` is ingested,
+- [x] **T65** `E` — link an error group to the deploy that preceded it. `deploy_events` is ingested,
       stored, served, and consumed by markers only.
 
 ### Tasks — raised here, and possibly not this phase's work

@@ -23,6 +23,7 @@ import os
 import socket
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from urllib.parse import urlsplit
 
@@ -271,3 +272,131 @@ async def test_no_audit_entry_carries_the_secret(db: AsyncSession) -> None:
     for row in (await db.scalars(statement)).all():
         assert secret not in row.target
         assert secret not in (row.actor_label or "")
+
+
+# ------------------------------------------- the deploy before an instant
+
+
+NOON: Final = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
+WINDOW_START: Final = NOON - timedelta(hours=1)
+
+
+async def _record_deploy(
+    db: AsyncSession,
+    tenant: ProvisionedTenant,
+    *,
+    version: str,
+    service_name: str,
+    at: datetime,
+) -> None:
+    db.add(
+        DeployEvent(
+            org_id=tenant.organization.id,
+            project_id=tenant.project.id,
+            version=version,
+            service_name=service_name,
+            deployed_at=at,
+            source="webhook",
+        )
+    )
+    await db.flush()
+
+
+async def _history(db: AsyncSession, tenant: ProvisionedTenant) -> service.DeployHistory:
+    return await service.history_for_window(
+        db,
+        org_id=tenant.organization.id,
+        project_id=tenant.project.id,
+        from_time=WINDOW_START,
+        to_time=NOON,
+    )
+
+
+async def test_the_deploy_before_the_window_opened_is_still_reachable(
+    db: AsyncSession,
+) -> None:
+    """The two statements together are exact without any lookback constant: a
+    service that has not deployed for a year still has a last deploy, and that
+    is the one an error inside this window came after."""
+    tenant = await _new_tenant(db)
+    await _record_deploy(
+        db, tenant, version="0.9.0", service_name=SERVICE, at=NOON - timedelta(days=200)
+    )
+
+    found = (await _history(db, tenant)).preceding(services=[SERVICE], at=NOON)
+
+    assert found is not None
+    assert found.version == "0.9.0"
+
+
+async def test_only_the_last_deploy_of_a_service_before_the_window_is_read(
+    db: AsyncSession,
+) -> None:
+    """An older one can answer nothing the newer one does not, and reading a
+    project's whole deploy history to answer one window would be the cost."""
+    tenant = await _new_tenant(db)
+    for days, version in ((30, "0.7.0"), (20, "0.8.0"), (10, "0.9.0")):
+        await _record_deploy(
+            db,
+            tenant,
+            version=version,
+            service_name=SERVICE,
+            at=NOON - timedelta(days=days),
+        )
+
+    found = (await _history(db, tenant)).preceding(services=[SERVICE], at=WINDOW_START)
+
+    assert found is not None
+    assert found.version == "0.9.0"
+
+
+async def test_a_deploy_inside_the_window_takes_precedence_over_the_one_before_it(
+    db: AsyncSession,
+) -> None:
+    tenant = await _new_tenant(db)
+    await _record_deploy(
+        db, tenant, version="0.9.0", service_name=SERVICE, at=NOON - timedelta(days=2)
+    )
+    await _record_deploy(
+        db, tenant, version="1.0.0", service_name=SERVICE, at=NOON - timedelta(minutes=4)
+    )
+
+    found = (await _history(db, tenant)).preceding(services=[SERVICE], at=NOON)
+
+    assert found is not None
+    assert found.version == "1.0.0"
+
+
+async def test_each_service_keeps_its_own_last_deploy_before_the_window(
+    db: AsyncSession,
+) -> None:
+    """`DISTINCT ON` is per service, not one row for the project — otherwise a
+    busy service's deploys would hide every quiet one's."""
+    tenant = await _new_tenant(db)
+    await _record_deploy(
+        db, tenant, version="2.0.0", service_name="payments", at=NOON - timedelta(days=9)
+    )
+    await _record_deploy(
+        db, tenant, version="1.0.0", service_name=SERVICE, at=NOON - timedelta(days=30)
+    )
+
+    history = await _history(db, tenant)
+
+    checkout = history.preceding(services=[SERVICE], at=NOON)
+    payments = history.preceding(services=["payments"], at=NOON)
+    assert checkout is not None and checkout.version == "1.0.0"
+    assert payments is not None and payments.version == "2.0.0"
+
+
+async def test_another_organizations_deploys_never_precede_this_ones_errors(
+    db: AsyncSession,
+) -> None:
+    quiet = await _new_tenant(db)
+    busy = await _new_tenant(db)
+    await _record_deploy(
+        db, busy, version="1.0.0", service_name=SERVICE, at=NOON - timedelta(minutes=4)
+    )
+
+    found = (await _history(db, quiet)).preceding(services=[SERVICE], at=NOON)
+
+    assert found is None

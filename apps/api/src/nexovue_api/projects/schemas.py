@@ -9,7 +9,7 @@ with it — which is the drift this whole feature exists to prevent.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Final
 
 from pydantic import BaseModel, Field
@@ -41,11 +41,22 @@ DELETION_TELEMETRY_NOTICE: Final = (
 
 
 class ProjectSummary(BaseModel):
-    """The selector's shape: enough to name a project and nothing else."""
+    """The selector's shape, plus the one fact every empty screen has to know.
+
+    `first_reported_on` is on the summary rather than on `ProjectDetail` because
+    the screens that need it — services, errors, traces, logs — read the project
+    list and never the settings document, and a second request per screen to
+    learn one date is a request per screen too many.
+
+    `None` means nothing has ever arrived, and it is the *only* condition under
+    which a screen may send somebody back to setup. A project that reported for
+    a year and has been silent for eight days has still reported.
+    """
 
     id: uuid.UUID
     slug: str
     name: str
+    first_reported_on: date | None
 
 
 class ProjectListResponse(BaseModel):

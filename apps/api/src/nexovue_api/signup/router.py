@@ -71,7 +71,12 @@ async def sign_up(
             name=tenant.organization.name,
         ),
         project=ProjectSummary(
-            id=tenant.project.id, slug=tenant.project.slug, name=tenant.project.name
+            id=tenant.project.id,
+            slug=tenant.project.slug,
+            name=tenant.project.name,
+            # Nothing can have arrived for a project created a moment ago, and
+            # this is the one place that fact is known without asking.
+            first_reported_on=None,
         ),
         api_key=tenant.api_key,
         otlp_endpoint=settings.otlp_endpoint,

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -108,6 +109,61 @@ async def list_deploy_events(
         .where(DeployEvent.org_id == org_id, DeployEvent.project_id == project_id)
         .order_by(DeployEvent.deployed_at.desc(), DeployEvent.id.desc())
         .limit(limit)
+    )
+    return (await session.scalars(statement)).all()
+
+
+async def deploy_events_between(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    from_time: datetime,
+    to_time: datetime,
+    limit: int,
+) -> Sequence[DeployEvent]:
+    """This project's deploys inside a window, most recent first, bounded.
+
+    The bound is the caller's, because only the caller knows what it does when
+    the window holds more than it asked for. Nothing here returns "whatever
+    matches": how many deploys a window holds is a customer's CI's decision.
+    """
+    statement = (
+        select(DeployEvent)
+        .where(
+            DeployEvent.org_id == org_id,
+            DeployEvent.project_id == project_id,
+            DeployEvent.deployed_at >= from_time,
+            DeployEvent.deployed_at <= to_time,
+        )
+        .order_by(DeployEvent.deployed_at.desc(), DeployEvent.id.desc())
+        .limit(limit)
+    )
+    return (await session.scalars(statement)).all()
+
+
+async def latest_deploy_per_service_before(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, before: datetime
+) -> Sequence[DeployEvent]:
+    """The most recent deploy of each service strictly before an instant.
+
+    One row per service rather than the whole history behind the window: what
+    precedes something is the *last* deploy of its service, and every earlier one
+    can answer nothing that this row does not. Without this a question about a
+    window would either read a project's entire deploy history or invent a
+    lookback nobody decided on.
+
+    `DISTINCT ON` is Postgres's, and the control plane has no other target.
+    """
+    statement = (
+        select(DeployEvent)
+        .where(
+            DeployEvent.org_id == org_id,
+            DeployEvent.project_id == project_id,
+            DeployEvent.deployed_at < before,
+        )
+        .distinct(DeployEvent.service_name)
+        .order_by(DeployEvent.service_name, DeployEvent.deployed_at.desc(), DeployEvent.id.desc())
     )
     return (await session.scalars(statement)).all()
 

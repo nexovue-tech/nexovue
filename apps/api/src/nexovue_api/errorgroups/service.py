@@ -14,6 +14,7 @@ from typing import Any, Final
 from nexovue_api import rollup
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.deploys.service import EMPTY_DEPLOY_HISTORY, DeployHistory
 from nexovue_api.errorgroups import queries
 from nexovue_api.errorgroups.schemas import (
     GROUPED_BY_SDK,
@@ -25,6 +26,7 @@ from nexovue_api.errorgroups.schemas import (
     GroupTrend,
     GroupTrendPoint,
     GroupTrendResponse,
+    PrecedingDeploy,
 )
 from nexovue_api.errors.exceptions import NotFoundError
 from nexovue_api.window import receive_window
@@ -58,6 +60,7 @@ async def list_error_groups(
     to_time: datetime,
     limit: int,
     new_only: bool = False,
+    deploys: DeployHistory = EMPTY_DEPLOY_HISTORY,
 ) -> ErrorGroupListResponse:
     """The window's error groups, the most frequent first, for one service or all.
 
@@ -69,6 +72,10 @@ async def list_error_groups(
     An unknown service name is an empty list rather than a 404, for the same reason
     the service reads give: a service can be silent in a window without ceasing to
     exist.
+
+    `deploys` is the project's deploys around this window, already read from the
+    control plane. An empty history is a legitimate answer — most projects send
+    no deploy notifications at all — and every group then carries none.
     """
     parameters = _window_parameters(project_id, from_time, to_time) | {
         "limit": limit,
@@ -83,7 +90,7 @@ async def list_error_groups(
         ),
         parameters,
     )
-    return ErrorGroupListResponse(groups=[_to_summary(row) for row in rows])
+    return ErrorGroupListResponse(groups=[_to_summary(row, deploys) for row in rows])
 
 
 async def get_error_group(
@@ -93,6 +100,7 @@ async def get_error_group(
     group_id: str,
     from_time: datetime,
     to_time: datetime,
+    deploys: DeployHistory = EMPTY_DEPLOY_HISTORY,
 ) -> ErrorGroupDetailResponse:
     """One group and the instances behind it, or a 404.
 
@@ -118,7 +126,7 @@ async def get_error_group(
         parameters | {"group_id": group_id, "limit": OCCURRENCE_SAMPLE_SIZE},
     )
     return ErrorGroupDetailResponse(
-        group=_to_summary(summary_row),
+        group=_to_summary(summary_row, deploys),
         recent=[_to_occurrence(row) for row in occurrence_rows],
     )
 
@@ -147,7 +155,15 @@ def _window_parameters(project_id: str, from_time: datetime, to_time: datetime) 
     }
 
 
-def _to_summary(row: dict[str, Any]) -> ErrorGroupSummary:
+def _to_summary(row: dict[str, Any], deploys: DeployHistory) -> ErrorGroupSummary:
+    first_seen = values.nanos_to_datetime(row["first_seen_nanos"])
+    services = [values.text(service) for service in row["services"]]
+
+    # `first_seen` is the earliest occurrence *inside the requested window*, so a
+    # group that has run for a week reports the window's own start and gets the
+    # deploy before that. That is the honest answer to what this asks — the last
+    # change before the earliest instance anybody can see — rather than a claim
+    # about a first occurrence nobody read.
     return ErrorGroupSummary(
         group_id=values.text(row["group_id"]),
         exception_type=values.text(row["exception_type"]),
@@ -155,13 +171,33 @@ def _to_summary(row: dict[str, Any]) -> ErrorGroupSummary:
         latest_message=values.text(row["latest_message"]),
         grouped_by=GROUPED_BY_SDK if int(row["grouped_by_sdk"]) else GROUPED_BY_TEMPLATE,
         occurrences=int(row["occurrences"]),
-        first_seen=values.nanos_to_datetime(row["first_seen_nanos"]),
+        first_seen=first_seen,
         started_in_window=bool(row["started_in_window"]),
         last_seen=values.nanos_to_datetime(row["last_seen_nanos"]),
-        services=[values.text(service) for service in row["services"]],
+        services=services,
         sample_trace_id=values.present_trace_id(row["sample_trace_id"]),
         sample_span_id=values.present_span_id(row["sample_span_id"]),
         sample_source=values.text(row["sample_source"]),
+        preceding_deploy=_preceding_deploy(deploys, services=services, at=first_seen),
+    )
+
+
+def _preceding_deploy(
+    deploys: DeployHistory, *, services: list[str], at: datetime
+) -> PrecedingDeploy | None:
+    """The deploy shape the wire carries, from the one the control plane holds.
+
+    Its own three fields rather than the deploy list's whole row: what a reader
+    needs beside an exception is which build, of which service, and when — and a
+    delivery id and a metadata blob beside an error group are noise.
+    """
+    deploy = deploys.preceding(services=services, at=at)
+    if deploy is None:
+        return None
+    return PrecedingDeploy(
+        version=deploy.version,
+        service_name=deploy.service_name,
+        deployed_at=deploy.deployed_at,
     )
 
 

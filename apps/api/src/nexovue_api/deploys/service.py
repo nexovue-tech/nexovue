@@ -13,8 +13,10 @@ no live key, a missing signature and a wrong signature are all refused with the
 same words — otherwise the endpoint answers "is this project id real?" for
 anyone who asks.
 
-Phase 1 stores the deploy. Correlating it with telemetry is Phase 2, and there
-is deliberately nothing here that reaches for a span.
+Correlating a deploy with telemetry lives here too, as `DeployHistory` — but
+only the deploy half of it. Nothing in this module reaches for a span: it
+answers "which deploy came last before this instant" and leaves whoever holds
+the telemetry to ask.
 """
 
 from __future__ import annotations
@@ -111,6 +113,105 @@ async def record_from_webhook(
 
     audit.record_deploy_recorded(session, event=event)
     return _summary(event)
+
+
+# How many of a window's own deploys one request will correlate against. A
+# project that deploys more often than this inside one window is not one this
+# reading says anything useful about, and the cap is what keeps a control-plane
+# read from being sized by a customer's CI rather than by us.
+MAX_CORRELATED_DEPLOYS: Final = 1_000
+
+
+class DeployHistory:
+    """The deploys that could precede anything inside one window, ready to ask.
+
+    Built once per request and asked once per row. The alternative is a statement
+    per row, and a page of error groups holds fifty.
+    """
+
+    def __init__(
+        self, deploys: Sequence[DeployEventSummary], *, known_from: datetime | None = None
+    ) -> None:
+        # Most recent first, so `preceding` is the first match rather than a
+        # search for a maximum.
+        self._deploys = sorted(deploys, key=lambda deploy: deploy.deployed_at, reverse=True)
+        self._known_from = known_from
+
+    def preceding(self, *, services: Sequence[str], at: datetime) -> DeployEventSummary | None:
+        """The last deploy of one of these services at or before this instant.
+
+        **This is the deploy *before* the thing, and never the deploy that caused
+        it.** All this knows is that a change shipped and then something happened;
+        an error four minutes later may have been triggered by traffic, by a
+        dependency, or by a change nobody notified us of at all. The order is a
+        fact and the cause is not, so every caller — and every screen reading
+        what a caller returns — has to say the first and never imply the second.
+
+        A group with no services matches nothing: there is no service whose
+        deploys could have come first. An instant before `known_from` matches
+        nothing either — see `history_for_window`.
+        """
+        if self._known_from is not None and at < self._known_from:
+            return None
+
+        wanted = set(services)
+        return next(
+            (
+                deploy
+                for deploy in self._deploys
+                if deploy.deployed_at <= at and deploy.service_name in wanted
+            ),
+            None,
+        )
+
+
+EMPTY_DEPLOY_HISTORY: Final = DeployHistory([])
+
+
+async def history_for_window(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    from_time: datetime,
+    to_time: datetime,
+) -> DeployHistory:
+    """Every deploy that can precede an instant inside this window.
+
+    Two statements, and between them the answer is exact rather than bounded by
+    a lookback somebody picked. Anything asked about lies inside the window, so
+    what precedes it is either a deploy inside the window, or — for each service
+    — the single last deploy before the window opened. Every deploy older than
+    that one is unreachable: a more recent deploy of the same service already
+    stands in front of it.
+
+    **When the window holds more deploys than the cap**, the oldest of them were
+    not read, and the pre-window deploys are dropped rather than used: naming one
+    of those would name a deploy that is provably not the last. `known_from`
+    records how far back the reading actually reaches, and anything earlier is
+    answered with nothing — which is what the field already means everywhere
+    else, rather than a deploy that is the wrong one.
+
+    The caller has already proved the project belongs to this organization; both
+    statements carry `org_id` regardless, so the tenancy is in the SQL.
+    """
+    inside = await queries.deploy_events_between(
+        session,
+        org_id=org_id,
+        project_id=project_id,
+        from_time=from_time,
+        to_time=to_time,
+        limit=MAX_CORRELATED_DEPLOYS,
+    )
+    if len(inside) == MAX_CORRELATED_DEPLOYS:
+        return DeployHistory(
+            [_summary(event) for event in inside], known_from=inside[-1].deployed_at
+        )
+
+    before = await queries.latest_deploy_per_service_before(
+        session, org_id=org_id, project_id=project_id, before=from_time
+    )
+    return DeployHistory([_summary(event) for event in (*inside, *before)])
 
 
 async def list_for_project(
