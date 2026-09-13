@@ -25,6 +25,7 @@ from nexovue_api.services.schemas import (
     EndpointListResponse,
     ServiceHealthResponse,
     ServiceListResponse,
+    ServiceOverviewResponse,
     ServiceTrendResponse,
 )
 from nexovue_api.window import clamp_limit, resolve_window
@@ -100,6 +101,25 @@ async def service_trend(
         repository,
         project_id=str(project.id),
         service_name=service_name,
+        from_time=window_start,
+        to_time=window_end,
+    )
+
+
+@router.get("/overview", summary="The whole project's RED over the window, and across it")
+async def project_overview(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+) -> ServiceOverviewResponse:
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.project_overview(
+        repository,
+        project_id=str(project.id),
         from_time=window_start,
         to_time=window_end,
     )

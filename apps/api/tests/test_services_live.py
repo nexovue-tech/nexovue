@@ -23,6 +23,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import clickhouse_connect
+import pytest
 import pytest_asyncio
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
@@ -325,3 +326,92 @@ async def test_the_rows_this_tenant_reads_are_the_rows_the_table_holds_for_it(
 
     assert total_in_table > 0
     assert sum(row.request_count for row in page.services) == total_in_table
+
+
+async def test_the_projects_p95_is_a_merge_and_not_an_average_of_its_services(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    """The reason the dashboard gets a read of its own.
+
+    A project's p95 is `quantilesMerge` over every stored state in the window.
+    The mean of its services' finished p95s is a different number, and on real
+    data it is not close: one slow service serving almost no traffic drags the
+    average while contributing nothing to the distribution. Measured here at the
+    time of writing, an hour of the development project answered 21.8ms merged
+    against 3,455ms averaged — a factor of 159.
+
+    A browser composing the dashboard from `/services` would have shown the
+    second number, and nothing on the screen could have revealed it was wrong.
+    """
+    repository = _repository(clickhouse, busiest.tenant_id)
+    overview = await service.project_overview(
+        repository,
+        project_id=busiest.project_id,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+    )
+    listed = await service.list_services(
+        repository,
+        project_id=busiest.project_id,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+        limit=service.MAX_SERVICE_LIMIT,
+    )
+
+    assert len(listed.services) > 1, "one service cannot show the difference"
+    # The premise: the list is whole, so its sum is the project's real total and
+    # the comparison below is against every service rather than a page of them.
+    assert overview.totals.service_count == len(listed.services)
+
+    # A read grouped by service answers the same question per service, and a
+    # caller taking its first row would pass every assertion about shape. This
+    # is what tells the two apart: the total belongs to the project.
+    assert overview.totals.request_count == sum(row.request_count for row in listed.services)
+
+    averaged = sum(row.p95_ms for row in listed.services) / len(listed.services)
+    assert overview.totals.p95_ms != pytest.approx(averaged, rel=0.01)
+
+
+async def test_the_projects_totals_are_not_the_sum_of_a_capped_list(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    """`uniqExact` over the rollup, not the length of a page.
+
+    The list is capped, so its count is the count of its first page. They agree
+    on a small project and stop agreeing at exactly the size where nobody is
+    watching for it — which is why the dashboard never asks the list.
+    """
+    repository = _repository(clickhouse, busiest.tenant_id)
+    overview = await service.project_overview(
+        repository,
+        project_id=busiest.project_id,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+    )
+    one_page = await service.list_services(
+        repository,
+        project_id=busiest.project_id,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+        limit=1,
+    )
+
+    assert len(one_page.services) == 1
+    assert overview.totals.service_count > 1
+    assert overview.totals.request_count > one_page.services[0].request_count
+
+
+async def test_every_overview_bucket_carries_all_three_percentiles(
+    clickhouse: AsyncClient, busiest: BusiestProject
+) -> None:
+    """The duration panel is three lines, and a missing one would draw at zero."""
+    overview = await service.project_overview(
+        _repository(clickhouse, busiest.tenant_id),
+        project_id=busiest.project_id,
+        from_time=busiest.window_start,
+        to_time=busiest.window_end,
+    )
+
+    assert overview.points, "the busiest project has no buckets; the rollup is not filling"
+    for point in overview.points:
+        assert point.p50_ms <= point.p95_ms <= point.p99_ms

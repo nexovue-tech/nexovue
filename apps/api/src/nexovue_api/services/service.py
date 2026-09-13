@@ -18,9 +18,12 @@ from nexovue_api.services import queries
 from nexovue_api.services.schemas import (
     EndpointHealth,
     EndpointListResponse,
+    OverviewPoint,
+    ProjectTotals,
     ServiceHealth,
     ServiceHealthResponse,
     ServiceListResponse,
+    ServiceOverviewResponse,
     ServiceTrend,
     ServiceTrendResponse,
     TrendPoint,
@@ -88,6 +91,87 @@ async def service_trend(
             ServiceTrend(service_name=name, points=points)
             for name, points in sorted(by_service.items())
         ],
+    )
+
+
+async def project_overview(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> ServiceOverviewResponse:
+    """The whole project's RED over the window, and bucketed across it.
+
+    Two reads of one table, deliberately kept apart from `list_services`: the
+    list is a ranking and is capped, and a total taken from a capped ranking is
+    the total of its first page. The percentile is the sharper reason — a
+    project's p95 is a merge of every service's quantile state, not an average
+    of their finished p95s, and nothing the list returns can be turned into it.
+    """
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
+    window = _window_parameters(project_id, from_time, to_time)
+
+    totals_row = await repository.query_one(queries.OVERVIEW_SQL, window)
+    points = await repository.query(
+        queries.OVERVIEW_TREND_SQL, window | {"bucket_seconds": bucket_seconds}
+    )
+
+    # Each bucket is its own small window, so a rate is against the bucket
+    # rather than the whole span — the same rule the per-service trend follows.
+    bucket_minutes = bucket_seconds / rollup.MIN_BUCKET_SECONDS
+    return ServiceOverviewResponse(
+        window_start=from_time,
+        window_end=to_time,
+        bucket_seconds=bucket_seconds,
+        totals=_to_totals(totals_row, rollup.window_minutes(from_time, to_time)),
+        points=[_to_overview_point(row, bucket_minutes) for row in points],
+    )
+
+
+def _to_totals(row: dict[str, Any] | None, minutes: float) -> ProjectTotals:
+    """The window's totals, or an empty window said plainly.
+
+    A window the rollup has nothing for returns no row at all. Zeroes would say
+    "measured, and it was nothing", which on a dashboard reads as an outage.
+    `service_count` of zero is what the screen's empty state keys on.
+    """
+    if row is None:
+        return ProjectTotals(
+            service_count=0,
+            request_count=0,
+            error_count=0,
+            requests_per_minute=0.0,
+            error_rate=0.0,
+            p50_ms=0.0,
+            p95_ms=0.0,
+            p99_ms=0.0,
+        )
+
+    requests = int(row["request_count"])
+    errors = int(row["error_count"])
+    latency = rollup.Latency(row["latency_ms"])
+    return ProjectTotals(
+        service_count=int(row["service_count"]),
+        request_count=requests,
+        error_count=errors,
+        requests_per_minute=rollup.per_minute(requests, minutes),
+        error_rate=rollup.failure_ratio(errors, requests),
+        p50_ms=latency.p50_ms,
+        p95_ms=latency.p95_ms,
+        p99_ms=latency.p99_ms,
+    )
+
+
+def _to_overview_point(row: dict[str, Any], bucket_minutes: float) -> OverviewPoint:
+    latency = rollup.Latency(row["latency_ms"])
+    return OverviewPoint(
+        bucket=row["bucket"],
+        requests_per_minute=rollup.per_minute(int(row["request_count"]), bucket_minutes),
+        error_rate=rollup.failure_ratio(int(row["error_count"]), int(row["request_count"])),
+        p50_ms=latency.p50_ms,
+        p95_ms=latency.p95_ms,
+        p99_ms=latency.p99_ms,
     )
 
 

@@ -100,3 +100,48 @@ class EndpointListResponse(BaseModel):
     window_start: IsoTimestamp
     window_end: IsoTimestamp
     endpoints: list[EndpointHealth] = Field(default_factory=list)
+
+
+class OverviewPoint(BaseModel):
+    """One bucket of the whole project's history.
+
+    Carries all three percentiles, unlike a service's own `TrendPoint`: this is
+    the dashboard's duration panel, and the shape of a latency distribution is
+    the three lines together — a p99 pulling away from a p95 is the reading.
+    """
+
+    bucket: IsoTimestamp
+    requests_per_minute: float
+    error_rate: float
+    p50_ms: float
+    p95_ms: float
+    p99_ms: float
+
+
+class ProjectTotals(BaseModel):
+    """Every service in the window, merged — never summed from the list.
+
+    `service_count` is `uniqExact` over the rollup rather than the length of the
+    service list, which is capped: a project with a hundred and one services
+    would otherwise report a hundred and no screen could say why.
+    """
+
+    service_count: int
+    request_count: int
+    error_count: int
+    requests_per_minute: float
+    error_rate: float
+    p50_ms: float
+    p95_ms: float
+    p99_ms: float
+
+
+class ServiceOverviewResponse(BaseModel):
+    """The dashboard's own read: the project over the window, and across it."""
+
+    window_start: IsoTimestamp
+    window_end: IsoTimestamp
+    # Chosen by the server from the window length, as the trend read does.
+    bucket_seconds: int
+    totals: ProjectTotals
+    points: list[OverviewPoint] = Field(default_factory=list)

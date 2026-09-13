@@ -32,6 +32,9 @@ TENANT_B: Final = "org-b"
 OTHER_TENANT: Final = "org-nobody"
 PROJECT: Final = "project-1"
 
+# One bucket of the overview trend, at a fixed instant so the assertions can name it.
+_BUCKET: Final = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
+
 _MIGRATIONS: Final = Path(__file__).resolve().parents[3] / "deploy" / "clickhouse" / "migrations"
 ENDPOINT_STATS_MIGRATION: Final = _MIGRATIONS / "000008_endpoint_stats_1m.up.sql"
 
@@ -88,6 +91,19 @@ class CapturingClient:
         named = bound.get("service_name")
         if named is not None and named != owned:
             return FakeQueryResult([], [])
+
+        # The overview statements first: they group by nothing and by bucket,
+        # so neither of the shapes below would recognise them.
+        if "service_count" in sql:
+            return FakeQueryResult(
+                ["service_count", "request_count", "error_count", "latency_ms"],
+                [(7, 4200, 63, [10.0, 61.8, 99.0])],
+            )
+        if "GROUP BY bucket" in sql:
+            return FakeQueryResult(
+                ["bucket", "request_count", "error_count", "latency_ms"],
+                [(_BUCKET, 4200, 63, [10.0, 61.8, 99.0])],
+            )
 
         if "span_name" in sql:
             return FakeQueryResult(
@@ -596,3 +612,91 @@ def test_every_span_kind_the_router_offers_is_one_the_rollup_stores() -> None:
     mismatch at best, and silently return nothing at worst.
     """
     assert set(service.SPAN_KINDS) == {"SERVER", "CONSUMER"}
+
+
+# ------------------------------------------------- the project's own read (T30)
+#
+# The dashboard cannot be composed from the service list, for two reasons of
+# very different weight. The dull one is that the list is capped, so a total
+# taken from it is the total of its first page. The sharp one is that a
+# project's p95 is a merge of every service's stored quantile state and is not
+# recoverable from their finished p95s at all — which is what
+# `AggregateFunction(quantiles(…))` exists for.
+
+
+async def test_the_overview_reads_the_rollup_rather_than_the_ranked_list(
+    client: CapturingClient,
+) -> None:
+    start, end = _window()
+
+    answer = await service.project_overview(
+        _repository(client, TENANT_A), project_id=PROJECT, from_time=start, to_time=end
+    )
+
+    # `uniqExact` over the rollup, not the length of a capped list.
+    assert answer.totals.service_count == 7
+    assert answer.totals.request_count == 4200
+    assert answer.totals.p50_ms == 10.0
+    assert answer.totals.p95_ms == 61.8
+    assert answer.totals.p99_ms == 99.0
+
+
+def test_the_overview_statements_group_by_nothing_and_by_bucket_alone() -> None:
+    """A service in either `GROUP BY` would answer a different question.
+
+    Grouped by service, `quantilesMerge` merges that service's states and the
+    answer is a list of per-service percentiles — exactly the thing that cannot
+    be averaged into a project's.
+    """
+    assert "GROUP BY" not in queries.OVERVIEW_SQL
+    assert "GROUP BY bucket\n" in queries.OVERVIEW_TREND_SQL
+    for statement in (queries.OVERVIEW_SQL, queries.OVERVIEW_TREND_SQL):
+        assert "service_name" not in statement.split("FROM")[0].replace(
+            "uniqExact(service_name)", ""
+        )
+        assert "quantilesMerge" in statement
+
+
+async def test_a_window_the_rollup_has_nothing_for_is_empty_rather_than_zeroed(
+    client: CapturingClient,
+) -> None:
+    """Zeroes on a dashboard read as an outage, not as an absence.
+
+    "0 req/min, 0 ms" is what a broken system looks like. `service_count` is
+    what the screen's empty state keys on, and it is the honest zero here —
+    nothing reported, rather than something reported nothing.
+    """
+    empty = _client()
+    empty.query = _returns_nothing  # type: ignore[method-assign]
+    start, end = _window()
+
+    answer = await service.project_overview(
+        _repository(empty, TENANT_A), project_id=PROJECT, from_time=start, to_time=end
+    )
+
+    assert answer.totals.service_count == 0
+    assert answer.totals.p95_ms == 0.0
+    assert answer.points == []
+
+
+async def _returns_nothing(*_args: Any, **_kwargs: Any) -> FakeQueryResult:
+    return FakeQueryResult([], [])
+
+
+async def test_each_overview_bucket_is_a_rate_against_itself(
+    client: CapturingClient,
+) -> None:
+    """A bucket's rate is against the bucket, never against the whole window.
+
+    Otherwise a quiet minute inside a busy hour reads as the hour's average and
+    the line is flat — the same rule the per-service trend follows.
+    """
+    start, end = _window()
+
+    answer = await service.project_overview(
+        _repository(client, TENANT_A), project_id=PROJECT, from_time=start, to_time=end
+    )
+    bucket_minutes = answer.bucket_seconds / 60
+
+    assert answer.points[0].requests_per_minute == pytest.approx(4200 / bucket_minutes)
+    assert answer.points[0].p99_ms == 99.0

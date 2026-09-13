@@ -122,9 +122,11 @@ async def _write_service(
         INSERT INTO endpoint_stats_1m
             (tenant_id, derived_retention_days, project_id, service_name, span_kind,
              span_name, minute, request_count, error_count, latency_quantiles)
+        -- The levels the column was declared with. A state built with any
+        -- others is a different aggregate, and merging it is undefined.
         SELECT %(tenant)s, %(retention)s, %(project)s, %(name)s, 'SERVER',
                'GET /', %(minute)s, %(requests)s, %(errors)s,
-               arrayReduce('quantilesState(0.5, 0.75, 0.9, 0.95, 0.99)', [%(latency)s])
+               arrayReduce('quantilesState(0.5, 0.95, 0.99)', [%(latency)s])
         """,
         parameters={
             "tenant": tenant_id,

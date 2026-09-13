@@ -221,3 +221,36 @@ def endpoints_sql(
         with_errors=with_errors,
         order=order,
     )
+
+
+# The whole project over the window, and across it.
+#
+# **Grouped by nothing and by bucket alone.** A project's p95 is not the mean of
+# its services' p95s and cannot be recovered from them — that is what storing
+# `AggregateFunction(quantiles(…))` rather than three numbers is *for*, and
+# `quantilesMerge` over every row in the window is the merge that answers it.
+# A client summing the service list would get the rate roughly right, the error
+# rate roughly right, and the latency wrong in a way nothing on the screen could
+# reveal.
+#
+# It also cannot be summed from that list for a duller reason: the list is
+# capped, so its total is the total of the first hundred services.
+OVERVIEW_SQL: Final = f"""
+SELECT
+    uniqExact(service_name) AS service_count,
+    sum(request_count) AS request_count,
+    sum(error_count) AS error_count,
+    {_LATENCY_MS}
+{_ENDPOINT_STATS_IN_WINDOW}
+"""
+
+OVERVIEW_TREND_SQL: Final = f"""
+SELECT
+    toStartOfInterval(minute, INTERVAL {{bucket_seconds:UInt32}} SECOND) AS bucket,
+    sum(request_count) AS request_count,
+    sum(error_count) AS error_count,
+    {_LATENCY_MS}
+{_ENDPOINT_STATS_IN_WINDOW}
+GROUP BY bucket
+ORDER BY bucket
+"""
