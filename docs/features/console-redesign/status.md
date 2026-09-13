@@ -1,5 +1,53 @@
 # Status: console-redesign
 
+## Open decisions from the follow-up phase (2026-09-14)
+
+**D1 — Cancellation timing. Money-facing, and the code and the screen disagree today.**
+`razorpay.cancel` sends `cancel_at_cycle_end: 0`, which ends the mandate immediately.
+`billing-view.describeCancellation` tells the customer the plan "returns to the free tier at the
+end of the period the processor is billing". Both cannot be true.
+
+The reasoning originally written in the adapter was **wrong**: it said cancelling at a cycle
+boundary "would keep charging somebody who cancelled". Verified against the vendor's
+cancel-subscription documentation on 2026-09-14 — `cancel_at_cycle_end: 1` ends the subscription
+when the current cycle completes, which stops every future charge and lets the period already paid
+for run out. The docstring is corrected; the behaviour is not, because picking one silently is how
+a customer ends up told one thing and billed another.
+
+- `0`, as now: access ends immediately, for a period the customer has already paid for. The copy
+  must change.
+- `1`: future charges stop and the paid period finishes. The copy is already right, and this is
+  what most subscription products do.
+
+**Recommended: `1`.** It matches what the screen already promises and what a customer expects, and
+the only argument recorded against it was a misreading of the API. Nobody is affected yet —
+nexovue is pre-deployment.
+
+**D2 — Store the charged amount.** There is no payment or invoice table: `billing_webhook_deliveries`
+records *that* a charge succeeded and *when*, never *how much*, deliberately. The charge history
+therefore derives the amount as `rate × services_committed`, which is exact except for a checkout
+spanning midnight UTC and is always exclusive of provider tax. The durable fix is a `Money` on the
+billing event and a column to persist it — `models.py` and a migration. Storing the rate on
+`billing_subscriptions` would close the first hole on its own.
+
+**D3 — How a non-JSON response is addressed.** `docs/engineering/api.md` says nothing about them and
+there were none. The charge export is `GET /billing/history.csv` with `Content-Disposition`.
+`?format=csv` or `/export` are equally defensible; it is one line either way, and whichever is
+chosen should be written into `api.md` so the next one matches.
+
+**D4 — The OTLP endpoint is unrecoverable from the console.** It is on no screen: not the projects
+list, not API keys, not the key-create response. A customer who loses the signup handoff cannot get
+it back. Small to fix, and nothing today tells them where to look.
+
+**D5 — `MAX_CORRELATED_DEPLOYS = 1_000`** is an engineering bound chosen while building T65, not a
+decision anybody took.
+
+**D6 — The browser SDK is unobtainable.** `@nexovue/browser-sdk` is `"private": true` with no
+registry and no CDN, so RUM is documented and cannot be installed by a customer.
+
+**D7 — Error-rate thresholds (Q6).** T61 is built on 1% warning / 5% critical, stated on screen, as
+the recommendation the approved plan recorded. One named constant if you want different numbers.
+
 ## Lifecycle status
 
 **Reopened 2026-09-14 — in development.** The first phase is built and closed; a follow-up phase is

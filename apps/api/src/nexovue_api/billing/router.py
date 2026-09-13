@@ -27,7 +27,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Final
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from nexovue_api.auth.dependencies import CurrentIdentity
@@ -38,6 +38,7 @@ from nexovue_api.billing.schemas import (
     BillingOverview,
     CheckoutHandoff,
     DeliveryAcknowledgement,
+    PaymentHistory,
     StartCheckoutRequest,
 )
 from nexovue_api.deps import AppSettings, DbSession
@@ -108,6 +109,62 @@ async def read_billing_overview(
         today=datetime.now(UTC).date(),
         configured=payments,
         currency=currency,
+    )
+
+
+@router.get("/history", summary="What this organization has been charged, newest first")
+async def read_payment_history(
+    identity: CurrentIdentity,
+    db: DbSession,
+) -> PaymentHistory:
+    """T66. **Readable by any member, for `read_billing_overview`'s reason**: the
+    overview already states the rate, the commitment and the month's cost, and a
+    list of the dates those were charged on adds no fact a member may not see.
+    Starting and ending the mandate stays `MayCommitSpend`; reading what it did
+    is not administration."""
+    return await service.payment_history(db, org_id=identity.organization.id)
+
+
+# The same rows as a file. A suffix rather than a `format` parameter, and a
+# route rather than something the browser assembles: a page in a sandboxed frame
+# cannot hand itself a blob, while a link to a response carrying
+# `Content-Disposition: attachment` is downloaded by the browser itself. It is
+# also same-origin under `/api/v1/`, so the session cookie — host-only, SameSite
+# Lax — travels with the top-level request that fetches it.
+HISTORY_CSV_PATH: Final = "/history.csv"
+
+CSV_CONTENT_TYPE: Final = "text/csv; charset=utf-8"
+
+
+@router.get(
+    HISTORY_CSV_PATH,
+    response_class=Response,
+    summary="The same charges as a file",
+)
+async def download_payment_history(
+    identity: CurrentIdentity,
+    db: DbSession,
+) -> Response:
+    """The history as CSV, named after the organization it belongs to.
+
+    **Not a tax invoice**, and nothing here pretends to be one: the document a
+    tax authority wants carries a seller's registration, a numbered series and
+    the buyer's address, and this product holds none of those — deliberately, in
+    `BillingSubscription`'s case. This is nexovue's own record of what was
+    charged, which is the honest thing it can produce.
+    """
+    history = await service.payment_history(db, org_id=identity.organization.id)
+    return Response(
+        content=service.charges_as_csv(history),
+        media_type=CSV_CONTENT_TYPE,
+        headers={
+            # `attachment` is what makes a browser save rather than render it.
+            # The slug is the organization's own and is already constrained to
+            # url-safe characters, so it needs no escaping to sit in a header.
+            "content-disposition": (
+                f'attachment; filename="nexovue-payments-{identity.organization.slug}.csv"'
+            )
+        },
     )
 
 

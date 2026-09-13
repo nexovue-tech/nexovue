@@ -273,9 +273,23 @@ class RazorpayPaymentProcessor:
     async def cancel(self, *, subscription_ref: str) -> CancellationOutcome:
         """End a subscription, and treat one that is already over as success.
 
-        `cancel_at_cycle_end` is 0: the customer asked to stop, and the plan
-        returns to the free tier on the processor's event either way. Leaving it
-        running to a boundary would keep charging somebody who cancelled.
+        `cancel_at_cycle_end` is 0, which ends the mandate **immediately**.
+
+        **The reasoning originally written here was wrong, and the screen still
+        contradicts this line.** It said that cancelling at a cycle boundary
+        "would keep charging somebody who cancelled". It does not: the vendor
+        documents `1` as ending the subscription when the current billing cycle
+        completes, which stops every future charge and lets the period already
+        paid for run out. Verified against the vendor's cancel-subscription
+        documentation, 2026-09-14.
+
+        So the two answers are: `0` ends access now, for a period the customer
+        has already paid; `1` stops future charges and lets that period finish.
+        `billing-view.describeCancellation` promises the second and this sends
+        the first, and which one is right is a decision about money rather than
+        a fact about the API. Recorded in `status.md`; not changed here, because
+        picking one silently is how a customer ends up told one thing and billed
+        another.
         """
         try:
             await self._call(

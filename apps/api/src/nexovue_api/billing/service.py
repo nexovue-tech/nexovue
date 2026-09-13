@@ -28,8 +28,11 @@ then declines, and takes it back a day later.
 
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Final
 
 import structlog
@@ -43,17 +46,22 @@ from nexovue_api.billing import (
     CancellationOutcome,
     Commitment,
     ConfiguredProcessor,
+    CurrencyUnknownError,
     Money,
     SignatureInvalidError,
     UnhandledBillingEventError,
     queries,
 )
+from nexovue_api.billing.processor import MINOR_UNITS_PER_MAJOR
 from nexovue_api.billing.schemas import (
     BillingOverview,
+    Charge,
+    ChargeOutcome,
     CheckoutHandoff,
     CheckoutRequirements,
     DeliveryAcknowledgement,
     DeliveryOutcome,
+    PaymentHistory,
     PlanOption,
     StartCheckoutRequest,
     SubscriptionSummary,
@@ -457,6 +465,147 @@ async def _period(
     )
 
 
+# -------------------------------------------------------- the payment history
+
+
+# The two deliveries that are about money. An activation and a cancellation say
+# what the arrangement *is*; only these say a debit happened or did not.
+CHARGE_KINDS: Final = (
+    BillingEventKind.PAYMENT_SUCCEEDED.value,
+    BillingEventKind.PAYMENT_FAILED.value,
+)
+
+_CHARGE_OUTCOMES: Final = {
+    BillingEventKind.PAYMENT_SUCCEEDED.value: ChargeOutcome.PAID,
+    BillingEventKind.PAYMENT_FAILED.value: ChargeOutcome.FAILED,
+}
+
+# How far back one read goes. A mandate authorises twelve monthly cycles before
+# the customer re-signs, so this is more than a decade of them: long enough that
+# no real history is truncated, bounded so the read stays one page however many
+# deliveries an account has accumulated.
+MAX_CHARGES: Final = 200
+
+# The columns of the downloadable history, named for the person opening a
+# spreadsheet rather than for the fields behind them.
+CHARGE_COLUMNS: Final = ("Date", "Outcome", "Plan", "Services committed", "Currency", "Amount")
+
+
+async def payment_history(session: AsyncSession, *, org_id: uuid.UUID) -> PaymentHistory:
+    """What this organization has been charged, newest first.
+
+    **Assembled from what this product already holds, and the provider is never
+    asked.** Every charge is a delivery whose signature was verified before it
+    was recorded, and what it was for is on the arrangement that delivery names.
+
+    **The amount is derived, and that is the one weakness worth naming out
+    loud.** A delivery stores no amount — `BillingWebhookDelivery` holds no body
+    by design — so the figure is rebuilt the way the mandate was: the rate in
+    force on the day the checkout began, times the count the customer committed
+    to, which is exactly what the processor was told to debit every month. It is
+    `commitment_for`'s own arithmetic over the same rows, and `plan_prices` is
+    appended rather than edited, so the rate read back is the rate read then.
+
+    Two things it still cannot see: a checkout begun on one side of midnight UTC
+    and committed on the other reads the following day's rate, and any tax the
+    provider adds at charge time is debited above this figure. **Recording the
+    amount when the event arrives is the durable answer**; it needs a column, so
+    it is raised rather than approximated further.
+    """
+    rows = await queries.charges(session, org_id=org_id, kinds=CHARGE_KINDS, limit=MAX_CHARGES)
+    # An arrangement is charged every month, so the same terms answer most of a
+    # history; without this the same price row is read once per line.
+    rates: dict[tuple[str, str, date], PlanPrice | None] = {}
+
+    charges = []
+    for delivery, subscription in rows:
+        charges.append(
+            Charge(
+                charged_at=delivery.received_at,
+                outcome=_CHARGE_OUTCOMES[delivery.kind],
+                plan_slug=subscription.plan_slug,
+                services_committed=subscription.services_committed,
+                currency=subscription.currency,
+                amount_minor_units=await _charged_amount(session, subscription, rates),
+            )
+        )
+    return PaymentHistory(charges=charges)
+
+
+async def _charged_amount(
+    session: AsyncSession,
+    subscription: BillingSubscription,
+    rates: dict[tuple[str, str, date], PlanPrice | None],
+) -> int | None:
+    """A month at this arrangement's terms, or None when its rate is unrecoverable.
+
+    None rather than zero, for `_price_summary`'s reason: a rate nobody can read
+    back is not a rate of nothing, and a zero here would be reported to a
+    customer as a month they were not charged for.
+    """
+    signed_on = subscription.created_at.date()
+    key = (subscription.plan_slug, subscription.currency, signed_on)
+    if key not in rates:
+        rates[key] = await usage_queries.find_effective_price(
+            session,
+            plan_slug=subscription.plan_slug,
+            currency=subscription.currency,
+            on_day=signed_on,
+        )
+    price = rates[key]
+    if price is None:
+        return None
+    # Through `Commitment` rather than by multiplying here: a count times a rate
+    # is the one piece of arithmetic the processor is also handed, and two places
+    # doing it is two places for a bill to differ from a debit.
+    commitment = Commitment(
+        services=subscription.services_committed,
+        rate=Money(minor_units=price.price_per_service_minor_units, currency=price.currency),
+    )
+    return commitment.total().minor_units
+
+
+def charges_as_csv(history: PaymentHistory) -> str:
+    """The same rows, as a file a spreadsheet or an accountant can read."""
+    sheet = io.StringIO()
+    writer = csv.writer(sheet)
+    writer.writerow(CHARGE_COLUMNS)
+    for charge in history.charges:
+        writer.writerow(
+            [
+                charge.charged_at.date().isoformat(),
+                charge.outcome.value,
+                charge.plan_slug,
+                charge.services_committed,
+                charge.currency,
+                _major_units(charge),
+            ]
+        )
+    return sheet.getvalue()
+
+
+def _major_units(charge: Charge) -> str:
+    """The amount in its own currency's major unit, as text.
+
+    **Never a float**, for `Money`'s reason, and never divided by an assumed
+    hundred. An amount that cannot be stated leaves the cell empty — the file's
+    form of the em dash the screen draws, because a blank says nothing while a
+    zero makes a claim.
+    """
+    if charge.amount_minor_units is None:
+        return ""
+    money = Money(minor_units=charge.amount_minor_units, currency=charge.currency)
+    try:
+        amount = money.major_units()
+    except CurrencyUnknownError:
+        return ""
+    # Quantized to the currency's own precision: a plain division makes 199500
+    # paise read as "1995", and a column where some cells carry a fractional
+    # part and others do not is the one a spreadsheet decides is text.
+    divisor = MINOR_UNITS_PER_MAJOR[charge.currency.upper()]
+    return str(amount.quantize(Decimal(1) / divisor))
+
+
 # ------------------------------------------------------------ the plan change
 
 
@@ -507,6 +656,25 @@ FREE_PLAN_DETAIL: Final = (
 )
 
 ALREADY_ON_PLAN_DETAIL: Final = "This organization already has a live subscription to that plan."
+
+# **A second mandate charges alongside the first, because nothing ends the
+# first.** Activating one subscription does not cancel another — `_apply` moves
+# the plan and touches no other row, and `active_services_committed` already
+# hedges with "if two are somehow active". The processor keeps debiting both and
+# the customer finds out from their bank.
+#
+# This was refused on the billing screen and nowhere else, which left the rule
+# protecting money in the markup: any caller reaching the route directly got two
+# mandates. It is refused here now, and the screen explains the two steps.
+#
+# The one-step replacement is the better product answer and is deliberately not
+# built: it means cancelling the superseded arrangement at the processor when the
+# new one activates, which changes what a webhook is allowed to do and what
+# happens when that cancellation fails. That is a decision, not an implementation.
+LIVE_SUBSCRIPTION_DETAIL: Final = (
+    "This organization already has an active subscription. Cancel it before starting "
+    "another, so two mandates cannot charge at the same time."
+)
 
 NOTHING_TO_CANCEL_DETAIL: Final = "This organization has no live subscription to cancel."
 
@@ -617,8 +785,15 @@ async def begin_plan_change(
         raise InvalidRequestError(PLAN_UNKNOWN_DETAIL)
 
     live = await queries.latest_subscription(session, org_id=organization.id)
-    if live is not None and live.status == STATUS_ACTIVE and live.plan_slug == request.plan_slug:
-        raise ConflictError(ALREADY_ON_PLAN_DETAIL)
+    if live is not None and live.status == STATUS_ACTIVE:
+        # Two sentences for one refusal, because the remedies differ: the
+        # customer who asked for the tier they are on has nothing to do, and the
+        # one asking for another has one thing to do first.
+        raise ConflictError(
+            ALREADY_ON_PLAN_DETAIL
+            if live.plan_slug == request.plan_slug
+            else LIVE_SUBSCRIPTION_DETAIL
+        )
 
     commitment = await commitment_for(
         session,

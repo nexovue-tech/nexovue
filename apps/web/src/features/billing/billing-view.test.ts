@@ -1,17 +1,29 @@
 import { describe, expect, it } from "vitest";
 
-import type { BillingOverview, BillingPeriodUsage, PlanOption, SubscriptionSummary } from "./api";
+import type {
+  BillingOverview,
+  BillingPeriodUsage,
+  Charge,
+  PlanOption,
+  SubscriptionSummary,
+} from "./api";
 import { CONFIRMATION_POLL_MS, CONFIRMATION_WINDOW_MS, confirmationPoll } from "./api";
 import {
   allowanceFraction,
   cancellationLabel,
+  chargeAmount,
+  chargeDay,
+  chargeOutcome,
+  chargeTerms,
   checkoutAvailability,
   describeAllowance,
   describeCancellation,
   describeCost,
   describeSubscription,
+  HISTORY_IS_NOT_AN_INVOICE,
   initialCommitment,
   monthlyTotalMinorUnits,
+  PAYMENT_METHOD_IS_THE_PROVIDERS,
   unfinishedCheckoutNotice,
 } from "./billing-view";
 
@@ -324,5 +336,101 @@ describe("waiting for the processor to confirm", () => {
    */
   it("gives up on a mandate that was never going to be confirmed", () => {
     expect(confirmationPoll("pending", CONFIRMATION_WINDOW_MS)).toBe(false);
+  });
+});
+
+describe("what a customer whose plan is already live can do", () => {
+  /**
+   * **The dead end this removes.** An active subscription used to end the
+   * section with one sentence and nothing to press, so a paying customer could
+   * not see what else existed, let alone move to it.
+   */
+  it("is told the two steps rather than only that it cannot be done", () => {
+    const answer = checkoutAvailability(overviewWith({ subscription: subscription() }));
+
+    expect(answer.available).toBe(false);
+    if (answer.available) return;
+    expect(answer.nextStep).toContain("cancel this subscription");
+    expect(answer.nextStep).toContain("choose the new plan");
+  });
+
+  /**
+   * No processor configured is a fact about the deployment, not about the
+   * customer. An instruction there sends them looking for a control nobody has.
+   */
+  it("is given no instruction when there is nothing it could do", () => {
+    const answer = checkoutAvailability(overviewWith({ checkout: null }));
+
+    expect(answer.available).toBe(false);
+    if (answer.available) return;
+    expect(answer.nextStep).toBeNull();
+  });
+});
+
+describe("what was charged", () => {
+  function charge(overrides: Partial<Charge> = {}): Charge {
+    return {
+      charged_at: "2026-10-01T03:00:00Z",
+      outcome: "paid",
+      plan_slug: "pro",
+      services_committed: 5,
+      currency: "INR",
+      amount_minor_units: 199_500,
+      ...overrides,
+    };
+  }
+
+  it("states the amount in its own currency", () => {
+    expect(chargeAmount(charge())).toContain("1,995");
+  });
+
+  /**
+   * **Never a zero.** The API sends null when the rate behind an arrangement
+   * can no longer be read back, and "₹0.00" for a month somebody paid for is a
+   * false statement rather than an incomplete one.
+   */
+  it("shows an em dash for an amount nobody can state", () => {
+    expect(chargeAmount(charge({ amount_minor_units: null }))).toBe("—");
+    expect(chargeAmount(charge({ amount_minor_units: null }))).not.toContain("0");
+  });
+
+  /**
+   * The month boundaries this screen states are UTC, so a charge rendered in
+   * the reader's own zone could sit in a different month from the period it
+   * paid for — on the one screen where the two have to agree.
+   */
+  it("dates a charge in UTC", () => {
+    expect(chargeDay(charge({ charged_at: "2026-10-01T03:00:00Z" }))).toBe("Oct 1, 2026");
+  });
+
+  it("says so rather than throwing when the date is unreadable", () => {
+    expect(chargeDay(charge({ charged_at: "not a date" }))).toBe("—");
+  });
+
+  /** A customer looking for a missing month must find out here that it failed. */
+  it("names a charge that did not go through", () => {
+    expect(chargeOutcome(charge({ outcome: "failed" }))).toBe("Not paid");
+    expect(chargeOutcome(charge())).toBe("Paid");
+  });
+
+  it("says what the charge was for, so the amount can be checked", () => {
+    expect(chargeTerms(charge())).toContain("pro");
+    expect(chargeTerms(charge())).toContain("5");
+  });
+
+  /**
+   * **The claim this product must not make.** A tax invoice carries a seller's
+   * registration, a numbered series and the buyer's address; none is stored, so
+   * the screen says where the real one comes from instead of printing something
+   * that looks like one.
+   */
+  it("does not call itself a tax invoice", () => {
+    expect(HISTORY_IS_NOT_AN_INVOICE).toContain("tax invoice");
+    expect(HISTORY_IS_NOT_AN_INVOICE).toContain("comes from the provider");
+  });
+
+  /** No card, no last four, no expiry is stored — so none is displayed. */
+  it("says the payment method is the provider's and not ours", () => {
+    expect(PAYMENT_METHOD_IS_THE_PROVIDERS).toContain("never by us");
   });
 });

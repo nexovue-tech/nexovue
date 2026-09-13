@@ -1,8 +1,14 @@
 import { formatDecimalBytes } from "@/shared/format/bytes";
 import { formatMoney } from "@/shared/format/money";
-import { formatCount } from "@/shared/format/number";
+import { formatCount, UNKNOWN } from "@/shared/format/number";
 
-import type { BillingOverview, BillingPeriodUsage, PlanOption, SubscriptionSummary } from "./api";
+import type {
+  BillingOverview,
+  BillingPeriodUsage,
+  Charge,
+  PlanOption,
+  SubscriptionSummary,
+} from "./api";
 
 /**
  * The sentences the billing screen says, kept out of the markup so they can be
@@ -47,7 +53,18 @@ function monthTurns(period: BillingPeriodUsage): string {
   if (Number.isNaN(last.getTime())) return "the month turns";
   const next = new Date(last);
   next.setUTCDate(next.getUTCDate() + 1);
-  return next.toLocaleDateString("en-US", {
+  return asDay(next);
+}
+
+/**
+ * A date, in UTC and never in the reader's own zone.
+ *
+ * The month boundaries this screen states are UTC — the allowance turns on one
+ * — so a charge shown in a local zone could sit in a different month from the
+ * period it paid for, on the one screen where the two must agree.
+ */
+function asDay(when: Date): string {
+  return when.toLocaleDateString("en-US", {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -128,6 +145,66 @@ export function cancellationConfirmLabel(subscription: SubscriptionSummary): str
   return subscription.status === "pending" ? "Yes, discard it" : "Yes, cancel the subscription";
 }
 
+/* ----------------------------------------------------------- the history */
+
+/** The day a charge was recorded, or words when the API sent an unreadable one. */
+export function chargeDay(charge: Charge): string {
+  const when = new Date(charge.charged_at);
+  return Number.isNaN(when.getTime()) ? UNKNOWN : asDay(when);
+}
+
+/**
+ * What a charge came to.
+ *
+ * **An amount that cannot be stated is an em dash, never a zero.** The API sends
+ * null when the rate behind an arrangement can no longer be read back, and a
+ * customer shown "$0.00" for a month they paid for has been told something
+ * false rather than something incomplete — `describeCost` refuses the same way.
+ */
+export function chargeAmount(charge: Charge): string {
+  if (charge.amount_minor_units === null) return UNKNOWN;
+  return formatMoney(charge.amount_minor_units, charge.currency);
+}
+
+/** Paid, or attempted and not paid. Said in a word the customer can scan for. */
+export function chargeOutcome(charge: Charge): string {
+  return charge.outcome === "paid" ? "Paid" : "Not paid";
+}
+
+/** What a charge was for: the tier, and the count that sized it. */
+export function chargeTerms(charge: Charge): string {
+  return `${charge.plan_slug} · ${formatCount(charge.services_committed)} services`;
+}
+
+/**
+ * What this list is and, more importantly, what it is not.
+ *
+ * **A tax invoice is not something this product can produce**, and saying so is
+ * the honest answer rather than printing a document that looks like one. A tax
+ * invoice carries a seller's registration, a numbered series, the buyer's
+ * address and a tax breakdown; nexovue stores none of those — the address
+ * deliberately, because holding a customer's billing address to save them
+ * retyping it is personal data kept for a convenience.
+ */
+export const HISTORY_IS_NOT_AN_INVOICE =
+  "This is our record of what was charged, exclusive of any tax the payment provider adds. The tax invoice for each charge comes from the provider you authorised the mandate with.";
+
+/** Said instead of an empty table, so a blank area is not read as a failure. */
+export const NO_CHARGES_YET =
+  "Nothing has been charged yet. A charge appears here once the provider confirms the first one.";
+
+/**
+ * Where the payment method lives, which is deliberately not here.
+ *
+ * **This product holds no card, no last four and no expiry**, and the schema
+ * says so in as many words: the checkout is the processor's own so that none of
+ * it ever arrives. There is therefore nothing to display and nothing to change
+ * here, and the screen says where it can be changed rather than drawing a
+ * section that would always be empty.
+ */
+export const PAYMENT_METHOD_IS_THE_PROVIDERS =
+  "Your card or bank details are held by the payment provider you authorised the mandate with, never by us. Change them there.";
+
 /**
  * Whether the upgrade form should be drawn at all.
  *
@@ -139,22 +216,42 @@ export function cancellationConfirmLabel(subscription: SubscriptionSummary): str
  * nothing to press but Cancel — on an arrangement their bank had never
  * authorised.
  *
- * The API had it right all along: `begin_plan_change` refuses only an *active*
- * arrangement on the same plan, so the screen was stricter than the service.
+ * The API had it right all along about `pending`: `begin_plan_change` refuses
+ * only an *active* arrangement, so the screen was stricter than the service.
  *
- * Two mandates cannot quietly both charge, because only one can reach `active` —
- * the second checkout is refused once the first activates.
+ * **An active arrangement is a step, not a wall.** It used to end here with
+ * "this organization already has an active subscription" and nothing to press,
+ * which left a paying customer unable to see what else existed, let alone move
+ * to it. It now says what to do and the plans stay visible while they decide —
+ * the refusal at the API is what stops two mandates charging, and this explains
+ * it instead of merely enforcing it a second time.
  */
-export function checkoutAvailability(
-  overview: BillingOverview,
-): { available: true } | { available: false; reason: string } {
+export type CheckoutAvailability =
+  | { available: true }
+  | {
+      available: false;
+      reason: string;
+      /** What the customer does next, or null when there is nothing they can do. */
+      nextStep: string | null;
+    };
+
+export function checkoutAvailability(overview: BillingOverview): CheckoutAvailability {
   if (overview.checkout === null) {
-    return { available: false, reason: "Upgrading is not available on this deployment yet." };
+    return {
+      available: false,
+      reason: "Upgrading is not available on this deployment yet.",
+      // Nothing the customer can act on: no processor is configured, which is a
+      // deployment's state rather than theirs. An instruction here would send
+      // them looking for a control nobody has.
+      nextStep: null,
+    };
   }
   if (overview.subscription?.status === "active") {
     return {
       available: false,
       reason: "This organization already has an active subscription.",
+      nextStep:
+        "To move to a different plan, cancel this subscription under Subscription above, then choose the new plan here. Two mandates would otherwise charge at once, so they are taken one at a time.",
     };
   }
   return { available: true };

@@ -9,19 +9,32 @@ import { formatMoney } from "@/shared/format/money";
 import { formatCount } from "@/shared/format/number";
 
 import type { BillingOverview, PlanOption } from "./api";
-import { useBillingOverview, useCancelSubscription, useStartCheckout } from "./api";
+import {
+  PAYMENT_HISTORY_FILE_URL,
+  useBillingOverview,
+  useCancelSubscription,
+  usePaymentHistory,
+  useStartCheckout,
+} from "./api";
 import {
   allowanceFraction,
   CONTACT_FIELD_LABELS,
   cancellationConfirmLabel,
   cancellationLabel,
+  chargeAmount,
+  chargeDay,
+  chargeOutcome,
+  chargeTerms,
   checkoutAvailability,
   describeAllowance,
   describeCancellation,
   describeCost,
   describeSubscription,
+  HISTORY_IS_NOT_AN_INVOICE,
   initialCommitment,
   monthlyTotalMinorUnits,
+  NO_CHARGES_YET,
+  PAYMENT_METHOD_IS_THE_PROVIDERS,
   unfinishedCheckoutNotice,
 } from "./billing-view";
 import { openCheckout, SCRIPT_BLOCKED } from "./checkout-handoff";
@@ -70,6 +83,7 @@ export function BillingScreen() {
       <CurrencyChoice overview={overview.data} onChange={setCurrency} />
       <Arrangement overview={overview.data} />
       <Upgrade overview={overview.data} currency={overview.data.currency} />
+      <Charges overview={overview.data} />
     </div>
   );
 }
@@ -165,6 +179,33 @@ function CurrencyChoice({
   );
 }
 
+/**
+ * What one tier costs and gives, drawn the same way whether it can be chosen.
+ *
+ * One component rather than two so a customer who cannot buy yet reads exactly
+ * the figures they will be offered — a second rendering is a second chance for
+ * the two to state different prices.
+ */
+function PlanTerms({ plan }: { plan: PlanOption }) {
+  return (
+    <>
+      <span className="flex items-baseline justify-between gap-4">
+        <span className="text-ink text-sm">{plan.name}</span>
+        <span className="text-ink text-sm">
+          {formatMoney(plan.price_per_service_minor_units, plan.currency)} per service
+        </span>
+      </span>
+      <span className="mt-1 block text-ink-dim text-xs">
+        {plan.included_bytes_per_service === null
+          ? "No volume recorded"
+          : `${formatDecimalBytes(plan.included_bytes_per_service)} a month for every service`}
+        {" · "}
+        {plan.raw_retention_days} days raw
+      </span>
+    </>
+  );
+}
+
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline gap-4">
@@ -239,17 +280,32 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
   const [contact, setContact] = useState<Record<string, string>>({});
 
   const availability = checkoutAvailability(overview);
+  const unfinished = unfinishedCheckoutNotice(overview);
+  const heading = overview.subscription ? "Change plan" : "Upgrade";
+
   if (!availability.available) {
     return (
-      <section className="flex max-w-2xl flex-col gap-2">
-        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Plan</h2>
+      <section className="flex max-w-2xl flex-col gap-3">
+        <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{heading}</h2>
         <p className="text-ink-dim text-sm leading-relaxed">{availability.reason}</p>
+        {availability.nextStep === null ? null : (
+          <>
+            <p className="text-ink text-sm leading-relaxed">{availability.nextStep}</p>
+            {/* The tiers stay on screen while the customer decides whether the
+                move is worth it. Shown rather than offered: pressing one would
+                start the second mandate the API refuses, so none is pressable. */}
+            <ul className="flex flex-col gap-3">
+              {overview.plans.map((plan) => (
+                <li key={plan.slug} className="rounded border border-line px-4 py-3">
+                  <PlanTerms plan={plan} />
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </section>
     );
   }
-
-  const unfinished = unfinishedCheckoutNotice(overview);
-  const heading = overview.subscription ? "Change plan" : "Upgrade";
 
   if (!choosing) {
     return (
@@ -295,19 +351,7 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
                   className="w-full rounded border border-line px-4 py-3 text-left hover:border-line-strong"
                   onClick={() => setChosen(plan)}
                 >
-                  <span className="flex items-baseline justify-between gap-4">
-                    <span className="text-ink text-sm">{plan.name}</span>
-                    <span className="text-ink text-sm">
-                      {formatMoney(plan.price_per_service_minor_units, plan.currency)} per service
-                    </span>
-                  </span>
-                  <span className="mt-1 block text-ink-dim text-xs">
-                    {plan.included_bytes_per_service === null
-                      ? "No volume recorded"
-                      : `${formatDecimalBytes(plan.included_bytes_per_service)} a month for every service`}
-                    {" · "}
-                    {plan.raw_retention_days} days raw
-                  </span>
+                  <PlanTerms plan={plan} />
                 </button>
               </li>
             ))}
@@ -415,6 +459,72 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
           />
         ) : null}
       </form>
+    </section>
+  );
+}
+
+/**
+ * What has actually been charged, and where the tax invoice comes from.
+ *
+ * **Drawn only for an organization that has had an arrangement.** A free-tier
+ * account has never been charged, and a permanently empty section is a question
+ * nobody asked.
+ *
+ * **Two sentences the product must say out loud.** A tax invoice is not
+ * something this product can produce — it holds no seller registration, no
+ * numbered series and no billing address — and the payment method is not
+ * something it holds at all. Saying so is the honest answer; drawing a card
+ * summary from nothing, or a document that looked like an invoice, would not be.
+ */
+function Charges({ overview }: { overview: BillingOverview }) {
+  const history = usePaymentHistory(overview.subscription !== null);
+
+  if (overview.subscription === null) return null;
+
+  return (
+    <section className="flex max-w-2xl flex-col gap-4">
+      <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Charges</h2>
+      <p className="text-ink-dim text-sm leading-relaxed">{HISTORY_IS_NOT_AN_INVOICE}</p>
+      <p className="text-ink-dim text-sm leading-relaxed">{PAYMENT_METHOD_IS_THE_PROVIDERS}</p>
+
+      {history.isPending ? (
+        <SkeletonRows rows={3} label="Loading charges" />
+      ) : history.isError ? (
+        <InlineFailure
+          title="Charges could not be loaded"
+          error={history.error}
+          onRetry={() => void history.refetch()}
+        />
+      ) : history.data.charges.length === 0 ? (
+        <p className="text-ink-dim text-sm leading-relaxed">{NO_CHARGES_YET}</p>
+      ) : (
+        <>
+          <ul className="flex flex-col divide-y divide-line">
+            {history.data.charges.map((charge) => (
+              <li
+                key={`${charge.charged_at}-${charge.plan_slug}`}
+                className="flex items-baseline justify-between gap-4 py-2"
+              >
+                <span className="text-ink text-sm">{chargeDay(charge)}</span>
+                <span className="grow text-ink-dim text-xs">{chargeTerms(charge)}</span>
+                <span className="text-ink-dim text-xs">{chargeOutcome(charge)}</span>
+                <span className="text-ink text-sm">{chargeAmount(charge)}</span>
+              </li>
+            ))}
+          </ul>
+          <div>
+            {/* A link, never a blob this page builds: a page in a sandboxed
+                frame cannot hand itself a file, while the browser saves a
+                same-origin response that says `attachment`. */}
+            <a
+              href={PAYMENT_HISTORY_FILE_URL}
+              className="text-ink-dim text-sm underline underline-offset-4 hover:text-ink"
+            >
+              Download as CSV
+            </a>
+          </div>
+        </>
+      )}
     </section>
   );
 }

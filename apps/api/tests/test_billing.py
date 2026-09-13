@@ -58,7 +58,14 @@ from nexovue_api.billing.razorpay import (
     SIGNATURE_HEADER,
     RazorpayPaymentProcessor,
 )
-from nexovue_api.billing.schemas import CheckoutStyle, DeliveryOutcome, StartCheckoutRequest
+from nexovue_api.billing.schemas import (
+    Charge,
+    ChargeOutcome,
+    CheckoutStyle,
+    DeliveryOutcome,
+    PaymentHistory,
+    StartCheckoutRequest,
+)
 from nexovue_api.data.postgres.models import (
     BillingSubscription,
     BillingWebhookDelivery,
@@ -1687,3 +1694,289 @@ class TestMoney:
         bill 1% of a yen invoice and nothing would fail when it happened."""
         with pytest.raises(CurrencyUnknownError):
             Money(minor_units=600, currency="JPY").major_units()
+
+
+# ------------------------------------------------------- what was charged (T66)
+
+
+SIGNED_ON: Final = datetime(2026, 9, 1, 9, 30, tzinfo=UTC)
+
+
+class ChargesSession:
+    """Answers the history's two reads: the joined rows, and the rate behind them.
+
+    `CapturingSession` answers a queue of scalars, which the history does not
+    use — its list comes back through `execute` — and `OverviewSession` routes by
+    selected entity, which cannot tell this statement's two entities apart. A
+    third double rather than a branch inside one of those, because the three
+    paths genuinely ask different questions.
+    """
+
+    def __init__(
+        self,
+        *,
+        rows: list[tuple[BillingWebhookDelivery, BillingSubscription]],
+        price: PlanPrice | None,
+    ) -> None:
+        self.statements: list[Any] = []
+        self.rows = rows
+        self._price = price
+        self.price_reads = 0
+
+    async def execute(self, statement: Any) -> _Rows:
+        self.statements.append(statement)
+        return _Rows(self.rows)
+
+    async def scalar(self, statement: Any) -> Any:
+        self.statements.append(statement)
+        self.price_reads += 1
+        return self._price
+
+    @property
+    def every_bound_value(self) -> set[Any]:
+        """Flattened, because `in_(...)` binds a list rather than a value each."""
+        bound: set[Any] = set()
+        for statement in self.statements:
+            for value in statement.compile().params.values():
+                if isinstance(value, list):
+                    bound.update(value)
+                else:
+                    bound.add(value)
+        return bound
+
+
+def _charged(
+    *,
+    kind: BillingEventKind = BillingEventKind.PAYMENT_SUCCEEDED,
+    at: datetime = datetime(2026, 10, 1, 3, 0, tzinfo=UTC),
+    subscription: BillingSubscription | None = None,
+) -> tuple[BillingWebhookDelivery, BillingSubscription]:
+    """One recorded delivery and the arrangement it was raised under."""
+    arrangement = subscription or _pending(status=service.STATUS_ACTIVE)
+    arrangement.created_at = SIGNED_ON
+    delivery = BillingWebhookDelivery(
+        org_id=ORG_ID,
+        processor=PROCESSOR_NAME,
+        delivery_id=DELIVERY_ID,
+        kind=kind.value,
+        subscription_ref=SUBSCRIPTION_REF,
+    )
+    delivery.received_at = at
+    return delivery, arrangement
+
+
+class TestThePaymentHistory:
+    """T66. A customer can see what they were charged without asking us."""
+
+    async def test_the_read_binds_the_organization(self) -> None:
+        """Unscoped, this would list another tenant's charges: the join is on a
+        reference the processor minted, not on anything this tenant owns."""
+        session = ChargesSession(rows=[], price=None)
+
+        await service.payment_history(session, org_id=ORG_ID)  # type: ignore[arg-type]
+
+        assert ORG_ID in session.every_bound_value
+        assert OTHER_ORG_ID not in session.every_bound_value
+
+    async def test_only_the_deliveries_about_money_are_asked_for(self) -> None:
+        """An activation and a cancellation say what the arrangement is. Listing
+        them as charges would show a customer a debit that never happened."""
+        session = ChargesSession(rows=[], price=None)
+
+        await service.payment_history(session, org_id=ORG_ID)  # type: ignore[arg-type]
+
+        asked_for = session.every_bound_value
+        assert BillingEventKind.PAYMENT_SUCCEEDED.value in asked_for
+        assert BillingEventKind.PAYMENT_FAILED.value in asked_for
+        assert BillingEventKind.SUBSCRIPTION_ACTIVATED.value not in asked_for
+        assert BillingEventKind.SUBSCRIPTION_CANCELLED.value not in asked_for
+
+    async def test_the_amount_is_the_rate_at_signing_times_the_commitment(self) -> None:
+        """What the processor was told to debit, rebuilt from the same rows
+        `commitment_for` built it from — never a second arithmetic."""
+        session = ChargesSession(rows=[_charged()], price=_PRO_PRICE)
+
+        history = await service.payment_history(session, org_id=ORG_ID)  # type: ignore[arg-type]
+
+        charge = history.charges[0]
+        assert charge.amount_minor_units == 600 * SERVICES_COMMITTED
+        assert charge.currency == "USD"
+        assert charge.outcome is ChargeOutcome.PAID
+        assert charge.services_committed == SERVICES_COMMITTED
+
+    async def test_the_rate_is_read_on_the_day_the_mandate_was_signed(self) -> None:
+        """Not today's. A repricing next month must not restate what a past
+        charge was computed from — the reason the price is a dated row."""
+        session = ChargesSession(rows=[_charged()], price=_PRO_PRICE)
+
+        await service.payment_history(session, org_id=ORG_ID)  # type: ignore[arg-type]
+
+        assert SIGNED_ON.date() in session.every_bound_value
+
+    async def test_a_failed_charge_is_listed_rather_than_hidden(self) -> None:
+        """A customer looking for a month that is missing has to find out here
+        that the debit failed, rather than from their bank."""
+        session = ChargesSession(
+            rows=[_charged(kind=BillingEventKind.PAYMENT_FAILED)], price=_PRO_PRICE
+        )
+
+        history = await service.payment_history(session, org_id=ORG_ID)  # type: ignore[arg-type]
+
+        assert history.charges[0].outcome is ChargeOutcome.FAILED
+        # Still carries the amount: what was not taken is the figure that failed.
+        assert history.charges[0].amount_minor_units == 600 * SERVICES_COMMITTED
+
+    async def test_an_amount_that_cannot_be_established_is_absent_and_not_zero(self) -> None:
+        """A rate nobody can read back is not a rate of nothing. A zero here
+        would tell a customer they were charged for a month they paid for."""
+        session = ChargesSession(rows=[_charged()], price=None)
+
+        history = await service.payment_history(session, org_id=ORG_ID)  # type: ignore[arg-type]
+
+        assert history.charges[0].amount_minor_units is None
+
+    async def test_one_arrangement_is_priced_once_however_many_months_it_charged(self) -> None:
+        """A year of charges under one mandate is one rate lookup, not twelve."""
+        subscription = _pending(status=service.STATUS_ACTIVE)
+        rows = [
+            _charged(at=datetime(2026, month, 1, tzinfo=UTC), subscription=subscription)
+            for month in (10, 11, 12)
+        ]
+        session = ChargesSession(rows=rows, price=_PRO_PRICE)
+
+        history = await service.payment_history(session, org_id=ORG_ID)  # type: ignore[arg-type]
+
+        assert len(history.charges) == 3
+        assert session.price_reads == 1
+
+    async def test_the_history_carries_no_processor_reference(self) -> None:
+        """The port keeps the vendor out of everything above the adapter, and a
+        subscription id helps nobody reading a screen."""
+        session = ChargesSession(rows=[_charged()], price=_PRO_PRICE)
+
+        history = await service.payment_history(session, org_id=ORG_ID)  # type: ignore[arg-type]
+
+        written = history.model_dump_json()
+        assert SUBSCRIPTION_REF not in written
+        assert DELIVERY_ID not in written
+        assert PROCESSOR_NAME not in written
+
+
+class TestTheDownloadableHistory:
+    def test_the_amount_is_written_in_major_units_to_the_currency_s_precision(self) -> None:
+        """A spreadsheet is where a float would do its damage, and a column that
+        mixes "1995" with "19.95" is the one read as text rather than money."""
+        history = PaymentHistory(
+            charges=[
+                Charge(
+                    charged_at=datetime(2026, 10, 1, 3, 0, tzinfo=UTC),
+                    outcome=ChargeOutcome.PAID,
+                    plan_slug="pro",
+                    services_committed=3,
+                    currency="USD",
+                    amount_minor_units=199_500,
+                )
+            ]
+        )
+
+        rows = service.charges_as_csv(history).splitlines()
+
+        assert rows[0].startswith("Date,")
+        assert rows[1] == "2026-10-01,paid,pro,3,USD,1995.00"
+
+    def test_an_amount_nobody_can_state_leaves_the_cell_empty(self) -> None:
+        """The file's form of the em dash: a blank says nothing, and a zero
+        makes a claim about money."""
+        history = PaymentHistory(
+            charges=[
+                Charge(
+                    charged_at=datetime(2026, 10, 1, 3, 0, tzinfo=UTC),
+                    outcome=ChargeOutcome.FAILED,
+                    plan_slug="pro",
+                    services_committed=3,
+                    currency="USD",
+                    amount_minor_units=None,
+                )
+            ]
+        )
+
+        assert service.charges_as_csv(history).splitlines()[1].endswith(",")
+
+    def test_a_currency_with_no_recorded_divisor_is_left_blank_rather_than_divided(self) -> None:
+        """The yen's minor unit is the yen. Dividing by an assumed hundred would
+        write a bill at a hundredth of its size into a file somebody files."""
+        history = PaymentHistory(
+            charges=[
+                Charge(
+                    charged_at=datetime(2026, 10, 1, 3, 0, tzinfo=UTC),
+                    outcome=ChargeOutcome.PAID,
+                    plan_slug="pro",
+                    services_committed=3,
+                    currency="JPY",
+                    amount_minor_units=600,
+                )
+            ]
+        )
+
+        assert service.charges_as_csv(history).splitlines()[1].endswith(",JPY,")
+
+
+class TestChangingPlanWhileOneIsLive:
+    """T66's other half: two mandates must not be able to charge at once."""
+
+    async def test_a_checkout_for_a_different_plan_is_refused_while_one_is_active(self) -> None:
+        """**The hole this closes.** Only the same plan was refused, so a
+        customer moving from `pro` to `scale` signed a second mandate while the
+        first kept debiting — nothing cancels the first, and `_apply` moves the
+        plan without touching the other row."""
+        live = BillingSubscription(
+            org_id=ORG_ID,
+            processor=PROCESSOR_NAME,
+            subscription_ref=SUBSCRIPTION_REF,
+            plan_slug="pro",
+            status=service.STATUS_ACTIVE,
+            services_committed=SERVICES_COMMITTED,
+            currency="USD",
+        )
+        processor = StubProcessor()
+        session = CapturingSession(answers=[_plan_row("scale"), live])
+
+        with pytest.raises(ConflictError, match="Cancel it before starting another"):
+            await service.begin_plan_change(
+                session,  # type: ignore[arg-type]
+                configured=_configured(processor),
+                organization=_organization(plan="pro"),
+                billing_email=OWNER_EMAIL,
+                request=_checkout_request(plan_slug="scale"),
+                app_base_url="https://app.example.test",
+                today=TODAY,
+            )
+
+        assert processor.checkouts == []
+        assert session.staged_of(BillingSubscription) == []
+
+    async def test_a_cancelled_arrangement_does_not_block_the_next_one(self) -> None:
+        """The two-step path has to actually work: cancel, then subscribe."""
+        ended = BillingSubscription(
+            org_id=ORG_ID,
+            processor=PROCESSOR_NAME,
+            subscription_ref=SUBSCRIPTION_REF,
+            plan_slug="pro",
+            status=service.STATUS_CANCELLED,
+            services_committed=SERVICES_COMMITTED,
+            currency="USD",
+        )
+        processor = StubProcessor()
+        session = CapturingSession(answers=[_plan_row("scale"), ended, _PRO_PRICE])
+
+        await service.begin_plan_change(
+            session,  # type: ignore[arg-type]
+            configured=_configured(processor),
+            organization=_organization(plan="free"),
+            billing_email=OWNER_EMAIL,
+            request=_checkout_request(plan_slug="scale"),
+            app_base_url="https://app.example.test",
+            today=TODAY,
+        )
+
+        assert len(processor.checkouts) == 1

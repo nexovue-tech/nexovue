@@ -150,6 +150,50 @@ class BillingOverview(BaseModel):
     plans: list[PlanOption] = Field(default_factory=list)
 
 
+class ChargeOutcome(StrEnum):
+    """What became of one attempt to debit the mandate."""
+
+    PAID = "paid"
+    # The processor reported a charge that did not go through. Kept in the
+    # history rather than hidden: a customer looking for a month that is missing
+    # needs to find out here that it failed, not from the bank.
+    FAILED = "failed"
+
+
+class Charge(BaseModel):
+    """One month's debit against the mandate, as this product's own records have it.
+
+    **Not a tax invoice, and the screen says so.** A tax invoice needs a seller's
+    registration, a numbered series, the buyer's address and a tax breakdown —
+    none of which this product holds, because `billing_subscriptions` stores no
+    address by design. The document a tax authority wants is the one the payment
+    provider raises; this is the record of what nexovue believes was charged.
+
+    **No processor reference of any kind.** `SubscriptionSummary` leaves one out
+    for the same reason: it identifies nothing a customer can act on, and it is
+    a vendor's noun on a screen that must not learn which vendor answered.
+    """
+
+    charged_at: datetime
+    outcome: ChargeOutcome
+    # The tier the arrangement was for, and the count that sized the mandate.
+    # Both are what the amount is the product of, so a customer can check it.
+    plan_slug: str
+    services_committed: int
+    currency: str
+    # Minor units, exclusive of any tax the provider adds at charge time. Null
+    # when the rate behind this arrangement can no longer be established — an
+    # amount nobody can state is not an amount of zero, and the screen renders
+    # the absence rather than a figure.
+    amount_minor_units: int | None = None
+
+
+class PaymentHistory(BaseModel):
+    """What this organization has been charged, newest first."""
+
+    charges: list[Charge] = Field(default_factory=list)
+
+
 class StartCheckoutRequest(BaseModel):
     """A customer asking to move onto a paid tier.
 

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 
-import { apiClient } from "@/shared/api-client";
+import { API_BASE_PATH, apiClient } from "@/shared/api-client";
 
 /**
  * The billing endpoints. Field names are the API's.
@@ -141,6 +141,54 @@ export function useBillingOverview(currency?: string) {
       confirmationPoll(query.state.data?.subscription?.status, Date.now() - startedAt.current),
   });
 }
+
+/** Whether a debit against the mandate went through. */
+export type ChargeOutcome = "paid" | "failed";
+
+/**
+ * One month's debit, as the API's own records have it.
+ *
+ * **Not a tax invoice.** The document a tax authority wants comes from the
+ * payment provider; this is what nexovue believes was charged, and the screen
+ * says which is which rather than letting a customer assume.
+ */
+export interface Charge {
+  charged_at: string;
+  outcome: ChargeOutcome;
+  plan_slug: string;
+  services_committed: number;
+  currency: string;
+  /** Minor units, or null when the rate behind it cannot be established. */
+  amount_minor_units: number | null;
+}
+
+export interface PaymentHistory {
+  charges: Charge[];
+}
+
+export const paymentHistoryQueryKey = ["billing", "history"] as const;
+
+export function usePaymentHistory(enabled: boolean) {
+  return useQuery({
+    queryKey: paymentHistoryQueryKey,
+    queryFn: ({ signal }) => apiClient.get<PaymentHistory>("billing/history", { signal }),
+    // An organization that has never had an arrangement has never been charged,
+    // so the request is not made rather than made to be told nothing.
+    enabled,
+  });
+}
+
+/**
+ * Where the downloadable history lives.
+ *
+ * **A plain link, not a blob the page builds.** A page running in a sandboxed
+ * frame cannot hand itself a file, and `createObjectURL` fails there silently;
+ * a same-origin response carrying `Content-Disposition: attachment` is saved by
+ * the browser itself. Same-origin also means the session cookie travels with it
+ * — it is host-only and SameSite Lax, which a top-level fetch of our own path
+ * satisfies.
+ */
+export const PAYMENT_HISTORY_FILE_URL = `${API_BASE_PATH}billing/history.csv`;
 
 export interface StartCheckoutInput {
   planSlug: string;

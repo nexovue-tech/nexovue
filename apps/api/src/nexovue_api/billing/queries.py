@@ -11,8 +11,9 @@ aimed at a different tenant, and it is not scoped by one.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import Row, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
@@ -98,6 +99,43 @@ async def latest_subscription(
     )
     found: BillingSubscription | None = await session.scalar(statement)
     return found
+
+
+async def charges(
+    session: AsyncSession, *, org_id: uuid.UUID, kinds: Sequence[str], limit: int
+) -> Sequence[Row[tuple[BillingWebhookDelivery, BillingSubscription]]]:
+    """Every delivery that was a charge, with the arrangement it was raised under.
+
+    The delivery says a charge happened and when; the arrangement says what it
+    was for. Both in one statement rather than a lookup per row, because a
+    history is a list and the second shape is how a short list becomes N+1.
+
+    Joined on the pair the delivery already carries and the subscription is
+    unique by — `uq_billing_subscriptions_processor_subscription_ref` — so at
+    most one arrangement answers. The tenant is bound on both sides of the join:
+    the delivery's is the filter, and the subscription's makes a reference
+    somehow shared across tenants unable to pull another organization's terms
+    into this one's history.
+    """
+    statement = (
+        select(BillingWebhookDelivery, BillingSubscription)
+        .join(
+            BillingSubscription,
+            (BillingSubscription.org_id == BillingWebhookDelivery.org_id)
+            & (BillingSubscription.processor == BillingWebhookDelivery.processor)
+            & (BillingSubscription.subscription_ref == BillingWebhookDelivery.subscription_ref),
+        )
+        .where(
+            BillingWebhookDelivery.org_id == org_id,
+            BillingWebhookDelivery.kind.in_(kinds),
+        )
+        # Newest first, which is the order a customer looks for the last one in.
+        # The id breaks a tie, so two deliveries recorded in the same instant do
+        # not swap places between two reads of the same page.
+        .order_by(BillingWebhookDelivery.received_at.desc(), BillingWebhookDelivery.id.desc())
+        .limit(limit)
+    )
+    return (await session.execute(statement)).all()
 
 
 async def find_organization(session: AsyncSession, *, org_id: uuid.UUID) -> Organization | None:
