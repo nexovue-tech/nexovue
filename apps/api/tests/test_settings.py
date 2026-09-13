@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import pytest
-
 from environment import TEST_ENVIRONMENT
 from pydantic import ValidationError
 
-from nexovue_api.settings import Settings, SettingsError, get_settings
+from nexovue_api.settings import (
+    DEFAULT_OTLP_ENDPOINT,
+    Settings,
+    SettingsError,
+    get_settings,
+)
 
 COMPLETE_ENVIRONMENT = {
     "ENV": "development",
@@ -111,9 +115,7 @@ class TestTheEndpointACustomerIsHanded:
     """
 
     def test_development_keeps_the_localhost_default(self) -> None:
-        settings = Settings(**{**TEST_ENVIRONMENT, "ENV": "development"})  # type: ignore[arg-type]
-
-        assert settings.otlp_endpoint.startswith("http://localhost")
+        assert _settings(env="development").otlp_endpoint.startswith("http://localhost")
 
     @pytest.mark.parametrize("env", ["staging", "production"])
     @pytest.mark.parametrize("endpoint", ["http://localhost:14318", "http://127.0.0.1:14318"])
@@ -123,17 +125,27 @@ class TestTheEndpointACustomerIsHanded:
         """At start-up rather than at the first signup. A deployment that is wrong
         should refuse to run, not wait to be wrong in front of somebody."""
         with pytest.raises(ValidationError) as refusal:
-            Settings(**{**TEST_ENVIRONMENT, "ENV": env, "OTLP_ENDPOINT": endpoint})  # type: ignore[arg-type]
+            _settings(env=env, otlp_endpoint=endpoint)
 
         assert "no customer can reach" in str(refusal.value)
 
     def test_a_real_address_is_accepted(self) -> None:
-        settings = Settings(  # type: ignore[arg-type]
-            **{
-                **TEST_ENVIRONMENT,
-                "ENV": "production",
-                "OTLP_ENDPOINT": "https://ingest.nexovue.com",
-            }
-        )
+        deployed = _settings(env="production", otlp_endpoint="https://ingest.nexovue.com")
 
-        assert settings.otlp_endpoint == "https://ingest.nexovue.com"
+        assert deployed.otlp_endpoint == "https://ingest.nexovue.com"
+
+
+def _settings(*, env: str, otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT) -> Settings:
+    """`Settings` for a named environment, spelled out rather than splatted.
+
+    `Settings` also takes pydantic-settings' own keyword-only parameters, and a
+    `**dict[str, str]` cannot type-check against those — it reports one error per
+    parameter it could have been.
+    """
+    return Settings(
+        env=env,
+        postgres_dsn=TEST_ENVIRONMENT["POSTGRES_DSN"],
+        clickhouse_dsn=TEST_ENVIRONMENT["CLICKHOUSE_DSN"],
+        redis_url=TEST_ENVIRONMENT["REDIS_URL"],
+        otlp_endpoint=otlp_endpoint,
+    )
