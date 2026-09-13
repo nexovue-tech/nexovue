@@ -6,8 +6,11 @@
 > ⚠️ **The markers here mean *specified*, not *built*, and the two do not track each other.**
 > `🔲 TO SPECIFY` means nobody has written this feature's acceptance criteria yet. Several such
 > features are already shipping — the Logs, Errors, Traces, Services, Service Map, Infrastructure,
-> Database, Synthetics and Usage screens all exist. Conversely, F1 is the only fully specified
+> Synthetics and Usage screens all exist, and database monitoring ships as a view inside
+> Infrastructure rather than as a screen of its own. Conversely, F1 is the only fully specified
 > feature, and it is not built.
+> `🔶 PART SPECIFIED` means one half of a feature has acceptance criteria and the other does not;
+> the entry says which is which.
 >
 > Acceptance criteria are written in the present tense because that is what an acceptance criterion
 > is — a statement to test against once built. Read every `AC` below as *must*, never as *does*.
@@ -16,7 +19,7 @@
 
 ## 1. Product Overview
 
-**Vision:** An insight-first observability platform that tells users *what broke and why*, instead of showing 50 dashboards.
+**Vision:** An insight-first observability platform that tells users *what broke and why*, instead of handing them an empty builder and fifty dashboards to maintain. The dashboards it composes for them are first-class; the work of assembling them is what it removes. ([`vision.md`](vision.md) is the source; this line mirrors it.)
 
 **Product goals:**
 - G1: A developer goes from alert → understanding in minutes, not hours.
@@ -68,7 +71,7 @@ internal admin console. The root Findings route is intentionally a placeholder, 
 
 **Insight-first core:** F1 Findings feed · F2 Finding detail · F3 AI insights · F4 AI chatbot (RAG) · F5 AI solution · F6 Anomaly detection (user-facing surface)
 **Owner layer:** F7 Owner status page
-**Observability screens:** F8 Service overview · F9 Service map · F10 Trace waterfall · F11 Errors screen · F12 Logs screen (search + live tail) · F13 Infrastructure monitoring · F14 Database monitoring · F15 RUM / Core Web Vitals · F16 Session replay · F17 Continuous profiling · F18 Synthetic checks · F19 SLO tracking · F20 Dashboards (optional mode) · F28 Deployment/release tracking · F29 LLM/AI-app observability
+**Observability screens:** F8 Service overview · F9 Service map · F10 Trace waterfall · F11 Errors screen · F12 Logs screen (search + live tail) · F13 Infrastructure monitoring · F14 Database monitoring · F15 RUM / Core Web Vitals · F16 Session replay · F17 Continuous profiling · F18 Synthetic checks · F19 SLO tracking · F20 Dashboards · F28 Deployment/release tracking · F29 LLM/AI-app observability
 **Workflow & operations:** F21 Alerts & notification connectors · F22 Case management · F23 Onboarding · F24 Integration settings · F25 Usage & cost view · F26 RBAC / user management · F27 Data controls (retention, PII masking rules) · F30 Public status page · F32 Account, organization & project access · F33 Telemetry intake & data protection
 **Internal (not customer-facing):** F31 Admin console
 
@@ -173,8 +176,24 @@ Check list + status + latency trends; create/edit uptime, SSL-expiry, API, and b
 ### F19 — SLO Tracking 🔲 TO SPECIFY
 Define targets on services/endpoints; error-budget status; budget-burn alerts into findings feed.
 
-### F20 — Dashboards (optional mode) 🔲 TO SPECIFY
-Classic dashboard builder as an *option*, never the front door; default templates auto-created per service.
+### F20 — Dashboards 🔶 PART SPECIFIED
+**Amended 2026-09-12: insights and dashboards are both first-class.** The earlier entry called this
+an "optional mode" and a builder that is "never the front door", which read as *a dashboard is
+something we tolerate*. It is not: a dashboard-shaped overview is reachable, complete, and composed
+for the customer rather than handed over empty.
+
+Two halves, at different stages:
+
+- **The composed overview — specified, not yet built.** Auto-composed RED and USE panels from
+  rollups that already exist, as its own top-level entry holding `/` until the insight engine exists.
+  Specified in [`../features/console-redesign/`](../features/console-redesign/) (OD2, and
+  `wireframes-dashboard.md`); it is T30–T34 of that feature's task plan and no code exists yet.
+- **The builder — still to specify.** Not foreclosed by the above: an auto-composed dashboard is a
+  fixed instance of what a builder would produce, so the composed overview is the first step toward
+  one rather than a substitute for it.
+
+**The front door is unchanged**: the Findings feed (F1) is what a person lands on. What changed is
+that the other surface stopped being a lesser one.
 
 ### F21 — Alerts & Notification Connectors 🔲 TO SPECIFY
 Connect Slack, Teams, WhatsApp, email, SMS, webhooks; what-triggers-what rules; smart grouping/anti-fatigue defaults; quiet hours.

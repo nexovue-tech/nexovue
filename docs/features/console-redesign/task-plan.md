@@ -292,9 +292,14 @@ measured in points because 0.1% becoming 0.2% has doubled and means nothing.
 - [ ] **T45** — `/review-diff`.
 - [ ] **T46** — Design QA: every rebuilt screen against its wireframe and the prototype. *Nothing
       implements this gate today.*
-- [ ] **T47** — `docs/architecture/frontend.md` updated to current truth.
-- [ ] **T48** — `docs/product/vision.md` and `feature-catalog.md` F20: both still record
-      "insight-first, not dashboard-first", superseded 2026-09-12.
+- [x] **T47** — `docs/architecture/frontend.md` updated to current truth. It claimed a database
+      *screen* that is now a view inside infrastructure, and predated `Sparkline`, `FilterBar`,
+      `Delta` and the rule that narrowing a list is the server's job.
+- [x] **T48** — the superseded stance, in **five** places rather than the three the audit found:
+      `vision.md`'s one-line vision and its Decisions Log, `feature-catalog.md` F20 *and* its own copy
+      of the vision line, and the comment in `route-manifest.ts`. The Decisions Log keeps the 2026-08
+      row and marks it superseded rather than rewriting it — a decisions log that edits its own
+      history cannot be used to find out why something changed.
 - [ ] **T49** — **Outcome** filled in; `status.md` final.
 
 ## New risks

@@ -12,7 +12,7 @@
 
 ## Vision (one line)
 
-An insight-first, full observability platform: it tells you **what broke and why**, instead of showing you 50 dashboards.
+An insight-first, full observability platform: it tells you **what broke and why**, instead of handing you an empty builder and fifty dashboards to maintain. The dashboards it composes for you are first-class; the work of assembling them is what it removes.
 
 ---
 
@@ -174,13 +174,14 @@ Key design points:
 
 | Date | Decision |
 |------|----------|
-| 2026-08 | Insight-first, not dashboard-first |
+| 2026-08 | Insight-first, not dashboard-first. **Superseded 2026-09-12 — see below.** |
 | 2026-08 | Build on OpenTelemetry; do not build collection SDKs/agents |
 | 2026-08 | Derive application metrics from traces first (simpler setup) |
 | 2026-08 | Two-view design: developer view + plain-language owner view |
 | 2026-08 | Agency channel deferred; pricing model settled 2026-08-27 and priced 2026-09-01 |
 | 2026-09-07 | Network monitoring and SIEM are out of scope. Categories 10 and 11 had no phase since 2026-08-25. Network telemetry is accepted as OTLP from a producer the customer runs — OBI, Beyla, Hubble, Tetragon — and never collected by an agent of ours, which is what keeps the founding no-agents decision intact rather than contradicting it. SIEM is not re-opened as a screen: the data overlaps with observability by roughly 80%, the *product* is detection content and certifications, and the nearest thing we build is export. |
 | 2026-08 | OTel setup: customer owns instrumentation; we own the receiving side (OTLP endpoint + API key + setup docs). Two customer patterns: (A) SDK direct-to-endpoint via 2 env vars — the onboarding priority ("value in 10 minutes"); (B) SDK → customer's own collector → our endpoint (for batching, data scrubbing, host metrics). Same ingestion pipeline serves both. |
+| 2026-09-12 | **Insights and dashboards are both first-class**, superseding "insight-first, not dashboard-first" above. The front door does not change: the Findings feed is still what a person lands on. What changed is that a dashboard-shaped overview is reachable, complete, and not a lesser mode — it is composed for the customer from rollups that already exist, rather than handed over as an empty builder. The earlier stance was read, correctly, as "a dashboard is something we tolerate", and that is not a product anyone would choose over the incumbent they already have. F20's builder is not foreclosed by this: an auto-composed dashboard is a fixed instance of what a builder would produce. |
 
 ---
 

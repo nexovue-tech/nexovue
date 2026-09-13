@@ -46,13 +46,18 @@ export interface NavSection {
 
 /**
  * `/` is the Phase 2 findings feed and stays a placeholder for the whole of Phase 1.
- * That is the standing rule in the plan: a dashboard must never become the front door.
+ *
+ * The rule is about *which* surface is the front door, not about a dashboard being
+ * a lesser one — the founder decided on 2026-09-12 that insights and dashboards are
+ * both first-class, superseding "insight-first, not dashboard-first". The feed is
+ * still what a person lands on; a composed overview is its own entry, and holds this
+ * route only until the insight engine exists to fill it.
  */
 export const FINDINGS_FEED: ScreenDefinition = {
   path: "/",
   title: "Findings",
   description:
-    "The feed of things that need you, written as sentences. Phase 2 builds it; until then this route stays deliberately empty so no dashboard drifts into being the front door.",
+    "The feed of things that need you, written as sentences. Phase 2 builds it; until then this route stays deliberately empty rather than being filled by whatever happens to be ready first.",
   taskId: "Phase 2 · F1",
 };
 
