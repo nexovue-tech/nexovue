@@ -50,12 +50,18 @@ the recommendation the approved plan recorded. One named constant if you want di
 
 ## Lifecycle status
 
-**Reopened 2026-09-14 — in development.** The first phase is built and closed; a follow-up phase is
-specified and awaiting approval.
+**Implemented, 2026-09-14.** Both phases are built. Not deployed: nexovue has no deployment, so
+"implemented" is as far as a feature goes here. Seven decisions are open and listed above; none of
+them blocks the code.
 
 ## Current task
 
-**T48–T68 are written and provisional, awaiting founder approval.** A pass over every screen, read
+**None — the follow-up phase is complete.** `just check` exit 0: 2709 Python (1 skipped), 903 web
+across 70 files, 120 browser-SDK. The task plan's Outcome carries what each task planned against
+what it cost, the five defects the work turned up that no task named, and three of my own mistakes
+worth keeping.
+
+### What it was, before it was built A pass over every screen, read
 as a customer rather than as the person who built it, found that the console is correct and does not
 yet behave like a product somebody uses all day: every refresh is a cold reload rather than a
 background fetch, no window can be absolute so paid retention is unreachable, nothing pauses, the

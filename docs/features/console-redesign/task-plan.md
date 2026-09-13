@@ -548,13 +548,13 @@ That rule is what separates T48–T54 from "make the refresh quieter".
 
 ### Tasks — live data, time, and control
 
-- [ ] **T48** `P` — keep previous data across the window tick, so a refresh is a background fetch
+- [x] **T48** `E` — keep previous data across the window tick, so a refresh is a background fetch
       rather than a remount. Everything below depends on this one. → a test that the rendered rows
       survive a window advance.
-- [ ] **T49** `P` — refresh control in the top bar beside the window: pause, and an interval. **The
+- [x] **T49** `E` — refresh control in the top bar beside the window: pause, and an interval. **The
       paused state must be unmistakable** — a persistent "Paused · showing 14:32:05", not an icon.
       A paused screen showing stale numbers during an incident is the AC18 failure again.
-- [ ] **T50** `P` — an absolute window disables polling by itself. Nothing new can arrive in a window
+- [x] **T50** `E` — an absolute window disables polling by itself. Nothing new can arrive in a window
       that ended last Tuesday.
 - [x] **T51** `E` — freeze list ordering while the pointer is over a list or a row is expanded, and
       offer an explicit "reorder" when the ranking has moved. Rows changing places under a reaching
@@ -567,7 +567,7 @@ That rule is what separates T48–T54 from "make the refresh quieter".
       place the gap happened** rather than a count in a pill. Verified by reading
       `use-log-tail.ts` and `LogsScreen.tsx`. Traces is a paged list and Findings has no engine,
       so neither is a live feed to protect.
-- [ ] **T54** `P` — one "updated Ns ago" freshness indicator, in the top bar rather than per panel.
+- [x] **T54** `E` — one "updated Ns ago" freshness indicator, in the top bar rather than per panel.
 - [x] **T55** `E` — absolute start/end in the global window control, which is what makes paid
       retention reachable.
 - [x] **T56** `E` — persist the selected project and window across a reload.
@@ -590,7 +590,7 @@ That rule is what separates T48–T54 from "make the refresh quieter".
 - [x] **T62** `E` — a "has this project ever reported" signal, replacing the widest-window heuristic
       that reads a project silent for eight days as one that never reported.
 - [x] **T63** `E` — export a filtered result from logs and traces. The commonest ask after search.
-- [ ] **T64** `P` — an active-session list beside "sign out everywhere", and second-factor
+- [x] **T64** `E` — an active-session list beside "sign out everywhere", and second-factor
       authentication. Today a customer can end every session but cannot see what is signed in, which
       is the thing they actually want when they suspect somebody else is.
 - [x] **T65** `E` — link an error group to the deploy that preceded it. `deploy_events` is ingested,
@@ -601,17 +601,65 @@ That rule is what separates T48–T54 from "make the refresh quieter".
 **Both of these are in this list because the review found them, and both arguably belong elsewhere.
 Flagged rather than decided.**
 
-- [ ] **T66** `P` — billing: an invoice list and download, the payment method on file, and a plan
+- [x] **T66** `E` — billing: an invoice list and download, the payment method on file, and a plan
       change path. Today "This organization already has an active subscription" is a dead end, and
       there is no way to obtain an invoice — usually a tax requirement rather than a convenience.
       **Belongs to `docs/features/usage-billing/` more than here**, and needs the payment provider.
-- [ ] **T67** `P` — customer setup documentation, for **both** audiences: a service already exporting
+- [x] **T67** `E` — customer setup documentation, for **both** audiences: a service already exporting
       OpenTelemetry, and one that has never been instrumented. Per language, plus Docker,
       Kubernetes, ECS, Lambda and bare metal; the Collector; the browser SDK. **This is not a console
       change and has no home in the repository yet** — the largest gap the review found, and the one
       that loses a customer silently, because they never reach a screen anybody is watching.
-- [ ] **T68** `P` — onboarding links to those docs, and answers "nothing has arrived" with something
+- [x] **T68** `E` — onboarding links to those docs, and answers "nothing has arrived" with something
       better than a spinner. Depends on T67.
+
+### Outcome — the follow-up phase, 2026-09-14
+
+**All twenty-one built.** `just check` exit 0: **2709 Python** (1 skipped, the opt-in billable mail
+suite), **903 web across 70 files**, 120 browser-SDK — against 2469 and 813 when the phase reopened.
+
+| Planned | Actual |
+|---|---|
+| T48 keeps previous data across the window tick | **The window was two things wearing one name.** `from`/`to` are what a read asks for and advance; a cache key must not. `WindowChoice` is what a reader *asked for*, and `windowKeyOf` is stable while the window moves — so no placeholder was needed at all |
+| T53 gives feeds an "N new" pill | **Already built, and better.** The logs tail pauses *server-side*, so rows cannot move under a reader, and the gap is marked where it happened rather than counted in a pill |
+| T63 exports logs and traces | **Traces only.** Logs have no search endpoint — the screen is a WebSocket tail — so a log export is a search API first. Recorded rather than smuggled in |
+| T61 needs a threshold decision | Built on 1% / 5% as the approved plan recorded, **stated on the screen**, one named pair to change |
+| T67 documents setup | 15 pages, and it found a defect that would have broken **every signup** in a deployed install |
+| T64 adds a second factor | Also narrowed migration 0019's recorded reasoning, which needed ADR 0083 |
+
+#### What the work found that the plan could not
+
+- **`OTLP_ENDPOINT` defaults to localhost**, is returned by signup, and was absent from
+  `.env.example`. A deployment setting `NEXOVUE_INGEST_HOST` and forgetting this one hands every new
+  customer an address only their own machine can reach — silent, total, and invisible to us because
+  no request arrives. The API now refuses to start on it outside development.
+- **`begin_plan_change` could bill twice.** It refused only a second mandate for the *same* plan, so
+  `pro` → `scale` left the first debiting. The only thing preventing it was the screen.
+- **Two rate-limit rules protected nothing.** `TELEMETRY_PATHS` named `/errors` and `/database`;
+  the routers are `/error-groups` and `/dbstats`. Both ClickHouse readers ran on the default tier
+  with no concurrency cap, and a prefix that matches nothing is silent.
+- **The concurrency cap sat below one screen's fan-out**, which only became visible once those two
+  readers were moved onto the right tier.
+- **`first-span.spec.ts` had been broken since T39**, because `just check` excludes the e2e package.
+
+#### Three of my own mistakes, kept because the lesson generalises
+
+- **`uv run mypy .` from `apps/api` checks something else.** It cannot resolve the `live` test helper
+  and drowns real errors in 42 false ones; the gate runs it from the repository root. The same shape
+  as `tsc --noEmit` in `apps/web`.
+- **A bulk edit reached a `useMemo` dependency array**, where deploy markers are computed *from* the
+  moving instants — biome caught it. A mechanical edit is only safe where the pattern means one thing.
+- **I measured "zero requests" and nearly went hunting.** The automated tab was hidden, where both
+  the old mechanism and the new one correctly stop.
+
+#### Left open, and recorded as D1–D7 in `status.md`
+
+Cancellation timing (money-facing, and the code and the screen disagree), storing the charged
+amount, the CSV route convention, the unrecoverable OTLP endpoint, `MAX_CORRELATED_DEPLOYS`, the
+unobtainable browser SDK, and the error-rate thresholds. Plus, from ADR 0083:
+`CREDENTIAL_ENCRYPTION_KEY` has no rotation procedure and the second factor has had no
+production-readiness review.
+
 
 ## New risks
 
