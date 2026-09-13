@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
+import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
 import type { ServiceEdge } from "@/shared/service-peers";
 
@@ -28,16 +29,25 @@ export interface ServiceMapResponse {
   edges: ServiceEdge[];
 }
 
-export const serviceMapQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["service-map", projectId, timeWindow.from, timeWindow.to] as const;
+export const serviceMapQueryKey = (projectId: string, timeWindow: TimeWindow, narrowing: string) =>
+  ["service-map", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
 
-export function useServiceMap(projectId: string | undefined, timeWindow: TimeWindow) {
+export function useServiceMap(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+  narrowing: Record<string, string> = {},
+) {
   return useQuery({
-    queryKey: serviceMapQueryKey(projectId ?? "", timeWindow),
+    queryKey: serviceMapQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
       apiClient.get<ServiceMapResponse>("service-map", {
-        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        searchParams: {
+          project_id: projectId,
+          from: timeWindow.from,
+          to: timeWindow.to,
+          ...narrowing,
+        },
         signal,
       }),
   });

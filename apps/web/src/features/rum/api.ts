@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
+import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
 
 /** What real browsers measured. Field names are the API's, unchanged. */
@@ -42,14 +43,23 @@ export interface WebVitalBreakdown {
   truncated: boolean;
 }
 
-export const webVitalsQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["web-vitals", projectId, timeWindow.from, timeWindow.to] as const;
+export const webVitalsQueryKey = (projectId: string, timeWindow: TimeWindow, narrowing: string) =>
+  ["web-vitals", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
 
 export const webVitalsBreakdownQueryKey = (
   projectId: string,
   timeWindow: TimeWindow,
   dimension: BreakdownDimension,
-) => ["web-vitals-breakdown", dimension, projectId, timeWindow.from, timeWindow.to] as const;
+  narrowing: string,
+) =>
+  [
+    "web-vitals-breakdown",
+    dimension,
+    projectId,
+    timeWindow.from,
+    timeWindow.to,
+    narrowing,
+  ] as const;
 
 /**
  * Each Core Web Vital's p75 over the window.
@@ -58,13 +68,22 @@ export const webVitalsBreakdownQueryKey = (
  * a p75 cannot be averaged out of smaller p75s, so the screen asks for the answer
  * rather than the parts.
  */
-export function useWebVitals(projectId: string | undefined, timeWindow: TimeWindow) {
+export function useWebVitals(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+  narrowing: Record<string, string> = {},
+) {
   return useQuery({
-    queryKey: webVitalsQueryKey(projectId ?? "", timeWindow),
+    queryKey: webVitalsQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
       apiClient.get<WebVitalsResponse>("rum/web-vitals", {
-        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        searchParams: {
+          project_id: projectId,
+          from: timeWindow.from,
+          to: timeWindow.to,
+          ...narrowing,
+        },
         signal,
       }),
   });
@@ -82,9 +101,15 @@ export function useWebVitalsBreakdown(
   projectId: string | undefined,
   timeWindow: TimeWindow,
   dimension: BreakdownDimension,
+  narrowing: Record<string, string> = {},
 ) {
   return useQuery({
-    queryKey: webVitalsBreakdownQueryKey(projectId ?? "", timeWindow, dimension),
+    queryKey: webVitalsBreakdownQueryKey(
+      projectId ?? "",
+      timeWindow,
+      dimension,
+      filterCacheKey(narrowing),
+    ),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
       apiClient.get<WebVitalBreakdown>("rum/web-vitals/breakdown", {
@@ -93,6 +118,7 @@ export function useWebVitalsBreakdown(
           dimension,
           from: timeWindow.from,
           to: timeWindow.to,
+          ...narrowing,
         },
         signal,
       }),

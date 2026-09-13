@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { apiClient } from "@/shared/api-client";
+import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
 
 /**
@@ -97,8 +98,11 @@ const RECENT_RUN_LIMIT = 120;
 
 export const checkDefinitionsQueryKey = (projectId: string) => ["checks", projectId] as const;
 
-export const checkResultsQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["synthetics", "checks", projectId, timeWindow.from, timeWindow.to] as const;
+export const checkResultsQueryKey = (
+  projectId: string,
+  timeWindow: TimeWindow,
+  narrowing: string,
+) => ["synthetics", "checks", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
 
 export const phaseBreakdownQueryKey = (
   projectId: string,
@@ -127,13 +131,22 @@ export function useCheckDefinitions(projectId: string | undefined) {
   });
 }
 
-export function useCheckResults(projectId: string | undefined, timeWindow: TimeWindow) {
+export function useCheckResults(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+  narrowing: Record<string, string> = {},
+) {
   return useQuery({
-    queryKey: checkResultsQueryKey(projectId ?? "", timeWindow),
+    queryKey: checkResultsQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
       apiClient.get<CheckResultListResponse>("synthetics/checks", {
-        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        searchParams: {
+          project_id: projectId,
+          from: timeWindow.from,
+          to: timeWindow.to,
+          ...narrowing,
+        },
         signal,
       }),
     select: (response) => response.checks,

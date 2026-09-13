@@ -1,9 +1,13 @@
-import { useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
 
+import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
+import { appliedFilters, FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
+import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatDuration } from "@/shared/format/duration";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
@@ -19,6 +23,7 @@ import {
   formatUptime,
   liveStateOf,
 } from "./check-health";
+import { SYNTHETIC_FILTERS } from "./filters";
 import { PhaseBreakdownPanel } from "./PhaseBreakdownPanel";
 
 /**
@@ -47,13 +52,24 @@ const URGENCY_TEXT: Record<Urgency, string> = {
 export function SyntheticsScreen() {
   const { projectId, rangeId } = useSelection();
   const timeWindow = useLiveWindow(rangeId);
+  const navigate = useNavigate();
+
+  // The route's own id, not its path: `/synthetics` renders inside the shell.
+  const search = useSearch({ from: "/shell/synthetics" });
+  const filters = useMemo(() => parseFilterValues(SYNTHETIC_FILTERS, search), [search]);
+
+  // `replace`, not push: the back button belongs to the screen a person came
+  // from, not to every control they tried on the way.
+  const show = (next: Record<string, string | undefined>) =>
+    void navigate({ to: "/synthetics", search: () => filterParams(next), replace: true });
 
   const definitions = useCheckDefinitions(projectId);
-  const results = useCheckResults(projectId, timeWindow);
+  const results = useCheckResults(projectId, timeWindow, filterParams(filters));
   const trendByCheck = useCheckTrend(projectId, timeWindow);
   const [chosenCheckId, setChosenCheckId] = useState<string>();
 
   const checks = results.data ?? [];
+  const narrowed = appliedFilters(SYNTHETIC_FILTERS, filters).length > 0;
   const selected = checks.find((check) => check.check_id === chosenCheckId) ?? checks[0];
   const targets = new Map((definitions.data ?? []).map((check) => [check.id, check]));
 
@@ -66,6 +82,13 @@ export function SyntheticsScreen() {
           how often, and which part of the request the time went to.
         </p>
       </header>
+
+      <FilterBar
+        definitions={SYNTHETIC_FILTERS}
+        values={filters}
+        onChange={(key, value) => show(withFilter(filters, key, value))}
+        onClearAll={() => show({})}
+      />
 
       {definitions.isPending || results.isPending ? (
         <div className="px-4">
@@ -88,10 +111,24 @@ export function SyntheticsScreen() {
           detail="Nothing is being probed for this project. Checks are created through the API — POST a target URL to /api/v1/checks and the prober picks it up on its next interval."
         />
       ) : checks.length === 0 ? (
-        <EmptyState
-          title="No probes in this window"
-          detail="The checks exist but published nothing for the selected period. Widen the time range, or check that the prober is running."
-        />
+        // "Nothing is down" and "the prober is not running" are opposite results,
+        // and one sentence for both reports a healthy site as a broken pipeline.
+        narrowed ? (
+          <EmptyState
+            title="No checks match these filters"
+            detail="Probes ran in the selected period, but none of them match what you asked for. If you asked for what is down, nothing is."
+            action={
+              <Button variant="secondary" onClick={() => show({})}>
+                Show every check
+              </Button>
+            }
+          />
+        ) : (
+          <EmptyState
+            title="No probes in this window"
+            detail="The checks exist but published nothing for the selected period. Widen the time range, or check that the prober is running."
+          />
+        )
       ) : (
         <>
           <CheckTable

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
+import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
 
 /**
@@ -65,15 +66,22 @@ interface ConnectionHealthResponse {
  */
 const STATEMENT_LIMIT = 200;
 
-export const slowStatementsQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["dbstats", "statements", projectId, timeWindow.from, timeWindow.to] as const;
+export const slowStatementsQueryKey = (
+  projectId: string,
+  timeWindow: TimeWindow,
+  narrowing: string,
+) => ["dbstats", "statements", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
 
 export const connectionHealthQueryKey = (projectId: string, timeWindow: TimeWindow) =>
   ["dbstats", "connections", projectId, timeWindow.from, timeWindow.to] as const;
 
-export function useSlowStatements(projectId: string | undefined, timeWindow: TimeWindow) {
+export function useSlowStatements(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+  narrowing: Record<string, string> = {},
+) {
   return useQuery({
-    queryKey: slowStatementsQueryKey(projectId ?? "", timeWindow),
+    queryKey: slowStatementsQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
       apiClient.get<SlowStatementsResponse>("dbstats/statements", {
@@ -82,6 +90,7 @@ export function useSlowStatements(projectId: string | undefined, timeWindow: Tim
           from: timeWindow.from,
           to: timeWindow.to,
           limit: STATEMENT_LIMIT,
+          ...narrowing,
         },
         signal,
       }),

@@ -16,17 +16,21 @@ import { VerifyEmailScreen } from "@/features/auth/VerifyEmailScreen";
 import { BillingScreen } from "@/features/billing/BillingScreen";
 import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
 import { ERROR_FILTERS } from "@/features/errors/filters";
+import { databaseFilters } from "@/features/infrastructure/databases/filters";
 import { infrastructureFilters } from "@/features/infrastructure/filters";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
 import { LogsScreen } from "@/features/logs/LogsScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
 import { ProjectsScreen } from "@/features/projects/ProjectsScreen";
+import { rumFilters } from "@/features/rum/filters";
 import { RumScreen } from "@/features/rum/RumScreen";
 import { ServiceDetailScreen } from "@/features/servicedetail/ServiceDetailScreen";
+import { SERVICE_MAP_FILTERS } from "@/features/servicemap/filters";
 import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
 import { parseServiceOrder, SERVICE_FILTERS } from "@/features/services/filters";
 import { ServicesScreen } from "@/features/services/ServicesScreen";
 import { ApiKeysScreen } from "@/features/settings/ApiKeysScreen";
+import { SYNTHETIC_FILTERS } from "@/features/synthetics/filters";
 import { SyntheticsScreen } from "@/features/synthetics/SyntheticsScreen";
 import { parseTraceFilters, toSearchParams } from "@/features/traces/filters";
 import { TraceListScreen } from "@/features/traces/TraceListScreen";
@@ -102,6 +106,8 @@ const serviceMapRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/service-map",
   component: ServiceMapScreen,
+  validateSearch: (search: Record<string, unknown>) =>
+    parseFilterValues(SERVICE_MAP_FILTERS, search),
 });
 
 /**
@@ -145,20 +151,26 @@ const infrastructureRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/infrastructure",
   component: InfrastructureScreen,
-  validateSearch: (search: Record<string, unknown>) =>
-    parseFilterValues(infrastructureFilters([]), search),
+  // Hosts and databases are two views of one route, so it validates both sets.
+  // Their keys are disjoint, so neither view can see the other's filters.
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseFilterValues(infrastructureFilters([]), search),
+    ...parseFilterValues(databaseFilters([]), search),
+  }),
 });
 
 const syntheticsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/synthetics",
   component: SyntheticsScreen,
+  validateSearch: (search: Record<string, unknown>) => parseFilterValues(SYNTHETIC_FILTERS, search),
 });
 
 const rumRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/rum",
   component: RumScreen,
+  validateSearch: (search: Record<string, unknown>) => parseFilterValues(rumFilters({}), search),
 });
 
 const usageRoute = createRoute({

@@ -7,6 +7,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { ApiError } from "@/shared/api-client";
 
+import { rumFilters } from "./filters";
 import { RumView } from "./RumScreen";
 import { ROUTE_TEMPLATE_TAG, readableVitals } from "./vitals";
 
@@ -32,6 +33,10 @@ function render(props: Parameters<typeof RumView>[0]): string {
 }
 
 const BASE = {
+  filterDefinitions: rumFilters({}),
+  filters: {},
+  onFilterChange: () => {},
+  onClearFilters: () => {},
   windowLabel: "hour",
   isPending: false,
   isError: false,
@@ -106,7 +111,11 @@ describe("the RUM screen", () => {
     expect(text).toContain("400 ms");
     // Only one split has more than one group, so there is nothing to choose between.
     expect(text).toContain("Page 2");
-    expect(text).not.toContain("Device");
+    // The split control offers a dimension with its group count beside it, so
+    // `Device 1` is what a second option would look like. Matched that way
+    // rather than on the bare word, which the device *filter* also renders —
+    // narrowing to one device class and splitting by it are different controls.
+    expect(text).not.toMatch(/Device \d/);
   });
 
   it("shows a page the readings cannot carry as a dash rather than a fast number", () => {

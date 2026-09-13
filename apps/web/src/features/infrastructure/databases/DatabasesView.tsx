@@ -1,9 +1,13 @@
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
+import { appliedFilters, FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatDuration } from "@/shared/format/duration";
 import { formatCount } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
@@ -13,6 +17,7 @@ import type { ConnectionStateCount, StatementCost } from "./api";
 import { useConnectionHealth, useSlowStatements } from "./api";
 import type { ServerConnections } from "./connection-health";
 import { describeState, groupByServer, holdsAnOpenTransaction } from "./connection-health";
+import { databaseFilters } from "./filters";
 import {
   describeCallsInWindow,
   describeHashLookup,
@@ -48,15 +53,32 @@ const SEEN_COLUMN = "hidden w-28 shrink-0 text-right md:block";
 export function DatabasesView() {
   const { projectId, rangeId } = useSelection();
   const timeWindow = useLiveWindow(rangeId);
+  const navigate = useNavigate();
+
+  // Databases share the infrastructure route, so they share its search object.
+  // The two sets of keys are disjoint, which is what lets one route validate
+  // both without either view seeing the other's filters.
+  const search = useSearch({ from: "/shell/infrastructure" });
 
   const statements = useSlowStatements(projectId, timeWindow);
   const connections = useConnectionHealth(projectId, timeWindow);
+
+  const rows = statements.data ?? [];
+  const [definitions, setDefinitions] = useState(() => databaseFilters([]));
+  const filters = useMemo(() => parseFilterValues(definitions, search), [definitions, search]);
+  const narrowed = appliedFilters(definitions, filters).length > 0;
+
+  useEffect(() => {
+    if (rows.length > 0) setDefinitions(databaseFilters(rows));
+  }, [rows]);
+
+  const show = (next: Record<string, string | undefined>) =>
+    void navigate({ to: "/infrastructure", search: () => filterParams(next), replace: true });
 
   const isPending = statements.isPending || connections.isPending;
   const isError = statements.isError || connections.isError;
 
   const servers = groupByServer(connections.data?.states ?? []);
-  const rows = statements.data ?? [];
   const polled = servers.length > 0 || rows.length > 0;
 
   return (
@@ -86,7 +108,17 @@ export function DatabasesView() {
       ) : (
         <>
           <ConnectionHealth servers={servers} />
-          {rows.length === 0 ? <NoStatements /> : <StatementTable statements={rows} />}
+          <FilterBar
+            definitions={definitions}
+            values={filters}
+            onChange={(key, value) => show(withFilter(filters, key, value))}
+            onClearAll={() => show({})}
+          />
+          {rows.length === 0 ? (
+            <NoStatements narrowed={narrowed} onClearFilters={() => show({})} />
+          ) : (
+            <StatementTable statements={rows} />
+          )}
         </>
       )}
     </div>
@@ -116,7 +148,29 @@ function NothingPolled() {
  * Connected, and still no statements. A real and different situation: the connection
  * read needs no extension, the statement read needs one.
  */
-function NoStatements() {
+function NoStatements({
+  narrowed,
+  onClearFilters,
+}: {
+  narrowed: boolean;
+  onClearFilters: () => void;
+}) {
+  // "Nothing is slower than a second" and "pg_stat_statements is not installed"
+  // are different findings, and one of them is good news.
+  if (narrowed) {
+    return (
+      <EmptyState
+        title="No statements match these filters"
+        detail="The poller is reading statements, but none in this window match what you asked for. If you asked for the slow ones, none were that slow."
+        action={
+          <Button variant="secondary" onClick={onClearFilters}>
+            Show every statement
+          </Button>
+        }
+      />
+    );
+  }
+
   return (
     <EmptyState
       title="Connected, but no statements were reported"

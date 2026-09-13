@@ -1,8 +1,12 @@
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { ReactFlow } from "@xyflow/react";
 import { useMemo } from "react";
 
+import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
+import { appliedFilters, FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
+import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { plural } from "@/shared/format/plural";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
@@ -11,6 +15,7 @@ import "./service-map.css";
 
 import { useServiceMap } from "./api";
 import { DependencyEdge } from "./DependencyEdge";
+import { SERVICE_MAP_FILTERS } from "./filters";
 import { NODE_HEIGHT, NODE_WIDTH } from "./graph-layout";
 import { ServiceNode } from "./ServiceNode";
 import { buildServiceGraph, DEPENDENCY_EDGE_TYPE, SERVICE_NODE_TYPE } from "./service-graph";
@@ -39,7 +44,19 @@ const ZOOM_RANGE = { min: 0.25, max: 2 };
 export function ServiceMapScreen() {
   const { projectId, rangeId } = useSelection();
   const timeWindow = useLiveWindow(rangeId);
-  const map = useServiceMap(projectId, timeWindow);
+  const navigate = useNavigate();
+
+  // The route's own id, not its path: `/service-map` renders inside the shell.
+  const search = useSearch({ from: "/shell/service-map" });
+  const filters = useMemo(() => parseFilterValues(SERVICE_MAP_FILTERS, search), [search]);
+  const narrowed = appliedFilters(SERVICE_MAP_FILTERS, filters).length > 0;
+
+  // `replace`, not push: the back button belongs to the screen a person came
+  // from, not to every control they tried on the way.
+  const show = (next: Record<string, string | undefined>) =>
+    void navigate({ to: "/service-map", search: () => filterParams(next), replace: true });
+
+  const map = useServiceMap(projectId, timeWindow, filterParams(filters));
 
   const graph = useMemo(() => buildServiceGraph(map.data), [map.data]);
 
@@ -61,6 +78,13 @@ export function ServiceMapScreen() {
         </p>
       </header>
 
+      <FilterBar
+        definitions={SERVICE_MAP_FILTERS}
+        values={filters}
+        onChange={(key, value) => show(withFilter(filters, key, value))}
+        onClearAll={() => show({})}
+      />
+
       {map.isPending ? (
         <MapSkeleton />
       ) : map.isError ? (
@@ -72,10 +96,25 @@ export function ServiceMapScreen() {
           />
         </div>
       ) : graph.nodes.length === 0 ? (
-        <EmptyState
-          title="No cross-service calls in this window"
-          detail={`Nothing called anything else in the last ${timeRangeById(rangeId).label}. An application that is a single service will legitimately show nothing here — the map is drawn from calls between services, so one service has no map. Widen the time range, or check that both sides of a call are exporting.`}
-        />
+        // A map with no failing edges is the result you want; a map with no
+        // edges at all is usually a missing exporter. Saying "no calls" to both
+        // reports a healthy system as a broken one.
+        narrowed ? (
+          <EmptyState
+            title="No dependencies match these filters"
+            detail="Services called each other in this window, but no edge matches what you asked for. If you asked for the failing ones, none of them failed."
+            action={
+              <Button variant="secondary" onClick={() => show({})}>
+                Show the whole map
+              </Button>
+            }
+          />
+        ) : (
+          <EmptyState
+            title="No cross-service calls in this window"
+            detail={`Nothing called anything else in the last ${timeRangeById(rangeId).label}. An application that is a single service will legitimately show nothing here — the map is drawn from calls between services, so one service has no map. Widen the time range, or check that both sides of a call are exporting.`}
+          />
+        )
       ) : (
         <>
           <MapLegend />

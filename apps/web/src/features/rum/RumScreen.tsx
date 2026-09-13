@@ -1,13 +1,19 @@
-import { useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 
+import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
+import type { FilterDefinition, FilterValues } from "@/shared/components/FilterBar";
+import { appliedFilters, FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatCount } from "@/shared/format/number";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
 import type { BreakdownDimension, WebVitalBreakdown } from "./api";
 import { useWebVitals, useWebVitalsBreakdown } from "./api";
+import { rumFilters } from "./filters";
 import type { BreakdownCell, ReadableGroup, ReadableVital } from "./vitals";
 import {
   describeVitals,
@@ -43,17 +49,48 @@ const RATING_WORDS: Record<ReadableVital["rating"], string> = {
 export function RumScreen() {
   const { projectId, rangeId } = useSelection();
   const timeWindow = useLiveWindow(rangeId);
-  const vitals = useWebVitals(projectId, timeWindow);
+  const navigate = useNavigate();
+
+  // The route's own id, not its path: `/rum` renders inside the shell.
+  const search = useSearch({ from: "/shell/rum" });
+
+  // The page list is built from the breakdown that is already loaded, so the
+  // definitions are rebuilt from each answer. `FilterBar` keeps a selected value
+  // that is no longer offered, which is what stops the control and the results
+  // disagreeing while a filter is applied.
+  const [definitions, setDefinitions] = useState(() => rumFilters({}));
+  const filters = useMemo(() => parseFilterValues(definitions, search), [definitions, search]);
+  const narrowing = useMemo(() => filterParams(filters), [filters]);
+
+  const vitals = useWebVitals(projectId, timeWindow, narrowing);
   // Both splits, because which one is worth offering is decided by how many
   // groups each came back with, and that is not knowable without asking.
-  const byPage = useWebVitalsBreakdown(projectId, timeWindow, "page");
-  const byDevice = useWebVitalsBreakdown(projectId, timeWindow, "device");
+  const byPage = useWebVitalsBreakdown(projectId, timeWindow, "page", narrowing);
+  const byDevice = useWebVitalsBreakdown(projectId, timeWindow, "device", narrowing);
+
+  const breakdowns: Breakdowns = useMemo(
+    () => ({ page: byPage.data, device: byDevice.data }),
+    [byPage.data, byDevice.data],
+  );
+
+  useEffect(() => {
+    if ((breakdowns.page?.groups.length ?? 0) > 0) setDefinitions(rumFilters(breakdowns));
+  }, [breakdowns]);
+
+  // `replace`, not push: the back button belongs to the screen a person came
+  // from, not to every control they tried on the way.
+  const show = (next: Record<string, string | undefined>) =>
+    void navigate({ to: "/rum", search: () => filterParams(next), replace: true });
 
   return (
     <RumView
+      filterDefinitions={definitions}
+      filters={filters}
+      onFilterChange={(key, value) => show(withFilter(filters, key, value))}
+      onClearFilters={() => show({})}
       windowLabel={timeRangeById(rangeId).label}
       vitals={readableVitals(vitals.data?.vitals ?? [])}
-      breakdowns={{ page: byPage.data, device: byDevice.data }}
+      breakdowns={breakdowns}
       isPending={vitals.isPending}
       isError={vitals.isError}
       error={vitals.error}
@@ -66,6 +103,10 @@ export function RumScreen() {
 export type Breakdowns = Partial<Record<BreakdownDimension, WebVitalBreakdown>>;
 
 interface RumViewProps {
+  filterDefinitions: readonly FilterDefinition[];
+  filters: FilterValues;
+  onFilterChange: (key: string, value: string | undefined) => void;
+  onClearFilters: () => void;
   /** "hour", "24 hours" — the range picker's own word, so the two agree. */
   windowLabel: string;
   vitals: readonly ReadableVital[];
@@ -78,6 +119,10 @@ interface RumViewProps {
 
 /** Everything the screen shows, with no query client and no clock behind it. */
 export function RumView({
+  filterDefinitions,
+  filters,
+  onFilterChange,
+  onClearFilters,
   windowLabel,
   vitals,
   breakdowns = {},
@@ -87,6 +132,7 @@ export function RumView({
   onRetry,
 }: RumViewProps) {
   const anyReadings = vitals.some((vital) => vital.readings > 0);
+  const narrowed = appliedFilters(filterDefinitions, filters).length > 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -101,6 +147,13 @@ export function RumView({
         </p>
       </header>
 
+      <FilterBar
+        definitions={filterDefinitions}
+        values={filters}
+        onChange={onFilterChange}
+        onClearAll={onClearFilters}
+      />
+
       {isPending ? (
         <div className="px-4">
           <SkeletonRows rows={5} label="Loading web vitals" />
@@ -110,10 +163,25 @@ export function RumView({
           <InlineFailure title="Web vitals could not be loaded" error={error} onRetry={onRetry} />
         </div>
       ) : !anyReadings ? (
-        <EmptyState
-          title="No browser has reported yet"
-          detail="Core Web Vitals arrive from the browser SDK on real page loads, not from your servers. Add the script to your site, or widen the time range — a quiet hour on a low-traffic page looks exactly like this."
-        />
+        // "Nobody visited this page on a tablet" and "the SDK is not installed"
+        // are opposite findings, and one sentence for both sends a reader to
+        // reinstall something that is already working.
+        narrowed ? (
+          <EmptyState
+            title="No readings match these filters"
+            detail="Browsers reported in this window, but none of them match what you asked for. A page nobody loaded on that device has no percentile to show."
+            action={
+              <Button variant="secondary" onClick={onClearFilters}>
+                Show every reading
+              </Button>
+            }
+          />
+        ) : (
+          <EmptyState
+            title="No browser has reported yet"
+            detail="Core Web Vitals arrive from the browser SDK on real page loads, not from your servers. Add the script to your site, or widen the time range — a quiet hour on a low-traffic page looks exactly like this."
+          />
+        )
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
           <VitalGroup
