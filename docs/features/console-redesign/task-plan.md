@@ -349,7 +349,7 @@ screen has its own select and did not. Fixed, with the test naming where it was 
 | Service detail needs "the full RED set: distribution, operations, dependencies" | **Three of the four are built.** `TrendChart` draws rate, failure share and p95; `useServiceEndpoints` is the operations table; `useServiceDependencies` reads `service_edges_1m`. The distribution is the heatmap **OD7 resolved as out of scope** — it cannot be drawn from three stored quantiles and a post-sampling `duration_ms`. |
 | The duration panel shows p50/p95/p99 | **It shows p95 only.** `TrendPoint` carries `p95_ms` alone (`services/schemas.py:52`) even though `TREND_SQL` already computes the whole quantile array and `_to_trend_point` throws two of them away (`service.py:79`). That is the one genuinely unbuilt part of the panel set. |
 | Overview reuses the ranked-entity row | It does, but **the numbers above it cannot come from that list.** `/services` is capped at a hundred, so a project total summed from it under-reports the moment a customer has a hundred and one. |
-| `route-manifest.ts` needs its "never the front door" comment updated | **Done in T47/T48.** What remains is the nav itself: `/` has a route and **no `NAV_SECTIONS` entry at all**, so Findings is unreachable from the sidebar today. |
+| `route-manifest.ts` needs its "never the front door" comment updated | **Done in T45/T46.** What remains is the nav itself: `/` has a route and **no `NAV_SECTIONS` entry at all**, so Findings is unreachable from the sidebar today. |
 
 **A project-wide trend has to be a server read.** Merging quantile states across services is exactly
 what storing states rather than numbers is for, and `quantilesMerge` over the window gives the
@@ -415,47 +415,84 @@ dashboard, whether the live window should tick more slowly, or whether the strip
 read after all.
 
 **Deleted from this block:** the distribution panel (OD7, already decided), the operations and
-dependencies tables (built), and the `route-manifest` comment (T47/T48).
+dependencies tables (built), and the `route-manifest` comment (T45/T46).
 
-### Surfaces and account — six screens
+### Surfaces and account *(re-expanded to `E`, 2026-09-13)*
 
-- [ ] **T35** `P` — `features/rum/RumScreen.tsx`: `readings` as a column, `is_route_template`
-      labelled, ratings named in words not only colour.
-- [ ] **T36** `P` — `infrastructure/signals` widened past host metrics into a metric catalogue.
-- [ ] **T37** `P` — `features/metrics/` (new): the catalogue plus a histogram reader over
-      `bucket_counts`/`explicit_bounds` (AC5); the heatmap **only** where a customer sends OTLP
-      histograms.
-- [ ] **T38** `P` — `features/usage/UsageScreen.tsx`: `settled: false` rendered, `services` beside
-      `billed_services`.
-- [ ] **T39** `P` — settings ×4 — `ApiKeysScreen`, `ProjectsScreen`, `BillingScreen`, `ProfileScreen`
-      — where the dangerous state does most of the work.
-- [ ] **T40** `P` — unsaved-changes warning on every editable form (AC19).
-      → one test per form.
+Six tasks became three. Two were built, one was pointed at the wrong screen, and the largest turned
+out to be half the size the wireframe assumed.
+
+#### What the reading found
+
+| Claim | What the code and the store say |
+|---|---|
+| RUM needs `readings` as a column, `is_route_template` labelled, ratings in words | **All three are built.** The card shows the count and refuses a percentile under ten (`vitals.ts:98-121`); the breakdown draws a `route` tag (`RumScreen.tsx:436`); `RATING_WORDS` names every rating. A thin breakdown cell already renders a dash with a footnote saying why. |
+| Usage needs `settled: false` rendered and `services` beside `billed_services` | **Built.** `describeCounting` renders the unsettled days, and the cap is `max_billed_services` — a plan ceiling, not a second count — which `describeCeiling` already states as "At most N services are billed." |
+| Widen `infrastructure/signals` into a metric catalogue | **Wrong home.** That endpoint answers *"which scrapers are on for this fleet"* and feeds the infrastructure strip. A catalogue answers *"what is my application instrumenting"*. Same shape, different scope; widening the first makes it answer a question the infrastructure screen never asks. |
+| `metrics_histogram`, `metrics_exp_histogram`, `metrics_summary` are written with no reader (AC5) | **True, and the only references anywhere are purge and row-count.** But two of the three are **empty**: nothing in the system sends an exponential histogram or a summary. `metrics_histogram` holds **579,226 rows across 41 metric names** in a day. |
+| Settings is four screens | **Six files carry a form**: `ApiKeysScreen`, `SiteKeysSection`, `ProjectsScreen`, `ProjectSettings`, `BillingScreen`, `ProfileScreen`. Their dangerous states are already built — `ApiKeysScreen` confirms a leak, `ProjectSettings` confirms disabling a signal. |
+
+**The histogram data is real and well formed**: `k6.http_req_duration` carries sixteen buckets with
+explicit bounds `[0, 5, 10, 25, 50, 75, …]`, a count, a sum and a unit. A reader can be built against
+it and tested against it today.
+
+**AC5's minimum is smaller than the wireframe assumed.** It raised "could `metrics_summary` and
+`metrics_exp_histogram` be listed-but-not-drawn in a first pass" as a founder call. The store answers
+it: there is nothing in either to draw. The catalogue lists whatever arrives; the reader is for
+histograms, because histograms are what exists.
+
+#### Tasks
+
+- [ ] **T35** `E` — `metrics/` (new API): `GET /metrics` — a catalogue across all five metric tables,
+      one row per metric name with its shape, series count, point count and last seen. Its own
+      endpoint, not a widened `infrastructure/signals`: that one is scoped to the host-metric names
+      and is read by the infrastructure strip. → `test_metrics.py`: a name present in two tables is
+      one row naming both shapes; an empty table contributes nothing rather than a zero row.
+- [ ] **T36** `E` — `GET /metrics/{name}/histogram` — buckets merged across the window over their
+      own `explicit_bounds`, with `count`, `sum` and estimated percentiles. **Refuses to merge
+      points whose bounds differ**: two histograms with different bucket layouts are not one
+      distribution, and adding their counts silently invents a shape. → `test_metrics.py` for the
+      merge and the refusal, `test_metrics_live.py` against `k6.http_req_duration`'s real sixteen
+      buckets.
+- [ ] **T37** `E` — `features/metrics/` (new) + route + sidebar entry: the catalogue as a ranked
+      list, and a histogram drawn over its own bounds when one is selected. Percentiles labelled as
+      **estimates**, because a percentile off buckets is one. A metric whose shape has no reader
+      lists with its counts and says so rather than being hidden. → `MetricsView.test.ts` for the
+      six states and for the estimate labelling.
+- [ ] **T38** `E` — unsaved-changes warning (AC19), on the forms that *have* a draft to lose:
+      `ProjectSettings`, `ProfileScreen`, `SiteKeysSection`. The other three submit immediately —
+      creating a key or a project has no unsaved state, and warning there would train the warning
+      out of being read. → one test per guarded form, plus one asserting the unguarded three do not
+      warn.
+
+**Deleted from this block:** RUM (built), Usage (built), the `infrastructure/signals` widening (wrong
+screen), and the settings rework (the dangerous states are already there; only the missing warning
+was real, and it is T38).
 
 ### Gateway and the Findings shell
 
-- [ ] **T41** `P` — `features/onboarding/OnboardingScreen.tsx` ends in a confirmation naming the
+- [ ] **T39** `P` — `features/onboarding/OnboardingScreen.tsx` ends in a confirmation naming the
       service that arrived (IA4), not the trace list.
-- [ ] **T42** `P` — `features/auth/`: login, signup, recovery on the Gateway archetype.
-- [ ] **T43** `P` — `features/findings/` (new): feed structure, ordering, acknowledge/resolve; the
+- [ ] **T40** `P` — `features/auth/`: login, signup, recovery on the Gateway archetype.
+- [ ] **T41** `P` — `features/findings/` (new): feed structure, ordering, acknowledge/resolve; the
       card provisional.
-- [ ] **T44** `P` — the healthy state carrying the RED summary, and **visibly distinct from
+- [ ] **T42** `P` — the healthy state carrying the RED summary, and **visibly distinct from
       failed-to-load** (AC18). → a test asserting the two differ.
 
 ### Closing
 
-- [ ] **T45** — `/review-diff`.
-- [ ] **T46** — Design QA: every rebuilt screen against its wireframe and the prototype. *Nothing
+- [ ] **T43** — `/review-diff`.
+- [ ] **T44** — Design QA: every rebuilt screen against its wireframe and the prototype. *Nothing
       implements this gate today.*
-- [x] **T47** — `docs/architecture/frontend.md` updated to current truth. It claimed a database
+- [x] **T45** — `docs/architecture/frontend.md` updated to current truth. It claimed a database
       *screen* that is now a view inside infrastructure, and predated `Sparkline`, `FilterBar`,
       `Delta` and the rule that narrowing a list is the server's job.
-- [x] **T48** — the superseded stance, in **five** places rather than the three the audit found:
+- [x] **T46** — the superseded stance, in **five** places rather than the three the audit found:
       `vision.md`'s one-line vision and its Decisions Log, `feature-catalog.md` F20 *and* its own copy
       of the vision line, and the comment in `route-manifest.ts`. The Decisions Log keeps the 2026-08
       row and marks it superseded rather than rewriting it — a decisions log that edits its own
       history cannot be used to find out why something changed.
-- [ ] **T49** — **Outcome** filled in; `status.md` final.
+- [ ] **T47** — **Outcome** filled in; `status.md` final.
 
 ## New risks
 
@@ -466,7 +503,7 @@ loaded.
 
 **Forty-eight tasks is the real size of this feature**, and only six are exact. That ratio is the
 honest picture: the thin path is known, and everything after it depends on whether the archetype
-survives. The two tasks with no code behind them at all — T46's Design QA gate, and T37's Metrics
+survives. The two tasks with no code behind them at all — T44's Design QA gate, and T37's Metrics
 screen — are the ones most likely to grow.
 
 **`useServiceTrend` doubles the screen's requests** — list and trend, in parallel. Both are bounded
