@@ -66,7 +66,9 @@ HTTP endpoint, fails with a connection or protocol error that names neither
 problem.
 
 Setting it costs nothing and removes a whole class of first-day failure. Every
-page in this section sets it.
+page here that configures an SDK through these variables sets it, and so does the
+onboarding screen. [Go](languages/go.md) is the one exception: there the exporter
+import fixes the protocol, so the variable changes nothing either way.
 
 ## What the endpoint accepts
 

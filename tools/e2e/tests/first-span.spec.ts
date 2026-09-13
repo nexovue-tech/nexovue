@@ -46,10 +46,16 @@ test("a span exported with a new account's key becomes a waterfall in its browse
   await expect(page.getByText(STOREFRONT.service, { exact: true })).toBeVisible();
   await expect(page.getByText(STOREFRONT.name, { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "See everything arriving" }).click();
+  // The confirmation offers the trace itself rather than the list (IA4). The
+  // tail sampler keeps a project's first traces unconditionally, so the one just
+  // sent is there to open rather than sampled away before anybody looks.
+  await page.getByRole("button", { name: "See your trace" }).click();
+  await expect(page).toHaveURL(new RegExp(`/traces/${trace.traceId}$`));
 
+  // The list is still worth asserting, for the tenancy claim rather than the
+  // navigation: a fresh organisation sees its own trace and no one else's.
+  await page.goto("/traces");
   const listedTrace = page.getByRole("link").filter({ hasText: STOREFRONT.name });
-  // A fresh organisation sees its own trace and no one else's.
   await expect(listedTrace).toHaveCount(1);
   await expect(listedTrace).toContainText(STOREFRONT.service);
 

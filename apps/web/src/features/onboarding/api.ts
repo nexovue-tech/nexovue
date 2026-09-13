@@ -9,8 +9,14 @@ import { apiClient } from "@/shared/api-client";
  * The response shape is declared here rather than imported from the traces feature,
  * because features do not import each other — and this needs one field of it.
  */
+export interface FirstTrace {
+  trace_id: string;
+  root_service: string;
+  root_name: string;
+}
+
 interface FirstTraceResponse {
-  traces: Array<{ trace_id: string; root_service: string; root_name: string }>;
+  traces: FirstTrace[];
 }
 
 /**
