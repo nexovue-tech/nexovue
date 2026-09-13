@@ -2,13 +2,11 @@ import { Menu } from "lucide-react";
 
 import { SelectField } from "@/shared/components/SelectField";
 import { useProjectSelection } from "@/shared/projects";
-import {
-  setSelectedProjectId,
-  setSelectedRangeId,
-  TIME_RANGES,
-  useSelection,
-} from "@/shared/selection";
+import { setSelectedProjectId } from "@/shared/selection";
 import { ThemeToggle } from "@/shared/theme/ThemeToggle";
+
+import { RefreshControl } from "./RefreshControl";
+import { WindowControl } from "./WindowControl";
 
 /**
  * Project and time range are the two things that qualify everything on every screen, so
@@ -20,7 +18,6 @@ import { ThemeToggle } from "@/shared/theme/ThemeToggle";
  */
 export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
   const { projects, projectId } = useProjectSelection();
-  const { rangeId } = useSelection();
 
   return (
     <header className="flex h-10 shrink-0 items-center gap-4 border-line border-b bg-surface px-4">
@@ -53,15 +50,13 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
 
       <span aria-hidden className="h-4 w-px bg-line" />
 
-      <SelectField
-        label="Last"
-        value={rangeId}
-        options={TIME_RANGES}
-        onChange={setSelectedRangeId}
-        optionLabel={(range) => range.label}
-      />
+      <WindowControl />
 
       <div className="flex-1" />
+
+      <RefreshControl />
+
+      <span aria-hidden className="h-4 w-px bg-line" />
 
       {/* Search is not here yet, and ⌘K stays reserved for it — no screen may bind
           that chord to something else in the meantime. It carried a button and a
