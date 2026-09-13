@@ -454,7 +454,7 @@ histograms, because histograms are what exists.
       distribution, and adding their counts silently invents a shape. → `test_metrics.py` for the
       merge and the refusal, `test_metrics_live.py` against `k6.http_req_duration`'s real sixteen
       buckets.
-- [ ] **T37** `E` — `features/metrics/` (new) + route + sidebar entry: the catalogue as a ranked
+- [x] **T37** `E` — `features/metrics/` (new) + route + sidebar entry: the catalogue as a ranked
       list, and a histogram drawn over its own bounds when one is selected. Percentiles labelled as
       **estimates**, because a percentile off buckets is one. A metric whose shape has no reader
       lists with its counts and says so rather than being hidden. → `MetricsView.test.ts` for the

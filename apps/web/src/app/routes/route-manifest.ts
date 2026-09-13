@@ -24,6 +24,7 @@ export type NavPath =
   | "/rum"
   | "/synthetics"
   | "/infrastructure"
+  | "/metrics"
   | "/usage"
   | "/settings/api-keys"
   | "/settings/projects"
@@ -116,6 +117,13 @@ export const SHELL_SCREENS: ScreenDefinition[] = [
     title: "Infrastructure",
     description:
       "Hosts, containers and databases: CPU, memory, disk and network behind the services, and the statements the databases are spending their time on.",
+    taskId: "P1-44",
+  },
+  {
+    path: "/metrics",
+    title: "Metrics",
+    description:
+      "Every metric this project reports, whether or not another screen happens to chart it, with the distribution behind any histogram.",
     taskId: "P1-44",
   },
   {
@@ -226,6 +234,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: "/rum", title: "Real user monitoring" },
       { path: "/synthetics", title: "Synthetics" },
       { path: "/infrastructure", title: "Infrastructure" },
+      { path: "/metrics", title: "Metrics" },
     ],
   },
   {

@@ -21,6 +21,7 @@ import { infrastructureFilters } from "@/features/infrastructure/filters";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
 import { LogsScreen, scopedService } from "@/features/logs/LogsScreen";
 import { severityFilterById } from "@/features/logs/severity";
+import { MetricsScreen } from "@/features/metrics/MetricsScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
 import { OverviewScreen } from "@/features/overview/OverviewScreen";
 import { ProjectsScreen } from "@/features/projects/ProjectsScreen";
@@ -183,6 +184,17 @@ const infrastructureRoute = createRoute({
   }),
 });
 
+const metricsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/metrics",
+  component: MetricsScreen,
+  // The chosen metric lives in the address bar, so "look at this one" is a link
+  // somebody can paste rather than a click somebody has to describe.
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...(typeof search.metric === "string" && search.metric ? { metric: search.metric } : {}),
+  }),
+});
+
 const syntheticsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/synthetics",
@@ -321,6 +333,7 @@ const routeTree = rootRoute.addChildren([
     errorsRoute,
     logsRoute,
     infrastructureRoute,
+    metricsRoute,
     syntheticsRoute,
     rumRoute,
     usageRoute,
