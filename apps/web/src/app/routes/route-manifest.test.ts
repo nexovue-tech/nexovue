@@ -32,4 +32,39 @@ describe("the sidebar", () => {
 
     expect(offered).toEqual([...new Set(offered)]);
   });
+
+  it("offers every screen a person is meant to reach from inside the app", () => {
+    // The other direction, and the one that was missing. The test above catches
+    // a nav entry whose route was deleted; nothing caught a *route* the sidebar
+    // never named — and Findings was exactly that for the whole of Phase 1. It
+    // had a screen, a placeholder and a task id, and nothing in the running app
+    // navigated to it.
+    //
+    // The exceptions are listed rather than pattern-matched: a screen reached
+    // only by following something (a trace, a service) or only while signed out
+    // has nothing to put in a sidebar, and each entry here is that claim made
+    // explicitly.
+    const reachedByFollowingSomething = new Set([
+      "/services/$name",
+      "/traces/$traceId",
+      "/onboarding",
+    ]);
+    const signedOut = new Set([
+      "/login",
+      "/signup",
+      "/forgot-password",
+      "/reset-password",
+      "/verify-email",
+    ]);
+
+    const offered = new Set<string>(
+      NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.path)),
+    );
+    const unreachable = [...servedPaths()].filter(
+      (path) =>
+        !offered.has(path) && !reachedByFollowingSomething.has(path) && !signedOut.has(path),
+    );
+
+    expect(unreachable).toEqual([]);
+  });
 });

@@ -1,3 +1,5 @@
+import type { PlotRows, SeriesToken } from "@/shared/components/TrendChart";
+
 import type { TrendPoint } from "./api";
 
 /**
@@ -13,12 +15,12 @@ import type { TrendPoint } from "./api";
  * uPlot's aligned-data shape, spelled out so this module stays free of the library.
  * One x row in seconds, then the values drawn against it.
  */
-export type PlotRows = [xSeconds: number[], values: number[]];
+// The chart's own shapes, which live beside the chart now that Overview draws
+// the same panels from different numbers. Re-exported so this module stays the
+// one place the rest of the feature reads them from.
+export type { PlotRows, SeriesToken };
 
 export type TrendMetric = "rate" | "errorRate" | "latency";
-
-/** The chart palette tokens, `--color-series-1` … `-6`. */
-export type SeriesToken = 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface TrendPlot {
   metric: TrendMetric;

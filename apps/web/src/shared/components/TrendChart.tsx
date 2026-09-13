@@ -2,12 +2,9 @@ import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import "./trend-chart.css";
 
-import { useEffect, useRef } from "react";
-
+import { useEffect, useMemo, useRef } from "react";
+import type { DeployMarker } from "@/shared/deploy-markers";
 import { useTheme } from "@/shared/theme/use-theme";
-
-import type { DeployMarker } from "./deploy-markers";
-import type { TrendPlot } from "./trend-series";
 
 /**
  * One metric of one service, over the window, drawn with uPlot.
@@ -34,7 +31,10 @@ const Y_AXIS_WIDTH = 52;
 const X_AXIS_HEIGHT = 40;
 
 /** Written out rather than built, so Tailwind's scanner can see every class. */
-const SERIES_TEXT_CLASS: Record<TrendPlot["seriesToken"], string> = {
+/** Solid, then progressively broken: p50 reads as the line, p99 as the edge. */
+const DASHES: readonly (number[] | undefined)[] = [undefined, [4, 3], [1, 3]];
+
+const SERIES_TEXT_CLASS: Record<SeriesToken | "critical", string> = {
   1: "text-series-1",
   2: "text-series-2",
   3: "text-series-3",
@@ -51,8 +51,27 @@ interface ChartPalette {
   font: string;
 }
 
+/** The chart palette tokens, `--color-series-1` … `-6`. */
+export type SeriesToken = 1 | 2 | 3 | 4 | 5 | 6;
+
+/**
+ * uPlot's own shape: x values in **seconds**, then one row per series.
+ *
+ * More than one row means more than one line *on one scale* — which is the
+ * point of drawing them together. Three separately-scaled percentile lines
+ * would each fill their own chart and look identical; on one scale, a p99
+ * pulling away from a p95 is visible, and that is the reading.
+ */
+export type PlotRows = [xSeconds: number[], ...series: number[][]];
+
 export interface TrendChartProps {
-  plot: TrendPlot;
+  /**
+   * One name per series, in `data`'s own order. A single-series chart passes
+   * one; the duration panel passes three.
+   */
+  label: string | readonly string[];
+  seriesToken: SeriesToken | "critical";
+  data: PlotRows;
   /** Vertical rules across the plot — the deploys inside this window (IA3). */
   markers?: readonly DeployMarker[];
   /** How a y value is written on the axis — the metric's own unit, not a raw number. */
@@ -71,15 +90,23 @@ export function TrendChart(props: TrendChartProps) {
   return <TrendCanvas key={resolved} {...props} />;
 }
 
-function TrendCanvas({ plot, markers = [], formatValue, description }: TrendChartProps) {
+function TrendCanvas({
+  label,
+  seriesToken,
+  data,
+  markers = [],
+  formatValue,
+  description,
+}: TrendChartProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const probeRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
-  const latest = useRef({ plot, formatValue, markers });
+  const labels = useMemo(() => (Array.isArray(label) ? label : [label as string]), [label]);
+  const latest = useRef({ labels, data, formatValue, markers });
 
   useEffect(() => {
-    latest.current = { plot, formatValue, markers };
-  }, [plot, formatValue, markers]);
+    latest.current = { labels, data, formatValue, markers };
+  }, [labels, data, formatValue, markers]);
 
   // Markers are read through the ref rather than closed over, so a deploy
   // arriving after the chart was built is drawn on the next frame instead of
@@ -98,10 +125,10 @@ function TrendCanvas({ plot, markers = [], formatValue, description }: TrendChar
         readPalette(probe),
         host.clientWidth,
         (value) => latest.current.formatValue(value),
-        latest.current.plot.label,
+        latest.current.labels,
         () => latest.current.markers,
       ),
-      latest.current.plot.data,
+      latest.current.data,
       host,
     );
     chartRef.current = chart;
@@ -119,18 +146,18 @@ function TrendCanvas({ plot, markers = [], formatValue, description }: TrendChar
   }, []);
 
   useEffect(() => {
-    chartRef.current?.setData(plot.data);
-  }, [plot]);
+    chartRef.current?.setData(data);
+  }, [data]);
 
   return (
-    <div className={`nv-trend-chart ${SERIES_TEXT_CLASS[plot.seriesToken]}`}>
+    <div className={`nv-trend-chart ${SERIES_TEXT_CLASS[seriesToken]}`}>
       {/* The chart's colours, worn by real elements so the token layer stays the only
           place a colour is decided. Sized to nothing rather than hidden: display:none
           has no computed colour to read. */}
       <div ref={probeRef} aria-hidden="true" className="h-0 overflow-hidden">
         <span data-probe="axis" className="font-mono text-2xs text-ink-dim" />
         <span data-probe="grid" className="text-line-subtle" />
-        <span data-probe="line" className={SERIES_TEXT_CLASS[plot.seriesToken]} />
+        <span data-probe="line" className={SERIES_TEXT_CLASS[seriesToken]} />
       </div>
 
       <div ref={hostRef} role="img" aria-label={description} className="w-full" />
@@ -197,7 +224,7 @@ function chartOptions(
   palette: ChartPalette,
   width: number,
   formatValue: (value: number) => string,
-  label: string,
+  labels: readonly string[],
   markers: () => readonly DeployMarker[],
 ): uPlot.Options {
   return {
@@ -206,8 +233,11 @@ function chartOptions(
     // and a rule painted on top of the reading obscures the thing it explains.
     hooks: { drawClear: [(chart) => drawDeploys(chart, markers(), palette)] },
     height: CHART_HEIGHT,
-    // The heading above the chart names the series; a legend would repeat it.
-    legend: { show: false },
+    // One series is named by the heading above the chart, so a legend repeats
+    // it. Several are not: three duration lines in one colour are three lines
+    // nobody can tell apart, and a p99 pulling away from a p95 — the reading
+    // the panel exists for — is invisible without knowing which is which.
+    legend: { show: labels.length > 1, live: false },
     padding: [8, 8, 0, 0],
     cursor: { y: false, points: { show: false }, drag: { x: false, y: false } },
     scales: {
@@ -238,6 +268,23 @@ function chartOptions(
         values: (_chart, splits) => splits.map((value) => formatValue(value)),
       },
     ],
-    series: [{}, { label, stroke: palette.line, width: 1.5, points: { show: false } }],
+    // One entry per series after the x row. Every line takes the same stroke:
+    // the panel's colour says *which panel*, and a second hue inside it would
+    // say "different kind of thing" about three views of one measurement.
+    // They are told apart by their labels and by where they sit.
+    series: [
+      {},
+      ...labels.map((name, index) => ({
+        label: name,
+        stroke: palette.line,
+        // One hue for the panel — a second would say "different kind of thing"
+        // about three views of one measurement. They are told apart by weight
+        // and dash instead: the first line is the emphasised one, because p50
+        // is the typical request and the tail is context around it.
+        width: index === 0 ? 1.5 : 1,
+        dash: DASHES[Math.min(index, DASHES.length - 1)],
+        points: { show: false },
+      })),
+    ],
   };
 }

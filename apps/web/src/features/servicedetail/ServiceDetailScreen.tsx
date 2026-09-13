@@ -6,6 +6,9 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { CHART_HEIGHT, TrendChart } from "@/shared/components/TrendChart";
+import type { DeployMarker } from "@/shared/deploy-markers";
+import { deployMarkers } from "@/shared/deploy-markers";
 import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatCount, formatPercent } from "@/shared/format/number";
@@ -31,8 +34,7 @@ import {
   useServiceErrors,
   useServiceTrend,
 } from "./api";
-import type { DeployMarker } from "./deploy-markers";
-import { deployMarkers } from "./deploy-markers";
+
 import type { Dependency, DetailState } from "./service-detail";
 import {
   dependencyKey,
@@ -43,7 +45,7 @@ import {
   detailState,
   neighboursOf,
 } from "./service-detail";
-import { CHART_HEIGHT, TrendChart } from "./TrendChart";
+
 import type { TrendMetric, TrendPlot } from "./trend-series";
 import { buildTrendPlots, describePlot } from "./trend-series";
 
@@ -491,7 +493,9 @@ function TrendPanel({
         </p>
       ) : (
         <TrendChart
-          plot={plot}
+          label={plot.label}
+          seriesToken={plot.seriesToken}
+          data={plot.data}
           markers={markers}
           formatValue={AXIS_FORMAT[plot.metric]}
           description={description}

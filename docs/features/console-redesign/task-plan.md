@@ -364,17 +364,17 @@ second answer to "how many nodes"; if it proves too slow the fix is a narrower r
 
 #### Tasks
 
-- [ ] **T30** `E` — `services/queries.py` + `service.py` + `router.py`: `GET /services/overview`
+- [x] **T30** `E` — `services/queries.py` + `service.py` + `router.py`: `GET /services/overview`
       returning the project's RED over the window and bucketed across it — `quantilesMerge` grouped
       by bucket alone, never per service. → `test_services.py`: the aggregate is not the sum of the
       list's rows; a window with no rollup is an empty answer, not a zeroed one.
       `test_services_live.py`: the project p95 read whole differs from the mean of its services'.
-- [ ] **T31** `E` — `features/overview/` (new) + route at `/`: three RED panels from T30, one deploy
+- [x] **T31** `E` — `features/overview/` (new) + route at `/`: three RED panels from T30, one deploy
       marker spanning all three (reusing `deploy-markers.ts`, not a second reader of `/deploys`),
       the ranked-entity row reused from `features/services`, and a strip of one line per surface.
       → `OverviewView.test.ts`: all six states; a surface with no data shows an em dash, never a
       zero; the marker is drawn on every panel or on none.
-- [ ] **T32** `E` — `route-manifest.ts`: Overview above Signals and **Findings gains its first
+- [x] **T32** `E` — `route-manifest.ts`: Overview above Signals and **Findings gains its first
       sidebar entry** — it has a route and no `NAV_SECTIONS` item, so nothing in the app navigates
       to it. → `route-manifest.test.ts` already fails on a nav path the router does not serve; add
       that every *served* screen with a title is reachable, which is the direction it does not yet
@@ -388,6 +388,18 @@ second answer to "how many nodes"; if it proves too slow the fix is a narrower r
       USE**: nothing stored carries saturation — no queue depth, no run queue, no IO wait — and
       relabelling utilization as saturation would be inventing a measurement. → a test that the
       panel set names what it cannot show rather than omitting it silently.
+
+**Rate limiting, found in the browser and worth knowing.** `/services`, `/infra`, `/synthetics` and
+`/rum` are all in the telemetry tier: **60 requests a minute, four in flight** (`ratelimit/policy.py`).
+Overview wanted five telemetry reads at once, and a fifth concurrent request is *refused*, not
+queued — so one read failed on every cold load, and which one lost was a race. The strip now waits
+for the panels: two reads, then three.
+
+What remains is a rate rather than a defect. The live window re-buckets every ten seconds, so an
+idle Overview refetches five telemetry reads six times a minute — **30 of the tier's 60**. Two tabs
+on this screen exceed it. **Open for the founder:** whether the telemetry tier is sized for a
+dashboard, whether the live window should tick more slowly, or whether the strip should become one
+read after all.
 
 **Deleted from this block:** the distribution panel (OD7, already decided), the operations and
 dependencies tables (built), and the `route-manifest` comment (T47/T48).

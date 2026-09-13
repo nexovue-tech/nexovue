@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 /** Faces the first screen renders in. Everything else may arrive late. */
 const CRITICAL_FONT_FACES = [
@@ -47,6 +47,12 @@ function preloadCriticalFonts(): Plugin {
 
 export default defineConfig({
   plugins: [tailwindcss(), react(), preloadCriticalFonts()],
+  test: {
+    // jsdom has no `matchMedia`, and uPlot reads it at module load — so a test
+    // importing any chart fails while collecting, with a stack pointing into
+    // `node_modules`. See `src/test-setup.ts`.
+    setupFiles: ["./src/test-setup.ts"],
+  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

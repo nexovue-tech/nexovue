@@ -22,6 +22,7 @@ import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureSc
 import { LogsScreen, scopedService } from "@/features/logs/LogsScreen";
 import { severityFilterById } from "@/features/logs/severity";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
+import { OverviewScreen } from "@/features/overview/OverviewScreen";
 import { ProjectsScreen } from "@/features/projects/ProjectsScreen";
 import { rumFilters } from "@/features/rum/filters";
 import { RumScreen } from "@/features/rum/RumScreen";
@@ -75,10 +76,24 @@ const shellRoute = createRoute({
 
 /* ------------------------------------------------------------------ the screens */
 
-const findingsRoute = createRoute({
+/**
+ * Overview holds `/` until the insight engine exists (OD2).
+ *
+ * Not "a dashboard became the front door": the founder's 2026-09-12 decision is
+ * that insights and dashboards are both first-class, and the feed is still what
+ * a person lands on once it is real. Until then `/` showing nothing was the
+ * worse answer — a front door that says the product has not started.
+ */
+const overviewRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/",
-  component: placeholderFor("/"),
+  component: OverviewScreen,
+});
+
+const findingsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/findings",
+  component: placeholderFor("/findings"),
 });
 
 const servicesRoute = createRoute({
@@ -296,6 +311,7 @@ const notFoundRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   shellRoute.addChildren([
+    overviewRoute,
     findingsRoute,
     servicesRoute,
     serviceRoute,

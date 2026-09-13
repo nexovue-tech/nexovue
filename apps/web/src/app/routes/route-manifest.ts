@@ -15,6 +15,7 @@
 /** Only paths that exist in the tree. Keeps the sidebar from pointing at nothing. */
 export type NavPath =
   | "/"
+  | "/findings"
   | "/services"
   | "/service-map"
   | "/traces"
@@ -54,7 +55,7 @@ export interface NavSection {
  * route only until the insight engine exists to fill it.
  */
 export const FINDINGS_FEED: ScreenDefinition = {
-  path: "/",
+  path: "/findings",
   title: "Findings",
   description:
     "The feed of things that need you, written as sentences. Phase 2 builds it; until then this route stays deliberately empty rather than being filled by whatever happens to be ready first.",
@@ -199,6 +200,16 @@ export const BARE_SCREENS: ScreenDefinition[] = [
 
 /** Sidebar grouping. Ordered by how often the screen is the answer, not alphabetically. */
 export const NAV_SECTIONS: NavSection[] = [
+  {
+    // Both first-class, per the founder's 2026-09-12 decision. Findings had no
+    // entry at all until now: it has been a route nothing in the running app
+    // navigated to, which is how a screen stays invisible while looking built.
+    label: "Home",
+    items: [
+      { path: "/", title: "Overview" },
+      { path: "/findings", title: "Findings" },
+    ],
+  },
   {
     label: "Signals",
     items: [

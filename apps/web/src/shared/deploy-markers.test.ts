@@ -62,3 +62,28 @@ describe("which deploys a chart draws", () => {
     expect(deployMarkers([deploy()], { ...WINDOW, from: "not a time" })).toEqual([]);
   });
 });
+
+describe("a chart with no single service", () => {
+  it("draws every deploy in the window, whichever service shipped it", () => {
+    // The dashboard's panels are the whole project, and a deploy that moved
+    // rate, errors and latency together is the reading — whoever shipped it.
+    const markers = deployMarkers(
+      [
+        deploy({ version: "checkout-1", service_name: "checkout" }),
+        deploy({ version: "payments-1", service_name: "payments" }),
+      ],
+      { from: WINDOW.from, to: WINDOW.to },
+    );
+
+    expect(markers.map((marker) => marker.version)).toEqual(["checkout-1", "payments-1"]);
+  });
+
+  it("still drops one outside the window", () => {
+    const markers = deployMarkers([deploy({ deployed_at: "2026-09-13T09:00:00Z" })], {
+      from: WINDOW.from,
+      to: WINDOW.to,
+    });
+
+    expect(markers).toEqual([]);
+  });
+});

@@ -31,12 +31,12 @@ const MILLISECONDS_PER_SECOND = 1000;
  * rule pinned to the left of the chart would say "this deploy happened at the
  * start of the window", which is a claim about a time nobody measured.
  *
- * Filtered to the service the chart is about. A project deploys many services,
- * and a rule from an unrelated one is an invitation to blame the wrong change.
+ * Filtered to the service the chart is about, when one is named. The dashboard
+ * names none: there, every deploy in the window belongs on the chart.
  */
 export function deployMarkers(
   deploys: readonly DeployEvent[],
-  options: { serviceName: string; from: string; to: string },
+  options: { serviceName?: string; from: string; to: string },
 ): DeployMarker[] {
   const from = Date.parse(options.from);
   const to = Date.parse(options.to);
@@ -44,7 +44,12 @@ export function deployMarkers(
 
   const markers: DeployMarker[] = [];
   for (const deploy of deploys) {
-    if (deploy.service_name !== options.serviceName) continue;
+    // No service named means the whole project — which is what the dashboard
+    // asks for, because a deploy that moved rate, errors and latency together
+    // is the reading, whichever service shipped it. A service's own chart names
+    // one, because a rule from an unrelated service there is an invitation to
+    // blame the wrong change.
+    if (options.serviceName !== undefined && deploy.service_name !== options.serviceName) continue;
     const at = Date.parse(deploy.deployed_at);
     if (!Number.isFinite(at) || at < from || at > to) continue;
     markers.push({ at: at / MILLISECONDS_PER_SECOND, version: deploy.version });
