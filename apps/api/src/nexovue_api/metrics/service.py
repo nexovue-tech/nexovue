@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from bisect import bisect_left
+from collections import defaultdict
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Final
 
+from nexovue_api import rollup
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.metrics import queries
 from nexovue_api.metrics.schemas import (
+    DurationHeatmapResponse,
+    HeatmapColumn,
     HistogramLayout,
     HistogramResponse,
     MetricCatalogueResponse,
@@ -22,6 +26,8 @@ from nexovue_api.window import receive_window
 # being readable anyway, and the cap keeps the group-by across five tables
 # bounded however many names a customer invents.
 MAX_METRICS: Final = 500
+
+NANOSECONDS_PER_SECOND: Final = 1_000_000_000
 
 
 async def list_metrics(
@@ -217,3 +223,95 @@ def _quantile(
 
     already = cumulative[index - 1] if index > 0 else 0
     return lower + (upper - lower) * ((rank - already) / within)
+
+
+async def read_duration_heatmap(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    service_name: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> DurationHeatmapResponse:
+    """One service's latency distribution over time, when it sends a histogram.
+
+    Returns `available=False` rather than an empty chart when it does not, which
+    is OD7's decision: the panel is absent for a customer whose SDK sends no
+    OTLP histogram, because an empty heatmap and a service with no traffic look
+    identical once drawn.
+    """
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
+    # One bucket earlier, so the first column the caller sees has a predecessor
+    # to subtract. Without it that column carries the whole history since the
+    # exporter started. Discarded again by `from_nanos` inside the statement.
+    read_from = from_time - timedelta(seconds=bucket_seconds)
+    received_from, received_to = receive_window(read_from, to_time)
+
+    rows = await repository.query(
+        queries.HEATMAP_SQL,
+        {
+            "project_id": project_id,
+            "service_name": service_name,
+            "metric_names": list(queries.DURATION_METRIC_NAMES),
+            "read_from": read_from,
+            "to_time": to_time,
+            "received_from": received_from,
+            "received_to": received_to,
+            "from_nanos": int(from_time.timestamp() * NANOSECONDS_PER_SECOND),
+            "bucket_seconds": bucket_seconds,
+        },
+    )
+
+    answer = DurationHeatmapResponse(
+        service_name=service_name,
+        bucket_seconds=bucket_seconds,
+        window_start=from_time,
+        window_end=to_time,
+    )
+    chosen = _busiest_layout(rows)
+    if chosen is None:
+        return answer
+
+    (metric_name, unit, bounds), columns = chosen
+    answer.available = True
+    answer.metric_name = metric_name
+    # The exporter's own unit. Without it a bound renders as a bare number and
+    # `10000` reads as ten thousand of something rather than ten seconds.
+    answer.unit = unit
+    answer.bounds = bounds
+    answer.columns = columns
+    return answer
+
+
+def _busiest_layout(
+    rows: Sequence[dict[str, Any]],
+) -> tuple[tuple[str, str, list[float]], list[HeatmapColumn]] | None:
+    """One heatmap, from whatever the service actually sent.
+
+    A service can report under both OTel spellings, or with two bucket layouts,
+    and those are different distributions that must not be drawn as one — the
+    same rule `HISTOGRAM_SQL` follows. A heatmap is a single panel rather than a
+    list, so this picks the layout carrying the most observations and leaves the
+    rest; the catalogue is where a reader goes to see that there were several.
+    """
+    grouped: dict[tuple[str, str, tuple[float, ...]], list[HeatmapColumn]] = defaultdict(list)
+    for row in rows:
+        key = (
+            values.text(row["metric_name"]),
+            values.text(row["metric_unit"]),
+            tuple(float(bound) for bound in row["bounds"]),
+        )
+        grouped[key].append(
+            HeatmapColumn(
+                bucket=values.nanos_to_datetime(row["bucket_nanos"]),
+                counts=[max(int(count), 0) for count in row["counts"]],
+                total=max(int(row["total"]), 0),
+            )
+        )
+    if not grouped:
+        return None
+
+    (metric_name, unit, bounds), columns = max(
+        grouped.items(), key=lambda entry: sum(column.total for column in entry[1])
+    )
+    return (metric_name, unit, list(bounds)), columns

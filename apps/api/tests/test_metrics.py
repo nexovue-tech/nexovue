@@ -523,3 +523,157 @@ class TestTheHistogramStatements:
         hour of ten-second exports reports 360 times the traffic."""
         assert "argMax(bucket_counts, timestamp)" in queries.HISTOGRAM_SQL
         assert "argMin(bucket_counts, timestamp)" in queries.HISTOGRAM_SQL
+
+
+# ------------------------------------------------------ the conditional heatmap
+
+
+_HEATMAP_COLUMNS: Final = [
+    "metric_name",
+    "metric_unit",
+    "bounds",
+    "bucket_nanos",
+    "counts",
+    "total",
+]
+
+
+class FakeHeatmapStore:
+    """Answers the heatmap statement and nothing else."""
+
+    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+        self._rows = rows
+        self.last_parameters: dict[str, Any] = {}
+
+    async def query(
+        self,
+        sql: str,
+        parameters: dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+    ) -> FakeQueryResult:
+        self.last_parameters = dict(parameters or {})
+        if sql == queries.HEATMAP_SQL:
+            return FakeQueryResult(_HEATMAP_COLUMNS, self._rows)
+        raise AssertionError(f"the heatmap read issued an unexpected statement:\n{sql}")
+
+
+def _column(
+    bucket_nanos: int,
+    counts: list[int],
+    *,
+    bounds: list[float] | None = None,
+    metric_name: str = "http.server.request.duration",
+    unit: str = "ms",
+) -> tuple[Any, ...]:
+    return (
+        metric_name,
+        unit,
+        [1.0, 5.0, 25.0] if bounds is None else bounds,
+        bucket_nanos,
+        counts,
+        sum(counts),
+    )
+
+
+async def _heatmap(store: FakeHeatmapStore, service_name: str = "checkout") -> Any:
+    start, end = _window()
+    return await service.read_duration_heatmap(
+        _repository(TENANT_A, store),  # type: ignore[arg-type]
+        project_id=PROJECT_A,
+        service_name=service_name,
+        from_time=start,
+        to_time=end,
+    )
+
+
+class TestTheConditionalHeatmap:
+    async def test_a_service_sending_histograms_gets_a_panel(self) -> None:
+        store = FakeHeatmapStore(
+            [
+                _column(_LATEST_NANOS, [1, 4, 2, 0]),
+                _column(_LATEST_NANOS + 60_000_000_000, [0, 6, 3, 1]),
+            ]
+        )
+
+        answer = await _heatmap(store)
+
+        assert answer.available is True
+        assert len(answer.columns) == 2
+        assert answer.bounds == [1.0, 5.0, 25.0]
+        assert answer.columns[0].total == 7
+        # Without the exporter's own unit a bound renders as a bare number, and
+        # `10000` reads as ten thousand of something rather than ten seconds.
+        assert answer.unit == "ms"
+
+    async def test_a_service_sending_none_has_no_panel_rather_than_an_empty_one(self) -> None:
+        """OD7 says absent, not empty.
+
+        An empty heatmap and a service with no traffic are the same picture, and
+        only one of them is the truth. The screen is told which it holds.
+        """
+        answer = await _heatmap(FakeHeatmapStore([]))
+
+        assert answer.available is False
+        assert answer.columns == []
+        assert answer.bounds == []
+
+    async def test_both_spellings_of_the_metric_are_asked_for(self) -> None:
+        """OTel renamed this metric and both names are in the wild — an SDK's
+        version decides which it emits. Asking for one shows the panel to a
+        fraction of the services that can have it."""
+        store = FakeHeatmapStore([])
+
+        await _heatmap(store)
+
+        assert set(store.last_parameters["metric_names"]) == {
+            "http.server.duration",
+            "http.server.request.duration",
+        }
+
+    async def test_the_read_starts_one_bucket_before_the_window(self) -> None:
+        """The first column needs a predecessor to subtract, or it carries the
+        whole history since the exporter started."""
+        store = FakeHeatmapStore([])
+        start, _ = _window()
+
+        answer = await _heatmap(store)
+
+        read_from = store.last_parameters["read_from"]
+        assert read_from < start
+        assert (start - read_from).total_seconds() == answer.bucket_seconds
+
+    async def test_two_layouts_are_not_drawn_as_one_panel(self) -> None:
+        """A heatmap is a single panel, so it takes the busiest layout rather
+        than adding two distributions measured on different scales together.
+        The catalogue is where a reader sees that there were several."""
+        store = FakeHeatmapStore(
+            [
+                _column(_LATEST_NANOS, [1, 1], bounds=[10.0]),
+                _column(_LATEST_NANOS, [500, 400], bounds=[0.01]),
+            ]
+        )
+
+        answer = await _heatmap(store)
+
+        assert answer.bounds == [0.01]
+        assert len(answer.columns) == 1
+        assert answer.columns[0].total == 900
+
+    async def test_a_negative_column_never_reaches_the_response(self) -> None:
+        """A restart between two buckets can leave a subtraction below zero, and
+        a negative count is not a reading anybody can draw."""
+        store = FakeHeatmapStore([_column(_LATEST_NANOS, [-3, 4, 1, 0])])
+
+        answer = await _heatmap(store)
+
+        assert answer.columns[0].counts == [0, 4, 1, 0]
+
+    def test_the_statement_binds_the_tenant_and_reads_one_service(self) -> None:
+        assert TENANT_BINDING in queries.HEATMAP_SQL
+        assert "service_name = {service_name:String}" in queries.HEATMAP_SQL
+
+    def test_the_statement_subtracts_the_previous_bucket(self) -> None:
+        """Losing this makes every column the total since start-up: monotonically
+        growing, identical in shape, and a heatmap of nothing."""
+        assert "lagInFrame" in queries.HEATMAP_SQL
+        assert "PARTITION BY metric_name, explicit_bounds, series_hash" in queries.HEATMAP_SQL

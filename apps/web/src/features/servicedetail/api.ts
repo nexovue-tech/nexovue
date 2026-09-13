@@ -284,3 +284,56 @@ export function useDeploys(projectId: string | undefined) {
     select: (response) => response.deploys,
   });
 }
+
+/**
+ * One service's latency distribution over time, when it sends an OTLP histogram.
+ *
+ * **The panel is conditional (OD7), and `available` is how the screen knows.** Most
+ * customers will not have one: `latency_quantiles` keeps three quantiles and cannot
+ * reconstruct a distribution, and `spans.duration_ms` is post-sampling. The three
+ * percentile lines carry the common case; this is the extra a histogram buys.
+ */
+export interface DurationHeatmapColumn {
+  bucket: string;
+  counts: number[];
+  total: number;
+}
+
+export interface DurationHeatmapResponse {
+  service_name: string;
+  available: boolean;
+  metric_name: string;
+  unit: string;
+  bounds: number[];
+  bucket_seconds: number;
+  window_start: string;
+  window_end: string;
+  columns: DurationHeatmapColumn[];
+}
+
+export const durationHeatmapQueryKey = (
+  projectId: string,
+  serviceName: string,
+  timeWindow: TimeWindow,
+) => ["service-duration-heatmap", projectId, serviceName, timeWindow.from, timeWindow.to] as const;
+
+export function useDurationHeatmap(
+  projectId: string | undefined,
+  serviceName: string,
+  timeWindow: TimeWindow,
+) {
+  return useQuery({
+    queryKey: durationHeatmapQueryKey(projectId ?? "", serviceName, timeWindow),
+    enabled: projectId !== undefined && serviceName !== "",
+    queryFn: ({ signal }) =>
+      apiClient.get<DurationHeatmapResponse>("metrics/duration-heatmap", {
+        searchParams: {
+          project_id: projectId,
+          service_name: serviceName,
+          from: timeWindow.from,
+          to: timeWindow.to,
+        },
+        signal,
+      }),
+  });
+}

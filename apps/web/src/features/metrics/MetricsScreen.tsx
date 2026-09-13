@@ -3,13 +3,14 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { formatBound } from "@/shared/format/metric-unit";
 import { formatCount, UNKNOWN } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
-
 import type { HistogramLayout, HistogramResponse, MetricSummary } from "./api";
 import { useHistogram, useMetricCatalogue } from "./api";
-import { estimateReadings, formatBound, histogramBars, meanOf } from "./buckets";
+
+import { estimateReadings, histogramBars, meanOf } from "./buckets";
 import { HistogramChart } from "./HistogramChart";
 
 /**

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-
+import { formatBound } from "@/shared/format/metric-unit";
 import type { HistogramLayout } from "./api";
-import { formatBound, histogramBars, meanOf } from "./buckets";
+
+import { histogramBars, meanOf } from "./buckets";
 
 const LAYOUT: HistogramLayout = {
   bounds: [1, 5, 25],

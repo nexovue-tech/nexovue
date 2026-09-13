@@ -91,3 +91,39 @@ class HistogramResponse(BaseModel):
     # was merged. The screen says so rather than drawing one chart that is the
     # sum of two incompatible ones.
     merged: bool = True
+
+
+class HeatmapColumn(BaseModel):
+    """One time bucket's distribution — a column of the heatmap."""
+
+    bucket: IsoTimestamp
+    # One entry per bucket of the layout, so one more than there are bounds.
+    counts: list[int] = Field(default_factory=list)
+    # Observations in this column. Carried rather than summed by the caller
+    # because a column of zeroes and a column that reported nothing look alike
+    # once they are drawn, and only one of them is worth a reader's attention.
+    total: int
+
+
+class DurationHeatmapResponse(BaseModel):
+    """A service's latency distribution over time, or nothing.
+
+    **Absent rather than empty when the customer sends no OTLP histogram.** That
+    is OD7's whole shape: `latency_quantiles` keeps three quantiles and cannot
+    reconstruct a distribution, and `spans.duration_ms` is post-sampling, so this
+    panel can only exist where a histogram does. `available` says which case a
+    reader is in, so the screen can leave the panel out instead of drawing an
+    empty one and implying the service had no traffic.
+    """
+
+    service_name: str
+    available: bool = False
+    # The metric this was read from — the two OTel spellings are both in the
+    # wild, and a reader comparing two services should be told which it got.
+    metric_name: str = ""
+    unit: str = ""
+    bounds: list[float] = Field(default_factory=list)
+    bucket_seconds: int = 0
+    window_start: IsoTimestamp
+    window_end: IsoTimestamp
+    columns: list[HeatmapColumn] = Field(default_factory=list)

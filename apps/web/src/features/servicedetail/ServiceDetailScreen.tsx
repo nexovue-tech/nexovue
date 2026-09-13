@@ -2,7 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
-
+import { DurationHeatmap } from "@/shared/components/DurationHeatmap";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
@@ -20,6 +20,7 @@ import type { HostGroup, ServiceEdge } from "@/shared/service-peers";
 import { collapseAddressPeers, EDGE_QUEUE, isPlaceholderService } from "@/shared/service-peers";
 
 import type {
+  DurationHeatmapResponse,
   EndpointHealth,
   ErrorGroupSummary,
   HealthMetrics,
@@ -28,6 +29,7 @@ import type {
 } from "./api";
 import {
   useDeploys,
+  useDurationHeatmap,
   useService,
   useServiceDependencies,
   useServiceEndpoints,
@@ -89,6 +91,9 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
   const dependencies = useServiceDependencies(projectId, timeWindow);
   const errors = useServiceErrors(projectId, serviceName, timeWindow);
   const deploys = useDeploys(projectId);
+  // Conditional (OD7): absent for a customer whose SDK sends no OTLP histogram,
+  // which is most of them. `available` is the answer, not an empty array.
+  const heatmap = useDurationHeatmap(projectId, serviceName, timeWindow);
 
   // One read for the project, narrowed to this service and this window. A
   // deploy of another service is an invitation to blame the wrong change for
@@ -130,6 +135,7 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
       points={points}
       markers={markers}
       endpoints={endpointRows}
+      heatmap={heatmap.data}
       dependencies={{
         status: panelStatus(dependencies),
         data: dependencies.data?.edges ?? [],
@@ -177,6 +183,8 @@ export interface ServiceDetailViewProps {
   /** The deploys of this service inside this window, as rules on the charts. */
   markers: readonly DeployMarker[];
   endpoints: readonly EndpointHealth[];
+  /** Absent for a customer whose SDK sends no OTLP histogram, which is most. */
+  heatmap?: DurationHeatmapResponse;
   dependencies: PanelSource<ServiceEdge>;
   errors: PanelSource<ErrorGroupSummary>;
 }
@@ -192,6 +200,7 @@ export function ServiceDetailView({
   points,
   markers,
   endpoints,
+  heatmap,
   dependencies,
   errors,
 }: ServiceDetailViewProps) {
@@ -268,6 +277,8 @@ export function ServiceDetailView({
               bucketCount={points.length}
               markers={markers}
             />
+
+            <HeatmapSection serviceName={serviceName} heatmap={heatmap} />
 
             <DependencySection
               serviceName={serviceName}
@@ -502,6 +513,40 @@ function TrendPanel({
         />
       )}
     </section>
+  );
+}
+
+/**
+ * The duration heatmap, present only where the customer sends a histogram.
+ *
+ * **Absent rather than empty** (OD7). Drawing an empty grid for the majority who send no
+ * OTLP histogram would say this service had no traffic, which is a different and false
+ * claim — the three percentile lines above already carry the common case.
+ */
+function HeatmapSection({
+  serviceName,
+  heatmap,
+}: {
+  serviceName: string;
+  heatmap?: DurationHeatmapResponse;
+}) {
+  if (!heatmap?.available || heatmap.columns.length === 0) return null;
+
+  return (
+    <>
+      <SectionHeading
+        title="Where the time went"
+        caption={`The shape of ${serviceName}'s latency in each bucket, from the ${heatmap.metric_name} histogram it reports. Each column is scaled to its own traffic, so a tail is visible in a quiet hour as well as a busy one.`}
+      />
+      <div className="px-4">
+        <DurationHeatmap
+          bounds={heatmap.bounds}
+          columns={heatmap.columns}
+          unit={heatmap.unit}
+          label={`${serviceName}'s latency distribution across ${heatmap.columns.length} buckets, fastest at the bottom.`}
+        />
+      </div>
+    </>
   );
 }
 

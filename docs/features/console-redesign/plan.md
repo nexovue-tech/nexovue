@@ -79,11 +79,9 @@ than against a plan written before a screen existed.
 
 - [x] RUM with `readings` as a column and `is_route_template` labelled
 - [x] Metrics: the catalogue and the histogram reader (AC5)
-- [ ] **The conditional heatmap (OD7) — not built, and never became a task.** It is the one item on
-      this plan that the task expansion dropped rather than deleted on purpose. `metrics_histogram`
-      now has a reader, so the data and the merge it would need exist; what is missing is the panel
-      inside Dashboard, drawn only where a customer sends OTLP histograms. Carried forward rather
-      than quietly ticked
+- [x] **The conditional heatmap (OD7)** — built 2026-09-13, after being carried open rather than
+      quietly ticked. A panel on service detail, present only for the three demo services that send
+      an OTLP server-duration histogram and absent for the other thirteen
 - [x] Usage rendering `settled: false`, and `services` beside `billed_services`
 - [x] Settings ×4, where the dangerous state does most of the work
 - [x] Unsaved-changes warning (AC19)

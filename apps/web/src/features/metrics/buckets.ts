@@ -1,6 +1,4 @@
-import { formatDecimalBytes } from "@/shared/format/bytes";
-import { formatDuration } from "@/shared/format/duration";
-import { formatCount, UNKNOWN } from "@/shared/format/number";
+import { formatBound } from "@/shared/format/metric-unit";
 
 import type { HistogramLayout } from "./api";
 
@@ -17,32 +15,6 @@ import type { HistogramLayout } from "./api";
  * per bucket instead, and labels the boundaries. What is lost is that bar *width* no
  * longer means anything; what is kept is that bar *height* can be compared at all.
  */
-
-/** A metric's unit, in the OTLP spelling the SDK sends. */
-const SECONDS = new Set(["s", "sec", "second", "seconds"]);
-const MILLISECONDS = new Set(["ms", "millisecond", "milliseconds"]);
-const BYTES = new Set(["By", "by", "byte", "bytes"]);
-
-const MILLISECONDS_PER_SECOND = 1000;
-
-/**
- * One bucket boundary, in whatever the metric is measured in.
- *
- * The unit is the exporter's own and is not guessed at. A duration renders as a
- * duration, a size as a size, and anything else renders as the number it is with its
- * unit beside it — inventing a scale for a unit we do not recognise would relabel
- * somebody's data.
- */
-export function formatBound(value: number | null | undefined, unit: string): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return UNKNOWN;
-
-  if (SECONDS.has(unit)) return formatDuration(value * MILLISECONDS_PER_SECOND);
-  if (MILLISECONDS.has(unit)) return formatDuration(value);
-  if (BYTES.has(unit)) return formatDecimalBytes(value);
-
-  const rendered = formatCount(value);
-  return unit ? `${rendered} ${unit}` : rendered;
-}
 
 export interface HistogramBar {
   /** What this bucket covers, as a reader would say it: "5ms to 10ms". */

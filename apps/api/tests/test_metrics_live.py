@@ -27,7 +27,11 @@ from live import require_stack
 
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.metrics import queries, service
-from nexovue_api.metrics.schemas import HistogramResponse, MetricCatalogueResponse
+from nexovue_api.metrics.schemas import (
+    DurationHeatmapResponse,
+    HistogramResponse,
+    MetricCatalogueResponse,
+)
 
 CLICKHOUSE_DSN: Final = os.environ.get(
     "NEXOVUE_CLICKHOUSE_HTTP_DSN", "clickhouse://nexovue:nexovue_dev@localhost:18123/nexovue"
@@ -351,3 +355,104 @@ async def test_a_metric_nobody_sent_is_an_empty_distribution_not_a_failure(
 
     assert answer.layouts == []
     assert answer.merged is True
+
+
+# ------------------------------------------------ the conditional heatmap
+
+
+async def _heatmap(
+    clickhouse: AsyncClient, reporting: tuple[str, str], service_name: str
+) -> DurationHeatmapResponse:
+    tenant_id, project_id = reporting
+    start, end = _window()
+    return await service.read_duration_heatmap(
+        TenantScopedRepository(clickhouse, tenant_id=tenant_id),
+        project_id=project_id,
+        service_name=service_name,
+        from_time=start,
+        to_time=end,
+    )
+
+
+async def _a_service_sending_histograms(clickhouse: AsyncClient, reporting: tuple[str, str]) -> str:
+    tenant_id, project_id = reporting
+    result = await clickhouse.query(
+        "SELECT service_name, count() AS rows FROM metrics_histogram "
+        "WHERE tenant_id = %(tenant)s AND project_id = %(project)s "
+        "AND metric_name IN %(names)s AND timestamp >= %(since)s "
+        "GROUP BY service_name ORDER BY rows DESC LIMIT 1",
+        parameters={
+            "tenant": tenant_id,
+            "project": project_id,
+            "names": list(queries.DURATION_METRIC_NAMES),
+            "since": _window()[0],
+        },
+    )
+    assert result.result_rows, (
+        "no service in the busiest project sends an OTLP server-duration histogram, so the "
+        "conditional panel has nothing to be conditional on. Run `just otel-demo up`."
+    )
+    return str(result.result_rows[0][0])
+
+
+async def test_a_service_sending_histograms_gets_a_heatmap_over_its_own_bounds(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    """OD7's panel, against the real thing.
+
+    The offline suite cannot tell you `lagInFrame` parses, that the window
+    partition matches the grouping, or that the arrays it subtracts line up.
+    """
+    service_name = await _a_service_sending_histograms(clickhouse, reporting)
+
+    answer = await _heatmap(clickhouse, reporting, service_name)
+
+    assert answer.available is True
+    assert answer.metric_name in queries.DURATION_METRIC_NAMES
+    assert answer.bounds, "a heatmap needs the bounds its rows are drawn against"
+    assert answer.columns, "the service reported inside this window"
+    for column in answer.columns:
+        assert len(column.counts) == len(answer.bounds) + 1, (
+            "a histogram has one more bucket than it has bounds: the last is unbounded"
+        )
+        assert all(count >= 0 for count in column.counts)
+
+
+async def test_the_first_column_is_a_delta_and_not_the_whole_history(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    """The defect the extra read exists to prevent.
+
+    These points are cumulative, so a first column with no predecessor carries
+    everything since the exporter started. Measured on the development store it
+    read 24,845 against 500 to 1,300 for every column after it — on a heatmap, one
+    black stripe and the rest empty. It is asserted as a ratio rather than a
+    number because the demo's traffic is not fixed.
+    """
+    service_name = await _a_service_sending_histograms(clickhouse, reporting)
+
+    answer = await _heatmap(clickhouse, reporting, service_name)
+    totals = [column.total for column in answer.columns if column.total > 0]
+
+    assert len(totals) > 2, "not enough columns to compare the first against the rest"
+    rest = sorted(totals[1:])
+    median = rest[len(rest) // 2]
+    assert totals[0] <= median * 10, (
+        f"the first column holds {totals[0]} against a median of {median}. That is the whole "
+        "history since start-up, not this bucket's own traffic."
+    )
+
+
+async def test_a_service_sending_no_histogram_has_no_panel_rather_than_an_empty_one(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    """OD7 says absent, not empty.
+
+    An empty heatmap and a service with no traffic look identical once drawn, so
+    the screen has to be told which it is holding.
+    """
+    answer = await _heatmap(clickhouse, reporting, f"absent-service-{uuid.uuid4().hex}")
+
+    assert answer.available is False
+    assert answer.columns == []
+    assert answer.bounds == []

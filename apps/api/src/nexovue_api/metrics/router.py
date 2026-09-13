@@ -11,7 +11,11 @@ from fastapi import APIRouter, Path, Query
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
 from nexovue_api.deps import DbSession
 from nexovue_api.metrics import service
-from nexovue_api.metrics.schemas import HistogramResponse, MetricCatalogueResponse
+from nexovue_api.metrics.schemas import (
+    DurationHeatmapResponse,
+    HistogramResponse,
+    MetricCatalogueResponse,
+)
 from nexovue_api.projects.service import require_project
 from nexovue_api.window import resolve_window
 
@@ -25,6 +29,7 @@ ToTime = Annotated[datetime | None, Query(alias="to")]
 # validate a name: a name we have never seen is an empty distribution, not a
 # bad request.
 MetricName = Annotated[str, Path(min_length=1, max_length=255)]
+ServiceName = Annotated[str, Query(min_length=1, max_length=255)]
 
 
 @router.get("", summary="Every metric this project reported, busiest first")
@@ -62,6 +67,27 @@ async def read_histogram(
         repository,
         project_id=str(project.id),
         metric_name=metric_name,
+        from_time=window_start,
+        to_time=window_end,
+    )
+
+
+@router.get("/duration-heatmap", summary="One service's latency distribution over time")
+async def read_duration_heatmap(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    project_id: ProjectId,
+    service_name: ServiceName,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+) -> DurationHeatmapResponse:
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.read_duration_heatmap(
+        repository,
+        project_id=str(project.id),
+        service_name=service_name,
         from_time=window_start,
         to_time=window_end,
     )

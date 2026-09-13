@@ -88,6 +88,14 @@ _EVERY_SHAPE: Final = "\n    UNION ALL".join(
 # One row per metric name. A name that arrived in two shapes is one row naming
 # both, because it is one metric with a configuration problem rather than two
 # metrics.
+#
+# **`uniqExact` rather than a `GROUP BY` that counts, and this was measured
+# both ways.** The alternative deduplicates in a grouping that can spill to
+# disk, which sounds like the safer shape for a read whose cost the customer
+# sets. It is not: over the same nine million rows it took 2.0 GiB and 2.8
+# seconds against 850 MiB and 1.3, because it materialises every distinct
+# reading where the hash set stays compact. Twice the memory is a strange way
+# to guard against running out of it.
 CATALOGUE_SQL: Final = f"""
 SELECT
     metric_name,
@@ -211,4 +219,102 @@ FROM metrics_histogram
 WHERE tenant_id = {tenant_id:String}
   AND project_id = {project_id:String}
   AND metric_name = {metric_name:String}
+"""
+
+
+# The duration histogram a service sends, under either spelling.
+#
+# OTel renamed this metric: `http.server.duration` is the older semantic
+# convention and `http.server.request.duration` the current one, and both are in
+# the wild because an SDK's version decides which it emits. The demo stack sends
+# both — `frontend` uses the old name, `cart` and `shipping` the new one — so a
+# reader that knew only one would show the panel to a third of the services that
+# can have it.
+DURATION_METRIC_NAMES: Final = (
+    "http.server.request.duration",
+    "http.server.duration",
+)
+
+# Bucketed by integer division rather than `INTERVAL`, for the reason
+# `synthetics/queries.py` gives: the width is a bound parameter, and
+# `INTERVAL {n} SECOND` cannot take one.
+_BUCKET_NANOS: Final = (
+    "intDiv(toUnixTimestamp(timestamp), {bucket_seconds:UInt32}) * {bucket_seconds:UInt32}"
+    " * 1000000000"
+)
+
+# A latency heatmap: the distribution's shape over time, one column per bucket.
+#
+# **The per-bucket delta is what makes this a heatmap rather than a smear.**
+# These points are cumulative, so plotting the stored state would draw every
+# column as the total since the process started — monotonically growing, and
+# identical in shape from one column to the next. A column's own contribution is
+# its state minus the previous column's, per series, which `lagInFrame` reads
+# without a self-join.
+#
+# **One bucket is read before the window and then discarded.** Without it the
+# first column has no predecessor, so its delta is the whole history since
+# start-up: measured on the development store the first column read 24,845
+# against 500 to 1,300 for every column after it, which on a heatmap is one black
+# stripe and fourteen empty ones. `{from_nanos:Int64}` drops it after the
+# window function has used it.
+#
+# A falling total is an exporter restart, and the state after it is the
+# contribution — the same rule `HISTOGRAM_SQL` applies across the whole window.
+HEATMAP_SQL: Final = f"""
+SELECT
+    metric_name,
+    metric_unit,
+    bounds,
+    bucket_nanos,
+    counts,
+    total
+FROM (
+    SELECT
+        metric_name,
+        any(metric_unit) AS metric_unit,
+        explicit_bounds AS bounds,
+        bucket_nanos,
+        sumForEach(delta) AS counts,
+        arraySum(sumForEach(delta)) AS total
+    FROM (
+        SELECT
+            metric_name,
+            metric_unit,
+            explicit_bounds,
+            bucket_nanos,
+            if(
+                length(previous) = 0 OR arraySum(state) < arraySum(previous),
+                state,
+                arrayMap((later, earlier) -> later - earlier, state, previous)
+            ) AS delta
+        FROM (
+            SELECT
+                metric_name,
+                any(metric_unit) AS metric_unit,
+                explicit_bounds,
+                series_hash,
+                {_BUCKET_NANOS} AS bucket_nanos,
+                CAST(argMax(bucket_counts, timestamp), 'Array(Int64)') AS state,
+                lagInFrame(CAST(argMax(bucket_counts, timestamp), 'Array(Int64)')) OVER (
+                    PARTITION BY metric_name, explicit_bounds, series_hash
+                    ORDER BY bucket_nanos
+                ) AS previous
+            FROM metrics_histogram
+            WHERE tenant_id = {{tenant_id:String}}
+              AND project_id = {{project_id:String}}
+              AND service_name = {{service_name:String}}
+              AND metric_name IN {{metric_names:Array(String)}}
+              AND timestamp >= {{read_from:DateTime64(3)}}
+              AND timestamp < {{to_time:DateTime64(3)}}
+              AND received_at >= {{received_from:DateTime64(3)}}
+              AND received_at < {{received_to:DateTime64(3)}}
+              AND length(bucket_counts) = length(explicit_bounds) + 1
+            GROUP BY metric_name, explicit_bounds, series_hash, bucket_nanos
+        )
+    )
+    GROUP BY metric_name, bounds, bucket_nanos
+)
+WHERE bucket_nanos >= {{from_nanos:Int64}}
+ORDER BY metric_name, bucket_nanos
 """

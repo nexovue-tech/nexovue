@@ -49,9 +49,33 @@ class Tier:
 
 
 AUTH_TIER: Final = Tier(quota=Quota(name="auth", limit=10, window_seconds=60))
+
+# The most telemetry reads one screen asks for at once. Service detail wants the
+# service, its trend, its endpoints, its dependencies, its errors and its duration
+# heatmap; Overview wanted five before it was made to wait for itself.
+#
+# This is not a limit. It is the measurement the limit below has to clear, and it
+# is stated here so the next screen that grows a read fails a test rather than a
+# customer.
+LARGEST_SCREEN_FANOUT: Final = 6
+
 TELEMETRY_TIER: Final = Tier(
     quota=Quota(name="telemetry", limit=60, window_seconds=60),
-    max_concurrent=4,
+    # **Above one screen's fan-out, and still below the number this tier exists
+    # to prevent.** At 4 it sat *under* legitimate use: opening one service
+    # refused one of its five reads, and the screen rendered with its errors
+    # panel missing. A cap below what the product's own screens need is not
+    # protection — it is a defect that looks like protection, and it had already
+    # been worked around in one screen by making its reads wait for each other.
+    #
+    # The reasoning above says ten concurrent scans hurt the cluster. Eight keeps
+    # that ceiling, leaves a screen room to load at once, and leaves the 60/minute
+    # quota to bound sustained load, which is the thing a counter is good at.
+    #
+    # **Refusing is still the wrong answer for a legitimate burst**; a bounded
+    # wait would make a sixth read slow rather than absent. That is a larger
+    # change than a number and is recorded rather than assumed.
+    max_concurrent=8,
 )
 DEFAULT_TIER: Final = Tier(quota=Quota(name="default", limit=300, window_seconds=60))
 
@@ -93,16 +117,25 @@ AUTH_PATHS: Final = (
     # way `/auth/verify-email` is.
     f"{API_PREFIX}/auth/email-change",
 )
+# **These must be the routers' real prefixes, and two of them were not.**
+# `/errors` and `/database` matched nothing: the routers are mounted at
+# `/error-groups` and `/dbstats`, so both read ClickHouse on the default tier —
+# 300 a minute with no concurrency cap at all — while the entries meant to
+# protect them sat here looking correct. Nothing failed, because a rule that
+# matches no path raises no error.
+#
+# `test_ratelimit_covers_every_clickhouse_router` compares this list against the
+# routers themselves, so the next rename is caught rather than discovered.
 TELEMETRY_PATHS: Final = (
     f"{API_PREFIX}/traces",
     f"{API_PREFIX}/logs",
     f"{API_PREFIX}/metrics",
-    f"{API_PREFIX}/errors",
+    f"{API_PREFIX}/error-groups",
     f"{API_PREFIX}/services",
     f"{API_PREFIX}/service-map",
-    f"{API_PREFIX}/infra",
+    f"{API_PREFIX}/infrastructure",
     f"{API_PREFIX}/synthetics",
-    f"{API_PREFIX}/database",
+    f"{API_PREFIX}/dbstats",
     f"{API_PREFIX}/rum",
     f"{API_PREFIX}/usage",
 )
