@@ -111,6 +111,12 @@ _READINGS: Final = """
 # setting of the same name and the statement fails to parse. The API speaks
 # HTTP, where it does not, but a name that works over only one transport is a
 # trap for whoever ports this next.
+# `points` counts distinct instants, not rows. A metric row is not unique —
+# `metricwriting.Absorb` takes a duplicate over a lost point — and each statement
+# here already groups by the whole series, so one instant is one reading. It is
+# what `reporting_interval_seconds` divides by, and counting rows would report a
+# host as sampling twice as often as it does. Measured at 7% over `count()`,
+# against 22% for materialising the deduplicated rows in a subquery.
 NODE_READINGS_SQL: Final = f"""
 SELECT
     host,
@@ -124,7 +130,7 @@ SELECT
     argMin(value, timestamp) AS earliest_value,
     toUnixTimestamp64Nano(max(timestamp)) AS latest_nanos,
     toUnixTimestamp64Nano(min(timestamp)) AS earliest_nanos,
-    count() AS points
+    uniqExact(timestamp) AS points
 FROM ({_READINGS})
 GROUP BY host, container, reporter, reporter_instance, metric_name, metric_unit, attributes_json
 ORDER BY host ASC, container ASC, reporter ASC, reporter_instance ASC,
@@ -167,7 +173,7 @@ SIGNALS_SEEN_SQL: Final = f"""
 SELECT
     metric_name,
     any(metric_unit) AS metric_unit,
-    count() AS points,
+    uniqExact((host, container, reporter, reporter_instance, attributes_json, timestamp)) AS points,
     uniqExact(attributes_json) AS series,
     uniqExact((host, container, reporter, reporter_instance)) AS nodes,
     toUnixTimestamp64Nano(max(timestamp)) AS latest_nanos

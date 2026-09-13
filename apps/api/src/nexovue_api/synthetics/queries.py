@@ -60,6 +60,20 @@ _WINDOW_PREDICATE: Final = """
   AND received_at < {received_to:DateTime64(3)}
 """
 
+# **One stored row per reading.** A metric row is not unique: `metricwriting.Absorb`
+# takes a duplicate over a lost point — no data loss is a phase-1 invariant, no
+# duplication is not — and leaves the reader to "group by series and timestamp
+# first". Every statement below collapses to this key before it counts, averages
+# or sums, because all four read rows a redelivery can double.
+#
+# The key names more than the series because `series_hash` is
+# `cityHash64(toJSONString(attrs))` and that is narrower than it looks: it tells
+# two phases apart, but not two checks (the check id lives in `resource_attrs`)
+# and not two metrics whose attributes match (a duration point carries
+# `attrs = {{}}`). `any()` over the group is exact rather than arbitrary — every
+# column it takes is a property of the series, so its candidates are equal.
+_ONE_ROW_PER_READING: Final = "GROUP BY check_id, metric_name, series_hash, timestamp"
+
 # One row per check. Status, duration and certificate are read in a single pass
 # with conditional aggregates rather than in three queries joined afterwards.
 #
@@ -68,25 +82,37 @@ _WINDOW_PREDICATE: Final = """
 # would report a check that ran once as having run eight times.
 CHECK_SUMMARIES_SQL: Final = f"""
 SELECT
-    {CHECK_ID} AS check_id,
-    argMax({CHECK_TYPE}, timestamp) AS check_type,
+    check_id,
+    argMax(probe_type, timestamp) AS check_type,
     countIf(metric_name = '{METRIC_STATUS}') AS runs,
     countIf(metric_name = '{METRIC_STATUS}' AND value = {UP_VALUE}) AS successful_runs,
     argMaxIf(value, timestamp, metric_name = '{METRIC_STATUS}') AS latest_up,
-    argMaxIf({HTTP_STATUS}, timestamp, metric_name = '{METRIC_STATUS}') AS latest_status_code,
+    argMaxIf(http_status, timestamp, metric_name = '{METRIC_STATUS}') AS latest_status_code,
     maxIf(toUnixTimestamp64Nano(timestamp), metric_name = '{METRIC_STATUS}') AS latest_run_nanos,
     avgIf(value, metric_name = '{METRIC_DURATION}') AS mean_seconds,
     quantileIf(0.95)(value, metric_name = '{METRIC_DURATION}') AS p95_seconds,
     maxIf(value, metric_name = '{METRIC_DURATION}') AS max_seconds,
     countIf(metric_name = '{METRIC_TLS_REMAINING}') AS tls_readings,
     argMaxIf(value, timestamp, metric_name = '{METRIC_TLS_REMAINING}') AS tls_days_remaining,
-    argMaxIf({TLS_ISSUER}, timestamp, metric_name = '{METRIC_TLS_REMAINING}') AS tls_issuer,
-    argMaxIf({SERVER_ADDRESS}, timestamp, metric_name = '{METRIC_TLS_REMAINING}') AS tls_server
-FROM metrics_gauge
-WHERE tenant_id = {{tenant_id:String}}
-  AND project_id = {{project_id:String}}
-  AND metric_name IN ('{METRIC_STATUS}', '{METRIC_DURATION}', '{METRIC_TLS_REMAINING}')
-{_WINDOW_PREDICATE}
+    argMaxIf(issuer, timestamp, metric_name = '{METRIC_TLS_REMAINING}') AS tls_issuer,
+    argMaxIf(server_address, timestamp, metric_name = '{METRIC_TLS_REMAINING}') AS tls_server
+FROM (
+    SELECT
+        timestamp,
+        {CHECK_ID} AS check_id,
+        metric_name,
+        any(value) AS value,
+        any({CHECK_TYPE}) AS probe_type,
+        any({HTTP_STATUS}) AS http_status,
+        any({TLS_ISSUER}) AS issuer,
+        any({SERVER_ADDRESS}) AS server_address
+    FROM metrics_gauge
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND metric_name IN ('{METRIC_STATUS}', '{METRIC_DURATION}', '{METRIC_TLS_REMAINING}')
+    {_WINDOW_PREDICATE}
+    {_ONE_ROW_PER_READING}
+)
 GROUP BY check_id
 ORDER BY check_id
 LIMIT {{limit:UInt32}}
@@ -101,16 +127,24 @@ LIMIT {{limit:UInt32}}
 # getting instantly fast.
 CHECK_TRENDS_SQL: Final = f"""
 SELECT
-    {CHECK_ID} AS check_id,
+    check_id,
     {_BUCKET_NANOS} AS bucket_nanos,
     countIf(metric_name = '{METRIC_STATUS}') AS runs,
     countIf(metric_name = '{METRIC_STATUS}' AND value = {UP_VALUE}) AS successful_runs,
     avgIf(value, metric_name = '{METRIC_DURATION}') AS mean_seconds
-FROM metrics_gauge
-WHERE tenant_id = {{tenant_id:String}}
-  AND project_id = {{project_id:String}}
-  AND metric_name IN ('{METRIC_STATUS}', '{METRIC_DURATION}')
-{_WINDOW_PREDICATE}
+FROM (
+    SELECT
+        timestamp,
+        {CHECK_ID} AS check_id,
+        metric_name,
+        any(value) AS value
+    FROM metrics_gauge
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND metric_name IN ('{METRIC_STATUS}', '{METRIC_DURATION}')
+    {_WINDOW_PREDICATE}
+    {_ONE_ROW_PER_READING}
+)
 GROUP BY check_id, bucket_nanos
 ORDER BY check_id, bucket_nanos
 LIMIT {{limit:UInt32}}
@@ -123,15 +157,24 @@ LIMIT {{limit:UInt32}}
 PHASE_BREAKDOWN_SQL: Final = f"""
 SELECT
     {_BUCKET_NANOS} AS bucket_nanos,
-    {PHASE} AS phase,
+    phase,
     avg(value) AS mean_seconds,
     count() AS samples
-FROM metrics_gauge
-WHERE tenant_id = {{tenant_id:String}}
-  AND project_id = {{project_id:String}}
-  AND metric_name = '{METRIC_PHASE_DURATION}'
-  AND {CHECK_ID} = {{check_id:String}}
-{_WINDOW_PREDICATE}
+FROM (
+    SELECT
+        timestamp,
+        {CHECK_ID} AS check_id,
+        metric_name,
+        {PHASE} AS phase,
+        any(value) AS value
+    FROM metrics_gauge
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND metric_name = '{METRIC_PHASE_DURATION}'
+      AND {CHECK_ID} = {{check_id:String}}
+    {_WINDOW_PREDICATE}
+    {_ONE_ROW_PER_READING}, phase
+)
 GROUP BY bucket_nanos, phase
 ORDER BY bucket_nanos, phase
 LIMIT {{limit:UInt32}}
@@ -141,15 +184,12 @@ LIMIT {{limit:UInt32}}
 # Grouped by `timestamp` because one probe writes its status, its duration and
 # its phases at the same instant; the group is one run.
 #
-# The inner group is correctness, not optimisation. A metric row is not unique —
-# `metricwriting.Absorb` takes a duplicate over a lost point, leaving the reader
-# to "group by series and timestamp first" — and this is the only statement here
-# that sums, so a redelivered probe would report twice the time it measured.
-# The series is `(metric_name, series_hash)`: `series_hash` hashes `attrs` alone,
-# and a duration point carries `attrs = {{}}`.
+# This is the statement that sums, so it is where a duplicate hurt most: before
+# the inner group a redelivered probe reported twice the time its request took,
+# while `anyIf` beside it shrugged the same duplicate off and stayed right.
 CHECK_RUNS_SQL: Final = f"""
 SELECT
-    observed_nanos,
+    toUnixTimestamp64Nano(timestamp) AS observed_nanos,
     countIf(metric_name = '{METRIC_STATUS}') AS status_points,
     anyIf(value, metric_name = '{METRIC_STATUS}') AS up_value,
     anyIf(http_status, metric_name = '{METRIC_STATUS}') AS status_code,
@@ -157,7 +197,8 @@ SELECT
     sumIf(value, metric_name = '{METRIC_PHASE_DURATION}') AS phase_total_seconds
 FROM (
     SELECT
-        toUnixTimestamp64Nano(timestamp) AS observed_nanos,
+        timestamp,
+        {CHECK_ID} AS check_id,
         metric_name,
         any(value) AS value,
         any({HTTP_STATUS}) AS http_status
@@ -167,7 +208,7 @@ FROM (
       AND metric_name IN ('{METRIC_STATUS}', '{METRIC_DURATION}', '{METRIC_PHASE_DURATION}')
       AND {CHECK_ID} = {{check_id:String}}
     {_WINDOW_PREDICATE}
-    GROUP BY metric_name, series_hash, observed_nanos
+    {_ONE_ROW_PER_READING}
 )
 GROUP BY observed_nanos
 ORDER BY observed_nanos DESC

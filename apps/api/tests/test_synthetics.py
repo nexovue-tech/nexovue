@@ -58,6 +58,13 @@ _SUMMARY_COLUMNS: Final = [
     "tls_server",
 ]
 _PHASE_COLUMNS: Final = ["bucket_nanos", "phase", "mean_seconds", "samples"]
+_TREND_COLUMNS: Final = [
+    "check_id",
+    "bucket_nanos",
+    "runs",
+    "successful_runs",
+    "mean_seconds",
+]
 _RUN_COLUMNS: Final = [
     "observed_nanos",
     "status_points",
@@ -100,14 +107,30 @@ class FakeGaugeStore:
             return FakeQueryResult([], [])
         check_id = owned[1]
 
-        if "GROUP BY check_id" in sql:
+        # Dispatch on which statement was run, by identity rather than by
+        # sniffing its text. A substring did this until a shared `GROUP BY
+        # check_id, metric_name, series_hash, timestamp` appeared inside three
+        # statements and every one of them started answering as the summary.
+        if sql == queries.CHECK_SUMMARIES_SQL:
             return FakeQueryResult(_SUMMARY_COLUMNS, [_summary_row(check_id)])
+        if sql == queries.CHECK_TRENDS_SQL:
+            return FakeQueryResult(_TREND_COLUMNS, _trend_rows(check_id))
 
         if bound.get("check_id") != check_id:
             return FakeQueryResult([], [])
-        if "GROUP BY bucket_nanos, phase" in sql:
+        if sql == queries.PHASE_BREAKDOWN_SQL:
             return FakeQueryResult(_PHASE_COLUMNS, _phase_rows())
-        return FakeQueryResult(_RUN_COLUMNS, _run_rows())
+        if sql == queries.CHECK_RUNS_SQL:
+            return FakeQueryResult(_RUN_COLUMNS, _run_rows())
+        raise AssertionError(f"the fake store was asked a statement it does not serve:\n{sql}")
+
+
+def _trend_rows(check_id: str) -> list[tuple[Any, ...]]:
+    """Two buckets: one healthy, one where nothing succeeded and so has no duration."""
+    return [
+        (check_id, _BUCKET_NANOS, 5, 5, _DURATION_SECONDS),
+        (check_id, _BUCKET_NANOS + _BUCKET_WIDTH_NANOS, 5, 0, None),
+    ]
 
 
 def _summary_row(check_id: str) -> tuple[Any, ...]:

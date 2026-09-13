@@ -429,6 +429,76 @@ async def test_a_probe_written_twice_reports_the_phase_total_it_measured_once(
     assert run.phase_total_ms == pytest.approx(_SEEDED_DURATION_SECONDS * 1000.0, abs=0.001)
 
 
+async def test_a_probe_written_twice_is_counted_as_one_run(
+    client: AsyncClient, redelivered: RedeliveredProbe
+) -> None:
+    """Uptime is a ratio of counted rows, so a duplicate would inflate both halves.
+
+    Two runs out of two still reads as 100%, which is why this is the assertion
+    that bites: the count itself is what a customer is shown, and one probe that
+    happened to be stored twice must not become two probes that happened.
+    """
+    from_time, to_time = _window()
+
+    results = await service.list_check_results(
+        _repository(client, redelivered.tenant_id),
+        project_id=redelivered.project_id,
+        from_time=from_time,
+        to_time=to_time,
+    )
+
+    assert len(results.checks) == 1
+    summary = results.checks[0]
+    assert summary.runs == 1
+    assert summary.successful_runs == 1
+    assert summary.mean_duration_ms == pytest.approx(_SEEDED_DURATION_SECONDS * 1000.0, abs=0.001)
+
+
+async def test_a_probe_written_twice_fills_one_bucket_once(
+    client: AsyncClient, redelivered: RedeliveredProbe
+) -> None:
+    """The sparkline reads the same rows the summary does, and must agree with it."""
+    from_time, to_time = _window()
+
+    trends = await service.check_trends(
+        _repository(client, redelivered.tenant_id),
+        project_id=redelivered.project_id,
+        from_time=from_time,
+        to_time=to_time,
+    )
+
+    assert len(trends.checks) == 1
+    points = trends.checks[0].points
+    assert sum(point.runs for point in points) == 1
+    assert sum(point.successful_runs for point in points) == 1
+
+
+async def test_a_probe_written_twice_contributes_one_sample_per_phase(
+    client: AsyncClient, redelivered: RedeliveredProbe
+) -> None:
+    """`samples` is how the breakdown says how much evidence a bar rests on.
+
+    Doubling it would overstate the confidence of the one measurement behind it.
+    """
+    from_time, to_time = _window()
+
+    breakdown = await service.phase_breakdown(
+        _repository(client, redelivered.tenant_id),
+        project_id=redelivered.project_id,
+        check_id=redelivered.check_id,
+        from_time=from_time,
+        to_time=to_time,
+        bucket_seconds=300,
+    )
+
+    measured = [bucket for bucket in breakdown.buckets if bucket.samples]
+    assert len(measured) == 1
+    bucket = measured[0]
+    assert bucket.samples == len(PHASE_ORDER)
+    for phase, seconds in _SEEDED_PHASE_SECONDS.items():
+        assert bucket.durations_ms[phase] == pytest.approx(seconds * 1000.0, abs=0.001)
+
+
 async def test_the_redelivered_rows_really_are_duplicated_in_the_store(
     client: AsyncClient, redelivered: RedeliveredProbe
 ) -> None:

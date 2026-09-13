@@ -204,6 +204,86 @@ async def test_a_reporting_host_and_container_come_back_rolled_up(
     assert container.memory_limit_bytes == 2_000
 
 
+@pytest.fixture
+async def redelivered_fleet(clickhouse: Any) -> AsyncIterator[str]:
+    """The same fleet, stored twice — what a redelivery leaves behind.
+
+    Two blocks rather than one statement run twice: ClickHouse drops a
+    byte-identical block on sight (ADR-0075), so a repeated statement would leave
+    nothing to catch. The token models a re-batch — the same points in a block
+    the store has not seen.
+    """
+    tenant_id = str(uuid.uuid4())
+    end = datetime.now(UTC).replace(microsecond=0)
+    start = end - timedelta(seconds=WINDOW_SECONDS)
+
+    written = (
+        ("metrics_gauge", _gauge_rows(tenant_id, start, end)),
+        ("metrics_sum", _sum_rows(tenant_id, start, end)),
+        ("metrics_gauge", _reporter_rows(tenant_id, start, end)),
+    )
+    for attempt in ("first", "redelivered"):
+        for index, (table, rows) in enumerate(written):
+            await clickhouse.command(
+                _insert(table, rows),
+                settings={"insert_deduplication_token": f"{tenant_id}-{index}-{attempt}"},
+            )
+    try:
+        yield tenant_id
+    finally:
+        for table in METRIC_TABLES:
+            await clickhouse.command(
+                f"ALTER TABLE {table} DELETE WHERE tenant_id = {_quoted(tenant_id)}",
+                settings={"mutations_sync": 2},
+            )
+
+
+async def test_a_host_stored_twice_is_not_reported_as_sampling_twice_as_often(
+    clickhouse: Any, redelivered_fleet: str
+) -> None:
+    """`reporting_interval_seconds` divides the window by the readings counted.
+
+    Counting stored rows would halve it, and the screen would say a host reports
+    every fifty seconds when it reports every hundred — a number nothing in the
+    fleet ever measured.
+    """
+    start, end = _window()
+
+    answer = await service.list_nodes(
+        _repository(clickhouse, redelivered_fleet),
+        project_id=PROJECT,
+        from_time=start,
+        to_time=end,
+    )
+    host = next(node for node in answer.nodes if node.kind == "host")
+
+    assert host.reporting_interval_seconds == float(WINDOW_SECONDS)
+    # The readings themselves are unchanged: every aggregate beside the count
+    # takes a value rather than adding rows up.
+    assert host.memory_used_bytes == 6_000_000_000
+    assert round(host.cpu_utilization or 0.0, 6) == 0.4
+
+
+async def test_signals_stored_twice_report_the_points_the_fleet_sent(
+    clickhouse: Any, redelivered_fleet: str
+) -> None:
+    """`points` is grouped by metric alone, so its count must name the series too."""
+    start, end = _window()
+
+    duplicated = await service.list_signals(
+        _repository(clickhouse, redelivered_fleet),
+        project_id=PROJECT,
+        from_time=start,
+        to_time=end,
+    )
+
+    by_name = {signal.metric_name: signal for signal in duplicated.signals}
+    memory = by_name[conventions.SYSTEM_MEMORY_USAGE]
+    # One node, writing each of its series at `start` and at `end`.
+    assert memory.nodes == 1
+    assert memory.points == 2 * memory.series
+
+
 async def test_signals_names_what_the_fleet_actually_sent(clickhouse: Any, fleet: str) -> None:
     start, end = _window()
 

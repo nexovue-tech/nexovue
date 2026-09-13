@@ -52,6 +52,10 @@ _WINDOW_PREDICATE: Final = """
 # latest reading is a running total and the spread across the window is what
 # happened during it. Both are reported: the total says how hot the statement is
 # overall, the spread says whether it was hot just now.
+# `readings` counts distinct instants rather than rows, for the reason
+# `infrastructure/queries.py` gives at `NODE_READINGS_SQL`: a metric row is not
+# unique, and both statements below already group by the whole series, so one
+# instant is one poll.
 SLOW_STATEMENTS_SQL: Final = f"""
 SELECT
     {QUERY_HASH} AS query_hash,
@@ -63,7 +67,7 @@ SELECT
     max(value) AS worst_mean_seconds,
     argMax({CALLS}, timestamp) AS calls_total,
     max({CALLS}) - min({CALLS}) AS calls_in_window,
-    count() AS readings,
+    uniqExact(timestamp) AS readings,
     max(toUnixTimestamp64Nano(timestamp)) AS latest_nanos
 FROM metrics_gauge
 WHERE tenant_id = {{tenant_id:String}}
@@ -111,7 +115,7 @@ SELECT
     {SERVER_PORT} AS server_port,
     argMax(value, timestamp) AS latest_backends,
     max(value) AS peak_backends,
-    count() AS readings,
+    uniqExact(timestamp) AS readings,
     max(toUnixTimestamp64Nano(timestamp)) AS latest_nanos
 FROM metrics_gauge
 WHERE tenant_id = {{tenant_id:String}}
