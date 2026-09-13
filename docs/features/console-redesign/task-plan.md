@@ -210,71 +210,71 @@ large enough to notice.
 
 ### Investigation core — five screens
 
-- [ ] **T21** `P` — `traces/schemas.py`: `SpanDetail` exposes `exception_type`, `exception_message`,
+- [ ] **T22** `P` — `traces/schemas.py`: `SpanDetail` exposes `exception_type`, `exception_message`,
       `deployment_version`; `TraceSummary` exposes `span_services`, `span_endpoints`,
       `worst_severity`. → API tests.
-- [ ] **T22** `P` — span `events` as a timeline and `links` as navigation in
+- [ ] **T23** `P` — span `events` as a timeline and `links` as navigation in
       `features/traces/SpanDetail.tsx` (AC17).
-- [ ] **T23** `P` — `features/logs/LogsScreen.tsx`: facets as counts; the trace arrow only when
+- [ ] **T24** `P` — `features/logs/LogsScreen.tsx`: facets as counts; the trace arrow only when
       `trace_id` is non-empty; Live as a toggle sharing the search filters.
-- [ ] **T24** `P` — `features/traces/TraceListScreen.tsx`: duration bar on a window-wide scale;
+- [ ] **T25** `P` — `features/traces/TraceListScreen.tsx`: duration bar on a window-wide scale;
       selection arrives pre-applied.
-- [ ] **T25** `P` — `features/traces/TraceScreen.tsx` + `TraceWaterfall.tsx`: detail pane subordinate
+- [ ] **T26** `P` — `features/traces/TraceScreen.tsx` + `TraceWaterfall.tsx`: detail pane subordinate
       to the waterfall; `TraceLink.exists: false` as its own state, not a load failure.
-- [ ] **T26** `P` — `features/servicedetail/`: one real chart, deploy markers (IA3), endpoints on the
+- [ ] **T27** `P` — `features/servicedetail/`: one real chart, deploy markers (IA3), endpoints on the
       row.
-- [ ] **T27** `P` — `features/servicemap/`: volume floor and failing-only; `callee_kind` labels the
+- [ ] **T28** `P` — `features/servicemap/`: volume floor and failing-only; `callee_kind` labels the
       node; `edge_kind` distinguishes a queue edge from a call.
-- [ ] **T28** `P` — selection travels (IA1): a shared scope in `shared/selection.ts`, applied on
+- [ ] **T29** `P` — selection travels (IA1): a shared scope in `shared/selection.ts`, applied on
       arrival rather than re-chosen. → `selection.test.ts`.
 
 ### The dashboard surface
 
-- [ ] **T29** `P` — `features/overview/` (new) + route at `/`; three RED panels from
+- [ ] **T30** `P` — `features/overview/` (new) + route at `/`; three RED panels from
       `endpoint_stats_1m`; ranked-entity row reused.
-- [ ] **T30** `P` — one deploy marker spanning all three panels; `deploys` API consumed for the first
+- [ ] **T31** `P` — one deploy marker spanning all three panels; `deploys` API consumed for the first
       time.
-- [ ] **T31** `P` — `route-manifest.ts`: Overview above Signals, Findings its own entry; **the "never
+- [ ] **T32** `P` — `route-manifest.ts`: Overview above Signals, Findings its own entry; **the "never
       the front door" comment records a superseded decision** — update it and
       `route-manifest.test.ts` together.
-- [ ] **T32** `P` — service detail expanded to the full RED set: distribution, operations,
+- [ ] **T33** `P` — service detail expanded to the full RED set: distribution, operations,
       dependencies from `service_edges_1m`.
-- [ ] **T33** `P` — infrastructure USE panels, honest about having no saturation measure.
+- [ ] **T34** `P` — infrastructure USE panels, honest about having no saturation measure.
 
 ### Surfaces and account — six screens
 
-- [ ] **T34** `P` — `features/rum/RumScreen.tsx`: `readings` as a column, `is_route_template`
+- [ ] **T35** `P` — `features/rum/RumScreen.tsx`: `readings` as a column, `is_route_template`
       labelled, ratings named in words not only colour.
-- [ ] **T35** `P` — `infrastructure/signals` widened past host metrics into a metric catalogue.
-- [ ] **T36** `P` — `features/metrics/` (new): the catalogue plus a histogram reader over
+- [ ] **T36** `P` — `infrastructure/signals` widened past host metrics into a metric catalogue.
+- [ ] **T37** `P` — `features/metrics/` (new): the catalogue plus a histogram reader over
       `bucket_counts`/`explicit_bounds` (AC5); the heatmap **only** where a customer sends OTLP
       histograms.
-- [ ] **T37** `P` — `features/usage/UsageScreen.tsx`: `settled: false` rendered, `services` beside
+- [ ] **T38** `P` — `features/usage/UsageScreen.tsx`: `settled: false` rendered, `services` beside
       `billed_services`.
-- [ ] **T38** `P` — settings ×4 — `ApiKeysScreen`, `ProjectsScreen`, `BillingScreen`, `ProfileScreen`
+- [ ] **T39** `P` — settings ×4 — `ApiKeysScreen`, `ProjectsScreen`, `BillingScreen`, `ProfileScreen`
       — where the dangerous state does most of the work.
-- [ ] **T39** `P` — unsaved-changes warning on every editable form (AC19).
+- [ ] **T40** `P` — unsaved-changes warning on every editable form (AC19).
       → one test per form.
 
 ### Gateway and the Findings shell
 
-- [ ] **T40** `P` — `features/onboarding/OnboardingScreen.tsx` ends in a confirmation naming the
+- [ ] **T41** `P` — `features/onboarding/OnboardingScreen.tsx` ends in a confirmation naming the
       service that arrived (IA4), not the trace list.
-- [ ] **T41** `P` — `features/auth/`: login, signup, recovery on the Gateway archetype.
-- [ ] **T42** `P` — `features/findings/` (new): feed structure, ordering, acknowledge/resolve; the
+- [ ] **T42** `P` — `features/auth/`: login, signup, recovery on the Gateway archetype.
+- [ ] **T43** `P` — `features/findings/` (new): feed structure, ordering, acknowledge/resolve; the
       card provisional.
-- [ ] **T43** `P` — the healthy state carrying the RED summary, and **visibly distinct from
+- [ ] **T44** `P` — the healthy state carrying the RED summary, and **visibly distinct from
       failed-to-load** (AC18). → a test asserting the two differ.
 
 ### Closing
 
-- [ ] **T44** — `/review-diff`.
-- [ ] **T45** — Design QA: every rebuilt screen against its wireframe and the prototype. *Nothing
+- [ ] **T45** — `/review-diff`.
+- [ ] **T46** — Design QA: every rebuilt screen against its wireframe and the prototype. *Nothing
       implements this gate today.*
-- [ ] **T46** — `docs/architecture/frontend.md` updated to current truth.
-- [ ] **T47** — `docs/product/vision.md` and `feature-catalog.md` F20: both still record
+- [ ] **T47** — `docs/architecture/frontend.md` updated to current truth.
+- [ ] **T48** — `docs/product/vision.md` and `feature-catalog.md` F20: both still record
       "insight-first, not dashboard-first", superseded 2026-09-12.
-- [ ] **T48** — **Outcome** filled in; `status.md` final.
+- [ ] **T49** — **Outcome** filled in; `status.md` final.
 
 ## New risks
 
@@ -285,7 +285,7 @@ loaded.
 
 **Forty-eight tasks is the real size of this feature**, and only six are exact. That ratio is the
 honest picture: the thin path is known, and everything after it depends on whether the archetype
-survives. The two tasks with no code behind them at all — T45's Design QA gate, and T36's Metrics
+survives. The two tasks with no code behind them at all — T46's Design QA gate, and T37's Metrics
 screen — are the ones most likely to grow.
 
 **`useServiceTrend` doubles the screen's requests** — list and trend, in parallel. Both are bounded
