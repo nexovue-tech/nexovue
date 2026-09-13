@@ -343,6 +343,10 @@ def _summarize(key: NodeKey, readings: Sequence[Reading], *, as_of: datetime) ->
         filesystem_utilization=_ratio(filesystem_used, filesystem_limit),
         disk_bytes_per_second=_disk_bytes_per_second(readings),
         network_bytes_per_second=_network_bytes_per_second(readings),
+        disk_queue_length=_disk_queue_length(readings),
+        swap_utilization=_swap_utilization(readings),
+        network_errors=_summed_delta(_any_named(readings, conventions.NETWORK_ERROR_NAMES)),
+        network_dropped=_summed_delta(_any_named(readings, conventions.NETWORK_DROPPED_NAMES)),
         first_seen=min(reading.first_seen for reading in readings),
         last_seen=last_seen,
         reporting_interval_seconds=interval,
@@ -536,6 +540,54 @@ def _network_bytes_per_second(readings: Sequence[Reading]) -> float | None:
         for reading in reported
         if not independence.is_loopback(reading.attribute(conventions.NETWORK_INTERFACE_ATTRIBUTES))
     )
+
+
+def _disk_queue_length(readings: Sequence[Reading]) -> float | None:
+    """Outstanding I/O across this node's disks — USE's saturation, for storage.
+
+    A **level**, not a counter. `system.disk.pending_operations` is the depth of
+    the queue at the moment it was scraped: it rises and falls, and reading it
+    as a delta would report a queue that drained as negative work.
+
+    Summed across devices and taken at the latest reading, because a node is
+    saturated when *any* of its disks is backed up and the total is what a
+    reader compares against its own history.
+    """
+    queued = _named(readings, conventions.SYSTEM_DISK_PENDING_OPERATIONS)
+    return sum(reading.latest_value for reading in queued) if queued else None
+
+
+def _swap_utilization(readings: Sequence[Reading]) -> float | None:
+    """The share of swap in use — USE's saturation, for memory.
+
+    Only the `used` state. The producer sends `used` and `free` as two points of
+    one metric, so summing them is always one and says nothing.
+
+    This is not memory utilization and must never be read as it: a host at 40%
+    memory that is swapping hard is under pressure its utilization cannot show,
+    which is the case USE's middle letter exists for.
+    """
+    used = [
+        reading
+        for reading in _named(readings, conventions.SYSTEM_SWAP_UTILIZATION)
+        if reading.attribute(conventions.SWAP_STATE_ATTRIBUTES) == conventions.SWAP_USED_STATE
+    ]
+    return max((reading.latest_value for reading in used), default=None)
+
+
+def _summed_delta(readings: Sequence[Reading]) -> float | None:
+    """How much these counters rose across the window. None when none were sent.
+
+    The same restart rule `_summed_rate` follows: a series whose value fell saw
+    an exporter restart, and its delta describes the restart rather than the
+    faults. Not divided by time — an error count is read as a count.
+    """
+    deltas = [
+        reading.latest_value - reading.earliest_value
+        for reading in readings
+        if reading.latest_value >= reading.earliest_value
+    ]
+    return sum(deltas) if deltas else None
 
 
 def _one_series_per_volume(readings: Sequence[Reading]) -> list[Reading]:

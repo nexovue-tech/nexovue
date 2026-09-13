@@ -22,6 +22,8 @@ import {
   cpuFraction,
   DISK_METRICS,
   describeMemory,
+  describeNetworkFaults,
+  describeSaturation,
   describeStale,
   describeUnattributed,
   explainMissing,
@@ -196,6 +198,8 @@ export function InfrastructureScreen() {
               {nodes.data?.truncated ? <TruncationNotice /> : null}
               <NestingNotice nodes={rows} />
               <StaleNotice nodes={rows} />
+              <SaturationNotice nodes={rows} />
+              <NetworkFaultNotice nodes={rows} />
               <UnattributedNotice nodes={rows} />
               <NodeTable nodes={rows} trendBySeries={trendBySeries} />
               <SignalStrip signals={signals.data ?? []} />
@@ -267,6 +271,41 @@ function TruncationNotice() {
  */
 function StaleNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
   const said = describeStale(nodes);
+  if (said === null) return null;
+
+  return (
+    <p className="shrink-0 border-critical-border border-l-2 px-4 py-2 text-critical-text text-sm">
+      {said}
+    </p>
+  );
+}
+
+/**
+ * USE's middle letter, said once above the table.
+ *
+ * Saturation is work that arrived and is waiting, and it is a different
+ * question from utilization: a disk with operations queued behind it is slower
+ * than its own busy-ness suggests, and a host swapping is out of memory
+ * whatever its memory percentage says. Both readings come from the standard
+ * `hostmetrics` receiver and were collected and drawn by nothing.
+ */
+function SaturationNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
+  const said = describeSaturation(nodes);
+  if (said === null) return null;
+
+  return (
+    <p className="shrink-0 border-warning-border border-l-2 px-4 py-2 text-sm text-warning-text">
+      {said}
+    </p>
+  );
+}
+
+/**
+ * USE's last letter. A sentence rather than a column because it is almost
+ * always zero, and a column of zeroes is rows of nothing.
+ */
+function NetworkFaultNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
+  const said = describeNetworkFaults(nodes);
   if (said === null) return null;
 
   return (

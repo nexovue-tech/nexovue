@@ -383,11 +383,24 @@ second answer to "how many nodes"; if it proves too slow the fix is a narrower r
       `p99_ms`; `_to_trend_point` stops discarding them; `trend-series.ts` draws three lines on one
       scale. → `test_services_trend.py` for the two new fields, `trend-series.test.ts` that the
       three lines share one axis — three separately-scaled lines would make p50 and p99 look equal.
-- [ ] **T34** `E` — `features/infrastructure/`: USE panels per node from `NodeSummary` —
+- [x] **T34** `E` — `features/infrastructure/`: USE panels per node from `NodeSummary` —
       utilization for CPU, memory and filesystem, plus the two byte rates. **Labelled U and E, not
       USE**: nothing stored carries saturation — no queue depth, no run queue, no IO wait — and
       relabelling utilization as saturation would be inventing a measurement. → a test that the
       panel set names what it cannot show rather than omitting it silently.
+
+**T34's premise was wrong, and the founder chose to widen it (2026-09-13).** The task said to label
+the panels U and E because "nothing stored carries saturation". That is true of `NodeSummary` and
+false of the store: `system.disk.pending_operations` — disk queue depth, USE's canonical saturation
+measure — is collected with a peak of 256, alongside `system.swap.utilization`,
+`system.network.errors` (41,998 points) and `system.network.dropped`. Eighteen host metrics were
+ingested and read by nothing. All are standard `hostmetrics` and `docker_stats` scrapers, so any
+customer already running a collector is already sending them.
+
+Writing "saturation: not measured" would have been wrong in the most damaging direction — telling a
+reader a thing cannot be done while the data sits in the store. The frame is now complete: U from
+the existing columns, S and E as sentences above the table, because both are usually absent and a
+column of nothing is rows of nothing.
 
 **Rate limiting, found in the browser and worth knowing.** `/services`, `/infra`, `/synthetics` and
 `/rum` are all in the telemetry tier: **60 requests a minute, four in flight** (`ratelimit/policy.py`).

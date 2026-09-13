@@ -59,6 +59,34 @@ class NodeSummary(BaseModel):
     disk_bytes_per_second: float | None = None
     network_bytes_per_second: float | None = None
 
+    # ------------------------------------------------------------ saturation
+    #
+    # USE's middle letter, and the one this screen used to say it could not
+    # measure. Both of these come from the standard `hostmetrics` receiver and
+    # were collected and read by nothing.
+    #
+    # Saturation is not utilization. A host at 40% memory that is swapping hard
+    # is in trouble `memory_utilization` cannot show, and a disk at any
+    # utilization with work queued behind it is slower than its own numbers
+    # suggest. That is the whole reason USE asks for two letters and not one.
+
+    # Outstanding I/O operations, summed across this node's disks. A **level**,
+    # not a counter: it rises and falls with the backlog, so it is the latest
+    # reading rather than a delta.
+    disk_queue_length: float | None = None
+    # The share of swap in use. Fraction, not percentage.
+    swap_utilization: float | None = None
+
+    # ---------------------------------------------------------------- errors
+    #
+    # Counted over the window rather than reported as a rate: "nine dropped in
+    # the last hour" is what a person acts on, where "0.0025 a second" is the
+    # same fact made unreadable. Kept apart because they are different faults —
+    # an interface erroring is not a queue overflowing — and a reader who sees
+    # one number cannot tell which they have.
+    network_errors: float | None = None
+    network_dropped: float | None = None
+
     first_seen: IsoTimestamp
     last_seen: IsoTimestamp
 

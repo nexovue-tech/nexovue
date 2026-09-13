@@ -52,6 +52,22 @@ export interface NodeSummary {
   disk_bytes_per_second: number | null;
   network_bytes_per_second: number | null;
 
+  /**
+   * USE's saturation — work that arrived and is waiting.
+   *
+   * Not utilization. A host at 40% memory that is swapping hard is under
+   * pressure `memory_utilization` cannot show, and a disk with work queued
+   * behind it is slower than its own numbers suggest. Both come from the
+   * standard `hostmetrics` receiver and were collected and drawn by nothing
+   * until now.
+   */
+  disk_queue_length: number | null;
+  swap_utilization: number | null;
+
+  /** Counted over the window, not rated. Usually zero, which is the good news. */
+  network_errors: number | null;
+  network_dropped: number | null;
+
   first_seen: string;
   last_seen: string;
 

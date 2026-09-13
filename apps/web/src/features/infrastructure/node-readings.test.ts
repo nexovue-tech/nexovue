@@ -5,6 +5,8 @@ import {
   CPU_METRICS,
   cpuFraction,
   describeMemory,
+  describeNetworkFaults,
+  describeSaturation,
   describeStale,
   describeUnattributed,
   explainMissing,
@@ -36,6 +38,10 @@ function node(overrides: Partial<NodeSummary> = {}): NodeSummary {
     filesystem_utilization: null,
     disk_bytes_per_second: null,
     network_bytes_per_second: null,
+    disk_queue_length: null,
+    swap_utilization: null,
+    network_errors: null,
+    network_dropped: null,
     first_seen: "2026-08-30T09:29:55.196Z",
     last_seen: "2026-08-30T09:42:56.449Z",
     reporting_interval_seconds: 60,
@@ -283,5 +289,68 @@ describe("describeMemory", () => {
 describe("MEMORY_METRICS", () => {
   it("names the metrics the memory column is built from", () => {
     expect(MEMORY_METRICS).toContain("system.memory.usage");
+  });
+});
+
+describe("saturation — USE's middle letter", () => {
+  it("says nothing when no node has work waiting", () => {
+    // The common case, and a fleet that is merely busy is not saturated.
+    expect(describeSaturation([node({ cpu_utilization: 0.98 })])).toBeNull();
+  });
+
+  it("names a node with a disk backlog rather than counting them", () => {
+    // "2 nodes" sends a reader scanning eleven rows for two they have not been
+    // told the shape of.
+    const said = describeSaturation([node({ disk_queue_length: 5 })]);
+
+    expect(said).toContain("web-01");
+    expect(said).toContain("1 node has work waiting");
+  });
+
+  it("treats swapping as saturation however healthy the memory looks", () => {
+    // The case the letter exists for: 74% memory reads as survivable, and a
+    // host swapping at 99% is out of memory regardless.
+    const said = describeSaturation([node({ memory_utilization: 0.74, swap_utilization: 0.9998 })]);
+
+    expect(said).not.toBeNull();
+  });
+
+  it("ignores a queue of nothing and a trace of swap", () => {
+    // A queue of zero is an idle disk, and a percent of swap is a machine that
+    // touched it once. Neither is an incident, and saying so would make the
+    // sentence appear on every fleet for ever.
+    expect(describeSaturation([node({ disk_queue_length: 0, swap_utilization: 0.01 })])).toBeNull();
+  });
+
+  it("says nothing about a node that sent no saturation reading", () => {
+    // Absent is not zero and is not saturated: a container sends neither of
+    // these, and claiming it is healthy would be inventing a measurement.
+    expect(describeSaturation([node()])).toBeNull();
+  });
+});
+
+describe("network faults — USE's last letter", () => {
+  it("says nothing when the window held none", () => {
+    expect(describeNetworkFaults([node({ network_errors: 0, network_dropped: 0 })])).toBeNull();
+  });
+
+  it("counts errors and drops apart, because they are different faults", () => {
+    // An interface erroring is not a queue overflowing, and one number for both
+    // leaves a reader unable to tell which they have.
+    const said = describeNetworkFaults([node({ network_errors: 3, network_dropped: 12 })]);
+
+    expect(said).toContain("3 errors");
+    expect(said).toContain("12 dropped");
+  });
+
+  it("names only the half that happened", () => {
+    const said = describeNetworkFaults([node({ network_errors: 0, network_dropped: 9 })]);
+
+    expect(said).toContain("9 dropped");
+    expect(said).not.toContain("0 errors");
+  });
+
+  it("says nothing about a node that reported no counters at all", () => {
+    expect(describeNetworkFaults([node()])).toBeNull();
   });
 });

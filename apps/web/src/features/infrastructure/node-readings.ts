@@ -15,7 +15,8 @@
 
 import { formatBinaryBytes } from "@/shared/format/bytes";
 import { formatDuration } from "@/shared/format/duration";
-import { formatPercent, isReading, UNKNOWN } from "@/shared/format/number";
+import { formatCount, formatPercent, isReading, UNKNOWN } from "@/shared/format/number";
+import { plural } from "@/shared/format/plural";
 import { formatRelativeTime } from "@/shared/format/time";
 
 import type { NodeSummary } from "./api";
@@ -202,3 +203,69 @@ export const MEMORY_METRICS = [
 export const DISK_METRICS = ["system.disk.io", "container.disk.io"] as const;
 export const NETWORK_METRICS = ["system.network.io", "container.network.io"] as const;
 export const FILESYSTEM_METRICS = ["system.filesystem.usage", "system.filesystem.limit"] as const;
+
+/* ------------------------------------------------------- saturation and errors */
+
+/**
+ * A node is saturated when work is waiting, not when it is busy.
+ *
+ * The two are different questions and USE asks both. A disk at any utilization
+ * with operations queued behind it is slower than its own numbers suggest, and
+ * a host swapping is out of memory whatever `memory_utilization` says.
+ */
+const QUEUE_WORTH_SAYING = 1;
+const SWAP_WORTH_SAYING = 0.5;
+
+export function isSaturated(node: NodeSummary): boolean {
+  return (
+    (node.disk_queue_length !== null && node.disk_queue_length >= QUEUE_WORTH_SAYING) ||
+    (node.swap_utilization !== null && node.swap_utilization >= SWAP_WORTH_SAYING)
+  );
+}
+
+/**
+ * The fleet's saturation, said once above the table.
+ *
+ * Named rather than counted: "2 nodes" sends a reader scanning eleven rows for
+ * two numbers they have not been told the shape of. The threshold is in the
+ * sentence because a queue of one is not an incident and a reader deciding
+ * whether to care needs to know what we called saturated.
+ */
+export function describeSaturation(nodes: readonly NodeSummary[]): string | null {
+  const saturated = nodes.filter(isSaturated);
+  if (saturated.length === 0) return null;
+
+  // Counted first, named after — the same shape as `describeStale`. A node's
+  // name here can be a phrase ("reported by recommendation"), and leading with
+  // one of those makes the sentence read as prose rather than as a list.
+  const named = saturated.map(nodeName).join(", ");
+  const subject = saturated.length === 1 ? "node has" : "nodes have";
+  return `${saturated.length} ${subject} work waiting: ${named}. Saturation is not the same as being busy — a disk with operations queued behind it is slower than its own numbers suggest, and a host using swap has run out of memory whatever its memory percentage says.`;
+}
+
+/**
+ * Network faults over the window, said once.
+ *
+ * Almost always zero, which is why this is a sentence rather than a column: a
+ * column of zeroes is eleven rows of nothing, and the one row that is not zero
+ * is the only thing worth the width.
+ */
+export function describeNetworkFaults(nodes: readonly NodeSummary[]): string | null {
+  const faulty = nodes.filter(
+    (node) => (node.network_errors ?? 0) > 0 || (node.network_dropped ?? 0) > 0,
+  );
+  if (faulty.length === 0) return null;
+
+  const said = faulty.map((node) => {
+    const errors = node.network_errors ?? 0;
+    const dropped = node.network_dropped ?? 0;
+    const parts = [
+      errors > 0 ? `${formatCount(errors)} ${plural(errors, "error")}` : "",
+      dropped > 0 ? `${formatCount(dropped)} dropped` : "",
+    ].filter(Boolean);
+    return `${nodeName(node)} (${parts.join(", ")})`;
+  });
+
+  const subject = faulty.length === 1 ? "node reported" : "nodes reported";
+  return `${faulty.length} ${subject} network faults in this window: ${said.join(" · ")}. An interface erroring is not a queue overflowing, so the two are counted apart.`;
+}

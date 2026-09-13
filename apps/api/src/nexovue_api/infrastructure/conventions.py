@@ -133,6 +133,40 @@ CONTAINER_MEMORY_USAGE_NAMES: Final = (CONTAINER_MEMORY_USAGE, DOCKER_CONTAINER_
 CONTAINER_DISK_IO: Final = "container.disk.io"
 CONTAINER_NETWORK_IO: Final = "container.network.io"
 
+# ------------------------------------------------- saturation and errors (USE)
+#
+# USE asks for utilization, **saturation** and errors. The first was read from
+# the day this screen existed; the other two were collected and read by nothing.
+# Every name below comes from the standard `hostmetrics` and `docker_stats`
+# receivers, so a customer already running a collector is already sending them —
+# nothing here asks for new instrumentation.
+
+# Saturation: work that arrived and is waiting. Queue depth is the canonical
+# measure, and it is a *level* rather than a counter — it rises and falls with
+# the backlog, so its reading is the latest value and never a delta.
+SYSTEM_DISK_PENDING_OPERATIONS: Final = "system.disk.pending_operations"
+
+# Saturation, for memory. Swapping is what a machine does once it has run out,
+# so this is memory pressure rather than memory use — a host at 40% memory and
+# swapping hard is in trouble that `system.memory.utilization` cannot show.
+SYSTEM_SWAP_UTILIZATION: Final = "system.swap.utilization"
+
+# Errors: packets the interface refused or lost. Cumulative counters, like the
+# byte counters beside them, and read as a count over the window rather than a
+# rate — "nine dropped in the last hour" is what a person acts on, where
+# "0.0025 a second" is the same fact made unreadable.
+SYSTEM_NETWORK_ERRORS: Final = "system.network.errors"
+SYSTEM_NETWORK_DROPPED: Final = "system.network.dropped"
+DOCKER_CONTAINER_NETWORK_RX_DROPPED: Final = "container.network.io.usage.rx_dropped"
+DOCKER_CONTAINER_NETWORK_TX_DROPPED: Final = "container.network.io.usage.tx_dropped"
+
+NETWORK_ERROR_NAMES: Final = (SYSTEM_NETWORK_ERRORS,)
+NETWORK_DROPPED_NAMES: Final = (
+    SYSTEM_NETWORK_DROPPED,
+    DOCKER_CONTAINER_NETWORK_RX_DROPPED,
+    DOCKER_CONTAINER_NETWORK_TX_DROPPED,
+)
+
 # Every name the read asks ClickHouse for. Bound as a query parameter, never
 # spliced into the statement.
 INFRASTRUCTURE_METRIC_NAMES: Final[tuple[str, ...]] = (
@@ -155,6 +189,12 @@ INFRASTRUCTURE_METRIC_NAMES: Final[tuple[str, ...]] = (
     DOCKER_CONTAINER_DISK_IO,
     DOCKER_CONTAINER_NETWORK_RX,
     DOCKER_CONTAINER_NETWORK_TX,
+    SYSTEM_DISK_PENDING_OPERATIONS,
+    SYSTEM_SWAP_UTILIZATION,
+    SYSTEM_NETWORK_ERRORS,
+    SYSTEM_NETWORK_DROPPED,
+    DOCKER_CONTAINER_NETWORK_RX_DROPPED,
+    DOCKER_CONTAINER_NETWORK_TX_DROPPED,
 )
 
 # The counters whose stored value only rises. Their reading is a rate, and a
@@ -169,6 +209,12 @@ CUMULATIVE_BYTE_COUNTERS: Final = frozenset(
         DOCKER_CONTAINER_DISK_IO,
         DOCKER_CONTAINER_NETWORK_RX,
         DOCKER_CONTAINER_NETWORK_TX,
+        # Packet counters, not byte counters, but the same rule applies: they
+        # only rise, and a fall between two points is a restart.
+        SYSTEM_NETWORK_ERRORS,
+        SYSTEM_NETWORK_DROPPED,
+        DOCKER_CONTAINER_NETWORK_RX_DROPPED,
+        DOCKER_CONTAINER_NETWORK_TX_DROPPED,
     }
 )
 
@@ -185,6 +231,11 @@ CUMULATIVE_BYTE_COUNTERS: Final = frozenset(
 # what we receive.
 
 # Which slice of CPU time a point measures.
+# Which half of swap a point measures: `used` or `free`. Only `used` is the
+# saturation reading; summing both would always give one.
+SWAP_STATE_ATTRIBUTES: Final[tuple[str, ...]] = ("state", "system.memory.state")
+SWAP_USED_STATE: Final = "used"
+
 CPU_MODE_ATTRIBUTES: Final[tuple[str, ...]] = ("state", "cpu.mode", "system.cpu.state")
 CPU_IDLE_MODE: Final = "idle"
 
