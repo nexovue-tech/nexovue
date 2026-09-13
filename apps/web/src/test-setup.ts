@@ -43,3 +43,33 @@ if (typeof globalThis.ResizeObserver === "undefined") {
     disconnect() {}
   } as unknown as typeof ResizeObserver;
 }
+
+/**
+ * jsdom here provides `window` and no `localStorage` on it at all.
+ *
+ * Every reader in this app already survives that — `theme.ts` and `refresh.ts` wrap
+ * each access, because a private window and blocked site data fail the same way in a
+ * real browser. What the absence costs is *coverage*: "this choice survives a reload"
+ * is a claim no test could make, so the one line that writes it was the one line
+ * nothing checked.
+ *
+ * In-memory and per-file, which is what a fresh tab looks like. It is deliberately not
+ * cleared between tests — a test that cares about starting empty says so, and one that
+ * writes then reads is exercising the behaviour rather than the fixture.
+ */
+if (typeof window !== "undefined" && window.localStorage === undefined) {
+  const entries = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => entries.get(key) ?? null,
+      setItem: (key: string, value: string) => void entries.set(key, String(value)),
+      removeItem: (key: string) => void entries.delete(key),
+      clear: () => entries.clear(),
+      key: (index: number) => [...entries.keys()][index] ?? null,
+      get length() {
+        return entries.size;
+      },
+    } satisfies Storage,
+  });
+}

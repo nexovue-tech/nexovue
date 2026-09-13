@@ -5,7 +5,6 @@ import { VerifyEmailBanner } from "@/features/auth/VerifyEmailBanner";
 import { ErrorBoundary } from "@/shared/components/ErrorBoundary";
 import { useOnlineStatus } from "@/shared/hooks/use-online-status";
 
-import { CommandPaletteMount, useCommandPaletteShortcut } from "./CommandPaletteMount";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 
@@ -16,18 +15,12 @@ import { TopBar } from "./TopBar";
  * and not the navigation, the project selector or the way back out.
  */
 export function AppShell() {
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const openPalette = useCallback(() => setPaletteOpen(true), []);
-  const closePalette = useCallback(() => setPaletteOpen(false), []);
-
   // Only meaningful below `md`, where the sidebar is a drawer rather than a column.
   const [navOpen, setNavOpen] = useState(false);
   const openNav = useCallback(() => setNavOpen(true), []);
   const closeNav = useCallback(() => setNavOpen(false), []);
 
   const online = useOnlineStatus();
-
-  useCommandPaletteShortcut(openPalette);
 
   // Escape closes the drawer, the same way it closes every other overlay here.
   useEffect(() => {
@@ -53,7 +46,7 @@ export function AppShell() {
       ) : null}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar onOpenCommandPalette={openPalette} onOpenNav={openNav} />
+        <TopBar onOpenNav={openNav} />
 
         {online ? null : (
           <p
@@ -74,8 +67,6 @@ export function AppShell() {
           </ErrorBoundary>
         </main>
       </div>
-
-      <CommandPaletteMount open={paletteOpen} onClose={closePalette} />
     </div>
   );
 }

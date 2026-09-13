@@ -18,13 +18,7 @@ import { ThemeToggle } from "@/shared/theme/ThemeToggle";
  * The selections themselves live in shared/, not here: the screens that read them are
  * features, and a feature may not import app/.
  */
-export function TopBar({
-  onOpenCommandPalette,
-  onOpenNav,
-}: {
-  onOpenCommandPalette: () => void;
-  onOpenNav: () => void;
-}) {
+export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
   const { projects, projectId } = useProjectSelection();
   const { rangeId } = useSelection();
 
@@ -69,14 +63,11 @@ export function TopBar({
 
       <div className="flex-1" />
 
-      <button
-        type="button"
-        onClick={onOpenCommandPalette}
-        className="flex items-baseline gap-2 border border-line px-2 py-0.5 text-ink-dim text-xs hover:border-line-strong hover:text-ink"
-      >
-        Search
-        <kbd className="font-mono text-2xs text-ink-dim">⌘K</kbd>
-      </button>
+      {/* Search is not here yet, and ⌘K stays reserved for it — no screen may bind
+          that chord to something else in the meantime. It carried a button and a
+          disabled input until 2026-09-14, which showed a customer who pressed it a
+          greyed-out box reading "mounted by P1-63, filled by a later task". An
+          internal task id is worse than no button at all. */}
 
       <ThemeToggle />
     </header>

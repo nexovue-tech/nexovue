@@ -57,10 +57,6 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
           </div>
         ))}
       </div>
-
-      <p className="border-line border-t px-4 py-2 font-mono text-2xs text-ink-dim">
-        phase 1 · shell only
-      </p>
     </nav>
   );
 }
