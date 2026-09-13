@@ -38,3 +38,56 @@ class MetricCatalogueResponse(BaseModel):
     # True when the read hit its ceiling: a prefix of the catalogue, not the
     # catalogue.
     truncated: bool = False
+
+
+class HistogramLayout(BaseModel):
+    """One bucket layout's distribution over the window.
+
+    A layout is a whole answer on its own. More than one of these means the
+    metric name arrived with incompatible bucket boundaries, and they are
+    reported side by side rather than added together — see `queries.py`.
+    """
+
+    # The upper bounds, ascending. `bucket_counts` has one more entry: the last
+    # counts everything above the last bound, which is why an estimate at the
+    # top of the distribution can only be a floor.
+    bounds: list[float] = Field(default_factory=list)
+    bucket_counts: list[int] = Field(default_factory=list)
+    # Observations in the window, which is the difference between the last
+    # cumulative point and the first — not the number of rows read.
+    count: int
+    # None when the exporter sent no sum. A histogram is not required to carry
+    # one, and inventing it from bucket midpoints would be a guess presented as
+    # a measurement.
+    sum: float | None = None
+    # The exporter's own extremes, when it sent them. Exact where the estimates
+    # are not, which is why they are worth carrying separately.
+    min: float | None = None
+    max: float | None = None
+    # Which services reported this layout. The actionable half of a conflict:
+    # two layouts means these services disagree about their own buckets.
+    services: list[str] = Field(default_factory=list)
+    series: int
+    # **Estimates.** A percentile read off buckets is interpolated within the
+    # bucket the rank falls in; it is as precise as the boundaries allow and no
+    # more. The screen labels them as estimates for that reason.
+    p50: float | None = None
+    p75: float | None = None
+    p90: float | None = None
+    p95: float | None = None
+    p99: float | None = None
+
+
+class HistogramResponse(BaseModel):
+    """One metric's distribution, per bucket layout."""
+
+    metric_name: str
+    unit: str
+    description: str = ""
+    window_start: IsoTimestamp
+    window_end: IsoTimestamp
+    layouts: list[HistogramLayout] = Field(default_factory=list)
+    # False when the name arrived with more than one bucket layout, so nothing
+    # was merged. The screen says so rather than drawing one chart that is the
+    # sum of two incompatible ones.
+    merged: bool = True

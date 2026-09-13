@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
+import pytest
+
 from nexovue_api.data.clickhouse.base import TENANT_BINDING, TenantScopedRepository
 from nexovue_api.metrics import queries, service
 from nexovue_api.metrics.schemas import MetricCatalogueResponse
@@ -253,3 +255,271 @@ async def test_the_window_is_bounded_on_our_receive_clock_as_well() -> None:
 
     assert store.last_parameters["received_from"] < store.last_parameters["from_time"]
     assert store.last_parameters["received_to"] > store.last_parameters["to_time"]
+
+
+# ------------------------------------------------------- estimating off buckets
+
+
+class TestQuantilesOffBuckets:
+    """What a percentile read from a histogram can and cannot claim.
+
+    Every number here is an estimate, and the tests are written to pin the
+    places where that matters rather than to restate the arithmetic.
+    """
+
+    def test_a_rank_inside_a_bucket_is_placed_linearly_within_it(self) -> None:
+        """The whole of the estimation, in one case with an obvious answer.
+
+        Ten observations, all in the bucket from 10 to 20. The median rank falls
+        halfway through that bucket, so the estimate is halfway along it.
+        """
+        estimates = service.estimate_quantiles([10.0, 20.0], [0, 10, 0], 10)
+
+        assert estimates[0] == pytest.approx(15.0)
+
+    def test_an_empty_histogram_estimates_nothing_rather_than_zero(self) -> None:
+        """Zero is a latency somebody would act on. Absence is not.
+
+        A window in which nothing was observed must not report a p99 of 0ms —
+        the screen renders an em dash for None and a fast service for 0.
+        """
+        assert service.estimate_quantiles([10.0, 20.0], [0, 0, 0], 0) == (None,) * 5
+        assert service.estimate_quantiles([10.0, 20.0], [0, 0, 0], 7) == (None,) * 5
+
+    def test_the_first_bucket_is_read_as_starting_at_zero(self) -> None:
+        """It has no lower bound, and every metric read here is a duration or a
+        size. Interpolating from negative infinity would be arithmetic nobody
+        can use."""
+        estimates = service.estimate_quantiles([100.0], [10, 0], 10)
+
+        assert estimates[0] == pytest.approx(50.0)
+
+    def test_a_rank_above_the_last_bound_reports_the_bound_and_not_infinity(self) -> None:
+        """The last bucket is open-ended, so the honest answer is a floor.
+
+        Nine observations under 10 and one above it: the p99 lands in the
+        unbounded bucket, where the only defensible claim is "at least 10".
+        """
+        estimates = service.estimate_quantiles([1.0, 10.0], [0, 9, 1], 10)
+
+        assert estimates[4] == pytest.approx(10.0)
+
+    def test_a_histogram_with_no_bounds_at_all_does_not_raise(self) -> None:
+        """A single unbounded bucket is legal OTLP and is in the store —
+        `otel.sdk.exporter.operation.duration` arrives with none."""
+        assert service.estimate_quantiles([], [12], 12) == (0.0,) * 5
+
+    def test_the_estimates_never_go_backwards(self) -> None:
+        """A p95 below a p50 would be visibly wrong on the screen, and is the
+        shape a bad interpolation takes."""
+        counts = [3, 12, 40, 21, 9, 2]
+        estimates = service.estimate_quantiles([1.0, 5.0, 25.0, 100.0, 500.0], counts, sum(counts))
+
+        values_read = [estimate for estimate in estimates if estimate is not None]
+        assert values_read == sorted(values_read)
+        assert len(values_read) == 5
+
+
+# ------------------------------------------------------ merging the buckets
+
+
+_HISTOGRAM_COLUMNS: Final = [
+    "bounds",
+    "services",
+    "series",
+    "bucket_counts",
+    "total_count",
+    "total_sum",
+    "low",
+    "high",
+    "latest_nanos",
+]
+
+_IDENTITY_COLUMNS: Final = ["metric_unit", "metric_description"]
+
+
+class FakeHistogramStore:
+    """Answers each statement the histogram read issues, and only that one.
+
+    **Dispatch is on the statement itself, not a substring of it.** A fake that
+    matched `"GROUP BY"` once answered every statement in `synthetics` as the
+    summary, and the misrouting survived because the shapes happened to fit.
+    These two share most of their text.
+    """
+
+    def __init__(
+        self, layouts: list[tuple[Any, ...]], identity: tuple[Any, ...] = ("ms", "how long")
+    ) -> None:
+        self._layouts = layouts
+        self._identity = identity
+        self.statements: list[str] = []
+        self.last_parameters: dict[str, Any] = {}
+
+    async def query(
+        self,
+        sql: str,
+        parameters: dict[str, Any] | None = None,
+        settings: dict[str, Any] | None = None,
+    ) -> FakeQueryResult:
+        self.statements.append(sql)
+        self.last_parameters = dict(parameters or {})
+
+        if sql == queries.HISTOGRAM_SQL:
+            return FakeQueryResult(_HISTOGRAM_COLUMNS, self._layouts)
+        if sql == queries.HISTOGRAM_IDENTITY_SQL:
+            return FakeQueryResult(_IDENTITY_COLUMNS, [self._identity])
+        raise AssertionError(
+            f"the histogram read issued a statement this fake does not know:\n{sql}"
+        )
+
+
+def _layout(
+    bounds: list[float],
+    counts: list[int],
+    *,
+    services: list[str],
+    total: int | None = None,
+    total_sum: float | None = 12.5,
+    low: float | None = 0.5,
+    high: float | None = 900.0,
+    series: int = 2,
+) -> tuple[Any, ...]:
+    return (
+        bounds,
+        services,
+        series,
+        counts,
+        sum(counts) if total is None else total,
+        total_sum,
+        low,
+        high,
+        _LATEST_NANOS,
+    )
+
+
+async def _histogram(store: FakeHistogramStore, name: str = "db.client.operation.duration") -> Any:
+    start, end = _window()
+    return await service.read_histogram(
+        _repository(TENANT_A, store),  # type: ignore[arg-type]
+        project_id=PROJECT_A,
+        metric_name=name,
+        from_time=start,
+        to_time=end,
+    )
+
+
+class TestTheHistogramRead:
+    async def test_one_layout_is_a_merged_distribution(self) -> None:
+        store = FakeHistogramStore([_layout([1.0, 10.0], [2, 6, 2], services=["checkout"])])
+
+        answer = await _histogram(store)
+
+        assert answer.merged is True
+        assert len(answer.layouts) == 1
+        assert answer.layouts[0].bucket_counts == [2, 6, 2]
+        assert answer.layouts[0].count == 10
+        assert answer.unit == "ms"
+
+    async def test_two_bucket_layouts_are_reported_apart_and_never_added(self) -> None:
+        """The case that happens in real data.
+
+        `db.client.operation.duration` arrives from one service with bounds in
+        milliseconds and from another with bounds in seconds. Adding their
+        counts would add milliseconds to seconds, so each is answered whole and
+        the response says nothing was merged.
+        """
+        store = FakeHistogramStore(
+            [
+                _layout([0.0, 5.0, 10.0], [0, 100, 20, 3], services=["product-catalog"]),
+                _layout([0.001, 0.005, 0.01], [6, 93, 49, 29], services=["accounting"]),
+            ]
+        )
+
+        answer = await _histogram(store)
+
+        assert answer.merged is False, "two bucket layouts are not one distribution"
+        assert len(answer.layouts) == 2
+        assert [layout.services for layout in answer.layouts] == [
+            ["product-catalog"],
+            ["accounting"],
+        ]
+        # Each layout keeps its own totals; nothing is a sum across the two.
+        assert [layout.count for layout in answer.layouts] == [123, 177]
+
+    async def test_a_conflict_names_the_services_that_disagree(self) -> None:
+        """The actionable half. "Two layouts" is a symptom; which services chose
+        them is what somebody can go and fix."""
+        store = FakeHistogramStore(
+            [
+                _layout([0.0, 5.0], [1, 1, 1], services=["product-catalog"]),
+                _layout([0.001, 0.005], [1, 1, 1], services=["accounting", "cart"]),
+            ]
+        )
+
+        answer = await _histogram(store)
+
+        assert answer.layouts[1].services == ["accounting", "cart"]
+
+    async def test_a_metric_that_reported_nothing_is_an_empty_answer_not_an_error(self) -> None:
+        """A name with no points in the window is a quiet metric, not a bad
+        request. The screen says "nothing in this window" and keeps the name."""
+        store = FakeHistogramStore([])
+
+        answer = await _histogram(store, name="never.reported")
+
+        assert answer.layouts == []
+        assert answer.merged is True
+        assert answer.metric_name == "never.reported"
+
+    async def test_a_negative_bucket_never_reaches_the_response(self) -> None:
+        """A window subtraction can go slightly negative when a series was
+        re-exported out of order. A negative count in a distribution is not a
+        reading anybody can act on."""
+        store = FakeHistogramStore([_layout([1.0, 10.0], [-2, 6, 2], services=["cart"], total=-1)])
+
+        answer = await _histogram(store)
+
+        assert answer.layouts[0].bucket_counts == [0, 6, 2]
+        assert answer.layouts[0].count == 0
+
+    async def test_an_absent_sum_stays_absent_rather_than_becoming_zero(self) -> None:
+        """OTLP does not require a histogram to carry a sum, and zero is a
+        reading somebody would act on."""
+        store = FakeHistogramStore(
+            [_layout([1.0], [1, 1], services=["cart"], total_sum=None, low=None, high=None)]
+        )
+
+        answer = await _histogram(store)
+
+        assert answer.layouts[0].sum is None
+        assert answer.layouts[0].min is None
+        assert answer.layouts[0].max is None
+
+    async def test_the_read_is_bound_to_the_metric_the_caller_named(self) -> None:
+        store = FakeHistogramStore([_layout([1.0], [1, 1], services=["cart"])])
+
+        await _histogram(store, name="http.server.duration")
+
+        assert store.last_parameters["metric_name"] == "http.server.duration"
+        assert store.last_parameters["tenant_id"] == TENANT_A
+
+
+class TestTheHistogramStatements:
+    def test_every_histogram_statement_binds_the_tenant(self) -> None:
+        """The chokepoint rule, checked here too: the structural test parses
+        source, and a statement that stopped naming the tenant would otherwise
+        only fail once it had read somebody else's rows."""
+        for statement in (queries.HISTOGRAM_SQL, queries.HISTOGRAM_IDENTITY_SQL):
+            assert TENANT_BINDING in statement
+
+    def test_the_window_statement_groups_by_the_bucket_layout(self) -> None:
+        """Losing this `GROUP BY` is what would silently add two distributions
+        together, and the result would look like a plausible histogram."""
+        assert "GROUP BY bounds" in queries.HISTOGRAM_SQL
+        assert "GROUP BY series_hash, explicit_bounds" in queries.HISTOGRAM_SQL
+
+    def test_the_distribution_is_a_window_delta_and_not_a_sum_of_points(self) -> None:
+        """Every histogram in the store is cumulative. Summing points across an
+        hour of ten-second exports reports 360 times the traffic."""
+        assert "argMax(bucket_counts, timestamp)" in queries.HISTOGRAM_SQL
+        assert "argMin(bucket_counts, timestamp)" in queries.HISTOGRAM_SQL

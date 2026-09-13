@@ -448,7 +448,7 @@ histograms, because histograms are what exists.
       endpoint, not a widened `infrastructure/signals`: that one is scoped to the host-metric names
       and is read by the infrastructure strip. → `test_metrics.py`: a name present in two tables is
       one row naming both shapes; an empty table contributes nothing rather than a zero row.
-- [ ] **T36** `E` — `GET /metrics/{name}/histogram` — buckets merged across the window over their
+- [x] **T36** `E` — `GET /metrics/{name}/histogram` — buckets merged across the window over their
       own `explicit_bounds`, with `count`, `sum` and estimated percentiles. **Refuses to merge
       points whose bounds differ**: two histograms with different bucket layouts are not one
       distribution, and adding their counts silently invents a shape. → `test_metrics.py` for the

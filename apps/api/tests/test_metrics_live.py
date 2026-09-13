@@ -20,13 +20,14 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import clickhouse_connect
+import pytest
 import pytest_asyncio
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
 
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.metrics import queries, service
-from nexovue_api.metrics.schemas import MetricCatalogueResponse
+from nexovue_api.metrics.schemas import HistogramResponse, MetricCatalogueResponse
 
 CLICKHOUSE_DSN: Final = os.environ.get(
     "NEXOVUE_CLICKHOUSE_HTTP_DSN", "clickhouse://nexovue:nexovue_dev@localhost:18123/nexovue"
@@ -230,3 +231,123 @@ def test_the_shapes_named_here_are_the_ones_the_store_has_tables_for() -> None:
         queries.SHAPE_EXPONENTIAL_HISTOGRAM,
         queries.SHAPE_SUMMARY,
     } >= queries.READABLE_SHAPES
+
+
+# ---------------------------------------------------- the histogram itself
+
+
+async def _histogram(
+    clickhouse: AsyncClient, reporting: tuple[str, str], metric_name: str
+) -> HistogramResponse:
+    tenant_id, project_id = reporting
+    start, end = _window()
+    return await service.read_histogram(
+        TenantScopedRepository(clickhouse, tenant_id=tenant_id),
+        project_id=project_id,
+        metric_name=metric_name,
+        from_time=start,
+        to_time=end,
+    )
+
+
+async def test_a_real_histogram_merges_into_one_distribution_over_its_own_bounds(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    """`k6.http_req_duration` is the load generator's own latency, sixteen
+    buckets over fifteen bounds. The offline suite cannot tell you `sumForEach`
+    and the `argMax`/`argMin` subtraction parse, or that they agree about array
+    lengths."""
+    answer = await _histogram(clickhouse, reporting, "k6.http_req_duration")
+
+    assert answer.merged is True, "one metric, one layout, one distribution"
+    (layout,) = answer.layouts
+    assert len(layout.bounds) == 15
+    assert len(layout.bucket_counts) == len(layout.bounds) + 1, (
+        "a histogram has one more bucket than it has bounds: the last is unbounded"
+    )
+    assert layout.count > 0
+    assert layout.series > 0
+    assert layout.services
+
+
+async def test_the_window_delta_is_far_below_the_number_of_points_stored(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    """The defect this read exists to avoid, measured against the store.
+
+    Every histogram here is cumulative, exported every ten seconds, so summing
+    the points would report the same observations hundreds of times over. The
+    catalogue counts points; this counts observations, and over a two-day window
+    the second must be nothing like the first multiplied by the export rate.
+    """
+    tenant_id, project_id = reporting
+    start, end = _window()
+    stored = await clickhouse.query(
+        "SELECT sum(count) AS naive, max(count) AS largest_single_point "
+        "FROM metrics_histogram WHERE tenant_id = %(tenant)s AND project_id = %(project)s "
+        "AND metric_name = 'k6.http_req_duration' AND timestamp >= %(since)s",
+        parameters={"tenant": tenant_id, "project": project_id, "since": start},
+    )
+    naive, largest = stored.result_rows[0]
+
+    answer = await _histogram(clickhouse, reporting, "k6.http_req_duration")
+    (layout,) = answer.layouts
+
+    assert naive > 0, "no points to compare against"
+    assert layout.count < naive, (
+        f"the read returned {layout.count}, which is not below the naive sum of {naive}. "
+        "Summing cumulative points counts every observation once per export."
+    )
+    assert layout.count >= largest, (
+        "the window's total cannot be smaller than the largest single cumulative point"
+    )
+    assert end > start
+
+
+async def test_percentiles_come_back_ordered_and_inside_the_bounds(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    """Estimates, but not arbitrary ones: each must sit inside the range its own
+    buckets describe, and they must not go backwards."""
+    answer = await _histogram(clickhouse, reporting, "k6.http_req_duration")
+    (layout,) = answer.layouts
+
+    estimates = [layout.p50, layout.p75, layout.p90, layout.p95, layout.p99]
+    assert all(estimate is not None for estimate in estimates)
+    assert estimates == sorted(estimate for estimate in estimates if estimate is not None)
+    assert all(0.0 <= estimate <= layout.bounds[-1] for estimate in estimates if estimate)
+
+
+async def test_a_metric_reported_with_two_bucket_layouts_is_never_merged(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    """This is real, not a constructed case.
+
+    `db.client.operation.duration` arrives from `product-catalog` with bounds
+    `[0, 5, 10, ...]` and from `accounting` with `[0.001, 0.005, 0.01, ...]` —
+    one in milliseconds and one in seconds. A reader that added their buckets
+    would publish a latency distribution that is the sum of two different units.
+    """
+    answer = await _histogram(clickhouse, reporting, "db.client.operation.duration")
+
+    if len(answer.layouts) < 2:
+        pytest.skip(
+            "the store currently holds one bucket layout for this metric; the "
+            "conflict this asserts on is a property of the demo's instrumentation"
+        )
+
+    assert answer.merged is False
+    layouts = {len(layout.bounds) for layout in answer.layouts}
+    assert len(layouts) > 1, "two layouts must differ in the bounds they carry"
+    for layout in answer.layouts:
+        assert layout.services, "a layout must name who reported it, so it can be fixed"
+        assert len(layout.bucket_counts) == len(layout.bounds) + 1
+
+
+async def test_a_metric_nobody_sent_is_an_empty_distribution_not_a_failure(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    answer = await _histogram(clickhouse, reporting, f"absent.metric.{uuid.uuid4().hex}")
+
+    assert answer.layouts == []
+    assert answer.merged is True

@@ -102,3 +102,113 @@ GROUP BY metric_name
 ORDER BY points DESC, metric_name
 LIMIT {{limit:UInt32}}
 """
+
+
+# A histogram's distribution over the window, one row per bucket layout.
+#
+# **Cumulative, which is what makes this more than a `sum()`.** Every histogram
+# in the store carries `CUMULATIVE` temporality: each point is the running total
+# since `start_timestamp`, so the same `count` and the same `bucket_counts`
+# repeat on every export. Summing points across an hour of ten-second exports
+# reports 360 times the traffic that happened. The window's own distribution is
+# the difference between the last point and the first, per series — the rule
+# `infrastructure/service._summed_delta` already follows for counters.
+#
+# Two things make that subtraction wrong, and both are handled as one condition:
+# an exporter restart, which resets the counters and shows up as a falling
+# `count`; and a series whose accumulation *began inside the window*, which shows
+# up as a `start_timestamp` at or after the window opened. In both cases the
+# latest point is itself the window's contribution, and subtracting anything from
+# it would discard real observations.
+#
+# **Grouped by `explicit_bounds`, never merged across them.** Two histograms with
+# different bucket layouts are not one distribution. This is not theoretical:
+# `db.client.operation.duration` arrives from one service with bounds
+# `[0, 5, 10, ...]` and from another with `[0.001, 0.005, 0.01, ...]`, and adding
+# those counts would add milliseconds to seconds and call the result a latency.
+# Each layout is returned whole, with the services that reported it, and the
+# caller decides what to show.
+_WINDOW_IS_THE_WHOLE_SERIES: Final = """
+                argMax(start_timestamp, timestamp) >= {from_time:DateTime64(3)}
+                OR argMax(count, timestamp) < argMin(count, timestamp)"""
+
+HISTOGRAM_SQL: Final = f"""
+SELECT
+    bounds,
+    arraySort(services) AS services,
+    series,
+    bucket_counts,
+    total_count,
+    total_sum,
+    low,
+    high,
+    toUnixTimestamp64Nano(latest) AS latest_nanos
+FROM (
+    SELECT
+        explicit_bounds AS bounds,
+        groupUniqArray(service_name) AS services,
+        uniqExact(series_hash) AS series,
+        sumForEach(window_buckets) AS bucket_counts,
+        sum(window_count) AS total_count,
+        sum(window_sum) AS total_sum,
+        min(low) AS low,
+        max(high) AS high,
+        max(latest) AS latest
+    FROM (
+        SELECT
+            series_hash,
+            explicit_bounds,
+            any(service_name) AS service_name,
+            max(timestamp) AS latest,
+            min(min) AS low,
+            max(max) AS high,
+            {_WINDOW_IS_THE_WHOLE_SERIES} AS whole,
+            if(
+                whole,
+                CAST(argMax(bucket_counts, timestamp), 'Array(Int64)'),
+                CAST(
+                    arrayMap(
+                        (later, earlier) -> toInt64(later) - toInt64(earlier),
+                        argMax(bucket_counts, timestamp),
+                        argMin(bucket_counts, timestamp)
+                    ),
+                    'Array(Int64)'
+                )
+            ) AS window_buckets,
+            if(
+                whole,
+                toInt64(argMax(count, timestamp)),
+                toInt64(argMax(count, timestamp)) - toInt64(argMin(count, timestamp))
+            ) AS window_count,
+            if(
+                whole,
+                argMax(sum, timestamp),
+                argMax(sum, timestamp) - argMin(sum, timestamp)
+            ) AS window_sum
+        FROM metrics_histogram
+        WHERE tenant_id = {{tenant_id:String}}
+          AND project_id = {{project_id:String}}
+          AND metric_name = {{metric_name:String}}{_WINDOW}
+          -- A point whose buckets do not match its own bounds is malformed;
+          -- `sumForEach` would refuse the group it landed in and take every
+          -- well-formed series with it.
+          AND length(bucket_counts) = length(explicit_bounds) + 1
+        GROUP BY series_hash, explicit_bounds
+    )
+    GROUP BY bounds
+)
+ORDER BY total_count DESC, length(bounds) DESC
+"""
+
+# The unit and description belong to the name rather than to a layout, and are
+# read even when no point carried a bucket — which is how a name that exists but
+# reported nothing in the window is told apart from one that does not exist.
+HISTOGRAM_IDENTITY_SQL: Final = """
+SELECT
+    any(metric_unit) AS metric_unit,
+    any(metric_description) AS metric_description
+FROM metrics_histogram
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND metric_name = {metric_name:String}
+"""
