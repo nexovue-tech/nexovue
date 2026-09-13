@@ -26,6 +26,17 @@ _ABSENT_PASSWORD_HASH: Final = _hasher.hash("argon2-timing-equalizer")
 
 MINIMUM_EMAIL_LENGTH: Final = 3
 
+# The refusal every "prove you hold this account" gate gives back — a password
+# change, a change of address, and arming or disarming a second factor. One
+# wording, here rather than in one of those callers, because it is the same
+# refusal and a second phrasing would be a second thing to keep true.
+#
+# Deliberately identical whether the account has no password at all (an invited
+# user, `password_hash` NULL) or the one supplied is wrong. Both are "you did not
+# prove you hold the current password", and the remedy in both cases is the
+# reset link.
+CURRENT_PASSWORD_WRONG: Final = "That is not the current password on this account."
+
 
 def hash_password(plaintext: str) -> str:
     return _hasher.hash(plaintext)

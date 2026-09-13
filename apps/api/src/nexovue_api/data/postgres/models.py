@@ -27,6 +27,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     SmallInteger,
     String,
     Text,
@@ -179,13 +180,64 @@ class User(Base):
     # session": Redis keys sessions by token fingerprint, so there is nothing to
     # enumerate, and this comparison rides a user row every request already loads.
     sessions_valid_from: Mapped[OptionalTimestamp]
+    # The TOTP shared secret, sealed by `auth/encryption.py` and authenticated
+    # against this row's id — so a copy of somebody else's ciphertext will not
+    # open here. Encrypted rather than hashed because verifying a code means
+    # recomputing an HMAC with the same secret the phone holds; it is the one
+    # credential in this schema that has to survive in a recoverable form.
+    totp_secret: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # When the customer proved they could produce a code from that secret. **This
+    # column, not the secret, is what switches the second factor on**: a secret
+    # stored without a confirmed code would lock out the person who mistyped it
+    # into their authenticator. NULL means the account signs in with a password
+    # alone. The CHECK in migration 0025 keeps the pair honest.
+    totp_confirmed_at: Mapped[OptionalTimestamp]
     invited_by: Mapped[uuid.UUID | None] = mapped_column(
         UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     invited_at: Mapped[OptionalTimestamp]
     created_at: Mapped[CreatedAt]
 
-    __table_args__ = (Index("ix_users_org_id", "org_id"),)
+    __table_args__ = (
+        Index("ix_users_org_id", "org_id"),
+        CheckConstraint(
+            "(totp_secret IS NULL) = (totp_confirmed_at IS NULL)",
+            name="totp_secret_and_confirmation_agree",
+        ),
+    )
+
+
+class UserRecoveryCode(Base):
+    """One single-use way back in when the authenticator is gone.
+
+    **No `org_id`, and that is a decision rather than an omission.** The rule at
+    the top of this module puts the tenant on every tenant-scoped table so the
+    filter is one column away. Nothing here is ever found by tenant: a code is
+    looked up as "this signed-in person's own", from the user id the session
+    names, and there is no query for an `org_id` predicate to protect. A column
+    no statement reads would be a claim of protection that is not there — which
+    is the mistake migration 0006 removed when `config_encrypted` turned out to
+    hold plain JSON. Erasure still reaches these rows: the foreign key below
+    cascades from `users`, which a tenant deletion removes directly.
+
+    Argon2 in `code_hash`, for the reason `auth/recovery_codes.py` sets out: a
+    code short enough to copy off paper is short enough to need a slow hash.
+
+    `used_at` rather than a delete, so "one of your recovery codes was used on
+    Tuesday" stays answerable.
+    """
+
+    __tablename__ = "user_recovery_codes"
+
+    id: Mapped[UuidPrimaryKey]
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    code_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[CreatedAt]
+    used_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (Index("ix_user_recovery_codes_user_id", "user_id"),)
 
 
 class Plan(Base):

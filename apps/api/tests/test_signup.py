@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.data.postgres.models import API_KEY_PREFIX_LENGTH, SLUG_MAX_LENGTH
 from nexovue_api.signup.apikeys import (
     API_KEY_PREFIX,
@@ -134,7 +135,9 @@ class _RecordingSessionStore:
     def __init__(self, log: _OrderLog) -> None:
         self._log = log
 
-    async def create(self, *, user_id: str, org_id: str) -> tuple[str, object]:
+    async def create(
+        self, *, user_id: str, org_id: str, client: ClientDescription | None = None
+    ) -> tuple[str, object]:
         from datetime import UTC, datetime
 
         from nexovue_api.auth.sessions import Session
@@ -158,6 +161,7 @@ async def test_the_tenant_is_committed_before_its_session_is_minted(
 
     import httpx
     from environment import TEST_ENVIRONMENT
+    from fake_stores import use_fake_second_factors
     from pydantic import SecretStr
 
     from nexovue_api.data.postgres.models import Organization, Project, User
@@ -204,6 +208,9 @@ async def test_the_tenant_is_committed_before_its_session_is_minted(
     app.dependency_overrides[get_app_settings] = lambda: settings
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_session_store] = lambda: _RecordingSessionStore(log)
+    # Sign-in asks whether a second factor is required, so every suite that
+    # drives it needs that store too.
+    use_fake_second_factors(app)
     # No mail provider: signup logs and carries on, which is its documented
     # behaviour and keeps this test about ordering.
     app.dependency_overrides[get_optional_email_sender] = lambda: None

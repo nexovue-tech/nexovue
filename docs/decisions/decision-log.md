@@ -268,6 +268,7 @@ and 0075 — leaving nine. The other 100 records are adequately served by this i
 | 0040 | Risk accepted — OTel browser instrumentation is experimental | 2026-08-26 | stands |  |
 | 0080 | An unanswered call's callee is named by what the caller asserted, and never by an IP or a transport | 2026-08-30 | **amended** | Its open question — should a bare IP be allowed to name a node? — is answered by 0082: the address is still stored, an… |
 | 0082 | A peer named by a bare IP is stored as it was asserted and collapsed into one node for display | 2026-08-31 | stands |  |
+| 0083 | Sessions are listed through a per-user index; the TOTP secret is encrypted with the user id as associated data | 2026-09-14 | stands | Narrows 0019 — revocation stays an epoch bump, listing gets an index |
 
 ---
 

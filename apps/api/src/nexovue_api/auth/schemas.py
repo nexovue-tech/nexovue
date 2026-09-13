@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,14 @@ PASSWORD_MAX_LENGTH = 128
 
 Password = Annotated[str, Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)]
 EmailAddress = Annotated[str, Field(min_length=3, max_length=EMAIL_MAX_LENGTH)]
+
+# A six-digit authenticator code or a hyphenated recovery code, in one field.
+# Bounded rather than shaped: refusing a five-digit entry with "that is not six
+# digits" would answer a question the caller has not earned, and the service has
+# one message for every way a code can fail. The ceiling is generous enough for
+# a recovery code typed with its separator and spaces.
+SECOND_FACTOR_CODE_MAX_LENGTH = 64
+SecondFactorCode = Annotated[str, Field(min_length=1, max_length=SECOND_FACTOR_CODE_MAX_LENGTH)]
 
 
 class UserSummary(BaseModel):
@@ -84,6 +92,36 @@ class TokenSubmission(BaseModel):
     """
 
     token: Annotated[str, Field(min_length=1, max_length=512)]
+
+
+class SecondFactorChallenge(BaseModel):
+    """What login answers when the password was right and is not enough.
+
+    **No identity is in this body, and that is the point.** The password has been
+    proved and the account has not been reached yet, so nothing that describes
+    the account — its name, its organization, even its address — is disclosed to
+    a caller who may only have got the password right.
+
+    `second_factor_required` is a constant `True` rather than an implied
+    discriminator, so a client tells the two login answers apart by a field
+    rather than by noticing which fields are missing.
+    """
+
+    second_factor_required: Literal[True] = True
+    challenge: str
+
+
+class SecondFactorSubmission(BaseModel):
+    """The second half of a sign-in: the challenge, and a code.
+
+    One field for both kinds of code. A customer holding a recovery code knows
+    it as "the code"; asking them to say which kind it is first would be asking
+    them to understand our schema. The service tries the authenticator's code
+    and then the recovery codes.
+    """
+
+    challenge: Annotated[str, Field(min_length=1, max_length=512)]
+    code: SecondFactorCode
 
 
 class PasswordReset(TokenSubmission):

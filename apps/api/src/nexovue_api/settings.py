@@ -250,6 +250,19 @@ class Settings(BaseSettings):
     # --- sessions -----------------------------------------------------------
     session_ttl_seconds: Annotated[int, Field(gt=0)] = 60 * 60 * 24 * 7
 
+    # The key that seals the one credential this system cannot hash: the TOTP
+    # shared secret, which has to be recoverable because verifying a code means
+    # recomputing an HMAC with it. `auth/encryption.py` states what this does and
+    # does not protect.
+    #
+    # Optional at boot and deliberately so, like the object store above: a
+    # deployment where nobody has enrolled a second factor needs no key, and an
+    # API that refused to start without one would stop an existing install on
+    # upgrade. The endpoints that need it refuse with 503 instead — never by
+    # storing a secret in the clear. Generate one with
+    # `auth.encryption.generate_key()`.
+    credential_encryption_key: str = ""
+
     # Where a customer points their OTLP exporter. Signup hands this back, so it
     # has to name the receiver as the *customer* reaches it, not as we reach it.
     otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT

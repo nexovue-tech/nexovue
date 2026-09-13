@@ -11,14 +11,21 @@ from http import HTTPStatus
 
 from fastapi import APIRouter, Request, Response
 
-from nexovue_api.auth import recovery, service
+from nexovue_api.auth import recovery, second_factor, service
 from nexovue_api.auth.cookies import clear_session_cookie, set_session_cookie
-from nexovue_api.auth.dependencies import CurrentIdentity
+from nexovue_api.auth.dependencies import (
+    CurrentClient,
+    CurrentIdentity,
+    OptionalCredentialEncryption,
+    SecondFactors,
+)
 from nexovue_api.auth.schemas import (
     IdentityResponse,
     LoginRequest,
     PasswordReset,
     PasswordResetRequest,
+    SecondFactorChallenge,
+    SecondFactorSubmission,
     TokenSubmission,
 )
 from nexovue_api.auth.sessions import session_token_from_headers
@@ -39,12 +46,67 @@ async def login(
     response: Response,
     db: DbSession,
     sessions: SessionStoreDep,
+    second_factors: SecondFactors,
+    client: CurrentClient,
     settings: AppSettings,
-) -> IdentityResponse:
+) -> IdentityResponse | SecondFactorChallenge:
+    """One of two answers, and the caller tells them apart by a field.
+
+    **No cookie is set on the challenge path.** A caller who has proved the
+    password holds one factor of two and must not be able to reach a single
+    screen with it — so the session is minted in `submit_second_factor` and
+    nowhere else. The challenge is a token in the body rather than a cookie for
+    the same reason: it is not a session and should not travel like one.
+
+    The challenge body names nothing about the account. Somebody who has guessed
+    a password correctly learns that and no more.
+    """
     user, organization = await service.authenticate(
         db, email=payload.email, password=payload.password
     )
-    token = await service.start_session(db, sessions, user=user)
+    if second_factor.is_enabled(user):
+        return SecondFactorChallenge(
+            challenge=await second_factors.open_challenge(user_id=str(user.id))
+        )
+
+    token = await service.start_session(db, sessions, user=user, client=client)
+    set_session_cookie(response, token, settings)
+    return service.describe_identity(user, organization)
+
+
+@router.post("/login/second-factor", summary="Finish a sign-in with a code")
+async def submit_second_factor(
+    payload: SecondFactorSubmission,
+    response: Response,
+    db: DbSession,
+    sessions: SessionStoreDep,
+    second_factors: SecondFactors,
+    box: OptionalCredentialEncryption,
+    client: CurrentClient,
+    settings: AppSettings,
+) -> IdentityResponse:
+    """Spend a challenge and, if the code is right, mint the session.
+
+    Unauthenticated, like `login`: it *is* the sign-in. What stands in for a
+    session is the challenge, which was issued only after the password was
+    proved, expires in minutes and is worth five attempts.
+
+    **Every failure is one 401 with one message** — a challenge that never
+    existed, one that expired, one whose attempts are spent, and a wrong code
+    alike. Distinguishing them would tell somebody holding a stolen password
+    which part of their attack is working.
+
+    The box is optional so a deployment with no encryption key still admits a
+    recovery code; see `auth/dependencies.get_optional_credential_box`.
+    """
+    user, organization = await service.authenticate_second_factor(
+        db,
+        second_factors,
+        box,
+        challenge_token=payload.challenge,
+        code=payload.code,
+    )
+    token = await service.start_session(db, sessions, user=user, client=client)
     set_session_cookie(response, token, settings)
     return service.describe_identity(user, organization)
 

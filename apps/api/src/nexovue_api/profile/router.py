@@ -3,26 +3,38 @@
 No route takes a user id. `CurrentIdentity` names the account, so there is no
 value in a path or a body that could point these anywhere else.
 
-**No `GET`.** `/auth/me` already answers "who is signed in" and the screen is
-already holding that body; a second route returning the same fields would be a
-second thing to keep in step with `UserSummary`.
+**No `GET` on the account itself.** `/auth/me` already answers "who is signed
+in" and the screen is already holding that body; a second route returning the
+same fields would be a second thing to keep in step with `UserSummary`. The two
+`GET`s below answer questions `/auth/me` does not: what is signed in, and
+whether a code is needed to sign in.
 
-**Sign-out-everywhere is a POST to a named action, not `DELETE /profile/sessions`.**
-A collection route promises a collection, and there is none: Redis keys sessions
-by token fingerprint, so a user's sessions cannot be listed — which is precisely
-why `users.sessions_valid_from` exists.
+**Sign-out-everywhere stays a POST to a named action** rather than becoming
+`DELETE /profile/sessions`, even though the collection now exists. The two do
+different things and only one of them is a collection operation: ending a single
+session deletes its key, while ending them all moves
+`users.sessions_valid_from` — an epoch that also refuses sessions nothing has
+enumerated. A `DELETE` on the collection would promise the first mechanism and
+perform the second.
+
+**`DELETE /profile/sessions/{session_id}` takes an id and is still not a route
+that can name somebody else's session.** The id is proved to be in the caller's
+own index before anything is deleted, and an id that is not is answered with the
+same 404 as one that never existed.
 """
 
 from __future__ import annotations
 
 from http import HTTPStatus
+from typing import Final
 
 from fastapi import APIRouter, Request, Response
 
+from nexovue_api.auth import second_factor
 from nexovue_api.auth.cookies import clear_session_cookie, set_session_cookie
-from nexovue_api.auth.dependencies import CurrentIdentity
+from nexovue_api.auth.dependencies import CredentialEncryption, CurrentIdentity, SecondFactors
 from nexovue_api.auth.schemas import UserSummary
-from nexovue_api.auth.sessions import session_token_from_headers
+from nexovue_api.auth.sessions import session_token_from_headers, token_fingerprint
 from nexovue_api.deps import (
     AppSettings,
     DbSession,
@@ -30,8 +42,24 @@ from nexovue_api.deps import (
     OneTimeTokens,
     SessionStoreDep,
 )
+from nexovue_api.errors.exceptions import NotFoundError
 from nexovue_api.profile import service
-from nexovue_api.profile.schemas import EmailChangeRequest, PasswordChange, ProfileUpdate
+from nexovue_api.profile.schemas import (
+    EmailChangeRequest,
+    PasswordChange,
+    ProfileUpdate,
+    RecoveryCodes,
+    SecondFactorConfirmation,
+    SecondFactorEnrolment,
+    SecondFactorEnrolmentRequest,
+    SecondFactorRemoval,
+    SecondFactorState,
+    SessionSummary,
+)
+
+# One refusal for a session id that is not the caller's and one that never
+# existed. See `end_session`.
+NO_SUCH_SESSION: Final = "There is no such session on this account."
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -145,3 +173,154 @@ async def sign_out_everywhere(
         current_token=session_token_from_headers(request.headers),
     )
     clear_session_cookie(response, settings)
+
+
+@router.get("/sessions", summary="What is signed in as you")
+async def list_sessions(
+    request: Request,
+    identity: CurrentIdentity,
+    sessions: SessionStoreDep,
+) -> list[SessionSummary]:
+    """The list beside sign-out-everywhere, which is the thing a worried customer
+    actually wants: not "end everything" but "is one of these not me?".
+
+    Newest first, the caller's own marked. No id is taken and none could be: the
+    user whose sessions these are comes from the session this request arrived on.
+    """
+    return await service.list_sessions(
+        sessions,
+        user=identity.user,
+        current_token=session_token_from_headers(request.headers),
+    )
+
+
+@router.delete(
+    "/sessions/{session_id}",
+    status_code=HTTPStatus.NO_CONTENT,
+    summary="End one session on this account",
+)
+async def end_session(
+    session_id: str,
+    request: Request,
+    response: Response,
+    identity: CurrentIdentity,
+    db: DbSession,
+    sessions: SessionStoreDep,
+    settings: AppSettings,
+) -> None:
+    """End a single session, which may be this one.
+
+    **404 for an id that is not the caller's**, whether it belongs to another
+    account or to nothing at all. `NotFoundError` is already documented as
+    deliberately indistinguishable from a resource in another organization, and
+    the same reasoning applies one level down: a caller must not learn that
+    somebody else's session is live by the shape of the refusal.
+
+    Ending your own current session clears the cookie, because leaving the
+    browser holding a token the store has just deleted would turn the customer's
+    deliberate act into a mystery 401 on their next click.
+    """
+    if not await service.end_one_session(db, sessions, user=identity.user, session_id=session_id):
+        raise NotFoundError(NO_SUCH_SESSION)
+    if session_id == _current_session_id(request):
+        clear_session_cookie(response, settings)
+
+
+def _current_session_id(request: Request) -> str | None:
+    """The id the caller's own session appears under in their list."""
+    token = session_token_from_headers(request.headers)
+    return token_fingerprint(token) if token else None
+
+
+@router.get("/two-factor", summary="Whether a code is needed to sign in as you")
+async def second_factor_state(identity: CurrentIdentity, db: DbSession) -> SecondFactorState:
+    """The state, never the secret. There is no route that returns the secret
+    after enrolment, because there is nothing a customer could do with it that
+    re-enrolling would not do more safely."""
+    status = await second_factor.describe(db, user=identity.user)
+    return SecondFactorState(
+        enabled=status.enabled,
+        confirmed_at=status.confirmed_at,
+        recovery_codes_remaining=status.recovery_codes_remaining,
+    )
+
+
+@router.post("/two-factor/enrol", summary="Offer a secret to an authenticator app")
+async def begin_second_factor_enrolment(
+    payload: SecondFactorEnrolmentRequest,
+    identity: CurrentIdentity,
+    second_factors: SecondFactors,
+    box: CredentialEncryption,
+) -> SecondFactorEnrolment:
+    """**Nothing on the account changes here.** This hands back a secret and
+    holds a sealed copy for ten minutes; the factor is armed by `confirm`, and
+    an offer nobody confirms expires on its own.
+
+    200 rather than 201: no resource was created, and a 201 would invite a client
+    to believe the second factor is now on.
+
+    The only response in this API that carries a TOTP secret. It is gated on the
+    current password, and a deployment with no encryption key gets 503 from the
+    dependency rather than a secret stored in the clear.
+    """
+    offer = await second_factor.begin_enrolment(
+        second_factors,
+        box,
+        user=identity.user,
+        current_password=payload.current_password,
+    )
+    return SecondFactorEnrolment(secret=offer.secret, provisioning_uri=offer.provisioning_uri)
+
+
+@router.post("/two-factor/confirm", summary="Prove the code and switch it on")
+async def confirm_second_factor(
+    payload: SecondFactorConfirmation,
+    identity: CurrentIdentity,
+    db: DbSession,
+    second_factors: SecondFactors,
+    box: CredentialEncryption,
+) -> RecoveryCodes:
+    """The step that arms the factor, and the only place recovery codes are shown.
+
+    **Confirmation exists so nobody locks themselves out.** A secret stored
+    without a proved code belongs to an account whose owner may have mistyped it
+    into their authenticator, and the next thing that would happen to them is
+    being refused by a control they were trying to add.
+
+    No session is ended. The customer is signed in on the device they enrolled
+    from, and adding a factor says nothing about the password being in anybody
+    else's hands.
+    """
+    codes = await second_factor.confirm_enrolment(
+        db, second_factors, box, user=identity.user, code=payload.code
+    )
+    return RecoveryCodes(recovery_codes=list(codes))
+
+
+@router.post(
+    "/two-factor/disable",
+    status_code=HTTPStatus.NO_CONTENT,
+    summary="Turn off two-factor authentication",
+)
+async def disable_second_factor(
+    payload: SecondFactorRemoval,
+    identity: CurrentIdentity,
+    db: DbSession,
+    second_factors: SecondFactors,
+) -> None:
+    """Gated on the current password, exactly as turning it on is.
+
+    Disarming removes protection its owner deliberately added, so it has to be
+    beyond the reach of a session somebody else is holding — which is the same
+    caller the arming gate refuses, arriving from the other direction.
+
+    The stored secret and every recovery code go with it. Nothing is kept "in
+    case they turn it back on": a secret that outlived its enrolment is a
+    credential nobody is watching.
+    """
+    await second_factor.disable(
+        db,
+        second_factors,
+        user=identity.user,
+        current_password=payload.current_password,
+    )

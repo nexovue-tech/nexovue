@@ -52,6 +52,10 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "source_maps": "projects",
     "usage_daily": "projects",
     "usage_daily_services": "projects",
+    # The one child of `users` rather than of `projects`. It carries no `org_id`
+    # on purpose — `models.UserRecoveryCode` argues why — so it is reached here
+    # through the person it belongs to, and `users` is deleted directly above.
+    "user_recovery_codes": "users",
 }
 
 # The organization row itself, which a deletion scrubs and keeps rather than

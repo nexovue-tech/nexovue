@@ -19,6 +19,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from nexovue_api.auth.clients import client_ip_of
 from nexovue_api.auth.sessions import session_token_from_headers, token_fingerprint
 from nexovue_api.errors import problems
 from nexovue_api.errors.handlers import problem_response
@@ -153,18 +154,25 @@ class RateLimitMiddleware:
         return getattr(state, "rate_limiter", None), getattr(state, "plan_limits", None)
 
     def _client_ip(self, scope: Scope) -> str:
-        """The caller's address, trusting X-Forwarded-For only as far as configured.
+        """The caller's address, from the one place that decides what to trust.
 
-        With no trusted proxies the direct peer is the only honest answer: a
-        forwarded header from an untrusted client is just a value it chose.
+        This held a second copy of the rule until 2026-09-14. **Two copies of a
+        trust boundary is one too many**: whichever drifts first does so
+        silently, and the two failures are a rate limiter counting the proxy
+        instead of the caller, and a session list showing somebody a network
+        that is not theirs. `auth.clients.client_ip_of` is the rule; this reads
+        the setting for itself only because middleware runs before any
+        dependency exists to hand it one.
         """
-        if self._trusted_proxy_count > 0:
-            forwarded = Headers(scope=scope).get(FORWARDED_FOR_HEADER, "")
-            hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
-            if len(hops) >= self._trusted_proxy_count:
-                return hops[-self._trusted_proxy_count]
         client = scope.get("client")
-        return str(client[0]) if client else UNKNOWN_CLIENT
+        return (
+            client_ip_of(
+                Headers(scope=scope),
+                direct_peer=str(client[0]) if client else None,
+                trusted_proxy_count=self._trusted_proxy_count,
+            )
+            or UNKNOWN_CLIENT
+        )
 
 
 def _with_limit_headers(send: Send, decision: Decision) -> Send:

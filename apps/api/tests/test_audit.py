@@ -21,8 +21,10 @@ from typing import Any
 import httpx
 import pytest
 from environment import TEST_ENVIRONMENT
+from fake_stores import use_fake_second_factors
 
 from nexovue_api.audit import service as audit
+from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.auth.credentials import hash_password
 from nexovue_api.auth.sessions import Session
 from nexovue_api.data.postgres.models import ApiKey, AuditLogEntry, Organization, User
@@ -109,7 +111,9 @@ class FakeSessionStore:
     def __init__(self) -> None:
         self.sessions: dict[str, Session] = {}
 
-    async def create(self, *, user_id: str, org_id: str) -> tuple[str, Session]:
+    async def create(
+        self, *, user_id: str, org_id: str, client: ClientDescription | None = None
+    ) -> tuple[str, Session]:
         token = f"token-{len(self.sessions)}"
         session = Session(user_id=user_id, org_id=org_id, created_at=datetime.now(UTC))
         self.sessions[token] = session
@@ -149,6 +153,9 @@ def _build_app(db: RecordingDbSession, store: FakeSessionStore) -> Any:
     app.dependency_overrides[get_app_settings] = lambda: settings
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_session_store] = lambda: store
+    # Sign-in asks whether a second factor is required, so every suite that
+    # drives it needs that store too.
+    use_fake_second_factors(app)
     return app
 
 

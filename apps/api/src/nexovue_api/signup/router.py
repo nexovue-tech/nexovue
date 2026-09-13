@@ -17,6 +17,7 @@ from fastapi import APIRouter, Response
 
 from nexovue_api.auth import recovery
 from nexovue_api.auth.cookies import set_session_cookie
+from nexovue_api.auth.dependencies import CurrentClient
 from nexovue_api.auth.schemas import OrganizationSummary
 from nexovue_api.auth.service import start_session
 from nexovue_api.auth.tokens import OneTimeTokenStore
@@ -46,6 +47,7 @@ async def sign_up(
     settings: AppSettings,
     tokens: OneTimeTokens,
     email: OptionalEmail,
+    client: CurrentClient,
 ) -> SignupResponse:
     tenant = await service.provision_tenant(
         db,
@@ -60,7 +62,11 @@ async def sign_up(
     # finds a session naming a tenant Postgres cannot see yet.
     await db.commit()
 
-    token = await start_session(db, sessions, user=tenant.user)
+    # Named, so the very first session is not the one device a customer cannot
+    # recognise in their own session list. `client` is optional on `start_session`
+    # so signup kept working while the list was being built; it is not optional
+    # to a reader deciding whether to end a session.
+    token = await start_session(db, sessions, user=tenant.user, client=client)
     set_session_cookie(response, token, settings)
     await _mail_verification(tenant.user, tokens, email, settings)
 

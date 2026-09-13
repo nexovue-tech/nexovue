@@ -13,6 +13,9 @@ import { ApiError } from "@/shared/api-client";
  */
 
 const HTTP_UNAUTHORIZED = 401;
+
+/** A 401 with no problem body. Rare enough to be a proxy, not the API. */
+const UNEXPLAINED_REFUSAL = "Those details were not accepted. Check them and try again.";
 const HTTP_CONFLICT = 409;
 const HTTP_UNPROCESSABLE = 422;
 
@@ -77,8 +80,12 @@ export function describeFormProblem(error: unknown): FormProblem {
   }
 
   if (error.status === HTTP_UNAUTHORIZED) {
-    // Deliberately one message for both unknown email and wrong password.
-    return { message: "That email and password do not match an account.", fieldErrors: {} };
+    // **The API's own sentence, not one written here.** It already answers an unknown
+    // email and a wrong password identically, and it answers every way a second factor
+    // can fail identically too — a screen that restated either would be a second copy
+    // of a rule whose whole value is that it does not vary. The fallback below is for
+    // a 401 that arrived without a problem body at all.
+    return { message: error.problem?.detail ?? UNEXPLAINED_REFUSAL, fieldErrors: {} };
   }
 
   if (error.status === HTTP_CONFLICT) {

@@ -13,13 +13,18 @@ from dataclasses import dataclass
 from typing import Annotated, Final
 
 from fastapi import Depends
+from starlette.datastructures import Headers
+from starlette.requests import HTTPConnection
 
+from nexovue_api.auth.clients import ClientDescription, client_ip_of, describe_client
+from nexovue_api.auth.encryption import CredentialBox, credential_box
 from nexovue_api.auth.queries import load_identity
 from nexovue_api.auth.sessions import Session
+from nexovue_api.auth.totp import SecondFactorStore
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import Organization, User
-from nexovue_api.deps import ClickHouseClient, CurrentSession, DbSession
-from nexovue_api.errors.exceptions import UnauthenticatedError
+from nexovue_api.deps import AppSettings, ClickHouseClient, CurrentSession, DbSession, RedisClient
+from nexovue_api.errors.exceptions import DependencyUnavailableError, UnauthenticatedError
 
 SESSION_NO_LONGER_VALID: Final = "The session is no longer valid. Sign in again."
 
@@ -79,3 +84,68 @@ def get_tenant_repository(
 
 
 TenantRepository = Annotated[TenantScopedRepository, Depends(get_tenant_repository)]
+
+
+def get_client_description(connection: HTTPConnection, settings: AppSettings) -> ClientDescription:
+    """What this request's session would be recognised by, reduced on arrival.
+
+    Reduced here rather than anywhere later: a raw User-Agent that never enters
+    the process's data path cannot be stored by a future change that did not
+    read `auth/clients.py`.
+    """
+    client = connection.scope.get("client")
+    return describe_client(
+        Headers(scope=connection.scope),
+        client_ip_of(
+            Headers(scope=connection.scope),
+            direct_peer=str(client[0]) if client else None,
+            trusted_proxy_count=settings.trusted_proxy_count,
+        ),
+    )
+
+
+CurrentClient = Annotated[ClientDescription, Depends(get_client_description)]
+
+
+def get_second_factor_store(redis: RedisClient) -> SecondFactorStore:
+    """The Redis state around a second factor: offers, challenges, spent codes."""
+    return SecondFactorStore(redis)
+
+
+SecondFactors = Annotated[SecondFactorStore, Depends(get_second_factor_store)]
+
+
+def get_credential_box(settings: AppSettings) -> CredentialBox:
+    """The cipher a TOTP secret is sealed with, or a 503 before the handler runs.
+
+    Not optional, on the same reasoning `EmailDelivery` is not: a route that
+    needs to seal or open a secret cannot be allowed to forget to check, and an
+    unconfigured deployment must refuse rather than store a secret in the clear.
+    """
+    return credential_box(settings.credential_encryption_key)
+
+
+CredentialEncryption = Annotated[CredentialBox, Depends(get_credential_box)]
+
+
+def get_optional_credential_box(settings: AppSettings) -> CredentialBox | None:
+    """The cipher, or None, for the one caller that must still work without it.
+
+    Sign-in takes this. If the key is missing or malformed, no stored TOTP
+    secret can be opened — and a recovery code, which is an argon2 hash and
+    needs no key, is then the only way into an enrolled account. Refusing the
+    whole endpoint would strand every such customer instead of leaving them the
+    fallback that exists for exactly this.
+    """
+    if not settings.credential_encryption_key:
+        return None
+    try:
+        return credential_box(settings.credential_encryption_key)
+    except DependencyUnavailableError:
+        # A key that will not decode is the same as no key at all here: the
+        # refusal belongs to the enrolment paths, not to somebody signing in
+        # with a recovery code.
+        return None
+
+
+OptionalCredentialEncryption = Annotated[CredentialBox | None, Depends(get_optional_credential_box)]

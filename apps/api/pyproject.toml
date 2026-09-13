@@ -20,6 +20,17 @@ dependencies = [
     # Shared with the other service: logging, request context, redaction.
     "nexovue-platform",
     "argon2-cffi>=23.1",
+    # RFC 6238 one-time passwords. The reference Python implementation
+    # (pyauth/pyotp, MIT, 2.10.0 on 2026-06-14, current for 3.13). Chosen over
+    # writing the HMAC by hand: the specification is short enough to implement
+    # and long enough to get wrong in ways no test would notice — counter byte
+    # order, dynamic-truncation offset, a comparison that is not constant time.
+    "pyotp>=2.10",
+    # AES-256-GCM for the TOTP shared secret, which is the one credential here
+    # that cannot be hashed. Nothing else in this workspace needed a cipher, so
+    # this arrives with the feature that does; `auth/encryption.py` is its only
+    # caller and states what the protection is worth.
+    "cryptography>=44",
     # Object storage for source map bytes, over the generic S3 API only:
     # SeaweedFS locally, AWS S3 in deployment. boto3 rather than an async
     # wrapper — aiobotocore pins `botocore<1.43.57` and aioboto3 pins

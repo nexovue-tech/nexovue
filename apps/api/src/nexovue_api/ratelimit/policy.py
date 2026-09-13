@@ -116,6 +116,27 @@ AUTH_PATHS: Final = (
     # Spends the link that address change mailed. Token guessing, throttled the
     # way `/auth/verify-email` is.
     f"{API_PREFIX}/auth/email-change",
+    # The second half of a sign-in (T64). A TOTP code is a six-digit credential
+    # — a million wide, which sounds large and is not: on the default tier, 300
+    # guesses a minute walks a meaningful fraction of that space in a day
+    # against an account whose password is already known. The challenge's own
+    # five-attempt budget bounds one password submission; this bounds the rate
+    # at which submissions can be made. Only the per-IP scope applies, because
+    # the body carries no email for `_email_from` to find.
+    f"{API_PREFIX}/auth/login/second-factor",
+    # Arming and disarming the second factor both verify the CURRENT password,
+    # which makes them credential checks wearing a profile route's clothes —
+    # the same reading `/profile/password` gets, and the reasoning above it
+    # applies here unchanged. `/profile/two-factor/confirm` is on the prefix
+    # too, and belongs there for its own reason: it checks a code against a
+    # secret nobody has confirmed yet, which is a credential check as well.
+    #
+    # The prefix also catches `GET /profile/two-factor`, which reads a state and
+    # checks nothing. That is accepted rather than worked around: it is read once
+    # when the profile screen opens, not polled the way `/auth/me` is — which is
+    # the reason `/auth/` is not listed here as a prefix. If a screen ever starts
+    # polling it, it needs a path of its own rather than a wider rule.
+    f"{API_PREFIX}/profile/two-factor",
 )
 # **These must be the routers' real prefixes, and two of them were not.**
 # `/errors` and `/database` matched nothing: the routers are mounted at

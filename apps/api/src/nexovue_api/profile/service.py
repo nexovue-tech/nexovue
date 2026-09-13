@@ -24,6 +24,14 @@ sign-out-everywhere**, and the difference is not a preference:
   which may be the shared or borrowed one they are trying to get out of. Keeping
   the caller's session would make the control quieter than its own name.
 
+**Ending *one* session is a different mechanism from ending them all, and has
+to be.** The epoch above is a blunt instrument by design — it refuses everything
+older than a moment — so it cannot express "this one and not that one". A single
+session ends by deleting its key, which is what `SessionStore.revoke_one_of`
+does, and the id it takes is proved to be in the caller's own index before
+anything is deleted. The list the customer picks from comes from that same
+index, so the set they can see and the set they can end are the same set.
+
 **A change of address starts here and finishes somewhere else.** Asking for one
 is a profile action gated on the current password; completing one is a proof of
 control over an inbox, followed from a mail client with no session — so it lives
@@ -40,22 +48,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
 from nexovue_api.auth import recovery
-from nexovue_api.auth.credentials import hash_password, verify_password
+from nexovue_api.auth.credentials import CURRENT_PASSWORD_WRONG, hash_password, verify_password
 from nexovue_api.auth.schemas import UserSummary
 from nexovue_api.auth.service import describe_user, start_session
-from nexovue_api.auth.sessions import SessionStore
+from nexovue_api.auth.sessions import SessionStore, token_fingerprint
 from nexovue_api.auth.tokens import OneTimeTokenStore
 from nexovue_api.data.postgres.models import User
 from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.notifications import EmailSender
-from nexovue_api.profile.schemas import ProfileUpdate
+from nexovue_api.profile.schemas import ProfileUpdate, SessionSummary
 from nexovue_api.profile.timezones import stored_timezone
 
-# Deliberately the same wording whether the account has no password at all (an
-# invited user, `users.password_hash` NULL) or the one supplied is wrong. Both
-# are "you did not prove you hold the current password", and the caller's remedy
-# in both cases is the reset link.
-CURRENT_PASSWORD_WRONG: Final = "That is not the current password on this account."
+# `CURRENT_PASSWORD_WRONG` is imported from `auth.credentials` rather than
+# written here: arming a second factor gives the same refusal, and one wording
+# for one gate is one thing to keep true.
 
 # Refused rather than accepted as a no-op: it is almost always a mis-paste, and
 # accepting it would end every other session for no change at all.
@@ -170,6 +176,55 @@ async def sign_out_everywhere(
     audit.record_all_sessions_ended(db, user=user)
     if current_token is not None:
         await sessions.revoke(current_token)
+
+
+async def list_sessions(
+    sessions: SessionStore, *, user: User, current_token: str | None
+) -> list[SessionSummary]:
+    """Every session live for this user, with the caller's own marked.
+
+    **Scoped by construction rather than by a filter somebody remembered.** The
+    store is asked for one user's index and that user is the one the session
+    named; there is no argument a request could carry that would point this at
+    anybody else, and no path where an id is looked up before it has been shown
+    to belong to the caller.
+
+    `current` is computed from the request's own token, never sent by the
+    client: a caller that could nominate which row is "this one" could talk a
+    customer out of ending the session that is not theirs.
+    """
+    here = token_fingerprint(current_token) if current_token else None
+    return [
+        SessionSummary(
+            id=session.id,
+            created_at=session.created_at,
+            last_seen_at=session.last_seen_at,
+            client=session.client.label,
+            network=session.client.network,
+            current=session.id == here,
+        )
+        for session in await sessions.list_for(str(user.id))
+    ]
+
+
+async def end_one_session(
+    db: AsyncSession, sessions: SessionStore, *, user: User, session_id: str
+) -> bool:
+    """End a single session of the caller's, and say whether it was theirs.
+
+    **No password is asked for**, on the same reasoning `sign_out_everywhere`
+    gives: the caller is somebody who thinks a session is not theirs, and a
+    stolen session calling this can do nothing worse than sign somebody out.
+
+    Returns False for an id that is not in this user's index — whether it
+    belongs to somebody else or to nobody at all. The router answers both with
+    one 404, so this cannot be used to learn that another account's session is
+    live.
+    """
+    ended = await sessions.revoke_one_of(user_id=str(user.id), session_id=session_id)
+    if ended:
+        audit.record_session_ended(db, org_id=user.org_id, user_id=user.id)
+    return ended
 
 
 def _end_every_session(user: User) -> None:

@@ -31,6 +31,32 @@ import { parseLoginSearch, SIGNED_OUT_EVERYWHERE } from "./search";
 const ADDRESS = "nexovue@nexovue.com";
 const PASSWORD_PATH = "/api/v1/profile/password";
 const SIGN_OUT_PATH = "/api/v1/profile/sign-out-everywhere";
+const SESSIONS_PATH = "/api/v1/profile/sessions";
+const TWO_FACTOR_PATH = "/api/v1/profile/two-factor";
+
+/**
+ * What the API answers for the session list, reduced exactly as it reduces it: a
+ * browser family and a network, never a raw User-Agent and never an exact address.
+ * The second row is another device, which is the one a worried customer ends.
+ */
+const SESSIONS = [
+  {
+    id: "a".repeat(64),
+    created_at: "2026-09-13T08:00:00.000Z",
+    last_seen_at: "2026-09-14T09:30:00.000Z",
+    client: "Chrome on macOS",
+    network: "203.0.113.0/24",
+    current: true,
+  },
+  {
+    id: "b".repeat(64),
+    created_at: "2026-09-01T22:10:00.000Z",
+    last_seen_at: "2026-09-02T06:05:00.000Z",
+    client: "Safari on iOS",
+    network: "198.51.100.0/24",
+    current: false,
+  },
+];
 
 const mounted: Root[] = [];
 
@@ -58,11 +84,47 @@ const IDENTITY = {
 const json = (body: unknown, status: number) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-/** Both profile writes answer 204 with no body, exactly as the API renders them. */
-function stubApi() {
+/**
+ * The profile writes answer 204 with no body, exactly as the API renders them.
+ *
+ * `secondFactor` is a parameter because the section has two shapes and only one can be
+ * on screen: off, with a form that asks for the password, and on, with the form that
+ * takes it away again.
+ */
+function stubApi(options: { secondFactorEnabled?: boolean } = {}) {
   const posted: string[] = [];
+  const deleted: string[] = [];
 
-  const fetchMock = vi.fn(async (url: URL) => {
+  const fetchMock = vi.fn(async (url: URL, init?: RequestInit) => {
+    if (url.pathname.startsWith(`${SESSIONS_PATH}/`) && init?.method === "DELETE") {
+      deleted.push(url.pathname);
+      return new Response(null, { status: 204 });
+    }
+    if (url.pathname === SESSIONS_PATH) return json(SESSIONS, 200);
+    if (url.pathname === TWO_FACTOR_PATH) {
+      return json(
+        {
+          enabled: options.secondFactorEnabled ?? false,
+          confirmed_at: options.secondFactorEnabled ? "2026-09-10T12:00:00.000Z" : null,
+          recovery_codes_remaining: options.secondFactorEnabled ? 9 : 0,
+        },
+        200,
+      );
+    }
+    if (url.pathname === `${TWO_FACTOR_PATH}/enrol`) {
+      posted.push(url.pathname);
+      return json(
+        {
+          secret: "JBSWY3DPEHPK3PXP",
+          provisioning_uri: "otpauth://totp/nexovue:dev?secret=JBSWY3DPEHPK3PXP&issuer=nexovue",
+        },
+        200,
+      );
+    }
+    if (url.pathname === `${TWO_FACTOR_PATH}/confirm`) {
+      posted.push(url.pathname);
+      return json({ recovery_codes: ["ABCDE-FGHJK", "MNPQR-STVWX"] }, 200);
+    }
     if (url.pathname === PASSWORD_PATH || url.pathname === SIGN_OUT_PATH) {
       posted.push(url.pathname);
       return new Response(null, { status: 204 });
@@ -72,7 +134,7 @@ function stubApi() {
   });
 
   vi.stubGlobal("fetch", fetchMock);
-  return { fetch: fetchMock, posted };
+  return { fetch: fetchMock, posted, deleted };
 }
 
 async function settle() {
@@ -231,5 +293,112 @@ describe("sign out everywhere", () => {
 
     await click(buttonLabelled(container, "Sign out everywhere"));
     expect(container.textContent).toContain("You will land on the sign-in screen");
+  });
+});
+
+describe("the signed-in devices list", () => {
+  it("names a device coarsely and never the browser string or the exact address", async () => {
+    stubApi();
+    const { container } = await mountProfile();
+    await settle();
+
+    expect(container.textContent).toContain("Chrome on macOS");
+    expect(container.textContent).toContain("203.0.113.0/24");
+    // The two leaks the API's reduction exists to prevent, asserted where a future
+    // change would first show them.
+    expect(container.textContent).not.toContain("Mozilla");
+    expect(container.textContent).not.toContain("203.0.113.42");
+  });
+
+  it("marks the session the reader is sitting in", async () => {
+    stubApi();
+    const { container } = await mountProfile();
+    await settle();
+
+    expect(container.textContent).toContain("This device");
+  });
+
+  it("ends one session by its own id rather than everything at once", async () => {
+    const api = stubApi();
+    const { container } = await mountProfile();
+    await settle();
+
+    await click(buttonLabelled(container, "End session"));
+
+    expect(api.deleted).toEqual([`${SESSIONS_PATH}/${"b".repeat(64)}`]);
+    expect(api.posted).toEqual([]);
+  });
+});
+
+describe("two-factor authentication", () => {
+  it("asks for the current password before it will even offer a secret", async () => {
+    const api = stubApi();
+    const { container } = await mountProfile();
+    await settle();
+
+    expect(api.posted).toEqual([]);
+    expect(container.textContent).toContain("Set up two-factor authentication");
+    expect(container.textContent).toContain("lock you out");
+  });
+
+  it("shows the secret only after the password, and arms nothing until a code", async () => {
+    const api = stubApi();
+    const { container } = await mountProfile();
+    await settle();
+
+    const enrolForm = buttonLabelled(container, "Set up two-factor authentication").closest("form");
+    if (!enrolForm) throw new Error("the enrolment button is not in a form");
+    await act(async () =>
+      typeInto(
+        enrolForm.querySelector<HTMLInputElement>(
+          'input[name="current_password"]',
+        ) as HTMLInputElement,
+        "nexovue-dev",
+      ),
+    );
+    await act(async () => enrolForm.requestSubmit());
+    await settle();
+
+    expect(container.textContent).toContain("JBSWY3DPEHPK3PXP");
+    expect(container.textContent).toContain("Nothing changes on your account until that code");
+    expect(api.posted).toEqual([`${TWO_FACTOR_PATH}/enrol`]);
+  });
+
+  it("shows the recovery codes once, saying they are shown nowhere else", async () => {
+    stubApi();
+    const { container } = await mountProfile();
+    await settle();
+
+    const enrolForm = buttonLabelled(container, "Set up two-factor authentication").closest("form");
+    if (!enrolForm) throw new Error("the enrolment button is not in a form");
+    await act(async () =>
+      typeInto(
+        enrolForm.querySelector<HTMLInputElement>(
+          'input[name="current_password"]',
+        ) as HTMLInputElement,
+        "nexovue-dev",
+      ),
+    );
+    await act(async () => enrolForm.requestSubmit());
+    await settle();
+
+    const confirmForm = field(container, "code").closest("form");
+    if (!confirmForm) throw new Error("the code field is not in a form");
+    await act(async () => typeInto(field(container, "code"), "123456"));
+    await act(async () => confirmForm.requestSubmit());
+    await settle();
+
+    expect(container.textContent).toContain("ABCDE-FGHJK");
+    expect(container.textContent).toContain("shown here and nowhere else");
+  });
+
+  it("offers to turn it off behind the password once it is on", async () => {
+    stubApi({ secondFactorEnabled: true });
+    const { container } = await mountProfile();
+    await settle();
+
+    expect(container.textContent).toContain("Turn off two-factor authentication");
+    expect(container.textContent).toContain("9 of your recovery codes are unused");
+    expect(container.textContent).not.toContain("Set up two-factor authentication");
   });
 });

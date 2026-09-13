@@ -21,6 +21,7 @@ from typing import Any, Final
 import httpx
 import pytest
 from environment import TEST_ENVIRONMENT
+from fake_stores import use_fake_second_factors
 from fastapi import FastAPI
 
 # The token double and the mail double both already exist next door, written for
@@ -28,6 +29,7 @@ from fastapi import FastAPI
 # be kept in step.
 from test_auth_recovery import FakeRedis, RecordingSender
 
+from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.auth.credentials import hash_password, verify_password
 from nexovue_api.auth.sessions import SESSION_COOKIE_NAME, Session
 from nexovue_api.auth.tokens import OneTimeTokenStore, TokenPurpose
@@ -62,7 +64,9 @@ class FakeSessionStore:
         self.sessions: dict[str, Session] = {}
         self._minted = 0
 
-    async def create(self, *, user_id: str, org_id: str) -> tuple[str, Session]:
+    async def create(
+        self, *, user_id: str, org_id: str, client: ClientDescription | None = None
+    ) -> tuple[str, Session]:
         self._minted += 1
         token = f"token-{self._minted}"
         session = Session(user_id=user_id, org_id=org_id, created_at=datetime.now(UTC))
@@ -182,6 +186,9 @@ def app(
     built.dependency_overrides[get_app_settings] = lambda: settings
     built.dependency_overrides[get_db_session] = db_override
     built.dependency_overrides[get_session_store] = lambda: store
+    # Sign-in asks whether a second factor is required, so every suite that
+    # drives it needs that store too.
+    use_fake_second_factors(built)
     built.dependency_overrides[get_email_sender] = lambda: sender
     built.dependency_overrides[get_one_time_tokens] = lambda: tokens
     return built
@@ -601,6 +608,14 @@ def test_no_profile_route_can_name_another_user(app: FastAPI) -> None:
     `new_email` names an *address*, not an account: it is where a link is sent,
     and following that link is what changes anything. It cannot select whose
     account is affected, which is the property this test is about.
+
+    **One path parameter is allowed and it is named here rather than pattern-
+    matched.** `DELETE /profile/sessions/{session_id}` takes the id of a session,
+    and that id is not a way to reach another account: `SessionStore.revoke_one_of`
+    checks membership of the *caller's own* index before it deletes anything, and
+    an id that is not in it is answered with the same 404 as one that never
+    existed. Listing the exception by name is the point — a second parameterized
+    route added later fails here and has to make its own argument.
     """
     from nexovue_api.profile.schemas import EmailChangeRequest, PasswordChange, ProfileUpdate
 
@@ -609,8 +624,11 @@ def test_no_profile_route_can_name_another_user(app: FastAPI) -> None:
     # the paths, and a test that walked it would quietly assert nothing.
     paths = [path for path in app.openapi()["paths"] if path.startswith(PROFILE)]
     assert paths, "no profile routes were registered"
-    parameterized = [path for path in paths if "{" in path]
-    assert not parameterized, f"a profile route takes a path parameter: {parameterized}"
+    parameterized = {path for path in paths if "{" in path}
+    assert parameterized == {f"{PROFILE}/sessions/{{session_id}}"}, (
+        f"a profile route takes a path parameter that has not been argued for: "
+        f"{sorted(parameterized)}"
+    )
 
     fields = (
         set(ProfileUpdate.model_fields)

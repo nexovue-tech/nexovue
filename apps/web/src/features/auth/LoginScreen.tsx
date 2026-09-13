@@ -7,7 +7,7 @@ import { TextField } from "@/shared/components/TextField";
 import { takeReturnTo } from "@/shared/session";
 
 import { AuthScreenLayout, FormMessage, FormNotice } from "./AuthScreenLayout";
-import { login, sessionQueryKey } from "./api";
+import { login, needsSecondFactor, sessionQueryKey, submitSecondFactor } from "./api";
 import { describeFormProblem } from "./problem-fields";
 import type { LoginNotice, LoginSearch } from "./search";
 import { PASSWORD_WAS_RESET, SIGNED_OUT_EVERYWHERE } from "./search";
@@ -29,19 +29,41 @@ const NOTICE_MESSAGE: Record<LoginNotice, string> = {
     "Every session on this account has been signed out, including this one. That is what you asked for, not a fault — sign in to start a fresh one.",
 };
 
+/**
+ * Said above the code field, because a second-factor prompt is where somebody with a
+ * dead phone gets stuck. The way out has to be on the screen, not in a help article.
+ */
+const SECOND_FACTOR_INTRO =
+  "Open your authenticator app and enter the six-digit code. If you no longer have it, enter one of the recovery codes you saved instead — each works once.";
+
 export function LoginScreen({ notice }: LoginSearch) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  /**
+   * The challenge the API handed back when the password was right and not enough.
+   * Held in state rather than pushed to a route of its own: it is one step of one
+   * sign-in, it expires in minutes, and a URL somebody could bookmark or share would
+   * be a URL carrying half a credential.
+   */
+  const [challenge, setChallenge] = useState<string | null>(null);
+
+  async function landInside(session: Awaited<ReturnType<typeof submitSecondFactor>>) {
+    queryClient.setQueryData(sessionQueryKey, session);
+    await navigate({ to: takeReturnTo() ?? DEFAULT_DESTINATION, replace: true });
+  }
 
   const signIn = useMutation({
     mutationKey: ["auth", "login"],
     mutationFn: login,
-    onSuccess: async (session) => {
-      queryClient.setQueryData(sessionQueryKey, session);
-      await navigate({ to: takeReturnTo() ?? DEFAULT_DESTINATION, replace: true });
+    onSuccess: async (outcome) => {
+      if (needsSecondFactor(outcome)) {
+        setChallenge(outcome.challenge);
+        return;
+      }
+      await landInside(outcome);
     },
   });
 
@@ -50,6 +72,19 @@ export function LoginScreen({ notice }: LoginSearch) {
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     signIn.mutate({ email, password });
+  }
+
+  if (challenge !== null) {
+    return (
+      <SecondFactorStep
+        challenge={challenge}
+        onSignedIn={landInside}
+        onStartOver={() => {
+          setChallenge(null);
+          setPassword("");
+        }}
+      />
+    );
   }
 
   return (
@@ -100,6 +135,83 @@ export function LoginScreen({ notice }: LoginSearch) {
 
           <div className="mt-1">
             <Button type="submit" pending={signIn.isPending} pendingLabel="Signing in…">
+              Sign in
+            </Button>
+          </div>
+        </div>
+      </form>
+    </AuthScreenLayout>
+  );
+}
+
+/**
+ * The second half of a sign-in.
+ *
+ * **One field for both kinds of code**, because the customer knows either as "the
+ * code"; the API tries the authenticator's and then the recovery codes.
+ *
+ * **The refusal is never narrowed.** A wrong code, an expired challenge and one whose
+ * attempts are spent all come back as the same 401 with the same sentence, so that
+ * somebody holding a stolen password cannot learn which half of their attack is
+ * landing. The screen passes that message through and adds a way to start again,
+ * because a spent challenge needs the password entering afresh.
+ */
+function SecondFactorStep({
+  challenge,
+  onSignedIn,
+  onStartOver,
+}: {
+  challenge: string;
+  onSignedIn: (session: Awaited<ReturnType<typeof submitSecondFactor>>) => Promise<void>;
+  onStartOver: () => void;
+}) {
+  const [code, setCode] = useState("");
+
+  const submit = useMutation({
+    mutationKey: ["auth", "second-factor"],
+    mutationFn: submitSecondFactor,
+    onSuccess: onSignedIn,
+  });
+
+  const problem = describeFormProblem(submit.error);
+
+  function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (code.trim() === "") return;
+    submit.mutate({ challenge, code: code.trim() });
+  }
+
+  return (
+    <AuthScreenLayout
+      title="One more step"
+      intro={SECOND_FACTOR_INTRO}
+      footer={
+        <p>
+          Wrong account?{" "}
+          <button type="button" onClick={onStartOver} className="text-brand-text hover:underline">
+            Start again
+          </button>
+          .
+        </p>
+      }
+    >
+      <form onSubmit={onSubmit} noValidate>
+        {problem.message ? <FormMessage message={problem.message} /> : null}
+
+        <div className="flex flex-col gap-4">
+          <TextField
+            label="Code"
+            name="code"
+            value={code}
+            onChange={setCode}
+            /* The browser fills a one-time code from a message or a password manager;
+               it is not a password and must not be offered to be saved as one. */
+            autoComplete="one-time-code"
+            error={problem.fieldErrors.code}
+          />
+
+          <div className="mt-1">
+            <Button type="submit" pending={submit.isPending} pendingLabel="Checking…">
               Sign in
             </Button>
           </div>

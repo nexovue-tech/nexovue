@@ -74,8 +74,48 @@ export function useSession() {
   });
 }
 
-export function login(credentials: { email: string; password: string }): Promise<Session> {
-  return apiClient.post<Session>("auth/login", credentials);
+/**
+ * What `POST /auth/login` answers when the password was right and is not enough.
+ *
+ * It names nothing about the account. Somebody who has guessed a password correctly
+ * learns that and no more — no address, no organization, no display name.
+ */
+export interface SecondFactorChallenge {
+  second_factor_required: true;
+  challenge: string;
+}
+
+export type LoginOutcome = Session | SecondFactorChallenge;
+
+/** Which of the two answers came back. A field, not the absence of other fields. */
+export function needsSecondFactor(outcome: LoginOutcome): outcome is SecondFactorChallenge {
+  return "second_factor_required" in outcome;
+}
+
+/**
+ * Exchanges credentials for a session, *or* for a challenge.
+ *
+ * **No cookie is set on the challenge path.** A caller who has proved only the password
+ * holds one factor of two and must not reach a single screen with it; the session is
+ * minted by `submitSecondFactor` and nowhere else.
+ */
+export function login(credentials: { email: string; password: string }): Promise<LoginOutcome> {
+  return apiClient.post<LoginOutcome>("auth/login", credentials);
+}
+
+/**
+ * Finishes a sign-in with an authenticator code or a recovery code — one field for
+ * both, because the customer knows either as "the code".
+ *
+ * Every failure is one 401 with one message: a challenge that never existed, one that
+ * expired, one whose attempts are spent, and a wrong code alike. A screen that tried to
+ * tell them apart would be inventing a distinction the API refuses to make.
+ */
+export function submitSecondFactor(submission: {
+  challenge: string;
+  code: string;
+}): Promise<Session> {
+  return apiClient.post<Session>("auth/login/second-factor", submission);
 }
 
 export function signup(request: SignupRequest): Promise<SignupResponse> {
@@ -185,5 +225,126 @@ export function useSignOutEverywhere() {
   return useMutation({
     mutationKey: ["profile", "sign-out-everywhere"],
     mutationFn: () => apiClient.post<void>("profile/sign-out-everywhere"),
+  });
+}
+
+/* ------------------------------------------------------- what is signed in */
+
+export interface ActiveSession {
+  /**
+   * The session's token fingerprint. Opaque here and safe to hold: it is a SHA-256
+   * digest, and the API proves an id belongs to the caller before ending anything.
+   */
+  id: string;
+  created_at: string;
+  last_seen_at: string;
+  /**
+   * "Chrome on macOS", or null when the client said nothing recognisable. Coarse on
+   * purpose — the API never stores the raw User-Agent, because this list is readable
+   * by whoever holds a session, which on this screen may be the intruder.
+   */
+  client: string | null;
+  /** The network, never the exact address: "203.0.113.0/24". Null when unknown. */
+  network: string | null;
+  /** The one the reader is sitting in. Computed by the API from the request's token. */
+  current: boolean;
+}
+
+export const sessionsQueryKey = ["profile", "sessions"] as const;
+export const twoFactorQueryKey = ["profile", "two-factor"] as const;
+
+/**
+ * What is signed in as you — the thing somebody actually wants when they suspect
+ * another person is in their account. The list is the API's; no id is sent, because
+ * the account is the one the session names.
+ */
+export function useActiveSessions() {
+  return useQuery({
+    queryKey: sessionsQueryKey,
+    queryFn: ({ signal }) => apiClient.get<ActiveSession[]>("profile/sessions", { signal }),
+  });
+}
+
+/**
+ * End one session. A 404 means the id is not this account's — deliberately the same
+ * answer as an id that never existed, so the endpoint cannot be used to find out that
+ * somebody else's session is live.
+ */
+export function useEndSession() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationKey: ["profile", "sessions", "end"],
+    mutationFn: (id: string) => apiClient.delete<void>(`profile/sessions/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: sessionsQueryKey }),
+  });
+}
+
+/* ------------------------------------------------------ the second factor */
+
+export interface SecondFactorState {
+  enabled: boolean;
+  confirmed_at: string | null;
+  recovery_codes_remaining: number;
+}
+
+export interface SecondFactorEnrolment {
+  /** The shared secret, for somebody typing it in by hand. Shown once. */
+  secret: string;
+  /** The same secret as an `otpauth://` URI — what a QR code would encode. */
+  provisioning_uri: string;
+}
+
+/** Whether signing in as you needs a code, and how much cover is left. */
+export function useSecondFactor() {
+  return useQuery({
+    queryKey: twoFactorQueryKey,
+    queryFn: ({ signal }) => apiClient.get<SecondFactorState>("profile/two-factor", { signal }),
+  });
+}
+
+/**
+ * Asks for a secret and changes nothing on the account.
+ *
+ * **The only response in the API that carries the secret.** It is gated on the current
+ * password, because arming a second factor on somebody else's account is a way to lock
+ * them out of it. Nothing is switched on until `useConfirmSecondFactor` proves a code.
+ */
+export function useBeginSecondFactorEnrolment() {
+  return useMutation({
+    mutationKey: ["profile", "two-factor", "enrol"],
+    mutationFn: (currentPassword: string) =>
+      apiClient.post<SecondFactorEnrolment>("profile/two-factor/enrol", {
+        current_password: currentPassword,
+      }),
+  });
+}
+
+/**
+ * Proves a code and switches the factor on, answering with the recovery codes.
+ *
+ * They are shown once and there is no endpoint that returns them again, because there
+ * is nothing to return: only hashes are stored.
+ */
+export function useConfirmSecondFactor() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationKey: ["profile", "two-factor", "confirm"],
+    mutationFn: (code: string) =>
+      apiClient.post<{ recovery_codes: string[] }>("profile/two-factor/confirm", { code }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: twoFactorQueryKey }),
+  });
+}
+
+/** Turns it off, gated on the current password exactly as turning it on is. */
+export function useDisableSecondFactor() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationKey: ["profile", "two-factor", "disable"],
+    mutationFn: (currentPassword: string) =>
+      apiClient.post<void>("profile/two-factor/disable", { current_password: currentPassword }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: twoFactorQueryKey }),
   });
 }

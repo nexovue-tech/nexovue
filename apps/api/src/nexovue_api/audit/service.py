@@ -45,6 +45,17 @@ PASSWORD_RESET_COMPLETED: Final = "user.password_reset_completed"
 # supplied the current password, which is a different story to read back.
 PASSWORD_CHANGED: Final = "user.password_changed"
 ALL_SESSIONS_ENDED: Final = "user.sessions_ended"
+# The second factor going on and off (T64). Both are recorded because both change
+# how hard the account is to take: arming one is a customer protecting
+# themselves, and disarming one is either the same customer changing phones or
+# somebody who already holds the password removing the obstacle.
+SECOND_FACTOR_ENABLED: Final = "user.second_factor_enabled"
+SECOND_FACTOR_DISABLED: Final = "user.second_factor_disabled"
+# A recovery code was spent to sign in. This is the entry that matters most of
+# the three: a code used by anybody but its owner is the first visible sign of a
+# takeover that already has the password. Which code is deliberately not
+# recorded — the row says that one was used, never which or what it was.
+RECOVERY_CODE_USED: Final = "user.recovery_code_used"
 # The two halves of a change of address, kept apart because only the pair tells
 # the story: a request with no completion is somebody who asked and could not
 # prove the new inbox, and a completion is the moment the account's recovery
@@ -131,6 +142,39 @@ def record_email_verified(db: AsyncSession, *, user: User) -> None:
         org_id=user.org_id,
         actor_user_id=user.id,
         action=EMAIL_VERIFIED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_second_factor_enabled(db: AsyncSession, *, user: User) -> None:
+    """A second factor was confirmed and is now required at sign-in."""
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=SECOND_FACTOR_ENABLED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_second_factor_disabled(db: AsyncSession, *, user: User) -> None:
+    """The second factor was turned off, with the current password proved."""
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=SECOND_FACTOR_DISABLED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
+def record_recovery_code_used(db: AsyncSession, *, user: User) -> None:
+    """A recovery code signed somebody in. Nothing about the code is stored."""
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=RECOVERY_CODE_USED,
         target=_target(USER_TARGET, user.id),
     )
 

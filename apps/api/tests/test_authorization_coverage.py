@@ -46,6 +46,12 @@ EXEMPT: Final = {
     # Unauthenticated: they are how a session comes into existence and ends.
     "login",
     "logout",
+    # Unauthenticated for the same reason: it *is* the sign-in, the half that
+    # follows the password. What stands in for a session is the challenge token,
+    # which was issued only after `login` proved the password, expires in
+    # minutes, and is worth five attempts. Requiring a session here would require
+    # the thing this endpoint exists to issue.
+    "submit_second_factor",
     # Unauthenticated by design: both are followed from a mail client, which is
     # a different browser session from the one that asked — often a different
     # device. The token in the body is the whole credential, single-use and
@@ -83,6 +89,19 @@ EXEMPT: Final = {
     # policy would let an owner with a stolen session through and lock a member
     # out of their own address.
     "request_email_change",
+    # Authenticated, any role, and every one of them acts only on
+    # `identity.user`. Three of the four carry a gate stronger than a role —
+    # `begin_second_factor_enrolment` and `disable_second_factor` verify the
+    # current password, and `confirm_second_factor` verifies a code against the
+    # secret the caller was just offered. `end_session` deliberately has none:
+    # it is reached by somebody who believes a session is not theirs, and a
+    # stolen session calling it can do nothing but sign somebody out. The id it
+    # takes is proved to be in the caller's own index before anything is
+    # deleted, so it cannot name another account's session at all.
+    "end_session",
+    "begin_second_factor_enrolment",
+    "confirm_second_factor",
+    "disable_second_factor",
     # A POST that reads. Symbolication turns minified frames back into original
     # ones and writes nothing; it is a POST because a stack trace does not fit
     # in a query string.
