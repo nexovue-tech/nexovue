@@ -138,6 +138,17 @@ test-py:
 test-web:
     pnpm -r --filter '!@nexovue/e2e' test
 
+# Deliberately NOT part of `just check`: the mail suite sends two real messages
+# per run, and a gate that runs on every change spends a month's allowance in a
+# working session. Run it before a release, or when the mail chain changed.
+#
+# Suites that spend a metered third-party quota
+test-billable:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    [ -f .env ] && { set -a; . ./.env; set +a; }
+    NEXOVUE_BILLABLE_LIVE_TESTS=1 uv run pytest apps/api/tests/test_notifications_live.py
+
 # ---------- end to end ----------
 
 # Deliberately NOT part of `just check` — the pre-commit gate must not require docker.

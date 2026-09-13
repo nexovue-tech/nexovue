@@ -1,5 +1,17 @@
 """One real message, through the real provider, to prove the chain.
 
+**Not run by default, because every run is spent.** Two messages leave here per
+run — one per template — and this suite used to sit inside `just check`. Forty
+gate runs in a single working session sent eighty real messages and consumed
+most of a month's provider allowance. The suite was right about what it proves
+and wrong about when to prove it: a mail chain is verified before a release, not
+on every change to a chart.
+
+`NEXOVUE_BILLABLE_LIVE_TESTS=1` asks for it; `just test-billable` sets that. Ask
+for it and it behaves exactly as it did — failing loudly rather than skipping,
+because a skip you did not ask for is the thing this file exists to avoid.
+
+
 The offline suite drives `httpx.MockTransport`, which proves the request is
 shaped correctly and nothing else. It cannot tell you the API key is valid, the
 sending domain is verified, the DKIM record resolves, or that a message actually
@@ -19,7 +31,7 @@ import os
 from typing import Final
 
 import pytest
-from live import require_stack
+from live import require_opt_in, require_stack
 
 from nexovue_api.notifications import Message, build_email_sender
 from nexovue_api.settings import EMAIL_VARIABLES, EmailSettings
@@ -29,6 +41,14 @@ _API_KEY: Final = os.environ.get("EMAIL_API_KEY", "")
 _SENDING_DOMAIN: Final = os.environ.get("EMAIL_SENDING_DOMAIN", "")
 _FROM: Final = os.environ.get("EMAIL_FROM_ADDRESS", "")
 _REPLY_TO: Final = os.environ.get("EMAIL_REPLY_TO", "")
+
+# Asked for, before anything else — including before the configuration check,
+# so an unconfigured machine is told "not run by default" rather than told off
+# for missing credentials it never needed.
+require_opt_in(
+    suite="apps/api/tests/test_notifications_live.py",
+    cost="it sends two real messages through the mail provider, against a metered quota",
+)
 
 require_stack(
     reachable=all((_API_KEY, _SENDING_DOMAIN, _FROM, _REPLY_TO)),
