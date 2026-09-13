@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from environment import TEST_ENVIRONMENT
+from pydantic import ValidationError
+
 from nexovue_api.settings import Settings, SettingsError, get_settings
 
 COMPLETE_ENVIRONMENT = {
@@ -96,3 +99,41 @@ def test_clickhouse_dsn_is_split_into_connection_parts(
     assert settings.clickhouse_port == 8123
     assert settings.clickhouse_database == "nexovue"
     assert settings.clickhouse_secure is False
+
+
+class TestTheEndpointACustomerIsHanded:
+    """`otlp_endpoint` is printed on the onboarding screen of every new account.
+
+    Its default is localhost, which is correct on a laptop and a silent disaster
+    anywhere else: the customer sets two variables, their exporter posts to their
+    own machine, the screen waits for a span that cannot arrive, and no request
+    reaches us to say so. They conclude the product does not work.
+    """
+
+    def test_development_keeps_the_localhost_default(self) -> None:
+        settings = Settings(**{**TEST_ENVIRONMENT, "ENV": "development"})  # type: ignore[arg-type]
+
+        assert settings.otlp_endpoint.startswith("http://localhost")
+
+    @pytest.mark.parametrize("env", ["staging", "production"])
+    @pytest.mark.parametrize("endpoint", ["http://localhost:14318", "http://127.0.0.1:14318"])
+    def test_a_deployed_install_refuses_to_start_on_an_address_only_we_can_reach(
+        self, env: str, endpoint: str
+    ) -> None:
+        """At start-up rather than at the first signup. A deployment that is wrong
+        should refuse to run, not wait to be wrong in front of somebody."""
+        with pytest.raises(ValidationError) as refusal:
+            Settings(**{**TEST_ENVIRONMENT, "ENV": env, "OTLP_ENDPOINT": endpoint})  # type: ignore[arg-type]
+
+        assert "no customer can reach" in str(refusal.value)
+
+    def test_a_real_address_is_accepted(self) -> None:
+        settings = Settings(  # type: ignore[arg-type]
+            **{
+                **TEST_ENVIRONMENT,
+                "ENV": "production",
+                "OTLP_ENDPOINT": "https://ingest.nexovue.com",
+            }
+        )
+
+        assert settings.otlp_endpoint == "https://ingest.nexovue.com"

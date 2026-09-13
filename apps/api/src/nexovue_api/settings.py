@@ -15,6 +15,7 @@ import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Annotated, Final, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
     AnyUrl,
@@ -24,6 +25,7 @@ from pydantic import (
     UrlConstraints,
     ValidationError,
     field_validator,
+    model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings import SettingsError as SettingsSourceError
@@ -74,6 +76,10 @@ DEFAULT_CLICKHOUSE_HTTP_PORT: Final = 8123
 # rather than on the field alone so the seed can report it without building the
 # full settings object, which needs credentials the seed has no use for.
 DEFAULT_OTLP_ENDPOINT: Final = "http://localhost:14318"
+
+# Hosts that mean 'this machine'. Correct in development and a silent disaster
+# anywhere else, because signup prints this address to the customer.
+_ADDRESSES_ONLY_WE_CAN_REACH: Final = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
 # Route prefix. Versioned from the very first route so no client is ever asked
 # to move later.
@@ -288,6 +294,33 @@ class Settings(BaseSettings):
     # Comma-separated, e.g. "INR" or "INR,USD". Empty until a deployment knows
     # its own answer; see `DomesticPaymentSettings.currencies`.
     payments_domestic_currencies: str = ""
+
+    @model_validator(mode="after")
+    def _reachable_by_a_customer(self) -> Settings:
+        """Refuse to hand every new customer an endpoint only we can reach.
+
+        `otlp_endpoint` is returned by signup and printed on the onboarding
+        screen, so its default — localhost, correct for a laptop — becomes the
+        address a deployed install tells the world to export to. Nothing fails
+        when that happens: the customer sets two variables, their exporter posts
+        to their own machine, and the screen waits for a first span that cannot
+        arrive. They conclude the product does not work, and no error reaches us
+        because no request does.
+
+        Caught at start-up rather than at the first signup, for the reason the
+        provider literals above are: a deployment that is wrong should refuse to
+        run, not wait to be wrong in front of somebody.
+        """
+        if self.env == "development":
+            return self
+        host = urlsplit(self.otlp_endpoint).hostname or ""
+        if host in _ADDRESSES_ONLY_WE_CAN_REACH:
+            raise ValueError(
+                f"OTLP_ENDPOINT is {self.otlp_endpoint!r}, which no customer can reach. "
+                f"Signup hands this to every new account and the onboarding screen prints "
+                f"it. Set it to the receiver's public address in {self.env}."
+            )
+        return self
 
     @field_validator("payments_domestic_provider", "email_provider", mode="before")
     @classmethod
