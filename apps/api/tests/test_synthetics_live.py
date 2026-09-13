@@ -15,6 +15,7 @@ client as fixture setup. Every assertion below goes through the chokepoint.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import uuid
@@ -341,3 +342,187 @@ async def test_a_bucket_nothing_succeeded_in_reports_no_duration_rather_than_zer
             assert point.mean_duration_ms is None
         else:
             assert point.mean_duration_ms is not None
+
+
+# A redelivered probe. The tests above assert on whatever the prober wrote; this
+# one seeds the case they cannot rely on finding — a probe stored twice, which
+# `metricwriting.Absorb` permits and development data has produced twice in three
+# days. Too rare to wait for, too real to leave unproven.
+
+_REDELIVERED_COLUMNS: Final = (
+    "timestamp, start_timestamp, received_at, retention_days, tenant_id, project_id, "
+    "service_name, scope_name, scope_version, metric_name, metric_unit, "
+    "metric_description, resource_attrs, attrs, flags, value"
+)
+
+# The phases of one imagined request, in seconds, and the total it reported.
+_SEEDED_PHASE_SECONDS: Final = {
+    "dns": 0.004,
+    "tcp": 0.011,
+    "tls": 0.030,
+    "ttfb": 0.050,
+    "transfer": 0.005,
+}
+_SEEDED_DURATION_SECONDS: Final = sum(_SEEDED_PHASE_SECONDS.values())
+_SEEDED_RETENTION_DAYS: Final = 30
+
+
+@dataclass(frozen=True, slots=True)
+class RedeliveredProbe:
+    """One probe whose every point was written to ClickHouse twice."""
+
+    tenant_id: str
+    project_id: str
+    check_id: str
+
+
+@pytest.fixture
+async def redelivered(client: AsyncClient) -> AsyncIterator[RedeliveredProbe]:
+    probe = RedeliveredProbe(
+        tenant_id=str(uuid.uuid4()), project_id=str(uuid.uuid4()), check_id=str(uuid.uuid4())
+    )
+    at = datetime.now(UTC).replace(microsecond=0)
+
+    # Two blocks, not one statement run twice: ClickHouse drops a byte-identical
+    # block on sight (ADR-0075, and observed the first time this fixture tried
+    # it). The token models a re-batch — the same points in a block the store has
+    # not seen, which is the shape a redelivery actually takes.
+    rows = _probe_rows(probe, at=at)
+    for attempt in ("first", "redelivered"):
+        await client.command(
+            _seed(rows),
+            settings={"insert_deduplication_token": f"{probe.check_id}-{attempt}"},
+        )
+    try:
+        yield probe
+    finally:
+        await client.command(
+            f"ALTER TABLE metrics_gauge DELETE WHERE tenant_id = {_sql_string(probe.tenant_id)}",
+            settings={"mutations_sync": 2},
+        )
+
+
+async def test_a_probe_written_twice_reports_the_phase_total_it_measured_once(
+    client: AsyncClient, redelivered: RedeliveredProbe
+) -> None:
+    """The reader owes the deduplication the writer deliberately does not do.
+
+    Summing the stored rows would report twice the time the request took, and the
+    phase breakdown would then accuse every phase of time the request never spent
+    there — on a probe that was fine.
+    """
+    from_time, to_time = _window()
+
+    runs = await service.list_runs(
+        _repository(client, redelivered.tenant_id),
+        project_id=redelivered.project_id,
+        check_id=redelivered.check_id,
+        from_time=from_time,
+        to_time=to_time,
+        limit=50,
+    )
+
+    assert len(runs.runs) == 1, "one probe was written, twice; it is still one run"
+    run = runs.runs[0]
+    assert run.up is True
+    assert run.duration_ms == pytest.approx(_SEEDED_DURATION_SECONDS * 1000.0, abs=0.001)
+    assert run.phase_total_ms == pytest.approx(_SEEDED_DURATION_SECONDS * 1000.0, abs=0.001)
+
+
+async def test_the_redelivered_rows_really_are_duplicated_in_the_store(
+    client: AsyncClient, redelivered: RedeliveredProbe
+) -> None:
+    """The fixture's own premise, proved rather than assumed.
+
+    Without this, ClickHouse silently dropping the second write would leave the
+    test above passing for the wrong reason — the shape of a green suite that
+    never exercised the bug.
+    """
+    result = await client.query(
+        """
+        SELECT metric_name, count() AS rows
+        FROM metrics_gauge
+        WHERE tenant_id = %(tenant)s
+        GROUP BY metric_name
+        """,
+        parameters={"tenant": redelivered.tenant_id},
+    )
+    stored = {str(name): int(rows) for name, rows in result.result_rows}
+
+    assert stored[queries.METRIC_STATUS] == 2
+    assert stored[queries.METRIC_DURATION] == 2
+    assert stored[queries.METRIC_PHASE_DURATION] == 2 * len(PHASE_ORDER)
+
+
+def _probe_rows(probe: RedeliveredProbe, *, at: datetime) -> list[str]:
+    """One probe: a status point, a duration point, and one point per phase."""
+    resource = {"synthetic": {"check": {"id": probe.check_id, "type": "http"}}}
+    rows = [
+        _seed_row(
+            probe,
+            at=at,
+            resource=resource,
+            metric_name=queries.METRIC_STATUS,
+            attributes={"http": {"response": {"status_code": 200}}},
+            value=float(queries.UP_VALUE),
+        ),
+        _seed_row(
+            probe,
+            at=at,
+            resource=resource,
+            metric_name=queries.METRIC_DURATION,
+            attributes={},
+            value=_SEEDED_DURATION_SECONDS,
+        ),
+    ]
+    rows.extend(
+        _seed_row(
+            probe,
+            at=at,
+            resource=resource,
+            metric_name=queries.METRIC_PHASE_DURATION,
+            attributes={"synthetic": {"check": {"step": phase}}},
+            value=seconds,
+        )
+        for phase, seconds in _SEEDED_PHASE_SECONDS.items()
+    )
+    return rows
+
+
+def _seed(rows: list[str]) -> str:
+    return f"INSERT INTO metrics_gauge ({_REDELIVERED_COLUMNS}) VALUES\n" + ",\n".join(rows)
+
+
+def _seed_row(
+    probe: RedeliveredProbe,
+    *,
+    at: datetime,
+    resource: dict[str, Any],
+    metric_name: str,
+    attributes: dict[str, Any],
+    value: float,
+) -> str:
+    stamp = _sql_string(at.strftime("%Y-%m-%d %H:%M:%S"))
+    fields = [
+        stamp,
+        stamp,
+        stamp,
+        str(_SEEDED_RETENTION_DAYS),
+        _sql_string(probe.tenant_id),
+        _sql_string(probe.project_id),
+        _sql_string("nexovue-prober"),
+        _sql_string("nexovue.scheduler.checks.http"),
+        _sql_string(""),
+        _sql_string(metric_name),
+        _sql_string("s"),
+        _sql_string(""),
+        _sql_string(json.dumps(resource)),
+        _sql_string(json.dumps(attributes)),
+        "0",
+        repr(float(value)),
+    ]
+    return "(" + ", ".join(fields) + ")"
+
+
+def _sql_string(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"

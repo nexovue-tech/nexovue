@@ -140,20 +140,35 @@ LIMIT {{limit:UInt32}}
 # Individual probes, newest first — the uptime strip rather than the average.
 # Grouped by `timestamp` because one probe writes its status, its duration and
 # its phases at the same instant; the group is one run.
+#
+# The inner group is correctness, not optimisation. A metric row is not unique —
+# `metricwriting.Absorb` takes a duplicate over a lost point, leaving the reader
+# to "group by series and timestamp first" — and this is the only statement here
+# that sums, so a redelivered probe would report twice the time it measured.
+# The series is `(metric_name, series_hash)`: `series_hash` hashes `attrs` alone,
+# and a duration point carries `attrs = {{}}`.
 CHECK_RUNS_SQL: Final = f"""
 SELECT
-    toUnixTimestamp64Nano(timestamp) AS observed_nanos,
+    observed_nanos,
     countIf(metric_name = '{METRIC_STATUS}') AS status_points,
     anyIf(value, metric_name = '{METRIC_STATUS}') AS up_value,
-    anyIf({HTTP_STATUS}, metric_name = '{METRIC_STATUS}') AS status_code,
+    anyIf(http_status, metric_name = '{METRIC_STATUS}') AS status_code,
     anyIf(value, metric_name = '{METRIC_DURATION}') AS duration_seconds,
     sumIf(value, metric_name = '{METRIC_PHASE_DURATION}') AS phase_total_seconds
-FROM metrics_gauge
-WHERE tenant_id = {{tenant_id:String}}
-  AND project_id = {{project_id:String}}
-  AND metric_name IN ('{METRIC_STATUS}', '{METRIC_DURATION}', '{METRIC_PHASE_DURATION}')
-  AND {CHECK_ID} = {{check_id:String}}
-{_WINDOW_PREDICATE}
+FROM (
+    SELECT
+        toUnixTimestamp64Nano(timestamp) AS observed_nanos,
+        metric_name,
+        any(value) AS value,
+        any({HTTP_STATUS}) AS http_status
+    FROM metrics_gauge
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND metric_name IN ('{METRIC_STATUS}', '{METRIC_DURATION}', '{METRIC_PHASE_DURATION}')
+      AND {CHECK_ID} = {{check_id:String}}
+    {_WINDOW_PREDICATE}
+    GROUP BY metric_name, series_hash, observed_nanos
+)
 GROUP BY observed_nanos
 ORDER BY observed_nanos DESC
 LIMIT {{limit:UInt32}}
