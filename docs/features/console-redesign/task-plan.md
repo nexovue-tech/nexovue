@@ -492,9 +492,13 @@ was real, and it is T38).
 
 ### Closing
 
-- [ ] **T43** — `/review-diff`.
-- [ ] **T44** — Design QA: every rebuilt screen against its wireframe and the prototype. *Nothing
-      implements this gate today.*
+- [x] **T43** — `/review-diff`, run over the phase's diff. Findings below under *What the review
+      found*.
+- [~] **T44** — Design QA. **Partial, and deliberately reported as partial.** Every screen built in
+      the final block was opened against the running stack with real data, which is where three
+      defects came from that no test could reach. A pass over *every* rebuilt screen against its
+      wireframe was not done — the gate still has no implementation, and one person clicking through
+      twenty-one routes is not the same thing as having one.
 - [x] **T45** — `docs/architecture/frontend.md` updated to current truth. It claimed a database
       *screen* that is now a view inside infrastructure, and predated `Sparkline`, `FilterBar`,
       `Delta` and the rule that narrowing a list is the server's job.
@@ -503,7 +507,7 @@ was real, and it is T38).
       of the vision line, and the comment in `route-manifest.ts`. The Decisions Log keeps the 2026-08
       row and marks it superseded rather than rewriting it — a decisions log that edits its own
       history cannot be used to find out why something changed.
-- [ ] **T47** — **Outcome** filled in; `status.md` final.
+- [x] **T47** — **Outcome** filled in; `status.md` final.
 
 ## New risks
 
@@ -561,10 +565,21 @@ so this is a manual look.
 
 ## Outcome
 
-**T1–T6 complete, 2026-09-13.** `just check` exit 0: 2277 Python, 120 browser-SDK, **630 web across
-48 files** — up from 613/47, so 17 tests were added.
+**The whole phase is complete, 2026-09-13.** `just check` exit 0: **2438 Python** (1 skipped — the
+billable mail suite, which is opt-in), 120 browser-SDK, **805 web across 64 files**. Against the
+phase's own starting point of 2277 Python and 630 web across 48 files, that is 161 Python and 175 web
+tests added across sixteen files.
 
-### What changed from this plan
+The record below is kept in the order the work happened, because the difference between what each
+block planned and what it actually cost is the most honest estimate anyone has of how well this
+planning works.
+
+### T1–T6 — the thin path
+
+`just check` exit 0: 2277 Python, 120 browser-SDK, **630 web across 48 files** — up from 613/47, so
+17 tests were added.
+
+#### What changed from this plan
 
 | Planned | Actual |
 |---|---|
@@ -572,7 +587,7 @@ so this is a manual look.
 | T4 draws critical *and* warning, distinguished by shape | **Critical only.** No error-rate threshold for a "warning" service exists anywhere in the code, and inventing one would have decided product behavior in a component. The mark is binary, exactly as the errors cell beside it already was. Recorded as a question below |
 | T5 splits on whether data ever arrived | **Splits on whether the widest range is already selected.** No API says whether a project has ever received telemetry. The proxy is wrong in one direction only — a project silent for over seven days reads as never having reported — which costs a reader a sentence, where the opposite error would send a customer with working instrumentation back to setup |
 
-### What the work found
+#### What the work found
 
 - **`Overrides` in `ServicesView.test.ts` had no `windowLabel`,** and vitest does not typecheck, so
   the tests passed while the build failed. `lint-web`'s own comment predicted exactly this: *"biome
@@ -583,7 +598,7 @@ so this is a manual look.
   utilities were verified against the built CSS instead: `size-1.75` resolves to 7px, matching the
   prototype exactly.
 
-### Left for the founder
+#### Left for the founder
 
 - **A warning tier for services.** Today a service is failing or it is not. Whether an error rate
   below some threshold should read as warning rather than critical is undecided, and the shape
@@ -591,7 +606,7 @@ so this is a manual look.
 - **A "has this project ever reported" signal.** It would replace the heuristic in `EmptyServices`
   with a fact.
 
-### Design QA — done 2026-09-13, against the running app
+#### Design QA — T1–T6, against the running app
 
 Opened `/services` in the running stack, both themes, and measured the layout rather than judging it
 by eye. Sixteen real services from the demo stack.
@@ -607,3 +622,70 @@ No test could have caught this: jsdom performs no layout.
 
 **Two design findings, both since resolved and re-verified live.** The sparkline now plots the series
 its colour claims, and the flat lines stay. See Questions.
+
+### T7–T34 — the archetype, the filters, the investigation core, the surfaces
+
+Recorded in their commits rather than here at the time, and summarised now so this document is not
+missing the middle of its own phase. The three findings worth carrying forward:
+
+- **Server-side filtering was the change that mattered**, not the filter bar. Narrowing a list in the
+  browser narrows a page of a capped read, so a screen with a cap and a client-side filter answers
+  confidently with the wrong rows. Seven screens now push their narrowing into SQL, and a live test
+  per screen proves the filter reaches past the cap.
+- **A project's p95 is not the average of its services' p95s.** It is a `quantilesMerge` across their
+  states, and on real data the two answered 21.8ms and 3,455ms — a factor of 159. `/services/overview`
+  exists only because of that measurement.
+- **Eighteen host metrics were collected, masked, retained and read by nothing.** Saturation was never
+  missing from the product; it was missing from the reader. T34 grew from a labelling fix into the
+  full USE frame on the founder's call.
+
+### T35–T42 — metrics, the guard, and the feed
+
+| Planned | Actual |
+|---|---|
+| T36 merges histogram buckets across the window | **A window *delta*, not a merge.** Every histogram in the store is CUMULATIVE, exported every ten seconds, so summing points reports the traffic hundreds of times over. The plan did not account for temporality, and nothing about the wrong answer would have looked wrong |
+| T36 refuses to merge points whose bounds differ | Unchanged, and **the case is real** — `db.client.operation.duration` arrives in milliseconds from one service and seconds from another. The live test asserts against that rather than a constructed pair |
+| T37 draws a histogram over its own bounds | Also needed **column headings and axis labels**, both found in the browser. Without boundary labels the chart is a row of heights, not a distribution |
+| T38 guards three screens | **Six forms across three screens.** Project settings is three independent forms with three drafts; one guard per screen would warn about the wrong one |
+| T40 puts the auth screens on the Gateway archetype | **Already done.** Established by reading all six screens |
+| T39 makes onboarding end in a confirmation | **Half already done.** The confirmation existed; the two onward actions the wireframe commits did not |
+| T41 builds the Findings feed | Built — and it was the last placeholder route, so `placeholder.tsx`, `ComingSoon.tsx` and the manifest's screen tables were deleted with it |
+
+#### What the review found
+
+No tenancy, authorization, durability or masking finding. The new ClickHouse statements are
+module-level constants carrying the tenant predicate as a literal, and the structural test parses
+them. Both new routes are reads behind `require_project`. The new web code imports nothing from
+another feature. Every absent reading renders as an em dash rather than a zero, including the
+estimates and the exporter's optional `sum`, `min` and `max`.
+
+Two things were wrong and are fixed: a structural test added in T38 used `node:fs` in a package that
+compiles without node types — `status-interpretation.test.ts` had already established Vite's glob as
+the way to read sources here, and I did not re-run the typecheck after adding it. And the metrics
+screen was first written against four design tokens that do not exist (`caution-*` rather than
+`warning-*`); Tailwind class names are strings, so nothing failed — it would simply have rendered
+unstyled.
+
+#### Design QA — T35–T42, against the running app
+
+Three defects found in the browser, none reachable by a test. The metrics catalogue had four
+unlabelled numeric columns. The histogram had no boundary labels. And the five percentile estimates
+were laid out as a grid spanning the chart's width, which put them at 0, 25, 50, 75 and 100% across
+the bars and read as **marks on the axis** — a position they do not have. All three fixed and
+re-verified, with the axis labels checked against the stored bounds rather than by eye.
+
+Six further routes were opened and swept for console errors after the placeholder system was deleted.
+Clean. That is not the same as a design QA of every rebuilt screen, which T44 still does not have.
+
+#### Left for the founder
+
+- **Two duplicate-weighted `avg()` sparkline means** remain, at about 22% error. Named in the
+  commits; not fixed here because the fix changes what two screens draw.
+- **A warning tier for services**, still undecided, still blocking the shape distinction.
+- **A "has this project ever reported" signal**, which would replace a heuristic.
+- **Whether the telemetry tier is sized for a dashboard.** An idle Overview spends 30 of its 60
+  requests a minute re-bucketing the live window, and two screens now gate a read behind another
+  purely because the fifth concurrent request is refused rather than queued. That is a workaround in
+  two places, and it will be a third.
+- **The insight engine.** Findings is built and feeds on nothing. Until it exists the healthy state is
+  the whole screen, which is why Overview holds `/`.

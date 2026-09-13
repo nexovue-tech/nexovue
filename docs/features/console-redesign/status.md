@@ -2,9 +2,24 @@
 
 ## Lifecycle status
 
-In development
+**Implemented.** Every task in the plan is built except one, named below. Not deployed: nexovue has
+no deployment, so "implemented" is as far as a feature goes here.
 
 ## Current task
+
+**None — the phase is complete, 2026-09-13.** `just check` exit 0: 2438 Python (1 skipped, the
+opt-in billable mail suite), 805 web across 64 files, 120 browser-SDK. The task plan's Outcome
+carries the full record of what each block planned against what it cost.
+
+**One item is not built and is not quietly ticked: the conditional duration heatmap (OD7).** It was
+on `plan.md` and never became a task in any expansion — the one thing the task gate dropped rather
+than deleted on purpose. `metrics_histogram` now has a reader and a bucket merge, so what it would
+need exists; what is missing is the panel inside Dashboard, drawn only where a customer sends OTLP
+histograms. It needs its own task before anyone calls this feature finished.
+
+---
+
+### The record below is the phase's history, oldest first
 
 **T1–T6 complete** — the thin path. `/services` now carries the ranked-entity row: `Sparkline`, the
 shared-scale trend column, the severity mark, and two empty states instead of one. 17 tests added,
@@ -243,9 +258,11 @@ of which is enforced by `route-manifest.test.ts`.
 
 ## Last updated
 
-2026-09-13 — T35 (the metrics catalogue) is built and committed. Two diagnoses that were wrong
-are recorded here because both cost time and both looked convincing: the isolation suite's
-`ReadTimeout` was neither rate limiting nor mail, it was a `ModuleNotFoundError` in T35's own
-router that killed the reloader's worker while the socket kept accepting; and unsetting `EMAIL_*`
-in `just test-py` fixes nothing, because the live suites reach the API over HTTP and the container
-reads its own `.env`. Next is T36.
+2026-09-13 — the phase closed. T35 through T42 built, `/review-diff` run, the task plan's Outcome
+filled in, and `plan.md` ticked with the one unbuilt item left visibly open.
+
+Two wrong diagnoses are recorded because both cost time and both looked convincing: the isolation
+suite's `ReadTimeout` was neither rate limiting nor mail, it was a `ModuleNotFoundError` in T35's own
+router that killed the reloader's worker while the socket kept accepting; and unsetting `EMAIL_*` in
+`just test-py` fixes nothing, because the live suites reach the API over HTTP and the container reads
+its own `.env`. The mail fix belongs in the compose file, and is there.
