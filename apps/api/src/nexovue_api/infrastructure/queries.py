@@ -132,6 +132,34 @@ ORDER BY host ASC, container ASC, reporter ASC, reporter_instance ASC,
 LIMIT {{max_series:UInt32}}
 """
 
+# Each node's utilization over time — the sparkline in its row.
+#
+# Bucketed by integer division for the reason `synthetics/queries.py` gives: the width is
+# a bound parameter, which `INTERVAL {n} SECOND` cannot take.
+#
+# Averaged within the bucket rather than taken at its edge. A host reporting every 15
+# seconds writes four points to a minute, and `argMax` would show whichever arrived last
+# rather than what the minute was like.
+_BUCKET_NANOS: Final = (
+    "intDiv(toUnixTimestamp(timestamp), {bucket_seconds:UInt32}) * {bucket_seconds:UInt32}"
+    " * 1000000000"
+)
+
+NODE_TRENDS_SQL: Final = f"""
+SELECT
+    host,
+    container,
+    reporter,
+    reporter_instance,
+    metric_name,
+    {_BUCKET_NANOS} AS bucket_nanos,
+    avg(value) AS mean_value
+FROM ({_READINGS})
+GROUP BY host, container, reporter, reporter_instance, metric_name, bucket_nanos
+ORDER BY host, container, reporter, reporter_instance, metric_name, bucket_nanos
+LIMIT {{max_series:UInt32}}
+"""
+
 # What has arrived at all, which is what the screen's empty state needs: a
 # project with no rows here has no collector sending host metrics, and that is a
 # different problem from a host that has gone quiet.

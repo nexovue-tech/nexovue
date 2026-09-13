@@ -19,7 +19,11 @@ from fastapi import APIRouter, Query
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
 from nexovue_api.deps import DbSession
 from nexovue_api.infrastructure import service
-from nexovue_api.infrastructure.schemas import NodeListResponse, SignalListResponse
+from nexovue_api.infrastructure.schemas import (
+    NodeListResponse,
+    NodeTrendResponse,
+    SignalListResponse,
+)
 from nexovue_api.projects.service import require_project
 from nexovue_api.window import resolve_window
 
@@ -67,6 +71,25 @@ async def list_signals(
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.list_signals(
+        repository,
+        project_id=str(project.id),
+        from_time=window_start,
+        to_time=window_end,
+    )
+
+
+@router.get("/trend", summary="Each node's metrics, bucket by bucket")
+async def node_trends(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+) -> NodeTrendResponse:
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.node_trends(
         repository,
         project_id=str(project.id),
         from_time=window_start,

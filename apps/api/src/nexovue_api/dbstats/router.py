@@ -20,7 +20,11 @@ from fastapi import APIRouter, Query
 
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
 from nexovue_api.dbstats import service
-from nexovue_api.dbstats.schemas import ConnectionHealthResponse, SlowStatementsResponse
+from nexovue_api.dbstats.schemas import (
+    ConnectionHealthResponse,
+    SlowStatementsResponse,
+    StatementTrendResponse,
+)
 from nexovue_api.deps import DbSession
 from nexovue_api.projects.service import require_project
 from nexovue_api.window import clamp_limit, resolve_window
@@ -67,6 +71,25 @@ async def connection_health(
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.connection_health(
+        repository,
+        project_id=str(project.id),
+        from_time=window_start,
+        to_time=window_end,
+    )
+
+
+@router.get("/statements/trend", summary="Each statement's cost, bucket by bucket")
+async def statement_trends(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+) -> StatementTrendResponse:
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.statement_trends(
         repository,
         project_id=str(project.id),
         from_time=window_start,

@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
 
+from nexovue_api import rollup
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.infrastructure import conventions, independence, liveness, queries
@@ -52,6 +53,9 @@ from nexovue_api.infrastructure.schemas import (
     NodeKind,
     NodeListResponse,
     NodeSummary,
+    NodeTrend,
+    NodeTrendPoint,
+    NodeTrendResponse,
     SignalListResponse,
     SignalSummary,
 )
@@ -122,6 +126,63 @@ class Reading:
         if self.points < 2 or self.elapsed_seconds <= 0:
             return None
         return self.elapsed_seconds / (self.points - 1)
+
+
+async def node_trends(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> NodeTrendResponse:
+    """Each node's metrics across the window, for the sparklines in its row.
+
+    One series per node per metric, which makes this the widest response the screen
+    asks for: a fleet reporting CPU, memory and filesystem is three series a node.
+    """
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
+    rows = await repository.query(
+        queries.NODE_TRENDS_SQL,
+        _read_parameters(project_id, from_time, to_time)
+        | {"bucket_seconds": bucket_seconds, "max_series": MAX_SERIES},
+    )
+
+    by_series: dict[tuple[NodeKey, str], list[NodeTrendPoint]] = defaultdict(list)
+    for row in rows:
+        key = (_node_key(row), values.text(row["metric_name"]))
+        by_series[key].append(
+            NodeTrendPoint(
+                bucket=values.nanos_to_datetime(row["bucket_nanos"]),
+                value=float(row["mean_value"]),
+            )
+        )
+
+    return NodeTrendResponse(
+        window_start=from_time,
+        window_end=to_time,
+        bucket_seconds=bucket_seconds,
+        trends=[
+            NodeTrend(
+                host=key.host,
+                container=key.container,
+                reporter=key.reporter,
+                reporter_instance=key.reporter_instance,
+                metric_name=metric_name,
+                points=points,
+            )
+            for (key, metric_name), points in sorted(
+                by_series.items(),
+                key=lambda entry: (
+                    entry[0][0].host,
+                    entry[0][0].container,
+                    entry[0][0].reporter,
+                    entry[0][0].reporter_instance,
+                    entry[0][1],
+                ),
+            )
+        ],
+        truncated=len(rows) >= MAX_SERIES,
+    )
 
 
 async def list_nodes(

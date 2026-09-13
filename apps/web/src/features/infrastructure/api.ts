@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
@@ -126,4 +127,70 @@ export function useSignals(projectId: string | undefined, timeWindow: TimeWindow
       }),
     select: (response) => response.signals,
   });
+}
+
+/** One bucket of one metric on one node. */
+export interface NodeTrendPoint {
+  bucket: string;
+  value: number;
+}
+
+interface NodeTrend {
+  host: string;
+  container: string;
+  reporter: string;
+  reporter_instance: string;
+  metric_name: string;
+  points: NodeTrendPoint[];
+}
+
+interface NodeTrendResponse {
+  window_start: string;
+  window_end: string;
+  bucket_seconds: number;
+  trends: NodeTrend[];
+  truncated: boolean;
+}
+
+/** The key both sides build from the same four fields, rather than a shared id. */
+export const nodeSeriesKey = (node: {
+  host: string;
+  container: string;
+  reporter: string;
+  reporter_instance: string;
+}) => `${node.host}/${node.container}/${node.reporter}/${node.reporter_instance}`;
+
+export const nodeTrendQueryKey = (projectId: string, timeWindow: TimeWindow) =>
+  ["node-trend", projectId, timeWindow.from, timeWindow.to] as const;
+
+/**
+ * Every node's metrics, in one request rather than one per row.
+ *
+ * Keyed `node/metric`, because a node has several: CPU, memory and filesystem are three
+ * series on one row, and the row picks the one its column draws.
+ */
+export function useNodeTrend(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+): ReadonlyMap<string, readonly NodeTrendPoint[]> {
+  const { data } = useQuery({
+    queryKey: nodeTrendQueryKey(projectId ?? "", timeWindow),
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<NodeTrendResponse>("infrastructure/trend", {
+        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        signal,
+      }),
+  });
+
+  return useMemo(
+    () =>
+      new Map(
+        (data?.trends ?? []).map((trend) => [
+          `${nodeSeriesKey(trend)}|${trend.metric_name}`,
+          trend.points,
+        ]),
+      ),
+    [data],
+  );
 }

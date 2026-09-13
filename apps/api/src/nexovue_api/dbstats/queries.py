@@ -75,6 +75,32 @@ ORDER BY worst_mean_seconds DESC, query_hash
 LIMIT {{limit:UInt32}}
 """
 
+# Each statement's cost over time — the sparkline in its row.
+#
+# The mean duration within the bucket, not the latest: a statement sampled several times
+# a minute would otherwise show whichever reading arrived last rather than the minute.
+_BUCKET_NANOS: Final = (
+    "intDiv(toUnixTimestamp(timestamp), {bucket_seconds:UInt32}) * {bucket_seconds:UInt32}"
+    " * 1000000000"
+)
+
+STATEMENT_TRENDS_SQL: Final = f"""
+SELECT
+    {QUERY_HASH} AS query_hash,
+    {SERVER_ADDRESS} AS server_address,
+    {SERVER_PORT} AS server_port,
+    {_BUCKET_NANOS} AS bucket_nanos,
+    avg(value) AS mean_seconds
+FROM metrics_gauge
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND metric_name = '{METRIC_OPERATION_DURATION}'
+{_WINDOW_PREDICATE}
+GROUP BY query_hash, server_address, server_port, bucket_nanos
+ORDER BY query_hash, server_address, server_port, bucket_nanos
+LIMIT {{limit:UInt32}}
+"""
+
 # Backends by state: how close a database is to refusing connections.
 # The latest reading is the level right now; the peak is the one that would
 # have exhausted `max_connections` if it had gone a little further.

@@ -10,8 +10,12 @@ In development
 shared-scale trend column, the severity mark, and two empty states instead of one. 17 tests added,
 `just check` green.
 
-**T7–T14 re-expanded from provisional to exact**, and awaiting approval. Two questions in them are
-blocking.
+**T7–T13 complete.** Errors, synthetics and the merged Infrastructure/Databases destination all
+carry their trend; `/database` is gone from the sidebar and the router, and `route-manifest.test.ts`
+still passes. `just check` green: 2289 Python, 638 web.
+
+T13 was already built — the stale rule already measured against each node's own reporting interval,
+and `truncated` was already surfaced. T14 (`VirtualTable`) left the feature by decision Q4.
 
 The re-expansion confirmed the earlier answer to "is it data or API": **it is the API.** All four
 screens already read time-stamped rows and collapse the time axis at the last step with

@@ -121,27 +121,27 @@ synthetics, infrastructure and database each carry their own table markup. There
 extend, so each screen adds the column itself. That is what makes T14 a refactor rather than a
 column.
 
-- [ ] **T7** `E` — `errorgroups/queries.py`: `GROUP_TREND_SQL` over `_GROUPED_WITH_DETAIL`, bucketed
+- [x] **T7** `E` — `errorgroups/queries.py`: `GROUP_TREND_SQL` over `_GROUPED_WITH_DETAIL`, bucketed
       by the same integer-division form synthetics uses; `schemas.py` gains `GroupTrendResponse`;
       `router.py` a `/trend` route. → `test_errorgroups.py`: buckets sum to the group's
       `occurrences`.
-- [ ] **T8** `E` — `features/errors/`: `api.ts` gains `useErrorGroupTrend`; `ErrorsScreen.tsx` gains
+- [x] **T8** `E` — `features/errors/`: `api.ts` gains `useErrorGroupTrend`; `ErrorsScreen.tsx` gains
       the sparkline column and three-line rows; `NEW` derived from `first_seen` inside the window.
       → `ErrorsView.test.ts`.
-- [ ] **T9** `E` — `synthetics/queries.py`: `CHECK_TREND_SQL` reusing `_BUCKET_NANOS` over
+- [x] **T9** `E` — `synthetics/queries.py`: `CHECK_TREND_SQL` reusing `_BUCKET_NANOS` over
       `METRIC_STATUS` and `METRIC_DURATION`, grouped by `bucket_nanos, check_id`. → `test_synthetics.py`.
-- [ ] **T10** `E` — `features/synthetics/SyntheticsScreen.tsx` on the row. **A failed run is a gap in
+- [x] **T10** `E` — `features/synthetics/SyntheticsScreen.tsx` on the row. **A failed run is a gap in
       the duration line, never a zero** — `Sparkline` puts an absent reading on the floor today, so
       this needs a null-aware variant or the screen must pass a sentinel. `tls.days_remaining` gains
       a column. → `check-health.test.ts`.
-- [ ] **T11** `E` — `infrastructure/queries.py` and `dbstats/queries.py`: add the bucket to the
+- [x] **T11** `E` — `infrastructure/queries.py` and `dbstats/queries.py`: add the bucket to the
       existing `GROUP BY` rather than a new statement; schemas gain the series. Infrastructure
       returns one series **per node per metric**, which is the largest response in this group.
       → `test_infrastructure.py`, `test_dbstats.py`.
-- [ ] **T12** `E` — merge `features/database/` into `features/infrastructure/` as two views (IA2);
+- [x] **T12** `E` — merge `features/database/` into `features/infrastructure/` as two views (IA2);
       `route-manifest.ts` drops `/database` from `NavPath`, `SHELL_SCREENS` and `NAV_SECTIONS`.
       → `route-manifest.test.ts` must still pass; it is what stops the sidebar offering a dead path.
-- [ ] **T13** `E` — `node-readings.ts`: stale becomes **critical**, measured against
+- [x] **T13** `E` — `node-readings.ts`: stale becomes **critical**, measured against
       `reporting_interval_seconds` rather than a fixed timeout, so an autoscaling fleet is not a wall
       of red; `NodeListResponse.truncated` surfaced. → `node-readings.test.ts`.
 - [ ] ~~**T14** — `shared/components/VirtualTable.tsx`~~ **Removed from this feature, 2026-09-13

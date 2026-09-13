@@ -45,7 +45,7 @@ const CALLS_COLUMN = "w-24 shrink-0 text-right";
 const TOTAL_COLUMN = "hidden w-24 shrink-0 text-right lg:block";
 const SEEN_COLUMN = "hidden w-28 shrink-0 text-right md:block";
 
-export function DatabaseScreen() {
+export function DatabasesView() {
   const { projectId, rangeId } = useSelection();
   const timeWindow = useLiveWindow(rangeId);
 
@@ -60,14 +60,11 @@ export function DatabaseScreen() {
   const polled = servers.length > 0 || rows.length > 0;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Database</h1>
-        <p className="mt-1 text-ink-dim text-sm">
-          What we read from your Postgres in the last {timeRangeById(rangeId).label}: which
-          statements cost the most time, and how many backends are connected.
-        </p>
-      </header>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <p className="shrink-0 px-4 pb-3 text-ink-dim text-sm">
+        What we read from your Postgres in the last {timeRangeById(rangeId).label}: which statements
+        cost the most time, and how many backends are connected.
+      </p>
 
       {isPending ? (
         <div className="px-4">

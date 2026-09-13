@@ -14,7 +14,6 @@ import { SignupScreen } from "@/features/auth/SignupScreen";
 import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
 import { VerifyEmailScreen } from "@/features/auth/VerifyEmailScreen";
 import { BillingScreen } from "@/features/billing/BillingScreen";
-import { DatabaseScreen } from "@/features/database/DatabaseScreen";
 import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
 import { LogsScreen } from "@/features/logs/LogsScreen";
@@ -143,12 +142,6 @@ const syntheticsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/synthetics",
   component: SyntheticsScreen,
-});
-
-const databaseRoute = createRoute({
-  getParentRoute: () => shellRoute,
-  path: "/database",
-  component: DatabaseScreen,
 });
 
 const rumRoute = createRoute({
@@ -281,7 +274,6 @@ const routeTree = rootRoute.addChildren([
     logsRoute,
     infrastructureRoute,
     syntheticsRoute,
-    databaseRoute,
     rumRoute,
     usageRoute,
     settingsApiKeysRoute,

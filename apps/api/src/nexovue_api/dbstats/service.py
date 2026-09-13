@@ -12,9 +12,11 @@ source of truth available until a database is connected.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
 from typing import Any, Final
 
+from nexovue_api import rollup
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.dbstats import queries
@@ -24,6 +26,9 @@ from nexovue_api.dbstats.schemas import (
     DatabaseServer,
     SlowStatementsResponse,
     StatementCost,
+    StatementTrend,
+    StatementTrendPoint,
+    StatementTrendResponse,
 )
 from nexovue_api.window import receive_window
 
@@ -38,6 +43,10 @@ MAX_STATEMENT_LIMIT: Final = 500
 # Postgres has a handful of backend states, times however many servers a
 # customer connects. Generous, and still a bound.
 MAX_CONNECTION_ROWS: Final = 500
+
+# One row per statement per bucket. Sized so a project at the statement cap still gets a
+# full window of points rather than a prefix of them.
+MAX_TREND_ROWS: Final = MAX_STATEMENT_LIMIT * 200
 
 
 async def slow_statements(
@@ -54,6 +63,50 @@ async def slow_statements(
         _window_parameters(project_id, from_time, to_time) | {"limit": limit},
     )
     return SlowStatementsResponse(statements=[_to_statement(row) for row in rows])
+
+
+async def statement_trends(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> StatementTrendResponse:
+    """Each statement's cost across the window, for the sparkline in its row."""
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
+    rows = await repository.query(
+        queries.STATEMENT_TRENDS_SQL,
+        _window_parameters(project_id, from_time, to_time)
+        | {"bucket_seconds": bucket_seconds, "limit": MAX_TREND_ROWS},
+    )
+
+    by_statement: dict[tuple[str, str, int], list[StatementTrendPoint]] = defaultdict(list)
+    for row in rows:
+        key = (
+            values.text(row["query_hash"]),
+            values.text(row["server_address"]),
+            int(row["server_port"]),
+        )
+        by_statement[key].append(
+            StatementTrendPoint(
+                bucket=values.nanos_to_datetime(row["bucket_nanos"]),
+                mean_ms=_milliseconds(row["mean_seconds"]),
+            )
+        )
+
+    return StatementTrendResponse(
+        window_start=from_time,
+        window_end=to_time,
+        bucket_seconds=bucket_seconds,
+        statements=[
+            StatementTrend(
+                query_hash=query_hash,
+                server=DatabaseServer(address=address, port=port),
+                points=points,
+            )
+            for (query_hash, address, port), points in sorted(by_statement.items())
+        ],
+    )
 
 
 async def connection_health(

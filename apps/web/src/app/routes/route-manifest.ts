@@ -22,7 +22,6 @@ export type NavPath =
   | "/logs"
   | "/rum"
   | "/synthetics"
-  | "/database"
   | "/infrastructure"
   | "/usage"
   | "/settings/api-keys"
@@ -109,7 +108,8 @@ export const SHELL_SCREENS: ScreenDefinition[] = [
   {
     path: "/infrastructure",
     title: "Infrastructure",
-    description: "Hosts and containers: CPU, memory, disk and network behind the services.",
+    description:
+      "Hosts, containers and databases: CPU, memory, disk and network behind the services, and the statements the databases are spending their time on.",
     taskId: "P1-44",
   },
   {
@@ -118,12 +118,6 @@ export const SHELL_SCREENS: ScreenDefinition[] = [
     description:
       "The checks we run for you — uptime, certificates and browser flows — with failure detail and screenshots.",
     taskId: "P1-45",
-  },
-  {
-    path: "/database",
-    title: "Database",
-    description: "Slow queries, mean time, call counts and connection health.",
-    taskId: "P1-46",
   },
   {
     path: "/rum",
@@ -215,7 +209,6 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: "/rum", title: "Real user monitoring" },
       { path: "/synthetics", title: "Synthetics" },
-      { path: "/database", title: "Database" },
       { path: "/infrastructure", title: "Infrastructure" },
     ],
   },

@@ -4,13 +4,14 @@ import { useRef, useState } from "react";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { Sparkline } from "@/shared/components/Sparkline";
 import { formatBinaryBytes } from "@/shared/format/bytes";
 import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
-
-import type { NodeSummary, SignalSummary } from "./api";
-import { useNodes, useSignals } from "./api";
+import type { NodeSummary, NodeTrendPoint, SignalSummary } from "./api";
+import { nodeSeriesKey, useNodes, useNodeTrend, useSignals } from "./api";
+import { DatabasesView } from "./databases/DatabasesView";
 import {
   CPU_METRICS,
   cpuFraction,
@@ -57,18 +58,65 @@ const ROW_HEIGHT = 44;
 
 /* Column widths, declared once so the header and every row cannot drift apart. */
 const CPU_COLUMN = "w-28 shrink-0 text-right";
+/* 104px of sparkline plus its 12px gutter, reserved on every row. */
+const TREND_COLUMN = "w-29 shrink-0 pl-3";
 const MEMORY_COLUMN = "w-32 shrink-0 text-right";
 const STORAGE_COLUMN = "hidden w-32 shrink-0 text-right lg:block";
 const DISK_COLUMN = "hidden w-28 shrink-0 text-right md:block";
 const NETWORK_COLUMN = "hidden w-28 shrink-0 text-right md:block";
 const SEEN_COLUMN = "hidden w-24 shrink-0 text-right lg:block";
 
+/**
+ * Hosts and databases are one destination, not two.
+ *
+ * Both are polled rather than pushed, both are thin on their own, and the flows found
+ * that a database is reached *from a trace* far more often than it is browsed — so it
+ * belongs where a reader already is rather than behind its own sidebar entry (IA2).
+ */
+const VIEWS = [
+  { id: "hosts", label: "Hosts" },
+  { id: "databases", label: "Databases" },
+] as const;
+
+type InfrastructureView = (typeof VIEWS)[number]["id"];
+
+function ViewSwitch({
+  view,
+  onSelect,
+}: {
+  view: InfrastructureView;
+  onSelect: (view: InfrastructureView) => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-baseline gap-1.5 font-mono text-2xs uppercase tracking-caps">
+      {VIEWS.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          aria-pressed={view === option.id}
+          onClick={() => onSelect(option.id)}
+          className={`rounded-sm border px-1.5 py-0.5 ${
+            view === option.id
+              ? "border-line bg-raised text-ink"
+              : "border-transparent text-ink-dim hover:text-ink"
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function InfrastructureScreen() {
   const { projectId, rangeId } = useSelection();
   const timeWindow = useLiveWindow(rangeId);
 
   const nodes = useNodes(projectId, timeWindow);
+  const trendBySeries = useNodeTrend(projectId, timeWindow);
   const signals = useSignals(projectId, timeWindow);
+
+  const [view, setView] = useState<InfrastructureView>("hosts");
 
   const all = nodes.data?.nodes ?? [];
   const [kind, setKind] = useState<KindFilter>("all");
@@ -77,14 +125,23 @@ export function InfrastructureScreen() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Infrastructure</h1>
-        <p className="mt-1 text-ink-dim text-sm">
-          The hosts, containers and reporting processes behind your services, over the last{" "}
-          {timeRangeById(rangeId).label}. A dash is a measurement nobody sent, never a zero.
-        </p>
+        <div className="flex items-baseline justify-between gap-6">
+          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">
+            Infrastructure
+          </h1>
+          <ViewSwitch view={view} onSelect={setView} />
+        </div>
+        {view === "hosts" ? (
+          <p className="mt-1 text-ink-dim text-sm">
+            The hosts, containers and reporting processes behind your services, over the last{" "}
+            {timeRangeById(rangeId).label}. A dash is a measurement nobody sent, never a zero.
+          </p>
+        ) : null}
       </header>
 
-      {nodes.isPending || signals.isPending ? (
+      {view === "databases" ? (
+        <DatabasesView />
+      ) : nodes.isPending || signals.isPending ? (
         <div className="px-4">
           <SkeletonRows rows={8} label="Loading hosts" />
         </div>
@@ -108,7 +165,7 @@ export function InfrastructureScreen() {
           <NestingNotice nodes={all} />
           <StaleNotice nodes={rows} />
           <UnattributedNotice nodes={rows} />
-          <NodeTable nodes={rows} />
+          <NodeTable nodes={rows} trendBySeries={trendBySeries} />
           <SignalStrip signals={signals.data ?? []} />
         </>
       )}
@@ -262,7 +319,46 @@ function NestingNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
   );
 }
 
-function NodeTable({ nodes }: { nodes: readonly NodeSummary[] }) {
+/**
+ * Memory, not CPU — decided by measuring the real stack rather than by assuming.
+ *
+ * CPU looked like the obvious column and is the wrong one. Docker reports
+ * `container.cpu.utilization` as a **cumulative** figure, not an instantaneous rate:
+ * `accounting` moves from 0.113 to 0.118 across thirty-six minutes, and `flagd` from
+ * 128.3 to 131.5. Measured across the dev stack the median CPU series swings 4.4% of its
+ * own range, so a sparkline of it is a flat ramp at every scale — and one node reporting
+ * a thousand times another flattens the rest besides.
+ *
+ * Memory swings 40.5%. It is the measure on this screen that actually carries a shape.
+ *
+ * **The ceiling is the node's own limit, which is a physical bound rather than a
+ * per-row autoscale.** Half of your limit is half of your limit whatever the limit is,
+ * so two rows remain comparable — unlike a maximum derived from whichever row happens to
+ * be busiest, which is the autoscaling the archetype refuses.
+ */
+const MEMORY_USAGE_METRICS = ["container.memory.usage.total", "system.memory.usage"] as const;
+
+function memorySeries(
+  node: NodeSummary,
+  trendBySeries: ReadonlyMap<string, readonly NodeTrendPoint[]> | undefined,
+): { points: readonly NodeTrendPoint[]; ceiling: number } | undefined {
+  if (node.memory_limit_bytes === null || node.memory_limit_bytes <= 0) return undefined;
+
+  const key = nodeSeriesKey(node);
+  for (const metric of MEMORY_USAGE_METRICS) {
+    const points = trendBySeries?.get(`${key}|${metric}`);
+    if (points) return { points, ceiling: node.memory_limit_bytes };
+  }
+  return undefined;
+}
+
+function NodeTable({
+  nodes,
+  trendBySeries,
+}: {
+  nodes: readonly NodeSummary[];
+  trendBySeries?: ReadonlyMap<string, readonly NodeTrendPoint[]>;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: nodes.length,
@@ -281,6 +377,7 @@ function NodeTable({ nodes }: { nodes: readonly NodeSummary[] }) {
         <span className={DISK_COLUMN}>Disk I/O</span>
         <span className={NETWORK_COLUMN}>Network</span>
         <span className={SEEN_COLUMN}>Last seen</span>
+        <span className={TREND_COLUMN}>Memory trend</span>
       </div>
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -291,7 +388,7 @@ function NodeTable({ nodes }: { nodes: readonly NodeSummary[] }) {
               className="absolute top-0 left-0 w-full"
               style={{ height: `${item.size}px`, transform: `translateY(${item.start}px)` }}
             >
-              <NodeRow node={nodes[item.index]} />
+              <NodeRow node={nodes[item.index]} trendBySeries={trendBySeries} />
             </div>
           ))}
         </div>
@@ -305,7 +402,15 @@ function nodeKey(node: NodeSummary): string {
   return `${node.host}/${node.container}/${node.reporter}/${node.reporter_instance}`;
 }
 
-function NodeRow({ node }: { node: NodeSummary }) {
+function NodeRow({
+  node,
+  trendBySeries,
+}: {
+  node: NodeSummary;
+  trendBySeries?: ReadonlyMap<string, readonly NodeTrendPoint[]>;
+}) {
+  const memory = memorySeries(node, trendBySeries);
+
   return (
     <div className="flex h-full items-center border-line-subtle border-b px-4 text-sm">
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
@@ -377,6 +482,15 @@ function NodeRow({ node }: { node: NodeSummary }) {
         title={`First seen ${formatTimestamp(node.first_seen)} · last seen ${formatTimestamp(node.last_seen)}`}
       >
         {formatRelativeTime(node.last_seen)}
+      </span>
+
+      <span className={TREND_COLUMN}>
+        <Sparkline
+          points={(memory?.points ?? []).map((point) => point.value)}
+          max={memory?.ceiling ?? 0}
+          tone={node.stale ? "critical" : "series"}
+          label={`${nodeName(node)} memory against its limit, over the window`}
+        />
       </span>
     </div>
   );

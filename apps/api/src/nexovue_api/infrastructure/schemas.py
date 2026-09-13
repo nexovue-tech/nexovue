@@ -111,3 +111,37 @@ class SignalListResponse(BaseModel):
     """
 
     signals: list[SignalSummary] = Field(default_factory=list)
+
+
+class NodeTrendPoint(BaseModel):
+    """One bucket of one metric on one node."""
+
+    bucket: IsoTimestamp
+    # The mean within the bucket, not the reading at its edge: a host reporting every
+    # fifteen seconds writes four points to a minute, and the last one is not the minute.
+    value: float
+
+
+class NodeTrend(BaseModel):
+    """One metric's history on one node, oldest first.
+
+    Identified by the same four fields `NodeSummary` carries, so a caller builds the same
+    key for both rather than trusting an id to mean the same thing in two responses.
+    """
+
+    host: str
+    container: str
+    reporter: str
+    reporter_instance: str
+    metric_name: str
+    points: list[NodeTrendPoint]
+
+
+class NodeTrendResponse(BaseModel):
+    window_start: IsoTimestamp
+    window_end: IsoTimestamp
+    bucket_seconds: int
+    trends: list[NodeTrend] = Field(default_factory=list)
+    # A fleet larger than one read can collapse. Reported rather than silently truncated,
+    # for the same reason `NodeListResponse` reports it.
+    truncated: bool = False

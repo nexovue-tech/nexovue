@@ -6,7 +6,7 @@ once, in the service.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from nexovue_api.wire import IsoTimestamp
 
@@ -64,3 +64,29 @@ class ConnectionHealthResponse(BaseModel):
     states: list[ConnectionStateCount]
     # The latest readings summed across every state and server returned.
     latest_backends_total: int
+
+
+class StatementTrendPoint(BaseModel):
+    """One bucket of one statement's cost."""
+
+    bucket: IsoTimestamp
+    mean_ms: float
+
+
+class StatementTrend(BaseModel):
+    """One statement's cost over the window, oldest first.
+
+    Keyed by hash and server, which is what identifies a statement — there is no query
+    text to key on, by design: the poller never sends SQL.
+    """
+
+    query_hash: str
+    server: DatabaseServer
+    points: list[StatementTrendPoint]
+
+
+class StatementTrendResponse(BaseModel):
+    window_start: IsoTimestamp
+    window_end: IsoTimestamp
+    bucket_seconds: int
+    statements: list[StatementTrend] = Field(default_factory=list)
