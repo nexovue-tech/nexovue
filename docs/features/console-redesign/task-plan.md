@@ -188,25 +188,46 @@ filter over a capped page silently under-reports**: ask for "only failing servic
 to say so. These are not conveniences to leave alone; they are wrong answers waiting for a customer
 large enough to notice.
 
-- [ ] **T15** `E` — `shared/components/FilterBar.tsx` (new). One control, driven by a declared list
+- [x] **T15** `E` — `shared/components/FilterBar.tsx` (new). One control, driven by a declared list
       of filters, so nine screens do not each invent a row of buttons. → `FilterBar.test.ts`.
-- [ ] **T16** `E` — API filters over columns already stored, one test each in the domain's own
+- [x] **T16** `E` — API filters over columns already stored, one test each in the domain's own
       offline suite: `services` (`with_errors`, `span_kind`) · `servicemap` (`min_calls_per_minute`,
       `failing_only`) · `synthetics` (`down_only`, `check_type`) · `dbstats` (`server`,
       `min_mean_ms`) · `infrastructure` (`kind`, `stale_only`, `host`).
-- [ ] **T17** `E` — `rum`: `device_class`, `route` and `rating` become filters as well as breakdown
+- [x] **T17** `E` — `rum`: `device_class`, `route` and `rating` become filters as well as breakdown
       dimensions. `BreakdownDimension` stays two members — `country` has no producer (AC4).
-- [ ] **T18** `E` — **move the three browser-side filters onto the server** and delete the local
+- [x] **T18** `E` — **move the three browser-side filters onto the server** and delete the local
       ones, so a filtered list is the filtered data rather than a filtered page. → a test per screen
       that a match beyond the first page is still returned.
-- [ ] **T19** `E` — filtered-empty distinguished from never-had-data on every screen that gained a
+- [x] **T19** `E` — filtered-empty distinguished from never-had-data on every screen that gained a
       filter (AC15). `ServicesScreen` already splits these two; the others copy that shape.
-- [ ] **T20** `E` — previous-period delta: a second read over the shifted window, one threshold per
+- [x] **T20** `E` — previous-period delta: a second read over the shifted window, one threshold per
       measure, rendered **only where significant** (AC13, AC14). → tests that an unremarkable reading
       carries no annotation, and that an absent prior window renders no delta rather than a zero.
-- [ ] **T21** `E` — a structural test that no feature interprets an HTTP status itself (AC21).
+- [x] **T21** `E` — a structural test that no feature interprets an HTTP status itself (AC21).
 
-**A reasonable stopping point. Five screens rebuilt, filterable, carrying context.**
+**A reasonable stopping point. Five screens rebuilt, filterable, carrying context.** Reached
+2026-09-13.
+
+**What changed from the plan.** Three things the audit got wrong, each found by reading the code:
+
+- **`isNewInWindow` was never a filter.** It marks a row; it has never hidden one. The real gap was
+  that "only new" could not be asked at all, so T18 *added* it rather than moving it — and
+  `started_in_window` now comes back on the row, so the marker and the filter share one definition
+  instead of keeping a copy each.
+- **RUM has no rating to filter on.** `rating` is a column of `web_vitals`, not of `web_vitals_1m`
+  which this screen reads. A rating is a property of a value and the p75 is a new value, so the
+  rating a reader sees is computed on the screen — `rum/service.py` already refuses to hold a second
+  copy of those thresholds. Filtering on the raw per-reading rating would have excluded pages this
+  screen still labels poor. `device_class` and `route` were built; the rating filter was not, and the
+  reason is recorded in both `rum/queries.py` and `features/rum/filters.ts`.
+- **Infrastructure's per-kind counts went with its filter.** They counted the page, which is the
+  thing being fixed.
+
+**T20's thresholds were measured, not chosen.** At a fifth, 14 of 15 services carried a request-rate
+delta over six hours and 6 of 16 over a day — a screen of annotations that has stopped saying
+anything. A volume now needs to move by half; a duration still needs a fifth, and an error rate is
+measured in points because 0.1% becoming 0.2% has doubled and means nothing.
 
 ### Investigation core — five screens
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveWindow, timeRangeById } from "./selection";
+import { previousWindow, resolveWindow, timeRangeById } from "./selection";
 
 const BUCKET_MS = 10_000;
 
@@ -44,5 +44,33 @@ describe("resolveWindow", () => {
     const { from, to } = resolveWindow("not-a-range", Date.parse("2026-08-27T08:00:00.000Z"));
     expect(Number.isNaN(Date.parse(from))).toBe(false);
     expect(Number.isNaN(Date.parse(to))).toBe(false);
+  });
+});
+
+describe("previousWindow", () => {
+  it("is the same span immediately before this one", () => {
+    // An hour is compared with the hour before it. A fixed offset would compare
+    // a Monday morning with a Sunday night and call the difference a change.
+    expect(
+      previousWindow({ from: "2026-09-13T10:00:00.000Z", to: "2026-09-13T11:00:00.000Z" }),
+    ).toEqual({ from: "2026-09-13T09:00:00.000Z", to: "2026-09-13T10:00:00.000Z" });
+  });
+
+  it("ends exactly where this window begins, leaving no gap and no overlap", () => {
+    const window = { from: "2026-09-13T10:17:30.000Z", to: "2026-09-13T10:32:30.000Z" };
+
+    expect(previousWindow(window).to).toBe(window.from);
+  });
+
+  it("follows a window someone narrowed by hand rather than a named range", () => {
+    const sevenMinutes = { from: "2026-09-13T10:00:00.000Z", to: "2026-09-13T10:07:00.000Z" };
+
+    expect(previousWindow(sevenMinutes).from).toBe("2026-09-13T09:53:00.000Z");
+  });
+
+  it("returns the window unchanged rather than an invalid one it cannot compute", () => {
+    const unparseable = { from: "not a time", to: "2026-09-13T11:00:00.000Z" };
+
+    expect(previousWindow(unparseable)).toEqual(unparseable);
   });
 });

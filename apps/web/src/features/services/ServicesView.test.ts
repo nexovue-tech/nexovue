@@ -80,6 +80,7 @@ interface Overrides {
   expanded?: ReadonlySet<string>;
   endpointsByService?: ReadonlyMap<string, EndpointGroup>;
   trendByService?: ReadonlyMap<string, readonly TrendPoint[]>;
+  previousByService?: ReadonlyMap<string, ServiceHealth>;
   widestWindow?: boolean;
 }
 
@@ -364,5 +365,79 @@ describe("ServicesView empty states", () => {
     expect(text).toContain("No services in the last 15 minutes");
     expect(text).toContain("Widen the time range");
     expect(text).not.toContain("No services yet");
+  });
+});
+
+/**
+ * A delta always carries its sign; the error cell prints a bare percentage, so
+ * "%" on its own finds the reading rather than the annotation.
+ */
+const SIGNED_CHANGE = /[+\u2212][\d.]+(?:%|pp)/;
+
+describe("the change against the previous window", () => {
+  /** The same service, with whatever the earlier window measured. */
+  const earlier = (overrides: Partial<ServiceHealth>): ReadonlyMap<string, ServiceHealth> =>
+    new Map([["demo-storefront", { ...STOREFRONT, ...overrides }]]);
+
+  it("renders no delta when the previous window holds nothing for this service", () => {
+    // A service that first reported inside this window has nothing to compare
+    // against, and "0%" would be a claim that it was flat.
+    const rendered = readable(render({ services: [STOREFRONT], previousByService: new Map() }));
+
+    expect(rendered).not.toMatch(SIGNED_CHANGE);
+  });
+
+  it("renders no delta when the reading is unremarkable", () => {
+    // Traffic up a tenth is movement, not news. Annotating it would spend the
+    // reader's attention on a row that did not need it — and the row that
+    // doubled would look exactly the same.
+    const rendered = readable(
+      render({
+        services: [STOREFRONT],
+        previousByService: earlier({
+          requests_per_minute: STOREFRONT.requests_per_minute / 1.3,
+          p95_ms: STOREFRONT.p95_ms / 1.05,
+          error_rate: STOREFRONT.error_rate - 0.001,
+        }),
+      }),
+    );
+
+    expect(rendered).not.toMatch(SIGNED_CHANGE);
+  });
+
+  it("names a change worth an eye, in the measure's own terms", () => {
+    const rendered = readable(
+      render({
+        services: [STOREFRONT],
+        previousByService: earlier({
+          requests_per_minute: STOREFRONT.requests_per_minute / 2,
+          p95_ms: STOREFRONT.p95_ms * 2,
+          // 5.5% to 0.5%: five points, which is what a ratio is measured in.
+          error_rate: STOREFRONT.error_rate + 0.05,
+        }),
+      }),
+    );
+
+    expect(rendered).toContain("+100%");
+    // A true minus sign, not a hyphen: these sit in a column of numbers.
+    expect(rendered).toContain("−" + "50%");
+    expect(rendered).toContain("−" + "5.0pp");
+  });
+
+  it("leaves the endpoints under an open service unannotated", () => {
+    // The previous window's endpoints are not read, so a delta there would have
+    // nothing behind it. Reserved columns keep them aligned with the row above.
+    const rendered = readable(
+      render({
+        services: [STOREFRONT],
+        expanded: new Set(["demo-storefront"]),
+        endpointsByService: endpointsLoaded([CHECKOUT]),
+        previousByService: earlier({ requests_per_minute: STOREFRONT.requests_per_minute / 2 }),
+      }),
+    );
+
+    expect(rendered).toContain("POST /checkout");
+    // One delta, on the service row, and none on the endpoint beneath it.
+    expect(rendered.match(/\+100%/g) ?? []).toHaveLength(1);
   });
 });

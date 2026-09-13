@@ -99,6 +99,23 @@ export function resolveWindow(rangeId: string, now = Date.now()): TimeWindow {
  *
  * It stops while the tab is hidden — nobody is reading, and each tick costs a request.
  */
+/**
+ * The same length of time, immediately before this window.
+ *
+ * A comparison is only fair against an equivalent span: an hour is compared with
+ * the hour before it, never with "yesterday" or a fixed offset. Derived from the
+ * window itself rather than from the range id, so a window someone narrowed by
+ * hand is compared with its own predecessor.
+ */
+export function previousWindow(timeWindow: TimeWindow): TimeWindow {
+  const from = Date.parse(timeWindow.from);
+  const to = Date.parse(timeWindow.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return timeWindow;
+
+  const span = to - from;
+  return { from: new Date(from - span).toISOString(), to: timeWindow.from };
+}
+
 export function useLiveWindow(rangeId: string): TimeWindow {
   const [now, setNow] = useState(() => Date.now());
 

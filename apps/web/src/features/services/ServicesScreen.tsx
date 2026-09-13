@@ -4,17 +4,25 @@ import { ChevronRight } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
+import { Delta } from "@/shared/components/Delta";
 import { EmptyState } from "@/shared/components/EmptyState";
 import type { FilterValues } from "@/shared/components/FilterBar";
 import { appliedFilters, FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows, SkeletonText } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
+import { deltaOf } from "@/shared/delta";
 import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatRatePerMinute } from "@/shared/format/rate";
-import { TIME_RANGES, timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import {
+  previousWindow,
+  TIME_RANGES,
+  timeRangeById,
+  useLiveWindow,
+  useSelection,
+} from "@/shared/selection";
 
 import type {
   EndpointGroup,
@@ -38,9 +46,14 @@ const PENDING_ENDPOINT_ROWS = [
 ] as const;
 
 /* Column widths, declared once so the header and every row cannot drift apart. */
-const RATE_COLUMN = "w-20 shrink-0 text-right";
-const ERRORS_COLUMN = "w-28 shrink-0 text-right";
+/* Three of these can carry a delta beside the reading, so they are sized for the
+   widest one — "+100%" — rather than for the number alone. Reserved on every row,
+   marked or not, so a row that changed does not shift the columns of the rows
+   around it. p50 and p99 carry none and keep their original width. */
+const RATE_COLUMN = "w-32 shrink-0 text-right";
+const ERRORS_COLUMN = "w-40 shrink-0 text-right";
 const LATENCY_COLUMN = "w-16 shrink-0 text-right";
+const P95_COLUMN = "w-28 shrink-0 text-right";
 /* The sparkline is 104px and the gutter before it 12px, so the cell is 116px — `w-26` held
    only the drawing and pushed it 12px into the row's own right padding, which put the
    column 4px from the edge while every other column sat 16px in. Reserved on every row so
@@ -91,6 +104,15 @@ export function ServicesScreen() {
   const services = useServiceList(projectId, timeWindow, narrowing);
   const trendByService = useServiceTrend(projectId, timeWindow);
 
+  // The same read over the hour before this one. A second request rather than a
+  // wider one: comparing two windows means asking the rollup for two windows,
+  // and the ranking of the earlier one is irrelevant — only its numbers are.
+  const earlier = useServiceList(projectId, previousWindow(timeWindow), narrowing);
+  const previousByService = useMemo(
+    () => new Map((earlier.data?.services ?? []).map((row) => [row.service_name, row])),
+    [earlier.data],
+  );
+
   // Sorted so the request set is a function of *which* services are open, not the
   // order they were opened in — otherwise every toggle rebuilds every query.
   const expandedNames = useMemo(() => [...expanded].sort(), [expanded]);
@@ -122,6 +144,7 @@ export function ServicesScreen() {
       onToggleService={toggleService}
       endpointsByService={endpointsByService}
       trendByService={trendByService}
+      previousByService={previousByService}
     />
   );
 }
@@ -149,6 +172,13 @@ interface ServicesViewProps {
   endpointsByService: ReadonlyMap<string, EndpointGroup>;
   /** Keyed by service name. A service missing from it has no trend and renders the rule. */
   trendByService?: ReadonlyMap<string, readonly TrendPoint[]>;
+  /**
+   * The same services over the window before this one, keyed by name.
+   *
+   * A service missing from it is one that did not report then, which is not the
+   * same as one that reported zero — so its row carries no delta at all.
+   */
+  previousByService?: ReadonlyMap<string, ServiceHealth>;
 }
 
 /**
@@ -206,6 +236,7 @@ export function ServicesView({
   onToggleService,
   endpointsByService,
   trendByService,
+  previousByService,
 }: ServicesViewProps) {
   const rows = buildServiceRows(services, expanded, endpointsByService);
   const narrowed = appliedFilters(SERVICE_FILTERS, filters).length > 0;
@@ -271,6 +302,7 @@ export function ServicesView({
                   onToggleService={onToggleService}
                   endpointsByService={endpointsByService}
                   trendByService={trendByService}
+                  previousByService={previousByService}
                   ceilings={ceilings}
                 />
               ))}
@@ -386,7 +418,7 @@ function ColumnHeader() {
       <span className={RATE_COLUMN}>Req/min</span>
       <span className={ERRORS_COLUMN}>Errors</span>
       <span className={`${LATENCY_COLUMN} ${WIDE_ONLY}`}>p50</span>
-      <span className={LATENCY_COLUMN}>p95</span>
+      <span className={P95_COLUMN}>p95</span>
       <span className={`${LATENCY_COLUMN} ${WIDE_ONLY}`}>p99</span>
       <span className={TREND_COLUMN}>Trend</span>
     </div>
@@ -400,6 +432,7 @@ function VirtualRow({
   onToggleService,
   endpointsByService,
   trendByService,
+  previousByService,
   ceilings,
 }: {
   row: ServiceRow;
@@ -408,6 +441,7 @@ function VirtualRow({
   onToggleService: (serviceName: string) => void;
   endpointsByService: ReadonlyMap<string, EndpointGroup>;
   trendByService?: ReadonlyMap<string, readonly TrendPoint[]>;
+  previousByService?: ReadonlyMap<string, ServiceHealth>;
   ceilings: TrendCeilings;
 }) {
   return (
@@ -421,6 +455,7 @@ function VirtualRow({
           expanded={row.expanded}
           onToggle={() => onToggleService(row.service.service_name)}
           trend={trendByService?.get(row.service.service_name)}
+          previous={previousByService?.get(row.service.service_name)}
           ceilings={ceilings}
         />
       ) : row.kind === "endpoint" ? (
@@ -440,12 +475,14 @@ function ServiceLine({
   expanded,
   onToggle,
   trend,
+  previous,
   ceilings,
 }: {
   service: ServiceHealth;
   expanded: boolean;
   onToggle: () => void;
   trend?: readonly TrendPoint[];
+  previous?: ServiceHealth;
   ceilings: TrendCeilings;
 }) {
   const failing = service.error_count > 0;
@@ -466,7 +503,7 @@ function ServiceLine({
         <SeverityMark failing={service.error_count > 0} />
         <span className="truncate text-ink">{service.service_name}</span>
       </span>
-      <MetricCells metrics={service} />
+      <MetricCells metrics={service} previous={previous} />
       <span className={TREND_COLUMN}>
         <Sparkline
           points={(trend ?? []).map((point) =>
@@ -524,9 +561,23 @@ function EndpointLine({ endpoint }: { endpoint: EndpointHealth }) {
   );
 }
 
-/** The numbers, in the same columns whether the row is a service or an endpoint. */
-function MetricCells({ metrics }: { metrics: HealthMetrics }) {
+/**
+ * The numbers, in the same columns whether the row is a service or an endpoint.
+ *
+ * Three of them can carry a change against the previous window, and most rows
+ * carry none: `deltaOf` is silent unless the move is worth an eye. The three are
+ * the ones a person reads this screen for — how much traffic, how much of it
+ * failed, and how slow the tail is — and each says which direction is the bad
+ * one, because a rising request rate and a rising error rate are not the same
+ * news.
+ *
+ * The error rate is compared in points rather than relatively: 0.1% becoming
+ * 0.2% has doubled and means nothing, and 0% becoming 2% is a change no
+ * percentage can express.
+ */
+function MetricCells({ metrics, previous }: { metrics: HealthMetrics; previous?: HealthMetrics }) {
   const failing = metrics.error_count > 0;
+  const samples = previous && { current: metrics.request_count, previous: previous.request_count };
 
   return (
     <>
@@ -535,6 +586,11 @@ function MetricCells({ metrics }: { metrics: HealthMetrics }) {
         title={describeVolume(metrics.request_count)}
       >
         {formatRatePerMinute(metrics.requests_per_minute)}
+        <Delta
+          delta={deltaOf("rate", metrics.requests_per_minute, previous?.requests_per_minute)}
+          worse="down"
+          label="Request rate"
+        />
       </span>
       <span
         className={`${ERRORS_COLUMN} font-mono text-2xs ${
@@ -542,14 +598,24 @@ function MetricCells({ metrics }: { metrics: HealthMetrics }) {
         }`}
       >
         {formatErrors(metrics.error_count, metrics.error_rate)}
+        <Delta
+          delta={deltaOf("ratio", metrics.error_rate, previous?.error_rate, samples)}
+          worse="up"
+          label="Error rate"
+        />
       </span>
       <span className={`${LATENCY_COLUMN} ${WIDE_ONLY} font-mono text-2xs text-ink-dim`}>
         {formatDuration(metrics.p50_ms)}
       </span>
       {/* p95 is the one the ranking and the toggle are about, so it is the one that
           reads as text rather than as metadata. */}
-      <span className={`${LATENCY_COLUMN} font-mono text-2xs text-ink`}>
+      <span className={`${P95_COLUMN} font-mono text-2xs text-ink`}>
         {formatDuration(metrics.p95_ms)}
+        <Delta
+          delta={deltaOf("duration", metrics.p95_ms, previous?.p95_ms, samples)}
+          worse="up"
+          label="p95"
+        />
       </span>
       <span className={`${LATENCY_COLUMN} ${WIDE_ONLY} font-mono text-2xs text-ink-dim`}>
         {formatDuration(metrics.p99_ms)}

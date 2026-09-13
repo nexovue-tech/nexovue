@@ -10,7 +10,7 @@ In development
 shared-scale trend column, the severity mark, and two empty states instead of one. 17 tests added,
 `just check` green.
 
-**T15–T21 re-expanded to exact**, and awaiting approval. The filter audit was parsed from every
+**T1–T21 are built and `just check` is green** (2342 Python, 684 web, 120 SDK). The filter audit was parsed from every
 router's AST rather than grepped, after six greps in this feature returned wrong answers.
 
 It found one thing that changes the work: **three filters exist only in the browser** — infrastructure's
@@ -193,27 +193,40 @@ with `route-manifest.test.ts`, which enforces router/sidebar agreement.
 
 ## Blocked
 
-Not blocked. Awaiting the approval gate.
+Not blocked. T22 onwards — the investigation core, the dashboard surface and the remaining
+surfaces — are still `P`, and are expanded one at a time as `plan.md` and ADR-0019 require.
 
 ## Validation
 
-Nothing to validate by test; no code has been produced.
+`just check` is green: 2342 Python tests, 684 web, 120 browser-SDK, every Go package `ok`.
 
-The design's factual claims were taken from the code: the token names it uses exist in
-`packages/ui/tokens.css`; the shell behaviours it leaves unchanged are those built in
-`apps/web/src/app/layout/AppShell.tsx`; the sidebar's three current groups and the twenty routes
-come from `route-manifest.ts`; and `/services/trend` already returning a bucketed series for one
-service is what makes the batched-series read a known risk rather than a guess.
+**What the filters are actually proved by.** `apps/api/tests/test_filters_reach_past_the_cap.py`
+seeds, for each screen, one match that ranks last behind more rows than the cap allows. It asserts
+the unfiltered read misses it — that assertion is the premise, and without it the suite would pass
+against a filter that does nothing — then asserts the filtered read returns it. Neutering the four
+filters fails all four tests.
 
-The specification's factual claims were taken from the code, not from documentation:
+Every other test added here was run against the code before its fix: the delta tests against a
+threshold that annotated everything, the structural test against a planted `error.status === 401`,
+and each filter test against the statement it was about to change.
 
-- Chart coverage — two of sixteen feature folders reference uPlot (`servicedetail`, `synthetics`).
-- `Sparkline` appears nowhere in `apps/web` or `packages/ui`, while `docs/design/design-system.md`
-  names it as the form a trend takes.
-- `ServiceTrendResponse` / `TrendPoint` already serve bucketed series with a server-chosen bucket
-  size, so most screens need no new backend read to show a trend.
-- The rollups carry per-minute counts and quantile state and are written before sampling.
-- The 20 routes and the three sidebar groups come from `route-manifest.ts`.
+**Verified in the browser**, which is where the last two findings came from. Measuring the row
+showed no cell overflowing its box after three columns were widened for their deltas. Querying the
+API over three window lengths showed the request-rate threshold was annotating almost every row,
+which is how it came to be raised from a fifth to a half.
+
+## Residual risks
+
+- **`tsc -b`, not `tsc --noEmit`.** This package uses project references, so a bare `tsc --noEmit`
+  silently checks nothing and vitest does not typecheck at all. Two type errors reached the gate
+  that way. `pnpm run typecheck` is the only invocation that answers.
+- **Search values are written JSON-quoted** — `?with_errors=%22true%22`. That is the router's
+  default serialisation and predates this work: `/traces` writes the same shape, and an unquoted
+  value pasted by hand still parses. Not changed here, because changing it changes every screen's
+  links at once.
+- **Deltas are on the services screen only.** AC13 asks that every reading with a rollup behind it
+  *be able to* show one, and `shared/delta.ts` plus `previousWindow` are that mechanism. The other
+  rollup-backed screens have not been wired to it.
 
 ## Documentation impact
 
@@ -225,4 +238,4 @@ of which is enforced by `route-manifest.test.ts`.
 
 ## Last updated
 
-2026-09-12
+2026-09-13
