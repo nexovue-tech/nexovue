@@ -31,6 +31,17 @@ SHAPE_HISTOGRAM: Final = "histogram"
 SHAPE_EXPONENTIAL_HISTOGRAM: Final = "exponential histogram"
 SHAPE_SUMMARY: Final = "summary"
 
+# Every shape the catalogue can report, which is what the shape filter may ask
+# for. Spelled once here so the API's accepted values and the branches that
+# produce them cannot drift apart.
+ALL_SHAPES: Final = (
+    SHAPE_GAUGE,
+    SHAPE_SUM,
+    SHAPE_HISTOGRAM,
+    SHAPE_EXPONENTIAL_HISTOGRAM,
+    SHAPE_SUMMARY,
+)
+
 # Only a histogram has a reader today. The others list with their counts and say
 # so, rather than being hidden — a metric a customer is paying to store should
 # appear even when we cannot yet draw it.
@@ -44,6 +55,33 @@ _WINDOW: Final = """
       AND timestamp < {to_time:DateTime64(3)}
       AND received_at >= {received_from:DateTime64(3)}
       AND received_at < {received_to:DateTime64(3)}"""
+
+# The optional predicates, spliced on comment markers: ClickHouse's own
+# parameter syntax is braces, so str.format cannot be used here. The same shape
+# `synthetics/queries.py` uses, for the same reason.
+_NAME_MATCH_PLACEHOLDER: Final = "/* name match */"
+_NARROWING_PLACEHOLDER: Final = "/* narrowing */"
+
+# A typed fragment of the name, matched anywhere in it and case-insensitively: a
+# reader who wants the queue metrics types "queue", not a prefix. In each
+# branch's own WHERE rather than over the result, so the group-by never sees the
+# rows that cannot match.
+NAME_MATCH_CLAUSE: Final = "AND positionCaseInsensitive(metric_name, {name_match:String}) > 0"
+
+# "Only names that arrived in this shape", asked of the grouped shapes rather
+# than of the rows. Narrowing the rows instead would drop the other shapes the
+# name arrived in, and a name reported as both a histogram and a summary would
+# come back looking like a clean histogram — the conflict this screen exists to
+# show, hidden by a filter.
+SHAPE_CLAUSE: Final = "has(shapes, {shape:String})"
+
+# "Only what this console can draw", which is `service._to_summary`'s rule and
+# must stay it: every shape the name arrived in has a reader. The set is bound
+# from `READABLE_SHAPES` rather than written out here, so the filter cannot say
+# one thing while the `readable` flag beside it says another.
+READABLE_ONLY_CLAUSE: Final = (
+    "arrayAll(arrived -> has({readable_shapes:Array(String)}, arrived), shapes)"
+)
 
 
 def _branch(table: str, shape: str) -> str:
@@ -72,10 +110,11 @@ def _branch(table: str, shape: str) -> str:
         toUnixTimestamp64Nano(timestamp) AS observed_nanos
     FROM {table}
     WHERE tenant_id = {{tenant_id:String}}
-      AND project_id = {{project_id:String}}{_WINDOW}"""
+      AND project_id = {{project_id:String}}
+      {_NAME_MATCH_PLACEHOLDER}{_WINDOW}"""
 
 
-_EVERY_SHAPE: Final = "\n    UNION ALL".join(
+_EVERY_BRANCH: Final = "\n    UNION ALL".join(
     (
         _branch("metrics_gauge", SHAPE_GAUGE),
         _branch("metrics_sum", SHAPE_SUM),
@@ -104,12 +143,31 @@ SELECT
     uniqExact(series_hash) AS series,
     uniqExact((series_hash, observed_nanos)) AS points,
     toUnixTimestamp64Nano(max(timestamp)) AS latest_nanos
-FROM ({_EVERY_SHAPE}
+FROM ({_EVERY_BRANCH}
 )
 GROUP BY metric_name
+{_NARROWING_PLACEHOLDER}
 ORDER BY points DESC, metric_name
 LIMIT {{limit:UInt32}}
 """
+
+
+def catalogue_sql(*, name_match: bool, shape: bool, readable_only: bool) -> str:
+    """The catalogue statement, narrowed to what the caller asked for.
+
+    Every predicate lives inside the statement. `LIMIT` cuts the catalogue at
+    `service.MAX_METRICS`, so narrowing the rows that came back would answer
+    "the gauges among the busiest five hundred" — and `truncated` beside it
+    would still say the cut was about traffic.
+    """
+    grouped = [
+        clause
+        for clause, asked in ((SHAPE_CLAUSE, shape), (READABLE_ONLY_CLAUSE, readable_only))
+        if asked
+    ]
+    return CATALOGUE_SQL.replace(
+        _NAME_MATCH_PLACEHOLDER, NAME_MATCH_CLAUSE if name_match else ""
+    ).replace(_NARROWING_PLACEHOLDER, f"HAVING {' AND '.join(grouped)}" if grouped else "")
 
 
 # A histogram's distribution over the window, one row per bucket layout.

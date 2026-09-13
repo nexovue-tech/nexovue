@@ -22,6 +22,7 @@ import { infrastructureFilters } from "@/features/infrastructure/filters";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
 import { LogsScreen, scopedService } from "@/features/logs/LogsScreen";
 import { severityFilterById } from "@/features/logs/severity";
+import { metricFilters } from "@/features/metrics/filters";
 import { MetricsScreen } from "@/features/metrics/MetricsScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
 import { OverviewScreen } from "@/features/overview/OverviewScreen";
@@ -187,9 +188,11 @@ const metricsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/metrics",
   component: MetricsScreen,
-  // The chosen metric lives in the address bar, so "look at this one" is a link
-  // somebody can paste rather than a click somebody has to describe.
+  // The chosen metric and the filters both live in the address bar, so "look at
+  // this one" and "look at these" are links somebody can paste rather than
+  // clicks somebody has to describe.
   validateSearch: (search: Record<string, unknown>) => ({
+    ...metricFilters(search),
     ...(typeof search.metric === "string" && search.metric ? { metric: search.metric } : {}),
   }),
 });

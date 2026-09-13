@@ -456,3 +456,84 @@ async def test_a_service_sending_no_histogram_has_no_panel_rather_than_an_empty_
     assert answer.available is False
     assert answer.columns == []
     assert answer.bounds == []
+
+
+# ------------------------------------------------ the narrowed catalogue
+
+
+async def _narrowed(
+    clickhouse: AsyncClient,
+    reporting: tuple[str, str],
+    **narrowing: object,
+) -> MetricCatalogueResponse:
+    tenant_id, project_id = reporting
+    start, end = _window()
+    return await service.list_metrics(
+        TenantScopedRepository(clickhouse, tenant_id=tenant_id),
+        project_id=project_id,
+        from_time=start,
+        to_time=end,
+        **narrowing,  # type: ignore[arg-type]
+    )
+
+
+async def test_every_narrowing_of_the_catalogue_parses(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    """The offline suite drives a fake store and cannot parse SQL.
+
+    `catalogue_sql` splices clauses into a five-table union by string
+    replacement, so a misplaced `HAVING` or a stray `AND` is a runtime error
+    that every offline test would pass straight over. This asks ClickHouse.
+    """
+    for narrowing in (
+        {"name_match": "http"},
+        {"shape": "histogram"},
+        {"readable_only": True},
+        {"name_match": "http", "shape": "histogram", "readable_only": True},
+    ):
+        answer = await _narrowed(clickhouse, reporting, **narrowing)
+
+        assert isinstance(answer.metrics, list), f"{narrowing} did not return a catalogue"
+
+
+async def test_narrowing_by_name_returns_a_subset_and_only_matches(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    whole = await _narrowed(clickhouse, reporting)
+    matching = await _narrowed(clickhouse, reporting, name_match="http")
+
+    assert whole.metrics, "the busiest project reported no metrics at all"
+    assert len(matching.metrics) <= len(whole.metrics)
+    assert all("http" in metric.metric_name for metric in matching.metrics)
+
+
+async def test_narrowing_by_shape_keeps_a_name_that_arrived_in_two(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    """Shape is a `HAVING` over the grouped shapes, never a `WHERE` over rows.
+
+    Dropping rows would drop the other shapes a name arrived in, and `readable`
+    — computed from whatever survived — would then offer a chart that cannot be
+    drawn. `db.client.operation.duration` really does arrive as both a gauge and
+    a histogram in the development store, which is what makes this checkable.
+    """
+    histograms = await _narrowed(clickhouse, reporting, shape="histogram")
+
+    mixed = [metric for metric in histograms.metrics if len(metric.shapes) > 1]
+    if not mixed:
+        pytest.skip("no name in this store arrived in more than one shape")
+
+    for metric in mixed:
+        assert "histogram" in metric.shapes
+        # The other shape survived the filter, so `readable` still sees it.
+        assert metric.readable is all(shape in queries.READABLE_SHAPES for shape in metric.shapes)
+
+
+async def test_readable_only_returns_nothing_this_console_cannot_draw(
+    clickhouse: AsyncClient, reporting: tuple[str, str]
+) -> None:
+    readable = await _narrowed(clickhouse, reporting, readable_only=True)
+
+    assert readable.metrics, "the store holds histograms, so something must be drawable"
+    assert all(metric.readable for metric in readable.metrics)

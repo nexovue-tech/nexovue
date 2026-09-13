@@ -36,24 +36,44 @@ async def list_metrics(
     project_id: str,
     from_time: datetime,
     to_time: datetime,
+    name_match: str | None = None,
+    shape: str | None = None,
+    readable_only: bool = False,
 ) -> MetricCatalogueResponse:
     """Every metric name this project reported in the window, busiest first.
 
     Busiest first because a catalogue is read to find something, and the thing
     somebody is looking for is almost never the quietest name in it.
+
+    The three filters reach the statement rather than the answer: `MAX_METRICS`
+    cuts the list, and a filter applied after the cut answers about the page.
+    Every binding here is added only when its clause was spliced in, so the two
+    cannot come apart.
     """
     received_from, received_to = receive_window(from_time, to_time)
+    parameters: dict[str, Any] = {
+        "project_id": project_id,
+        "from_time": from_time,
+        "to_time": to_time,
+        "received_from": received_from,
+        "received_to": received_to,
+        # One past the cap, so a full catalogue is told apart from a cut one.
+        "limit": MAX_METRICS + 1,
+    }
+    if name_match:
+        parameters["name_match"] = name_match
+    if shape:
+        parameters["shape"] = shape
+    if readable_only:
+        parameters["readable_shapes"] = sorted(queries.READABLE_SHAPES)
+
     rows = await repository.query(
-        queries.CATALOGUE_SQL,
-        {
-            "project_id": project_id,
-            "from_time": from_time,
-            "to_time": to_time,
-            "received_from": received_from,
-            "received_to": received_to,
-            # One past the cap, so a full catalogue is told apart from a cut one.
-            "limit": MAX_METRICS + 1,
-        },
+        queries.catalogue_sql(
+            name_match=bool(name_match),
+            shape=bool(shape),
+            readable_only=readable_only,
+        ),
+        parameters,
     )
 
     return MetricCatalogueResponse(

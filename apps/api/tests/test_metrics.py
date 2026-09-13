@@ -10,12 +10,12 @@ isolation test below fails rather than quietly passing.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, get_args
 
 import pytest
 
 from nexovue_api.data.clickhouse.base import TENANT_BINDING, TenantScopedRepository
-from nexovue_api.metrics import queries, service
+from nexovue_api.metrics import queries, router, service
 from nexovue_api.metrics.schemas import MetricCatalogueResponse
 
 TENANT_A: Final = "org-a"
@@ -101,11 +101,18 @@ def _store(rows: list[tuple[Any, ...]] | None = None) -> FakeMetricStore:
 
 
 async def _catalogue(
-    store: FakeMetricStore, tenant: str = TENANT_A, project: str = PROJECT_A
+    store: FakeMetricStore,
+    tenant: str = TENANT_A,
+    project: str = PROJECT_A,
+    **narrowing: Any,
 ) -> MetricCatalogueResponse:
     start, end = _window()
     return await service.list_metrics(
-        _repository(tenant, store), project_id=project, from_time=start, to_time=end
+        _repository(tenant, store),
+        project_id=project,
+        from_time=start,
+        to_time=end,
+        **narrowing,
     )
 
 
@@ -255,6 +262,111 @@ async def test_the_window_is_bounded_on_our_receive_clock_as_well() -> None:
 
     assert store.last_parameters["received_from"] < store.last_parameters["from_time"]
     assert store.last_parameters["received_to"] > store.last_parameters["to_time"]
+
+
+# ----------------------------------------------------------------------- filters
+#
+# All three predicates are inside the statement, ahead of its `LIMIT`. The
+# catalogue is cut at `MAX_METRICS`, so asking "which of these are gauges" of the
+# rows that came back would answer "the gauges among the busiest five hundred" —
+# and `truncated` beside it would still claim the cut was about traffic.
+
+
+def test_an_unfiltered_catalogue_carries_none_of_the_predicates() -> None:
+    """A spliced clause with nothing bound to it is a failed read, not a filter."""
+    statement = queries.catalogue_sql(name_match=False, shape=False, readable_only=False)
+
+    assert "name_match:String" not in statement
+    assert "HAVING" not in statement
+
+
+async def test_an_unfiltered_catalogue_binds_none_of_them_either() -> None:
+    store = _store()
+
+    await _catalogue(store)
+
+    for binding in ("name_match", "shape", "readable_shapes"):
+        assert binding not in store.last_parameters
+
+
+def test_a_typed_name_narrows_every_branch_before_anything_is_grouped() -> None:
+    """Five tables, five predicates — and all five ahead of the group-by.
+
+    Matched anywhere in the name and case-insensitively: somebody looking for
+    the queue metrics types "queue", not the prefix of a name they have not
+    read yet.
+    """
+    statement = queries.catalogue_sql(name_match=True, shape=False, readable_only=False)
+
+    assert statement.count("positionCaseInsensitive(metric_name") == 5
+    assert statement.index("positionCaseInsensitive") < statement.index("GROUP BY metric_name")
+
+
+async def test_a_typed_name_reaches_the_statement_rather_than_the_answer() -> None:
+    store = _store()
+
+    await _catalogue(store, name_match="queue")
+
+    assert store.last_parameters["name_match"] == "queue"
+    assert "name_match:String" in store.statements[-1]
+
+
+def test_the_shape_filter_asks_the_grouped_shapes_and_never_the_rows() -> None:
+    """Narrowing the rows would hide the conflict this screen exists to show.
+
+    A name sent as a histogram and a summary would come back from a row-level
+    filter looking like a clean histogram — and `readable`, computed from the
+    shapes that survived, would then offer a chart that cannot be drawn.
+    """
+    statement = queries.catalogue_sql(name_match=False, shape=True, readable_only=False)
+
+    assert "HAVING has(shapes, {shape:String})" in statement
+    assert statement.index("HAVING") > statement.index("GROUP BY metric_name")
+    assert statement.index("HAVING") < statement.index("LIMIT")
+
+
+def test_readable_only_is_the_same_rule_the_readable_flag_is_computed_from() -> None:
+    """The filter and the column beside it must not be able to disagree.
+
+    `_to_summary` calls a name readable when every shape it arrived in has a
+    reader; this clause says the same thing in SQL, over the set that rule uses.
+    """
+    statement = queries.catalogue_sql(name_match=False, shape=False, readable_only=True)
+
+    assert "arrayAll(" in statement
+    assert "readable_shapes:Array(String)" in statement
+
+
+async def test_readable_only_binds_the_readable_shapes_themselves() -> None:
+    """Bound rather than written into the statement, so adding a reader to
+    `READABLE_SHAPES` widens the filter with it."""
+    store = _store()
+
+    await _catalogue(store, readable_only=True)
+
+    assert store.last_parameters["readable_shapes"] == sorted(queries.READABLE_SHAPES)
+
+
+def test_two_narrowings_are_one_having_and_not_two() -> None:
+    statement = queries.catalogue_sql(name_match=True, shape=True, readable_only=True)
+
+    assert statement.count("HAVING") == 1
+    assert " AND " in statement[statement.index("HAVING") :]
+
+
+def test_no_narrowing_costs_the_statement_its_tenant_binding() -> None:
+    """Five branches, five predicates, whatever was spliced into them."""
+    for name_match, shape, readable_only in ((False, False, False), (True, True, True)):
+        statement = queries.catalogue_sql(
+            name_match=name_match, shape=shape, readable_only=readable_only
+        )
+        assert statement.count(TENANT_BINDING) == 5
+
+
+def test_the_api_accepts_exactly_the_shapes_the_catalogue_can_report() -> None:
+    """A shape the reader can pick and the store cannot produce is an empty
+    catalogue that reads as "this project reports no gauges"."""
+    assert get_args(router.MetricShape) == queries.ALL_SHAPES
 
 
 # ------------------------------------------------------- estimating off buckets

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Path, Query
 
@@ -31,6 +31,17 @@ ToTime = Annotated[datetime | None, Query(alias="to")]
 MetricName = Annotated[str, Path(min_length=1, max_length=255)]
 ServiceName = Annotated[str, Query(min_length=1, max_length=255)]
 
+# The shapes a name can arrive in. Enumerated so a typo is refused at the edge
+# rather than answering with an empty catalogue a reader would take for "this
+# project reports no gauges". `test_metrics.py` holds these to `queries`.
+MetricShape = Literal["gauge", "sum", "histogram", "exponential histogram", "summary"]
+NameMatch = Annotated[
+    str | None,
+    Query(max_length=255, description="Only names containing this text, case-insensitively"),
+]
+Shape = Annotated[MetricShape | None, Query(description="Only names that arrived in this shape")]
+ReadableOnly = Annotated[bool, Query(description="Only names this console can draw")]
+
 
 @router.get("", summary="Every metric this project reported, busiest first")
 async def list_metrics(
@@ -40,6 +51,9 @@ async def list_metrics(
     project_id: ProjectId,
     from_time: FromTime = None,
     to_time: ToTime = None,
+    name: NameMatch = None,
+    shape: Shape = None,
+    readable_only: ReadableOnly = False,
 ) -> MetricCatalogueResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
@@ -48,6 +62,9 @@ async def list_metrics(
         project_id=str(project.id),
         from_time=window_start,
         to_time=window_end,
+        name_match=name,
+        shape=shape,
+        readable_only=readable_only,
     )
 
 

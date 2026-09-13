@@ -1,8 +1,13 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
+import type { FilterValues } from "@/shared/components/FilterBar";
+import { FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { filterParams, withFilter } from "@/shared/filters";
 import { formatBound } from "@/shared/format/metric-unit";
 import { formatCount, UNKNOWN } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
@@ -11,7 +16,11 @@ import type { HistogramLayout, HistogramResponse, MetricSummary } from "./api";
 import { useHistogram, useMetricCatalogue } from "./api";
 
 import { estimateReadings, histogramBars, meanOf } from "./buckets";
+import { METRIC_FILTERS, METRIC_NAME_KEY, metricFilters, metricsNarrowed } from "./filters";
 import { HistogramChart } from "./HistogramChart";
+
+/** Typing a character must not send a request; the pause before the next one may. */
+const NAME_DEBOUNCE_MS = 300;
 
 /**
  * What this project actually reports, and the distribution behind one of them.
@@ -25,6 +34,9 @@ import { HistogramChart } from "./HistogramChart";
  * being hidden. Hiding it would answer the screen's own question wrongly: it *is* in
  * here, and a customer paying to store it should be told that before being told we
  * cannot draw it yet.
+ *
+ * All three filters go to the server, because the catalogue is capped: see
+ * `filters.ts`.
  */
 export function MetricsScreen() {
   const { projectId, rangeId } = useSelection();
@@ -33,18 +45,25 @@ export function MetricsScreen() {
 
   const search = useSearch({ from: "/shell/metrics" });
   const selected = typeof search.metric === "string" ? search.metric : undefined;
-
-  const catalogue = useMetricCatalogue(projectId, timeWindow);
-  const histogram = useHistogram(projectId, selected, timeWindow);
+  const filters = useMemo(() => metricFilters(search), [search]);
 
   // `replace`: picking through a catalogue is browsing, and the back button belongs
   // to the screen somebody arrived from rather than to every name they tried.
-  const select = (metricName: string | undefined) =>
+  // The chosen metric and the filters travel together — narrowing the list is not
+  // a reason to close the distribution somebody is reading.
+  const show = (next: FilterValues, metricName = selected) =>
     void navigate({
       to: "/metrics",
-      search: () => (metricName ? { metric: metricName } : {}),
+      search: () => ({ ...filterParams(next), ...(metricName ? { metric: metricName } : {}) }),
       replace: true,
     });
+
+  const [typedName, onTypedName] = useTypedName(filters[METRIC_NAME_KEY] ?? "", (name) =>
+    show(withFilter(filters, METRIC_NAME_KEY, name)),
+  );
+
+  const catalogue = useMetricCatalogue(projectId, timeWindow, filterParams(filters));
+  const histogram = useHistogram(projectId, selected, timeWindow);
 
   return (
     <MetricsView
@@ -56,12 +75,74 @@ export function MetricsScreen() {
       error={catalogue.error}
       onRetry={() => void catalogue.refetch()}
       selected={selected}
-      onSelect={select}
+      onSelect={(metricName) => show(filters, metricName)}
+      filters={filters}
+      typedName={typedName}
+      onTypedName={onTypedName}
+      onFilterChange={(key, value) => show(withFilter(filters, key, value))}
+      onClearFilters={() => show({})}
       histogram={histogram.data}
       histogramPending={histogram.isFetching}
       histogramError={histogram.isError}
     />
   );
+}
+
+/**
+ * The name being typed, handed to the URL once typing stops.
+ *
+ * **Held here and not read back out of the address bar.** The router applies a
+ * navigation inside a React transition, and a text input rendered from state a
+ * transition owns shows the value it had before the keystroke — fast typing
+ * loses characters. The box is local; the filter is still the URL's, arriving a
+ * beat later. That beat is also what keeps a keystroke from becoming a
+ * group-by across five metric tables.
+ */
+function useTypedName(
+  urlName: string,
+  onSettled: (name: string | undefined) => void,
+): [string, (value: string) => void] {
+  const [typed, setTyped] = useState(urlName);
+  const [knownUrlName, setKnownUrlName] = useState(urlName);
+  const settled = useDebounced(typed, NAME_DEBOUNCE_MS);
+  const sent = useRef(urlName);
+
+  // Held in a ref and refreshed first, so the settling below calls the newest
+  // one: it closes over the other filters, and a shape chosen mid-word must not
+  // be undone by a callback captured before it.
+  const commit = useRef(onSettled);
+  useEffect(() => {
+    commit.current = onSettled;
+  });
+
+  // The URL changed under the box — cleared from the chip row, or a link that
+  // arrived already narrowed. Adjusted while rendering rather than in an effect,
+  // which would paint the stale value first.
+  if (urlName !== knownUrlName) {
+    setKnownUrlName(urlName);
+    setTyped(urlName);
+    sent.current = urlName;
+  }
+
+  useEffect(() => {
+    if (settled === sent.current) return;
+    sent.current = settled;
+    commit.current(settled || undefined);
+  }, [settled]);
+
+  return [typed, setTyped];
+}
+
+/** Holds the last value still, so a keystroke does not become a request. */
+function useDebounced(value: string, delayMs: number): string {
+  const [settled, setSettled] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+
+  return settled;
 }
 
 export interface MetricsViewProps {
@@ -74,6 +155,12 @@ export interface MetricsViewProps {
   onRetry: () => void;
   selected?: string;
   onSelect: (metricName: string | undefined) => void;
+  filters: FilterValues;
+  /** What is in the search box, which leads the URL by one debounce. */
+  typedName: string;
+  onTypedName: (value: string) => void;
+  onFilterChange: (key: string, value: string | undefined) => void;
+  onClearFilters: () => void;
   histogram?: HistogramResponse;
   histogramPending: boolean;
   histogramError: boolean;
@@ -90,18 +177,50 @@ export function MetricsView({
   onRetry,
   selected,
   onSelect,
+  filters,
+  typedName,
+  onTypedName,
+  onFilterChange,
+  onClearFilters,
   histogram,
   histogramPending,
   histogramError,
 }: MetricsViewProps) {
+  // The typed name counts as narrowing the moment it is typed, not when it
+  // reaches the URL: otherwise the empty state reached by typing blames the
+  // project for a filter the reader can see in the box.
+  const narrowed = metricsNarrowed(filters) || typedName !== "";
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <header className="shrink-0 px-4 pt-5 pb-3">
         <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Metrics</h1>
         <p className="mt-1 text-ink-dim text-sm">
-          Every metric this project reported over the last {windowLabel}, busiest first.
+          {narrowed
+            ? `The metrics matching these filters, of everything reported over the last ${windowLabel}.`
+            : `Every metric this project reported over the last ${windowLabel}, busiest first.`}
         </p>
       </header>
+
+      {/* Its own row above the declared controls: `FilterBar` renders a select or
+          a toggle, and three hundred names are typed at rather than picked from. */}
+      <div className="shrink-0 px-4 pb-2">
+        <input
+          type="search"
+          value={typedName}
+          onChange={(event) => onTypedName(event.target.value)}
+          placeholder="Search metric names"
+          aria-label="Search metric names"
+          className="w-full max-w-sm rounded-sm border border-line bg-surface px-2.5 py-1 font-mono text-ink text-xs outline-none placeholder:text-ink-dim hover:border-line-strong focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
+        />
+      </div>
+
+      <FilterBar
+        definitions={METRIC_FILTERS}
+        values={filters}
+        onChange={onFilterChange}
+        onClearAll={onClearFilters}
+      />
 
       {isPending ? (
         <div className="px-4">
@@ -116,10 +235,7 @@ export function MetricsView({
           />
         </div>
       ) : metrics.length === 0 ? (
-        <EmptyState
-          title="No metrics in this window"
-          detail="Nothing in this project sent a metric over this period. An OpenTelemetry SDK exports metrics separately from traces, so a service can be tracing happily and reporting no metrics at all — or widen the time range if you expected something older."
-        />
+        <EmptyCatalogue narrowed={narrowed} onClearFilters={onClearFilters} />
       ) : (
         <>
           {selected ? (
@@ -134,14 +250,55 @@ export function MetricsView({
 
           <Catalogue metrics={metrics} selected={selected} onSelect={onSelect} />
 
+          {/* The cap applies after the filters, so a narrowed list that was still
+              cut was cut on what matched — saying "this project reports more"
+              there would blame the project for the filter's own ceiling. */}
           {truncated ? (
             <p className="shrink-0 px-4 py-3 text-ink-dim text-xs">
-              This project reports more metric names than this list holds. The busiest are shown.
+              {narrowed
+                ? "More metric names match these filters than this list holds. The busiest are shown."
+                : "This project reports more metric names than this list holds. The busiest are shown."}
             </p>
           ) : null}
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Why the catalogue is empty, which is two situations and not one.
+ *
+ * "Nothing matched what you asked for" and "this project has never reported a
+ * metric" ask opposite things of the reader, and one sentence for both sends
+ * half of them to instrument a service that is already instrumented.
+ */
+function EmptyCatalogue({
+  narrowed,
+  onClearFilters,
+}: {
+  narrowed: boolean;
+  onClearFilters: () => void;
+}) {
+  if (narrowed) {
+    return (
+      <EmptyState
+        title="No metrics match these filters"
+        detail="Nothing this project reported over this period matches what you asked for. Drop a filter, or widen the time range."
+        action={
+          <Button variant="secondary" onClick={onClearFilters}>
+            Clear all filters
+          </Button>
+        }
+      />
+    );
+  }
+
+  return (
+    <EmptyState
+      title="No metrics in this window"
+      detail="Nothing in this project sent a metric over this period. An OpenTelemetry SDK exports metrics separately from traces, so a service can be tracing happily and reporting no metrics at all — or widen the time range if you expected something older."
+    />
   );
 }
 

@@ -13,6 +13,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import type { HistogramLayout, HistogramResponse, MetricSummary } from "./api";
+import { METRIC_NAME_KEY, metricFilters, metricsNarrowed } from "./filters";
 import type { MetricsViewProps } from "./MetricsScreen";
 import { MetricsView } from "./MetricsScreen";
 
@@ -96,6 +97,11 @@ const BASE: MetricsViewProps = {
   isError: false,
   onRetry: () => {},
   onSelect: () => {},
+  filters: {},
+  typedName: "",
+  onTypedName: () => {},
+  onFilterChange: () => {},
+  onClearFilters: () => {},
   histogramPending: false,
   histogramError: false,
 };
@@ -275,3 +281,121 @@ describe("two bucket layouts are never drawn as one", () => {
     expect(container.querySelectorAll('svg[role="img"]')).toHaveLength(2);
   });
 });
+
+describe("what the URL holds", () => {
+  it("reads all three filters back out of a shared link", async () => {
+    expect(metricFilters({ name: "queue", shape: "gauge", readable_only: "true" })).toEqual({
+      name: "queue",
+      shape: "gauge",
+      readable_only: "true",
+    });
+  });
+
+  it("treats a blank name as not filtering", async () => {
+    // `?name=` reads as a filter in the address bar and is not one.
+    expect(metricFilters({ name: "   " })).toEqual({});
+  });
+
+  it("ignores the chosen metric, which is a selection and not a filter", async () => {
+    expect(metricFilters({ metric: "http.server.duration" })).toEqual({});
+  });
+
+  it("counts a typed name as narrowing, which the declared filters alone do not", async () => {
+    expect(metricsNarrowed({})).toBe(false);
+    expect(metricsNarrowed({ [METRIC_NAME_KEY]: "queue" })).toBe(true);
+    expect(metricsNarrowed({ readable_only: "true" })).toBe(true);
+  });
+});
+
+describe("asking the catalogue a question", () => {
+  it("offers the five shapes the API accepts, spelled its way", async () => {
+    const container = await render();
+    const shapes = [...(container.querySelector("select")?.options ?? [])].map(
+      (option) => option.value,
+    );
+
+    expect(shapes).toEqual(["", "gauge", "sum", "histogram", "exponential histogram", "summary"]);
+  });
+
+  it("reports every keystroke, including the one that empties the box", async () => {
+    const typed: string[] = [];
+    const container = await render({
+      typedName: "queue",
+      onTypedName: (value) => typed.push(value),
+    });
+
+    type(searchBox(container), "queue.depth");
+    type(searchBox(container), "");
+
+    expect(typed).toEqual(["queue.depth", ""]);
+  });
+
+  it("shows the applied filter in the box, so a shared link explains itself", async () => {
+    const container = await render({
+      filters: { [METRIC_NAME_KEY]: "queue" },
+      typedName: "queue",
+    });
+
+    expect(searchBox(container).value).toBe("queue");
+  });
+
+  it("says a filter matched nothing rather than that nothing ever arrived", async () => {
+    // Opposite actions: one asks the reader to drop a filter, the other to go
+    // and instrument a service that is already instrumented.
+    const text = await readable({ metrics: [], filters: { shape: "gauge" } });
+
+    expect(text).toContain("No metrics match these filters");
+    expect(text).not.toContain("separately from traces");
+  });
+
+  it("counts a name still settling as a filter, not as a project with no metrics", async () => {
+    // The name reaches the URL a debounce after it is typed. Until it does,
+    // `filters` holds nothing and only the box knows a filter is applied.
+    const text = await readable({ metrics: [], filters: {}, typedName: "zzz" });
+
+    expect(text).toContain("No metrics match these filters");
+  });
+
+  it("offers the way out of a filter that matched nothing", async () => {
+    let cleared = 0;
+    const container = await render({
+      metrics: [],
+      filters: { shape: "gauge" },
+      onClearFilters: () => {
+        cleared += 1;
+      },
+    });
+
+    const clear = [...container.querySelectorAll("button")].find((button) =>
+      (button.textContent ?? "").includes("Clear all filters"),
+    );
+    act(() => clear?.click());
+
+    expect(cleared).toBe(1);
+  });
+
+  it("still explains an empty window when nothing was asked of it", async () => {
+    const text = await readable({ metrics: [] });
+
+    expect(text).toContain("No metrics in this window");
+  });
+});
+
+function searchBox(container: HTMLElement): HTMLInputElement {
+  const found = container.querySelector<HTMLInputElement>('input[type="search"]');
+  if (!found) throw new Error("no search box rendered");
+  return found;
+}
+
+/**
+ * React tracks an input's value and drops an event whose value it believes it
+ * already has, so a plain assignment here would report the first keystroke and
+ * silently swallow the one that clears the box.
+ */
+function type(input: HTMLInputElement, value: string): void {
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  act(() => {
+    setValue?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}

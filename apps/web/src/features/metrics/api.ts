@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
+import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
 
 /**
@@ -78,19 +79,35 @@ export interface HistogramResponse {
   merged: boolean;
 }
 
-export const metricsQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["metrics", "catalogue", projectId, timeWindow.from, timeWindow.to] as const;
+export const metricsQueryKey = (projectId: string, timeWindow: TimeWindow, narrowing: string) =>
+  ["metrics", "catalogue", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
 
 export const histogramQueryKey = (projectId: string, metricName: string, timeWindow: TimeWindow) =>
   ["metrics", "histogram", projectId, metricName, timeWindow.from, timeWindow.to] as const;
 
-export function useMetricCatalogue(projectId: string | undefined, timeWindow: TimeWindow) {
+/**
+ * The catalogue, narrowed by whatever the URL asks for.
+ *
+ * `narrowing` reaches the request rather than the rows that come back: the read
+ * is cut at five hundred names, and a filter applied after that cut answers
+ * about the page. See `filters.ts`.
+ */
+export function useMetricCatalogue(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+  narrowing: Record<string, string>,
+) {
   return useQuery({
-    queryKey: metricsQueryKey(projectId ?? "", timeWindow),
+    queryKey: metricsQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
       apiClient.get<MetricCatalogueResponse>("metrics", {
-        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        searchParams: {
+          project_id: projectId,
+          from: timeWindow.from,
+          to: timeWindow.to,
+          ...narrowing,
+        },
         signal,
       }),
   });
