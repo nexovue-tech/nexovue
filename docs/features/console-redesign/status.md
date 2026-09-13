@@ -11,11 +11,13 @@ no deployment, so "implemented" is as far as a feature goes here.
 opt-in billable mail suite), 805 web across 64 files, 120 browser-SDK. The task plan's Outcome
 carries the full record of what each block planned against what it cost.
 
-**One item is not built and is not quietly ticked: the conditional duration heatmap (OD7).** It was
-on `plan.md` and never became a task in any expansion — the one thing the task gate dropped rather
-than deleted on purpose. `metrics_histogram` now has a reader and a bucket merge, so what it would
-need exists; what is missing is the panel inside Dashboard, drawn only where a customer sends OTLP
-histograms. It needs its own task before anyone calls this feature finished.
+**Every item on `plan.md` is now built**, including the conditional duration heatmap (OD7) that was
+carried open rather than quietly ticked.
+
+Closing it found two defects nothing else would have: `TELEMETRY_PATHS` named `/errors` and
+`/database` while the routers are mounted at `/error-groups` and `/dbstats`, so two ClickHouse
+readers had run on the default tier with no concurrency cap and nothing reported it; and fixing that
+exposed a cap of four sitting under a screen that asks for five.
 
 ---
 

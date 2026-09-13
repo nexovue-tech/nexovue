@@ -679,13 +679,18 @@ Clean. That is not the same as a design QA of every rebuilt screen, which T44 st
 
 #### Left for the founder
 
-- **Two duplicate-weighted `avg()` sparkline means** remain, at about 22% error. Named in the
-  commits; not fixed here because the fix changes what two screens draw.
+- ~~Two duplicate-weighted `avg()` sparkline means~~ — **fixed 2026-09-13.** The note said 22%; the
+  measured error is about 8%, and only while a redelivery overlaps. Recorded because the number in
+  the note was wrong, not only because the defect is gone.
+- ~~Whether the telemetry tier is sized for a dashboard~~ — **answered 2026-09-13.** It was not: the
+  cap sat at four while service detail asked for five, which only became visible once two ClickHouse
+  routers were moved onto the tier that was supposed to hold them. Now eight, tied by a test to the
+  largest screen's fan-out.
+- ~~The conditional duration heatmap (OD7)~~ — **built 2026-09-13.**
 - **A warning tier for services**, still undecided, still blocking the shape distinction.
 - **A "has this project ever reported" signal**, which would replace a heuristic.
-- **Whether the telemetry tier is sized for a dashboard.** An idle Overview spends 30 of its 60
-  requests a minute re-bucketing the live window, and two screens now gate a read behind another
-  purely because the fifth concurrent request is refused rather than queued. That is a workaround in
-  two places, and it will be a third.
+- **A bounded wait instead of a refusal on the telemetry tier.** Raising the cap fixes today's
+  screens; it does not change that a legitimate burst one over the cap is answered with a 429 rather
+  than a queue. The next screen to grow past eight meets the same wall.
 - **The insight engine.** Findings is built and feeds on nothing. Until it exists the healthy state is
   the whole screen, which is why Overview holds `/`.
