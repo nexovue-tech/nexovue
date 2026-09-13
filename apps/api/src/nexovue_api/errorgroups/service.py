@@ -8,7 +8,7 @@ and digging the stacktrace out of the JSON it was left in.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 from nexovue_api import rollup
@@ -221,21 +221,50 @@ async def group_trends(
         queries.group_trends_sql(one_service=service_name is not None), parameters
     )
 
-    by_group: dict[str, list[GroupTrendPoint]] = defaultdict(list)
+    counted: dict[str, dict[datetime, int]] = defaultdict(dict)
     for row in rows:
-        by_group[values.text(row["group_id"])].append(
-            GroupTrendPoint(
-                bucket=values.nanos_to_datetime(row["bucket_nanos"]),
-                occurrences=int(row["occurrences"]),
-            )
+        counted[values.text(row["group_id"])][values.nanos_to_datetime(row["bucket_nanos"])] = int(
+            row["occurrences"]
         )
 
+    buckets = _buckets_in(from_time, to_time, bucket_seconds)
     return GroupTrendResponse(
         window_start=from_time,
         window_end=to_time,
         bucket_seconds=bucket_seconds,
         groups=[
-            GroupTrend(group_id=group_id, points=points)
-            for group_id, points in sorted(by_group.items())
+            GroupTrend(
+                group_id=group_id,
+                points=[
+                    GroupTrendPoint(bucket=bucket, occurrences=found.get(bucket, 0))
+                    for bucket in buckets
+                ],
+            )
+            for group_id, found in sorted(counted.items())
         ],
     )
+
+
+def _buckets_in(from_time: datetime, to_time: datetime, bucket_seconds: int) -> list[datetime]:
+    """Every bucket in the window, including the ones nothing happened in.
+
+    The statement returns only buckets that hold an occurrence, which for an error group
+    is most of them missing: four exceptions in an hour is four rows, and a sparkline
+    drawn from four points is not a shape — it is four points.
+
+    **A quiet bucket is a real reading here, not an absent one.** Zero errors happened,
+    and that is the shape: four in the first minutes and none since is a group that
+    stopped, which is the opposite claim to four spread evenly. Contrast a duration,
+    where a missing bucket means nothing was measured and the line must break instead.
+    """
+    step = timedelta(seconds=bucket_seconds)
+    start_epoch = int(from_time.timestamp()) // bucket_seconds * bucket_seconds
+    bucket = datetime.fromtimestamp(start_epoch, tz=UTC)
+    if bucket < from_time:
+        bucket += step
+
+    buckets: list[datetime] = []
+    while bucket < to_time:
+        buckets.append(bucket)
+        bucket += step
+    return buckets

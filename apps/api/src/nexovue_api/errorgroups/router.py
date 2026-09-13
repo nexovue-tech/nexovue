@@ -58,27 +58,6 @@ async def list_error_groups(
     )
 
 
-@router.get("/{group_id}", summary="One error group and its most recent instances")
-async def get_error_group(
-    identity: CurrentIdentity,
-    db: DbSession,
-    repository: TenantRepository,
-    group_id: str,
-    project_id: ProjectId,
-    from_time: FromTime = None,
-    to_time: ToTime = None,
-) -> ErrorGroupDetailResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
-    window_start, window_end = resolve_window(from_time, to_time)
-    return await service.get_error_group(
-        repository,
-        project_id=str(project.id),
-        group_id=group_id,
-        from_time=window_start,
-        to_time=window_end,
-    )
-
-
 @router.get("/trend", summary="How often each group happened, bucket by bucket")
 async def group_trends(
     identity: CurrentIdentity,
@@ -95,6 +74,27 @@ async def group_trends(
         repository,
         project_id=str(project.id),
         service_name=service_name,
+        from_time=window_start,
+        to_time=window_end,
+    )
+
+
+@router.get("/{group_id}", summary="One error group and its most recent instances")
+async def get_error_group(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    group_id: str,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+) -> ErrorGroupDetailResponse:
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.get_error_group(
+        repository,
+        project_id=str(project.id),
+        group_id=group_id,
         from_time=window_start,
         to_time=window_end,
     )

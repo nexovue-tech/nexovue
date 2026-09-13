@@ -292,3 +292,49 @@ async def test_a_groups_buckets_sum_to_the_occurrences_its_row_claims(
     assert sum(point.occurrences for point in series.points) == group.occurrences
     # Spread over 80 minutes, so the buckets are not all one.
     assert len(series.points) > 1
+
+
+async def test_a_quiet_bucket_counts_zero_rather_than_going_missing(
+    client: AsyncClient, tenant: str
+) -> None:
+    """Four exceptions in an hour must still draw a shape.
+
+    The statement returns only buckets holding an occurrence, so a sparse group would
+    arrive as four points and render as a rule rather than a line. A quiet bucket is a
+    real reading here — zero errors happened — and leaving it out claims the group was
+    busy throughout when in fact it stopped.
+    """
+    project_id = str(uuid.uuid4())
+    now = datetime.now(UTC)
+    window_start, window_end = now - timedelta(hours=1), now + timedelta(minutes=1)
+
+    # Two occurrences at the very start of the window and nothing since.
+    for index in range(2):
+        await _write_error_at(
+            client,
+            tenant_id=tenant,
+            project_id=project_id,
+            at=now - timedelta(minutes=58 - index),
+            trace=f"{index + 100:032x}",
+        )
+
+    trends = await service.group_trends(
+        TenantScopedRepository(client, tenant_id=tenant),
+        project_id=project_id,
+        service_name=None,
+        from_time=window_start,
+        to_time=window_end,
+    )
+
+    assert len(trends.groups) == 1
+    points = trends.groups[0].points
+
+    # A window of buckets, not the two that hold an occurrence. The exact count follows
+    # from `rollup.trend_bucket_seconds`, which widens the bucket to keep the point count
+    # near sixty — an hour lands around thirty.
+    assert len(points) > 20
+    assert sum(point.occurrences for point in points) == 2
+
+    # The shape is the whole point: busy at the start, silent since.
+    assert sum(point.occurrences for point in points[:5]) == 2
+    assert all(point.occurrences == 0 for point in points[5:])
