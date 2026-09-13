@@ -79,7 +79,9 @@ async def service_trend(
                 bucket=row["bucket"],
                 requests_per_minute=rollup.per_minute(row["request_count"], bucket_minutes),
                 error_rate=rollup.failure_ratio(row["error_count"], row["request_count"]),
+                p50_ms=latency.p50_ms,
                 p95_ms=latency.p95_ms,
+                p99_ms=latency.p99_ms,
             )
         )
 

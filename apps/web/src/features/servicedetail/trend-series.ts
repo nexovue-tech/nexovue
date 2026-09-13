@@ -29,6 +29,8 @@ export interface TrendPlot {
   /** What the numbers are, for the reader and for assistive technology. */
   unit: string;
   seriesToken: SeriesToken | "critical";
+  /** One name per line, in `data`'s own order. */
+  lineNames: string[];
   data: PlotRows;
   /**
    * Every bucket read zero. A line pinned to the axis is indistinguishable from a
@@ -52,7 +54,15 @@ const METRICS: ReadonlyArray<{
   unit: string;
   seriesToken: SeriesToken | "critical";
   zeroText: string;
-  read: (point: TrendPoint) => number;
+  /**
+   * One entry per line, drawn on one scale.
+   *
+   * Latency has three. The shape of a distribution is the three together — a
+   * p99 pulling away from a p95 while the p50 holds is a tail problem, and a
+   * p95 alone cannot tell that from everything getting slower at once. Three
+   * separately scaled charts would each fill their own box and look identical.
+   */
+  lines: ReadonlyArray<{ name: string; read: (point: TrendPoint) => number }>;
 }> = [
   {
     metric: "rate",
@@ -60,7 +70,7 @@ const METRICS: ReadonlyArray<{
     unit: "requests a minute",
     seriesToken: 1,
     zeroText: "No requests in this window.",
-    read: (point) => point.requests_per_minute,
+    lines: [{ name: "Requests/min", read: (point) => point.requests_per_minute }],
   },
   {
     metric: "errorRate",
@@ -69,15 +79,19 @@ const METRICS: ReadonlyArray<{
     seriesToken: "critical",
     zeroText: "Nothing failed in this window.",
     // A fraction on the wire; the axis is read in percent.
-    read: (point) => point.error_rate * PERCENT,
+    lines: [{ name: "Failure share", read: (point) => point.error_rate * PERCENT }],
   },
   {
     metric: "latency",
-    label: "p95 latency",
+    label: "Duration",
     unit: "milliseconds",
     seriesToken: 3,
     zeroText: "No latency recorded in this window.",
-    read: (point) => point.p95_ms,
+    lines: [
+      { name: "p50", read: (point) => point.p50_ms },
+      { name: "p95", read: (point) => point.p95_ms },
+      { name: "p99", read: (point) => point.p99_ms },
+    ],
   },
 ];
 
@@ -92,14 +106,18 @@ export function buildTrendPlots(points: readonly TrendPoint[]): TrendPlot[] {
   const seconds = usable.map((point) => Date.parse(point.bucket) / MS_PER_SECOND);
 
   return METRICS.map((descriptor) => {
-    const values = usable.map((point) => descriptor.read(point));
+    const rows = descriptor.lines.map((line) => usable.map((point) => line.read(point)));
     return {
       metric: descriptor.metric,
       label: descriptor.label,
       unit: descriptor.unit,
       seriesToken: descriptor.seriesToken,
-      data: [seconds, values] as PlotRows,
-      flatAtZero: values.length > 0 && values.every((value) => value === 0),
+      lineNames: descriptor.lines.map((line) => line.name),
+      data: [seconds, ...rows] as PlotRows,
+      // Every line of every bucket. A panel where only the p50 is zero has
+      // something to draw; one where all three are has nothing.
+      flatAtZero:
+        rows.length > 0 && rows.every((row) => row.length > 0 && row.every((v) => v === 0)),
       zeroText: descriptor.zeroText,
     };
   });

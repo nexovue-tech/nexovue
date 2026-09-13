@@ -455,7 +455,7 @@ function TrendSection({
         caption={
           bucketCount === 0
             ? "No buckets in this window — the rollup has nothing for this service yet."
-            : `Request rate, failure share and p95 across ${bucketCount} ${bucketCount === 1 ? "bucket" : "buckets"}. Three charts, because three units.${markers.length > 0 ? ` Dashed rules are deploys of ${serviceName}.` : ""}`
+            : `Request rate, failure share and duration across ${bucketCount} ${bucketCount === 1 ? "bucket" : "buckets"}. Three charts, because three units — and three lines on the last, because the shape of a distribution is p50, p95 and p99 together.${markers.length > 0 ? ` Dashed rules are deploys of ${serviceName}.` : ""}`
         }
       />
       {bucketCount > 0 ? (
@@ -493,7 +493,7 @@ function TrendPanel({
         </p>
       ) : (
         <TrendChart
-          label={plot.label}
+          label={plot.lineNames}
           seriesToken={plot.seriesToken}
           data={plot.data}
           markers={markers}

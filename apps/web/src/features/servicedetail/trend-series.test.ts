@@ -8,7 +8,9 @@ function point(overrides: Partial<TrendPoint> = {}): TrendPoint {
     bucket: "2026-08-30T10:00:00Z",
     requests_per_minute: 12,
     error_rate: 0.05,
+    p50_ms: 12.4,
     p95_ms: 62.9,
+    p99_ms: 188.0,
     ...overrides,
   };
 }
@@ -35,7 +37,41 @@ describe("buildTrendPlots", () => {
   });
 
   it("carries latency through untouched — the API already reports milliseconds", () => {
-    expect(plotsOf([point()]).get("latency")?.data[1]).toEqual([62.9]);
+    expect(plotsOf([point()]).get("latency")?.data[1]).toEqual([12.4]);
+  });
+
+  it("draws the three percentiles on one scale rather than three charts", () => {
+    // The whole reason the panel exists. Three separately scaled charts each
+    // fill their own box and look identical, so a p99 pulling away from a p95 —
+    // a tail problem rather than a general slowdown — is invisible.
+    const latency = plotsOf([point(), point({ bucket: "2026-08-30T10:01:00Z", p99_ms: 900 })]);
+    const plot = latency.get("latency");
+
+    expect(plot?.lineNames).toEqual(["p50", "p95", "p99"]);
+    // One x row, then one row per line, in the same order as the names.
+    expect(plot?.data).toHaveLength(4);
+    expect(plot?.data[1]).toEqual([12.4, 12.4]);
+    expect(plot?.data[2]).toEqual([62.9, 62.9]);
+    expect(plot?.data[3]).toEqual([188.0, 900]);
+  });
+
+  it("keeps the other two panels to a single line", () => {
+    // One unit, one line. A rate panel with three lines would be three
+    // different measurements sharing an axis, which is the thing three separate
+    // panels exist to prevent.
+    const plots = plotsOf([point()]);
+
+    expect(plots.get("rate")?.lineNames).toEqual(["Requests/min"]);
+    expect(plots.get("errorRate")?.lineNames).toEqual(["Failure share"]);
+  });
+
+  it("calls a panel flat only when every line of it is zero", () => {
+    // A service whose p50 is zero and whose tail is not has something to draw.
+    const partlyZero = plotsOf([point({ p50_ms: 0, p95_ms: 0, p99_ms: 40 })]);
+    const wholly = plotsOf([point({ p50_ms: 0, p95_ms: 0, p99_ms: 0 })]);
+
+    expect(partlyZero.get("latency")?.flatAtZero).toBe(false);
+    expect(wholly.get("latency")?.flatAtZero).toBe(true);
   });
 
   it("drops a bucket whose timestamp will not parse rather than plotting it at the epoch", () => {
@@ -68,7 +104,7 @@ describe("describePlot", () => {
     const plot = buildTrendPlots([point()])[2];
     const described = describePlot(plot, "demo-storefront", 1);
 
-    expect(described).toContain("p95 latency");
+    expect(described).toContain("Duration");
     expect(described).toContain("demo-storefront");
     expect(described).toContain("milliseconds");
   });

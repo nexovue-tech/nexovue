@@ -379,7 +379,7 @@ second answer to "how many nodes"; if it proves too slow the fix is a narrower r
       to it. → `route-manifest.test.ts` already fails on a nav path the router does not serve; add
       that every *served* screen with a title is reachable, which is the direction it does not yet
       hold.
-- [ ] **T33** `E` — the duration panel becomes p50/p95/p99. `TrendPoint` gains `p50_ms` and
+- [x] **T33** `E` — the duration panel becomes p50/p95/p99. `TrendPoint` gains `p50_ms` and
       `p99_ms`; `_to_trend_point` stops discarding them; `trend-series.ts` draws three lines on one
       scale. → `test_services_trend.py` for the two new fields, `trend-series.test.ts` that the
       three lines share one axis — three separately-scaled lines would make p50 and p99 look equal.

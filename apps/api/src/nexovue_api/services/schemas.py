@@ -42,14 +42,22 @@ class EndpointHealth(BaseModel):
 class TrendPoint(BaseModel):
     """One bucket of a service's history.
 
-    The same three numbers the aggregate carries, so the sparkline and the row
-    it sits in cannot disagree about what they are showing.
+    The same numbers the aggregate carries, so the sparkline and the row it sits
+    in cannot disagree about what they are showing.
+
+    All three percentiles, because the detail screen draws the distribution's
+    shape rather than one line through it: a p99 pulling away from a p95 while
+    the p50 holds is a tail problem, and a p95 alone cannot tell that from
+    everything getting slower together. `TREND_SQL` has always merged the whole
+    quantile array — until now the service threw two of them away.
     """
 
     bucket: IsoTimestamp
     requests_per_minute: float
     error_rate: float
+    p50_ms: float
     p95_ms: float
+    p99_ms: float
 
 
 class ServiceTrend(BaseModel):

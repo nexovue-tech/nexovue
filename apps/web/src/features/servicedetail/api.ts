@@ -42,7 +42,14 @@ export interface TrendPoint {
   bucket: string;
   requests_per_minute: number;
   error_rate: number;
+  /**
+   * All three, because the duration panel draws the distribution's shape.
+   * A p99 pulling away from a p95 while the p50 holds is a tail problem; a p95
+   * alone cannot tell that from everything getting slower together.
+   */
+  p50_ms: number;
   p95_ms: number;
+  p99_ms: number;
 }
 
 interface ServiceTrend {

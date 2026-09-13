@@ -226,3 +226,47 @@ async def test_a_service_name_from_the_caller_cannot_reach_another_tenants_rows(
     )
 
     assert trend.services == []
+
+
+# --------------------------------------------------- all three percentiles (T33)
+#
+# `TREND_SQL` has always merged the whole quantile array; the mapper used to
+# keep one of the three. The detail screen draws the distribution's shape, and a
+# p95 alone cannot tell a tail problem from everything getting slower together.
+
+
+async def test_each_bucket_carries_the_three_percentiles_the_rollup_merged(
+    client: CapturingClient,
+) -> None:
+    trend = await service.service_trend(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        service_name=None,
+        from_time=WINDOW_START,
+        to_time=WINDOW_END,
+    )
+    first, second = trend.services[0].points
+
+    assert (first.p50_ms, first.p95_ms, first.p99_ms) == (10.0, 50.0, 90.0)
+    assert (second.p50_ms, second.p95_ms, second.p99_ms) == (11.0, 120.0, 200.0)
+
+
+async def test_the_percentiles_are_read_in_the_order_the_column_declares(
+    client: CapturingClient,
+) -> None:
+    """`quantiles(0.5, 0.95, 0.99)` is the column's own declaration.
+
+    The array's positions are the only thing that says which number is which,
+    and an index off by one would put a p99 on the chart under the word p95 —
+    a wrong reading that looks entirely plausible. Ordering is what catches it.
+    """
+    trend = await service.service_trend(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        service_name=None,
+        from_time=WINDOW_START,
+        to_time=WINDOW_END,
+    )
+
+    for point in trend.services[0].points:
+        assert point.p50_ms < point.p95_ms < point.p99_ms
