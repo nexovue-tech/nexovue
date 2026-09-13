@@ -16,6 +16,7 @@ import { ApiError } from "@/shared/api-client";
 
 import type { ErrorGroupDetail, ErrorGroupSummary, ErrorOccurrence } from "./api";
 import { ErrorsView } from "./ErrorsScreen";
+import { errorFilters } from "./filters";
 
 const DECLINED: ErrorGroupSummary = {
   group_id: "82fe32c42683a275",
@@ -140,6 +141,7 @@ async function mountInRouter(element: ReturnType<typeof createElement>): Promise
 function render(overrides: Overrides = {}): Promise<HTMLElement> {
   return mountInRouter(
     createElement(ErrorsView, {
+      filterDefinitions: errorFilters([]),
       filters: {},
       onFilterChange: () => {},
       onClearFilters: () => {},

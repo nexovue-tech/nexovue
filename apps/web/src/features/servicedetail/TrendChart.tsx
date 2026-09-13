@@ -6,6 +6,7 @@ import { useEffect, useRef } from "react";
 
 import { useTheme } from "@/shared/theme/use-theme";
 
+import type { DeployMarker } from "./deploy-markers";
 import type { TrendPlot } from "./trend-series";
 
 /**
@@ -52,6 +53,8 @@ interface ChartPalette {
 
 export interface TrendChartProps {
   plot: TrendPlot;
+  /** Vertical rules across the plot — the deploys inside this window (IA3). */
+  markers?: readonly DeployMarker[];
   /** How a y value is written on the axis — the metric's own unit, not a raw number. */
   formatValue: (value: number) => string;
   /** Read by assistive technology in place of the canvas. */
@@ -68,15 +71,22 @@ export function TrendChart(props: TrendChartProps) {
   return <TrendCanvas key={resolved} {...props} />;
 }
 
-function TrendCanvas({ plot, formatValue, description }: TrendChartProps) {
+function TrendCanvas({ plot, markers = [], formatValue, description }: TrendChartProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const probeRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
-  const latest = useRef({ plot, formatValue });
+  const latest = useRef({ plot, formatValue, markers });
 
   useEffect(() => {
-    latest.current = { plot, formatValue };
-  }, [plot, formatValue]);
+    latest.current = { plot, formatValue, markers };
+  }, [plot, formatValue, markers]);
+
+  // Markers are read through the ref rather than closed over, so a deploy
+  // arriving after the chart was built is drawn on the next frame instead of
+  // remounting the whole plot and losing the cursor.
+  useEffect(() => {
+    chartRef.current?.redraw();
+  }, []);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -89,6 +99,7 @@ function TrendCanvas({ plot, formatValue, description }: TrendChartProps) {
         host.clientWidth,
         (value) => latest.current.formatValue(value),
         latest.current.plot.label,
+        () => latest.current.markers,
       ),
       latest.current.plot.data,
       host,
@@ -151,14 +162,49 @@ function colourOf(element: HTMLElement): string {
   return getComputedStyle(element).color;
 }
 
+/**
+ * One dashed vertical rule per deploy, across the plotting area only.
+ *
+ * uPlot's own `valToPos` places it, so the rule and the series agree about
+ * where a moment is by construction rather than by a second calculation that
+ * could drift from it. `deployMarkers` has already dropped anything outside
+ * the window, so nothing here is clamped to an edge.
+ */
+function drawDeploys(chart: uPlot, markers: readonly DeployMarker[], palette: ChartPalette): void {
+  if (markers.length === 0) return;
+  const context = chart.ctx;
+
+  context.save();
+  context.beginPath();
+  context.rect(chart.bbox.left, chart.bbox.top, chart.bbox.width, chart.bbox.height);
+  context.clip();
+  context.strokeStyle = palette.axis;
+  context.lineWidth = 1;
+  context.setLineDash([3, 3]);
+
+  for (const marker of markers) {
+    const x = Math.round(chart.valToPos(marker.at, "x", true)) + 0.5;
+    context.beginPath();
+    context.moveTo(x, chart.bbox.top);
+    context.lineTo(x, chart.bbox.top + chart.bbox.height);
+    context.stroke();
+  }
+
+  context.restore();
+}
+
 function chartOptions(
   palette: ChartPalette,
   width: number,
   formatValue: (value: number) => string,
   label: string,
+  markers: () => readonly DeployMarker[],
 ): uPlot.Options {
   return {
     width,
+    // Drawn under the series, not over it: a deploy is context for the line,
+    // and a rule painted on top of the reading obscures the thing it explains.
+    hooks: { drawClear: [(chart) => drawDeploys(chart, markers(), palette)] },
     height: CHART_HEIGHT,
     // The heading above the chart names the series; a legend would repeat it.
     legend: { show: false },

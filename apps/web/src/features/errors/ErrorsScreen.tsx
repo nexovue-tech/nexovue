@@ -1,10 +1,10 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
-import type { FilterValues } from "@/shared/components/FilterBar";
+import type { FilterDefinition, FilterValues } from "@/shared/components/FilterBar";
 import { appliedFilters, FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
@@ -22,7 +22,7 @@ import {
   firstWithStacktrace,
   isNewInWindow,
 } from "./error-groups";
-import { ERROR_FILTERS } from "./filters";
+import { errorFilters } from "./filters";
 import type { SymbolicationState } from "./symbolication";
 import { useSymbolication } from "./symbolication";
 
@@ -51,7 +51,8 @@ export function ErrorsScreen() {
 
   // The route's own id, not its path: `/errors` renders inside the shell.
   const search = useSearch({ from: "/shell/errors" });
-  const filters = useMemo(() => parseFilterValues(ERROR_FILTERS, search), [search]);
+  const [definitions, setDefinitions] = useState(() => errorFilters([]));
+  const filters = useMemo(() => parseFilterValues(definitions, search), [definitions, search]);
 
   // `replace`, not push: the back button belongs to the screen a person came
   // from, not to every control they tried on the way.
@@ -61,6 +62,13 @@ export function ErrorsScreen() {
   const [selectedGroupId, setSelectedGroupId] = useState<string>();
 
   const groups = useErrorGroups(projectId, timeWindow, filterParams(filters));
+  const listed = groups.data?.groups ?? [];
+
+  // The options depend on what came back, and what came back depends on the
+  // filters — so the definitions are rebuilt from each answer.
+  useEffect(() => {
+    if (listed.length > 0) setDefinitions(errorFilters(listed));
+  }, [listed]);
   const trendByGroup = useErrorGroupTrend(projectId, timeWindow);
   const detail = useErrorGroup(projectId, selectedGroupId, timeWindow);
 
@@ -73,13 +81,13 @@ export function ErrorsScreen() {
     carrier?.release ?? "",
   );
 
-  const listed = groups.data?.groups ?? [];
   // A group id is derived from the window's rows, so moving the window can retire the
   // selection. Falling back to nothing beats a panel describing a group that is gone.
   const selected = listed.find((group) => group.group_id === selectedGroupId);
 
   return (
     <ErrorsView
+      filterDefinitions={definitions}
       filters={filters}
       onFilterChange={(key, value) => show(withFilter(filters, key, value))}
       onClearFilters={() => show({})}
@@ -103,6 +111,7 @@ export function ErrorsScreen() {
 }
 
 interface ErrorsViewProps {
+  filterDefinitions: readonly FilterDefinition[];
   filters: FilterValues;
   onFilterChange: (key: string, value: string | undefined) => void;
   onClearFilters: () => void;
@@ -128,6 +137,7 @@ interface ErrorsViewProps {
 
 /** Everything the screen shows, with no query client and no clock behind it. */
 export function ErrorsView({
+  filterDefinitions,
   filters,
   onFilterChange,
   onClearFilters,
@@ -148,7 +158,7 @@ export function ErrorsView({
   onDetailRetry,
 }: ErrorsViewProps) {
   const ceiling = trendCeiling(groups, trendByGroup);
-  const narrowed = appliedFilters(ERROR_FILTERS, filters).length > 0;
+  const narrowed = appliedFilters(filterDefinitions, filters).length > 0;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -172,7 +182,7 @@ export function ErrorsView({
         </header>
 
         <FilterBar
-          definitions={ERROR_FILTERS}
+          definitions={filterDefinitions}
           values={filters}
           onChange={onFilterChange}
           onClearAll={onClearFilters}

@@ -270,7 +270,7 @@ response, so a row cannot say what it touched.
 
 #### Tasks
 
-- [ ] **T22** `E` — `traces/schemas.py` + `queries.py` + `service.py`: `SpanDetail` gains
+- [x] **T22** `E` — `traces/schemas.py` + `queries.py` + `service.py`: `SpanDetail` gains
       `exception_type`, `exception_message`, `deployment_version`; `TraceSummary` gains
       `span_services[]` and `span_endpoints[]`, the latter split on `\x1f` into `(service, operation)`
       pairs rather than shipped as joined strings. **Not `worst_severity`** — that is `status_code`.
@@ -279,33 +279,33 @@ response, so a row cannot say what it touched.
       **Also fixes `wireframes-investigation.md`** — the duplicated fragment and line 220 — because
       the same reading produced both, and a document that contradicts its own correction should not
       outlive the commit that discovered it. No test: it is prose.
-- [ ] **T23** `E` — `features/traces/SpanDetail.tsx`: `exception_type` and `exception_message` lead
+- [x] **T23** `E` — `features/traces/SpanDetail.tsx`: `exception_type` and `exception_message` lead
       the pane, above attributes (AC17). `deployment_version` is an entry in it. → `SpanDetail.test.ts`:
       a failed span shows the exception first; a span without one shows no empty section.
-- [ ] **T24** `E` — span `events` as a timeline and `links` as navigation in the same pane.
+- [x] **T24** `E` — span `events` as a timeline and `links` as navigation in the same pane.
       `traces/schemas.py` parses `events` from its JSON string and zips the three `links` arrays into
       one list; a link whose target is not held renders as text, never a dead link.
       → `test_traces.py` for the parse and the zip, `SpanDetail.test.ts` for the two states.
       **The stacktrace inside an exception event is large** — `errorgroups/queries.py:152` already
       refuses to select one into a list read, and this must stay a detail-only field for the same
       reason.
-- [ ] **T25** `E` — `features/logs/LogsScreen.tsx`: facets carry their counts. `ServiceFacet.records`
+- [x] **T25** `E` — `features/logs/LogsScreen.tsx`: facets carry their counts. `ServiceFacet.records`
       and `SeverityFacet.records` (`logs/search.py:201,206`) are served and dropped at
       `LogsScreen.tsx:73`. → `LogsView.test.ts`: a facet shows its count; a facet with none is absent
       rather than showing zero.
-- [ ] **T26** `E` — `features/traces/TraceListScreen.tsx`: a duration bar on one window-wide scale,
+- [x] **T26** `E` — `features/traces/TraceListScreen.tsx`: a duration bar on one window-wide scale,
       the same shared-ceiling rule `Sparkline` uses — per-row autoscale would make every trace look
       equally slow. → `TraceListScreen.test.ts`: two rows at different durations draw different
       widths against one ceiling.
-- [ ] **T27** `E` — `features/traces/TraceScreen.tsx`: consume `GET /logs?trace_id=` so a trace shows
+- [x] **T27** `E` — `features/traces/TraceScreen.tsx`: consume `GET /logs?trace_id=` so a trace shows
       the logs emitted under it, and render `TraceLink.exists: false` as its own state — "we hold the
       logs but not the trace" is a fact, not a failed load. → `TraceScreen.test.ts` for the three
       states: linked, held-but-absent, and none.
-- [ ] **T28** `E` — deploy markers on service detail (IA3). `GET /deploys` is served and drawn
+- [x] **T28** `E` — deploy markers on service detail (IA3). `GET /deploys` is served and drawn
       nowhere; a vertical rule on `TrendChart` at each deploy answers "did a deploy cause this"
       without leaving the screen. → `TrendChart.test.ts`: a marker lands at its timestamp's x; a
       deploy outside the window draws none.
-- [ ] **T29** `E` — selection travels (IA1): `shared/selection.ts` gains an entity scope beside the
+- [x] **T29** `E` — selection travels (IA1): `shared/selection.ts` gains an entity scope beside the
       project and range, applied on arrival rather than re-chosen. Today it holds `projectId` and
       `rangeId` only. → `selection.test.ts`: a scope survives a screen change; an unknown scope is
       dropped rather than filtering everything out.
@@ -314,6 +314,31 @@ response, so a row cannot say what it touched.
 four items are built), `worst_severity` from the schema task, the `ServiceEdge` latency backend item,
 and the three log items that already work. **One chart** on service detail is built; the deploy
 marker it was bundled with is not, and became T29 on its own.
+
+**Outcome, 2026-09-13.** Built, `just check` green — 2364 Python, 719 web.
+
+Three things changed from the plan, each because the code said so:
+
+- **T27's `exists: false` was already built**, at the destination rather than the source.
+  `TraceNotStored` renders exactly that state — "this trace was not kept", no retry, no error — and
+  the logs list cannot know per line whether a trace is held without a lookup per row. What T27
+  actually added is the other half: a trace now shows the logs emitted under it, collapsed, because
+  the waterfall is the screen and a panel that opens itself competes with it.
+- **T24's links are navigation, not text.** The task said a link whose target is not held should
+  render as text. Following one is already safe: `TraceScreen` answers "not kept" rather than
+  failing, which is what `TraceScreen.test.ts` exists to hold. Rendering text instead would have
+  removed a working path to avoid a failure that does not happen.
+- **T29 kept the scope out of the selection store.** A sticky global scope would have meant a reader
+  who opened `checkout` this morning finding Logs filtered this afternoon with nothing on screen
+  saying why, and no way to hand the view to a colleague. It travels in the link instead — the same
+  rule the filters follow — which required logs and error groups to read their service from the URL
+  at all.
+
+**One defect found in the browser, not by a test.** Arriving at Logs scoped to `frontend` — a
+service with no logs in the window — left the control reading "All" while the list was narrowed to
+it. A native select shows its first option when none matches its value, so the control and the
+results disagreed with nothing on screen to say so. `FilterBar` already guards this; the logs
+screen has its own select and did not. Fixed, with the test naming where it was found.
 
 ### The dashboard surface
 

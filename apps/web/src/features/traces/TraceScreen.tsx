@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { isNotFound } from "@/shared/api-client";
@@ -7,9 +8,10 @@ import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatDuration } from "@/shared/format/duration";
-import { formatTimestamp } from "@/shared/format/time";
+import { formatCount } from "@/shared/format/number";
+import { formatClockTime, formatTimestamp } from "@/shared/format/time";
 import { useSelection } from "@/shared/selection";
-import { useTrace } from "./api";
+import { useTrace, useTraceLogs } from "./api";
 import { SpanDetail } from "./SpanDetail";
 import { TraceWaterfall } from "./TraceWaterfall";
 import { buildSpanTree, flattenTree } from "./trace-tree";
@@ -111,6 +113,8 @@ export function TraceScreen({ traceId }: { traceId: string }) {
             onSelectSpan={setSelectedSpanId}
           />
         )}
+
+        <TraceLogs projectId={projectId} traceId={detail.trace_id} />
       </div>
 
       {selectedRow ? (
@@ -122,6 +126,64 @@ export function TraceScreen({ traceId }: { traceId: string }) {
         >
           <SpanDetail row={selectedRow} onClose={() => setSelectedSpanId(undefined)} />
         </aside>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * What the services said while this trace was running.
+ *
+ * Collapsed by default, and that is the point: the waterfall is the screen, and
+ * a log panel that opens itself competes with it for the reader's first look.
+ * The count is enough to say whether opening it is worth doing.
+ *
+ * Read for the trace rather than for the window — the endpoint bounds itself on
+ * `span_trace_lookup`, so a trace reached from an old link shows the lines it
+ * was emitted with rather than the lines inside the range picker's window.
+ */
+function TraceLogs({ projectId, traceId }: { projectId: string | undefined; traceId: string }) {
+  const [open, setOpen] = useState(false);
+  const logs = useTraceLogs(projectId, traceId);
+  const lines = logs.data?.logs ?? [];
+
+  // Nothing to offer while it is loading, and nothing to apologise for if it
+  // fails: the waterfall above is the screen, and this is a correlation on top
+  // of it. A failed side-read must not put an error banner over a trace that
+  // loaded perfectly well.
+  if (logs.isPending || logs.isError || lines.length === 0) return null;
+
+  return (
+    <div className="shrink-0 border-line border-t">
+      <button
+        type="button"
+        onClick={() => setOpen((shown) => !shown)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 px-4 py-2 text-left font-mono text-2xs text-ink-dim uppercase tracking-caps hover:bg-hover"
+      >
+        <ChevronRight
+          size={12}
+          aria-hidden="true"
+          className={open ? "rotate-90 transition-transform" : "transition-transform"}
+        />
+        Logs · {formatCount(lines.length)}
+      </button>
+
+      {open ? (
+        <ul className="max-h-64 overflow-y-auto px-4 pb-3">
+          {lines.map((line) => (
+            <li
+              key={`${line.observed_at}:${line.span_id}:${line.body}`}
+              className="flex gap-3 border-line-subtle border-b py-1 text-xs last:border-b-0"
+            >
+              <span className="w-20 shrink-0 font-mono text-2xs text-ink-dim">
+                {formatClockTime(line.observed_at)}
+              </span>
+              <span className="w-14 shrink-0 font-mono text-2xs text-ink-dim">{line.severity}</span>
+              <span className="min-w-0 flex-1 break-words text-ink">{line.body}</span>
+            </li>
+          ))}
+        </ul>
       ) : null}
     </div>
   );

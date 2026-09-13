@@ -49,6 +49,20 @@ export interface TraceSummary {
   span_count: number;
   error_count: number;
   status_code: TraceStatusCode;
+  /**
+   * Every service and every (service, operation) the trace touched, not only
+   * the root it is named after. These are the same columns the list already
+   * filters on, so a reader can go from seeing a service on a row to seeing
+   * every trace that touched it.
+   */
+  span_services: string[];
+  span_endpoints: TraceEndpoint[];
+}
+
+/** One (service, operation) a trace touched. `GET /` means nothing alone. */
+export interface TraceEndpoint {
+  service_name: string;
+  operation: string;
 }
 
 export interface Span {
@@ -73,6 +87,31 @@ export interface Span {
   rpc_system?: string;
   rpc_method?: string;
   rpc_status?: string;
+  /**
+   * What the span threw. Empty on a span that did not throw — including one
+   * that failed: a gRPC `UNAVAILABLE` is an outcome, not an exception, and the
+   * API deliberately does not fill these in from a status.
+   */
+  exception_type?: string;
+  exception_message?: string;
+  /** The build this span ran on, from `service.version`. Empty when unsaid. */
+  deployment_version?: string;
+  /** What happened inside the span, in time order. Usually empty. */
+  events?: SpanEvent[];
+  /** Spans in *other* traces this one points at — a queue hop, usually. */
+  links?: SpanLink[];
+  attributes: Record<string, unknown>;
+}
+
+export interface SpanEvent {
+  at: string;
+  name: string;
+  attributes: Record<string, unknown>;
+}
+
+export interface SpanLink {
+  trace_id: string;
+  span_id: string;
   attributes: Record<string, unknown>;
 }
 
@@ -183,6 +222,56 @@ export function useTrace(projectId: string | undefined, traceId: string) {
     queryFn: ({ signal }) =>
       apiClient.get<TraceDetail>(`traces/${encodeURIComponent(traceId)}`, {
         searchParams: { project_id: projectId },
+        signal,
+      }),
+  });
+}
+
+/**
+ * The logs emitted under one trace.
+ *
+ * Declared here rather than imported from `features/logs`: a feature never
+ * imports another feature, and what is shared is the API's contract, not that
+ * screen's code.
+ */
+export interface TraceLogLine {
+  observed_at: string;
+  service_name: string;
+  severity: string;
+  severity_number: number;
+  body: string;
+  trace_id: string;
+  span_id: string;
+  attributes: Record<string, unknown>;
+}
+
+interface LogsForTraceResponse {
+  /**
+   * Whether the store holds the trace these logs point at. False is a fact, not
+   * a failure: logs are written in full and traces are tail-sampled, so a
+   * healthy trace is routinely judged and dropped while its log lines survive.
+   */
+  trace: { trace_id: string; exists: boolean };
+  logs: TraceLogLine[];
+}
+
+export const traceLogsQueryKey = (projectId: string, traceId: string) =>
+  ["trace-logs", projectId, traceId] as const;
+
+/**
+ * Read for the trace, not for the window.
+ *
+ * The endpoint bounds itself on `span_trace_lookup`, so no time range is sent:
+ * a trace found from a week-old link should show the lines it was emitted with,
+ * not the lines inside whatever range the picker happens to be on.
+ */
+export function useTraceLogs(projectId: string | undefined, traceId: string) {
+  return useQuery({
+    queryKey: traceLogsQueryKey(projectId ?? "", traceId),
+    enabled: projectId !== undefined && traceId !== "",
+    queryFn: ({ signal }) =>
+      apiClient.get<LogsForTraceResponse>("logs", {
+        searchParams: { project_id: projectId, trace_id: traceId },
         signal,
       }),
   });

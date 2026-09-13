@@ -25,6 +25,8 @@ from nexovue_api.traces.schemas import (
     OperationFacet,
     ServiceFacet,
     SpanDetail,
+    SpanEvent,
+    SpanLink,
     TraceDetailResponse,
     TraceEndpoint,
     TraceFacetsResponse,
@@ -628,5 +630,70 @@ def _to_span(row: dict[str, Any]) -> SpanDetail:
         exception_type=values.text(row["exception_type"]),
         exception_message=values.text(row["exception_message"]),
         deployment_version=values.text(row["deployment_version"]),
+        events=_to_events(row["events_json"]),
+        links=_to_links(row),
         attributes=values.json_object(row["attributes_json"]),
     )
+
+
+def _to_events(stored: object) -> list[SpanEvent]:
+    """`spans.events`, which the worker stores as one OTLP-shaped JSON string.
+
+    Each entry carries its own clock. An entry missing a timestamp is dropped
+    rather than placed at the span's start: an event's position inside the span
+    is the whole reason a timeline is worth drawing, and putting an unplaced one
+    at the beginning would invent that position.
+    """
+    events = []
+    for entry in values.json_array(stored):
+        if not isinstance(entry, dict):
+            continue
+        at = _event_time(entry.get("timestamp"))
+        if at is None:
+            continue
+        attributes = entry.get("attributes")
+        events.append(
+            SpanEvent(
+                at=at,
+                name=values.text(entry.get("name")),
+                attributes=attributes if isinstance(attributes, dict) else {},
+            )
+        )
+    # Ordered, because a timeline out of order is not one. The store preserves
+    # the exporter's order and an exporter is not required to sort.
+    return sorted(events, key=lambda event: event.at)
+
+
+def _event_time(raw: object) -> datetime | None:
+    """An OTLP event timestamp, or None when it is not one."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _to_links(row: dict[str, Any]) -> list[SpanLink]:
+    """Three parallel arrays, zipped back into the links they describe.
+
+    `strict=False` on purpose: the arrays come from one nested column and cannot
+    disagree in length, and a `strict=True` zip would turn an impossible state
+    into a 500 rather than a shorter list. A link with no trace id is dropped —
+    it points nowhere, and offering it would be offering a dead end.
+    """
+    links = []
+    for trace_id, span_id, attributes in zip(
+        row["link_trace_ids"], row["link_span_ids"], row["link_attributes"], strict=False
+    ):
+        target = values.text(trace_id)
+        if not target:
+            continue
+        links.append(
+            SpanLink(
+                trace_id=target,
+                span_id=values.text(span_id),
+                attributes=values.json_object(attributes),
+            )
+        )
+    return links

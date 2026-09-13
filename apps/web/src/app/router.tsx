@@ -19,7 +19,8 @@ import { ERROR_FILTERS } from "@/features/errors/filters";
 import { databaseFilters } from "@/features/infrastructure/databases/filters";
 import { infrastructureFilters } from "@/features/infrastructure/filters";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
-import { LogsScreen } from "@/features/logs/LogsScreen";
+import { LogsScreen, scopedService } from "@/features/logs/LogsScreen";
+import { severityFilterById } from "@/features/logs/severity";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
 import { ProjectsScreen } from "@/features/projects/ProjectsScreen";
 import { rumFilters } from "@/features/rum/filters";
@@ -145,6 +146,14 @@ const logsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/logs",
   component: LogsScreen,
+  // The service and the severity live here so arriving from another screen can
+  // land already narrowed, and so a narrowed view is a link someone can send.
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...(scopedService(search.service) ? { service: scopedService(search.service) as string } : {}),
+    ...(severityFilterById(String(search.severity ?? "")).id === "all"
+      ? {}
+      : { severity: severityFilterById(String(search.severity ?? "")).id }),
+  }),
 });
 
 const infrastructureRoute = createRoute({

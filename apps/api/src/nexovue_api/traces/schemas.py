@@ -83,6 +83,32 @@ class TraceFacetsResponse(BaseModel):
     operations: list[OperationFacet] = Field(default_factory=list)
 
 
+class SpanEvent(BaseModel):
+    """One thing that happened inside a span, at a moment inside its duration.
+
+    An exception is the common one, and its stacktrace lives in `attributes`
+    rather than in a field of its own — this is the OTLP shape, and flattening
+    it here would make the two disagree.
+    """
+
+    at: IsoTimestamp
+    name: str
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class SpanLink(BaseModel):
+    """Another span this one points at, across traces.
+
+    A queue consumer links back to the producer's span: the two are causally
+    related and are not the same trace, which is the case `edge_kind = queue`
+    on the service map is derived from.
+    """
+
+    trace_id: str
+    span_id: str
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
 class SpanDetail(BaseModel):
     """One span, flat. The browser builds the tree; the API does not nest."""
 
@@ -114,6 +140,16 @@ class SpanDetail(BaseModel):
     # did not say. It answers "did a deploy cause this" for one span, without
     # leaving the trace.
     deployment_version: str = ""
+    # Stored as one JSON string and three parallel arrays respectively; both are
+    # taken apart here so a client never parses our storage shapes.
+    #
+    # Returned in full on a trace detail and never in a list: measured over six
+    # hours, the worst single trace carries 28 KiB of events and the mean span
+    # carries 33 bytes, which is nothing beside the spans themselves. A *list*
+    # read is the one that cannot afford them — `errorgroups/queries.py` refuses
+    # a stacktrace in one for that reason.
+    events: list[SpanEvent] = Field(default_factory=list)
+    links: list[SpanLink] = Field(default_factory=list)
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 

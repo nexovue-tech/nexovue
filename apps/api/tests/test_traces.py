@@ -51,12 +51,16 @@ _SPAN_COLUMNS = [
     "exception_type",
     "exception_message",
     "deployment_version",
+    "events_json",
+    "link_trace_ids",
+    "link_span_ids",
+    "link_attributes",
     "attributes_json",
 ]
 
 # The two shapes a span comes in. An HTTP span leaves the RPC columns empty and
 # a gRPC span leaves the HTTP ones empty; neither is a null.
-_HTTP_SPAN_ROW = (
+_HTTP_SPAN_ROW: tuple[Any, ...] = (
     b"00f067aa0ba902b7",
     "",
     "storefront",
@@ -76,10 +80,20 @@ _HTTP_SPAN_ROW = (
     "ValueError",
     "card declined",
     "2026.9.12-a1b2c3d",
+    # Out of order on purpose: an exporter is not required to sort, and the
+    # timeline has to.
+    (
+        '[{"timestamp":"2026-08-27T10:00:00.200Z","name":"exception",'
+        '"attributes":{"exception":{"stacktrace":"...frames..."}}},'
+        '{"timestamp":"2026-08-27T10:00:00.100Z","name":"retry","attributes":{}}]'
+    ),
+    ["4bf92f3577b34da6a3ce929d0e0e4736"],
+    ["00f067aa0ba902b7"],
+    ['{"kind":"queue"}'],
     '{"tier":"gold"}',
 )
 
-_GRPC_SPAN_ROW = (
+_GRPC_SPAN_ROW: tuple[Any, ...] = (
     b"00f067aa0ba902b7",
     "",
     "product-catalog",
@@ -100,6 +114,10 @@ _GRPC_SPAN_ROW = (
     "",
     "",
     "",
+    "",
+    [],
+    [],
+    [],
     "{}",
 )
 
@@ -1059,3 +1077,94 @@ def test_the_window_read_still_lets_no_string_out_of_it() -> None:
     assert "span_endpoints" not in window_read
     assert "span_services" in queries.TRACE_ROOTS_SQL
     assert "{trace_ids:Array(String)}" in queries.TRACE_ROOTS_SQL
+
+
+# ------------------------------------------------ events and links (T24)
+#
+# Both are stored in shapes that belong to the store, not to the contract:
+# `events` is one JSON string in OTLP's own shape, `links` is three parallel
+# arrays of a nested column. Taking them apart here is what stops a client
+# parsing either.
+
+
+async def test_a_spans_events_come_back_as_a_timeline() -> None:
+    detail = await service.get_trace(_repository(TENANT_A), project_id=PROJECT, trace_id=TRACE_A)
+    events = detail.spans[0].events
+
+    assert [event.name for event in events] == ["retry", "exception"]
+    # An exception's stacktrace stays inside its attributes, which is OTLP's
+    # shape. Lifting it to a field would make ours disagree with the wire.
+    assert events[1].attributes["exception"]["stacktrace"] == "...frames..."
+
+
+async def test_events_are_ordered_however_the_exporter_sent_them() -> None:
+    """A timeline out of order is not one.
+
+    The store preserves the exporter's order and an exporter is not required to
+    sort, so the fixture above is deliberately reversed.
+    """
+    detail = await service.get_trace(_repository(TENANT_A), project_id=PROJECT, trace_id=TRACE_A)
+    times = [event.at for event in detail.spans[0].events]
+
+    assert times == sorted(times)
+
+
+def test_an_event_with_no_usable_timestamp_is_dropped_rather_than_placed() -> None:
+    """Its position inside the span is the whole reason to draw a timeline.
+
+    Putting an unplaced event at the span's start would invent that position,
+    and a reader cannot tell an invented one from a measured one.
+    """
+    parsed = service._to_events(
+        '[{"name":"no-clock"},'
+        '{"timestamp":"not-a-time","name":"bad-clock"},'
+        '{"timestamp":"2026-08-27T10:00:00Z","name":"kept"}]'
+    )
+
+    assert [event.name for event in parsed] == ["kept"]
+
+
+def test_unreadable_events_are_no_events_rather_than_an_error() -> None:
+    """A span whose events column is malformed still has a waterfall row."""
+    assert service._to_events("not json at all") == []
+    assert service._to_events("") == []
+
+
+async def test_a_spans_links_are_zipped_back_out_of_their_parallel_arrays() -> None:
+    detail = await service.get_trace(_repository(TENANT_A), project_id=PROJECT, trace_id=TRACE_A)
+    links = detail.spans[0].links
+
+    assert len(links) == 1
+    assert links[0].trace_id == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert links[0].span_id == "00f067aa0ba902b7"
+    assert links[0].attributes == {"kind": "queue"}
+
+
+def test_a_link_pointing_at_no_trace_is_dropped() -> None:
+    """It points nowhere, and offering it would be offering a dead end."""
+    zipped = service._to_links(
+        {
+            "link_trace_ids": ["", "4bf92f3577b34da6a3ce929d0e0e4736"],
+            "link_span_ids": ["00f067aa0ba902b7", "00f067aa0ba902b7"],
+            "link_attributes": ["{}", "{}"],
+        }
+    )
+
+    assert [link.trace_id for link in zipped] == ["4bf92f3577b34da6a3ce929d0e0e4736"]
+
+
+def test_arrays_that_disagree_in_length_shorten_rather_than_raise() -> None:
+    """They come from one nested column and cannot disagree.
+
+    A strict zip would turn an impossible state into a 500 — a whole trace lost
+    to a defect in one link — where a shorter list loses only the link itself.
+    """
+    zipped = service._to_links(
+        {
+            "link_trace_ids": ["4bf92f3577b34da6a3ce929d0e0e4736", "89862496c280c749485ae30629e97"],
+            "link_span_ids": ["00f067aa0ba902b7"],
+            "link_attributes": ["{}"],
+        }
+    )
+
+    assert len(zipped) == 1

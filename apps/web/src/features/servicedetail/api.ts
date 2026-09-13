@@ -243,3 +243,37 @@ export function useServiceDependencies(projectId: string | undefined, timeWindow
       }),
   });
 }
+
+/**
+ * The deploys recorded on this project.
+ *
+ * Served since the webhook was built and drawn nowhere until now. Read for the
+ * project rather than the service — the endpoint has no service filter — and
+ * narrowed to the chart's own service by `deployMarkers`.
+ */
+export interface DeployEventSummary {
+  id: string;
+  version: string;
+  service_name: string;
+  deployed_at: string;
+  source: string;
+}
+
+interface DeployEventListResponse {
+  deploys: DeployEventSummary[];
+}
+
+export const deploysQueryKey = (projectId: string) => ["deploys", projectId] as const;
+
+export function useDeploys(projectId: string | undefined) {
+  return useQuery({
+    queryKey: deploysQueryKey(projectId ?? ""),
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<DeployEventListResponse>("deploys", {
+        searchParams: { project_id: projectId },
+        signal,
+      }),
+    select: (response) => response.deploys,
+  });
+}

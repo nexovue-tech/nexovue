@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -10,12 +10,18 @@ import { formatCount } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 import { formatClockTime, formatTimestamp } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
-
-import type { LogSearchFilters } from "./api";
+import type { LogSearchFilters, ServiceFacet, SeverityFacet } from "./api";
 import { useLogFacets, useLogSearch } from "./api";
 import type { LogLine, LogRow, TailNarration } from "./log-feed";
 import { buildLogRows, describeLogs } from "./log-feed";
 import { SEVERITY_FILTERS, severityFilterById, severityStyle } from "./severity";
+
+/** A service named in the URL, or nothing. A blank string is not a filter. */
+export function scopedService(raw: unknown): string | undefined {
+  const named = typeof raw === "string" ? raw.trim() : "";
+  return named === "" ? undefined : named;
+}
+
 import type { LogTail, TailStatus } from "./use-log-tail";
 import { useLogTail } from "./use-log-tail";
 
@@ -46,9 +52,29 @@ export function LogsScreen() {
   const { projectId, rangeId } = useSelection();
   const timeWindow = useLiveWindow(rangeId);
 
+  const navigate = useNavigate();
+  // The route's own id, not its path: `/logs` renders inside the shell. Named
+  // `routeSearch` because `search` below is the log search itself.
+  const routeSearch = useSearch({ from: "/shell/logs" });
+
+  // In the URL rather than in component state, so arriving from a service lands
+  // already narrowed to it (IA1), and so a narrowed view can be handed to a
+  // colleague as a link. The typed query stays local: it changes on every
+  // keystroke, and a history entry per character is not a history.
+  const serviceName = scopedService(routeSearch.service);
+  const severityId = severityFilterById(String(routeSearch.severity ?? "")).id;
+
+  const show = (next: { service?: string; severity?: string }) =>
+    void navigate({
+      to: "/logs",
+      search: () => ({
+        ...(next.service ? { service: next.service } : {}),
+        ...(next.severity && next.severity !== "all" ? { severity: next.severity } : {}),
+      }),
+      replace: true,
+    });
+
   const [typed, setTyped] = useState("");
-  const [serviceName, setServiceName] = useState<string | undefined>(undefined);
-  const [severityId, setSeverityId] = useState("all");
   const [expanded, setExpanded] = useState<string | undefined>(undefined);
 
   const query = useDebounced(typed, SEARCH_DEBOUNCE_MS);
@@ -67,10 +93,11 @@ export function LogsScreen() {
       typed={typed}
       onTypedChange={setTyped}
       serviceName={serviceName}
-      onServiceChange={setServiceName}
+      onServiceChange={(value) => show({ service: value, severity: severityId })}
       severityId={severityId}
-      onSeverityChange={setSeverityId}
-      services={facets.data?.services.map((facet) => facet.service_name) ?? []}
+      onSeverityChange={(value) => show({ service: serviceName, severity: value })}
+      services={facets.data?.services ?? []}
+      severities={facets.data?.severities ?? []}
       searched={search.data?.logs ?? []}
       isPending={search.isPending}
       isError={search.isError}
@@ -106,7 +133,8 @@ interface LogsViewProps {
   onServiceChange: (value: string | undefined) => void;
   severityId: string;
   onSeverityChange: (id: string) => void;
-  services: readonly string[];
+  services: readonly ServiceFacet[];
+  severities: readonly SeverityFacet[];
   searched: readonly LogLine[];
   isPending: boolean;
   isError: boolean;
@@ -130,6 +158,7 @@ export function LogsView({
   severityId,
   onSeverityChange,
   services,
+  severities,
   searched,
   isPending,
   isError,
@@ -198,6 +227,7 @@ export function LogsView({
         severityId={severityId}
         onSeverityChange={onSeverityChange}
         services={services}
+        severities={severities}
       />
 
       {tail.status === "failed" && tail.failure ? (
@@ -325,6 +355,7 @@ function FilterBar({
   severityId,
   onSeverityChange,
   services,
+  severities,
 }: {
   typed: string;
   onTypedChange: (value: string) => void;
@@ -332,7 +363,8 @@ function FilterBar({
   onServiceChange: (value: string | undefined) => void;
   severityId: string;
   onSeverityChange: (id: string) => void;
-  services: readonly string[];
+  services: readonly ServiceFacet[];
+  severities: readonly SeverityFacet[];
 }) {
   return (
     <div className="flex shrink-0 flex-wrap items-baseline gap-x-5 gap-y-2 px-4 pb-3">
@@ -347,24 +379,78 @@ function FilterBar({
 
       {/* Native selects, deliberately: keyboard navigation, typeahead and the mobile
           picker all keep working, and there is nothing here a listbox would add. */}
+      {/* The counts are the point. A facet is not a list of options — it is
+          what the window actually holds, counted with no filters applied, so a
+          reader picks the service with 4,000 records rather than discovering
+          after two clicks that the one they picked has three. A service absent
+          from the facets sent nothing here and is not offered at all. */}
       <InlineSelect
         label="Service"
         value={serviceName ?? ""}
         onChange={(value) => onServiceChange(value || undefined)}
-        options={[
-          { value: "", label: "All" },
-          ...services.map((name) => ({ value: name, label: name })),
-        ]}
+        options={serviceOptions(services, serviceName)}
       />
 
       <InlineSelect
         label="Severity"
         value={severityId}
         onChange={onSeverityChange}
-        options={SEVERITY_FILTERS.map((filter) => ({ value: filter.id, label: filter.label }))}
+        options={SEVERITY_FILTERS.map((filter) => ({
+          value: filter.id,
+          label: countedSeverity(filter, severities),
+        }))}
       />
     </div>
   );
+}
+
+/**
+ * The services this window holds, with the one already chosen kept in the list.
+ *
+ * A native select shows its first option when none matches the value, so a
+ * service that sent no logs this hour — arriving from its own screen, or from a
+ * shared link — would leave the control reading "All" while the results were
+ * narrowed to it. The control saying one thing and the list another is worse
+ * than either answer alone, and it is how a reader concludes the product is
+ * broken. The kept entry carries no count, because there is nothing to count.
+ */
+export function serviceOptions(
+  facets: readonly ServiceFacet[],
+  selected: string | undefined,
+): { value: string; label: string }[] {
+  const counted = facets.map((facet) => ({
+    value: facet.service_name,
+    label: `${facet.service_name} · ${formatCount(facet.records)}`,
+  }));
+  const known = selected === undefined || facets.some((f) => f.service_name === selected);
+  return [
+    { value: "", label: "All" },
+    ...(known ? [] : [{ value: selected, label: selected }]),
+    ...counted,
+  ];
+}
+
+/**
+ * A severity option with what the window holds behind it.
+ *
+ * A severity filter is a floor — "warning and above" — so its count is the sum
+ * of every severity at or above it, not the count of that one name. Counting
+ * only the exact level would say "warning 3" on a window holding three warnings
+ * and four hundred errors, which is the opposite of what the filter returns.
+ *
+ * "All" carries no count: it is not a narrowing, and a total beside it competes
+ * with the caption that already says how many records there are.
+ */
+export function countedSeverity(
+  filter: (typeof SEVERITY_FILTERS)[number],
+  severities: readonly SeverityFacet[],
+): string {
+  if (filter.minSeverity === undefined) return filter.label;
+  const floor = filter.minSeverity;
+  const records = severities
+    .filter((facet) => facet.severity_number >= floor)
+    .reduce((running, facet) => running + facet.records, 0);
+  return records > 0 ? `${filter.label} · ${formatCount(records)}` : filter.label;
 }
 
 function InlineSelect({

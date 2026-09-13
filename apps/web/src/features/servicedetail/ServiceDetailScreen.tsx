@@ -11,6 +11,7 @@ import { formatErrors } from "@/shared/format/health";
 import { formatCount, formatPercent } from "@/shared/format/number";
 import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
+import { SCOPED_PATHS, scopedSearch } from "@/shared/scope";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 import type { HostGroup, ServiceEdge } from "@/shared/service-peers";
 import { collapseAddressPeers, EDGE_QUEUE, isPlaceholderService } from "@/shared/service-peers";
@@ -23,12 +24,15 @@ import type {
   TrendPoint,
 } from "./api";
 import {
+  useDeploys,
   useService,
   useServiceDependencies,
   useServiceEndpoints,
   useServiceErrors,
   useServiceTrend,
 } from "./api";
+import type { DeployMarker } from "./deploy-markers";
+import { deployMarkers } from "./deploy-markers";
 import type { Dependency, DetailState } from "./service-detail";
 import {
   dependencyKey,
@@ -82,6 +86,20 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
   const endpoints = useServiceEndpoints(projectId, serviceName, timeWindow);
   const dependencies = useServiceDependencies(projectId, timeWindow);
   const errors = useServiceErrors(projectId, serviceName, timeWindow);
+  const deploys = useDeploys(projectId);
+
+  // One read for the project, narrowed to this service and this window. A
+  // deploy of another service is an invitation to blame the wrong change for
+  // the step in this chart.
+  const markers = useMemo(
+    () =>
+      deployMarkers(deploys.data ?? [], {
+        serviceName,
+        from: timeWindow.from,
+        to: timeWindow.to,
+      }),
+    [deploys.data, serviceName, timeWindow.from, timeWindow.to],
+  );
 
   const points = trend.data?.points ?? [];
   const endpointRows = endpoints.data?.endpoints ?? [];
@@ -108,6 +126,7 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
       }}
       row={row}
       points={points}
+      markers={markers}
       endpoints={endpointRows}
       dependencies={{
         status: panelStatus(dependencies),
@@ -153,6 +172,8 @@ export interface ServiceDetailViewProps {
   onRetry: () => void;
   row?: ServiceHealth;
   points: readonly TrendPoint[];
+  /** The deploys of this service inside this window, as rules on the charts. */
+  markers: readonly DeployMarker[];
   endpoints: readonly EndpointHealth[];
   dependencies: PanelSource<ServiceEdge>;
   errors: PanelSource<ErrorGroupSummary>;
@@ -167,6 +188,7 @@ export function ServiceDetailView({
   onRetry,
   row,
   points,
+  markers,
   endpoints,
   dependencies,
   errors,
@@ -238,7 +260,12 @@ export function ServiceDetailView({
           <div ref={watchContentHeight}>
             {row ? <HeadlineMetrics row={row} /> : null}
 
-            <TrendSection plots={plots} serviceName={serviceName} bucketCount={points.length} />
+            <TrendSection
+              plots={plots}
+              serviceName={serviceName}
+              bucketCount={points.length}
+              markers={markers}
+            />
 
             <DependencySection
               serviceName={serviceName}
@@ -312,20 +339,38 @@ function ServiceHeader({
         <h1 className="min-w-0 break-all font-semibold font-serif text-ink text-xl tracking-tight">
           {serviceName}
         </h1>
-        <nav className="flex shrink-0 items-baseline gap-3 text-sm">
+        {/* The service travels with the link (IA1). A person who has found the
+            failing service should not have to type its name again on the next
+            screen — and each destination spells the parameter differently, which
+            `scopedSearch` is where it stops mattering. */}
+        <nav className="flex shrink-0 flex-wrap items-baseline gap-3 text-sm">
           <Link
-            to="/traces"
-            search={{ service: serviceName }}
-            className="text-brand-text underline-offset-2 hover:underline"
+            to={SCOPED_PATHS.traces}
+            search={scopedSearch("traces", serviceName)}
+            className={SCOPED_LINK_CLASS}
           >
             Traces
           </Link>
           <Link
-            to="/traces"
-            search={{ service: serviceName, status: "ERROR" }}
-            className="text-brand-text underline-offset-2 hover:underline"
+            to={SCOPED_PATHS.traces}
+            search={{ ...scopedSearch("traces", serviceName), status: "ERROR" }}
+            className={SCOPED_LINK_CLASS}
           >
             Failed traces
+          </Link>
+          <Link
+            to={SCOPED_PATHS.logs}
+            search={scopedSearch("logs", serviceName)}
+            className={SCOPED_LINK_CLASS}
+          >
+            Logs
+          </Link>
+          <Link
+            to={SCOPED_PATHS.errors}
+            search={scopedSearch("errors", serviceName)}
+            className={SCOPED_LINK_CLASS}
+          >
+            Errors
           </Link>
         </nav>
       </div>
@@ -379,6 +424,8 @@ function Headline({
 }
 
 /** A heading that names a section and says what is in it, in one sentence. */
+const SCOPED_LINK_CLASS = "text-brand-text underline-offset-2 hover:underline";
+
 function SectionHeading({ title, caption }: { title: string; caption: string }) {
   return (
     <div className="px-4 pt-6 pb-2">
@@ -392,10 +439,12 @@ function TrendSection({
   plots,
   serviceName,
   bucketCount,
+  markers,
 }: {
   plots: readonly TrendPlot[];
   serviceName: string;
   bucketCount: number;
+  markers: readonly DeployMarker[];
 }) {
   return (
     <>
@@ -404,7 +453,7 @@ function TrendSection({
         caption={
           bucketCount === 0
             ? "No buckets in this window — the rollup has nothing for this service yet."
-            : `Request rate, failure share and p95 across ${bucketCount} ${bucketCount === 1 ? "bucket" : "buckets"}. Three charts, because three units.`
+            : `Request rate, failure share and p95 across ${bucketCount} ${bucketCount === 1 ? "bucket" : "buckets"}. Three charts, because three units.${markers.length > 0 ? ` Dashed rules are deploys of ${serviceName}.` : ""}`
         }
       />
       {bucketCount > 0 ? (
@@ -413,6 +462,7 @@ function TrendSection({
             <TrendPanel
               key={plot.metric}
               plot={plot}
+              markers={markers}
               description={describePlot(plot, serviceName, bucketCount)}
             />
           ))}
@@ -422,7 +472,15 @@ function TrendSection({
   );
 }
 
-function TrendPanel({ plot, description }: { plot: TrendPlot; description: string }) {
+function TrendPanel({
+  plot,
+  markers,
+  description,
+}: {
+  plot: TrendPlot;
+  markers: readonly DeployMarker[];
+  description: string;
+}) {
   return (
     <section className="rounded-sm border border-line p-3">
       <h3 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{plot.label}</h3>
@@ -432,7 +490,12 @@ function TrendPanel({ plot, description }: { plot: TrendPlot; description: strin
           {plot.zeroText}
         </p>
       ) : (
-        <TrendChart plot={plot} formatValue={AXIS_FORMAT[plot.metric]} description={description} />
+        <TrendChart
+          plot={plot}
+          markers={markers}
+          formatValue={AXIS_FORMAT[plot.metric]}
+          description={description}
+        />
       )}
     </section>
   );

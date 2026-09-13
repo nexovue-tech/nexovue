@@ -548,6 +548,13 @@ SELECT
     exception_type,
     exception_message,
     deployment_version,
+    -- Already a JSON string in the store; taken apart by the service rather
+    -- than by ClickHouse, because the shape is OTLP's and not ours.
+    events AS events_json,
+    -- Three parallel arrays, zipped into one list of links by the service.
+    links.trace_id AS link_trace_ids,
+    links.span_id AS link_span_ids,
+    links.attributes AS link_attributes,
     toJSONString(span_attrs) AS attributes_json
 FROM spans
 WHERE tenant_id = {{tenant_id:String}}

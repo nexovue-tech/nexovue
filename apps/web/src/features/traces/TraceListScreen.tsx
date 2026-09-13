@@ -25,6 +25,10 @@ import {
 } from "./filters";
 
 const ROW_HEIGHT = 36;
+
+/* Reserved on every row so the columns beside it do not shift when one trace
+   has no bar to draw. */
+const DURATION_BAR_COLUMN = "hidden w-24 shrink-0 pl-3 sm:block";
 const OVERSCAN_ROWS = 10;
 
 /** The two most useful latency questions, as one control rather than a number pad. */
@@ -70,6 +74,7 @@ export function TraceListScreen() {
     void navigate({ to: "/traces", search: () => toSearchParams(next), replace: true });
 
   const traces = list.data?.traces ?? [];
+  const ceiling = slowestDuration(traces);
   const services = facets.data?.services.map((facet) => facet.service_name) ?? [];
   const operations = useMemo(
     () => operationsFor(facets.data?.operations ?? [], filters.service),
@@ -147,6 +152,7 @@ export function TraceListScreen() {
                   trace={traces[item.index]}
                   offsetTop={item.start}
                   height={ROW_HEIGHT}
+                  ceiling={ceiling}
                 />
               ))}
             </div>
@@ -384,14 +390,63 @@ function InlineSelect({
   );
 }
 
+/**
+ * The slowest trace on the page, which every bar is drawn against.
+ *
+ * One ceiling for the whole list, never per row: a bar that autoscaled to its
+ * own value would be full width on every row, and a list where everything is
+ * full width says nothing at all. This is the same rule `Sparkline` follows,
+ * and for the same reason.
+ */
+export function slowestDuration(traces: readonly TraceSummary[]): number {
+  return traces.reduce((slowest, trace) => Math.max(slowest, trace.duration_ms), 0);
+}
+
+/** The width, as a fraction. A trace at the ceiling fills the cell. */
+export function barFraction(durationMs: number, ceiling: number): number {
+  if (!Number.isFinite(durationMs) || durationMs <= 0 || ceiling <= 0) return 0;
+  return Math.min(1, durationMs / ceiling);
+}
+
+function DurationBar({
+  durationMs,
+  ceiling,
+  failed,
+}: {
+  durationMs: number;
+  ceiling: number;
+  failed: boolean;
+}) {
+  const fraction = barFraction(durationMs, ceiling);
+  // Nothing to compare it against, so nothing is drawn. A zero-width bar on a
+  // single-trace page would read as "instant" rather than as "no scale yet".
+  if (fraction === 0) return null;
+
+  return (
+    <span
+      className="block h-1 rounded-xs bg-line"
+      // `aria-hidden`: the duration is already in the cell beside this, as a
+      // number. A second reading of the same value is noise to a screen reader.
+      aria-hidden="true"
+    >
+      <span
+        className={`block h-full rounded-xs ${failed ? "bg-critical-solid" : "bg-brand"}`}
+        style={{ width: `${fraction * 100}%` }}
+      />
+    </span>
+  );
+}
+
 function TraceRow({
   trace,
   offsetTop,
   height,
+  ceiling,
 }: {
   trace: TraceSummary;
   offsetTop: number;
   height: number;
+  ceiling: number;
 }) {
   const failed = traceFailed(trace);
 
@@ -425,6 +480,10 @@ function TraceRow({
 
         <span className="w-20 shrink-0 text-right font-mono text-2xs text-ink-dim">
           {formatDuration(trace.duration_ms)}
+        </span>
+
+        <span className={DURATION_BAR_COLUMN}>
+          <DurationBar durationMs={trace.duration_ms} ceiling={ceiling} failed={failed} />
         </span>
 
         <span
