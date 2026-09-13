@@ -48,7 +48,7 @@ const RATING_WORDS: Record<ReadableVital["rating"], string> = {
  */
 export function RumScreen() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/rum` renders inside the shell.

@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { apiClient } from "@/shared/api-client";
 import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 /**
  * Hosts and containers, read from the metrics a customer's collector sends.
@@ -109,10 +110,10 @@ interface SignalListResponse {
 }
 
 export const nodesQueryKey = (projectId: string, timeWindow: TimeWindow, narrowing: string) =>
-  ["infrastructure-nodes", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
+  ["infrastructure-nodes", projectId, windowKeyOf(timeWindow), narrowing] as const;
 
 export const signalsQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["infrastructure", "signals", projectId, timeWindow.from, timeWindow.to] as const;
+  ["infrastructure", "signals", projectId, windowKeyOf(timeWindow)] as const;
 
 export function useNodes(
   projectId: string | undefined,
@@ -120,6 +121,7 @@ export function useNodes(
   narrowing: Record<string, string> = {},
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: nodesQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -144,6 +146,7 @@ export function useNodes(
  */
 export function useSignals(projectId: string | undefined, timeWindow: TimeWindow) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: signalsQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -187,7 +190,7 @@ export const nodeSeriesKey = (node: {
 }) => `${node.host}/${node.container}/${node.reporter}/${node.reporter_instance}`;
 
 export const nodeTrendQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["node-trend", projectId, timeWindow.from, timeWindow.to] as const;
+  ["node-trend", projectId, windowKeyOf(timeWindow)] as const;
 
 /**
  * Every node's metrics, in one request rather than one per row.
@@ -200,6 +203,7 @@ export function useNodeTrend(
   timeWindow: TimeWindow,
 ): ReadonlyMap<string, readonly NodeTrendPoint[]> {
   const { data } = useQuery({
+    ...liveOptions(timeWindow),
     queryKey: nodeTrendQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>

@@ -51,7 +51,7 @@ const URGENCY_TEXT: Record<Urgency, string> = {
 
 export function SyntheticsScreen() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/synthetics` renders inside the shell.

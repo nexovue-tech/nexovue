@@ -117,7 +117,7 @@ function ViewSwitch({
 
 export function InfrastructureScreen() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/infrastructure` renders inside the shell.

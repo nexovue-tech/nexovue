@@ -58,7 +58,7 @@ const STATUS_OPTIONS = [
  */
 export function TraceListScreen() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/traces` renders inside the pathless shell.

@@ -52,7 +52,7 @@ const SEEN_COLUMN = "hidden w-28 shrink-0 text-right md:block";
 
 export function DatabasesView() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
   const navigate = useNavigate();
 
   // Databases share the infrastructure route, so they share its search object.

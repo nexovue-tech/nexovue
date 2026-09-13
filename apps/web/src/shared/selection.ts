@@ -9,6 +9,8 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 
+import { refetchIntervalFor, useRefreshPreference } from "./refresh";
+
 export interface TimeRange {
   id: string;
   label: string;
@@ -239,10 +241,64 @@ export function previousWindow(timeWindow: TimeWindow): TimeWindow {
   return { from: new Date(from - span).toISOString(), to: timeWindow.from };
 }
 
-export function useLiveWindow(rangeId: string): TimeWindow {
+/**
+ * The window a live screen reads against, and what a query should do about it.
+ *
+ * **It is a `TimeWindow` and carries a `key` beside it**, because those two answer
+ * different questions and were conflated until now. `from`/`to` are what a *read* asks
+ * for and they advance; `key` is what a *cache* is keyed on and it must not. Putting the
+ * advancing pair in a query key made every tick a different query with no cached data —
+ * `isPending`, and the screen renders its skeleton. Every refresh was a cold load.
+ *
+ * The tick stops when nothing can come of it: while the tab is hidden nobody is reading,
+ * while paused the reader asked it to, and an absolute window has no newer instant to
+ * advance to. Refresh is then driven by `refetchInterval` rather than by the key
+ * changing underneath the screen.
+ */
+export interface LiveWindow extends TimeWindow {
+  /** Stable while `from` and `to` advance. See `windowCacheKey`. */
+  key: string;
+  /** What a query should pass as `refetchInterval`: milliseconds, or `false`. */
+  refetchInterval: number | false;
+  isAbsolute: boolean;
+}
+
+/**
+ * What a query key should carry for a window.
+ *
+ * Accepts a plain `TimeWindow` so a caller that resolved its own instants — a test, or a
+ * read that is not live — still gets a key rather than a type error. A `LiveWindow` hands
+ * back the stable one, which is the whole point; anything else falls back to the instants
+ * it has, which is exactly as stable as that caller is.
+ */
+export function windowKeyOf(window: TimeWindow | LiveWindow): string {
+  return "key" in window ? window.key : `${window.from}/${window.to}`;
+}
+
+/**
+ * The options every live read shares.
+ *
+ * Refresh is driven from here rather than by the key changing, which is the correction:
+ * a key that moved made each tick a different query with no data behind it, and the
+ * screen fell back to its skeleton. A stable key plus an interval is the same freshness
+ * without the teardown.
+ */
+export function liveOptions(window: TimeWindow | LiveWindow): { refetchInterval: number | false } {
+  return { refetchInterval: "refetchInterval" in window ? window.refetchInterval : false };
+}
+
+export function useLiveWindow(): LiveWindow {
+  const { window: choice } = useSelection();
+  const preference = useRefreshPreference();
   const [now, setNow] = useState(() => Date.now());
 
+  const isAbsolute = choice.kind === "absolute";
+  const refetchInterval = refetchIntervalFor(preference, { windowIsAbsolute: isAbsolute });
+  const still = isAbsolute || preference.paused;
+
   useEffect(() => {
+    if (still) return;
+
     const advance = () => setNow(Date.now());
     const tick = setInterval(() => {
       if (document.visibilityState === "visible") advance();
@@ -254,7 +310,8 @@ export function useLiveWindow(rangeId: string): TimeWindow {
       clearInterval(tick);
       document.removeEventListener("visibilitychange", advance);
     };
-  }, []);
+  }, [still]);
 
-  return resolveWindow(rangeId, now);
+  const resolved = resolveChoice(choice, now);
+  return { ...resolved, key: windowCacheKey(choice), refetchInterval, isAbsolute };
 }

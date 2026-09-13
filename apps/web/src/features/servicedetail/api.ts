@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 import type { ServiceEdge } from "@/shared/service-peers";
 
 /**
@@ -111,28 +112,28 @@ interface ErrorGroupListResponse {
 }
 
 export const serviceQueryKey = (projectId: string, serviceName: string, timeWindow: TimeWindow) =>
-  ["service-detail", projectId, serviceName, timeWindow.from, timeWindow.to] as const;
+  ["service-detail", projectId, serviceName, windowKeyOf(timeWindow)] as const;
 
 export const serviceTrendQueryKey = (
   projectId: string,
   serviceName: string,
   timeWindow: TimeWindow,
-) => ["service-trend", projectId, serviceName, timeWindow.from, timeWindow.to] as const;
+) => ["service-trend", projectId, serviceName, windowKeyOf(timeWindow)] as const;
 
 export const serviceEndpointsQueryKey = (
   projectId: string,
   serviceName: string,
   timeWindow: TimeWindow,
-) => ["service-endpoints", projectId, serviceName, timeWindow.from, timeWindow.to] as const;
+) => ["service-endpoints", projectId, serviceName, windowKeyOf(timeWindow)] as const;
 
 export const serviceDependenciesQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["service-dependencies", projectId, timeWindow.from, timeWindow.to] as const;
+  ["service-dependencies", projectId, windowKeyOf(timeWindow)] as const;
 
 export const serviceErrorsQueryKey = (
   projectId: string,
   serviceName: string,
   timeWindow: TimeWindow,
-) => ["service-errors", projectId, serviceName, timeWindow.from, timeWindow.to] as const;
+) => ["service-errors", projectId, serviceName, windowKeyOf(timeWindow)] as const;
 
 function windowParams(projectId: string | undefined, timeWindow: TimeWindow) {
   return { project_id: projectId, from: timeWindow.from, to: timeWindow.to };
@@ -149,6 +150,7 @@ export function useService(
   timeWindow: TimeWindow,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: serviceQueryKey(projectId ?? "", serviceName, timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -173,6 +175,7 @@ export function useServiceTrend(
   timeWindow: TimeWindow,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: serviceTrendQueryKey(projectId ?? "", serviceName, timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -195,6 +198,7 @@ export function useServiceEndpoints(
   timeWindow: TimeWindow,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: serviceEndpointsQueryKey(projectId ?? "", serviceName, timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -222,6 +226,7 @@ export function useServiceErrors(
   timeWindow: TimeWindow,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: serviceErrorsQueryKey(projectId ?? "", serviceName, timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -241,6 +246,7 @@ export function useServiceErrors(
  */
 export function useServiceDependencies(projectId: string | undefined, timeWindow: TimeWindow) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: serviceDependenciesQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -315,7 +321,7 @@ export const durationHeatmapQueryKey = (
   projectId: string,
   serviceName: string,
   timeWindow: TimeWindow,
-) => ["service-duration-heatmap", projectId, serviceName, timeWindow.from, timeWindow.to] as const;
+) => ["service-duration-heatmap", projectId, serviceName, windowKeyOf(timeWindow)] as const;
 
 export function useDurationHeatmap(
   projectId: string | undefined,
@@ -323,6 +329,7 @@ export function useDurationHeatmap(
   timeWindow: TimeWindow,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: durationHeatmapQueryKey(projectId ?? "", serviceName, timeWindow),
     enabled: projectId !== undefined && serviceName !== "",
     queryFn: ({ signal }) =>

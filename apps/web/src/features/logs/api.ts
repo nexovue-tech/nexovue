@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 import type { LogLine } from "./log-feed";
 
@@ -71,7 +72,7 @@ export const logSearchQueryKey = (
   ] as const;
 
 export const logFacetsQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["log-facets", projectId, timeWindow.from, timeWindow.to] as const;
+  ["log-facets", projectId, windowKeyOf(timeWindow)] as const;
 
 /** Newest first, one page at a time. The cursor is opaque; we only hand it back. */
 export function useLogSearch(
@@ -105,6 +106,7 @@ export function useLogSearch(
  */
 export function useLogFacets(projectId: string | undefined, timeWindow: TimeWindow) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: logFacetsQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>

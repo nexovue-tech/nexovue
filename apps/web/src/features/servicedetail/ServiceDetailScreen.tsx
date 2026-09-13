@@ -83,7 +83,7 @@ const AXIS_FORMAT: Record<TrendMetric, (value: number) => string> = {
  */
 export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
 
   const aggregate = useService(projectId, serviceName, timeWindow);
   const trend = useServiceTrend(projectId, serviceName, timeWindow);

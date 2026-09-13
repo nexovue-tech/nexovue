@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/shared/api-client";
 import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 import type { ServiceEdge } from "@/shared/service-peers";
 
 /** The service-map half of the M6 contract. Field names are the API's, unchanged. */
@@ -30,7 +31,7 @@ export interface ServiceMapResponse {
 }
 
 export const serviceMapQueryKey = (projectId: string, timeWindow: TimeWindow, narrowing: string) =>
-  ["service-map", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
+  ["service-map", projectId, windowKeyOf(timeWindow), narrowing] as const;
 
 export function useServiceMap(
   projectId: string | undefined,
@@ -38,6 +39,7 @@ export function useServiceMap(
   narrowing: Record<string, string> = {},
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: serviceMapQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>

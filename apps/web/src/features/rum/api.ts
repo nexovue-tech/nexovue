@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/shared/api-client";
 import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 /** What real browsers measured. Field names are the API's, unchanged. */
 
@@ -44,7 +45,7 @@ export interface WebVitalBreakdown {
 }
 
 export const webVitalsQueryKey = (projectId: string, timeWindow: TimeWindow, narrowing: string) =>
-  ["web-vitals", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
+  ["web-vitals", projectId, windowKeyOf(timeWindow), narrowing] as const;
 
 export const webVitalsBreakdownQueryKey = (
   projectId: string,
@@ -74,6 +75,7 @@ export function useWebVitals(
   narrowing: Record<string, string> = {},
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: webVitalsQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -104,6 +106,7 @@ export function useWebVitalsBreakdown(
   narrowing: Record<string, string> = {},
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: webVitalsBreakdownQueryKey(
       projectId ?? "",
       timeWindow,

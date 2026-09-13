@@ -40,7 +40,7 @@ const NAME_DEBOUNCE_MS = 300;
  */
 export function MetricsScreen() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
   const navigate = useNavigate();
 
   const search = useSearch({ from: "/shell/metrics" });

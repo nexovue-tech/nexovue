@@ -30,8 +30,8 @@ import { orderFindings } from "./ordering";
  * insight engine nobody has designed.
  */
 export function FindingsScreen() {
-  const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const { projectId } = useSelection();
+  const timeWindow = useLiveWindow();
 
   const feed = useFindings(projectId, timeWindow);
   const summary = useProjectSummary(projectId, timeWindow);

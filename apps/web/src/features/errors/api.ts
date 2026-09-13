@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { apiClient } from "@/shared/api-client";
 import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 /** The error-grouping half of the M6 contract. Field names are the API's, unchanged. */
 
@@ -106,10 +107,10 @@ export const errorGroupListQueryKey = (
   projectId: string,
   timeWindow: TimeWindow,
   narrowing: string,
-) => ["error-groups", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
+) => ["error-groups", projectId, windowKeyOf(timeWindow), narrowing] as const;
 
 export const errorGroupQueryKey = (projectId: string, groupId: string, timeWindow: TimeWindow) =>
-  ["error-group", projectId, groupId, timeWindow.from, timeWindow.to] as const;
+  ["error-group", projectId, groupId, windowKeyOf(timeWindow)] as const;
 
 /**
  * Every exception in the window, most frequent first.
@@ -123,6 +124,7 @@ export function useErrorGroups(
   narrowing: Record<string, string> = {},
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: errorGroupListQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -150,6 +152,7 @@ export function useErrorGroup(
   timeWindow: TimeWindow,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: errorGroupQueryKey(projectId ?? "", groupId ?? "", timeWindow),
     enabled: projectId !== undefined && groupId !== undefined,
     queryFn: ({ signal }) =>
@@ -161,7 +164,7 @@ export function useErrorGroup(
 }
 
 export const errorGroupTrendQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["error-group-trend", projectId, timeWindow.from, timeWindow.to] as const;
+  ["error-group-trend", projectId, windowKeyOf(timeWindow)] as const;
 
 /**
  * Every group's history, in one request rather than one per row.
@@ -175,6 +178,7 @@ export function useErrorGroupTrend(
   timeWindow: TimeWindow,
 ): ReadonlyMap<string, readonly GroupTrendPoint[]> {
   const { data } = useQuery({
+    ...liveOptions(timeWindow),
     queryKey: errorGroupTrendQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>

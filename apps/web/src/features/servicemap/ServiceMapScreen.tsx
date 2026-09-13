@@ -43,7 +43,7 @@ const ZOOM_RANGE = { min: 0.25, max: 2 };
 
 export function ServiceMapScreen() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/service-map` renders inside the shell.

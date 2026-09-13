@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/shared/api-client";
 import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 /**
  * Every metric a project reports, and the distribution behind a chosen one.
@@ -80,10 +81,10 @@ export interface HistogramResponse {
 }
 
 export const metricsQueryKey = (projectId: string, timeWindow: TimeWindow, narrowing: string) =>
-  ["metrics", "catalogue", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
+  ["metrics", "catalogue", projectId, windowKeyOf(timeWindow), narrowing] as const;
 
 export const histogramQueryKey = (projectId: string, metricName: string, timeWindow: TimeWindow) =>
-  ["metrics", "histogram", projectId, metricName, timeWindow.from, timeWindow.to] as const;
+  ["metrics", "histogram", projectId, metricName, windowKeyOf(timeWindow)] as const;
 
 /**
  * The catalogue, narrowed by whatever the URL asks for.
@@ -98,6 +99,7 @@ export function useMetricCatalogue(
   narrowing: Record<string, string>,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: metricsQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -126,6 +128,7 @@ export function useHistogram(
   timeWindow: TimeWindow,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: histogramQueryKey(projectId ?? "", metricName ?? "", timeWindow),
     enabled: projectId !== undefined && metricName !== undefined && metricName !== "",
     queryFn: ({ signal }) =>

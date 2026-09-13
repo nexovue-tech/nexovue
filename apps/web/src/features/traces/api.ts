@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 import type { TraceFilters } from "./filters";
 import { toSearchParams } from "./filters";
@@ -154,10 +155,10 @@ export const traceListQueryKey = (
   projectId: string,
   timeWindow: TimeWindow,
   filters: TraceFilters,
-) => ["traces", projectId, timeWindow.from, timeWindow.to, toSearchParams(filters)] as const;
+) => ["traces", projectId, windowKeyOf(timeWindow), toSearchParams(filters)] as const;
 
 export const traceFacetsQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["trace-facets", projectId, timeWindow.from, timeWindow.to] as const;
+  ["trace-facets", projectId, windowKeyOf(timeWindow)] as const;
 
 export const traceQueryKey = (projectId: string, traceId: string) =>
   ["trace", projectId, traceId] as const;
@@ -205,6 +206,7 @@ export function useTraceList(
  */
 export function useTraceFacets(projectId: string | undefined, timeWindow: TimeWindow) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: traceFacetsQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>

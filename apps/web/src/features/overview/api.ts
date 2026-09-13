@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 /**
  * What the dashboard reads.
@@ -43,7 +44,7 @@ interface ServiceOverviewResponse {
 }
 
 export const overviewQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["services-overview", projectId, timeWindow.from, timeWindow.to] as const;
+  ["services-overview", projectId, windowKeyOf(timeWindow)] as const;
 
 /**
  * The project's RED, merged by the store.
@@ -55,6 +56,7 @@ export const overviewQueryKey = (projectId: string, timeWindow: TimeWindow) =>
  */
 export function useProjectOverview(projectId: string | undefined, timeWindow: TimeWindow) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: overviewQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -83,7 +85,7 @@ interface ServiceListResponse {
 export const WORST_SERVICES_SHOWN = 5;
 
 export const worstServicesQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["overview-worst-services", projectId, timeWindow.from, timeWindow.to] as const;
+  ["overview-worst-services", projectId, windowKeyOf(timeWindow)] as const;
 
 /**
  * The few worst services, in the ranking the API already applies.
@@ -94,6 +96,7 @@ export const worstServicesQueryKey = (projectId: string, timeWindow: TimeWindow)
  */
 export function useWorstServices(projectId: string | undefined, timeWindow: TimeWindow) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: worstServicesQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -126,7 +129,7 @@ interface WebVitalsResponse {
 }
 
 export const surfacesQueryKey = (surface: string, projectId: string, timeWindow: TimeWindow) =>
-  ["overview-surface", surface, projectId, timeWindow.from, timeWindow.to] as const;
+  ["overview-surface", surface, projectId, windowKeyOf(timeWindow)] as const;
 
 /**
  * The three surface reads behind the bottom strip.
@@ -153,6 +156,7 @@ export function useNodesSummary(
   ready: boolean,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: surfacesQueryKey("nodes", projectId ?? "", timeWindow),
     enabled: projectId !== undefined && ready,
     queryFn: ({ signal }) =>
@@ -169,6 +173,7 @@ export function useChecksSummary(
   ready: boolean,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: surfacesQueryKey("checks", projectId ?? "", timeWindow),
     enabled: projectId !== undefined && ready,
     queryFn: ({ signal }) =>
@@ -185,6 +190,7 @@ export function useVitalsSummary(
   ready: boolean,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: surfacesQueryKey("vitals", projectId ?? "", timeWindow),
     enabled: projectId !== undefined && ready,
     queryFn: ({ signal }) =>

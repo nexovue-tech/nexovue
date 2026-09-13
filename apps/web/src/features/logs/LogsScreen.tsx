@@ -50,7 +50,7 @@ const SERVICE_COLUMN = "hidden w-44 shrink-0 truncate pr-4 md:block";
  */
 export function LogsScreen() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
 
   const navigate = useNavigate();
   // The route's own id, not its path: `/logs` renders inside the shell. Named

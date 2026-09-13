@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { apiClient } from "@/shared/api-client";
 import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 /** The service-overview half of the M6 contract. Field names are the API's, unchanged. */
 
@@ -72,15 +73,14 @@ export interface EndpointGroup {
 }
 
 export const serviceListQueryKey = (projectId: string, timeWindow: TimeWindow, narrowing: string) =>
-  ["services", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
+  ["services", projectId, windowKeyOf(timeWindow), narrowing] as const;
 
 export const serviceEndpointsQueryKey = (
   projectId: string,
   serviceName: string,
   timeWindow: TimeWindow,
   narrowing: string,
-) =>
-  ["service-endpoints", projectId, serviceName, timeWindow.from, timeWindow.to, narrowing] as const;
+) => ["service-endpoints", projectId, serviceName, windowKeyOf(timeWindow), narrowing] as const;
 
 /**
  * Every service that reported in the window, ranked and narrowed by the server.
@@ -96,6 +96,7 @@ export function useServiceList(
   narrowing: Record<string, string>,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: serviceListQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -112,7 +113,7 @@ export function useServiceList(
 }
 
 export const serviceTrendQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["service-trend", projectId, timeWindow.from, timeWindow.to] as const;
+  ["service-trend", projectId, windowKeyOf(timeWindow)] as const;
 
 /**
  * Every service's history, in one request rather than one per row.
@@ -131,6 +132,7 @@ export function useServiceTrend(
   timeWindow: TimeWindow,
 ): ReadonlyMap<string, readonly TrendPoint[]> {
   const { data } = useQuery({
+    ...liveOptions(timeWindow),
     queryKey: serviceTrendQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/shared/api-client";
 import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 /**
  * What door 4b's Postgres poller read. Field names are the API's, unchanged.
@@ -70,10 +71,10 @@ export const slowStatementsQueryKey = (
   projectId: string,
   timeWindow: TimeWindow,
   narrowing: string,
-) => ["dbstats", "statements", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
+) => ["dbstats", "statements", projectId, windowKeyOf(timeWindow), narrowing] as const;
 
 export const connectionHealthQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["dbstats", "connections", projectId, timeWindow.from, timeWindow.to] as const;
+  ["dbstats", "connections", projectId, windowKeyOf(timeWindow)] as const;
 
 export function useSlowStatements(
   projectId: string | undefined,
@@ -81,6 +82,7 @@ export function useSlowStatements(
   narrowing: Record<string, string> = {},
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: slowStatementsQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -100,6 +102,7 @@ export function useSlowStatements(
 
 export function useConnectionHealth(projectId: string | undefined, timeWindow: TimeWindow) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: connectionHealthQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>

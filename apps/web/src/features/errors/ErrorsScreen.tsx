@@ -51,7 +51,7 @@ const TREND_COLUMN = "w-29 shrink-0 pl-3";
  */
 export function ErrorsScreen() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/errors` renders inside the shell.

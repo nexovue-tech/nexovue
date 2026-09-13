@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 /**
  * The feed's shape, and the reads its healthy state is made of.
@@ -92,7 +93,8 @@ interface CheckListResponse {
  */
 export function useProjectSummary(projectId: string | undefined, timeWindow: TimeWindow) {
   return useQuery({
-    queryKey: ["findings", "summary", projectId ?? "", timeWindow.from, timeWindow.to] as const,
+    ...liveOptions(timeWindow),
+    queryKey: ["findings", "summary", projectId ?? "", windowKeyOf(timeWindow)] as const,
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
       apiClient.get<ServiceOverviewResponse>("services/overview", {
@@ -116,7 +118,8 @@ export function useCheckCounts(
   ready: boolean,
 ) {
   return useQuery({
-    queryKey: ["findings", "checks", projectId ?? "", timeWindow.from, timeWindow.to] as const,
+    ...liveOptions(timeWindow),
+    queryKey: ["findings", "checks", projectId ?? "", windowKeyOf(timeWindow)] as const,
     enabled: projectId !== undefined && ready,
     queryFn: ({ signal }) =>
       apiClient.get<CheckListResponse>("synthetics/checks", {

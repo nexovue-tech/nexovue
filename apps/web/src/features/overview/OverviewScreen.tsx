@@ -39,7 +39,7 @@ import { buildOverviewPlots } from "./overview-plots";
  */
 export function OverviewScreen() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
 
   const overview = useProjectOverview(projectId, timeWindow);
   const worst = useWorstServices(projectId, timeWindow);

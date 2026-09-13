@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { apiClient } from "@/shared/api-client";
 import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
+import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 /**
  * The synthetic-check half of the M4 contract. Field names are the API's, unchanged.
@@ -102,16 +103,16 @@ export const checkResultsQueryKey = (
   projectId: string,
   timeWindow: TimeWindow,
   narrowing: string,
-) => ["synthetics", "checks", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
+) => ["synthetics", "checks", projectId, windowKeyOf(timeWindow), narrowing] as const;
 
 export const phaseBreakdownQueryKey = (
   projectId: string,
   checkId: string,
   timeWindow: TimeWindow,
-) => ["synthetics", "phases", projectId, checkId, timeWindow.from, timeWindow.to] as const;
+) => ["synthetics", "phases", projectId, checkId, windowKeyOf(timeWindow)] as const;
 
 export const checkRunsQueryKey = (projectId: string, checkId: string, timeWindow: TimeWindow) =>
-  ["synthetics", "runs", projectId, checkId, timeWindow.from, timeWindow.to] as const;
+  ["synthetics", "runs", projectId, checkId, windowKeyOf(timeWindow)] as const;
 
 /**
  * The definitions. Deliberately outside the time window: a check defined this morning
@@ -137,6 +138,7 @@ export function useCheckResults(
   narrowing: Record<string, string> = {},
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: checkResultsQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
@@ -159,6 +161,7 @@ export function usePhaseBreakdown(
   timeWindow: TimeWindow,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: phaseBreakdownQueryKey(projectId ?? "", checkId ?? "", timeWindow),
     enabled: projectId !== undefined && checkId !== undefined,
     queryFn: ({ signal }) =>
@@ -178,6 +181,7 @@ export function useCheckRuns(
   timeWindow: TimeWindow,
 ) {
   return useQuery({
+    ...liveOptions(timeWindow),
     queryKey: checkRunsQueryKey(projectId ?? "", checkId ?? "", timeWindow),
     enabled: projectId !== undefined && checkId !== undefined,
     queryFn: ({ signal }) =>
@@ -219,7 +223,7 @@ interface CheckTrendResponse {
 }
 
 export const checkTrendQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["check-trend", projectId, timeWindow.from, timeWindow.to] as const;
+  ["check-trend", projectId, windowKeyOf(timeWindow)] as const;
 
 /**
  * Every check's history, in one request rather than one per row.
@@ -232,6 +236,7 @@ export function useCheckTrend(
   timeWindow: TimeWindow,
 ): ReadonlyMap<string, readonly CheckTrendPoint[]> {
   const { data } = useQuery({
+    ...liveOptions(timeWindow),
     queryKey: checkTrendQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>

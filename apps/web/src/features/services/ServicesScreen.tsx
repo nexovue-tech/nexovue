@@ -67,7 +67,7 @@ const WIDE_ONLY = "hidden lg:block";
  */
 export function ServicesScreen() {
   const { projectId, rangeId } = useSelection();
-  const timeWindow = useLiveWindow(rangeId);
+  const timeWindow = useLiveWindow();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/services` renders inside the pathless shell.
