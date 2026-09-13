@@ -13,6 +13,7 @@ that have nothing to do with each other.
 from __future__ import annotations
 
 from datetime import datetime
+from math import ceil
 from typing import Final
 
 # Exactly the levels the stored `AggregateFunction(quantiles(...), Float64)` was
@@ -28,6 +29,28 @@ P95_INDEX: Final = 2
 P99_INDEX: Final = 3
 
 SECONDS_PER_MINUTE: Final = 60.0
+
+# How many points a sparkline is drawn from. Enough that a shape is visible,
+# few enough that the response stays small and the line does not become a smear
+# — a row-height chart cannot show more than this anyway.
+TREND_POINTS: Final = 60
+
+# The rollup's own resolution. No bucket smaller than this exists, so asking for
+# one would return the same minutes under a different name.
+MIN_BUCKET_SECONDS: Final = 60
+
+
+def trend_bucket_seconds(from_time: datetime, to_time: datetime) -> int:
+    """A bucket that keeps the point count near TREND_POINTS.
+
+    An hour of minutes is 60 points and needs no bucketing; a week is over
+    10,000, which is a large response drawn as a smear. Rounded up to a whole
+    minute because that is the grain the table stores.
+    """
+    span = max((to_time - from_time).total_seconds(), MIN_BUCKET_SECONDS)
+    wanted = span / TREND_POINTS
+    minutes = max(1, ceil(wanted / MIN_BUCKET_SECONDS))
+    return minutes * MIN_BUCKET_SECONDS
 
 
 def window_minutes(from_time: datetime, to_time: datetime) -> float:

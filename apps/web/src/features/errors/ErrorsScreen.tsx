@@ -4,13 +4,13 @@ import { useRef, useState } from "react";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { Sparkline } from "@/shared/components/Sparkline";
 import { formatCount } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import type { TimeWindow } from "@/shared/selection";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
-
-import type { ErrorGroupDetail, ErrorGroupSummary } from "./api";
-import { useErrorGroup, useErrorGroups } from "./api";
+import type { ErrorGroupDetail, ErrorGroupSummary, GroupTrendPoint } from "./api";
+import { useErrorGroup, useErrorGroups, useErrorGroupTrend } from "./api";
 import { ErrorGroupPanel } from "./ErrorGroupDetail";
 import {
   describeErrors,
@@ -29,6 +29,9 @@ const SERVICES_COLUMN = "hidden w-40 shrink-0 lg:block";
 const COUNT_COLUMN = "w-16 shrink-0 text-right";
 const STARTED_COLUMN = "w-28 shrink-0 text-right";
 const LAST_SEEN_COLUMN = "hidden w-24 shrink-0 text-right sm:block";
+/* 104px of sparkline plus its 12px gutter, so the drawing does not push into the row's
+   own right padding. Reserved on every row so nothing shifts when a group has no trend. */
+const TREND_COLUMN = "w-29 shrink-0 pl-3";
 
 /**
  * Every exception in the window, grouped — a hundred identical crashes on one line.
@@ -43,6 +46,7 @@ export function ErrorsScreen() {
   const [selectedGroupId, setSelectedGroupId] = useState<string>();
 
   const groups = useErrorGroups(projectId, timeWindow);
+  const trendByGroup = useErrorGroupTrend(projectId, timeWindow);
   const detail = useErrorGroup(projectId, selectedGroupId, timeWindow);
 
   // The stack the panel will show is the one symbolication is asked about, so
@@ -65,6 +69,7 @@ export function ErrorsScreen() {
       symbolication={symbolication}
       timeWindow={timeWindow}
       groups={listed}
+      trendByGroup={trendByGroup}
       isPending={groups.isPending}
       isError={groups.isError}
       error={groups.error}
@@ -87,6 +92,8 @@ interface ErrorsViewProps {
   symbolication: SymbolicationState;
   timeWindow: TimeWindow;
   groups: readonly ErrorGroupSummary[];
+  /** Keyed by group id. A group missing from it has no trend and renders the rule. */
+  trendByGroup?: ReadonlyMap<string, readonly GroupTrendPoint[]>;
   isPending: boolean;
   isError: boolean;
   error?: unknown;
@@ -106,6 +113,7 @@ export function ErrorsView({
   symbolication,
   timeWindow,
   groups,
+  trendByGroup,
   isPending,
   isError,
   error,
@@ -118,6 +126,8 @@ export function ErrorsView({
   detailError,
   onDetailRetry,
 }: ErrorsViewProps) {
+  const ceiling = trendCeiling(groups, trendByGroup);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: groups.length,
@@ -167,6 +177,8 @@ export function ErrorsView({
                     onSelect={onSelect}
                     offsetTop={item.start}
                     height={item.size}
+                    trend={trendByGroup?.get(groups[item.index].group_id)}
+                    ceiling={ceiling}
                   />
                 ))}
               </div>
@@ -206,6 +218,7 @@ function ColumnHeader() {
       <span className={COUNT_COLUMN}>Count</span>
       <span className={STARTED_COLUMN}>Started</span>
       <span className={LAST_SEEN_COLUMN}>Last</span>
+      <span className={TREND_COLUMN}>Trend</span>
     </div>
   );
 }
@@ -214,6 +227,25 @@ function ColumnHeader() {
  * One group: the exception, the message every instance of it collapsed into, and the
  * three numbers that say whether it is an incident or a long-standing bug.
  */
+/**
+ * One scale for the screen, so two rows can be compared.
+ *
+ * Every row here is an exception, so unlike the service list there is no second kind of
+ * series to scale separately — a group's occurrences are a group's occurrences.
+ */
+export function trendCeiling(
+  groups: readonly ErrorGroupSummary[],
+  trendByGroup: ReadonlyMap<string, readonly GroupTrendPoint[]> | undefined,
+): number {
+  let ceiling = 0;
+  for (const group of groups) {
+    for (const point of trendByGroup?.get(group.group_id) ?? []) {
+      if (point.occurrences > ceiling) ceiling = point.occurrences;
+    }
+  }
+  return ceiling;
+}
+
 function GroupRow({
   group,
   timeWindow,
@@ -221,6 +253,8 @@ function GroupRow({
   onSelect,
   offsetTop,
   height,
+  trend,
+  ceiling,
 }: {
   group: ErrorGroupSummary;
   timeWindow: TimeWindow;
@@ -228,6 +262,8 @@ function GroupRow({
   onSelect: (groupId: string) => void;
   offsetTop: number;
   height: number;
+  trend?: readonly GroupTrendPoint[];
+  ceiling: number;
 }) {
   const startedHere = isNewInWindow(group, timeWindow);
 
@@ -283,6 +319,15 @@ function GroupRow({
           title={formatTimestamp(group.last_seen)}
         >
           {formatRelativeTime(group.last_seen)}
+        </span>
+
+        <span className={TREND_COLUMN}>
+          <Sparkline
+            points={(trend ?? []).map((point) => point.occurrences)}
+            max={ceiling}
+            tone="critical"
+            label={`${group.exception_type} occurrences over the window`}
+          />
         </span>
       </button>
     </div>

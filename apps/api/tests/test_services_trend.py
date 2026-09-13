@@ -17,6 +17,7 @@ from typing import Any, Final
 
 import pytest
 
+from nexovue_api import rollup
 from nexovue_api.data.clickhouse.base import TenantScopedRepository, binds_tenant
 from nexovue_api.services import queries, service
 
@@ -116,7 +117,7 @@ def test_naming_one_service_adds_a_predicate_and_nothing_else() -> None:
 )
 def test_the_bucket_grows_with_the_window(window: timedelta, expected_seconds: int) -> None:
     end = WINDOW_END
-    assert service.trend_bucket_seconds(end - window, end) == expected_seconds
+    assert rollup.trend_bucket_seconds(end - window, end) == expected_seconds
 
 
 @pytest.mark.parametrize(
@@ -124,15 +125,15 @@ def test_the_bucket_grows_with_the_window(window: timedelta, expected_seconds: i
 )
 def test_no_window_produces_more_points_than_a_sparkline_can_show(window: timedelta) -> None:
     """The reason bucketing exists. A month of minutes is 43,200 points."""
-    bucket = service.trend_bucket_seconds(WINDOW_END - window, WINDOW_END)
+    bucket = rollup.trend_bucket_seconds(WINDOW_END - window, WINDOW_END)
     points = window.total_seconds() / bucket
 
-    assert points <= service.TREND_POINTS + 1
+    assert points <= rollup.TREND_POINTS + 1
 
 
 def test_the_bucket_is_never_finer_than_the_table_stores() -> None:
     """A sub-minute bucket would return the same minutes under another name."""
-    assert service.trend_bucket_seconds(WINDOW_END, WINDOW_END) == service.MIN_BUCKET_SECONDS
+    assert rollup.trend_bucket_seconds(WINDOW_END, WINDOW_END) == rollup.MIN_BUCKET_SECONDS
 
 
 # ------------------------------------------------------------------------- shaping

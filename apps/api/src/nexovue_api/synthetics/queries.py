@@ -92,6 +92,30 @@ ORDER BY check_id
 LIMIT {{limit:UInt32}}
 """
 
+# Each check's history, bucket by bucket — the sparkline in its row.
+#
+# The duration is `avgIf` over the bucket, and **a bucket with no successful run has no
+# duration at all**: `avgIf` over nothing returns nothing, and `runs`/`successful_runs`
+# beside it say why. The service turns that into a gap rather than a zero, because a
+# check that failed has no response time and a line drawn at zero would read as the site
+# getting instantly fast.
+CHECK_TRENDS_SQL: Final = f"""
+SELECT
+    {CHECK_ID} AS check_id,
+    {_BUCKET_NANOS} AS bucket_nanos,
+    countIf(metric_name = '{METRIC_STATUS}') AS runs,
+    countIf(metric_name = '{METRIC_STATUS}' AND value = {UP_VALUE}) AS successful_runs,
+    avgIf(value, metric_name = '{METRIC_DURATION}') AS mean_seconds
+FROM metrics_gauge
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND metric_name IN ('{METRIC_STATUS}', '{METRIC_DURATION}')
+{_WINDOW_PREDICATE}
+GROUP BY check_id, bucket_nanos
+ORDER BY check_id, bucket_nanos
+LIMIT {{limit:UInt32}}
+"""
+
 # The phase breakdown: which part of the request was slow, over time.
 # One row per bucket per phase, which the service pivots into one point per
 # bucket carrying every phase — the shape a stacked chart plots without

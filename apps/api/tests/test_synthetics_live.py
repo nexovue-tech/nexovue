@@ -286,3 +286,58 @@ async def test_the_readings_this_suite_asserts_on_are_visible_in_the_store(
     assert counts.get(queries.METRIC_PHASE_DURATION, 0) > 0
     # Five phase readings per probe, one status reading per probe.
     assert counts[queries.METRIC_PHASE_DURATION] == len(PHASE_ORDER) * counts[queries.METRIC_STATUS]
+
+
+async def test_a_checks_buckets_account_for_every_run_its_summary_counted(
+    client: AsyncClient, subject: SyntheticSubject
+) -> None:
+    """The sparkline and the uptime beside it must count the same probes.
+
+    `runs` counts status points rather than rows, because one probe writes a status, a
+    duration, five phases and a certificate. A trend that counted rows would report a
+    check that ran once as having run eight times, and the row's own number would
+    disagree with its line.
+    """
+    from_time, to_time = _window()
+    repository = _repository(client, subject.tenant_id)
+
+    summaries = await service.list_check_results(
+        repository, project_id=subject.project_id, from_time=from_time, to_time=to_time
+    )
+    trends = await service.check_trends(
+        repository, project_id=subject.project_id, from_time=from_time, to_time=to_time
+    )
+
+    summary = next(check for check in summaries.checks if check.check_id == subject.check_id)
+    series = next(trend for trend in trends.checks if trend.check_id == subject.check_id)
+
+    assert sum(point.runs for point in series.points) == summary.runs
+    assert sum(point.successful_runs for point in series.points) == summary.successful_runs
+
+
+async def test_a_bucket_nothing_succeeded_in_reports_no_duration_rather_than_zero(
+    client: AsyncClient, subject: SyntheticSubject
+) -> None:
+    """A failed probe has no response time.
+
+    Drawn as zero it would read as the site getting instantly fast at the moment it went
+    down, which is the opposite of what happened. On a healthy stack there may be no
+    failing bucket to find, so this asserts the invariant rather than the existence of a
+    failure — it bites the first time one occurs.
+    """
+    from_time, to_time = _window()
+    trends = await service.check_trends(
+        _repository(client, subject.tenant_id),
+        project_id=subject.project_id,
+        from_time=from_time,
+        to_time=to_time,
+    )
+
+    points = [point for trend in trends.checks for point in trend.points]
+    assert points, "no synthetic buckets in the window; the scheduler is not running"
+
+    for point in points:
+        if point.successful_runs == 0:
+            assert point.mean_duration_ms is None
+        else:
+            assert point.mean_duration_ms is not None

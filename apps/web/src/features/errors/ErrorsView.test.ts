@@ -101,6 +101,7 @@ afterEach(() => {
 
 interface Overrides {
   groups?: readonly ErrorGroupSummary[];
+  trendByGroup?: ReadonlyMap<string, readonly { bucket: string; occurrences: number }[]>;
   isPending?: boolean;
   isError?: boolean;
   error?: unknown;
@@ -274,5 +275,47 @@ describe("ErrorsView", () => {
 
     expect(rendered).toContain("Instances could not be loaded");
     expect(rendered).toContain("TimeoutError");
+  });
+});
+
+describe("ErrorsView trends", () => {
+  const trend = (peak: number, count = 6) =>
+    Array.from({ length: count }, (_, index) => ({
+      bucket: new Date(index * 60_000).toISOString(),
+      occurrences: Math.round((peak / count) * (index + 1)),
+    }));
+
+  const endHeights = (container: HTMLElement) =>
+    [...container.querySelectorAll("polyline")].map((line) => {
+      const ys = (line.getAttribute("points") ?? "")
+        .split(" ")
+        .filter(Boolean)
+        .map((pair) => Number(pair.split(",")[1]));
+      return ys[ys.length - 1];
+    });
+
+  it("draws every group against one scale, so two rows can be compared", async () => {
+    const container = await render({
+      groups: [LONG_STANDING, DECLINED],
+      trendByGroup: new Map([
+        [LONG_STANDING.group_id, trend(100)],
+        [DECLINED.group_id, trend(10)],
+      ]),
+    });
+
+    const [busy, quiet] = endHeights(container);
+
+    // Lower y is higher on screen: the busier group must end visibly above the quieter.
+    expect(busy).toBeLessThan(quiet);
+  });
+
+  it("keeps a group whose trend never arrived, and rules the cell", async () => {
+    const container = await render({
+      groups: [LONG_STANDING, DECLINED],
+      trendByGroup: new Map([[LONG_STANDING.group_id, trend(100)]]),
+    });
+
+    expect(container.querySelectorAll("polyline")).toHaveLength(1);
+    expect(readable(container)).toContain(DECLINED.exception_type);
   });
 });

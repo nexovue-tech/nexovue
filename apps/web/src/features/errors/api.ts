@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
@@ -44,6 +45,25 @@ export interface ErrorOccurrence {
    * when the sender stamped no version, and a stack with no release cannot be
    * symbolicated at all. */
   release: string;
+}
+
+/** One bucket of a group's history. */
+export interface GroupTrendPoint {
+  bucket: string;
+  /** Counted as the group's own `occurrences` is, so the line and the number agree. */
+  occurrences: number;
+}
+
+interface GroupTrend {
+  group_id: string;
+  points: GroupTrendPoint[];
+}
+
+interface GroupTrendResponse {
+  window_start: string;
+  window_end: string;
+  bucket_seconds: number;
+  groups: GroupTrend[];
 }
 
 interface ErrorGroupListResponse {
@@ -100,4 +120,34 @@ export function useErrorGroup(
         signal,
       }),
   });
+}
+
+export const errorGroupTrendQueryKey = (projectId: string, timeWindow: TimeWindow) =>
+  ["error-group-trend", projectId, timeWindow.from, timeWindow.to] as const;
+
+/**
+ * Every group's history, in one request rather than one per row.
+ *
+ * Separate from the list on purpose: the rows must appear as soon as the list lands and
+ * fill in their lines when this arrives. A group missing from the map has no trend to
+ * draw and renders the rule rather than disappearing.
+ */
+export function useErrorGroupTrend(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+): ReadonlyMap<string, readonly GroupTrendPoint[]> {
+  const { data } = useQuery({
+    queryKey: errorGroupTrendQueryKey(projectId ?? "", timeWindow),
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<GroupTrendResponse>("error-groups/trend", {
+        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        signal,
+      }),
+  });
+
+  return useMemo(
+    () => new Map((data?.groups ?? []).map((trend) => [trend.group_id, trend.points])),
+    [data],
+  );
 }

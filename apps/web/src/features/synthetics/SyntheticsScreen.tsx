@@ -3,12 +3,13 @@ import { useState } from "react";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { Sparkline } from "@/shared/components/Sparkline";
 import { formatDuration } from "@/shared/format/duration";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
-import type { CheckDefinition, CheckResultSummary } from "./api";
-import { useCheckDefinitions, useCheckResults } from "./api";
+import type { CheckDefinition, CheckResultSummary, CheckTrendPoint } from "./api";
+import { useCheckDefinitions, useCheckResults, useCheckTrend } from "./api";
 import type { Urgency } from "./check-health";
 import {
   certificateUrgency,
@@ -49,6 +50,7 @@ export function SyntheticsScreen() {
 
   const definitions = useCheckDefinitions(projectId);
   const results = useCheckResults(projectId, timeWindow);
+  const trendByCheck = useCheckTrend(projectId, timeWindow);
   const [chosenCheckId, setChosenCheckId] = useState<string>();
 
   const checks = results.data ?? [];
@@ -93,6 +95,7 @@ export function SyntheticsScreen() {
       ) : (
         <>
           <CheckTable
+            trendByCheck={trendByCheck}
             checks={checks}
             targets={targets}
             selectedCheckId={selected?.check_id}
@@ -107,17 +110,45 @@ export function SyntheticsScreen() {
   );
 }
 
+/* 104px of sparkline plus its 12px gutter, reserved on every row. */
+const TREND_COLUMN = "w-29 shrink-0 pl-3";
+
+/**
+ * One scale for the screen, in milliseconds, so two checks are comparable.
+ *
+ * Buckets with no successful run carry no duration and contribute nothing to the
+ * ceiling — a failure must not raise or lower the scale the successes are drawn against.
+ */
+export function trendCeiling(
+  checks: readonly CheckResultSummary[],
+  trendByCheck: ReadonlyMap<string, readonly CheckTrendPoint[]> | undefined,
+): number {
+  let ceiling = 0;
+  for (const check of checks) {
+    for (const point of trendByCheck?.get(check.check_id) ?? []) {
+      if (point.mean_duration_ms !== null && point.mean_duration_ms > ceiling) {
+        ceiling = point.mean_duration_ms;
+      }
+    }
+  }
+  return ceiling;
+}
+
 function CheckTable({
   checks,
   targets,
   selectedCheckId,
   onSelect,
+  trendByCheck,
 }: {
   checks: readonly CheckResultSummary[];
   targets: Map<string, CheckDefinition>;
   selectedCheckId: string | undefined;
   onSelect: (checkId: string) => void;
+  trendByCheck?: ReadonlyMap<string, readonly CheckTrendPoint[]>;
 }) {
+  const ceiling = trendCeiling(checks, trendByCheck);
+
   return (
     <div className="shrink-0">
       <div className="flex items-center border-line border-b bg-surface px-4 py-1.5 pl-6 font-mono text-2xs text-ink-dim uppercase tracking-caps">
@@ -128,6 +159,7 @@ function CheckTable({
         <span className="w-20 text-right">p95</span>
         <span className="hidden w-20 text-right md:block">Max</span>
         <span className="hidden w-40 text-right lg:block">Certificate</span>
+        <span className={TREND_COLUMN}>Trend</span>
       </div>
 
       {checks.map((check) => (
@@ -137,6 +169,8 @@ function CheckTable({
           definition={targets.get(check.check_id)}
           selected={check.check_id === selectedCheckId}
           onSelect={onSelect}
+          trend={trendByCheck?.get(check.check_id)}
+          ceiling={ceiling}
         />
       ))}
     </div>
@@ -148,11 +182,15 @@ function CheckRow({
   definition,
   selected,
   onSelect,
+  trend,
+  ceiling,
 }: {
   check: CheckResultSummary;
   definition: CheckDefinition | undefined;
   selected: boolean;
   onSelect: (checkId: string) => void;
+  trend?: readonly CheckTrendPoint[];
+  ceiling: number;
 }) {
   const urgency = checkUrgency(check);
 
@@ -195,6 +233,18 @@ function CheckRow({
 
       <span className="hidden w-40 truncate text-right font-mono text-2xs lg:block">
         <Certificate check={check} />
+      </span>
+
+      <span className={TREND_COLUMN}>
+        {/* A bucket nothing succeeded in has no duration, and the line breaks there. A
+            zero would be drawn on the floor and read as the site getting instantly
+            fast at the moment it went down. */}
+        <Sparkline
+          points={(trend ?? []).map((point) => point.mean_duration_ms)}
+          max={ceiling}
+          absent="gap"
+          label={`${identityOf(check, definition)} response time over the window`}
+        />
       </span>
     </button>
   );

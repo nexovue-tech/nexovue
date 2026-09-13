@@ -8,6 +8,7 @@ one point per bucket.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
 from typing import Any, Final
 
@@ -21,6 +22,9 @@ from nexovue_api.synthetics.schemas import (
     CheckResultSummary,
     CheckRun,
     CheckRunListResponse,
+    CheckTrend,
+    CheckTrendPoint,
+    CheckTrendResponse,
     PhaseBreakdownResponse,
     PhaseBucket,
     TlsCertificate,
@@ -49,6 +53,10 @@ MAX_BUCKET_SECONDS: Final = 86_400
 # Buckets times phases. Well above what `TARGET_BUCKETS` produces, so it binds
 # only on a caller who asked for a very fine bucket over a very long window.
 MAX_PHASE_ROWS: Final = 20_000
+
+# One row per check per bucket. Sized so a project at the check cap still gets a full
+# window of points rather than a prefix.
+MAX_TREND_ROWS: Final = MAX_CHECKS * 200
 
 
 def resolve_bucket_seconds(from_time: datetime, to_time: datetime, requested: int | None) -> int:
@@ -81,6 +89,51 @@ async def list_check_results(
         _window_parameters(project_id, from_time, to_time) | {"limit": MAX_CHECKS},
     )
     return CheckResultListResponse(checks=[_to_summary(row) for row in rows])
+
+
+async def check_trends(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> CheckTrendResponse:
+    """Each check's history across the window, for the sparkline in its row.
+
+    A bucket in which nothing succeeded carries no duration. That is the whole reason
+    this returns `None` rather than `0.0`: a failed probe has no response time, and a
+    line drawn at zero claims the site got instantly fast at the moment it went down.
+    """
+    bucket_seconds = resolve_bucket_seconds(from_time, to_time, None)
+    rows = await repository.query(
+        queries.CHECK_TRENDS_SQL,
+        _window_parameters(project_id, from_time, to_time)
+        | {"bucket_seconds": bucket_seconds, "limit": MAX_TREND_ROWS},
+    )
+
+    by_check: dict[str, list[CheckTrendPoint]] = defaultdict(list)
+    for row in rows:
+        successful = int(row["successful_runs"])
+        by_check[values.text(row["check_id"])].append(
+            CheckTrendPoint(
+                bucket=values.nanos_to_datetime(row["bucket_nanos"]),
+                runs=int(row["runs"]),
+                successful_runs=successful,
+                mean_duration_ms=(
+                    float(row["mean_seconds"]) * MILLISECONDS_PER_SECOND if successful else None
+                ),
+            )
+        )
+
+    return CheckTrendResponse(
+        window_start=from_time,
+        window_end=to_time,
+        bucket_seconds=bucket_seconds,
+        checks=[
+            CheckTrend(check_id=check_id, points=points)
+            for check_id, points in sorted(by_check.items())
+        ],
+    )
 
 
 async def phase_breakdown(

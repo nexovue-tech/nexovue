@@ -29,6 +29,7 @@ from nexovue_api.synthetics import service
 from nexovue_api.synthetics.schemas import (
     CheckResultListResponse,
     CheckRunListResponse,
+    CheckTrendResponse,
     PhaseBreakdownResponse,
 )
 from nexovue_api.window import clamp_limit, resolve_window
@@ -112,4 +113,23 @@ async def list_runs(
         from_time=window_start,
         to_time=window_end,
         limit=clamp_limit(limit, default=service.DEFAULT_RUN_LIMIT, maximum=service.MAX_RUN_LIMIT),
+    )
+
+
+@router.get("/checks/trend", summary="Each check's uptime and duration, bucket by bucket")
+async def check_trends(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+) -> CheckTrendResponse:
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.check_trends(
+        repository,
+        project_id=str(project.id),
+        from_time=window_start,
+        to_time=window_end,
     )

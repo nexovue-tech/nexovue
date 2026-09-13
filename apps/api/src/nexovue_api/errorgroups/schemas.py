@@ -64,3 +64,33 @@ class ErrorGroupDetailResponse(BaseModel):
     group: ErrorGroupSummary
     # Newest first, so the first entry is the one a reader opens.
     recent: list[ErrorOccurrence] = Field(default_factory=list)
+
+
+class GroupTrendPoint(BaseModel):
+    """One bucket of a group's history."""
+
+    bucket: IsoTimestamp
+    # Counted exactly as the group's own `occurrences` is, so the sparkline and the
+    # number beside it cannot disagree.
+    occurrences: int
+
+
+class GroupTrend(BaseModel):
+    """One group's history across the window, oldest first."""
+
+    group_id: str
+    points: list[GroupTrendPoint]
+
+
+class GroupTrendResponse(BaseModel):
+    """What each row's sparkline is drawn from.
+
+    `bucket_seconds` is returned rather than assumed: the server chooses it from the
+    window length, so a client plotting against a fixed minute would mis-scale its own
+    axis on any window wider than an hour.
+    """
+
+    window_start: IsoTimestamp
+    window_end: IsoTimestamp
+    bucket_seconds: int
+    groups: list[GroupTrend] = Field(default_factory=list)

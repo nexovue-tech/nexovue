@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
-from math import ceil
 from typing import Any, Final
 
 from nexovue_api import rollup
@@ -40,28 +39,6 @@ ONE_SERVICE_LIMIT: Final = 1
 DEFAULT_ENDPOINT_LIMIT: Final = 100
 MAX_ENDPOINT_LIMIT: Final = 1_000
 
-# How many points a sparkline is drawn from. Enough that a shape is visible,
-# few enough that the response stays small and the line does not become a smear
-# — a row-height chart cannot show more than this anyway.
-TREND_POINTS: Final = 60
-
-# The rollup's own resolution. No bucket smaller than this exists, so asking for
-# one would return the same minutes under a different name.
-MIN_BUCKET_SECONDS: Final = 60
-
-
-def trend_bucket_seconds(from_time: datetime, to_time: datetime) -> int:
-    """A bucket that keeps the point count near TREND_POINTS.
-
-    An hour of minutes is 60 points and needs no bucketing; a week is over
-    10,000, which is a large response drawn as a smear. Rounded up to a whole
-    minute because that is the grain the table stores.
-    """
-    span = max((to_time - from_time).total_seconds(), MIN_BUCKET_SECONDS)
-    wanted = span / TREND_POINTS
-    minutes = max(1, ceil(wanted / MIN_BUCKET_SECONDS))
-    return minutes * MIN_BUCKET_SECONDS
-
 
 async def service_trend(
     repository: TenantScopedRepository,
@@ -76,7 +53,7 @@ async def service_trend(
     Same source and same window as the aggregate beside it, so a row and its
     trend can never disagree about what they are describing.
     """
-    bucket_seconds = trend_bucket_seconds(from_time, to_time)
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
     parameters = _window_parameters(project_id, from_time, to_time) | {
         "bucket_seconds": bucket_seconds
     }
@@ -90,7 +67,7 @@ async def service_trend(
     # Each bucket is its own small window, so a rate is against the bucket
     # rather than the whole span — otherwise a quiet minute inside a busy hour
     # would read as the hour's average and the line would be flat.
-    bucket_minutes = bucket_seconds / MIN_BUCKET_SECONDS
+    bucket_minutes = bucket_seconds / rollup.MIN_BUCKET_SECONDS
     by_service: dict[str, list[TrendPoint]] = defaultdict(list)
     for row in rows:
         latency = rollup.Latency(row["latency_ms"])

@@ -210,3 +210,85 @@ async def test_another_tenant_reads_none_of_these_errors(client: AsyncClient, te
         limit=50,
     )
     assert groups.groups == []
+
+
+async def _write_error_at(
+    client: AsyncClient, *, tenant_id: str, project_id: str, at: datetime, trace: str
+) -> None:
+    """One exception at a chosen instant, carrying trace context so it deduplicates."""
+    await client.command(
+        """
+        INSERT INTO logs (timestamp, received_at, retention_days, tenant_id, project_id,
+                          trace_id, span_id, service_name, severity, severity_number,
+                          body, body_structured, resource_attrs, log_attrs,
+                          exception_type, exception_message, timestamp_source)
+        SELECT %(at)s, %(at)s, 30, %(tenant)s, %(project)s,
+               %(trace)s, %(span)s, 'acme-storefront', 'ERROR', 17,
+               %(message)s, '{}', %(resource)s, %(attrs)s,
+               %(type)s, %(message)s, 'event'
+        """,
+        parameters={
+            "at": at,
+            "tenant": tenant_id,
+            "project": project_id,
+            "trace": trace,
+            "span": trace[:16],
+            "message": MESSAGE,
+            "resource": json.dumps({"service": {"name": "acme-storefront"}}),
+            "attrs": json.dumps(
+                {"exception": {"type": EXCEPTION_TYPE, "message": MESSAGE, "stacktrace": ""}}
+            ),
+            "type": EXCEPTION_TYPE,
+        },
+    )
+
+
+async def test_a_groups_buckets_sum_to_the_occurrences_its_row_claims(
+    client: AsyncClient, tenant: str
+) -> None:
+    """The sparkline and the number beside it must count the same thing.
+
+    Occurrences are deduplicated on trace:span, because one exception reaches us as both
+    a span event and a log record. A trend that counted rows instead would draw twice the
+    shape the row's own number claims, and nothing on the screen could say which was
+    right.
+    """
+    project_id = str(uuid.uuid4())
+    now = datetime.now(UTC)
+    window_start, window_end = now - timedelta(hours=2), now + timedelta(minutes=1)
+
+    # Five occurrences spread across the window, each with its own trace context.
+    for index in range(5):
+        await _write_error_at(
+            client,
+            tenant_id=tenant,
+            project_id=project_id,
+            at=now - timedelta(minutes=index * 20),
+            trace=f"{index:032x}",
+        )
+
+    repository = TenantScopedRepository(client, tenant_id=tenant)
+    listed = await service.list_error_groups(
+        repository,
+        project_id=project_id,
+        service_name=None,
+        from_time=window_start,
+        to_time=window_end,
+        limit=10,
+    )
+    trends = await service.group_trends(
+        repository,
+        project_id=project_id,
+        service_name=None,
+        from_time=window_start,
+        to_time=window_end,
+    )
+
+    assert len(listed.groups) == 1
+    group = listed.groups[0]
+    assert group.occurrences == 5
+
+    series = next(trend for trend in trends.groups if trend.group_id == group.group_id)
+    assert sum(point.occurrences for point in series.points) == group.occurrences
+    # Spread over 80 minutes, so the buckets are not all one.
+    assert len(series.points) > 1

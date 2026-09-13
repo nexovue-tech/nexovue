@@ -20,7 +20,11 @@ from fastapi import APIRouter, Query
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
 from nexovue_api.deps import DbSession
 from nexovue_api.errorgroups import service
-from nexovue_api.errorgroups.schemas import ErrorGroupDetailResponse, ErrorGroupListResponse
+from nexovue_api.errorgroups.schemas import (
+    ErrorGroupDetailResponse,
+    ErrorGroupListResponse,
+    GroupTrendResponse,
+)
 from nexovue_api.projects.service import require_project
 from nexovue_api.window import clamp_limit, resolve_window
 
@@ -70,6 +74,27 @@ async def get_error_group(
         repository,
         project_id=str(project.id),
         group_id=group_id,
+        from_time=window_start,
+        to_time=window_end,
+    )
+
+
+@router.get("/trend", summary="How often each group happened, bucket by bucket")
+async def group_trends(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+    service_name: Annotated[str | None, Query(alias="service")] = None,
+) -> GroupTrendResponse:
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.group_trends(
+        repository,
+        project_id=str(project.id),
+        service_name=service_name,
         from_time=window_start,
         to_time=window_end,
     )

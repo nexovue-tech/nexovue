@@ -234,6 +234,38 @@ LIMIT {{limit:UInt32}}
 """
 
 
+# The bucket an occurrence falls in. `occurred_nanos` is already an integer, so the
+# arithmetic is integer division rather than `toStartOfInterval` — and the width is a
+# bound parameter, which `INTERVAL {n} SECOND` cannot take. The same reason
+# `synthetics/queries.py` gives for its own bucket.
+NANOS_PER_SECOND: Final = 1_000_000_000
+_BUCKET_NANOS: Final = (
+    f"intDiv(occurred_nanos, {{bucket_seconds:UInt32}} * {NANOS_PER_SECOND})"
+    f" * ({{bucket_seconds:UInt32}} * {NANOS_PER_SECOND})"
+)
+
+# How often each group happened, bucket by bucket — the sparkline in its row.
+#
+# Counted exactly as the list counts: the same exception reaches us as a span event and
+# as a log record, so occurrences are deduplicated on trace:span and only what carries
+# neither is counted outright. A trend that counted rows would draw twice the shape the
+# row's own number claims.
+#
+# Grouped over `_GROUPED` rather than a second scan: the list already reads these rows,
+# and this reads them again the same way rather than approximating them a different one.
+_GROUP_TRENDS_TEMPLATE: Final = f"""
+SELECT
+    group_id,
+    {_BUCKET_NANOS} AS bucket_nanos,
+    uniqExactIf(occurrence_key, occurrence_key != '')
+        + countIf(occurrence_key = '') AS occurrences
+FROM ({_GROUPED})
+GROUP BY group_id, bucket_nanos
+ORDER BY group_id, bucket_nanos
+LIMIT {{limit:UInt32}}
+"""
+
+
 def _narrowed_to_service(sql: str, *, one_service: bool) -> str:
     return sql.replace(_ONE_SERVICE_PLACEHOLDER, ONE_SERVICE_CLAUSE if one_service else "")
 
@@ -276,3 +308,8 @@ LIMIT {{limit:UInt32}}
 """,
     one_service=False,
 )
+
+
+def group_trends_sql(*, one_service: bool) -> str:
+    """The per-bucket occurrence counts, narrowed to one service when one is named."""
+    return _narrowed_to_service(_GROUP_TRENDS_TEMPLATE, one_service=one_service)

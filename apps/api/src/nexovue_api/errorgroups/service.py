@@ -7,9 +7,11 @@ and digging the stacktrace out of the JSON it was left in.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
 from typing import Any, Final
 
+from nexovue_api import rollup
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.errorgroups import queries
@@ -20,6 +22,9 @@ from nexovue_api.errorgroups.schemas import (
     ErrorGroupListResponse,
     ErrorGroupSummary,
     ErrorOccurrence,
+    GroupTrend,
+    GroupTrendPoint,
+    GroupTrendResponse,
 )
 from nexovue_api.errors.exceptions import NotFoundError
 from nexovue_api.window import receive_window
@@ -38,6 +43,10 @@ EXCEPTION_MESSAGE_ATTRIBUTE: Final = "exception.message"
 EXCEPTION_STACKTRACE_ATTRIBUTE: Final = "exception.stacktrace"
 
 GROUP_NOT_FOUND_DETAIL: Final = "No such error group in this window."
+
+# One group's row needs its own series; a page of fifty needs fifty. Sized from the
+# shared bucket arithmetic so the cap moves with it rather than drifting from it.
+MAX_TREND_ROWS: Final = MAX_LIMIT * rollup.TREND_POINTS
 
 
 async def list_error_groups(
@@ -185,3 +194,48 @@ def _span_event_stacktrace(detail_json: object, exception_type: str, exception_m
             return stacktrace
         first_stacktrace = first_stacktrace or stacktrace
     return first_stacktrace
+
+
+async def group_trends(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    service_name: str | None,
+    from_time: datetime,
+    to_time: datetime,
+) -> GroupTrendResponse:
+    """Each group's history across the window, for the sparkline in its row.
+
+    Same source, same window and the same deduplication as the list beside it, so a
+    row's number and its line cannot disagree about what they are counting.
+    """
+    bucket_seconds = rollup.trend_bucket_seconds(from_time, to_time)
+    parameters = _window_parameters(project_id, from_time, to_time) | {
+        "bucket_seconds": bucket_seconds,
+        "limit": MAX_TREND_ROWS,
+    }
+    if service_name is not None:
+        parameters["service_name"] = service_name
+
+    rows = await repository.query(
+        queries.group_trends_sql(one_service=service_name is not None), parameters
+    )
+
+    by_group: dict[str, list[GroupTrendPoint]] = defaultdict(list)
+    for row in rows:
+        by_group[values.text(row["group_id"])].append(
+            GroupTrendPoint(
+                bucket=values.nanos_to_datetime(row["bucket_nanos"]),
+                occurrences=int(row["occurrences"]),
+            )
+        )
+
+    return GroupTrendResponse(
+        window_start=from_time,
+        window_end=to_time,
+        bucket_seconds=bucket_seconds,
+        groups=[
+            GroupTrend(group_id=group_id, points=points)
+            for group_id, points in sorted(by_group.items())
+        ],
+    )

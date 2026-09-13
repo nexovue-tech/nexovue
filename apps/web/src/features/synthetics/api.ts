@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
@@ -181,4 +182,54 @@ export function useCheckRuns(
       ),
     select: (response) => response.runs,
   });
+}
+
+/** One bucket of a check's history. */
+export interface CheckTrendPoint {
+  bucket: string;
+  runs: number;
+  successful_runs: number;
+  /** Null when nothing succeeded in the bucket: a failed probe has no response time. */
+  mean_duration_ms: number | null;
+}
+
+interface CheckTrend {
+  check_id: string;
+  points: CheckTrendPoint[];
+}
+
+interface CheckTrendResponse {
+  window_start: string;
+  window_end: string;
+  bucket_seconds: number;
+  checks: CheckTrend[];
+}
+
+export const checkTrendQueryKey = (projectId: string, timeWindow: TimeWindow) =>
+  ["check-trend", projectId, timeWindow.from, timeWindow.to] as const;
+
+/**
+ * Every check's history, in one request rather than one per row.
+ *
+ * Separate from the results query so the table appears as soon as the summaries land and
+ * fills in its lines when this arrives.
+ */
+export function useCheckTrend(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+): ReadonlyMap<string, readonly CheckTrendPoint[]> {
+  const { data } = useQuery({
+    queryKey: checkTrendQueryKey(projectId ?? "", timeWindow),
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<CheckTrendResponse>("synthetics/checks/trend", {
+        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        signal,
+      }),
+  });
+
+  return useMemo(
+    () => new Map((data?.checks ?? []).map((trend) => [trend.check_id, trend.points])),
+    [data],
+  );
 }

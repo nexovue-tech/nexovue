@@ -96,3 +96,35 @@ class CheckRunListResponse(BaseModel):
     check_id: str
     # Newest first.
     runs: list[CheckRun]
+
+
+class CheckTrendPoint(BaseModel):
+    """One bucket of a check's history."""
+
+    bucket: IsoTimestamp
+    runs: int
+    successful_runs: int
+    # Null when no run in this bucket succeeded: a check that failed has no response
+    # time, and a zero here would be drawn as the site getting instantly fast.
+    mean_duration_ms: float | None = None
+
+
+class CheckTrend(BaseModel):
+    """One check's history across the window, oldest first."""
+
+    check_id: str
+    points: list[CheckTrendPoint]
+
+
+class CheckTrendResponse(BaseModel):
+    """What each row's sparkline is drawn from.
+
+    `bucket_seconds` is returned rather than assumed: the server chooses it from the
+    window length and the checks' own interval, so a client plotting against a fixed
+    minute would mis-scale its axis.
+    """
+
+    window_start: IsoTimestamp
+    window_end: IsoTimestamp
+    bucket_seconds: int
+    checks: list[CheckTrend] = Field(default_factory=list)
