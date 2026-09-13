@@ -150,17 +150,61 @@ column.
       screens are rebuilt, when all nine callers are known. The four screens here are touched twice
       as a result, which is the accepted cost.
 
-### Make the screens answerable — filters and context
+### Make the screens answerable — filters and context *(re-expanded to `E`, 2026-09-13)*
 
-- [ ] **T15** `P` — `shared/components/FilterBar.tsx` and `TimeRangePicker.tsx` (new).
-- [ ] **T16** `P` — filters on `servicemap`, `synthetics`, `dbstats`, `infrastructure`, `rum`, `usage`
-      — API query params over columns already stored. → one API test each.
-- [ ] **T17** `P` — `rum`: `device_class` and `route` become filters, not only breakdown dimensions.
-- [ ] **T18** `P` — filtered-empty vs never-had-data on every screen that gained a filter (AC15).
-- [ ] **T19** `P` — previous-period delta: a second read over the shifted window, one threshold per
+**The audit, read from every router's own signature** rather than grepped — six earlier greps in
+this feature returned the wrong answer, so this was parsed from the AST.
+
+`project_id`, the time window, `limit` and `cursor` are excluded: every read takes them and none of
+them is a filter a customer thinks in.
+
+| Screen | Filters today | What a customer cannot ask | Column that already exists |
+|---|---|---|---|
+| **Traces** | `service` · `operation` · `status` · `min_duration_ms` · `max_duration_ms` · `attr`+`attr_value` | "traces where *this span* was slow", not just ones containing the service | `spans.duration_ms` |
+| **Logs** | `q` · `service` · `min_severity` | "exclude this pattern" — only positive substring match exists | `logs.body` |
+| **Errors** | `service` | "only new since the deploy" · "sort by first-seen" | `first_seen`, `last_seen` |
+| **Services** | — | "only with errors" · "HTTP not queues" | `error_count`, `span_kind` |
+| **Service map** | — | "hide low-volume links" · "only failing edges" · "this service and its neighbours" | `calls_per_minute`, `error_rate`, `caller`/`callee` |
+| **Synthetics** | — | "only what's down" · "browser checks only" · "certificates expiring" | `up`, `check_type`, `tls.days_remaining` |
+| **Database** | — | "only this server" · "slower than N" · "only this database" | `server`, `latest_mean_ms`, `namespace` |
+| **Infrastructure** | — | "only containers" · "only stale" · "over N%" · "this host's containers" | `kind`, `stale`, `cpu_utilization`, `host` |
+| **RUM** | — (`dimension` is a breakdown) | "only mobile" · "only this page" · "only poor readings" | `device_class`, `route`, `rating` |
+| **Usage** | — | "which project is costing me this" | `ProjectDayUsage.project_id` |
+
+**Traces accepts six filters. Seven screens accept none.** That asymmetry is invisible from inside —
+traces was built first and built carefully — and from outside reads as the product losing interest
+after the second screen.
+
+**The finding that changes the work.** Three filters exist *only in the browser* and filter the page
+rather than the data:
+
+- `KindFilter` on infrastructure (`InfrastructureScreen.tsx:122`)
+- the `slowest` ordering on services (`service-rows.ts:33`)
+- `isNewInWindow` on errors
+
+Each sits under a server cap — services pages at 100, errors at 50, database at 500. **A client-side
+filter over a capped page silently under-reports**: ask for "only failing services" on a project with
+150 of them and the answer is "the failing ones among the first hundred", with nothing on screen able
+to say so. These are not conveniences to leave alone; they are wrong answers waiting for a customer
+large enough to notice.
+
+- [ ] **T15** `E` — `shared/components/FilterBar.tsx` (new). One control, driven by a declared list
+      of filters, so nine screens do not each invent a row of buttons. → `FilterBar.test.ts`.
+- [ ] **T16** `E` — API filters over columns already stored, one test each in the domain's own
+      offline suite: `services` (`with_errors`, `span_kind`) · `servicemap` (`min_calls_per_minute`,
+      `failing_only`) · `synthetics` (`down_only`, `check_type`) · `dbstats` (`server`,
+      `min_mean_ms`) · `infrastructure` (`kind`, `stale_only`, `host`).
+- [ ] **T17** `E` — `rum`: `device_class`, `route` and `rating` become filters as well as breakdown
+      dimensions. `BreakdownDimension` stays two members — `country` has no producer (AC4).
+- [ ] **T18** `E` — **move the three browser-side filters onto the server** and delete the local
+      ones, so a filtered list is the filtered data rather than a filtered page. → a test per screen
+      that a match beyond the first page is still returned.
+- [ ] **T19** `E` — filtered-empty distinguished from never-had-data on every screen that gained a
+      filter (AC15). `ServicesScreen` already splits these two; the others copy that shape.
+- [ ] **T20** `E` — previous-period delta: a second read over the shifted window, one threshold per
       measure, rendered **only where significant** (AC13, AC14). → tests that an unremarkable reading
-      carries no annotation.
-- [ ] **T20** `P` — a structural test that no feature interprets an HTTP status itself (AC21).
+      carries no annotation, and that an absent prior window renders no delta rather than a zero.
+- [ ] **T21** `E` — a structural test that no feature interprets an HTTP status itself (AC21).
 
 **A reasonable stopping point. Five screens rebuilt, filterable, carrying context.**
 

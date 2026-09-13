@@ -10,6 +10,14 @@ In development
 shared-scale trend column, the severity mark, and two empty states instead of one. 17 tests added,
 `just check` green.
 
+**T15–T21 re-expanded to exact**, and awaiting approval. The filter audit was parsed from every
+router's AST rather than grepped, after six greps in this feature returned wrong answers.
+
+It found one thing that changes the work: **three filters exist only in the browser** — infrastructure's
+kind filter, services' `slowest` ordering, and errors' new-in-window — and each sits under a server
+cap. A client-side filter over a capped page answers about the page, not the data, and nothing on
+screen can say so. T18 moves them to the server.
+
 **T7–T13 complete.** Errors, synthetics and the merged Infrastructure/Databases destination all
 carry their trend; `/database` is gone from the sidebar and the router, and `route-manifest.test.ts`
 still passes. `just check` green: 2289 Python, 638 web.
