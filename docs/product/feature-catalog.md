@@ -61,9 +61,14 @@
 | Usage and billing controls | Usage/service counts, plan allowances, rate/allowance enforcement, billing screen, checkout handoff, and signed idempotent payment-webhook handling exist. | F25 is partly implemented; payment-provider/reconciliation scope remains incomplete. |
 | Data lifecycle controls | Project masking configuration, plan-derived retention, tenant data purge, and source-map storage controls exist. | F27 is partly implemented; customer-facing export/archive controls are not complete. |
 
-**Not implemented:** findings/insight engine, AI/RAG, owner/public status pages, session replay,
+**Not implemented:** the findings/insight engine, AI/RAG, owner/public status pages, session replay,
 continuous profiling, SLOs, dashboard builder, alert connectors, case management, RBAC, and the
-internal admin console. The root Findings route is intentionally a placeholder, not a shipped feature.
+internal admin console.
+
+**Findings is a built screen with nothing to feed it (2026-09-13).** Its structure, ordering and
+actions exist and are tested; no engine produces a finding, so what a customer sees is the healthy
+state carrying Overview's RED summary. That is the difference between this and a placeholder, and it
+is why Overview holds `/` — Findings takes the root route when the engine exists, not before.
 
 ---
 
