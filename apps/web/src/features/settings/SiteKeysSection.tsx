@@ -6,6 +6,7 @@ import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
+import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 
 import type { SiteKeySummary } from "./api";
@@ -126,8 +127,15 @@ function CreateSiteKeyForm({
 
   const ready = name.trim().length > 0 && parsedOrigins.length > 0;
 
+  // A site key is the one creation form with a draft worth keeping: the origins are a
+  // list somebody types out line by line, and losing five of them to a stray click is
+  // real work lost. Creating a project or an API key is a single field, and warning
+  // there would be the noise that teaches people to dismiss the warning that matters.
+  const guard = useUnsavedChanges(name.trim() !== "" || origins.trim() !== "");
+
   return (
     <div className="mx-4 mb-4 border border-line bg-surface px-4 py-3">
+      <UnsavedChangesPrompt guard={guard} what="this site key" />
       <form
         className="flex flex-col gap-3"
         onSubmit={(event) => {

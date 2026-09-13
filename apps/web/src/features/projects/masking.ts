@@ -102,3 +102,27 @@ export const TEXT_KEY_LABELS: Record<MaskingTextKey, { label: string; hint: stri
     hint: "An exact value that should survive every rule above.",
   },
 };
+
+/**
+ * Whether two masking documents say the same thing.
+ *
+ * Needed because the form and the stored document are not comparable directly: the form
+ * holds sets and free text, and `documentOf` sorts, trims and drops empty keys on the way
+ * out. Comparing the round-tripped document against the stored one is what makes "typed
+ * and undone" register as no change — which is the whole difference between a warning
+ * people read and one they learn to click away.
+ *
+ * Order-insensitive for the same reason: a stored `["b", "a"]` and a typed `["a", "b"]`
+ * are the same rules, and warning about them would be warning about nothing.
+ */
+export function sameMasking(left: MaskingDocument, right: MaskingDocument): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+
+  for (const key of keys) {
+    const ours = [...(left[key as keyof MaskingDocument] ?? [])].sort();
+    const theirs = [...(right[key as keyof MaskingDocument] ?? [])].sort();
+    if (ours.length !== theirs.length) return false;
+    if (ours.some((entry, index) => entry !== theirs[index])) return false;
+  }
+  return true;
+}

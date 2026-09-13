@@ -459,7 +459,7 @@ histograms, because histograms are what exists.
       **estimates**, because a percentile off buckets is one. A metric whose shape has no reader
       lists with its counts and says so rather than being hidden. → `MetricsView.test.ts` for the
       six states and for the estimate labelling.
-- [ ] **T38** `E` — unsaved-changes warning (AC19), on the forms that *have* a draft to lose:
+- [x] **T38** `E` — unsaved-changes warning (AC19), on the forms that *have* a draft to lose:
       `ProjectSettings`, `ProfileScreen`, `SiteKeysSection`. The other three submit immediately —
       creating a key or a project has no unsaved state, and warning there would train the warning
       out of being read. → one test per guarded form, plus one asserting the unguarded three do not

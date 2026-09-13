@@ -5,6 +5,7 @@ import { Button } from "@/shared/components/Button";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
+import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
 import { clearSession } from "@/shared/session";
 
 import {
@@ -86,6 +87,8 @@ function NameSection({ currentName }: { currentName: string | null }) {
   // to what it already was is not a change, and a Save that does nothing reads as broken.
   const changed = name.trim() !== (currentName ?? "");
 
+  const guard = useUnsavedChanges(changed);
+
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (changed) rename.mutate(name);
@@ -96,6 +99,7 @@ function NameSection({ currentName }: { currentName: string | null }) {
       title="Your name"
       blurb="What colleagues see beside anything you did. Leave it empty and the account shows your address instead."
     >
+      <UnsavedChangesPrompt guard={guard} what="your name" />
       <form onSubmit={onSubmit} noValidate className="max-w-sm">
         {problem.message ? <FormProblem message={problem.message} /> : null}
 
@@ -154,6 +158,11 @@ function PasswordSection() {
   const problem = describeFormProblem(changePassword.error);
   const fieldErrors = { ...problem.fieldErrors, ...refusals };
 
+  // A half-typed password change is unsaved work like any other, so AC19 covers it.
+  // Worth revisiting if a password manager's autofill starts making this true without
+  // anybody typing — a warning that fires on its own is the kind people stop reading.
+  const guard = useUnsavedChanges(currentPassword !== "" || newPassword !== "");
+
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -190,6 +199,7 @@ function PasswordSection() {
         </p>
       ) : null}
 
+      <UnsavedChangesPrompt guard={guard} what="your password" />
       <form onSubmit={onSubmit} noValidate className="max-w-sm">
         {problem.message ? <FormProblem message={problem.message} /> : null}
 

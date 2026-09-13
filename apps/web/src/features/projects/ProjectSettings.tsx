@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Button } from "@/shared/components/Button";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { TextField } from "@/shared/components/TextField";
+import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
 
 import type { MaskingTextKey, ProjectDeleted, ProjectDetail, SamplingDocument } from "./api";
 import {
@@ -14,7 +15,14 @@ import {
   useSaveSamplingConfig,
 } from "./api";
 import type { MaskingForm } from "./masking";
-import { documentOf, formOf, newlyDisabled, RULE_LABELS, TEXT_KEY_LABELS } from "./masking";
+import {
+  documentOf,
+  formOf,
+  newlyDisabled,
+  RULE_LABELS,
+  sameMasking,
+  TEXT_KEY_LABELS,
+} from "./masking";
 
 /**
  * One project's settings: what it is called, what it keeps, and the two documents
@@ -64,9 +72,11 @@ function Identity({ project }: { project: ProjectDetail }) {
   const [slug, setSlug] = useState(project.slug);
 
   const changed = name !== project.name || slug !== project.slug;
+  const guard = useUnsavedChanges(changed);
 
   return (
     <section className="flex flex-col gap-4">
+      <UnsavedChangesPrompt guard={guard} what="this project's name or slug" />
       <SectionHeading
         title="Name and slug"
         detail="The name is what you read on a screen; the slug is what appears in URLs. Changing the slug changes those links."
@@ -163,8 +173,18 @@ function Sampling({ project }: { project: ProjectDetail }) {
     save.mutate(config);
   };
 
+  // Compared against what is stored, not against whether a field was touched: a
+  // value typed and undone is not an unsaved change, and warning about it teaches
+  // people to click the warning away.
+  const changed =
+    keepErrors !== (stored.keep_errors ?? true) ||
+    slowMs !== String(stored.slow_threshold_ms ?? "") ||
+    healthy !== String(stored.healthy_percent ?? "");
+  const guard = useUnsavedChanges(changed);
+
   return (
     <section className="flex flex-col gap-4">
+      <UnsavedChangesPrompt guard={guard} what="the sampling rules" />
       <SectionHeading
         title="Sampling"
         detail="Which traces are kept. Errors and slow traces are kept whole; a percentage of the healthy ones is kept so a normal request still has an example to compare against."
@@ -252,8 +272,15 @@ function Masking({ project }: { project: ProjectDetail }) {
     setConfirming(undefined);
   };
 
+  // Through the stored document, so the comparison is between two values of the
+  // same shape rather than between a form and a document that order their sets
+  // differently.
+  const changed = !sameMasking(documentOf(form), stored);
+  const guard = useUnsavedChanges(changed);
+
   return (
     <section className="flex flex-col gap-4">
+      <UnsavedChangesPrompt guard={guard} what="the masking rules" />
       <SectionHeading
         title="Masking"
         detail="What is removed from your telemetry before it is stored. These rules run in your own process, so anything they catch never leaves it."
