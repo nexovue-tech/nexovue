@@ -12,7 +12,7 @@ import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
 import type { TraceSummary } from "./api";
-import { traceFailed, useTraceFacets, useTraceList } from "./api";
+import { traceExportUrl, traceFailed, useTraceFacets, useTraceList } from "./api";
 import type { ActiveFilter, TraceFilters, TraceStatusFilter } from "./filters";
 import {
   activeFilters,
@@ -97,6 +97,14 @@ export function TraceListScreen() {
         <p className="mt-1 text-ink-dim text-sm">
           Every request assembled in the last {timeRangeById(rangeId).label}, newest first.
         </p>
+        {/* The filters travel with it, so the file answers the question on screen
+            rather than the whole window. */}
+        <a
+          href={traceExportUrl(projectId ?? "", timeWindow, filters)}
+          className="mt-1 inline-block text-ink-dim text-xs underline underline-offset-4 hover:text-ink"
+        >
+          Download these as CSV
+        </a>
       </header>
 
       <FilterBar

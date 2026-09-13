@@ -16,7 +16,7 @@ import pytest
 
 from nexovue_api.data.clickhouse.base import TENANT_BINDING, TenantScopedRepository
 from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
-from nexovue_api.traces import queries, service
+from nexovue_api.traces import queries, router, service
 from nexovue_api.traces.cursor import TracePageCursor, decode_cursor
 from nexovue_api.traces.queries import ENDPOINT_SEPARATOR, TraceFilters
 from nexovue_api.traces.schemas import TraceSummary
@@ -1168,3 +1168,54 @@ def test_arrays_that_disagree_in_length_shorten_rather_than_raise() -> None:
     )
 
     assert len(zipped) == 1
+
+
+# ------------------------------------------------------------ exporting the list
+
+
+class TestTheExportedFile:
+    """The list as a file, which is the commonest ask after search itself.
+
+    `data-and-filter-gaps.md` records it: *"Give me this as CSV." No export
+    anywhere.*
+    """
+
+    async def _sheet(self, repository: Any) -> tuple[str, bool]:
+        start, end = _window()
+        return await service.traces_as_csv(
+            repository,
+            project_id=PROJECT,
+            from_time=start,
+            to_time=end,
+            filters=TraceFilters(),
+        )
+
+    async def test_the_header_names_the_columns_the_screen_shows(self) -> None:
+        sheet, _ = await self._sheet(_repository(TENANT_A))
+
+        assert sheet.splitlines()[0].split(",") == list(service.TRACE_COLUMNS)
+
+    async def test_the_traces_in_the_window_reach_the_file(self) -> None:
+        sheet, truncated = await self._sheet(_repository(TENANT_A))
+
+        # Header plus the rows the fake store holds for this tenant.
+        assert len(sheet.strip().splitlines()) > 1
+        assert truncated is False
+
+    async def test_another_organization_exports_nothing_of_this_one(self) -> None:
+        """The same isolation the list itself is held to — an export is the same
+        read, more times, and a cap is not a tenancy boundary."""
+        mine, _ = await self._sheet(_repository(TENANT_A))
+        theirs, _ = await self._sheet(_repository(TENANT_B))
+
+        assert mine != theirs
+
+    def test_the_csv_route_is_declared_before_the_trace_id_wildcard(self) -> None:
+        """Otherwise `/traces/traces.csv` is matched as a trace id and answers a
+        404 nobody could explain."""
+        # Paths carry the router prefix, so the constant is matched by suffix.
+        paths = [getattr(route, "path", "") for route in router.router.routes]
+        exported = next(i for i, path in enumerate(paths) if path.endswith(router.TRACES_CSV_PATH))
+        wildcard = next(i for i, path in enumerate(paths) if path.endswith("/{trace_id}"))
+
+        assert exported < wildcard

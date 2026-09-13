@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Final
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
 from nexovue_api.deps import DbSession
@@ -79,6 +79,71 @@ async def list_traces(
         ),
         limit=clamp_limit(limit, default=service.DEFAULT_LIMIT, maximum=service.MAX_LIMIT),
         cursor=cursor,
+    )
+
+
+# The same rows as a file. A suffix rather than a `format` parameter, matching
+# `billing/router.py`, which is the only other non-JSON response in this API — and
+# a route rather than something the browser assembles, because a page in a
+# sandboxed frame cannot hand itself a blob while a link to a response carrying
+# `Content-Disposition: attachment` is downloaded by the browser itself.
+#
+# Declared above `/{trace_id}` on purpose: the wildcard would otherwise match
+# this as a trace id and answer a 404 nobody could explain.
+TRACES_CSV_PATH: Final = "/export.csv"
+CSV_CONTENT_TYPE: Final = "text/csv; charset=utf-8"
+
+
+@router.get(TRACES_CSV_PATH, response_class=Response, summary="The same traces as a file")
+async def download_traces(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+    span_service: Annotated[str | None, Query(alias="service")] = None,
+    operation: Annotated[str | None, Query()] = None,
+    status: Annotated[str | None, Query()] = None,
+    min_duration_ms: Annotated[float | None, Query(ge=0)] = None,
+    max_duration_ms: Annotated[float | None, Query(ge=0)] = None,
+    attr: Annotated[str | None, Query()] = None,
+    attr_value: Annotated[str | None, Query()] = None,
+) -> Response:
+    """The filtered list as CSV, with the same filters the screen is showing.
+
+    **Every filter is taken again rather than a "download what you last asked
+    for" token.** The link carries the question, so it is the same question a
+    reader can paste to a colleague — and there is no server-side memory of a
+    search to go stale between looking and downloading.
+    """
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    sheet, truncated = await service.traces_as_csv(
+        repository,
+        project_id=str(project.id),
+        from_time=window_start,
+        to_time=window_end,
+        filters=service.build_filters(
+            service_name=span_service,
+            operation=operation,
+            status=status,
+            min_duration_ms=min_duration_ms,
+            max_duration_ms=max_duration_ms,
+            attribute_path=attr,
+            attribute_value=attr_value,
+        ),
+    )
+
+    return Response(
+        content=sheet,
+        media_type=CSV_CONTENT_TYPE,
+        headers={
+            "content-disposition": f'attachment; filename="{project.slug}-traces.csv"',
+            # A file that silently stops is worse than one that says so. The screen
+            # reads this to tell a reader their filters, not the export, are the tool.
+            "x-nexovue-truncated": "true" if truncated else "false",
+        },
     )
 
 

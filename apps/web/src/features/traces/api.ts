@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
-import { apiClient } from "@/shared/api-client";
+import { API_BASE_PATH, apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
 import { liveOptions, windowKeyOf } from "@/shared/selection";
 
@@ -277,4 +277,30 @@ export function useTraceLogs(projectId: string | undefined, traceId: string) {
         signal,
       }),
   });
+}
+
+/**
+ * The same traces as a file, carrying the same question.
+ *
+ * **A link, never a blob this page builds.** A page in a sandboxed frame cannot hand
+ * itself a file, while the browser saves a same-origin response that says `attachment` —
+ * the reasoning `billing/router.py` records for the only other non-JSON response here.
+ *
+ * Every filter goes on the URL rather than a "download what I last asked for" token: the
+ * link is then the same question a reader can paste to a colleague, and there is no
+ * server-side memory of a search to go stale between looking and downloading.
+ */
+export function traceExportUrl(
+  projectId: string,
+  timeWindow: TimeWindow,
+  filters: TraceFilters,
+): string {
+  const url = new URL(`${API_BASE_PATH}traces/export.csv`, window.location.origin);
+  url.searchParams.set("project_id", projectId);
+  url.searchParams.set("from", timeWindow.from);
+  url.searchParams.set("to", timeWindow.to);
+  for (const [key, value] of Object.entries(toSearchParams(filters))) {
+    if (typeof value === "string" && value) url.searchParams.set(key, value);
+  }
+  return url.toString();
 }

@@ -556,36 +556,40 @@ That rule is what separates T48–T54 from "make the refresh quieter".
       A paused screen showing stale numbers during an incident is the AC18 failure again.
 - [ ] **T50** `P` — an absolute window disables polling by itself. Nothing new can arrive in a window
       that ended last Tuesday.
-- [ ] **T51** `P` — freeze list ordering while the pointer is over a list or a row is expanded, and
+- [x] **T51** `E` — freeze list ordering while the pointer is over a list or a row is expanded, and
       offer an explicit "reorder" when the ranking has moved. Rows changing places under a reaching
       cursor is the real damage, not the flash.
-- [ ] **T52** `P` — highlight the **cell** that changed, briefly, honouring `prefers-reduced-motion`.
+- [x] **T52** `E` — highlight the **cell** that changed, briefly, honouring `prefers-reduced-motion`.
       Not the row.
-- [ ] **T53** `P` — feeds (logs, traces, findings) anchor on scroll position: at the top, new rows
-      stream in; scrolled away, a "N new" pill and nothing moves.
+- [x] **T53** `E` — **already built, and better than this asked for.** The logs tail pauses
+      *server-side* when a reader scrolls away, so rows cannot move under them; the server holds
+      lines, reports how many it dropped, and the screen renders a `GapRow` saying so **in the
+      place the gap happened** rather than a count in a pill. Verified by reading
+      `use-log-tail.ts` and `LogsScreen.tsx`. Traces is a paged list and Findings has no engine,
+      so neither is a live feed to protect.
 - [ ] **T54** `P` — one "updated Ns ago" freshness indicator, in the top bar rather than per panel.
-- [ ] **T55** `P` — absolute start/end in the global window control, which is what makes paid
+- [x] **T55** `E` — absolute start/end in the global window control, which is what makes paid
       retention reachable.
-- [ ] **T56** `P` — persist the selected project and window across a reload.
-- [ ] **T57** `P` — a per-screen window override, rendered as visibly an override with a way back to
+- [x] **T56** `E` — persist the selected project and window across a reload.
+- [x] **T57** `E` — a per-screen window override, rendered as visibly an override with a way back to
       the global one.
-- [ ] **T58** `P` — resolve Usage's competing control. A billing month is a genuinely different axis
+- [x] **T58** `E` — resolve Usage's competing control. A billing month is a genuinely different axis
       from an incident window, so this may stay an exception — it must look like one.
 
 ### Tasks — stop looking unfinished
 
-- [ ] **T59** `P` — delete `phase 1 · shell only`, and hide ⌘K until search exists rather than
+- [x] **T59** `E` — delete `phase 1 · shell only`, and hide ⌘K until search exists rather than
       showing a customer a disabled box naming an internal task.
-- [ ] **T60** `P` — filters on Metrics: name, shape, and readable-only. The gap T37 left.
+- [x] **T60** `E` — filters on Metrics: name, shape, and readable-only. The gap T37 left.
 
 ### Tasks — what the screen-by-screen read found
 
-- [ ] **T61** `P` — a warning tier for services. One error in a hundred thousand requests currently
+- [x] **T61** `E` — a warning tier for services. One error in a hundred thousand requests currently
       draws the same mark as forty percent failing. **Blocked on the threshold**, which is a founder
       decision and is recorded under Questions.
 - [x] **T62** `E` — a "has this project ever reported" signal, replacing the widest-window heuristic
       that reads a project silent for eight days as one that never reported.
-- [ ] **T63** `P` — export a filtered result from logs and traces. The commonest ask after search.
+- [x] **T63** `E` — export a filtered result from logs and traces. The commonest ask after search.
 - [ ] **T64** `P` — an active-session list beside "sign out everywhere", and second-factor
       authentication. Today a customer can end every session but cannot see what is signed in, which
       is the thing they actually want when they suspect somebody else is.

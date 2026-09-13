@@ -9,6 +9,8 @@ it.
 
 from __future__ import annotations
 
+import csv
+import io
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -697,3 +699,82 @@ def _to_links(row: dict[str, Any]) -> list[SpanLink]:
             )
         )
     return links
+
+
+# What a row of the exported file holds. The list's own columns, in the order the
+# screen shows them, so a reader comparing the two is not translating.
+TRACE_COLUMNS: Final = (
+    "started",
+    "trace_id",
+    "root_service",
+    "root_operation",
+    "duration_ms",
+    "spans",
+    "errors",
+    "status",
+)
+
+# **Deliberately more than one screen holds and far less than a window can.** An
+# export exists to be taken away and worked on, so a page of fifty would be a
+# worse answer than the screen already gives. A million rows would be a request
+# that runs until something times out and leaves nobody with a file. Five
+# thousand traces is a spreadsheet a person can open; past it, the filters are
+# the tool, not the download.
+MAX_EXPORTED_TRACES: Final = 5_000
+
+
+async def traces_as_csv(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    from_time: datetime,
+    to_time: datetime,
+    filters: TraceFilters,
+) -> tuple[str, bool]:
+    """The filtered list as a file, and whether it was cut short.
+
+    Paged through with the list's own cursor rather than by raising its limit:
+    the cap exists because a single unbounded read of `trace_summaries` is what
+    `performance.md` refuses, and an export is not an exception to that — it is
+    the same read, more times.
+
+    Returns the truncation flag rather than hiding it, because a file that
+    silently stops is worse than one that says where it stopped. The caller
+    writes that into the response.
+    """
+    sheet = io.StringIO()
+    writer = csv.writer(sheet)
+    writer.writerow(TRACE_COLUMNS)
+
+    written = 0
+    cursor: str | None = None
+    while written < MAX_EXPORTED_TRACES:
+        page = await list_traces(
+            repository,
+            project_id=project_id,
+            from_time=from_time,
+            to_time=to_time,
+            filters=filters,
+            limit=min(MAX_LIMIT, MAX_EXPORTED_TRACES - written),
+            cursor=cursor,
+        )
+        for trace in page.traces:
+            writer.writerow(
+                [
+                    trace.start_time.isoformat(),
+                    trace.trace_id,
+                    trace.root_service,
+                    trace.root_name,
+                    f"{trace.duration_ms:.3f}",
+                    trace.span_count,
+                    trace.error_count,
+                    trace.status_code,
+                ]
+            )
+        written += len(page.traces)
+
+        cursor = page.next_cursor
+        if not cursor or not page.traces:
+            return sheet.getvalue(), False
+
+    return sheet.getvalue(), True

@@ -217,6 +217,18 @@ export function describeScope(rangeLabel: string): string {
   return `Every project in this organization over the last ${rangeLabel} — the bill is the organization's, not one project's.`;
 }
 
+/**
+ * Why the window in the top bar does nothing here.
+ *
+ * **Two controls reading "Last" and disagreeing is worse than one being wrong.** Every
+ * other screen answers "what is happening", which is a question about an interval a
+ * reader picks; this one answers "what is owed", which is a question about a billing
+ * period nobody picks. So the period is this screen's own, and it says so rather than
+ * leaving somebody to notice that the top bar stopped applying.
+ */
+export const OWN_PERIOD_NOTE =
+  "This screen keeps its own period: a bill is measured in whole days the meter has counted, not in the window at the top of the screen.";
+
 /** The union, said in words, because the daily column beside it invites adding up. */
 export const UNION_CAPTION =
   "Counted once each across the whole range: a service reporting every day is one service, not one a day.";

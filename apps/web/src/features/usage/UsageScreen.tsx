@@ -34,6 +34,7 @@ import {
   NO_COST_REASON,
   NO_PRICE_LABEL,
   NOTHING_IS_CAPPED,
+  OWN_PERIOD_NOTE,
   STILL_COUNTING,
   UNION_CAPTION,
 } from "./usage-format";
@@ -111,6 +112,7 @@ export function UsageView({
           <RangeToggle days={range.days} onRangeChange={onRangeChange} />
         </div>
         <p className="mt-1 text-ink-dim text-sm">{describeScope(range.label)}</p>
+        <p className="mt-1 text-ink-dim text-xs">{OWN_PERIOD_NOTE}</p>
       </header>
 
       {isPending ? (
@@ -149,7 +151,7 @@ function RangeToggle({
 }) {
   return (
     <div className="flex shrink-0 items-baseline gap-1.5 font-mono text-2xs uppercase tracking-caps">
-      <span className="text-ink-dim">Last</span>
+      <span className="text-ink-dim">Period</span>
       {RANGE_OPTIONS.map((option) => (
         <button
           key={option.days}

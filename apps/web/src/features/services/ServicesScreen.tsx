@@ -4,11 +4,13 @@ import { ChevronRight } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
+import { Changed } from "@/shared/components/Changed";
 import { Delta } from "@/shared/components/Delta";
 import { EmptyState } from "@/shared/components/EmptyState";
 import type { FilterValues } from "@/shared/components/FilterBar";
 import { appliedFilters, FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
+import { ReorderNotice } from "@/shared/components/ReorderNotice";
 import { SkeletonRows, SkeletonText } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
 import { deltaOf } from "@/shared/delta";
@@ -16,6 +18,7 @@ import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatRatePerMinute } from "@/shared/format/rate";
+import { useSettledOrder } from "@/shared/live-updates";
 import { useEverReported } from "@/shared/projects";
 import { previousWindow, timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 
@@ -31,6 +34,8 @@ import type { ServiceOrder } from "./filters";
 import { ORDER_OPTIONS, parseServiceOrder, SERVICE_FILTERS } from "./filters";
 import type { ServiceRow } from "./service-rows";
 import { buildServiceRows, describeServices, describeVolume, rowHeight } from "./service-rows";
+import type { ServiceSeverity } from "./severity";
+import { SEVERITY_LEGEND, serviceSeverity } from "./severity";
 
 const OVERSCAN_ROWS = 10;
 
@@ -217,6 +222,9 @@ export function trendCeilings(
 }
 
 /** Everything the screen shows, with no query client and no clock behind it. */
+/** What a held row is identified by — the name is what a reader aims at. */
+const serviceName = (service: ServiceHealth) => service.service_name;
+
 export function ServicesView({
   order,
   onOrderChange,
@@ -236,7 +244,10 @@ export function ServicesView({
   trendByService,
   previousByService,
 }: ServicesViewProps) {
-  const rows = buildServiceRows(services, expanded, endpointsByService);
+  // Held by name, and by the *service* list rather than the row list: expanding a
+  // service adds its endpoints, and those are not a ranking anybody is reaching into.
+  const settled = useSettledOrder(services, serviceName, { frozen: expanded.size > 0 });
+  const rows = buildServiceRows(settled.items, expanded, endpointsByService);
   const narrowed = appliedFilters(SERVICE_FILTERS, filters).length > 0;
   const ceilings = trendCeilings(services, trendByService);
 
@@ -259,7 +270,7 @@ export function ServicesView({
         <p className="mt-1 text-ink-dim text-sm">
           {isPending || isError
             ? `Every service you send traces from, over the last ${windowLabel}.`
-            : describeServices(services.length, windowLabel, order)}
+            : `${describeServices(services.length, windowLabel, order)} ${SEVERITY_LEGEND}`}
         </p>
       </header>
 
@@ -287,9 +298,11 @@ export function ServicesView({
         />
       ) : (
         <>
+          {settled.reorderPending ? <ReorderNotice onApply={settled.applyOrder} /> : null}
+
           <ColumnHeader />
 
-          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto" {...settled.holdProps}>
             <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
               {virtualizer.getVirtualItems().map((item) => (
                 <VirtualRow
@@ -493,7 +506,7 @@ function ServiceLine({
           size={12}
           className={`shrink-0 text-solid transition-transform ${expanded ? "rotate-90" : ""}`}
         />
-        <SeverityMark failing={service.error_count > 0} />
+        <SeverityMark severity={serviceSeverity(service)} />
         <span className="truncate text-ink">{service.service_name}</span>
       </span>
       <MetricCells metrics={service} previous={previous} />
@@ -518,19 +531,28 @@ function ServiceLine({
  * on every row is a tool shouting that nothing is happening. The space is still reserved,
  * so the names line up whether a row is marked or not.
  *
- * **One tier, not two.** `design-system.md` distinguishes critical from warning by shape
- * as well as hue, and nothing in this product defines what a *warning* service is — no
- * error-rate threshold exists anywhere in the code, and inventing one here would be
- * deciding product behavior in a component. The mark is therefore binary, exactly as the
- * errors cell beside it already is, and the shape distinction waits for a threshold
- * somebody has actually decided.
+ * **Two tiers now, and the thresholds are stated on the screen** — see `ColumnHeader`.
+ * It was binary until 2026-09-14 because no threshold existed anywhere in the code and
+ * inventing one inside a component would have decided product behaviour where nobody
+ * could find it. The numbers live in `severity.ts` as one named pair, which is where to
+ * change them.
+ *
+ * **Shape as well as hue**, which `design-system.md` asks for: a reader who cannot
+ * separate amber from red still separates a ring from a disc.
  */
-function SeverityMark({ failing }: { failing: boolean }) {
+function SeverityMark({ severity }: { severity: ServiceSeverity }) {
+  if (severity === "healthy") return <span className={MARK_COLUMN} aria-hidden />;
+
   return (
     <span className={MARK_COLUMN} aria-hidden>
-      {failing ? (
+      {severity === "critical" ? (
         <span data-severity="critical" className="size-1.75 rounded-full bg-critical-solid" />
-      ) : null}
+      ) : (
+        <span
+          data-severity="warning"
+          className="size-1.75 rounded-full border-[1.5px] border-warning-solid"
+        />
+      )}
     </span>
   );
 }
@@ -578,7 +600,9 @@ function MetricCells({ metrics, previous }: { metrics: HealthMetrics; previous?:
         className={`${RATE_COLUMN} font-mono text-2xs text-ink-dim`}
         title={describeVolume(metrics.request_count)}
       >
-        {formatRatePerMinute(metrics.requests_per_minute)}
+        <Changed value={metrics.requests_per_minute}>
+          {formatRatePerMinute(metrics.requests_per_minute)}
+        </Changed>
         <Delta
           delta={deltaOf("rate", metrics.requests_per_minute, previous?.requests_per_minute)}
           worse="down"
@@ -590,7 +614,9 @@ function MetricCells({ metrics, previous }: { metrics: HealthMetrics; previous?:
           failing ? "text-critical-text" : "text-ink-dim"
         }`}
       >
-        {formatErrors(metrics.error_count, metrics.error_rate)}
+        <Changed value={metrics.error_count}>
+          {formatErrors(metrics.error_count, metrics.error_rate)}
+        </Changed>
         <Delta
           delta={deltaOf("ratio", metrics.error_rate, previous?.error_rate, samples)}
           worse="up"

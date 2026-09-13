@@ -93,6 +93,63 @@ export function heldOrder<T>(
   };
 }
 
+export interface SettledOrder<T> {
+  /** What to render. */
+  items: T[];
+  /** True while a newer ranking is being withheld. */
+  reorderPending: boolean;
+  /** Take the newer ranking now, because the reader asked. */
+  applyOrder: () => void;
+  /** Spread onto the list container; this is what "is somebody reading" means. */
+  holdProps: {
+    onPointerEnter: () => void;
+    onPointerLeave: () => void;
+    onFocusCapture: () => void;
+    onBlurCapture: () => void;
+  };
+}
+
+/**
+ * A ranked list that does not rearrange itself under the hand reaching for it.
+ *
+ * **Engagement is a pointer inside the list or focus within it**, which are the two ways
+ * somebody is in the middle of using one. A pointer that has never entered is not a
+ * reader, so a list nobody has touched reorders freely — the hold costs nothing until
+ * it is needed.
+ *
+ * `held` is deliberately *not* cleared on leave alone. Leaving replaces it with whatever
+ * arrived while the pointer was inside, which is the same thing as never having held it.
+ */
+export function useSettledOrder<T>(
+  incoming: readonly T[],
+  keyOf: (item: T) => string,
+  { frozen = false }: { frozen?: boolean } = {},
+): SettledOrder<T> {
+  const [engaged, setEngaged] = useState(false);
+  const [shownKeys, setShownKeys] = useState<readonly string[]>([]);
+
+  const holding = engaged || frozen;
+  const settled = heldOrder(holding ? shownKeys : [], incoming, keyOf);
+
+  useEffect(() => {
+    if (holding) return;
+    setShownKeys(incoming.map(keyOf));
+    // `incoming` is a new array every render; its *order* is what matters here.
+  }, [holding, incoming, keyOf]);
+
+  return {
+    items: settled.items,
+    reorderPending: settled.reorderPending,
+    applyOrder: () => setShownKeys(incoming.map(keyOf)),
+    holdProps: {
+      onPointerEnter: () => setEngaged(true),
+      onPointerLeave: () => setEngaged(false),
+      onFocusCapture: () => setEngaged(true),
+      onBlurCapture: () => setEngaged(false),
+    },
+  };
+}
+
 /**
  * How many of `incoming` the reader has not been shown.
  *
