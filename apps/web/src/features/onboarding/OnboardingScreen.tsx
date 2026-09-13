@@ -106,9 +106,13 @@ function Arrived({ traceId, service, name }: { traceId: string; service: string;
     void navigate({ to: "/traces/$traceId", params: { traceId }, replace: true });
   };
 
-  const openList = () => {
+  // The two things Flow B found the Indie persona reaches for next, and the
+  // reason the confirmation is the destination rather than the trace list: a
+  // customer who has just proved it works is deciding what to do about it, not
+  // reading spans.
+  const leaveFor = (to: "/synthetics" | "/usage") => () => {
     forgetFirstSetup();
-    void navigate({ to: "/traces", replace: true });
+    void navigate({ to, replace: true });
   };
 
   return (
@@ -122,9 +126,15 @@ function Arrived({ traceId, service, name }: { traceId: string; service: string;
       </p>
 
       <div className="mt-5 flex flex-wrap gap-3">
-        <Button onClick={openTrace}>Open the trace</Button>
-        <Button variant="secondary" onClick={openList}>
-          See everything arriving
+        {/* The specific trace rather than the list: the tail sampler keeps a
+            project's first traces unconditionally, so the one they just sent is
+            there to be opened instead of sampled away before anyone looks. */}
+        <Button onClick={openTrace}>See your trace</Button>
+        <Button variant="secondary" onClick={leaveFor("/synthetics")}>
+          Add an uptime check
+        </Button>
+        <Button variant="secondary" onClick={leaveFor("/usage")}>
+          What this costs
         </Button>
       </div>
     </div>

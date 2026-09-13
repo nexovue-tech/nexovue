@@ -16,6 +16,7 @@ import { VerifyEmailScreen } from "@/features/auth/VerifyEmailScreen";
 import { BillingScreen } from "@/features/billing/BillingScreen";
 import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
 import { ERROR_FILTERS } from "@/features/errors/filters";
+import { FindingsScreen } from "@/features/findings/FindingsScreen";
 import { databaseFilters } from "@/features/infrastructure/databases/filters";
 import { infrastructureFilters } from "@/features/infrastructure/filters";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
@@ -44,16 +45,14 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { parseFilterValues } from "@/shared/filters";
 
 import { AppShell } from "./layout/AppShell";
-import { placeholderFor } from "./routes/placeholder";
 
 /**
  * Code-based routing, not file-based.
  *
  * File-based routing generates src/routeTree.gen.ts, and biome.json — which this task
  * may not edit — has no exclusion for generated files, so the generated tree would have
- * to satisfy our lint and format rules on every regeneration. Twenty placeholder screens
- * also read better as one table than as twenty near-identical files. Switching later is
- * a mechanical change plus one ignore entry in biome.json.
+ * to satisfy our lint and format rules on every regeneration. Switching later is a
+ * mechanical change plus one ignore entry in biome.json.
  */
 
 export interface RouterContext {
@@ -94,7 +93,7 @@ const overviewRoute = createRoute({
 const findingsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/findings",
-  component: placeholderFor("/findings"),
+  component: FindingsScreen,
 });
 
 const servicesRoute = createRoute({

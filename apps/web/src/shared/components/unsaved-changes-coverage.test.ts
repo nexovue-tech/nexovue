@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-
 import { describe, expect, it } from "vitest";
 
 /**
@@ -17,8 +14,22 @@ import { describe, expect, it } from "vitest";
  * not quietly changed.
  */
 
-const source = (path: string) =>
-  readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8");
+/**
+ * Vite's own glob rather than `node:fs`, the same way `status-interpretation.test.ts`
+ * reads sources: this package compiles without node types, and a structural test that
+ * needed them could not live beside the code it guards.
+ */
+const SOURCES: Record<string, string> = import.meta.glob("/src/**/*.tsx", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+
+function source(path: string): string {
+  const found = SOURCES[`/src/${path}`];
+  if (found === undefined) throw new Error(`${path} is named by this test and does not exist`);
+  return found;
+}
 
 /** A draft somebody would be sorry to lose. */
 const GUARDED = [

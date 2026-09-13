@@ -471,13 +471,24 @@ was real, and it is T38).
 
 ### Gateway and the Findings shell
 
-- [ ] **T39** `P` — `features/onboarding/OnboardingScreen.tsx` ends in a confirmation naming the
-      service that arrived (IA4), not the trace list.
-- [ ] **T40** `P` — `features/auth/`: login, signup, recovery on the Gateway archetype.
-- [ ] **T41** `P` — `features/findings/` (new): feed structure, ordering, acknowledge/resolve; the
-      card provisional.
-- [ ] **T42** `P` — the healthy state carrying the RED summary, and **visibly distinct from
-      failed-to-load** (AC18). → a test asserting the two differ.
+- [x] **T39** `E` — `features/onboarding/OnboardingScreen.tsx`. **Half of this was already built**:
+      the confirmation already named the service that arrived and already was the destination. What
+      was missing were the two onward actions the wireframe commits — an uptime check and the cost
+      question, which Flow B found the Indie persona reaches for next. The trace action now opens the
+      trace itself rather than the list, which the first-traces carve-out guarantees is findable.
+- [x] **T40** `E` — **already implemented; nothing to do.** `AuthScreenLayout` is the Gateway
+      archetype and login, signup and all three recovery screens already use it; `/onboarding` sits
+      outside the shell on the same frame with a wider measure for its code block. Verified by
+      reading all six, not by the plan's say-so.
+- [x] **T41** `E` — `features/findings/`: `ordering.ts` (active before resolved, then severity, then
+      recency — F1 AC1.5, with resolved findings ordered by when they resolved), `api.ts` (the
+      `Finding` shape and a feed that asks nothing, because no engine produces one), and
+      `FindingsScreen.tsx`. The card's contents stay provisional and are marked so. The route stops
+      being a placeholder — and it was the last one, so `placeholder.tsx`, `ComingSoon.tsx` and the
+      manifest's screen tables went with it. → `ordering.test.ts`, `FindingsView.test.ts`.
+- [x] **T42** `E` — the healthy state carries Overview's RED summary so "normal" is checkable, and
+      shares no wording with failed-to-load (AC18). → a test asserting the error state contains none
+      of the healthy state's reassurance, phrase by phrase, the summary numbers included.
 
 ### Closing
 
