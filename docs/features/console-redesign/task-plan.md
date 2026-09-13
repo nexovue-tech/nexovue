@@ -340,18 +340,57 @@ it. A native select shows its first option when none matches its value, so the c
 results disagreed with nothing on screen to say so. `FilterBar` already guards this; the logs
 screen has its own select and did not. Fixed, with the test naming where it was found.
 
-### The dashboard surface
+### The dashboard surface *(re-expanded to `E`, 2026-09-13)*
 
-- [ ] **T30** `P` — `features/overview/` (new) + route at `/`; three RED panels from
-      `endpoint_stats_1m`; ranked-entity row reused.
-- [ ] **T31** `P` — one deploy marker spanning all three panels, reusing what T28 builds for service
-      detail rather than a second reader of the same API.
-- [ ] **T32** `P` — `route-manifest.ts`: Overview above Signals, Findings its own entry; **the "never
-      the front door" comment records a superseded decision** — update it and
-      `route-manifest.test.ts` together.
-- [ ] **T33** `P` — service detail expanded to the full RED set: distribution, operations,
-      dependencies from `service_edges_1m`.
-- [ ] **T34** `P` — infrastructure USE panels, honest about having no saturation measure.
+#### What the reading found
+
+| Claim | What the code says |
+|---|---|
+| Service detail needs "the full RED set: distribution, operations, dependencies" | **Three of the four are built.** `TrendChart` draws rate, failure share and p95; `useServiceEndpoints` is the operations table; `useServiceDependencies` reads `service_edges_1m`. The distribution is the heatmap **OD7 resolved as out of scope** — it cannot be drawn from three stored quantiles and a post-sampling `duration_ms`. |
+| The duration panel shows p50/p95/p99 | **It shows p95 only.** `TrendPoint` carries `p95_ms` alone (`services/schemas.py:52`) even though `TREND_SQL` already computes the whole quantile array and `_to_trend_point` throws two of them away (`service.py:79`). That is the one genuinely unbuilt part of the panel set. |
+| Overview reuses the ranked-entity row | It does, but **the numbers above it cannot come from that list.** `/services` is capped at a hundred, so a project total summed from it under-reports the moment a customer has a hundred and one. |
+| `route-manifest.ts` needs its "never the front door" comment updated | **Done in T47/T48.** What remains is the nav itself: `/` has a route and **no `NAV_SECTIONS` entry at all**, so Findings is unreachable from the sidebar today. |
+
+**A project-wide trend has to be a server read.** Merging quantile states across services is exactly
+what storing states rather than numbers is for, and `quantilesMerge` over the window gives the
+project's true p95. Averaging per-service p95s in the browser would be the error this codebase
+warns about in four places — "a p75 cannot be averaged out of smaller p75s". So Overview cannot be
+composed from reads that already exist; it needs one of its own.
+
+**The bottom strip costs three reads on the front door.** Synthetics and RUM are small. The
+infrastructure line is a full node read — capped at 50,000 series — for a count and a worst case.
+Reused rather than given a counting endpoint of its own, because a second way to count nodes is a
+second answer to "how many nodes"; if it proves too slow the fix is a narrower read, not a cache.
+
+#### Tasks
+
+- [ ] **T30** `E` — `services/queries.py` + `service.py` + `router.py`: `GET /services/overview`
+      returning the project's RED over the window and bucketed across it — `quantilesMerge` grouped
+      by bucket alone, never per service. → `test_services.py`: the aggregate is not the sum of the
+      list's rows; a window with no rollup is an empty answer, not a zeroed one.
+      `test_services_live.py`: the project p95 read whole differs from the mean of its services'.
+- [ ] **T31** `E` — `features/overview/` (new) + route at `/`: three RED panels from T30, one deploy
+      marker spanning all three (reusing `deploy-markers.ts`, not a second reader of `/deploys`),
+      the ranked-entity row reused from `features/services`, and a strip of one line per surface.
+      → `OverviewView.test.ts`: all six states; a surface with no data shows an em dash, never a
+      zero; the marker is drawn on every panel or on none.
+- [ ] **T32** `E` — `route-manifest.ts`: Overview above Signals and **Findings gains its first
+      sidebar entry** — it has a route and no `NAV_SECTIONS` item, so nothing in the app navigates
+      to it. → `route-manifest.test.ts` already fails on a nav path the router does not serve; add
+      that every *served* screen with a title is reachable, which is the direction it does not yet
+      hold.
+- [ ] **T33** `E` — the duration panel becomes p50/p95/p99. `TrendPoint` gains `p50_ms` and
+      `p99_ms`; `_to_trend_point` stops discarding them; `trend-series.ts` draws three lines on one
+      scale. → `test_services_trend.py` for the two new fields, `trend-series.test.ts` that the
+      three lines share one axis — three separately-scaled lines would make p50 and p99 look equal.
+- [ ] **T34** `E` — `features/infrastructure/`: USE panels per node from `NodeSummary` —
+      utilization for CPU, memory and filesystem, plus the two byte rates. **Labelled U and E, not
+      USE**: nothing stored carries saturation — no queue depth, no run queue, no IO wait — and
+      relabelling utilization as saturation would be inventing a measurement. → a test that the
+      panel set names what it cannot show rather than omitting it silently.
+
+**Deleted from this block:** the distribution panel (OD7, already decided), the operations and
+dependencies tables (built), and the `route-manifest` comment (T47/T48).
 
 ### Surfaces and account — six screens
 
