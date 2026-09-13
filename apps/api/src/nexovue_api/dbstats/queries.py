@@ -56,6 +56,20 @@ _WINDOW_PREDICATE: Final = """
 # `infrastructure/queries.py` gives at `NODE_READINGS_SQL`: a metric row is not
 # unique, and both statements below already group by the whole series, so one
 # instant is one poll.
+# The optional predicates, spliced on comment markers: ClickHouse's own
+# parameter syntax is braces, so str.format cannot be used here.
+_SERVER_PLACEHOLDER: Final = "/* server */"
+_MIN_MEAN_PLACEHOLDER: Final = "/* min mean */"
+
+# "Only this server". The address is a resource attribute, so this narrows the
+# rows read rather than the statements returned.
+SERVER_CLAUSE: Final = f"AND {SERVER_ADDRESS} = {{server:String}}"
+
+# "Slower than N", tested against the worst reading rather than the latest,
+# because that is what the list is ranked by: a statement that spiked to two
+# seconds and has since settled is the one worth finding.
+MIN_MEAN_CLAUSE: Final = "HAVING worst_mean_seconds >= {min_mean_seconds:Float64}"
+
 SLOW_STATEMENTS_SQL: Final = f"""
 SELECT
     {QUERY_HASH} AS query_hash,
@@ -73,11 +87,26 @@ FROM metrics_gauge
 WHERE tenant_id = {{tenant_id:String}}
   AND project_id = {{project_id:String}}
   AND metric_name = '{METRIC_OPERATION_DURATION}'
+  {_SERVER_PLACEHOLDER}
 {_WINDOW_PREDICATE}
 GROUP BY query_hash, namespace, server_address, server_port
+{_MIN_MEAN_PLACEHOLDER}
 ORDER BY worst_mean_seconds DESC, query_hash
 LIMIT {{limit:UInt32}}
 """
+
+
+def slow_statements_sql(*, server: bool, min_mean: bool) -> str:
+    """The statement list, narrowed to what the caller asked for.
+
+    Inside the statement, never over its result: `LIMIT` caps the list at five
+    hundred, so filtering afterwards would answer "the slow ones among the five
+    hundred worst" and have no way to say so.
+    """
+    return SLOW_STATEMENTS_SQL.replace(
+        _SERVER_PLACEHOLDER, SERVER_CLAUSE if server else ""
+    ).replace(_MIN_MEAN_PLACEHOLDER, MIN_MEAN_CLAUSE if min_mean else "")
+
 
 # Each statement's cost over time — the sparkline in its row.
 #

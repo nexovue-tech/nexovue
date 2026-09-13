@@ -19,6 +19,30 @@ ROLLUP_QUANTILES: Final = (0.5, 0.75, 0.95)
 
 _QUANTILE_ARGUMENTS: Final = ", ".join(str(quantile) for quantile in ROLLUP_QUANTILES)
 
+# The optional predicates, spliced on comment markers: ClickHouse's own
+# parameter syntax is braces, so str.format cannot be used here.
+#
+# Both are columns of the rollup, so they narrow what is merged rather than what
+# is returned — the p75 of "mobile only" is the p75 of the mobile readings, not
+# the overall p75 with the other rows hidden. The `group_limit` on the two
+# breakdowns makes that the only correct place for them.
+#
+# **There is deliberately no rating filter here.** The rollup carries no rating:
+# `features/rum/vitals.ts` states that a rating is a property of a value and the
+# p75 is a new value, so the rating a reader sees is computed from the merged
+# p75 against the Core Web Vitals thresholds. The raw `web_vitals` table has a
+# per-reading `rating`, but filtering on it would exclude pages this screen
+# still labels "poor" — a control disagreeing with the column beside it.
+_DEVICE_CLASS_PLACEHOLDER: Final = "/* device class */"
+_ROUTE_PLACEHOLDER: Final = "/* route */"
+
+DEVICE_CLASS_CLAUSE: Final = "AND device_class = {device_class:String}"
+
+# A page is `route` where the customer configured one and `url_path` where they
+# did not, so the filter matches whichever of the two the reader was shown.
+ROUTE_CLAUSE: Final = "AND if(route != '', route, url_path) = {route:String}"
+
+
 # One row per vital: how many readings the window holds and the distribution
 # they merge to. A Core Web Vital is defined at the 75th percentile, so the
 # quantile state is what is stored and the finished number is computed here.
@@ -32,6 +56,8 @@ WHERE tenant_id = {{tenant_id:String}}
   AND project_id = {{project_id:String}}
   AND minute >= {{from_time:DateTime}}
   AND minute < {{to_time:DateTime}}
+  {_DEVICE_CLASS_PLACEHOLDER}
+  {_ROUTE_PLACEHOLDER}
 GROUP BY vital_name
 ORDER BY vital_name
 """
@@ -80,6 +106,8 @@ FROM (
       AND project_id = {{project_id:String}}
       AND minute >= {{from_time:DateTime}}
       AND minute < {{to_time:DateTime}}
+      {_DEVICE_CLASS_PLACEHOLDER}
+      {_ROUTE_PLACEHOLDER}
     GROUP BY group_key, vital_name
 )
 GROUP BY group_key
@@ -108,9 +136,18 @@ FROM (
       AND project_id = {{project_id:String}}
       AND minute >= {{from_time:DateTime}}
       AND minute < {{to_time:DateTime}}
+      {_DEVICE_CLASS_PLACEHOLDER}
+      {_ROUTE_PLACEHOLDER}
     GROUP BY group_key, vital_name
 )
 GROUP BY group_key
 ORDER BY sum(readings) DESC, group_key
 LIMIT {{group_limit:UInt32}}
 """
+
+
+def filtered(statement: str, *, device_class: bool, route: bool) -> str:
+    """Any of these statements, narrowed to what the caller asked for."""
+    return statement.replace(
+        _DEVICE_CLASS_PLACEHOLDER, DEVICE_CLASS_CLAUSE if device_class else ""
+    ).replace(_ROUTE_PLACEHOLDER, ROUTE_CLAUSE if route else "")

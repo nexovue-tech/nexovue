@@ -57,6 +57,7 @@ async def list_error_groups(
     from_time: datetime,
     to_time: datetime,
     limit: int,
+    new_only: bool = False,
 ) -> ErrorGroupListResponse:
     """The window's error groups, the most frequent first, for one service or all.
 
@@ -69,12 +70,17 @@ async def list_error_groups(
     the service reads give: a service can be silent in a window without ceasing to
     exist.
     """
-    parameters = _window_parameters(project_id, from_time, to_time) | {"limit": limit}
+    parameters = _window_parameters(project_id, from_time, to_time) | {
+        "limit": limit,
+        "new_after_nanos": _new_after_nanos(from_time, to_time),
+    }
     if service_name is not None:
         parameters["service_name"] = service_name
 
     rows = await repository.query(
-        queries.error_groups_sql(one_group=False, one_service=service_name is not None),
+        queries.error_groups_sql(
+            one_group=False, one_service=service_name is not None, new_only=new_only
+        ),
         parameters,
     )
     return ErrorGroupListResponse(groups=[_to_summary(row) for row in rows])
@@ -97,7 +103,12 @@ async def get_error_group(
     parameters = _window_parameters(project_id, from_time, to_time)
     summary_row = await repository.query_one(
         queries.error_groups_sql(one_group=True, one_service=False),
-        parameters | {"group_id": group_id, "limit": 1},
+        parameters
+        | {
+            "group_id": group_id,
+            "limit": 1,
+            "new_after_nanos": _new_after_nanos(from_time, to_time),
+        },
     )
     if summary_row is None:
         raise NotFoundError(GROUP_NOT_FOUND_DETAIL)
@@ -110,6 +121,18 @@ async def get_error_group(
         group=_to_summary(summary_row),
         recent=[_to_occurrence(row) for row in occurrence_rows],
     )
+
+
+def _new_after_nanos(from_time: datetime, to_time: datetime) -> int:
+    """The instant after which a first occurrence counts as starting here.
+
+    A margin into the window rather than its edge, because `first_seen` is the
+    minimum over the rows the window holds: a bug that has run for a week reports
+    the window's own start and would otherwise look like a new incident. The
+    margin is a fraction of the window, so it scales with what is being asked.
+    """
+    margin = (to_time - from_time).total_seconds() * queries.WINDOW_EDGE_FRACTION
+    return int((from_time.timestamp() + margin) * queries.NANOS_PER_SECOND)
 
 
 def _window_parameters(project_id: str, from_time: datetime, to_time: datetime) -> dict[str, Any]:
@@ -133,6 +156,7 @@ def _to_summary(row: dict[str, Any]) -> ErrorGroupSummary:
         grouped_by=GROUPED_BY_SDK if int(row["grouped_by_sdk"]) else GROUPED_BY_TEMPLATE,
         occurrences=int(row["occurrences"]),
         first_seen=values.nanos_to_datetime(row["first_seen_nanos"]),
+        started_in_window=bool(row["started_in_window"]),
         last_seen=values.nanos_to_datetime(row["last_seen_nanos"]),
         services=[values.text(service) for service in row["services"]],
         sample_trace_id=values.present_trace_id(row["sample_trace_id"]),

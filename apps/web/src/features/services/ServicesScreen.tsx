@@ -1,11 +1,16 @@
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRight } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
+import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
+import type { FilterValues } from "@/shared/components/FilterBar";
+import { appliedFilters, FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows, SkeletonText } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
+import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatRatePerMinute } from "@/shared/format/rate";
@@ -19,14 +24,10 @@ import type {
   TrendPoint,
 } from "./api";
 import { useEndpointsByService, useServiceList, useServiceTrend } from "./api";
-import type { ServiceOrder, ServiceRow } from "./service-rows";
-import {
-  buildServiceRows,
-  describeServices,
-  describeVolume,
-  ORDER_OPTIONS,
-  rowHeight,
-} from "./service-rows";
+import type { ServiceOrder } from "./filters";
+import { ORDER_OPTIONS, parseServiceOrder, SERVICE_FILTERS } from "./filters";
+import type { ServiceRow } from "./service-rows";
+import { buildServiceRows, describeServices, describeVolume, rowHeight } from "./service-rows";
 
 const OVERSCAN_ROWS = 10;
 
@@ -59,17 +60,41 @@ const WIDE_ONLY = "hidden lg:block";
 export function ServicesScreen() {
   const { projectId, rangeId } = useSelection();
   const timeWindow = useLiveWindow(rangeId);
+  const navigate = useNavigate();
 
-  const [order, setOrder] = useState<ServiceOrder>("worst");
+  // The route's own id, not its path: `/services` renders inside the pathless shell.
+  const search = useSearch({ from: "/shell/services" });
+  const filters = useMemo(() => parseFilterValues(SERVICE_FILTERS, search), [search]);
+  const order = parseServiceOrder(search.order);
+
+  // `replace`, not push: the back button belongs to the screen a person came
+  // from, not to every control they tried on the way.
+  const show = (next: FilterValues, nextOrder: ServiceOrder = order) =>
+    void navigate({
+      to: "/services",
+      search: () => ({
+        ...filterParams(next),
+        ...(nextOrder === "worst" ? {} : { order: nextOrder }),
+      }),
+      replace: true,
+    });
+
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
 
-  const services = useServiceList(projectId, timeWindow);
+  // The ordering travels with the filters: the server cuts the list, so both
+  // have to reach it before the cut.
+  const narrowing = useMemo(
+    () => ({ ...filterParams(filters), ...(order === "worst" ? {} : { order }) }),
+    [filters, order],
+  );
+
+  const services = useServiceList(projectId, timeWindow, narrowing);
   const trendByService = useServiceTrend(projectId, timeWindow);
 
   // Sorted so the request set is a function of *which* services are open, not the
   // order they were opened in — otherwise every toggle rebuilds every query.
   const expandedNames = useMemo(() => [...expanded].sort(), [expanded]);
-  const endpointsByService = useEndpointsByService(projectId, expandedNames, timeWindow);
+  const endpointsByService = useEndpointsByService(projectId, expandedNames, timeWindow, narrowing);
 
   function toggleService(serviceName: string) {
     setExpanded((open) => {
@@ -82,7 +107,10 @@ export function ServicesScreen() {
   return (
     <ServicesView
       order={order}
-      onOrderChange={setOrder}
+      onOrderChange={(next) => show(filters, next)}
+      filters={filters}
+      onFilterChange={(key, value) => show(withFilter(filters, key, value))}
+      onClearFilters={() => show({})}
       windowLabel={timeRangeById(rangeId).label}
       widestWindow={rangeId === TIME_RANGES[TIME_RANGES.length - 1].id}
       services={services.data?.services ?? []}
@@ -101,6 +129,9 @@ export function ServicesScreen() {
 interface ServicesViewProps {
   order: ServiceOrder;
   onOrderChange: (order: ServiceOrder) => void;
+  filters: FilterValues;
+  onFilterChange: (key: string, value: string | undefined) => void;
+  onClearFilters: () => void;
   /** "hour", "24 hours" — the range picker's own word, so the two agree. */
   windowLabel: string;
   /**
@@ -161,6 +192,9 @@ export function trendCeilings(
 export function ServicesView({
   order,
   onOrderChange,
+  filters,
+  onFilterChange,
+  onClearFilters,
   windowLabel,
   widestWindow = false,
   services,
@@ -173,7 +207,8 @@ export function ServicesView({
   endpointsByService,
   trendByService,
 }: ServicesViewProps) {
-  const rows = buildServiceRows(services, order, expanded, endpointsByService);
+  const rows = buildServiceRows(services, expanded, endpointsByService);
+  const narrowed = appliedFilters(SERVICE_FILTERS, filters).length > 0;
   const ceilings = trendCeilings(services, trendByService);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -199,6 +234,13 @@ export function ServicesView({
         </p>
       </header>
 
+      <FilterBar
+        definitions={SERVICE_FILTERS}
+        values={filters}
+        onChange={onFilterChange}
+        onClearAll={onClearFilters}
+      />
+
       {isPending ? (
         <div className="px-4">
           <SkeletonRows rows={10} label="Loading services" />
@@ -208,7 +250,12 @@ export function ServicesView({
           <InlineFailure title="Services could not be loaded" error={error} onRetry={onRetry} />
         </div>
       ) : services.length === 0 ? (
-        <EmptyServices widestWindow={widestWindow} windowLabel={windowLabel} />
+        <EmptyServices
+          widestWindow={widestWindow}
+          windowLabel={windowLabel}
+          narrowed={narrowed}
+          onClearFilters={onClearFilters}
+        />
       ) : (
         <>
           <ColumnHeader />
@@ -250,13 +297,38 @@ export function ServicesView({
  * a reader a sentence, where the opposite error would send a customer with working
  * instrumentation back to the setup page.
  */
+/**
+ * Why the list is empty, which is three different situations and not one.
+ *
+ * "Nothing matches these filters" and "nothing has ever arrived" ask for
+ * opposite actions from the reader, and a screen that says "no services" to both
+ * sends half of them to the wrong one.
+ */
 function EmptyServices({
   widestWindow,
   windowLabel,
+  narrowed,
+  onClearFilters,
 }: {
   widestWindow: boolean;
   windowLabel: string;
+  narrowed: boolean;
+  onClearFilters: () => void;
 }) {
+  if (narrowed) {
+    return (
+      <EmptyState
+        title="No services match these filters"
+        detail={`Services reported in the last ${windowLabel}, but none of them match what you asked for. Drop a filter, or widen the time range.`}
+        action={
+          <Button variant="secondary" onClick={onClearFilters}>
+            Clear all filters
+          </Button>
+        }
+      />
+    );
+  }
+
   if (widestWindow) {
     return (
       <EmptyState

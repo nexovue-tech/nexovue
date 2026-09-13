@@ -955,3 +955,139 @@ def _network(*, device: str, direction: str, earliest: float, latest: float) -> 
         earliest=earliest,
         latest=latest,
     )
+
+
+# ---------------------------------------------------------------------- filters
+#
+# `kind` and `host` are predicates in the statement. `stale_only` cannot be: a
+# node is stale relative to the interval its own series turned out to have, and
+# that does not exist until the series are grouped.
+
+
+def test_an_unfiltered_node_read_carries_no_where_of_its_own() -> None:
+    statement = queries.node_readings_sql(kind=None, host=None)
+
+    assert queries.HOST_CLAUSE not in statement
+    for clause in queries.KIND_CLAUSES.values():
+        assert clause not in statement
+    # The inner read's own predicates are indented inside the subquery, so an
+    # unindented WHERE is the outer one and there must be none.
+    assert statement.count("\nWHERE ") == 0
+
+
+def test_each_kind_is_decided_the_same_way_in_sql_as_in_python() -> None:
+    """`NodeKey.kind` and `KIND_CLAUSES` are two spellings of one rule.
+
+    A container names the host it runs on, so "container" has to be tested
+    before "host" in both — reversed, every container would answer as a host.
+    """
+    assert set(queries.KIND_CLAUSES) == {"host", "container", "reporter"}
+    assert queries.KIND_CLAUSES["container"] == "WHERE container != ''"
+    assert queries.KIND_CLAUSES["host"] == "WHERE container = '' AND host != ''"
+    assert queries.KIND_CLAUSES["reporter"] == "WHERE container = '' AND host = ''"
+
+    assert service.NodeKey(host="h", container="c", reporter="", reporter_instance="").kind == (
+        "container"
+    )
+    assert service.NodeKey(host="h", container="", reporter="", reporter_instance="").kind == "host"
+    assert service.NodeKey(host="", container="", reporter="r", reporter_instance="").kind == (
+        "reporter"
+    )
+
+
+def test_a_kind_and_a_host_compose_into_one_where() -> None:
+    """Whichever predicate arrives first carries the keyword; the other joins it."""
+    statement = queries.node_readings_sql(kind="container", host="web-07")
+
+    assert statement.count("WHERE container != ''") == 1
+    assert f"AND {queries.HOST_CLAUSE}" in statement
+    # One outer WHERE, not two: the second predicate joins it rather than
+    # opening another, which ClickHouse would refuse.
+    assert statement.count("\nWHERE ") == 1
+
+
+def test_a_host_alone_opens_the_where_itself() -> None:
+    assert "WHERE host = {host:String}" in queries.node_readings_sql(kind=None, host="web-07")
+
+
+async def test_filtering_by_host_binds_the_name() -> None:
+    store = FakeMetricStore({TENANT_A: []})
+
+    await service.list_nodes(
+        _repository(TENANT_A, store),
+        project_id=PROJECT,
+        from_time=WINDOW_START,
+        to_time=WINDOW_END,
+        host="web-07",
+    )
+
+    assert store.last_parameters["host"] == "web-07"
+
+
+async def test_an_unasked_host_binds_nothing() -> None:
+    """A parameter bound to a statement that does not name it is a ClickHouse error."""
+    store = FakeMetricStore({TENANT_A: []})
+
+    await service.list_nodes(
+        _repository(TENANT_A, store),
+        project_id=PROJECT,
+        from_time=WINDOW_START,
+        to_time=WINDOW_END,
+    )
+
+    assert "host" not in store.last_parameters
+
+
+def _one_gone_one_live() -> FakeMetricStore:
+    """Two reporters: one last heard from an hour ago, one still arriving."""
+    return FakeMetricStore(
+        {
+            TENANT_A: [
+                series(
+                    conventions.SYSTEM_CPU_UTILIZATION,
+                    host="",
+                    reporter="recommendation",
+                    reporter_instance="gone",
+                    attributes={"cpu": 0, "state": "user"},
+                    latest=0.054,
+                    latest_nanos=_LATEST_NANOS - _AN_HOUR_IN_NANOS,
+                ),
+                series(
+                    conventions.SYSTEM_CPU_UTILIZATION,
+                    host="",
+                    reporter="recommendation",
+                    reporter_instance="live",
+                    attributes={"cpu": 0, "state": "user"},
+                    latest=0.066,
+                ),
+            ]
+        }
+    )
+
+
+async def test_only_stale_keeps_the_node_that_stopped_reporting() -> None:
+    """Applied after assembly, because staleness is not a column.
+
+    A node is stale relative to the interval its own series turned out to have,
+    which is not known until the series are grouped. What keeps that honest is
+    that it runs over every series in the window rather than over a page of
+    them, and `truncated` still says when the window itself was cut.
+    """
+    store = _one_gone_one_live()
+
+    answer = await service.list_nodes(
+        _repository(TENANT_A, store),
+        project_id=PROJECT,
+        from_time=WINDOW_START,
+        to_time=WINDOW_END,
+        stale_only=True,
+    )
+
+    assert [node.reporter_instance for node in answer.nodes] == ["gone"]
+
+
+async def test_without_the_filter_both_nodes_are_listed() -> None:
+    """The filter's own premise: there is a live node for it to have removed."""
+    answer = await _nodes(TENANT_A, _one_gone_one_live())
+
+    assert [node.reporter_instance for node in answer.nodes] == ["gone", "live"]

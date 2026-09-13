@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query
 
@@ -35,6 +35,19 @@ ProjectId = Annotated[uuid.UUID, Query(description="Project to read service heal
 FromTime = Annotated[datetime | None, Query(alias="from")]
 ToTime = Annotated[datetime | None, Query(alias="to")]
 
+# The two filters both ranked reads accept. `span_kind` is an enumeration rather
+# than free text so a typo is a 422 here, not an empty list the reader would
+# take for "nothing is failing".
+SpanKind = Annotated[
+    Literal["SERVER", "CONSUMER"] | None,
+    Query(description="Only spans of this kind — SERVER is HTTP, CONSUMER is a queue"),
+]
+WithErrors = Annotated[bool, Query(description="Only those that failed at least once")]
+Order = Annotated[
+    Literal["worst", "slowest"],
+    Query(description="Lead with failures, or with the slow tail"),
+]
+
 
 @router.get("", summary="Every service in a time window, worst first")
 async def list_services(
@@ -45,6 +58,9 @@ async def list_services(
     from_time: FromTime = None,
     to_time: ToTime = None,
     limit: Annotated[int | None, Query(ge=1, le=service.MAX_SERVICE_LIMIT)] = None,
+    span_kind: SpanKind = None,
+    with_errors: WithErrors = False,
+    order: Order = "worst",
 ) -> ServiceListResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
@@ -56,6 +72,9 @@ async def list_services(
         limit=clamp_limit(
             limit, default=service.DEFAULT_SERVICE_LIMIT, maximum=service.MAX_SERVICE_LIMIT
         ),
+        span_kind=span_kind,
+        with_errors=with_errors,
+        order=order,
     )
 
 
@@ -95,6 +114,9 @@ async def list_project_endpoints(
     from_time: FromTime = None,
     to_time: ToTime = None,
     limit: Annotated[int | None, Query(ge=1, le=service.MAX_ENDPOINT_LIMIT)] = None,
+    span_kind: SpanKind = None,
+    with_errors: WithErrors = False,
+    order: Order = "worst",
 ) -> EndpointListResponse:
     return await _endpoints(
         identity,
@@ -105,6 +127,9 @@ async def list_project_endpoints(
         from_time=from_time,
         to_time=to_time,
         limit=limit,
+        span_kind=span_kind,
+        with_errors=with_errors,
+        order=order,
     )
 
 
@@ -146,6 +171,9 @@ async def list_service_endpoints(
     from_time: FromTime = None,
     to_time: ToTime = None,
     limit: Annotated[int | None, Query(ge=1, le=service.MAX_ENDPOINT_LIMIT)] = None,
+    span_kind: SpanKind = None,
+    with_errors: WithErrors = False,
+    order: Order = "worst",
 ) -> EndpointListResponse:
     return await _endpoints(
         identity,
@@ -156,6 +184,9 @@ async def list_service_endpoints(
         from_time=from_time,
         to_time=to_time,
         limit=limit,
+        span_kind=span_kind,
+        with_errors=with_errors,
+        order=order,
     )
 
 
@@ -169,6 +200,9 @@ async def _endpoints(
     from_time: datetime | None,
     to_time: datetime | None,
     limit: int | None,
+    span_kind: str | None,
+    with_errors: bool,
+    order: str,
 ) -> EndpointListResponse:
     """The two endpoint routes differ only in whether a service was named."""
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
@@ -182,4 +216,7 @@ async def _endpoints(
         limit=clamp_limit(
             limit, default=service.DEFAULT_ENDPOINT_LIMIT, maximum=service.MAX_ENDPOINT_LIMIT
         ),
+        span_kind=span_kind,
+        with_errors=with_errors,
+        order=order,
     )

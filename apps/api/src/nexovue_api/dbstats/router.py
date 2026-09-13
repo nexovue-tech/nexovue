@@ -45,6 +45,10 @@ async def slow_statements(
     from_time: FromTime = None,
     to_time: ToTime = None,
     limit: Annotated[int | None, Query(ge=1, le=service.MAX_STATEMENT_LIMIT)] = None,
+    server: Annotated[str | None, Query(description="Only statements on this server")] = None,
+    min_mean_ms: Annotated[
+        float | None, Query(ge=0, description="Only statements whose worst mean reached this")
+    ] = None,
 ) -> SlowStatementsResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
@@ -56,6 +60,8 @@ async def slow_statements(
         limit=clamp_limit(
             limit, default=service.DEFAULT_STATEMENT_LIMIT, maximum=service.MAX_STATEMENT_LIMIT
         ),
+        server=server,
+        min_mean_ms=min_mean_ms,
     )
 
 

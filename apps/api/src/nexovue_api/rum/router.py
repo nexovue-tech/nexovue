@@ -34,6 +34,13 @@ ToTime = Annotated[datetime | None, Query(alias="to")]
 # rather than reaching a query.
 Dimension = Annotated[BreakdownDimension, Query(description="Split the readings by page or device")]
 
+# The two filters both reads accept. There is no rating filter: the rating a
+# reader sees is computed from the merged p75 on the screen, where the Core Web
+# Vitals thresholds live, and a second copy of them here could exclude a page
+# this screen still labels poor.
+DeviceClass = Annotated[str | None, Query(description="Only readings from this class of device")]
+Route = Annotated[str | None, Query(description="Only readings from this page")]
+
 
 @router.get("/web-vitals", summary="Each Core Web Vital's p75 over a time window")
 async def get_web_vitals(
@@ -43,6 +50,8 @@ async def get_web_vitals(
     project_id: ProjectId,
     from_time: FromTime = None,
     to_time: ToTime = None,
+    device_class: DeviceClass = None,
+    route: Route = None,
 ) -> WebVitalsResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
@@ -51,6 +60,8 @@ async def get_web_vitals(
         project_id=str(project.id),
         from_time=window_start,
         to_time=window_end,
+        device_class=device_class,
+        route=route,
     )
 
 
@@ -66,12 +77,16 @@ async def get_web_vitals_breakdown(
     dimension: Dimension,
     from_time: FromTime = None,
     to_time: ToTime = None,
+    device_class: DeviceClass = None,
+    route: Route = None,
 ) -> WebVitalBreakdownResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.break_down_web_vitals(
         repository,
         dimension=dimension,
+        device_class=device_class,
+        route=route,
         project_id=str(project.id),
         from_time=window_start,
         to_time=window_end,

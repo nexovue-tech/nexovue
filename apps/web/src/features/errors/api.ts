@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { apiClient } from "@/shared/api-client";
+import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
 
 /** The error-grouping half of the M6 contract. Field names are the API's, unchanged. */
@@ -23,6 +24,14 @@ export interface ErrorGroupSummary {
   grouped_by: string;
   occurrences: number;
   first_seen: string;
+  /**
+   * Whether the group began inside the window rather than before it.
+   *
+   * Decided by the API, not here: the row's marker and the "only new" filter are
+   * the same question, and a copy of the rule on each side is how they come to
+   * disagree — the filter hiding a row the list had marked.
+   */
+  started_in_window: boolean;
   last_seen: string;
   services: string[];
   /** Empty when the newest instance carried no trace context, never null. */
@@ -76,8 +85,11 @@ export interface ErrorGroupDetail {
   recent: ErrorOccurrence[];
 }
 
-export const errorGroupListQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["error-groups", projectId, timeWindow.from, timeWindow.to] as const;
+export const errorGroupListQueryKey = (
+  projectId: string,
+  timeWindow: TimeWindow,
+  narrowing: string,
+) => ["error-groups", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
 
 export const errorGroupQueryKey = (projectId: string, groupId: string, timeWindow: TimeWindow) =>
   ["error-group", projectId, groupId, timeWindow.from, timeWindow.to] as const;
@@ -88,13 +100,22 @@ export const errorGroupQueryKey = (projectId: string, groupId: string, timeWindo
  * The API decides that order — occurrences, then recency — and the ranking is the
  * product, so nothing here re-sorts it.
  */
-export function useErrorGroups(projectId: string | undefined, timeWindow: TimeWindow) {
+export function useErrorGroups(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+  narrowing: Record<string, string> = {},
+) {
   return useQuery({
-    queryKey: errorGroupListQueryKey(projectId ?? "", timeWindow),
+    queryKey: errorGroupListQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
       apiClient.get<ErrorGroupListResponse>("error-groups", {
-        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        searchParams: {
+          project_id: projectId,
+          from: timeWindow.from,
+          to: timeWindow.to,
+          ...narrowing,
+        },
         signal,
       }),
   });

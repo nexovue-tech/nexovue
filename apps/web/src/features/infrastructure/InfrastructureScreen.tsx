@@ -1,10 +1,14 @@
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
+import { appliedFilters, FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
+import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatBinaryBytes } from "@/shared/format/bytes";
 import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
@@ -12,6 +16,7 @@ import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 import type { NodeSummary, NodeTrendPoint, SignalSummary } from "./api";
 import { nodeSeriesKey, useNodes, useNodeTrend, useSignals } from "./api";
 import { DatabasesView } from "./databases/DatabasesView";
+import { infrastructureFilters } from "./filters";
 import {
   CPU_METRICS,
   cpuFraction,
@@ -111,16 +116,36 @@ function ViewSwitch({
 export function InfrastructureScreen() {
   const { projectId, rangeId } = useSelection();
   const timeWindow = useLiveWindow(rangeId);
+  const navigate = useNavigate();
 
-  const nodes = useNodes(projectId, timeWindow);
-  const trendBySeries = useNodeTrend(projectId, timeWindow);
-  const signals = useSignals(projectId, timeWindow);
+  // The route's own id, not its path: `/infrastructure` renders inside the shell.
+  const search = useSearch({ from: "/shell/infrastructure" });
 
   const [view, setView] = useState<InfrastructureView>("hosts");
 
-  const all = nodes.data?.nodes ?? [];
-  const [kind, setKind] = useState<KindFilter>("all");
-  const rows = kind === "all" ? all : all.filter((node) => node.kind === kind);
+  // The options depend on what came back, and what came back depends on the
+  // filters — so the definitions are rebuilt from each answer. `FilterBar` keeps
+  // a selected value that is no longer offered, which is what stops the control
+  // and the results disagreeing while a filter is applied.
+  const [definitions, setDefinitions] = useState(() => infrastructureFilters([]));
+  const filters = useMemo(() => parseFilterValues(definitions, search), [definitions, search]);
+  const narrowing = useMemo(() => filterParams(filters), [filters]);
+
+  const nodes = useNodes(projectId, timeWindow, narrowing);
+  const trendBySeries = useNodeTrend(projectId, timeWindow);
+  const signals = useSignals(projectId, timeWindow);
+
+  const rows = nodes.data?.nodes ?? [];
+  useEffect(() => {
+    if (rows.length > 0) setDefinitions(infrastructureFilters(rows));
+  }, [rows]);
+
+  // `replace`, not push: the back button belongs to the screen a person came
+  // from, not to every control they tried on the way.
+  const show = (next: Record<string, string | undefined>) =>
+    void navigate({ to: "/infrastructure", search: () => filterParams(next), replace: true });
+
+  const narrowed = appliedFilters(definitions, filters).length > 0;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -156,17 +181,26 @@ export function InfrastructureScreen() {
             }}
           />
         </div>
-      ) : all.length === 0 ? (
-        <NothingReporting />
       ) : (
         <>
-          {nodes.data?.truncated ? <TruncationNotice /> : null}
-          <KindFilterBar nodes={all} selected={kind} onSelect={setKind} />
-          <NestingNotice nodes={all} />
-          <StaleNotice nodes={rows} />
-          <UnattributedNotice nodes={rows} />
-          <NodeTable nodes={rows} trendBySeries={trendBySeries} />
-          <SignalStrip signals={signals.data ?? []} />
+          <FilterBar
+            definitions={definitions}
+            values={filters}
+            onChange={(key, value) => show(withFilter(filters, key, value))}
+            onClearAll={() => show({})}
+          />
+          {rows.length === 0 ? (
+            <NothingReporting narrowed={narrowed} onClearFilters={() => show({})} />
+          ) : (
+            <>
+              {nodes.data?.truncated ? <TruncationNotice /> : null}
+              <NestingNotice nodes={rows} />
+              <StaleNotice nodes={rows} />
+              <UnattributedNotice nodes={rows} />
+              <NodeTable nodes={rows} trendBySeries={trendBySeries} />
+              <SignalStrip signals={signals.data ?? []} />
+            </>
+          )}
         </>
       )}
     </div>
@@ -181,7 +215,30 @@ export function InfrastructureScreen() {
  * from anything we deploy. There is no nexovue agent to install, so the instruction is
  * the receiver name and the endpoint, which is the whole of what they have to do.
  */
-function NothingReporting() {
+function NothingReporting({
+  narrowed,
+  onClearFilters,
+}: {
+  narrowed: boolean;
+  onClearFilters: () => void;
+}) {
+  // "Nothing matches these filters" and "no collector is running" ask for
+  // opposite actions, and one sentence for both sends half the readers to set up
+  // a collector they already have.
+  if (narrowed) {
+    return (
+      <EmptyState
+        title="No nodes match these filters"
+        detail="Your collector is reporting, but nothing in this window matches what you asked for. Drop a filter, or widen the time range."
+        action={
+          <Button variant="secondary" onClick={onClearFilters}>
+            Clear all filters
+          </Button>
+        }
+      />
+    );
+  }
+
   return (
     <EmptyState
       title="No host metrics have arrived"
@@ -233,68 +290,6 @@ function UnattributedNotice({ nodes }: { nodes: readonly NodeSummary[] }) {
     <p className="shrink-0 border-warning-border border-l-2 px-4 py-2 text-sm text-warning-text">
       {said}
     </p>
-  );
-}
-
-type KindFilter = "all" | NodeSummary["kind"];
-
-/* Plural labels, because the button carries a count. */
-const KIND_LABELS: Record<NodeSummary["kind"], string> = {
-  host: "Hosts",
-  container: "Containers",
-  reporter: "Reporters",
-};
-
-const KIND_ORDER: readonly NodeSummary["kind"][] = ["host", "container", "reporter"];
-
-/**
- * Narrows the list to one kind of node.
- *
- * It exists because a host and the containers inside it are not comparable rows, and
- * a reader scanning a mixed list has no way to know which is which without reading
- * every kind label. Hidden when only one kind reported, so a fleet of plain hosts is
- * not given a control that does nothing.
- */
-function KindFilterBar({
-  nodes,
-  selected,
-  onSelect,
-}: {
-  nodes: readonly NodeSummary[];
-  selected: KindFilter;
-  onSelect: (kind: KindFilter) => void;
-}) {
-  const present = KIND_ORDER.filter((kind) => nodes.some((node) => node.kind === kind));
-  if (present.length < 2) return null;
-
-  const options: { id: KindFilter; label: string; count: number }[] = [
-    { id: "all", label: "All", count: nodes.length },
-    ...present.map((kind) => ({
-      id: kind as KindFilter,
-      label: KIND_LABELS[kind],
-      count: nodes.filter((node) => node.kind === kind).length,
-    })),
-  ];
-
-  return (
-    <div className="flex shrink-0 items-baseline gap-1.5 px-4 pb-2 font-mono text-2xs uppercase tracking-caps">
-      <span className="text-ink-dim">Show</span>
-      {options.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          aria-pressed={selected === option.id}
-          onClick={() => onSelect(option.id)}
-          className={`rounded-sm border px-1.5 py-0.5 ${
-            selected === option.id
-              ? "border-line bg-raised text-ink"
-              : "border-transparent text-ink-dim hover:text-ink"
-          }`}
-        >
-          {option.label} {option.count}
-        </button>
-      ))}
-    </div>
   );
 }
 

@@ -515,3 +515,84 @@ def test_no_live_materialized_view_fills_the_table_these_statements_read() -> No
         "derived before the sampler and a view over `spans` is not"
     )
     assert drops, "000024 must drop endpoint_stats_1m_mv, or the rollup is fed twice"
+
+
+# ---------------------------------------------------------------------- filters
+#
+# Every filter is a predicate inside the statement. `LIMIT` caps the ranking at a
+# hundred services, so one applied to what came back would answer "the failing
+# ones among the first hundred" and have no way to say so. Each test below
+# asserts the clause lands ahead of `LIMIT`, which is what makes that true.
+
+
+def _applied_before_the_cap(statement: str, clause: str) -> bool:
+    return clause in statement and statement.index(clause) < statement.index("LIMIT")
+
+
+def test_an_unfiltered_ranking_carries_neither_predicate() -> None:
+    statement = queries.services_sql(one_service=False)
+
+    assert "span_kind = " not in statement
+    assert "HAVING" not in statement
+
+
+async def test_only_failing_services_is_asked_of_the_store(client: CapturingClient) -> None:
+    await service.list_services(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        from_time=_window()[0],
+        to_time=_window()[1],
+        limit=100,
+        with_errors=True,
+    )
+
+    assert _applied_before_the_cap(client.statements[0], queries.WITH_ERRORS_CLAUSE)
+
+
+async def test_one_span_kind_narrows_what_is_aggregated(client: CapturingClient) -> None:
+    """SERVER is HTTP and CONSUMER is a queue, and a service can be only one.
+
+    This is a `WHERE`, not a `HAVING`: asking for HTTP must change which rows are
+    summed, so a service that only consumes a queue leaves the answer entirely
+    rather than appearing with the totals of its queue traffic.
+    """
+    await service.list_services(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        from_time=_window()[0],
+        to_time=_window()[1],
+        limit=100,
+        span_kind="SERVER",
+    )
+
+    statement = client.statements[0]
+    assert _applied_before_the_cap(statement, queries.SPAN_KIND_CLAUSE)
+    assert statement.index(queries.SPAN_KIND_CLAUSE) < statement.index("GROUP BY")
+    assert client.parameters[0]["span_kind"] == "SERVER"
+
+
+async def test_the_endpoint_ranking_takes_the_same_two_filters(client: CapturingClient) -> None:
+    await service.list_endpoints(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        service_name=None,
+        from_time=_window()[0],
+        to_time=_window()[1],
+        limit=100,
+        span_kind="CONSUMER",
+        with_errors=True,
+    )
+
+    statement = client.statements[0]
+    assert _applied_before_the_cap(statement, queries.SPAN_KIND_CLAUSE)
+    assert _applied_before_the_cap(statement, queries.WITH_ERRORS_CLAUSE)
+    assert client.parameters[0]["span_kind"] == "CONSUMER"
+
+
+def test_every_span_kind_the_router_offers_is_one_the_rollup_stores() -> None:
+    """The enumeration on the route and the two kinds `derive` writes are one list.
+
+    A third member here would be refused by ClickHouse as a `LowCardinality`
+    mismatch at best, and silently return nothing at worst.
+    """
+    assert set(service.SPAN_KINDS) == {"SERVER", "CONSUMER"}

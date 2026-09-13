@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query
 
@@ -49,6 +49,10 @@ async def list_check_results(
     project_id: ProjectId,
     from_time: FromTime = None,
     to_time: ToTime = None,
+    check_type: Annotated[
+        Literal["http", "browser"] | None, Query(description="Only checks of this kind")
+    ] = None,
+    down_only: Annotated[bool, Query(description="Only checks whose last probe failed")] = False,
 ) -> CheckResultListResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
@@ -57,6 +61,8 @@ async def list_check_results(
         project_id=str(project.id),
         from_time=window_start,
         to_time=window_end,
+        check_type=check_type,
+        down_only=down_only,
     )
 
 

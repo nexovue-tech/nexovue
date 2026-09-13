@@ -56,11 +56,21 @@ async def slow_statements(
     from_time: datetime,
     to_time: datetime,
     limit: int,
+    server: str | None = None,
+    min_mean_ms: float | None = None,
 ) -> SlowStatementsResponse:
     """The costliest normalized statements in the window, slowest first."""
+    parameters = _window_parameters(project_id, from_time, to_time) | {"limit": limit}
+    if server is not None:
+        parameters["server"] = server
+    # Asked in milliseconds because that is what the column is labelled with;
+    # stored in seconds, so it is converted here rather than in SQL.
+    if min_mean_ms is not None:
+        parameters["min_mean_seconds"] = min_mean_ms / MILLISECONDS_PER_SECOND
+
     rows = await repository.query(
-        queries.SLOW_STATEMENTS_SQL,
-        _window_parameters(project_id, from_time, to_time) | {"limit": limit},
+        queries.slow_statements_sql(server=server is not None, min_mean=min_mean_ms is not None),
+        parameters,
     )
     return SlowStatementsResponse(statements=[_to_statement(row) for row in rows])
 

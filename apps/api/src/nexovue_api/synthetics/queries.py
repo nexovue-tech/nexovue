@@ -74,6 +74,21 @@ _WINDOW_PREDICATE: Final = """
 # column it takes is a property of the series, so its candidates are equal.
 _ONE_ROW_PER_READING: Final = "GROUP BY check_id, metric_name, series_hash, timestamp"
 
+# The optional predicates, spliced on comment markers: ClickHouse's own
+# parameter syntax is braces, so str.format cannot be used here.
+_CHECK_TYPE_PLACEHOLDER: Final = "/* check type */"
+_DOWN_ONLY_PLACEHOLDER: Final = "/* down only */"
+
+# "Browser checks only". The type is a resource attribute, so this narrows the
+# rows read rather than the summaries returned.
+CHECK_TYPE_CLAUSE: Final = f"AND {CHECK_TYPE} = {{check_type:String}}"
+
+# "Only what's down", and `runs > 0` is load-bearing: `argMaxIf` over no matching
+# row returns zero, so a check with a certificate reading and no probe would
+# otherwise be reported as down. `_to_summary` says the same thing about `up`.
+DOWN_ONLY_CLAUSE: Final = "HAVING runs > 0 AND latest_up != 1"
+
+
 # One row per check. Status, duration and certificate are read in a single pass
 # with conditional aggregates rather than in three queries joined afterwards.
 #
@@ -110,13 +125,28 @@ FROM (
     WHERE tenant_id = {{tenant_id:String}}
       AND project_id = {{project_id:String}}
       AND metric_name IN ('{METRIC_STATUS}', '{METRIC_DURATION}', '{METRIC_TLS_REMAINING}')
+      {_CHECK_TYPE_PLACEHOLDER}
     {_WINDOW_PREDICATE}
     {_ONE_ROW_PER_READING}
 )
 GROUP BY check_id
+{_DOWN_ONLY_PLACEHOLDER}
 ORDER BY check_id
 LIMIT {{limit:UInt32}}
 """
+
+
+def check_summaries_sql(*, check_type: bool, down_only: bool) -> str:
+    """The summary statement, narrowed to what the caller asked for.
+
+    Both predicates live inside the statement. `LIMIT` caps the list, so asking
+    "what is down" of the rows that came back would answer "the down ones among
+    the first hundred checks" with nothing able to say so.
+    """
+    return CHECK_SUMMARIES_SQL.replace(
+        _CHECK_TYPE_PLACEHOLDER, CHECK_TYPE_CLAUSE if check_type else ""
+    ).replace(_DOWN_ONLY_PLACEHOLDER, DOWN_ONLY_CLAUSE if down_only else "")
+
 
 # Each check's history, bucket by bucket — the sparkline in its row.
 #

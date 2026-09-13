@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query
 
@@ -42,6 +42,16 @@ async def list_nodes(
     project_id: ProjectId,
     from_time: FromTime = None,
     to_time: ToTime = None,
+    kind: Annotated[
+        Literal["host", "container", "reporter"] | None,
+        Query(description="Only nodes of this kind"),
+    ] = None,
+    host: Annotated[
+        str | None, Query(description="Only this machine and the containers running on it")
+    ] = None,
+    stale_only: Annotated[
+        bool, Query(description="Only nodes that have stopped reporting")
+    ] = False,
 ) -> NodeListResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
@@ -50,6 +60,9 @@ async def list_nodes(
         project_id=str(project.id),
         from_time=window_start,
         to_time=window_end,
+        kind=kind,
+        host=host,
+        stale_only=stale_only,
     )
 
 

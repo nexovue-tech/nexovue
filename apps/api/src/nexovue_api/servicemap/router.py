@@ -33,6 +33,13 @@ async def get_service_map(
     from_time: Annotated[datetime | None, Query(alias="from")] = None,
     to_time: Annotated[datetime | None, Query(alias="to")] = None,
     limit: Annotated[int | None, Query(ge=1, le=service.MAX_LIMIT)] = None,
+    min_calls_per_minute: Annotated[
+        float | None,
+        Query(ge=0, description="Hide edges quieter than this, in calls per minute"),
+    ] = None,
+    failing_only: Annotated[
+        bool, Query(description="Only edges that failed at least once")
+    ] = False,
 ) -> ServiceMapResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
@@ -42,4 +49,6 @@ async def get_service_map(
         from_time=window_start,
         to_time=window_end,
         limit=clamp_limit(limit, default=service.DEFAULT_LIMIT, maximum=service.MAX_LIMIT),
+        min_calls_per_minute=min_calls_per_minute,
+        failing_only=failing_only,
     )

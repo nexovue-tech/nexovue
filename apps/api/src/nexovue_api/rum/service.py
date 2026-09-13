@@ -46,11 +46,22 @@ async def summarize_web_vitals(
     project_id: str,
     from_time: datetime,
     to_time: datetime,
+    device_class: str | None = None,
+    route: str | None = None,
 ) -> WebVitalsResponse:
-    """Each vital's p75 over the window, with the sample size behind it."""
+    """Each vital's p75 over the window, with the sample size behind it.
+
+    The filters narrow what is merged, so the headline p75 is the p75 of the
+    readings the filter kept — not the overall p75 with rows hidden beside it.
+    """
     rows = await repository.query(
-        queries.VITAL_SUMMARY_SQL,
-        {"project_id": project_id, "from_time": from_time, "to_time": to_time},
+        queries.filtered(
+            queries.VITAL_SUMMARY_SQL,
+            device_class=device_class is not None,
+            route=route is not None,
+        ),
+        {"project_id": project_id, "from_time": from_time, "to_time": to_time}
+        | _narrowing(device_class=device_class, route=route),
     )
     return WebVitalsResponse(vitals=[_to_summary(row) for row in rows])
 
@@ -62,6 +73,8 @@ async def break_down_web_vitals(
     project_id: str,
     from_time: datetime,
     to_time: datetime,
+    device_class: str | None = None,
+    route: str | None = None,
 ) -> WebVitalBreakdownResponse:
     """The same p75s, split by page or by device class, busiest group first.
 
@@ -71,20 +84,35 @@ async def break_down_web_vitals(
     it, and would also hide from a reader that a page was visited at all.
     """
     rows = await repository.query(
-        _BREAKDOWN_SQL[dimension],
+        queries.filtered(
+            _BREAKDOWN_SQL[dimension],
+            device_class=device_class is not None,
+            route=route is not None,
+        ),
         {
             "project_id": project_id,
             "from_time": from_time,
             "to_time": to_time,
             # One past the limit, so a full page is told apart from a cut one.
             "group_limit": MAX_GROUPS + 1,
-        },
+        }
+        | _narrowing(device_class=device_class, route=route),
     )
     return WebVitalBreakdownResponse(
         dimension=dimension,
         groups=[_to_group(row) for row in rows[:MAX_GROUPS]],
         truncated=len(rows) > MAX_GROUPS,
     )
+
+
+def _narrowing(*, device_class: str | None, route: str | None) -> dict[str, Any]:
+    """Only the filters that were asked for; an absent one binds nothing."""
+    bound: dict[str, Any] = {}
+    if device_class is not None:
+        bound["device_class"] = device_class
+    if route is not None:
+        bound["route"] = route
+    return bound
 
 
 def _to_group(row: dict[str, Any]) -> WebVitalGroup:

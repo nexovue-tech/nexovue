@@ -91,6 +91,17 @@ async def service_trend(
     )
 
 
+# The two span kinds the rollup keeps apart. A screen asking for "HTTP, not
+# queues" is asking for SERVER; the list is here so a typo is a 422 at the edge
+# rather than an empty answer the reader would read as "nothing is failing".
+SPAN_KINDS: Final = ("SERVER", "CONSUMER")
+
+# How the ranking is ordered. "worst" leads with failures, "slowest" with the
+# slow tail — two different questions of the same rows, and both are the store's
+# to answer because `LIMIT` cuts whichever order it was given.
+ORDERINGS: Final = ("worst", "slowest")
+
+
 async def list_services(
     repository: TenantScopedRepository,
     *,
@@ -98,6 +109,9 @@ async def list_services(
     from_time: datetime,
     to_time: datetime,
     limit: int,
+    span_kind: str | None = None,
+    with_errors: bool = False,
+    order: str = "worst",
 ) -> ServiceListResponse:
     """Every service that reported in the window, worst first."""
     return ServiceListResponse(
@@ -110,6 +124,9 @@ async def list_services(
             from_time=from_time,
             to_time=to_time,
             limit=limit,
+            span_kind=span_kind,
+            with_errors=with_errors,
+            order=order,
         ),
     )
 
@@ -151,6 +168,9 @@ async def _read_services(
     from_time: datetime,
     to_time: datetime,
     limit: int,
+    span_kind: str | None = None,
+    with_errors: bool = False,
+    order: str = "worst",
 ) -> list[ServiceHealth]:
     """The ranking, for the whole project or for one named service.
 
@@ -160,9 +180,17 @@ async def _read_services(
     parameters = _window_parameters(project_id, from_time, to_time) | {"limit": limit}
     if service_name is not None:
         parameters["service_name"] = service_name
+    if span_kind is not None:
+        parameters["span_kind"] = span_kind
 
     rows = await repository.query(
-        queries.services_sql(one_service=service_name is not None), parameters
+        queries.services_sql(
+            one_service=service_name is not None,
+            span_kind=span_kind is not None,
+            with_errors=with_errors,
+            order=order,
+        ),
+        parameters,
     )
     minutes = rollup.window_minutes(from_time, to_time)
     return [_to_service(row, minutes) for row in rows]
@@ -176,6 +204,9 @@ async def list_endpoints(
     from_time: datetime,
     to_time: datetime,
     limit: int,
+    span_kind: str | None = None,
+    with_errors: bool = False,
+    order: str = "worst",
 ) -> EndpointListResponse:
     """Endpoints ranked by how bad they are, for one service or for the project.
 
@@ -187,9 +218,17 @@ async def list_endpoints(
     parameters = _window_parameters(project_id, from_time, to_time) | {"limit": limit}
     if service_name is not None:
         parameters["service_name"] = service_name
+    if span_kind is not None:
+        parameters["span_kind"] = span_kind
 
     rows = await repository.query(
-        queries.endpoints_sql(one_service=service_name is not None), parameters
+        queries.endpoints_sql(
+            one_service=service_name is not None,
+            span_kind=span_kind is not None,
+            with_errors=with_errors,
+            order=order,
+        ),
+        parameters,
     )
     minutes = rollup.window_minutes(from_time, to_time)
     return EndpointListResponse(

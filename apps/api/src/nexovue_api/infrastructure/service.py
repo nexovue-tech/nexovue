@@ -191,22 +191,36 @@ async def list_nodes(
     project_id: str,
     from_time: datetime,
     to_time: datetime,
+    kind: NodeKind | None = None,
+    host: str | None = None,
+    stale_only: bool = False,
 ) -> NodeListResponse:
-    """Every host, container and reporting process that sent one of these metrics."""
+    """Every host, container and reporting process that sent one of these metrics.
+
+    `kind` and `host` are predicates in the statement. `stale_only` cannot be:
+    whether a node has stopped reporting is measured from the interval its own
+    series turned out to have, which does not exist until the series are grouped.
+    It is applied after assembly, over every series the window holds rather than
+    over a page of them — and the two predicates that do narrow the read make
+    `truncated` less likely on a filtered answer than on an unfiltered one.
+    """
     rows = await repository.query(
-        queries.NODE_READINGS_SQL,
-        _read_parameters(project_id, from_time, to_time) | {"max_series": MAX_SERIES},
+        queries.node_readings_sql(kind=kind, host=host),
+        _read_parameters(project_id, from_time, to_time)
+        | {"max_series": MAX_SERIES}
+        | ({"host": host} if host is not None else {}),
     )
 
     by_node: dict[NodeKey, list[Reading]] = defaultdict(list)
     for row in rows:
         by_node[_node_key(row)].append(_to_reading(row))
 
+    nodes = [
+        _summarize(key, readings, as_of=to_time)
+        for key, readings in sorted(by_node.items(), key=_ordered)
+    ]
     return NodeListResponse(
-        nodes=[
-            _summarize(key, readings, as_of=to_time)
-            for key, readings in sorted(by_node.items(), key=_ordered)
-        ],
+        nodes=[node for node in nodes if node.stale] if stale_only else nodes,
         truncated=len(rows) >= MAX_SERIES,
     )
 

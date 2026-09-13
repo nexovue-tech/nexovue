@@ -55,6 +55,26 @@ WHERE tenant_id = {tenant_id:String}
 # named technology ahead of the empty string and gives the same answer twice.
 _PEER_KIND: Final = "max(server_peer_kind) AS server_peer_kind"
 
+# ClickHouse's parameter syntax is braces, so the optional predicates are
+# spliced on a comment marker rather than with str.format. Both are `HAVING`:
+# they test sums, which do not exist until the group does.
+_EDGE_FILTERS_PLACEHOLDER: Final = "/* edge filters */"
+
+# "Hide low-volume links". The caller asks in calls per minute because that is
+# what the edge is labelled with; the stored column is a count, so the service
+# multiplies by the window it is reading and binds the floor as a count. Asking
+# the reader to think in "calls per window" instead would move the arithmetic
+# from here to their head.
+MIN_CALL_COUNT_CLAUSE: Final = "sum(call_count) >= {min_call_count:UInt64}"
+
+# "Only failing edges" — one failure in the window is enough to be worth seeing.
+FAILING_ONLY_CLAUSE: Final = "sum(error_count) > 0"
+
+_EDGE_FILTER_CLAUSES: Final = {
+    "min_call_count": MIN_CALL_COUNT_CLAUSE,
+    "failing_only": FAILING_ONLY_CLAUSE,
+}
+
 SERVICE_EDGES_SQL: Final = f"""
 SELECT
     client_service,
@@ -66,6 +86,21 @@ SELECT
     {_LATENCY_MS}
 {_SERVICE_EDGES_IN_WINDOW}
 GROUP BY client_service, server_service, edge_kind
+{_EDGE_FILTERS_PLACEHOLDER}
 ORDER BY {BUSIEST_FIRST}, client_service, server_service, edge_kind
 LIMIT {{limit:UInt32}}
 """
+
+
+def service_edges_sql(*, min_call_count: bool, failing_only: bool) -> str:
+    """The edge statement, narrowed to what the caller asked for.
+
+    The predicates go inside the statement rather than over what it returns:
+    `LIMIT` caps the graph at a thousand edges, so a filter applied afterwards
+    would answer "the failing edges among the busiest thousand" with no way to
+    say so.
+    """
+    wanted = {"min_call_count": min_call_count, "failing_only": failing_only}
+    applied = [clause for name, clause in _EDGE_FILTER_CLAUSES.items() if wanted[name]]
+    having = f"HAVING {' AND '.join(applied)}" if applied else ""
+    return SERVICE_EDGES_SQL.replace(_EDGE_FILTERS_PLACEHOLDER, having)

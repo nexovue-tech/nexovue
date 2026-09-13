@@ -2,6 +2,7 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { apiClient } from "@/shared/api-client";
+import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
 
 /** The service-overview half of the M6 contract. Field names are the API's, unchanged. */
@@ -70,27 +71,41 @@ export interface EndpointGroup {
   refetch: () => void;
 }
 
-export const serviceListQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["services", projectId, timeWindow.from, timeWindow.to] as const;
+export const serviceListQueryKey = (projectId: string, timeWindow: TimeWindow, narrowing: string) =>
+  ["services", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
 
 export const serviceEndpointsQueryKey = (
   projectId: string,
   serviceName: string,
   timeWindow: TimeWindow,
-) => ["service-endpoints", projectId, serviceName, timeWindow.from, timeWindow.to] as const;
+  narrowing: string,
+) =>
+  ["service-endpoints", projectId, serviceName, timeWindow.from, timeWindow.to, narrowing] as const;
 
 /**
- * Every service that reported in the window. The API returns them already ranked —
- * errors, then the slow tail, then volume — and that order is the product, so nothing
- * here re-sorts it.
+ * Every service that reported in the window, ranked and narrowed by the server.
+ *
+ * The filters and the ordering both travel with the request rather than being
+ * applied to the answer. The API returns the first hundred rows of whichever
+ * order it was asked for, so anything done to that page here could only
+ * rearrange the rows that survived the cut.
  */
-export function useServiceList(projectId: string | undefined, timeWindow: TimeWindow) {
+export function useServiceList(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+  narrowing: Record<string, string>,
+) {
   return useQuery({
-    queryKey: serviceListQueryKey(projectId ?? "", timeWindow),
+    queryKey: serviceListQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
       apiClient.get<ServiceListResponse>("services", {
-        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        searchParams: {
+          project_id: projectId,
+          from: timeWindow.from,
+          to: timeWindow.to,
+          ...narrowing,
+        },
         signal,
       }),
   });
@@ -142,16 +157,23 @@ export function useEndpointsByService(
   projectId: string | undefined,
   serviceNames: readonly string[],
   timeWindow: TimeWindow,
+  narrowing: Record<string, string>,
 ): ReadonlyMap<string, EndpointGroup> {
+  const narrowedBy = filterCacheKey(narrowing);
   return useQueries({
     queries: serviceNames.map((serviceName) => ({
-      queryKey: serviceEndpointsQueryKey(projectId ?? "", serviceName, timeWindow),
+      queryKey: serviceEndpointsQueryKey(projectId ?? "", serviceName, timeWindow, narrowedBy),
       enabled: projectId !== undefined,
       queryFn: ({ signal }: { signal: AbortSignal }) =>
         apiClient.get<EndpointListResponse>(
           `services/${encodeURIComponent(serviceName)}/endpoints`,
           {
-            searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+            searchParams: {
+              project_id: projectId,
+              from: timeWindow.from,
+              to: timeWindow.to,
+              ...narrowing,
+            },
             signal,
           },
         ),

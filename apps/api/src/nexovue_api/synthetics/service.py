@@ -71,12 +71,19 @@ def _clamped_bucket(seconds: int) -> int:
     return min(max(seconds, MIN_BUCKET_SECONDS), MAX_BUCKET_SECONDS)
 
 
+# What a check can be. Enumerated so a typo is refused at the edge rather
+# than answering with an empty list the reader would take for "all healthy".
+CHECK_TYPES: Final = ("http", "browser")
+
+
 async def list_check_results(
     repository: TenantScopedRepository,
     *,
     project_id: str,
     from_time: datetime,
     to_time: datetime,
+    check_type: str | None = None,
+    down_only: bool = False,
 ) -> CheckResultListResponse:
     """Every check that reported something in the window, with its readings.
 
@@ -84,9 +91,13 @@ async def list_check_results(
     is the honest answer here — the definitions endpoint lists what exists, and
     inventing a zeroed row would say "measured, and it was zero".
     """
+    parameters = _window_parameters(project_id, from_time, to_time) | {"limit": MAX_CHECKS}
+    if check_type is not None:
+        parameters["check_type"] = check_type
+
     rows = await repository.query(
-        queries.CHECK_SUMMARIES_SQL,
-        _window_parameters(project_id, from_time, to_time) | {"limit": MAX_CHECKS},
+        queries.check_summaries_sql(check_type=check_type is not None, down_only=down_only),
+        parameters,
     )
     return CheckResultListResponse(checks=[_to_summary(row) for row in rows])
 

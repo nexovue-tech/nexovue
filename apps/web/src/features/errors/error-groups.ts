@@ -8,69 +8,38 @@
 
 import { formatCount, UNKNOWN } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
-import type { TimeWindow } from "@/shared/selection";
 
 import type { ErrorGroupSummary } from "./api";
-
-/**
- * How close to the window's start still counts as "already happening when it opened".
- *
- * A fraction of the window rather than a fixed span: a minute is the whole story in a
- * fifteen-minute window and noise in a seven-day one.
- */
-const WINDOW_EDGE_FRACTION = 0.02;
-
-/**
- * Where a group started, as far as this window can tell.
- *
- * `before-window` is the honest answer, not a missing one. A group's `first_seen` is
- * the minimum over the rows *inside* the window, so a bug that has run for a week
- * reports the window's own start. Saying "started an hour ago" there would be a lie
- * the screen invented; saying "before this window" is what we actually know.
- */
-export type GroupStart = "started-in-window" | "before-window";
-
-export function groupStart(firstSeen: string, timeWindow: TimeWindow): GroupStart {
-  const first = Date.parse(firstSeen);
-  const start = Date.parse(timeWindow.from);
-  const end = Date.parse(timeWindow.to);
-  if (!Number.isFinite(first) || !Number.isFinite(start) || !Number.isFinite(end)) {
-    return "before-window";
-  }
-
-  const edge = (end - start) * WINDOW_EDGE_FRACTION;
-  return first - start > edge ? "started-in-window" : "before-window";
-}
 
 /**
  * A group that began inside the window is the one worth colour: it is an incident
  * starting now rather than a bug that was already there. Everything else on this
  * screen is an error too, so colouring all of it would mark nothing.
+ *
+ * **The API decides this, not the screen.** `first_seen` is the minimum over the
+ * rows *inside* the window, so a bug that has run for a week reports the
+ * window's own start and a margin is what tells the two apart. That margin used
+ * to live here, and the "only new" filter needs the same one — two copies of it
+ * would eventually disagree, and the visible symptom would be a filter hiding a
+ * row the list had just marked as new.
  */
-export function isNewInWindow(group: ErrorGroupSummary, timeWindow: TimeWindow): boolean {
-  return groupStart(group.first_seen, timeWindow) === "started-in-window";
+export function isNewInWindow(group: ErrorGroupSummary): boolean {
+  return group.started_in_window;
 }
 
 export function totalOccurrences(groups: readonly ErrorGroupSummary[]): number {
   return groups.reduce((running, group) => running + group.occurrences, 0);
 }
 
-export function countNewInWindow(
-  groups: readonly ErrorGroupSummary[],
-  timeWindow: TimeWindow,
-): number {
-  return groups.filter((group) => isNewInWindow(group, timeWindow)).length;
+export function countNewInWindow(groups: readonly ErrorGroupSummary[]): number {
+  return groups.filter(isNewInWindow).length;
 }
 
 /**
  * The sentence under the title. The grouping is the product, so the caption says both
  * numbers — how many distinct exceptions, and how many crashes they stand for.
  */
-export function describeErrors(
-  groups: readonly ErrorGroupSummary[],
-  windowLabel: string,
-  timeWindow: TimeWindow,
-): string {
+export function describeErrors(groups: readonly ErrorGroupSummary[], windowLabel: string): string {
   if (groups.length === 0) return `Nothing has thrown in the last ${windowLabel}.`;
 
   const occurrences = totalOccurrences(groups);
@@ -79,7 +48,7 @@ export function describeErrors(
     ` · ${formatCount(occurrences)} ${plural(occurrences, "occurrence")}` +
     ` in the last ${windowLabel}`;
 
-  const fresh = countNewInWindow(groups, timeWindow);
+  const fresh = countNewInWindow(groups);
   return fresh === 0
     ? `${opening}. None of them started here.`
     : `${opening}, ${fresh} of which started inside it.`;

@@ -13,16 +13,9 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { ApiError } from "@/shared/api-client";
-import type { TimeWindow } from "@/shared/selection";
 
 import type { ErrorGroupDetail, ErrorGroupSummary, ErrorOccurrence } from "./api";
 import { ErrorsView } from "./ErrorsScreen";
-
-/** The six-hour window the demo data falls in, and the group the demo app produced. */
-const WINDOW: TimeWindow = {
-  from: "2026-08-28T15:00:00.000Z",
-  to: "2026-08-28T21:00:00.000Z",
-};
 
 const DECLINED: ErrorGroupSummary = {
   group_id: "82fe32c42683a275",
@@ -32,6 +25,7 @@ const DECLINED: ErrorGroupSummary = {
   grouped_by: "type_and_message_template",
   occurrences: 158,
   first_seen: "2026-08-28T19:58:31.447Z",
+  started_in_window: true,
   last_seen: "2026-08-28T20:11:00.411Z",
   services: ["demo-payments"],
   sample_trace_id: "89862496c280c749485ae30629e9737f",
@@ -48,6 +42,7 @@ const LONG_STANDING: ErrorGroupSummary = {
   latest_message: "read timed out after 30s",
   occurrences: 12_483,
   first_seen: "2026-08-28T15:00:00.050Z",
+  started_in_window: false,
   services: ["demo-checkout", "demo-storefront", "demo-payments"],
 };
 
@@ -145,11 +140,13 @@ async function mountInRouter(element: ReturnType<typeof createElement>): Promise
 function render(overrides: Overrides = {}): Promise<HTMLElement> {
   return mountInRouter(
     createElement(ErrorsView, {
+      filters: {},
+      onFilterChange: () => {},
+      onClearFilters: () => {},
       windowLabel: "6 hours",
       // Nothing symbolicated: these fixtures are a Python service, which has no
       // release and no source map, and the stack is shown as it arrived.
       symbolication: { frames: undefined, isPending: false, isError: false },
-      timeWindow: WINDOW,
       groups: [DECLINED, LONG_STANDING],
       isPending: false,
       isError: false,

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
 import { apiClient } from "@/shared/api-client";
+import { filterCacheKey } from "@/shared/filters";
 import type { TimeWindow } from "@/shared/selection";
 
 /**
@@ -91,19 +92,28 @@ interface SignalListResponse {
   signals: SignalSummary[];
 }
 
-export const nodesQueryKey = (projectId: string, timeWindow: TimeWindow) =>
-  ["infrastructure", "hosts", projectId, timeWindow.from, timeWindow.to] as const;
+export const nodesQueryKey = (projectId: string, timeWindow: TimeWindow, narrowing: string) =>
+  ["infrastructure-nodes", projectId, timeWindow.from, timeWindow.to, narrowing] as const;
 
 export const signalsQueryKey = (projectId: string, timeWindow: TimeWindow) =>
   ["infrastructure", "signals", projectId, timeWindow.from, timeWindow.to] as const;
 
-export function useNodes(projectId: string | undefined, timeWindow: TimeWindow) {
+export function useNodes(
+  projectId: string | undefined,
+  timeWindow: TimeWindow,
+  narrowing: Record<string, string> = {},
+) {
   return useQuery({
-    queryKey: nodesQueryKey(projectId ?? "", timeWindow),
+    queryKey: nodesQueryKey(projectId ?? "", timeWindow, filterCacheKey(narrowing)),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>
       apiClient.get<NodeListResponse>("infrastructure/hosts", {
-        searchParams: { project_id: projectId, from: timeWindow.from, to: timeWindow.to },
+        searchParams: {
+          project_id: projectId,
+          from: timeWindow.from,
+          to: timeWindow.to,
+          ...narrowing,
+        },
         signal,
       }),
   });

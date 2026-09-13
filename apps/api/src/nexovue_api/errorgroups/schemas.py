@@ -26,6 +26,10 @@ class ErrorGroupSummary(BaseModel):
     # span event and once as a log record, and that is one occurrence.
     occurrences: int
     first_seen: IsoTimestamp
+    # Whether this group began inside the window rather than before it. Decided
+    # here rather than on the screen, so the row's marker and the "only new"
+    # filter cannot answer the same question differently.
+    started_in_window: bool = False
     last_seen: IsoTimestamp
     services: list[str] = Field(default_factory=list)
     # Where to open one instance. Empty when the newest instance carried no

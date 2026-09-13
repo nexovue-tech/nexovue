@@ -117,6 +117,26 @@ _READINGS: Final = """
 # what `reporting_interval_seconds` divides by, and counting rows would report a
 # host as sampling twice as often as it does. Measured at 7% over `count()`,
 # against 22% for materialising the deduplicated rows in a subquery.
+# The optional predicates, spliced on comment markers: ClickHouse's own
+# parameter syntax is braces, so str.format cannot be used here. Both narrow the
+# series read rather than the nodes returned, which also makes `truncated` less
+# likely to fire on a filtered read than on an unfiltered one.
+_KIND_PLACEHOLDER: Final = "/* kind */"
+_HOST_PLACEHOLDER: Final = "/* host */"
+
+# `kind` is not stored — it is what a node turns out to be once you know whether
+# it named a container, a host, or neither. `NodeKey.kind` decides it the same
+# way in Python, and the two must agree.
+KIND_CLAUSES: Final = {
+    "container": "WHERE container != ''",
+    "host": "WHERE container = '' AND host != ''",
+    "reporter": "WHERE container = '' AND host = ''",
+}
+
+# "This host's containers" — a container names the host it runs on, so one
+# predicate answers both "this machine" and "what is on it".
+HOST_CLAUSE: Final = "host = {host:String}"
+
 NODE_READINGS_SQL: Final = f"""
 SELECT
     host,
@@ -132,6 +152,8 @@ SELECT
     toUnixTimestamp64Nano(min(timestamp)) AS earliest_nanos,
     uniqExact(timestamp) AS points
 FROM ({_READINGS})
+{_KIND_PLACEHOLDER}
+{_HOST_PLACEHOLDER}
 GROUP BY host, container, reporter, reporter_instance, metric_name, metric_unit, attributes_json
 ORDER BY host ASC, container ASC, reporter ASC, reporter_instance ASC,
          metric_name ASC, attributes_json ASC
@@ -181,3 +203,17 @@ FROM ({_READINGS})
 GROUP BY metric_name
 ORDER BY metric_name ASC
 """
+
+
+def node_readings_sql(*, kind: str | None, host: str | None) -> str:
+    """The node statement, narrowed to what the caller asked for.
+
+    The two predicates compose into one `WHERE`, so whichever arrives first
+    carries the keyword and the other is appended with `AND`.
+    """
+    clauses = [KIND_CLAUSES[kind]] if kind is not None else []
+    if host is not None:
+        clauses.append(f"AND {HOST_CLAUSE}" if clauses else f"WHERE {HOST_CLAUSE}")
+    return NODE_READINGS_SQL.replace(_KIND_PLACEHOLDER, clauses[0] if clauses else "").replace(
+        _HOST_PLACEHOLDER, clauses[1] if len(clauses) > 1 else ""
+    )

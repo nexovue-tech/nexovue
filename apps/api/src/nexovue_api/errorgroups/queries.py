@@ -205,11 +205,27 @@ _GROUPING: Final = f"""
 _GROUPED: Final = f"SELECT {_GROUPING} FROM ({_OCCURRENCES})"
 _GROUPED_WITH_DETAIL: Final = f"SELECT {_GROUPING}, detail_json FROM ({_OCCURRENCES_WITH_DETAIL})"
 
-# ClickHouse's own parameter syntax is braces, so the single-group predicate is
+# ClickHouse's own parameter syntax is braces, so the optional predicates are
 # spliced on a comment marker rather than with str.format.
-_GROUP_PLACEHOLDER: Final = "/* one group */"
+_HAVING_PLACEHOLDER: Final = "/* having */"
 
-ONE_GROUP_CLAUSE: Final = "HAVING group_id = {group_id:String}"
+ONE_GROUP_CLAUSE: Final = "group_id = {group_id:String}"
+
+# Whether this group began inside the window rather than before it.
+#
+# `first_seen` is the minimum over the rows *in* the window, so a bug that has
+# run for a week reports the window's own start. The margin is what tells those
+# apart, and it is a fraction of the window rather than a fixed duration: two
+# minutes into an hour is a new incident, two minutes into a five-minute window
+# is the same bug still running.
+#
+# **It is computed here and returned**, not left to the screen. The row's marker
+# and this filter are the same question, and a copy of the rule on each side is
+# how they come to disagree.
+STARTED_IN_WINDOW: Final = "min(occurred_nanos) > {new_after_nanos:UInt64}"
+WINDOW_EDGE_FRACTION: Final = 0.02
+
+NEW_ONLY_CLAUSE: Final = "started_in_window"
 
 _ERROR_GROUPS_TEMPLATE: Final = f"""
 SELECT
@@ -219,6 +235,7 @@ SELECT
     argMax(message_template, occurred_nanos) AS message_template,
     argMax(exception_message, occurred_nanos) AS latest_message,
     min(occurred_nanos) AS first_seen_nanos,
+    {STARTED_IN_WINDOW} AS started_in_window,
     max(occurred_nanos) AS last_seen_nanos,
     uniqExactIf(occurrence_key, occurrence_key != '')
         + countIf(occurrence_key = '') AS occurrences,
@@ -228,7 +245,7 @@ SELECT
     argMax(source, occurred_nanos) AS sample_source
 FROM ({_GROUPED})
 GROUP BY group_id
-{_GROUP_PLACEHOLDER}
+{_HAVING_PLACEHOLDER}
 ORDER BY occurrences DESC, last_seen_nanos DESC, group_id
 LIMIT {{limit:UInt32}}
 """
@@ -270,17 +287,25 @@ def _narrowed_to_service(sql: str, *, one_service: bool) -> str:
     return sql.replace(_ONE_SERVICE_PLACEHOLDER, ONE_SERVICE_CLAUSE if one_service else "")
 
 
-def error_groups_sql(*, one_group: bool, one_service: bool) -> str:
-    """The grouping statement, narrowed to a single group and to one service.
+def error_groups_sql(*, one_group: bool, one_service: bool, new_only: bool = False) -> str:
+    """The grouping statement, narrowed to a single group, a service, or what is new.
 
     Narrowed to a service, every number the statement returns is that service's:
     `occurrences` counts only its instances and `services` names only it. The
     `group_id` stays the project-wide one, so the detail view still opens the whole
     group.
+
+    `new_only` is a `HAVING`, ahead of the `LIMIT` that caps the list at fifty:
+    asked of the rows that came back it would answer "the new ones among the
+    fifty noisiest", and a new incident is usually not yet noisy.
     """
-    grouped = _ERROR_GROUPS_TEMPLATE.replace(
-        _GROUP_PLACEHOLDER, ONE_GROUP_CLAUSE if one_group else ""
-    )
+    conditions = [
+        clause
+        for clause, wanted in ((ONE_GROUP_CLAUSE, one_group), (NEW_ONLY_CLAUSE, new_only))
+        if wanted
+    ]
+    having = f"HAVING {' AND '.join(conditions)}" if conditions else ""
+    grouped = _ERROR_GROUPS_TEMPLATE.replace(_HAVING_PLACEHOLDER, having)
     return _narrowed_to_service(grouped, one_service=one_service)
 
 

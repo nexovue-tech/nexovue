@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import type { TimeWindow } from "@/shared/selection";
-
 import type { ErrorGroupSummary } from "./api";
 import {
   countNewInWindow,
@@ -9,17 +7,10 @@ import {
   describeOccurrences,
   describeServices,
   firstWithStacktrace,
-  groupStart,
   isNewInWindow,
   stackFrames,
   totalOccurrences,
 } from "./error-groups";
-
-/** A six-hour window, the one the demo data actually falls in. */
-const WINDOW: TimeWindow = {
-  from: "2026-08-28T15:00:00.000Z",
-  to: "2026-08-28T21:00:00.000Z",
-};
 
 function group(overrides: Partial<ErrorGroupSummary> = {}): ErrorGroupSummary {
   return {
@@ -30,6 +21,7 @@ function group(overrides: Partial<ErrorGroupSummary> = {}): ErrorGroupSummary {
     grouped_by: "type_and_message_template",
     occurrences: 158,
     first_seen: "2026-08-28T19:58:31.447Z",
+    started_in_window: true,
     last_seen: "2026-08-28T20:11:00.411Z",
     services: ["demo-payments"],
     sample_trace_id: "89862496c280c749485ae30629e9737f",
@@ -39,43 +31,28 @@ function group(overrides: Partial<ErrorGroupSummary> = {}): ErrorGroupSummary {
   };
 }
 
-describe("groupStart", () => {
-  it("calls a group that first appeared well inside the window new", () => {
-    expect(groupStart("2026-08-28T19:58:31.447Z", WINDOW)).toBe("started-in-window");
-  });
-
-  it("refuses to invent a start time for a group already running when the window opened", () => {
-    // The query only sees rows inside the window, so first_seen pins to its edge. The
-    // honest answer is "before this window", never "started six hours ago".
-    expect(groupStart("2026-08-28T15:00:00.100Z", WINDOW)).toBe("before-window");
-  });
-
-  it("scales the edge with the window rather than using one fixed span", () => {
-    const fifteenMinutes: TimeWindow = {
-      from: "2026-08-28T20:45:00.000Z",
-      to: "2026-08-28T21:00:00.000Z",
-    };
-    // Ten seconds in: inside a 2% edge of 18s here, well past the 7-minute edge of a
-    // six-hour window — so the same offset reads differently, which is the point.
-    expect(groupStart("2026-08-28T20:45:10.000Z", fifteenMinutes)).toBe("before-window");
-    expect(groupStart("2026-08-28T20:45:30.000Z", fifteenMinutes)).toBe("started-in-window");
-  });
-
-  it("treats an unparseable timestamp as older than the window, never as new", () => {
-    expect(groupStart("not a timestamp", WINDOW)).toBe("before-window");
-  });
-});
-
 describe("isNewInWindow and countNewInWindow", () => {
-  it("counts only the groups that began inside the window", () => {
+  it("reports what the API decided, rather than deciding again from first_seen", () => {
+    // The margin that separates "started here" from "was already running" lives
+    // in the API, because the "only new" filter needs the same one. Re-deriving
+    // it here from `first_seen` is how the two came to be able to disagree — and
+    // the visible symptom would be the filter hiding a row marked as new.
     const groups = [
-      group({ group_id: "fresh" }),
-      group({ group_id: "old", first_seen: "2026-08-28T15:00:00.000Z" }),
+      group({ group_id: "fresh", started_in_window: true }),
+      group({
+        group_id: "old",
+        started_in_window: false,
+        first_seen: "2026-08-28T15:00:00.000Z",
+      }),
     ];
 
-    expect(isNewInWindow(groups[0], WINDOW)).toBe(true);
-    expect(isNewInWindow(groups[1], WINDOW)).toBe(false);
-    expect(countNewInWindow(groups, WINDOW)).toBe(1);
+    expect(isNewInWindow(groups[0])).toBe(true);
+    expect(isNewInWindow(groups[1])).toBe(false);
+    expect(countNewInWindow(groups)).toBe(1);
+  });
+
+  it("counts nothing when the window held no new group", () => {
+    expect(countNewInWindow([group({ started_in_window: false })])).toBe(0);
   });
 });
 
@@ -88,7 +65,7 @@ describe("totalOccurrences", () => {
 
 describe("describeErrors", () => {
   it("says both numbers, because the grouping is the point", () => {
-    const caption = describeErrors([group()], "6 hours", WINDOW);
+    const caption = describeErrors([group()], "6 hours");
 
     expect(caption).toBe(
       "1 distinct exception · 158 occurrences in the last 6 hours, 1 of which started inside it.",
@@ -99,7 +76,6 @@ describe("describeErrors", () => {
     const caption = describeErrors(
       [group({ occurrences: 1 }), group({ group_id: "second", occurrences: 3 })],
       "hour",
-      WINDOW,
     );
 
     expect(caption).toContain("2 distinct exceptions");
@@ -108,16 +84,15 @@ describe("describeErrors", () => {
 
   it("distinguishes a backlog from an incident", () => {
     const caption = describeErrors(
-      [group({ first_seen: "2026-08-28T15:00:00.000Z" })],
+      [group({ first_seen: "2026-08-28T15:00:00.000Z", started_in_window: false })],
       "6 hours",
-      WINDOW,
     );
 
     expect(caption).toContain("None of them started here.");
   });
 
   it("says nothing threw rather than reporting zeroes", () => {
-    expect(describeErrors([], "hour", WINDOW)).toBe("Nothing has thrown in the last hour.");
+    expect(describeErrors([], "hour")).toBe("Nothing has thrown in the last hour.");
   });
 });
 

@@ -282,3 +282,93 @@ def test_every_column_the_statement_names_exists_in_the_table(column: str) -> No
 
     assert declaration.search(_migration_text()), f"{column} is not a column of service_edges_1m"
     assert column in queries.SERVICE_EDGES_SQL
+
+
+# ---------------------------------------------------------------------- filters
+#
+# Both predicates are `HAVING`: they test sums, which do not exist until the
+# group does. They sit ahead of `LIMIT`, so "only failing edges" is the failing
+# edges rather than the failing ones among the busiest thousand.
+
+
+def test_an_unfiltered_map_carries_no_having() -> None:
+    assert "HAVING" not in queries.service_edges_sql(min_call_count=False, failing_only=False)
+
+
+async def test_only_failing_edges_is_asked_of_the_store(client: CapturingClient) -> None:
+    start, end = _window()
+    await service.get_service_map(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        from_time=start,
+        to_time=end,
+        limit=200,
+        failing_only=True,
+    )
+
+    statement = client.statements[0]
+    assert queries.FAILING_ONLY_CLAUSE in statement
+    assert statement.index("HAVING") < statement.index("LIMIT")
+
+
+async def test_a_volume_floor_is_converted_from_per_minute_to_a_count(
+    client: CapturingClient,
+) -> None:
+    """The reader thinks in calls per minute; the column holds a count.
+
+    The window here is an hour, so one call a minute is sixty calls. Doing this
+    in the service rather than asking for "calls per window" keeps the
+    arithmetic out of the reader's head — and out of SQL, where the window
+    length is not a column.
+    """
+    start, end = _window()
+    minutes = (end - start).total_seconds() / 60
+
+    await service.get_service_map(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        from_time=start,
+        to_time=end,
+        limit=200,
+        min_calls_per_minute=1.0,
+    )
+
+    assert queries.MIN_CALL_COUNT_CLAUSE in client.statements[0]
+    assert client.parameters[0]["min_call_count"] == minutes
+
+
+async def test_a_fractional_floor_rounds_up_so_it_still_excludes(
+    client: CapturingClient,
+) -> None:
+    """A floor that rounded down would admit the edge it was set to exclude."""
+    start, end = _window()
+    minutes = (end - start).total_seconds() / 60
+
+    await service.get_service_map(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        from_time=start,
+        to_time=end,
+        limit=200,
+        min_calls_per_minute=0.5 / minutes,
+    )
+
+    assert client.parameters[0]["min_call_count"] == 1
+
+
+async def test_both_filters_compose_into_one_having(client: CapturingClient) -> None:
+    start, end = _window()
+    await service.get_service_map(
+        _repository(client, TENANT_A),
+        project_id=PROJECT,
+        from_time=start,
+        to_time=end,
+        limit=200,
+        min_calls_per_minute=2.0,
+        failing_only=True,
+    )
+
+    statement = client.statements[0]
+    assert statement.count("HAVING") == 1
+    assert queries.MIN_CALL_COUNT_CLAUSE in statement
+    assert queries.FAILING_ONLY_CLAUSE in statement

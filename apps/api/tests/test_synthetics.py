@@ -75,6 +75,29 @@ _RUN_COLUMNS: Final = [
 ]
 
 
+def _statements() -> dict[str, str]:
+    """Every statement the module can build, mapped to what answers it.
+
+    Built rather than listed: the summary statement is assembled from its
+    filters, so comparing against the unfiltered constant would stop matching
+    the moment a screen asked for one.
+    """
+    served = {
+        queries.CHECK_TRENDS_SQL: "trends",
+        queries.PHASE_BREAKDOWN_SQL: "breakdown",
+        queries.CHECK_RUNS_SQL: "runs",
+    }
+    for check_type in (False, True):
+        for down_only in (False, True):
+            served[queries.check_summaries_sql(check_type=check_type, down_only=down_only)] = (
+                "summaries"
+            )
+    return served
+
+
+_STATEMENTS: Final = _statements()
+
+
 class FakeQueryResult:
     def __init__(self, column_names: list[str], result_rows: list[tuple[Any, ...]]) -> None:
         self.column_names = column_names
@@ -107,22 +130,25 @@ class FakeGaugeStore:
             return FakeQueryResult([], [])
         check_id = owned[1]
 
-        # Dispatch on which statement was run, by identity rather than by
-        # sniffing its text. A substring did this until a shared `GROUP BY
-        # check_id, metric_name, series_hash, timestamp` appeared inside three
-        # statements and every one of them started answering as the summary.
-        if sql == queries.CHECK_SUMMARIES_SQL:
+        # Dispatch on which statement was run, matched against every statement
+        # the module can build rather than by sniffing its text. A substring did
+        # this until a shared `GROUP BY check_id, metric_name, series_hash,
+        # timestamp` appeared inside three statements and all of them started
+        # answering as the summary.
+        served = _STATEMENTS.get(sql)
+        if served is None:
+            raise AssertionError(f"the fake store was asked a statement it does not serve:\n{sql}")
+
+        if served == "summaries":
             return FakeQueryResult(_SUMMARY_COLUMNS, [_summary_row(check_id)])
-        if sql == queries.CHECK_TRENDS_SQL:
+        if served == "trends":
             return FakeQueryResult(_TREND_COLUMNS, _trend_rows(check_id))
 
         if bound.get("check_id") != check_id:
             return FakeQueryResult([], [])
-        if sql == queries.PHASE_BREAKDOWN_SQL:
+        if served == "breakdown":
             return FakeQueryResult(_PHASE_COLUMNS, _phase_rows())
-        if sql == queries.CHECK_RUNS_SQL:
-            return FakeQueryResult(_RUN_COLUMNS, _run_rows())
-        raise AssertionError(f"the fake store was asked a statement it does not serve:\n{sql}")
+        return FakeQueryResult(_RUN_COLUMNS, _run_rows())
 
 
 def _trend_rows(check_id: str) -> list[tuple[Any, ...]]:
@@ -487,3 +513,46 @@ def test_the_attribute_paths_read_here_are_the_keys_the_prober_writes() -> None:
     assert f"attrs.{publish.ATTR_STATUS_CODE}" in queries.HTTP_STATUS
     assert f"attrs.{publish.ATTR_ISSUER}" in queries.TLS_ISSUER
     assert f"attrs.{publish.ATTR_SERVER_ADDRESS}" in queries.SERVER_ADDRESS
+
+
+# ---------------------------------------------------------------------- filters
+#
+# Both predicates are inside the statement, ahead of its `LIMIT`: asking "what is
+# down" of the rows that came back would answer "the down ones among the first
+# hundred checks" with nothing able to say so.
+
+
+def test_an_unfiltered_list_carries_neither_predicate() -> None:
+    statement = queries.check_summaries_sql(check_type=False, down_only=False)
+
+    assert "check_type:String" not in statement
+    assert "HAVING" not in statement
+
+
+async def test_one_check_type_narrows_the_rows_that_are_read() -> None:
+    """The type is a resource attribute, so this is a `WHERE` in the inner read."""
+    store = _store()
+    start, end = _window()
+
+    await service.list_check_results(
+        _repository(TENANT_A, store),
+        project_id=PROJECT_A,
+        from_time=start,
+        to_time=end,
+        check_type="browser",
+    )
+
+    assert store.last_parameters["check_type"] == "browser"
+
+
+def test_down_only_refuses_to_call_a_check_with_no_probe_down() -> None:
+    """`argMaxIf` over no matching row returns zero, which would read as down.
+
+    A check holding only a certificate reading has not failed — it has not run.
+    `_to_summary` reports `up` as null in exactly that case, and this predicate
+    has to agree with it or the filter and the column contradict each other.
+    """
+    statement = queries.check_summaries_sql(check_type=False, down_only=True)
+
+    assert "runs > 0" in statement
+    assert statement.index("HAVING") < statement.index("LIMIT")

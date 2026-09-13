@@ -316,3 +316,63 @@ def test_the_attribute_paths_read_here_are_the_keys_the_poller_writes() -> None:
     assert f"attrs.{envelope.ATTR_CONNECTION_STATE}" in queries.CONNECTION_STATE
     assert f"resource_attrs.{envelope.ATTR_SERVER_ADDRESS}" in queries.SERVER_ADDRESS
     assert f"resource_attrs.{envelope.ATTR_SERVER_PORT}" in queries.SERVER_PORT
+
+
+# ---------------------------------------------------------------------- filters
+#
+# Inside the statement, ahead of its `LIMIT`: the list is capped at five hundred,
+# so filtering what came back would answer "the slow ones among the five hundred
+# worst" and have no way to say so.
+
+
+def test_an_unfiltered_statement_list_carries_neither_predicate() -> None:
+    statement = queries.slow_statements_sql(server=False, min_mean=False)
+
+    assert "server:String" not in statement
+    assert "HAVING" not in statement
+
+
+async def test_one_server_narrows_the_rows_that_are_read() -> None:
+    store = _store()
+    start, end = _window()
+
+    await service.slow_statements(
+        _repository(TENANT_A, store),
+        project_id=PROJECT_A,
+        from_time=start,
+        to_time=end,
+        limit=10,
+        server="db-primary",
+    )
+
+    assert store.last_parameters["server"] == "db-primary"
+
+
+async def test_a_floor_asked_in_milliseconds_is_bound_in_seconds() -> None:
+    """The column holds seconds and the screen shows milliseconds.
+
+    Binding 250 against a column of seconds would return every statement in the
+    store, which reads as "the filter does nothing" rather than as a unit bug.
+    """
+    store = _store()
+    start, end = _window()
+
+    await service.slow_statements(
+        _repository(TENANT_A, store),
+        project_id=PROJECT_A,
+        from_time=start,
+        to_time=end,
+        limit=10,
+        min_mean_ms=250.0,
+    )
+
+    assert store.last_parameters["min_mean_seconds"] == pytest.approx(0.25)
+
+
+def test_the_floor_is_tested_against_the_worst_reading_not_the_latest() -> None:
+    """The list is ranked by the worst reading, so the filter matches the ranking.
+
+    A statement that spiked to two seconds and has since settled is the one the
+    reader is looking for, and testing the latest reading would hide it.
+    """
+    assert "worst_mean_seconds >=" in queries.MIN_MEAN_CLAUSE

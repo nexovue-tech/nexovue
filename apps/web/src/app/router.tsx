@@ -15,6 +15,8 @@ import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
 import { VerifyEmailScreen } from "@/features/auth/VerifyEmailScreen";
 import { BillingScreen } from "@/features/billing/BillingScreen";
 import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
+import { ERROR_FILTERS } from "@/features/errors/filters";
+import { infrastructureFilters } from "@/features/infrastructure/filters";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
 import { LogsScreen } from "@/features/logs/LogsScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
@@ -22,6 +24,7 @@ import { ProjectsScreen } from "@/features/projects/ProjectsScreen";
 import { RumScreen } from "@/features/rum/RumScreen";
 import { ServiceDetailScreen } from "@/features/servicedetail/ServiceDetailScreen";
 import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
+import { parseServiceOrder, SERVICE_FILTERS } from "@/features/services/filters";
 import { ServicesScreen } from "@/features/services/ServicesScreen";
 import { ApiKeysScreen } from "@/features/settings/ApiKeysScreen";
 import { SyntheticsScreen } from "@/features/synthetics/SyntheticsScreen";
@@ -31,6 +34,7 @@ import { TraceScreen } from "@/features/traces/TraceScreen";
 import { UsageScreen } from "@/features/usage/UsageScreen";
 import { ErrorScreen } from "@/shared/components/ErrorScreen";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { parseFilterValues } from "@/shared/filters";
 
 import { AppShell } from "./layout/AppShell";
 import { placeholderFor } from "./routes/placeholder";
@@ -76,6 +80,10 @@ const servicesRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/services",
   component: ServicesScreen,
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...parseFilterValues(SERVICE_FILTERS, search),
+    ...(parseServiceOrder(search.order) === "worst" ? {} : { order: "slowest" as const }),
+  }),
 });
 
 const serviceRoute = createRoute({
@@ -124,6 +132,7 @@ const errorsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/errors",
   component: ErrorsScreen,
+  validateSearch: (search: Record<string, unknown>) => parseFilterValues(ERROR_FILTERS, search),
 });
 
 const logsRoute = createRoute({
@@ -136,6 +145,8 @@ const infrastructureRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/infrastructure",
   component: InfrastructureScreen,
+  validateSearch: (search: Record<string, unknown>) =>
+    parseFilterValues(infrastructureFilters([]), search),
 });
 
 const syntheticsRoute = createRoute({

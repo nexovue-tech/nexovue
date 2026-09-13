@@ -1,13 +1,17 @@
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
+import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
+import type { FilterValues } from "@/shared/components/FilterBar";
+import { appliedFilters, FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
+import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatCount } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
-import type { TimeWindow } from "@/shared/selection";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 import type { ErrorGroupDetail, ErrorGroupSummary, GroupTrendPoint } from "./api";
 import { useErrorGroup, useErrorGroups, useErrorGroupTrend } from "./api";
@@ -18,6 +22,7 @@ import {
   firstWithStacktrace,
   isNewInWindow,
 } from "./error-groups";
+import { ERROR_FILTERS } from "./filters";
 import type { SymbolicationState } from "./symbolication";
 import { useSymbolication } from "./symbolication";
 
@@ -42,10 +47,20 @@ const TREND_COLUMN = "w-29 shrink-0 pl-3";
 export function ErrorsScreen() {
   const { projectId, rangeId } = useSelection();
   const timeWindow = useLiveWindow(rangeId);
+  const navigate = useNavigate();
+
+  // The route's own id, not its path: `/errors` renders inside the shell.
+  const search = useSearch({ from: "/shell/errors" });
+  const filters = useMemo(() => parseFilterValues(ERROR_FILTERS, search), [search]);
+
+  // `replace`, not push: the back button belongs to the screen a person came
+  // from, not to every control they tried on the way.
+  const show = (next: Record<string, string | undefined>) =>
+    void navigate({ to: "/errors", search: () => filterParams(next), replace: true });
 
   const [selectedGroupId, setSelectedGroupId] = useState<string>();
 
-  const groups = useErrorGroups(projectId, timeWindow);
+  const groups = useErrorGroups(projectId, timeWindow, filterParams(filters));
   const trendByGroup = useErrorGroupTrend(projectId, timeWindow);
   const detail = useErrorGroup(projectId, selectedGroupId, timeWindow);
 
@@ -65,9 +80,11 @@ export function ErrorsScreen() {
 
   return (
     <ErrorsView
+      filters={filters}
+      onFilterChange={(key, value) => show(withFilter(filters, key, value))}
+      onClearFilters={() => show({})}
       windowLabel={timeRangeById(rangeId).label}
       symbolication={symbolication}
-      timeWindow={timeWindow}
       groups={listed}
       trendByGroup={trendByGroup}
       isPending={groups.isPending}
@@ -86,11 +103,13 @@ export function ErrorsScreen() {
 }
 
 interface ErrorsViewProps {
+  filters: FilterValues;
+  onFilterChange: (key: string, value: string | undefined) => void;
+  onClearFilters: () => void;
   /** "hour", "24 hours" — the range picker's own word, so the two agree. */
   windowLabel: string;
   /** The resolved stack for the selected group, asked for by the route component. */
   symbolication: SymbolicationState;
-  timeWindow: TimeWindow;
   groups: readonly ErrorGroupSummary[];
   /** Keyed by group id. A group missing from it has no trend and renders the rule. */
   trendByGroup?: ReadonlyMap<string, readonly GroupTrendPoint[]>;
@@ -109,9 +128,11 @@ interface ErrorsViewProps {
 
 /** Everything the screen shows, with no query client and no clock behind it. */
 export function ErrorsView({
+  filters,
+  onFilterChange,
+  onClearFilters,
   windowLabel,
   symbolication,
-  timeWindow,
   groups,
   trendByGroup,
   isPending,
@@ -127,6 +148,7 @@ export function ErrorsView({
   onDetailRetry,
 }: ErrorsViewProps) {
   const ceiling = trendCeiling(groups, trendByGroup);
+  const narrowed = appliedFilters(ERROR_FILTERS, filters).length > 0;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -145,9 +167,16 @@ export function ErrorsView({
           <p className="mt-1 text-ink-dim text-sm">
             {isPending || isError
               ? `Every exception thrown in the last ${windowLabel}, grouped, most frequent first.`
-              : describeErrors(groups, windowLabel, timeWindow)}
+              : describeErrors(groups, windowLabel)}
           </p>
         </header>
+
+        <FilterBar
+          definitions={ERROR_FILTERS}
+          values={filters}
+          onChange={onFilterChange}
+          onClearAll={onClearFilters}
+        />
 
         {isPending ? (
           <div className="px-4">
@@ -158,10 +187,24 @@ export function ErrorsView({
             <InlineFailure title="Errors could not be loaded" error={error} onRetry={onRetry} />
           </div>
         ) : groups.length === 0 ? (
-          <EmptyState
-            title="Nothing threw in this window"
-            detail="No exception reached us for the selected period, which is the result you want. If you expected one, widen the time range — an error that stopped an hour ago is invisible from a fifteen-minute window."
-          />
+          // Nothing threw and nothing *new* threw are different results, and only
+          // one of them is the one you want.
+          narrowed ? (
+            <EmptyState
+              title="Nothing new started in this window"
+              detail="Exceptions were thrown in the selected period, but all of them were already running when it opened. That is a backlog rather than an incident."
+              action={
+                <Button variant="secondary" onClick={onClearFilters}>
+                  Show every error
+                </Button>
+              }
+            />
+          ) : (
+            <EmptyState
+              title="Nothing threw in this window"
+              detail="No exception reached us for the selected period, which is the result you want. If you expected one, widen the time range — an error that stopped an hour ago is invisible from a fifteen-minute window."
+            />
+          )
         ) : (
           <>
             <ColumnHeader />
@@ -172,7 +215,6 @@ export function ErrorsView({
                   <GroupRow
                     key={item.key}
                     group={groups[item.index]}
-                    timeWindow={timeWindow}
                     selected={groups[item.index].group_id === selected?.group_id}
                     onSelect={onSelect}
                     offsetTop={item.start}
@@ -248,7 +290,6 @@ export function trendCeiling(
 
 function GroupRow({
   group,
-  timeWindow,
   selected,
   onSelect,
   offsetTop,
@@ -257,7 +298,6 @@ function GroupRow({
   ceiling,
 }: {
   group: ErrorGroupSummary;
-  timeWindow: TimeWindow;
   selected: boolean;
   onSelect: (groupId: string) => void;
   offsetTop: number;
@@ -265,7 +305,7 @@ function GroupRow({
   trend?: readonly GroupTrendPoint[];
   ceiling: number;
 }) {
-  const startedHere = isNewInWindow(group, timeWindow);
+  const startedHere = isNewInWindow(group);
 
   return (
     <div

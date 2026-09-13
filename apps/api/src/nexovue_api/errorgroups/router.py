@@ -45,6 +45,9 @@ async def list_error_groups(
     to_time: ToTime = None,
     service_name: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=service.MAX_LIMIT)] = None,
+    new_only: Annotated[
+        bool, Query(description="Only groups that began inside the window")
+    ] = False,
 ) -> ErrorGroupListResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
@@ -55,6 +58,7 @@ async def list_error_groups(
         from_time=window_start,
         to_time=window_end,
         limit=clamp_limit(limit, default=service.DEFAULT_LIMIT, maximum=service.MAX_LIMIT),
+        new_only=new_only,
     )
 
 

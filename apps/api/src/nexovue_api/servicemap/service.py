@@ -7,6 +7,7 @@ is deriving the node list from the edges, so the two can never disagree.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Any, Final
 
@@ -29,18 +30,30 @@ async def get_service_map(
     from_time: datetime,
     to_time: datetime,
     limit: int,
+    min_calls_per_minute: float | None = None,
+    failing_only: bool = False,
 ) -> ServiceMapResponse:
     """The window's dependency graph, busiest edges first."""
-    rows = await repository.query(
-        queries.SERVICE_EDGES_SQL,
-        {
-            "project_id": project_id,
-            "from_time": from_time,
-            "to_time": to_time,
-            "limit": limit,
-        },
-    )
     minutes = rollup.window_minutes(from_time, to_time)
+    parameters: dict[str, Any] = {
+        "project_id": project_id,
+        "from_time": from_time,
+        "to_time": to_time,
+        "limit": limit,
+    }
+    # The floor is asked in calls per minute and stored as a count, so it is
+    # converted here rather than in SQL, where `minutes` is not a column.
+    # Rounded up: a floor of 1/min over a 30-minute window must exclude an edge
+    # carrying 29 calls, and `int()` would have admitted it.
+    if min_calls_per_minute is not None:
+        parameters["min_call_count"] = math.ceil(min_calls_per_minute * minutes)
+
+    rows = await repository.query(
+        queries.service_edges_sql(
+            min_call_count=min_calls_per_minute is not None, failing_only=failing_only
+        ),
+        parameters,
+    )
     edges = [_to_edge(row, minutes) for row in rows]
     return ServiceMapResponse(
         window_start=from_time,

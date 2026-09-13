@@ -744,3 +744,148 @@ async def test_a_device_breakdown_never_claims_a_route_template(
 
     assert [group.key for group in answer.groups] == ["desktop"]
     assert not answer.groups[0].is_route_template
+
+
+# ---------------------------------------------------------------------- filters
+#
+# `device_class` and `route` are columns of the rollup, so they narrow what is
+# merged. The p75 of "mobile only" is therefore the p75 of the mobile readings
+# and not the overall p75 with the desktop rows hidden beside it — which is the
+# whole difference between a filter and a view.
+#
+# There is deliberately no rating filter. The rollup carries no rating: a rating
+# is a property of a value and the p75 is a new value, so it is computed on the
+# screen from the merged p75. Filtering on the raw table's per-reading rating
+# would exclude pages this screen still labels poor.
+
+
+async def test_filtering_by_device_class_changes_the_headline_percentile(
+    client: AsyncClient, tenant: str
+) -> None:
+    project_id = str(uuid.uuid4())
+    minute = datetime.now(UTC).replace(second=0, microsecond=0)
+    # Desktop outnumbers mobile nine to one, so the site's own p75 is a desktop
+    # number and the mobile readings are exactly what it hides. Even counts would
+    # have put the p75 on the slow side and made this pass either way.
+    for device, value, count in (("desktop", 400.0, 9), ("mobile", 3200.0, 1)):
+        await _write_readings(
+            client,
+            tenant_id=tenant,
+            project_id=project_id,
+            vital="lcp",
+            values=[value] * count,
+            minute=minute,
+            url_path="/",
+            device_class=device,
+        )
+
+    start, end = _window()
+    repository = TenantScopedRepository(client, tenant_id=tenant)
+    everyone = await service.summarize_web_vitals(
+        repository, project_id=project_id, from_time=start, to_time=end
+    )
+    mobile = await service.summarize_web_vitals(
+        repository, project_id=project_id, from_time=start, to_time=end, device_class="mobile"
+    )
+
+    assert everyone.vitals[0].readings == 10
+    assert everyone.vitals[0].p75 == pytest.approx(400.0)
+    # The filter merges a different set, rather than hiding rows from this one.
+    assert mobile.vitals[0].readings == 1
+    assert mobile.vitals[0].p75 == pytest.approx(3200.0)
+
+
+async def test_filtering_by_page_matches_the_path_when_no_route_was_configured(
+    client: AsyncClient, tenant: str
+) -> None:
+    """A page is `route` where one exists and `url_path` where it does not.
+
+    The filter has to match whichever of the two the reader was shown, or a
+    customer who configured no route templates can see a page and not filter
+    to it.
+    """
+    project_id = str(uuid.uuid4())
+    minute = datetime.now(UTC).replace(second=0, microsecond=0)
+    for path, value in (("/checkout", 2500.0), ("/", 300.0)):
+        await _write_readings(
+            client,
+            tenant_id=tenant,
+            project_id=project_id,
+            vital="lcp",
+            values=[value] * 4,
+            minute=minute,
+            url_path=path,
+        )
+
+    start, end = _window()
+    checkout = await service.summarize_web_vitals(
+        TenantScopedRepository(client, tenant_id=tenant),
+        project_id=project_id,
+        from_time=start,
+        to_time=end,
+        route="/checkout",
+    )
+
+    assert checkout.vitals[0].p75 == pytest.approx(2500.0)
+
+
+async def test_filtering_by_page_matches_the_template_when_one_was_configured(
+    client: AsyncClient, tenant: str
+) -> None:
+    project_id = str(uuid.uuid4())
+    minute = datetime.now(UTC).replace(second=0, microsecond=0)
+    await _write_readings(
+        client,
+        tenant_id=tenant,
+        project_id=project_id,
+        vital="lcp",
+        values=[2500.0] * 4,
+        minute=minute,
+        url_path="/orders/8f21",
+        route="/orders/{id}",
+    )
+
+    start, end = _window()
+    repository = TenantScopedRepository(client, tenant_id=tenant)
+    by_template = await service.summarize_web_vitals(
+        repository, project_id=project_id, from_time=start, to_time=end, route="/orders/{id}"
+    )
+    by_raw_path = await service.summarize_web_vitals(
+        repository, project_id=project_id, from_time=start, to_time=end, route="/orders/8f21"
+    )
+
+    assert by_template.vitals[0].p75 == pytest.approx(2500.0)
+    # The template is what the reader was shown, so the raw path is not the page.
+    assert by_raw_path.vitals == []
+
+
+async def test_a_filter_narrows_the_breakdown_as_well_as_the_headline(
+    client: AsyncClient, tenant: str
+) -> None:
+    """The breakdown is capped at fifty groups, so its filter must be a predicate."""
+    project_id = str(uuid.uuid4())
+    minute = datetime.now(UTC).replace(second=0, microsecond=0)
+    for device in ("desktop", "mobile"):
+        for path in ("/", "/checkout"):
+            await _write_readings(
+                client,
+                tenant_id=tenant,
+                project_id=project_id,
+                vital="lcp",
+                values=[1000.0] * 4,
+                minute=minute,
+                url_path=path,
+                device_class=device,
+            )
+
+    start, end = _window()
+    answer = await service.break_down_web_vitals(
+        TenantScopedRepository(client, tenant_id=tenant),
+        dimension=BreakdownDimension.PAGE,
+        project_id=project_id,
+        from_time=start,
+        to_time=end,
+        device_class="mobile",
+    )
+
+    assert sorted(group.key for group in answer.groups) == ["/", "/checkout"]

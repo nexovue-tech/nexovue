@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { EndpointGroup, EndpointHealth, ServiceHealth } from "./api";
 import {
-  applyOrder,
   buildServiceRows,
   describeServices,
   describeVolume,
@@ -52,41 +51,10 @@ function loaded(endpoints: EndpointHealth[]): EndpointGroup {
 const NOTHING_EXPANDED: ReadonlySet<string> = new Set();
 const NO_ENDPOINTS: ReadonlyMap<string, EndpointGroup> = new Map();
 
-describe("applyOrder", () => {
-  const checkout = service("checkout", { p95_ms: 62.9 });
-  const catalog = service("catalog", { p95_ms: 410 });
-  const report = service("report", { p95_ms: 180 });
-
-  it("leaves the API's ranking alone — worst first is the product, not a default", () => {
-    const ranked = [checkout, catalog, report];
-    expect(applyOrder(ranked, "worst")).toBe(ranked);
-  });
-
-  it("re-ranks by the slow tail when asked, without touching the input", () => {
-    const ranked = [checkout, catalog, report];
-    expect(applyOrder(ranked, "slowest").map((row) => row.service_name)).toEqual([
-      "catalog",
-      "report",
-      "checkout",
-    ]);
-    expect(ranked[0]).toBe(checkout);
-  });
-
-  it("keeps the API's order between equal p95s rather than inventing one", () => {
-    const first = service("first", { p95_ms: 100 });
-    const second = service("second", { p95_ms: 100 });
-    expect(applyOrder([first, second], "slowest").map((row) => row.service_name)).toEqual([
-      "first",
-      "second",
-    ]);
-  });
-});
-
 describe("buildServiceRows", () => {
   it("is one row per service while nothing is open", () => {
     const rows = buildServiceRows(
       [service("storefront"), service("catalog")],
-      "worst",
       NOTHING_EXPANDED,
       NO_ENDPOINTS,
     );
@@ -97,7 +65,6 @@ describe("buildServiceRows", () => {
   it("puts an open service's endpoints directly under it", () => {
     const rows = buildServiceRows(
       [service("storefront"), service("catalog")],
-      "worst",
       new Set(["storefront"]),
       new Map([
         [
@@ -111,10 +78,13 @@ describe("buildServiceRows", () => {
     expect(rows[1]).toMatchObject({ endpoint: { endpoint: "POST /checkout" } });
   });
 
-  it("ranks the endpoints the same way as the services", () => {
+  it("renders the endpoints in the order they were served", () => {
+    // Endpoints are ranked by the same statement and the same ordering as the
+    // services above them, so the two agree without this module comparing
+    // anything. Re-sorting here would have been a second opinion, over a page
+    // the server had already cut.
     const rows = buildServiceRows(
       [service("storefront")],
-      "slowest",
       new Set(["storefront"]),
       new Map([
         [
@@ -129,23 +99,17 @@ describe("buildServiceRows", () => {
 
     expect(
       rows.filter((row) => row.kind === "endpoint").map((row) => row.endpoint.endpoint),
-    ).toEqual(["GET /report", "POST /checkout"]);
+    ).toEqual(["POST /checkout", "GET /report"]);
   });
 
   it("says it is loading in the render before the query exists", () => {
-    const rows = buildServiceRows(
-      [service("storefront")],
-      "worst",
-      new Set(["storefront"]),
-      NO_ENDPOINTS,
-    );
+    const rows = buildServiceRows([service("storefront")], new Set(["storefront"]), NO_ENDPOINTS);
     expect(rows[1]).toMatchObject({ kind: "note", note: "pending" });
   });
 
   it("distinguishes a failed endpoint read from a silent service", () => {
     const failed = buildServiceRows(
       [service("storefront")],
-      "worst",
       new Set(["storefront"]),
       new Map([["storefront", { status: "error", endpoints: [], refetch: () => {} }]]),
     );
@@ -153,7 +117,6 @@ describe("buildServiceRows", () => {
 
     const silent = buildServiceRows(
       [service("storefront")],
-      "worst",
       new Set(["storefront"]),
       new Map([["storefront", loaded([])]]),
     );
@@ -163,7 +126,6 @@ describe("buildServiceRows", () => {
   it("keys endpoints by kind as well as name — SERVER and CONSUMER are not one endpoint", () => {
     const rows = buildServiceRows(
       [service("worker")],
-      "worst",
       new Set(["worker"]),
       new Map([
         [
@@ -182,12 +144,7 @@ describe("buildServiceRows", () => {
 
 describe("rowHeight", () => {
   it("gives the loading note room for the two lines it draws", () => {
-    const rows = buildServiceRows(
-      [service("storefront")],
-      "worst",
-      new Set(["storefront"]),
-      NO_ENDPOINTS,
-    );
+    const rows = buildServiceRows([service("storefront")], new Set(["storefront"]), NO_ENDPOINTS);
     expect(rowHeight(rows[1])).toBeGreaterThan(rowHeight(rows[0]));
   });
 });
@@ -240,25 +197,17 @@ describe("the API's ranking is the product", () => {
     requests_per_minute: 1.6,
   });
 
-  it("keeps the server's order under `worst`, however tempting the rate looks", () => {
-    const asServed = [CHECKOUT, NOTIFICATIONS];
+  it("renders the rows in the order they arrived, whatever the numbers look like", () => {
+    // The ranking is the server's, and this module must not have an opinion
+    // about it: `notification-worker` has the higher error *rate* and the lower
+    // error *count*, and harm is what the ranking leads with.
+    const rows = buildServiceRows([CHECKOUT, NOTIFICATIONS], NOTHING_EXPANDED, NO_ENDPOINTS).filter(
+      (row) => row.kind === "service",
+    );
 
-    expect(applyOrder(asServed, "worst").map((row) => row.service_name)).toEqual([
+    expect(rows.map((row) => (row.kind === "service" ? row.service.service_name : ""))).toEqual([
       "checkout-api",
       "notification-worker",
-    ]);
-  });
-
-  it("does not resort by error rate under any order", () => {
-    // `slowest` is the one escape hatch, and it sorts on the tail — never on error rate.
-    const asServed = [
-      service("fast-but-failing", { p95_ms: 10, error_rate: 0.9, error_count: 90 }),
-      service("slow-and-fine", { p95_ms: 900, error_rate: 0, error_count: 0 }),
-    ];
-
-    expect(applyOrder(asServed, "slowest").map((row) => row.service_name)).toEqual([
-      "slow-and-fine",
-      "fast-but-failing",
     ]);
   });
 });

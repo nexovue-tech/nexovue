@@ -1,42 +1,28 @@
 /**
- * The one flat list the screen renders, and the ordering behind it.
+ * The one flat list the screen renders.
  *
  * Services and the endpoints opened underneath them share a single row array so the
- * virtualizer has one index space to work in, and so the ordering rule is applied in
- * exactly one place instead of twice.
+ * virtualizer has one index space to work in.
+ *
+ * The ordering itself is not here and never was a presentation choice: the API
+ * returns the first hundred rows of whichever order it was asked for, so a sort
+ * applied to that page could only rearrange the rows that survived it.
  */
 
 import { formatCount } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 
-import type { EndpointGroup, EndpointHealth, HealthMetrics, ServiceHealth } from "./api";
+import type { EndpointGroup, EndpointHealth, ServiceHealth } from "./api";
+import type { ServiceOrder } from "./filters";
 
 /**
- * `worst` is the API's own order — errors, then the slow tail, then volume — and it is
- * the product, so it is never recomputed here. `slowest` is the escape hatch for the
- * window where nothing is failing and something is still dragging.
+ * What the ranking in force is called, for the sentence under the title.
+ *
+ * The ordering itself is the server's — `LIMIT` cuts whichever order the
+ * statement used, so sorting a page here can only rearrange what survived it.
  */
-export type ServiceOrder = "worst" | "slowest";
-
-export const ORDER_OPTIONS: ReadonlyArray<{ id: ServiceOrder; label: string }> = [
-  { id: "worst", label: "worst" },
-  { id: "slowest", label: "slowest" },
-];
-
 export function orderCaption(order: ServiceOrder): string {
   return order === "slowest" ? "slowest first" : "worst first";
-}
-
-/**
- * Sorted by the slow tail, descending. Array.prototype.sort is stable, so equal p95s
- * keep the ranking the API gave them rather than a random one.
- */
-export function applyOrder<Row extends HealthMetrics>(
-  rows: readonly Row[],
-  order: ServiceOrder,
-): readonly Row[] {
-  if (order !== "slowest") return rows;
-  return [...rows].sort((left, right) => right.p95_ms - left.p95_ms);
 }
 
 export type ServiceRow =
@@ -73,13 +59,12 @@ function endpointRowKey(endpoint: EndpointHealth): string {
  */
 export function buildServiceRows(
   services: readonly ServiceHealth[],
-  order: ServiceOrder,
   expanded: ReadonlySet<string>,
   endpointsByService: ReadonlyMap<string, EndpointGroup>,
 ): ServiceRow[] {
   const rows: ServiceRow[] = [];
 
-  for (const service of applyOrder(services, order)) {
+  for (const service of services) {
     const isExpanded = expanded.has(service.service_name);
     rows.push({
       kind: "service",
@@ -101,7 +86,7 @@ export function buildServiceRows(
       continue;
     }
 
-    for (const endpoint of applyOrder(group?.endpoints ?? [], order)) {
+    for (const endpoint of group?.endpoints ?? []) {
       rows.push({ kind: "endpoint", key: endpointRowKey(endpoint), endpoint });
     }
   }

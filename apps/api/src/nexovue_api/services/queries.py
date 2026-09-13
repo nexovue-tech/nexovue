@@ -55,6 +55,19 @@ _LATENCY_MS: Final = f"quantilesMerge({QUANTILE_ARGUMENTS})(latency_quantiles) A
 # so a busy endpoint outranks a quiet one that is equally broken.
 WORST_FIRST: Final = f"error_count DESC, latency_ms[{P95_INDEX}] DESC, request_count DESC"
 
+# The other question this screen is asked: not "what is broken" but "what is
+# slow". The same three measures, with the slow tail leading.
+#
+# **It is an ordering, so it has to be the store's.** `LIMIT` keeps the first
+# hundred rows of whichever order the statement used, and re-sorting those in
+# the browser answers "the slowest among the hundred with the most errors" — a
+# service that is the slowest in the project and fails for nobody is exactly the
+# row that ordering cannot reach.
+SLOWEST_FIRST: Final = f"latency_ms[{P95_INDEX}] DESC, error_count DESC, request_count DESC"
+
+_ORDERINGS: Final = {"worst": WORST_FIRST, "slowest": SLOWEST_FIRST}
+_ORDER_PLACEHOLDER: Final = "/* ordering */"
+
 # The source and its window, kept in one literal: the tenant predicate has to
 # sit in the same string as the table it guards, or the structure test cannot
 # see that the table is guarded.
@@ -66,11 +79,24 @@ WHERE tenant_id = {tenant_id:String}
   AND minute < {to_time:DateTime}
 """
 
-# ClickHouse's own parameter syntax is braces, so the single-service predicate is
-# spliced on a comment marker rather than with str.format.
+# ClickHouse's own parameter syntax is braces, so the optional predicates are
+# spliced on comment markers rather than with str.format.
 _ONE_SERVICE_PLACEHOLDER: Final = "/* one service */"
+_SPAN_KIND_PLACEHOLDER: Final = "/* span kind */"
+_WITH_ERRORS_PLACEHOLDER: Final = "/* with errors */"
 
 ONE_SERVICE_CLAUSE: Final = "AND service_name = {service_name:String}"
+
+# "HTTP, not queues" — the rollup keeps SERVER and CONSUMER rows apart, so this
+# narrows which rows are aggregated rather than which totals are shown. A
+# service that only consumes a queue disappears from a SERVER-only answer, which
+# is the question being asked.
+SPAN_KIND_CLAUSE: Final = "AND span_kind = {span_kind:String}"
+
+# "Only the ones with errors", applied after the group because `error_count` is
+# a sum across the window: a service that failed once in an hour has errors even
+# though most of its minutes did not.
+WITH_ERRORS_CLAUSE: Final = "HAVING error_count > 0"
 
 # One service's row and the whole ranking are the same read: the detail screen shows
 # exactly the numbers its row on the overview shows, so they cannot disagree.
@@ -82,8 +108,10 @@ SELECT
     {_LATENCY_MS}
 {_ENDPOINT_STATS_IN_WINDOW}
   {_ONE_SERVICE_PLACEHOLDER}
+  {_SPAN_KIND_PLACEHOLDER}
 GROUP BY service_name
-ORDER BY {WORST_FIRST}, service_name
+{_WITH_ERRORS_PLACEHOLDER}
+ORDER BY {_ORDER_PLACEHOLDER}, service_name
 LIMIT {{limit:UInt32}}
 """
 
@@ -100,8 +128,10 @@ SELECT
     {_LATENCY_MS}
 {_ENDPOINT_STATS_IN_WINDOW}
   {_ONE_SERVICE_PLACEHOLDER}
+  {_SPAN_KIND_PLACEHOLDER}
 GROUP BY service_name, span_kind, span_name
-ORDER BY {WORST_FIRST}, service_name, span_kind, span_name
+{_WITH_ERRORS_PLACEHOLDER}
+ORDER BY {_ORDER_PLACEHOLDER}, service_name, span_kind, span_name
 LIMIT {{limit:UInt32}}
 """
 
@@ -128,20 +158,66 @@ ORDER BY service_name, bucket
 """
 
 
-def _narrowed(template: str, *, one_service: bool) -> str:
-    return template.replace(_ONE_SERVICE_PLACEHOLDER, ONE_SERVICE_CLAUSE if one_service else "")
+def _narrowed(
+    template: str,
+    *,
+    one_service: bool,
+    span_kind: bool = False,
+    with_errors: bool = False,
+    order: str = "worst",
+) -> str:
+    """The statement with each optional predicate either spliced in or removed.
+
+    Every filter is a predicate inside the statement, never a list trimmed after
+    it comes back. `LIMIT` caps the ranking, so a filter applied afterwards would
+    answer "the failing ones among the first hundred" and have no way to say so.
+    """
+    return (
+        template.replace(_ONE_SERVICE_PLACEHOLDER, ONE_SERVICE_CLAUSE if one_service else "")
+        .replace(_SPAN_KIND_PLACEHOLDER, SPAN_KIND_CLAUSE if span_kind else "")
+        .replace(_WITH_ERRORS_PLACEHOLDER, WITH_ERRORS_CLAUSE if with_errors else "")
+        .replace(_ORDER_PLACEHOLDER, _ORDERINGS[order])
+    )
 
 
-def services_sql(*, one_service: bool) -> str:
-    """The service statement, narrowed to one service when one is named."""
-    return _narrowed(_SERVICES_TEMPLATE, one_service=one_service)
+def services_sql(
+    *,
+    one_service: bool,
+    span_kind: bool = False,
+    with_errors: bool = False,
+    order: str = "worst",
+) -> str:
+    """The service statement, narrowed to what the caller asked for."""
+    return _narrowed(
+        _SERVICES_TEMPLATE,
+        one_service=one_service,
+        span_kind=span_kind,
+        with_errors=with_errors,
+        order=order,
+    )
 
 
 def trend_sql(*, one_service: bool) -> str:
-    """The trend statement, narrowed to one service when one is named."""
+    """The trend statement, narrowed to one service when one is named.
+
+    Ordered by service and bucket, never by the ranking: it draws the history of
+    rows the ranking already chose.
+    """
     return _narrowed(TREND_SQL, one_service=one_service)
 
 
-def endpoints_sql(*, one_service: bool) -> str:
-    """The endpoint statement, narrowed to one service when one is named."""
-    return _narrowed(_ENDPOINTS_TEMPLATE, one_service=one_service)
+def endpoints_sql(
+    *,
+    one_service: bool,
+    span_kind: bool = False,
+    with_errors: bool = False,
+    order: str = "worst",
+) -> str:
+    """The endpoint statement, narrowed to what the caller asked for."""
+    return _narrowed(
+        _ENDPOINTS_TEMPLATE,
+        one_service=one_service,
+        span_kind=span_kind,
+        with_errors=with_errors,
+        order=order,
+    )

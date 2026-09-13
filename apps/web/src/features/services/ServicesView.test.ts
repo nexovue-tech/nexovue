@@ -108,6 +108,9 @@ function render(overrides: Overrides = {}): HTMLElement {
       createElement(ServicesView, {
         order: "worst",
         onOrderChange: () => {},
+        filters: {},
+        onFilterChange: () => {},
+        onClearFilters: () => {},
         windowLabel: "hour",
         services: [STOREFRONT, HEALTHY],
         isPending: false,
@@ -176,10 +179,14 @@ describe("ServicesView", () => {
   });
 
   it("re-ranks by the slow tail when the toggle asks for it", () => {
+    // The server re-ranks, so what arrives is already in the asked-for order and
+    // the view renders it as served. What this holds is that the caption says
+    // which ranking is in force — a list ordered one way and captioned the other
+    // is worse than no caption.
     const rendered = readable(render({ order: "slowest", services: [HEALTHY, STOREFRONT] }));
 
     expect(rendered).toContain("slowest first.");
-    expect(rendered.indexOf("demo-storefront")).toBeLessThan(rendered.indexOf("demo-catalog"));
+    expect(rendered.indexOf("demo-catalog")).toBeLessThan(rendered.indexOf("demo-storefront"));
   });
 
   it("colours the errors and leaves a healthy service uncoloured", () => {
