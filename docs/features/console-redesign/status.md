@@ -2,14 +2,32 @@
 
 ## Lifecycle status
 
-**Implemented.** Every task in the plan is built except one, named below. Not deployed: nexovue has
-no deployment, so "implemented" is as far as a feature goes here.
+**Reopened 2026-09-14 — in development.** The first phase is built and closed; a follow-up phase is
+specified and awaiting approval.
 
 ## Current task
 
-**None — the phase is complete, 2026-09-13.** `just check` exit 0: 2438 Python (1 skipped, the
-opt-in billable mail suite), 805 web across 64 files, 120 browser-SDK. The task plan's Outcome
-carries the full record of what each block planned against what it cost.
+**T48–T68 are written and provisional, awaiting founder approval.** A pass over every screen, read
+as a customer rather than as the person who built it, found that the console is correct and does not
+yet behave like a product somebody uses all day: every refresh is a cold reload rather than a
+background fetch, no window can be absolute so paid retention is unreachable, nothing pauses, the
+selection does not survive a reload, ⌘K shows a customer an internal task id, and the metrics screen
+has no filters. None of it is a defect in what was built; all of it is what the building did not
+cover.
+
+Two of the four decisions that bound the list are exclusions: **team membership becomes its own
+feature** rather than part of this, and **the insight engine is the next feature**, so Findings keeps
+its healthy state meanwhile.
+
+Nothing below has been expanded from `P` to `E`, and no file has been edited for it. That is the
+gate.
+
+### The first phase, completed 2026-09-13
+
+`just check` exit 0 at close: 2438 Python (1 skipped, the
+opt-in billable mail suite), 805 web across 64 files, 120 browser-SDK — 2469 and 813 after the loose
+ends were closed on 2026-09-13. The task plan's Outcome carries the full record of what each block
+planned against what it cost.
 
 **Every item on `plan.md` is now built**, including the conditional duration heatmap (OD7) that was
 carried open rather than quietly ticked.
@@ -103,7 +121,10 @@ end-to-end path, then widen. **The first step is the Services screen alone, and 
 cheaply.** A reasonable stopping point comes after filters and context: five screens rebuilt,
 filterable and carrying context is a usable product, and the rest can be re-judged then.
 
-## Next action
+### Next action — as it stood at batch 2, kept for its corrections
+
+The current next action is at the top of this file. This section is history: it records two mistakes
+worth keeping, one of which propagated into four commits before reading a file corrected it.
 
 Founder reviews `design.md` and batch 1. Three questions in the wireframes need answers before
 implementation: batch 3's AC4 correction below. Batch 2 asks three: exposing latency quantiles across all
@@ -259,6 +280,22 @@ must be updated as part of this feature: `docs/product/vision.md`,
 of which is enforced by `route-manifest.test.ts`.
 
 ## Last updated
+
+2026-09-14 — **reopened.** A screen-by-screen review, read as a customer, produced T48–T68: live
+data that refreshes without tearing the screen down, a window that can be absolute, a refresh
+somebody can pause, and the smaller gaps the read turned up. All provisional; nothing is expanded
+and nothing is edited until the founder approves.
+
+Two exclusions are decisions rather than omissions. **Team membership** — invites, members, roles —
+is needed and becomes its own feature, even though the schema already carries the four roles. **The
+insight engine** is the next feature, so Findings keeps its healthy state until there is something to
+feed it.
+
+Two questions are open: the error-rate thresholds that block T61, and whether billing (T66) and
+customer documentation (T67) belong to this phase at all — neither is a console screen, and both are
+flagged rather than absorbed.
+
+---
 
 2026-09-13 — the phase closed. T35 through T42 built, `/review-diff` run, the task plan's Outcome
 filled in, and `plan.md` ticked with the one unbuilt item left visibly open.

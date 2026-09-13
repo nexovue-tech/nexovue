@@ -509,6 +509,106 @@ was real, and it is T38).
       history cannot be used to find out why something changed.
 - [x] **T47** — **Outcome** filled in; `status.md` final.
 
+---
+
+## Follow-up phase — reopened 2026-09-14
+
+**The phase closed on 2026-09-13 and was reopened the next day.** A founder-led pass over every
+screen, read as a customer rather than as the person who built it, found that the console is
+*correct* and does not yet *behave* like a product somebody uses all day. Nothing below is a defect
+in what was built; all of it is what the building did not cover.
+
+Four decisions were taken before this list was written, and they are what bound it:
+
+| Question | Decision (2026-09-14) |
+|---|---|
+| Is nexovue a team product? | **Yes, and not now.** Invites, members and roles become their own feature. Out of this phase entirely, despite the schema already carrying `owner/admin/member/viewer`. |
+| Who are the setup docs for? | **Both** — someone already exporting OpenTelemetry, and someone who has never instrumented anything. Two audiences, one set of docs. |
+| Global time window, or per screen? | **Global with an override.** The window travelling between screens is what makes an investigation work (IA1); the override exists for the screen that genuinely needs its own, and must be visibly an override rather than a silent divergence. |
+| Is Findings honest with no engine? | **Yes for now.** The insight engine is the next feature; the healthy state stands until it exists. |
+
+### What the reading found
+
+| Claim | What the code says |
+|---|---|
+| Screens refresh in the background | **No. Every refresh is a cold load.** `useLiveWindow` advances `to` every ten seconds, `timeWindow` is part of every query key, and no query sets `placeholderData`. A changed key is a new query with no cached data, so `isPending` is true and the screen renders its skeleton. Locally that is a flicker; on a customer's latency it is the whole screen tearing down every ten seconds, for ever. |
+| A customer can look at a past incident | **No.** `TIME_RANGES` is five relative options ending at 7 days. There is no absolute range, so retention the customer pays for — 30 days of traces, 395 of metrics — cannot be reached from any screen. |
+| A customer can hold a screen still | **No.** Nothing pauses polling and nothing sets its interval. Reading carefully, screenshotting, or showing a colleague all fight a ten-second tick. |
+| The time control is global | **Almost.** Usage carries its own 7/30/90-day control while the top bar still reads `LAST hour`, which silently does nothing there. Two controls with the same label, disagreeing. |
+| Selection survives a reload | **No.** `selection` is a module-level variable; only the theme reaches `localStorage`. Reload returns to the default project and `last hour`. |
+| ⌘K searches | **No.** `CommandPaletteMount` renders a *disabled* input whose placeholder reads *"mounted by P1-63, filled by a later task"*. A customer who presses ⌘K is shown an internal task id. |
+| The sidebar tells a customer something useful | `phase 1 · shell only`, printed on every screen. True while most routes were placeholders; now stale, and it reads as "this product is unfinished". |
+| Metrics can be narrowed | **No.** 314 names, ranked by traffic, no filter. AC15 named "the seven screens that have none" before this screen existed, so it was never in scope — and T37 did not notice. |
+
+### The design rule these share
+
+**Never move what someone is reading; mark what changed.** A live screen does not need loud updates
+if it keeps a memory of what changed — loud updates are what an interface builds when it forgets.
+That rule is what separates T48–T54 from "make the refresh quieter".
+
+### Tasks — live data, time, and control
+
+- [ ] **T48** `P` — keep previous data across the window tick, so a refresh is a background fetch
+      rather than a remount. Everything below depends on this one. → a test that the rendered rows
+      survive a window advance.
+- [ ] **T49** `P` — refresh control in the top bar beside the window: pause, and an interval. **The
+      paused state must be unmistakable** — a persistent "Paused · showing 14:32:05", not an icon.
+      A paused screen showing stale numbers during an incident is the AC18 failure again.
+- [ ] **T50** `P` — an absolute window disables polling by itself. Nothing new can arrive in a window
+      that ended last Tuesday.
+- [ ] **T51** `P` — freeze list ordering while the pointer is over a list or a row is expanded, and
+      offer an explicit "reorder" when the ranking has moved. Rows changing places under a reaching
+      cursor is the real damage, not the flash.
+- [ ] **T52** `P` — highlight the **cell** that changed, briefly, honouring `prefers-reduced-motion`.
+      Not the row.
+- [ ] **T53** `P` — feeds (logs, traces, findings) anchor on scroll position: at the top, new rows
+      stream in; scrolled away, a "N new" pill and nothing moves.
+- [ ] **T54** `P` — one "updated Ns ago" freshness indicator, in the top bar rather than per panel.
+- [ ] **T55** `P` — absolute start/end in the global window control, which is what makes paid
+      retention reachable.
+- [ ] **T56** `P` — persist the selected project and window across a reload.
+- [ ] **T57** `P` — a per-screen window override, rendered as visibly an override with a way back to
+      the global one.
+- [ ] **T58** `P` — resolve Usage's competing control. A billing month is a genuinely different axis
+      from an incident window, so this may stay an exception — it must look like one.
+
+### Tasks — stop looking unfinished
+
+- [ ] **T59** `P` — delete `phase 1 · shell only`, and hide ⌘K until search exists rather than
+      showing a customer a disabled box naming an internal task.
+- [ ] **T60** `P` — filters on Metrics: name, shape, and readable-only. The gap T37 left.
+
+### Tasks — what the screen-by-screen read found
+
+- [ ] **T61** `P` — a warning tier for services. One error in a hundred thousand requests currently
+      draws the same mark as forty percent failing. **Blocked on the threshold**, which is a founder
+      decision and is recorded under Questions.
+- [ ] **T62** `P` — a "has this project ever reported" signal, replacing the widest-window heuristic
+      that reads a project silent for eight days as one that never reported.
+- [ ] **T63** `P` — export a filtered result from logs and traces. The commonest ask after search.
+- [ ] **T64** `P` — an active-session list beside "sign out everywhere", and second-factor
+      authentication. Today a customer can end every session but cannot see what is signed in, which
+      is the thing they actually want when they suspect somebody else is.
+- [ ] **T65** `P` — link an error group to the deploy that preceded it. `deploy_events` is ingested,
+      stored, served, and consumed by markers only.
+
+### Tasks — raised here, and possibly not this phase's work
+
+**Both of these are in this list because the review found them, and both arguably belong elsewhere.
+Flagged rather than decided.**
+
+- [ ] **T66** `P` — billing: an invoice list and download, the payment method on file, and a plan
+      change path. Today "This organization already has an active subscription" is a dead end, and
+      there is no way to obtain an invoice — usually a tax requirement rather than a convenience.
+      **Belongs to `docs/features/usage-billing/` more than here**, and needs the payment provider.
+- [ ] **T67** `P` — customer setup documentation, for **both** audiences: a service already exporting
+      OpenTelemetry, and one that has never been instrumented. Per language, plus Docker,
+      Kubernetes, ECS, Lambda and bare metal; the Collector; the browser SDK. **This is not a console
+      change and has no home in the repository yet** — the largest gap the review found, and the one
+      that loses a customer silently, because they never reach a screen anybody is watching.
+- [ ] **T68** `P` — onboarding links to those docs, and answers "nothing has arrived" with something
+      better than a spinner. Depends on T67.
+
 ## New risks
 
 **The screen-wide `max` is computed from the loaded page, not the project.** With a `limit` of 100
@@ -534,6 +634,8 @@ appear with em dashes and fill in.
 | Q3 | ~~ten of sixteen sparklines nearly flat~~ **RESOLVED 2026-09-13: left as designed.** The flat lines are true — those services really are quiet — and the alternative is the per-row scaling the archetype exists to refuse. | Resolved | [`design.md`](design.md) §6 |
 | Q4 | ~~`VirtualTable` in this group or its own change?~~ **RESOLVED 2026-09-13: later, its own change.** Zero user-visible benefit, and a shared table extracted from four examples while nine exist is a guess. | Resolved | [`plan.md`](plan.md) |
 | Q5 | ~~a failed run drawn as a gap or a zero?~~ **RESOLVED 2026-09-13: `Sparkline` gains a gap mode.** RUM page timings and database query durations will both want it, so it belongs in the component rather than worked around in one screen. | Resolved | [`design.md`](design.md) §6 |
+| Q6 | **At what error rate does a service stop being healthy?** T61 cannot be built without a number. Today one error in a hundred thousand draws the same mark as forty percent failing, so the mark has stopped carrying information. A fixed pair of thresholds is recommended — 1% warning, 5% critical, **stated on screen** so a reader knows what the mark claims — because a baseline-relative answer is really the insight engine's job. | **Blocks T61** | [`spec.md`](spec.md) Open decisions |
+| Q7 | **Do T66 (billing) and T67 (customer docs) belong to this phase?** Both were found by the 2026-09-14 review and neither is a console screen: billing needs the payment provider and has a workspace of its own, and setup documentation has no home in the repository at all. Kept here so they are not lost, flagged so they are not absorbed by default. | Not blocking — T48 onward proceed either way | this table |
 
 **Q2 and Q3 were what the thin path was built to find.** Both were visible only against real data —
 sixteen services where two carry all the traffic — and neither would have surfaced from the
