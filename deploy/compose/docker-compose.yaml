@@ -207,6 +207,25 @@ services:
       # rather than something to put in `.env`, because in this stack the answer
       # is always "wherever `web` is".
       APP_BASE_URL: http://localhost:${WEB_HOST_PORT:-15173}
+      # Development renders mail into the log instead of sending it.
+      #
+      # Not a convenience: signing up sends a verification message, so every
+      # account a test creates spent one real message against a metered
+      # allowance. Three signups reach this container per `just check`, which
+      # made the gate a recurring charge on a quota no suite in it was about —
+      # 80% of a month's allowance went that way in one working session.
+      #
+      # Set here rather than left to `.env` because the failure is silent and
+      # cumulative: nothing tells you it is happening until the provider does.
+      # This deliberately wins over an `EMAIL_PROVIDER` in `.env` (compose
+      # applies `environment` over `env_file`), so the credentials that file
+      # holds cannot be spent by a container nobody was watching. The real chain
+      # is proved by `just test-billable`, which reads `.env` in the test process
+      # and never goes through here.
+      #
+      # The log carries the rendered body, so a verification link is followed by
+      # copying it out of `docker logs nexovue-api-1`.
+      EMAIL_PROVIDER: console
     # The developer's own third-party credentials — the payment gateway
     # (`PAYMENTS_DOMESTIC_*`) and the mail provider (`EMAIL_*`).
     #

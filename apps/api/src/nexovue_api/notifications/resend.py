@@ -13,11 +13,10 @@ party's release cadence"*. A vendor package for a single call buys convenience
 and costs a dependency whose releases we inherit. If a second endpoint is ever
 needed — audiences, broadcasts — that arithmetic changes and so should this.
 
-**Templates are here rather than with the provider.** Resend can host them, and
-that would put the words a customer reads outside version control, outside code
-review and outside `just check`. The bodies below are deliberately plain: a
-verification mail is one sentence and a link, and anything more is a marketing
-message wearing a transactional message's clothes.
+**Templates are in the repository rather than with the provider.** Resend can
+host them, and that would put the words a customer reads outside version
+control, outside code review and outside `just check`. They are therefore not
+Resend-shaped and do not live here either — see `templates.py`.
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ from typing import Any, Final
 import httpx
 
 from nexovue_api.notifications.sender import Delivery, EmailError, Message
+from nexovue_api.notifications.templates import render
 from nexovue_api.settings import EmailSettings
 
 SEND_ENDPOINT: Final = "https://api.resend.com/emails"
@@ -36,27 +36,6 @@ SEND_ENDPOINT: Final = "https://api.resend.com/emails"
 # enough that a stalled provider does not hold a request open — a person waiting
 # on a signup response should see a failure rather than a spinner.
 TIMEOUT_SECONDS: Final = 10.0
-
-# What a recipient reads. Subject and a plain-text body per message, filled from
-# the caller's own `data`. No HTML: these are one sentence and a link, and an
-# HTML part is a second thing to keep in step for no gain a reader would notice.
-_TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
-    Message.VERIFY_EMAIL: (
-        "Confirm your email address",
-        "Confirm your address to finish setting up nexovue:\n\n{link}\n\n"
-        "The link expires in {expires_in}. If you did not sign up, ignore this.",
-    ),
-    Message.RESET_PASSWORD: (
-        "Reset your password",
-        "Use this link to set a new password:\n\n{link}\n\n"
-        "It expires in {expires_in} and can be used once. If you did not ask for "
-        "this, nothing has changed and you can ignore it.",
-    ),
-    Message.INVOICE: (
-        "Your nexovue invoice",
-        "Your invoice for {period} is ready: {amount}\n\n{link}",
-    ),
-}
 
 
 class ResendEmailSender:
@@ -70,7 +49,7 @@ class ResendEmailSender:
         self._client = client
 
     async def send(self, *, to: str, message: Message, data: Mapping[str, Any]) -> Delivery:
-        subject, body = _render(message, data)
+        subject, body = render(message, data)
         payload = {
             "from": self._settings.from_address,
             "to": [to],
@@ -99,22 +78,6 @@ class ResendEmailSender:
 
         identifier = response.json().get("id", "")
         return Delivery(provider_message_id=str(identifier))
-
-
-def _render(message: Message, data: Mapping[str, Any]) -> tuple[str, str]:
-    """Fill a template, and fail loudly on a field the caller did not supply.
-
-    A `KeyError` from `str.format` would name the missing field and nothing
-    else. Sending a mail that reads `{link}` to a customer is worse than not
-    sending it, so this refuses rather than degrades.
-    """
-    subject, body = _TEMPLATES[message]
-    try:
-        return subject, body.format(**data)
-    except KeyError as missing:
-        raise EmailError(
-            f"{message.value} needs {missing} and the caller did not supply it"
-        ) from missing
 
 
 def _refusal(response: httpx.Response) -> str:

@@ -41,8 +41,18 @@ LogFormat = Literal["json", "console"]
 # Payments are expected to end up as two of these — a domestic gateway and a
 # merchant of record, because a non-EU seller owes EU VAT from the first euro —
 # which is why the payment one is named for the role it fills.
-EmailProvider = Literal["resend"]
+#
+# `console` is not a vendor: it renders the message and writes it to the log.
+# It is what development runs, so a signup in a test does not spend a real
+# message — see `notifications/console.py`.
+EmailProvider = Literal["resend", "console"]
 DomesticPaymentProvider = Literal["razorpay"]
+
+# Who logged mail claims to be from when nothing configured a sender. A
+# domain that cannot resolve, so a message that escaped to a real provider
+# would be refused rather than delivered from a plausible-looking address.
+CONSOLE_FROM_ADDRESS: Final = "nexovue@console.invalid"
+
 
 # A processor runs two estates with two sets of credentials and two hostnames.
 # Named rather than a bool because "is production" is a question about the
@@ -310,7 +320,23 @@ class Settings(BaseSettings):
         None rather than an error, because an API that cannot send mail still
         serves every screen. The caller that needs to send is the one that must
         refuse, and it can name `EMAIL_VARIABLES` when it does.
+
+        **`console` is configured by naming it, and needs nothing else.** The
+        all-or-none rule exists because a half-filled configuration fails at the
+        first send with a provider error that names no variable. There is no
+        provider to refuse here and no credential to be valid, so the rule has
+        nothing to protect — and applying it anyway would mean a clone with no
+        `.env` gets no mail at all, when reading the verification link out of the
+        log is exactly what development needs.
         """
+        if self.email_provider == "console":
+            return EmailSettings(
+                provider=self.email_provider,
+                api_key="",
+                sending_domain=self.email_sending_domain,
+                from_address=self.email_from_address or CONSOLE_FROM_ADDRESS,
+                reply_to=self.email_reply_to,
+            )
         parts = (
             self.email_api_key,
             self.email_sending_domain,

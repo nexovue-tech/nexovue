@@ -1,0 +1,57 @@
+"""What a recipient reads. Ours, not a provider's.
+
+`resend.py` records why these live in the repository rather than with the
+provider — hosted templates put the words a customer reads *"outside version
+control, outside code review and outside `just check`"*. That reasoning makes
+them provider-neutral by definition, so they sit here rather than inside any one
+adapter, and every adapter renders the same words.
+
+**That sameness is the point, not a tidiness.** A development adapter that
+invented its own formatting would accept a caller that forgot `{link}` and let
+the missing field surface in production instead — the one place these templates
+exist to keep it out of.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any, Final
+
+from nexovue_api.notifications.sender import EmailError, Message
+
+# Subject and a plain-text body per message, filled from the caller's own
+# `data`. No HTML: these are one sentence and a link, and an HTML part is a
+# second thing to keep in step for no gain a reader would notice.
+TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
+    Message.VERIFY_EMAIL: (
+        "Confirm your email address",
+        "Confirm your address to finish setting up nexovue:\n\n{link}\n\n"
+        "The link expires in {expires_in}. If you did not sign up, ignore this.",
+    ),
+    Message.RESET_PASSWORD: (
+        "Reset your password",
+        "Use this link to set a new password:\n\n{link}\n\n"
+        "It expires in {expires_in} and can be used once. If you did not ask for "
+        "this, nothing has changed and you can ignore it.",
+    ),
+    Message.INVOICE: (
+        "Your nexovue invoice",
+        "Your invoice for {period} is ready: {amount}\n\n{link}",
+    ),
+}
+
+
+def render(message: Message, data: Mapping[str, Any]) -> tuple[str, str]:
+    """Fill a template, and fail loudly on a field the caller did not supply.
+
+    A `KeyError` from `str.format` would name the missing field and nothing
+    else. Sending a mail that reads `{link}` to a customer is worse than not
+    sending it, so this refuses rather than degrades.
+    """
+    subject, body = TEMPLATES[message]
+    try:
+        return subject, body.format(**data)
+    except KeyError as missing:
+        raise EmailError(
+            f"{message.value} needs {missing} and the caller did not supply it"
+        ) from missing

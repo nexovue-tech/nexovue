@@ -40,3 +40,7 @@ def build_email_sender(settings: EmailSettings) -> EmailSender:
             from nexovue_api.notifications.resend import ResendEmailSender
 
             return ResendEmailSender(settings)
+        case "console":
+            from nexovue_api.notifications.console import ConsoleEmailSender
+
+            return ConsoleEmailSender(settings)
