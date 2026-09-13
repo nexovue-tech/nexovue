@@ -37,13 +37,83 @@ const DEFAULT_RANGE_ID = "1h";
 const WINDOW_BUCKET_MS = 10_000;
 const MS_PER_MINUTE = 60_000;
 
+/**
+ * What window a reader asked for, which is not the same as the window a read uses.
+ *
+ * **A relative choice resolves to a different pair of instants every few seconds; an
+ * absolute one never moves.** Keeping the *choice* rather than the resolved instants is
+ * what lets a cache key stay still while the window underneath it advances — see
+ * `windowCacheKey`. It is also the difference between "the last hour" and "14:00 to
+ * 15:00 last Tuesday", which a customer needs and could not ask for until now: the
+ * relative options stop at seven days while traces are retained for thirty and metrics
+ * for over a year, so most of what is paid for was unreachable from any screen.
+ */
+export type WindowChoice =
+  | { kind: "relative"; rangeId: string }
+  | { kind: "absolute"; from: string; to: string };
+
 interface Selection {
   projectId?: string;
   rangeId: string;
+  /** The window the whole console reads against, unless a screen overrides it. */
+  window: WindowChoice;
 }
 
-let selection: Selection = { rangeId: DEFAULT_RANGE_ID };
+export const SELECTION_STORAGE_KEY = "nexovue.selection";
+
+function readStored(): Selection {
+  const fresh: Selection = {
+    rangeId: DEFAULT_RANGE_ID,
+    window: { kind: "relative", rangeId: DEFAULT_RANGE_ID },
+  };
+  try {
+    const stored = localStorage.getItem(SELECTION_STORAGE_KEY);
+    if (!stored) return fresh;
+    const parsed: unknown = JSON.parse(stored);
+    if (typeof parsed !== "object" || parsed === null) return fresh;
+
+    const { projectId, window: windowChoice } = parsed as Partial<Selection>;
+    return {
+      projectId: typeof projectId === "string" ? projectId : undefined,
+      rangeId: windowChoice?.kind === "relative" ? windowChoice.rangeId : DEFAULT_RANGE_ID,
+      window: validWindowChoice(windowChoice) ?? fresh.window,
+    };
+  } catch {
+    return fresh;
+  }
+}
+
+/**
+ * Refuses a remembered value this build cannot honour.
+ *
+ * A range id can disappear between releases, and an absolute pair can be written by
+ * anything with access to the key. Neither should leave the console unable to read.
+ */
+function validWindowChoice(choice: WindowChoice | undefined): WindowChoice | undefined {
+  if (choice?.kind === "relative") {
+    return TIME_RANGES.some((range) => range.id === choice.rangeId) ? choice : undefined;
+  }
+  if (choice?.kind === "absolute") {
+    const from = Date.parse(choice.from);
+    const to = Date.parse(choice.to);
+    return Number.isFinite(from) && Number.isFinite(to) && from < to ? choice : undefined;
+  }
+  return undefined;
+}
+
+let selection: Selection = readStored();
 const listeners = new Set<() => void>();
+
+function remember() {
+  try {
+    localStorage.setItem(
+      SELECTION_STORAGE_KEY,
+      JSON.stringify({ projectId: selection.projectId, window: selection.window }),
+    );
+  } catch {
+    // It still applies to this tab; it just will not survive a reload.
+  }
+}
 
 function publish() {
   for (const listener of listeners) listener();
@@ -57,17 +127,70 @@ function subscribe(listener: () => void): () => void {
 export function setSelectedProjectId(projectId: string): void {
   if (selection.projectId === projectId) return;
   selection = { ...selection, projectId };
+  remember();
   publish();
 }
 
 export function setSelectedRangeId(rangeId: string): void {
-  if (selection.rangeId === rangeId) return;
-  selection = { ...selection, rangeId };
+  if (selection.rangeId === rangeId && selection.window.kind === "relative") return;
+  selection = { ...selection, rangeId, window: { kind: "relative", rangeId } };
+  remember();
+  publish();
+}
+
+/**
+ * Pin the console to a fixed pair of instants — the incident, rather than "recently".
+ *
+ * The relative range is kept beside it, so leaving an absolute window returns a reader
+ * to the one they were on rather than to a default they did not choose.
+ */
+export function setAbsoluteWindow(from: string, to: string): void {
+  const choice = validWindowChoice({ kind: "absolute", from, to });
+  if (!choice) return;
+  selection = { ...selection, window: choice };
+  remember();
+  publish();
+}
+
+export function clearAbsoluteWindow(): void {
+  if (selection.window.kind === "relative") return;
+  selection = { ...selection, window: { kind: "relative", rangeId: selection.rangeId } };
+  remember();
   publish();
 }
 
 export function useSelection(): Selection {
   return useSyncExternalStore(subscribe, () => selection);
+}
+
+/**
+ * What a query key should carry for a window, and the whole reason this type exists.
+ *
+ * **A resolved window cannot go in a cache key.** `to` is "now", so a key holding it
+ * changes every ten seconds, and a changed key is a *different query* with no cached
+ * data — which means `isPending`, which means the screen renders its skeleton. Every
+ * refresh was a cold load for that reason: on a fast connection a flicker, on a
+ * customer's a full teardown of the screen, every ten seconds, for ever.
+ *
+ * The choice is stable where the window is not, so the same query refetches in the
+ * background and the rows a reader is looking at stay on screen.
+ */
+export function windowCacheKey(choice: WindowChoice): string {
+  return choice.kind === "relative" ? `rel:${choice.rangeId}` : `abs:${choice.from}/${choice.to}`;
+}
+
+/** The instants to read against, resolved at the moment of asking. */
+export function resolveChoice(choice: WindowChoice, now = Date.now()): TimeWindow {
+  return choice.kind === "absolute"
+    ? { from: choice.from, to: choice.to }
+    : resolveWindow(choice.rangeId, now);
+}
+
+/** The words for a window, which differ in kind rather than in length. */
+export function describeChoice(choice: WindowChoice): string {
+  return choice.kind === "relative"
+    ? `last ${timeRangeById(choice.rangeId).label}`
+    : `${new Date(choice.from).toLocaleString()} to ${new Date(choice.to).toLocaleString()}`;
 }
 
 export function timeRangeById(rangeId: string): TimeRange {

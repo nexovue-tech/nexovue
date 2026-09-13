@@ -1,76 +1,105 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
 
-import { previousWindow, resolveWindow, timeRangeById } from "./selection";
+import { afterEach, describe, expect, it } from "vitest";
 
-const BUCKET_MS = 10_000;
+import type { WindowChoice } from "./selection";
+import {
+  clearAbsoluteWindow,
+  describeChoice,
+  resolveChoice,
+  SELECTION_STORAGE_KEY,
+  setAbsoluteWindow,
+  setSelectedRangeId,
+  windowCacheKey,
+} from "./selection";
 
-describe("resolveWindow", () => {
-  /**
-   * The regression: `to` was floored to the bucket below `now`, so the list silently
-   * excluded everything from the last 0–10 seconds — the newest traces, which is the
-   * only reason anyone opens the screen.
-   */
-  it("never ends before now, even mid-bucket", () => {
-    const now = Date.parse("2026-08-27T08:00:32.276Z");
-    expect(Date.parse(resolveWindow("1h", now).to)).toBeGreaterThanOrEqual(now);
+const TUESDAY: WindowChoice = {
+  kind: "absolute",
+  from: "2026-09-08T14:00:00.000Z",
+  to: "2026-09-08T15:00:00.000Z",
+};
+
+afterEach(() => {
+  clearAbsoluteWindow();
+  setSelectedRangeId("1h");
+  localStorage.removeItem(SELECTION_STORAGE_KEY);
+});
+
+describe("what a query key carries for a window", () => {
+  it("stays still while a relative window advances underneath it", () => {
+    // The whole point. `to` is "now", so a key holding it changes every ten
+    // seconds — and a changed key is a different query with no cached data,
+    // which renders the skeleton. Every refresh was a cold load for that reason.
+    const choice: WindowChoice = { kind: "relative", rangeId: "1h" };
+
+    const early = windowCacheKey(choice);
+    const late = windowCacheKey(choice);
+
+    expect(early).toBe(late);
+    expect(resolveChoice(choice, 1_000_000).to).not.toBe(resolveChoice(choice, 9_000_000).to);
   });
 
-  it("includes a trace that arrived a moment ago", () => {
-    const now = Date.parse("2026-08-27T08:00:32.276Z");
-    const justNow = now - 500;
-    const { from, to } = resolveWindow("1h", now);
-    expect(Date.parse(from)).toBeLessThanOrEqual(justNow);
-    expect(Date.parse(to)).toBeGreaterThanOrEqual(justNow);
+  it("tells two different ranges apart", () => {
+    expect(windowCacheKey({ kind: "relative", rangeId: "1h" })).not.toBe(
+      windowCacheKey({ kind: "relative", rangeId: "24h" }),
+    );
   });
 
-  it("stays on a bucket boundary, so the query key holds still between ticks", () => {
-    const base = Date.parse("2026-08-27T08:00:30.000Z");
-    const first = resolveWindow("1h", base + 1);
-    const later = resolveWindow("1h", base + BUCKET_MS - 1);
-    expect(later).toEqual(first);
-  });
-
-  it("advances once the bucket turns over", () => {
-    const base = Date.parse("2026-08-27T08:00:30.000Z");
-    expect(resolveWindow("1h", base + BUCKET_MS + 1)).not.toEqual(resolveWindow("1h", base + 1));
-  });
-
-  it("spans exactly the selected range", () => {
-    const { from, to } = resolveWindow("15m", Date.parse("2026-08-27T08:00:00.000Z"));
-    expect(Date.parse(to) - Date.parse(from)).toBe(timeRangeById("15m").minutes * 60_000);
-  });
-
-  it("falls back to a known range rather than producing a NaN window", () => {
-    const { from, to } = resolveWindow("not-a-range", Date.parse("2026-08-27T08:00:00.000Z"));
-    expect(Number.isNaN(Date.parse(from))).toBe(false);
-    expect(Number.isNaN(Date.parse(to))).toBe(false);
+  it("tells an absolute window apart from a relative one", () => {
+    expect(windowCacheKey(TUESDAY)).not.toBe(windowCacheKey({ kind: "relative", rangeId: "1h" }));
   });
 });
 
-describe("previousWindow", () => {
-  it("is the same span immediately before this one", () => {
-    // An hour is compared with the hour before it. A fixed offset would compare
-    // a Monday morning with a Sunday night and call the difference a change.
-    expect(
-      previousWindow({ from: "2026-09-13T10:00:00.000Z", to: "2026-09-13T11:00:00.000Z" }),
-    ).toEqual({ from: "2026-09-13T09:00:00.000Z", to: "2026-09-13T10:00:00.000Z" });
+describe("resolving a choice into instants", () => {
+  it("hands an absolute window back untouched, whatever the clock says", () => {
+    expect(resolveChoice(TUESDAY, Date.now())).toEqual({ from: TUESDAY.from, to: TUESDAY.to });
+    expect(resolveChoice(TUESDAY, 0)).toEqual({ from: TUESDAY.from, to: TUESDAY.to });
   });
 
-  it("ends exactly where this window begins, leaving no gap and no overlap", () => {
-    const window = { from: "2026-09-13T10:17:30.000Z", to: "2026-09-13T10:32:30.000Z" };
+  it("moves a relative window with the clock", () => {
+    const early = resolveChoice({ kind: "relative", rangeId: "1h" }, 1_000_000_000);
+    const later = resolveChoice({ kind: "relative", rangeId: "1h" }, 1_000_600_000);
 
-    expect(previousWindow(window).to).toBe(window.from);
+    expect(Date.parse(later.to)).toBeGreaterThan(Date.parse(early.to));
+  });
+});
+
+describe("choosing a window", () => {
+  it("refuses a pair that is not two instants in order", () => {
+    // Written by anything with access to the key, or by a bad date field. Neither
+    // should leave the console unable to read.
+    setAbsoluteWindow("not a date", TUESDAY.to);
+    expect(localStorage.getItem(SELECTION_STORAGE_KEY) ?? "").not.toContain("not a date");
+
+    setAbsoluteWindow(TUESDAY.to, TUESDAY.from);
+    expect(localStorage.getItem(SELECTION_STORAGE_KEY) ?? "").not.toContain('"absolute"');
   });
 
-  it("follows a window someone narrowed by hand rather than a named range", () => {
-    const sevenMinutes = { from: "2026-09-13T10:00:00.000Z", to: "2026-09-13T10:07:00.000Z" };
+  it("remembers an absolute window across a reload", () => {
+    setAbsoluteWindow(TUESDAY.from, TUESDAY.to);
 
-    expect(previousWindow(sevenMinutes).from).toBe("2026-09-13T09:53:00.000Z");
+    expect(localStorage.getItem(SELECTION_STORAGE_KEY)).toContain(TUESDAY.from);
   });
 
-  it("returns the window unchanged rather than an invalid one it cannot compute", () => {
-    const unparseable = { from: "not a time", to: "2026-09-13T11:00:00.000Z" };
+  it("returns to the range the reader was on rather than a default", () => {
+    // Leaving an incident should put somebody back where they were, not at
+    // "last hour" because that is what the code initialises to.
+    setSelectedRangeId("24h");
+    setAbsoluteWindow(TUESDAY.from, TUESDAY.to);
 
-    expect(previousWindow(unparseable)).toEqual(unparseable);
+    clearAbsoluteWindow();
+
+    expect(localStorage.getItem(SELECTION_STORAGE_KEY)).toContain("24h");
+  });
+});
+
+describe("how a window reads", () => {
+  it("says a relative window in the range picker's own words", () => {
+    expect(describeChoice({ kind: "relative", rangeId: "24h" })).toBe("last 24 hours");
+  });
+
+  it("says an absolute window as two instants", () => {
+    expect(describeChoice(TUESDAY)).toContain("to");
+    expect(describeChoice(TUESDAY)).not.toContain("last");
   });
 });
