@@ -227,6 +227,11 @@ which is how it came to be raised from a fifth to a half.
 - **Deltas are on the services screen only.** AC13 asks that every reading with a rollup behind it
   *be able to* show one, and `shared/delta.ts` plus `previousWindow` are that mechanism. The other
   rollup-backed screens have not been wired to it.
+- **A bare `uvicorn` outside compose still sends real mail.** The console provider is set on the
+  `api` service in `deploy/compose/docker-compose.yaml`, which is what every live suite reaches. A
+  developer who runs the API directly gets `EMAIL_PROVIDER` from their own `.env` and every signup
+  spends a real message again. Not fixed here, because making `development` imply `console` in
+  `settings.py` would also decide it for anyone deliberately testing the real chain in dev.
 
 ## Documentation impact
 
@@ -238,4 +243,9 @@ of which is enforced by `route-manifest.test.ts`.
 
 ## Last updated
 
-2026-09-13
+2026-09-13 — T35 (the metrics catalogue) is built and committed. Two diagnoses that were wrong
+are recorded here because both cost time and both looked convincing: the isolation suite's
+`ReadTimeout` was neither rate limiting nor mail, it was a `ModuleNotFoundError` in T35's own
+router that killed the reloader's worker while the socket kept accepting; and unsetting `EMAIL_*`
+in `just test-py` fixes nothing, because the live suites reach the API over HTTP and the container
+reads its own `.env`. Next is T36.

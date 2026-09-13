@@ -443,7 +443,7 @@ histograms, because histograms are what exists.
 
 #### Tasks
 
-- [ ] **T35** `E` — `metrics/` (new API): `GET /metrics` — a catalogue across all five metric tables,
+- [x] **T35** `E` — `metrics/` (new API): `GET /metrics` — a catalogue across all five metric tables,
       one row per metric name with its shape, series count, point count and last seen. Its own
       endpoint, not a widened `infrastructure/signals`: that one is scoped to the host-metric names
       and is read by the infrastructure strip. → `test_metrics.py`: a name present in two tables is
