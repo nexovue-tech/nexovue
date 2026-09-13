@@ -288,7 +288,12 @@ SELECT
     max(error_count) AS error_count,
     max(worst_severity) AS worst_severity,
     argMax(root_service, trace_summaries.span_count) AS root_service,
-    argMax(root_name, trace_summaries.span_count) AS root_name
+    argMax(root_name, trace_summaries.span_count) AS root_name,
+    -- Merged with the same function the column was declared with: a trace
+    -- whose spans arrived in separate blocks has several rows here, and the
+    -- union of their arrays is the trace's own set.
+    groupUniqArrayArray(span_services) AS span_services,
+    groupUniqArrayArray(span_endpoints) AS span_endpoints
 FROM trace_summaries
 WHERE tenant_id = {tenant_id:String}
   AND project_id = {project_id:String}
@@ -400,7 +405,14 @@ TRACE_ROOTS_SQL: Final = f"""
 SELECT
     trace_id,
     argMin(service_name, (has_parent, start_nanos)) AS root_service,
-    argMin(span_name, (has_parent, start_nanos)) AS root_name
+    argMin(span_name, (has_parent, start_nanos)) AS root_name,
+    -- What the trace touched, gathered here rather than in the grouping read
+    -- above: that one is bounded by the window and admits fixed-width values
+    -- only, this one is bounded by a page of ids and is already where every
+    -- string a row needs comes from. Tuples rather than the stored separator —
+    -- these come from `spans`, so there is no packed pair to take apart.
+    groupUniqArray(service_name) AS span_services,
+    groupUniqArray((service_name, span_name)) AS span_endpoints
 FROM (
     SELECT
         trace_id,
@@ -530,6 +542,12 @@ SELECT
     rpc_system,
     rpc_method,
     rpc_status,
+    -- Columns of their own rather than fields inside `events`: a detail pane
+    -- leads with what was thrown, and should not have to parse a JSON blob
+    -- carrying a full stacktrace to find out what it was.
+    exception_type,
+    exception_message,
+    deployment_version,
     toJSONString(span_attrs) AS attributes_json
 FROM spans
 WHERE tenant_id = {{tenant_id:String}}

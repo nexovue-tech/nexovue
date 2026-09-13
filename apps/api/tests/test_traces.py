@@ -18,7 +18,7 @@ from nexovue_api.data.clickhouse.base import TENANT_BINDING, TenantScopedReposit
 from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
 from nexovue_api.traces import queries, service
 from nexovue_api.traces.cursor import TracePageCursor, decode_cursor
-from nexovue_api.traces.queries import TraceFilters
+from nexovue_api.traces.queries import ENDPOINT_SEPARATOR, TraceFilters
 from nexovue_api.traces.schemas import TraceSummary
 
 TENANT_A = "org-a"
@@ -48,6 +48,9 @@ _SPAN_COLUMNS = [
     "rpc_system",
     "rpc_method",
     "rpc_status",
+    "exception_type",
+    "exception_message",
+    "deployment_version",
     "attributes_json",
 ]
 
@@ -69,6 +72,10 @@ _HTTP_SPAN_ROW = (
     "",
     "",
     "",
+    # The HTTP span is the failing one, so it carries what it threw.
+    "ValueError",
+    "card declined",
+    "2026.9.12-a1b2c3d",
     '{"tier":"gold"}',
 )
 
@@ -88,6 +95,11 @@ _GRPC_SPAN_ROW = (
     "grpc",
     "oteldemo.ProductCatalogService/ListProducts",
     "UNAVAILABLE",
+    # Failed without throwing: a status is not an exception, and the two halves
+    # stay empty rather than being filled in from the status.
+    "",
+    "",
+    "",
     "{}",
 )
 
@@ -153,8 +165,27 @@ class FakeTelemetry:
                         "worst_severity",
                         "root_service",
                         "root_name",
+                        "span_services",
+                        "span_endpoints",
                     ],
-                    [(owned.encode(), _START_NANOS, 412.7, 2, 1, 2, "storefront", "GET /checkout")],
+                    [
+                        (
+                            owned.encode(),
+                            _START_NANOS,
+                            412.7,
+                            2,
+                            1,
+                            2,
+                            "storefront",
+                            "GET /checkout",
+                            ["storefront", "payments"],
+                            # Stored packed, exactly as the worker writes them.
+                            [
+                                f"storefront{ENDPOINT_SEPARATOR}GET /checkout",
+                                f"payments{ENDPOINT_SEPARATOR}POST /charge",
+                            ],
+                        )
+                    ],
                 )
             return FakeQueryResult(
                 ["trace_id", "start_time_nanos"],
@@ -167,8 +198,17 @@ class FakeTelemetry:
             if owned is None or owned not in set(bound.get("trace_ids", [])):
                 return FakeQueryResult([], [])
             return FakeQueryResult(
-                ["trace_id", "root_service", "root_name"],
-                [(owned.encode(), "storefront", "GET /checkout")],
+                ["trace_id", "root_service", "root_name", "span_services", "span_endpoints"],
+                [
+                    (
+                        owned.encode(),
+                        "storefront",
+                        "GET /checkout",
+                        ["storefront", "payments"],
+                        # Read from `spans`, so a pair arrives as a tuple.
+                        [("storefront", "GET /checkout"), ("payments", "POST /charge")],
+                    )
+                ],
             )
 
         if "GROUP BY trace_id" in sql:
@@ -881,3 +921,141 @@ async def test_the_cursor_names_a_position_in_the_ordered_read() -> None:
     assert decode_cursor(page.next_cursor) == TracePageCursor(
         start_time_nanos=_START_NANOS, trace_id=TRACE_A
     )
+
+
+# --------------------------------------------------- what a trace touched (T22)
+#
+# `span_services` and `span_endpoints` were already *filtering* the list —
+# `SUMMARY_SERVICE_CLAUSE` and `SUMMARY_ENDPOINT_CLAUSE` read them — and were
+# never returned, so a row could be narrowed by what a trace touched but could
+# not say it. These put them on the wire.
+#
+# They arrive in two shapes, because the list is read two ways. From
+# `trace_summaries` a pair is one string with a unit separator inside it, the
+# way the worker packs it. From `spans` — the fallback an attribute filter
+# forces — a pair is a tuple, because nothing packed it. Both must answer the
+# same, or the same trace describes itself differently depending on which filter
+# happened to be applied.
+
+
+async def test_a_trace_says_which_services_it_touched_not_only_its_root() -> None:
+    page = await _page(_repository(TENANT_A))
+
+    assert page.traces[0].root_service == "storefront"
+    assert page.traces[0].span_services == ["payments", "storefront"]
+
+
+async def test_a_stored_endpoint_pair_is_split_rather_than_shipped_packed() -> None:
+    """The separator is the worker's storage detail and stops at this boundary.
+
+    A client that had to split these would be parsing our storage format, and
+    `GET /charge` means nothing without the service that served it — which is
+    why the pair is kept together at all rather than being two flat lists.
+    """
+    page = await _page(_repository(TENANT_A))
+
+    assert [(pair.service_name, pair.operation) for pair in page.traces[0].span_endpoints] == [
+        ("payments", "POST /charge"),
+        ("storefront", "GET /checkout"),
+    ]
+    for pair in page.traces[0].span_endpoints:
+        assert ENDPOINT_SEPARATOR not in pair.service_name
+        assert ENDPOINT_SEPARATOR not in pair.operation
+
+
+async def test_the_fallback_read_describes_a_trace_the_same_way() -> None:
+    """An attribute filter groups `spans` instead, and must not answer differently.
+
+    The two reads take the pair in different shapes — packed from
+    `trace_summaries`, a tuple from `spans` — and a reader must not be able to
+    tell which one served them.
+    """
+    attribute = TraceFilters(attribute_path="db.system", attribute_value="postgresql")
+    grouped = await _page(_repository(TENANT_A), filters=attribute)
+    summarised = await _page(_repository(TENANT_A))
+
+    assert grouped.traces[0].span_services == summarised.traces[0].span_services
+    assert grouped.traces[0].span_endpoints == summarised.traces[0].span_endpoints
+
+
+def test_a_pair_missing_its_separator_is_dropped_rather_than_guessed_at() -> None:
+    """The worker writes both halves together, so a bare string is not a pair.
+
+    Inventing a service name for it — or taking the whole string as one — would
+    put an endpoint on the row that never ran.
+    """
+    split = service._split_stored_endpoints(
+        [f"storefront{ENDPOINT_SEPARATOR}GET /", "no-separator-here"]
+    )
+
+    assert [(pair.service_name, pair.operation) for pair in split] == [("storefront", "GET /")]
+
+
+def test_both_shapes_come_back_in_one_order() -> None:
+    """`groupUniqArray` has no order to preserve, and neither store sorts.
+
+    Without this the same request twice answers with the same set arranged
+    differently, which reads as a change and makes a response impossible to diff.
+    """
+    packed = service._split_stored_endpoints(
+        [f"z-service{ENDPOINT_SEPARATOR}POST /b", f"a-service{ENDPOINT_SEPARATOR}GET /a"]
+    )
+    tupled = service._pairs_to_endpoints([("z-service", "POST /b"), ("a-service", "GET /a")])
+
+    assert packed == tupled
+    assert [pair.service_name for pair in packed] == ["a-service", "z-service"]
+
+
+async def test_a_span_that_threw_reports_what_it_threw() -> None:
+    """Stored on the span, not only inside `events`.
+
+    A detail pane leads with the exception, and should not have to parse a JSON
+    blob carrying a full stacktrace to find out what the exception was.
+    """
+    detail = await service.get_trace(_repository(TENANT_A), project_id=PROJECT, trace_id=TRACE_A)
+    span = detail.spans[0]
+
+    assert (span.exception_type, span.exception_message) == ("ValueError", "card declined")
+    assert span.deployment_version == "2026.9.12-a1b2c3d"
+
+
+async def test_a_span_that_failed_without_throwing_reports_empty_strings() -> None:
+    """A gRPC status is an outcome, not an exception.
+
+    Empty rather than null, and never filled in from the status: "UNAVAILABLE"
+    is not something the service threw, and showing it as one would invent a
+    stacktrace's worth of meaning that does not exist.
+    """
+    detail = await service.get_trace(
+        _repository(TENANT_A, _GRPC_SPAN_ROW), project_id=PROJECT, trace_id=TRACE_A
+    )
+    span = detail.spans[0]
+
+    assert span.rpc_status == "UNAVAILABLE"
+    assert (span.exception_type, span.exception_message, span.deployment_version) == ("", "", "")
+
+
+def test_the_summary_read_asks_for_both_columns() -> None:
+    """They are merged with the function the column was declared with.
+
+    A trace whose spans arrived in separate blocks has several rows in
+    `trace_summaries`, and the union of their arrays is the trace's own set.
+    """
+    assert "groupUniqArrayArray(span_services)" in queries.TRACE_PAGE_VALUES_SQL
+    assert "groupUniqArrayArray(span_endpoints)" in queries.TRACE_PAGE_VALUES_SQL
+
+
+def test_the_window_read_still_lets_no_string_out_of_it() -> None:
+    """The memory bound this module documents, held as a property of the source.
+
+    The read that finds the page is bounded by the window rather than by a page
+    of ids, so a string in its group-by is unbounded memory. Both columns are
+    gathered by the page-scoped read instead — which is where every other string
+    a row needs already comes from.
+    """
+    window_read = queries.list_traces_sql(NO_FILTERS, with_cursor=False)
+
+    assert "span_services" not in window_read
+    assert "span_endpoints" not in window_read
+    assert "span_services" in queries.TRACE_ROOTS_SQL
+    assert "{trace_ids:Array(String)}" in queries.TRACE_ROOTS_SQL

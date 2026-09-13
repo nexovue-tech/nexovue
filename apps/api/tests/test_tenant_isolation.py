@@ -237,6 +237,8 @@ class RecordingTelemetryStore:
                 "worst_severity",
                 "root_service",
                 "root_name",
+                "span_services",
+                "span_endpoints",
             ],
             [
                 (
@@ -248,6 +250,9 @@ class RecordingTelemetryStore:
                     1,
                     "storefront",
                     "GET /checkout",
+                    ["storefront"],
+                    # Packed, the way the worker writes them.
+                    [f"storefront{queries.ENDPOINT_SEPARATOR}GET /checkout"],
                 )
                 for row in rows
                 if row.trace_id in wanted
@@ -259,9 +264,16 @@ class RecordingTelemetryStore:
         rows = self._matching(sql, bound, by_project=True)
         wanted = set(bound.get("trace_ids", []))
         return FakeQueryResult(
-            ["trace_id", "root_service", "root_name"],
+            ["trace_id", "root_service", "root_name", "span_services", "span_endpoints"],
             [
-                (row.trace_id, "storefront", "GET /checkout")
+                (
+                    row.trace_id,
+                    "storefront",
+                    "GET /checkout",
+                    ["storefront"],
+                    # Read from `spans`, so a pair arrives as a tuple.
+                    [("storefront", "GET /checkout")],
+                )
                 for row in rows
                 if row.trace_id in wanted
             ],

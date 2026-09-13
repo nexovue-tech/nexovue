@@ -13,19 +13,21 @@ The genuine stored-but-unshown items in this batch stand, and were read from the
 
 | Stored | Not on the schema |
 |---|---|
-| `trace_summaries.span_services[]`, `span_endpoints[]`, `worst_severity` | `TraceSummary` |
+| `trace_summaries.span_services[]`, `span_endpoints[]` | `TraceSummary` |
 | `spans.exception_type`, `exception_message`, `events`, `links`, `deployment_version` | `SpanDetail` |
+
+**Second correction, 2026-09-13.** This table also listed `worst_severity`. That was wrong too: it
+*is* on `TraceSummary`, as `status_code` — mapped through `_SEVERITY_NAMES` at
+`traces/service.py:519,537`, exactly as `traceassembly/summary.go:13` says the API should map it.
+The store keeps a number because a max over a number is a merge it performs for free; the name is
+what reaches the wire.
+
+And `span_services`/`span_endpoints` were never unused: `SUMMARY_SERVICE_CLAUSE` and
+`SUMMARY_ENDPOINT_CLAUSE` already **filter** on them, so "which traces touched payments" was
+answerable before this batch. What was missing was showing them on the row.
 
 `SpanDetail` does expose `rpc_system`, `rpc_method`, `rpc_status`, and `ServiceEdge` exposes
 `callee_kind` — four AC4 dimensions already served and simply not drawn.
-
----|---|
-| `trace_summaries.span_services[]`, `span_endpoints[]`, `worst_severity` | `TraceSummary` |
-| `spans.exception_type`, `exception_message`, `events`, `links`, `deployment_version` | `SpanDetail` |
-| `service_edges_1m.latency_quantiles` | `ServiceEdge` |
-
-`SpanDetail` does expose `rpc_system`, `rpc_method`, `rpc_status`, and `ServiceEdge` exposes
-`callee_kind` — so four of the twelve AC4 dimensions are already served and simply not drawn.
 
 ---
 
@@ -217,8 +219,10 @@ from being drawn as if it were an instrumented service of the customer's own.
 "nothing calls anything yet," not as a failure. *Partial* — a node named only by an IP is collapsed
 for display (ADR-0082) and says so.
 
-**Backend:** `ServiceEdge` needs the latency quantiles the rollup already stores, so a slow hop is
-distinguishable from a failing one.
+**Backend: none.** This line once read *"`ServiceEdge` needs the latency quantiles the rollup already
+stores"*. It has them — `p50_ms`, `p95_ms`, `p99_ms` at `servicemap/schemas.py:54-56`, with a comment
+explaining that on a queue edge the duration is the publish and not the delivery lag. A slow hop is
+already distinguishable from a failing one; only the drawing is missing.
 
 ---
 

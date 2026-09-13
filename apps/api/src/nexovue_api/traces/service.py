@@ -10,6 +10,7 @@ it.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Final
@@ -25,6 +26,7 @@ from nexovue_api.traces.schemas import (
     ServiceFacet,
     SpanDetail,
     TraceDetailResponse,
+    TraceEndpoint,
     TraceFacetsResponse,
     TraceListResponse,
     TraceSummary,
@@ -89,6 +91,27 @@ class TraceWindow:
     span_end: datetime
     received_from: datetime
     received_to: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class TraceRow:
+    """The strings one trace on the page is described by.
+
+    Fetched for a page of ids rather than for the window: the read that finds
+    the page admits no string at all, because a group-by over a window carrying
+    strings is what `AGGREGATION_BOUND` exists to prevent.
+    """
+
+    root_service: str
+    root_name: str
+    services: list[str]
+    endpoints: list[TraceEndpoint]
+
+
+# A trace whose page row is missing — possible only if it dropped out between
+# the two reads. Empty rather than absent: a trace with no name still has a
+# duration worth showing.
+EMPTY_TRACE_ROW: Final = TraceRow(root_service="", root_name="", services=[], endpoints=[])
 
 
 def build_filters(
@@ -356,8 +379,8 @@ async def _root_spans(
     from_time: datetime,
     to_time: datetime,
     trace_ids: list[str],
-) -> dict[str, tuple[str, str]]:
-    """The service and name each trace on this page is known by."""
+) -> dict[str, TraceRow]:
+    """What each trace on this page is known by, and what it touched."""
     if not trace_ids:
         return {}
 
@@ -371,9 +394,11 @@ async def _root_spans(
         },
     )
     return {
-        values.text(row["trace_id"]): (
-            values.text(row["root_service"]),
-            values.text(row["root_name"]),
+        values.text(row["trace_id"]): TraceRow(
+            root_service=values.text(row["root_service"]),
+            root_name=values.text(row["root_name"]),
+            services=[values.text(name) for name in row["span_services"]],
+            endpoints=_pairs_to_endpoints(row["span_endpoints"]),
         )
         for row in rows
     }
@@ -517,15 +542,18 @@ def _to_merged_summary(row: dict[str, Any]) -> TraceSummary:
         span_count=int(row["span_count"]),
         error_count=int(row["error_count"]),
         status_code=_SEVERITY_NAMES.get(int(row["worst_severity"]), UNKNOWN_STATUS),
+        span_services=sorted(values.text(name) for name in row["span_services"]),
+        span_endpoints=_split_stored_endpoints(row["span_endpoints"]),
     )
 
 
-def _to_summary(row: dict[str, Any], roots: dict[str, tuple[str, str]]) -> TraceSummary:
+def _to_summary(row: dict[str, Any], roots: dict[str, TraceRow]) -> TraceSummary:
     trace_id = values.text(row["trace_id"])
     # Both reads cover the same window for the same tenant, so a page trace
     # always has a root here. Empty rather than absent if that ever stops being
     # true: a trace with no name still has a duration worth showing.
-    root_service, root_name = roots.get(trace_id, ("", ""))
+    touched = roots.get(trace_id, EMPTY_TRACE_ROW)
+    root_service, root_name = touched.root_service, touched.root_name
     return TraceSummary(
         trace_id=trace_id,
         root_service=root_service,
@@ -535,7 +563,49 @@ def _to_summary(row: dict[str, Any], roots: dict[str, tuple[str, str]]) -> Trace
         span_count=int(row["span_count"]),
         error_count=int(row["error_count"]),
         status_code=_SEVERITY_NAMES.get(int(row["worst_severity"]), UNKNOWN_STATUS),
+        span_services=sorted(values.text(name) for name in touched.services),
+        span_endpoints=touched.endpoints,
     )
+
+
+def _split_stored_endpoints(stored: Any) -> list[TraceEndpoint]:
+    """`trace_summaries.span_endpoints`, which packs each pair into one string.
+
+    A pair the separator is missing from is dropped rather than guessed at: the
+    worker writes both halves together, so a string without one did not come
+    from there, and inventing a service name for it would put a service on the
+    row that never ran.
+    """
+    endpoints = []
+    for pair in stored:
+        service_name, separator, operation = values.text(pair).partition(queries.ENDPOINT_SEPARATOR)
+        if not separator:
+            continue
+        endpoints.append(TraceEndpoint(service_name=service_name, operation=operation))
+    return _ordered(endpoints)
+
+
+def _pairs_to_endpoints(stored: Any) -> list[TraceEndpoint]:
+    """The same field read from `spans`, where each pair arrives as a tuple.
+
+    Nothing is packed on this path, so nothing has to be taken apart — which is
+    the point: the separator is the worker's storage detail, and only the read
+    of its table should know about it.
+    """
+    return _ordered(
+        TraceEndpoint(service_name=values.text(pair[0]), operation=values.text(pair[1]))
+        for pair in stored
+    )
+
+
+def _ordered(endpoints: Iterable[TraceEndpoint]) -> list[TraceEndpoint]:
+    """Sorted, because both stores return these unordered.
+
+    `groupUniqArray` has no order to preserve, so without this the same request
+    twice can answer with the same set arranged differently — which reads as a
+    change and makes a response impossible to diff.
+    """
+    return sorted(endpoints, key=lambda entry: (entry.service_name, entry.operation))
 
 
 def _to_span(row: dict[str, Any]) -> SpanDetail:
@@ -555,5 +625,8 @@ def _to_span(row: dict[str, Any]) -> SpanDetail:
         rpc_system=values.text(row["rpc_system"]),
         rpc_method=values.text(row["rpc_method"]),
         rpc_status=values.text(row["rpc_status"]),
+        exception_type=values.text(row["exception_type"]),
+        exception_message=values.text(row["exception_message"]),
+        deployment_version=values.text(row["deployment_version"]),
         attributes=values.json_object(row["attributes_json"]),
     )
