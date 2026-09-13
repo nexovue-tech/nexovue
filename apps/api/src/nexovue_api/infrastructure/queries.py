@@ -173,6 +173,34 @@ _BUCKET_NANOS: Final = (
     " * 1000000000"
 )
 
+# One row per reading before the average, because a metric row is not unique.
+# `metricwriting.Absorb` takes a duplicate over a lost point, so a redelivered
+# batch stores the same reading twice and an average counts it twice.
+#
+# **Uniform duplication is invisible here**, which is what makes this worth
+# stating: copying every reading leaves the mean exactly where it was. A real
+# redelivery overlaps rather than repeats — on the development store one hour
+# held 64 duplicate rows out of 3,264 — and a partial duplicate drags the mean
+# toward whichever readings arrived twice. The sibling statements never needed
+# this: they take `argMax`, `argMin` or `uniqExact`, none of which counts rows.
+#
+# `attributes_json` is in the inner group and not the outer, so a node's series
+# are still averaged together within the bucket — that is the reading the
+# sparkline wants, and only the copies are removed.
+_ONE_ROW_PER_READING: Final = """
+    SELECT
+        host,
+        container,
+        reporter,
+        reporter_instance,
+        metric_name,
+        attributes_json,
+        timestamp,
+        any(value) AS value
+    FROM ({readings})
+    GROUP BY host, container, reporter, reporter_instance, metric_name,
+             attributes_json, timestamp"""
+
 NODE_TRENDS_SQL: Final = f"""
 SELECT
     host,
@@ -182,7 +210,8 @@ SELECT
     metric_name,
     {_BUCKET_NANOS} AS bucket_nanos,
     avg(value) AS mean_value
-FROM ({_READINGS})
+FROM ({_ONE_ROW_PER_READING.format(readings=_READINGS)}
+)
 GROUP BY host, container, reporter, reporter_instance, metric_name, bucket_nanos
 ORDER BY host, container, reporter, reporter_instance, metric_name, bucket_nanos
 LIMIT {{max_series:UInt32}}

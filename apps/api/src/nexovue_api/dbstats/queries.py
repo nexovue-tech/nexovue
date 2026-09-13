@@ -117,18 +117,38 @@ _BUCKET_NANOS: Final = (
     " * 1000000000"
 )
 
+# One row per reading before the average, because a metric row is not unique.
+# `metricwriting.Absorb` takes a duplicate over a lost point, so a redelivered
+# batch stores the same reading twice and an average counts it twice — the same
+# debt `synthetics` and `infrastructure` already pay.
+#
+# **Uniform duplication is invisible**, which is why this is easy to miss:
+# copying every reading leaves the mean where it was. A real redelivery overlaps
+# rather than repeats — this metric held 64 duplicate rows out of 3,264 in one
+# hour of the development store — and a partial one drags the mean toward
+# whichever statements arrived twice.
 STATEMENT_TRENDS_SQL: Final = f"""
 SELECT
-    {QUERY_HASH} AS query_hash,
-    {SERVER_ADDRESS} AS server_address,
-    {SERVER_PORT} AS server_port,
+    query_hash,
+    server_address,
+    server_port,
     {_BUCKET_NANOS} AS bucket_nanos,
     avg(value) AS mean_seconds
-FROM metrics_gauge
-WHERE tenant_id = {{tenant_id:String}}
-  AND project_id = {{project_id:String}}
-  AND metric_name = '{METRIC_OPERATION_DURATION}'
-{_WINDOW_PREDICATE}
+FROM (
+    SELECT
+        {QUERY_HASH} AS query_hash,
+        {SERVER_ADDRESS} AS server_address,
+        {SERVER_PORT} AS server_port,
+        series_hash,
+        timestamp,
+        any(value) AS value
+    FROM metrics_gauge
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND metric_name = '{METRIC_OPERATION_DURATION}'
+    {_WINDOW_PREDICATE}
+    GROUP BY query_hash, server_address, server_port, series_hash, timestamp
+)
 GROUP BY query_hash, server_address, server_port, bucket_nanos
 ORDER BY query_hash, server_address, server_port, bucket_nanos
 LIMIT {{limit:UInt32}}

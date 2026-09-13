@@ -21,6 +21,7 @@ indistinguishable from a pass. `NEXOVUE_SKIP_LIVE_TESTS=1` opts out on purpose.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import uuid
@@ -251,3 +252,136 @@ async def test_the_tenant_this_suite_reads_holds_other_metrics_too(
         "no gauge readings at all for this tenant, so the empty database "
         "responses above prove nothing — start the stack and seed it"
     )
+
+
+# ------------------------------------------------- a statement stored twice
+
+_SEED_COLUMNS: Final = (
+    "timestamp, start_timestamp, received_at, retention_days, tenant_id, project_id, "
+    "service_name, scope_name, scope_version, metric_name, metric_unit, "
+    "metric_description, resource_attrs, attrs, flags, value"
+)
+_SEED_PROJECT: Final = "live-dbstats-duplication"
+_SEED_SERVER: Final = {"server": {"address": "db.example.test", "port": "5432"}}
+_SEED_HASH: Final = "abc123"
+
+
+def _quoted(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _seed_row(tenant_id: str, *, at: datetime, seconds: float) -> str:
+    stamp = _quoted(at.strftime("%Y-%m-%d %H:%M:%S"))
+    fields = [
+        stamp,
+        stamp,
+        stamp,
+        "30",
+        _quoted(tenant_id),
+        _quoted(_SEED_PROJECT),
+        _quoted("checkout"),
+        _quoted(""),
+        _quoted(""),
+        _quoted(queries.METRIC_OPERATION_DURATION),
+        _quoted("s"),
+        _quoted(""),
+        _quoted(json.dumps(_SEED_SERVER)),
+        _quoted(json.dumps({"db": {"query": {"hash": _SEED_HASH}}})),
+        "0",
+        repr(float(seconds)),
+    ]
+    return "(" + ", ".join(fields) + ")"
+
+
+@pytest.fixture
+async def partly_redelivered_statement(client: AsyncClient) -> AsyncIterator[tuple[str, datetime]]:
+    """One statement timed four times, where **one** of the four arrived twice.
+
+    Partial on purpose. Duplicating every reading leaves an average exactly where
+    it was — the copies cancel — so a fixture that redelivered the whole batch
+    could not catch a duplicate-weighted mean. A real redelivery overlaps: this
+    metric held 64 duplicate rows out of 3,264 in one hour of the development
+    store.
+
+    The four readings are 0.7s, 0.3s, 0.5s and 0.5s, whose mean is 0.5. Rewriting
+    only the 0.7 pulls a duplicate-weighted mean to 0.54.
+
+    **Each reading gets its own instant**, a second apart and well inside one
+    bucket. Four readings of one statement at the same instant with the same
+    attributes are not four readings — they are one stored four times, and
+    collapsing them is what this fix is *for*. The timestamp is what tells a
+    redelivered copy from a second measurement.
+    """
+    tenant_id = str(uuid.uuid4())
+    base = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=1)
+    measured = [
+        (base + timedelta(seconds=offset), value)
+        for offset, value in enumerate((0.7, 0.3, 0.5, 0.5))
+    ]
+
+    first = [_seed_row(tenant_id, at=at, seconds=value) for at, value in measured]
+    await client.command(
+        f"INSERT INTO metrics_gauge ({_SEED_COLUMNS}) VALUES\n" + ",\n".join(first),
+        settings={"insert_deduplication_token": f"{tenant_id}-first"},
+    )
+    # The overlap: the first reading, at its own instant, arriving a second time.
+    await client.command(
+        f"INSERT INTO metrics_gauge ({_SEED_COLUMNS}) VALUES\n"
+        + _seed_row(tenant_id, at=measured[0][0], seconds=0.7),
+        settings={"insert_deduplication_token": f"{tenant_id}-overlap"},
+    )
+    try:
+        yield tenant_id, base
+    finally:
+        await client.command(
+            f"ALTER TABLE metrics_gauge DELETE WHERE tenant_id = {_quoted(tenant_id)}",
+            settings={"mutations_sync": 2},
+        )
+
+
+async def test_the_store_really_holds_the_duplicate_this_asserts_on(
+    client: AsyncClient, partly_redelivered_statement: tuple[str, datetime]
+) -> None:
+    """A duplication test the store quietly deduplicated would prove nothing."""
+    tenant_id, _ = partly_redelivered_statement
+
+    result = await client.query(
+        "SELECT count() AS rows, uniqExact((series_hash, timestamp)) AS readings "
+        "FROM metrics_gauge WHERE tenant_id = %(tenant)s",
+        parameters={"tenant": tenant_id},
+    )
+    rows, readings = result.result_rows[0]
+
+    assert (rows, readings) == (5, 4), (
+        f"expected five rows for four readings, got {rows} for {readings} — the seed did not "
+        "store the overlap this test exists to catch"
+    )
+
+
+async def test_a_statement_timed_twice_does_not_weight_the_trend_it_is_in(
+    client: AsyncClient, partly_redelivered_statement: tuple[str, datetime]
+) -> None:
+    """The sparkline must plot what the database did, not what the store kept.
+
+    An average is the aggregate where a duplicate hides: it stays plausible
+    whatever the copies do to it, so nothing on the screen could say this
+    statement was slower than it was.
+    """
+    tenant_id, base = partly_redelivered_statement
+    start = base - timedelta(minutes=5)
+    end = base + timedelta(minutes=5)
+
+    trends = await service.statement_trends(
+        TenantScopedRepository(client, tenant_id=tenant_id),
+        project_id=_SEED_PROJECT,
+        from_time=start,
+        to_time=end,
+    )
+
+    points = [point for trend in trends.statements for point in trend.points]
+    assert points, "the seeded statement reported inside this window"
+    for point in points:
+        assert round(point.mean_ms, 3) == 500.0, (
+            f"the bucket reports {point.mean_ms}ms; the four readings in it are 700, 300, 500 "
+            "and 500ms, whose mean is 500. A value near 540 is the 700 counted twice."
+        )

@@ -668,3 +668,109 @@ def _sum_rows(tenant_id: str, start: datetime, end: datetime) -> list[str]:
                 )
             )
     return rows
+
+
+@pytest.fixture
+async def partly_redelivered_fleet(clickhouse: Any) -> AsyncIterator[str]:
+    """A fleet where **one** of four CPU readings arrived twice.
+
+    Partial on purpose, and this is the point of the fixture. Duplicating every
+    reading leaves an average exactly where it was — the extra copies cancel — so
+    `redelivered_fleet` cannot catch a duplicate-weighted mean however hard it
+    tries. A real redelivery is partial: on the development store one hour held
+    64 duplicate rows out of 3,264, a re-batch that overlapped rather than
+    repeated.
+
+    The fleet writes four CPU readings per instant — two cores, idle and user —
+    at 0.7, 0.3, 0.5 and 0.5. Their mean is 0.5. Re-writing only the 0.7 pulls a
+    duplicate-weighted mean to 0.54.
+    """
+    tenant_id = str(uuid.uuid4())
+    end = datetime.now(UTC).replace(microsecond=0)
+    start = end - timedelta(seconds=WINDOW_SECONDS)
+
+    await clickhouse.command(
+        _insert("metrics_gauge", _gauge_rows(tenant_id, start, end)),
+        settings={"insert_deduplication_token": f"{tenant_id}-first"},
+    )
+    repeated = [
+        _row(
+            tenant_id,
+            at=at,
+            resource=_HOST_RESOURCE,
+            metric_name=conventions.SYSTEM_CPU_UTILIZATION,
+            unit="1",
+            attributes={"cpu": {"mode": "idle", "logical_number": "0"}},
+            value=0.7,
+        )
+        for at in (start, end)
+    ]
+    await clickhouse.command(
+        _insert("metrics_gauge", repeated),
+        settings={"insert_deduplication_token": f"{tenant_id}-overlap"},
+    )
+    try:
+        yield tenant_id
+    finally:
+        await clickhouse.command(
+            f"ALTER TABLE metrics_gauge DELETE WHERE tenant_id = {_quoted(tenant_id)}",
+            settings={"mutations_sync": 2},
+        )
+
+
+async def test_the_store_really_holds_the_duplicate_this_asserts_on(
+    clickhouse: Any, partly_redelivered_fleet: str
+) -> None:
+    """The companion assertion, for the reason the synthetics suite grew one.
+
+    A regression test for duplication is worthless if the store quietly
+    deduplicated the seed — the test would pass against the unfixed reader and
+    prove nothing. This fails first if that happens.
+    """
+    result = await clickhouse.query(
+        "SELECT count() AS rows, uniqExact((toJSONString(attrs), timestamp)) AS readings "
+        "FROM metrics_gauge WHERE tenant_id = %(tenant)s AND metric_name = %(metric)s",
+        parameters={
+            "tenant": partly_redelivered_fleet,
+            "metric": conventions.SYSTEM_CPU_UTILIZATION,
+        },
+    )
+    rows, readings = result.result_rows[0]
+
+    assert rows > readings, (
+        f"the seed stored {rows} rows for {readings} readings — ClickHouse deduplicated it, "
+        "so there is no duplicate here for the reader to mishandle"
+    )
+
+
+async def test_a_reading_that_arrived_twice_does_not_weight_the_trend_it_is_in(
+    clickhouse: Any, partly_redelivered_fleet: str
+) -> None:
+    """The sparkline must plot the fleet's utilization, not the store's copies.
+
+    `metricwriting.Absorb` takes a duplicate over a lost point, so the reader owes
+    the deduplication — the same debt the run counts and the phase totals already
+    pay. An average is the one aggregate where this hides: it looks plausible
+    whatever the duplication does to it, and nothing on the screen could say the
+    host was busier than it was.
+    """
+    start, end = _window()
+
+    answer = await service.node_trends(
+        _repository(clickhouse, partly_redelivered_fleet),
+        project_id=PROJECT,
+        from_time=start,
+        to_time=end,
+    )
+    cpu = next(
+        trend
+        for trend in answer.trends
+        if trend.metric_name == conventions.SYSTEM_CPU_UTILIZATION and trend.host == HOST
+    )
+
+    assert cpu.points, "the fleet reported CPU in this window"
+    for point in cpu.points:
+        assert round(point.value, 6) == 0.5, (
+            f"the bucket reports {point.value}; the four readings in it are 0.7, 0.3, 0.5 and "
+            "0.5, whose mean is 0.5. A value near 0.54 is the 0.7 counted twice."
+        )
