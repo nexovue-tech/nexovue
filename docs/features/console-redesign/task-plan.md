@@ -229,32 +229,98 @@ delta over six hours and 6 of 16 over a day — a screen of annotations that has
 anything. A volume now needs to move by half; a duration still needs a fifth, and an error rate is
 measured in points because 0.1% becoming 0.2% has doubled and means nothing.
 
-### Investigation core — five screens
+### Investigation core — five screens *(re-expanded to `E`, 2026-09-13)*
 
-- [ ] **T22** `P` — `traces/schemas.py`: `SpanDetail` exposes `exception_type`, `exception_message`,
-      `deployment_version`; `TraceSummary` exposes `span_services`, `span_endpoints`,
-      `worst_severity`. → API tests.
-- [ ] **T23** `P` — span `events` as a timeline and `links` as navigation in
-      `features/traces/SpanDetail.tsx` (AC17).
-- [ ] **T24** `P` — `features/logs/LogsScreen.tsx`: facets as counts; the trace arrow only when
-      `trace_id` is non-empty; Live as a toggle sharing the search filters.
-- [ ] **T25** `P` — `features/traces/TraceListScreen.tsx`: duration bar on a window-wide scale;
-      selection arrives pre-applied.
-- [ ] **T26** `P` — `features/traces/TraceScreen.tsx` + `TraceWaterfall.tsx`: detail pane subordinate
-      to the waterfall; `TraceLink.exists: false` as its own state, not a load failure.
-- [ ] **T27** `P` — `features/servicedetail/`: one real chart, deploy markers (IA3), endpoints on the
-      row.
-- [ ] **T28** `P` — `features/servicemap/`: volume floor and failing-only; `callee_kind` labels the
-      node; `edge_kind` distinguishes a queue edge from a call.
-- [ ] **T29** `P` — selection travels (IA1): a shared scope in `shared/selection.ts`, applied on
-      arrival rather than re-chosen. → `selection.test.ts`.
+**Read from the code and the store, not from the wireframes.** Three of the eight tasks shrank or
+vanished, and two approved documents turned out to be wrong.
+
+#### What the reading found
+
+| Claim | Where it came from | What the code says |
+|---|---|---|
+| `TraceSummary` does not expose `worst_severity` | `wireframes-investigation.md` gap table | **Wrong.** It is `status_code`, mapped through `_SEVERITY_NAMES` at `traces/service.py:519,537` — exactly as `traceassembly/summary.go:13` says the API should. |
+| `ServiceEdge` needs the latency the rollup stores | same file, line 220 | **Wrong, and already withdrawn** at the top of that file. `servicemap/schemas.py:54-56` carries `p50_ms`, `p95_ms`, `p99_ms`. |
+| The service map needs a volume floor and failing-only | T28 | **Built in T16.** `servicemap/queries.py` has `MIN_CALL_COUNT_CLAUSE` and `FAILING_ONLY_CLAUSE`. |
+| `callee_kind` labels the node, `edge_kind` marks a queue | T28 | **Built.** `service-graph.ts:216-218` and `:311,322`. |
+| One real chart on service detail | T27 | **Built.** `servicedetail/TrendChart.tsx` is uPlot. |
+| Live shares the search filters | T24 | **Built.** `useLogTail(projectId, filters, true)` at `LogsScreen.tsx:62`. |
+| The trace arrow appears only with a `trace_id` | T24 | **Built.** `LogsScreen.tsx:499`. |
+
+**`wireframes-investigation.md` carries a botched edit.** Its 2026-09-13 correction is followed by a
+stray `---|---|` and a duplicate of the table it replaced, still asserting the withdrawn `ServiceEdge`
+claim. Line 220 repeats it. Both are listed as T22's first act, because an approved document that
+contradicts itself is worse than one that is merely out of date.
+
+**`span_services` and `span_endpoints` already filter.** `SUMMARY_SERVICE_CLAUSE` and
+`SUMMARY_ENDPOINT_CLAUSE` (`traces/queries.py:206,218`) mean "which traces touched payments" is
+answerable today. What is missing is *showing* them: the columns are never selected into the
+response, so a row cannot say what it touched.
+
+**What is genuinely stored and unshown**, verified against the store over six hours of real spans:
+
+| Column | Populated | Shape |
+|---|---|---|
+| `spans.exception_type` / `exception_message` | 380 of 120,049 | `LowCardinality(String)` / `String` |
+| `spans.deployment_version` | 46,924 | `LowCardinality(String)` |
+| `spans.events` | 11,446 | JSON string: `[{timestamp, name, attributes}]`, exception events carry a full stacktrace |
+| `spans.links.*` | 284 | **three parallel arrays** — `trace_id`, `span_id`, `attributes` — not one field |
+| `trace_summaries.span_services` / `span_endpoints` | every trace | arrays; endpoints join service to operation with `\x1f` (`summary.go:25`) |
+| `GET /deploys` | served | consumed by no screen |
+| `LogsForTraceResponse.TraceLink` | served | consumed by no screen |
+
+#### Tasks
+
+- [ ] **T22** `E` — `traces/schemas.py` + `queries.py` + `service.py`: `SpanDetail` gains
+      `exception_type`, `exception_message`, `deployment_version`; `TraceSummary` gains
+      `span_services[]` and `span_endpoints[]`, the latter split on `\x1f` into `(service, operation)`
+      pairs rather than shipped as joined strings. **Not `worst_severity`** — that is `status_code`.
+      → `test_traces.py`: a span carrying an exception exposes both halves; an endpoint pair
+      round-trips its separator; a trace with no exception exposes empty strings, never null.
+      **Also fixes `wireframes-investigation.md`** — the duplicated fragment and line 220 — because
+      the same reading produced both, and a document that contradicts its own correction should not
+      outlive the commit that discovered it. No test: it is prose.
+- [ ] **T23** `E` — `features/traces/SpanDetail.tsx`: `exception_type` and `exception_message` lead
+      the pane, above attributes (AC17). `deployment_version` is an entry in it. → `SpanDetail.test.ts`:
+      a failed span shows the exception first; a span without one shows no empty section.
+- [ ] **T24** `E` — span `events` as a timeline and `links` as navigation in the same pane.
+      `traces/schemas.py` parses `events` from its JSON string and zips the three `links` arrays into
+      one list; a link whose target is not held renders as text, never a dead link.
+      → `test_traces.py` for the parse and the zip, `SpanDetail.test.ts` for the two states.
+      **The stacktrace inside an exception event is large** — `errorgroups/queries.py:152` already
+      refuses to select one into a list read, and this must stay a detail-only field for the same
+      reason.
+- [ ] **T25** `E` — `features/logs/LogsScreen.tsx`: facets carry their counts. `ServiceFacet.records`
+      and `SeverityFacet.records` (`logs/search.py:201,206`) are served and dropped at
+      `LogsScreen.tsx:73`. → `LogsView.test.ts`: a facet shows its count; a facet with none is absent
+      rather than showing zero.
+- [ ] **T26** `E` — `features/traces/TraceListScreen.tsx`: a duration bar on one window-wide scale,
+      the same shared-ceiling rule `Sparkline` uses — per-row autoscale would make every trace look
+      equally slow. → `TraceListScreen.test.ts`: two rows at different durations draw different
+      widths against one ceiling.
+- [ ] **T27** `E` — `features/traces/TraceScreen.tsx`: consume `GET /logs?trace_id=` so a trace shows
+      the logs emitted under it, and render `TraceLink.exists: false` as its own state — "we hold the
+      logs but not the trace" is a fact, not a failed load. → `TraceScreen.test.ts` for the three
+      states: linked, held-but-absent, and none.
+- [ ] **T28** `E` — deploy markers on service detail (IA3). `GET /deploys` is served and drawn
+      nowhere; a vertical rule on `TrendChart` at each deploy answers "did a deploy cause this"
+      without leaving the screen. → `TrendChart.test.ts`: a marker lands at its timestamp's x; a
+      deploy outside the window draws none.
+- [ ] **T29** `E` — selection travels (IA1): `shared/selection.ts` gains an entity scope beside the
+      project and range, applied on arrival rather than re-chosen. Today it holds `projectId` and
+      `rangeId` only. → `selection.test.ts`: a scope survives a screen change; an unknown scope is
+      dropped rather than filtering everything out.
+
+**Deleted from this block, with reasons above:** the service map task entirely (T28 as written — its
+four items are built), `worst_severity` from the schema task, the `ServiceEdge` latency backend item,
+and the three log items that already work. **One chart** on service detail is built; the deploy
+marker it was bundled with is not, and became T29 on its own.
 
 ### The dashboard surface
 
 - [ ] **T30** `P` — `features/overview/` (new) + route at `/`; three RED panels from
       `endpoint_stats_1m`; ranked-entity row reused.
-- [ ] **T31** `P` — one deploy marker spanning all three panels; `deploys` API consumed for the first
-      time.
+- [ ] **T31** `P` — one deploy marker spanning all three panels, reusing what T28 builds for service
+      detail rather than a second reader of the same API.
 - [ ] **T32** `P` — `route-manifest.ts`: Overview above Signals, Findings its own entry; **the "never
       the front door" comment records a superseded decision** — update it and
       `route-manifest.test.ts` together.
