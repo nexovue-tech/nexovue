@@ -74,23 +74,26 @@ the recommendation the approved plan recorded. One named constant if you want di
 
 ## Lifecycle status
 
-**In progress — a second follow-up pass opened 2026-09-14.** The first two phases are built. Not
-deployed: nexovue has no deployment, so "implemented" is as far as a feature goes here. Seven
-decisions are open and listed above; none of them blocks the code.
+**Implemented, 2026-09-14.** All three passes are built. Not deployed: nexovue has no deployment,
+so "implemented" is as far as a feature goes here. Seven decisions are open and listed above; none
+of them blocks the code. One task — T79, the customer-facing read API — is recorded and
+deliberately not started: it belongs in its own feature.
 
 ## Current task
 
-**The second follow-up pass, T69–T79 in the task plan.** A founder-led pass over the running
-console found three defects in what the phase had just shipped and two pieces of scope it never
-had. T69 is built; T70–T78 are not; T79 is recorded and belongs in its own feature.
+**None — the second follow-up pass is complete.** T69–T78 are built; `just check` exit 0 with 2733
+Python and 924 web tests. T79 is recorded and deliberately not started.
+
+A founder-led pass over the running console found three defects in what the phase had just shipped
+and two pieces of scope it never had.
 
 | | What |
 |---|---|
-| T69 | **Built.** A screen fed by a stream declares it, and the one top-bar control shows that stream rather than a poll interval. The logs screen carried two refresh controls and the top-bar one drove only the facet counts |
-| T70–T72 | Log export: a server route mirroring the traces one, a client-side export of the live buffer, and one control offering both. **Not redundant** — the tail runs ahead of storage |
-| T73–T74 | The setup documentation T67 wrote has no address. An unauthenticated `/docs/*` route in the web app, and the console linking to it |
-| T75–T78 | The account screens, restructured on the row grammar read off claude.ai's settings. Projects and API keys deliberately stay routed pages — a modal is the wrong container for work |
-| T79 | A customer-facing read API. The console API is session-cookie only and ingest keys are write-only, so **a customer cannot script against their own telemetry at all.** Needs its own specification |
+| T69 | Built. A screen fed by a stream declares it, and the one top-bar control shows that stream rather than a poll interval. The logs screen carried two refresh controls and the top-bar one drove only the facet counts |
+| T70–T72 | **Built.** Log export: a server route mirroring the traces one, a client-side export of the live buffer, and one control offering both. **Not redundant** — the tail runs ahead of storage |
+| T73–T74 | **Built.** The setup documentation T67 wrote had no address. An unauthenticated `/docs/*` route serves the same Markdown, and the console links to it |
+| T75–T78 | **Built.** The account screens, restructured on the row grammar read off claude.ai's settings. Projects and API keys deliberately stay routed pages — a modal is the wrong container for work |
+| T79 | **Not started, by decision.** A customer-facing read API. The console API is session-cookie only and ingest keys are write-only, so **a customer cannot script against their own telemetry at all.** Needs its own specification |
 
 **One recorded finding was wrong and is corrected in the task plan.** The first follow-up phase
 recorded that logs have no search endpoint, which is why T63 exported traces only. `logs/search.py`

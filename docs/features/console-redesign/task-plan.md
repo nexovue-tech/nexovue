@@ -688,25 +688,25 @@ places: the interface describes a mechanism the customer cannot act on.
       stream instead of an interval. The tail's own Pause and Follow leave the screen header; the
       facet query stops polling. → `shared/refresh.ts` gains `LiveStream`/`useDeclaredStream`,
       proved by `refresh.test.ts` and verified against the running console.
-- [ ] **T70** `E` — `GET /logs/export.csv`, mirroring `/traces/export.csv` exactly: the same filters
+- [x] **T70** `E` — `GET /logs/export.csv`, mirroring `/traces/export.csv` exactly: the same filters
       on the URL, the same `content-disposition`, the same truncation marker. Reuses the predicate
       in `logs/search.py`. → `apps/api/src/nexovue_api/logs/search.py`, proved by a route test and
       by `test_api_conventions.py`, which already requires the extension suffix.
-- [ ] **T71** `E` — export the live buffer from the client, without a server call. **This is not
+- [x] **T71** `E` — export the live buffer from the client, without a server call. **This is not
       redundant with T70.** Logs reach ClickHouse through the pipeline, so the tail is *ahead* of
       storage: an export that reads only storage silently drops the newest lines, on the one screen
       where the newest lines are the point. → `features/logs/log-export.ts`, proved by a test that
       the buffer's newest line survives the conversion.
-- [ ] **T72** `E` — one Export control in the logs filter bar offering both, each labelled with what
+- [x] **T72** `E` — one Export control in the logs filter bar offering both, each labelled with what
       it will actually contain, including the buffer's line count and the fact that it is capped.
 
 ### Tasks — the documentation a customer can reach
 
-- [ ] **T73** `E` — an unauthenticated `/docs/*` route in the existing web app, compiling the
+- [x] **T73** `E` — an unauthenticated `/docs/*` route in the existing web app, compiling the
       Markdown already in `docs/product/setup/` at build time. One deploy, one design system,
       nothing new to host. → `apps/web/src/features/docs/`, proved by a test that every page in
       `docs/product/setup/` resolves to a route and that no route renders empty.
-- [ ] **T74** `E` — onboarding and the API keys screen link to it by URL, replacing the inline
+- [x] **T74** `E` — onboarding and the API keys screen link to it by URL, replacing the inline
       extracts and the repo path. `SETUP_DOCS_PATH` becomes the base URL its comment anticipated.
 
 ### Tasks — the account screens
@@ -716,16 +716,16 @@ two-pane rail; content as rows of *label on the left, one control on the right, 
 sub-sections as a heading plus one line of helper text and then a plain table; at most one line of
 prose anywhere; destructive actions as a row with a sentence and a button.
 
-- [ ] **T75** `E` — adopt that row grammar across the account screens: a `SettingRow` that takes a
+- [x] **T75** `E` — adopt that row grammar across the account screens: a `SettingRow` that takes a
       label, optional one-line description, and one control. The multi-sentence paragraphs go. →
       `shared/components/SettingRow.tsx`, proved by a test that a row renders its control and its
       description, and by the existing screens' tests still passing.
-- [ ] **T76** `E` — split today's overloaded "Profile & security" into **General** (name, and the
+- [x] **T76** `E` — split today's overloaded "Profile & security" into **General** (name, and the
       theme toggle moved out of the top bar) and **Account** (active sessions, second factor, sign
       out everywhere, delete), the way the reference does.
-- [ ] **T77** `E` — a grouped, searchable settings rail for the preference screens: General,
+- [x] **T77** `E` — a grouped, searchable settings rail for the preference screens: General,
       Account, Billing, Usage.
-- [ ] **T78** `E` — history as plain tables with column headers rather than list rows: charges,
+- [x] **T78** `E` — history as plain tables with column headers rather than list rows: charges,
       sessions, and keys.
 
 **Projects and API keys stay routed full pages and are not moved behind the rail.** The reference's
@@ -740,6 +740,44 @@ departs from the reference, and it is a founder decision to reverse.**
       limits, and its own documentation. **Needs a specification before any code**, and the key
       model is the decision that gates it. Recorded here because this pass found it; it belongs in
       its own feature.
+
+
+### Outcome — the second follow-up pass, 2026-09-14
+
+**T69–T78 built; T79 recorded and not started.** `just check` exit 0: **2733
+Python** (3 skipped), **924 web across 74 files**. Two live suites failed on the
+first run and passed after restarting ClickHouse and the worker — the idle RSS
+creep `memory.xml` documents, not this work.
+
+| Planned | Actual |
+|---|---|
+| T70 exports logs from storage | Built, and it found a defect the JSON path hides: `IsoTimestamp` carries a serializer pydantic only applies when *serializing*, so `csv.writer` took the raw datetime and the file would have carried `2026-08-30 07:51:58.688120+00:00` where every API answer carries `…T07:51:58.688Z`. The wire's function is exported and used |
+| T73 publishes the setup pages | Built, and two repository conventions had to be stopped from leaking onto a website — both fixed in the compiler rather than by hand, because the twenty-seventh link would be written the same way and correctly so. A link written `[browser.md](browser.md)` is a 404 whose text names a file nobody can see; and markdown-it emits no heading ids, so the front page's `(#languages)` pointed at nothing |
+| T75 adopts the row grammar | Built, and the layout moved to `shared/` — five features import it, and the import rule is what caught that |
+| T76 splits the profile screen | Built, plus Usage moved into the area: it is an account fact, and it was the one screen whose own period control disagreed with the top bar's |
+| — | **A defect the plan did not name.** The settings screens advertised a poll interval over data that never arrives on its own, which is the T69 defect in the other direction. A screen can now declare it has nothing live, and the control disappears |
+
+#### What the work found that the plan could not
+
+- **`UsageView` had to stay a function of its props.** Wrapping it in the layout
+  put a router `<Link>` under it and broke twenty-one tests that render it alone.
+  The layout belongs to the route component; the view keeps every claim about the
+  numbers, including the sentence saying the bill is the organization's.
+- **`markdown-it` 15 ships its own types**, and `@types/markdown-it` conflicts
+  with them. The `@types` package is removed.
+- **The manifest test's "no two entries lead to the same place" had to change
+  shape**, not be relaxed: with two levels of navigation the sidebar's settings
+  door and the rail's first screen are deliberately the same path. Uniqueness is
+  now checked within each level, and a new test asserts the door lands on the
+  first room — otherwise the reader arrives somewhere the rail does not
+  highlight.
+
+#### Left open
+
+**T79, the customer-facing read API.** The console API is session-cookie only and
+ingest keys are write-only, so a customer cannot script against their own
+telemetry at all. It needs a specification, and the key model is the decision
+that gates it.
 
 
 ## New risks
