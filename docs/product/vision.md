@@ -4,7 +4,8 @@
 > **Status:** Product intent. Written during scoping and kept as the statement of *what we mean to build* — it is not a status report. The source-derived `README.md` and `../architecture/` documents are the authority on what exists.
 > **Purpose:** What we are building, for whom, and what is in or out of scope. Update as thinking evolves.
 > **Companion docs:** `../architecture/system.md` (current architecture) · `feature-catalog.md` (features) · `../research/market-analysis-2026.md` (research)
-> **Last updated:** 2026-09-04 — the pricing and open-question sections reconciled against the code.
+> **Last updated:** 2026-09-14 — phases recorded (§0 below), door 3's state corrected, and the deployment shape decided.
+> **Where the status lives:** this file is intent. [`feature-catalog.md`](feature-catalog.md) §4 is the one table saying what is built, what is specified, and which phase the rest belongs to.
 >
 > **How to read this file.** Everything here is intent unless it says otherwise. Nothing in it is evidence that a thing is built. Where a decision has since been implemented, the section says so and names the migration.
 
@@ -16,13 +17,36 @@ An insight-first, full observability platform: it tells you **what broke and why
 
 ---
 
+## 0. Where the product is (2026-09-14)
+
+**Phase 0 is complete.** Every signal in the plan arrives, and each has a screen good enough to
+investigate with: services, service map, traces and waterfall, errors, logs with a live tail,
+infrastructure, database, RUM, synthetics and metrics — twelve screens sharing one time window, one
+project selector and one refresh control. Signup to first span works, with verification, recovery, a
+second factor, keys, projects, usage, allowances and Razorpay checkout behind it. Fifteen pages of
+setup documentation are published without a login.
+
+**What Phase 0 deliberately did not do** is the part this vision is actually about: it produces no
+finding, notifies nobody of anything, admits no second person to an organization, and runs nowhere
+but a laptop. The insight layer in §4 and §5b — the chain that is the differentiation — has not been
+started.
+
+**Phase 1 is proposed and not yet approved:** install (F37), invite (F26), alert (F21). The ordering
+and the reasoning are in [`feature-catalog.md`](feature-catalog.md) §5.
+
+**Two commercial facts that shape it.** nexovue is **both SaaS and self-hosted**, and there are **no
+customers and no marketing yet**. That makes self-hosted the cheap first door — it costs nothing to
+run, and the work is the same work hosted needs later.
+
+---
+
 ## 1. Users & Buyers — FOCUS: 3 users
 
 | # | Role | Who | What they need |
 |---|------|-----|----------------|
 | 1 | **Primary user** | Full-stack developer at a small startup (2–15 people) | Root cause, fast. "What broke, where, why." |
-| 2 | **Secondary user** | Indie hacker / solo founder | Free tier, zero-config setup, value in under 10 minutes |
-| 3 | **Viewer** | Non-technical application/website owner | Plain-language status: "Is my site okay? Are customers affected?" |
+| 2 | **Secondary user** | F21 | Indie hacker / solo founder | Free tier, zero-config setup, value in under 10 minutes |
+| 3 | **Viewer** | F22 | Non-technical application/website owner | Plain-language status: "Is my site okay? Are customers affected?" |
 
 > ⏸️ **Deferred:** Agency / dev-shop channel (white-label, multi-site). Revisit later.
 
@@ -39,7 +63,7 @@ All via **OpenTelemetry** (OTLP protocol, community SDKs — we do **not** build
 | 1 | **Traces** | Request journeys stitched across microservices by trace ID (spans + context propagation) | *Where* is the problem |
 | 2 | **Logs** | Records from inside each service, correlated to traces via trace ID | *Why* it happened |
 | 3 | **Metrics** | **Application metrics**: request rate, error rate, p95/p99 latency — emitted by SDK **or derived from traces (do that first)**. **Infrastructure metrics**: CPU, memory, disk, network — from host agent (OTel collector `hostmetrics`), Kubernetes stats, or cloud APIs | *That* something is wrong (detection) |
-| 4 | **Deploy & change events** | Deploys, config changes, feature flags | Correlation ("spiked 2 min after deploy X") |
+| 4 | **Deploy & change events** | F4 | Deploys, config changes, feature flags | Correlation ("spiked 2 min after deploy X") |
 
 **Later signals:**
 - 5. Continuous profiles — line-level CPU/memory attribution. *Not built.*
@@ -77,11 +101,17 @@ All via **OpenTelemetry** (OTLP protocol, community SDKs — we do **not** build
 | 3. **Browser snippet** | Lightweight JS script tag in the customer's site (OTel browser SDK is maturing; replay needs a custom DOM recorder) | RUM, session replay |
 | 4. **Pull integrations (APIs/webhooks)** | We connect out or receive webhooks: cloud APIs (CloudWatch/GCP) for infra metrics, direct DB connections (pg_stat_statements) for DB health, GitHub/CI webhooks for deploy events, cloud audit logs for SIEM | Infra metrics (cloud path), database monitoring, deploy events, SIEM |
 
-**Which of these exist (2026-09-04):** door 1 accepts traces, logs and metrics over OTLP/HTTP and
-OTLP/gRPC. Door 2 runs HTTP, SSL and Playwright browser checks. Door 3's receiving side is built — a
-separate browser entrance under `/browser`, gated by public site keys and an origin allowlist — but
-the RUM screens are not. Door 4b polls CloudWatch and `pg_stat_statements`, and deploy webhooks are
-built. Session replay is neither built nor scoped; SIEM is decided out of scope.
+**Which of these exist (2026-09-14):** door 1 accepts traces, logs and metrics over OTLP/HTTP and
+OTLP/gRPC. Door 2 runs HTTP, SSL and Playwright browser checks. Door 3 is built on both sides now —
+a separate browser entrance under `/browser`, gated by public site keys and an origin allowlist,
+**and** the RUM screens, which were still missing when this paragraph was first written. Door 4b
+polls CloudWatch and `pg_stat_statements`, and deploy webhooks are built. Session replay is neither
+built nor scoped; SIEM is decided out of scope.
+
+**One thing door 3 still cannot do: be installed.** `@nexovue/browser-sdk` is `"private": true` with
+no registry and no CDN, so RUM is documented and unobtainable. The decision (D6, 2026-09-14) is a
+script tag first and npm after, and both wait on there being somewhere to serve it from — which is
+what makes Phase 1's first item a deployment rather than a feature.
 
 Special cases:
 - **Continuous profiling** — new official OTel signal, support still early; historically own agents (Pyroscope-style).
@@ -92,14 +122,19 @@ Special cases:
 
 ## 4. Platform Features (Raj's feature list)
 
-| # | Feature | Notes |
-|---|---------|-------|
-| 1 | **Anomaly detection** | Automatic detection of unusual patterns in metrics/traces — no manual threshold setup. This is the trigger for everything below. |
-| 2 | **Alerts & notifications — multiple connectors** | Teams, WhatsApp, Slack, email, SMS, webhooks, etc. Smart grouping to avoid alert fatigue. |
-| 3 | **Case management** | When an error/issue happens → automatically create a case/incident. Case dashboard with lifecycle (open → investigating → resolved). Connectors: GitHub Issues, Jira, etc. — push cases to the tools teams already use. |
-| 4 | **AI chatbot (with RAG)** | Chat with your system: "why was checkout slow yesterday?" RAG over the customer's own telemetry, past incidents, and docs — answers grounded in *their* data, not generic. |
-| 5 | **AI insights** | Proactive plain-language findings: "Latency on /checkout jumped 4x at 14:32, correlated with deploy a41f2c9 and DB connection errors." Cross-signal correlation (metric → trace → log). |
-| 6 | **AI solution** | Beyond diagnosis → suggested fix: "Probable cause: unindexed query in deploy a41f2c9. Suggested fix: add index on orders.user_id." Possibly draft the PR via GitHub connector. |
+> **None of the six is built, and together they are Phase 2.** They are the chain this product is
+> differentiated by, and the honest position on 2026-09-14 is that Phase 0 built everything
+> *underneath* them. Catalogue entries: F6, F21, F22, F4, F3, F5 — status in
+> [`feature-catalog.md`](feature-catalog.md) §4.
+
+| # | Feature | Catalogue | Notes |
+|---|---------|---|-------|
+| 1 | **Anomaly detection** | F6 | Automatic detection of unusual patterns in metrics/traces — no manual threshold setup. This is the trigger for everything below. |
+| 2 | **Alerts & notifications — multiple connectors** | F21 | Teams, WhatsApp, Slack, email, SMS, webhooks, etc. Smart grouping to avoid alert fatigue. |
+| 3 | **Case management** | F22 | When an error/issue happens → automatically create a case/incident. Case dashboard with lifecycle (open → investigating → resolved). Connectors: GitHub Issues, Jira, etc. — push cases to the tools teams already use. |
+| 4 | **AI chatbot (with RAG)** | F4 | Chat with your system: "why was checkout slow yesterday?" RAG over the customer's own telemetry, past incidents, and docs — answers grounded in *their* data, not generic. |
+| 5 | **AI insights** | F3 | Proactive plain-language findings: "Latency on /checkout jumped 4x at 14:32, correlated with deploy a41f2c9 and DB connection errors." Cross-signal correlation (metric → trace → log). |
+| 6 | **AI solution** | F5 | Beyond diagnosis → suggested fix: "Probable cause: unindexed query in deploy a41f2c9. Suggested fix: add index on orders.user_id." Possibly draft the PR via GitHub connector. |
 
 **How the features chain together (the incident pipeline):**
 
@@ -181,6 +216,8 @@ Key design points:
 | 2026-08 | Agency channel deferred; pricing model settled 2026-08-27 and priced 2026-09-01 |
 | 2026-09-07 | Network monitoring and SIEM are out of scope. Categories 10 and 11 had no phase since 2026-08-25. Network telemetry is accepted as OTLP from a producer the customer runs — OBI, Beyla, Hubble, Tetragon — and never collected by an agent of ours, which is what keeps the founding no-agents decision intact rather than contradicting it. SIEM is not re-opened as a screen: the data overlaps with observability by roughly 80%, the *product* is detection content and certifications, and the nearest thing we build is export. |
 | 2026-08 | OTel setup: customer owns instrumentation; we own the receiving side (OTLP endpoint + API key + setup docs). Two customer patterns: (A) SDK direct-to-endpoint via 2 env vars — the onboarding priority ("value in 10 minutes"); (B) SDK → customer's own collector → our endpoint (for batching, data scrubbing, host metrics). Same ingestion pipeline serves both. |
+| 2026-09-14 | **Both SaaS and self-hosted, and self-hosted opens first.** No customers and no marketing yet, and idle cloud infrastructure is not worth paying for before there is a reason. The resolution is to separate *deployment capability* — images, migrations, a restore actually performed, a runbook — which costs nothing to build and must exist before a customer, from *a running production*, which is the bill and can wait. A developer evaluating an observability tool will run `docker compose up`; the same images serve hosted later, so nothing is wasted. **Open:** what a self-hoster pays, since the Razorpay subscription flow assumes we collect monthly. |
+| 2026-09-14 | **Phases named.** Phase 0 (every signal, every screen) complete. Phase 1 proposed as install → invite → alert, in the order a self-hoster hits the wall. Phase 2 is the insight layer this document is built on. Recorded so that "what is left" has one answer instead of being reconstructed each time. |
 | 2026-09-12 | **Insights and dashboards are both first-class**, superseding "insight-first, not dashboard-first" above. The front door does not change: the Findings feed is still what a person lands on. What changed is that a dashboard-shaped overview is reachable, complete, and not a lesser mode — it is composed for the customer from rollups that already exist, rather than handed over as an empty builder. The earlier stance was read, correctly, as "a dashboard is something we tolerate", and that is not a product anyone would choose over the incumbent they already have. F20's builder is not foreclosed by this: an auto-composed dashboard is a fixed instance of what a builder would produce. |
 
 ---
