@@ -253,4 +253,13 @@ Key design points:
 - Status page hosting (public status.mysite.com)
 - **Sustainability / carbon monitoring (GreenOps):** show energy use + estimated CO₂ footprint of customer infrastructure. Technical: derived, not measured — instance type + CPU utilization → estimated energy → × grid carbon intensity of the cloud region (public datasets; reference: Cloud Carbon Footprint project, CNCF Kepler for per-container energy on K8s). Piggybacks on infra-monitoring data our door-4b pollers already fetch — no new doors needed. Fits our "translate technical → plain language" spirit; carbon waste ≈ cost waste (idle oversized instances), so it doubles as a cost-saving view. Differentiator candidate, not core wedge — demand today mostly from ESG-reporting companies.
 
+- **Third-party dependency / vendor outage detection** — "is this broken because of us, or because
+  a vendor we depend on is down." Different from F9's service map, which is built from our own
+  traces and shows dependencies *between the customer's own services*; this would be about external
+  vendors (Stripe, AWS, a payment processor) that never send us a span. Surfaced 2026-09-14 by
+  UptimeRobot's acquisition of IsDown (29 Jul 2026), built for exactly this question — one
+  acquisition, medium confidence, unshipped as of the last check, so this is "worth knowing exists,"
+  not "worth building." For a team with no dedicated SRE, correctly identifying a vendor outage is
+  the difference between a five-minute read and an hour lost debugging code that was never broken.
+
 *(Add new ideas here so nothing is lost.)*
