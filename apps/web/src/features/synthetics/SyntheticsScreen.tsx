@@ -10,7 +10,7 @@ import { Sparkline } from "@/shared/components/Sparkline";
 import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatDuration } from "@/shared/format/duration";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 
 import type { CheckDefinition, CheckResultSummary, CheckTrendPoint } from "./api";
 import { useCheckDefinitions, useCheckResults, useCheckTrend } from "./api";
@@ -50,8 +50,9 @@ const URGENCY_TEXT: Record<Urgency, string> = {
 };
 
 export function SyntheticsScreen() {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/synthetics` renders inside the shell.
@@ -78,8 +79,8 @@ export function SyntheticsScreen() {
       <header className="shrink-0 px-4 pt-5 pb-3">
         <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Synthetics</h1>
         <p className="mt-1 text-ink-dim text-sm">
-          What we probed for you in the last {timeRangeById(rangeId).label}: whether it answered,
-          how often, and which part of the request the time went to.
+          What we probed for you in {windowPhrase}: whether it answered, how often, and which part
+          of the request the time went to.
         </p>
       </header>
 

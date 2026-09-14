@@ -162,17 +162,17 @@ describe("neighboursOf", () => {
 
 describe("describeService", () => {
   it("leads with the rate and says plainly when nothing failed", () => {
-    expect(describeService(HEALTHY, "hour")).toBe(
+    expect(describeService(HEALTHY, "the last hour")).toBe(
       "48 requests a minute in the last hour, none of them failing.",
     );
   });
 
   it("puts the failure share in the sentence when there is one", () => {
-    expect(describeService(STOREFRONT, "hour")).toContain("5.5% of them failing.");
+    expect(describeService(STOREFRONT, "the last hour")).toContain("5.5% of them failing.");
   });
 
   it("blames silence rather than a page it fell off, now that it asks by name", () => {
-    const sentence = describeService(undefined, "24 hours");
+    const sentence = describeService(undefined, "the last 24 hours");
 
     expect(sentence).toBe("No totals for the last 24 hours — nothing by this name reported in it.");
     expect(sentence).not.toContain("busiest");
@@ -237,7 +237,7 @@ describe("describeServiceErrors", () => {
 
 describe("describeSilence", () => {
   it("refuses to claim the service does not exist", () => {
-    const sentence = describeSilence("demo-storefront", "hour");
+    const sentence = describeSilence("demo-storefront", "the last hour");
 
     expect(sentence).toContain("demo-storefront");
     expect(sentence).toContain("not the same as it not existing");

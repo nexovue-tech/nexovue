@@ -147,29 +147,31 @@ describe("buildLogRows", () => {
 
 describe("describeLogs", () => {
   it("says the tail is running", () => {
-    expect(describeLogs(1240, "hour", "live", 0)).toBe(
+    expect(describeLogs(1240, "the last hour", "live", 0)).toBe(
       "1,240 lines from the last hour, newest first, updating as they arrive.",
     );
   });
 
   it("says the tail is paused", () => {
-    expect(describeLogs(12, "hour", "paused", 0)).toContain("The tail is paused.");
+    expect(describeLogs(12, "the last hour", "paused", 0)).toContain("The tail is paused.");
   });
 
   it("states the loss once, in the sentence, as well as marking each gap", () => {
-    expect(describeLogs(12, "hour", "live", 142)).toContain(
+    expect(describeLogs(12, "the last hour", "live", 142)).toContain(
       "142 lines were dropped while the tail was behind",
     );
   });
 
   it("says nothing about a tail that is neither running nor paused", () => {
-    const sentence = describeLogs(12, "hour", "off", 0);
+    const sentence = describeLogs(12, "the last hour", "off", 0);
     expect(sentence).toBe("12 lines from the last hour, newest first.");
     expect(sentence).not.toContain("paused");
   });
 
   it("counts one line as a line", () => {
-    expect(describeLogs(1, "15 minutes", "live", 1)).toContain("1 line from the last 15 minutes");
-    expect(describeLogs(1, "15 minutes", "live", 1)).toContain("1 line was dropped");
+    expect(describeLogs(1, "the last 15 minutes", "live", 1)).toContain(
+      "1 line from the last 15 minutes",
+    );
+    expect(describeLogs(1, "the last 15 minutes", "live", 1)).toContain("1 line was dropped");
   });
 });

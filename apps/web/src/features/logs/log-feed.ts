@@ -191,7 +191,7 @@ export function describeLogs(
   droppedTotal: number,
 ): string {
   const lines = `${formatCount(rowCount)} ${plural(rowCount, "line")}`;
-  const scope = `${lines} from the last ${windowLabel}, newest first`;
+  const scope = `${lines} from ${windowLabel}, newest first`;
   const sentence =
     tail === "live"
       ? `${scope}, updating as they arrive.`

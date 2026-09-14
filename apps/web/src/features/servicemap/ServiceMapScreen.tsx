@@ -8,7 +8,7 @@ import { appliedFilters, FilterBar } from "@/shared/components/FilterBar";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { plural } from "@/shared/format/plural";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 
 import "@xyflow/react/dist/base.css";
 import "./service-map.css";
@@ -42,8 +42,9 @@ const FIT_VIEW = { padding: 0.1, maxZoom: 1 };
 const ZOOM_RANGE = { min: 0.25, max: 2 };
 
 export function ServiceMapScreen() {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/service-map` renders inside the shell.
@@ -70,10 +71,10 @@ export function ServiceMapScreen() {
               serviceCount={graph.nodes.length}
               edgeCount={graph.edges.length}
               failingEdgeCount={graph.failingEdgeCount}
-              rangeLabel={timeRangeById(rangeId).label}
+              rangeLabel={windowPhrase}
             />
           ) : (
-            <>Who calls whom in the last {timeRangeById(rangeId).label}, taken from your spans.</>
+            <>Who calls whom in {windowPhrase}, taken from your spans.</>
           )}
         </p>
       </header>
@@ -112,7 +113,7 @@ export function ServiceMapScreen() {
         ) : (
           <EmptyState
             title="No cross-service calls in this window"
-            detail={`Nothing called anything else in the last ${timeRangeById(rangeId).label}. An application that is a single service will legitimately show nothing here — the map is drawn from calls between services, so one service has no map. Widen the time range, or check that both sides of a call are exporting.`}
+            detail={`Nothing called anything else in ${windowPhrase}. An application that is a single service will legitimately show nothing here — the map is drawn from calls between services, so one service has no map. Widen the time range, or check that both sides of a call are exporting.`}
           />
         )
       ) : (
@@ -156,7 +157,7 @@ function MapSummary({
   return (
     <>
       {serviceCount} {plural(serviceCount, "service")} and {edgeCount}{" "}
-      {plural(edgeCount, "dependency", "dependencies")} in the last {rangeLabel}
+      {plural(edgeCount, "dependency", "dependencies")} in {rangeLabel}
       {failingEdgeCount > 0 ? (
         <>
           {" — "}

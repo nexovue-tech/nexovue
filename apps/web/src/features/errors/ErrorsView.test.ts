@@ -147,7 +147,7 @@ function render(overrides: Overrides = {}): Promise<HTMLElement> {
       filters: {},
       onFilterChange: () => {},
       onClearFilters: () => {},
-      windowLabel: "6 hours",
+      windowLabel: "the last 6 hours",
       // Nothing symbolicated: these fixtures are a Python service, which has no
       // release and no source map, and the stack is shown as it arrived.
       symbolication: { frames: undefined, isPending: false, isError: false },

@@ -85,10 +85,10 @@ export function describeService(row: ServiceHealth | undefined, windowLabel: str
   // The aggregate is now asked for by name, so the only reason it is absent is that
   // this service reported nothing — never that it ranked too low to be on a page.
   if (!row) {
-    return `No totals for the last ${windowLabel} — nothing by this name reported in it.`;
+    return `No totals for ${windowLabel} — nothing by this name reported in it.`;
   }
 
-  const traffic = `${formatRatePerMinute(row.requests_per_minute)} requests a minute in the last ${windowLabel}`;
+  const traffic = `${formatRatePerMinute(row.requests_per_minute)} requests a minute in ${windowLabel}`;
   if (row.error_count === 0) return `${traffic}, none of them failing.`;
   return `${traffic}, ${formatPercent(row.error_rate)} of them failing.`;
 }
@@ -120,5 +120,5 @@ export function describeServiceErrors(groups: readonly ErrorGroupSummary[]): str
 
 /** Why a screen with a name on it is showing nothing, and what to do about it. */
 export function describeSilence(serviceName: string, windowLabel: string): string {
-  return `Nothing named “${serviceName}” has reported in the last ${windowLabel}. That is not the same as it not existing — this view is built from what arrived in the selected period, so a service that has stopped exporting, or was renamed, disappears from it rather than turning red. Widen the time range, or check that the service is still sending.`;
+  return `Nothing named “${serviceName}” has reported in ${windowLabel}. That is not the same as it not existing — this view is built from what arrived in the selected period, so a service that has stopped exporting, or was renamed, disappears from it rather than turning red. Widen the time range, or check that the service is still sending.`;
 }

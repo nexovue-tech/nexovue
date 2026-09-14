@@ -20,7 +20,7 @@ import { formatErrors } from "@/shared/format/health";
 import { formatRatePerMinute } from "@/shared/format/rate";
 import { useSettledOrder } from "@/shared/live-updates";
 import { useEverReported } from "@/shared/projects";
-import { previousWindow, timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { previousWindow, useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 
 import type {
   EndpointGroup,
@@ -71,8 +71,9 @@ const WIDE_ONLY = "hidden lg:block";
  * `ServicesView`, which is a function of its props and nothing else.
  */
 export function ServicesScreen() {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/services` renders inside the pathless shell.
@@ -136,7 +137,7 @@ export function ServicesScreen() {
       filters={filters}
       onFilterChange={(key, value) => show(withFilter(filters, key, value))}
       onClearFilters={() => show({})}
-      windowLabel={timeRangeById(rangeId).label}
+      windowLabel={windowPhrase}
       everReported={everReported}
       services={services.data?.services ?? []}
       isPending={services.isPending}
@@ -269,7 +270,7 @@ export function ServicesView({
         </div>
         <p className="mt-1 text-ink-dim text-sm">
           {isPending || isError
-            ? `Every service you send traces from, over the last ${windowLabel}.`
+            ? `Every service you send traces from, over ${windowLabel}.`
             : `${describeServices(services.length, windowLabel, order)} ${SEVERITY_LEGEND}`}
         </p>
       </header>
@@ -357,7 +358,7 @@ function EmptyServices({
     return (
       <EmptyState
         title="No services match these filters"
-        detail={`Services reported in the last ${windowLabel}, but none of them match what you asked for. Drop a filter, or widen the time range.`}
+        detail={`Services reported in ${windowLabel}, but none of them match what you asked for. Drop a filter, or widen the time range.`}
         action={
           <Button variant="secondary" onClick={onClearFilters}>
             Clear all filters
@@ -378,7 +379,7 @@ function EmptyServices({
 
   return (
     <EmptyState
-      title={`No services in the last ${windowLabel}`}
+      title={`No services in ${windowLabel}`}
       detail="Nothing reported in the selected period. Widen the time range, or check that your services are still exporting — a service that stops reporting disappears from this list rather than turning red."
     />
   );

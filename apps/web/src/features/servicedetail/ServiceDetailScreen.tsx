@@ -15,7 +15,7 @@ import { formatCount, formatPercent } from "@/shared/format/number";
 import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
 import { SCOPED_PATHS, scopedSearch } from "@/shared/scope";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 import type { HostGroup, ServiceEdge } from "@/shared/service-peers";
 import { collapseAddressPeers, EDGE_QUEUE, isPlaceholderService } from "@/shared/service-peers";
 
@@ -82,8 +82,9 @@ const AXIS_FORMAT: Record<TrendMetric, (value: number) => string> = {
  * `ServiceDetailView`, which is a function of its props and nothing else.
  */
 export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
 
   const aggregate = useService(projectId, serviceName, timeWindow);
   const trend = useServiceTrend(projectId, serviceName, timeWindow);
@@ -123,7 +124,7 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
   return (
     <ServiceDetailView
       serviceName={serviceName}
-      windowLabel={timeRangeById(rangeId).label}
+      windowLabel={windowPhrase}
       state={state}
       error={aggregate.error ?? trend.error ?? endpoints.error}
       onRetry={() => {
@@ -391,7 +392,7 @@ function ServiceHeader({
       <p className="mt-1 text-ink-dim text-sm">
         {state === "ready"
           ? describeService(row, windowLabel)
-          : `What ${serviceName} did over the last ${windowLabel}.`}
+          : `What ${serviceName} did over ${windowLabel}.`}
       </p>
     </header>
   );

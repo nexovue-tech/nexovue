@@ -58,7 +58,7 @@ const POINTS = [
 ];
 
 const BASE: OverviewViewProps = {
-  windowLabel: "hour",
+  windowLabel: "the last hour",
   totals: TOTALS,
   plots: buildOverviewPlots(POINTS),
   markers: [],

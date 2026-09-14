@@ -11,7 +11,7 @@ import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatDuration } from "@/shared/format/duration";
 import { formatCount } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 
 import type { ConnectionStateCount, StatementCost } from "./api";
 import { useConnectionHealth, useSlowStatements } from "./api";
@@ -51,8 +51,9 @@ const TOTAL_COLUMN = "hidden w-24 shrink-0 text-right lg:block";
 const SEEN_COLUMN = "hidden w-28 shrink-0 text-right md:block";
 
 export function DatabasesView() {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
   const navigate = useNavigate();
 
   // Databases share the infrastructure route, so they share its search object.
@@ -84,8 +85,8 @@ export function DatabasesView() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <p className="shrink-0 px-4 pb-3 text-ink-dim text-sm">
-        What we read from your Postgres in the last {timeRangeById(rangeId).label}: which statements
-        cost the most time, and how many backends are connected.
+        What we read from your Postgres in {windowPhrase}: which statements cost the most time, and
+        how many backends are connected.
       </p>
 
       {isPending ? (

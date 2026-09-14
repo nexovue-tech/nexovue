@@ -9,7 +9,7 @@ import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatDuration } from "@/shared/format/duration";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 
 import type { TraceSummary } from "./api";
 import { traceExportUrl, traceFailed, useTraceFacets, useTraceList } from "./api";
@@ -57,8 +57,9 @@ const STATUS_OPTIONS = [
  * "which trace was it?" is a link somebody can paste to a colleague.
  */
 export function TraceListScreen() {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/traces` renders inside the pathless shell.
@@ -95,7 +96,7 @@ export function TraceListScreen() {
       <header className="shrink-0 px-4 pt-5 pb-3">
         <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Traces</h1>
         <p className="mt-1 text-ink-dim text-sm">
-          Every request assembled in the last {timeRangeById(rangeId).label}, newest first.
+          Every request assembled in {windowPhrase}, newest first.
         </p>
         {/* The filters travel with it, so the file answers the question on screen
             rather than the whole window. */}
@@ -131,7 +132,7 @@ export function TraceListScreen() {
           title={
             hasAnyFilter(filters) ? "No traces match these filters" : "No traces in this window"
           }
-          detail={explainEmptyResult(filters, timeRangeById(rangeId).label, {
+          detail={explainEmptyResult(filters, windowPhrase, {
             services,
             operations: operations.map((facet) => facet.operation),
           })}

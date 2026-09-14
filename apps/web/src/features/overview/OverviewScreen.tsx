@@ -10,7 +10,7 @@ import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatCount, UNKNOWN } from "@/shared/format/number";
 import { formatRatePerMinute } from "@/shared/format/rate";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 
 import type { OverviewService, ProjectTotals } from "./api";
 import {
@@ -38,8 +38,9 @@ import { buildOverviewPlots } from "./overview-plots";
  * on real data. `/services/overview` exists for that reason alone.
  */
 export function OverviewScreen() {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
 
   const overview = useProjectOverview(projectId, timeWindow);
   const worst = useWorstServices(projectId, timeWindow);
@@ -63,7 +64,7 @@ export function OverviewScreen() {
 
   return (
     <OverviewView
-      windowLabel={timeRangeById(rangeId).label}
+      windowLabel={windowPhrase}
       totals={overview.data?.totals}
       plots={buildOverviewPlots(overview.data?.points ?? [])}
       markers={markers}
@@ -132,7 +133,7 @@ export function OverviewView({
       <header className="shrink-0 px-4 pt-5 pb-3">
         <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Overview</h1>
         <p className="mt-1 text-ink-dim text-sm">
-          Every service you send traces from, over the last {windowLabel}.
+          Every service you send traces from, over {windowLabel}.
         </p>
       </header>
 
@@ -237,7 +238,7 @@ function Panel({
           data={[plot.lines[0].data[0], ...plot.lines.map((line) => line.data[1])]}
           markers={markers}
           formatValue={AXIS_FORMAT[plot.metric]}
-          description={`${plot.label} across the last ${windowLabel}.`}
+          description={`${plot.label} across ${windowLabel}.`}
         />
       )}
     </section>

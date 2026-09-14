@@ -154,20 +154,20 @@ export function explainEmptyResult(
   known: { services: readonly string[]; operations: readonly string[] },
 ): string {
   if (known.services.length === 0) {
-    return `Nothing has been assembled in the last ${windowLabel}. Widen the time range, or check that your services are still exporting.`;
+    return `Nothing has been assembled in ${windowLabel}. Widen the time range, or check that your services are still exporting.`;
   }
 
   const unknown = namedButAbsent(filters, known);
   if (unknown) {
-    return `No ${unknown.kind} called “${unknown.name}” sent anything in the last ${windowLabel}. ${known.services.length} ${known.services.length === 1 ? "service is" : "services are"} reporting — pick one of those, or widen the time range.`;
+    return `No ${unknown.kind} called “${unknown.name}” sent anything in ${windowLabel}. ${known.services.length} ${known.services.length === 1 ? "service is" : "services are"} reporting — pick one of those, or widen the time range.`;
   }
 
   const applied = activeFilters(filters);
   if (applied.length === 0) {
-    return `Nothing has been assembled in the last ${windowLabel}. Widen the time range, or check that your services are still exporting.`;
+    return `Nothing has been assembled in ${windowLabel}. Widen the time range, or check that your services are still exporting.`;
   }
 
-  return `Traces were assembled in the last ${windowLabel}, but none match ${listFilters(applied)}. Drop a filter, or widen the time range.`;
+  return `Traces were assembled in ${windowLabel}, but none match ${listFilters(applied)}. Drop a filter, or widen the time range.`;
 }
 
 function namedButAbsent(

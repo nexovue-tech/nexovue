@@ -12,7 +12,7 @@ import { Sparkline } from "@/shared/components/Sparkline";
 import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatCount, UNKNOWN } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 import type { ErrorGroupDetail, ErrorGroupSummary, GroupTrendPoint } from "./api";
 import { useErrorGroup, useErrorGroups, useErrorGroupTrend } from "./api";
 import { ErrorGroupPanel } from "./ErrorGroupDetail";
@@ -50,8 +50,9 @@ const TREND_COLUMN = "w-29 shrink-0 pl-3";
  * `ErrorsView`, which is a function of its props and nothing else.
  */
 export function ErrorsScreen() {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/errors` renders inside the shell.
@@ -96,7 +97,7 @@ export function ErrorsScreen() {
       filters={filters}
       onFilterChange={(key, value) => show(withFilter(filters, key, value))}
       onClearFilters={() => show({})}
-      windowLabel={timeRangeById(rangeId).label}
+      windowLabel={windowPhrase}
       symbolication={symbolication}
       groups={listed}
       trendByGroup={trendByGroup}
@@ -181,7 +182,7 @@ export function ErrorsView({
           <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Errors</h1>
           <p className="mt-1 text-ink-dim text-sm">
             {isPending || isError
-              ? `Every exception thrown in the last ${windowLabel}, grouped, most frequent first.`
+              ? `Every exception thrown in ${windowLabel}, grouped, most frequent first.`
               : describeErrors(groups, windowLabel)}
           </p>
         </header>

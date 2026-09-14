@@ -112,7 +112,7 @@ function render(overrides: Overrides = {}): HTMLElement {
         filters: {},
         onFilterChange: () => {},
         onClearFilters: () => {},
-        windowLabel: "hour",
+        windowLabel: "the last hour",
         services: [STOREFRONT, HEALTHY],
         isPending: false,
         isError: false,
@@ -160,7 +160,7 @@ describe("ServicesView", () => {
   });
 
   it("says what to do about an empty window rather than showing a blank area", () => {
-    const rendered = readable(render({ services: [], windowLabel: "hour" }));
+    const rendered = readable(render({ services: [], windowLabel: "the last hour" }));
 
     expect(rendered).toContain("No services in the last hour");
     expect(rendered).toContain("Widen the time range");
@@ -358,7 +358,11 @@ describe("ServicesView empty states", () => {
   });
 
   it("offers a wider range when a project that has reported is quiet now", () => {
-    const container = render({ services: [], everReported: true, windowLabel: "15 minutes" });
+    const container = render({
+      services: [],
+      everReported: true,
+      windowLabel: "the last 15 minutes",
+    });
     const text = readable(container);
 
     // A customer with eleven services must never be told they have none.
@@ -370,7 +374,7 @@ describe("ServicesView empty states", () => {
   it("never offers setup on a project silent for longer than any range reaches", () => {
     // The whole point of replacing the old widest-window guess: eight days of
     // silence is not a project that was never instrumented.
-    const container = render({ services: [], everReported: true, windowLabel: "7 days" });
+    const container = render({ services: [], everReported: true, windowLabel: "the last 7 days" });
 
     expect(readable(container)).not.toContain("No services yet");
   });

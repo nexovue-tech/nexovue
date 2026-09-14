@@ -90,7 +90,7 @@ const MERGED: HistogramResponse = {
 };
 
 const BASE: MetricsViewProps = {
-  windowLabel: "hour",
+  windowLabel: "the last hour",
   metrics: [HISTOGRAM_METRIC, GAUGE_METRIC, CONFLICTED_METRIC],
   truncated: false,
   isPending: false,

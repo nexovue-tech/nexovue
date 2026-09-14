@@ -69,7 +69,7 @@ describe("totalOccurrences", () => {
 
 describe("describeErrors", () => {
   it("says both numbers, because the grouping is the point", () => {
-    const caption = describeErrors([group()], "6 hours");
+    const caption = describeErrors([group()], "the last 6 hours");
 
     expect(caption).toBe(
       "1 distinct exception · 158 occurrences in the last 6 hours, 1 of which started inside it.",
@@ -79,7 +79,7 @@ describe("describeErrors", () => {
   it("pluralises on each number independently", () => {
     const caption = describeErrors(
       [group({ occurrences: 1 }), group({ group_id: "second", occurrences: 3 })],
-      "hour",
+      "the last hour",
     );
 
     expect(caption).toContain("2 distinct exceptions");
@@ -89,14 +89,14 @@ describe("describeErrors", () => {
   it("distinguishes a backlog from an incident", () => {
     const caption = describeErrors(
       [group({ first_seen: "2026-08-28T15:00:00.000Z", started_in_window: false })],
-      "6 hours",
+      "the last 6 hours",
     );
 
     expect(caption).toContain("None of them started here.");
   });
 
   it("says nothing threw rather than reporting zeroes", () => {
-    expect(describeErrors([], "hour")).toBe("Nothing has thrown in the last hour.");
+    expect(describeErrors([], "the last hour")).toBe("Nothing has thrown in the last hour.");
   });
 });
 

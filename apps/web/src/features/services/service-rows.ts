@@ -102,7 +102,7 @@ function noteFor(group: EndpointGroup | undefined): "pending" | "empty" | "faile
 
 /** The sentence under the title. It says what is on the screen and in what order. */
 export function describeServices(count: number, windowLabel: string, order: ServiceOrder): string {
-  return `${count} ${plural(count, "service")} reporting in the last ${windowLabel}, ${orderCaption(order)}.`;
+  return `${count} ${plural(count, "service")} reporting in ${windowLabel}, ${orderCaption(order)}.`;
 }
 
 /** The tooltip behind the rate column — the absolute volume the rate came from. */

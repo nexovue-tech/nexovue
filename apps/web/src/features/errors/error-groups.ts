@@ -41,13 +41,13 @@ export function countNewInWindow(groups: readonly ErrorGroupSummary[]): number {
  * numbers — how many distinct exceptions, and how many crashes they stand for.
  */
 export function describeErrors(groups: readonly ErrorGroupSummary[], windowLabel: string): string {
-  if (groups.length === 0) return `Nothing has thrown in the last ${windowLabel}.`;
+  if (groups.length === 0) return `Nothing has thrown in ${windowLabel}.`;
 
   const occurrences = totalOccurrences(groups);
   const opening =
     `${formatCount(groups.length)} distinct ${plural(groups.length, "exception")}` +
     ` · ${formatCount(occurrences)} ${plural(occurrences, "occurrence")}` +
-    ` in the last ${windowLabel}`;
+    ` in ${windowLabel}`;
 
   const fresh = countNewInWindow(groups);
   return fresh === 0

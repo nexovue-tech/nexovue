@@ -10,7 +10,7 @@ import { formatCount } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 import { formatClockTime, formatTimestamp } from "@/shared/format/time";
 import { useDeclaredStream } from "@/shared/refresh";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 import type { LogSearchFilters, ServiceFacet, SeverityFacet } from "./api";
 import { logExportUrl, useLogFacets, useLogSearch } from "./api";
 import { bufferLineCount, downloadBuffer } from "./log-export";
@@ -52,8 +52,9 @@ const SERVICE_COLUMN = "hidden w-44 shrink-0 truncate pr-4 md:block";
  * visible is in `LogsView`, which is a function of its props.
  */
 export function LogsScreen() {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
 
   const navigate = useNavigate();
   // The route's own id, not its path: `/logs` renders inside the shell. Named
@@ -92,7 +93,7 @@ export function LogsScreen() {
 
   return (
     <LogsView
-      windowLabel={timeRangeById(rangeId).label}
+      windowLabel={windowPhrase}
       exportUrl={projectId ? logExportUrl(projectId, timeWindow, filters) : undefined}
       typed={typed}
       onTypedChange={setTyped}
@@ -220,7 +221,7 @@ export function LogsView({
         </div>
         <p className="mt-1 text-ink-dim text-sm">
           {isPending || isError
-            ? `Every log line this project holds, over the last ${windowLabel}.`
+            ? `Every log line this project holds, over ${windowLabel}.`
             : describeLogs(
                 rows.length,
                 windowLabel,

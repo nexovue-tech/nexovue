@@ -12,7 +12,7 @@ import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatBinaryBytes } from "@/shared/format/bytes";
 import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 import type { NodeSummary, NodeTrendPoint, SignalSummary } from "./api";
 import { nodeSeriesKey, useNodes, useNodeTrend, useSignals } from "./api";
 import { DatabasesView } from "./databases/DatabasesView";
@@ -116,8 +116,9 @@ function ViewSwitch({
 }
 
 export function InfrastructureScreen() {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/infrastructure` renders inside the shell.
@@ -161,7 +162,7 @@ export function InfrastructureScreen() {
         {view === "hosts" ? (
           <p className="mt-1 text-ink-dim text-sm">
             The hosts, containers and reporting processes behind your services, over the last{" "}
-            {timeRangeById(rangeId).label}. A dash is a measurement nobody sent, never a zero.
+            {windowPhrase}. A dash is a measurement nobody sent, never a zero.
           </p>
         ) : null}
       </header>

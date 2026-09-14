@@ -11,7 +11,7 @@ import { filterParams, withFilter } from "@/shared/filters";
 import { formatBound } from "@/shared/format/metric-unit";
 import { formatCount, UNKNOWN } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 import type { HistogramLayout, HistogramResponse, MetricSummary } from "./api";
 import { useHistogram, useMetricCatalogue } from "./api";
 
@@ -39,8 +39,9 @@ const NAME_DEBOUNCE_MS = 300;
  * `filters.ts`.
  */
 export function MetricsScreen() {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
   const navigate = useNavigate();
 
   const search = useSearch({ from: "/shell/metrics" });
@@ -67,7 +68,7 @@ export function MetricsScreen() {
 
   return (
     <MetricsView
-      windowLabel={timeRangeById(rangeId).label}
+      windowLabel={windowPhrase}
       metrics={catalogue.data?.metrics ?? []}
       truncated={catalogue.data?.truncated ?? false}
       isPending={catalogue.isPending}
@@ -197,8 +198,8 @@ export function MetricsView({
         <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Metrics</h1>
         <p className="mt-1 text-ink-dim text-sm">
           {narrowed
-            ? `The metrics matching these filters, of everything reported over the last ${windowLabel}.`
-            : `Every metric this project reported over the last ${windowLabel}, busiest first.`}
+            ? `The metrics matching these filters, of everything reported over ${windowLabel}.`
+            : `Every metric this project reported over ${windowLabel}, busiest first.`}
         </p>
       </header>
 

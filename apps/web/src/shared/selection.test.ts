@@ -6,6 +6,7 @@ import type { WindowChoice } from "./selection";
 import {
   clearAbsoluteWindow,
   describeChoice,
+  describeWindowChoice,
   resolveChoice,
   SELECTION_STORAGE_KEY,
   setAbsoluteWindow,
@@ -101,5 +102,64 @@ describe("how a window reads", () => {
   it("says an absolute window as two instants", () => {
     expect(describeChoice(TUESDAY)).toContain("to");
     expect(describeChoice(TUESDAY)).not.toContain("last");
+  });
+});
+
+describe("the window a screen's sentences carry", () => {
+  it("names the relative range the reader chose", () => {
+    expect(describeWindowChoice({ kind: "relative", rangeId: "1h" })).toBe("the last hour");
+  });
+
+  it("names the pinned range instead of the range it replaced", () => {
+    /* The regression. Twelve screens printed the *relative* label, so pinning a
+       window left every subtitle in the console saying "the last 15 minutes"
+       while the control above it said a range that ended hours ago. */
+    const phrase = describeWindowChoice({
+      kind: "absolute",
+      from: "2026-09-14T12:00:00.000Z",
+      to: "2026-09-14T13:00:00.000Z",
+    });
+
+    expect(phrase).not.toContain("the last");
+    expect(phrase).toContain(" on ");
+    // 24-hour, like every other clock in this console.
+    expect(phrase).toMatch(/^\d\d:\d\d–\d\d:\d\d on /);
+  });
+
+  it("names both days when a pinned range crosses one", () => {
+    /* "12:00–13:00 on 15 Sept" for a range that began the day before would lose
+       the day it started, which is the only thing making it unambiguous. */
+    // Twenty-six hours, so it crosses a day in the reader's zone whatever that is.
+    const phrase = describeWindowChoice({
+      kind: "absolute",
+      from: "2026-09-14T00:00:00.000Z",
+      to: "2026-09-15T02:00:00.000Z",
+    });
+
+    expect(phrase).toContain(" to ");
+    expect(phrase).not.toContain(" on ");
+  });
+
+  it("says the range is pinned rather than printing Invalid Date", () => {
+    expect(describeWindowChoice({ kind: "absolute", from: "nonsense", to: "also" })).toBe(
+      "the pinned range",
+    );
+  });
+
+  it("reads as a sentence in both cases, which is why it carries its own article", () => {
+    /* Callers write "over {phrase}", never "over the last {phrase}" — the two
+       cases do not fit one sentence otherwise. */
+    for (const choice of [
+      { kind: "relative", rangeId: "15m" } as const,
+      {
+        kind: "absolute",
+        from: "2026-09-14T12:00:00.000Z",
+        to: "2026-09-14T13:00:00.000Z",
+      } as const,
+    ]) {
+      expect(`Every service you send traces from, over ${describeWindowChoice(choice)}.`).toMatch(
+        /^Every service you send traces from, over \S.*\.$/,
+      );
+    }
   });
 });

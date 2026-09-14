@@ -37,7 +37,7 @@ const BASE = {
   filters: {},
   onFilterChange: () => {},
   onClearFilters: () => {},
-  windowLabel: "hour",
+  windowLabel: "the last hour",
   isPending: false,
   isError: false,
   onRetry: () => {},

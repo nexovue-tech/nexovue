@@ -234,8 +234,8 @@ export function describeVitals(vitals: readonly ReadableVital[], windowLabel: st
   if (measured.length === 0) {
     const readings = vitals.reduce((total, vital) => total + vital.readings, 0);
     return readings === 0
-      ? `No browser reported a Core Web Vital in the last ${windowLabel}.`
-      : `Only ${readings} readings arrived in the last ${windowLabel} — too few to describe a 75th percentile.`;
+      ? `No browser reported a Core Web Vital in ${windowLabel}.`
+      : `Only ${readings} readings arrived in ${windowLabel} — too few to describe a 75th percentile.`;
   }
 
   const core = measured.filter((vital) => vital.core);
@@ -244,7 +244,7 @@ export function describeVitals(vitals: readonly ReadableVital[], windowLabel: st
     (core.length > 0 ? core : measured).find((vital) => vital.rating === "needs-improvement");
 
   if (worst === undefined) {
-    return `Every Core Web Vital measured in the last ${windowLabel} is inside Google's "good" threshold.`;
+    return `Every Core Web Vital measured in ${windowLabel} is inside Google's "good" threshold.`;
   }
-  return `${worst.label} is ${worst.display} at the 75th percentile over the last ${windowLabel}, which Google rates ${worst.rating === "poor" ? "poor" : "as needing improvement"}.`;
+  return `${worst.label} is ${worst.display} at the 75th percentile over ${windowLabel}, which Google rates ${worst.rating === "poor" ? "poor" : "as needing improvement"}.`;
 }

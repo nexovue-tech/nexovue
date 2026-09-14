@@ -151,10 +151,10 @@ describe("rowHeight", () => {
 
 describe("describeServices", () => {
   it("names the count, the window and the ranking in force", () => {
-    expect(describeServices(10, "hour", "worst")).toBe(
+    expect(describeServices(10, "the last hour", "worst")).toBe(
       "10 services reporting in the last hour, worst first.",
     );
-    expect(describeServices(1, "24 hours", "slowest")).toBe(
+    expect(describeServices(1, "the last 24 hours", "slowest")).toBe(
       "1 service reporting in the last 24 hours, slowest first.",
     );
   });

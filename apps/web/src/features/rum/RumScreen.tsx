@@ -9,7 +9,7 @@ import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatCount } from "@/shared/format/number";
-import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
+import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 
 import type { BreakdownDimension, WebVitalBreakdown } from "./api";
 import { useWebVitals, useWebVitalsBreakdown } from "./api";
@@ -47,8 +47,9 @@ const RATING_WORDS: Record<ReadableVital["rating"], string> = {
  * `RumView`, which is a function of its props and nothing else.
  */
 export function RumScreen() {
-  const { projectId, rangeId } = useSelection();
+  const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const windowPhrase = useWindowPhrase();
   const navigate = useNavigate();
 
   // The route's own id, not its path: `/rum` renders inside the shell.
@@ -88,7 +89,7 @@ export function RumScreen() {
       filters={filters}
       onFilterChange={(key, value) => show(withFilter(filters, key, value))}
       onClearFilters={() => show({})}
-      windowLabel={timeRangeById(rangeId).label}
+      windowLabel={windowPhrase}
       vitals={readableVitals(vitals.data?.vitals ?? [])}
       breakdowns={breakdowns}
       isPending={vitals.isPending}
@@ -142,7 +143,7 @@ export function RumView({
         </h1>
         <p className="mt-1 text-ink-dim text-sm">
           {isPending || isError
-            ? `What real browsers measured in the last ${windowLabel}.`
+            ? `What real browsers measured in ${windowLabel}.`
             : describeVitals(vitals, windowLabel)}
         </p>
       </header>

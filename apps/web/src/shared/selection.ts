@@ -9,6 +9,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 
+import { formatDate } from "./format/time";
 import { refetchIntervalFor, useRefreshPreference } from "./refresh";
 
 export interface TimeRange {
@@ -193,6 +194,57 @@ export function describeChoice(choice: WindowChoice): string {
   return choice.kind === "relative"
     ? `last ${timeRangeById(choice.rangeId).label}`
     : `${new Date(choice.from).toLocaleString()} to ${new Date(choice.to).toLocaleString()}`;
+}
+
+/**
+ * The window a screen's own sentences carry.
+ *
+ * **Every screen said "the last 15 minutes" while the top bar said a pinned
+ * range.** Twelve of them printed `timeRangeById(rangeId).label`, which describes
+ * the relative range the reader last chose and says nothing about the window
+ * actually being read — so pinning one made every subtitle in the console
+ * disagree with the control above it. That is the defect T58 fixed for Usage,
+ * reintroduced the day absolute windows arrived.
+ *
+ * A phrase rather than a bare label, because the two cases do not fit the same
+ * sentence: "in the last 15 minutes" and "in 12:00–13:00 on 14 Sept" both read,
+ * and "in the last 12:00–13:00" does not. Callers write "over {phrase}", never
+ * "over the last {phrase}".
+ */
+export function describeWindowChoice(choice: WindowChoice): string {
+  if (choice.kind === "relative") return `the last ${timeRangeById(choice.rangeId).label}`;
+
+  const from = new Date(choice.from);
+  const to = new Date(choice.to);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return "the pinned range";
+
+  // A range inside one day names the day once. Across days each end needs its own,
+  // or "12:00–13:00 on 14 Sept" would quietly lose the day the range started.
+  return from.toDateString() === to.toDateString()
+    ? `${clock(from)}–${clock(to)} on ${day(from)}`
+    : `${day(from)}, ${clock(from)} to ${day(to)}, ${clock(to)}`;
+}
+
+/* `hour12: false` for the reason `format/time.ts` sets it on every other clock in
+   this console: the logs screen prints 13:22:47 and a window phrase reading
+   "01:22 PM" beside it would be the same instant written two ways. */
+const WINDOW_CLOCK = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+function clock(at: Date): string {
+  return WINDOW_CLOCK.format(at);
+}
+
+function day(at: Date): string {
+  return formatDate(at.toISOString());
+}
+
+/** What this screen is showing, for the sentence under its heading. */
+export function useWindowPhrase(): string {
+  return describeWindowChoice(useSelection().window);
 }
 
 export function timeRangeById(rangeId: string): TimeRange {
