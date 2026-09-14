@@ -162,3 +162,25 @@ export function useRevokeSiteKey(projectId: string | undefined) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: siteKeysQueryKey(projectId) }),
   });
 }
+
+/**
+ * Where telemetry goes, which is a fact about the deployment rather than about a key.
+ *
+ * **It was reachable exactly once.** Signup returned it and the onboarding screen printed
+ * it; nothing else in the product ever showed it again, so a customer who closed that tab
+ * could not recover the one value their exporter needs. It belongs beside the keys,
+ * because a key and an endpoint are useless apart.
+ */
+export interface IngestEndpoint {
+  otlp_endpoint: string;
+  key_header: string;
+}
+
+export function useIngestEndpoint() {
+  return useQuery({
+    queryKey: ["system", "ingest"] as const,
+    // A deployment fact: it does not change while somebody is looking at it.
+    staleTime: Number.POSITIVE_INFINITY,
+    queryFn: ({ signal }) => apiClient.get<IngestEndpoint>("system/ingest", { signal }),
+  });
+}

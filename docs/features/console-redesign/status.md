@@ -15,7 +15,14 @@ One case falls back to ending now, and the vendor forces it: a subscription stil
 `authenticated` has no cycle under way to wait for. Nothing has been charged there, so there is no
 paid period to protect — which was the only reason to wait.
 
-**D2 — Store the charged amount.** There is no payment or invoice table: `billing_webhook_deliveries`
+**D2 — BLOCKED, and the blocker is the right kind.** Storing the charged amount needs the real
+`subscription.charged` payload: which field carries it, in what unit, and whether tax is inside it.
+`razorpay.py` records that every one of its three vendor behaviours was *"measured rather than
+assumed, on 2026-09-10 against the sandbox"*, and the test fixture is synthetic — it carries no
+payment entity at all. Inventing a money field against a guessed shape is the one thing that
+standard exists to prevent, so this waits for sandbox access rather than for an afternoon.
+
+**D2 (original) — Store the charged amount.** There is no payment or invoice table: `billing_webhook_deliveries`
 records *that* a charge succeeded and *when*, never *how much*, deliberately. The charge history
 therefore derives the amount as `rate × services_committed`, which is exact except for a checkout
 spanning midnight UTC and is always exclusive of provider tax. The durable fix is a `Money` on the
@@ -27,15 +34,28 @@ there were none. The charge export is `GET /billing/history.csv` with `Content-D
 `?format=csv` or `/export` are equally defensible; it is one line either way, and whichever is
 chosen should be written into `api.md` so the next one matches.
 
-**D4 — The OTLP endpoint is unrecoverable from the console.** It is on no screen: not the projects
-list, not API keys, not the key-create response. A customer who loses the signup handoff cannot get
-it back. Small to fix, and nothing today tells them where to look.
+**D4 — RESOLVED 2026-09-14.** `GET /system/ingest` answers where telemetry goes, and the API-keys
+screen prints it as the two lines a customer pastes. It sits beside the keys because a key and an
+endpoint are useless apart. Unauthenticated on purpose: it is the address telemetry is posted to,
+printed in every setup page, and it identifies nobody.
+
+The header name is returned rather than spelled in the console, so one copy cannot drift from the
+receiver's.
 
 **D5 — `MAX_CORRELATED_DEPLOYS = 1_000`** is an engineering bound chosen while building T65, not a
 decision anybody took.
 
-**D6 — The browser SDK is unobtainable.** `@nexovue/browser-sdk` is `"private": true` with no
-registry and no CDN, so RUM is documented and cannot be installed by a customer.
+**D6 — The browser SDK is unobtainable, and the fix is a decision you have to take.**
+`@nexovue/browser-sdk` is `"private": true` with no registry and no CDN, so RUM is documented and
+cannot be installed. Two routes, and they are not exclusive:
+
+- **Publish to npm.** Needs an npm organisation and a token, and publishing is an outward-facing
+  act on your account — not something to do on your behalf.
+- **Serve the bundle ourselves**, so a customer writes a `<script src>`. No registry needed, and it
+  is how most RUM products are actually installed — but it is a caching, versioning and
+  cache-busting shape that depends on a deployment that does not exist yet.
+
+Recommended: the script tag first, decided as part of the deployment work, with npm after.
 
 **D7 — Error-rate thresholds (Q6).** T61 is built on 1% warning / 5% critical, stated on screen, as
 the recommendation the approved plan recorded. One named constant if you want different numbers.

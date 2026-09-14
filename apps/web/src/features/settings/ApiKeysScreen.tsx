@@ -10,7 +10,7 @@ import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useSelection } from "@/shared/selection";
 
 import type { ApiKeyCreated, ApiKeySummary } from "./api";
-import { useApiKeys, useCreateApiKey, useRevokeApiKey } from "./api";
+import { useApiKeys, useCreateApiKey, useIngestEndpoint, useRevokeApiKey } from "./api";
 import type { KeyTraffic } from "./key-status";
 import {
   describeTraffic,
@@ -90,6 +90,7 @@ export function ApiKeysScreen() {
           project&rsquo;s ingest to anyone who views source, so the two are kept apart everywhere —
           including here.
         </p>
+        <IngestTarget />
       </header>
 
       <div className="shrink-0 px-4 pb-3">
@@ -458,5 +459,35 @@ function RevokedBadge() {
     <span className="shrink-0 rounded-sm border border-critical-border bg-critical-subtle px-1.5 py-0.5 font-mono text-2xs text-critical-text uppercase tracking-caps">
       Revoked
     </span>
+  );
+}
+
+/**
+ * The endpoint the keys on this screen are used against.
+ *
+ * A key without an endpoint is half an instruction, and this was the missing half: the
+ * value appeared once, on the signup handoff, and nowhere else in the product ever
+ * again. Rendered as the two lines a customer actually pastes rather than as a fact to
+ * transcribe.
+ */
+function IngestTarget() {
+  const { data: ingest } = useIngestEndpoint();
+  if (!ingest) return null;
+
+  const endpointLine = `OTEL_EXPORTER_OTLP_ENDPOINT=${ingest.otlp_endpoint}`;
+  const headersLine = `OTEL_EXPORTER_OTLP_HEADERS=${ingest.key_header}=<your key>`;
+
+  return (
+    <div className="mt-4 max-w-2xl border-line border-t pt-3">
+      <p className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Where they are used</p>
+      <div className="mt-1.5 flex items-baseline gap-3">
+        <code className="min-w-0 flex-1 select-all break-all font-mono text-ink text-xs">
+          {endpointLine}
+          <br />
+          {headersLine}
+        </code>
+        <CopyButton value={`${endpointLine}\n${headersLine}`} label="both variables" />
+      </div>
+    </div>
   );
 }
