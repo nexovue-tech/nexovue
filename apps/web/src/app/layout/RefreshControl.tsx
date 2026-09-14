@@ -3,10 +3,12 @@ import { Pause, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { SelectField } from "@/shared/components/SelectField";
+import type { LiveStream } from "@/shared/refresh";
 import {
   REFRESH_INTERVALS,
   setPaused,
   setRefreshIntervalId,
+  useLiveStream,
   useRefreshPreference,
 } from "@/shared/refresh";
 import { useLiveWindow } from "@/shared/selection";
@@ -30,6 +32,11 @@ export function RefreshControl() {
   const live = useLiveWindow();
   const updatedAt = useNewestData();
   const fetching = useIsFetching() > 0;
+  const stream = useLiveStream();
+
+  // A screen that streams has no interval to pick. Its own connection is the
+  // refresh, so this shows that instead — in the same place, with the same verb.
+  if (stream) return <StreamControl stream={stream} />;
 
   if (live.isAbsolute) {
     // Not a pause, and it must not read as one: a pinned window is not stale, it is
@@ -79,6 +86,51 @@ export function RefreshControl() {
         onChange={setRefreshIntervalId}
         optionLabel={(option) => option.label}
       />
+    </span>
+  );
+}
+
+/** The word for each connection state, in the reader's terms rather than the socket's. */
+const STREAM_WORD: Record<LiveStream["state"], string> = {
+  idle: "Tail off",
+  connecting: "Connecting",
+  live: "Live",
+  paused: "Paused",
+  failed: "Tail ended",
+};
+
+/**
+ * The same control, for a screen fed by a socket.
+ *
+ * Paused is the loud state here for the reason it is loud above: a frozen tail
+ * during an incident is how somebody concludes a service went quiet when it did
+ * not. The difference is that a paused tail is not showing stale numbers, it is
+ * holding a position, so it names what resuming does rather than a timestamp.
+ */
+function StreamControl({ stream }: { stream: LiveStream }) {
+  const running = stream.state === "live";
+
+  return (
+    <span className="flex items-center gap-3">
+      {stream.state === "paused" ? (
+        <span className="rounded-sm border border-warning-border bg-warning-subtle px-2 py-0.5 font-mono text-2xs text-warning-text uppercase tracking-caps">
+          Paused · new lines are waiting
+        </span>
+      ) : (
+        <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+          {STREAM_WORD[stream.state]}
+        </span>
+      )}
+
+      <button
+        type="button"
+        onClick={running ? stream.pause : stream.resume}
+        aria-pressed={stream.state === "paused"}
+        aria-label={running ? "Pause the live tail" : "Follow the live tail"}
+        className="flex items-center rounded p-1 text-ink-dim hover:text-ink"
+      >
+        {running ? <Pause size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
+      </button>
     </span>
   );
 }

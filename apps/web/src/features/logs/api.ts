@@ -2,7 +2,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
-import { liveOptions, windowKeyOf } from "@/shared/selection";
+import { windowKeyOf } from "@/shared/selection";
 
 import type { LogLine } from "./log-feed";
 
@@ -105,8 +105,11 @@ export function useLogSearch(
  * no logs would be offered as a filter that can only ever return nothing.
  */
 export function useLogFacets(projectId: string | undefined, timeWindow: TimeWindow) {
+  // **Not polled.** The tail is what makes this screen live; these are the filter
+  // options the window holds, and they are re-read when the window, the project or
+  // the filters change. Polling them was the only thing the interval picker did
+  // here, which is why the picker read as a control over the tail and was not one.
   return useQuery({
-    ...liveOptions(timeWindow),
     queryKey: logFacetsQueryKey(projectId ?? "", timeWindow),
     enabled: projectId !== undefined,
     queryFn: ({ signal }) =>

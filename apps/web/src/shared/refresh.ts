@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 /**
  * How often a live screen re-reads, and whether it re-reads at all.
@@ -131,4 +131,59 @@ export function refetchIntervalFor(
   if (options.windowIsAbsolute) return false;
   if (preferenceNow.paused) return false;
   return intervalById(preferenceNow.intervalId).ms;
+}
+
+/* ------------------------------------------------------- screens that stream */
+
+/**
+ * A screen whose live data arrives over a socket rather than by asking again.
+ *
+ * **A poll control on a streaming screen is a control over nothing.** Logs are
+ * tailed: lines arrive as they are written, and the interval picker beside them
+ * governed only a facet count nobody was watching. Two refresh controls on one
+ * screen, one of which does not refresh what the screen is showing, is worse
+ * than either alone — it invites somebody to set five seconds and conclude the
+ * tail is slow.
+ *
+ * So a screen that streams says so, and the one control in the top bar shows
+ * that stream's state instead of an interval. Pause stays in the same place on
+ * every screen, which is the point of having put it there.
+ */
+export type StreamState = "idle" | "connecting" | "live" | "paused" | "failed";
+
+export interface LiveStream {
+  state: StreamState;
+  pause: () => void;
+  resume: () => void;
+}
+
+let stream: LiveStream | undefined;
+const streamListeners = new Set<() => void>();
+
+function subscribeStream(listener: () => void): () => void {
+  streamListeners.add(listener);
+  return () => streamListeners.delete(listener);
+}
+
+/** Declared by the screen while it is mounted, and withdrawn when it leaves. */
+export function declareStream(next: LiveStream | undefined): void {
+  stream = next;
+  for (const listener of streamListeners) listener();
+}
+
+export function useLiveStream(): LiveStream | undefined {
+  return useSyncExternalStore(subscribeStream, () => stream);
+}
+
+/**
+ * Declare this screen's stream for as long as it is on screen.
+ *
+ * Takes the pieces rather than an object: the caller rebuilds its tail object on
+ * every render, and an effect keyed on that would re-declare forever.
+ */
+export function useDeclaredStream(state: StreamState, pause: () => void, resume: () => void): void {
+  useEffect(() => {
+    declareStream({ state, pause, resume });
+    return () => declareStream(undefined);
+  }, [state, pause, resume]);
 }

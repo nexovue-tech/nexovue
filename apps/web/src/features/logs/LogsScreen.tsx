@@ -9,10 +9,12 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatCount } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
 import { formatClockTime, formatTimestamp } from "@/shared/format/time";
+import { useDeclaredStream } from "@/shared/refresh";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 import type { LogSearchFilters, ServiceFacet, SeverityFacet } from "./api";
 import { useLogFacets, useLogSearch } from "./api";
 import type { LogLine, LogRow, TailNarration } from "./log-feed";
+
 import { buildLogRows, describeLogs } from "./log-feed";
 import { SEVERITY_FILTERS, severityFilterById, severityStyle } from "./severity";
 
@@ -200,13 +202,14 @@ export function LogsView({
     resume();
   }, [resume]);
 
+  /* The tail is this screen's refresh, so the top bar's one control shows it —
+     rather than an interval picker governing a facet count nobody is watching. */
+  useDeclaredStream(status, pause, followNewest);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <div className="flex items-baseline justify-between gap-6">
-          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Logs</h1>
-          <TailControl status={tail.status} onPause={tail.pause} onFollow={followNewest} />
-        </div>
+        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Logs</h1>
         <p className="mt-1 text-ink-dim text-sm">
           {isPending || isError
             ? `Every log line this project holds, over the last ${windowLabel}.`
@@ -307,45 +310,11 @@ function rowHeight(row: LogRow, expanded: string | undefined): number {
  * Whether the tail is running, as a sentence with a switch in it — the same idiom as
  * the top bar's `PROJECT production ⌄` rather than a form control dropped on the page.
  */
-function TailControl({
-  status,
-  onPause,
-  onFollow,
-}: {
-  status: TailStatus;
-  onPause: () => void;
-  onFollow: () => void;
-}) {
-  const running = status === "live";
-
-  return (
-    <div className="flex shrink-0 items-baseline gap-2 font-mono text-2xs uppercase tracking-caps">
-      <span className="text-ink-dim">{TAIL_STATUS_WORD[status]}</span>
-      <button
-        type="button"
-        aria-pressed={running}
-        onClick={running ? onPause : onFollow}
-        className="rounded-sm border border-line bg-raised px-1.5 py-0.5 text-ink hover:bg-hover"
-      >
-        {running ? "Pause" : "Follow"}
-      </button>
-    </div>
-  );
-}
-
 /** The socket has five states; the sentence under the heading has words for three. */
 function narrate(status: TailStatus): TailNarration {
   if (status === "live") return "live";
   return status === "paused" ? "paused" : "off";
 }
-
-const TAIL_STATUS_WORD: Record<TailStatus, string> = {
-  idle: "Tail off",
-  connecting: "Connecting",
-  live: "Live",
-  paused: "Paused",
-  failed: "Tail ended",
-};
 
 function FilterBar({
   typed,
