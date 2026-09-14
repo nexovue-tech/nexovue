@@ -36,7 +36,10 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       {
         path: "/settings/general",
         title: "General",
-        keywords: ["name", "theme", "appearance", "dark", "light", "profile"],
+        // Not "theme": it is a control in the sidebar footer now, on every screen,
+        // and a rail entry leading to a page that no longer holds it is worse than
+        // no match at all.
+        keywords: ["name", "profile", "email", "address"],
       },
       {
         path: "/settings/account",

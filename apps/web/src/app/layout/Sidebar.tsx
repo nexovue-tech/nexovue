@@ -4,6 +4,7 @@ import { ArrowUpRight } from "lucide-react";
 
 import { Wordmark } from "@/shared/components/Logo";
 import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
+import { ThemeToggle } from "@/shared/theme/ThemeToggle";
 
 import { NAV_SECTIONS } from "../routes/route-manifest";
 
@@ -76,6 +77,20 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
         Setup documentation
         <ArrowUpRight size={12} aria-hidden="true" />
       </a>
+
+      {/* **Reachable on every screen, and not in the top bar.** It lived there until
+          2026-09-14 and was moved into Settings on the grounds that a theme is chosen
+          once — which is true of a product people open to read something, and false of
+          one an operator sits in all day. The room is bright in the morning, dark
+          during an incident, and a screenshot pasted into a channel wants whichever
+          the reader uses. Two clicks was the wrong price for that.
+
+          Here rather than beside the project and the window, because those two
+          qualify every reading on every screen and this qualifies none of them. */}
+      <div className="flex shrink-0 items-center justify-between gap-2 border-line border-t px-4 py-2.5">
+        <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Theme</span>
+        <ThemeToggle />
+      </div>
     </nav>
   );
 }

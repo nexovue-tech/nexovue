@@ -2,7 +2,6 @@ import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SettingGroup, SettingRow } from "@/shared/components/SettingRow";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { SettingsLayout } from "@/shared/settings/SettingsLayout";
-import { ThemeToggle } from "@/shared/theme/ThemeToggle";
 
 import { NameSection } from "./account-sections";
 import { useSession } from "./api";
@@ -57,12 +56,10 @@ export function GeneralScreen() {
     >
       <NameSection currentName={user.name} />
 
-      <SettingGroup title="Appearance">
-        <SettingRow
-          label="Theme"
-          description="Following the operating system is the default, and changes with it."
-          control={<ThemeToggle />}
-        />
+      {/* No theme row here. It is one control, in the sidebar footer, where it is
+          reachable from every screen — a second one on this page would be a second
+          place to change the same thing and a second place to look for it. */}
+      <SettingGroup title="Account">
         <SettingRow
           label="Email address"
           description="Changing it has to re-verify the new address, which is not built yet."
