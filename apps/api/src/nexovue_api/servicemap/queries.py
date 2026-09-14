@@ -60,15 +60,21 @@ _PEER_KIND: Final = "max(server_peer_kind) AS server_peer_kind"
 # they test sums, which do not exist until the group does.
 _EDGE_FILTERS_PLACEHOLDER: Final = "/* edge filters */"
 
+# **Both test the SELECT aliases, not the sums again.** `sum(call_count) AS
+# call_count` puts `call_count` in scope as the sum itself, so writing
+# `HAVING sum(call_count) >= …` resolves the identifier to that alias and asks
+# ClickHouse for `sum(sum(call_count))` — ILLEGAL_AGGREGATION, code 184, a 500 the
+# moment either filter is switched on. The alias is already the aggregate.
+
 # "Hide low-volume links". The caller asks in calls per minute because that is
 # what the edge is labelled with; the stored column is a count, so the service
 # multiplies by the window it is reading and binds the floor as a count. Asking
 # the reader to think in "calls per window" instead would move the arithmetic
 # from here to their head.
-MIN_CALL_COUNT_CLAUSE: Final = "sum(call_count) >= {min_call_count:UInt64}"
+MIN_CALL_COUNT_CLAUSE: Final = "call_count >= {min_call_count:UInt64}"
 
 # "Only failing edges" — one failure in the window is enough to be worth seeing.
-FAILING_ONLY_CLAUSE: Final = "sum(error_count) > 0"
+FAILING_ONLY_CLAUSE: Final = "error_count > 0"
 
 _EDGE_FILTER_CLAUSES: Final = {
     "min_call_count": MIN_CALL_COUNT_CLAUSE,
