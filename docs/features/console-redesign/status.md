@@ -33,10 +33,11 @@ Deliveries recorded before the column keep their nulls and fall back to the old 
 what they were always shown with. No backfill: inventing history from today's prices is the exact
 error the column exists to stop.
 
-**D3 — How a non-JSON response is addressed.** `docs/engineering/api.md` says nothing about them and
-there were none. The charge export is `GET /billing/history.csv` with `Content-Disposition`.
-`?format=csv` or `/export` are equally defensible; it is one line either way, and whichever is
-chosen should be written into `api.md` so the next one matches.
+**D3 — RESOLVED 2026-09-14: the extension suffix.** Written into `docs/engineering/api.md`, which is
+what makes it a convention rather than two files that happen to agree. `/billing/history.csv` and
+`/traces/export.csv` already follow it. The standard also carries the two things that are easy to
+get wrong and hard to notice: such a route must be declared above any sibling wildcard, and the
+filters belong on the URL rather than behind a server-side token.
 
 **D4 — RESOLVED 2026-09-14.** `GET /system/ingest` answers where telemetry goes, and the API-keys
 screen prints it as the two lines a customer pastes. It sits beside the keys because a key and an
@@ -46,8 +47,11 @@ printed in every setup page, and it identifies nobody.
 The header name is returned rather than spelled in the console, so one copy cannot drift from the
 receiver's.
 
-**D5 — `MAX_CORRELATED_DEPLOYS = 1_000`** is an engineering bound chosen while building T65, not a
-decision anybody took.
+**D5 — ACCEPTED 2026-09-14: 1,000 stands, as a guess that fails safely.** A team deploying twenty
+times a day reaches 140 in a week, a seventh of it. Past the cap the pre-window anchors are dropped
+and earlier error groups answer *nothing* rather than naming a deploy that is provably not the last
+— it degrades by going quiet, never by lying. Revisit when a real customer's deploy volume says
+something; there is nothing to learn from guessing harder now.
 
 **D6 — The browser SDK is unobtainable, and the fix is a decision you have to take.**
 `@nexovue/browser-sdk` is `"private": true` with no registry and no CDN, so RUM is documented and
@@ -59,7 +63,11 @@ cannot be installed. Two routes, and they are not exclusive:
   is how most RUM products are actually installed — but it is a caching, versioning and
   cache-busting shape that depends on a deployment that does not exist yet.
 
-Recommended: the script tag first, decided as part of the deployment work, with npm after.
+**Decided 2026-09-14: the script tag first, as part of the deployment work; npm after.** Which
+makes D6 the second item this week to resolve to *"once nexovue runs somewhere"* — it is not a
+decision that can be taken in isolation today, because what a customer's `<script src>` points at,
+how it is cached, and how a fix reaches them without editing their pages are all shapes a deployment
+defines.
 
 **D7 — Error-rate thresholds (Q6).** T61 is built on 1% warning / 5% critical, stated on screen, as
 the recommendation the approved plan recorded. One named constant if you want different numbers.

@@ -425,22 +425,42 @@ async def test_the_first_column_is_a_delta_and_not_the_whole_history(
 
     These points are cumulative, so a first column with no predecessor carries
     everything since the exporter started. Measured on the development store it
-    read 24,845 against 500 to 1,300 for every column after it — on a heatmap, one
-    black stripe and the rest empty. It is asserted as a ratio rather than a
-    number because the demo's traffic is not fixed.
-    """
-    service_name = await _a_service_sending_histograms(clickhouse, reporting)
+    read 24,845 against 500 to 1,300 for every column after it — on a heatmap,
+    one black stripe and the rest empty.
 
-    answer = await _heatmap(clickhouse, reporting, service_name)
-    totals = [column.total for column in answer.columns if column.total > 0]
+    **The property only holds for a series that predates the window**, and this
+    asserted it unconditionally until 2026-09-14, when the demo's exporter had
+    restarted four times inside a two-day window. Every series then began
+    *inside* it, so the first column each appeared in legitimately carried its
+    whole accumulation — and the test failed on correct behaviour. It now checks
+    the premise and says so rather than failing on data.
+    """
+    tenant_id, project_id = reporting
+    start, _ = _window()
+
+    predating = await clickhouse.query(
+        "SELECT count() FROM metrics_histogram WHERE tenant_id = %(tenant)s "
+        "AND project_id = %(project)s AND metric_name = 'k6.http_req_duration' "
+        "AND timestamp >= %(since)s AND start_timestamp < %(since)s",
+        parameters={"tenant": tenant_id, "project": project_id, "since": start},
+    )
+    if not int(predating.result_rows[0][0]):
+        pytest.skip(
+            "every series in this window began inside it, so no column has a "
+            "predecessor to subtract and there is no pre-window history to leak"
+        )
+
+    answer = await _histogram(clickhouse, reporting, "k6.http_req_duration")
+    heatmap = await _heatmap(clickhouse, reporting, "frontend")
+    totals = [column.total for column in heatmap.columns if column.total > 0]
 
     assert len(totals) > 2, "not enough columns to compare the first against the rest"
     rest = sorted(totals[1:])
-    median = rest[len(rest) // 2]
-    assert totals[0] <= median * 10, (
-        f"the first column holds {totals[0]} against a median of {median}. That is the whole "
-        "history since start-up, not this bucket's own traffic."
+    assert totals[0] <= rest[len(rest) // 2] * 10, (
+        f"the first column holds {totals[0]} against a median of {rest[len(rest) // 2]}. "
+        "That is the whole history since start-up, not this bucket's own traffic."
     )
+    assert answer.layouts, "the metric this compares against reported nothing"
 
 
 async def test_a_service_sending_no_histogram_has_no_panel_rather_than_an_empty_one(
