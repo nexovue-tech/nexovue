@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { UNKNOWN } from "@/shared/format/number";
 
 import {
+  emitterSaidSomethingElse,
   SEVERITY_DEBUG,
   SEVERITY_ERROR,
   SEVERITY_FATAL,
@@ -8,6 +10,7 @@ import {
   SEVERITY_INFO,
   SEVERITY_WARN,
   severityFilterById,
+  severityLabel,
   severityStyle,
   severityTone,
 } from "./severity";
@@ -71,5 +74,55 @@ describe("severityFilterById", () => {
   it("offers no floor for All, so a zero floor is never sent as a filter", () => {
     expect(severityFilterById("all").minSeverity).toBeUndefined();
     expect(severityFilterById("error").minSeverity).toBe(SEVERITY_ERROR);
+  });
+});
+
+describe("the level a row shows", () => {
+  it("reads one spelling for a level however the emitter wrote it", () => {
+    /* One project's logs carried "INFO", "info" and "Information" for the same
+       number — three spellings of one level in a list people scan by level. */
+    for (const number of [9, 10, 11, 12]) {
+      expect(severityLabel(number)).toBe("INFO");
+    }
+    expect(severityLabel(13)).toBe("WARN");
+    expect(severityLabel(17)).toBe("ERROR");
+    expect(severityLabel(21)).toBe("FATAL");
+    expect(severityLabel(5)).toBe("DEBUG");
+    expect(severityLabel(1)).toBe("TRACE");
+  });
+
+  it("names the level when the emitter sent a number and no words", () => {
+    /* 117,127 lines carried number 9 with no text, so the cell was blank about a
+       level the record knew perfectly well. */
+    expect(severityLabel(9)).toBe("INFO");
+  });
+
+  it("is an em dash when nothing was specified, not a level below TRACE", () => {
+    expect(severityLabel(0)).toBe(UNKNOWN);
+  });
+
+  it("never returns something wider than the column it is drawn in", () => {
+    /* The cell is five characters wide. "Information" was eleven and had no
+       truncation, so it ran into the service beside it. */
+    for (let number = 0; number <= 24; number += 1) {
+      expect(severityLabel(number).length).toBeLessThanOrEqual(5);
+    }
+  });
+});
+
+describe("what the emitter actually wrote", () => {
+  it("is worth showing when it differs from the level", () => {
+    expect(emitterSaidSomethingElse({ severity: "Information", severity_number: 9 })).toBe(true);
+    expect(emitterSaidSomethingElse({ severity: "Notice", severity_number: 9 })).toBe(true);
+  });
+
+  it("is not worth showing when it only differs in case", () => {
+    expect(emitterSaidSomethingElse({ severity: "info", severity_number: 9 })).toBe(false);
+    expect(emitterSaidSomethingElse({ severity: "INFO", severity_number: 9 })).toBe(false);
+  });
+
+  it("is not worth showing when the emitter wrote nothing", () => {
+    expect(emitterSaidSomethingElse({ severity: "", severity_number: 9 })).toBe(false);
+    expect(emitterSaidSomethingElse({ severity: "   ", severity_number: 0 })).toBe(false);
   });
 });

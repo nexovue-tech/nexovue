@@ -1,3 +1,5 @@
+import { UNKNOWN } from "@/shared/format/number";
+
 /**
  * Severity, and the one place on this screen colour is allowed.
  *
@@ -21,6 +23,41 @@ export const SEVERITY_INFO = 9;
 export const SEVERITY_WARN = 13;
 export const SEVERITY_ERROR = 17;
 export const SEVERITY_FATAL = 21;
+
+/**
+ * The level a line is at, in one spelling.
+ *
+ * **`severity_text` is whatever the emitter felt like writing.** One project's
+ * logs carried "INFO", "info" and "Information" for the same OTLP number — three
+ * spellings of one level in a list people scan by level — and 117,127 lines
+ * carried number 9 with no text at all, so the cell was blank about a level the
+ * record knew. "Information" also overflowed its column, because the column is
+ * sized for a level and that is a sentence.
+ *
+ * The number is the specification's own, so it is what the column reads from. The
+ * emitter's own wording is not thrown away: it is in the expanded line, where it
+ * is evidence rather than a label.
+ */
+const BANDS: ReadonlyArray<{ floor: number; label: string }> = [
+  { floor: SEVERITY_FATAL, label: "FATAL" },
+  { floor: SEVERITY_ERROR, label: "ERROR" },
+  { floor: SEVERITY_WARN, label: "WARN" },
+  { floor: SEVERITY_INFO, label: "INFO" },
+  { floor: SEVERITY_DEBUG, label: "DEBUG" },
+  { floor: 1, label: "TRACE" },
+];
+
+export function severityLabel(severityNumber: number): string {
+  // Zero is OTLP's "unspecified", which is a reading nobody sent rather than a
+  // level below TRACE — an em dash, like every other absent reading here.
+  return BANDS.find((band) => severityNumber >= band.floor)?.label ?? UNKNOWN;
+}
+
+/** Whether the emitter's own wording adds anything the label does not already say. */
+export function emitterSaidSomethingElse(line: { severity: string; severity_number: number }) {
+  const written = line.severity.trim();
+  return written !== "" && written.toUpperCase() !== severityLabel(line.severity_number);
+}
 
 export type SeverityTone = "critical" | "warning" | "quiet";
 

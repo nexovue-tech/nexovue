@@ -17,7 +17,13 @@ import { bufferLineCount, downloadBuffer } from "./log-export";
 import type { LiveBuffer, LogLine, LogRow, TailNarration } from "./log-feed";
 
 import { buildLogRows, describeLogs } from "./log-feed";
-import { SEVERITY_FILTERS, severityFilterById, severityStyle } from "./severity";
+import {
+  emitterSaidSomethingElse,
+  SEVERITY_FILTERS,
+  severityFilterById,
+  severityLabel,
+  severityStyle,
+} from "./severity";
 
 /** A service named in the URL, or nothing. A blank string is not a filter. */
 export function scopedService(raw: unknown): string | undefined {
@@ -32,6 +38,23 @@ const LINE_HEIGHT = 26;
 const GAP_HEIGHT = 30;
 const DETAIL_LINE_HEIGHT = 20;
 const DETAIL_PADDING = 20;
+
+/* The message block is sized from the message, because the rows are virtualized:
+   the height has to be known before the panel is drawn, and a block tall enough
+   for the longest body would leave a hundred pixels of nothing under the median
+   one, which is eighty-two characters.
+
+   The estimate is deliberately generous per line, so it errs towards a little
+   dead space rather than towards clipping; past six lines it stops growing and
+   the block scrolls, which is what keeps a fifteen-thousand-character body from
+   turning one row into a page. */
+const MESSAGE_CHARS_PER_LINE = 110;
+const MESSAGE_MAX_LINES = 6;
+
+function messageHeight(body: string): number {
+  const lines = Math.ceil(body.length / MESSAGE_CHARS_PER_LINE);
+  return Math.min(Math.max(lines, 1), MESSAGE_MAX_LINES) * DETAIL_LINE_HEIGHT;
+}
 const OVERSCAN_ROWS = 20;
 
 /** Typing a character must not send a request; the pause before the next one may. */
@@ -42,7 +65,12 @@ const AT_TOP_PX = 8;
 
 /* Column widths, declared once so the header and every row cannot drift apart. */
 const TIME_COLUMN = "w-24 shrink-0 pr-3 pl-2";
-const SEVERITY_COLUMN = "hidden w-16 shrink-0 pr-3 sm:block";
+/* `truncate` as well as a width: the Service column had it and this one did not,
+   which is why an eleven-character "Information" ran into the service beside it
+   rather than being cut. The label is five characters at most now, so the
+   truncation should never fire — it is there so that it cannot be the next
+   emitter's decision whether this column stays inside itself. */
+const SEVERITY_COLUMN = "hidden w-16 shrink-0 truncate pr-3 sm:block";
 const SERVICE_COLUMN = "hidden w-44 shrink-0 truncate pr-4 md:block";
 
 /**
@@ -307,12 +335,20 @@ function measurementKey(row: LogRow, expanded: string | undefined): string {
   return row.key === expanded ? `${row.key}:open` : row.key;
 }
 
-function rowHeight(row: LogRow, expanded: string | undefined): number {
+export function rowHeight(row: LogRow, expanded: string | undefined): number {
   if (row.kind === "gap") return GAP_HEIGHT;
   if (row.key !== expanded) return LINE_HEIGHT;
 
-  const detailLines = Object.keys(row.line.attributes).length + (row.line.trace_id ? 1 : 0);
-  return LINE_HEIGHT + DETAIL_PADDING + Math.max(1, detailLines) * DETAIL_LINE_HEIGHT;
+  const detailLines =
+    Object.keys(row.line.attributes).length +
+    (row.line.trace_id ? 1 : 0) +
+    (emitterSaidSomethingElse(row.line) ? 1 : 0);
+  return (
+    LINE_HEIGHT +
+    DETAIL_PADDING +
+    messageHeight(row.line.body) +
+    (detailLines === 0 ? 1 : detailLines) * DETAIL_LINE_HEIGHT
+  );
 }
 
 /**
@@ -580,9 +616,16 @@ function LogLineRow({
         <span className={`${TIME_COLUMN} text-ink-dim`} title={formatTimestamp(line.observed_at)}>
           {formatClockTime(line.observed_at)}
         </span>
-        <span className={`${SEVERITY_COLUMN} uppercase ${tone.label}`}>{line.severity}</span>
+        <span
+          className={`${SEVERITY_COLUMN} uppercase ${tone.label}`}
+          title={emitterSaidSomethingElse(line) ? `Sent as “${line.severity}”` : undefined}
+        >
+          {severityLabel(line.severity_number)}
+        </span>
         <span className={`${SERVICE_COLUMN} text-ink-dim`}>{line.service_name}</span>
-        <span className={`min-w-0 flex-1 truncate ${tone.body}`}>{line.body}</span>
+        <span className={`min-w-0 flex-1 truncate ${tone.body}`} title={line.body}>
+          {line.body}
+        </span>
       </button>
 
       {expanded ? <LineDetail line={line} /> : null}
@@ -601,6 +644,27 @@ function LineDetail({ line }: { line: LogLine }) {
 
   return (
     <dl className="space-y-0.5 bg-surface px-4 py-2.5 pl-26">
+      {/* **The message, in full.** The row truncates it to one line, and this panel
+          used to show the trace and the attributes and not the thing the line
+          actually says — so the longest body in this project, 15,193 characters,
+          could be read nowhere in the product. It wraps here, and scrolls past the
+          height below rather than growing: the rows are virtualized, so a panel
+          whose height depends on its content would be measured wrong for every row
+          under it. */}
+      <div className="flex gap-3" style={{ height: messageHeight(line.body) }}>
+        <dt className="w-28 shrink-0 text-ink-dim uppercase tracking-caps">Message</dt>
+        <dd className="min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words text-ink">
+          {line.body}
+        </dd>
+      </div>
+
+      {emitterSaidSomethingElse(line) ? (
+        <div className="flex gap-3" style={{ height: DETAIL_LINE_HEIGHT }}>
+          <dt className="w-28 shrink-0 text-ink-dim uppercase tracking-caps">Sent as</dt>
+          <dd className="min-w-0 truncate text-ink">{line.severity}</dd>
+        </div>
+      ) : null}
+
       {line.trace_id ? (
         <div className="flex gap-3" style={{ height: DETAIL_LINE_HEIGHT }}>
           <dt className="w-28 shrink-0 text-ink-dim uppercase tracking-caps">Trace</dt>

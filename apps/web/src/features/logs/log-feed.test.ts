@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-
+import { rowHeight } from "./LogsScreen";
 import type { LiveBuffer, LogLine } from "./log-feed";
 import { acceptFrame, buildLogRows, describeLogs, EMPTY_LIVE } from "./log-feed";
 
@@ -173,5 +173,45 @@ describe("describeLogs", () => {
       "1 line from the last 15 minutes",
     );
     expect(describeLogs(1, "the last 15 minutes", "live", 1)).toContain("1 line was dropped");
+  });
+});
+
+function expandedHeight(body: string): number {
+  const line: LogLine = {
+    row_key: "1",
+    observed_at: "2026-09-14T13:22:54.537Z",
+    service_name: "frontend-proxy",
+    severity: "INFO",
+    severity_number: 9,
+    body,
+    trace_id: "",
+    span_id: "",
+    attributes: {},
+  };
+  return rowHeight({ kind: "line", key: "k", line, live: false }, "k");
+}
+
+describe("how tall an expanded line is", () => {
+  /* The rows are virtualized, so this number is computed before the panel exists.
+     If it disagrees with what renders, every row below the open one draws in the
+     wrong place — which is the defect `getItemKey` was folded for. */
+
+  it("grows with the message, so a one-line body leaves no dead space under it", () => {
+    const short = expandedHeight("Product Found");
+    const wrapped = expandedHeight("x".repeat(330));
+
+    expect(wrapped).toBeGreaterThan(short);
+  });
+
+  it("stops growing, so a fifteen-thousand-character body is not a page", () => {
+    /* The longest body in this project is 15,193 characters. */
+    const long = expandedHeight("x".repeat(15_193));
+    const sixLines = expandedHeight("x".repeat(660));
+
+    expect(long).toBe(sixLines);
+  });
+
+  it("is the same for a message of any length past the cap", () => {
+    expect(expandedHeight("x".repeat(20_000))).toBe(expandedHeight("x".repeat(100_000)));
   });
 });
