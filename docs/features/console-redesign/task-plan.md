@@ -622,7 +622,7 @@ suite), **903 web across 70 files**, 120 browser-SDK — against 2469 and 813 wh
 |---|---|
 | T48 keeps previous data across the window tick | **The window was two things wearing one name.** `from`/`to` are what a read asks for and advance; a cache key must not. `WindowChoice` is what a reader *asked for*, and `windowKeyOf` is stable while the window moves — so no placeholder was needed at all |
 | T53 gives feeds an "N new" pill | **Already built, and better.** The logs tail pauses *server-side*, so rows cannot move under a reader, and the gap is marked where it happened rather than counted in a pill |
-| T63 exports logs and traces | **Traces only.** Logs have no search endpoint — the screen is a WebSocket tail — so a log export is a search API first. Recorded rather than smuggled in |
+| T63 exports logs and traces | **Traces only — and the reason recorded here was wrong.** It said logs have no search endpoint. `logs/search.py` has carried `/search` and `/facets` since before this phase, `router.py:31` mounts them, and `useLogSearch` is what fills the stored half of the screen. The claim came from reading `logs/router.py` alone and seeing one route. Corrected 2026-09-14; T69 is the work it wrongly excused |
 | T61 needs a threshold decision | Built on 1% / 5% as the approved plan recorded, **stated on the screen**, one named pair to change |
 | T67 documents setup | 15 pages, and it found a defect that would have broken **every signup** in a deployed install |
 | T64 adds a second factor | Also narrowed migration 0019's recorded reasoning, which needed ADR 0083 |
@@ -659,6 +659,87 @@ amount, the CSV route convention, the unrecoverable OTLP endpoint, `MAX_CORRELAT
 unobtainable browser SDK, and the error-rate thresholds. Plus, from ADR 0083:
 `CREDENTIAL_ENCRYPTION_KEY` has no rotation procedure and the second factor has had no
 production-readiness review.
+
+
+## Second follow-up pass — reopened 2026-09-14
+
+A founder-led pass over the running console, after the twenty-one above were built. Three of the
+five findings are defects in what the phase just shipped; two are scope it never had.
+
+### What the reading found
+
+| Claim | What the code and the running console say |
+|---|---|
+| The logs screen respects the refresh control | **It did not, and could not.** Logs arrive over a socket. The interval picker beside them drove exactly one query — the facet counts — so a customer could set five seconds and conclude the tail was slow. Two refresh controls on one screen, and the one in the top bar refreshed nothing the screen was showing. |
+| Logs cannot be exported because there is no search endpoint | **False, and recorded in this plan.** See the corrected T63 row above. |
+| A customer can read the setup documentation | **No.** `docs/product/setup/` is fifteen Markdown pages in a private repository. There is no site, no route, and no link from the console. `setup-docs.ts` says so in its own comment and names a repo path rather than inventing a hostname. T67 wrote the pages; nothing published them. |
+| A customer can script against their own telemetry | **No, at all.** The console API is session-cookie only. `apikeys` are *ingest* keys — write-only, read by the receiver. There is no read key, no bearer token, no scope. Not logs, not traces, not metrics. |
+| The account screens read like a product | **No.** They are routed pages of explanatory prose above left-aligned forms. The API keys screen opens with four lines of paragraph before anything actionable, and every block chose its own width. |
+
+### The design rule these share
+
+**One control per thing, and the control names what it actually does.** A poll picker over a socket,
+a Save-less form under a paragraph, and documentation with no address are the same failure in three
+places: the interface describes a mechanism the customer cannot act on.
+
+### Tasks — the logs screen
+
+- [x] **T69** `E` — a screen fed by a stream declares it, and the one top-bar control shows that
+      stream instead of an interval. The tail's own Pause and Follow leave the screen header; the
+      facet query stops polling. → `shared/refresh.ts` gains `LiveStream`/`useDeclaredStream`,
+      proved by `refresh.test.ts` and verified against the running console.
+- [ ] **T70** `E` — `GET /logs/export.csv`, mirroring `/traces/export.csv` exactly: the same filters
+      on the URL, the same `content-disposition`, the same truncation marker. Reuses the predicate
+      in `logs/search.py`. → `apps/api/src/nexovue_api/logs/search.py`, proved by a route test and
+      by `test_api_conventions.py`, which already requires the extension suffix.
+- [ ] **T71** `E` — export the live buffer from the client, without a server call. **This is not
+      redundant with T70.** Logs reach ClickHouse through the pipeline, so the tail is *ahead* of
+      storage: an export that reads only storage silently drops the newest lines, on the one screen
+      where the newest lines are the point. → `features/logs/log-export.ts`, proved by a test that
+      the buffer's newest line survives the conversion.
+- [ ] **T72** `E` — one Export control in the logs filter bar offering both, each labelled with what
+      it will actually contain, including the buffer's line count and the fact that it is capped.
+
+### Tasks — the documentation a customer can reach
+
+- [ ] **T73** `E` — an unauthenticated `/docs/*` route in the existing web app, compiling the
+      Markdown already in `docs/product/setup/` at build time. One deploy, one design system,
+      nothing new to host. → `apps/web/src/features/docs/`, proved by a test that every page in
+      `docs/product/setup/` resolves to a route and that no route renders empty.
+- [ ] **T74** `E` — onboarding and the API keys screen link to it by URL, replacing the inline
+      extracts and the repo path. `SETUP_DOCS_PATH` becomes the base URL its comment anticipated.
+
+### Tasks — the account screens
+
+**Structure taken from claude.ai's settings, read on 2026-09-14.** Its grammar is: a searchable
+two-pane rail; content as rows of *label on the left, one control on the right, hairline divider*;
+sub-sections as a heading plus one line of helper text and then a plain table; at most one line of
+prose anywhere; destructive actions as a row with a sentence and a button.
+
+- [ ] **T75** `E` — adopt that row grammar across the account screens: a `SettingRow` that takes a
+      label, optional one-line description, and one control. The multi-sentence paragraphs go. →
+      `shared/components/SettingRow.tsx`, proved by a test that a row renders its control and its
+      description, and by the existing screens' tests still passing.
+- [ ] **T76** `E` — split today's overloaded "Profile & security" into **General** (name, and the
+      theme toggle moved out of the top bar) and **Account** (active sessions, second factor, sign
+      out everywhere, delete), the way the reference does.
+- [ ] **T77** `E` — a grouped, searchable settings rail for the preference screens: General,
+      Account, Billing, Usage.
+- [ ] **T78** `E` — history as plain tables with column headers rather than list rows: charges,
+      sessions, and keys.
+
+**Projects and API keys stay routed full pages and are not moved behind the rail.** The reference's
+settings are *preferences*; half of this section is *work* — minting an ingest key, copying two
+environment variables, deleting a project and reading the receipt. A modal is the wrong container
+for something a customer spends minutes inside. **This is the one place this pass deliberately
+departs from the reference, and it is a founder decision to reverse.**
+
+### Tasks — raised here, and not this phase's work
+
+- [ ] **T79** — a customer-facing read API: a new key type distinct from ingest keys, scopes, rate
+      limits, and its own documentation. **Needs a specification before any code**, and the key
+      model is the decision that gates it. Recorded here because this pass found it; it belongs in
+      its own feature.
 
 
 ## New risks
