@@ -776,6 +776,21 @@ class BillingWebhookDelivery(Base):
     subscription_ref: Mapped[str] = mapped_column(
         String(PROCESSOR_REFERENCE_LENGTH), nullable=False
     )
+    # What the customer was debited, when the delivery carried it.
+    #
+    # **Recorded rather than recomputed**, which is the whole reason for the
+    # column. It was derived as `rate x services_committed` from whatever the
+    # plan charges *now*, so a rate change, a commitment change, or a checkout
+    # spanning midnight UTC quietly rewrote history — and provider tax was never
+    # in it at all. A charge is a fact about a moment, and a fact that can be
+    # recalculated differently later is not one.
+    #
+    # Null for every event that is not a charge, and for a charge whose payload
+    # stated no amount: a missing figure is missing, never nought.
+    amount_minor_units: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # ISO 4217, as `plan_prices.currency` holds it. Beside the number rather than
+    # inferred from the organization, because an integer alone is not an amount.
+    amount_currency: Mapped[str | None] = mapped_column(String(CURRENCY_CODE_LENGTH), nullable=True)
     received_at: Mapped[CreatedAt]
 
     __table_args__ = (

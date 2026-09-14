@@ -172,6 +172,11 @@ async def record_from_webhook(
             delivery_id=event.delivery_id,
             kind=event.kind.value,
             subscription_ref=event.subscription_ref,
+            # Recorded at the moment it happened. Everything that could be used
+            # to recompute it later — the plan's rate, the committed count — is
+            # a value that changes, and a charge is a fact about a moment.
+            amount_minor_units=event.amount.minor_units if event.amount else None,
+            amount_currency=event.amount.currency if event.amount else None,
         ),
     )
     return DeliveryAcknowledgement(outcome=DeliveryOutcome.RECORDED)
@@ -498,19 +503,17 @@ async def payment_history(session: AsyncSession, *, org_id: uuid.UUID) -> Paymen
     asked.** Every charge is a delivery whose signature was verified before it
     was recorded, and what it was for is on the arrangement that delivery names.
 
-    **The amount is derived, and that is the one weakness worth naming out
-    loud.** A delivery stores no amount — `BillingWebhookDelivery` holds no body
-    by design — so the figure is rebuilt the way the mandate was: the rate in
-    force on the day the checkout began, times the count the customer committed
-    to, which is exactly what the processor was told to debit every month. It is
-    `commitment_for`'s own arithmetic over the same rows, and `plan_prices` is
-    appended rather than edited, so the rate read back is the rate read then.
+    **The amount is what the delivery said, when it said one.** Since migration
+    0026 a charge records what the customer was actually debited, at the moment
+    it arrived — so a later price rise, a new commitment, or a checkout spanning
+    midnight UTC cannot rewrite a charge that already happened.
 
-    Two things it still cannot see: a checkout begun on one side of midnight UTC
-    and committed on the other reads the following day's rate, and any tax the
-    provider adds at charge time is debited above this figure. **Recording the
-    amount when the event arrives is the durable answer**; it needs a column, so
-    it is raised rather than approximated further.
+    Deliveries recorded before that column existed carry no amount, and those
+    fall back to the derivation they were always shown with: the rate in force on
+    the day the checkout began, times the committed count. It is stated rather
+    than hidden because the two answers differ in one visible way — the derived
+    one is exclusive of any tax the provider added at charge time, and the
+    recorded one is what the statement shows.
     """
     rows = await queries.charges(session, org_id=org_id, kinds=CHARGE_KINDS, limit=MAX_CHARGES)
     # An arrangement is charged every month, so the same terms answer most of a
@@ -525,8 +528,12 @@ async def payment_history(session: AsyncSession, *, org_id: uuid.UUID) -> Paymen
                 outcome=_CHARGE_OUTCOMES[delivery.kind],
                 plan_slug=subscription.plan_slug,
                 services_committed=subscription.services_committed,
-                currency=subscription.currency,
-                amount_minor_units=await _charged_amount(session, subscription, rates),
+                currency=delivery.amount_currency or subscription.currency,
+                amount_minor_units=(
+                    delivery.amount_minor_units
+                    if delivery.amount_minor_units is not None
+                    else await _charged_amount(session, subscription, rates)
+                ),
             )
         )
     return PaymentHistory(charges=charges)
@@ -538,6 +545,10 @@ async def _charged_amount(
     rates: dict[tuple[str, str, date], PlanPrice | None],
 ) -> int | None:
     """A month at this arrangement's terms, or None when its rate is unrecoverable.
+
+    **The fallback, not the answer.** Since migration 0026 a charge records what
+    was debited; this reconstructs it for deliveries that predate that column,
+    and for those it is the same figure they were always shown.
 
     None rather than zero, for `_price_summary`'s reason: a rate nobody can read
     back is not a rate of nothing, and a zero here would be reported to a

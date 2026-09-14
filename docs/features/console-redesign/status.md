@@ -15,19 +15,23 @@ One case falls back to ending now, and the vendor forces it: a subscription stil
 `authenticated` has no cycle under way to wait for. Nothing has been charged there, so there is no
 paid period to protect — which was the only reason to wait.
 
-**D2 — BLOCKED, and the blocker is the right kind.** Storing the charged amount needs the real
-`subscription.charged` payload: which field carries it, in what unit, and whether tax is inside it.
-`razorpay.py` records that every one of its three vendor behaviours was *"measured rather than
-assumed, on 2026-09-10 against the sandbox"*, and the test fixture is synthetic — it carries no
-payment entity at all. Inventing a money field against a guessed shape is the one thing that
-standard exists to prevent, so this waits for sandbox access rather than for an afternoon.
+**D2 — RESOLVED 2026-09-14: the charged amount is recorded.** You have sandbox credentials, which
+unblocked it. `billing_webhook_deliveries` now carries `amount_minor_units` and `amount_currency`
+(migration 0026, verified reversible), written from `payload.payment.entity.amount` — paise, which
+is already the whole-subunit convention `Money` keeps, so nothing is converted and nothing rounds.
 
-**D2 (original) — Store the charged amount.** There is no payment or invoice table: `billing_webhook_deliveries`
-records *that* a charge succeeded and *when*, never *how much*, deliberately. The charge history
-therefore derives the amount as `rate × services_committed`, which is exact except for a checkout
-spanning midnight UTC and is always exclusive of provider tax. The durable fix is a `Money` on the
-billing event and a column to persist it — `models.py` and a migration. Storing the rate on
-`billing_subscriptions` would close the first hole on its own.
+`fee` and `tax` are deliberately *not* deducted: those are the processor's own take from what it
+settles to us, while `amount` is what the customer's statement shows and therefore what they are
+reconciling against.
+
+The payload shape came from the vendor's documentation rather than from a sandbox charge, and that
+distinction is stated in the code: firing a real `subscription.charged` needs an authorised mandate
+and a billing cycle to come round, which a test cannot arrange. Documented is not the same as
+measured, and it is not the same as assumed either.
+
+Deliveries recorded before the column keep their nulls and fall back to the old derivation, which is
+what they were always shown with. No backfill: inventing history from today's prices is the exact
+error the column exists to stop.
 
 **D3 — How a non-JSON response is addressed.** `docs/engineering/api.md` says nothing about them and
 there were none. The charge export is `GET /billing/history.csv` with `Content-Disposition`.

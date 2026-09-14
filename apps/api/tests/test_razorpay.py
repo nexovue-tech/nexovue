@@ -25,6 +25,7 @@ import pytest
 from nexovue_api.billing import (
     BillingContact,
     BillingError,
+    BillingEvent,
     BillingEventKind,
     CancellationOutcome,
     Commitment,
@@ -79,18 +80,24 @@ def _sign(body: bytes, secret: str = WEBHOOK_SECRET) -> str:
 
 
 def _payload(
-    event: str = "subscription.activated", subscription_ref: str | None = SUBSCRIPTION_REF
+    event: str = "subscription.activated",
+    subscription_ref: str | None = SUBSCRIPTION_REF,
+    payment: dict[str, Any] | None = None,
 ) -> bytes:
     entity: dict[str, Any] = {"status": "active", "quantity": 5}
     if subscription_ref is not None:
         entity["id"] = subscription_ref
-    return json.dumps(
-        {
-            "entity": "event",
-            "event": event,
-            "payload": {"subscription": {"entity": entity}},
-        }
-    ).encode()
+    body: dict[str, Any] = {
+        "entity": "event",
+        "event": event,
+        "payload": {"subscription": {"entity": entity}},
+    }
+    if payment is not None:
+        # The shape the vendor documents for `subscription.charged`: the amount in
+        # paise beside its currency, with `fee` and `tax` as the processor's own
+        # deductions from what it settles rather than part of the debit.
+        body["payload"]["payment"] = {"entity": payment}
+    return json.dumps(body).encode()
 
 
 def _headers(body: bytes, **overrides: str) -> dict[str, str]:
@@ -513,3 +520,60 @@ class TestCancelling:
 
         with pytest.raises(BillingError):
             await _processor(handler).cancel(subscription_ref=SUBSCRIPTION_REF)
+
+
+class TestWhatTheCustomerWasDebited:
+    """The amount a charge carried, recorded rather than recomputed later.
+
+    It was derived from `rate x services_committed` until 2026-09-14, so a price
+    rise or a new commitment quietly rewrote a charge that had already happened.
+    """
+
+    def _event(self, payment: dict[str, Any] | None) -> BillingEvent:
+        body = _payload(event="subscription.charged", payment=payment)
+        return _processor().event_from_webhook(body=body, headers=_headers(body))
+
+    def test_the_amount_is_taken_whole_from_the_delivery(self) -> None:
+        """Paise are already whole subunits, which is what `Money` holds — so
+        nothing is converted and nothing can be rounded on the way in."""
+        event = self._event({"amount": 199500, "currency": "INR", "fee": 2900, "tax": 0})
+
+        assert event.amount == Money(minor_units=199500, currency="INR")
+
+    def test_the_processors_own_fee_is_not_deducted(self) -> None:
+        """`fee` and `tax` are what the processor keeps from what it settles to
+        us. The customer's statement shows `amount`, and that is the number they
+        are reconciling against."""
+        event = self._event({"amount": 199500, "currency": "INR", "fee": 2900, "tax": 522})
+
+        assert event.amount is not None
+        assert event.amount.minor_units == 199500
+
+    def test_an_event_that_is_not_a_charge_carries_no_amount(self) -> None:
+        body = _payload(event="subscription.activated")
+
+        assert _processor().event_from_webhook(body=body, headers=_headers(body)).amount is None
+
+    @pytest.mark.parametrize(
+        "payment",
+        [
+            {"currency": "INR"},
+            {"amount": 199500},
+            {"amount": "199500", "currency": "INR"},
+            {"amount": 199500, "currency": ""},
+            {"amount": True, "currency": "INR"},
+        ],
+        ids=["no amount", "no currency", "amount as text", "empty currency", "a boolean"],
+    )
+    def test_an_unreadable_amount_is_absent_rather_than_nought(
+        self, payment: dict[str, Any]
+    ) -> None:
+        """A charge recorded as zero is a figure somebody reconciles against and
+        finds wrong. Missing has to look missing."""
+        assert self._event(payment).amount is None
+
+    def test_the_currency_is_normalised_so_two_spellings_are_one(self) -> None:
+        event = self._event({"amount": 199500, "currency": "inr"})
+
+        assert event.amount is not None
+        assert event.amount.currency == "INR"

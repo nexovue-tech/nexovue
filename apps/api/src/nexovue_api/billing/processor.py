@@ -93,6 +93,14 @@ class BillingEvent:
     # Unique per delivery, so a replayed webhook is detectable — the same
     # property `X-GitHub-Delivery` gives door 4a.
     delivery_id: str
+    # What the customer was actually debited, when the event carries it.
+    #
+    # **`Money` rather than a number and a currency code**, because the port is
+    # allowed this product's vocabulary and an integer alone is not an amount.
+    # None for the events that are not a charge, and for a charge whose payload
+    # did not state one — a missing amount is recorded as missing rather than as
+    # zero, which is a figure somebody would reconcile against.
+    amount: Money | None = None
 
 
 @dataclass(frozen=True, slots=True)

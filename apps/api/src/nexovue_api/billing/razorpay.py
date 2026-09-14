@@ -48,6 +48,7 @@ from nexovue_api.billing.processor import (
     Commitment,
     ContactField,
     EmbeddedCheckout,
+    Money,
     SignatureInvalidError,
 )
 from nexovue_api.settings import DOMESTIC_PAYMENT_VARIABLES, DomesticPaymentSettings
@@ -367,6 +368,7 @@ class RazorpayPaymentProcessor:
             kind=kind,
             subscription_ref=subscription_ref,
             delivery_id=received.get(DELIVERY_HEADER, ""),
+            amount=_charged(document),
         )
 
     def _verify(self, *, body: bytes, headers: Mapping[str, str]) -> None:
@@ -431,6 +433,33 @@ TERMINAL_STATUSES: Final = frozenset({"cancelled", "completed", "expired"})
 # the vendor refuses `cancel_at_cycle_end: 1` on one. There is also nothing paid
 # for to protect, which is the only reason waiting was worth asking for.
 BEFORE_THE_FIRST_CHARGE: Final = frozenset({"created", "authenticated"})
+
+
+def _charged(document: Mapping[str, Any]) -> Money | None:
+    """What the customer was debited, when the delivery says.
+
+    `payload.payment.entity.amount`, in paise — the whole-subunit convention
+    `Money` already keeps, so nothing is converted and nothing can be rounded.
+    From the vendor's own payload documentation, read on 2026-09-14, rather than
+    from a sandbox charge: firing one needs a real mandate and a billing cycle to
+    come round, which is not something a test can arrange.
+
+    **`amount` and not `amount` minus `fee` and `tax`.** Those two are the
+    processor's own deductions from what it settles to us; the customer's
+    statement shows `amount`, and this is the number a customer is reconciling
+    against when they open the screen.
+
+    Absent rather than zero on anything unreadable. A missing charge recorded as
+    nought is a figure somebody would reconcile against and find wrong, where a
+    blank says plainly that we do not hold it — the same rule the screen follows
+    with an em dash.
+    """
+    payment = _object_at(_object_at(_object_at(document, "payload"), "payment"), "entity")
+    minor_units = payment.get("amount")
+    currency = _text(payment.get("currency"))
+    if not isinstance(minor_units, int) or isinstance(minor_units, bool) or not currency:
+        return None
+    return Money(minor_units=minor_units, currency=currency.upper())
 
 
 def _prefill(contact: BillingContact) -> dict[str, str]:
