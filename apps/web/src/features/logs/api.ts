@@ -56,6 +56,19 @@ function searchParams(
   };
 }
 
+/**
+ * **`windowKeyOf`, not `from` and `to`.** This was the one window-scoped key in
+ * the app built from the window's ends, and the ends move: `useLiveWindow`
+ * advances them every ten seconds. A changed key is a query TanStack has never
+ * run, so `isPending` went true on every tick and the screen drew its fourteen-row
+ * skeleton over lines that were already on it — the exact defect T48 named as
+ * "every refresh is a cold load", surviving on the one screen that also has a
+ * socket, where it was easy to read as the tail doing something.
+ *
+ * Pausing did not stop it. The pause on this screen holds the *tail*; the window
+ * kept advancing underneath, so the skeleton kept arriving over a feed that was
+ * deliberately frozen.
+ */
 export const logSearchQueryKey = (
   projectId: string,
   timeWindow: TimeWindow,
@@ -64,8 +77,7 @@ export const logSearchQueryKey = (
   [
     "logs",
     projectId,
-    timeWindow.from,
-    timeWindow.to,
+    windowKeyOf(timeWindow),
     filters.query.trim(),
     filters.serviceName ?? "",
     filters.minSeverity ?? 0,
