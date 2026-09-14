@@ -89,12 +89,29 @@
 | **F34** | Metrics explorer | ✅ Yes | 🔲 | 0 | Catalogue with name/shape/readable filters, histograms, duration heatmaps. *Added 2026-09-14 — it shipped without a catalogue entry* |
 | **F35** | Setup documentation (public) | ✅ Yes | 🔲 | 0 | Fifteen pages served unauthenticated at `/docs`, compiled from `docs/product/setup/`. *Added 2026-09-14* |
 | **F36** | Customer read API | 🔴 No | 🔲 | 2 | The console API is **session-cookie only** and ingest keys are write-only, so **a customer cannot script against their own telemetry at all**. *Added 2026-09-14* |
-| **F37** | Self-hosted install & operation | 🟡 Skeleton | 🔲 | **1** | `docker-compose.onprem.yaml` and the operations docs exist and are marked, correctly, as unverified. No images, no registry, no release, no runbook. *Added 2026-09-14* |
+| **F37** | Self-hosted install & operation | 🟡 Skeleton | 🔲 | **1** | `docker-compose.onprem.yaml` and the operations docs exist and are marked, correctly, as unverified. No images, no registry, no release, no runbook. **Licence decided 2026-09-15: AGPL-3.0 source-public, browser SDK permissive; dependency audit clean, secret scan still owed.** *Added 2026-09-14* |
 
 **Named capabilities inside features (so they aren't lost):** BubbleUp-style attribute/outlier
 analysis → F20 + F2 evidence · service ownership metadata → F8/F9 · telemetry-value transparency
 → F25 · cross-signal global search → F1/F4 · suspect-commit/release linkage on errors → F11 + F28 ·
 log archival tiers → F27 · **sustainability/carbon panel → F13**.
+
+**What the 2026-09-14/15 market research changed, and what it did not.** Two passes over the
+August analysis ([`../research/market-analysis-2026-09.md`](../research/market-analysis-2026-09.md),
+which states its own gaps). **Reconfirmed:** no vendor among twelve prices per service monitored, so
+the pricing unit stays structurally unique; the insight-first position is unclaimed not just by
+Datadog-class incumbents but by the OTel-native peer set that a buyer actually price-compares us
+against; GreenOps remains nascent and owned by no observability vendor, Grafana included.
+**Sharpened:** F21's urgency — Better Stack ships a live, purchasable agentic AI SRE doing
+eBPF+OTel root-cause with code-fix suggestions, so the gap on "tell me what broke and act on it" is
+wider than August assumed, and the differentiator left is *OTel-only, no agent* rather than *does AI
+root-cause at all*. **Corrected:** Datadog's "$5 per 100 custom metrics" traces to a competitor's
+blog, not Datadog's own page, which declines to publish a list price. **Still unanswered after two
+passes, and not to be read as validated:** what small teams say is *missing* from tools they
+rejected; whether free-self-hosted converts to paid anywhere; and whether a dashboard builder, SLOs
+or session replay are genuinely mandatory in real buyer evaluations. The decision to skip F16, F19,
+F20's builder and F7 in Phase 1 is therefore **carried, not confirmed** — close it before locking
+Phase 2 scope.
 
 **Deliberately NOT built (explicit decisions):** on-call scheduling and escalation → integrate via
 PagerDuty/Opsgenie connectors in F21/F22, never our own · customer cloud FinOps → parked ·
@@ -430,9 +447,39 @@ Two consequences this spec has to carry: the **billing screen** has nothing to s
 install and must not try to reach Razorpay, and the **ingestion allowance gate** is off — it is the
 operator's own disk and not ours to cap.
 
-**Still open and separate:** the code licence, which decides whether a competitor may sell nexovue as
-their own hosted service. Hard to reverse, and it belongs before the first image is published.
-**Added 2026-09-14.**
+**The licence: AGPL-3.0, source public — decided 2026-09-15.** The server, workers, API and console
+go out under AGPL-3.0; **`packages/browser-sdk` ships permissive (MIT or Apache-2.0) and must not be
+AGPL**, because it executes inside the customer's own page and copyleft there would make it legally
+unusable by the customers it exists for. The rule this spec has to hold: anything running on our
+infrastructure may be AGPL, anything running inside a customer's application may not.
+
+**Precedent, from the 2026-09-14 research pass** — the menu the peer set actually uses, none of
+which changed in the preceding twelve months (checked against each project's `LICENSE` commit
+history, not a survey): OpenObserve AGPL-3.0 core + commercial add-on, SigNoz MIT core + commercial
+`ee/`, ClickStack/HyperDX Apache-2.0 and MIT, Coroot Apache-2.0, Uptrace AGPL-3.0, Dash0 proprietary
+with no self-hosting at all. **Every OTel-native peer but one is readable**, which is why
+source-public rather than images-only: a closed binary asking for a customer's whole telemetry
+stream is a reason to pick a competitor that has nothing to do with features.
+
+**Two pre-flight items this feature owns**, both cheap and both before publication rather than
+after:
+
+1. **Dependency licence audit — done 2026-09-15, clean.** No incompatible licence in any ecosystem:
+   npm's 51 production packages are MIT/ISC/Apache-2.0/BSD-3/Unlicense; Go is MIT/BSD-3/Apache-2.0;
+   Python is MIT/BSD-3/Apache-2.0 plus duals. The two worth not assuming: `symbolic` is MIT despite
+   Sentry relicensing other projects to BSL, and `pycurl` is `LGPL-2.1-only OR MIT`, so the MIT
+   branch applies. Caveat recorded honestly: direct dependencies were checked, not the full
+   transitive tree — `go-licenses report ./...` and `pip-licenses` close that.
+2. **Content-level secret scan over full git history — NOT yet run, and required.** A filename-level
+   check found `.env` was never committed (only `.env.example`, carrying `nexovue_dev` against
+   localhost), but that matched names, not contents. A key pasted into a source file, a fixture or a
+   commit message would not have shown up. `gitleaks detect` or `trufflehog git file://.` before the
+   repo is flipped, because git history cannot be un-published — a leaked credential means rotating
+   it, not deleting it.
+
+**Open-core is deferred, not foreclosed.** No licence machinery, no `ee/` split, no key checking in
+this feature. A future paid feature is new code under its own licence, not a relicensing of anything
+existing — the shape OpenObserve already runs. **Added 2026-09-14, licence resolved 2026-09-15.**
 
 
 ## 7. Non-Functional Requirements (pointer)
