@@ -26,12 +26,15 @@ from __future__ import annotations
 
 import base64
 import binascii
+import csv
+import io
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, Field
 
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
@@ -42,6 +45,7 @@ from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.logs.schemas import LogRecord
 from nexovue_api.projects.service import require_project
 from nexovue_api.window import clamp_limit, receive_window, resolve_window
+from nexovue_api.wire import to_iso_millis
 
 DEFAULT_LIMIT: Final = 200
 MAX_LIMIT: Final = 1_000
@@ -279,6 +283,90 @@ async def search_logs(
     )
 
 
+# **Deliberately more than one screen holds and far less than a window can**, for
+# the reason `traces/service.py` gives at the same cap: an export exists to be taken
+# away and worked on, so a page of two hundred is a worse answer than the screen
+# already gives, and a million rows is a request that runs until something times out
+# and leaves nobody with a file. Past this the filters are the tool, not the download.
+MAX_EXPORTED_LOGS: Final = 50_000
+
+LOG_COLUMNS: Final = (
+    "observed_at",
+    "severity",
+    "severity_number",
+    "service_name",
+    "body",
+    "trace_id",
+    "span_id",
+    "attributes",
+)
+
+
+async def logs_as_csv(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    from_time: datetime,
+    to_time: datetime,
+    filters: LogFilters,
+) -> tuple[str, bool]:
+    """The filtered records as a file, and whether it was cut short.
+
+    Paged through with the search's own cursor rather than by raising its limit:
+    the cap exists because a single unbounded read is what `performance.md`
+    refuses, and an export is not an exception to that — it is the same read,
+    more times.
+
+    Returns the truncation flag rather than hiding it. A file that silently stops
+    is worse than one that says where it stopped, and the caller writes that into
+    the response for the screen to repeat.
+    """
+    sheet = io.StringIO()
+    writer = csv.writer(sheet)
+    writer.writerow(LOG_COLUMNS)
+
+    written = 0
+    cursor: str | None = None
+    while written < MAX_EXPORTED_LOGS:
+        page = await search_logs(
+            repository,
+            project_id=project_id,
+            from_time=from_time,
+            to_time=to_time,
+            filters=filters,
+            limit=min(MAX_LIMIT, MAX_EXPORTED_LOGS - written),
+            cursor=cursor,
+        )
+        for line in page.logs:
+            writer.writerow(
+                [
+                    # **Written through the wire's own serializer.** `IsoTimestamp`
+                    # carries one, but pydantic only applies it when serializing, and
+                    # `csv.writer` takes the raw datetime — so the file would have
+                    # carried `2026-08-30 07:51:58.688120+00:00` where every API
+                    # answer carries `2026-08-30T07:51:58.688Z`. One product, one
+                    # timestamp.
+                    to_iso_millis(line.observed_at),
+                    line.severity,
+                    line.severity_number,
+                    line.service_name,
+                    line.body,
+                    line.trace_id,
+                    line.span_id,
+                    # One column rather than a column per key: log attributes are
+                    # per-record, so a spread would be as wide as the union of every
+                    # record in the file and empty almost everywhere.
+                    json.dumps(line.attributes, sort_keys=True) if line.attributes else "",
+                ]
+            )
+        written += len(page.logs)
+        if page.next_cursor is None:
+            return sheet.getvalue(), False
+        cursor = page.next_cursor
+
+    return sheet.getvalue(), True
+
+
 def _next_cursor(rows: list[dict[str, Any]], limit: int) -> str | None:
     """A cursor only when a full page came back — a short page is the last one."""
     if len(rows) < limit:
@@ -374,6 +462,63 @@ async def search(
         filters=LogFilters(service_name=service, min_severity=min_severity, search=q),
         limit=clamp_limit(limit, default=DEFAULT_LIMIT, maximum=MAX_LIMIT),
         cursor=cursor,
+    )
+
+
+# The same records as a file. A suffix rather than a `format` parameter, matching
+# `traces/router.py` and `billing/router.py` — the convention `docs/engineering/api.md`
+# records — and a route rather than something the browser assembles, because a link to
+# a response carrying `Content-Disposition: attachment` is downloaded by the browser
+# itself.
+LOGS_CSV_PATH: Final = "/export.csv"
+CSV_CONTENT_TYPE: Final = "text/csv; charset=utf-8"
+
+
+@router.get(LOGS_CSV_PATH, response_class=Response, summary="The same records as a file")
+async def download(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+    q: Annotated[str | None, Query(description="Case-insensitive substring of the body")] = None,
+    service: Annotated[str | None, Query(description="Exactly one service name")] = None,
+    min_severity: Annotated[
+        int | None, Query(ge=MIN_SEVERITY_FLOOR, le=MIN_SEVERITY_CEILING)
+    ] = None,
+) -> Response:
+    """The filtered records as CSV, with the same filters the screen is showing.
+
+    **Every filter is taken again rather than a "download what you last asked
+    for" token**, for the reason the traces export gives: the link carries the
+    question, so it is the same question a reader can paste to a colleague, and
+    there is no server-side memory of a search to go stale between looking and
+    downloading.
+
+    **This reads storage, which runs behind the tail.** Records reach ClickHouse
+    through the pipeline, so the newest lines on the screen may not be in this
+    file yet. The screen offers its own buffer as the other half of the answer.
+    """
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    sheet, truncated = await logs_as_csv(
+        repository,
+        project_id=str(project.id),
+        from_time=window_start,
+        to_time=window_end,
+        filters=LogFilters(service_name=service, min_severity=min_severity, search=q),
+    )
+
+    return Response(
+        content=sheet,
+        media_type=CSV_CONTENT_TYPE,
+        headers={
+            "content-disposition": f'attachment; filename="{project.slug}-logs.csv"',
+            # A file that silently stops is worse than one that says so. The screen
+            # reads this to tell a reader their filters, not the export, are the tool.
+            "x-nexovue-truncated": "true" if truncated else "false",
+        },
     )
 
 

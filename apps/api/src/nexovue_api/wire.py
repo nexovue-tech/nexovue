@@ -16,7 +16,7 @@ MILLISECOND_DIGITS: Final = 3
 _MICROSECOND_DIGITS: Final = 6
 
 
-def _to_iso_millis(value: datetime) -> str:
+def to_iso_millis(value: datetime) -> str:
     """`2026-08-27T10:15:04.123Z` — always UTC, always three decimal places."""
     moment = value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
     return (
@@ -26,4 +26,4 @@ def _to_iso_millis(value: datetime) -> str:
     )
 
 
-IsoTimestamp = Annotated[datetime, PlainSerializer(_to_iso_millis, return_type=str)]
+IsoTimestamp = Annotated[datetime, PlainSerializer(to_iso_millis, return_type=str)]

@@ -7,6 +7,8 @@ isolation test below fails rather than quietly passing.
 
 from __future__ import annotations
 
+import csv
+import io
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -260,3 +262,78 @@ async def test_facets_read_only_the_tenant_the_repository_was_built_for() -> Non
     )
     assert facets.services == []
     assert facets.severities == []
+
+
+# ------------------------------------------------------------ exporting the list
+
+
+class TestTheExportedFile:
+    """The records as a file.
+
+    T63 exported traces only, on a recorded finding that logs had no search
+    endpoint. They did — this pages through the very function above.
+    """
+
+    async def _sheet(
+        self, tenant: str, store: FakeLogStore | None = None
+    ) -> tuple[str, bool]:
+        return await search.logs_as_csv(
+            _repository(tenant, store),
+            project_id=PROJECT,
+            from_time=WINDOW_START,
+            to_time=WINDOW_END,
+            filters=search.LogFilters(),
+        )
+
+    async def test_the_header_names_the_columns_the_screen_shows(self) -> None:
+        sheet, _ = await self._sheet(TENANT_A)
+
+        assert sheet.splitlines()[0].split(",") == list(search.LOG_COLUMNS)
+
+    async def test_the_records_in_the_window_reach_the_file(self) -> None:
+        sheet, truncated = await self._sheet(TENANT_A)
+
+        rows = sheet.strip().splitlines()
+        assert len(rows) == 3  # header plus the two the fake store holds
+        assert "payment authorization failed" in rows[1]
+        assert truncated is False
+
+    async def test_attributes_are_one_column_rather_than_a_column_each(self) -> None:
+        """A spread would be as wide as the union of every record in the file and
+        empty almost everywhere: log attributes are per-record."""
+        sheet, _ = await self._sheet(TENANT_A)
+
+        rows = list(csv.DictReader(io.StringIO(sheet)))
+        assert rows[0]["attributes"] == '{"provider": "stripe-sandbox"}'
+
+    async def test_the_file_carries_the_same_timestamps_the_api_does(self) -> None:
+        """`IsoTimestamp` carries a serializer, but pydantic only applies it when
+        serializing — `csv.writer` would take the raw datetime and write
+        `2026-08-30 07:51:58.688120+00:00` where the API writes
+        `2026-08-30T07:51:58.688Z`. One product, one timestamp."""
+        sheet, _ = await self._sheet(TENANT_A)
+
+        rows = list(csv.DictReader(io.StringIO(sheet)))
+        assert rows[0]["observed_at"].endswith("Z")
+        assert "T" in rows[0]["observed_at"]
+
+    async def test_another_organization_exports_nothing_of_this_one(self) -> None:
+        """The same isolation the search is held to. An export is the same read,
+        more times, and a cap is not a tenancy boundary."""
+        store = FakeLogStore(owner=TENANT_A)
+
+        mine, _ = await self._sheet(TENANT_A, store)
+        theirs, _ = await self._sheet(TENANT_B, store)
+
+        assert "payment authorization failed" in mine
+        assert theirs.strip() == ",".join(search.LOG_COLUMNS)
+
+    async def test_a_file_that_stops_short_says_so(self) -> None:
+        """A file that silently stops is worse than one that says where it
+        stopped: the reader would take a partial window for the whole one."""
+        full_page = FakeLogStore(owner=TENANT_A, rows=search.MAX_LIMIT)
+
+        sheet, truncated = await self._sheet(TENANT_A, full_page)
+
+        assert truncated is True
+        assert len(sheet.strip().splitlines()) == search.MAX_EXPORTED_LOGS + 1

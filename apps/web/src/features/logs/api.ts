@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
-import { apiClient } from "@/shared/api-client";
+import { API_BASE_PATH, apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
 import { windowKeyOf } from "@/shared/selection";
 
@@ -122,4 +122,30 @@ export function useLogFacets(projectId: string | undefined, timeWindow: TimeWind
         signal,
       }),
   });
+}
+
+/**
+ * The same records as a file, carrying the same question.
+ *
+ * **A link, never a blob this page builds** — the reasoning `traces/api.ts` records:
+ * the browser saves a same-origin response that says `attachment`, and every filter
+ * goes on the URL so the link is the same question a reader can paste to a colleague.
+ *
+ * **This reads storage, which runs behind the tail.** `log-export.ts` is the other
+ * half of the answer, and the control offers both because neither is complete alone.
+ */
+export function logExportUrl(
+  projectId: string,
+  timeWindow: TimeWindow,
+  filters: LogSearchFilters,
+): string {
+  const url = new URL(`${API_BASE_PATH}logs/export.csv`, window.location.origin);
+  url.searchParams.set("project_id", projectId);
+  url.searchParams.set("from", timeWindow.from);
+  url.searchParams.set("to", timeWindow.to);
+  const query = filters.query.trim();
+  if (query) url.searchParams.set("q", query);
+  if (filters.serviceName) url.searchParams.set("service", filters.serviceName);
+  if (filters.minSeverity) url.searchParams.set("min_severity", String(filters.minSeverity));
+  return url.toString();
 }

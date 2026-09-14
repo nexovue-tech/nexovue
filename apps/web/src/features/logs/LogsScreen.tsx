@@ -12,8 +12,9 @@ import { formatClockTime, formatTimestamp } from "@/shared/format/time";
 import { useDeclaredStream } from "@/shared/refresh";
 import { timeRangeById, useLiveWindow, useSelection } from "@/shared/selection";
 import type { LogSearchFilters, ServiceFacet, SeverityFacet } from "./api";
-import { useLogFacets, useLogSearch } from "./api";
-import type { LogLine, LogRow, TailNarration } from "./log-feed";
+import { logExportUrl, useLogFacets, useLogSearch } from "./api";
+import { bufferLineCount, downloadBuffer } from "./log-export";
+import type { LiveBuffer, LogLine, LogRow, TailNarration } from "./log-feed";
 
 import { buildLogRows, describeLogs } from "./log-feed";
 import { SEVERITY_FILTERS, severityFilterById, severityStyle } from "./severity";
@@ -92,6 +93,7 @@ export function LogsScreen() {
   return (
     <LogsView
       windowLabel={timeRangeById(rangeId).label}
+      exportUrl={projectId ? logExportUrl(projectId, timeWindow, filters) : undefined}
       typed={typed}
       onTypedChange={setTyped}
       serviceName={serviceName}
@@ -129,6 +131,8 @@ function useDebounced(value: string, delayMs: number): string {
 
 interface LogsViewProps {
   windowLabel: string;
+  /** Absent until a project is chosen; there is nothing to export from before then. */
+  exportUrl?: string;
   typed: string;
   onTypedChange: (value: string) => void;
   serviceName?: string;
@@ -153,6 +157,7 @@ interface LogsViewProps {
 /** Everything the screen shows, with no query client and no socket behind it. */
 export function LogsView({
   windowLabel,
+  exportUrl,
   typed,
   onTypedChange,
   serviceName,
@@ -209,7 +214,10 @@ export function LogsView({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Logs</h1>
+        <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Logs</h1>
+          <ExportControls exportUrl={exportUrl} buffer={tail.buffer} />
+        </div>
         <p className="mt-1 text-ink-dim text-sm">
           {isPending || isError
             ? `Every log line this project holds, over the last ${windowLabel}.`
@@ -310,6 +318,47 @@ function rowHeight(row: LogRow, expanded: string | undefined): number {
  * Whether the tail is running, as a sentence with a switch in it — the same idiom as
  * the top bar's `PROJECT production ⌄` rather than a form control dropped on the page.
  */
+/**
+ * Two exports, because neither is the whole answer.
+ *
+ * **Records reach ClickHouse through the pipeline, so the stored search runs behind
+ * the tail.** A file read from storage is complete for the window and missing the
+ * newest lines; a file built from the buffer has the newest lines and reaches back
+ * only as far as the buffer does. Offering one and calling it "export" would be a
+ * silent choice about which of those a reader gets.
+ *
+ * So both are offered, each labelled with what it will actually contain — the
+ * buffer one with its own line count, so nobody presses it expecting the window.
+ */
+function ExportControls({
+  exportUrl,
+  buffer,
+}: {
+  exportUrl: string | undefined;
+  buffer: LiveBuffer;
+}) {
+  const held = bufferLineCount(buffer);
+
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs">
+      {exportUrl ? (
+        <a href={exportUrl} className="text-ink-dim underline underline-offset-4 hover:text-ink">
+          Download this window as CSV
+        </a>
+      ) : null}
+
+      <button
+        type="button"
+        disabled={held === 0}
+        onClick={() => downloadBuffer(buffer, "nexovue-logs-on-screen.csv")}
+        className="text-ink-dim underline underline-offset-4 hover:text-ink disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
+      >
+        Download the {formatCount(held)} {plural(held, "line", "lines")} on screen
+      </button>
+    </div>
+  );
+}
+
 /** The socket has five states; the sentence under the heading has words for three. */
 function narrate(status: TailStatus): TailNarration {
   if (status === "live") return "live";
