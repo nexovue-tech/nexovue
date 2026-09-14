@@ -151,13 +151,23 @@ export function refetchIntervalFor(
  */
 export type StreamState = "idle" | "connecting" | "live" | "paused" | "failed";
 
+/**
+ * A screen with nothing live on it at all.
+ *
+ * The settings screens read a name, a plan and a list of keys. None of it
+ * arrives on its own, and an interval picker over them is the same defect the
+ * logs screen had in the other direction: a control that governs nothing, read
+ * by a customer as a promise that the screen is watching something.
+ */
+export const NOTHING_LIVE = "nothing-live" as const;
+
 export interface LiveStream {
   state: StreamState;
   pause: () => void;
   resume: () => void;
 }
 
-let stream: LiveStream | undefined;
+let stream: LiveStream | typeof NOTHING_LIVE | undefined;
 const streamListeners = new Set<() => void>();
 
 function subscribeStream(listener: () => void): () => void {
@@ -166,13 +176,18 @@ function subscribeStream(listener: () => void): () => void {
 }
 
 /** Declared by the screen while it is mounted, and withdrawn when it leaves. */
-export function declareStream(next: LiveStream | undefined): void {
+export function declareStream(next: LiveStream | typeof NOTHING_LIVE | undefined): void {
   stream = next;
   for (const listener of streamListeners) listener();
 }
 
-export function useLiveStream(): LiveStream | undefined {
-  return useSyncExternalStore(subscribeStream, () => stream);
+/** What is declared right now. Separate from the hook so a test needs no tree. */
+export function readLiveStream(): LiveStream | typeof NOTHING_LIVE | undefined {
+  return stream;
+}
+
+export function useLiveStream(): LiveStream | typeof NOTHING_LIVE | undefined {
+  return useSyncExternalStore(subscribeStream, readLiveStream);
 }
 
 /**
@@ -186,4 +201,12 @@ export function useDeclaredStream(state: StreamState, pause: () => void, resume:
     declareStream({ state, pause, resume });
     return () => declareStream(undefined);
   }, [state, pause, resume]);
+}
+
+/** Declared by a screen that polls nothing, for as long as it is on screen. */
+export function useNothingLive(): void {
+  useEffect(() => {
+    declareStream(NOTHING_LIVE);
+    return () => declareStream(undefined);
+  }, []);
 }

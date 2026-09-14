@@ -1,11 +1,11 @@
 import { ChevronRight } from "lucide-react";
 import { useState } from "react";
-
 import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
+import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 
 import type { ProjectDeleted } from "./api";
 import { useCreateProject, useProject, useProjects } from "./api";
@@ -37,92 +37,87 @@ export function ProjectsScreen() {
   };
 
   return (
-    // One column, one measure: the heading stopped at 42rem while the list ran to
-    // the window edge, and the rows were inset a further 4 on top of that, so no two
-    // left edges on the screen agreed.
-    <div className="flex w-full max-w-3xl flex-col gap-8 px-6 py-8">
-      <header>
-        <h1 className="font-medium font-serif text-ink text-xl tracking-tight">Projects</h1>
-        <p className="mt-2 text-ink-dim text-sm leading-relaxed">
-          A project is what a key sends to and what telemetry is filed under. Most teams keep one
-          per environment &mdash; production and staging &mdash; so a staging deploy can never be
-          mistaken for a production incident.
-        </p>
-      </header>
+    <SettingsLayout
+      title="Projects"
+      description="A project is what a key sends to and what telemetry is filed under. Most teams keep one per environment — production and staging — so a staging deploy can never be mistaken for a production incident."
+    >
+      <div className="flex flex-col gap-8">
+        {deleted ? (
+          <DeletionReceipt result={deleted} onDismiss={() => setDeleted(undefined)} />
+        ) : null}
 
-      {deleted ? (
-        <DeletionReceipt result={deleted} onDismiss={() => setDeleted(undefined)} />
-      ) : null}
+        <CreateProject />
 
-      <CreateProject />
-
-      {projects.isPending ? (
-        <SkeletonRows rows={3} label="Loading projects" />
-      ) : projects.isError ? (
-        <InlineFailure
-          title="Projects could not be loaded"
-          error={projects.error}
-          onRetry={() => void projects.refetch()}
-        />
-      ) : projects.data.length === 0 ? (
-        <EmptyState
-          title="This organization has no projects"
-          detail="Nothing can send telemetry until one exists, because a key belongs to a project. Create one above."
-        />
-      ) : (
-        <section>
-          {/* The list said nothing about being a list: no count, no heading, and a
+        {projects.isPending ? (
+          <SkeletonRows rows={3} label="Loading projects" />
+        ) : projects.isError ? (
+          <InlineFailure
+            title="Projects could not be loaded"
+            error={projects.error}
+            onRetry={() => void projects.refetch()}
+          />
+        ) : projects.data.length === 0 ? (
+          <EmptyState
+            title="This organization has no projects"
+            detail="Nothing can send telemetry until one exists, because a key belongs to a project. Create one above."
+          />
+        ) : (
+          <section>
+            {/* The list said nothing about being a list: no count, no heading, and a
               row whose only affordance was a hover class that does not exist. A
               reader could not tell there was anything to click. */}
-          <h2 className="border-line border-b pb-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps">
-            {projects.data.length} {projects.data.length === 1 ? "project" : "projects"} — open one
-            to change what it keeps
-          </h2>
-          <ul className="flex flex-col">
-            {projects.data.map((project) => (
-              <li key={project.id} className="border-line-subtle border-b">
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-3 py-3 text-left hover:bg-hover"
-                  aria-expanded={selectedId === project.id}
-                  onClick={() => setSelectedId(selectedId === project.id ? undefined : project.id)}
-                >
-                  <ChevronRight
-                    size={14}
-                    aria-hidden="true"
-                    className={`shrink-0 text-ink-dim transition-transform ${
-                      selectedId === project.id ? "rotate-90" : ""
-                    }`}
-                  />
-                  <span className="text-ink text-sm">{project.name}</span>
-                  <span className="font-mono text-ink-dim text-xs">{project.slug}</span>
-                </button>
+            <h2 className="border-line border-b pb-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps">
+              {projects.data.length} {projects.data.length === 1 ? "project" : "projects"} — open
+              one to change what it keeps
+            </h2>
+            <ul className="flex flex-col">
+              {projects.data.map((project) => (
+                <li key={project.id} className="border-line-subtle border-b">
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-3 py-3 text-left hover:bg-hover"
+                    aria-expanded={selectedId === project.id}
+                    onClick={() =>
+                      setSelectedId(selectedId === project.id ? undefined : project.id)
+                    }
+                  >
+                    <ChevronRight
+                      size={14}
+                      aria-hidden="true"
+                      className={`shrink-0 text-ink-dim transition-transform ${
+                        selectedId === project.id ? "rotate-90" : ""
+                      }`}
+                    />
+                    <span className="text-ink text-sm">{project.name}</span>
+                    <span className="font-mono text-ink-dim text-xs">{project.slug}</span>
+                  </button>
 
-                {selectedId === project.id ? (
-                  <div className="pb-8">
-                    {selected.isPending ? (
-                      <SkeletonRows rows={4} label="Loading project settings" />
-                    ) : selected.isError ? (
-                      <InlineFailure
-                        title="This project's settings could not be loaded"
-                        error={selected.error}
-                        onRetry={() => void selected.refetch()}
-                      />
-                    ) : (
-                      <ProjectSettings
-                        key={selected.data.id}
-                        project={selected.data}
-                        onDeleted={onDeleted}
-                      />
-                    )}
-                  </div>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-    </div>
+                  {selectedId === project.id ? (
+                    <div className="pb-8">
+                      {selected.isPending ? (
+                        <SkeletonRows rows={4} label="Loading project settings" />
+                      ) : selected.isError ? (
+                        <InlineFailure
+                          title="This project's settings could not be loaded"
+                          error={selected.error}
+                          onRetry={() => void selected.refetch()}
+                        />
+                      ) : (
+                        <ProjectSettings
+                          key={selected.data.id}
+                          project={selected.data}
+                          onDeleted={onDeleted}
+                        />
+                      )}
+                    </div>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </div>
+    </SettingsLayout>
   );
 }
 

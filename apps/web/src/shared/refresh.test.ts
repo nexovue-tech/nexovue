@@ -4,9 +4,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { RefreshPreference } from "./refresh";
 import {
+  declareStream,
   intervalById,
+  NOTHING_LIVE,
   REFRESH_INTERVALS,
   REFRESH_STORAGE_KEY,
+  readLiveStream,
   refetchIntervalFor,
   setPaused,
   setRefreshIntervalId,
@@ -82,5 +85,35 @@ describe("what survives a reload", () => {
     setPaused(true);
 
     expect(localStorage.getItem(REFRESH_STORAGE_KEY) ?? "").not.toContain("paused");
+  });
+});
+
+describe("what a screen says about its own liveness", () => {
+  it("has no stream declared until a screen declares one", () => {
+    declareStream(undefined);
+
+    expect(readLiveStream()).toBeUndefined();
+  });
+
+  it("carries a stream's state and its controls to whatever renders them", () => {
+    const pause = () => {};
+    const resume = () => {};
+
+    declareStream({ state: "paused", pause, resume });
+
+    expect(readLiveStream()).toEqual({ state: "paused", pause, resume });
+    declareStream(undefined);
+  });
+
+  it("distinguishes a screen with nothing live from one that has not said", () => {
+    /* The two must not collapse: "no stream" is a polling screen, which shows an
+       interval, and NOTHING_LIVE is a screen that polls nothing, which shows no
+       control at all. Rendering an interval over a list of API keys is a control
+       that governs nothing. */
+    declareStream(NOTHING_LIVE);
+
+    expect(readLiveStream()).toBe(NOTHING_LIVE);
+    declareStream(undefined);
+    expect(readLiveStream()).toBeUndefined();
   });
 });

@@ -274,9 +274,7 @@ class TestTheExportedFile:
     endpoint. They did — this pages through the very function above.
     """
 
-    async def _sheet(
-        self, tenant: str, store: FakeLogStore | None = None
-    ) -> tuple[str, bool]:
+    async def _sheet(self, tenant: str, store: FakeLogStore | None = None) -> tuple[str, bool]:
         return await search.logs_as_csv(
             _repository(tenant, store),
             project_id=PROJECT,

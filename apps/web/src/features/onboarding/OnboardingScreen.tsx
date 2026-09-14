@@ -149,7 +149,7 @@ function Arrived({ traceId, service, name }: { traceId: string; service: string;
   // reason the confirmation is the destination rather than the trace list: a
   // customer who has just proved it works is deciding what to do about it, not
   // reading spans.
-  const leaveFor = (to: "/synthetics" | "/usage") => () => {
+  const leaveFor = (to: "/synthetics" | "/settings/usage") => () => {
     forgetFirstSetup();
     void navigate({ to, replace: true });
   };
@@ -172,7 +172,7 @@ function Arrived({ traceId, service, name }: { traceId: string; service: string;
         <Button variant="secondary" onClick={leaveFor("/synthetics")}>
           Add an uptime check
         </Button>
-        <Button variant="secondary" onClick={leaveFor("/usage")}>
+        <Button variant="secondary" onClick={leaveFor("/settings/usage")}>
           What this costs
         </Button>
       </div>

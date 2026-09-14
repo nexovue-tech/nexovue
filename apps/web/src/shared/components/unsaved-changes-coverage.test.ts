@@ -34,7 +34,7 @@ function source(path: string): string {
 /** A draft somebody would be sorry to lose. */
 const GUARDED = [
   "features/projects/ProjectSettings.tsx",
-  "features/auth/ProfileScreen.tsx",
+  "features/auth/account-sections.tsx",
   "features/settings/SiteKeysSection.tsx",
 ];
 

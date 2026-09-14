@@ -1,9 +1,28 @@
+/**
+ * The parts both account screens are built from.
+ *
+ * **The session controls are deliberately different from each other.** Changing the
+ * password keeps the session you are sitting in and ends every other one; ending one
+ * device ends exactly that one; sign-out-everywhere ends this one too. Each is stated
+ * before the customer commits, not only after, because a control that surprises you at
+ * the moment it fires is one you stop trusting.
+ *
+ * These used to be one screen called "Profile & security", which is two things wearing
+ * one name: what you are called and how you are themed is a preference, and what is
+ * signed in as you is not. They are `GeneralScreen` and `AccountScreen` now.
+ *
+ * Email change and timezone are the rest of P1-72 and are not built — no API exists for
+ * either yet, so the address is shown and not offered as a field.
+ */
+
 import { useNavigate } from "@tanstack/react-router";
 import { type FormEvent, type ReactNode, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { CopyButton } from "@/shared/components/CopyButton";
+import { DataTable } from "@/shared/components/DataTable";
 import { InlineFailure } from "@/shared/components/InlineFailure";
+import { SettingGroup } from "@/shared/components/SettingRow";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
 import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
@@ -12,7 +31,6 @@ import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { clearSession } from "@/shared/session";
 
 import {
-  type ActiveSession,
   PASSWORD_MIN_LENGTH,
   useActiveSessions,
   useBeginSecondFactorEnrolment,
@@ -22,81 +40,14 @@ import {
   useEndSession,
   useRenameSelf,
   useSecondFactor,
-  useSession,
   useSignOutEverywhere,
 } from "./api";
 import { describeFormProblem } from "./problem-fields";
 import { SIGNED_OUT_EVERYWHERE } from "./search";
 
-/**
- * Your own account: what you are called, the password on it, the second factor in
- * front of it, what is signed in as you, and the control that ends all of it at once.
- *
- * **The session controls are the substance of this screen, and they are deliberately
- * different from each other.** Changing the password keeps the session you are sitting
- * in and ends every other one; ending one device ends exactly that one;
- * sign-out-everywhere ends this one too. Each is stated before the customer commits,
- * not only after, because a control that surprises you at the moment it fires is one
- * you stop trusting.
- *
- * **The order is the order somebody works down it when they are worried.** What is
- * signed in comes before the blunt instrument, because "end the one I do not
- * recognise" is almost always the right answer and "sign out of everything" is the one
- * people reach for only because it was the only one on offer.
- *
- * Email change and timezone are the rest of P1-72 and are not built — no API exists for
- * either yet, so the address below is shown and not offered as a field.
- */
-export function ProfileScreen() {
-  const session = useSession();
-
-  if (session.isPending) {
-    return (
-      <div className="px-4 pt-5">
-        <SkeletonRows rows={6} label="Loading your account" />
-      </div>
-    );
-  }
-
-  if (session.isError || session.data === undefined) {
-    return (
-      <div className="px-4 pt-5">
-        <InlineFailure
-          title="Your account could not be loaded"
-          error={session.error}
-          onRetry={() => void session.refetch()}
-        />
-      </div>
-    );
-  }
-
-  const { user, organization } = session.data;
-
-  return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-      <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">
-          Profile &amp; security
-        </h1>
-        <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">
-          Signed in as <span className="text-ink">{user.email}</span> in{" "}
-          <span className="text-ink">{organization.name}</span>. The address cannot be changed here
-          yet — changing it has to re-verify, and that is not built.
-        </p>
-      </header>
-
-      <NameSection currentName={user.name} />
-      <PasswordSection />
-      <SecondFactorSection />
-      <ActiveSessionsSection />
-      <SignOutEverywhereSection />
-    </div>
-  );
-}
-
 /* ------------------------------------------------------------------- the name */
 
-function NameSection({ currentName }: { currentName: string | null }) {
+export function NameSection({ currentName }: { currentName: string | null }) {
   const rename = useRenameSelf();
   const [name, setName] = useState(currentName ?? "");
 
@@ -165,7 +116,7 @@ const PASSWORD_CHANGED_CONFIRMATION =
 
 const CURRENT_PASSWORD_REQUIRED = "Enter the password on the account now.";
 
-function PasswordSection() {
+export function PasswordSection() {
   const changePassword = useChangeOwnPassword();
 
   const [currentPassword, setCurrentPassword] = useState("");
@@ -269,7 +220,7 @@ const RECOVERY_CODES_BLURB =
  */
 type EnrolmentStage = "off" | "scanning" | "codes";
 
-function SecondFactorSection() {
+export function SecondFactorSection() {
   const state = useSecondFactor();
   const [stage, setStage] = useState<EnrolmentStage>("off");
 
@@ -466,7 +417,7 @@ const SESSIONS_BLURB =
  * family and a network are enough to recognise your own laptop and not enough to find
  * out where its owner sits.
  */
-function ActiveSessionsSection() {
+export function ActiveSessionsSection() {
   const sessions = useActiveSessions();
   const endSession = useEndSession();
 
@@ -500,51 +451,65 @@ function ActiveSessionsSection() {
         </div>
       ) : null}
 
-      <ul className="max-w-2xl divide-y divide-line-subtle border-line-subtle border-t border-b">
-        {sessions.data.map((entry) => (
-          <SessionRow
-            key={entry.id}
-            session={entry}
-            pending={endSession.isPending && endSession.variables === entry.id}
-            onEnd={() => endSession.mutate(entry.id)}
-          />
-        ))}
-      </ul>
+      <DataTable
+        caption="Sessions currently signed in to this account"
+        rows={sessions.data}
+        rowKey={(entry) => entry.id}
+        empty="Nothing else is signed in."
+        columns={[
+          {
+            key: "device",
+            header: "Device",
+            cell: (entry) => (
+              <>
+                {/* An unrecognised client is words rather than a device name
+                    nobody owns. */}
+                {entry.client ?? "Unknown device"}
+                {entry.current ? (
+                  <span className="ml-2 font-mono text-2xs text-brand-text uppercase tracking-caps">
+                    This device
+                  </span>
+                ) : null}
+              </>
+            ),
+          },
+          {
+            key: "network",
+            header: "Network",
+            cell: (entry) => <span className="text-ink-dim">{entry.network ?? UNKNOWN}</span>,
+          },
+          {
+            key: "last-used",
+            header: "Last used",
+            cell: (entry) => (
+              <span className="text-ink-dim">{formatRelativeTime(entry.last_seen_at)}</span>
+            ),
+          },
+          {
+            key: "started",
+            header: "Started",
+            cell: (entry) => (
+              <span className="text-ink-dim">{formatTimestamp(entry.created_at)}</span>
+            ),
+          },
+          {
+            key: "end",
+            header: "",
+            numeric: true,
+            cell: (entry) => (
+              <Button
+                variant="secondary"
+                pending={endSession.isPending && endSession.variables === entry.id}
+                pendingLabel="Ending…"
+                onClick={() => endSession.mutate(entry.id)}
+              >
+                {entry.current ? "End this session" : "End session"}
+              </Button>
+            ),
+          },
+        ]}
+      />
     </Section>
-  );
-}
-
-function SessionRow({
-  session,
-  pending,
-  onEnd,
-}: {
-  session: ActiveSession;
-  pending: boolean;
-  onEnd: () => void;
-}) {
-  return (
-    <li className="flex items-center justify-between gap-4 py-3">
-      <div className="min-w-0">
-        <p className="text-ink text-sm">
-          {/* An unrecognised client is an em dash like every other missing reading,
-              rather than a device name nobody owns. */}
-          {session.client ?? "Unknown device"}
-          {session.current ? (
-            <span className="ml-2 font-mono text-2xs text-brand-text uppercase tracking-caps">
-              This device
-            </span>
-          ) : null}
-        </p>
-        <p className="mt-0.5 text-ink-dim text-xs">
-          {session.network ?? UNKNOWN} · last used {formatRelativeTime(session.last_seen_at)} ·
-          started {formatTimestamp(session.created_at)}
-        </p>
-      </div>
-      <Button variant="secondary" pending={pending} pendingLabel="Ending…" onClick={onEnd}>
-        {session.current ? "End this session" : "End session"}
-      </Button>
-    </li>
   );
 }
 
@@ -553,7 +518,7 @@ function SessionRow({
 const SIGN_OUT_EVERYWHERE_BLURB =
   "Ends every session on this account, including this one. Reach for it when you think somebody else may be signed in as you — a shared machine you walked away from, a phone you no longer have.";
 
-function SignOutEverywhereSection() {
+export function SignOutEverywhereSection() {
   const navigate = useNavigate();
   const signOut = useSignOutEverywhere();
   const [confirming, setConfirming] = useState(false);
@@ -609,6 +574,7 @@ function SignOutEverywhereSection() {
 
 /* --------------------------------------------------------------- furniture */
 
+/** The screens' own name for the shared grammar, so every call site kept its shape. */
 function Section({
   title,
   blurb,
@@ -619,11 +585,9 @@ function Section({
   children: ReactNode;
 }) {
   return (
-    <section className="shrink-0 border-line-subtle border-t px-4 py-5">
-      <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">{title}</h2>
-      <p className="mt-1 mb-4 max-w-2xl text-ink-dim text-sm leading-relaxed">{blurb}</p>
-      {children}
-    </section>
+    <SettingGroup title={title} description={blurb}>
+      <div className="py-3">{children}</div>
+    </SettingGroup>
   );
 }
 

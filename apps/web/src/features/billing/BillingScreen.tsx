@@ -1,12 +1,13 @@
 import { useState } from "react";
-
 import { Button } from "@/shared/components/Button";
+import { DataTable } from "@/shared/components/DataTable";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
 import { formatDecimalBytes } from "@/shared/format/bytes";
 import { formatMoney } from "@/shared/format/money";
 import { formatCount } from "@/shared/format/number";
+import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 
 import type { BillingOverview, PlanOption } from "./api";
 import {
@@ -57,34 +58,38 @@ export function BillingScreen() {
   const [currency, setCurrency] = useState<string>();
   const overview = useBillingOverview(currency);
 
-  if (overview.isPending) return <SkeletonRows rows={6} label="Loading billing" />;
+  if (overview.isPending) {
+    return (
+      <SettingsLayout title="Billing">
+        <SkeletonRows rows={6} label="Loading billing" />
+      </SettingsLayout>
+    );
+  }
   if (overview.isError) {
     return (
-      <div className="px-6 py-8">
+      <SettingsLayout title="Billing">
         <InlineFailure
           title="Billing could not be loaded"
           error={overview.error}
           onRetry={() => void overview.refetch()}
         />
-      </div>
+      </SettingsLayout>
     );
   }
 
   return (
-    <div className="flex flex-col gap-10 px-6 py-8">
-      <header className="max-w-2xl">
-        <h1 className="font-medium font-serif text-ink text-xl tracking-tight">Billing</h1>
-        <p className="mt-2 text-ink-dim text-sm leading-relaxed">
-          What you are on, what pays for it, and how much of this month&rsquo;s allowance is spent.
-        </p>
-      </header>
-
-      <ThisMonth overview={overview.data} />
-      <CurrencyChoice overview={overview.data} onChange={setCurrency} />
-      <Arrangement overview={overview.data} />
-      <Upgrade overview={overview.data} currency={overview.data.currency} />
-      <Charges overview={overview.data} />
-    </div>
+    <SettingsLayout
+      title="Billing"
+      description="What you are on, what pays for it, and how much of this month's allowance is spent."
+    >
+      <div className="flex flex-col gap-10">
+        <ThisMonth overview={overview.data} />
+        <CurrencyChoice overview={overview.data} onChange={setCurrency} />
+        <Arrangement overview={overview.data} />
+        <Upgrade overview={overview.data} currency={overview.data.currency} />
+        <Charges overview={overview.data} />
+      </div>
+    </SettingsLayout>
   );
 }
 
@@ -495,23 +500,28 @@ function Charges({ overview }: { overview: BillingOverview }) {
           error={history.error}
           onRetry={() => void history.refetch()}
         />
-      ) : history.data.charges.length === 0 ? (
-        <p className="text-ink-dim text-sm leading-relaxed">{NO_CHARGES_YET}</p>
       ) : (
         <>
-          <ul className="flex flex-col divide-y divide-line">
-            {history.data.charges.map((charge) => (
-              <li
-                key={`${charge.charged_at}-${charge.plan_slug}`}
-                className="flex items-baseline justify-between gap-4 py-2"
-              >
-                <span className="text-ink text-sm">{chargeDay(charge)}</span>
-                <span className="grow text-ink-dim text-xs">{chargeTerms(charge)}</span>
-                <span className="text-ink-dim text-xs">{chargeOutcome(charge)}</span>
-                <span className="text-ink text-sm">{chargeAmount(charge)}</span>
-              </li>
-            ))}
-          </ul>
+          <DataTable
+            caption="Charges recorded against this organization"
+            rows={history.data.charges}
+            rowKey={(charge) => `${charge.charged_at}-${charge.plan_slug}`}
+            empty={NO_CHARGES_YET}
+            columns={[
+              { key: "date", header: "Date", cell: chargeDay },
+              {
+                key: "terms",
+                header: "What for",
+                cell: (charge) => <span className="text-ink-dim">{chargeTerms(charge)}</span>,
+              },
+              {
+                key: "outcome",
+                header: "Status",
+                cell: (charge) => <span className="text-ink-dim">{chargeOutcome(charge)}</span>,
+              },
+              { key: "amount", header: "Total", numeric: true, cell: chargeAmount },
+            ]}
+          />
           <div>
             {/* A link, never a blob this page builds: a page in a sandboxed
                 frame cannot hand itself a file, while the browser saves a

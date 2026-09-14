@@ -5,10 +5,10 @@ import {
   createRouter,
   Outlet,
 } from "@tanstack/react-router";
-
+import { AccountScreen } from "@/features/auth/AccountScreen";
 import { ForgotPasswordScreen } from "@/features/auth/ForgotPasswordScreen";
+import { GeneralScreen } from "@/features/auth/GeneralScreen";
 import { LoginScreen } from "@/features/auth/LoginScreen";
-import { ProfileScreen } from "@/features/auth/ProfileScreen";
 import { ResetPasswordScreen } from "@/features/auth/ResetPasswordScreen";
 import { SignupScreen } from "@/features/auth/SignupScreen";
 import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
@@ -212,9 +212,12 @@ const rumRoute = createRoute({
   validateSearch: (search: Record<string, unknown>) => parseFilterValues(rumFilters({}), search),
 });
 
-const usageRoute = createRoute({
+/* Usage sits with the other settings now: it is an account fact — what this
+   organization has ingested and what that costs — rather than a telemetry screen,
+   and it was the one entry whose own time control disagreed with the top bar's. */
+const settingsUsageRoute = createRoute({
   getParentRoute: () => shellRoute,
-  path: "/usage",
+  path: "/settings/usage",
   component: UsageScreen,
 });
 
@@ -241,10 +244,18 @@ const settingsBillingRoute = createRoute({
  * own account, so it is only reachable with a session — and the shell's own `/auth/me`
  * is what enforces that, the same way it does for the rest.
  */
-const settingsProfileRoute = createRoute({
+/* "Profile & security" was two things wearing one name. What you are called and
+   how the console looks to you is a preference; what is signed in as you is not. */
+const settingsGeneralRoute = createRoute({
   getParentRoute: () => shellRoute,
-  path: "/settings/profile",
-  component: ProfileScreen,
+  path: "/settings/general",
+  component: GeneralScreen,
+});
+
+const settingsAccountRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/account",
+  component: AccountScreen,
 });
 
 /* Bare screens — outside the shell. */
@@ -369,11 +380,12 @@ const routeTree = rootRoute.addChildren([
     metricsRoute,
     syntheticsRoute,
     rumRoute,
-    usageRoute,
+    settingsGeneralRoute,
+    settingsAccountRoute,
     settingsApiKeysRoute,
     settingsProjectsRoute,
     settingsBillingRoute,
-    settingsProfileRoute,
+    settingsUsageRoute,
     notFoundRoute,
   ]),
   loginRoute,

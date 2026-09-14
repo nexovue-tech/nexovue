@@ -1,12 +1,12 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef, useState } from "react";
-
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatDecimalBytes } from "@/shared/format/bytes";
 import { formatCount } from "@/shared/format/number";
 import { useProjects } from "@/shared/projects";
+import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 
 import type { BillingPeriod, CardinalityWarning, PlanPrice, UsageResponse } from "./api";
 import { useUsage } from "./api";
@@ -69,16 +69,18 @@ export function UsageScreen() {
   const projectNames = new Map((projects.data ?? []).map((project) => [project.id, project.name]));
 
   return (
-    <UsageView
-      range={range}
-      onRangeChange={setRangeDays}
-      usage={usage.data}
-      isPending={usage.isPending}
-      isError={usage.isError}
-      error={usage.error}
-      onRetry={() => void usage.refetch()}
-      projectNames={projectNames}
-    />
+    <SettingsLayout title="Usage">
+      <UsageView
+        range={range}
+        onRangeChange={setRangeDays}
+        usage={usage.data}
+        isPending={usage.isPending}
+        isError={usage.isError}
+        error={usage.error}
+        onRetry={() => void usage.refetch()}
+        projectNames={projectNames}
+      />
+    </SettingsLayout>
   );
 }
 
@@ -105,24 +107,21 @@ export function UsageView({
   projectNames,
 }: UsageViewProps) {
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="shrink-0 px-4 pt-5 pb-4">
-        <div className="flex items-baseline justify-between gap-6">
-          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Usage</h1>
-          <RangeToggle days={range.days} onRangeChange={onRangeChange} />
+    <div className="flex min-h-0 flex-col">
+      {/* Both sentences qualify the numbers below rather than name the screen, so
+          they stay with the numbers and not in the layout's heading. */}
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+        <div>
+          <p className="text-ink-dim text-sm">{describeScope(range.label)}</p>
+          <p className="mt-0.5 text-ink-dim text-xs">{OWN_PERIOD_NOTE}</p>
         </div>
-        <p className="mt-1 text-ink-dim text-sm">{describeScope(range.label)}</p>
-        <p className="mt-1 text-ink-dim text-xs">{OWN_PERIOD_NOTE}</p>
-      </header>
+        <RangeToggle days={range.days} onRangeChange={onRangeChange} />
+      </div>
 
       {isPending ? (
-        <div className="px-4">
-          <SkeletonRows rows={10} label="Loading usage" />
-        </div>
+        <SkeletonRows rows={10} label="Loading usage" />
       ) : isError || usage === undefined ? (
-        <div className="px-4">
-          <InlineFailure title="Usage could not be loaded" error={error} onRetry={onRetry} />
-        </div>
+        <InlineFailure title="Usage could not be loaded" error={error} onRetry={onRetry} />
       ) : (
         <>
           <Summary usage={usage} />

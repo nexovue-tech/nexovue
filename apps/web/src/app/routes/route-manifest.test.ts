@@ -1,7 +1,8 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-
+import { SETTINGS_GROUPS } from "@/shared/settings/settings-nav";
 import { createAppRouter } from "../router";
+
 import { NAV_SECTIONS } from "./route-manifest";
 
 /**
@@ -19,18 +20,45 @@ function servedPaths(): Set<string> {
   return new Set(Object.keys(router.routesByPath).filter((path) => path !== NOT_FOUND_ROUTE_PATH));
 }
 
+/**
+ * Navigation is two levels now: the sidebar, and the settings rail inside it.
+ * Both are navigation, so both are held to the same promise — a screen reached
+ * from either is reachable, and a screen reached from neither is not.
+ */
+function everythingOffered(): string[] {
+  return [
+    ...NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.path)),
+    ...SETTINGS_GROUPS.flatMap((group) => group.items.map((item) => item.path)),
+  ];
+}
+
 describe("the sidebar", () => {
   it("offers only paths the router serves with a screen of their own", () => {
     const served = servedPaths();
-    const offered = NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.path));
 
-    expect(offered.filter((path) => !served.has(path))).toEqual([]);
+    expect(everythingOffered().filter((path) => !served.has(path))).toEqual([]);
   });
 
-  it("names every screen once, so no two entries lead to the same place", () => {
-    const offered = NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.path));
+  it("names every screen once within each level of navigation", () => {
+    // Within a level, not across the two. The sidebar's Settings entry and the
+    // rail's first screen are deliberately the same path: one is the door and the
+    // other is the room behind it.
+    for (const level of [
+      NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.path)),
+      SETTINGS_GROUPS.flatMap((group) => group.items.map((item) => item.path)),
+    ]) {
+      expect(level).toEqual([...new Set(level)]);
+    }
+  });
 
-    expect(offered).toEqual([...new Set(offered)]);
+  it("opens the settings area on the first screen its own rail lists", () => {
+    // Otherwise the door lands somewhere the rail does not highlight, and the
+    // reader's first impression of the area is that they are already lost in it.
+    const door = NAV_SECTIONS.flatMap((section) => section.items)
+      .map((item) => item.path)
+      .find((path) => path.startsWith("/settings/"));
+
+    expect(door).toBe(SETTINGS_GROUPS[0].items[0].path);
   });
 
   it("offers every screen a person is meant to reach from inside the app", () => {
@@ -62,9 +90,7 @@ describe("the sidebar", () => {
       "/docs/$",
     ]);
 
-    const offered = new Set<string>(
-      NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.path)),
-    );
+    const offered = new Set<string>(everythingOffered());
     const unreachable = [...servedPaths()].filter(
       (path) =>
         !offered.has(path) && !reachedByFollowingSomething.has(path) && !signedOut.has(path),

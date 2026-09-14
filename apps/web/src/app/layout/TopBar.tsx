@@ -3,7 +3,6 @@ import { Menu } from "lucide-react";
 import { SelectField } from "@/shared/components/SelectField";
 import { useProjectSelection } from "@/shared/projects";
 import { setSelectedProjectId } from "@/shared/selection";
-import { ThemeToggle } from "@/shared/theme/ThemeToggle";
 
 import { RefreshControl } from "./RefreshControl";
 import { WindowControl } from "./WindowControl";
@@ -54,17 +53,18 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
 
       <div className="flex-1" />
 
-      <RefreshControl />
+      {/* The theme used to sit here, beside the two controls that qualify every
+          reading on every screen. It was the only one that changed nothing about
+          the data, and it took space on every screen for a decision most people
+          make once — it is a row under Settings → General now.
 
-      <span aria-hidden className="h-4 w-px bg-line" />
-
-      {/* Search is not here yet, and ⌘K stays reserved for it — no screen may bind
+          Search is not here yet, and ⌘K stays reserved for it — no screen may bind
           that chord to something else in the meantime. It carried a button and a
           disabled input until 2026-09-14, which showed a customer who pressed it a
           greyed-out box reading "mounted by P1-63, filled by a later task". An
           internal task id is worse than no button at all. */}
 
-      <ThemeToggle />
+      <RefreshControl />
     </header>
   );
 }

@@ -8,6 +8,7 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useSelection } from "@/shared/selection";
+import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
 import type { ApiKeyCreated, ApiKeySummary } from "./api";
 import { useApiKeys, useCreateApiKey, useIngestEndpoint, useRevokeApiKey } from "./api";
@@ -80,92 +81,85 @@ export function ApiKeysScreen() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-      {/* One column, one measure. Every block inside sets its own vertical rhythm
-          and none of them its own width: prose that stopped at 42rem above a form
-          box running to the window edge is what made this screen read as two
-          screens stacked. */}
-      <div className="w-full max-w-3xl px-4 pb-10">
-        <header className="shrink-0 pt-5 pb-3">
-          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Ingest keys</h1>
-          <p className="mt-1 text-ink-dim text-sm leading-relaxed">
-            Two kinds, and they are not interchangeable.{" "}
-            <strong className="font-medium text-ink">Server keys</strong> are secret and belong in
-            your backend services. <strong className="font-medium text-ink">Browser keys</strong>{" "}
-            are public and belong in your web pages. Putting a server key in a page hands your
-            project&rsquo;s ingest to anyone who views source, so the two are kept apart everywhere
-            — including here.
-          </p>
-          <IngestTarget />
-        </header>
+    <SettingsLayout
+      title="Ingest keys"
+      description={
+        <>
+          Two kinds, and they are not interchangeable.{" "}
+          <strong className="font-medium text-ink">Server keys</strong> are secret and belong in
+          your backend services. <strong className="font-medium text-ink">Browser keys</strong> are
+          public and belong in your web pages. Putting a server key in a page hands your
+          project&rsquo;s ingest to anyone who views source, so the two are kept apart everywhere —
+          including here.
+        </>
+      }
+    >
+      <IngestTarget />
 
-        <div className="shrink-0 pb-3">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">
-              Server keys
-            </h2>
-            <SecretBadge />
-          </div>
-          <p className="mt-1 text-ink-dim text-sm leading-relaxed">
-            The keys your services authenticate with when they export telemetry. A project can hold
-            several at once, which is what lets you replace one without an outage. The secret is
-            shown once, at creation, and never again.
-          </p>
+      <div className="shrink-0 pb-3">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">Server keys</h2>
+          <SecretBadge />
         </div>
+        <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+          The keys your services authenticate with when they export telemetry. A project can hold
+          several at once, which is what lets you replace one without an outage. The secret is shown
+          once, at creation, and never again.
+        </p>
+      </div>
 
-        {minted ? <MintedKey created={minted} onDismiss={() => setMinted(undefined)} /> : null}
+      {minted ? <MintedKey created={minted} onDismiss={() => setMinted(undefined)} /> : null}
 
-        {/* The form stays out of the way while a fresh secret is on screen, unless a
+      {/* The form stays out of the way while a fresh secret is on screen, unless a
           rotation was started — then both belong, because they are about different
           keys and dismissing the panel first would destroy a secret nothing can
           reissue. */}
-        {minted === undefined || rotating ? (
-          <CreateKeyForm
-            rotating={rotating}
-            onCancelRotation={() => setRotating(undefined)}
-            onCreate={mint}
-            pending={create.isPending}
-            error={create.error}
-            disabled={projectId === undefined}
-          />
-        ) : null}
+      {minted === undefined || rotating ? (
+        <CreateKeyForm
+          rotating={rotating}
+          onCancelRotation={() => setRotating(undefined)}
+          onCreate={mint}
+          pending={create.isPending}
+          error={create.error}
+          disabled={projectId === undefined}
+        />
+      ) : null}
 
-        {projectId === undefined ? (
-          <EmptyState
-            title="No project selected"
-            detail="Keys belong to a project. Choose one in the top bar and its keys appear here."
+      {projectId === undefined ? (
+        <EmptyState
+          title="No project selected"
+          detail="Keys belong to a project. Choose one in the top bar and its keys appear here."
+        />
+      ) : keys.isPending ? (
+        <div className="">
+          <SkeletonRows rows={4} label="Loading API keys" />
+        </div>
+      ) : keys.isError || keys.data === undefined ? (
+        <div className="">
+          <InlineFailure
+            title="API keys could not be loaded"
+            error={keys.error}
+            onRetry={() => void keys.refetch()}
           />
-        ) : keys.isPending ? (
-          <div className="">
-            <SkeletonRows rows={4} label="Loading API keys" />
-          </div>
-        ) : keys.isError || keys.data === undefined ? (
-          <div className="">
-            <InlineFailure
-              title="API keys could not be loaded"
-              error={keys.error}
-              onRetry={() => void keys.refetch()}
-            />
-          </div>
-        ) : keys.data.length === 0 ? (
-          <EmptyState
-            title="This project has no keys"
-            detail="Nothing can send telemetry to this project until one exists. Create one above; the secret is shown once, at that moment, and never again."
-          />
-        ) : (
-          <KeyList
-            keys={keys.data}
-            onRotate={setRotating}
-            onRevoke={(key) => revoke.mutate(key.id)}
-            revokingId={revoke.isPending ? revoke.variables : undefined}
-            revokeError={revoke.error}
-            onDismissRevokeError={() => revoke.reset()}
-          />
-        )}
+        </div>
+      ) : keys.data.length === 0 ? (
+        <EmptyState
+          title="This project has no keys"
+          detail="Nothing can send telemetry to this project until one exists. Create one above; the secret is shown once, at that moment, and never again."
+        />
+      ) : (
+        <KeyList
+          keys={keys.data}
+          onRotate={setRotating}
+          onRevoke={(key) => revoke.mutate(key.id)}
+          revokingId={revoke.isPending ? revoke.variables : undefined}
+          revokeError={revoke.error}
+          onDismissRevokeError={() => revoke.reset()}
+        />
+      )}
 
-        <SiteKeysSection projectId={projectId} />
-      </div>
-    </div>
+      <SiteKeysSection projectId={projectId} />
+    </SettingsLayout>
   );
 }
 

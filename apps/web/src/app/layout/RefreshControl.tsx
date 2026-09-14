@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { SelectField } from "@/shared/components/SelectField";
 import type { LiveStream } from "@/shared/refresh";
 import {
+  NOTHING_LIVE,
   REFRESH_INTERVALS,
   setPaused,
   setRefreshIntervalId,
@@ -33,6 +34,11 @@ export function RefreshControl() {
   const updatedAt = useNewestData();
   const fetching = useIsFetching() > 0;
   const stream = useLiveStream();
+
+  // A screen with nothing live on it shows nothing. An interval over a list of
+  // API keys is a control that governs nothing, and reads as a promise that the
+  // screen is watching something.
+  if (stream === NOTHING_LIVE) return null;
 
   // A screen that streams has no interval to pick. Its own connection is the
   // refresh, so this shows that instead — in the same place, with the same verb.

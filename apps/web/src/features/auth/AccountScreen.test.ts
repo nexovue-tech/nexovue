@@ -13,7 +13,7 @@ import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { ProfileScreen } from "./ProfileScreen";
+import { AccountScreen } from "./AccountScreen";
 import { parseLoginSearch, SIGNED_OUT_EVERYWHERE } from "./search";
 
 /**
@@ -156,7 +156,7 @@ async function mountProfile() {
   const profileRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/settings/profile",
-    component: () => createElement(QueryClientProvider, { client }, createElement(ProfileScreen)),
+    component: () => createElement(QueryClientProvider, { client }, createElement(AccountScreen)),
   });
   const loginRoute = createRoute({
     getParentRoute: () => rootRoute,

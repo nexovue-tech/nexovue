@@ -27,11 +27,7 @@ export type NavPath =
   | "/synthetics"
   | "/infrastructure"
   | "/metrics"
-  | "/usage"
-  | "/settings/api-keys"
-  | "/settings/projects"
-  | "/settings/billing"
-  | "/settings/profile";
+  | "/settings/general";
 
 export interface NavSection {
   /** Small-caps rule in the sidebar. */
@@ -70,13 +66,10 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
+    // One entry, not six. The settings screens have their own rail, which is what
+    // lets a reader see what else exists without the main sidebar listing account
+    // preferences beside telemetry screens.
     label: "Account",
-    items: [
-      { path: "/usage", title: "Usage" },
-      { path: "/settings/api-keys", title: "API keys" },
-      { path: "/settings/projects", title: "Projects" },
-      { path: "/settings/billing", title: "Billing" },
-      { path: "/settings/profile", title: "Profile & security" },
-    ],
+    items: [{ path: "/settings/general", title: "Settings" }],
   },
 ];
