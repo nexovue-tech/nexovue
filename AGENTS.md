@@ -28,6 +28,21 @@ These rules take priority when they are more specific than the workflow in
     configuration syntax, or a question about current best practice, search authoritative web
     sources first. Report the source, selected approach, rejected alternative, and anything found
     to be outdated.
+
+    **When you cannot search, say so before recommending — not afterwards.** Training data is old
+    and an agent cannot tell from the inside which parts have gone stale, so an unverified answer
+    delivered in the same confident voice as a sourced one is indistinguishable from research to
+    the person reading it. If the search budget is spent, a tool is unavailable, or the question is
+    otherwise unresolvable, state that plainly *and* name the confidence, before the
+    recommendation is acted on. The failure mode this exists to stop is real and has happened: a
+    `MALLOC_CONF` value was recommended from memory and applied to a running container, and a
+    broker swap was proposed on remembered characteristics whose central premise a single
+    measurement then contradicted. Both were caught by the founder noticing, not by the agent
+    disclosing.
+
+    The same applies to anything written into the repository. A comment or document asserting an
+    unverified claim is worse than a spoken one, because the next reader has no way to know it was
+    never checked. Mark it as unverified in the text itself.
 11. **Delete what a change replaces.** When code, configuration, documentation, or a database object
     is superseded, remove it in the same change unless it must remain; state what remains and why.
 12. **A result is evidence only when it was observed.** Read test output and test counts; exit code
