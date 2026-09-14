@@ -421,10 +421,18 @@ no runbook. There is no `just` recipe for it; it has never been run.
 **What the operator is being asked to run**, which the spec has to be honest about: five stateful
 systems — ClickHouse, Kafka, Postgres, Redis, SeaweedFS.
 
-**Open question that belongs to the founder:** what a self-hoster pays. The Razorpay subscription
-flow assumes SaaS — a monthly charge we collect. Self-hosted usually means a free tier, open-core,
-or a licence key, and the answer determines whether the billing already built applies to this path
-or waits for hosted. **Added 2026-09-14.**
+**What a self-hoster pays: nothing — decided 2026-09-14.** Free to self-host, paid to have us host
+it. So this feature builds **no licence machinery**: no key issuance, no validation, no expiry, no
+phone home. Images are published anonymously, because a check at install destroys the ten-minute
+promise the setup docs are written around.
+
+Two consequences this spec has to carry: the **billing screen** has nothing to show in a self-hosted
+install and must not try to reach Razorpay, and the **ingestion allowance gate** is off — it is the
+operator's own disk and not ours to cap.
+
+**Still open and separate:** the code licence, which decides whether a competitor may sell nexovue as
+their own hosted service. Hard to reverse, and it belongs before the first image is published.
+**Added 2026-09-14.**
 
 
 ## 7. Non-Functional Requirements (pointer)
