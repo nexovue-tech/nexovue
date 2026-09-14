@@ -7,6 +7,7 @@
  * the dev stack pointed at the seed, not of the product.
  */
 
+import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
 import { signIn } from "./support/accounts";
@@ -21,8 +22,12 @@ test("a returning user signs in and reaches the traces already arriving", async 
   await expect(page).toHaveURL(/\/traces$/);
   await expect(page.getByRole("heading", { name: "Traces", level: 1 })).toBeVisible();
 
+  // Scoped to the column header row rather than matched across the page: "Took" is
+  // also the duration filter's label above the list ("Took · over 100 ms"), and both
+  // readings are correct, so an unscoped exact match resolves to two elements.
+  await expect(traceListColumns(page), NOTHING_ARRIVING).toBeVisible();
   for (const column of TRACE_LIST_COLUMNS) {
-    await expect(page.getByText(column, { exact: true }), NOTHING_ARRIVING).toBeVisible();
+    await expect(traceListColumns(page)).toContainText(column);
   }
   await expect(page.getByRole("heading", { name: "No traces in this window" })).toHaveCount(0);
 });
@@ -35,3 +40,15 @@ test("a wrong password is answered on the form, not by navigating away", async (
   );
   await expect(page).toHaveURL(/\/login$/);
 });
+
+/**
+ * The trace list's column header row.
+ *
+ * Located by its own full text because the rows beneath it carry bare values with no
+ * labels of their own — this row is what names their columns, so it is the one element
+ * whose text is exactly the column names. `Spans` is hidden below the `sm` breakpoint
+ * and is therefore optional.
+ */
+function traceListColumns(page: Page) {
+  return page.locator("div").filter({ hasText: /^Request(Spans)?TookWhen$/ });
+}

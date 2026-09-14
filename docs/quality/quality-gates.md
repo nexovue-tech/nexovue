@@ -16,6 +16,16 @@ For a changed feature or change record, verify:
 
 Run E2E, live-stack, load, chaos, and migration/backup checks when the changed risk requires them. They are not all part of the offline gate.
 
+**A change to a screen the E2E suite asserts on always requires it.** That case is not a judgement
+call, and leaving it to one is what let three specs rot through a whole phase: the console redesign
+changed every screen, `just check` excludes E2E so that the pre-commit gate needs no Docker, and
+nothing else ran it. The suite was red on copy that had been deliberately improved — an empty state
+split in two, a percentage that gained a decimal place — so every failure was a stale assertion and
+none of them was a defect. **That is the expensive kind of red**: it proves nothing, it is
+discovered late, and by then nobody trusts the suite enough to read it.
+
+Run `just e2e` before handing off any change that touches `apps/web/src`, with the stack up.
+
 **A suite that spends a metered third-party quota is not part of `just check`.** Most live suites
 cost nothing to repeat — ClickHouse and Postgres are ours. A suite that calls a paid provider is
 different: every run is spent, and a gate that runs on every change spends it on every change. The

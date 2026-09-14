@@ -67,8 +67,12 @@ test("a service's traffic becomes its row on the overview, and its endpoint unde
 
   // Before anything is sent, the screen says so rather than showing an empty table or
   // a failure. This is the same organisation a moment earlier, so it is honestly empty.
+  //
+  // **"Never reported", not "nothing in this window".** T62 split the two: a project
+  // that has never been sent anything is a setup problem, and a project that reported
+  // last week and is silent now is an outage. A brand-new account is the first.
   await page.goto("/services");
-  await expect(page.getByRole("heading", { name: "No services in this window" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "No services yet" })).toBeVisible();
   await expect(page.getByText("Services could not be loaded")).toHaveCount(0);
 
   await exportTrace(request, {

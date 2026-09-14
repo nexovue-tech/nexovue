@@ -27,7 +27,9 @@ const LOAD = { calls: 60, failures: 6 };
 
 /** What the API must compute from that load, as the screen spells it. */
 const EXPECTED_RATE = "1/min";
-const EXPECTED_FAILURES = "6 failed · 10%";
+/* One decimal place: `formatPercent` shows it so that a share too small to
+   round to a whole number is not printed as zero. */
+const EXPECTED_FAILURES = "6 failed · 10.0%";
 
 /**
  * An edge is bucketed by the minute and cannot be written until that minute can no
@@ -80,7 +82,7 @@ test("a call between two services becomes an edge carrying its own numbers", asy
   // is in words: these calls were direct, not messages through a queue.
   await expect(edgeLabel).toHaveAttribute(
     "title",
-    `${EXPECTED_RATE} · p95 ${expectedP95} · 6 failed (10%) · direct call`,
+    `${EXPECTED_RATE} · p95 ${expectedP95} · 6 failed (10.0%) · direct call`,
   );
 
   // And the sentence above the map counts what is drawn on it.
