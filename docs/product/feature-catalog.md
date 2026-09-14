@@ -73,7 +73,7 @@
 | **F18** | Synthetic checks | ✅ Yes | 🔲 | 0 | HTTP, SSL-expiry and browser-flow checks, with phase breakdown |
 | **F19** | SLO tracking | 🔴 No | 🔲 | Later | |
 | **F20** | Dashboards | 🟡 Partly | 🔶 | Later | The composed Overview is built and holds `/`; the **builder** is not |
-| **F21** | Alerts & notification connectors | 🔴 No | 🔲 | **1** | The largest gap in the product. Notification adapters and a scheduler exist to build on |
+| **F21** | Alerts & notification connectors | 🔴 No | 🔲 | **1** | The largest gap in the product. Notification adapters and a scheduler exist to build on. **A live competitor already bundles detection + AI root-cause + code-fix suggestions** (Better Stack's AI SRE, confirmed 2026-09-14) — the gap on "tell me what broke and act on it" is wider than scoped in August |
 | **F22** | Case management | 🔴 No | 🔲 | 2 | Depends on findings existing |
 | **F23** | Onboarding | ✅ Yes | 🔲 | 0 | Signup → two env vars → first-span celebration; auto-created defaults not built |
 | **F24** | Integration settings | 🟡 Partly | 🔲 | 2 | Keys, site keys, deploy webhooks, cloud and DB pollers, integration health all built; AWS role flow is not |

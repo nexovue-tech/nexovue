@@ -13,6 +13,11 @@
 > direct fetches afterward, on a quota that still had headroom. WebSearch was then exhausted for the
 > session, so nothing below is a fresh search past that point; everything is drawn from sources this
 > pass actually opened. Read every verdict's confidence label literally.
+>
+> **Updated 2026-09-14 21:51 IST — a second pass, §D below, resumed once the session limit reset.**
+> That pass finished executing cleanly (no crash), but ran with WebSearch exhausted for nearly its
+> whole duration, so three of the seven questions it was scoped to answer came back with zero claims
+> — not a weak answer, an empty one. Read §D's own header before trusting anything in it.
 
 ---
 
@@ -101,3 +106,58 @@ Datadog's Bits AI is credit-metered: $500 per 500 credits/month annual, or $1.30
 [^10]: https://opentelemetry.io/blog/2026/obi-goals/
 
 Vendor pricing/licence table sources: https://www.dash0.com/comparisons/best-openobserve-alternatives · https://uptrace.dev/comparisons/observability-tools-pricing
+
+---
+
+## D. Second pass — 2026-09-14 21:51 IST, resumed after the session limit reset
+
+> **This pass completed cleanly: 100 of 100 agents, zero errors, synthesis succeeded.** That is a
+> different failure mode from Part A/B/C above, which crashed mid-run. But "completed" here means
+> *the harness finished running*, not *every question got answered* — **WebSearch hit its 200-call
+> session budget almost immediately and stayed exhausted for nearly the whole pass.** All seventeen
+> confirmed claims below rest on **WebFetch of a primary source directly — none were cross-checked
+> against a second, independent source.** That is a small risk for something mechanically checkable
+> (a GitHub licence file's commit history) and a real gap for anything that needed search to find at
+> all — three of the seven questions asked came back with **zero claims produced**, not a weak
+> answer, an empty one.
+
+This pass was scoped to skip everything Part A–C already confirmed (per-service pricing, the AI-SRE
+vendor set, OTel signal maturity) and spend the whole budget on the seven items that never got
+reached.
+
+| # | Question | Verdict | Evidence |
+|---|---|---|---|
+| 1 | Owner-facing status page — still unserved? | **PARTLY CONFIRMED** | The one adjacent 2026 move — UptimeRobot acquiring IsDown (29 Jul 2026) — targets dependency-outage detection for *engineers* ("is it us or a vendor"), not a simplified owner view; unshipped as of a live re-check on 2026-09-14, IsDown still operates independently. But the *positive* claim — "this gap is still served only by point solutions" — failed verification (0-3) even though the source (an HN post about a tool called StatusLane, built explicitly because general monitoring tools feel too heavy for solo devs) reads that way on its face. **Net: nobody was confirmed to have filled it, but "still open" itself isn't confirmed either — genuinely unresolved, not a green light.** |
+| 2 | GreenOps/carbon — still nascent? | **CONFIRMED** | Grafana's own sustainability tag page shows no post newer than Dec 2024; its `/tags/greenops/` page 404s. Cloud Carbon Footprint remains a standalone tool with no OTel or named-vendor integration. No observability incumbent, Grafana included, owns this natively. |
+| 3 | Did SigNoz/Dash0/Coroot/HyperDX/OpenObserve/Uptrace change licence in 12 months? | **CONFIRMED — no** | Checked directly against GitHub LICENSE-file commit history for each: Uptrace and OpenObserve AGPLv3 (unchanged since 2023), Coroot Apache-2.0 (one commit, 2022), SigNoz MIT-core + proprietary `ee/` (last touch Jul 2025, just outside the window), HyperDX MIT (one commit, 2023). **Stable menu — no licence pressure in either direction.** |
+| 4 | What do small teams (2–15, no SRE) say is *missing*, per G2/Capterra/Reddit/HN? | **UNVERIFIABLE — zero claims produced** | WebSearch exhausted before this could be reached at all. Wholly open. |
+| 5 | Is dashboard builder / SLO / session replay genuinely mandatory in 2026 buyer evaluations? | **UNVERIFIABLE** | One source (rfp.wiki) was fetched; both readings extracted from it ("dashboarding is core/mandatory", "SLO is lower-priority") failed adversarial verification 0-3. **Genuinely unknown — not leaning either way.** Treat nexovue's bet to skip all three in Phase 1 as neither validated nor invalidated. |
+| 6 | New entrant/category traction since August? | **PARTLY CONFIRMED, and this is the important one** | **Better Stack already ships a live, purchasable, agentic "AI SRE"** — eBPF+OpenTelemetry-based automated root-cause analysis, marketed as "Claude Code with the knowledge of your telemetry," reading logs/metrics/traces/incidents/on-call and writing code fixes. Confirmed across four primary pages including its docs (not beta, not waitlisted). It also ingests Datadog/Sentry/GitHub, so it's a hybrid stack, not OTel-only — nexovue's "OTel-native only, no eBPF agent" claim survives, narrower than before. |
+| 7 | Does free-self-host → paid-hosted actually convert, anywhere? | **UNVERIFIABLE — zero claims produced** | Same cause as item 4. Wholly open. |
+
+**One more reconfirmation, incidentally:** Better Stack's own pricing page was fetched — GB ingested, GB/month retained, per-seat, per-occurrence add-ons, with "30x cheaper than Datadog" / "80x more data, same budget" marketing. No per-service unit. This is the twelfth vendor checked across both passes with a pricing model on some other axis than nexovue's.
+
+### What this changes
+
+**Nothing in Phase 1's ordering.** Install → invite → alert stands; no evidence from either pass argues for reordering it.
+
+**But the urgency behind reaching F21 (alerting) is higher than the August analysis assumed.** Better
+Stack's bundle — detection, eBPF/OTel root-cause analysis, code-fix suggestions, on-call-adjacent
+capability, all live today — is a materially stronger existing competitor than nexovue's current
+zero-alerting state. The competitive gap on "tell me what broke and act on it" is wider than
+originally scoped. This doesn't move F21 earlier in the sequence — it still needs F26 (teams) first
+— but it's a reason not to let F21 slip once F26 lands.
+
+**Differentiators, restated more precisely:**
+- OTel-native purity is real but narrower than it looked in August — it's now "no eBPF agent, no
+  hybrid-stack lock-in" rather than "does AI root-cause analysis at all," since Better Stack already
+  does the latter.
+- Per-service pricing: reconfirmed unique against a twelfth vendor.
+- GreenOps: confirmed nascent, confirmed unowned — a legitimate later-stage differentiator, still not
+  urgent.
+
+**Left genuinely open, not merely deferred:** whether nexovue's decision to skip a dashboard builder,
+SLOs, session replay and the owner status page in Phase 1 is *safe* — none of items 1, 5 resolved
+either way, and items 4 and 7 didn't run at all. A third pass targeting exactly those three, once
+WebSearch has budget again, would close this properly rather than leaving it as an assumption
+carried forward twice now.
