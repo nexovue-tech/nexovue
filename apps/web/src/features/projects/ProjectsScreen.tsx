@@ -37,8 +37,11 @@ export function ProjectsScreen() {
   };
 
   return (
-    <div className="flex flex-col gap-8 px-6 py-8">
-      <header className="max-w-2xl">
+    // One column, one measure: the heading stopped at 42rem while the list ran to
+    // the window edge, and the rows were inset a further 4 on top of that, so no two
+    // left edges on the screen agreed.
+    <div className="flex w-full max-w-3xl flex-col gap-8 px-6 py-8">
+      <header>
         <h1 className="font-medium font-serif text-ink text-xl tracking-tight">Projects</h1>
         <p className="mt-2 text-ink-dim text-sm leading-relaxed">
           A project is what a key sends to and what telemetry is filed under. Most teams keep one
@@ -71,7 +74,7 @@ export function ProjectsScreen() {
           {/* The list said nothing about being a list: no count, no heading, and a
               row whose only affordance was a hover class that does not exist. A
               reader could not tell there was anything to click. */}
-          <h2 className="border-line border-b px-4 pb-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps">
+          <h2 className="border-line border-b pb-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps">
             {projects.data.length} {projects.data.length === 1 ? "project" : "projects"} — open one
             to change what it keeps
           </h2>
@@ -80,7 +83,7 @@ export function ProjectsScreen() {
               <li key={project.id} className="border-line-subtle border-b">
                 <button
                   type="button"
-                  className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-hover"
+                  className="flex w-full items-center gap-3 py-3 text-left hover:bg-hover"
                   aria-expanded={selectedId === project.id}
                   onClick={() => setSelectedId(selectedId === project.id ? undefined : project.id)}
                 >
@@ -96,7 +99,7 @@ export function ProjectsScreen() {
                 </button>
 
                 {selectedId === project.id ? (
-                  <div className="px-4 pb-8">
+                  <div className="pb-8">
                     {selected.isPending ? (
                       <SkeletonRows rows={4} label="Loading project settings" />
                     ) : selected.isError ? (
@@ -170,7 +173,7 @@ function CreateProject() {
  */
 function DeletionReceipt({ result, onDismiss }: { result: ProjectDeleted; onDismiss: () => void }) {
   return (
-    <div className="max-w-2xl rounded border border-line bg-raised p-4 text-sm">
+    <div className="rounded border border-line bg-raised p-4 text-sm">
       <p className="text-ink">The project was deleted.</p>
       <ul className="mt-2 flex flex-col gap-1 text-ink-dim">
         <li>{result.api_keys_revoked} ingest keys revoked</li>

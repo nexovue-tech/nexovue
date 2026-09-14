@@ -80,82 +80,90 @@ export function ApiKeysScreen() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-      <header className="shrink-0 px-4 pt-5 pb-3">
-        <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Ingest keys</h1>
-        <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">
-          Two kinds, and they are not interchangeable.{" "}
-          <strong className="font-medium text-ink">Server keys</strong> are secret and belong in
-          your backend services. <strong className="font-medium text-ink">Browser keys</strong> are
-          public and belong in your web pages. Putting a server key in a page hands your
-          project&rsquo;s ingest to anyone who views source, so the two are kept apart everywhere —
-          including here.
-        </p>
-        <IngestTarget />
-      </header>
+      {/* One column, one measure. Every block inside sets its own vertical rhythm
+          and none of them its own width: prose that stopped at 42rem above a form
+          box running to the window edge is what made this screen read as two
+          screens stacked. */}
+      <div className="w-full max-w-3xl px-4 pb-10">
+        <header className="shrink-0 pt-5 pb-3">
+          <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Ingest keys</h1>
+          <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+            Two kinds, and they are not interchangeable.{" "}
+            <strong className="font-medium text-ink">Server keys</strong> are secret and belong in
+            your backend services. <strong className="font-medium text-ink">Browser keys</strong>{" "}
+            are public and belong in your web pages. Putting a server key in a page hands your
+            project&rsquo;s ingest to anyone who views source, so the two are kept apart everywhere
+            — including here.
+          </p>
+          <IngestTarget />
+        </header>
 
-      <div className="shrink-0 px-4 pb-3">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">Server keys</h2>
-          <SecretBadge />
+        <div className="shrink-0 pb-3">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">
+              Server keys
+            </h2>
+            <SecretBadge />
+          </div>
+          <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+            The keys your services authenticate with when they export telemetry. A project can hold
+            several at once, which is what lets you replace one without an outage. The secret is
+            shown once, at creation, and never again.
+          </p>
         </div>
-        <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">
-          The keys your services authenticate with when they export telemetry. A project can hold
-          several at once, which is what lets you replace one without an outage. The secret is shown
-          once, at creation, and never again.
-        </p>
-      </div>
 
-      {minted ? <MintedKey created={minted} onDismiss={() => setMinted(undefined)} /> : null}
+        {minted ? <MintedKey created={minted} onDismiss={() => setMinted(undefined)} /> : null}
 
-      {/* The form stays out of the way while a fresh secret is on screen, unless a
+        {/* The form stays out of the way while a fresh secret is on screen, unless a
           rotation was started — then both belong, because they are about different
           keys and dismissing the panel first would destroy a secret nothing can
           reissue. */}
-      {minted === undefined || rotating ? (
-        <CreateKeyForm
-          rotating={rotating}
-          onCancelRotation={() => setRotating(undefined)}
-          onCreate={mint}
-          pending={create.isPending}
-          error={create.error}
-          disabled={projectId === undefined}
-        />
-      ) : null}
-
-      {projectId === undefined ? (
-        <EmptyState
-          title="No project selected"
-          detail="Keys belong to a project. Choose one in the top bar and its keys appear here."
-        />
-      ) : keys.isPending ? (
-        <div className="px-4">
-          <SkeletonRows rows={4} label="Loading API keys" />
-        </div>
-      ) : keys.isError || keys.data === undefined ? (
-        <div className="px-4">
-          <InlineFailure
-            title="API keys could not be loaded"
-            error={keys.error}
-            onRetry={() => void keys.refetch()}
+        {minted === undefined || rotating ? (
+          <CreateKeyForm
+            rotating={rotating}
+            onCancelRotation={() => setRotating(undefined)}
+            onCreate={mint}
+            pending={create.isPending}
+            error={create.error}
+            disabled={projectId === undefined}
           />
-        </div>
-      ) : keys.data.length === 0 ? (
-        <EmptyState
-          title="This project has no keys"
-          detail="Nothing can send telemetry to this project until one exists. Create one above; the secret is shown once, at that moment, and never again."
-        />
-      ) : (
-        <KeyList
-          keys={keys.data}
-          onRotate={setRotating}
-          onRevoke={(key) => revoke.mutate(key.id)}
-          revokingId={revoke.isPending ? revoke.variables : undefined}
-          revokeError={revoke.error}
-          onDismissRevokeError={() => revoke.reset()}
-        />
-      )}
+        ) : null}
 
-      <SiteKeysSection projectId={projectId} />
+        {projectId === undefined ? (
+          <EmptyState
+            title="No project selected"
+            detail="Keys belong to a project. Choose one in the top bar and its keys appear here."
+          />
+        ) : keys.isPending ? (
+          <div className="">
+            <SkeletonRows rows={4} label="Loading API keys" />
+          </div>
+        ) : keys.isError || keys.data === undefined ? (
+          <div className="">
+            <InlineFailure
+              title="API keys could not be loaded"
+              error={keys.error}
+              onRetry={() => void keys.refetch()}
+            />
+          </div>
+        ) : keys.data.length === 0 ? (
+          <EmptyState
+            title="This project has no keys"
+            detail="Nothing can send telemetry to this project until one exists. Create one above; the secret is shown once, at that moment, and never again."
+          />
+        ) : (
+          <KeyList
+            keys={keys.data}
+            onRotate={setRotating}
+            onRevoke={(key) => revoke.mutate(key.id)}
+            revokingId={revoke.isPending ? revoke.variables : undefined}
+            revokeError={revoke.error}
+            onDismissRevokeError={() => revoke.reset()}
+          />
+        )}
+
+        <SiteKeysSection projectId={projectId} />
+      </div>
     </div>
   );
 }
@@ -179,11 +187,11 @@ function SecretBadge() {
  */
 function MintedKey({ created, onDismiss }: { created: ApiKeyCreated; onDismiss: () => void }) {
   return (
-    <section className="mx-4 mb-4 border border-brand-line bg-brand-surface px-4 py-3">
+    <section className="mb-4 border border-brand-line bg-brand-surface px-4 py-3">
       <h2 className="font-medium font-serif text-ink text-lg tracking-tight">
         {created.api_key.name} is ready
       </h2>
-      <p className="mt-2 max-w-2xl text-ink-dim text-sm leading-relaxed">{created.notice}</p>
+      <p className="mt-2 text-ink-dim text-sm leading-relaxed">{created.notice}</p>
 
       <div className="mt-3 flex items-center gap-3 border border-line bg-surface px-3 py-2">
         <code className="min-w-0 flex-1 select-all break-all font-mono text-ink text-sm">
@@ -227,9 +235,9 @@ function CreateKeyForm({
   const value = name || suggested;
 
   return (
-    <section className="mx-4 mb-4 border border-line bg-surface px-4 py-3">
+    <section className="mb-4 border border-line bg-surface px-4 py-3">
       {rotating ? (
-        <p className="mb-3 max-w-2xl text-ink text-sm leading-relaxed">
+        <p className="mb-3 text-ink text-sm leading-relaxed">
           Replacing <span className="font-mono text-2xs">{rotating.key_hint}</span> ({rotating.name}
           ). Both keys work until you revoke the old one, so deploy this replacement first and
           withdraw the old key once it has gone quiet.
@@ -301,17 +309,17 @@ function KeyList({
 
   return (
     <section className="shrink-0">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 pb-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 pb-2">
         <p className="text-ink-dim text-sm">
           {live === 1
             ? "One live key. Create a replacement before withdrawing it, or ingest stops."
             : `${live} live keys. Any of them authenticates; withdrawing one leaves the rest working.`}
         </p>
       </div>
-      <p className="max-w-3xl px-4 pb-3 text-ink-dim text-sm leading-relaxed">{PRECISION_NOTE}</p>
+      <p className="pb-3 text-ink-dim text-sm leading-relaxed">{PRECISION_NOTE}</p>
 
       {revokeError ? (
-        <div className="px-4 pb-3">
+        <div className="pb-3">
           <InlineFailure
             title="The key could not be revoked"
             error={revokeError}
@@ -353,7 +361,7 @@ function KeyRow({
   const [confirmingLeak, setConfirmingLeak] = useState(false);
 
   return (
-    <li className={`border-line-subtle border-b px-4 py-3 ${status.revoked ? "opacity-60" : ""}`}>
+    <li className={`border-line-subtle border-b py-3 ${status.revoked ? "opacity-60" : ""}`}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
         <div className="min-w-0">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -362,9 +370,7 @@ function KeyRow({
             <SecretBadge />
             {status.revoked ? <RevokedBadge /> : <TrafficBadge traffic={status.traffic} />}
           </div>
-          <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">
-            {describeTraffic(status)}
-          </p>
+          <p className="mt-1 text-ink-dim text-sm leading-relaxed">{describeTraffic(status)}</p>
           <p className="mt-1 font-mono text-2xs text-ink-dim">
             Created {formatTimestamp(apiKey.created_at)}
             {apiKey.last_used_at
@@ -425,12 +431,12 @@ function LeakConfirmation({
   return (
     <div className="mt-3 border-critical-solid border-l-2 bg-critical-subtle px-3 py-3">
       <p className="font-medium text-ink text-sm">Revoke {apiKey.name} immediately?</p>
-      <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">
+      <p className="mt-1 text-ink-dim text-sm leading-relaxed">
         {stopsTraffic
           ? "This key is still carrying traffic. Revoking it stops those services from sending telemetry within a minute, and it cannot be undone — the replacement for a revoked key is a new key. Do this when the secret is already exposed and every minute it stays live is a minute somebody else can use it."
           : "Nothing is currently sending with this key, so revoking it should stop nothing. It cannot be undone — the replacement for a revoked key is a new key."}
       </p>
-      <p className="mt-2 max-w-2xl text-ink-dim text-sm leading-relaxed">
+      <p className="mt-2 text-ink-dim text-sm leading-relaxed">
         If the key has <em>not</em> leaked, cancel and use Rotate instead: it creates a replacement
         while this one keeps working, so nothing goes down.
       </p>
@@ -478,7 +484,7 @@ function IngestTarget() {
   const headersLine = `OTEL_EXPORTER_OTLP_HEADERS=${ingest.key_header}=<your key>`;
 
   return (
-    <div className="mt-4 max-w-2xl border-line border-t pt-3">
+    <div className="mt-4 border-line border-t pt-3">
       <p className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Where they are used</p>
       <div className="mt-1.5 flex items-baseline gap-3">
         <code className="min-w-0 flex-1 select-all break-all font-mono text-ink text-xs">

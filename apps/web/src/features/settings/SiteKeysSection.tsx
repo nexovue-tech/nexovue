@@ -59,12 +59,12 @@ export function SiteKeysSection({ projectId }: { projectId: string | undefined }
 
   return (
     <section className="mt-8 shrink-0 border-line border-t pt-5">
-      <header className="px-4 pb-3">
+      <header className="pb-3">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">Browser keys</h2>
           <PublicBadge />
         </div>
-        <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">{PUBLIC_NOTE}</p>
+        <p className="mt-1 text-ink-dim text-sm leading-relaxed">{PUBLIC_NOTE}</p>
       </header>
 
       <CreateSiteKeyForm
@@ -75,11 +75,11 @@ export function SiteKeysSection({ projectId }: { projectId: string | undefined }
       />
 
       {projectId === undefined ? null : keys.isPending ? (
-        <div className="px-4">
+        <div className="">
           <SkeletonRows rows={2} label="Loading browser keys" />
         </div>
       ) : keys.isError || keys.data === undefined ? (
-        <div className="px-4">
+        <div className="">
           <InlineFailure
             title="Browser keys could not be loaded"
             error={keys.error}
@@ -134,7 +134,7 @@ function CreateSiteKeyForm({
   const guard = useUnsavedChanges(name.trim() !== "" || origins.trim() !== "");
 
   return (
-    <div className="mx-4 mb-4 border border-line bg-surface px-4 py-3">
+    <div className="mb-4 border border-line bg-surface px-4 py-3">
       <UnsavedChangesPrompt guard={guard} what="this site key" />
       <form
         className="flex flex-col gap-3"
@@ -205,10 +205,10 @@ function SiteKeyList({
 
   return (
     <div>
-      <p className="max-w-3xl px-4 pb-3 text-ink-dim text-sm leading-relaxed">{ORIGIN_NOTE}</p>
+      <p className="pb-3 text-ink-dim text-sm leading-relaxed">{ORIGIN_NOTE}</p>
 
       {revokeError ? (
-        <div className="px-4 pb-3">
+        <div className="pb-3">
           <InlineFailure
             title="The browser key could not be retired"
             error={revokeError}
@@ -247,7 +247,7 @@ function SiteKeyRow({
   const [confirming, setConfirming] = useState(false);
 
   return (
-    <li className={`border-line-subtle border-b px-4 py-3 ${status.revoked ? "opacity-60" : ""}`}>
+    <li className={`border-line-subtle border-b py-3 ${status.revoked ? "opacity-60" : ""}`}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -265,7 +265,7 @@ function SiteKeyRow({
             <CopyButton value={siteKey.public_key} label="browser key" />
           </div>
 
-          <p className="mt-2 max-w-2xl text-ink-dim text-sm leading-relaxed">
+          <p className="mt-2 text-ink-dim text-sm leading-relaxed">
             {describeSiteKeyTraffic(status)}
           </p>
 
@@ -313,7 +313,7 @@ function SiteKeyRow({
           <p className="font-medium text-ink text-sm">Retire {siteKey.name}?</p>
           {/* No "this key leaked" wording anywhere: a key that was never secret
               cannot leak, and offering that action would teach the wrong model. */}
-          <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">
+          <p className="mt-1 text-ink-dim text-sm leading-relaxed">
             Pages still carrying this key stop reporting within a minute. It cannot be undone —
             create a new key and redeploy your site to replace it. Retire a browser key when the
             site is gone or has moved to a new key, not because the value was seen: it was always
