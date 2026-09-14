@@ -1,4 +1,4 @@
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRight } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -477,6 +477,13 @@ function VirtualRow({
   );
 }
 
+/**
+ * Two gestures on one row: the chevron opens the endpoints, the row opens the service.
+ *
+ * The whole row used to be the toggle, which left the detail page reachable only from
+ * Overview and the service map — the list of services being the one place that did not
+ * link to a service. The split follows `WaterfallRow`.
+ */
 function ServiceLine({
   service,
   expanded,
@@ -495,33 +502,47 @@ function ServiceLine({
   const failing = service.error_count > 0;
 
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-expanded={expanded}
-      className="flex h-full w-full items-center border-line-subtle border-b px-4 text-left text-sm hover:bg-hover"
-    >
-      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+    <div className="flex h-full w-full items-center border-line-subtle border-b px-4 text-sm hover:bg-hover">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-label={
+          expanded
+            ? `Hide ${service.service_name}'s endpoints`
+            : `Show ${service.service_name}'s endpoints`
+        }
+        className="-ml-1 flex h-full shrink-0 items-center pr-1.5 pl-1 text-solid hover:text-ink"
+      >
         <ChevronRight
           aria-hidden
           size={12}
-          className={`shrink-0 text-solid transition-transform ${expanded ? "rotate-90" : ""}`}
+          className={`transition-transform ${expanded ? "rotate-90" : ""}`}
         />
-        <SeverityMark severity={serviceSeverity(service)} />
-        <span className="truncate text-ink">{service.service_name}</span>
-      </span>
-      <MetricCells metrics={service} previous={previous} />
-      <span className={TREND_COLUMN}>
-        <Sparkline
-          points={(trend ?? []).map((point) =>
-            failing ? point.error_rate : point.requests_per_minute,
-          )}
-          max={failing ? ceilings.errorRate : ceilings.rate}
-          tone={failing ? "critical" : "series"}
-          label={`${service.service_name} ${failing ? "error rate" : "request rate"} over the window`}
-        />
-      </span>
-    </button>
+      </button>
+
+      <Link
+        to="/services/$name"
+        params={{ name: service.service_name }}
+        className="flex h-full min-w-0 flex-1 items-center text-left"
+      >
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          <SeverityMark severity={serviceSeverity(service)} />
+          <span className="truncate text-ink">{service.service_name}</span>
+        </span>
+        <MetricCells metrics={service} previous={previous} />
+        <span className={TREND_COLUMN}>
+          <Sparkline
+            points={(trend ?? []).map((point) =>
+              failing ? point.error_rate : point.requests_per_minute,
+            )}
+            max={failing ? ceilings.errorRate : ceilings.rate}
+            tone={failing ? "critical" : "series"}
+            label={`${service.service_name} ${failing ? "error rate" : "request rate"} over the window`}
+          />
+        </span>
+      </Link>
+    </div>
   );
 }
 

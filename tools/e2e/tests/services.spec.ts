@@ -4,8 +4,8 @@
  * A fresh organisation opens the screen before it has sent anything, exports a known
  * amount of traffic with the key onboarding just handed it, and reads its own service
  * back with the numbers that traffic implies — request rate, failures and the slow tail,
- * exactly as the columns print them. Then it opens the service, which is the only thing
- * the screen can be clicked for, and gets that endpoint's numbers underneath.
+ * exactly as the columns print them. Then it opens the row's endpoints, and finally the
+ * service itself: the row carries both gestures, the chevron and the row.
  *
  * Nothing is arranged behind the product's back: the credentials come off the onboarding
  * screen and every assertion is on text a person can see.
@@ -55,7 +55,7 @@ const CELLS = {
  */
 const ARRIVAL_TIMEOUT_MS = 90_000;
 
-test("a service's traffic becomes its row on the overview, and its endpoint underneath", async ({
+test("a service's traffic becomes a row that opens its endpoints and the service", async ({
   page,
   request,
 }) => {
@@ -86,15 +86,17 @@ test("a service's traffic becomes its row on the overview, and its endpoint unde
     }),
   });
 
-  const serviceRow = page.getByRole("button").filter({ hasText: SERVICE });
+  // The row is a link to the service, with the chevron beside it as a separate control.
+  const serviceRow = page.getByRole("link").filter({ hasText: SERVICE });
+  const endpointToggle = page.getByRole("button", { name: `${SERVICE}'s endpoints` });
   // A fresh organisation sees its own service and no one else's.
   await expect(serviceRow).toHaveCount(1, { timeout: ARRIVAL_TIMEOUT_MS });
   await expect(page.getByText("1 service reporting in the last hour, worst first.")).toBeVisible();
 
   await expectHealthCells(serviceRow);
 
-  await serviceRow.click();
-  await expect(serviceRow).toHaveAttribute("aria-expanded", "true");
+  await endpointToggle.click();
+  await expect(endpointToggle).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByText(ENDPOINT, { exact: true })).toBeVisible();
   // The kind is part of an endpoint's identity, so the row carries it.
   await expect(page.getByText("SERVER", { exact: true })).toBeVisible();
@@ -104,9 +106,15 @@ test("a service's traffic becomes its row on the overview, and its endpoint unde
   await expect(page.getByText(CELLS.failures, { exact: true })).toHaveCount(2);
   await expect(page.getByText(CELLS.rate, { exact: true })).toHaveCount(2);
 
-  await serviceRow.click();
-  await expect(serviceRow).toHaveAttribute("aria-expanded", "false");
+  await endpointToggle.click();
+  await expect(endpointToggle).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByText(ENDPOINT, { exact: true })).toHaveCount(0);
+
+  // And the row itself opens the service. This is what the screen exists to lead to, and
+  // it was unreachable from here until the row stopped being the expand toggle.
+  await serviceRow.click();
+  await expect(page).toHaveURL(new RegExp(`/services/${SERVICE}$`));
+  await expect(page.getByRole("heading", { name: SERVICE, level: 1 })).toBeVisible();
 });
 
 /** The four numbers the row is read for, each in its own column. */
