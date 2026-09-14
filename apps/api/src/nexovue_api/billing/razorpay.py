@@ -65,6 +65,11 @@ CHECKOUT_SCRIPT_URL: Final = "https://checkout.razorpay.com/v1/checkout.js"
 CHECKOUT_GLOBAL: Final = "Razorpay"
 SUBSCRIPTION_CANCEL_PATH: Final = "/subscriptions/{subscription_ref}/cancel"
 
+# Let the paid period finish rather than ending it under somebody. See `cancel`.
+CANCEL_AT_CYCLE_END: Final = 1
+# What the vendor falls back to when there is no cycle under way to wait for.
+CANCEL_NOW: Final = 0
+
 # https://razorpay.com/docs/webhooks/validate-test/
 SIGNATURE_HEADER: Final = "x-razorpay-signature"
 # Unique per delivery, so a redelivery is distinguishable from a second event —
@@ -273,29 +278,32 @@ class RazorpayPaymentProcessor:
     async def cancel(self, *, subscription_ref: str) -> CancellationOutcome:
         """End a subscription, and treat one that is already over as success.
 
-        `cancel_at_cycle_end` is 0, which ends the mandate **immediately**.
+        `cancel_at_cycle_end` is 1: **future charges stop and the period the
+        customer has already paid for runs out.**
 
-        **The reasoning originally written here was wrong, and the screen still
-        contradicts this line.** It said that cancelling at a cycle boundary
-        "would keep charging somebody who cancelled". It does not: the vendor
-        documents `1` as ending the subscription when the current billing cycle
-        completes, which stops every future charge and lets the period already
-        paid for run out. Verified against the vendor's cancel-subscription
-        documentation, 2026-09-14.
+        It sent 0 — immediate — until 2026-09-14, on a reason that was not true.
+        The comment said cancelling at a cycle boundary "would keep charging
+        somebody who cancelled". It does not: the vendor documents 1 as ending
+        the subscription when the current billing cycle completes, which stops
+        every future charge. Verified against the cancel-subscription
+        documentation rather than against the comment.
 
-        So the two answers are: `0` ends access now, for a period the customer
-        has already paid; `1` stops future charges and lets that period finish.
-        `billing-view.describeCancellation` promises the second and this sends
-        the first, and which one is right is a decision about money rather than
-        a fact about the API. Recorded in `status.md`; not changed here, because
-        picking one silently is how a customer ends up told one thing and billed
-        another.
+        So the old value took away time a customer had paid for, while
+        `billing-view.describeCancellation` told them the opposite — and of the
+        two, the screen was right. The founder chose the screen's promise
+        (D1, `status.md`).
+
+        **One case the vendor refuses**, and `CancellationOutcome` already
+        carries the shape for it: a subscription with no billing cycle under way
+        — created or authenticated, first charge not yet fired — has no cycle
+        end to wait for. There is nothing paid for to protect there, so it falls
+        back to ending now.
         """
         try:
             await self._call(
                 "POST",
                 SUBSCRIPTION_CANCEL_PATH.format(subscription_ref=subscription_ref),
-                {"cancel_at_cycle_end": 0},
+                {"cancel_at_cycle_end": CANCEL_AT_CYCLE_END},
             )
         except BillingError:
             # Idempotent by *asking*, not by pattern-matching an error message:
@@ -303,10 +311,19 @@ class RazorpayPaymentProcessor:
             # wanted, and reading its status is deterministic where guessing
             # which of a vendor's messages means "already cancelled" is not.
             status = await self._status_of(subscription_ref)
-            if status not in TERMINAL_STATUSES:
+            if status in TERMINAL_STATUSES:
+                # Reported over rather than cancelled just now, so no event follows.
+                return CancellationOutcome.ALREADY_ENDED
+            if status not in BEFORE_THE_FIRST_CHARGE:
                 raise
-            # Reported over rather than cancelled just now, so no event follows.
-            return CancellationOutcome.ALREADY_ENDED
+            # Nothing has been charged, so there is no paid period to let finish
+            # and the vendor will not wait for a cycle that has not begun. The
+            # customer asked to stop; ending it now is what that means here.
+            await self._call(
+                "POST",
+                SUBSCRIPTION_CANCEL_PATH.format(subscription_ref=subscription_ref),
+                {"cancel_at_cycle_end": CANCEL_NOW},
+            )
         return CancellationOutcome.REQUESTED
 
     async def _status_of(self, subscription_ref: str) -> str:
@@ -409,6 +426,11 @@ class RazorpayPaymentProcessor:
 # A subscription in one of these can never charge again, so a cancel that finds
 # one has already achieved what it was asked for.
 TERMINAL_STATUSES: Final = frozenset({"cancelled", "completed", "expired"})
+
+# A subscription that has not started charging has no cycle end to wait for, and
+# the vendor refuses `cancel_at_cycle_end: 1` on one. There is also nothing paid
+# for to protect, which is the only reason waiting was worth asking for.
+BEFORE_THE_FIRST_CHARGE: Final = frozenset({"created", "authenticated"})
 
 
 def _prefill(contact: BillingContact) -> dict[str, str]:

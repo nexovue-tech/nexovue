@@ -435,6 +435,57 @@ class TestCancelling:
 
         assert outcome is CancellationOutcome.REQUESTED
 
+    async def test_the_paid_period_is_allowed_to_finish(self) -> None:
+        """D1. It sent `0` — immediate — until 2026-09-14, on a reason that was
+        not true: the comment claimed waiting for a cycle boundary "would keep
+        charging somebody who cancelled". It does not. So a customer who
+        cancelled on the second of the month lost twenty-eight days they had
+        paid for, while the screen told them the opposite.
+        """
+        sent: list[dict[str, object]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"id": SUBSCRIPTION_REF, "status": "cancelled"})
+
+        await _processor(handler).cancel(subscription_ref=SUBSCRIPTION_REF)
+
+        assert sent == [{"cancel_at_cycle_end": 1}]
+
+    async def test_a_subscription_that_never_charged_is_ended_now(self) -> None:
+        """The one case the vendor refuses, because there is no cycle under way
+        to wait for — and the one where waiting protects nothing, since nothing
+        has been paid."""
+        attempts: list[dict[str, object]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/cancel"):
+                attempts.append(json.loads(request.content))
+                if attempts[-1] == {"cancel_at_cycle_end": 1}:
+                    return httpx.Response(
+                        400, json={"error": {"description": "no active billing cycle"}}
+                    )
+                return httpx.Response(200, json={"id": SUBSCRIPTION_REF, "status": "cancelled"})
+            return httpx.Response(200, json={"id": SUBSCRIPTION_REF, "status": "created"})
+
+        outcome = await _processor(handler).cancel(subscription_ref=SUBSCRIPTION_REF)
+
+        assert attempts == [{"cancel_at_cycle_end": 1}, {"cancel_at_cycle_end": 0}]
+        assert outcome is CancellationOutcome.REQUESTED
+
+    async def test_a_refusal_that_is_neither_is_still_a_failure(self) -> None:
+        """A live subscription the processor refused to cancel must not be
+        reported as cancelled: the organization would drop to the free tier
+        while the mandate kept debiting."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/cancel"):
+                return httpx.Response(500, json={"error": {"description": "upstream is unwell"}})
+            return httpx.Response(200, json={"id": SUBSCRIPTION_REF, "status": "active"})
+
+        with pytest.raises(BillingError):
+            await _processor(handler).cancel(subscription_ref=SUBSCRIPTION_REF)
+
     async def test_one_already_over_says_so_rather_than_promising_an_event(self) -> None:
         """The processor refuses the cancel and reports a terminal status. That
         is not a failure — it is the answer — and it is the case that used to

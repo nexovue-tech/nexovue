@@ -2,26 +2,18 @@
 
 ## Open decisions from the follow-up phase (2026-09-14)
 
-**D1 — Cancellation timing. Money-facing, and the code and the screen disagree today.**
-`razorpay.cancel` sends `cancel_at_cycle_end: 0`, which ends the mandate immediately.
-`billing-view.describeCancellation` tells the customer the plan "returns to the free tier at the
-end of the period the processor is billing". Both cannot be true.
+**D1 — RESOLVED 2026-09-14: the paid period finishes.** `razorpay.cancel` now sends
+`cancel_at_cycle_end: 1` — future charges stop and the period the customer already paid for runs
+out. The screen's copy needed no change, because the screen was the half that was right.
 
-The reasoning originally written in the adapter was **wrong**: it said cancelling at a cycle
-boundary "would keep charging somebody who cancelled". Verified against the vendor's
-cancel-subscription documentation on 2026-09-14 — `cancel_at_cycle_end: 1` ends the subscription
-when the current cycle completes, which stops every future charge and lets the period already paid
-for run out. The docstring is corrected; the behaviour is not, because picking one silently is how
-a customer ends up told one thing and billed another.
+It sent `0` on a reason that was not true: the comment claimed waiting for a cycle boundary "would
+keep charging somebody who cancelled". The vendor's documentation says the opposite. So a customer
+cancelling on the second of the month lost twenty-eight days they had paid for, while the screen
+promised them otherwise.
 
-- `0`, as now: access ends immediately, for a period the customer has already paid for. The copy
-  must change.
-- `1`: future charges stop and the paid period finishes. The copy is already right, and this is
-  what most subscription products do.
-
-**Recommended: `1`.** It matches what the screen already promises and what a customer expects, and
-the only argument recorded against it was a misreading of the API. Nobody is affected yet —
-nexovue is pre-deployment.
+One case falls back to ending now, and the vendor forces it: a subscription still in `created` or
+`authenticated` has no cycle under way to wait for. Nothing has been charged there, so there is no
+paid period to protect — which was the only reason to wait.
 
 **D2 — Store the charged amount.** There is no payment or invoice table: `billing_webhook_deliveries`
 records *that* a charge succeeded and *when*, never *how much*, deliberately. The charge history
