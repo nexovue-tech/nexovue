@@ -1,3 +1,4 @@
+import { ChevronRight } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/shared/components/Button";
@@ -66,41 +67,57 @@ export function ProjectsScreen() {
           detail="Nothing can send telemetry until one exists, because a key belongs to a project. Create one above."
         />
       ) : (
-        <ul className="flex flex-col">
-          {projects.data.map((project) => (
-            <li key={project.id} className="border-line-subtle border-b">
-              <button
-                type="button"
-                className="flex w-full items-baseline gap-4 px-4 py-3 text-left hover:bg-surface-hover"
-                aria-expanded={selectedId === project.id}
-                onClick={() => setSelectedId(selectedId === project.id ? undefined : project.id)}
-              >
-                <span className="text-ink text-sm">{project.name}</span>
-                <span className="font-mono text-ink-dim text-xs">{project.slug}</span>
-              </button>
+        <section>
+          {/* The list said nothing about being a list: no count, no heading, and a
+              row whose only affordance was a hover class that does not exist. A
+              reader could not tell there was anything to click. */}
+          <h2 className="border-line border-b px-4 pb-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps">
+            {projects.data.length} {projects.data.length === 1 ? "project" : "projects"} — open one
+            to change what it keeps
+          </h2>
+          <ul className="flex flex-col">
+            {projects.data.map((project) => (
+              <li key={project.id} className="border-line-subtle border-b">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-hover"
+                  aria-expanded={selectedId === project.id}
+                  onClick={() => setSelectedId(selectedId === project.id ? undefined : project.id)}
+                >
+                  <ChevronRight
+                    size={14}
+                    aria-hidden="true"
+                    className={`shrink-0 text-ink-dim transition-transform ${
+                      selectedId === project.id ? "rotate-90" : ""
+                    }`}
+                  />
+                  <span className="text-ink text-sm">{project.name}</span>
+                  <span className="font-mono text-ink-dim text-xs">{project.slug}</span>
+                </button>
 
-              {selectedId === project.id ? (
-                <div className="px-4 pb-8">
-                  {selected.isPending ? (
-                    <SkeletonRows rows={4} label="Loading project settings" />
-                  ) : selected.isError ? (
-                    <InlineFailure
-                      title="This project's settings could not be loaded"
-                      error={selected.error}
-                      onRetry={() => void selected.refetch()}
-                    />
-                  ) : (
-                    <ProjectSettings
-                      key={selected.data.id}
-                      project={selected.data}
-                      onDeleted={onDeleted}
-                    />
-                  )}
-                </div>
-              ) : null}
-            </li>
-          ))}
-        </ul>
+                {selectedId === project.id ? (
+                  <div className="px-4 pb-8">
+                    {selected.isPending ? (
+                      <SkeletonRows rows={4} label="Loading project settings" />
+                    ) : selected.isError ? (
+                      <InlineFailure
+                        title="This project's settings could not be loaded"
+                        error={selected.error}
+                        onRetry={() => void selected.refetch()}
+                      />
+                    ) : (
+                      <ProjectSettings
+                        key={selected.data.id}
+                        project={selected.data}
+                        onDeleted={onDeleted}
+                      />
+                    )}
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
     </div>
   );
@@ -153,7 +170,7 @@ function CreateProject() {
  */
 function DeletionReceipt({ result, onDismiss }: { result: ProjectDeleted; onDismiss: () => void }) {
   return (
-    <div className="max-w-2xl rounded border border-line bg-surface-raised p-4 text-sm">
+    <div className="max-w-2xl rounded border border-line bg-raised p-4 text-sm">
       <p className="text-ink">The project was deleted.</p>
       <ul className="mt-2 flex flex-col gap-1 text-ink-dim">
         <li>{result.api_keys_revoked} ingest keys revoked</li>

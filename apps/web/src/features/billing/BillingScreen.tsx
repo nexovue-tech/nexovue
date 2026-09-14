@@ -120,9 +120,9 @@ function ThisMonth({ overview }: { overview: BillingOverview }) {
         // to divide. Hidden from assistive technology on purpose: the sentence
         // below states both figures and what happens at the limit, so announcing
         // this too would read the same fact twice and less precisely.
-        <div className="h-1.5 w-full overflow-hidden rounded bg-surface-raised" aria-hidden="true">
+        <div className="h-1.5 w-full overflow-hidden rounded bg-raised" aria-hidden="true">
           <div
-            className={fraction >= 1 ? "h-full bg-danger" : "h-full bg-brand"}
+            className={fraction >= 1 ? "h-full bg-critical-solid" : "h-full bg-brand"}
             style={{ width: `${Math.min(100, Math.round(fraction * 100))}%` }}
           />
         </div>

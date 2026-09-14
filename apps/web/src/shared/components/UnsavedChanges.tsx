@@ -55,7 +55,7 @@ export function UnsavedChangesPrompt({ guard, what }: UnsavedChangesPromptProps)
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="unsaved-changes-title"
-        className="w-full max-w-md rounded border border-line bg-raised p-5 shadow-lg"
+        className="w-full max-w-md rounded border border-line bg-raised p-5 shadow-overlay"
       >
         <h2 id="unsaved-changes-title" className="font-medium font-serif text-base text-ink">
           Leave without saving?

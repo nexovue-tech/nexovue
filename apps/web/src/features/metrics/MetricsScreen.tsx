@@ -192,7 +192,7 @@ export function MetricsView({
   const narrowed = metricsNarrowed(filters) || typedName !== "";
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto">
+    <div className="flex h-full min-h-0 flex-col">
       <header className="shrink-0 px-4 pt-5 pb-3">
         <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Metrics</h1>
         <p className="mt-1 text-ink-dim text-sm">
@@ -312,7 +312,12 @@ function Catalogue({
   onSelect: (metricName: string | undefined) => void;
 }) {
   return (
-    <section className="shrink-0 border-line border-t">
+    // `min-h-0` and `flex-1` rather than `shrink-0`: this section owns the
+    // remaining height and scrolls inside it, so the count and the column
+    // headings stay put while three hundred rows move under them. Scrolling the
+    // page instead took the headings away with the rows, which is what every
+    // other list on this product already avoids.
+    <section className="flex min-h-0 flex-1 flex-col border-line border-t">
       <div className="flex items-baseline justify-between px-4 py-2">
         <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
           {formatCount(metrics.length)} {plural(metrics.length, "metric")}
@@ -330,7 +335,7 @@ function Catalogue({
         <span className="w-24 shrink-0 text-right" />
       </div>
 
-      <ul>
+      <ul className="min-h-0 flex-1 overflow-y-auto">
         {metrics.map((metric) => (
           <li key={metric.metric_name}>
             <MetricRow

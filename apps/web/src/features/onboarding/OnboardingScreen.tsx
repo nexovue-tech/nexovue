@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { CopyButton } from "@/shared/components/CopyButton";
+import { Wordmark } from "@/shared/components/Logo";
 import { useProjects } from "@/shared/projects";
 import type { FirstSetup } from "@/shared/session";
 import { forgetFirstSetup, readFirstSetup } from "@/shared/session";
@@ -85,7 +86,7 @@ export function OnboardingView({ setup, arrived, failed, silent }: OnboardingVie
 
   return (
     <div className="mx-auto min-h-dvh max-w-2xl px-6 py-12">
-      <p className="font-semibold font-serif text-ink text-md tracking-tight">nexovue</p>
+      <Wordmark />
 
       <h1 className="mt-6 font-semibold font-serif text-2xl text-ink tracking-tight">
         Send your first span

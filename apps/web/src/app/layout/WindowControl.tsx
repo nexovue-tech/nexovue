@@ -30,7 +30,7 @@ export function WindowControl() {
 
   if (choice.kind === "absolute") {
     return (
-      <span className="flex items-baseline gap-2">
+      <span className="flex items-center gap-2">
         <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Window</span>
         <span className="text-ink text-sm">
           {new Date(choice.from).toLocaleString()} — {new Date(choice.to).toLocaleString()}
@@ -50,7 +50,7 @@ export function WindowControl() {
   }
 
   return (
-    <span className="flex items-baseline gap-3">
+    <span className="flex items-center gap-3">
       <SelectField
         label="Last"
         value={live.isAbsolute ? "" : choice.rangeId}
@@ -86,7 +86,7 @@ function RangePicker({ onClose }: { onClose: () => void }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="range-picker-title"
-        className="w-full max-w-md rounded border border-line bg-raised p-5 shadow-lg"
+        className="w-full max-w-md rounded border border-line bg-raised p-5 shadow-overlay"
       >
         <h2 id="range-picker-title" className="font-medium font-serif text-base text-ink">
           Pick a range

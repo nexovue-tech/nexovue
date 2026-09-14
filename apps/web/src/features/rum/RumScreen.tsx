@@ -26,8 +26,8 @@ import {
 
 /* Every rating's colour, named once so a card and its footnote cannot disagree. */
 const RATING_STYLES: Record<ReadableVital["rating"], string> = {
-  good: "text-ok-text",
-  "needs-improvement": "text-warn-text",
+  good: "text-healthy",
+  "needs-improvement": "text-warning-text",
   poor: "text-critical-text",
   insufficient: "text-ink-dim",
 };

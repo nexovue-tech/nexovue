@@ -41,7 +41,7 @@ export function RefreshControl() {
   }
 
   return (
-    <span className="flex items-baseline gap-3">
+    <span className="flex items-center gap-3">
       {/* **Paused has to be unmistakable.** A paused screen shows numbers that were
           true a while ago, and during an incident that is how somebody concludes a
           service recovered when it did not. It is a filled warning chip rather than a
@@ -63,7 +63,7 @@ export function RefreshControl() {
         onClick={() => setPaused(!preference.paused)}
         aria-pressed={preference.paused}
         aria-label={preference.paused ? "Resume refreshing" : "Pause refreshing"}
-        className="rounded p-1 text-ink-dim hover:text-ink"
+        className="flex items-center rounded p-1 text-ink-dim hover:text-ink"
       >
         {preference.paused ? (
           <Play size={14} aria-hidden="true" />

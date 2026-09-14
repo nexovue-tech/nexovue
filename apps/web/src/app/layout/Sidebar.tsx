@@ -1,5 +1,7 @@
 import { Link } from "@tanstack/react-router";
 
+import { Wordmark } from "@/shared/components/Logo";
+
 import { NAV_SECTIONS } from "../routes/route-manifest";
 
 /**
@@ -26,9 +28,9 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
       <Link
         to="/"
         onClick={onNavigate}
-        className="flex h-10 items-center border-line border-b px-4 font-semibold font-serif text-ink text-md tracking-tight"
+        className="flex h-10 items-center border-line border-b px-4"
       >
-        nexovue
+        <Wordmark />
       </Link>
 
       <div className="flex-1 overflow-y-auto py-3">

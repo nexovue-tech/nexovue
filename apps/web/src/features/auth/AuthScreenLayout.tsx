@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { Wordmark } from "@/shared/components/Logo";
+
 /**
  * The frame the bare screens share. Outside the shell on purpose: there is no
  * project, time range or navigation to show to someone who is not signed in yet.
@@ -24,7 +26,7 @@ export function AuthScreenLayout({
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center bg-page px-6 py-12">
       <div className="w-full max-w-sm">
-        <p className="font-semibold font-serif text-ink text-md tracking-tight">nexovue</p>
+        <Wordmark />
 
         <h1 className="mt-6 font-semibold font-serif text-2xl text-ink tracking-tight">{title}</h1>
         <p className="mt-2 text-ink-dim text-sm leading-relaxed">{intro}</p>

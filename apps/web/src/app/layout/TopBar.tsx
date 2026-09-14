@@ -42,7 +42,7 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
         />
       ) : (
         // Nothing to choose between yet. An empty select reads as a broken control.
-        <span className="flex items-baseline gap-2">
+        <span className="flex items-center gap-2">
           <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Project</span>
           <span className="text-ink-dim text-sm">—</span>
         </span>
