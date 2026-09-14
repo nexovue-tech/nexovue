@@ -96,7 +96,7 @@ export function ApiKeysScreen() {
     >
       <IngestTarget />
 
-      <div className="shrink-0 pb-3">
+      <div className="shrink-0 pt-6 pb-3">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">Server keys</h2>
           <SecretBadge />

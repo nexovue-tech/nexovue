@@ -38,7 +38,13 @@ export function SettingsLayout({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-      <div className="flex w-full max-w-5xl flex-col gap-8 px-5 py-6 md:flex-row md:gap-10">
+      {/* **Centred, and capped once for every settings screen.** Left-aligned, the
+          content ended a third of the way across a wide window and the rest read as
+          missing rather than as margin; uncapped, a preference row stretched until its
+          control was two hundred pixels from the label that names it. The cap is the
+          same on every screen so the rail does not jump sideways as a reader moves
+          between them. */}
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-5 py-6 md:flex-row md:gap-10">
         <SettingsNav />
 
         <main className="min-w-0 flex-1 pb-10">

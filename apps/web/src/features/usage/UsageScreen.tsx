@@ -45,12 +45,24 @@ import { buildUsageRows, projectLabel, ROW_HEIGHT, unsettledDayCount } from "./u
 
 const OVERSCAN_ROWS = 10;
 
-/* Column widths, declared once so the header and every row cannot drift apart. */
+/* Column widths, declared once so the header and every row cannot drift apart.
+   `TABLE_WIDTH` is what they add up to with room for the project name: the rows are
+   virtualized at a fixed height, so a column that runs out of room cannot wrap, and
+   squeezing left the project as "P…" — a row naming neither the project nor, so,
+   what its numbers are about. The table scrolls sideways instead. */
+const TABLE_WIDTH = "min-w-[32rem]";
+const PROJECT_COLUMN = "min-w-0 flex-1 shrink-0 basis-48";
 const DAY_COLUMN = "w-24 shrink-0";
-const SERVICES_COLUMN = "w-24 shrink-0 text-right";
+const SERVICES_COLUMN = "w-16 shrink-0 text-right";
 const COUNT_COLUMN = "w-24 shrink-0 text-right";
 const BYTES_COLUMN = "w-20 shrink-0 text-right";
-const WIDE_ONLY = "hidden lg:block";
+
+/* **Measured against the table's own width, not the window's.** This was `lg:`, a
+   viewport breakpoint — but the table sits inside a sidebar, a settings rail and a
+   centred column, so on a 1498px window its pane is under 600px. Every viewport
+   breakpoint reported "plenty of room" and the last column was cut off. A container
+   query asks the element that actually constrains it. */
+const WIDE_ONLY = "hidden @2xl:block";
 
 /**
  * What this organization has ingested, and the services it is billed for.
@@ -184,7 +196,10 @@ function Summary({ usage }: { usage: UsageResponse }) {
 
   return (
     <section className="shrink-0 border-line-subtle border-b px-4 pb-4">
-      <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Two columns, not four. Each of these carries a sentence explaining what its
+          figure counts, and at a quarter of this pane those sentences wrapped every
+          four words into a column twelve lines deep. */}
+      <dl className="grid gap-x-10 gap-y-5 sm:grid-cols-2">
         <div>
           <Term>{formatPeriod(usage.period)}</Term>
           <dd>
@@ -270,7 +285,12 @@ function Cost({ period, planName }: { period: BillingPeriod; planName: string })
 
   return (
     <>
-      <p className="flex items-baseline gap-2">
+      {/* **Wrapping, because the badge overflowed onto the next column.** A figure
+          and a badge in a flex row that cannot wrap is as wide as both of them, and
+          a grid column narrower than that does not clip the overflow — it paints it
+          over its neighbour, which is how "₹10,773.00 still metering" came to sit on
+          top of the billable-services count. */}
+      <p className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <span className="font-semibold font-serif text-2xl text-ink tracking-tight">{amount}</span>
         {period.settled ? null : <StillMetering />}
       </p>
@@ -395,27 +415,34 @@ function DayTable({ rows }: { rows: readonly UsageRow[] }) {
     <>
       <p className="shrink-0 px-4 pt-3 pb-2 text-ink-dim text-sm">{DAY_TABLE_CAPTION}</p>
 
-      <div className="flex shrink-0 items-center border-line border-y bg-surface px-4 py-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps">
-        <span className={DAY_COLUMN}>Day</span>
-        <span className="min-w-0 flex-1">Project</span>
-        <span className={SERVICES_COLUMN}>Services</span>
-        <span className={COUNT_COLUMN}>Spans</span>
-        <span className={`${COUNT_COLUMN} ${WIDE_ONLY}`}>Logs</span>
-        <span className={`${COUNT_COLUMN} ${WIDE_ONLY}`}>Points</span>
-        <span className={BYTES_COLUMN}>Bytes</span>
-      </div>
+      <div className="@container flex min-h-0 flex-1 flex-col overflow-x-auto">
+        <div
+          className={`flex shrink-0 items-center border-line border-y bg-surface px-4 py-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps ${TABLE_WIDTH}`}
+        >
+          <span className={DAY_COLUMN}>Day</span>
+          <span className={PROJECT_COLUMN}>Project</span>
+          <span className={SERVICES_COLUMN}>Services</span>
+          <span className={COUNT_COLUMN}>Spans</span>
+          <span className={`${COUNT_COLUMN} ${WIDE_ONLY}`}>Logs</span>
+          <span className={`${COUNT_COLUMN} ${WIDE_ONLY}`}>Points</span>
+          <span className={BYTES_COLUMN}>Bytes</span>
+        </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-          {virtualizer.getVirtualItems().map((item) => (
-            <div
-              key={item.key}
-              className="absolute inset-x-0 top-0"
-              style={{ height: item.size, transform: `translateY(${item.start}px)` }}
-            >
-              <DayRow row={rows[item.index]} />
-            </div>
-          ))}
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+          <div
+            className={`relative w-full ${TABLE_WIDTH}`}
+            style={{ height: virtualizer.getTotalSize() }}
+          >
+            {virtualizer.getVirtualItems().map((item) => (
+              <div
+                key={item.key}
+                className="absolute inset-x-0 top-0"
+                style={{ height: item.size, transform: `translateY(${item.start}px)` }}
+              >
+                <DayRow row={rows[item.index]} />
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </>
@@ -426,11 +453,13 @@ function DayRow({ row }: { row: UsageRow }) {
   const { usage } = row;
 
   return (
-    <div className="flex h-full items-center border-line-subtle border-b px-4 text-sm">
+    <div
+      className={`flex h-full items-center border-line-subtle border-b px-4 text-sm ${TABLE_WIDTH}`}
+    >
       <span className={`${DAY_COLUMN} font-mono text-2xs text-ink-dim`}>
         {formatDay(usage.day)}
       </span>
-      <span className="flex min-w-0 flex-1 items-baseline gap-2">
+      <span className={`flex items-baseline gap-2 ${PROJECT_COLUMN}`}>
         <span className="truncate text-ink">{row.projectLabel}</span>
         {usage.settled ? null : <StillCounting />}
       </span>
