@@ -45,8 +45,8 @@ run, and the work is the same work hosted needs later.
 | # | Role | Who | What they need |
 |---|------|-----|----------------|
 | 1 | **Primary user** | Full-stack developer at a small startup (2–15 people) | Root cause, fast. "What broke, where, why." |
-| 2 | **Secondary user** | F21 | Indie hacker / solo founder | Free tier, zero-config setup, value in under 10 minutes |
-| 3 | **Viewer** | F22 | Non-technical application/website owner | Plain-language status: "Is my site okay? Are customers affected?" |
+| 2 | **Secondary user** | Indie hacker / solo founder | Free tier, zero-config setup, value in under 10 minutes |
+| 3 | **Viewer** | Non-technical application/website owner | Plain-language status: "Is my site okay? Are customers affected?" |
 
 > ⏸️ **Deferred:** Agency / dev-shop channel (white-label, multi-site). Revisit later.
 
@@ -63,7 +63,7 @@ All via **OpenTelemetry** (OTLP protocol, community SDKs — we do **not** build
 | 1 | **Traces** | Request journeys stitched across microservices by trace ID (spans + context propagation) | *Where* is the problem |
 | 2 | **Logs** | Records from inside each service, correlated to traces via trace ID | *Why* it happened |
 | 3 | **Metrics** | **Application metrics**: request rate, error rate, p95/p99 latency — emitted by SDK **or derived from traces (do that first)**. **Infrastructure metrics**: CPU, memory, disk, network — from host agent (OTel collector `hostmetrics`), Kubernetes stats, or cloud APIs | *That* something is wrong (detection) |
-| 4 | **Deploy & change events** | F4 | Deploys, config changes, feature flags | Correlation ("spiked 2 min after deploy X") |
+| 4 | **Deploy & change events** | Deploys, config changes, feature flags | Correlation ("spiked 2 min after deploy X") |
 
 **Later signals:**
 - 5. Continuous profiles — line-level CPU/memory attribution. *Not built.*
