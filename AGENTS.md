@@ -47,11 +47,31 @@ Read these before changing a meaningful part of the system:
 1. `README.md` for the repository map and local commands.
 2. `docs/product/vision.md` for product intent and scope.
 3. `docs/product/feature-catalog.md` to identify the selected feature.
-4. The relevant document in `docs/architecture/` for current-system truth.
-5. The applicable `docs/engineering/` standards — see **Engineering standards** below for which.
-6. The relevant `docs/quality/` and `docs/operations/` documents when release risk is in scope.
-7. The feature or change's `status.md`, `plan.md`, `spec.md`, and `design.md`, if it exists.
-8. `docs/templates/README.md` for the form each of those documents takes.
+4. `docs/decisions/` for what has already been settled and why — the `ADR-NNN` series, plus
+   `decision-log.md`, which indexes 112 earlier records. **Read it before proposing anything that
+   sounds like a fresh choice**: several questions that sound open already have an answer, including
+   one decided, reversed, and reversed back inside a day.
+5. The relevant document in `docs/architecture/` for current-system truth.
+6. The applicable `docs/engineering/` standards — see **Engineering standards** below for which.
+7. The relevant `docs/quality/` and `docs/operations/` documents when release risk is in scope.
+8. The feature or change's `status.md`, `plan.md`, `spec.md`, and `design.md`, if it exists.
+9. `docs/templates/README.md` for the form each of those documents takes.
+
+## Where a decision gets recorded
+
+**A material, settled decision becomes an ADR in `docs/decisions/`** — not a line in a table
+somewhere else. The criterion is in that directory's own README: material, settled, and supported by
+repository evidence or an explicit founder decision. Add it to the README's index in the same commit,
+or it is invisible to the next reader.
+
+Do not scatter decisions across whichever document was open at the time. `vision.md`'s log carries
+*product and commercial* intent — pricing, scope, who the buyer is. `docs/decisions/` carries the
+consequential ones and, more importantly, **why**, including the alternatives rejected and the
+evidence that decided it. That "why" is the part no amount of reading the code recovers, and it is
+what stops a settled question being re-litigated by someone who never knew it was settled.
+
+If a decision is genuinely not material enough for an ADR, it still belongs somewhere durable — the
+feature's `status.md` or its catalogue entry — never only in conversation.
 
 For current-state facts, code, migrations, tests, and deployment files are authoritative when they disagree with documentation. For intended feature behavior, an approved feature specification is authoritative; do not silently let implementation redefine it. Product vision and research are intent/evidence, never proof that a capability exists.
 

@@ -447,7 +447,7 @@ Two consequences this spec has to carry: the **billing screen** has nothing to s
 install and must not try to reach Razorpay, and the **ingestion allowance gate** is off — it is the
 operator's own disk and not ours to cap.
 
-**The licence: AGPL-3.0, source public — decided 2026-09-15.** The server, workers, API and console
+**The licence: AGPL-3.0, source public — decided 2026-09-15, recorded in [ADR-004](../decisions/ADR-004-agpl-with-a-permissive-browser-sdk.md).** The server, workers, API and console
 go out under AGPL-3.0; **`packages/browser-sdk` ships permissive (MIT or Apache-2.0) and must not be
 AGPL**, because it executes inside the customer's own page and copyleft there would make it legally
 unusable by the customers it exists for. The rule this spec has to hold: anything running on our
