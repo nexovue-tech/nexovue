@@ -5,6 +5,8 @@ import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
+import { setupDocs } from "./build/setup-docs-plugin.js";
+
 /** Faces the first screen renders in. Everything else may arrive late. */
 const CRITICAL_FONT_FACES = [
   "ibm-plex-sans-latin-400-normal",
@@ -46,7 +48,14 @@ function preloadCriticalFonts(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [tailwindcss(), react(), preloadCriticalFonts()],
+  plugins: [
+    tailwindcss(),
+    react(),
+    preloadCriticalFonts(),
+    // The repository root: the setup pages are documentation first and are read
+    // from where they are written, never copied into this package.
+    setupDocs(fileURLToPath(new URL("../..", import.meta.url))),
+  ],
   test: {
     // jsdom has no `matchMedia`, and uPlot reads it at module load — so a test
     // importing any chart fails while collecting, with a stack pointing into

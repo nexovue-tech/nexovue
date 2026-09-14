@@ -14,6 +14,7 @@ import { SignupScreen } from "@/features/auth/SignupScreen";
 import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
 import { VerifyEmailScreen } from "@/features/auth/VerifyEmailScreen";
 import { BillingScreen } from "@/features/billing/BillingScreen";
+import { DocsScreen } from "@/features/docs/DocsScreen";
 import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
 import { ERROR_FILTERS } from "@/features/errors/filters";
 import { FindingsScreen } from "@/features/findings/FindingsScreen";
@@ -273,6 +274,36 @@ const onboardingRoute = createRoute({
 });
 
 /**
+ * The setup documentation, signed out.
+ *
+ * **Outside the shell deliberately, and outside authentication.** Somebody
+ * evaluating nexovue has to know what instrumenting their service costs before
+ * they sign up, and somebody whose telemetry stopped at three in the morning
+ * should not be asked to sign in to read the troubleshooting page. Nothing here
+ * is tenant data.
+ *
+ * A splat rather than a route per page: the pages are folders of Markdown and
+ * the router must not need editing every time one is written.
+ */
+const docsIndexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/docs",
+  component: DocsScreen,
+});
+
+const docsPageRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/docs/$",
+  component: DocsPageRoute,
+});
+
+function DocsPageRoute() {
+  const { _splat } = docsPageRoute.useParams();
+  // `/docs/` and `/docs` are the same page, not a missing one.
+  return <DocsScreen slug={_splat?.replace(/\/$/, "") || undefined} />;
+}
+
+/**
  * The two screens a mailed link lands on, plus the form that asks for one.
  *
  * Unauthenticated and outside the shell like the rest: the customer clicks these from a
@@ -348,6 +379,8 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   signupRoute,
   onboardingRoute,
+  docsIndexRoute,
+  docsPageRoute,
   verifyEmailRoute,
   resetPasswordRoute,
   forgotPasswordRoute,

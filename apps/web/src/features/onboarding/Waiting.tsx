@@ -1,6 +1,6 @@
 import { CopyButton } from "@/shared/components/CopyButton";
 
-import { OTLP_PROTOCOL, SETUP_DOCS_PATH } from "./setup-docs";
+import { OTLP_PROTOCOL, setupDocUrl } from "@/shared/setup-docs";
 
 /**
  * Waiting, and then waiting long enough that waiting is the wrong advice.
@@ -111,8 +111,16 @@ function SilenceChecks({ endpoint }: { endpoint: string }) {
       </div>
 
       <p className="mt-4 max-w-prose text-ink-dim text-xs leading-relaxed">
-        The whole sequence, including what each refusal code means, is troubleshooting.md under{" "}
-        <code className="font-mono text-ink">{SETUP_DOCS_PATH}</code> in the nexovue repository.
+        The whole sequence, including what each refusal code means, is in{" "}
+        <a
+          href={setupDocUrl("troubleshooting")}
+          className="text-brand-text underline underline-offset-4"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Nothing has arrived
+        </a>
+        . It opens in a new tab, so this screen keeps watching.
       </p>
     </div>
   );

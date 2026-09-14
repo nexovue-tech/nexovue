@@ -172,12 +172,15 @@ describe("the way out for a service that is not instrumented", () => {
     expect(text).toContain("Kubernetes");
   });
 
-  it("names the repository path and invents no documentation URL", async () => {
-    // There is no documentation site. A link that does not resolve is worse than
-    // a path, which a reader can at least check.
+  it("links to the published documentation and invents no hostname", async () => {
+    // This used to assert the repository path, because there was no site and a
+    // link that does not resolve is worse than a path a reader can check. The
+    // pages are published now — at a route of this same app, which is why there
+    // is still no hostname to invent.
     const text = await readable();
 
-    expect(text).toContain("docs/product/setup/");
+    expect(text).toContain("the setup documentation");
     expect(text).not.toMatch(/docs\.nexovue/);
+    expect(text).not.toContain("docs/product/setup/");
   });
 });

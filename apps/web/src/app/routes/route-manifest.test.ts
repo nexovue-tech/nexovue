@@ -55,6 +55,11 @@ describe("the sidebar", () => {
       "/forgot-password",
       "/reset-password",
       "/verify-email",
+      // The setup documentation. Reachable from the sidebar, but as a plain
+      // anchor rather than a nav item: it is not a screen of this console, takes
+      // neither the project nor the window with it, and opens in its own tab.
+      "/docs",
+      "/docs/$",
     ]);
 
     const offered = new Set<string>(

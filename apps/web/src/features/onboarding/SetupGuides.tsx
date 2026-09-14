@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { SETUP_DOCS_PATH } from "./setup-docs";
+import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
 
 /**
  * The other half of the split the setup documentation opens with. The variables above
@@ -138,9 +138,16 @@ export function SetupGuides() {
 
       <p className="mt-3 max-w-prose text-ink-dim text-xs leading-relaxed">
         The long versions — every language, every platform, the Collector, the browser SDK and what
-        each refusal code means — are in the nexovue repository under{" "}
-        <code className="font-mono text-ink">{SETUP_DOCS_PATH}</code>. There is no documentation
-        site yet, so that is a path rather than a link.
+        each refusal code means — are in{" "}
+        <a
+          href={SETUP_DOCS_PATH}
+          className="text-brand-text underline underline-offset-4"
+          target="_blank"
+          rel="noreferrer"
+        >
+          the setup documentation
+        </a>
+        . It opens in a new tab, so this screen keeps watching for your first span.
       </p>
     </div>
   );

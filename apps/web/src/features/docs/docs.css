@@ -1,0 +1,144 @@
+/*
+ * The setup pages' typography.
+ *
+ * A stylesheet rather than Tailwind classes, because the markup is compiled from
+ * Markdown and there is no element here to put a class on. Every value is a
+ * token: this is the same product, read by somebody who has not signed up yet.
+ */
+
+.nv-doc {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  /* A measure, not a container width. Running text past this is unreadable
+     however wide the window is, and these pages are read, not scanned. */
+  max-width: 46rem;
+}
+
+.nv-doc h1 {
+  font-family: var(--font-serif);
+  font-size: var(--text-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.nv-doc h2 {
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-semibold);
+  margin-top: 2.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-line-subtle);
+}
+
+.nv-doc h3 {
+  font-size: var(--text-md);
+  font-weight: var(--font-weight-semibold);
+  margin-top: 1.75rem;
+}
+
+.nv-doc p,
+.nv-doc ul,
+.nv-doc ol {
+  margin-top: 0.85rem;
+}
+
+.nv-doc ul,
+.nv-doc ol {
+  padding-left: 1.25rem;
+}
+
+.nv-doc ul {
+  list-style: disc;
+}
+
+.nv-doc ol {
+  list-style: decimal;
+}
+
+.nv-doc li + li {
+  margin-top: 0.3rem;
+}
+
+.nv-doc a {
+  color: var(--color-brand-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.nv-doc strong {
+  color: var(--color-ink);
+  font-weight: var(--font-weight-semibold);
+}
+
+.nv-doc code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  background: var(--color-raised);
+  border: 1px solid var(--color-line-subtle);
+  border-radius: var(--radius-xs);
+  padding: 0.05rem 0.3rem;
+}
+
+/* A block is already a block: the inline chrome would draw a box inside a box. */
+.nv-doc pre {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  background: var(--color-raised);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  /* The two environment variables are long and must not be re-wrapped into
+     something that no longer pastes. */
+  overflow-x: auto;
+}
+
+.nv-doc pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.nv-doc blockquote {
+  margin-top: 1rem;
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--color-brand-line);
+  color: var(--color-ink-dim);
+}
+
+/* Tables carry the "where you are / start here" routing on the front page, so
+   they are content rather than decoration. Scrolled rather than squeezed: a
+   column of shell commands cannot be narrowed into two words per line. */
+.nv-doc table {
+  display: block;
+  overflow-x: auto;
+  margin-top: 1rem;
+  border-collapse: collapse;
+  font-size: var(--text-xs);
+}
+
+.nv-doc th,
+.nv-doc td {
+  border-bottom: 1px solid var(--color-line-subtle);
+  padding: 0.45rem 0.9rem 0.45rem 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.nv-doc th {
+  color: var(--color-ink-dim);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--font-weight-normal);
+  letter-spacing: var(--tracking-caps, 0.08em);
+  text-transform: uppercase;
+  border-bottom-color: var(--color-line);
+}
+
+.nv-doc hr {
+  margin-top: 2rem;
+  border: 0;
+  border-top: 1px solid var(--color-line-subtle);
+}

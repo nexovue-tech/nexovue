@@ -8,7 +8,7 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useSelection } from "@/shared/selection";
-
+import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
 import type { ApiKeyCreated, ApiKeySummary } from "./api";
 import { useApiKeys, useCreateApiKey, useIngestEndpoint, useRevokeApiKey } from "./api";
 import type { KeyTraffic } from "./key-status";
@@ -21,6 +21,7 @@ import {
   suggestedRotationName,
   TRAFFIC_LABEL,
 } from "./key-status";
+
 import { SiteKeysSection } from "./SiteKeysSection";
 
 /**
@@ -494,6 +495,18 @@ function IngestTarget() {
         </code>
         <CopyButton value={`${endpointLine}\n${headersLine}`} label="both variables" />
       </div>
+      <p className="mt-2 text-ink-dim text-xs leading-relaxed">
+        Where each one goes, per language and per platform, is in{" "}
+        <a
+          href={SETUP_DOCS_PATH}
+          className="text-brand-text underline underline-offset-4"
+          target="_blank"
+          rel="noreferrer"
+        >
+          the setup documentation
+        </a>
+        .
+      </p>
     </div>
   );
 }

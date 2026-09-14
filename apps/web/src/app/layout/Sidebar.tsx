@@ -1,6 +1,9 @@
 import { Link } from "@tanstack/react-router";
 
+import { ArrowUpRight } from "lucide-react";
+
 import { Wordmark } from "@/shared/components/Logo";
+import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
 
 import { NAV_SECTIONS } from "../routes/route-manifest";
 
@@ -59,6 +62,20 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
           </div>
         ))}
       </div>
+
+      {/* Below the navigation rather than in it: the documentation is not a screen
+          of this console and does not take the time window or the project with it.
+          A new tab for the same reason — somebody reading setup instructions is
+          working in the console at the same time. */}
+      <a
+        href={SETUP_DOCS_PATH}
+        target="_blank"
+        rel="noreferrer"
+        className="flex shrink-0 items-center gap-1.5 border-line border-t px-4 py-2.5 text-ink-dim text-sm hover:bg-hover hover:text-ink"
+      >
+        Setup documentation
+        <ArrowUpRight size={12} aria-hidden="true" />
+      </a>
     </nav>
   );
 }

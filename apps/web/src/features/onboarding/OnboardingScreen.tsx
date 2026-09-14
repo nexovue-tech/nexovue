@@ -7,11 +7,10 @@ import { Wordmark } from "@/shared/components/Logo";
 import { useProjects } from "@/shared/projects";
 import type { FirstSetup } from "@/shared/session";
 import { forgetFirstSetup, readFirstSetup } from "@/shared/session";
-
+import { OTLP_PROTOCOL } from "@/shared/setup-docs";
 import type { FirstTrace } from "./api";
 import { useFirstTrace } from "./api";
 import { SetupGuides } from "./SetupGuides";
-import { OTLP_PROTOCOL } from "./setup-docs";
 import { Waiting } from "./Waiting";
 
 /**
