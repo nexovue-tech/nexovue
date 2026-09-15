@@ -91,9 +91,25 @@ appears.
 `LICENSE` file at the repository root, no `license` field in any `pyproject.toml`, and
 `packages/browser-sdk/package.json` says `"UNLICENSED"` — which contradicts this ADR's carve-out
 rather than implementing it. Publishing with those unchanged publishes source under no grant at
-all, which is the one outcome worse than either licence. **Open: MIT or Apache-2.0 for the SDK.**
-Apache-2.0 adds an express patent grant and a NOTICE requirement; MIT is shorter and is what the
-OTel browser packages the SDK sits beside already use.
+all, which is the one outcome worse than either licence. **Resolved 2026-09-15: the SDK is Apache-2.0.** (An
+earlier draft of this paragraph said the neighbouring OTel browser packages are MIT. They are not —
+`@opentelemetry/api`, `@opentelemetry/sdk-trace-web` and `web-vitals` all declare Apache-2.0, and
+the claim was written from memory rather than checked.) Three reasons, strongest first:
+
+1. **The shipped bundle already contains Apache-2.0 code.** `vite.config.ts` sets no `external`, and
+   its own comment says both builds are self-contained — so all three Apache-2.0 dependencies are
+   compiled into `dist/nexovue-rum.min.js`. Apache §4 attribution travels with the artifact that is
+   actually distributed, not with the source tree it was built from. Calling our half MIT would not
+   remove that obligation; it would only make the one file customers embed answer to two licences.
+2. **Every comparable SDK is Apache-2.0** — Splunk's `splunk-otel-js-web`, Sumo Logic's
+   `opentelemetry-rum`, and OpenTelemetry's own browser instrumentation. A customer's counsel
+   reviewing ours sees the licence they already cleared for the OTel SDK they likely run.
+3. **The patent grant is the entire point of the carve-out.** MIT is silent on patents, which is an
+   ambiguity enterprise review flags. The SDK is permissive to remove friction from embedding it in
+   someone else's product, and an express patent grant removes more friction than MIT's brevity
+   adds. It also terminates for a licensee who sues us over patents, which MIT cannot do.
+
+The cost is a NOTICE file and a statement of changes — both owed anyway under (1).
 
 **Not decided here:** what a self-hoster pays (nothing — vision.md, 2026-09-14) and which features
 might later be commercial. Those are commercial decisions recorded in `vision.md`; this ADR covers
