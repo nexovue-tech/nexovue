@@ -3,6 +3,8 @@ name = "nexovue"
 version = "0.1.0"
 description = "Insight-first observability platform"
 requires-python = ">=3.13"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 
 [tool.uv.workspace]
 members = ["apps/api", "apps/scheduler", "packages/py-platform"]

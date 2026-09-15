@@ -3,6 +3,7 @@ name = "nexovue-api"
 version = "0.1.0"
 description = "Control-plane API: queries the telemetry store, owns Postgres, serves the web app"
 requires-python = ">=3.13"
+license = "AGPL-3.0-only"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",

@@ -3,6 +3,7 @@ name = "nexovue-scheduler"
 version = "0.1.0"
 description = "Doors 2 and 4b: synthetic probes and cloud/database pollers"
 requires-python = ">=3.13"
+license = "AGPL-3.0-only"
 dependencies = [
     "celery[redis]>=5.4",
     "pydantic>=2.9",

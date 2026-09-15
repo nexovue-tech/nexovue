@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Real user monitoring for the nexovue browser door: web vitals, JS errors, page views and sessions.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "NOTICE"
   ],
   "main": "./dist/index.js",
   "module": "./dist/index.js",
