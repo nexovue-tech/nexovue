@@ -68,6 +68,24 @@ it.
 already distributed are permanent, which makes this decision far less irreversible than it first
 appears.
 
+**The holder is ANANDHARAJ A personally**, recorded 2026-09-15. No company is registered, so there
+is no other legal person for copyright to vest in — and that is the ordinary position for a project
+at this stage, not a gap to close before publishing. It is also what makes the paragraph above
+literally true: one natural person holds every line, so relicensing needs no one else's consent and
+no contributor agreement exists to unwind.
+
+Two consequences to act on rather than discover:
+
+1. **On incorporation, copyright must be assigned to the company in writing.** It does not move by
+   itself, and a company that turns out not to own its own product is a due-diligence finding at
+   exactly the wrong moment. The assignment is short; forgetting it is expensive.
+2. **Every outside contribution from here changes the answer.** The moment someone else's patch is
+   merged, copyright stops being sole and the freedom above is gone unless a CLA or a DCO captured
+   it at the time. Decide which before the repository is public, not after the first pull request.
+
+`NOTICE` in `packages/browser-sdk` is the only file carrying the name; both `LICENSE` files are
+verbatim licence text and name no holder by design.
+
 **Two obligations fell on F37 before anything could be published. Both are discharged,
 2026-09-15 — and neither changed the decision.**
 

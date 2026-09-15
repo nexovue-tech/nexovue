@@ -1,8 +1,7 @@
 nexovue browser SDK
-Copyright 2026 nexovue
+Copyright 2026 ANANDHARAJ A
 
-This product includes software developed at nexovue, licensed under the
-Apache License, Version 2.0. See LICENSE.
+This product is licensed under the Apache License, Version 2.0. See LICENSE.
 
 The distributed bundles — dist/index.js and dist/nexovue-rum.min.js — are
 self-contained by design: a script tag cannot resolve bare imports, so the

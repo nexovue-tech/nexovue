@@ -13,7 +13,7 @@ import packageJson from "./package.json" with { type: "json" };
  * where the notice belongs in the file itself; `/*!` is the marker every
  * minifier preserves. NOTICE carries the full text.
  */
-const ATTRIBUTION = `/*! nexovue browser SDK — Apache-2.0
+const ATTRIBUTION = `/*! nexovue browser SDK — Copyright 2026 ANANDHARAJ A — Apache-2.0
  * Bundles OpenTelemetry JS (Copyright The OpenTelemetry Authors) and
  * web-vitals (Copyright Google LLC), both Apache-2.0.
  * http://www.apache.org/licenses/LICENSE-2.0
