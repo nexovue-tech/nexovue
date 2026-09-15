@@ -8,6 +8,7 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-002 — Acknowledge only durable boundaries](ADR-002-at-least-once-delivery.md)
 - [ADR-003 — Use OpenTelemetry as the primary collection contract](ADR-003-otel-first-collection.md)
 - [ADR-004 — AGPL-3.0 for the platform, permissive for the browser SDK](ADR-004-agpl-with-a-permissive-browser-sdk.md)
+- [ADR-005 — Contributions come with a CLA, not a DCO](ADR-005-a-cla-rather-than-a-dco.md)
 
 ## Earlier decisions, 0001–0112
 
