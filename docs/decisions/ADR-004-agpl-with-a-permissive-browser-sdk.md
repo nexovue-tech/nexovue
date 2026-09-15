@@ -68,16 +68,32 @@ it.
 already distributed are permanent, which makes this decision far less irreversible than it first
 appears.
 
-**Two obligations fall on F37 before anything is published:**
+**Two obligations fell on F37 before anything could be published. Both are discharged,
+2026-09-15 — and neither changed the decision.**
 
-1. The dependency audit above covered *direct* dependencies, not the full transitive tree.
-   `go-licenses report ./...` and `pip-licenses` close that gap.
-2. **A content-level secret scan over full git history is still owed.** The check performed matched
-   filenames — it established that `.env` was never committed and only `.env.example` templates
-   carrying `nexovue_dev` against localhost are present. It did not read file contents, so a key
-   pasted into a source file, a fixture or a commit message would not have surfaced. `gitleaks
-   detect` or `trufflehog git file://.` before the repository is flipped, because git history cannot
-   be un-published: a leaked credential must be rotated, not deleted.
+1. *Transitive licence audit.* The survey above read direct dependencies. Re-run against the full
+   build graph: 51 production npm packages (MIT, ISC, Apache-2.0, BSD-3, Unlicense, MIT-or-CC0),
+   37 Go modules reached by `go list -deps` from the receiver, workers and contracts (Apache-2.0,
+   BSD-3, MIT, one MPL-2.0), and 95 Python packages. Nothing copyleft, nothing source-available —
+   no BSL, SSPL or Elastic anywhere. The two licences worth naming are both compatible: MPL-2.0
+   (`certifi`, `pathspec`, `go.mongodb.org/mongo-driver`-style terms) carries an explicit
+   secondary-licence provision for GPL-family works, and `pycurl` is `LGPL-2.1-only OR MIT`, so
+   the MIT branch applies.
+2. *Content-level secret scan.* `gitleaks git` over all 364 commits, ~10 MB. 17 findings, **all
+   false positives**: `AKIAEXAMPLEACCESSKEY`, `0123456789abcdef…`, a matched log-message string,
+   the parameter name `sealed_secret` in `totp.py`, and `sk_test_51HxmpleTokenThatMustNeverBeStored`
+   planted in the deleted demo shop so the masking rule had something to catch. Every `nvp_live_*`
+   literal in history is a fixture (`devloc…`, `AAAAAA`, `short`, `x`) or the scheme constant. No
+   private key block, and no credential file was ever added — only `.env.example`, with `.env` and
+   `.env.*` ignored since the beginning.
+
+**What this audit found instead: the licence is decided but nowhere declared.** There is no
+`LICENSE` file at the repository root, no `license` field in any `pyproject.toml`, and
+`packages/browser-sdk/package.json` says `"UNLICENSED"` — which contradicts this ADR's carve-out
+rather than implementing it. Publishing with those unchanged publishes source under no grant at
+all, which is the one outcome worse than either licence. **Open: MIT or Apache-2.0 for the SDK.**
+Apache-2.0 adds an express patent grant and a NOTICE requirement; MIT is shorter and is what the
+OTel browser packages the SDK sits beside already use.
 
 **Not decided here:** what a self-hoster pays (nothing — vision.md, 2026-09-14) and which features
 might later be commercial. Those are commercial decisions recorded in `vision.md`; this ADR covers
