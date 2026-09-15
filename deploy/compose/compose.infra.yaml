@@ -67,26 +67,25 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-nexovue}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-nexovue_dev}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
-      # **EXPERIMENTAL, 2026-09-15 — measured here, not verified against
-      # ClickHouse's own guidance.** Intended to make jemalloc return freed
-      # pages to the OS sooner. The problem is real and measured: 2.27 GiB
-      # resident against 1.24 GiB actually allocated after under two hours, so
-      # roughly a gigabyte was held by the allocator rather than by ClickHouse,
-      # and `memory.xml` records the same drift.
+      # No MALLOC_CONF here, and that is the conclusion rather than an omission.
       #
-      # What is measured: with this set, resident tracked *below* allocated
-      # instead of a gigabyte above it.
+      # The drift is real: 2.27 GiB resident against 1.24 GiB allocated after
+      # under two hours, so roughly a gigabyte sat in the allocator rather than
+      # in ClickHouse. `memory.xml` records the same.
       #
-      # What is NOT established, because the web-search budget was exhausted
-      # when this was chosen: whether ClickHouse 26.3 already sets its own
-      # MALLOC_CONF that this overrides, whether 1000ms is the right interval
-      # for this workload rather than merely a working one, and whether the
-      # upstream recommendation is a different mechanism entirely. `memory.xml`
-      # concluded there was no flag to turn; this contradicts that conclusion on
-      # the strength of one local measurement, which is weaker evidence than it
-      # sounds. **Verify against ClickHouse documentation before this ships in
-      # the on-prem compose or informs a minimum-machine-size claim.**
-      MALLOC_CONF: "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000"
+      # A `background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000` was
+      # set here on 2026-09-15 and reverted once it could be checked against
+      # ClickHouse's source. Its compiled-in default is already
+      # `…,muzzy_decay_ms:0,dirty_decay_ms:5000,…,background_thread:true,…`
+      # (contrib/jemalloc-cmake/CMakeLists.txt), and MALLOC_CONF overrides only
+      # the options it names. So that line was a no-op on background_thread, a
+      # mild tightening of dirty_decay_ms — and it raised muzzy_decay_ms from 0
+      # to 1000, telling jemalloc to *hold* muzzy pages for a second where the
+      # default returns them at once. Backwards from the goal, which is why the
+      # measurement never resolved.
+      #
+      # If this is tuned later, `dirty_decay_ms` is the only lever, muzzy stays
+      # at 0, and it needs a controlled measurement rather than one sample.
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       # One file, not the directory: config.d already holds the image's own

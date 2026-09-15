@@ -14,10 +14,14 @@
          cap as the demo ingests: seen at 4.00 GiB of 4.00 GiB with
          `system.metrics.MemoryTracking` reporting 1.40 GiB, so 2.6 GiB was
          allocator-retained rather than in use, and a restart reclaimed all of
-         it. `jemalloc_enable_background_threads` is already on by default, so
-         there is no flag to turn; this is the shape of the problem, not a
-         misconfiguration. Raising the cap moves the day it recurs and nothing
-         else. -->
+         it. There is no flag to turn, and that has now been checked against
+         ClickHouse's source rather than assumed: its compiled-in jemalloc
+         config is already `background_thread:true, dirty_decay_ms:5000,
+         muzzy_decay_ms:0` (contrib/jemalloc-cmake/CMakeLists.txt). A MALLOC_CONF
+         override was tried on 2026-09-15 and reverted — see the comment in
+         `compose.infra.yaml`, which records why it made things worse. This is
+         the shape of the problem, not a misconfiguration. Raising the cap moves
+         the day it recurs and nothing else. -->
     <max_server_memory_usage>4294967296</max_server_memory_usage>
 
     <!-- Defaults are sized for a dedicated server. On a laptop sharing memory
