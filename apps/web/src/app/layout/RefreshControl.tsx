@@ -162,7 +162,17 @@ function useNewestData(): Date | undefined {
     };
 
     read();
-    const unsubscribe = client.getQueryCache().subscribe(read);
+    /**
+     * **Read after the render that caused the event, not inside it.**
+     *
+     * React Query emits `added` from inside `useQuery`'s first render, so a screen
+     * mounting a new query made this component set state while that component was
+     * still rendering — which React reports as "Cannot update a component while
+     * rendering a different component", four times on a page with four new queries.
+     * A microtask is the smallest wait that is outside the render: the age on screen
+     * is a second coarse anyway, so nothing is lost by reading it a tick later.
+     */
+    const unsubscribe = client.getQueryCache().subscribe(() => queueMicrotask(read));
     // The cache only fires when something changes; the words below age every second
     // whether or not it does.
     const tick = setInterval(read, CLOCK_MS);

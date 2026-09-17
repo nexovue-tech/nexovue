@@ -56,11 +56,11 @@
   --sev-healthy: var(--n-11); /* no hue, by design */
 
   --series-1: oklch(0.8 0.136 200); /* #00D7E0 cyan */
-  --series-2: oklch(0.8 0.14 180); /* #23DBC1 teal */
-  --series-3: oklch(0.8 0.108 290); /* #BCB2FF violet */
+  --series-2: oklch(0.8 0.14 105); /* #CBC24A lime */
+  --series-3: oklch(0.8 0.108 300); /* #C8AEF9 violet */
   --series-4: oklch(0.8 0.1 265); /* #9EBDFF indigo */
-  --series-5: oklch(0.8 0.14 330); /* #F09BE8 magenta */
-  --series-6: oklch(0.8 0.118 10); /* #FF9DAC rose */
+  --series-5: oklch(0.8 0.14 335); /* #F59AE1 magenta */
+  --series-6: oklch(0.92 0.08 200); /* #A3F5FA pale cyan — lightness, not hue */
 
   color-scheme: dark;
 }
@@ -114,11 +114,11 @@
     --sev-healthy: var(--n-11); /* no hue, by design */
 
     --series-1: oklch(0.6 0.102 200); /* #009298 cyan */
-    --series-2: oklch(0.6 0.109 180); /* #009583 teal */
-    --series-3: oklch(0.6 0.14 290); /* #806FCD violet */
+    --series-2: oklch(0.6 0.12 105); /* #8B8318 lime */
+    --series-3: oklch(0.6 0.14 300); /* #8E6AC7 violet */
     --series-4: oklch(0.6 0.14 265); /* #567CD3 indigo */
-    --series-5: oklch(0.6 0.14 330); /* #AE5EA8 magenta */
-    --series-6: oklch(0.6 0.14 10); /* #C4576D rose */
+    --series-5: oklch(0.6 0.14 335); /* #B25CA1 magenta */
+    --series-6: oklch(0.42 0.1 200); /* #005C62 deep cyan — lightness, not hue */
 
     color-scheme: light;
   }
@@ -166,11 +166,11 @@
   --sev-healthy: var(--n-11); /* no hue, by design */
 
   --series-1: oklch(0.6 0.102 200); /* #009298 cyan */
-  --series-2: oklch(0.6 0.109 180); /* #009583 teal */
-  --series-3: oklch(0.6 0.14 290); /* #806FCD violet */
+  --series-2: oklch(0.6 0.12 105); /* #8B8318 lime */
+  --series-3: oklch(0.6 0.14 300); /* #8E6AC7 violet */
   --series-4: oklch(0.6 0.14 265); /* #567CD3 indigo */
-  --series-5: oklch(0.6 0.14 330); /* #AE5EA8 magenta */
-  --series-6: oklch(0.6 0.14 10); /* #C4576D rose */
+  --series-5: oklch(0.6 0.14 335); /* #B25CA1 magenta */
+  --series-6: oklch(0.42 0.1 200); /* #005C62 deep cyan — lightness, not hue */
 
   color-scheme: light;
 }

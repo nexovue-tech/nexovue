@@ -47,12 +47,16 @@ export interface PhaseReading {
 export type SeriesToken = 1 | 2 | 3 | 4 | 5 | 6;
 
 /**
- * Palette order, not palette index. The tokens are numbered by hue in sequence
- * (200°, 180°, 290°, 265°, 330°, 10°), so taking them in order puts cyan next to teal —
- * twenty degrees apart, and adjacent bands in a stack share an edge. This order
- * separates neighbours: 200 · 290 · 330 · 180 · 265 · 10.
+ * The tokens in their own order, which is now the right order.
+ *
+ * This used to reorder them — `[1, 3, 5, 2, 4, 6]` — because `--series-1` (200°) and
+ * `--series-2` (180°) were twenty degrees apart and adjacent bands in a stack share an
+ * edge. That was a workaround in one chart for a palette that had two colours too close
+ * together everywhere else as well. The palette was fixed instead: every pair is now at
+ * least 30° apart in hue or 0.10 apart in lightness, enforced by
+ * `packages/ui/scripts/verify-contrast.js`, so neighbours no longer need rearranging.
  */
-const PALETTE_ORDER: readonly SeriesToken[] = [1, 3, 5, 2, 4, 6];
+const PALETTE_ORDER: readonly SeriesToken[] = [1, 2, 3, 4, 5, 6];
 
 const PERCENT = 100;
 

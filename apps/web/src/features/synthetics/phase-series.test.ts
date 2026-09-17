@@ -133,8 +133,14 @@ describe("buildPhasePlot with an unexpected shape", () => {
 });
 
 describe("seriesTokenFor", () => {
-  it("separates neighbouring bands instead of taking the palette in hue order", () => {
-    expect([0, 1, 2, 3, 4, 5].map(seriesTokenFor)).toEqual([1, 3, 5, 2, 4, 6]);
+  it("takes the palette in its own order, which the palette itself keeps distinct", () => {
+    // It used to reorder them to dodge two tokens that were twenty degrees apart.
+    // The palette carries that guarantee now; `verify-contrast.js` enforces it.
+    expect([0, 1, 2, 3, 4, 5].map(seriesTokenFor)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("wraps, so a seventh phase reuses the first colour rather than none", () => {
+    expect(seriesTokenFor(6)).toBe(seriesTokenFor(0));
   });
 });
 

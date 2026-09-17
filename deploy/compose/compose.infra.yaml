@@ -187,7 +187,13 @@ services:
       - seaweedfs-data:/data
       - ../seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:9333/cluster/status"]
+      # **The S3 port, not the master's.** `weed server` brings the master up on
+      # 9333 first and the S3 gateway on 8333 seconds later, so probing the master
+      # declared this healthy while 8333 still refused connections — and the API,
+      # which gates on this and creates its bucket at boot, exited on a cold start
+      # with "could not prepare the bucket". A health check has to probe the port
+      # its dependants actually call.
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8333/status"]
       interval: 10s
       timeout: 5s
       retries: 10

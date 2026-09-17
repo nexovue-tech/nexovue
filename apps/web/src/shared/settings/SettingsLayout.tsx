@@ -47,7 +47,10 @@ export function SettingsLayout({
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-5 py-6 md:flex-row md:gap-10">
         <SettingsNav />
 
-        <main className="min-w-0 flex-1 pb-10">
+        {/* A column inside the shell's main landmark, not a second landmark. Two of
+            them is invalid HTML and gives a screen reader's landmark list a duplicate
+            to choose between; `AppShell` owns the page's one. */}
+        <div className="min-w-0 flex-1 pb-10">
           <header>
             <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">{title}</h1>
             {description ? (
@@ -56,7 +59,7 @@ export function SettingsLayout({
           </header>
 
           <div className="mt-6">{children}</div>
-        </main>
+        </div>
       </div>
     </div>
   );

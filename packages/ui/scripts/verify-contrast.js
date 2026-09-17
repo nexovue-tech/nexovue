@@ -65,9 +65,20 @@ function resolveFloat(tokens, name) {
 const quantise = ({ r, g, b }) => [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
 
 function lightnessOf(tokens, name) {
+  return oklchOf(tokens, name).l;
+}
+
+function oklchOf(tokens, name) {
   const indirect = tokens[name].match(/^var\((--[\w-]+)\)$/);
   const value = indirect ? tokens[indirect[1]] : tokens[name];
-  return parse(value).l;
+  const colour = parse(value);
+  return { l: colour.l, c: colour.c ?? 0, h: colour.h ?? 0 };
+}
+
+/** The shorter way round the hue circle, in degrees. */
+function hueDistance(a, b) {
+  const apart = Math.abs(a - b) % 360;
+  return apart > 180 ? 360 - apart : apart;
 }
 
 const APCA_DRIFT_TOLERANCE = 1; // the doc rounds Lc to whole numbers
@@ -112,7 +123,7 @@ const CHECKS = {
     pair("info label on badge fill", "--sev-info-text", "--sev-info-subtle", LABEL, [60, 8.46]),
     pair("info label on page", "--sev-info-text", "--n-1", LABEL, [61, 9.32]),
     pair("info dot vs page (UI)", "--sev-info-solid", "--n-1", NON_TEXT, [51, 7.49]),
-    pair("worst chart series vs page (UI)", SERIES, "--n-1", CHART_MARK, [64, 9.92]),
+    pair("worst chart series vs page (UI)", SERIES, "--n-1", CHART_MARK, [64, 9.91]),
   ],
   light: [
     pair("primary text (n-12) on page", "--n-12", "--n-1", BODY_TEXT, [98, 12.96]),
@@ -140,9 +151,28 @@ const CHECKS = {
     pair("info label on badge fill", "--sev-info-text", "--sev-info-subtle", LABEL, [67, 4.51]),
     pair("info label on page", "--sev-info-text", "--n-1", LABEL, [73, 4.91]),
     pair("info dot vs page (UI)", "--sev-info-solid", "--n-1", NON_TEXT, [80, 6.36]),
-    pair("worst chart series vs page (UI)", SERIES, "--n-1", CHART_MARK, [63, 3.68]),
+    pair("worst chart series vs page (UI)", SERIES, "--n-1", CHART_MARK, [64, 3.72]),
   ],
 };
+
+/**
+ * How far apart two categorical series must be to be two colours.
+ *
+ * `--series-1` at 200° and `--series-2` at 180° shipped 20° apart and read as one
+ * colour wherever a chart drew both, which the five-phase synthetic chart does. Hue
+ * alone cannot separate six series inside the ~230° the reserved bands leave, so a
+ * pair may satisfy either rule: far enough apart in hue, or far enough apart in
+ * lightness. One of the two must hold for every pair.
+ */
+const SERIES_MIN_HUE = 30;
+const SERIES_MIN_LIGHTNESS = 0.1;
+
+/** The hues severity and the brand own; a series that sits on one steals its meaning. */
+const RESERVED_HUES = [
+  { label: "critical red", hue: 25 },
+  { label: "warning amber", hue: 70 },
+  { label: "brand green", hue: 157.1 },
+];
 
 /** Staggered lightness so severity survives protanopia, deuteranopia and greyscale. */
 const SEPARATIONS = [
@@ -209,6 +239,35 @@ for (const [theme, checks] of Object.entries(CHECKS)) {
         `  ${ratio.toFixed(3).padStart(6)}:1 (${ratioUnquantised.toFixed(3)} unquantised)` +
         `  needs Lc ${target.lc} / ${target.wcag}:1${note}\n`,
     );
+  }
+
+  for (let first = 0; first < SERIES.length; first += 1) {
+    for (let second = first + 1; second < SERIES.length; second += 1) {
+      const a = oklchOf(palettes[theme], SERIES[first]);
+      const b = oklchOf(palettes[theme], SERIES[second]);
+      const hue = hueDistance(a.h, b.h);
+      const lightness = Math.abs(a.l - b.l);
+      const passes = hue >= SERIES_MIN_HUE - 1e-9 || lightness >= SERIES_MIN_LIGHTNESS - 1e-9;
+      if (!passes) failures += 1;
+      const label = `series ${first + 1} <-> ${second + 1}`;
+      process.stdout.write(
+        `  ${passes ? "ok  " : "FAIL"} ${label.padEnd(32)} Δh ${hue.toFixed(0).padStart(3)}°` +
+          `  ΔL ${lightness.toFixed(3)}  (needs Δh ${SERIES_MIN_HUE} or ΔL ${SERIES_MIN_LIGHTNESS})\n`,
+      );
+    }
+  }
+
+  for (const series of SERIES) {
+    for (const { label, hue } of RESERVED_HUES) {
+      const distance = hueDistance(oklchOf(palettes[theme], series).h, hue);
+      const passes = distance >= SERIES_MIN_HUE - 1e-9;
+      if (!passes) failures += 1;
+      const name = `${series.replace("--", "")} vs ${label}`;
+      process.stdout.write(
+        `  ${passes ? "ok  " : "FAIL"} ${name.padEnd(32)} Δh ${distance.toFixed(0).padStart(3)}°` +
+          `                (needs Δh ${SERIES_MIN_HUE})\n`,
+      );
+    }
   }
 
   for (const { label, a, b, min } of SEPARATIONS) {

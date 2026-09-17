@@ -148,6 +148,8 @@ It is a light, high-chroma spring green, and that has three consequences the sys
 2. **It is green, on a monitoring product.** Green traditionally means "healthy", and we decided health is the *absence* of colour. So the rule is strict: **brand green appears only in interactive and brand contexts** — logo, links, focus rings, primary buttons, active navigation. Never in a status, never in a chart. Users learn "green = ours, and clickable," not "green = fine."
 3. **Its hue band is reserved.** 130–175° belongs to the brand, so green is removed from the categorical series palette entirely — alongside red 15–40° and amber 55–85°, which belong to severity.
 
+**What "distinct" costs, and how the sixth series is paid for.** Three reserved bands leave roughly 230° of hue for the categorical palette, and six series cannot all sit 60° apart inside it. Spacing them evenly *sounds* right and produced the defect this palette replaces: `--series-1` at 200° and `--series-2` at 180° were 20° apart and read as one colour wherever both were drawn, which a five-series chart does. So five hues carry 30°-or-more separation — 200, 105, 300, 265, 335 — and the sixth is a **lightness** step on the first rather than a hue nobody had left: `--series-6` is `--series-1`'s hue at L 0.92 against L 0.80 in dark, and 0.42 against 0.60 in light — lighter on the dark page and darker on the light one, because a chart mark has to stay Lc 60 against the page it is drawn on and a mid-lightness cyan measures 38 on near-black. That is the same technique severity already uses where hue cannot carry a difference (critical ↔ warning, ΔL 0.18), applied for the same reason.
+
 The neutral scale carries a trace of the brand hue (chroma 0.010 at 157.1°) rather than being pure grey. At that level it is not perceptible as green; it stops the interface reading as dead grey-on-grey and quietly ties the greys to the brand.
 
 ### Tokens
@@ -200,11 +202,11 @@ Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verifie
   --sev-healthy: var(--n-11);   /* no hue, by design */
 
   --series-1: oklch(0.800 0.136 200);   /* #00D7E0 cyan */
-  --series-2: oklch(0.800 0.140 180);   /* #23DBC1 teal */
-  --series-3: oklch(0.800 0.108 290);   /* #BCB2FF violet */
+  --series-2: oklch(0.800 0.140 105);   /* #CBC24A lime */
+  --series-3: oklch(0.800 0.108 300);   /* #C8AEF9 violet */
   --series-4: oklch(0.800 0.100 265);   /* #9EBDFF indigo */
-  --series-5: oklch(0.800 0.140 330);   /* #F09BE8 magenta */
-  --series-6: oklch(0.800 0.118 10);   /* #FF9DAC rose */
+  --series-5: oklch(0.800 0.140 335);   /* #F59AE1 magenta */
+  --series-6: oklch(0.920 0.080 200);   /* #A3F5FA pale cyan */
 }
 
 /* ---------- LIGHT ---------- */
@@ -250,11 +252,11 @@ Generated in OKLCH at fixed hue with chroma gamut-clamped per step, then verifie
   --sev-healthy: var(--n-11);   /* no hue, by design */
 
   --series-1: oklch(0.600 0.102 200);   /* #009298 cyan */
-  --series-2: oklch(0.600 0.109 180);   /* #009583 teal */
-  --series-3: oklch(0.600 0.140 290);   /* #806FCD violet */
+  --series-2: oklch(0.600 0.120 105);   /* #8B8318 lime */
+  --series-3: oklch(0.600 0.140 300);   /* #8E6AC7 violet */
   --series-4: oklch(0.600 0.140 265);   /* #567CD3 indigo */
-  --series-5: oklch(0.600 0.140 330);   /* #AE5EA8 magenta */
-  --series-6: oklch(0.600 0.140 10);   /* #C4576D rose */
+  --series-5: oklch(0.600 0.140 335);   /* #B25CA1 magenta */
+  --series-6: oklch(0.420 0.100 200);   /* #005C62 deep cyan */
 }
 ```
 
@@ -284,7 +286,7 @@ Targets: body text Lc 75 / 4.5:1 · labels and chart marks Lc 60 / 4.5:1 · non-
 | dark · info label on badge fill | 60 | 8.46:1 | Lc 60 · 4.5:1 | ✓ |
 | dark · info label on page | 61 | 9.32:1 | Lc 60 · 4.5:1 | ✓ |
 | dark · info dot vs page (UI) | 51 | 7.49:1 | Lc 15 · 3.0:1 | ✓ |
-| dark · worst chart series vs page (UI) | 64 | 9.92:1 | Lc 60 · 3.0:1 | ✓ |
+| dark · worst chart series vs page (UI) | 64 | 9.91:1 | Lc 60 · 3.0:1 | ✓ |
 | light · primary text (n-12) on page | 98 | 12.96:1 | Lc 75 · 4.5:1 | ✓ |
 | light · secondary text (n-11) on page | 71 | 4.52:1 | Lc 60 · 4.5:1 | ✓ |
 | light · brand link (brand-11) on page | 76 | 5.46:1 | Lc 60 · 4.5:1 | ✓ |
@@ -298,7 +300,7 @@ Targets: body text Lc 75 / 4.5:1 · labels and chart marks Lc 60 / 4.5:1 · non-
 | light · info label on badge fill | 67 | 4.51:1 | Lc 60 · 4.5:1 | ✓ |
 | light · info label on page | 73 | 4.91:1 | Lc 60 · 4.5:1 | ✓ |
 | light · info dot vs page (UI) | 80 | 6.36:1 | Lc 15 · 3.0:1 | ✓ |
-| light · worst chart series vs page (UI) | 63 | 3.68:1 | Lc 60 · 3.0:1 | ✓ |
+| light · worst chart series vs page (UI) | 64 | 3.72:1 | Lc 60 · 3.0:1 | ✓ |
 
 > **WCAG figures are measured on 8-bit sRGB**, corrected 2026-08-26. WCAG 2.x defines relative luminance over 8-bit channel values — what a browser actually paints — while the first pass computed it on unquantised floats. One pair passed in float and failed once rounded: light warning-label-on-badge measured 4.509 unquantised but **4.488 as painted**, below AA. `--sev-warning-text` moved from L 0.549 to 0.547 and now measures 4.55. Two pairs remain thin by design — light info-on-badge at 4.53 and light secondary text at 4.54 — so any future change to those hues must be re-measured quantised, not in float.
 >
@@ -314,6 +316,13 @@ Severity *dots* are deliberately staggered in lightness where hues are confusabl
 | critical ↔ info | 0.08 | 0.08 | Red vs blue survives every common CVD type on hue alone. |
 
 This is why severity colours are *not* all tuned to identical contrast. An early pass did exactly that and drove all three to the same lightness — perfectly legible, and indistinguishable in greyscale. **Contrast and separation are different requirements**, and optimising for one silently destroys the other.
+
+**The same requirement applies between series, and was missing.** Contrast was verified pair by pair against the page; nothing measured one series against another. The first palette therefore shipped `--series-1` at 200° beside `--series-2` at 180°, and 20° at one lightness is one colour to the eye — visible the moment a chart drew five series at once. `verify-contrast.js` now measures every series pair and every series against the reserved hues:
+
+| Rule | Threshold | Why |
+|---|---|---|
+| series ↔ series | Δh ≥ 30° **or** ΔL ≥ 0.10 | Six series do not fit inside the ~230° the reserved bands leave at 60° each, so a pair may separate by hue or by lightness. `--series-6` takes the lightness route on `--series-1`'s hue. |
+| series ↔ critical red (25°), warning amber (70°), brand green (157°) | Δh ≥ 30° | A series that sits on a reserved hue takes that hue's meaning with it. The old `--series-2` at 180° sat 23° from the brand. |
 
 ### Other colour uses
 
@@ -335,6 +344,8 @@ This is why severity colours are *not* all tuned to identical contrast. An early
 | `features/traces/` | **`TraceWaterfall`** · `WaterfallRow` · `SpanDetail` — no library provides a waterfall |
 | `features/logs/` | `LogsScreen` and the live-tail client |
 | `features/servicedetail/`, `features/synthetics/` | `TrendChart` · `PhaseChart`, the two uPlot wrappers |
+| `shared/components/` **[2026-09-17, F18]** | `Tabs` (the WAI-ARIA tabs pattern: one tab stop, arrow keys, a marked invalid tab) · `EditableRows` (the first editable list: rows keyed by id, focus moved on add and remove, a stated maximum) · `CodeEditor` (a thin wrapper over CodeMirror 6's own packages, themed from tokens; about 105 kB gzip, so screens load it lazily — see `features/synthetics/LazyCodeEditor.tsx`) |
+| `features/synthetics/` **[2026-09-17]** | `RequestEditor` · `BodyEditor` · `AssertionRows` · `AuthHelper` · `FileAttach` · `StepList` · `EvidenceView` — the Postman-style request editor and the run evidence view |
 
 `useVirtualizer` is called directly in the **nine** screens that need it — logs, traces list, trace
 waterfall, database, usage, infrastructure, errors, services and service detail — rather than through a

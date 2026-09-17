@@ -16,3 +16,4 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 - [Template gaps](template-gaps/change.md) — the four forms had no section for work every feature kept doing.
 - [Task plan gate](task-plan-gate/change.md) — nothing sat between an approved plan and the first edited file.
 - [Plan holds tasks](plan-holds-tasks/change.md) — the plan and its task plan were two documents and two approvals for one ordering.
+- [QA-found defects](qa-found-defects/bug.md) — seven defects a hands-on pass found outside the feature it was testing, from a health check probing the wrong port to two chart colours that were one colour.

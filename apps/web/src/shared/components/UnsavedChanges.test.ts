@@ -11,7 +11,7 @@ import {
 import { act, createElement, useState } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UnsavedChangesPrompt, useUnsavedChanges } from "./UnsavedChanges";
 
@@ -165,5 +165,127 @@ describe("AC19: leaving a form with unsaved changes", () => {
 
     expect(screen.prompt()).toBeNull();
     expect(screen.router.state.location.pathname).toBe("/elsewhere");
+  });
+});
+
+/* ------------------------------------------------------------------ keyboard */
+
+/**
+ * `role="alertdialog"` with `aria-modal="true"` tells a screen reader the rest of the
+ * page is not there. The component said that and did none of it: focus stayed on the
+ * link that was clicked, Escape did nothing, and Tab walked the page behind the scrim,
+ * so a keyboard user met a screen that had silently stopped navigating.
+ *
+ * The tests above drive the guard through a real router; these drive the dialog alone,
+ * because focus and key handling are the part a navigation test cannot see.
+ */
+describe("the prompt, from a keyboard", () => {
+  let reset: ReturnType<typeof vi.fn>;
+  let proceed: ReturnType<typeof vi.fn>;
+  let container: HTMLElement;
+  let root: Root;
+  /** Whatever held focus when the dialog opened — the link that was clicked. */
+  let outside: HTMLButtonElement;
+
+  beforeEach(() => {
+    reset = vi.fn();
+    proceed = vi.fn();
+    container = document.createElement("div");
+    document.body.append(container);
+    outside = document.createElement("button");
+    outside.textContent = "Logs";
+    document.body.append(outside);
+    outside.focus();
+    root = createRoot(container);
+    mounted.push(root);
+  });
+
+  /** The shape `useBlocker({ withResolver: true })` hands back while it is blocking. */
+  const blocked = () => ({ status: "blocked", reset, proceed }) as never;
+
+  function open() {
+    act(() => {
+      root.render(createElement(UnsavedChangesPrompt, { guard: blocked(), what: "this check" }));
+    });
+    const dialog = container.querySelector<HTMLElement>('[role="alertdialog"]');
+    if (!dialog) throw new Error("the prompt did not render");
+    return dialog;
+  }
+
+  function press(key: string, options: { shiftKey?: boolean } = {}) {
+    act(() => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, ...options }),
+      );
+    });
+  }
+
+  it("takes focus, and puts it on staying rather than discarding", () => {
+    const dialog = open();
+
+    expect(document.activeElement?.closest('[role="alertdialog"]')).toBe(dialog);
+    expect(document.activeElement?.textContent).toBe("Keep editing");
+  });
+
+  it("answers Escape by keeping the work, never by discarding it", () => {
+    open();
+
+    press("Escape");
+
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(proceed).not.toHaveBeenCalled();
+  });
+
+  it("still answers Escape once focus has left it, as a click on the scrim leaves it", () => {
+    // The handler used to live on the dialog element, so a click anywhere outside —
+    // the scrim is the whole viewport — left Escape inert and Tab walking the page
+    // behind it. That is the reported defect, one click away from the fix.
+    open();
+    (document.body as HTMLElement).focus();
+    outside.focus();
+
+    press("Escape");
+
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Tab inside itself, in both directions", () => {
+    const dialog = open();
+    const [first, last] = [...dialog.querySelectorAll("button")];
+
+    last.focus();
+    press("Tab");
+    expect(document.activeElement).toBe(first);
+
+    first.focus();
+    press("Tab", { shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("pulls focus back when something outside takes it", () => {
+    const dialog = open();
+
+    act(() => {
+      outside.focus();
+      outside.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    });
+
+    expect(document.activeElement?.closest('[role="alertdialog"]')).toBe(dialog);
+  });
+
+  it("gives focus back to where it came from when it closes", () => {
+    open();
+    expect(document.activeElement).not.toBe(outside);
+
+    act(() => {
+      root.render(
+        createElement(UnsavedChangesPrompt, {
+          guard: { status: "idle" } as never,
+          what: "this check",
+        }),
+      );
+    });
+
+    expect(document.activeElement).toBe(outside);
   });
 });

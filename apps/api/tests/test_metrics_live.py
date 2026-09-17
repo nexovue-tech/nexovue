@@ -241,10 +241,13 @@ def test_the_shapes_named_here_are_the_ones_the_store_has_tables_for() -> None:
 
 
 async def _histogram(
-    clickhouse: AsyncClient, reporting: tuple[str, str], metric_name: str
+    clickhouse: AsyncClient,
+    reporting: tuple[str, str],
+    metric_name: str,
+    window: tuple[datetime, datetime] | None = None,
 ) -> HistogramResponse:
     tenant_id, project_id = reporting
-    start, end = _window()
+    start, end = window or _window()
     return await service.read_histogram(
         TenantScopedRepository(clickhouse, tenant_id=tenant_id),
         project_id=project_id,
@@ -285,16 +288,27 @@ async def test_the_window_delta_is_far_below_the_number_of_points_stored(
     the second must be nothing like the first multiplied by the export rate.
     """
     tenant_id, project_id = reporting
-    start, end = _window()
+    # One window, measured once and given to both sides. Calling `_window()` twice
+    # put a few milliseconds of fresh points on one side of the comparison only.
+    window = _window()
+    start, end = window
     stored = await clickhouse.query(
-        "SELECT sum(count) AS naive, max(count) AS largest_single_point "
-        "FROM metrics_histogram WHERE tenant_id = %(tenant)s AND project_id = %(project)s "
-        "AND metric_name = 'k6.http_req_duration' AND timestamp >= %(since)s",
-        parameters={"tenant": tenant_id, "project": project_id, "since": start},
+        """
+        SELECT sum(points_total) AS naive, max(delta) AS largest_series_delta
+        FROM (
+            SELECT series_hash, max(count) - min(count) AS delta, sum(count) AS points_total
+            FROM metrics_histogram
+            WHERE tenant_id = %(tenant)s AND project_id = %(project)s
+              AND metric_name = 'k6.http_req_duration'
+              AND timestamp >= %(since)s AND timestamp <= %(until)s
+            GROUP BY series_hash
+        )
+        """,
+        parameters={"tenant": tenant_id, "project": project_id, "since": start, "until": end},
     )
-    naive, largest = stored.result_rows[0]
+    naive, largest_series_delta = stored.result_rows[0]
 
-    answer = await _histogram(clickhouse, reporting, "k6.http_req_duration")
+    answer = await _histogram(clickhouse, reporting, "k6.http_req_duration", window)
     (layout,) = answer.layouts
 
     assert naive > 0, "no points to compare against"
@@ -302,10 +316,22 @@ async def test_the_window_delta_is_far_below_the_number_of_points_stored(
         f"the read returned {layout.count}, which is not below the naive sum of {naive}. "
         "Summing cumulative points counts every observation once per export."
     )
-    assert layout.count >= largest, (
-        "the window's total cannot be smaller than the largest single cumulative point"
+    # **A delta against a delta.** This compared the window's total against the
+    # largest single *cumulative* point, which is the total since the exporter
+    # started — a number the window is under whenever the exporter started before
+    # it. The comparable lower bound is the biggest rise any one series made
+    # inside the window: every series' rise is part of the answer, so the answer
+    # cannot be smaller than the largest of them.
+    assert layout.count >= largest_series_delta, (
+        f"the read returned {layout.count}, below the {largest_series_delta} that one "
+        "series alone rose by inside this window — so a series was dropped."
     )
-    assert end > start
+    # **This is a floor, not the answer.** The read sums every series' rise, so it is
+    # at least the largest of them and at most the naive total; asserting the exact sum
+    # would mean recomputing the read's own grouping — `series_hash` *and* the bucket
+    # bounds, skipping malformed points — here, which is a copy of the code under test
+    # rather than a check on it. What this pair catches is the two ways the read can be
+    # wrong in kind: counting a cumulative point as an observation, and losing a series.
 
 
 async def test_percentiles_come_back_ordered_and_inside_the_bounds(

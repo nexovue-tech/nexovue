@@ -1,4 +1,5 @@
 import { useBlocker } from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
 
 import { Button } from "./Button";
 
@@ -44,14 +45,84 @@ interface UnsavedChangesPromptProps {
   what: string;
 }
 
+/** The guard while it is actually holding a navigation, so `reset` and `proceed` exist. */
+type BlockedGuard = Extract<UnsavedChangesGuard, { status: "blocked" }>;
+
 /** The dialog, rendered only while a navigation is actually held. */
 export function UnsavedChangesPrompt({ guard, what }: UnsavedChangesPromptProps) {
   if (guard.status !== "blocked") return null;
+  // Mounted only while blocked, so the dialog's own effects run exactly when it
+  // opens and closes — which is what lets it take and give back focus.
+  return <BlockedPrompt guard={guard} what={what} />;
+}
+
+/**
+ * `aria-modal` is a promise to a screen reader that the rest of the page is not
+ * there. Keeping that promise is three behaviours, and this had none of them: focus
+ * stayed on whatever was clicked, Escape did nothing, and Tab walked the page behind
+ * the scrim. A keyboard user met a screen that had simply stopped navigating.
+ */
+function BlockedPrompt({ guard, what }: { guard: BlockedGuard; what: string }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  // `reset` is a new function each render; the listeners below must call today's.
+  const keep = useRef(guard.reset);
+  keep.current = guard.reset;
+
+  useEffect(() => {
+    const returnTo = document.activeElement as HTMLElement | null;
+    // The first stop in document order, which is "Keep editing" — staying is the safe
+    // answer, so the first Enter cannot discard anything. The order of the two buttons
+    // is therefore load-bearing, and the test pins it by label.
+    const first = () => focusable(dialog.current)[0];
+    first()?.focus();
+
+    /**
+     * **On the document, not on the dialog.** Handlers bound to the dialog only see
+     * keys typed inside it, so one click on the scrim — which is the whole viewport —
+     * moved focus to `<body>` and left Escape inert and Tab walking the page behind.
+     * That is the defect this is meant to fix, one click away.
+     */
+    const keys = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        // Escape is "get me out of this dialog", never "discard my work".
+        event.preventDefault();
+        keep.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const stops = focusable(dialog.current);
+      if (stops.length === 0) return;
+      const inside = dialog.current?.contains(document.activeElement) === true;
+      const edge = event.shiftKey ? stops[0] : stops[stops.length - 1];
+      if (inside && document.activeElement !== edge) return;
+      event.preventDefault();
+      (event.shiftKey ? stops[stops.length - 1] : stops[0]).focus();
+    };
+
+    /** Whatever the page hands focus to while this is open, the dialog takes back. */
+    const pullBack = (event: FocusEvent) => {
+      const target = event.target as Node | null;
+      if (target && dialog.current?.contains(target)) return;
+      first()?.focus();
+    };
+
+    document.addEventListener("keydown", keys);
+    document.addEventListener("focusin", pullBack);
+    return () => {
+      document.removeEventListener("keydown", keys);
+      document.removeEventListener("focusin", pullBack);
+      // The node that had focus may have been unmounted by the navigation this
+      // dialog just released; focusing a detached element silently does nothing.
+      if (returnTo?.isConnected) returnTo.focus?.();
+    };
+  }, []);
 
   return (
     // eslint-disable-next-line -- the scrim is decoration; the dialog below takes focus.
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-4">
       <div
+        ref={dialog}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="unsaved-changes-title"
@@ -75,4 +146,14 @@ export function UnsavedChangesPrompt({ guard, what }: UnsavedChangesPromptProps)
       </div>
     </div>
   );
+}
+
+/** The dialog's own tab stops, in document order. */
+function focusable(within: HTMLElement | null): HTMLElement[] {
+  if (!within) return [];
+  return [
+    ...within.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ];
 }
