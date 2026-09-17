@@ -9,6 +9,10 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-003 — Use OpenTelemetry as the primary collection contract](ADR-003-otel-first-collection.md)
 - [ADR-004 — AGPL-3.0 for the platform, permissive for the browser SDK](ADR-004-agpl-with-a-permissive-browser-sdk.md)
 - [ADR-005 — Contributions come with a CLA, not a DCO](ADR-005-a-cla-rather-than-a-dco.md)
+- [ADR-006 — Terraform for infrastructure, with two delivery paths — Ansible on Linux servers, Helm on Kubernetes](ADR-006-terraform-with-two-delivery-paths.md)
+- [ADR-007 — Migrating between clouds loses no data, and costs the console seconds](ADR-007-migrating-between-clouds.md)
+- [ADR-008 — The website takes the first payment, and cloud customers are onboarded by hand](ADR-008-the-website-takes-the-first-payment.md)
+- [ADR-009 — Regions are cells, and every organization belongs to one — India by default](ADR-009-regions-are-cells.md)
 
 ## Earlier decisions, 0001–0112
 
