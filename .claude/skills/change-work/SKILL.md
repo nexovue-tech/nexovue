@@ -21,7 +21,8 @@ Create `docs/changes/<id>/` from the templates:
 
 - A defect → `docs/templates/bug.md` as `bug.md`.
 - Anything else → `docs/templates/change.md` as `change.md`.
-- Always `status.md`. Add `plan.md` or `design.md` only if the change is large enough to need one.
+- Always `status.md`. Add `plan.md` or `design.md` only if the change is large enough to need one. A
+  `plan.md` holds its steps and their tasks together — write it with `/write-plan`.
 
 Then add the record to the list in `docs/changes/README.md`.
 

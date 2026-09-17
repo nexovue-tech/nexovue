@@ -60,19 +60,21 @@ then identifies the relevant product/catalog entry and the smallest suitable wor
 | Major feature, migration, security, or infrastructure change | Create spec, design, plan, status, review and readiness evidence. | Approve specification, design, plan, and production/staging rollout. |
 | Production incident or customer feedback | Create a change/bug record, investigate and reproduce, identify root cause and specification impact, add regression coverage, then release through the appropriate gates. | Approve material behavior, risk, or release decisions. |
 
-## Before code: the task plan
+## Before code: the plan, with its tasks
 
-A plan is approved as an ordering of work, not as a list of files. Before the first file is edited,
-that plan is expanded into named files and named tests — read from the code rather than from the
-documents about the code — and that expansion is approved.
-
-It lives beside the plan as `task-plan.md`, from `../templates/task-plan.md`.
+One document, `plan.md`, from `../templates/plan.md`, holds both the order of the work and its tasks.
+Each step says what ships and how it can be judged; the tasks under it name the files that change and
+the tests that prove them — **read from the code rather than from the documents about the code**. The
+founder approves the plan before the first file is edited.
 
 Its most valuable output is not the task list. It is the two things the reading turns up — work that
 is already done, and places where the code disagrees with an approved document. Both are cheapest to
 find here.
 
-Claude Code runs this as the `task-plan` skill.
+Claude Code runs this as the `write-plan` skill.
+
+*Until 2026-09-17 the tasks lived in a separate `task-plan.md`. Features and changes planned before then
+keep theirs as the record of how they were built.*
 
 ## Handoff
 

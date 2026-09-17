@@ -15,3 +15,4 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 - [Explore skill](explore-skill/change.md) — the workflow had no step for an idea that is not yet a requirement.
 - [Template gaps](template-gaps/change.md) — the four forms had no section for work every feature kept doing.
 - [Task plan gate](task-plan-gate/change.md) — nothing sat between an approved plan and the first edited file.
+- [Plan holds tasks](plan-holds-tasks/change.md) — the plan and its task plan were two documents and two approvals for one ordering.

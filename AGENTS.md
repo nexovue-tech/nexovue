@@ -162,7 +162,7 @@ Go runs per module, never from repository-root `./...`; always use `-count=1`. P
 - **Receiver:** preserve `auth → origin → allowance → ratelimit → decode → normalize → produce`. Browser `text/plain` is allowed only for the browser door; trace batches partition by trace ID; refusals use OTLP status semantics.
 - **Workers:** preserve `decode → mask → derive → sample → sink`. Every post-message accumulator retains partition provenance so a rebalance cannot double-count. Undecodable messages go to the DLQ before their offset advances.
 - **API:** route handlers stay HTTP-only; domain packages separate schemas, services, and queries. No raw tenant ClickHouse SQL outside `data/`; tenant-scoped Postgres queries take `org_id`. Checkout never changes a plan; a signed, idempotent webhook does.
-- **Scheduler:** tasks publish shared envelopes; a failed monitored target is a successful measurement. Keep browser and light queues separate.
+- **Scheduler:** tasks publish shared envelopes; a failed monitored target is a successful measurement. Never run customer-supplied code.
 - **Web:** imports flow `shared → features → app`; use only `shared/api-client.ts` for API calls and `app/query-client.ts` for status interpretation. Use design tokens; loading is a skeleton and missing readings render as an em dash.
 
 ## Validation and handoff
