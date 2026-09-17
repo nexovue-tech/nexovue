@@ -155,44 +155,23 @@ class TestTargetsWeRefuseToFetch:
         assert targets.validate_target(target) == target.strip()
 
     @pytest.mark.parametrize(
-        "step_url",
-        [
-            "http://169.254.169.254/latest/meta-data/",
-            "http://127.0.0.1:8080/",
-            "http://postgres:5432/",
-            "file:///etc/passwd",
-        ],
+        "host", ["169.254.169.254", "127.0.0.1", "postgres", "[::1]", "10.1.2.3"]
     )
-    def test_a_browser_step_cannot_reach_where_a_target_cannot(self, step_url: str) -> None:
-        """The second door into a request, which the first version left open.
+    def test_a_tcp_host_inside_our_network_is_refused(self, host: str) -> None:
+        with pytest.raises(InvalidRequestError):
+            targets.validate_host(host)
 
-        A browser check carries its own step list, and each `goto` names a URL.
-        Validating only the target meant a check pointed at a public site could
-        still walk the prober to the metadata endpoint, with `expect_text`
-        reporting whether a given string came back.
-        """
-        with pytest.raises(InvalidRequestError):
-            targets.validate_step_urls({"steps": [{"action": "goto", "url": step_url}]})
+    def test_a_public_tcp_host_is_accepted(self) -> None:
+        assert targets.validate_host("db.example.com") == "db.example.com"
 
-    def test_a_flow_of_public_steps_is_accepted(self) -> None:
-        targets.validate_step_urls(
-            {
-                "steps": [
-                    {"action": "goto", "url": "https://shop.acme.example/"},
-                    {"action": "expect_text", "selector": "h1", "text": "Shop"},
-                ]
-            }
-        )
+    @pytest.mark.parametrize("resolver", ["10.0.0.2", "127.0.0.53", "dns.example.com"])
+    def test_a_resolver_must_be_a_public_address(self, resolver: str) -> None:
+        """AC16: a resolver inside our network would answer questions about it."""
+        with pytest.raises(InvalidRequestError):
+            targets.validate_resolver(resolver)
 
-    def test_a_malformed_step_list_is_refused_rather_than_ignored(self) -> None:
-        """Silently skipping something we cannot read is how a check gets stored
-        that nobody validated."""
-        with pytest.raises(InvalidRequestError):
-            targets.validate_step_urls({"steps": "not a list"})
-        with pytest.raises(InvalidRequestError):
-            targets.validate_step_urls({"steps": ["not a step"]})
-        with pytest.raises(InvalidRequestError):
-            targets.validate_step_urls({"steps": [{"action": "goto", "url": 42}]})
+    def test_a_public_resolver_is_accepted(self) -> None:
+        assert targets.validate_resolver("1.1.1.1") == "1.1.1.1"
 
     def test_an_overlong_target_is_refused(self) -> None:
         """Bounded so the column and every log line that quotes it stay sane."""

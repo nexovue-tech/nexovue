@@ -48,7 +48,9 @@ _SUMMARY_COLUMNS: Final = [
     "successful_runs",
     "latest_up",
     "latest_status_code",
+    "latest_outcome",
     "latest_run_nanos",
+    "duration_points",
     "mean_seconds",
     "p95_seconds",
     "max_seconds",
@@ -63,15 +65,24 @@ _TREND_COLUMNS: Final = [
     "bucket_nanos",
     "runs",
     "successful_runs",
+    "duration_points",
     "mean_seconds",
 ]
 _RUN_COLUMNS: Final = [
     "observed_nanos",
+    "run_id",
     "status_points",
     "up_value",
     "status_code",
+    "duration_points",
     "duration_seconds",
+    "phase_points",
     "phase_total_seconds",
+    "outcome",
+    "final_flag",
+    "maintenance_flag",
+    "attempt",
+    "location",
 ]
 
 
@@ -86,6 +97,8 @@ def _statements() -> dict[str, str]:
         queries.CHECK_TRENDS_SQL: "trends",
         queries.PHASE_BREAKDOWN_SQL: "breakdown",
         queries.CHECK_RUNS_SQL: "runs",
+        queries.CHECK_RUN_COUNT_SQL: "run_count",
+        queries.CHECK_RUN_EVIDENCE_SQL: "evidence",
     }
     for check_type in (False, True):
         for down_only in (False, True):
@@ -112,9 +125,14 @@ class FakeGaugeStore:
     what makes a dropped predicate visible as an empty response.
     """
 
-    def __init__(self, owners: dict[str, tuple[str, str]]) -> None:
+    def __init__(
+        self,
+        owners: dict[str, tuple[str, str]],
+        trend_rows: list[tuple[Any, ...]] | None = None,
+    ) -> None:
         # tenant -> (the project it owns, the check inside it)
         self._owners = owners
+        self._trend_rows = trend_rows
         self.last_parameters: dict[str, Any] = {}
 
     async def query(
@@ -142,7 +160,7 @@ class FakeGaugeStore:
         if served == "summaries":
             return FakeQueryResult(_SUMMARY_COLUMNS, [_summary_row(check_id)])
         if served == "trends":
-            return FakeQueryResult(_TREND_COLUMNS, _trend_rows(check_id))
+            return FakeQueryResult(_TREND_COLUMNS, self._trend_rows or _trend_rows(check_id))
 
         if bound.get("check_id") != check_id:
             return FakeQueryResult([], [])
@@ -154,20 +172,31 @@ class FakeGaugeStore:
 def _trend_rows(check_id: str) -> list[tuple[Any, ...]]:
     """Two buckets: one healthy, one where nothing succeeded and so has no duration."""
     return [
-        (check_id, _BUCKET_NANOS, 5, 5, _DURATION_SECONDS),
-        (check_id, _BUCKET_NANOS + _BUCKET_WIDTH_NANOS, 5, 0, None),
+        (check_id, _BUCKET_NANOS, 5, 5, 5, _DURATION_SECONDS),
+        (check_id, _BUCKET_NANOS + _BUCKET_WIDTH_NANOS, 5, 0, 0, None),
     ]
+
+
+def _untimed_trend_row(check_id: str) -> tuple[Any, ...]:
+    """A bucket a heartbeat produces: judged up, never probed, so never timed.
+
+    `avg` over no rows is NaN in ClickHouse, which is what the count beside it
+    exists to catch — a success is not the same fact as a measurement.
+    """
+    return (check_id, _BUCKET_NANOS, 1, 1, 0, float("nan"))
 
 
 def _summary_row(check_id: str) -> tuple[Any, ...]:
     return (
         check_id,
-        "http",
+        "api",
         200,  # runs
         190,  # successful_runs
         1.0,  # latest_up
         200,  # latest_status_code
+        "up",  # latest_outcome
         _RUN_NANOS,
+        200,  # duration_points
         _DURATION_SECONDS,
         1.1562705,
         3.77763,
@@ -191,10 +220,40 @@ def _phase_rows() -> list[tuple[Any, ...]]:
 
 def _run_rows() -> list[tuple[Any, ...]]:
     return [
-        (_RUN_NANOS, 1, 1.0, 200, _DURATION_SECONDS, sum(_PHASE_SECONDS.values())),
-        (_RUN_NANOS - 60_000_000_000, 1, 0.0, 503, 0.2, 0.2),
+        (
+            _RUN_NANOS,
+            "r-3",
+            1,
+            1.0,
+            200,
+            1,  # duration_points
+            _DURATION_SECONDS,
+            len(_PHASE_SECONDS),  # phase_points
+            sum(_PHASE_SECONDS.values()),
+            "up",
+            "true",
+            "false",
+            2,
+            "mumbai",
+        ),
+        (
+            _RUN_NANOS - 60_000_000_000,
+            "r-2",
+            1,
+            0.0,
+            503,
+            1,  # duration_points
+            0.2,
+            1,  # phase_points
+            0.2,
+            "down",
+            "false",
+            "false",
+            1,
+            "hyderabad",
+        ),
         # A group whose status point has not landed: half a run, not a run.
-        (_RUN_NANOS - 120_000_000_000, 0, 0.0, 0, 0.3, 0.3),
+        (_RUN_NANOS - 120_000_000_000, "r-1", 0, 0.0, 0, 1, 0.3, 1, 0.3, "", "", "", 0, ""),
     ]
 
 
@@ -357,6 +416,65 @@ def test_a_summary_without_a_certificate_reading_reports_no_certificate() -> Non
     assert service._to_certificate(row) is None
 
 
+def test_a_check_that_timed_nothing_reports_no_duration_rather_than_zero() -> None:
+    """A heartbeat is never probed, so it has no response time at all.
+
+    The store's answer over no rows is not one value: `avg` and `quantile` return
+    NaN while `max` returns zero. Neither is a reading — a zero p95 reads as a
+    check answering instantly, the one reading a heartbeat can never earn, and a
+    NaN would reach the wire as a `null` decided by a serialiser rather than here.
+    """
+    row = dict(zip(_SUMMARY_COLUMNS, _summary_row(CHECK_A), strict=True))
+    row["check_type"] = "heartbeat"
+    row["duration_points"] = 0
+    row["mean_seconds"] = float("nan")
+    row["p95_seconds"] = float("nan")
+    row["max_seconds"] = 0.0
+
+    summary = service._to_summary(row)
+
+    assert summary.mean_duration_ms is None
+    assert summary.p95_duration_ms is None
+    assert summary.max_duration_ms is None
+    # The run still counted: silence is a reading, it just has no duration.
+    assert summary.runs == 200
+
+
+async def test_a_trend_bucket_that_succeeded_without_being_timed_has_no_duration() -> None:
+    """A heartbeat's bucket: a success is not a measurement.
+
+    `successful_runs` was the proxy for "something was timed" until heartbeats
+    stopped publishing a duration. The count of duration points is the fact, and
+    without it this bucket would carry the store's NaN into the response.
+    """
+    store = FakeGaugeStore(
+        {TENANT_A: (PROJECT_A, CHECK_A)}, trend_rows=[_untimed_trend_row(CHECK_A)]
+    )
+    start, end = _window()
+
+    trends = await service.check_trends(
+        _repository(TENANT_A, store), project_id=PROJECT_A, from_time=start, to_time=end
+    )
+
+    (point,) = trends.checks[0].points
+    assert point.successful_runs == 1
+    assert point.mean_duration_ms is None
+
+
+def test_a_run_that_never_sent_its_request_reports_no_duration() -> None:
+    """`anyIf` over no duration point returns zero; the request was never sent."""
+    row = dict(zip(_RUN_COLUMNS, _run_rows()[0], strict=True))
+    row["duration_points"] = 0
+    row["duration_seconds"] = 0.0
+    row["phase_points"] = 0
+    row["phase_total_seconds"] = 0.0
+
+    run = service._to_run(row)
+
+    assert run.duration_ms is None
+    assert run.phase_total_ms is None
+
+
 def test_a_summary_with_no_probe_in_the_window_reports_up_as_unknown() -> None:
     row = dict(zip(_SUMMARY_COLUMNS, _summary_row(CHECK_A), strict=True))
     row["runs"] = 0
@@ -470,6 +588,11 @@ async def test_runs_are_newest_first_and_carry_the_status_they_reported() -> Non
     assert [run.up for run in runs.runs] == [True, False]
     assert [run.status_code for run in runs.runs] == [200, 503]
     assert runs.runs[0].duration_ms == pytest.approx(521.081)
+    # The overruled attempt is listed, and says it was not the confirmed one.
+    assert [(run.final, run.attempt, run.location) for run in runs.runs] == [
+        (True, 2, "mumbai"),
+        (False, 1, "hyderabad"),
+    ]
 
 
 async def test_a_probe_whose_status_has_not_landed_is_not_reported_as_a_run() -> None:
@@ -513,6 +636,26 @@ def test_the_attribute_paths_read_here_are_the_keys_the_prober_writes() -> None:
     assert f"attrs.{publish.ATTR_STATUS_CODE}" in queries.HTTP_STATUS
     assert f"attrs.{publish.ATTR_ISSUER}" in queries.TLS_ISSUER
     assert f"attrs.{publish.ATTR_SERVER_ADDRESS}" in queries.SERVER_ADDRESS
+    assert f"attrs.{publish.ATTR_OUTCOME}" in queries.OUTCOME
+    assert f"attrs.{publish.ATTR_FINAL}" in queries.FINAL
+    assert f"attrs.{publish.ATTR_MAINTENANCE}" in queries.MAINTENANCE
+    assert f"attrs.{publish.ATTR_RUN_ID}" in queries.RUN_ID
+    assert f"attrs.{publish.ATTR_ATTEMPT}" in queries.ATTEMPT
+    assert f"attrs.{publish.ATTR_LOCATION}" in queries.LOCATION
+    assert f"log_attrs.{publish.ATTR_RUN_ID}" in queries.EVIDENCE_RUN_ID
+    assert queries.PROBER_SERVICE_NAME == publish.PROBER_SERVICE_NAME
+
+
+def test_uptime_counts_only_confirmed_measured_runs_outside_maintenance() -> None:
+    """AC19, AC22, AC23 at the read: an overruled attempt, a misconfigured run and a
+    run during maintenance are listed and never counted."""
+    for statement in (
+        queries.check_summaries_sql(check_type=False, down_only=False),
+        queries.CHECK_TRENDS_SQL,
+    ):
+        assert "final_flag != 'false'" in statement
+        assert "maintenance_flag != 'true'" in statement
+        assert "'misconfigured', 'prober_error'" in statement
 
 
 # ---------------------------------------------------------------------- filters
@@ -539,10 +682,10 @@ async def test_one_check_type_narrows_the_rows_that_are_read() -> None:
         project_id=PROJECT_A,
         from_time=start,
         to_time=end,
-        check_type="browser",
+        check_type="dns",
     )
 
-    assert store.last_parameters["check_type"] == "browser"
+    assert store.last_parameters["check_type"] == "dns"
 
 
 def test_down_only_refuses_to_call_a_check_with_no_probe_down() -> None:

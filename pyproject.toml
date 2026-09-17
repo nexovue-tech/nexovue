@@ -17,6 +17,8 @@ dev = [
     "protobuf>=7.36",          # runtime for the generated envelope bindings
     "opentelemetry-proto>=1.44",  # test-only: proves a payload parses as the OTLP request its signal names
     "types-protobuf",
+    # PyYAML ships no annotations; the import package reads OpenAPI YAML with it.
+    "types-PyYAML",
     "ruff>=0.8",
     "mypy>=1.13",
     "pytest>=8.3",
@@ -76,7 +78,7 @@ exclude = [
 mypy_path = ["packages/contracts/gen/python", "tests/helpers"]  # ...but it must still resolve
 
 [[tool.mypy.overrides]]
-module = ["clickhouse_connect.*", "celery.*", "pycurl.*", "confluent_kafka.*", "playwright.*", "boto3.*", "botocore.*", "asyncpg.*"]
+module = ["clickhouse_connect.*", "celery.*", "kombu.*", "pycurl.*", "confluent_kafka.*", "boto3.*", "botocore.*", "asyncpg.*", "re2.*"]
 ignore_missing_imports = true
 
 # Celery ships no type information, so `celery.beat.Scheduler` is Any and strict
@@ -99,7 +101,7 @@ asyncio_mode = "auto"
 # tests/helpers holds `live`, the shared "a live suite fails rather than skips"
 # guard. It sits above the apps because the API and the scheduler both need it.
 pythonpath = ["tests/helpers", "packages/contracts/gen/python"]
-testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests"]
+testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests"]
 
 [tool.uv.sources]
 nexovue-platform = { workspace = true }

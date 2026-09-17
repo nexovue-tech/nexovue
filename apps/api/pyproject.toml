@@ -52,6 +52,13 @@ dependencies = [
     # JSON. Prebuilt py2.py3 wheels cover macOS arm64 and manylinux_2_28, so
     # neither a laptop nor the python:3.13-slim image needs a Rust toolchain.
     "symbolic>=13.9",
+    # Run now sends a probe task to the scheduler's broker by name (ADR-011).
+    # Only `send_task` is used; no scheduler code is imported.
+    "celery[redis]>=5.4",
+    # Imports (F18): OpenAPI descriptions in YAML, read with the safe loader and
+    # refused on any alias; and validation of Swagger 2.0 and OpenAPI 3.0-3.2.
+    "pyyaml>=6.0",
+    "openapi-spec-validator>=0.9",
 ]
 
 [build-system]

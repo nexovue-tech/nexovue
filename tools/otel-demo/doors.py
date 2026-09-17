@@ -52,15 +52,13 @@ RELEASE: Final = os.environ.get("NEXOVUE_RUM_RELEASE", "unknown")
 STOREFRONT: Final = os.environ.get("NEXOVUE_DEMO_STOREFRONT", "http://host.docker.internal:8080/")
 
 CHECK_INTERVAL_SECONDS: Final = 60
-# A browser flow costs a Chromium per run, so it is asked for less often than the
-# HTTP check. Five minutes still gives the screen several points an hour.
-BROWSER_CHECK_INTERVAL_SECONDS: Final = 300
 
-# The demo's own test hooks, from upstream `src/frontend/utils/enums/CypressFields.ts`.
-# Its own selectors rather than ones invented here, so a flow breaks when the
-# demo changes rather than drifting silently.
-PRODUCT_LIST: Final = "[data-cy=product-list]"
-PRODUCT_CARD: Final = "[data-cy=product-card]"
+# The storefront's own product API, which the catalogue page reads. Listing a
+# product is the shallowest check that fails when the catalogue is down — the
+# page itself returns 200 around an empty list.
+PRODUCTS_API: Final = STOREFRONT.rstrip("/") + "/api/products"
+
+STATUS_BELOW_400: Final = {"source": "status_code", "comparison": "less_than", "target": "400"}
 
 
 class DoorsError(Exception):
@@ -154,54 +152,64 @@ def assert_site_key_allows_the_storefront(
 
 
 def ensure_checks(opener: urllib.request.OpenerDirector, project_id: str) -> None:
-    """The two checks, created once and left alone on every later run."""
+    """The demo's checks, created once by name and left alone on every later run."""
     existing = {
-        check["target"] + "|" + check["type"]
+        check["name"]
         for check in call(opener, "GET", f"/api/v1/checks?project_id={project_id}")["checks"]
     }
 
     wanted: list[dict[str, Any]] = [
         {
             "project_id": project_id,
-            "type": "http",
-            "target": STOREFRONT,
+            "name": "Storefront",
             "interval_seconds": CHECK_INTERVAL_SECONDS,
-            "config": {},
+            "config": {
+                "type": "api",
+                "request": {"method": "GET", "url": STOREFRONT, "assertions": [STATUS_BELOW_400]},
+            },
         },
         {
             "project_id": project_id,
-            "type": "browser",
-            "target": STOREFRONT,
-            "interval_seconds": BROWSER_CHECK_INTERVAL_SECONDS,
-            # Loading the shop and seeing a product is the shallowest flow that
-            # would actually fail if the catalogue were down — a `goto` alone
-            # passes against an error page.
+            "name": "Catalogue lists a product",
+            "interval_seconds": CHECK_INTERVAL_SECONDS,
+            "degraded_ms": 1500,
             "config": {
+                "type": "multistep",
                 "steps": [
-                    {"action": "goto", "name": "open the storefront", "url": STOREFRONT},
                     {
-                        "action": "wait_for",
-                        "name": "the catalogue renders",
-                        "selector": PRODUCT_LIST,
+                        "name": "open the storefront",
+                        "url": STOREFRONT,
+                        "assertions": [STATUS_BELOW_400],
                     },
-                    {"action": "wait_for", "name": "a product is listed", "selector": PRODUCT_CARD},
-                ]
+                    {
+                        "name": "a product is listed",
+                        "url": PRODUCTS_API,
+                        "assertions": [
+                            {"source": "status_code", "comparison": "equals", "target": "200"},
+                            {
+                                "source": "json_path",
+                                "property": "$[0].id",
+                                "comparison": "is_not_empty",
+                            },
+                        ],
+                    },
+                ],
             },
         },
     ]
 
     for check in wanted:
-        if f"{check['target']}|{check['type']}" in existing:
-            print(f"  {check['type']} check already defined")
+        if check["name"] in existing:
+            print(f"  check already defined: {check['name']}")
             continue
         try:
             created = call(opener, "POST", "/api/v1/checks", check)
         except urllib.error.HTTPError as failure:
             raise DoorsError(
-                f"the API refused a {check['type']} check on {check['target']} "
-                f"({failure.code}): {failure.read().decode('utf-8', 'replace')[:200]}"
+                f"the API refused the check {check['name']!r} "
+                f"({failure.code}): {failure.read().decode('utf-8', 'replace')[:300]}"
             ) from failure
-        print(f"  {check['type']} check created: {created['id']}")
+        print(f"  check created: {check['name']} ({created['id']})")
 
 
 # ---------------------------------------------------------------- door 4a

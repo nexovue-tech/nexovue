@@ -305,3 +305,51 @@ def test_the_migrations_are_where_this_check_thinks_they_are() -> None:
     assert CLICKHOUSE_MIGRATIONS.is_dir(), f"no ClickHouse migrations at {CLICKHOUSE_MIGRATIONS}"
     assert _tables_the_migrations_create(), "the migrations directory yielded no tables"
     assert _query_modules(), "no queries.py modules were found to check"
+
+
+# ------------------------------------------------------- API -> the probe task (ADR-011)
+
+
+def test_run_now_sends_exactly_the_arguments_the_probe_task_accepts() -> None:
+    """A renamed keyword would fail Run now on the worker, and the console would wait
+    for a result that never comes."""
+    import inspect
+    import os
+
+    for name, value in {
+        "ENV": "development",
+        "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
+        "REDIS_URL": "redis://localhost:6379/1",
+        "KAFKA_BROKERS": "localhost:9092",
+    }.items():
+        os.environ.setdefault(name, value)
+
+    from nexovue_platform.checks.task import RUN_CHECK_TASK, CheckDefinition, run_now_arguments
+
+    from nexovue_scheduler.probes import tasks
+
+    definition = CheckDefinition(
+        check_id=None,
+        org_id="o",
+        project_id="p",
+        name="n",
+        type="tcp",
+        config={"type": "tcp", "host": "example.com", "port": 443},
+        interval_seconds=60,
+        locations=["local"],
+    )
+    sent = set(run_now_arguments(definition, "local", "request"))
+    accepted = {
+        parameter.name
+        for parameter in inspect.signature(tasks.run_check.run).parameters.values()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    }
+
+    assert tasks.run_check.name == RUN_CHECK_TASK
+    assert sent <= accepted
+    assert {
+        parameter.name
+        for parameter in inspect.signature(tasks.run_check.run).parameters.values()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        and parameter.default is inspect.Parameter.empty
+    } <= sent

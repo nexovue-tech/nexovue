@@ -14,6 +14,9 @@ import {
   useSaveMaskingConfig,
   useSaveSamplingConfig,
 } from "./api";
+import { CheckSecretsSection } from "./CheckSecretsSection";
+import { CheckVariablesSection } from "./CheckVariablesSection";
+import { MaintenanceWindowsSection } from "./MaintenanceWindowsSection";
 import type { MaskingForm } from "./masking";
 import {
   documentOf,
@@ -52,6 +55,9 @@ export function ProjectSettings({
       <Retention project={project} />
       <Sampling project={project} />
       <Masking project={project} />
+      <CheckSecretsSection projectId={project.id} />
+      <CheckVariablesSection projectId={project.id} />
+      <MaintenanceWindowsSection projectId={project.id} />
       <Deletion project={project} onDeleted={onDeleted} />
     </div>
   );

@@ -45,6 +45,15 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "api_keys": "projects",
     "site_keys": "projects",
     "checks": "projects",
+    "check_states": "projects",
+    "check_state_changes": "projects",
+    "check_secrets": "projects",
+    "check_variables": "projects",
+    # Its `check_id` is SET NULL so a deleted check's files can be swept; the
+    # project is the parent that takes the row with it.
+    "check_files": "projects",
+    "maintenance_windows": "projects",
+    "maintenance_window_checks": "projects",
     "integrations": "projects",
     "deploy_events": "projects",
     "project_webhook_secrets": "projects",

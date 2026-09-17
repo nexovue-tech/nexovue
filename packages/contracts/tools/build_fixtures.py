@@ -11,6 +11,7 @@ Run: uv run --no-project --with protobuf --with opentelemetry-proto \
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -407,16 +408,34 @@ def synthetic_gauge(
     )
 
 
-def door2_synthetic_http() -> envelope_pb2.Envelope:
-    """An uptime check: pass/fail, total duration, per-phase breakdown, certificate expiry."""
+SYNTHETIC_CHECK_ID = "01996d5e-9a40-7d01-b000-000000000101"
+SYNTHETIC_RUN_ID = "3f9a1c52-7e0b-4d8a-9f61-2c4e8b7a1d05"
+
+
+def synthetic_run_attributes(outcome: str) -> list[common_pb2.KeyValue]:
+    """What every point and evidence record of one run carries, so a reader counts
+    only confirmed, measured runs and still sees the retries (F18 design, *Results*)."""
+    return [
+        string_attribute("synthetic.check.outcome", outcome),
+        string_attribute("synthetic.check.run.id", SYNTHETIC_RUN_ID),
+        int_attribute("synthetic.check.attempt", 1),
+        bool_attribute("synthetic.check.final", True),
+        bool_attribute("synthetic.check.maintenance", False),
+        string_attribute("synthetic.check.location", "mumbai"),
+    ]
+
+
+def door2_synthetic_api() -> envelope_pb2.Envelope:
+    """An API check: pass/fail, total duration, per-phase breakdown, certificate expiry."""
     observed_at = BASE_UNIX_NANO
-    check_id = "01996d5e-9a40-7d01-b000-000000000101"
+    check_id = SYNTHETIC_CHECK_ID
+    run = synthetic_run_attributes("up")
 
     def phase(step: str, seconds: float) -> metrics_pb2.NumberDataPoint:
         return metrics_pb2.NumberDataPoint(
             time_unix_nano=observed_at,
             as_double=seconds,
-            attributes=[string_attribute("synthetic.check.step", step)],
+            attributes=[*run, string_attribute("synthetic.check.step", step)],
         )
 
     status = synthetic_gauge(
@@ -427,7 +446,7 @@ def door2_synthetic_http() -> envelope_pb2.Envelope:
             metrics_pb2.NumberDataPoint(
                 time_unix_nano=observed_at,
                 as_int=1,
-                attributes=[int_attribute("http.response.status_code", 200)],
+                attributes=[*run, int_attribute("http.response.status_code", 200)],
             )
         ],
     )
@@ -435,7 +454,7 @@ def door2_synthetic_http() -> envelope_pb2.Envelope:
         "synthetic.check.duration",
         "s",
         "Wall-clock duration of the whole check",
-        [metrics_pb2.NumberDataPoint(time_unix_nano=observed_at, as_double=0.2841)],
+        [metrics_pb2.NumberDataPoint(time_unix_nano=observed_at, as_double=0.2841, attributes=run)],
     )
     phases = synthetic_gauge(
         "synthetic.check.phase.duration",
@@ -458,6 +477,7 @@ def door2_synthetic_http() -> envelope_pb2.Envelope:
                 time_unix_nano=observed_at,
                 as_int=47,
                 attributes=[
+                    *run,
                     string_attribute("tls.server.issuer", "CN=E6,O=Let's Encrypt,C=US"),
                     string_attribute("server.address", "shop.acme.example"),
                 ],
@@ -468,11 +488,11 @@ def door2_synthetic_http() -> envelope_pb2.Envelope:
     request = metrics_service_pb2.ExportMetricsServiceRequest(
         resource_metrics=[
             metrics_pb2.ResourceMetrics(
-                resource=synthetic_resource(check_id, "http", "eu-west-1"),
+                resource=synthetic_resource(check_id, "api", "mumbai"),
                 scope_metrics=[
                     metrics_pb2.ScopeMetrics(
                         scope=common_pb2.InstrumentationScope(
-                            name="nexovue.scheduler.checks.http", version="0.1.0"
+                            name="nexovue.scheduler.checks.api", version="0.1.0"
                         ),
                         metrics=[status, duration, phases, certificate_validity],
                         schema_url=f"https://opentelemetry.io/schemas/{SEMCONV_VERSION}",
@@ -491,66 +511,111 @@ def door2_synthetic_http() -> envelope_pb2.Envelope:
     )
 
 
-def door2_synthetic_browser() -> envelope_pb2.Envelope:
-    """The failure detail a browser flow emits alongside its metrics.
+def door2_synthetic_evidence() -> envelope_pb2.Envelope:
+    """What one API check run sent and received, as the check page shows it (F18 FR31).
 
-    Door 2 produces two shapes (system-architecture.md): check-result metrics, and a
-    log-style record carrying the error and its screenshot when a step fails. This is
-    the second shape — a door that speaks no OTLP natively, emitting OTLP logs.
+    One log record per attempt, beside the run's metrics. The body is the run's
+    evidence as JSON — redacted and size-capped by the prober before it leaves —
+    and the attributes are the ones a reader finds it by.
     """
     observed_at = BASE_UNIX_NANO
-    check_id = "01996d5e-9a40-7d01-b000-000000000102"
-
-    failure = logs_pb2.LogRecord(
+    body = json.dumps(
+        {
+            "run_id": SYNTHETIC_RUN_ID,
+            "check_id": SYNTHETIC_CHECK_ID,
+            "check_type": "api",
+            "location": "mumbai",
+            "attempt": 1,
+            "final": True,
+            "maintenance": False,
+            "outcome": "down",
+            "started_at": "2026-08-26T09:15:00Z",
+            "duration_ms": 284.1,
+            "status_code": 200,
+            "tls_days_remaining": 47,
+            "steps": [
+                {
+                    "position": 0,
+                    "name": "Create order",
+                    "target": "https://api.acme.example/orders",
+                    "duration_ms": 284.1,
+                    "phases_ms": {
+                        "dns": 12.1,
+                        "tcp": 33.4,
+                        "tls": 90.8,
+                        "ttfb": 130.2,
+                        "transfer": 17.6,
+                    },
+                    "request": {
+                        "method": "POST",
+                        "url": "https://api.acme.example/orders",
+                        "headers": [
+                            {"name": "Authorization", "value": "[withheld]"},
+                            {"name": "Content-Type", "value": "application/json"},
+                        ],
+                        "body": {
+                            "text": '{"item": "shoe", "qty": 2}',
+                            "size_bytes": 27,
+                            "truncated": False,
+                            "binary": False,
+                        },
+                    },
+                    "response": {
+                        "status_code": 200,
+                        "headers": [{"name": "Content-Type", "value": "application/json"}],
+                        "body": {
+                            "text": '{"order": {"id": null}}',
+                            "size_bytes": 24,
+                            "truncated": False,
+                            "binary": False,
+                        },
+                    },
+                    "answers": [],
+                    "assertions": [
+                        {
+                            "source": "status_code",
+                            "property": "",
+                            "comparison": "equals",
+                            "target": "200",
+                            "actual": "200",
+                            "passed": True,
+                        },
+                        {
+                            "source": "json_path",
+                            "property": "$.order.id",
+                            "comparison": "is_not_empty",
+                            "target": "",
+                            "actual": "null",
+                            "passed": False,
+                        },
+                    ],
+                    "extracted": [],
+                    "passed": False,
+                    "error": "expected json path $.order.id is not empty, got null",
+                }
+            ],
+            "error": "expected json path $.order.id is not empty, got null",
+        },
+        separators=(",", ":"),
+    )
+    record = logs_pb2.LogRecord(
         time_unix_nano=observed_at,
-        observed_time_unix_nano=observed_at + 12 * NANOS_PER_MILLISECOND,
+        observed_time_unix_nano=observed_at,
         severity_number=logs_pb2.SEVERITY_NUMBER_ERROR,
         severity_text="ERROR",
-        body=common_pb2.AnyValue(
-            string_value=(
-                "step 'confirm-order' timed out after 30000ms waiting for "
-                "locator('[data-test=order-confirmation]')"
-            )
-        ),
-        attributes=[
-            string_attribute("error.type", "TimeoutError"),
-            string_attribute("synthetic.check.failed_step", "confirm-order"),
-            int_attribute("synthetic.check.failed_step.index", 4),
-            # Screenshots are too large for the pipeline; the blob lives in object storage.
-            string_attribute(
-                "synthetic.check.screenshot.ref",
-                "s3://nexovue-synthetics/01996d5e-9a40-7d01-b000-000000000102/"
-                "2026-08-26T09-15-00Z.png",
-            ),
-            string_attribute("url.full", "https://shop.acme.example/checkout"),
-            string_attribute("browser.name", "chromium"),
-            string_attribute("browser.version", "142.0.7444.51"),
-        ],
+        body=common_pb2.AnyValue(string_value=body),
+        attributes=synthetic_run_attributes("down"),
     )
-
-    completed = logs_pb2.LogRecord(
-        time_unix_nano=observed_at + 40 * NANOS_PER_MILLISECOND,
-        observed_time_unix_nano=observed_at + 41 * NANOS_PER_MILLISECOND,
-        severity_number=logs_pb2.SEVERITY_NUMBER_INFO,
-        severity_text="INFO",
-        body=common_pb2.AnyValue(string_value="browser flow finished: 3 of 4 steps passed"),
-        attributes=[
-            int_attribute("synthetic.check.steps.total", 4),
-            int_attribute("synthetic.check.steps.passed", 3),
-            double_attribute("synthetic.check.duration", 32.104),
-        ],
-    )
-
     request = logs_service_pb2.ExportLogsServiceRequest(
         resource_logs=[
             logs_pb2.ResourceLogs(
-                resource=synthetic_resource(check_id, "browser", "eu-west-1"),
+                resource=synthetic_resource(SYNTHETIC_CHECK_ID, "api", "mumbai"),
                 scope_logs=[
                     logs_pb2.ScopeLogs(
                         scope=common_pb2.InstrumentationScope(
-                            name="nexovue.scheduler.checks.browser", version="0.1.0"
+                            name="nexovue.scheduler.checks.api", version="0.1.0"
                         ),
-                        log_records=[failure, completed],
+                        log_records=[record],
                         schema_url=f"https://opentelemetry.io/schemas/{SEMCONV_VERSION}",
                     )
                 ],
@@ -562,7 +627,7 @@ def door2_synthetic_browser() -> envelope_pb2.Envelope:
         envelope_pb2.DOOR_SYNTHETIC,
         envelope_pb2.SIGNAL_LOGS,
         "01996d5e-9a40-7c01-a000-000000000005",
-        received_offset_millis=32_190,
+        received_offset_millis=320,
         payload=request.SerializeToString(),
     )
 
@@ -969,8 +1034,8 @@ FIXTURE_BUILDERS = {
     "door1-traces.bin": door1_traces,
     "door1-logs.bin": door1_logs,
     "door1-metrics.bin": door1_metrics,
-    "door2-synthetic-http.bin": door2_synthetic_http,
-    "door2-synthetic-browser.bin": door2_synthetic_browser,
+    "door2-synthetic-api.bin": door2_synthetic_api,
+    "door2-synthetic-evidence.bin": door2_synthetic_evidence,
     "door3-rum-logs.bin": door3_rum_logs,
     "door3-rum-traces.bin": door3_rum_traces,
     "door4b-cloudwatch.bin": door4b_cloudwatch,

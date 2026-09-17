@@ -1,8 +1,8 @@
 """What a probe records about a URL.
 
 The probe keeps the query and the fragment where the browser SDK trims them,
-because `browser.py` reports where the browser *ended up* and a redirect to a
-login page is the diagnosis. The two rules that hold unconditionally are the
+because a run's evidence reports where the request *ended up* and a redirect to
+a login page is the diagnosis. The two rules that hold unconditionally are the
 ones asserted here: credentials never leave, and the conventions' sensitive
 parameters are redacted.
 """
@@ -52,7 +52,7 @@ def test_a_url_needing_no_change_is_returned_exactly_as_it_arrived() -> None:
 
 
 def test_an_absent_url_stays_absent_rather_than_becoming_an_empty_string() -> None:
-    """An empty `url.full` reads as "the browser was nowhere", which is a
+    """An empty `url.full` reads as "the request went nowhere", which is a
     different claim from not knowing."""
     assert reportable_url(None) is None
     assert reportable_url("") == ""

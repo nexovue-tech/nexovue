@@ -70,9 +70,11 @@ export function isNotFound(error: unknown): boolean {
 
 export interface RequestOptions {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
-  /** Serialised as JSON. Use `formData` for uploads. */
+  /** Serialised as JSON. Use `formData` or `file` for uploads. */
   body?: unknown;
   formData?: FormData;
+  /** Sent as the raw body with its own type, for an endpoint that caps a stream. */
+  file?: Blob;
   searchParams?: Record<string, string | number | boolean | undefined>;
   headers?: Record<string, string>;
   timeoutMs?: number;
@@ -153,6 +155,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     ...options.headers,
   };
   if (options.body !== undefined) headers["content-type"] = "application/json";
+  if (options.file !== undefined) {
+    headers["content-type"] = options.file.type || "application/octet-stream";
+  }
 
   let response: Response;
   try {
@@ -160,28 +165,24 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       method: options.method ?? "GET",
       headers,
       body:
-        options.formData ?? (options.body === undefined ? undefined : JSON.stringify(options.body)),
+        options.file ??
+        options.formData ??
+        (options.body === undefined ? undefined : JSON.stringify(options.body)),
       credentials: "same-origin", // sessions are cookie-based (D7)
       signal,
     });
   } catch (cause) {
-    const aborted = signal.aborted;
-    const message = aborted ? "Request timed out" : "Could not reach the server";
-    logger.warn(message, {
-      trace_id: traceId,
-      path,
-      cause: cause instanceof Error ? cause.message : String(cause),
-    });
-    throw new ApiError(message, 0, {
-      traceId,
-      correlationId: traceId,
-      offline: !aborted,
-      aborted,
-    });
+    throw unanswered(cause, { traceId, path, options, timeout });
   }
 
   if (!response.ok) {
-    const problem = await readProblem(response);
+    // The body is streamed, so the same cancellation can land here instead of on
+    // `fetch` — and an `AbortError` escaping this function raw would reach the
+    // query client as something other than an `ApiError`, which is how a
+    // navigation ends up showing a toast.
+    const problem = await readProblem(response).catch((cause: unknown) => {
+      throw unanswered(cause, { traceId, path, options, timeout });
+    });
     throw new ApiError(
       problem?.title ?? response.statusText ?? "Request failed",
       response.status,
@@ -197,7 +198,58 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch (cause) {
+    // A cancellation mid-body, or a truncated one. Either way the answer never
+    // arrived, and this is the same three-way question `fetch` asks above.
+    throw unanswered(cause, { traceId, path, options, timeout });
+  }
+}
+
+/**
+ * Why a request produced no answer — and only two of the three are failures.
+ *
+ * The signal is aborted by our own timeout *and* by the caller: React Query cancels
+ * a query when its component unmounts, which happens on every navigation. Reading
+ * `signal.aborted` alone called all of that "Request timed out", so changing screens
+ * wrote a warning per in-flight read into the log that is the evidence when somebody
+ * reports the console was slow.
+ *
+ * A cancellation is not logged at all: nobody was waiting for the answer. It is still
+ * an `ApiError`, because every caller of this module expects one.
+ */
+function unanswered(
+  cause: unknown,
+  context: { traceId: string; path: string; options: RequestOptions; timeout: AbortSignal },
+): ApiError {
+  const { traceId, path, options, timeout } = context;
+  // The error has to *be* an abort, not merely coincide with one: a real network
+  // failure that races an unmount is still a network failure.
+  const abort = cause instanceof DOMException && cause.name === "AbortError";
+  const cancelled = abort && options.signal?.aborted === true;
+  const timedOut =
+    !cancelled &&
+    (timeout.aborted || (cause instanceof DOMException && cause.name === "TimeoutError"));
+  const message = cancelled
+    ? "Request cancelled"
+    : timedOut
+      ? "Request timed out"
+      : "Could not reach the server";
+
+  if (!cancelled) {
+    logger.warn(message, {
+      trace_id: traceId,
+      path,
+      cause: cause instanceof Error ? cause.message : String(cause),
+    });
+  }
+  return new ApiError(message, 0, {
+    traceId,
+    correlationId: traceId,
+    offline: !cancelled && !timedOut,
+    aborted: cancelled || timedOut,
+  });
 }
 
 export const apiClient = {

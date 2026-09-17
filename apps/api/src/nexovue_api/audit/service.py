@@ -69,6 +69,17 @@ INTEGRATION_DELETED: Final = "integration.deleted"
 CHECK_CREATED: Final = "check.created"
 CHECK_UPDATED: Final = "check.updated"
 CHECK_DELETED: Final = "check.deleted"
+# F18. A heartbeat token is a credential anybody holding it can use to mark a
+# job healthy, so replacing one is recorded the way minting a key is.
+CHECK_HEARTBEAT_TOKEN_ISSUED: Final = "check.heartbeat_token_issued"
+CHECKS_IMPORTED: Final = "check.imported"
+# A secret checks send on our infrastructure's behalf. The value is never
+# recorded; the id of the row it lives in is.
+CHECK_SECRET_WRITTEN: Final = "check_secret.written"
+CHECK_SECRET_DELETED: Final = "check_secret.deleted"
+MAINTENANCE_WINDOW_CREATED: Final = "maintenance_window.created"
+MAINTENANCE_WINDOW_UPDATED: Final = "maintenance_window.updated"
+MAINTENANCE_WINDOW_DELETED: Final = "maintenance_window.deleted"
 API_KEY_CREATED: Final = "api_key.created"
 API_KEY_REVOKED: Final = "api_key.revoked"
 # Named apart from the secret kind, because "a key was minted" is a different
@@ -99,6 +110,9 @@ USER_TARGET: Final = "user"
 API_KEY_TARGET: Final = "api_key"
 SITE_KEY_TARGET: Final = "site_key"
 CHECK_TARGET: Final = "check"
+CHECK_SECRET_TARGET: Final = "check_secret"
+MAINTENANCE_WINDOW_TARGET: Final = "maintenance_window"
+PROJECT_CHECKS_TARGET: Final = "project"
 INTEGRATION_TARGET: Final = "integration"
 WEBHOOK_SECRET_TARGET: Final = "webhook_secret"
 DEPLOY_TARGET: Final = "deploy"
@@ -454,6 +468,76 @@ def record_check_deleted(
         actor_user_id=actor_user_id,
         action=CHECK_DELETED,
         target=_target(CHECK_TARGET, check_id),
+    )
+
+
+def record_check_heartbeat_token_issued(
+    db: AsyncSession, *, check: Check, actor_user_id: uuid.UUID
+) -> None:
+    """A heartbeat URL was minted or replaced; the previous one stops working."""
+    _add(
+        db,
+        org_id=check.org_id,
+        actor_user_id=actor_user_id,
+        action=CHECK_HEARTBEAT_TOKEN_ISSUED,
+        target=_target(CHECK_TARGET, check.id),
+    )
+
+
+def record_checks_imported(
+    db: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """A batch of checks arrived from a cURL command, OpenAPI file or collection.
+    Each check also gets its own `check.created`; this says they came together."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=CHECKS_IMPORTED,
+        target=_target(PROJECT_CHECKS_TARGET, project_id),
+    )
+
+
+def record_check_secret_written(
+    db: AsyncSession, *, org_id: uuid.UUID, secret_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """A secret was stored or replaced. Never its value, never its name."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=CHECK_SECRET_WRITTEN,
+        target=_target(CHECK_SECRET_TARGET, secret_id),
+    )
+
+
+def record_check_secret_deleted(
+    db: AsyncSession, *, org_id: uuid.UUID, secret_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=CHECK_SECRET_DELETED,
+        target=_target(CHECK_SECRET_TARGET, secret_id),
+    )
+
+
+def record_maintenance_window_changed(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    window_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    action: str,
+) -> None:
+    """A window decides when a failure is not believed, so each change is kept."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(MAINTENANCE_WINDOW_TARGET, window_id),
     )
 
 

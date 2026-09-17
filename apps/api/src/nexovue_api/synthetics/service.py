@@ -8,19 +8,27 @@ one point per bucket.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Final
 
+from nexovue_platform.checks.config import CHECK_TYPES as CONFIGURED_CHECK_TYPES
+from nexovue_platform.checks.evidence import RunEvidence
+from pydantic import ValidationError
+
 from nexovue_api.checks.schemas import MIN_INTERVAL_SECONDS
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.errors.exceptions import NotFoundError
 from nexovue_api.synthetics import queries
 from nexovue_api.synthetics.schemas import (
     PHASE_ORDER,
     CheckResultListResponse,
     CheckResultSummary,
     CheckRun,
+    CheckRunCount,
+    CheckRunEvidenceResponse,
     CheckRunListResponse,
     CheckTrend,
     CheckTrendPoint,
@@ -73,7 +81,7 @@ def _clamped_bucket(seconds: int) -> int:
 
 # What a check can be. Enumerated so a typo is refused at the edge rather
 # than answering with an empty list the reader would take for "all healthy".
-CHECK_TYPES: Final = ("http", "browser")
+CHECK_TYPES: Final = CONFIGURED_CHECK_TYPES
 
 
 async def list_check_results(
@@ -111,9 +119,11 @@ async def check_trends(
 ) -> CheckTrendResponse:
     """Each check's history across the window, for the sparkline in its row.
 
-    A bucket in which nothing succeeded carries no duration. That is the whole reason
-    this returns `None` rather than `0.0`: a failed probe has no response time, and a
-    line drawn at zero claims the site got instantly fast at the moment it went down.
+    A bucket carries no duration when nothing in it succeeded, and also when nothing
+    in it was timed — a heartbeat is judged every period and probed never, so a bucket
+    of its successes holds no measurement. That is the whole reason this returns `None`
+    rather than `0.0`: a line drawn at zero claims the site got instantly fast at the
+    moment it went down, or that a heartbeat answered in no time at all.
     """
     bucket_seconds = resolve_bucket_seconds(from_time, to_time, None)
     rows = await repository.query(
@@ -130,8 +140,12 @@ async def check_trends(
                 bucket=values.nanos_to_datetime(row["bucket_nanos"]),
                 runs=int(row["runs"]),
                 successful_runs=successful,
-                mean_duration_ms=(
-                    float(row["mean_seconds"]) * MILLISECONDS_PER_SECOND if successful else None
+                # Two facts, both needed: the line is drawn from successful runs
+                # only — a 500 answered in 3 ms would draw a healthy-looking line
+                # while the check is down — and only a timed run has a duration to
+                # draw at all, which a heartbeat's successes do not.
+                mean_duration_ms=_milliseconds_if(
+                    row["duration_points"] if successful else 0, row["mean_seconds"]
                 ),
             )
         )
@@ -169,6 +183,50 @@ async def phase_breakdown(
         phases=phases,
         buckets=_to_buckets(rows, phases),
     )
+
+
+async def run_evidence(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    check_id: str,
+    run_id: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> CheckRunEvidenceResponse:
+    """What one attempt sent and received (FR31).
+
+    A record that no longer parses is reported as absent rather than as a 500:
+    evidence written by an older prober is still the customer's history, and the
+    run list beside it stays readable.
+    """
+    rows = await repository.query(
+        queries.CHECK_RUN_EVIDENCE_SQL,
+        _window_parameters(project_id, from_time, to_time)
+        | {"check_id": check_id, "run_id": run_id},
+    )
+    if not rows:
+        raise NotFoundError("No evidence was recorded for that run in this window.")
+    try:
+        evidence = RunEvidence.model_validate_json(values.text(rows[0]["body"]))
+    except ValidationError as unreadable:
+        raise NotFoundError("That run's evidence could not be read.") from unreadable
+    return CheckRunEvidenceResponse(evidence=evidence)
+
+
+async def run_count(
+    repository: TenantScopedRepository,
+    *,
+    project_id: str,
+    check_id: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> CheckRunCount:
+    rows = await repository.query(
+        queries.CHECK_RUN_COUNT_SQL,
+        _window_parameters(project_id, from_time, to_time) | {"check_id": check_id},
+    )
+    return CheckRunCount(check_id=check_id, runs=int(rows[0]["runs"]) if rows else 0)
 
 
 async def list_runs(
@@ -254,11 +312,12 @@ def _to_summary(row: dict[str, Any]) -> CheckResultSummary:
         # `argMaxIf` over no matching row returns zero, which would read as
         # "down". Without a run there is no answer, so it is null.
         up=bool(row["latest_up"]) if runs else None,
+        latest_outcome=values.text(row["latest_outcome"]),
         latest_status_code=int(row["latest_status_code"]),
         latest_run_at=values.nanos_to_datetime(row["latest_run_nanos"]) if runs else None,
-        mean_duration_ms=_milliseconds(row["mean_seconds"]),
-        p95_duration_ms=_milliseconds(row["p95_seconds"]),
-        max_duration_ms=_milliseconds(row["max_seconds"]),
+        mean_duration_ms=_milliseconds_if(row["duration_points"], row["mean_seconds"]),
+        p95_duration_ms=_milliseconds_if(row["duration_points"], row["p95_seconds"]),
+        max_duration_ms=_milliseconds_if(row["duration_points"], row["max_seconds"]),
         tls=_to_certificate(row),
     )
 
@@ -277,13 +336,35 @@ def _to_certificate(row: dict[str, Any]) -> TlsCertificate | None:
 def _to_run(row: dict[str, Any]) -> CheckRun:
     return CheckRun(
         timestamp=values.nanos_to_datetime(row["observed_nanos"]),
+        run_id=values.text(row["run_id"]),
         up=float(row["up_value"]) == queries.UP_VALUE,
         status_code=int(row["status_code"]),
-        duration_ms=_milliseconds(row["duration_seconds"]),
-        phase_total_ms=_milliseconds(row["phase_total_seconds"]),
+        duration_ms=_milliseconds_if(row["duration_points"], row["duration_seconds"]),
+        phase_total_ms=_milliseconds_if(row["phase_points"], row["phase_total_seconds"]),
+        outcome=values.text(row["outcome"]),
+        attempt=int(row["attempt"]) or 1,
+        final=values.text(row["final_flag"]) != "false",
+        maintenance=values.text(row["maintenance_flag"]) == "true",
+        location=values.text(row["location"]),
     )
 
 
 def _milliseconds(seconds: Any) -> float:
     """Seconds in the store, milliseconds on the wire — converted in one place."""
     return float(seconds) * MILLISECONDS_PER_SECOND
+
+
+def _milliseconds_if(points: Any, seconds: Any) -> float | None:
+    """A duration only when something was timed.
+
+    An aggregate over no rows is not nothing: `avg` and `quantile` return NaN,
+    while `max`, `sum` and `any` return zero — and zero is a real, instant
+    response. `points` is the count beside the aggregate, so absent stays absent
+    whichever of the two the statement used. The finiteness check is the belt to
+    that braces: a NaN reaching a response would be serialised as `null` by
+    accident rather than by decision.
+    """
+    if not int(points):
+        return None
+    milliseconds = _milliseconds(seconds)
+    return milliseconds if math.isfinite(milliseconds) else None

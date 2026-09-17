@@ -21,11 +21,6 @@ LogFormat = Literal["json", "console"]
 
 SERVICE_NAME: Final = "scheduler"
 
-# The two queues are separated deliberately: Playwright is memory-hungry and
-# slow, and must not share a worker pool with sub-second HTTP checks.
-QUEUE_LIGHT: Final = "light"
-QUEUE_BROWSER: Final = "browser"
-
 
 class SettingsError(Exception):
     """Configuration that stops the process, phrased for the person fixing it."""
@@ -56,35 +51,41 @@ class Settings(BaseSettings):
     task_soft_time_limit_seconds: Annotated[int, Field(gt=0)] = 30
     task_hard_time_limit_seconds: Annotated[int, Field(gt=0)] = 60
 
-    # A browser flow is many steps, each of which may wait on a page. Sharing
-    # the limits above meant a multi-step flow was killed part way through and
-    # reported as the customer's site failing when it was our clock that ran
-    # out. Per-step timeouts are divided out of this budget, so a flow always
-    # finishes inside it.
-    browser_task_soft_time_limit_seconds: Annotated[int, Field(gt=0)] = 180
-    browser_task_hard_time_limit_seconds: Annotated[int, Field(gt=0)] = 240
-
     # --- publishing ---------------------------------------------------------
     # Named here rather than shared, the same way the receiver and the worker
     # each name their own: one service's topic configuration should not be able
     # to move another's.
     kafka_metrics_topic: str = "metrics-raw"
-    # Browser flows are logs, not metrics — the frozen fixture for that door
-    # carries SIGNAL_LOGS, because a flow's result is a narrative of steps with
-    # a failure message, not a number.
+    # A run's evidence — the request sent, the response received, the failing
+    # assertion — is a log record: text, not a number.
     kafka_logs_topic: str = "logs-raw"
 
-    # Stamped on every probe result as `cloud.region`. A check answers
-    # differently from different places, and a reading with no location cannot
-    # be compared with one taken elsewhere — so this is part of the measurement,
-    # not deployment trivia.
+    # The probe location this worker is, stamped on every run as `cloud.region`
+    # and `synthetic.check.location`. A check answers differently from different
+    # places, and a reading with no location cannot be compared with one taken
+    # elsewhere. A worker consumes `light.<this>` as well as `light`.
     prober_region: str = "local"
 
-    # Where a browser flow's screenshot is kept. The log record carries a
-    # reference rather than the image, because a screenshot is megabytes and a
-    # log record that size would be refused long before it reached storage.
-    synthetics_bucket: str = "nexovue-synthetics"
-    synthetics_endpoint_url: str = "http://seaweedfs:8333"
+    # Every location this deployment has, so beat can run a check "from
+    # everywhere" and a retry can go somewhere else. Must match the API's list.
+    probe_locations: Annotated[list[str], NoDecode, Field(min_length=1)] = ["local"]
+
+    # Where a DNS check asks when the customer named no resolver. Public resolvers,
+    # never this container's own: that one answers `postgres` with our network.
+    # Each is still an address the connection guard judges.
+    dns_resolvers: Annotated[list[str], NoDecode, Field(min_length=1)] = ["1.1.1.1", "8.8.8.8"]
+
+    # Opens check secrets immediately before a request uses them (ADR-010).
+    # Empty means a check that uses a secret cannot run here, and says so.
+    check_secret_key: str = ""
+
+    # Where the files checks send are kept: the API's object store, read-only
+    # from here. All four or none, as the API reads them.
+    s3_endpoint: str | None = None
+    s3_bucket: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
+    s3_region: str = "us-east-1"
 
     # Which region's API to call when assuming a customer's role. Not a
     # credential: customers grant us a role to assume rather than handing over
@@ -126,6 +127,13 @@ class Settings(BaseSettings):
     # scheduling looked exactly like one with nothing due. For an uptime product
     # that is the worst blind spot there is — the checker failing silently.
     beat_heartbeat_seconds: Annotated[int, Field(gt=0)] = 60
+
+    @field_validator("probe_locations", "dns_resolvers", mode="before")
+    @classmethod
+    def _split_locations(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [entry.strip() for entry in value.split(",") if entry.strip()]
+        return value
 
     @field_validator("kafka_brokers", mode="before")
     @classmethod

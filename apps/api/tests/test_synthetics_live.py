@@ -16,6 +16,7 @@ client as fixture setup. Every assertion below goes through the chokepoint.
 from __future__ import annotations
 
 import json
+import math
 import os
 import socket
 import uuid
@@ -51,6 +52,11 @@ LOOKBACK: Final = timedelta(days=2)
 # real data that was not wrong. What this still catches is a breakdown measuring
 # a different request from the total beside it, or phases silently zero.
 PHASE_SUM_TOLERANCE: Final = 0.10
+
+# How far back to look for a run that succeeded. A minute's interval fills a page
+# of fifty in under an hour, so the newest page can be entirely failures while the
+# window still holds hundreds of healthy runs to check the arithmetic against.
+RUNS_SEARCHED_FOR_A_SUCCESS: Final = 1000
 
 
 def _parts() -> tuple[str, int, str, str, str]:
@@ -108,23 +114,34 @@ async def subject(client: AsyncClient) -> SyntheticSubject:
 
     Raw client on purpose: asking "who has data" is a question no tenant-scoped
     query can ask, and it is setup rather than a claim about the API.
+
+    Chosen by its **successful duration** readings: only a probed check publishes a
+    duration at all, and only a successful run has phases that sum to one. Picking
+    the busiest check by any reading handed this suite a heartbeat (no timing) or a
+    check that has been failing all day (nothing to check the arithmetic against).
     """
     result = await client.query(
         f"""
-        SELECT tenant_id, project_id, {queries.CHECK_ID} AS check_id, count() AS readings
-        FROM metrics_gauge
-        WHERE metric_name = %(metric)s AND timestamp >= %(since)s
+        SELECT tenant_id, project_id, check_id, count() AS readings
+        FROM (
+            SELECT tenant_id, project_id, {queries.CHECK_ID} AS check_id,
+                   {queries.OUTCOME} AS outcome
+            FROM metrics_gauge
+            WHERE metric_name = %(metric)s AND timestamp >= %(since)s
+        )
+        WHERE outcome IN ('up', 'degraded')
         GROUP BY tenant_id, project_id, check_id
         ORDER BY readings DESC
         LIMIT 2
         """,
-        parameters={"metric": queries.METRIC_STATUS, "since": _since()},
+        parameters={"metric": queries.METRIC_DURATION, "since": _since()},
     )
     rows = [dict(zip(result.column_names, row, strict=True)) for row in result.result_rows]
     assert rows, (
-        "no synthetic readings in ClickHouse for the last two days. This suite "
-        "asserts on real prober output, so an empty store is a failure here, not "
-        "a pass — check that the scheduler is running."
+        "no successful synthetic probe in ClickHouse for the last two days. This "
+        "suite asserts on real prober output, so an empty store is a failure here, "
+        "not a pass — check that the scheduler is running and that at least one "
+        "check is passing."
     )
 
     strangers = {str(row["tenant_id"]) for row in rows} - {str(rows[0]["tenant_id"])}
@@ -167,7 +184,8 @@ async def test_a_check_that_ran_reports_its_runs_and_its_uptime(
     check = checks[subject.check_id]
     assert check.runs > 0
     assert 0.0 <= check.uptime_percent <= 100.0
-    assert check.mean_duration_ms > 0.0
+    # The subject is a probed check, so it has a duration; a heartbeat would not.
+    assert check.mean_duration_ms is not None and check.mean_duration_ms > 0.0
     assert check.up is not None
 
 
@@ -204,18 +222,21 @@ async def test_the_phases_of_a_probe_sum_to_the_duration_it_reported(
     """
     start, end = _window()
 
+    # The whole window, not the newest page: a check that has been failing all day
+    # still has passing runs earlier in it, and this test is about arithmetic.
     runs = await service.list_runs(
         _repository(client, subject.tenant_id),
         project_id=subject.project_id,
         check_id=subject.check_id,
         from_time=start,
         to_time=end,
-        limit=50,
+        limit=RUNS_SEARCHED_FOR_A_SUCCESS,
     )
 
     successful = [run for run in runs.runs if run.up]
     assert successful, "no successful probe in the window to check the arithmetic against"
     for run in successful:
+        assert run.phase_total_ms is not None and run.duration_ms is not None
         assert run.phase_total_ms == pytest.approx(
             run.duration_ms, rel=PHASE_SUM_TOLERANCE, abs=1.0
         )
@@ -340,8 +361,13 @@ async def test_a_bucket_nothing_succeeded_in_reports_no_duration_rather_than_zer
     for point in points:
         if point.successful_runs == 0:
             assert point.mean_duration_ms is None
-        else:
-            assert point.mean_duration_ms is not None
+        elif point.mean_duration_ms is not None:
+            # A bucket may succeed without being timed — a heartbeat is judged, not
+            # probed — so a reading is optional here. What it may never be is NaN,
+            # which `is not None` would have accepted and the wire would have shown
+            # as a `null` nobody decided on.
+            assert math.isfinite(point.mean_duration_ms)
+            assert point.mean_duration_ms > 0.0
 
 
 # A redelivered probe. The tests above assert on whatever the prober wrote; this

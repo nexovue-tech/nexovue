@@ -1,11 +1,22 @@
 [project]
 name = "nexovue-platform"
 version = "0.1.0"
-description = "What the API and the scheduler both need: structured logging, request context, redaction"
+description = "What the API and the scheduler both need: structured logging, request context, redaction, and what a synthetic check is"
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
     "structlog>=24.4",
+    # The check configuration models, validated by the API and parsed by the
+    # scheduler from one definition.
+    "pydantic>=2.9",
+    # AES-256-GCM for check secrets, sealed by the API and opened by the scheduler.
+    "cryptography>=44",
+    # RFC 9535 JSONPath, strictly — the author's own recommendation over
+    # python-jsonpath when nothing beyond the RFC is wanted (MIT, 1.0.0).
+    "jsonpath-rfc9535>=1.0",
+    # Customer-typed patterns in assertions. RE2 matches in linear time, so no
+    # pattern can hold a worker with catastrophic backtracking (BSD).
+    "google-re2>=1.1",
 ]
 
 [build-system]

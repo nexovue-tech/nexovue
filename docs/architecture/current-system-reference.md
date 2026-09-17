@@ -39,7 +39,7 @@ The system is built as five independently deployable services plus two shared li
 | `apps/receiver` | Go | Terminates OTLP over HTTP and gRPC, authenticates the caller, enforces rate limits and plan allowance, converts everything into one internal message shape, publishes to Kafka |
 | `apps/workers` | Go | Consumes Kafka, masks sensitive values, derives metrics from every span before any sampling happens, tail-samples traces, writes everything to ClickHouse |
 | `apps/api` | Python (FastAPI) | Owns the Postgres schema (organizations, users, projects, credentials, billing), reads ClickHouse, serves the REST API the web app calls |
-| `apps/scheduler` | Python (Celery) | Runs synthetic HTTP/browser checks and polls customer cloud/database metrics, on a schedule stored in Postgres |
+| `apps/scheduler` | Python (Celery) | Runs synthetic API, multistep, TCP, DNS and heartbeat checks and polls customer cloud/database metrics, on a schedule stored in Postgres |
 | `apps/web` | TypeScript (React) | The console — traces, logs, services, service map, errors, RUM, synthetics, database, infrastructure, usage, billing, settings |
 | `packages/browser-sdk` | TypeScript | The JavaScript SDK a customer drops into their own web page to send RUM data |
 | `packages/contracts` | Protobuf (Go + Python generated) | The one internal envelope message every ingestion path normalizes into before Kafka |
@@ -58,7 +58,7 @@ Every message that eventually reaches ClickHouse arrives through one of five typ
 | Door | Enum value | What produces it |
 |---|---|---|
 | Direct OTLP | `DOOR_OTLP` | An application's OpenTelemetry SDK, authenticated with a secret API key, hitting `apps/receiver` |
-| Synthetic checks | `DOOR_SYNTHETIC` | `apps/scheduler`'s probe workers, running an HTTP or browser-flow check |
+| Synthetic checks | `DOOR_SYNTHETIC` | `apps/scheduler`'s probe workers: a check's result as metrics, and what it sent and received as a log record |
 | Pollers | `DOOR_POLLER` | `apps/scheduler`'s pollers, reading a customer's AWS CloudWatch or Postgres statistics |
 | Browser RUM | `DOOR_RUM` | `packages/browser-sdk` running in a customer's own web page, authenticated with a public site key |
 | Webhook | `DOOR_WEBHOOK` | Defined in the envelope contract but not constructed by any code path found in this pass — likely reserved for a door not yet built |
@@ -116,7 +116,7 @@ Auto-creation is disabled on the broker; topics are created explicitly by `deplo
 |---|---|---|---|---|
 | `spans-raw` | 12 | `apps/receiver` | `apps/workers` (trace assembly), `nexovue-workers-usage` (metering) | trace id — every partition is one trace-assembler's whole world |
 | `logs-raw` | 4 | `apps/receiver`, `apps/scheduler` (browser-flow check results) | `apps/workers` (log writing), `nexovue-workers-logs-usage` | tenant (organization) id |
-| `metrics-raw` | 4 | `apps/receiver`, `apps/scheduler` (HTTP check results, cloud/database poller results) | `apps/workers` (metric ingest), `nexovue-workers-metrics-usage` | tenant id |
+| `metrics-raw` | 4 | `apps/receiver`, `apps/scheduler` (check results, cloud/database poller results) | `apps/workers` (metric ingest), `nexovue-workers-metrics-usage` | tenant id |
 | `spans-dlq` / `logs-dlq` / `metrics-dlq` | 1 each | `apps/workers`, on decode/processing failure | none — nothing drains a dead-letter topic automatically | inherits the source record's key |
 
 Every raw topic: 7-day retention, roughly 16 MiB max message size (sized to the receiver's decoded-body cap plus envelope overhead — a previous 1 MiB default silently dropped any oversized trace, with the sender retrying an unshrinkable batch forever), `zstd` compression.
@@ -355,8 +355,14 @@ Each follows the same internal layout: `router.py` (HTTP only, no SQL, no busine
 | `servicemap` | The service dependency graph, derived from the same edges rollup the workers write |
 | `errorgroups` | Exception fingerprinting and grouping, reading both spans and logs together |
 | `rum` | Core Web Vitals summary and breakdown |
-| `synthetics` | Synthetic check results, phase timing breakdown, and individual runs |
-| `checks` | Synthetic check *definitions* (Postgres), including server-side-request-forgery target validation |
+| `synthetics` | Synthetic check results over a window, phase breakdown, individual runs, a run's evidence, run counts |
+| `checks` | Synthetic check *definitions* (Postgres): typed configuration, project-aware validation including request-forgery target rules, confirmed state and state changes, heartbeat tokens |
+| `checkruns` | Run now: dispatches a definition to a probe worker through the scheduler's broker and waits for its result in Redis (ADR-011) |
+| `checkimports` | Previewing and confirming checks from a cURL command, an OpenAPI description or a Postman collection; parsing only, no network |
+| `checksecrets` | Project secrets (sealed, write-only) and variables that checks use as `{{secret.NAME}}` and `{{name}}` (ADR-010) |
+| `checkfiles` | Files a check sends in a request: rows in Postgres, bytes in object storage under `synthetics/{org_id}/files/` |
+| `maintenance` | Maintenance windows during which a failing check changes no state |
+| `heartbeats` | `GET\|POST /heartbeat/{token}`: the unauthenticated URL a customer's job calls |
 | `deploys` | Signed deploy-event webhook ingestion and listing |
 | `sourcemaps` | Source map upload, storage, and stack symbolication |
 | `dbstats` | Slow-statement and connection-health readings from a polled customer database |
@@ -377,19 +383,19 @@ The payment-processor integration is behind an abstract port with no vendor voca
 
 ### 7.1 Purpose
 
-A Celery service running two kinds of measurement: synthetic probes (an HTTP check, timed per network phase, and a full browser flow driven through headless Chromium) and pollers (reading a customer's AWS CloudWatch RDS metrics or Postgres statistics). There is deliberately no Celery result backend — each task builds its own OTLP-shaped envelope and publishes it directly to Kafka, following the exact same internal envelope contract every other door uses.
+A Celery service running two kinds of measurement: synthetic checks (API and multistep API requests, TCP connections, DNS resolution, and heartbeats judged against their last call) and pollers (reading a customer's AWS CloudWatch RDS metrics or Postgres statistics). There is deliberately no Celery result backend — each task builds its own OTLP-shaped envelope and publishes it directly to Kafka, following the exact same internal envelope contract every other door uses.
 
 ### 7.2 Scheduling
 
-The schedule is not code — a custom Celery beat scheduler re-reads the `checks` and `integrations` tables from Postgres on a refresh timer (default 30s) and builds one schedule entry per enabled row, embedding the *entire* check definition in the task's own arguments so the worker that eventually runs the check never has to query Postgres itself, bounding staleness to the refresh interval.
+The schedule is not code — a custom Celery beat scheduler re-reads the `checks` and `integrations` tables from Postgres on a refresh timer (default 30s). It builds one entry per enabled check **per probe location**, dispatched to that location's queue (`light.<location>`), with the *entire* definition in the task's arguments — variables, file names, maintenance windows, and the secrets it uses **still sealed** — so the worker that runs the check never queries Postgres on the path of a measurement (ADR-010's amendment). Each entry expires with its interval, so a late run is dropped rather than queued, and a check's first run is offset by a stable hash of its id so checks saved together do not fire together. Heartbeats have no entry of their own; a sweep judges them every minute. A second sweep deletes uploaded files no saved check uses, a day after upload.
 
 Because two beat replicas run for availability, only one may actually schedule at a time: a Redis lock, refreshed continuously by whoever holds it, decides leadership. A follower holds an empty schedule and does nothing. When a leader dies, the lock expires and the new leader rebuilds its schedule from zero — deliberately not firing a backlog of everything that was "due" while no leader existed.
 
 ### 7.3 Synthetic checks
 
-Two check types exist: `http` (via libcurl, timing DNS/TCP/TLS/time-to-first-byte/transfer phases separately, with certificate-expiry reporting) and `browser` (via Playwright, running a small sequence of navigate/click/fill/wait/expect-text steps). Both run inside a strict egress guard that refuses to connect to loopback, link-local, private, or cloud-metadata addresses at the moment of connection (not merely at validation time — DNS rebinding between the two would defeat a validate-then-connect check), with a narrower, development-only relaxation for private ranges alone.
+Five kinds exist, validated by one shared model (`packages/py-platform/.../checks/config.py`) in the API and parsed from it in the scheduler: `api` (one request — any method, headers, query, a text/JSON/XML/form/multipart/binary body, basic/bearer/API-key auth from secrets — judged by assertions on status, headers, body text, a JSONPath value, response time or certificate days), `multistep` (requests in order, passing extracted values forward), `tcp`, `dns` (via dnspython, optionally against a chosen resolver), and `heartbeat`. Requests go through libcurl, timing DNS/TCP/TLS/time-to-first-byte/transfer phases separately; multipart bodies are built in memory, never on the worker's disk. Every connection — each redirect hop, a TCP host, a chosen DNS resolver — passes a strict egress guard that refuses loopback, link-local, private and cloud-metadata addresses at the moment of connection (not merely at validation time), with a narrower, development-only relaxation for private ranges alone. Customer patterns run on RE2, and JSONPath's regex functions are disabled, so no customer input can backtrack a worker.
 
-A failing target is still a successful task — "down" is itself a measurement, and it's always published; only a genuine inability to publish the result is retried.
+A run's outcome is `up`, `degraded` (passing but slower than a threshold), `down`, `misconfigured` (an undefined `{{name}}`, a deleted secret or file — the author's to fix) or `prober_error` (ours). A failing target is still a successful task — "down" is a measurement and always published. A `down` result is **confirmed** by re-dispatching the check to the next location (or the same one when there is only one) before it counts; every attempt is published, marked `final` or not. After publishing, the final attempt dispatches a separate task that records the check's state in Postgres (`check_states`, `check_state_changes`); a run during a maintenance window is marked and changes no state. Every opened secret is redacted from the evidence by value (as typed, URL-encoded, JSON-escaped and base64) before anything leaves the worker. Run now executes the same code path, publishes nothing, and leaves its result in Redis for five minutes.
 
 ### 7.4 Pollers
 
@@ -397,7 +403,7 @@ Two kinds: CloudWatch (AWS RDS metrics) and Postgres (`pg_stat_statements`/`pg_s
 
 ### 7.5 Publishing
 
-Results are encoded as OTLP protobuf (metrics for HTTP checks and pollers, logs for browser-flow results) and produced directly to Kafka with `acks=all` and idempotence enabled, and the publish call blocks until the broker confirms delivery — a probe that reported success while its result sat undelivered would be claiming a check ran when nothing downstream could ever see it.
+Results are encoded as OTLP protobuf — for a check, gauges carrying the run's outcome, attempt, location and whether it was final, plus one log record whose body is the run's evidence as JSON (the request sent, the response received, each assertion with expected and actual) — and produced directly to Kafka with `acks=all` and idempotence enabled, and the publish call blocks until the broker confirms delivery — a probe that reported success while its result sat undelivered would be claiming a check ran when nothing downstream could ever see it.
 
 ---
 
@@ -419,7 +425,7 @@ A thin `fetch` wrapper (never axios — banned by the linter after a real supply
 
 One feature folder per screen area under `src/features/`, each holding its own typed API hooks and pure computation modules kept separate from the screen component so the computation can be unit-tested without rendering anything. Import direction is enforced by the linter, not just convention: a feature may never import another feature directly, may never escape its own directory with a relative `../` path, and may never import the app-composition layer — only shared code and the app layer may see across features.
 
-Screens present: traces (list + waterfall detail), logs (search + live tail), services (ranked list + trend), service map, errors (grouped, with browser-stack symbolication), RUM (Core Web Vitals), synthetics (check results + phase breakdown), database (polled statement/connection stats), infrastructure (polled host/container metrics), usage, billing, settings (API keys, site keys, projects, profile), and onboarding.
+Screens present: traces (list + waterfall detail), logs (search + live tail), services (ranked list + trend), service map, errors (grouped, with browser-stack symbolication), RUM (Core Web Vitals), synthetics (every check with its confirmed state; new check with a Postman-style request editor and Run now; import from cURL, OpenAPI or Postman; a check page with runs, evidence, phase breakdown, state changes, edit, pause and delete), database (polled statement/connection stats), infrastructure (polled host/container metrics), usage, billing, settings (API keys, site keys, projects, profile), and onboarding.
 
 Every numeric formatter follows one convention throughout the codebase: an absent or negative reading renders as an em-dash, never as `"0"` — a real zero and "we don't know" must never look the same to a reader of the screen.
 
@@ -520,7 +526,7 @@ The SDK sends a page-load span to the traces browser door and web-vital/error lo
 
 ### Flow 5 — A synthetic check
 
-A check is defined via the console/API and stored in Postgres → the scheduler's leader-elected beat process picks it up on its refresh timer, embedding the whole check definition in the dispatched task → a probe worker runs it (HTTP or full browser flow) → the result — even a failure, which is itself a valid measurement — is encoded as an OTLP envelope and produced directly to Kafka with a delivery-blocking publish call, using the same `metrics-raw`/`logs-raw` topics and the same worker pipelines as any other metric or log. There is no dedicated synthetic-results pipeline or table; the only synthetic-specific artifacts downstream of Kafka are the envelope's door value and the metric/attribute names the console's synthetics screen filters on.
+A check is defined in the console (or imported) and stored in Postgres → the scheduler's leader-elected beat process picks it up on its refresh timer, embedding the whole definition, sealed secrets included, in one task per location → a probe worker in that location runs it → a down result is retried from the next location before it counts → the result — even a failure, which is itself a valid measurement — is encoded as an OTLP envelope and produced directly to Kafka with a delivery-blocking publish call, using the same `metrics-raw`/`logs-raw` topics and the same worker pipelines as any other metric or log. There is no dedicated synthetic-results pipeline or table; the only synthetic-specific artifacts downstream of Kafka are the envelope's door value and the metric/attribute names the console's synthetics screen filters on.
 
 ### Flow 6 — Sign-up to first data
 

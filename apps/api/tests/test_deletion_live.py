@@ -46,14 +46,23 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.queries import load_identity
+from nexovue_api.checkfiles.service import object_key as check_file_key
+from nexovue_api.checkfiles.service import tenant_prefix as check_files_prefix
 from nexovue_api.data.clickhouse.base import TenantScopedPurger
 from nexovue_api.data.objectstore import ObjectStore, ObjectStoreError
 from nexovue_api.data.postgres.models import (
     BillingSubscription,
     BillingWebhookDelivery,
     Check,
+    CheckFile,
+    CheckSecret,
+    CheckState,
+    CheckStateChange,
+    CheckVariable,
     DeployEvent,
     Integration,
+    MaintenanceWindow,
+    MaintenanceWindowCheck,
     SiteKey,
     SourceMap,
     UsageDaily,
@@ -128,6 +137,13 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "api_keys",
     "site_keys",
     "checks",
+    "check_states",
+    "check_state_changes",
+    "check_secrets",
+    "check_variables",
+    "check_files",
+    "maintenance_windows",
+    "maintenance_window_checks",
     "integrations",
     "deploy_events",
     "project_webhook_secrets",
@@ -150,6 +166,13 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "billing_webhook_deliveries": ROWS_PER_TABLE,
     "audit_log": 2,
     "checks": ROWS_PER_TABLE,
+    "check_states": ROWS_PER_TABLE,
+    "check_state_changes": ROWS_PER_TABLE,
+    "check_secrets": ROWS_PER_TABLE,
+    "check_variables": ROWS_PER_TABLE,
+    "check_files": ROWS_PER_TABLE,
+    "maintenance_windows": ROWS_PER_TABLE,
+    "maintenance_window_checks": ROWS_PER_TABLE,
     "deploy_events": ROWS_PER_TABLE,
     "integrations": ROWS_PER_TABLE,
     "organizations": 1,
@@ -266,6 +289,7 @@ async def two_tenants(db: AsyncSession, store: ObjectStore) -> AsyncIterator[tup
     finally:
         for tenant in (deleted, spared):
             await store.delete_prefix(tenant_prefix(tenant.org_id))
+            await store.delete_prefix(check_files_prefix(tenant.org_id))
 
 
 @pytest.fixture
@@ -308,7 +332,80 @@ async def _build_tenant(db: AsyncSession, store: ObjectStore, label: str) -> Ten
 async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectStore) -> None:
     """Fill every table `provision_tenant` does not already touch."""
     day = datetime.now(UTC).date()
+    now = datetime.now(UTC)
     for index in range(ROWS_PER_TABLE):
+        check_id, window_id, file_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        db.add(
+            Check(
+                id=check_id,
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                name=f"check {index}",
+                type="tcp",
+                config={"type": "tcp", "host": "example.test", "port": 443},
+                interval_seconds=60,
+            )
+        )
+        db.add(
+            MaintenanceWindow(
+                id=window_id,
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                name=f"window {index}",
+                starts_at=now,
+                ends_at=now + timedelta(hours=1),
+            )
+        )
+        await db.flush()
+        key = check_file_key(tenant.org_id, file_id)
+        await store.put(key, MAP_BYTES, content_type="application/octet-stream")
+        tenant.object_keys.append(key)
+        db.add_all(
+            [
+                CheckState(
+                    org_id=tenant.org_id,
+                    project_id=tenant.project_id,
+                    check_id=check_id,
+                    state="up",
+                    since=now,
+                    last_run_at=now,
+                ),
+                CheckStateChange(
+                    org_id=tenant.org_id,
+                    project_id=tenant.project_id,
+                    check_id=check_id,
+                    to_state="up",
+                    changed_at=now,
+                ),
+                CheckSecret(
+                    org_id=tenant.org_id,
+                    project_id=tenant.project_id,
+                    name=f"SECRET_{index}",
+                    sealed_value=b"sealed",
+                ),
+                CheckVariable(
+                    org_id=tenant.org_id,
+                    project_id=tenant.project_id,
+                    name=f"variable_{index}",
+                    value="value",
+                ),
+                CheckFile(
+                    id=file_id,
+                    org_id=tenant.org_id,
+                    project_id=tenant.project_id,
+                    check_id=check_id,
+                    name="payload.bin",
+                    content_type="application/octet-stream",
+                    size_bytes=len(MAP_BYTES),
+                ),
+                MaintenanceWindowCheck(
+                    org_id=tenant.org_id,
+                    project_id=tenant.project_id,
+                    window_id=window_id,
+                    check_id=check_id,
+                ),
+            ]
+        )
         db.add_all(
             [
                 SiteKey(
@@ -317,13 +414,6 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectSt
                     name=f"site {index}",
                     public_key=f"nvp_live_{uuid.uuid4().hex[:22]}",
                     allowed_origins=["https://example.test"],
-                ),
-                Check(
-                    org_id=tenant.org_id,
-                    project_id=tenant.project_id,
-                    type="http",
-                    target=f"https://example.test/{index}",
-                    interval_seconds=60,
                 ),
                 Integration(
                     org_id=tenant.org_id,
@@ -520,7 +610,7 @@ async def test_deleting_an_organization_empties_every_table_it_owned(
     assert after == dict.fromkeys(FIXTURE_ROWS, 0) | {TOMBSTONED_TABLE: 1}, (
         f"the deletion did not leave exactly the tombstone: {after}"
     )
-    assert outcome.objects_deleted == MAPS_PER_TENANT
+    assert outcome.objects_deleted == MAPS_PER_TENANT + ROWS_PER_TABLE  # maps and check files
     assert outcome.is_complete, f"telemetry still present: {outcome.telemetry_remaining}"
     assert not await _stored_keys(store, deleted)
 

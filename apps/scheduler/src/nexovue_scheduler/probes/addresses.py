@@ -28,6 +28,8 @@ import pycurl
 # connection attempt without raising through the C stack.
 REFUSED: Final = pycurl.SOCKET_BAD
 
+REFUSAL_REASON: Final = "The target resolved to a non-public address and was not contacted."
+
 
 def is_publicly_routable(address_text: str) -> bool:
     """Whether an address is one the public internet can reach.
@@ -107,13 +109,16 @@ def refusal_reason_for(refused_addresses: Iterable[str]) -> str | None:
     """The error to report instead of the client's, when we caused the failure.
 
     None when nothing was refused, so an ordinary failure keeps its own message
-    rather than gaining a false one. Shared by every guard, so a refusal reads
-    the same whether libcurl or Chromium was the one asking.
+    rather than gaining a false one. Shared by every probe, so a refusal reads the
+    same for a request, a TCP connection and a DNS resolver.
+
+    **The address is not in it.** This message is shown to the customer, and the
+    address a name resolved to from inside our network — `postgres` to
+    172.18.0.4 — is a fact about our network, not theirs.
     """
-    addresses = ", ".join(dict.fromkeys(refused_addresses))
-    if not addresses:
+    if not any(True for _ in refused_addresses):
         return None
-    return f"Target resolved to a non-public address and was not contacted: {addresses}"
+    return REFUSAL_REASON
 
 
 class ConnectGuard:

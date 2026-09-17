@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from nexovue_api.auth.sessions import SessionStore
+from nexovue_api.checks.run_now import CeleryProbeBroker, ProbeBroker
 from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.health.checks import dependency_checks
 from nexovue_api.health.registry import CheckRegistry
@@ -114,6 +115,8 @@ class Resources:
     # still serves, and the two flows that must send — verification and password
     # reset — refuse by naming the variables that are missing.
     email: EmailSender | None
+    # None when no probe broker is configured; Run now refuses with 503.
+    probes: ProbeBroker | None = None
 
 
 def build_lifespan(
@@ -185,6 +188,9 @@ async def open_resources(settings: Settings) -> Resources:
         clickhouse=ClickHouseConnection(connect_clickhouse),
         sessions=SessionStore(redis, ttl_seconds=settings.session_ttl_seconds),
         rate_limiter=RateLimiter(redis),
+        probes=(
+            CeleryProbeBroker(str(settings.probe_broker_url)) if settings.probe_broker_url else None
+        ),
     )
 
 
@@ -228,6 +234,8 @@ async def _open_object_store(settings: Settings) -> ObjectStore | None:
 
 async def close_resources(resources: Resources) -> None:
     """Close every pool, in the reverse order they were opened."""
+    if resources.probes is not None:
+        await resources.probes.close()
     await resources.clickhouse.close()
     await resources.redis.aclose()
     await resources.engine.dispose()

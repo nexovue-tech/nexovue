@@ -34,4 +34,5 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 RUN useradd --system --uid 10001 nexovue
 USER nexovue
 EXPOSE 8081
-CMD ["celery", "-A", "nexovue_scheduler.celery_app", "worker", "--queues", "light"]
+# The queues come from the app: `light` and `light.$PROBER_REGION`.
+CMD ["celery", "-A", "nexovue_scheduler.celery_app", "worker"]

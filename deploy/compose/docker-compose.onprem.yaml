@@ -170,6 +170,10 @@ services:
       S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+      CHECK_SECRET_KEY: ${CHECK_SECRET_KEY:?set CHECK_SECRET_KEY}
+      PROBE_BROKER_URL: redis://redis:6379/0
+      PROBE_LOCATIONS: local
+      PROBER_REGION: local
     depends_on:
       postgres:
         condition: service_healthy
@@ -207,24 +211,8 @@ services:
     image: *image-base
     command: >-
       celery -A nexovue_scheduler.celery_app worker
-      --queues light --concurrency 8 --loglevel info
+      --concurrency 8 --loglevel info
     environment: *control-plane-env
-
-  # TODO(browser-image): this cannot run. `*image-base` is built from
-  #   apps/scheduler/Dockerfile, which deliberately carries no Playwright and no
-  #   Chromium — that is the whole reason Dockerfile.browser exists. The worker
-  #   starts, takes a browser check off the queue and fails on the import. It
-  #   needs its own image, and the registry path for one is TODO(registry)
-  #   above. Browser checks are unavailable on-prem until both are answered.
-  scheduler-browser:
-    <<: *service-defaults
-    image: *image-base
-    command: >-
-      celery -A nexovue_scheduler.celery_app worker
-      --queues browser --concurrency 1 --loglevel info
-    environment: *control-plane-env
-    shm_size: 1gb
-    ipc: host
 
 # TODO(backups): P1-51 owns the runbook. Volume snapshots alone do not give a
 #   consistent ClickHouse or Postgres backup, and no volume here is on a

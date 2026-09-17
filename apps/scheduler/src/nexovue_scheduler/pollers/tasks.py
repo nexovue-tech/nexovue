@@ -5,8 +5,7 @@ over rather than an id, so this worker never touches the control plane on the
 path of a measurement. The cost is staleness bounded by the beat refresh
 interval, which is the right trade for something that repeats every minute.
 
-Both tasks run on the `light` queue: a poll is one API call or two `SELECT`s and
-has nothing in common with the browser workers' memory profile.
+Both tasks run on the `light` queue: a poll is one API call or two `SELECT`s.
 """
 
 from __future__ import annotations

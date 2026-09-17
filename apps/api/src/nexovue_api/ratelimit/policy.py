@@ -86,6 +86,31 @@ DEFAULT_TIER: Final = Tier(quota=Quota(name="default", limit=300, window_seconds
 WEBHOOK_PREFIX: Final = "/api/v1/deploys/webhook/"
 WEBHOOK_TIER: Final = Tier(quota=Quota(name="deploy-webhook", limit=60, window_seconds=60))
 
+# F18. Each of these makes our infrastructure do work somebody else chose, so each
+# has its own allowance rather than a share of the one signed-in screens need.
+#
+# Run now is an outbound request to an address the caller picked; the result read
+# shares the prefix and waits server-side, so one run costs one or two requests.
+RUN_NOW_PREFIX: Final = "/api/v1/check-runs"
+RUN_NOW_TIER: Final = Tier(quota=Quota(name="check-run-now", limit=30, window_seconds=60))
+# Parsing an OpenAPI description or a Postman collection is CPU the caller chose.
+CHECK_IMPORT_PREFIX: Final = "/api/v1/check-imports"
+CHECK_IMPORT_TIER: Final = Tier(quota=Quota(name="check-import", limit=20, window_seconds=60))
+# Up to three megabytes into object storage per request.
+CHECK_FILE_PREFIX: Final = "/api/v1/check-files"
+CHECK_FILE_TIER: Final = Tier(quota=Quota(name="check-file", limit=30, window_seconds=60))
+# Unauthenticated, like the deploy webhook: anything on the internet can reach it,
+# and a job that calls more than once a second is not a heartbeat.
+HEARTBEAT_PREFIX: Final = "/api/v1/heartbeat/"
+HEARTBEAT_TIER: Final = Tier(quota=Quota(name="heartbeat", limit=120, window_seconds=60))
+
+_OWN_TIERS: Final = (
+    (RUN_NOW_PREFIX, RUN_NOW_TIER),
+    (CHECK_IMPORT_PREFIX, CHECK_IMPORT_TIER),
+    (CHECK_FILE_PREFIX, CHECK_FILE_TIER),
+    (HEARTBEAT_PREFIX, HEARTBEAT_TIER),
+)
+
 # Ordered longest-prefix-first so a more specific rule cannot be shadowed.
 AUTH_PATHS: Final = (
     f"{API_PREFIX}/auth/login",
@@ -170,6 +195,9 @@ def tier_for_path(path: str) -> Tier | None:
     """The tier a request path falls into, or None when it is exempt."""
     if path.startswith(WEBHOOK_PREFIX):
         return WEBHOOK_TIER
+    for prefix, tier in _OWN_TIERS:
+        if path.startswith(prefix):
+            return tier
     if path in EXEMPT_PATHS:
         return None
     if path.startswith(AUTH_PATHS):

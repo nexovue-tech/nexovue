@@ -27,6 +27,7 @@ from starlette.requests import HTTPConnection
 
 from nexovue_api.auth.sessions import Session, SessionStore, session_token_from_headers
 from nexovue_api.auth.tokens import OneTimeTokenStore
+from nexovue_api.checks.run_now import ProbeBroker
 from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.errors.exceptions import DependencyUnavailableError, UnauthenticatedError
 from nexovue_api.lifespan import Resources
@@ -90,6 +91,13 @@ def get_object_store(
 ) -> ObjectStore | None:
     """The object store, or None when the deployment configured none."""
     return resources.object_store
+
+
+def get_probe_broker(
+    resources: Annotated[Resources, Depends(get_resources)],
+) -> ProbeBroker | None:
+    """The scheduler's broker, or None when Run now is not configured."""
+    return resources.probes
 
 
 def get_email_sender(
@@ -172,6 +180,7 @@ CurrentSession = Annotated[Session, Depends(get_current_session)]
 SessionStoreDep = Annotated[SessionStore, Depends(get_session_store)]
 # Optional on purpose: only source maps need it, and they say so by name.
 ObjectStoreDep = Annotated[ObjectStore | None, Depends(get_object_store)]
+ProbeBrokerDep = Annotated[ProbeBroker | None, Depends(get_probe_broker)]
 # Not optional, unlike the object store: a route that asks for this one needs to
 # send, so the refusal belongs before the handler rather than inside it.
 EmailDelivery = Annotated[EmailSender, Depends(get_email_sender)]

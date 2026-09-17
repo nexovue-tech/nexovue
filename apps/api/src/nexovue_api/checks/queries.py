@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexovue_api.data.postgres.models import Check
+from nexovue_api.data.postgres.models import Check, CheckState, CheckStateChange
 
 
 async def list_checks(
@@ -53,6 +53,38 @@ def add_check(session: AsyncSession, check: Check) -> None:
     session.add(check)
 
 
+async def states_in_project(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> Sequence[CheckState]:
+    statement = select(CheckState).where(
+        CheckState.org_id == org_id, CheckState.project_id == project_id
+    )
+    return (await session.scalars(statement)).all()
+
+
+async def find_state(
+    session: AsyncSession, *, org_id: uuid.UUID, check_id: uuid.UUID
+) -> CheckState | None:
+    statement = select(CheckState).where(
+        CheckState.org_id == org_id, CheckState.check_id == check_id
+    )
+    state: CheckState | None = await session.scalar(statement)
+    return state
+
+
+async def state_changes(
+    session: AsyncSession, *, org_id: uuid.UUID, check_id: uuid.UUID, limit: int
+) -> Sequence[CheckStateChange]:
+    """Newest first."""
+    statement = (
+        select(CheckStateChange)
+        .where(CheckStateChange.org_id == org_id, CheckStateChange.check_id == check_id)
+        .order_by(CheckStateChange.changed_at.desc(), CheckStateChange.id.desc())
+        .limit(limit)
+    )
+    return (await session.scalars(statement)).all()
+
+
 async def delete_check(session: AsyncSession, *, org_id: uuid.UUID, check_id: uuid.UUID) -> bool:
     """Remove one check, reporting whether there was one to remove.
 
@@ -60,9 +92,9 @@ async def delete_check(session: AsyncSession, *, org_id: uuid.UUID, check_id: uu
     tenant's check removes nothing rather than needing a check afterwards.
 
     Checks are deleted outright rather than soft-deleted. A withdrawn API key is
-    kept because an audit needs to see what was withdrawn; a check holds no
-    secret and its measurements live in ClickHouse under their own retention, so
-    there is nothing here worth keeping a tombstone for.
+    kept because an audit needs to see what was withdrawn; a check's secrets are
+    the project's, and its measurements live in ClickHouse under their own
+    retention, so there is nothing here worth keeping a tombstone for.
     """
     # RETURNING makes this one statement that also answers "was there a row",
     # so there is no separate SELECT for another transaction to race.

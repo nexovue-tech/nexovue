@@ -3,21 +3,17 @@ import { describe, expect, it } from "vitest";
 import type { CheckResultSummary, CheckRun } from "./api";
 import {
   certificateUrgency,
-  checkUrgency,
-  failedRunCount,
   formatCertificateAge,
   formatUptime,
-  isPerfect,
-  liveStateOf,
   runsOldestFirst,
-  uptimeUrgency,
 } from "./check-health";
 
 /** The real check on the dev stack: 247 runs, 100% uptime, p95 1144ms, 59 days of cert. */
 function summary(overrides: Partial<CheckResultSummary> = {}): CheckResultSummary {
   return {
     check_id: "6d3c2b1a-0000-4000-8000-000000000001",
-    check_type: "http",
+    check_type: "api",
+    latest_outcome: "up",
     runs: 247,
     successful_runs: 247,
     uptime_percent: 100,
@@ -31,39 +27,6 @@ function summary(overrides: Partial<CheckResultSummary> = {}): CheckResultSummar
     ...overrides,
   };
 }
-
-describe("liveStateOf", () => {
-  it("is unknown with no runs — absent is not down", () => {
-    expect(liveStateOf(summary({ runs: 0, successful_runs: 0, up: null }))).toBe("unknown");
-  });
-
-  it("is unknown when the API reported no status, even with runs counted", () => {
-    expect(liveStateOf(summary({ up: null }))).toBe("unknown");
-  });
-
-  it("reads up and down from the latest probe", () => {
-    expect(liveStateOf(summary())).toBe("up");
-    expect(liveStateOf(summary({ up: false }))).toBe("down");
-  });
-});
-
-describe("uptimeUrgency", () => {
-  it("gives a healthy check no colour at all", () => {
-    expect(uptimeUrgency(summary())).toBe("none");
-  });
-
-  it("is critical while the check is down", () => {
-    expect(uptimeUrgency(summary({ up: false, successful_runs: 240 }))).toBe("critical");
-  });
-
-  it("keeps a recovered outage visible as a warning", () => {
-    expect(uptimeUrgency(summary({ successful_runs: 240, uptime_percent: 97.2 }))).toBe("warning");
-  });
-
-  it("says nothing about a check with no runs in the window", () => {
-    expect(uptimeUrgency(summary({ runs: 0, successful_runs: 0, up: null }))).toBe("none");
-  });
-});
 
 describe("certificateUrgency", () => {
   it("leaves a certificate inside its renewal cycle uncoloured", () => {
@@ -80,24 +43,6 @@ describe("certificateUrgency", () => {
     expect(certificateUrgency(7)).toBe("critical");
     expect(certificateUrgency(0)).toBe("critical");
     expect(certificateUrgency(-3)).toBe("critical");
-  });
-});
-
-describe("checkUrgency", () => {
-  it("is none for the healthy check with a fresh certificate", () => {
-    expect(checkUrgency(summary())).toBe("none");
-  });
-
-  it("takes the worst of uptime and certificate, not the first", () => {
-    expect(
-      checkUrgency(
-        summary({ tls: { days_remaining: 3, issuer: "Let's Encrypt", server_address: "a.test" } }),
-      ),
-    ).toBe("critical");
-  });
-
-  it("ignores a certificate a plain-HTTP check does not have", () => {
-    expect(checkUrgency(summary({ tls: null, successful_runs: 246 }))).toBe("warning");
   });
 });
 
@@ -125,25 +70,15 @@ describe("formatCertificateAge", () => {
   });
 });
 
-describe("failedRunCount and isPerfect", () => {
-  it("counts what failed", () => {
-    expect(failedRunCount(summary())).toBe(0);
-    expect(failedRunCount(summary({ successful_runs: 240 }))).toBe(7);
-  });
-
-  it("never reports a negative count if the two totals disagree", () => {
-    expect(failedRunCount(summary({ runs: 10, successful_runs: 12 }))).toBe(0);
-  });
-
-  it("calls a window perfect only when something actually ran in it", () => {
-    expect(isPerfect(summary())).toBe(true);
-    expect(isPerfect(summary({ runs: 0, successful_runs: 0, uptime_percent: 0 }))).toBe(false);
-  });
-});
-
 describe("runsOldestFirst", () => {
   const run = (timestamp: string): CheckRun => ({
     timestamp,
+    run_id: timestamp,
+    outcome: "up",
+    attempt: 1,
+    final: true,
+    maintenance: false,
+    location: "local",
     up: true,
     status_code: 200,
     duration_ms: 800,

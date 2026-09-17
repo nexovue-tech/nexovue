@@ -27,7 +27,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings import SettingsError as SettingsSourceError
 
 Environment = Literal["development", "staging", "production"]
@@ -263,6 +263,22 @@ class Settings(BaseSettings):
     # `auth.encryption.generate_key()`.
     credential_encryption_key: str = ""
 
+    # --- synthetic checks ----------------------------------------------------
+    # Seals check secrets (ADR-010). Its own key rather than the TOTP one, so a
+    # rotation of either leaves the other alone; the scheduler holds the same
+    # value to open what a request uses. Optional at boot for the same reason as
+    # the key above: the routes that need it refuse with 503 instead.
+    check_secret_key: str = ""
+
+    # The probe locations a check can run from. The hosted service lists its
+    # regions; a self-hosted install has one. Each is a scheduler worker
+    # consuming `light.<location>`.
+    probe_locations: Annotated[list[str], NoDecode, Field(min_length=1)] = ["local"]
+
+    # The scheduler's broker, which Run now dispatches through (ADR-011). Unset
+    # means Run now answers 503 rather than dispatching nowhere.
+    probe_broker_url: RedisDsn | None = None
+
     # Where a customer points their OTLP exporter. Signup hands this back, so it
     # has to name the receiver as the *customer* reaches it, not as we reach it.
     otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT
@@ -334,6 +350,14 @@ class Settings(BaseSettings):
                 f"it. Set it to the receiver's public address in {self.env}."
             )
         return self
+
+    @field_validator("probe_locations", mode="before")
+    @classmethod
+    def _split_locations(cls, value: object) -> object:
+        """Comma-separated, the way the scheduler reads the same variable."""
+        if isinstance(value, str):
+            return [entry.strip() for entry in value.split(",") if entry.strip()]
+        return value
 
     @field_validator("payments_domestic_provider", "email_provider", mode="before")
     @classmethod

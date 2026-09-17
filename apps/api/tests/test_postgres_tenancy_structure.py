@@ -58,6 +58,10 @@ EXEMPT: Final = {
     # the organization, so it cannot be scoped by one — and asking the webhook
     # to name the organization is the arrangement deliberately removed.
     "subscription_by_processor_ref",
+    # A heartbeat ping resolves its check by the token's hash alone, as an ingest
+    # key resolves by its prefix: the token is what *establishes* the tenant, and
+    # the caller is a cron job with no session to say which one.
+    "record_ping_by_token_hash",
 }
 
 

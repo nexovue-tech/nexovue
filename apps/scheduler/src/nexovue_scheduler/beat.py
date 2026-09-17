@@ -15,29 +15,43 @@ each one starts its interval from that moment instead of looking hours overdue.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
-from datetime import timedelta
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Final
 
 from celery.beat import ScheduleEntry, Scheduler
 from celery.schedules import schedule as run_every
+from nexovue_platform.checks.task import (
+    RUN_CHECK_TASK,
+    SHARED_QUEUE,
+    SWEEP_HEARTBEATS_TASK,
+    SWEEP_UNATTACHED_FILES_TASK,
+    probe_queue,
+    time_limits_for,
+)
 from nexovue_platform.telemetry.logging import get_logger
 from redis import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from nexovue_scheduler.checks import CheckDefinition, load_enabled_checks
+from nexovue_scheduler.checks import ScheduledCheck, load_enabled_checks
 from nexovue_scheduler.leader import LeaderLock
 from nexovue_scheduler.pollers.integrations import IntegrationDefinition, load_active_integrations
-from nexovue_scheduler.settings import QUEUE_LIGHT, Settings, get_settings
+from nexovue_scheduler.settings import Settings, get_settings
 
-# The task every check dispatches to. Named as a string rather than imported so
-# beat does not pull in pycurl and Playwright to schedule work it never runs.
-PROBE_TASK = "nexovue_scheduler.probes.run_check"
+# Task names come from the shared contract rather than imports, so beat does not
+# pull in pycurl to schedule work it never runs.
+PROBE_TASK: Final = RUN_CHECK_TASK
 
-# A browser flow is a different task purely so that its name routes it to the
-# browser worker; Playwright is not installed on the light one.
-BROWSER_TASK = "nexovue_scheduler.probes.browser.run_flow"
-BROWSER_CHECK_TYPE = "browser"
+# A heartbeat is judged once a minute: the floor every check shares (spec D5).
+HEARTBEAT_SWEEP_SECONDS: Final = 60
+FILE_SWEEP_SECONDS: Final = 3600
+HEARTBEAT_SWEEP_ENTRY: Final = "sweep:heartbeats"
+FILE_SWEEP_ENTRY: Final = "sweep:unattached-files"
+
+# A sweep judges every heartbeat, or every unattached file, in one task.
+SWEEP_SOFT_TIME_LIMIT_SECONDS: Final = 50
+SWEEP_TIME_LIMIT_SECONDS: Final = 58
 
 # Door 4b. Named as strings for the same reason: beat dispatches these and never
 # calls them, so it has no business importing boto3 to schedule a poll.
@@ -47,6 +61,16 @@ POLL_TASKS = {
 }
 
 logger = get_logger(__name__)
+
+
+def _start_offset(check: ScheduledCheck) -> timedelta:
+    """Where in its interval a check first fires: a stable hash of its id.
+
+    Without it every check saved in the same refresh fires on the same second,
+    every minute, and the probe workers see a thundering herd instead of a flow.
+    """
+    digest = int(hashlib.sha256(check.id.bytes).hexdigest()[:8], 16)
+    return timedelta(seconds=digest % check.interval_seconds)
 
 
 def _unchanged(existing: ScheduleEntry | None, interval: Any, arguments: dict[str, Any]) -> bool:
@@ -198,7 +222,9 @@ class PostgresScheduler(Scheduler):
 
         try:
             engine = self._engine_or_create()
-            checks = self._loop.run_until_complete(load_enabled_checks(engine))
+            checks = self._loop.run_until_complete(
+                load_enabled_checks(engine, all_locations=self._settings.probe_locations)
+            )
             integrations = self._loop.run_until_complete(load_active_integrations(engine))
         except Exception:
             # Postgres being briefly unreachable must not empty the schedule:
@@ -210,47 +236,98 @@ class PostgresScheduler(Scheduler):
 
         self._refreshes += 1
 
-        self._entries = self._entries_for(checks) | self._poll_entries_for(integrations)
+        self._entries = (
+            self._entries_for(checks) | self._sweep_entries() | self._poll_entries_for(integrations)
+        )
 
-    def _entries_for(self, checks: list[CheckDefinition]) -> dict[str, ScheduleEntry]:
-        """Build schedule entries, preserving the timing of ones already running.
+    def _entries_for(self, checks: list[ScheduledCheck]) -> dict[str, ScheduleEntry]:
+        """One entry per check per location, preserving the timing of running ones.
 
         An unchanged check keeps its existing entry so that a refresh does not
-        reset its interval — otherwise a refresh every 30s would stop a 60s
-        check from ever coming due.
+        reset its interval — otherwise a refresh every 30s would stop a 60s check
+        from ever coming due.
 
         "Unchanged" has to mean the whole definition, not just the interval. An
         entry carries the check's settings in its kwargs, so keeping it because
         the interval matched meant an edited target or config never reached the
         worker — the one thing this table exists to make possible.
+
+        A heartbeat has no entry of its own: nothing is probed, and the sweep
+        judges every one of them together.
         """
         entries: dict[str, ScheduleEntry] = {}
+        now = datetime.now(UTC)
         for check in checks:
-            name = check.schedule_name
-            existing = self._entries.get(name)
+            if check.is_heartbeat:
+                continue
             interval = run_every(run_every=timedelta(seconds=check.interval_seconds))
-            arguments = {
-                "check_id": str(check.id),
-                "org_id": str(check.org_id),
-                "project_id": str(check.project_id),
-                "check_type": check.type,
-                "target": check.target,
-                "config": check.config,
-            }
+            limits = time_limits_for(check.definition.config)
+            served = [
+                location
+                for location in check.definition.locations
+                if location in self._settings.probe_locations
+            ]
+            if len(served) < len(check.definition.locations):
+                # A queue nothing consumes grows for ever; the browser queue did.
+                logger.warning(
+                    "check names a location this deployment does not have",
+                    check_id=str(check.id),
+                    unserved=sorted(set(check.definition.locations) - set(served)),
+                )
+            for location in served:
+                name = check.schedule_name(location)
+                existing = self._entries.get(name)
+                arguments = {
+                    "definition": check.definition.model_dump(mode="json"),
+                    "location": location,
+                }
+                if _unchanged(existing, interval, arguments):
+                    entries[name] = existing  # _unchanged proves it is not None
+                    continue
 
-            if _unchanged(existing, interval, arguments):
+                entries[name] = ScheduleEntry(
+                    name=name,
+                    task=PROBE_TASK,
+                    schedule=interval,
+                    # The whole definition travels with the task, so the probe
+                    # worker needs no database; see `probes/tasks.py`.
+                    kwargs=arguments,
+                    options={
+                        "queue": probe_queue(location),
+                        # A run not started before the next is due is dropped,
+                        # not queued behind it (FR26).
+                        "expires": check.interval_seconds,
+                        **limits,
+                    },
+                    last_run_at=now - _start_offset(check),
+                    app=self.app,
+                )
+        return entries
+
+    def _sweep_entries(self) -> dict[str, ScheduleEntry]:
+        """The two periodic sweeps, kept across refreshes like any other entry."""
+        wanted = {
+            HEARTBEAT_SWEEP_ENTRY: (SWEEP_HEARTBEATS_TASK, HEARTBEAT_SWEEP_SECONDS),
+            FILE_SWEEP_ENTRY: (SWEEP_UNATTACHED_FILES_TASK, FILE_SWEEP_SECONDS),
+        }
+        entries: dict[str, ScheduleEntry] = {}
+        for name, (task, seconds) in wanted.items():
+            interval = run_every(run_every=timedelta(seconds=seconds))
+            existing = self._entries.get(name)
+            if _unchanged(existing, interval, {}):
                 entries[name] = existing  # _unchanged proves it is not None
                 continue
-
             entries[name] = ScheduleEntry(
                 name=name,
-                task=BROWSER_TASK if check.type == BROWSER_CHECK_TYPE else PROBE_TASK,
+                task=task,
                 schedule=interval,
-                # The whole definition travels with the task, so the probe
-                # worker needs no database. A check edited in the UI therefore
-                # runs with its previous settings until the next refresh, which
-                # is the trade `probes/__init__.py` documents.
-                kwargs=arguments,
+                kwargs={},
+                options={
+                    "queue": SHARED_QUEUE,
+                    "expires": seconds,
+                    "soft_time_limit": SWEEP_SOFT_TIME_LIMIT_SECONDS,
+                    "time_limit": SWEEP_TIME_LIMIT_SECONDS,
+                },
                 app=self.app,
             )
         return entries
@@ -291,7 +368,7 @@ class PostgresScheduler(Scheduler):
                 task=task,
                 schedule=interval,
                 kwargs=arguments,
-                options={"queue": QUEUE_LIGHT},
+                options={"queue": SHARED_QUEUE},
                 app=self.app,
             )
         return entries

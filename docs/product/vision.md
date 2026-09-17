@@ -102,7 +102,7 @@ All via **OpenTelemetry** (OTLP protocol, community SDKs — we do **not** build
 | 4. **Pull integrations (APIs/webhooks)** | We connect out or receive webhooks: cloud APIs (CloudWatch/GCP) for infra metrics, direct DB connections (pg_stat_statements) for DB health, GitHub/CI webhooks for deploy events, cloud audit logs for SIEM | Infra metrics (cloud path), database monitoring, deploy events, SIEM |
 
 **Which of these exist (2026-09-14):** door 1 accepts traces, logs and metrics over OTLP/HTTP and
-OTLP/gRPC. Door 2 runs HTTP, SSL and Playwright browser checks. Door 3 is built on both sides now —
+OTLP/gRPC. Door 2 runs API, multistep API, TCP, DNS and heartbeat checks, with certificate expiry; browser checks were removed by founder decision on 2026-09-17 (F18 spec D13). Door 3 is built on both sides now —
 a separate browser entrance under `/browser`, gated by public site keys and an origin allowlist,
 **and** the RUM screens, which were still missing when this paragraph was first written. Door 4b
 polls CloudWatch and `pg_stat_statements`, and deploy webhooks are built. Session replay is neither

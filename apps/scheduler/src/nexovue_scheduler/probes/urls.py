@@ -2,9 +2,9 @@
 
 The browser SDK trims a page URL to its path by default, because the visitor
 never chose to send us their query string. **A probe is the other
-case**: the URL is one the customer configured us to open, and `browser.py`
-reports where the browser actually ended up — *"a redirect to a login page is
-exactly the thing worth seeing"*. Trimming that to a path deletes the diagnosis
+case**: the URL is one the customer configured us to call, and a run's evidence
+reports where the request actually ended up — a redirect to a login page is
+exactly the thing worth seeing. Trimming that to a path deletes the diagnosis
 the record exists for, so the query and the fragment stay.
 
 Two rules stay unconditional, and neither was applied before:
@@ -42,7 +42,7 @@ def reportable_url(url: str | None) -> str | None:
     Returns the input unchanged when it cannot be parsed: a probe records where
     it was, and a URL we failed to understand is still the most useful thing we
     know. `None` stays `None` — absent is not the empty string, which would read
-    as "the browser was nowhere".
+    as "the request went nowhere".
     """
     if not url:
         return url

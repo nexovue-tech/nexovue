@@ -113,7 +113,28 @@ EXEMPT: Final = {
     "revoke_api_key",
     "create_site_key",
     "revoke_site_key",
+    # Unauthenticated by design: a customer's cron job calls it and has no
+    # session. The token in the path is the whole credential — shown once, kept
+    # only as its hash, rotatable — and the only thing it can do is mark that one
+    # heartbeat as called. It has its own rate tier.
+    "receive_heartbeat",
 }
+
+
+def _methods_of(decorator: ast.Call) -> set[str]:
+    """`@router.post(...)` names its method; `@router.api_route(..., methods=[...])`
+    lists them, and a parser that read only the first let a POST through unjudged."""
+    assert isinstance(decorator.func, ast.Attribute)
+    if decorator.func.attr != "api_route":
+        return {decorator.func.attr.lower()}
+    for keyword in decorator.keywords:
+        if keyword.arg == "methods" and isinstance(keyword.value, ast.List | ast.Tuple):
+            return {
+                element.value.lower()
+                for element in keyword.value.elts
+                if isinstance(element, ast.Constant) and isinstance(element.value, str)
+            }
+    return set()
 
 
 def _handlers(router: Path) -> list[tuple[str, str]]:
@@ -128,12 +149,13 @@ def _handlers(router: Path) -> list[tuple[str, str]]:
         # for one name skipped that whole router without saying so — which is
         # the failure this file exists to catch, in this file.
         methods = {
-            decorator.func.attr.lower()
+            method
             for decorator in node.decorator_list
             if isinstance(decorator, ast.Call)
             and isinstance(decorator.func, ast.Attribute)
             and isinstance(decorator.func.value, ast.Name)
             and decorator.func.value.id.endswith("router")
+            for method in _methods_of(decorator)
         }
         if not methods & MUTATING_METHODS:
             continue

@@ -37,26 +37,19 @@ the key was absent is the one outcome this module exists to prevent.
 from __future__ import annotations
 
 import base64
-import os
 from typing import Final
 
-from cryptography.exceptions import InvalidTag
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from nexovue_platform.checks.sealing import KEY_BYTES, SealedBox, SealError
+from nexovue_platform.checks.sealing import generate_key as _generate_key
 
 from nexovue_api.errors.exceptions import DependencyUnavailableError, InternalError
 
-# The environment variable a deployment sets. Named for what it protects rather
-# than for TOTP: the next credential that cannot be hashed should share this key
-# rather than introduce a second one nobody rotates.
+# The environment variable a deployment sets.
 CREDENTIAL_ENCRYPTION_VARIABLE: Final = "CREDENTIAL_ENCRYPTION_KEY"
 
-KEY_BYTES: Final = 32
-NONCE_BYTES: Final = 12
-
-# Stored ahead of the nonce so a future scheme can be told apart from this one
-# without guessing at lengths. Rotation is a change of key; this is a change of
-# construction, and the two are different problems.
-FORMAT_VERSION: Final = 1
+# Bound into every ciphertext, so a TOTP secret cannot be presented as the same
+# owner's credential of another kind. Check secrets have their own key and purpose.
+TOTP_PURPOSE: Final = "totp"
 
 _KEY_MISCONFIGURED: Final = (
     "Two-factor authentication is not available on this deployment, so this could not be "
@@ -70,13 +63,11 @@ class CredentialBox:
     def __init__(self, key: bytes) -> None:
         if len(key) != KEY_BYTES:
             raise ValueError(f"{CREDENTIAL_ENCRYPTION_VARIABLE} must decode to {KEY_BYTES} bytes")
-        self._cipher = AESGCM(key)
+        self._box = SealedBox(key, purpose=TOTP_PURPOSE)
 
     def seal(self, plaintext: str, *, owner_id: str) -> bytes:
         """Encrypt, authenticating the owner so the ciphertext cannot be moved."""
-        nonce = os.urandom(NONCE_BYTES)
-        sealed = self._cipher.encrypt(nonce, plaintext.encode(), _associated_data(owner_id))
-        return bytes([FORMAT_VERSION]) + nonce + sealed
+        return self._box.seal(plaintext, owner=owner_id)
 
     def open(self, sealed: bytes, *, owner_id: str) -> str:
         """Decrypt, or refuse.
@@ -86,16 +77,10 @@ class CredentialBox:
         changed, the row was tampered with, or the ciphertext belongs to
         somebody else, and none of those should read as "wrong code".
         """
-        if len(sealed) <= 1 + NONCE_BYTES or sealed[0] != FORMAT_VERSION:
-            raise InternalError("A stored credential is not in a form this build can read.")
-        nonce = sealed[1 : 1 + NONCE_BYTES]
         try:
-            opened = self._cipher.decrypt(
-                nonce, sealed[1 + NONCE_BYTES :], _associated_data(owner_id)
-            )
-        except InvalidTag as tampered:
-            raise InternalError("A stored credential could not be decrypted.") from tampered
-        return opened.decode()
+            return self._box.open(sealed, owner=owner_id)
+        except SealError as unreadable:
+            raise InternalError("A stored credential could not be decrypted.") from unreadable
 
 
 def credential_box(configured_key: str) -> CredentialBox:
@@ -116,10 +101,4 @@ def credential_box(configured_key: str) -> CredentialBox:
 def generate_key() -> str:
     """A key in the form the environment variable takes. For operators, not for
     requests — nothing in the request path calls this."""
-    return base64.urlsafe_b64encode(os.urandom(KEY_BYTES)).decode()
-
-
-def _associated_data(owner_id: str) -> bytes:
-    """What the ciphertext is bound to. Prefixed so one owner's TOTP secret could
-    not be presented as the same owner's future second sealed credential."""
-    return f"totp:{owner_id}".encode()
+    return _generate_key()

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Final
 
+from nexovue_platform.checks.evidence import RunEvidence
 from pydantic import BaseModel, Field
 
 from nexovue_api.wire import IsoTimestamp
@@ -41,11 +42,18 @@ class CheckResultSummary(BaseModel):
     uptime_percent: float
     # Null when no probe reported a status in the window.
     up: bool | None = None
+    # The most recent confirmed run's outcome — including one uptime does not
+    # count, so a misconfigured check says so. Empty for readings from before
+    # outcomes were published.
+    latest_outcome: str = ""
     latest_status_code: int
     latest_run_at: IsoTimestamp | None = None
-    mean_duration_ms: float
-    p95_duration_ms: float
-    max_duration_ms: float
+    # Null when nothing in the window was timed: a heartbeat is never probed, and
+    # a run refused before its request has no response time. A zero would read as
+    # an instant answer and drag every percentile down with it.
+    mean_duration_ms: float | None = None
+    p95_duration_ms: float | None = None
+    max_duration_ms: float | None = None
     # Null for a check whose target is plain HTTP, or one never probed here.
     tls: TlsCertificate | None = None
 
@@ -81,15 +89,27 @@ class PhaseBreakdownResponse(BaseModel):
 
 
 class CheckRun(BaseModel):
-    """One probe. The uptime strip, rather than the average over it."""
+    """One attempt. The uptime strip, rather than the average over it."""
 
     timestamp: IsoTimestamp
+    # Empty for readings published before runs carried an id; such a run has no
+    # evidence to open.
+    run_id: str
     up: bool
     status_code: int
-    duration_ms: float
+    # Null when this run timed nothing — a heartbeat, or a run that never sent
+    # its request. Not zero: that is a real, instant response.
+    duration_ms: float | None = None
     # The phases summed. It tracks `duration_ms` closely; a gap between them is
-    # time the probe spent outside the phases it measured.
-    phase_total_ms: float
+    # time the probe spent outside the phases it measured. Null when no phase was
+    # measured.
+    phase_total_ms: float | None = None
+    outcome: str
+    attempt: int
+    # False for an attempt a retry overruled; it is shown, and not counted.
+    final: bool
+    maintenance: bool
+    location: str
 
 
 class CheckRunListResponse(BaseModel):
@@ -128,3 +148,12 @@ class CheckTrendResponse(BaseModel):
     window_end: IsoTimestamp
     bucket_seconds: int
     checks: list[CheckTrend] = Field(default_factory=list)
+
+
+class CheckRunEvidenceResponse(BaseModel):
+    evidence: RunEvidence
+
+
+class CheckRunCount(BaseModel):
+    check_id: str
+    runs: int

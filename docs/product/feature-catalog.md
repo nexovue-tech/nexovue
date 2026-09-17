@@ -1,6 +1,6 @@
 # Feature catalog
 
-> **Owner:** Raj · **Status:** Draft — living document · **Last updated:** 2026-09-14 — a single status table for every feature (§4), the Phase 0 record and the proposed Phase 1 (§5), and F34–F37 added
+> **Owner:** Raj · **Status:** Draft — living document · **Last updated:** 2026-09-16 — Phase 1 approved and reordered (§5): F18 first, then F21, F26, F31 and F36, with the website and deployment as parallel tracks
 > **How to use this doc:** every feature gets the same structure as F1 (the template): Description → User stories → Acceptance criteria → UI notes → Dependencies → Open questions. We fill features in one by one; a feature is "specified" when its acceptance criteria are testable.
 
 > ⚠️ **Built and specified are different questions, and §4 answers both separately.**
@@ -70,7 +70,7 @@
 | **F15** | RUM / Core Web Vitals | ✅ Yes | 🔲 | 0 | Screens built; **the browser SDK is unpublishable** (decision D6) |
 | **F16** | Session replay | 🔴 No | 🔲 | Later | Neither built nor scoped |
 | **F17** | Continuous profiling | 🔴 No | 🔲 | Later | OTel signal still early |
-| **F18** | Synthetic checks | ✅ Yes | 🔲 | 0 | HTTP, SSL-expiry and browser-flow checks, with phase breakdown |
+| **F18** | Synthetic checks | ✅ Yes | ✅ | **1** | **Built 2026-09-17** to the approved [spec](../features/synthetic-checks/spec.md): API, multistep API, heartbeat, TCP and DNS checks created, edited, paused and deleted in the console; any method, bodies, files, auth from write-only secrets; assertions; import from cURL, OpenAPI and Postman; Run now; confirmation from another location; up/degraded/down/misconfigured state with a timeline; maintenance windows; per-run evidence. **Browser checks removed** (D13). Awaiting the founder's review of the uncommitted change — see [status](../features/synthetic-checks/status.md) |
 | **F19** | SLO tracking | 🔴 No | 🔲 | Later | |
 | **F20** | Dashboards | 🟡 Partly | 🔶 | Later | The composed Overview is built and holds `/`; the **builder** is not |
 | **F21** | Alerts & notification connectors | 🔴 No | 🔲 | **1** | The largest gap in the product. Notification adapters and a scheduler exist to build on. **A live competitor already bundles detection + AI root-cause + code-fix suggestions** (Better Stack's AI SRE, confirmed 2026-09-14) — the gap on "tell me what broke and act on it" is wider than scoped in August |
@@ -83,13 +83,13 @@
 | **F28** | Deployment / release tracking | 🟡 Partly | 🔲 | 2 | Deploy webhooks, chart markers and error-to-deploy linkage built; the release-comparison screen is not |
 | **F29** | LLM / AI-app observability | 🔴 No | 🔲 | Later | `gen_ai.*` attributes already land and are queryable; no screen, no metric contract |
 | **F30** | Public status page | 🔴 No | 🔲 | Later | |
-| **F31** | Admin console (internal) | 🔴 No | 🔲 | Later | `audit_log.impersonation_context` is in place and unused. **With no customers it is a console with one row** |
+| **F31** | Admin console (internal) | 🔴 No | 🔲 | **1** | `audit_log.impersonation_context` is in place and unused. **Moved from Later, 2026-09-16:** cloud customers are onboarded by hand through it ([ADR-008](../decisions/ADR-008-the-website-takes-the-first-payment.md)), so it is the first thing a paying customer depends on |
 | **F32** | Account, organization & project access | ✅ Yes | 🔲 | 0 | Signup, verification, recovery, profile, TOTP second factor, active sessions, sign-out-everywhere |
 | **F33** | Telemetry intake & data protection | ✅ Yes | 🔲 | 0 | OTLP HTTP and gRPC, browser intake, site keys, origin allowlist, masking, tail sampling, tenant isolation |
 | **F34** | Metrics explorer | ✅ Yes | 🔲 | 0 | Catalogue with name/shape/readable filters, histograms, duration heatmaps. *Added 2026-09-14 — it shipped without a catalogue entry* |
 | **F35** | Setup documentation (public) | ✅ Yes | 🔲 | 0 | Fifteen pages served unauthenticated at `/docs`, compiled from `docs/product/setup/`. *Added 2026-09-14* |
-| **F36** | Customer read API | 🔴 No | 🔲 | 2 | The console API is **session-cookie only** and ingest keys are write-only, so **a customer cannot script against their own telemetry at all**. *Added 2026-09-14* |
-| **F37** | Self-hosted install & operation | 🟡 Skeleton | 🔲 | **1** | `docker-compose.onprem.yaml` and the operations docs exist and are marked, correctly, as unverified. No images, no registry, no release, no runbook. **Licence decided 2026-09-15: AGPL-3.0 source-public, browser SDK permissive; dependency audit clean, secret scan still owed.** *Added 2026-09-14* |
+| **F36** | Customer read API | 🔴 No | 🔲 | **1** | The console API is **session-cookie only** and ingest keys are write-only, so **a customer cannot script against their own telemetry at all**. *Added 2026-09-14* |
+| **F37** | Self-hosted install & operation | 🟡 Skeleton | 🔲 | **1** | `docker-compose.onprem.yaml` and the operations docs exist and are marked, correctly, as unverified. No images, no registry, no release, no runbook. **Licence decided and declared 2026-09-15: AGPL-3.0, browser SDK Apache-2.0; transitive licence audit and git-history secret scan both clean.** Delivered as the deployment track of Phase 1 ([ADR-006](../decisions/ADR-006-terraform-with-two-delivery-paths.md)). *Added 2026-09-14* |
 
 **Named capabilities inside features (so they aren't lost):** BubbleUp-style attribute/outlier
 analysis → F20 + F2 evidence · service ownership metadata → F8/F9 · telemetry-value transparency
@@ -140,40 +140,45 @@ pass.
 **What Phase 0 deliberately did not do:** produce a single finding, notify anybody of anything,
 admit a second user to an organization, or run anywhere but a laptop.
 
-### Phase 1 — proposed, not yet approved
+### Phase 1 — approved 2026-09-16
 
-> **Status: awaiting Raj's approval.** The ordering below is a recommendation, and §5's "what it
-> answers" column is the argument for it. Nothing is started.
+**No release date.** Features are completed first; hosted deployment happens when a first cloud
+customer pays ([ADR-008](../decisions/ADR-008-the-website-takes-the-first-payment.md)). Three tracks:
+the first in strict order, the other two alongside it.
 
-nexovue is **both SaaS and self-hosted**, has **no customers and no marketing yet**, and the
-founder's constraint is not to pay for idle infrastructure before there is a reason to. That points
-at self-hosted as the cheap first door: it costs nothing to run, a developer evaluating an
-observability tool will run `docker compose up`, and the work — images, migrations, backup, restore
-— is the same work hosted needs later.
+**Track 1 — features, in order**
 
-Three items, in the order a self-hoster hits the wall:
-
-| Order | Feature | What it answers | Why now |
-|---|---|---|---|
-| 1 | **F37 — Install** | "Can I run this?" | Unblocks four other things and closes two decisions that already resolved to *"once nexovue runs somewhere"*: the unobtainable browser SDK (D6) and the unreachable ingest hostname |
-| 2 | **F26 — Invite** | "Can my team use it?" | An organization holds exactly one person today. For an internal tool that is a wall at the second user, and retrofitting multi-user costs more the longer other features assume one |
-| 3 | **F21 — Alert** | "Will it tell me when something breaks?" | The first question anyone asks an observability tool, and today the answer is no. An observability tool that cannot notify is a dashboard |
-
-**Deliberately left out of Phase 1**, from the founder's own candidate list:
-
-| Candidate | Where it went | Why |
+| Order | Feature | Bar |
 |---|---|---|
-| Customer read API (F36) | Phase 2 | Small and well understood, but no customer is asking yet and it needs a hostname first |
-| Anomaly detection (F6) | Phase 2 | Detecting anomalies before anything can notify you about them gives you nothing to do with them |
-| Insight engine, RAG, chatbot (F3, F4, F1's engine) | Phase 2 | Three features on one line, and together about the size of all of Phase 0 |
-| Platform admin console (F31) | Later | With zero customers it is a console with one row |
-| Website redesign | Outside this catalog | Marketing, already deployed on Firebase, independent of the product |
+| 1 | **F18 — Synthetic checks** | **Complete to production level** — everything a customer expects of synthetic monitoring, specified in full before any code, through the SDD workflow |
+| 2 | **F21 — Alerts & notification connectors** | |
+| 3 | **F26 — Teams: invite, roles, membership** | |
+| 4 | **F31 — Platform admin console** | Must exist before the first paying cloud customer: onboarding goes through it |
+| 5 | **F36 — Customer read API** | |
+
+**Track 2 — website redesign, in parallel.** A modern site for the product only, with SEO, pricing
+(self-hosted free; cloud plans paid; no free cloud tier) and the first payment
+([ADR-008](../decisions/ADR-008-the-website-takes-the-first-payment.md)). Outside this catalogue:
+`nexovue.com` is a separate Next.js application on Firebase.
+
+**Track 3 — production readiness and deployment, in parallel.** F37 plus the hosted infrastructure:
+
+- CI building multi-arch images, **published publicly on Docker Hub**
+- The self-hosted install, runnable and documented
+- Terraform, with Ansible for Linux servers and Helm for Kubernetes ([ADR-006](../decisions/ADR-006-terraform-with-two-delivery-paths.md))
+- The preparations for moving between clouds ([ADR-007](../decisions/ADR-007-migrating-between-clouds.md)) and regions ([ADR-009](../decisions/ADR-009-regions-are-cells.md))
+- **A trial run on Oracle Cloud.** Always Free is 2 OCPUs / 12 GB since June 2026 — a trial and staging environment, not one for a paying customer
+- The blockers in [`../operations/production-readiness.md`](../operations/production-readiness.md)
+
+Docker Hub allows 100 anonymous pulls per six hours **per IP**. A single self-hosted install pulls
+about a dozen images and is unaffected; nodes or runners sharing one NAT address share that budget, so
+our own deployments pull authenticated.
 
 ### Phase 2 and later
 
 Phase 2 is the insight layer the vision is built on — anomaly detection, the insight engine, findings
-with something behind them, cases, and the chatbot — plus the read API and the release-comparison
-screen. Everything marked *Later* in §4 has no phase and is not scheduled.
+with something behind them, cases, and the chatbot — plus the release-comparison screen, the AWS role
+flow and data archival. Everything marked *Later* in §4 has no phase and is not scheduled.
 
 ---
 
@@ -266,8 +271,10 @@ Playback linked from errors/findings; PII masking on by default; retention rules
 ### F17 — Continuous Profiling 🔲 TO SPECIFY
 Flame graphs per service; "which code is slow/hot" linked from finding evidence where relevant.
 
-### F18 — Synthetic Checks 🔲 TO SPECIFY
-Check list + status + latency trends; create/edit uptime, SSL-expiry, API, and browser-flow checks; failure detail with screenshot; multi-region results (when available).
+### F18 — Synthetic Checks ✅ SPECIFIED
+Specified, designed and built through the SDD workflow: [`spec.md`](../features/synthetic-checks/spec.md),
+[`design.md`](../features/synthetic-checks/design.md), [`plan.md`](../features/synthetic-checks/plan.md). Browser
+checks, screenshots and customer scripts are out of scope by founder decision (spec D13, D16).
 
 ### F19 — SLO Tracking 🔲 TO SPECIFY
 Define targets on services/endpoints; error-budget status; budget-burn alerts into findings feed.

@@ -1,9 +1,10 @@
 """Keeping credentials out of the logs.
 
-Two rules, matching the Go services exactly: an event key that names a secret
-never has its value logged, and a connection string loses its password wherever
-it appears — including inside the free text of a driver error, which is how
-DSNs most often escape into a log line.
+Three rules: an event key that names a secret never has its value logged; a
+connection string loses its password wherever it appears — including inside the
+free text of a driver error, which is how DSNs most often escape into a log line;
+and a heartbeat URL loses its token, because the token is the whole credential and
+every request log line, access log line and refusal names the path it arrived on.
 """
 
 from __future__ import annotations
@@ -31,6 +32,9 @@ SECRET_KEY_MARKERS: Final = (
 
 _CREDENTIALS_IN_URL: Final = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:/@]+):[^\s/@]*@")
 
+# `/api/v1/heartbeat/<token>` — the path segment after `heartbeat/`, whatever follows it.
+_HEARTBEAT_TOKEN_IN_PATH: Final = re.compile(r"(/heartbeat/)[^\s/?#\"']+")
+
 
 def is_secret_key(key: str) -> bool:
     """Whether a value logged under this key must never be written out."""
@@ -39,8 +43,9 @@ def is_secret_key(key: str) -> bool:
 
 
 def redact_credentials(text: str) -> str:
-    """Remove connection-string passwords, keeping the scheme, user and host."""
-    return _CREDENTIALS_IN_URL.sub(rf"\1:{PLACEHOLDER}@", text)
+    """Remove connection-string passwords and heartbeat tokens, keeping the rest."""
+    without_passwords = _CREDENTIALS_IN_URL.sub(rf"\1:{PLACEHOLDER}@", text)
+    return _HEARTBEAT_TOKEN_IN_PATH.sub(rf"\1{PLACEHOLDER}", without_passwords)
 
 
 def redact_event(

@@ -374,9 +374,33 @@ class SiteKey(Base):
     __table_args__ = (Index("ix_site_keys_project_id", "project_id"),)
 
 
+# The kinds a check can be. Mirrored by a CHECK constraint, so a row the
+# scheduler cannot run is refused by the database rather than scheduled and lost.
+CHECK_TYPES: Final = ("api", "multistep", "heartbeat", "tcp", "dns")
+
+# The states a run can confirm. Paused and in-maintenance are read off the check
+# and its windows, not stored: neither is something a run found.
+CHECK_STATES: Final = ("up", "degraded", "down", "misconfigured")
+
+MAINTENANCE_RECURRENCES: Final = ("none", "daily", "weekly")
+
+CHECK_NAME_MAX_LENGTH: Final = 120
+FILE_NAME_MAX_LENGTH: Final = 255
+CONTENT_TYPE_MAX_LENGTH: Final = 255
+RUN_ID_LENGTH: Final = 36
+
+
+def _quoted(values: tuple[str, ...]) -> str:
+    return ", ".join(f"'{value}'" for value in values)
+
+
 class Check(Base):
-    """A door 2 probe definition. Our own Beat scheduler reads this table, so a
-    customer editing a check in the UI needs no redeploy."""
+    """A synthetic check. Our own Beat scheduler reads this table, so a customer
+    editing a check in the console needs no redeploy.
+
+    `config` is the whole definition, validated against
+    `nexovue_platform.checks.config` before it is written; `type` repeats its
+    discriminator so the database can refuse a kind nothing runs."""
 
     __tablename__ = "checks"
 
@@ -387,17 +411,238 @@ class Check(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
+    name: Mapped[str] = mapped_column(String(CHECK_NAME_MAX_LENGTH), nullable=False)
     type: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
-    target: Mapped[str] = mapped_column(Text, nullable=False)
+    # For a heartbeat, the period a call is expected within.
     interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
-    config: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'::jsonb")
-    )
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    # Probe locations this check runs from, each independently.
+    locations: Mapped[list[str]] = mapped_column(
+        ARRAY(String(SHORT_LABEL_LENGTH)), nullable=False, server_default=text("'{}'")
+    )
+    # Response times above which a passing run is degraded, and a run fails.
+    degraded_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    failing_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # How many times a failure is retried before it is believed.
+    retries: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("1"))
+    # A heartbeat's URL token, hashed like an API key: shown once, never stored.
+    heartbeat_token_hash: Mapped[str | None] = mapped_column(
+        String(SHA256_HEX_LENGTH), nullable=True, unique=True
+    )
+    last_ping_at: Mapped[OptionalTimestamp]
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        CheckConstraint(f"type IN ({_quoted(CHECK_TYPES)})", name="type_is_known"),
+        CheckConstraint("interval_seconds BETWEEN 60 AND 86400", name="interval_is_within_bounds"),
+        CheckConstraint("retries BETWEEN 1 AND 3", name="retries_are_bounded"),
+        CheckConstraint(
+            "degraded_ms IS NULL OR failing_ms IS NULL OR degraded_ms < failing_ms",
+            name="degraded_is_below_failing",
+        ),
+        # The scheduler's only query is "every enabled check"; it runs every tick.
+        Index("ix_checks_enabled_org_id", "enabled", "org_id"),
+        Index("ix_checks_project_id", "project_id"),
+    )
+
+
+class CheckState(Base):
+    """A check's confirmed state, and the run that confirmed it. One row per check."""
+
+    __tablename__ = "check_states"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    check_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("checks.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    state: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    since: Mapped[RequiredTimestamp]
+    run_id: Mapped[str | None] = mapped_column(String(RUN_ID_LENGTH), nullable=True)
+    location: Mapped[str | None] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=True)
+    # The last confirmed run, whether or not it changed anything.
+    last_run_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (
+        CheckConstraint(f"state IN ({_quoted(CHECK_STATES)})", name="state_is_known"),
+    )
+
+
+class CheckStateChange(Base):
+    """One confirmed transition. What an alert will be raised from (F21)."""
+
+    __tablename__ = "check_state_changes"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    check_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("checks.id", ondelete="CASCADE"), nullable=False
+    )
+    # Null for the first state a check ever reaches.
+    from_state: Mapped[str | None] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=True)
+    to_state: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    changed_at: Mapped[RequiredTimestamp]
+    run_id: Mapped[str | None] = mapped_column(String(RUN_ID_LENGTH), nullable=True)
+    location: Mapped[str | None] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=True)
+    # Why, in the run's own words: the failing assertion or the error.
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_check_state_changes_check_id_changed_at", "check_id", "changed_at"),
+    )
+
+
+class CheckSecret(Base):
+    """A value checks use and nobody reads back (ADR-010).
+
+    Sealed with the check-secret key, bound to its project and name, so a value
+    copied into another row fails to open rather than becoming that row's secret."""
+
+    __tablename__ = "check_secrets"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    sealed_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+
+    __table_args__ = (UniqueConstraint("project_id", "name"),)
+
+
+class CheckVariable(Base):
+    """A plain value any check in the project can use as `{{name}}`."""
+
+    __tablename__ = "check_variables"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+
+    __table_args__ = (UniqueConstraint("project_id", "name"),)
+
+
+class CheckFile(Base):
+    """A file a check sends in a request. The bytes are in object storage.
+
+    `check_id` is null while the file belongs to a form nobody has saved yet, or
+    after a check stopped using it. A sweep removes the first kind a day on and the
+    second an hour on, row first and object after — so an abandoned form leaves
+    nothing behind, and no object is ever deleted before the change that freed it
+    has committed."""
+
+    __tablename__ = "check_files"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    check_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("checks.id", ondelete="SET NULL"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(String(FILE_NAME_MAX_LENGTH), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(CONTENT_TYPE_MAX_LENGTH), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[CreatedAt]
+    # When a check stopped using it; the sweep takes a detached file an hour on.
+    detached_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        CheckConstraint("size_bytes >= 0", name="size_is_not_negative"),
+        Index("ix_check_files_check_id", "check_id"),
+        Index(
+            "ix_check_files_unattached_created_at",
+            "created_at",
+            postgresql_where=text("check_id IS NULL"),
+        ),
+    )
+
+
+class MaintenanceWindow(Base):
+    """Planned work during which a failing check changes no state (FR36)."""
+
+    __tablename__ = "maintenance_windows"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(CHECK_NAME_MAX_LENGTH), nullable=False)
+    starts_at: Mapped[RequiredTimestamp]
+    ends_at: Mapped[RequiredTimestamp]
+    recurrence: Mapped[str] = mapped_column(
+        String(SHORT_LABEL_LENGTH), nullable=False, server_default=text("'none'")
+    )
+    repeat_until: Mapped[OptionalTimestamp]
+    # Every check in the project, including ones created after the window.
+    applies_to_all: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     created_at: Mapped[CreatedAt]
 
-    # The scheduler's only query is "every enabled check"; it runs every tick.
-    __table_args__ = (Index("ix_checks_enabled_org_id", "enabled", "org_id"),)
+    __table_args__ = (
+        CheckConstraint("ends_at > starts_at", name="ends_after_it_starts"),
+        CheckConstraint(
+            f"recurrence IN ({_quoted(MAINTENANCE_RECURRENCES)})", name="recurrence_is_known"
+        ),
+        Index("ix_maintenance_windows_project_id", "project_id"),
+    )
+
+
+class MaintenanceWindowCheck(Base):
+    """One check a window covers, when it does not cover them all."""
+
+    __tablename__ = "maintenance_window_checks"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    window_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("maintenance_windows.id", ondelete="CASCADE"), nullable=False
+    )
+    check_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("checks.id", ondelete="CASCADE"), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("window_id", "check_id"),
+        Index("ix_maintenance_window_checks_check_id", "check_id"),
+    )
 
 
 class Integration(Base):

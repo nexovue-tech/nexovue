@@ -48,6 +48,7 @@ from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nexovue_api.audit import service as audit
+from nexovue_api.checkfiles.service import tenant_prefix as check_files_prefix
 from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.data.postgres.models import Organization
 from nexovue_api.errors.exceptions import ConflictError, NotFoundError
@@ -55,7 +56,7 @@ from nexovue_api.organizations import queries
 from nexovue_api.organizations.schemas import DeletionAccepted
 from nexovue_api.organizations.tables import DELETED_DIRECTLY
 from nexovue_api.purge import PurgeUnfinishedError, TenantPurge
-from nexovue_api.sourcemaps.service import tenant_prefix
+from nexovue_api.sourcemaps.service import tenant_prefix as source_maps_prefix
 
 logger = get_logger(__name__)
 
@@ -220,15 +221,18 @@ async def _require_marked_for_deletion(session: AsyncSession, org_id: uuid.UUID)
 
 
 async def _erase_objects(object_store: ObjectStore | None, org_id: uuid.UUID) -> int:
-    """Every source map object under this tenant's prefix.
+    """Every object under this tenant's prefixes: source maps and check files.
 
     None means the deployment configured no store, in which case no upload was
-    ever accepted — `store_source_map` refuses without one — so there is nothing
-    to erase rather than something unreachable.
+    ever accepted — both uploads refuse without one — so there is nothing to
+    erase rather than something unreachable.
     """
     if object_store is None:
         return 0
-    return await object_store.delete_prefix(tenant_prefix(org_id))
+    erased = 0
+    for prefix in (source_maps_prefix(org_id), check_files_prefix(org_id)):
+        erased += await object_store.delete_prefix(prefix)
+    return erased
 
 
 async def _telemetry_left_after_waiting(purge: TenantPurge, wait_seconds: float) -> dict[str, int]:

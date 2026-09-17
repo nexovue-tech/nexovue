@@ -28,12 +28,10 @@ dependencies = [
     # Assuming a customer's role and reading CloudWatch. boto3 is AWS's own
     # client and is the only thing that speaks STS's signing.
     "boto3>=1.35",
+    # DNS monitors (F18): record types, a chosen resolver, and NXDOMAIN told
+    # apart from a timeout — none of which `getaddrinfo` can say (ISC, 2.8).
+    "dnspython>=2.8",
 ]
-
-[project.optional-dependencies]
-# Only the browser image installs these. Chromium and its dependencies are
-# ~1.5GB the light queue has no use for, which is why that image is separate.
-browser = ["playwright>=1.62"]
 
 [build-system]
 requires = ["uv_build>=0.12"]

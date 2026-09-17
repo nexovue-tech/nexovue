@@ -13,6 +13,8 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-007 — Migrating between clouds loses no data, and costs the console seconds](ADR-007-migrating-between-clouds.md)
 - [ADR-008 — The website takes the first payment, and cloud customers are onboarded by hand](ADR-008-the-website-takes-the-first-payment.md)
 - [ADR-009 — Regions are cells, and every organization belongs to one — India by default](ADR-009-regions-are-cells.md)
+- [ADR-010 — Check secrets are sealed with their own key, and only their names travel through the queue](ADR-010-check-secrets.md)
+- [ADR-011 — The API dispatches run-now tasks to the scheduler's broker](ADR-011-api-dispatches-run-now.md)
 
 ## Earlier decisions, 0001–0112
 

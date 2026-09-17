@@ -7,7 +7,7 @@
 #
 # Profiles:
 #   default  infrastructure + the services on the walking-skeleton path
-#   doors    Celery probes and pollers, including the Playwright browser queue
+#   doors    Celery probes and pollers
 #   tools    demo app and load generator
 #
 # Every service is capped to the laptop budget. Core total is ~10 GB inside a
@@ -197,6 +197,12 @@ services:
       S3_BUCKET: nexovue-dev
       S3_ACCESS_KEY_ID: nexovue_dev_access
       S3_SECRET_ACCESS_KEY: nexovue_dev_secret
+      # Seals check secrets (ADR-010). A dev constant, like the passwords above:
+      # it protects nothing outside this machine. The scheduler holds the same.
+      CHECK_SECRET_KEY: qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4=
+      # Run now dispatches through the scheduler's broker, which is database 1.
+      PROBE_BROKER_URL: redis://redis:6379/1
+      PROBE_LOCATIONS: local
       # Where a browser lands: the **app**, never this API. Verification links,
       # password resets and the return from a payment all point at a screen,
       # which then calls the endpoint behind it.
@@ -345,7 +351,22 @@ services:
       # refuses. And it does not open loopback or link-local at any setting; see
       # `probes.addresses.may_connect_to`, which is where that line is drawn.
       ALLOW_PRIVATE_PROBE_TARGETS: "true"
+      # The same key the API seals check secrets with, to open them at run time.
+      CHECK_SECRET_KEY: qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4=
+      # This worker is the one probe location a dev stack has.
+      PROBER_REGION: local
+      PROBE_LOCATIONS: local
+      # The files checks send, read from the API's object store.
+      S3_ENDPOINT: http://seaweedfs:8333
+      S3_BUCKET: nexovue-dev
+      S3_ACCESS_KEY_ID: nexovue_dev_access
+      S3_SECRET_ACCESS_KEY: nexovue_dev_secret
     depends_on:
+      seaweedfs:
+        # Files a check sends, and the objects its sweep deletes, live here. A
+        # dependant that starts before the S3 gateway answers meets a refused
+        # connection on its first object.
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -368,13 +389,18 @@ services:
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
-      celery -A nexovue_scheduler.celery_app worker --queues light --concurrency 8 --loglevel info
+      celery -A nexovue_scheduler.celery_app worker --concurrency 8 --loglevel info
     working_dir: /workspace
     volumes:
       - ../..:/workspace
       - python-venv:/workspace/.venv
     environment: *scheduler-env
     depends_on:
+      seaweedfs:
+        # Files a check sends, and the objects its sweep deletes, live here. A
+        # dependant that starts before the S3 gateway answers meets a refused
+        # connection on its first object.
+        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
@@ -388,30 +414,6 @@ services:
           # during pool startup and the queue never drained, with the only
           # symptom a BrokenPipeError from Celery's own bootstrap.
           memory: 768M
-
-  scheduler-browser:
-    build:
-      context: ../..
-      dockerfile: apps/scheduler/Dockerfile.browser
-    command: >-
-      celery -A nexovue_scheduler.celery_app worker
-      --queues browser --concurrency 1 --loglevel info
-    volumes:
-      # Over the image's own copy, which is what the package imports from. It
-      # was mounted at /app/src, a path nothing reads, so this worker ran the
-      # code from its last build however the working tree changed.
-      - ../../apps/scheduler/src:/app/apps/scheduler/src
-    environment: *scheduler-env
-    # Chromium's default 64 MB /dev/shm is the usual cause of crashes in Docker.
-    shm_size: 1gb
-    ipc: host
-    depends_on:
-      redis:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 1536M
 
   # ---------- tools ----------
   # The hand-written demo shop is gone. It was three services we controlled, and

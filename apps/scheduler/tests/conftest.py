@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from loopback_site import LoopbackSite, serve_loopback_site
+from recording_site import RecordingSite, serve_recording_site
 
 
 @pytest.fixture
-def loopback_site() -> Iterator[LoopbackSite]:
-    """A loopback service the suites prove was never contacted."""
-    with serve_loopback_site() as site:
+def recording_site() -> Iterator[RecordingSite]:
+    """A real HTTP target on this machine's private address that records every request."""
+    with serve_recording_site() as site:
         yield site

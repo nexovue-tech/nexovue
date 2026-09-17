@@ -5,15 +5,16 @@ the contract expects is stated once, in plain Python, and can be asserted
 without a network or a broker.
 
 The phase names are not ours to choose. `packages/contracts/fixtures/
-door2-synthetic-http.bin` is the frozen example of this door, and it carries
-exactly five steps whose durations sum to the total. Both facts are asserted in
-`test_http_check.py`.
+door2-synthetic-api.bin` is the frozen example of this door, and it carries
+exactly five steps whose durations sum to the total.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final
+
+from nexovue_platform.checks.evidence import HEALTHY_OUTCOMES, Outcome
 
 # The five phases, in the order a request passes through them. `transfer` is the
 # body arriving after the first byte; `ttfb` is the wait before it, which is
@@ -37,27 +38,50 @@ class Certificate:
 
 
 @dataclass(frozen=True, slots=True)
-class ProbeResult:
-    """One completed check, whether it succeeded or not.
+class HttpExchange:
+    """One request and what came back — or why nothing did.
 
-    A failed check is still a measurement and is still published — silence is
-    indistinguishable from "nobody looked", which is the thing a monitoring
-    product must never be ambiguous about.
+    A target that fails is still an exchange: the timings up to the failure are
+    true, and knowing DNS resolved before the connection was refused is the
+    diagnosis.
     """
+
+    # None when no response arrived at all.
+    status_code: int | None
+    # The final response's headers, after any redirects.
+    headers: list[tuple[str, str]]
+    body: bytes
+    # True when the body was longer than the probe keeps and was cut off.
+    body_truncated: bool
+    total_seconds: float
+    phases: dict[str, float]
+    certificate: Certificate | None
+    # Where the request ended up, after redirects.
+    effective_url: str
+    # Why no response arrived. Never published as a metric attribute: it is
+    # unbounded text and would become a high-cardinality label.
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunMeasurement:
+    """The numbers one attempt publishes, whatever kind of check it was."""
 
     check_id: str
     check_type: str
-    target: str
-
-    # True when the request completed and the status was not an error. A probe
-    # that could not connect at all reports False with an empty `phases`.
-    up: bool
-    status_code: int | None
-    total_seconds: float
-    phases: dict[str, float]
+    run_id: str
+    outcome: Outcome
+    attempt: int
+    final: bool
+    maintenance: bool
+    location: str
+    # None when the run timed nothing: a heartbeat sweep, or a run refused
+    # before a request was sent. Such a run publishes no duration at all.
+    total_seconds: float | None
+    status_code: int | None = None
+    phases: dict[str, float] = field(default_factory=dict)
     certificate: Certificate | None = None
 
-    # Set when the probe failed, for the log. It is deliberately not published
-    # as an attribute: libcurl's messages are unbounded text and would become a
-    # high-cardinality label on a time series.
-    error: str | None = None
+    @property
+    def up(self) -> bool:
+        return self.outcome in HEALTHY_OUTCOMES

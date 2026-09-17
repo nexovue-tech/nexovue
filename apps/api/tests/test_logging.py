@@ -105,6 +105,18 @@ def test_redaction_keeps_the_host_an_operator_needs() -> None:
     assert "db:5432" in redacted
 
 
+@pytest.mark.parametrize("log_format", ["json", "console"])
+def test_a_heartbeat_token_never_reaches_a_log_line(log_format: str) -> None:
+    """The token is the whole credential of a heartbeat, and every access log line,
+    request log line and refusal names the path it arrived on."""
+    token = "hb_" + KNOWN_SECRET
+    line = _emit(log_format, path=f"/api/v1/heartbeat/{token}")
+    access = redact_credentials(f'10.0.0.1:5 - "POST /api/v1/heartbeat/{token}?x=1 HTTP/1.1" 200')
+
+    assert token not in line
+    assert token not in access and "/api/v1/heartbeat/" in access
+
+
 @pytest.mark.parametrize(
     ("header", "expected"),
     [

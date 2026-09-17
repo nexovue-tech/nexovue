@@ -19,16 +19,22 @@ from nexovue_api.apikeys import router as apikeys_router
 from nexovue_api.auth import router as auth_router
 from nexovue_api.billing import router as billing_router
 from nexovue_api.buildinfo import SERVICE_NAME
+from nexovue_api.checkfiles import router as check_files_router
+from nexovue_api.checkimports import router as check_imports_router
+from nexovue_api.checkruns import router as check_runs_router
 from nexovue_api.checks import router as checks_router
+from nexovue_api.checksecrets import router as check_secrets_router
 from nexovue_api.dbstats import router as dbstats_router
 from nexovue_api.deploys import router as deploys_router
 from nexovue_api.errorgroups import router as error_groups_router
 from nexovue_api.errors.handlers import install_error_handlers
 from nexovue_api.health import router as health_router
+from nexovue_api.heartbeats import router as heartbeats_router
 from nexovue_api.infrastructure import router as infrastructure_router
 from nexovue_api.integrations import router as integrations_router
 from nexovue_api.lifespan import build_lifespan
 from nexovue_api.logs import router as logs_router
+from nexovue_api.maintenance import router as maintenance_router
 from nexovue_api.metrics import router as metrics_router
 from nexovue_api.middleware.correlation import CorrelationIdMiddleware
 from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
@@ -115,6 +121,12 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(apikeys_router.router)
     versioned.include_router(apikeys_router.site_key_router)
     versioned.include_router(checks_router.router)
+    versioned.include_router(check_runs_router.router)
+    versioned.include_router(check_imports_router.router)
+    versioned.include_router(check_files_router.router)
+    versioned.include_router(check_secrets_router.router)
+    versioned.include_router(maintenance_router.router)
+    versioned.include_router(heartbeats_router.router)
     versioned.include_router(deploys_router.router)
     versioned.include_router(billing_router.router)
     versioned.include_router(integrations_router.router)

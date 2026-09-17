@@ -52,18 +52,18 @@ EXPECTATIONS: Final = [
         60_080,
     ),
     (
-        "door2-synthetic-http.bin",
+        "door2-synthetic-api.bin",
         envelope_pb2.DOOR_SYNTHETIC,
         envelope_pb2.SIGNAL_METRICS,
         "01996d5e-9a40-7c01-a000-000000000004",
         310,
     ),
     (
-        "door2-synthetic-browser.bin",
+        "door2-synthetic-evidence.bin",
         envelope_pb2.DOOR_SYNTHETIC,
         envelope_pb2.SIGNAL_LOGS,
         "01996d5e-9a40-7c01-a000-000000000005",
-        32_190,
+        320,
     ),
     (
         "door3-rum-logs.bin",

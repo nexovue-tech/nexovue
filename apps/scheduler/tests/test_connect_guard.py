@@ -141,8 +141,10 @@ def test_a_refusal_reports_why_rather_than_looking_like_a_host_being_down() -> N
     reason = guard.refusal_reason()
 
     assert reason is not None
-    assert "169.254.169.254" in reason
     assert "not contacted" in reason
+    # Shown to the customer: where a name points inside our network is not theirs to learn.
+    assert "169.254.169.254" not in reason
+    assert guard.refused_addresses == ["169.254.169.254"]
 
 
 def test_a_probe_that_refused_nothing_reports_no_reason_of_its_own() -> None:
@@ -150,13 +152,13 @@ def test_a_probe_that_refused_nothing_reports_no_reason_of_its_own() -> None:
     assert ConnectGuard().refusal_reason() is None
 
 
-def test_the_same_address_offered_twice_is_named_once() -> None:
+def test_a_refusal_names_no_address_however_many_were_offered() -> None:
     guard = ConnectGuard()
     for _ in range(3):
         guard.open_socket(0, FakeSockAddr(addr=("10.0.0.1", 80)))
 
     assert guard.refusal_reason() == (
-        "Target resolved to a non-public address and was not contacted: 10.0.0.1"
+        "The target resolved to a non-public address and was not contacted."
     )
 
 
@@ -172,9 +174,11 @@ def test_a_real_public_name_resolving_privately_is_refused_at_connect(name: str)
     """
     from nexovue_scheduler.probes import http_check
 
-    result = http_check.perform("rebind", f"http://{name}/", 5)
+    result = http_check.perform(
+        http_check.PreparedRequest(method="GET", url=f"http://{name}/", timeout_seconds=5)
+    )
 
-    assert result.up is False
+    assert result.status_code is None
     assert result.error is not None
     assert "not contacted" in result.error
 
@@ -245,4 +249,4 @@ class TestTheGuardCarriesTheDecision:
         guard = ConnectGuard(private_allowed=True)
 
         assert guard.open_socket(1, FakeSockAddr(addr=("127.0.0.1", 80))) == REFUSED
-        assert "127.0.0.1" in (guard.refusal_reason() or "")
+        assert "not contacted" in (guard.refusal_reason() or "")

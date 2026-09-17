@@ -75,6 +75,10 @@ describe("the sidebar", () => {
     const reachedByFollowingSomething = new Set([
       "/services/$name",
       "/traces/$traceId",
+      // Reached from the Synthetics screen's own actions and rows.
+      "/synthetics/new",
+      "/synthetics/import",
+      "/synthetics/$checkId",
       "/onboarding",
     ]);
     const signedOut = new Set([

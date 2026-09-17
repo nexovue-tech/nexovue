@@ -36,6 +36,11 @@ const GUARDED = [
   "features/projects/ProjectSettings.tsx",
   "features/auth/account-sections.tsx",
   "features/settings/SiteKeysSection.tsx",
+  "features/projects/CheckSecretsSection.tsx",
+  "features/projects/CheckVariablesSection.tsx",
+  "features/projects/MaintenanceWindowsSection.tsx",
+  "features/synthetics/CheckForm.tsx",
+  "features/synthetics/ImportScreen.tsx",
 ];
 
 /** Submitted immediately, with no draft behind them. */

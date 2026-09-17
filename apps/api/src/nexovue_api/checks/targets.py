@@ -28,10 +28,9 @@ error message, and being stricter costs nothing.
 from __future__ import annotations
 
 import ipaddress
-from typing import Any, Final
+from typing import Final
 from urllib.parse import urlsplit
 
-from nexovue_api.checks.schemas import MAX_STEPS_PER_FLOW
 from nexovue_api.errors.exceptions import InvalidRequestError
 
 ALLOWED_SCHEMES: Final = frozenset({"http", "https"})
@@ -69,35 +68,30 @@ def validate_target(raw: str) -> str:
     return target
 
 
-def validate_step_urls(config: dict[str, Any]) -> None:
-    """Every URL a browser flow will navigate to, not just the check's target.
+def validate_host(raw: str) -> str:
+    """A TCP host: the same refusals as a URL's host, without the URL around it."""
+    host = raw.strip().lower().strip("[]")
+    if not host:
+        raise InvalidRequestError("A check needs a host.")
+    if host in INTERNAL_HOSTNAMES:
+        raise InvalidRequestError("That hostname names nexovue's own infrastructure.")
+    _refuse_private_address(host)
+    return raw.strip()
 
-    A browser check carries its own step list, and each `goto` step names a URL.
-    Validating only `target` left those unchecked — so a check whose target was
-    a public site could still walk our prober to the metadata endpoint, with
-    `expect_text` reporting back whether a given string was present. That is the
-    same request-forgery hole this module exists to close, reached by a second
-    door I had not looked at.
+
+def validate_resolver(raw: str) -> str:
+    """A DNS resolver: a public address, never a name.
+
+    A name would have to be resolved before it could be asked anything, and a
+    resolver inside our network would answer questions about it.
     """
-    steps = config.get("steps")
-    if steps is None:
-        return
-    if not isinstance(steps, list):
-        raise InvalidRequestError("A check's steps must be a list.")
-    if len(steps) > MAX_STEPS_PER_FLOW:
-        raise InvalidRequestError(f"A flow may have at most {MAX_STEPS_PER_FLOW} steps.")
-
-    for position, step in enumerate(steps, start=1):
-        if not isinstance(step, dict):
-            raise InvalidRequestError(f"Step {position} is not a step.")
-        url = step.get("url")
-        if url is None:
-            continue
-        if not isinstance(url, str):
-            raise InvalidRequestError(f"Step {position} has a url that is not text.")
-        # Same rules as the target. A step is a request we make on our own
-        # infrastructure exactly as the target is.
-        validate_target(url)
+    address = raw.strip().strip("[]")
+    try:
+        ipaddress.ip_address(address)
+    except ValueError as not_an_address:
+        raise InvalidRequestError("A resolver must be an IP address.") from not_an_address
+    _refuse_private_address(address)
+    return address
 
 
 def _refuse_private_address(host: str) -> None:

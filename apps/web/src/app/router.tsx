@@ -36,7 +36,10 @@ import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
 import { parseServiceOrder, SERVICE_FILTERS } from "@/features/services/filters";
 import { ServicesScreen } from "@/features/services/ServicesScreen";
 import { ApiKeysScreen } from "@/features/settings/ApiKeysScreen";
+import { CheckDetailScreen, parseCheckSearch } from "@/features/synthetics/CheckDetailScreen";
 import { SYNTHETIC_FILTERS } from "@/features/synthetics/filters";
+import { ImportScreen } from "@/features/synthetics/ImportScreen";
+import { NewCheckScreen, parseNewCheckSearch } from "@/features/synthetics/NewCheckScreen";
 import { SyntheticsScreen } from "@/features/synthetics/SyntheticsScreen";
 import { parseTraceFilters, toSearchParams } from "@/features/traces/filters";
 import { TraceListScreen } from "@/features/traces/TraceListScreen";
@@ -203,6 +206,28 @@ const syntheticsRoute = createRoute({
   path: "/synthetics",
   component: SyntheticsScreen,
   validateSearch: (search: Record<string, unknown>) => parseFilterValues(SYNTHETIC_FILTERS, search),
+});
+
+// Declared before `$checkId` reads nothing into order: TanStack ranks a static
+// segment above a parameter, so `/synthetics/new` is never taken for a check id.
+const newCheckRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/synthetics/new",
+  component: NewCheckScreen,
+  validateSearch: parseNewCheckSearch,
+});
+
+const importChecksRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/synthetics/import",
+  component: ImportScreen,
+});
+
+const checkRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/synthetics/$checkId",
+  component: CheckDetailScreen,
+  validateSearch: parseCheckSearch,
 });
 
 const rumRoute = createRoute({
@@ -379,6 +404,9 @@ const routeTree = rootRoute.addChildren([
     infrastructureRoute,
     metricsRoute,
     syntheticsRoute,
+    newCheckRoute,
+    importChecksRoute,
+    checkRoute,
     rumRoute,
     settingsGeneralRoute,
     settingsAccountRoute,

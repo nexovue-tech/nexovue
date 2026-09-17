@@ -284,8 +284,7 @@ async def test_a_host_resolving_to_loopback_is_refused() -> None:
     `database_target_from` checks only that the host is a string, so until this
     a tenant could name `localhost` and the scheduler would connect to itself
     from inside our network. Door 2's HTTP check refuses this through
-    `ConnectGuard` and its browser flow through `PublicAddressProxy`; door 4b
-    went through neither.
+    `ConnectGuard`; door 4b did not.
     """
     with pytest.raises(DatabaseAddressError, match=re.escape("127.0.0.1")):
         await refuse_unreachable_host("localhost", 5432, private_allowed=False)

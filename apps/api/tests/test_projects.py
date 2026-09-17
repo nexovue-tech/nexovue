@@ -136,8 +136,9 @@ class Tenant:
         check = Check(
             org_id=self.organization.id,
             project_id=self.project.id,
-            type="http",
-            target="https://example.test",
+            name="example",
+            type="tcp",
+            config={"type": "tcp", "host": "example.test", "port": 443},
             interval_seconds=60,
             enabled=True,
         )

@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Query
+from nexovue_platform.checks.config import CheckType
 
 from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
 from nexovue_api.deps import DbSession
@@ -28,6 +29,8 @@ from nexovue_api.projects.service import require_project
 from nexovue_api.synthetics import service
 from nexovue_api.synthetics.schemas import (
     CheckResultListResponse,
+    CheckRunCount,
+    CheckRunEvidenceResponse,
     CheckRunListResponse,
     CheckTrendResponse,
     PhaseBreakdownResponse,
@@ -49,9 +52,7 @@ async def list_check_results(
     project_id: ProjectId,
     from_time: FromTime = None,
     to_time: ToTime = None,
-    check_type: Annotated[
-        Literal["http", "browser"] | None, Query(description="Only checks of this kind")
-    ] = None,
+    check_type: Annotated[CheckType | None, Query(description="Only checks of this kind")] = None,
     down_only: Annotated[bool, Query(description="Only checks whose last probe failed")] = False,
 ) -> CheckResultListResponse:
     project = await require_project(db, org_id=identity.org_id, project_id=project_id)
@@ -119,6 +120,53 @@ async def list_runs(
         from_time=window_start,
         to_time=window_end,
         limit=clamp_limit(limit, default=service.DEFAULT_RUN_LIMIT, maximum=service.MAX_RUN_LIMIT),
+    )
+
+
+@router.get(
+    "/checks/{check_id}/runs/{run_id}",
+    summary="What one run sent, received and asserted",
+)
+async def run_evidence(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    check_id: uuid.UUID,
+    run_id: uuid.UUID,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+) -> CheckRunEvidenceResponse:
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.run_evidence(
+        repository,
+        project_id=str(project.id),
+        check_id=str(check_id),
+        run_id=str(run_id),
+        from_time=window_start,
+        to_time=window_end,
+    )
+
+
+@router.get("/checks/{check_id}/run-count", summary="How many runs a check has recorded")
+async def run_count(
+    identity: CurrentIdentity,
+    db: DbSession,
+    repository: TenantRepository,
+    check_id: uuid.UUID,
+    project_id: ProjectId,
+    from_time: FromTime = None,
+    to_time: ToTime = None,
+) -> CheckRunCount:
+    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    window_start, window_end = resolve_window(from_time, to_time)
+    return await service.run_count(
+        repository,
+        project_id=str(project.id),
+        check_id=str(check_id),
+        from_time=window_start,
+        to_time=window_end,
     )
 
 

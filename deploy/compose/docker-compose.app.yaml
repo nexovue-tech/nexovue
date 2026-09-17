@@ -157,6 +157,15 @@ services:
       S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+      # Seals check secrets in the API and opens them in the probe workers
+      # (ADR-010). Demanded: an install without it cannot run any check that
+      # uses a secret, and would only find out at the first run.
+      CHECK_SECRET_KEY: ${CHECK_SECRET_KEY:?set CHECK_SECRET_KEY}
+      # Run now dispatches to the probe workers through their broker (ADR-011).
+      PROBE_BROKER_URL: redis://redis:6379/0
+      # Every probe location this deployment has, and the one this container is.
+      PROBE_LOCATIONS: ${PROBE_LOCATIONS:-local}
+      PROBER_REGION: ${PROBER_REGION:-local}
       # Where a browser lands after following a verification link, a password
       # reset or a payment. The app hostname, never the ingest one.
       # Demanded rather than defaulted: there is no sensible guess for a
@@ -189,6 +198,11 @@ services:
     ports:
       - "8000:8000"
     depends_on:
+      seaweedfs:
+        # Files a check sends, and the objects its sweep deletes, live here. A
+        # dependant that starts before the S3 gateway answers meets a refused
+        # connection on its first object.
+        condition: service_healthy
       postgres:
         condition: service_healthy
       clickhouse:
@@ -231,6 +245,11 @@ services:
       --scheduler nexovue_scheduler.beat:PostgresScheduler
     environment: *control-plane-env
     depends_on:
+      seaweedfs:
+        # Files a check sends, and the objects its sweep deletes, live here. A
+        # dependant that starts before the S3 gateway answers meets a refused
+        # connection on its first object.
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -245,35 +264,20 @@ services:
     image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
     command: >-
       celery -A nexovue_scheduler.celery_app worker
-      --queues light --concurrency 8 --loglevel info
+      --concurrency 8 --loglevel info
     environment: *control-plane-env
     depends_on:
+      seaweedfs:
+        # Files a check sends, and the objects its sweep deletes, live here. A
+        # dependant that starts before the S3 gateway answers meets a refused
+        # connection on its first object.
+        condition: service_healthy
       scheduler-beat:
         condition: service_started
     deploy:
       resources:
         limits:
           memory: 256M
-
-  scheduler-browser:
-    <<: *service-defaults
-    build:
-      context: ../..
-      dockerfile: apps/scheduler/Dockerfile.browser
-    image: nexovue/scheduler-browser:${NEXOVUE_VERSION:-dev}
-    command: >-
-      celery -A nexovue_scheduler.celery_app worker
-      --queues browser --concurrency 1 --loglevel info
-    environment: *control-plane-env
-    shm_size: 1gb
-    ipc: host
-    depends_on:
-      redis:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 1536M
 
   # ---------- intelligence (Phase 2) ----------
   # Anomaly detection, cross-signal correlation and the LLM call that turns a
@@ -300,6 +304,11 @@ services:
       # provider and the ollama container below becomes unnecessary.
       LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434}
     depends_on:
+      seaweedfs:
+        # Files a check sends, and the objects its sweep deletes, live here. A
+        # dependant that starts before the S3 gateway answers meets a refused
+        # connection on its first object.
+        condition: service_healthy
       postgres:
         condition: service_healthy
       clickhouse:

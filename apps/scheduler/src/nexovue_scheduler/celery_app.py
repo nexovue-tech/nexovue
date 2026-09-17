@@ -1,9 +1,9 @@
 """The Celery application for doors 2 and 4b.
 
-Two queues, kept apart on purpose: `light` runs sub-second HTTP checks at high
-concurrency, `browser` runs Playwright one at a time in a much larger container.
-Sharing a pool would let one slow browser run starve the checks that are
-supposed to fire every minute.
+**A worker is a probe location.** It consumes `light`, shared by every location
+— pollers, state writes, sweeps — and `light.<its location>`, where runs from
+that location are dispatched. Beat and the API name the queue on every probe
+dispatch, which is what makes "run from Hyderabad" mean a worker in Hyderabad.
 
 **There is no result backend.** Probe output is not a return value — a task
 normalizes its result to the envelope and publishes it to Kafka itself, the same
@@ -14,8 +14,16 @@ path for the same data, and the invariant is that there is only one.
 from __future__ import annotations
 
 from celery import Celery
+from kombu import Exchange, Queue
+from nexovue_platform.checks.task import (
+    RECORD_OUTCOME_TASK,
+    SHARED_QUEUE,
+    SWEEP_HEARTBEATS_TASK,
+    SWEEP_UNATTACHED_FILES_TASK,
+    probe_queue,
+)
 
-from nexovue_scheduler.settings import QUEUE_BROWSER, QUEUE_LIGHT, SERVICE_NAME, get_settings
+from nexovue_scheduler.settings import SERVICE_NAME, get_settings
 
 _settings = get_settings()
 
@@ -25,8 +33,15 @@ app.conf.update(
     # No backend: see the module docstring. Celery warns rather than fails when
     # a task returns something, and probe tasks return None for this reason.
     result_backend=None,
-    task_default_queue=QUEUE_LIGHT,
-    task_queues_late_binding=True,
+    task_default_queue=SHARED_QUEUE,
+    # Each queue on its own exchange and key, which is exactly the queue Celery
+    # creates when a producer names one it has not declared. Left to the
+    # default, both bound the key `light` — and the API's Run now, naming
+    # `light.local`, would publish to a binding nothing consumed.
+    task_queues=tuple(
+        Queue(name, Exchange(name, type="direct"), routing_key=name)
+        for name in (SHARED_QUEUE, probe_queue(_settings.prober_region))
+    ),
     # Both ceilings come from settings so an operator can raise them without a
     # code change. A probe that hangs holds a worker slot, and a held slot is a
     # check that has silently stopped running — so the hard limit is a real
@@ -51,8 +66,12 @@ app.conf.update(
 
 # Routing lives here rather than on each task, so the queue a task lands on is
 # readable in one place and cannot drift per-decorator.
+# A probe run is deliberately absent: every dispatch names its location's queue —
+# beat, a confirmation, Run now. One that named none would fall to `light` and run
+# from whichever location took it.
 app.conf.task_routes = {
-    "nexovue_scheduler.probes.browser.*": {"queue": QUEUE_BROWSER},
-    "nexovue_scheduler.probes.*": {"queue": QUEUE_LIGHT},
-    "nexovue_scheduler.pollers.*": {"queue": QUEUE_LIGHT},
+    RECORD_OUTCOME_TASK: {"queue": SHARED_QUEUE},
+    SWEEP_HEARTBEATS_TASK: {"queue": SHARED_QUEUE},
+    SWEEP_UNATTACHED_FILES_TASK: {"queue": SHARED_QUEUE},
+    "nexovue_scheduler.pollers.*": {"queue": SHARED_QUEUE},
 }

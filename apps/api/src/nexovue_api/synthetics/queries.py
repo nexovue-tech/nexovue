@@ -39,6 +39,32 @@ PHASE: Final = "toString(attrs.synthetic.check.step)"
 HTTP_STATUS: Final = "toInt32OrZero(toString(attrs.http.response.status_code))"
 TLS_ISSUER: Final = "toString(attrs.tls.server.issuer)"
 SERVER_ADDRESS: Final = "toString(attrs.server.address)"
+OUTCOME: Final = "toString(attrs.synthetic.check.outcome)"
+FINAL: Final = "toString(attrs.synthetic.check.final)"
+MAINTENANCE: Final = "toString(attrs.synthetic.check.maintenance)"
+RUN_ID: Final = "toString(attrs.synthetic.check.run.id)"
+ATTEMPT: Final = "toInt32OrZero(toString(attrs.synthetic.check.attempt))"
+LOCATION: Final = "toString(attrs.synthetic.check.location)"
+
+# Outcomes that say nothing about the customer's service: the author's mistake,
+# or ours (BR7). Held out of uptime, and still listed as runs.
+UNMEASURED_OUTCOMES: Final = ("misconfigured", "prober_error")
+
+# **A run counts toward uptime only when it is the confirmed one.** An attempt a
+# retry overruled is visible in the run list and nowhere else (FR25), and a run
+# taken during a maintenance window changes nothing (AC23). Readings published
+# before these attributes existed carry none of them and count, as they did.
+_COUNTED: Final = (
+    "(final_flag != 'false' AND maintenance_flag != 'true' "
+    f"AND outcome NOT IN ({', '.join(repr(outcome) for outcome in UNMEASURED_OUTCOMES)}))"
+)
+
+# The per-reading attributes every statement below carries up from the inner
+# collapse. Taken with `any()`: they are part of `attrs`, so part of the series.
+_READING_ATTRIBUTES: Final = f"""
+        any({OUTCOME}) AS outcome,
+        any({FINAL}) AS final_flag,
+        any({MAINTENANCE}) AS maintenance_flag"""
 
 # `synthetic.check.status` is 1 for up and 0 for down.
 UP_VALUE: Final = 1
@@ -79,8 +105,8 @@ _ONE_ROW_PER_READING: Final = "GROUP BY check_id, metric_name, series_hash, time
 _CHECK_TYPE_PLACEHOLDER: Final = "/* check type */"
 _DOWN_ONLY_PLACEHOLDER: Final = "/* down only */"
 
-# "Browser checks only". The type is a resource attribute, so this narrows the
-# rows read rather than the summaries returned.
+# "Only DNS checks". The type is a resource attribute, so this narrows the rows
+# read rather than the summaries returned.
 CHECK_TYPE_CLAUSE: Final = f"AND {CHECK_TYPE} = {{check_type:String}}"
 
 # "Only what's down", and `runs > 0` is load-bearing: `argMaxIf` over no matching
@@ -99,14 +125,19 @@ CHECK_SUMMARIES_SQL: Final = f"""
 SELECT
     check_id,
     argMax(probe_type, timestamp) AS check_type,
-    countIf(metric_name = '{METRIC_STATUS}') AS runs,
-    countIf(metric_name = '{METRIC_STATUS}' AND value = {UP_VALUE}) AS successful_runs,
-    argMaxIf(value, timestamp, metric_name = '{METRIC_STATUS}') AS latest_up,
-    argMaxIf(http_status, timestamp, metric_name = '{METRIC_STATUS}') AS latest_status_code,
+    countIf(metric_name = '{METRIC_STATUS}' AND {_COUNTED}) AS runs,
+    countIf(metric_name = '{METRIC_STATUS}' AND {_COUNTED} AND value = {UP_VALUE})
+        AS successful_runs,
+    argMaxIf(value, timestamp, metric_name = '{METRIC_STATUS}' AND {_COUNTED}) AS latest_up,
+    argMaxIf(http_status, timestamp, metric_name = '{METRIC_STATUS}' AND {_COUNTED})
+        AS latest_status_code,
+    argMaxIf(outcome, timestamp, metric_name = '{METRIC_STATUS}' AND final_flag != 'false')
+        AS latest_outcome,
     maxIf(toUnixTimestamp64Nano(timestamp), metric_name = '{METRIC_STATUS}') AS latest_run_nanos,
-    avgIf(value, metric_name = '{METRIC_DURATION}') AS mean_seconds,
-    quantileIf(0.95)(value, metric_name = '{METRIC_DURATION}') AS p95_seconds,
-    maxIf(value, metric_name = '{METRIC_DURATION}') AS max_seconds,
+    countIf(metric_name = '{METRIC_DURATION}' AND {_COUNTED}) AS duration_points,
+    avgIf(value, metric_name = '{METRIC_DURATION}' AND {_COUNTED}) AS mean_seconds,
+    quantileIf(0.95)(value, metric_name = '{METRIC_DURATION}' AND {_COUNTED}) AS p95_seconds,
+    maxIf(value, metric_name = '{METRIC_DURATION}' AND {_COUNTED}) AS max_seconds,
     countIf(metric_name = '{METRIC_TLS_REMAINING}') AS tls_readings,
     argMaxIf(value, timestamp, metric_name = '{METRIC_TLS_REMAINING}') AS tls_days_remaining,
     argMaxIf(issuer, timestamp, metric_name = '{METRIC_TLS_REMAINING}') AS tls_issuer,
@@ -120,7 +151,7 @@ FROM (
         any({CHECK_TYPE}) AS probe_type,
         any({HTTP_STATUS}) AS http_status,
         any({TLS_ISSUER}) AS issuer,
-        any({SERVER_ADDRESS}) AS server_address
+        any({SERVER_ADDRESS}) AS server_address,{_READING_ATTRIBUTES}
     FROM metrics_gauge
     WHERE tenant_id = {{tenant_id:String}}
       AND project_id = {{project_id:String}}
@@ -150,24 +181,27 @@ def check_summaries_sql(*, check_type: bool, down_only: bool) -> str:
 
 # Each check's history, bucket by bucket — the sparkline in its row.
 #
-# The duration is `avgIf` over the bucket, and **a bucket with no successful run has no
-# duration at all**: `avgIf` over nothing returns nothing, and `runs`/`successful_runs`
-# beside it say why. The service turns that into a gap rather than a zero, because a
-# check that failed has no response time and a line drawn at zero would read as the site
-# getting instantly fast.
+# The duration is `avgIf` over the bucket, and **a bucket may hold no duration at all**:
+# no run in it succeeded, or the runs in it were never timed — a heartbeat is judged
+# every period and probed never. `duration_points` counts what the average was taken
+# over, because `avg` over no rows returns NaN rather than nothing, and the service turns
+# that count into a gap rather than a zero: a check with no response time drawn at zero
+# reads as the site getting instantly fast.
 CHECK_TRENDS_SQL: Final = f"""
 SELECT
     check_id,
     {_BUCKET_NANOS} AS bucket_nanos,
-    countIf(metric_name = '{METRIC_STATUS}') AS runs,
-    countIf(metric_name = '{METRIC_STATUS}' AND value = {UP_VALUE}) AS successful_runs,
-    avgIf(value, metric_name = '{METRIC_DURATION}') AS mean_seconds
+    countIf(metric_name = '{METRIC_STATUS}' AND {_COUNTED}) AS runs,
+    countIf(metric_name = '{METRIC_STATUS}' AND {_COUNTED} AND value = {UP_VALUE})
+        AS successful_runs,
+    countIf(metric_name = '{METRIC_DURATION}' AND {_COUNTED}) AS duration_points,
+    avgIf(value, metric_name = '{METRIC_DURATION}' AND {_COUNTED}) AS mean_seconds
 FROM (
     SELECT
         timestamp,
         {CHECK_ID} AS check_id,
         metric_name,
-        any(value) AS value
+        any(value) AS value,{_READING_ATTRIBUTES}
     FROM metrics_gauge
     WHERE tenant_id = {{tenant_id:String}}
       AND project_id = {{project_id:String}}
@@ -202,6 +236,7 @@ FROM (
       AND project_id = {{project_id:String}}
       AND metric_name = '{METRIC_PHASE_DURATION}'
       AND {CHECK_ID} = {{check_id:String}}
+      AND {FINAL} != 'false'
     {_WINDOW_PREDICATE}
     {_ONE_ROW_PER_READING}, phase
 )
@@ -210,28 +245,41 @@ ORDER BY bucket_nanos, phase
 LIMIT {{limit:UInt32}}
 """
 
-# Individual probes, newest first — the uptime strip rather than the average.
-# Grouped by `timestamp` because one probe writes its status, its duration and
-# its phases at the same instant; the group is one run.
+# Individual runs, newest first — every attempt, including the ones a retry
+# overruled, because a flaky check is found by its retries (FR25).
+#
+# Grouped by timestamp and run id: one run writes its status, its duration and
+# its phases at the same instant under one id. Readings from before run ids
+# existed share an empty id and fall back to the timestamp alone.
 #
 # This is the statement that sums, so it is where a duplicate hurt most: before
-# the inner group a redelivered probe reported twice the time its request took,
-# while `anyIf` beside it shrugged the same duplicate off and stayed right.
+# the inner group a redelivered probe reported twice the time its request took.
 CHECK_RUNS_SQL: Final = f"""
 SELECT
     toUnixTimestamp64Nano(timestamp) AS observed_nanos,
+    run_id,
     countIf(metric_name = '{METRIC_STATUS}') AS status_points,
     anyIf(value, metric_name = '{METRIC_STATUS}') AS up_value,
     anyIf(http_status, metric_name = '{METRIC_STATUS}') AS status_code,
+    countIf(metric_name = '{METRIC_DURATION}') AS duration_points,
     anyIf(value, metric_name = '{METRIC_DURATION}') AS duration_seconds,
-    sumIf(value, metric_name = '{METRIC_PHASE_DURATION}') AS phase_total_seconds
+    countIf(metric_name = '{METRIC_PHASE_DURATION}') AS phase_points,
+    sumIf(value, metric_name = '{METRIC_PHASE_DURATION}') AS phase_total_seconds,
+    anyIf(outcome, metric_name = '{METRIC_STATUS}') AS outcome,
+    anyIf(final_flag, metric_name = '{METRIC_STATUS}') AS final_flag,
+    anyIf(maintenance_flag, metric_name = '{METRIC_STATUS}') AS maintenance_flag,
+    anyIf(attempt, metric_name = '{METRIC_STATUS}') AS attempt,
+    anyIf(location, metric_name = '{METRIC_STATUS}') AS location
 FROM (
     SELECT
         timestamp,
         {CHECK_ID} AS check_id,
         metric_name,
         any(value) AS value,
-        any({HTTP_STATUS}) AS http_status
+        any({HTTP_STATUS}) AS http_status,
+        any({RUN_ID}) AS run_id,
+        any({ATTEMPT}) AS attempt,
+        any({LOCATION}) AS location,{_READING_ATTRIBUTES}
     FROM metrics_gauge
     WHERE tenant_id = {{tenant_id:String}}
       AND project_id = {{project_id:String}}
@@ -240,7 +288,44 @@ FROM (
     {_WINDOW_PREDICATE}
     {_ONE_ROW_PER_READING}
 )
-GROUP BY observed_nanos
+GROUP BY observed_nanos, run_id
 ORDER BY observed_nanos DESC
 LIMIT {{limit:UInt32}}
+"""
+
+# How many runs a check has recorded since it was created: what deleting it
+# loses (FR37). Status points collapsed to one per reading, attempts included.
+CHECK_RUN_COUNT_SQL: Final = f"""
+SELECT count() AS runs
+FROM (
+    SELECT timestamp
+    FROM metrics_gauge
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND metric_name = '{METRIC_STATUS}'
+      AND {CHECK_ID} = {{check_id:String}}
+    {_WINDOW_PREDICATE}
+    GROUP BY series_hash, timestamp
+)
+"""
+
+# A run's evidence: the request sent, the response received, the failing
+# assertion (FR31). One log record per attempt, from the prober's own service,
+# which the sort key reaches before it reaches the body. Delivered twice it is
+# the same record twice, so the newest is taken and the rest ignored.
+PROBER_SERVICE_NAME: Final = "nexovue-prober"
+EVIDENCE_RUN_ID: Final = "toString(log_attrs.synthetic.check.run.id)"
+EVIDENCE_CHECK_ID: Final = "toString(resource_attrs.synthetic.check.id)"
+
+CHECK_RUN_EVIDENCE_SQL: Final = f"""
+SELECT body
+FROM logs
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND service_name = '{PROBER_SERVICE_NAME}'
+  AND {EVIDENCE_CHECK_ID} = {{check_id:String}}
+  AND {EVIDENCE_RUN_ID} = {{run_id:String}}
+{_WINDOW_PREDICATE}
+ORDER BY timestamp DESC
+LIMIT 1
 """
