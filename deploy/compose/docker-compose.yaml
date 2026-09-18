@@ -156,6 +156,11 @@ services:
       retries: 12
       start_period: 180s
     depends_on:
+      # Masking and sampling rules come from Postgres the moment the worker starts;
+      # without it every span is handled with the built-in defaults for the first
+      # 30 seconds instead of the project's own rules.
+      postgres:
+        condition: service_healthy
       kafka:
         condition: service_healthy
       clickhouse:

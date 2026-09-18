@@ -21,6 +21,67 @@ x-service-defaults: &service-defaults
 include:
   - path: compose.infra.yaml
 
+x-data-plane-env: &data-plane-env
+  # What both Go services read. Each adds its own: the receiver its Redis
+  # address, the worker its ClickHouse address. Merge keys cannot remove a
+  # variable, so nothing either service ignores belongs here.
+  ENV: production
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  KAFKA_BROKERS: kafka:9092
+  POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+
+x-control-plane-env: &control-plane-env
+  # What the API and the scheduler both read. The API adds ClickHouse, the
+  # scheduler adds Kafka; neither reads the other's, so neither is here.
+  ENV: production
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  REDIS_URL: redis://redis:6379/0
+  S3_ENDPOINT: http://seaweedfs:8333
+  S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+  # Seals check secrets in the API and opens them in the probe workers
+  # (ADR-010). Demanded: an install without it cannot run any check that
+  # uses a secret, and would only find out at the first run.
+  CHECK_SECRET_KEY: ${CHECK_SECRET_KEY:?set CHECK_SECRET_KEY}
+  # Run now dispatches to the probe workers through their broker (ADR-011).
+  PROBE_BROKER_URL: redis://redis:6379/0
+  # Every probe location this deployment has, and the one this container is.
+  PROBE_LOCATIONS: ${PROBE_LOCATIONS:-local}
+  PROBER_REGION: ${PROBER_REGION:-local}
+  # Where a browser lands after following a verification link, a password
+  # reset or a payment. The app hostname, never the ingest one.
+  # Demanded rather than defaulted: there is no sensible guess for a
+  # deployment's own hostname, and a wrong one sends customers nowhere.
+  APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL}
+  # Third-party credentials, passed through rather than demanded.
+  #
+  # `:-` and not `:?` on purpose, unlike every variable above: an install
+  # that charges nobody needs no gateway, and one that sends no mail needs no
+  # provider. `Settings.domestic_payments` and `Settings.email` read an unset
+  # or blank value as "not configured" and hand back None, so the screens
+  # still serve and only the routes that need a credential refuse — by
+  # variable name, which is what `PaymentsNotConfiguredError` is for.
+  #
+  # An empty string is the same as absent to both, so a deployment that sets
+  # three of the four gets None rather than a half-built client that fails at
+  # its first signature check.
+  EMAIL_PROVIDER: ${EMAIL_PROVIDER:-}
+  EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+  EMAIL_SENDING_DOMAIN: ${EMAIL_SENDING_DOMAIN:-}
+  EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-}
+  EMAIL_REPLY_TO: ${EMAIL_REPLY_TO:-}
+  PAYMENTS_DOMESTIC_PROVIDER: ${PAYMENTS_DOMESTIC_PROVIDER:-razorpay}
+  PAYMENTS_DOMESTIC_APP_ID: ${PAYMENTS_DOMESTIC_APP_ID:-}
+  PAYMENTS_DOMESTIC_SECRET_KEY: ${PAYMENTS_DOMESTIC_SECRET_KEY:-}
+  PAYMENTS_DOMESTIC_ENV: ${PAYMENTS_DOMESTIC_ENV:-sandbox}
+  PAYMENTS_DOMESTIC_WEBHOOK_SECRET: ${PAYMENTS_DOMESTIC_WEBHOOK_SECRET:-}
+  PAYMENTS_DOMESTIC_CURRENCIES: ${PAYMENTS_DOMESTIC_CURRENCIES:-}
+  PAYMENTS_DOMESTIC_BASE_URL: ${PAYMENTS_DOMESTIC_BASE_URL:-}
+
 services:
   # ---------- infrastructure: no published ports ----------
   # The infrastructure module carries no restart policy, because development
@@ -65,19 +126,14 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
-    environment: &data-plane-env
+    environment:
+      <<: *data-plane-env
       # Go's collector cannot see a cgroup limit — as of Go 1.26 the proposal to
       # derive one from the cgroup is still open — so without this the heap
       # doubles freely and the kernel kills the process first. Measured: the dev
       # worker was OOM-killed at 1017 MB RSS against a 1 GiB cap. ~85% of this
       # service's 512M, leaving the rest for stacks and everything off-heap.
       GOMEMLIMIT: 435MiB
-      ENV: production
-      LOG_LEVEL: info
-      LOG_FORMAT: json
-      KAFKA_BROKERS: kafka:9092
-      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
-      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
     ports:
       - "4317:4317"
@@ -118,12 +174,18 @@ services:
       # the extra memory unusable.
       GOMEMLIMIT: ${WORKER_GOMEMLIMIT:-650MiB}
       <<: *data-plane-env
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
       WORKER_PIPELINES: ${WORKER_PIPELINES:-all}
       # Required rather than optional: the worker treats an absent secret as
       # "hashing rules unavailable" and boots anyway, so a missing value here
       # would disable pseudonymisation without anything going red.
       WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:?set WORKERS_MASKING_HASH_SECRET}
     depends_on:
+      # Masking and sampling rules come from Postgres the moment the worker starts;
+      # without it every span is handled with the built-in defaults for the first
+      # 30 seconds instead of the project's own rules.
+      postgres:
+        condition: service_healthy
       kafka:
         condition: service_healthy
       clickhouse:
@@ -145,56 +207,9 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
-    environment: &control-plane-env
-      ENV: production
-      LOG_LEVEL: info
-      LOG_FORMAT: json
-      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    environment:
+      <<: *control-plane-env
       CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
-      REDIS_URL: redis://redis:6379/0
-      KAFKA_BROKERS: kafka:9092
-      S3_ENDPOINT: http://seaweedfs:8333
-      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
-      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
-      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
-      # Seals check secrets in the API and opens them in the probe workers
-      # (ADR-010). Demanded: an install without it cannot run any check that
-      # uses a secret, and would only find out at the first run.
-      CHECK_SECRET_KEY: ${CHECK_SECRET_KEY:?set CHECK_SECRET_KEY}
-      # Run now dispatches to the probe workers through their broker (ADR-011).
-      PROBE_BROKER_URL: redis://redis:6379/0
-      # Every probe location this deployment has, and the one this container is.
-      PROBE_LOCATIONS: ${PROBE_LOCATIONS:-local}
-      PROBER_REGION: ${PROBER_REGION:-local}
-      # Where a browser lands after following a verification link, a password
-      # reset or a payment. The app hostname, never the ingest one.
-      # Demanded rather than defaulted: there is no sensible guess for a
-      # deployment's own hostname, and a wrong one sends customers nowhere.
-      APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL}
-      # Third-party credentials, passed through rather than demanded.
-      #
-      # `:-` and not `:?` on purpose, unlike every variable above: an install
-      # that charges nobody needs no gateway, and one that sends no mail needs no
-      # provider. `Settings.domestic_payments` and `Settings.email` read an unset
-      # or blank value as "not configured" and hand back None, so the screens
-      # still serve and only the routes that need a credential refuse — by
-      # variable name, which is what `PaymentsNotConfiguredError` is for.
-      #
-      # An empty string is the same as absent to both, so a deployment that sets
-      # three of the four gets None rather than a half-built client that fails at
-      # its first signature check.
-      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-}
-      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
-      EMAIL_SENDING_DOMAIN: ${EMAIL_SENDING_DOMAIN:-}
-      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-}
-      EMAIL_REPLY_TO: ${EMAIL_REPLY_TO:-}
-      PAYMENTS_DOMESTIC_PROVIDER: ${PAYMENTS_DOMESTIC_PROVIDER:-razorpay}
-      PAYMENTS_DOMESTIC_APP_ID: ${PAYMENTS_DOMESTIC_APP_ID:-}
-      PAYMENTS_DOMESTIC_SECRET_KEY: ${PAYMENTS_DOMESTIC_SECRET_KEY:-}
-      PAYMENTS_DOMESTIC_ENV: ${PAYMENTS_DOMESTIC_ENV:-sandbox}
-      PAYMENTS_DOMESTIC_WEBHOOK_SECRET: ${PAYMENTS_DOMESTIC_WEBHOOK_SECRET:-}
-      PAYMENTS_DOMESTIC_CURRENCIES: ${PAYMENTS_DOMESTIC_CURRENCIES:-}
-      PAYMENTS_DOMESTIC_BASE_URL: ${PAYMENTS_DOMESTIC_BASE_URL:-}
     ports:
       - "8000:8000"
     depends_on:
@@ -243,7 +258,9 @@ services:
     command: >-
       celery -A nexovue_scheduler.celery_app beat
       --scheduler nexovue_scheduler.beat:PostgresScheduler
-    environment: *control-plane-env
+    environment:
+      <<: *control-plane-env
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       seaweedfs:
         # Files a check sends, and the objects its sweep deletes, live here. A
@@ -265,8 +282,16 @@ services:
     command: >-
       celery -A nexovue_scheduler.celery_app worker
       --concurrency 8 --loglevel info
-    environment: *control-plane-env
+    environment:
+      <<: *control-plane-env
+      KAFKA_BROKERS: kafka:9092
     depends_on:
+      # Kafka carries every check result and Redis is this worker's task queue.
+      # Starting before either loses the first results after three delivery attempts.
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       seaweedfs:
         # Files a check sends, and the objects its sweep deletes, live here. A
         # dependant that starts before the S3 gateway answers meets a refused
@@ -299,6 +324,10 @@ services:
     image: nexovue/insight:${NEXOVUE_VERSION:-dev}
     environment:
       <<: *control-plane-env
+      # apps/insight does not exist yet, so which of these it reads is undecided.
+      # Kept as it was until the service is written (F3, F6).
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      KAFKA_BROKERS: kafka:9092
       INSIGHT_PIPELINES: ${INSIGHT_PIPELINES:-detect,correlate,summarise}
       # Points at the self-hosted model by default; set this to a hosted
       # provider and the ollama container below becomes unnecessary.

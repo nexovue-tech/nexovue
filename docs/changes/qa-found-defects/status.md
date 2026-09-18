@@ -22,8 +22,8 @@ None. The seven are fixed, each with a regression test observed red before the f
 
 ## Next action
 
-The seventeen undeclared dependencies frozen in `UNDECLARED_TODAY` need a decision each — see
-*Risks*. Nothing else here is outstanding.
+None. The seventeen undeclared dependencies were decided on 2026-09-18 and resolved in
+`docs/changes/compose-dependencies/`.
 
 ## Open decisions
 

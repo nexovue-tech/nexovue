@@ -33,6 +33,43 @@ x-service-defaults: &service-defaults
 include:
   - path: compose.infra.yaml
 
+x-data-plane-env: &data-plane-env
+  # What both Go services read. Each adds its own: the receiver its Redis
+  # address, the worker its ClickHouse address. Merge keys cannot remove a
+  # variable, so nothing either service ignores belongs here.
+  ENV: production
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  KAFKA_BROKERS: kafka:9092
+  POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+
+x-control-plane-env: &control-plane-env
+  # What the API and the scheduler both read. The API adds ClickHouse, the
+  # scheduler adds Kafka; neither reads the other's, so neither is here.
+  ENV: production
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  REDIS_URL: redis://redis:6379/0
+  # Caddy is the only hop in front of the API here, so the caller's address
+  # is the last entry X-Forwarded-For. Left at the default 0 the middleware
+  # correctly refuses to trust the header and falls back to the direct peer
+  # — which is Caddy, for everybody. Every user then shares one bucket, so
+  # ten failed logins a minute lock out the whole deployment.
+  TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
+  # Object storage: AWS S3, or the SeaweedFS service above for an
+  # air-gapped install. Generic S3 API only. Holds source map
+  # bytes today and the cold tier when it is built. The bucket must exist —
+  # outside development the API does not create its own.
+  S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT}
+  S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+  CHECK_SECRET_KEY: ${CHECK_SECRET_KEY:?set CHECK_SECRET_KEY}
+  PROBE_BROKER_URL: redis://redis:6379/0
+  PROBE_LOCATIONS: local
+  PROBER_REGION: local
+
 services:
   # ---------- infrastructure ----------
   # TODO(sizing): every limit below is the laptop budget. Server specs are
@@ -109,13 +146,8 @@ services:
     # TODO(images): compose cannot append to a YAML anchor, so each service
     #   needs its full "<registry>/nexovue/<name>:<tag>" written out once the
     #   registry path above is decided. The anchor documents the base only.
-    environment: &data-plane-env
-      ENV: production
-      LOG_LEVEL: info
-      LOG_FORMAT: json
-      KAFKA_BROKERS: kafka:9092
-      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
-      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    environment:
+      <<: *data-plane-env
       REDIS_URL: redis://redis:6379/0
     depends_on:
       kafka:
@@ -135,11 +167,23 @@ services:
       # The worker was the one service missing this merge, so it had no broker
       # or store address at all — it could not have reached either.
       <<: *data-plane-env
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
       WORKER_PIPELINES: ${WORKER_PIPELINES:-all}
       # Required rather than optional: the worker treats an absent secret as
       # "hashing rules unavailable" and boots anyway, so a missing value here
       # would disable pseudonymisation without anything going red.
       WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:?set WORKERS_MASKING_HASH_SECRET}
+    depends_on:
+      # The pipelines consume and write the moment the worker starts.
+      # Masking and sampling rules come from Postgres the moment the worker starts;
+      # without it every span is handled with the built-in defaults for the first
+      # 30 seconds instead of the project's own rules.
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -148,32 +192,9 @@ services:
   api:
     <<: *service-defaults
     image: *image-base
-    environment: &control-plane-env
-      ENV: production
-      LOG_LEVEL: info
-      LOG_FORMAT: json
-      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    environment:
+      <<: *control-plane-env
       CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
-      REDIS_URL: redis://redis:6379/0
-      KAFKA_BROKERS: kafka:9092
-      # Caddy is the only hop in front of the API here, so the caller's address
-      # is the last entry X-Forwarded-For. Left at the default 0 the middleware
-      # correctly refuses to trust the header and falls back to the direct peer
-      # — which is Caddy, for everybody. Every user then shares one bucket, so
-      # ten failed logins a minute lock out the whole deployment.
-      TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
-      # Object storage: AWS S3, or the SeaweedFS service above for an
-      # air-gapped install. Generic S3 API only. Holds source map
-      # bytes today and the cold tier when it is built. The bucket must exist —
-      # outside development the API does not create its own.
-      S3_ENDPOINT: ${S3_ENDPOINT:?set S3_ENDPOINT}
-      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
-      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
-      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
-      CHECK_SECRET_KEY: ${CHECK_SECRET_KEY:?set CHECK_SECRET_KEY}
-      PROBE_BROKER_URL: redis://redis:6379/0
-      PROBE_LOCATIONS: local
-      PROBER_REGION: local
     depends_on:
       postgres:
         condition: service_healthy
@@ -199,7 +220,9 @@ services:
     command: >-
       celery -A nexovue_scheduler.celery_app beat
       --scheduler nexovue_scheduler.beat:PostgresScheduler
-    environment: *control-plane-env
+    environment:
+      <<: *control-plane-env
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       postgres:
         condition: service_healthy
@@ -212,7 +235,16 @@ services:
     command: >-
       celery -A nexovue_scheduler.celery_app worker
       --concurrency 8 --loglevel info
-    environment: *control-plane-env
+    environment:
+      <<: *control-plane-env
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      # Kafka carries every check result and Redis is this worker's task queue.
+      # Starting before either loses the first results after three delivery attempts.
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 # TODO(backups): P1-51 owns the runbook. Volume snapshots alone do not give a
 #   consistent ClickHouse or Postgres backup, and no volume here is on a

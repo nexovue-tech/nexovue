@@ -102,53 +102,57 @@ def test_a_dependant_of_a_gated_store_waits_for_it(store: str, file_name: str) -
         )
 
 
-# Every other service that names one it does not wait for, as of 2026-09-18.
-#
-# **A record, not an endorsement.** Each of these is the same shape as the defect
-# above, and each needs its own answer rather than a blanket gate: `web` naming `api`
-# is deliberate — the console is built to load and explain itself while the API is
-# down — while `worker` naming `postgres` looks like the real thing. Freezing the list
-# stops it growing quietly while the decisions are made, and the assertion below fails
-# just as loudly when one is *fixed*, so the record cannot drift from the files.
-UNDECLARED_TODAY: Final[dict[str, dict[str, list[str]]]] = {
+# Services that name another and deliberately do not wait for it — each with the
+# reason, decided 2026-09-18 from the services' own startup code
+# (docs/changes/compose-dependencies/). Everything else that was here was either a
+# real dependency, now declared, or a variable the service never read, now deleted.
+_WEB_API = "the console loads and explains itself while the API is down"
+_BEAT_KAFKA = (
+    "beat never produces; the shared scheduler settings require KAFKA_BROKERS, "
+    "so the variable stays although beat does not use it"
+)
+_LIGHT_POSTGRES = (
+    "the probe worker opens Postgres on its first task, and its work only arrives "
+    "from beat and the API, both of which wait for Postgres"
+)
+_INSIGHT = "apps/insight does not exist yet; its dependencies are decided when it is written"
+
+DELIBERATELY_UNDECLARED: Final[dict[str, dict[str, dict[str, str]]]] = {
     "docker-compose.yaml": {
-        "worker": ["postgres"],
-        "web": ["api"],
-        "scheduler-beat": ["kafka"],
-        "scheduler-light": ["postgres"],
-        "insight": ["redis"],
+        "web": {"api": _WEB_API},
+        "scheduler-beat": {"kafka": _BEAT_KAFKA},
+        "scheduler-light": {"postgres": _LIGHT_POSTGRES},
+        "insight": {"redis": _INSIGHT},
     },
     "docker-compose.app.yaml": {
-        "receiver": ["clickhouse"],
-        "worker": ["postgres", "redis"],
-        "api": ["kafka"],
-        "scheduler-beat": ["clickhouse", "kafka"],
-        "scheduler-light": ["clickhouse", "kafka", "postgres", "redis"],
-        "insight": ["kafka", "ollama"],
+        "scheduler-beat": {"kafka": _BEAT_KAFKA},
+        "scheduler-light": {"postgres": _LIGHT_POSTGRES},
+        "insight": {"kafka": _INSIGHT, "ollama": _INSIGHT},
     },
     "docker-compose.onprem.yaml": {
-        "receiver": ["clickhouse"],
-        "worker": ["clickhouse", "kafka", "postgres", "redis"],
-        "api": ["kafka"],
-        "scheduler-beat": ["clickhouse", "kafka"],
-        "scheduler-light": ["clickhouse", "kafka", "postgres", "redis"],
-        "insight": ["ollama"],
+        "scheduler-beat": {"kafka": _BEAT_KAFKA},
+        "scheduler-light": {"postgres": _LIGHT_POSTGRES},
+        "insight": {"ollama": _INSIGHT},
     },
     "compose.infra.yaml": {},
 }
 
 
-@pytest.mark.parametrize("file_name", sorted(UNDECLARED_TODAY))
-def test_no_undeclared_dependency_is_added_or_silently_resolved(file_name: str) -> None:
-    """The frozen list above, held against the files.
+@pytest.mark.parametrize("file_name", sorted(DELIBERATELY_UNDECLARED))
+def test_every_undeclared_dependency_is_one_decided_on_purpose(file_name: str) -> None:
+    """Held against the files in both directions.
 
-    Fails on a new one, and fails on a fixed one — the second so that the record is
-    updated in the same change rather than left claiming a gap that is closed.
+    A new undeclared dependency fails — declare it, or add it here with its reason.
+    One that is no longer undeclared fails too, so a stale reason cannot outlive the
+    configuration it explained.
     """
-    assert _undeclared(file_name) == UNDECLARED_TODAY[file_name], (
-        f"{file_name}'s undeclared dependencies have changed. If a service now waits "
-        "for what it connects to, remove it from UNDECLARED_TODAY in the same change; "
-        "if a new one appeared, declare the dependency instead of recording it."
+    decided = {
+        service: sorted(reasons) for service, reasons in DELIBERATELY_UNDECLARED[file_name].items()
+    }
+    assert _undeclared(file_name) == decided, (
+        f"{file_name}'s undeclared dependencies no longer match the decided list. Declare "
+        "a real dependency in `depends_on`, delete a variable the service never reads, or "
+        "record a deliberate one in DELIBERATELY_UNDECLARED with its reason."
     )
 
 
