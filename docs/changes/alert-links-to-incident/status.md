@@ -38,6 +38,7 @@ Founder: read the diff, then say **push**. Then decide the finding under *Open d
   `Depends(get_db_session, scope="function")`, which commits before the response — but it needs an audit
   of every route that reads the session after its function returns (streaming responses, the log-tail
   WebSocket). Out of this change's scope; its own change record, on the founder's word.
+  **Resolved** by `docs/changes/commit-before-response/`.
 
 ## Blocked
 

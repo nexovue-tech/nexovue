@@ -20,3 +20,4 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 - [Compose dependencies](compose-dependencies/change.md) — every service now waits for what it needs at start, and is handed no connection setting it ignores.
 - [Gate-found defects](gate-found-defects/bug.md) — a worker whose pipeline failed could never exit, a synthetics suite that judged a failing QA check, and test cleanups that filled development ClickHouse's memory with superseded parts.
 - [Alert links to incident](alert-links-to-incident/bug.md) — an alert's link went to the check it was about, so it died with the check; it now opens the incident, which links on to the evidence while it exists.
+- [Commit before response](commit-before-response/bug.md) — every API write answered before its transaction committed, so a screen re-reading on success could show the old rows; the session now commits before the response.

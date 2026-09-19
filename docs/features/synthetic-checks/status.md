@@ -3,13 +3,13 @@
 ## Lifecycle status
 
 **Implemented.** Specification and design approved 2026-09-17; plan approved 2026-09-17, with Q1 answered by
-approving the plan's proposal. Built, verified and reviewed on the dev stack. **Nothing is committed**: the founder
-reviews the whole diff first.
+approving the plan's proposal. Built, verified and reviewed on the dev stack, and committed 2026-09-18 as
+`75b5424` under the founder's identity. Not deployed.
 
 ## Current task
 
-None. Waiting for the founder's review of the uncommitted diff. The pre-existing defects the QA pass turned up were
-fixed under their own change record, `docs/changes/qa-found-defects/`.
+None. The pre-existing defects the QA pass turned up were fixed under their own change record,
+`docs/changes/qa-found-defects/`.
 
 ## Completed
 
@@ -65,9 +65,9 @@ fixed under their own change record, `docs/changes/qa-found-defects/`.
 
 ## Next action
 
-Founder reviews the uncommitted diff (`git status` — 203 paths, of which 100 new). On approval, commit F18 as one
-change under the founder's identity. The earlier uncommitted ADRs 006–009 and workflow/skill changes are in the same
-working tree and are **not** part of F18; they need their own review and commit.
+None for the approved scope — it is committed (`75b5424`); ADRs 006–009 went in separately (`2c33a9c`). What the
+specification leaves out (screenshots, true multi-region, browser checks — D13) waits for a founder decision to
+reopen it.
 
 ## Open decisions
 
