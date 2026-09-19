@@ -59,6 +59,9 @@ from nexovue_api.data.postgres.base import (
 
 # `viewer` is what the non-technical owner persona gets when F26 lands in
 # Phase 2. The columns exist now so nothing migrates then.
+# SHA-256, hex.
+SET_PASSWORD_TOKEN_HASH_LENGTH: Final = 64
+
 USER_ROLES: Final = ("owner", "admin", "member", "viewer")
 UserRole: Final = Enum(*USER_ROLES, name="user_role")
 
@@ -207,6 +210,18 @@ class User(Base):
         UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     invited_at: Mapped[OptionalTimestamp]
+    # The set-password link an invite (or an onboarded owner) carries, as its
+    # SHA-256; the plaintext is only ever in the email. Both null once spent.
+    set_password_token_hash: Mapped[str | None] = mapped_column(
+        String(SET_PASSWORD_TOKEN_HASH_LENGTH), nullable=True
+    )
+    set_password_expires_at: Mapped[OptionalTimestamp]
+    # Null when the invite email did not go, so the console can say so and offer
+    # a resend rather than leave a person waiting for mail that was never sent.
+    invite_sent_at: Mapped[OptionalTimestamp]
+    # Removed from the organization. The row stays so history keeps the name;
+    # the address is rewritten so it is free to sign up again (F26, BR5, BR6).
+    removed_at: Mapped[OptionalTimestamp]
     created_at: Mapped[CreatedAt]
 
     __table_args__ = (
@@ -214,6 +229,16 @@ class User(Base):
         CheckConstraint(
             "(totp_secret IS NULL) = (totp_confirmed_at IS NULL)",
             name="totp_secret_and_confirmation_agree",
+        ),
+        CheckConstraint(
+            "(set_password_token_hash IS NULL) = (set_password_expires_at IS NULL)",
+            name="set_password_link_and_expiry_agree",
+        ),
+        Index(
+            "uq_users_set_password_token_hash",
+            "set_password_token_hash",
+            unique=True,
+            postgresql_where=text("set_password_token_hash IS NOT NULL"),
         ),
     )
 
@@ -1089,9 +1114,14 @@ class AuditLogEntry(Base):
     impersonation_context: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
     action: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
     target: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    # How it changed, where that is more than the action says: a role's before
+    # and after, the address an invite went to. Never a secret.
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     at: Mapped[CreatedAt]
 
-    __table_args__ = (Index("ix_audit_log_org_id_at", "org_id", "at"),)
+    # `(at, id)` is the audit screen's page order; `at` alone ties within a
+    # transaction.
+    __table_args__ = (Index("ix_audit_log_org_id_at_id", "org_id", "at", "id"),)
 
 
 # --------------------------------------------------------------------- alerts

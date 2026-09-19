@@ -16,7 +16,7 @@ import uuid
 from fastapi import APIRouter, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayConfigureProjects
 from nexovue_api.deps import DbSession
 from nexovue_api.projects import service
 from nexovue_api.projects.schemas import (
@@ -41,7 +41,7 @@ async def list_projects(identity: CurrentIdentity, db: DbSession) -> ProjectList
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Create a project")
 async def create_project(
-    request: ProjectCreateRequest, identity: MayAdminister, db: DbSession
+    request: ProjectCreateRequest, identity: MayConfigureProjects, db: DbSession
 ) -> ProjectDetail:
     return await service.create(
         db, org_id=identity.org_id, actor_user_id=identity.user.id, request=request
@@ -59,7 +59,7 @@ async def get_project(
 async def update_project(
     project_id: uuid.UUID,
     request: ProjectUpdateRequest,
-    identity: MayAdminister,
+    identity: MayConfigureProjects,
     db: DbSession,
 ) -> ProjectDetail:
     return await service.update(
@@ -73,7 +73,7 @@ async def update_project(
 
 @router.delete("/{project_id}", summary="Close a project and withdraw its credentials")
 async def delete_project(
-    project_id: uuid.UUID, identity: MayAdminister, db: DbSession
+    project_id: uuid.UUID, identity: MayConfigureProjects, db: DbSession
 ) -> ProjectDeleted:
     """200 with a body, not 204: what this did to the project's telemetry is the
     thing a customer most needs told, and 204 has nowhere to say it."""
@@ -86,7 +86,7 @@ async def delete_project(
 async def replace_sampling_config(
     project_id: uuid.UUID,
     request: SamplingConfigWrite,
-    identity: MayAdminister,
+    identity: MayConfigureProjects,
     db: DbSession,
 ) -> SamplingConfigResponse:
     return await service.write_sampling_config(
@@ -98,7 +98,7 @@ async def replace_sampling_config(
 async def replace_masking_config(
     project_id: uuid.UUID,
     request: MaskingConfigWrite,
-    identity: MayAdminister,
+    identity: MayConfigureProjects,
     db: DbSession,
 ) -> MaskingConfigResponse:
     return await service.write_masking_config(

@@ -11,7 +11,7 @@ import uuid
 from fastapi import APIRouter, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayManageCheckSecrets
 from nexovue_api.checksecrets import service
 from nexovue_api.checksecrets.schemas import (
     CheckSecretListResponse,
@@ -37,7 +37,7 @@ async def list_secrets(
 
 @router.put("/check-secrets/{name}", summary="Store or replace a secret")
 async def write_secret(
-    identity: MayAdminister,
+    identity: MayManageCheckSecrets,
     db: DbSession,
     settings: AppSettings,
     project_id: uuid.UUID,
@@ -59,7 +59,7 @@ async def write_secret(
     "/check-secrets/{name}", status_code=status.HTTP_204_NO_CONTENT, summary="Remove a secret"
 )
 async def delete_secret(
-    identity: MayAdminister, db: DbSession, project_id: uuid.UUID, name: SecretName
+    identity: MayManageCheckSecrets, db: DbSession, project_id: uuid.UUID, name: SecretName
 ) -> None:
     await service.delete_secret(
         db,
@@ -79,7 +79,7 @@ async def list_variables(
 
 @router.put("/check-variables/{name}", summary="Store or replace a variable")
 async def write_variable(
-    identity: MayAdminister,
+    identity: MayManageCheckSecrets,
     db: DbSession,
     project_id: uuid.UUID,
     name: VariableName,
@@ -96,6 +96,6 @@ async def write_variable(
     summary="Remove a variable",
 )
 async def delete_variable(
-    identity: MayAdminister, db: DbSession, project_id: uuid.UUID, name: VariableName
+    identity: MayManageCheckSecrets, db: DbSession, project_id: uuid.UUID, name: VariableName
 ) -> None:
     await service.delete_variable(db, org_id=identity.org_id, project_id=project_id, name=name)

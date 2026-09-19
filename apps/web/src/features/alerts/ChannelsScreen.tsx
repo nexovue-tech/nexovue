@@ -5,6 +5,7 @@ import { Button } from "@/shared/components/Button";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatRelativeTime } from "@/shared/format/time";
+import { useCan } from "@/shared/identity";
 import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 
 import { describeDestination, formatUntil, isMuted, KIND_NAMES } from "./alert-words";
@@ -20,6 +21,7 @@ import { ChannelForm } from "./ChannelForm";
 export function ChannelsScreen() {
   const channels = useChannels();
   const [connecting, setConnecting] = useState(false);
+  const canManage = useCan("manage_channels");
   const [outcome, setOutcome] = useState<string>();
 
   const ordered = [...(channels.data ?? [])].sort(
@@ -45,7 +47,7 @@ export function ChannelsScreen() {
               setOutcome(`Connected ${channel.name}. Send a test from its page to be sure.`);
             }}
           />
-        ) : (
+        ) : canManage ? (
           <div>
             <Button
               onClick={() => {
@@ -56,7 +58,7 @@ export function ChannelsScreen() {
               Connect a channel
             </Button>
           </div>
-        )}
+        ) : null}
 
         {channels.isPending ? (
           <SkeletonRows rows={3} label="Loading channels" />

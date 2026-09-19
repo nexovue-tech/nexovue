@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayManageChannels
 from nexovue_api.channels import service
 from nexovue_api.channels.schemas import (
     ChannelListResponse,
@@ -32,7 +32,7 @@ async def list_channels(identity: CurrentIdentity, db: DbSession) -> ChannelList
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Connect a channel")
 async def create_channel(
-    identity: MayAdminister, db: DbSession, settings: AppSettings, request: CreateChannelRequest
+    identity: MayManageChannels, db: DbSession, settings: AppSettings, request: CreateChannelRequest
 ) -> CreatedChannel:
     return await service.create(
         db,
@@ -53,7 +53,7 @@ async def get_channel(
 
 @router.patch("/{channel_id}", summary="Rename, reconfigure, or replace a channel's secret")
 async def update_channel(
-    identity: MayAdminister,
+    identity: MayManageChannels,
     db: DbSession,
     settings: AppSettings,
     channel_id: uuid.UUID,
@@ -71,7 +71,7 @@ async def update_channel(
 
 @router.post("/{channel_id}/signing-secret", summary="Replace a webhook's signing secret")
 async def rotate_signing_secret(
-    identity: MayAdminister, db: DbSession, settings: AppSettings, channel_id: uuid.UUID
+    identity: MayManageChannels, db: DbSession, settings: AppSettings, channel_id: uuid.UUID
 ) -> SigningSecret:
     return await service.rotate_signing_secret(
         db,
@@ -84,7 +84,7 @@ async def rotate_signing_secret(
 
 @router.put("/{channel_id}/mute", summary="Mute a channel until a time, or unmute it")
 async def mute_channel(
-    identity: MayAdminister, db: DbSession, channel_id: uuid.UUID, request: MuteChannelRequest
+    identity: MayManageChannels, db: DbSession, channel_id: uuid.UUID, request: MuteChannelRequest
 ) -> ChannelSummary:
     return await service.mute(
         db,
@@ -97,7 +97,7 @@ async def mute_channel(
 
 @router.put("/{channel_id}/quiet-hours", summary="Set or clear a channel's quiet hours")
 async def set_quiet_hours(
-    identity: MayAdminister, db: DbSession, channel_id: uuid.UUID, request: QuietHoursRequest
+    identity: MayManageChannels, db: DbSession, channel_id: uuid.UUID, request: QuietHoursRequest
 ) -> ChannelSummary:
     return await service.set_quiet_hours(
         db,
@@ -109,7 +109,7 @@ async def set_quiet_hours(
 
 
 @router.delete("/{channel_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Remove a channel")
-async def delete_channel(identity: MayAdminister, db: DbSession, channel_id: uuid.UUID) -> None:
+async def delete_channel(identity: MayManageChannels, db: DbSession, channel_id: uuid.UUID) -> None:
     await service.delete(
         db, org_id=identity.org_id, actor_user_id=identity.user.id, channel_id=channel_id
     )

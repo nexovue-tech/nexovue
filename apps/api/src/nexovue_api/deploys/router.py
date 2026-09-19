@@ -18,7 +18,7 @@ from typing import Annotated, Final
 from fastapi import APIRouter, Query, Request, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayManageCredentials
 from nexovue_api.deploys import service, signatures
 from nexovue_api.deploys.schemas import (
     DEFAULT_PAGE_SIZE,
@@ -78,7 +78,8 @@ async def list_deploys(
     summary="The deploy secrets this project's webhook will accept",
 )
 async def read_webhook_secrets(
-    identity: CurrentIdentity,
+    # The secrets themselves, so a credential action even though it only reads.
+    identity: MayManageCredentials,
     db: DbSession,
     project_id: uuid.UUID,
 ) -> WebhookSecretsResponse:
@@ -96,7 +97,7 @@ async def read_webhook_secrets(
     summary="Mint a deploy secret, leaving existing ones live",
 )
 async def create_webhook_secret(
-    identity: MayAdminister,
+    identity: MayManageCredentials,
     db: DbSession,
     project_id: uuid.UUID,
 ) -> WebhookSecretsResponse:
@@ -111,7 +112,7 @@ async def create_webhook_secret(
     summary="Withdraw a deploy secret",
 )
 async def revoke_webhook_secret(
-    identity: MayAdminister,
+    identity: MayManageCredentials,
     db: DbSession,
     secret_id: uuid.UUID,
 ) -> None:

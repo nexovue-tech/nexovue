@@ -55,6 +55,10 @@ async def get_current_identity(session: CurrentSession, db: DbSession) -> Identi
         raise UnauthenticatedError(SESSION_NO_LONGER_VALID)
 
     user, organization = found
+    if user.removed_at is not None:
+        # Before the epoch check, which removal also trips: the person should be
+        # told why, not that their session merely expired (F26, spec error cases).
+        raise UnauthenticatedError(f"You are no longer a member of {organization.name}.")
     if _issued_before_reset(session, user):
         # P1-71: a password reset ends every session it did not issue. There is
         # nothing to enumerate — Redis keys sessions by token fingerprint — so

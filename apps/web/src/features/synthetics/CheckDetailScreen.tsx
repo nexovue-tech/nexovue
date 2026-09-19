@@ -12,6 +12,7 @@ import { Tabs } from "@/shared/components/Tabs";
 import { formatDuration } from "@/shared/format/duration";
 import { plural } from "@/shared/format/plural";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
+import { useCan } from "@/shared/identity";
 import type { TimeRange, TimeWindow } from "@/shared/selection";
 import {
   setSelectedRangeId,
@@ -74,6 +75,8 @@ export function CheckDetailScreen() {
   const navigate = useNavigate();
   const check = useCheck(checkId);
   const tab: CheckTab = search.tab ?? "overview";
+  // Settings is where a check is edited; a viewer reads the overview only (F26).
+  const canOperate = useCan("operate_checks");
 
   if (check.isPending) {
     return (
@@ -105,6 +108,7 @@ export function CheckDetailScreen() {
   }
 
   const definition = check.data;
+  const shown = canOperate ? tab : "overview";
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <CheckHeader check={definition} />
@@ -114,11 +118,15 @@ export function CheckDetailScreen() {
       <div className="min-w-0 px-4 pb-10">
         <Tabs
           label="Check"
-          items={[
-            { id: "overview", label: "Overview" },
-            { id: "edit", label: "Settings" },
-          ]}
-          selected={tab}
+          items={
+            canOperate
+              ? [
+                  { id: "overview", label: "Overview" },
+                  { id: "edit", label: "Settings" },
+                ]
+              : [{ id: "overview", label: "Overview" }]
+          }
+          selected={shown}
           onSelect={(id) =>
             void navigate({
               to: "/synthetics/$checkId",
@@ -129,7 +137,7 @@ export function CheckDetailScreen() {
           }
         >
           <div className="pt-4">
-            {tab === "overview" ? (
+            {shown === "overview" ? (
               <Overview check={definition} selectedRun={search.run} />
             ) : (
               <EditCheck check={definition} />
@@ -151,6 +159,7 @@ function CheckHeader({ check }: { check: CheckDefinition }) {
   const update = useUpdateCheck(check.id, projectId);
   const [changed, setChanged] = useState<"Paused." | "Resumed.">();
   const state = check.displayed_state;
+  const canOperate = useCan("operate_checks");
 
   return (
     <header className="shrink-0 px-4 pt-5 pb-3">
@@ -164,27 +173,29 @@ function CheckHeader({ check }: { check: CheckDefinition }) {
         <h1 className="min-w-0 break-words font-semibold font-serif text-ink text-xl tracking-tight">
           {check.name}
         </h1>
-        <div className="flex gap-2">
-          <Button
-            variant="secondary"
-            pending={update.isPending}
-            pendingLabel={check.enabled ? "Pausing" : "Resuming"}
-            onClick={() => {
-              setChanged(undefined);
-              update.mutate(
-                { enabled: !check.enabled },
-                { onSuccess: (saved) => setChanged(saved.enabled ? "Resumed." : "Paused.") },
-              );
-            }}
-          >
-            {check.enabled ? "Pause" : "Resume"}
-          </Button>
-          {changed ? (
-            <span role="status" className="self-center text-ink-dim text-sm">
-              {changed}
-            </span>
-          ) : null}
-        </div>
+        {canOperate ? (
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              pending={update.isPending}
+              pendingLabel={check.enabled ? "Pausing" : "Resuming"}
+              onClick={() => {
+                setChanged(undefined);
+                update.mutate(
+                  { enabled: !check.enabled },
+                  { onSuccess: (saved) => setChanged(saved.enabled ? "Resumed." : "Paused.") },
+                );
+              }}
+            >
+              {check.enabled ? "Pause" : "Resume"}
+            </Button>
+            {changed ? (
+              <span role="status" className="self-center text-ink-dim text-sm">
+                {changed}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <p className="mt-1 text-sm">
         {state ? (
@@ -242,6 +253,7 @@ function Overview({
   check: CheckDefinition;
   selectedRun: string | undefined;
 }) {
+  const canOperate = useCan("operate_checks");
   const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
   const windowPhrase = useWindowPhrase();
@@ -295,7 +307,7 @@ function Overview({
 
       <RunsAndEvidence check={check} timeWindow={timeWindow} selectedRun={selectedRun} />
       <StateTimeline check={check} />
-      <DeleteCheck check={check} />
+      {canOperate ? <DeleteCheck check={check} /> : null}
     </div>
   );
 }
@@ -575,6 +587,7 @@ function HeartbeatUrl({ check }: { check: CheckDefinition }) {
   const issue = useIssueHeartbeatToken(check.id);
   const [confirming, setConfirming] = useState(false);
   const url = issue.data ? `${window.location.origin}${issue.data.ping_path}` : undefined;
+  const canOperate = useCan("operate_checks");
   return (
     <section aria-label="Heartbeat URL" className="flex max-w-2xl flex-col gap-2">
       <h2 className="font-medium font-serif text-ink text-lg tracking-tight">Heartbeat URL</h2>
@@ -606,7 +619,7 @@ function HeartbeatUrl({ check }: { check: CheckDefinition }) {
             Keep the current one
           </Button>
         </div>
-      ) : !url ? (
+      ) : !url && canOperate ? (
         <div>
           <Button variant="secondary" onClick={() => setConfirming(true)}>
             Issue a new URL

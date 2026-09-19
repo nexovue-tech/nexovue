@@ -52,6 +52,8 @@ class Message(Enum):
     ALERT = "alert"
     # Sent through email because the channel it is about is the one not working.
     CHANNEL_FAILING = "channel_failing"
+    # F26. A person invited into an organization; the link sets their password.
+    INVITE = "invite"
 
 
 @dataclass(frozen=True, slots=True)

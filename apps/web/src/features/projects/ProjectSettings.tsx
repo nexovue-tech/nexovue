@@ -4,6 +4,7 @@ import { Button } from "@/shared/components/Button";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { TextField } from "@/shared/components/TextField";
 import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
+import { useCan } from "@/shared/identity";
 
 import type { MaskingTextKey, ProjectDeleted, ProjectDetail, SamplingDocument } from "./api";
 import {
@@ -49,16 +50,26 @@ export function ProjectSettings({
   project: ProjectDetail;
   onDeleted: (result: ProjectDeleted) => void;
 }) {
+  // Each section is an editor, gated by the action it performs (F26, FR1). Retention
+  // is a reading anyone may see; the rest appear only for who may change them.
+  const canConfigure = useCan("configure_projects");
+  const canManageSecrets = useCan("manage_check_secrets");
+  const canOperateAlerts = useCan("operate_alerts");
   return (
     <div className="flex flex-col gap-10 border-line border-t pt-8">
-      <Identity project={project} />
+      {canConfigure ? <Identity project={project} /> : null}
       <Retention project={project} />
-      <Sampling project={project} />
-      <Masking project={project} />
-      <CheckSecretsSection projectId={project.id} />
-      <CheckVariablesSection projectId={project.id} />
-      <MaintenanceWindowsSection projectId={project.id} />
-      <Deletion project={project} onDeleted={onDeleted} />
+      {canConfigure ? <Sampling project={project} /> : null}
+      {canConfigure ? <Masking project={project} /> : null}
+      {canManageSecrets ? <CheckSecretsSection projectId={project.id} /> : null}
+      {canManageSecrets ? <CheckVariablesSection projectId={project.id} /> : null}
+      {canOperateAlerts ? <MaintenanceWindowsSection projectId={project.id} /> : null}
+      {canConfigure ? <Deletion project={project} onDeleted={onDeleted} /> : null}
+      {canConfigure ? null : (
+        <p className="max-w-2xl text-ink-dim text-sm">
+          Renaming, sampling, masking and deleting a project are an owner's or an admin's to change.
+        </p>
+      )}
     </div>
   );
 }

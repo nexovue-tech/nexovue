@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 
+import { useSession } from "@/shared/identity";
 import { useNothingLive } from "@/shared/refresh";
 
 import { SETTINGS_GROUPS, type SettingsPath } from "./settings-nav";
@@ -75,6 +76,7 @@ export function SettingsLayout({
 function SettingsNav() {
   const [typed, setTyped] = useState("");
   const needle = typed.trim().toLowerCase();
+  const permissions = useSession().data?.user.permissions;
 
   const groups = useMemo(
     () =>
@@ -82,12 +84,13 @@ function SettingsNav() {
         ...group,
         items: group.items.filter(
           (item) =>
-            needle === "" ||
-            item.title.toLowerCase().includes(needle) ||
-            item.keywords.some((word) => word.includes(needle)),
+            (item.requires === undefined || permissions?.includes(item.requires) === true) &&
+            (needle === "" ||
+              item.title.toLowerCase().includes(needle) ||
+              item.keywords.some((word) => word.includes(needle))),
         ),
       })).filter((group) => group.items.length > 0),
-    [needle],
+    [needle, permissions],
   );
 
   return (

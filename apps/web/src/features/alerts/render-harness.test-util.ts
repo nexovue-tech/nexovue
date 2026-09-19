@@ -11,9 +11,8 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { vi } from "vitest";
-
+import { identityFor } from "@/shared/identity.test-util";
 import { setSelectedProjectId } from "@/shared/selection";
-
 import { AlertsScreen } from "./AlertsScreen";
 import type { AlertRule, ChannelSummary, Incident } from "./api";
 import { ChannelDetailScreen } from "./ChannelDetailScreen";
@@ -198,7 +197,10 @@ export function stubApi(handlers: Handlers) {
         body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
       };
       calls.push(call);
-      const handler = handlers[`${method} ${path}`];
+      // Everyone is an owner unless a test says otherwise (F26: screens hide by role).
+      const handler =
+        handlers[`${method} ${path}`] ??
+        (`${method} ${path}` === "GET /auth/me" ? json(identityFor("owner")) : undefined);
       if (!handler) throw new Error(`no stub for ${method} ${path}`);
       return handler(call);
     }),

@@ -50,6 +50,13 @@ TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
         '"{channel_name}" for {failing_for}. The last attempt: {reason}.\n\n'
         "Alerts meant for it are reaching nobody until it is fixed: {link}",
     ),
+    Message.INVITE: (
+        "{inviter} invited you to {organization} on nexovue",
+        "{inviter} invited you to join {organization} on nexovue as {role_phrase}.\n\n"
+        "Choose your password to accept:\n\n{link}\n\n"
+        "The link expires in {expires_in} and can be used once. If you were not "
+        "expecting this, ignore it — nothing happens until the link is used.",
+    ),
 }
 
 

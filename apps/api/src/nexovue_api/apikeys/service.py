@@ -51,7 +51,6 @@ from nexovue_api.data.postgres.models import API_KEY_PREFIX_LENGTH, ApiKey, Site
 from nexovue_api.errors.exceptions import (
     InternalError,
     NotFoundError,
-    PermissionDeniedError,
 )
 from nexovue_api.signup.apikeys import generate_api_key, hash_api_key
 
@@ -61,17 +60,8 @@ NO_SUCH_KEY_DETAIL: Final = "No such API key."
 # Of the seven secret characters the stored prefix carries.
 HINT_CHARACTERS: Final = 4
 
-MAY_NOT_REVOKE_DETAIL: Final = "Only an owner or admin can revoke an API key."
-MAY_NOT_CREATE_DETAIL: Final = "Only an owner or admin can create an API key."
 
 NO_SUCH_SITE_KEY_DETAIL: Final = "No such site key."
-MAY_NOT_REVOKE_SITE_KEY_DETAIL: Final = "Only an owner or admin can revoke a site key."
-MAY_NOT_CREATE_SITE_KEY_DETAIL: Final = "Only an owner or admin can create a site key."
-
-# Both actions grant or withdraw ingest for the whole organization, so both ask
-# what a member's role is. Broader role enforcement arrives with F26; this is not
-# that, it is the two credential actions that should never have been everyone's.
-ROLES_THAT_MAY_MANAGE_KEYS: Final = frozenset({"owner", "admin"})
 
 # `key_prefix` is unique over sixteen characters, so a fresh key can genuinely
 # collide. Bounded so an exhausted keyspace fails loudly instead of spinning.
@@ -109,9 +99,6 @@ async def create(
     The caller has already proved the project is theirs. `org_id` is taken from
     the session either way, so the row cannot be written into another tenant.
     """
-    if actor.role not in ROLES_THAT_MAY_MANAGE_KEYS:
-        raise PermissionDeniedError(MAY_NOT_CREATE_DETAIL)
-
     plaintext = await allocate_unused_key(db)
     key = ApiKey(
         org_id=org_id,
@@ -145,9 +132,6 @@ async def revoke(
     record of it commit together — a withdrawn key with no trail of who
     withdrew it is not a state this can reach.
     """
-    if actor.role not in ROLES_THAT_MAY_MANAGE_KEYS:
-        raise PermissionDeniedError(MAY_NOT_REVOKE_DETAIL)
-
     key = await queries.lock_key(db, org_id=org_id, key_id=key_id)
     if key is None:
         raise NotFoundError(NO_SUCH_KEY_DETAIL)
@@ -201,9 +185,6 @@ async def create_site_key(
     telemetry for one project — but it is still a door onto a customer's ingest
     and their bill, so it is not everyone's to open.
     """
-    if actor.role not in ROLES_THAT_MAY_MANAGE_KEYS:
-        raise PermissionDeniedError(MAY_NOT_CREATE_SITE_KEY_DETAIL)
-
     key = SiteKey(
         org_id=org_id,
         project_id=project_id,
@@ -235,9 +216,6 @@ async def revoke_site_key(
     Revoking is the only lever a public key has: it cannot be un-leaked, because
     it was never secret. What it can be is retired when a site stops using it.
     """
-    if actor.role not in ROLES_THAT_MAY_MANAGE_KEYS:
-        raise PermissionDeniedError(MAY_NOT_REVOKE_SITE_KEY_DETAIL)
-
     key = await queries.lock_site_key(db, org_id=org_id, key_id=key_id)
     if key is None:
         raise NotFoundError(NO_SUCH_SITE_KEY_DETAIL)

@@ -14,8 +14,8 @@ import { createRoot } from "react-dom/client";
 import { vi } from "vitest";
 
 import { parseFilterValues } from "@/shared/filters";
+import { identityFor } from "@/shared/identity.test-util";
 import { setSelectedProjectId } from "@/shared/selection";
-
 import type { CheckDefinition, CheckResultSummary, CheckRun } from "./api";
 import { CheckDetailScreen, parseCheckSearch } from "./CheckDetailScreen";
 import type { RunEvidence } from "./check-model";
@@ -302,7 +302,10 @@ export function stubApi(handlers: Handlers): StubbedApi {
         body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
       };
       calls.push(call);
-      const handler = handlers[`${method} ${path}`];
+      // Everyone is an owner unless a test says otherwise (F26: screens hide by role).
+      const handler =
+        handlers[`${method} ${path}`] ??
+        (`${method} ${path}` === "GET /auth/me" ? json(identityFor("owner")) : undefined);
       if (!handler) {
         unanswered.push(`${method} ${path}`);
         throw new Error(`no stub for ${method} ${path}`);

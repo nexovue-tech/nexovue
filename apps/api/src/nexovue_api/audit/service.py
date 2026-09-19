@@ -17,7 +17,7 @@ when, and nothing that grants access to anything.
 from __future__ import annotations
 
 import uuid
-from typing import Final
+from typing import Any, Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -116,6 +116,13 @@ PROJECT_DELETED: Final = "project.deleted"
 # what leaves the customer's process, and it is the only edit here whose blast
 # radius is other people's secrets.
 PROJECT_MASKING_RULE_DISABLED: Final = "project.masking_rule_disabled"
+
+MEMBER_INVITED: Final = "member.invited"
+MEMBER_INVITE_RESENT: Final = "member.invite_resent"
+MEMBER_INVITE_WITHDRAWN: Final = "member.invite_withdrawn"
+MEMBER_JOINED: Final = "member.joined"
+MEMBER_ROLE_CHANGED: Final = "member.role_changed"
+MEMBER_REMOVED: Final = "member.removed"
 
 ORGANIZATION_TARGET: Final = "organization"
 USER_TARGET: Final = "user"
@@ -792,6 +799,87 @@ def erasure_certificate_target(org_id: uuid.UUID) -> str:
     return _target(ORGANIZATION_TARGET, org_id)
 
 
+# F26: people coming into and leaving an organization. `detail` carries what an
+# owner reading the log needs and the target cannot say: the address an invite
+# went to, a role before and after.
+
+
+def record_member_invited(db: AsyncSession, *, member: User, actor_user_id: uuid.UUID) -> None:
+    _add(
+        db,
+        org_id=member.org_id,
+        actor_user_id=actor_user_id,
+        action=MEMBER_INVITED,
+        target=_target(USER_TARGET, member.id),
+        detail={"email": member.email, "role": member.role},
+    )
+
+
+def record_member_invite_resent(
+    db: AsyncSession, *, member: User, actor_user_id: uuid.UUID
+) -> None:
+    _add(
+        db,
+        org_id=member.org_id,
+        actor_user_id=actor_user_id,
+        action=MEMBER_INVITE_RESENT,
+        target=_target(USER_TARGET, member.id),
+        detail={"email": member.email},
+    )
+
+
+def record_member_invite_withdrawn(
+    db: AsyncSession, *, member: User, actor_user_id: uuid.UUID
+) -> None:
+    _add(
+        db,
+        org_id=member.org_id,
+        actor_user_id=actor_user_id,
+        action=MEMBER_INVITE_WITHDRAWN,
+        target=_target(USER_TARGET, member.id),
+        detail={"email": member.email},
+    )
+
+
+def record_member_joined(db: AsyncSession, *, member: User) -> None:
+    """Written as the person who joined: accepting is their own act."""
+    _add(
+        db,
+        org_id=member.org_id,
+        actor_user_id=member.id,
+        action=MEMBER_JOINED,
+        target=_target(USER_TARGET, member.id),
+        detail={"role": member.role},
+    )
+
+
+def record_member_role_changed(
+    db: AsyncSession, *, member: User, actor_user_id: uuid.UUID, before: str
+) -> None:
+    _add(
+        db,
+        org_id=member.org_id,
+        actor_user_id=actor_user_id,
+        action=MEMBER_ROLE_CHANGED,
+        target=_target(USER_TARGET, member.id),
+        detail={"before": before, "after": member.role},
+    )
+
+
+def record_member_removed(
+    db: AsyncSession, *, member: User, actor_user_id: uuid.UUID, email: str
+) -> None:
+    """`email` is the address the person had: the row's is rewritten on removal."""
+    _add(
+        db,
+        org_id=member.org_id,
+        actor_user_id=actor_user_id,
+        action=MEMBER_REMOVED,
+        target=_target(USER_TARGET, member.id),
+        detail={"email": email, "role": member.role},
+    )
+
+
 def _add(
     db: AsyncSession,
     *,
@@ -801,6 +889,7 @@ def _add(
     target: str,
     actor_label: str | None = None,
     impersonation_context: uuid.UUID | None = None,
+    detail: dict[str, Any] | None = None,
 ) -> None:
     """Put the entry in the caller's transaction. Nothing is committed here."""
     db.add(
@@ -811,6 +900,7 @@ def _add(
             impersonation_context=impersonation_context,
             action=action,
             target=target,
+            detail=detail,
         )
     )
 

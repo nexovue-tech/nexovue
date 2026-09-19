@@ -1,9 +1,11 @@
 import { Link } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
+import { useCan } from "@/shared/identity";
 import { useSelection } from "@/shared/selection";
 import type { CheckChoice } from "./alert-words";
 import {
@@ -39,6 +41,7 @@ const TONE_TEXT = {
 } as const;
 
 export function AlertsScreen() {
+  const canOperate = useCan("operate_alerts");
   const { projectId } = useSelection();
   const incidents = useIncidents(projectId);
   const rules = useAlertRules(projectId);
@@ -61,13 +64,15 @@ export function AlertsScreen() {
           >
             Channels
           </Link>
-          <Link
-            to="/alerts/rules/new"
-            search={{}}
-            className={`${ACTION} bg-brand text-brand-contrast hover:bg-brand-hover`}
-          >
-            New rule
-          </Link>
+          {canOperate ? (
+            <Link
+              to="/alerts/rules/new"
+              search={{}}
+              className={`${ACTION} bg-brand text-brand-contrast hover:bg-brand-hover`}
+            >
+              New rule
+            </Link>
+          ) : null}
         </div>
       </header>
 
@@ -110,17 +115,19 @@ export function AlertsScreen() {
             title="No rules"
             detail="Nothing in this project will tell anyone when it breaks. A rule names what to watch and who to tell."
             action={
-              <Link
-                to="/alerts/rules/new"
-                search={{}}
-                className={`${ACTION} bg-brand text-brand-contrast hover:bg-brand-hover`}
-              >
-                New rule
-              </Link>
+              canOperate ? (
+                <Link
+                  to="/alerts/rules/new"
+                  search={{}}
+                  className={`${ACTION} bg-brand text-brand-contrast hover:bg-brand-hover`}
+                >
+                  New rule
+                </Link>
+              ) : undefined
             }
           />
         ) : (
-          <RuleList rules={rules.data} checks={checks.data ?? []} />
+          <RuleList rules={rules.data} checks={checks.data ?? []} canOperate={canOperate} />
         )}
       </section>
 
@@ -269,9 +276,12 @@ function IncidentSubject({ incident }: { incident: Incident }) {
 function RuleList({
   rules,
   checks,
+  canOperate,
 }: {
   rules: readonly AlertRule[];
   checks: readonly CheckChoice[];
+  /** A rule opens in its editor; for someone who cannot edit, it is read here only. */
+  canOperate: boolean;
 }) {
   return (
     <ul className="max-w-4xl border-line border-t">
@@ -279,11 +289,7 @@ function RuleList({
         const status = ruleStatus(rule);
         return (
           <li key={rule.id} className="border-line-subtle border-b py-3">
-            <Link
-              to="/alerts/rules/$ruleId"
-              params={{ ruleId: rule.id }}
-              className="group flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1"
-            >
+            <RuleRowFrame ruleId={rule.id} linked={canOperate}>
               <div className="min-w-0">
                 <p className="flex flex-wrap items-baseline gap-x-2">
                   <span className="font-medium text-base text-ink group-hover:underline">
@@ -299,11 +305,30 @@ function RuleList({
                 </p>
               </div>
               <span className={`shrink-0 text-sm ${TONE_TEXT[status.tone]}`}>{status.label}</span>
-            </Link>
+            </RuleRowFrame>
           </li>
         );
       })}
     </ul>
+  );
+}
+
+function RuleRowFrame({
+  ruleId,
+  linked,
+  children,
+}: {
+  ruleId: string;
+  linked: boolean;
+  children: ReactNode;
+}) {
+  const layout = "group flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1";
+  return linked ? (
+    <Link to="/alerts/rules/$ruleId" params={{ ruleId }} className={layout}>
+      {children}
+    </Link>
+  ) : (
+    <div className={layout}>{children}</div>
   );
 }
 

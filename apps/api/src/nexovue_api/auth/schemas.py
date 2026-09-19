@@ -49,6 +49,9 @@ class UserSummary(BaseModel):
     # so its absence is invisible without this. The moment, not a boolean: "when"
     # is the question support asks, and a boolean cannot answer it.
     email_verified_at: datetime | None
+    # What this person may do (`auth/policy.py`), so the console hides a control
+    # the API would refuse without restating the table (F26, FR3).
+    permissions: list[str]
 
 
 class OrganizationSummary(BaseModel):

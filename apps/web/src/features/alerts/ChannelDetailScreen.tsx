@@ -8,6 +8,7 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
 import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
+import { useCan } from "@/shared/identity";
 import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 
 import {
@@ -40,6 +41,8 @@ import {
 export function ChannelDetailScreen() {
   const { channelId } = useParams({ from: "/shell/settings/channels/$channelId" });
   const channel = useChannel(channelId);
+  // Anyone may see where alerts go and whether they arrived; changing it is an admin's.
+  const canManage = useCan("manage_channels");
 
   return (
     <SettingsLayout
@@ -61,12 +64,14 @@ export function ChannelDetailScreen() {
       ) : (
         <div className="flex max-w-3xl flex-col gap-8">
           <Overview channel={channel.data} />
-          <SendTest channel={channel.data} />
-          {channel.data.kind === "owners" ? null : <Settings channel={channel.data} />}
-          <Mute channel={channel.data} />
-          {PEOPLE_READ.has(channel.data.kind) ? <Quiet channel={channel.data} /> : null}
+          {canManage ? <SendTest channel={channel.data} /> : null}
+          {canManage && channel.data.kind !== "owners" ? <Settings channel={channel.data} /> : null}
+          {canManage ? <Mute channel={channel.data} /> : null}
+          {canManage && PEOPLE_READ.has(channel.data.kind) ? (
+            <Quiet channel={channel.data} />
+          ) : null}
           <DeliveryLog channelId={channel.data.id} />
-          {channel.data.kind === "owners" ? null : <Remove channel={channel.data} />}
+          {canManage && channel.data.kind !== "owners" ? <Remove channel={channel.data} /> : null}
         </div>
       )}
     </SettingsLayout>

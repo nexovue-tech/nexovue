@@ -2,6 +2,7 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import { CopyButton } from "@/shared/components/CopyButton";
+import { Permitted } from "@/shared/components/Permitted";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { useNothingLive } from "@/shared/refresh";
 import { useSelection } from "@/shared/selection";
@@ -44,6 +45,14 @@ export function parseNewCheckSearch(search: Record<string, unknown>): { kind?: C
  * with a status assertion already written.
  */
 export function NewCheckScreen() {
+  return (
+    <Permitted action="operate_checks" who="an owner, an admin or a member">
+      <NewCheckScreenForm />
+    </Permitted>
+  );
+}
+
+function NewCheckScreenForm() {
   // A form reads nothing on a timer: the top bar's interval control would govern
   // nothing here, and reads as a promise that this screen is watching something.
   useNothingLive();

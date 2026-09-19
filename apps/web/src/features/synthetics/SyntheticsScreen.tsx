@@ -9,6 +9,7 @@ import { Sparkline } from "@/shared/components/Sparkline";
 import { filterParams, parseFilterValues, withFilter } from "@/shared/filters";
 import { formatDuration } from "@/shared/format/duration";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
+import { useCan } from "@/shared/identity";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 
 import type { CheckDefinition, CheckResultSummary, CheckTrendPoint } from "./api";
@@ -62,6 +63,7 @@ export function SyntheticsScreen() {
   const checks = visibleChecks(all, filters);
   const readings = new Map((results.data ?? []).map((result) => [result.check_id, result]));
   const narrowed = appliedFilters(SYNTHETIC_FILTERS, filters).length > 0;
+  const canOperate = useCan("operate_checks");
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
@@ -73,20 +75,22 @@ export function SyntheticsScreen() {
             {windowPhrase}.
           </p>
         </div>
-        <div className="flex gap-2">
-          <Link
-            to="/synthetics/import"
-            className={`${ACTION} border border-line text-ink-dim hover:border-line-strong hover:text-ink`}
-          >
-            Import
-          </Link>
-          <Link
-            to="/synthetics/new"
-            className={`${ACTION} bg-brand text-brand-contrast hover:bg-brand-hover`}
-          >
-            New check
-          </Link>
-        </div>
+        {canOperate ? (
+          <div className="flex gap-2">
+            <Link
+              to="/synthetics/import"
+              className={`${ACTION} border border-line text-ink-dim hover:border-line-strong hover:text-ink`}
+            >
+              Import
+            </Link>
+            <Link
+              to="/synthetics/new"
+              className={`${ACTION} bg-brand text-brand-contrast hover:bg-brand-hover`}
+            >
+              New check
+            </Link>
+          </div>
+        ) : null}
       </header>
 
       <FilterBar
@@ -113,20 +117,22 @@ export function SyntheticsScreen() {
           title="No checks yet"
           detail="A check calls your API, port, domain or job from outside and tells you when it stops answering the way it should. Start from a URL, or import the requests you already have."
           action={
-            <div className="flex gap-2">
-              <Link
-                to="/synthetics/new"
-                className={`${ACTION} bg-brand text-brand-contrast hover:bg-brand-hover`}
-              >
-                New check
-              </Link>
-              <Link
-                to="/synthetics/import"
-                className={`${ACTION} border border-line text-ink-dim hover:text-ink`}
-              >
-                Import cURL, OpenAPI or Postman
-              </Link>
-            </div>
+            canOperate ? (
+              <div className="flex gap-2">
+                <Link
+                  to="/synthetics/new"
+                  className={`${ACTION} bg-brand text-brand-contrast hover:bg-brand-hover`}
+                >
+                  New check
+                </Link>
+                <Link
+                  to="/synthetics/import"
+                  className={`${ACTION} border border-line text-ink-dim hover:text-ink`}
+                >
+                  Import cURL, OpenAPI or Postman
+                </Link>
+              </div>
+            ) : undefined
           }
         />
       ) : checks.length === 0 && narrowed ? (

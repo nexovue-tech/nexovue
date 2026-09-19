@@ -20,7 +20,7 @@ from nexovue_api.alerts.schemas import (
     WriteRuleRequest,
 )
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayOperateAlerts
 from nexovue_api.deps import DbSession, EvaluationReaderDep
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
@@ -35,7 +35,7 @@ async def list_rules(
 
 @router.post("/rules", status_code=status.HTTP_201_CREATED, summary="Create an alert rule")
 async def create_rule(
-    identity: MayAdminister, db: DbSession, request: WriteRuleRequest
+    identity: MayOperateAlerts, db: DbSession, request: WriteRuleRequest
 ) -> RuleSummary:
     return await service.create_rule(
         db, org_id=identity.org_id, actor_user_id=identity.user.id, request=request
@@ -49,7 +49,7 @@ async def get_rule(identity: CurrentIdentity, db: DbSession, rule_id: uuid.UUID)
 
 @router.patch("/rules/{rule_id}", summary="Change an alert rule")
 async def update_rule(
-    identity: MayAdminister, db: DbSession, rule_id: uuid.UUID, request: UpdateRuleRequest
+    identity: MayOperateAlerts, db: DbSession, rule_id: uuid.UUID, request: UpdateRuleRequest
 ) -> RuleSummary:
     return await service.update_rule(
         db, org_id=identity.org_id, actor_user_id=identity.user.id, rule_id=rule_id, request=request
@@ -58,7 +58,7 @@ async def update_rule(
 
 @router.put("/rules/{rule_id}/mute", summary="Mute a rule until a time, or unmute it")
 async def mute_rule(
-    identity: MayAdminister, db: DbSession, rule_id: uuid.UUID, request: MuteRuleRequest
+    identity: MayOperateAlerts, db: DbSession, rule_id: uuid.UUID, request: MuteRuleRequest
 ) -> RuleSummary:
     return await service.mute_rule(
         db,
@@ -72,7 +72,7 @@ async def mute_rule(
 @router.delete(
     "/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete an alert rule"
 )
-async def delete_rule(identity: MayAdminister, db: DbSession, rule_id: uuid.UUID) -> None:
+async def delete_rule(identity: MayOperateAlerts, db: DbSession, rule_id: uuid.UUID) -> None:
     await service.delete_rule(
         db, org_id=identity.org_id, actor_user_id=identity.user.id, rule_id=rule_id
     )

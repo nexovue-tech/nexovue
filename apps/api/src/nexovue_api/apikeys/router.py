@@ -39,6 +39,7 @@ from nexovue_api.apikeys.schemas import (
     SiteKeySummary,
 )
 from nexovue_api.auth.dependencies import CurrentIdentity
+from nexovue_api.auth.policy import MayManageCredentials
 from nexovue_api.deps import DbSession
 from nexovue_api.projects.service import require_project
 
@@ -65,7 +66,7 @@ async def list_api_keys(
     summary="Mint an ingest key, leaving existing ones live",
 )
 async def create_api_key(
-    identity: CurrentIdentity, db: DbSession, request: ApiKeyCreateRequest
+    identity: MayManageCredentials, db: DbSession, request: ApiKeyCreateRequest
 ) -> ApiKeyCreated:
     project = await require_project(db, org_id=identity.org_id, project_id=request.project_id)
     return await service.create(
@@ -79,7 +80,7 @@ async def create_api_key(
 
 @router.post("/{key_id}/revoke", summary="Withdraw an ingest key")
 async def revoke_api_key(
-    identity: CurrentIdentity, db: DbSession, key_id: uuid.UUID
+    identity: MayManageCredentials, db: DbSession, key_id: uuid.UUID
 ) -> ApiKeySummary:
     return await service.revoke(db, org_id=identity.org_id, actor=identity.user, key_id=key_id)
 
@@ -102,7 +103,7 @@ async def list_site_keys(
     summary="Mint a public browser key for one or more origins",
 )
 async def create_site_key(
-    identity: CurrentIdentity, db: DbSession, request: SiteKeyCreateRequest
+    identity: MayManageCredentials, db: DbSession, request: SiteKeyCreateRequest
 ) -> SiteKeySummary:
     project = await require_project(db, org_id=identity.org_id, project_id=request.project_id)
     return await service.create_site_key(
@@ -117,7 +118,7 @@ async def create_site_key(
 
 @site_key_router.post("/{key_id}/revoke", summary="Withdraw a public browser key")
 async def revoke_site_key(
-    identity: CurrentIdentity, db: DbSession, key_id: uuid.UUID
+    identity: MayManageCredentials, db: DbSession, key_id: uuid.UUID
 ) -> SiteKeySummary:
     return await service.revoke_site_key(
         db, org_id=identity.org_id, actor=identity.user, key_id=key_id

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Query, status
 from pydantic import BaseModel
 
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayManageChannels
 from nexovue_api.channels import service
 from nexovue_api.channels.schemas import SendTestAccepted, SendTestResult
 from nexovue_api.deps import ChannelTesterDep, DbSession
@@ -24,7 +24,7 @@ class SendTestRequest(BaseModel):
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED, summary="Send a test through a channel")
 async def send_test(
-    identity: MayAdminister, db: DbSession, tester: ChannelTesterDep, request: SendTestRequest
+    identity: MayManageChannels, db: DbSession, tester: ChannelTesterDep, request: SendTestRequest
 ) -> SendTestAccepted:
     return await service.dispatch_test(
         db, tester, org_id=identity.org_id, channel_id=request.channel_id

@@ -14,7 +14,7 @@ from typing import Annotated, Final
 
 from fastapi import APIRouter, Query, Request, status
 
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayOperateChecks
 from nexovue_api.checkfiles import service
 from nexovue_api.checkfiles.schemas import MAX_FILE_BYTES, MAX_FILE_NAME_LENGTH, CheckFileSummary
 from nexovue_api.deps import DbSession, ObjectStoreDep
@@ -29,7 +29,7 @@ FileName = Annotated[str, Query(min_length=1, max_length=MAX_FILE_NAME_LENGTH)]
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Keep a file a check will send")
 async def upload_file(
-    identity: MayAdminister,
+    identity: MayOperateChecks,
     db: DbSession,
     store: ObjectStoreDep,
     request: Request,

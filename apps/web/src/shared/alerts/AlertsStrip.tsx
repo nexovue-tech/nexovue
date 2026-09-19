@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 
 import { formatRelativeTime } from "../format/time";
+import { useCan } from "../identity";
 import type { Coverage } from "./api";
 
 /**
@@ -16,6 +17,7 @@ export function AlertsStrip({
   /** Prefills the new rule with this subject. */
   newRuleSearch: { check?: string; service?: string };
 }) {
+  const canOperate = useCan("operate_alerts");
   if (coverage === undefined) return null;
   const [open] = coverage.open_incidents;
   const active = coverage.rules.filter((rule) => rule.enabled && !rule.notifying_nobody);
@@ -57,13 +59,15 @@ export function AlertsStrip({
           </>
         )}
       </span>
-      <Link
-        to="/alerts/rules/new"
-        search={newRuleSearch}
-        className="font-medium text-brand-text hover:underline"
-      >
-        Alert me about this
-      </Link>
+      {canOperate ? (
+        <Link
+          to="/alerts/rules/new"
+          search={newRuleSearch}
+          className="font-medium text-brand-text hover:underline"
+        >
+          Alert me about this
+        </Link>
+      ) : null}
     </section>
   );
 }

@@ -1,33 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
+import type { AuthenticatedUser, Organization, Session } from "@/shared/identity";
+import { sessionQueryKey } from "@/shared/identity";
+
+export type { AuthenticatedUser, Organization, Session } from "@/shared/identity";
+export { sessionQueryKey, useSession } from "@/shared/identity";
 
 /** The identity half of the M1 contract. Shapes are the contract's, not ours. */
-
-export interface Organization {
-  id: string;
-  slug: string;
-  name: string;
-}
-
-export interface AuthenticatedUser {
-  id: string;
-  email: string;
-  /** Nullable: users.name is nullable in the schema. */
-  name: string | null;
-  role: string;
-  /**
-   * ISO timestamp, null until the address is proven. Verification gates nothing in
-   * Phase 1, so its absence is invisible without this field — it exists so the shell
-   * knows whether there is anything to offer.
-   */
-  email_verified_at: string | null;
-}
-
-export interface Session {
-  user: AuthenticatedUser;
-  organization: Organization;
-}
 
 export interface SignupRequest {
   organization_name: string;
@@ -56,23 +36,6 @@ export interface PasswordResetConfirmation {
  * rule before somebody trips over it.
  */
 export const PASSWORD_MIN_LENGTH = 8;
-
-export const sessionQueryKey = ["auth", "me"] as const;
-
-/**
- * Who is signed in, from the server rather than from what a screen remembered.
- *
- * `/auth/me` is deliberately off the API's strict auth rate-limit tier — its policy
- * comment says in as many words that it is polled by every signed-in screen — so the
- * shell may hold this open for as long as it is mounted. A 401 here is an expired
- * session, and app/query-client.ts is what turns it into a trip to /login.
- */
-export function useSession() {
-  return useQuery({
-    queryKey: sessionQueryKey,
-    queryFn: ({ signal }) => apiClient.get<Session>("auth/me", { signal }),
-  });
-}
 
 /**
  * What `POST /auth/login` answers when the password was right and is not enough.
@@ -347,4 +310,25 @@ export function useDisableSecondFactor() {
       apiClient.post<void>("profile/two-factor/disable", { current_password: currentPassword }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: twoFactorQueryKey }),
   });
+}
+
+/* ------------------------------------------------------------------ invitations */
+
+/** What an invite link is for, before anyone types a password (F26). */
+export interface InvitationPreview {
+  organization: string;
+  email: string;
+  role: "owner" | "admin" | "member" | "viewer";
+  invited_by: string;
+  expires_at: string;
+}
+
+/** A POST, so the link's token travels in a body rather than a logged URL. */
+export function previewInvitation(token: string) {
+  return apiClient.post<InvitationPreview>("invitations/preview", { token });
+}
+
+/** Sets the password, proves the address and signs the person in. */
+export function acceptInvitation(input: { token: string; name: string; password: string }) {
+  return apiClient.post<Session>("invitations/accept", input);
 }

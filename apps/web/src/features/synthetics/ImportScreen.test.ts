@@ -12,7 +12,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-
+import { identityFor } from "@/shared/identity.test-util";
 import { setSelectedProjectId } from "@/shared/selection";
 import { ImportScreen } from "./ImportScreen";
 import type { ImportConfirmBody, ImportPlan } from "./import-api";
@@ -125,6 +125,7 @@ function stubApi(preview: () => Response) {
       confirms.push(JSON.parse(String(init?.body)));
       return json({ created: ["c1"] }, 201);
     }
+    if (url.pathname.endsWith("/auth/me")) return json(identityFor("member"), 200);
     throw new Error(`no stub for ${url.pathname}`);
   });
   vi.stubGlobal("fetch", fetchMock);

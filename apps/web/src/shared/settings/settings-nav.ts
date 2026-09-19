@@ -1,3 +1,5 @@
+import type { Action } from "../identity";
+
 /**
  * What the settings rail offers, and what each entry can be found by.
  *
@@ -9,6 +11,8 @@ export type SettingsPath =
   | "/settings/general"
   | "/settings/account"
   | "/settings/api-keys"
+  | "/settings/members"
+  | "/settings/audit"
   | "/settings/channels"
   | "/settings/projects"
   | "/settings/billing"
@@ -17,6 +21,11 @@ export type SettingsPath =
 export interface SettingsItem {
   path: SettingsPath;
   title: string;
+  /**
+   * Shown only to people who may do this. Absent means every signed-in person may
+   * open the screen — most settings are readable by anyone in the organization.
+   */
+  requires?: Action;
   /**
    * What somebody might type looking for it, in the words they would use rather
    * than the ones on the tab. "Sessions" and "two-factor" both live under
@@ -62,9 +71,20 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     label: "This organization",
     items: [
       {
+        path: "/settings/members",
+        title: "Members",
+        keywords: ["team", "invite", "people", "users", "role", "owner", "admin", "remove"],
+      },
+      {
         path: "/settings/api-keys",
         title: "Ingest keys",
         keywords: ["api", "key", "token", "secret", "site key", "browser key", "otlp"],
+      },
+      {
+        path: "/settings/audit",
+        title: "Audit log",
+        requires: "read_audit",
+        keywords: ["audit", "history", "activity", "who", "log", "security", "support"],
       },
       {
         path: "/settings/channels",

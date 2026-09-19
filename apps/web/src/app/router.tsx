@@ -10,6 +10,8 @@ import { ChannelDetailScreen } from "@/features/alerts/ChannelDetailScreen";
 import { ChannelsScreen } from "@/features/alerts/ChannelsScreen";
 import { IncidentScreen } from "@/features/alerts/IncidentScreen";
 import { EditRuleScreen, NewRuleScreen, parseNewRuleSearch } from "@/features/alerts/RuleEditor";
+import { AuditScreen } from "@/features/audit/AuditScreen";
+import { AcceptInviteScreen } from "@/features/auth/AcceptInviteScreen";
 import { AccountScreen } from "@/features/auth/AccountScreen";
 import { ForgotPasswordScreen } from "@/features/auth/ForgotPasswordScreen";
 import { GeneralScreen } from "@/features/auth/GeneralScreen";
@@ -28,6 +30,7 @@ import { infrastructureFilters } from "@/features/infrastructure/filters";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
 import { LogsScreen, scopedService } from "@/features/logs/LogsScreen";
 import { severityFilterById } from "@/features/logs/severity";
+import { MembersScreen } from "@/features/members/MembersScreen";
 import { metricFilters } from "@/features/metrics/filters";
 import { MetricsScreen } from "@/features/metrics/MetricsScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
@@ -297,6 +300,18 @@ const settingsApiKeysRoute = createRoute({
   component: ApiKeysScreen,
 });
 
+const settingsMembersRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/members",
+  component: MembersScreen,
+});
+
+const settingsAuditRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/audit",
+  component: AuditScreen,
+});
+
 const settingsChannelsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/channels",
@@ -432,6 +447,19 @@ function ResetPasswordRoute() {
   return <ResetPasswordScreen token={resetPasswordRoute.useSearch().token} />;
 }
 
+// F26: where an invite email lands. Signed out, like the two recovery links above.
+const acceptInviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/invite",
+  component: AcceptInviteRoute,
+  validateSearch: parseTokenSearch,
+});
+
+/** The route owns the search param; the screen owns everything after it. */
+function AcceptInviteRoute() {
+  return <AcceptInviteScreen token={acceptInviteRoute.useSearch().token} />;
+}
+
 const forgotPasswordRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/forgot-password",
@@ -473,6 +501,8 @@ const routeTree = rootRoute.addChildren([
     settingsGeneralRoute,
     settingsAccountRoute,
     settingsApiKeysRoute,
+    settingsMembersRoute,
+    settingsAuditRoute,
     settingsChannelsRoute,
     settingsChannelRoute,
     settingsProjectsRoute,
@@ -487,6 +517,7 @@ const routeTree = rootRoute.addChildren([
   docsPageRoute,
   verifyEmailRoute,
   resetPasswordRoute,
+  acceptInviteRoute,
   forgotPasswordRoute,
 ]);
 

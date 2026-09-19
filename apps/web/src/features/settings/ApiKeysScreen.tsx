@@ -7,6 +7,7 @@ import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
+import { useCan } from "@/shared/identity";
 import { useSelection } from "@/shared/selection";
 import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
@@ -70,6 +71,8 @@ export function ApiKeysScreen() {
 
   const create = useCreateApiKey(projectId);
   const revoke = useRevokeApiKey(projectId);
+  // Anyone may read the list; minting and withdrawing a key are an admin's (F26, FR1).
+  const canManage = useCan("manage_credentials");
 
   function mint(name: string) {
     create.mutate(name, {
@@ -114,7 +117,7 @@ export function ApiKeysScreen() {
           rotation was started — then both belong, because they are about different
           keys and dismissing the panel first would destroy a secret nothing can
           reissue. */}
-      {minted === undefined || rotating ? (
+      {canManage && (minted === undefined || rotating) ? (
         <CreateKeyForm
           rotating={rotating}
           onCancelRotation={() => setRotating(undefined)}
@@ -150,6 +153,7 @@ export function ApiKeysScreen() {
       ) : (
         <KeyList
           keys={keys.data}
+          canManage={canManage}
           onRotate={setRotating}
           onRevoke={(key) => revoke.mutate(key.id)}
           revokingId={revoke.isPending ? revoke.variables : undefined}
@@ -286,6 +290,7 @@ function CreateKeyForm({
 
 function KeyList({
   keys,
+  canManage,
   onRotate,
   onRevoke,
   revokingId,
@@ -293,6 +298,7 @@ function KeyList({
   onDismissRevokeError,
 }: {
   keys: readonly ApiKeySummary[];
+  canManage: boolean;
   onRotate: (key: ApiKeySummary) => void;
   onRevoke: (key: ApiKeySummary) => void;
   revokingId: string | undefined;
@@ -326,6 +332,7 @@ function KeyList({
       <ul className="border-line border-t">
         {orderedKeys(keys).map((key) => (
           <KeyRow
+            canManage={canManage}
             key={key.id}
             apiKey={key}
             now={now}
@@ -341,12 +348,14 @@ function KeyList({
 
 function KeyRow({
   apiKey,
+  canManage,
   now,
   onRotate,
   onRevoke,
   revoking,
 }: {
   apiKey: ApiKeySummary;
+  canManage: boolean;
   now: number;
   onRotate: (key: ApiKeySummary) => void;
   onRevoke: (key: ApiKeySummary) => void;
@@ -375,7 +384,7 @@ function KeyRow({
           </p>
         </div>
 
-        {status.revoked ? null : (
+        {status.revoked || !canManage ? null : (
           <div className="flex shrink-0 items-center gap-2">
             <Button variant="secondary" onClick={() => onRotate(apiKey)}>
               Rotate

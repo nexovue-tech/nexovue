@@ -22,6 +22,7 @@ _VERIFIED_OWNERS: Final = text(
     """
     SELECT email FROM users
     WHERE org_id = :org_id AND role = 'owner' AND email_verified_at IS NOT NULL
+      AND removed_at IS NULL
     ORDER BY email
     """
 )

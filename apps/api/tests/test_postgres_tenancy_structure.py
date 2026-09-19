@@ -62,6 +62,13 @@ EXEMPT: Final = {
     # key resolves by its prefix: the token is what *establishes* the tenant, and
     # the caller is a cron job with no session to say which one.
     "record_ping_by_token_hash",
+    # A set-password link (an invite, F26) resolves its person by the link's
+    # hash alone: nobody is signed in, and the link is what *establishes* the
+    # tenant, as a heartbeat token does.
+    "find_by_set_password_link",
+    # An invite must say when an address belongs to another organization (D1),
+    # and addresses are unique system-wide — `email_is_taken`'s reason.
+    "find_by_email",
 }
 
 

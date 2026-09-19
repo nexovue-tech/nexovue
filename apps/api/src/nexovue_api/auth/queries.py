@@ -6,6 +6,7 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from nexovue_api.data.postgres.models import Organization, User
 
@@ -21,7 +22,11 @@ async def find_active_user_by_email(
     statement = (
         select(User, Organization)
         .join(Organization, Organization.id == User.org_id)
-        .where(User.email == email, Organization.deleted_at.is_(None))
+        .where(
+            User.email == email,
+            User.removed_at.is_(None),
+            Organization.deleted_at.is_(None),
+        )
     )
     row = (await session.execute(statement)).first()
     return (row[0], row[1]) if row is not None else None
@@ -47,3 +52,26 @@ async def load_identity(
     )
     row = (await session.execute(statement)).first()
     return (row[0], row[1]) if row is not None else None
+
+
+async def find_by_set_password_link(
+    session: AsyncSession, token_hash: str
+) -> tuple[User, Organization, User | None] | None:
+    """The person a set-password link names, their organization, and who invited them.
+
+    Cross-tenant by nature: the link is what identifies the tenant, and nobody is
+    signed in yet. A removed person or a deleted organization holds no live link.
+    """
+    inviter = aliased(User)
+    statement = (
+        select(User, Organization, inviter)
+        .join(Organization, Organization.id == User.org_id)
+        .outerjoin(inviter, inviter.id == User.invited_by)
+        .where(
+            User.set_password_token_hash == token_hash,
+            User.removed_at.is_(None),
+            Organization.deleted_at.is_(None),
+        )
+    )
+    row = (await session.execute(statement)).first()
+    return (row[0], row[1], row[2]) if row is not None else None

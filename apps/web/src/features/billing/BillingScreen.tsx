@@ -7,6 +7,7 @@ import { TextField } from "@/shared/components/TextField";
 import { formatDecimalBytes } from "@/shared/format/bytes";
 import { formatMoney } from "@/shared/format/money";
 import { formatCount } from "@/shared/format/number";
+import { useCan } from "@/shared/identity";
 import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 
 import type { BillingOverview, PlanOption } from "./api";
@@ -53,6 +54,7 @@ import { openCheckout, SCRIPT_BLOCKED } from "./checkout-handoff";
  * controls, because a control that vanishes teaches nobody who to ask.
  */
 export function BillingScreen() {
+  const canSpend = useCan("commit_spend");
   // Null until the customer picks one, so the API answers with whatever this
   // organization already pays in rather than a guess made here.
   const [currency, setCurrency] = useState<string>();
@@ -85,8 +87,15 @@ export function BillingScreen() {
       <div className="flex flex-col gap-10">
         <ThisMonth overview={overview.data} />
         <CurrencyChoice overview={overview.data} onChange={setCurrency} />
-        <Arrangement overview={overview.data} />
-        <Upgrade overview={overview.data} currency={overview.data.currency} />
+        <Arrangement overview={overview.data} canSpend={canSpend} />
+        {canSpend ? (
+          <Upgrade overview={overview.data} currency={overview.data.currency} />
+        ) : (
+          <p className="max-w-2xl text-ink-dim text-sm">
+            Changing the plan or the subscription is the owner's: it commits the organization to a
+            recurring charge.
+          </p>
+        )}
         <Charges overview={overview.data} />
       </div>
     </SettingsLayout>
@@ -220,7 +229,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Arrangement({ overview }: { overview: BillingOverview }) {
+function Arrangement({ overview, canSpend }: { overview: BillingOverview; canSpend: boolean }) {
   const cancel = useCancelSubscription();
   const [confirming, setConfirming] = useState(false);
   const subscription = overview.subscription;
@@ -232,7 +241,7 @@ function Arrangement({ overview }: { overview: BillingOverview }) {
       <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Subscription</h2>
       <p className="text-ink text-sm leading-relaxed">{describeSubscription(subscription)}</p>
 
-      {subscription.status === "cancelled" ? null : confirming ? (
+      {subscription.status === "cancelled" || !canSpend ? null : confirming ? (
         <div className="rounded border border-warning-border bg-warning-subtle p-4 text-sm">
           <p className="text-warning-text">{describeCancellation(subscription)}</p>
           <div className="mt-3 flex gap-2">

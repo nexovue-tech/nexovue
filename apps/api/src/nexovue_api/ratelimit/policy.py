@@ -169,6 +169,10 @@ AUTH_PATHS: Final = (
     # the reason `/auth/` is not listed here as a prefix. If a screen ever starts
     # polling it, it needs a path of its own rather than a wider rule.
     f"{API_PREFIX}/profile/two-factor",
+    # Previewing and accepting an invite (F26). The token in the body is the
+    # whole credential, so both are token guessing, throttled as a reset link
+    # is; accepting also sets a password.
+    f"{API_PREFIX}/invitations",
 )
 # **These must be the routers' real prefixes, and two of them were not.**
 # `/errors` and `/database` matched nothing: the routers are mounted at

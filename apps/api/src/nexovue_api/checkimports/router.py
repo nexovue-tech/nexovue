@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayOperateChecks
 from nexovue_api.checkimports import service
 from nexovue_api.checkimports.schemas import (
     ImportConfirmed,
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/check-imports", tags=["check imports"])
 
 @router.post("/preview", summary="What an import would create; nothing is saved")
 async def preview_import(
-    identity: MayAdminister, db: DbSession, request: ImportPreviewRequest
+    identity: MayOperateChecks, db: DbSession, request: ImportPreviewRequest
 ) -> ImportPlan:
     return await service.preview(db, org_id=identity.org_id, request=request)
 
@@ -31,7 +31,7 @@ async def preview_import(
     summary="Create the reviewed checks, with their secrets and variables",
 )
 async def confirm_import(
-    identity: MayAdminister,
+    identity: MayOperateChecks,
     db: DbSession,
     settings: AppSettings,
     request: ImportConfirmRequest,

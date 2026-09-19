@@ -78,7 +78,7 @@
 | **F23** | Onboarding | ✅ Yes | 🔲 | 0 | Signup → two env vars → first-span celebration; auto-created defaults not built |
 | **F24** | Integration settings | 🟡 Partly | 🔲 | 2 | Keys, site keys, deploy webhooks, cloud and DB pollers, integration health all built; AWS role flow is not |
 | **F25** | Usage & cost view | ✅ Yes | 🔲 | 0 | Usage, allowance, projected cost, billing, charge history |
-| **F26** | RBAC / user management | 🟡 Partly | 🔲 | **1** | **Role gates are built** (`auth/policy.py`); there is **no way to invite a second person**, so no role can be held or changed |
+| **F26** | RBAC / user management | ✅ Yes | ✅ | **1** | **Built 2026-09-19** as Stage 1 of [Team, API and admin access](../features/team-and-api-access/spec.md) (with F31 and F36): invite by email, accept, four roles on every route and screen, remove, transfer ownership, audit log screen — see [status](../features/team-and-api-access/status.md) |
 | **F27** | Data controls | 🟡 Partly | 🔲 | 2 | Masking, plan retention, tenant purge and CSV export built; archival tiers and a GDPR surface are not |
 | **F28** | Deployment / release tracking | 🟡 Partly | 🔲 | 2 | Deploy webhooks, chart markers and error-to-deploy linkage built; the release-comparison screen is not |
 | **F29** | LLM / AI-app observability | 🔴 No | 🔲 | Later | `gen_ai.*` attributes already land and are queryable; no screen, no metric contract |

@@ -5,6 +5,7 @@ import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
+import { useCan } from "@/shared/identity";
 import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 
 import type { ProjectDeleted } from "./api";
@@ -25,6 +26,7 @@ import { ProjectSettings } from "./ProjectSettings";
  * them to draw a list would be a page of documents nobody asked to see.
  */
 export function ProjectsScreen() {
+  const canConfigure = useCan("configure_projects");
   const projects = useProjects();
   const [selectedId, setSelectedId] = useState<string>();
   const [deleted, setDeleted] = useState<ProjectDeleted>();
@@ -46,7 +48,7 @@ export function ProjectsScreen() {
           <DeletionReceipt result={deleted} onDismiss={() => setDeleted(undefined)} />
         ) : null}
 
-        <CreateProject />
+        {canConfigure ? <CreateProject /> : null}
 
         {projects.isPending ? (
           <SkeletonRows rows={3} label="Loading projects" />

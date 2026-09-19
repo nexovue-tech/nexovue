@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayManageCredentials
 from nexovue_api.deps import DbSession
 from nexovue_api.integrations import service
 from nexovue_api.integrations.schemas import (
@@ -30,7 +30,7 @@ async def list_integrations(
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Connect a cloud account")
 async def create_integration(
-    identity: MayAdminister,
+    identity: MayManageCredentials,
     db: DbSession,
     request: CreateIntegrationRequest,
 ) -> CreatedIntegrationResponse:
@@ -43,7 +43,7 @@ async def create_integration(
     "/{integration_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Disconnect an account"
 )
 async def delete_integration(
-    identity: MayAdminister,
+    identity: MayManageCredentials,
     db: DbSession,
     integration_id: uuid.UUID,
 ) -> None:

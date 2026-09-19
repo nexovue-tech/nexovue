@@ -3,10 +3,12 @@ import { useId, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { InlineFailure } from "@/shared/components/InlineFailure";
+import { Permitted } from "@/shared/components/Permitted";
 import { SelectField } from "@/shared/components/SelectField";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
 import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
+import { useCan } from "@/shared/identity";
 import { useNothingLive } from "@/shared/refresh";
 import { useSelection } from "@/shared/selection";
 
@@ -71,6 +73,14 @@ const RENOTIFY: readonly { id: string; label: string }[] = [
 ];
 
 export function NewRuleScreen() {
+  return (
+    <Permitted action="operate_alerts" who="an owner, an admin or a member">
+      <NewRuleScreenBody />
+    </Permitted>
+  );
+}
+
+function NewRuleScreenBody() {
   useNothingLive();
   const search = useSearch({ from: "/shell/alerts/rules/new" });
   const { projectId } = useSelection();
@@ -95,6 +105,14 @@ export function NewRuleScreen() {
 }
 
 export function EditRuleScreen() {
+  return (
+    <Permitted action="operate_alerts" who="an owner, an admin or a member">
+      <EditRuleScreenBody />
+    </Permitted>
+  );
+}
+
+function EditRuleScreenBody() {
   useNothingLive();
   const { ruleId } = useParams({ from: "/shell/alerts/rules/$ruleId" });
   const rule = useAlertRule(ruleId);
@@ -241,6 +259,8 @@ function RuleForm({
 }) {
   const save = useSaveRule();
   const channels = useChannels();
+  // A member writes rules but channels hold secrets: connecting one is an admin's.
+  const canConnect = useCan("manage_channels");
   const navigate = useNavigate();
   const [draft, setDraft] = useState(initial);
   const [baseline, setBaseline] = useState(initial);
@@ -337,7 +357,7 @@ function RuleForm({
           {problems.channels ? (
             <p className="text-critical-text text-xs">{problems.channels}</p>
           ) : null}
-          {connecting ? null : (
+          {connecting || !canConnect ? null : (
             <div>
               <Button variant="secondary" onClick={() => setConnecting(true)}>
                 Connect a new channel

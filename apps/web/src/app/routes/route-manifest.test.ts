@@ -92,6 +92,8 @@ describe("the sidebar", () => {
       "/signup",
       "/forgot-password",
       "/reset-password",
+      // F26: where an invite email lands.
+      "/invite",
       "/verify-email",
       // The setup documentation. Reachable from the sidebar, but as a plain
       // anchor rather than a nav item: it is not a screen of this console, takes

@@ -4,6 +4,7 @@ import { useEffect, useId, useState } from "react";
 import { Button } from "@/shared/components/Button";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
+import { Permitted } from "@/shared/components/Permitted";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Tabs } from "@/shared/components/Tabs";
 import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
@@ -54,6 +55,14 @@ interface LoadedFile {
 }
 
 export function ImportScreen() {
+  return (
+    <Permitted action="operate_checks" who="an owner, an admin or a member">
+      <ImportScreenForm />
+    </Permitted>
+  );
+}
+
+function ImportScreenForm() {
   // Nothing here refreshes on a timer; see NewCheckScreen.
   useNothingLive();
   const { projectId } = useSelection();

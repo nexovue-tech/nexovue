@@ -257,6 +257,24 @@ async def test_me_returns_the_same_body_as_login(user: User, organization: Organ
     assert identity.json() == signed_in.json()
 
 
+async def test_me_says_what_the_person_may_do(user: User, organization: Organization) -> None:
+    """The console hides what a role cannot do from this list (F26, FR3)."""
+    user.role = "member"
+    app = _build_app(user=user, organization=organization, store=FakeSessionStore())
+
+    async with await _client(app) as client:
+        await client.post(
+            f"{API_PREFIX}/auth/login", json={"email": user.email, "password": PASSWORD}
+        )
+        identity = await client.get(f"{API_PREFIX}/auth/me")
+
+    assert identity.json()["user"]["permissions"] == [
+        "operate_checks",
+        "operate_alerts",
+        "upload_source_maps",
+    ]
+
+
 async def test_a_session_naming_a_user_that_is_gone_is_401(
     user: User, organization: Organization
 ) -> None:

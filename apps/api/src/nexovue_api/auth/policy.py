@@ -1,104 +1,65 @@
-"""Who may change something, in one place.
+"""Route gates over the one table of who may do what (`auth/permissions.py`).
 
-**This changes no behaviour today, and that is what makes it safe to add now.**
-Phase 1 is single-operator by decision (`phase-1-plan.md` §9): signup mints one
-owner, there is no invite flow, and `users.role` is therefore `owner` for every
-user that exists. Every policy below admits every current user.
+Every mutating route declares the action it performs — `MayOperateChecks`,
+`MayManageChannels` — and `ALLOWED` says which roles may perform each action.
+The table is the specification's FR1 (`docs/features/team-and-api-access/`),
+and nothing else in the API decides who may do something.
 
-It exists because the alternative is worse later. A role is read in exactly one
-module today — `apikeys/service.py`, four call sites — while 47 routes are
-served. When P1-76 brings a second person into an organization, or F26 brings
-role enforcement, authorization stops being optional on all of them at once, and
-retrofitting a cross-cutting concern into 47 places after another phase of
-feature work is the change that never gets made.
+**Named for what it protects, not for who may do it.** Widening who may operate
+checks is one line in `ALLOWED`; a route never names a role.
 
-**A dependency rather than a service-layer check**, because every route already
-takes `CurrentIdentity` and this composes with it: a route swaps one annotation
-and its body is untouched. The four existing checks inside `apikeys/service.py`
-stay where they are — they guard *site* keys too, which is finer than a route.
+**A dependency, not a service-layer check**, because every route already takes
+`CurrentIdentity` and this composes with it. It re-reads the caller's role on
+every request (the identity is loaded per request), so a role change applies to
+the very next request of every open session.
 
-**Named for what it protects, not for who may do it.** `MayConfigureIngestion`
-survives F26 deciding that a `member` may configure ingestion;
-`OwnerOrAdmin` would have to be renamed everywhere the day the answer changes.
-
-`test_authorization_coverage.py` fails when a mutating route on an authenticated
-router takes plain `CurrentIdentity`, so a route added next month is covered the
-day it is written rather than the day someone remembers.
+`test_authorization_coverage.py` fails when a mutating route declares no action,
+or declares a different one than its checked-in table says — so a gate that
+quietly widens is a failed build, not a review comment.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated, Final
+from typing import Annotated
 
 from fastapi import Depends
 
 from nexovue_api.auth.dependencies import CurrentIdentity, Identity
-from nexovue_api.data.postgres.models import USER_ROLES
+from nexovue_api.auth.permissions import ALLOWED, Action, may
 from nexovue_api.errors.exceptions import PermissionDeniedError
 
-# The roles that may change a project's configuration. Matches
-# `apikeys.service.ROLES_THAT_MAY_MANAGE_KEYS`, which predates this module and
-# guards site keys as well as routes — restated rather than imported, because a
-# policy module importing a domain service inverts the dependency.
-ROLES_THAT_MAY_ADMINISTER: Final = frozenset({"owner", "admin"})
 
-# Ending the organization is the one action that is not administration. An admin
-# rotates a key, edits a check, revokes a secret — all recoverable. Deleting the
-# tenant erases every other member's data along with their own and cannot be
-# undone once the telemetry mutation has run, so it belongs to the person the
-# account belongs to. This is the second policy `MayAdminister`'s note reserved:
-# the two genuinely differ.
-ROLES_THAT_MAY_END_THE_ORGANIZATION: Final = frozenset({"owner"})
-
-# Committing the organization to a recurring charge, and ending that commitment.
-# An admin administers what the organization already pays for; signing a mandate
-# that debits an account every month is the account holder's own act, and the
-# person who answers for the bill is the person who may create it. Cancelling
-# sits here for the same reason and not out of symmetry: an admin who could end
-# the mandate could stop the organization's ingestion at the next boundary.
-# Reading the overview stays open to every member — see `read_billing_overview`.
-ROLES_THAT_MAY_COMMIT_SPEND: Final = frozenset({"owner"})
-
-
-def require_role(*allowed: str) -> Callable[[Identity], Identity]:
-    """Build a dependency that admits only these roles.
-
-    The roles are checked against `USER_ROLES` at import time rather than at
-    request time: a typo in a policy would otherwise be a gate that admits
-    nobody, discovered by a customer rather than by a start-up failure.
-    """
-    unknown = sorted(set(allowed) - set(USER_ROLES))
-    if unknown:
-        raise ValueError(f"unknown role(s) in policy: {unknown}; known roles are {USER_ROLES}")
-
-    permitted = frozenset(allowed)
+def require(action: Action) -> Callable[[Identity], Identity]:
+    """Build a dependency that admits only the roles `action` allows."""
 
     def guard(identity: CurrentIdentity) -> Identity:
-        if identity.user.role not in permitted:
-            raise PermissionDeniedError(_refusal(permitted))
+        if not may(identity.user.role, action):
+            raise PermissionDeniedError(refusal(action))
         return identity
 
     return guard
 
 
-def _refusal(permitted: frozenset[str]) -> str:
+def refusal(action: Action) -> str:
     """Say which roles may, not which role the caller holds.
 
-    Telling a caller their own role back is fine; telling them the rule is what
-    lets them ask the right person. Sorted so the message is stable.
+    Telling a caller the rule is what lets them ask the right person. Sorted so
+    the message is stable.
     """
-    named = (f"an {role}" if role[0] in "aeiou" else f"a {role}" for role in sorted(permitted))
+    roles = sorted(ALLOWED[action])
+    named = (f"an {role}" if role[0] in "aeiou" else f"a {role}" for role in roles)
     return f"Only {' or '.join(named)} can change this."
 
 
-# Configuration: keys, checks, integrations, deploy secrets.
-MayAdminister = Annotated[Identity, Depends(require_role(*ROLES_THAT_MAY_ADMINISTER))]
-
-# Deletion of the whole tenant, and nothing else.
-MayEndTheOrganization = Annotated[
-    Identity, Depends(require_role(*ROLES_THAT_MAY_END_THE_ORGANIZATION))
-]
-
-# Starting or ending a paid subscription.
-MayCommitSpend = Annotated[Identity, Depends(require_role(*ROLES_THAT_MAY_COMMIT_SPEND))]
+MayOperateChecks = Annotated[Identity, Depends(require(Action.OPERATE_CHECKS))]
+MayOperateAlerts = Annotated[Identity, Depends(require(Action.OPERATE_ALERTS))]
+MayUploadSourceMaps = Annotated[Identity, Depends(require(Action.UPLOAD_SOURCE_MAPS))]
+MayManageChannels = Annotated[Identity, Depends(require(Action.MANAGE_CHANNELS))]
+MayManageCheckSecrets = Annotated[Identity, Depends(require(Action.MANAGE_CHECK_SECRETS))]
+MayConfigureProjects = Annotated[Identity, Depends(require(Action.CONFIGURE_PROJECTS))]
+MayManageCredentials = Annotated[Identity, Depends(require(Action.MANAGE_CREDENTIALS))]
+MayManageMembers = Annotated[Identity, Depends(require(Action.MANAGE_MEMBERS))]
+MayReadAudit = Annotated[Identity, Depends(require(Action.READ_AUDIT))]
+MayCommitSpend = Annotated[Identity, Depends(require(Action.COMMIT_SPEND))]
+MayEndTheOrganization = Annotated[Identity, Depends(require(Action.END_ORGANIZATION))]

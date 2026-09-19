@@ -28,8 +28,12 @@ const HTTP_FORBIDDEN = 403;
 const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_SERVER_ERROR_FLOOR = 500;
 
-/** The screens where nobody is signed in yet, so a 401 is an answer rather than a lapse. */
-const AUTH_SCREEN_PATHS = new Set(["/login", "/signup"]);
+/**
+ * The screens where nobody is signed in yet, so a 401 is an answer rather than a lapse.
+ * `/invite` asks who is signed in only to warn that accepting will switch accounts; a
+ * signed-out invitee is the ordinary case, not an expired session.
+ */
+const AUTH_SCREEN_PATHS = new Set(["/login", "/signup", "/invite"]);
 
 /** Set by the app once the router exists, so this module does not import the router. */
 let redirectToLogin: (() => void) | undefined;

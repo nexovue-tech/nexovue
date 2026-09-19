@@ -1126,9 +1126,10 @@ async def test_a_bad_slug_is_refused_before_it_reaches_the_service(
 
 def test_the_policy_that_guards_these_routes_refuses_a_member() -> None:
     """The dependency itself, so the refusal above is not an accident of wiring."""
-    from nexovue_api.auth.policy import ROLES_THAT_MAY_ADMINISTER, require_role
+    from nexovue_api.auth.permissions import Action
+    from nexovue_api.auth.policy import require
 
-    guard = require_role(*ROLES_THAT_MAY_ADMINISTER)
+    guard = require(Action.CONFIGURE_PROJECTS)
     member = Tenant("shell")
     member.user.role = "member"
 

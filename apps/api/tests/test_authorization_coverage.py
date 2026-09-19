@@ -1,8 +1,10 @@
-"""Every authenticated route that changes something names a policy.
+"""Every route that changes something names the action it performs — the right one.
 
-`auth/policy.py` exists so authorization is not retrofitted into 47 routes after
-a phase of feature work. That only holds if a route added next month is covered
-the day it is written, which is what this checks.
+`auth/policy.py` holds one table of who may do what (F26, FR1). That only holds
+if a route added next month declares its action the day it is written, and if a
+route's action cannot quietly change to one more roles may perform. Both are
+checked here: every mutating handler must be in `POLICY_OF` with its exact
+policy, or in `EXEMPT` with its reason.
 
 Structural, in the shape `test_tenant_chokepoint_structure.py` established: it
 parses every router and judges the annotation, so a new route is judged the
@@ -18,6 +20,7 @@ every entry in it carries its reason. Adding a name there is a decision.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from typing import Final
 
@@ -26,7 +29,12 @@ import pytest
 from nexovue_api import auth
 
 API_SOURCE: Final = Path(auth.__file__).resolve().parents[1]
-ROUTERS: Final = sorted(API_SOURCE.glob("*/router.py"))
+# Every module, not only files named `router.py`: `channels/test_router.py` served
+# Send test for months without ever being judged, because the glob said
+# `*/router.py` and that file is not one.
+ROUTERS: Final = sorted(
+    path for path in API_SOURCE.rglob("*.py") if "router" in path.read_text(encoding="utf-8")
+)
 
 MUTATING_METHODS: Final = frozenset({"post", "patch", "put", "delete"})
 
@@ -102,22 +110,93 @@ EXEMPT: Final = {
     "begin_second_factor_enrolment",
     "confirm_second_factor",
     "disable_second_factor",
+    # Unauthenticated by design: both are reached from an invite email by
+    # someone who is not signed in yet. The link's token in the body is the whole
+    # credential — 256 bits, stored only as a hash, single-use and expiring in
+    # seven days (`auth/set_password.py`) — and both sit on the AUTH rate tier.
+    # Preview is a POST so the token travels in a body, not a logged URL.
+    "preview_invitation",
+    "accept_invitation",
     # A POST that reads. Symbolication turns minified frames back into original
     # ones and writes nothing; it is a POST because a stack trace does not fit
     # in a query string.
     "symbolicate",
-    # Guarded inside `apikeys/service.py` instead, and more finely: those checks
-    # cover site keys as well as ingest keys, which is below route granularity.
-    # Moving them up here would lose that.
-    "create_api_key",
-    "revoke_api_key",
-    "create_site_key",
-    "revoke_site_key",
+    # Unauthenticated by design: the processor calls it, and the signature over
+    # the raw body is the gate (`billing/`), as for `receive_deploy`.
+    "receive_billing_event",
+    # Unauthenticated: the browser returns here from the processor's checkout,
+    # and nothing it carries is trusted — payment is confirmed only by the
+    # signed webhook (ADR-008).
+    "return_from_checkout",
     # Unauthenticated by design: a customer's cron job calls it and has no
     # session. The token in the path is the whole credential — shown once, kept
     # only as its hash, rotatable — and the only thing it can do is mark that one
     # heartbeat as called. It has its own rate tier.
     "receive_heartbeat",
+}
+
+
+# Every gated mutating handler and the policy it must carry, as
+# `<module path>:<handler>`. Changing a policy here is changing who may do
+# something (FR1), and it should read that way in review.
+POLICY_OF: Final = {
+    "alerts/router.py:create_rule": "MayOperateAlerts",
+    "alerts/router.py:update_rule": "MayOperateAlerts",
+    "alerts/router.py:mute_rule": "MayOperateAlerts",
+    "alerts/router.py:delete_rule": "MayOperateAlerts",
+    "maintenance/router.py:create_window": "MayOperateAlerts",
+    "maintenance/router.py:update_window": "MayOperateAlerts",
+    "maintenance/router.py:delete_window": "MayOperateAlerts",
+    "checks/router.py:create_check": "MayOperateChecks",
+    "checks/router.py:update_check": "MayOperateChecks",
+    "checks/router.py:delete_check": "MayOperateChecks",
+    "checks/router.py:issue_heartbeat_token": "MayOperateChecks",
+    "checkruns/router.py:run_now": "MayOperateChecks",
+    "checkfiles/router.py:upload_file": "MayOperateChecks",
+    "checkimports/router.py:preview_import": "MayOperateChecks",
+    "checkimports/router.py:confirm_import": "MayOperateChecks",
+    "sourcemaps/router.py:upload_source_map": "MayUploadSourceMaps",
+    "channels/router.py:create_channel": "MayManageChannels",
+    "channels/router.py:update_channel": "MayManageChannels",
+    "channels/router.py:rotate_signing_secret": "MayManageChannels",
+    "channels/router.py:mute_channel": "MayManageChannels",
+    "channels/router.py:set_quiet_hours": "MayManageChannels",
+    "channels/router.py:delete_channel": "MayManageChannels",
+    "channels/test_router.py:send_test": "MayManageChannels",
+    "checksecrets/router.py:write_secret": "MayManageCheckSecrets",
+    "checksecrets/router.py:delete_secret": "MayManageCheckSecrets",
+    "checksecrets/router.py:write_variable": "MayManageCheckSecrets",
+    "checksecrets/router.py:delete_variable": "MayManageCheckSecrets",
+    "projects/router.py:create_project": "MayConfigureProjects",
+    "projects/router.py:update_project": "MayConfigureProjects",
+    "projects/router.py:delete_project": "MayConfigureProjects",
+    "projects/router.py:replace_sampling_config": "MayConfigureProjects",
+    "projects/router.py:replace_masking_config": "MayConfigureProjects",
+    "apikeys/router.py:create_api_key": "MayManageCredentials",
+    "apikeys/router.py:revoke_api_key": "MayManageCredentials",
+    "apikeys/router.py:create_site_key": "MayManageCredentials",
+    "apikeys/router.py:revoke_site_key": "MayManageCredentials",
+    "deploys/router.py:create_webhook_secret": "MayManageCredentials",
+    "deploys/router.py:revoke_webhook_secret": "MayManageCredentials",
+    "integrations/router.py:create_integration": "MayManageCredentials",
+    "integrations/router.py:delete_integration": "MayManageCredentials",
+    "billing/router.py:start_checkout": "MayCommitSpend",
+    "billing/router.py:cancel_subscription": "MayCommitSpend",
+    "organizations/router.py:delete_organization": "MayEndTheOrganization",
+    "members/router.py:invite_member": "MayManageMembers",
+    "members/router.py:resend_invitation": "MayManageMembers",
+    "members/router.py:withdraw_invitation": "MayManageMembers",
+    "members/router.py:change_role": "MayManageMembers",
+    "members/router.py:remove_member": "MayManageMembers",
+}
+
+# Reads that return a secret, and so are an action even though they change
+# nothing: a viewer reading every screen must not read these.
+SECRET_READS: Final = {
+    "deploys/router.py:read_webhook_secrets": "MayManageCredentials",
+    # Not a secret, but the organization's history of who did what: an owner's
+    # and an admin's to read (FR36, AC38).
+    "audit/router.py:read_audit_log": "MayReadAudit",
 }
 
 
@@ -137,10 +216,11 @@ def _methods_of(decorator: ast.Call) -> set[str]:
     return set()
 
 
-def _handlers(router: Path) -> list[tuple[str, str]]:
-    """Every handler in a router, as (function name, its argument annotations)."""
+def _handlers(router: Path) -> list[tuple[str, set[str], str]]:
+    """Every handler in a module, as (`<module>:<name>`, its methods, its annotations)."""
     tree = ast.parse(router.read_text(encoding="utf-8"))
-    found: list[tuple[str, str]] = []
+    module = router.relative_to(API_SOURCE).as_posix()
+    found: list[tuple[str, set[str], str]] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
             continue
@@ -157,30 +237,63 @@ def _handlers(router: Path) -> list[tuple[str, str]]:
             and decorator.func.value.id.endswith("router")
             for method in _methods_of(decorator)
         }
-        if not methods & MUTATING_METHODS:
+        if not methods:
             continue
         annotations = " ".join(
             ast.unparse(argument.annotation)
             for argument in node.args.args + node.args.kwonlyargs
             if argument.annotation is not None
         )
-        found.append((node.name, annotations))
+        found.append((f"{module}:{node.name}", methods, annotations))
     return found
 
 
-@pytest.mark.parametrize("router", ROUTERS, ids=lambda p: p.parent.name)
-def test_a_mutating_route_names_a_policy(router: Path) -> None:
-    """A route that changes something says who may change it."""
-    offending = [
-        name
-        for name, annotations in _handlers(router)
-        if name not in EXEMPT and UNGUARDED_IDENTITY in annotations
+def _all_handlers() -> list[tuple[str, set[str], str]]:
+    return [handler for router in ROUTERS for handler in _handlers(router)]
+
+
+def _mutating() -> list[tuple[str, str]]:
+    return [
+        (key, annotations)
+        for key, methods, annotations in _all_handlers()
+        if methods & MUTATING_METHODS
     ]
-    assert not offending, (
-        f"{router.parent.name}/{router.name}: {offending} change something while taking plain "
-        f"`{UNGUARDED_IDENTITY}`. Use a policy from `auth/policy.py`, or add the name to EXEMPT "
-        f"with the reason it is safe."
+
+
+def _name(key: str) -> str:
+    return key.rpartition(":")[2]
+
+
+def test_every_mutating_route_is_gated_or_exempt() -> None:
+    """A new mutating route must be placed: in `POLICY_OF` with its policy, or in
+    `EXEMPT` with the reason it needs none."""
+    unplaced = sorted(
+        key for key, _ in _mutating() if key not in POLICY_OF and _name(key) not in EXEMPT
     )
+    assert not unplaced, (
+        f"{unplaced} change something and are in neither POLICY_OF nor EXEMPT. Give each a "
+        f"policy from `auth/policy.py` and add it to POLICY_OF, or add it to EXEMPT "
+        f"with its reason."
+    )
+
+
+@pytest.mark.parametrize("key", sorted({**POLICY_OF, **SECRET_READS}))
+def test_a_route_carries_exactly_its_policy(key: str) -> None:
+    """The policy on the route is the one the table names — so widening a gate is
+    a change to this file, not a quiet edit to an annotation."""
+    expected = {**POLICY_OF, **SECRET_READS}[key]
+    annotations = {found: ann for found, _, ann in _all_handlers()}
+    assert key in annotations, f"{key} is in the table but no such handler exists"
+    carried = set(re.findall(r"\bMay\w+", annotations[key]))
+    assert carried == {expected}, f"{key} carries {sorted(carried)}; the table says {expected}"
+    assert UNGUARDED_IDENTITY not in annotations[key]
+
+
+def test_an_exempt_route_takes_no_policy_by_accident() -> None:
+    """An exempt handler is exempt on purpose; one that also carries a policy is a
+    stale exemption hiding a gated route from `POLICY_OF`."""
+    both = sorted(key for key, ann in _mutating() if _name(key) in EXEMPT and "May" in ann)
+    assert not both, f"{both} are exempt but carry a policy; move them to POLICY_OF"
 
 
 def test_every_exemption_names_a_route_that_exists() -> None:
@@ -190,18 +303,13 @@ def test_every_exemption_names_a_route_that_exists() -> None:
     worth catching — it is how an exemption written for one route ends up
     covering a different one that reuses the name.
     """
-    declared = {name for router in ROUTERS for name, _ in _handlers(router)}
+    declared = {_name(key) for key, _ in _mutating()}
     stale = sorted(EXEMPT - declared)
     assert not stale, f"EXEMPT names handlers that no longer exist: {stale}"
 
 
-def test_the_policy_refuses_an_unknown_role() -> None:
-    """A typo in a policy is a gate that admits nobody.
+def test_every_policy_named_exists() -> None:
+    from nexovue_api.auth import policy
 
-    Checked when the module is imported rather than when a request arrives, so
-    it fails at start-up instead of in front of a customer.
-    """
-    from nexovue_api.auth.policy import require_role
-
-    with pytest.raises(ValueError, match="unknown role"):
-        require_role("owner", "adminstrator")
+    missing = sorted({*POLICY_OF.values(), *SECRET_READS.values()} - set(dir(policy)))
+    assert not missing, f"no such policy in auth/policy.py: {missing}"

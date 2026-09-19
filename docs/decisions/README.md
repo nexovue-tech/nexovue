@@ -19,6 +19,8 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-013 — Notifications are an outbox, written in the transaction that decided them](ADR-013-notifications-are-an-outbox.md)
 - [ADR-014 — Telemetry erasure runs as a nightly batch, not per deletion](ADR-014-telemetry-erasure-runs-as-a-nightly-batch.md)
 - [ADR-015 — Profiles are normalised at the intake, the one exception to the untouched envelope](ADR-015-profiles-are-normalised-at-the-intake.md)
+- [ADR-016 — Staff work on their own host, as their own kind of account](ADR-016-staff-work-on-their-own-host.md)
+- [ADR-017 — A read token is its own credential, and the read API is the routes that accept it](ADR-017-a-read-token-is-its-own-credential.md)
 
 ## Earlier decisions, 0001–0112
 

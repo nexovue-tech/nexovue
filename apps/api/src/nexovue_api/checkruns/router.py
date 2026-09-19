@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayOperateChecks
 from nexovue_api.checkruns import service
 from nexovue_api.checks.schemas import RunNowAccepted, RunNowRequest, RunNowResult
 from nexovue_api.deps import AppSettings, DbSession, ProbeBrokerDep
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/check-runs", tags=["checks"])
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED, summary="Run a definition once")
 async def run_now(
-    identity: MayAdminister,
+    identity: MayOperateChecks,
     db: DbSession,
     settings: AppSettings,
     broker: ProbeBrokerDep,

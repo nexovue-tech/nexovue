@@ -22,6 +22,7 @@ from nexovue_api.auth import second_factor
 from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.auth.credentials import normalize_email, verify_password
 from nexovue_api.auth.encryption import CredentialBox
+from nexovue_api.auth.permissions import permissions_of
 from nexovue_api.auth.queries import find_active_user_by_email, load_identity
 from nexovue_api.auth.schemas import IdentityResponse, OrganizationSummary, UserSummary
 from nexovue_api.auth.sessions import SessionStore
@@ -102,7 +103,8 @@ async def _live_identity(db: AsyncSession, user_id: str) -> tuple[User, Organiza
     except ValueError:
         return None
     user = await db.get(User, identifier)
-    if user is None:
+    if user is None or user.removed_at is not None:
+        # Removed between the password and the code: the code must not finish it.
         return None
     return await load_identity(db, user_id=user.id, org_id=user.org_id)
 
@@ -177,6 +179,7 @@ def describe_user(user: User) -> UserSummary:
         role=user.role,
         timezone=user.timezone,
         email_verified_at=user.email_verified_at,
+        permissions=[str(action) for action in permissions_of(user.role)],
     )
 
 

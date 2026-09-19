@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayOperateAlerts
 from nexovue_api.deps import DbSession
 from nexovue_api.maintenance import service
 from nexovue_api.maintenance.schemas import (
@@ -28,7 +28,7 @@ async def list_windows(
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Schedule a maintenance window")
 async def create_window(
-    identity: MayAdminister, db: DbSession, request: WriteMaintenanceWindowRequest
+    identity: MayOperateAlerts, db: DbSession, request: WriteMaintenanceWindowRequest
 ) -> MaintenanceWindowSummary:
     return await service.create(
         db, org_id=identity.org_id, actor_user_id=identity.user.id, request=request
@@ -37,7 +37,7 @@ async def create_window(
 
 @router.put("/{window_id}", summary="Replace a maintenance window")
 async def update_window(
-    identity: MayAdminister,
+    identity: MayOperateAlerts,
     db: DbSession,
     window_id: uuid.UUID,
     request: WriteMaintenanceWindowRequest,
@@ -54,7 +54,7 @@ async def update_window(
 @router.delete(
     "/{window_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Remove a maintenance window"
 )
-async def delete_window(identity: MayAdminister, db: DbSession, window_id: uuid.UUID) -> None:
+async def delete_window(identity: MayOperateAlerts, db: DbSession, window_id: uuid.UUID) -> None:
     await service.remove(
         db, org_id=identity.org_id, actor_user_id=identity.user.id, window_id=window_id
     )

@@ -11,7 +11,7 @@ import uuid
 from fastapi import APIRouter, status
 
 from nexovue_api.auth.dependencies import CurrentIdentity
-from nexovue_api.auth.policy import MayAdminister
+from nexovue_api.auth.policy import MayOperateChecks
 from nexovue_api.checks import service
 from nexovue_api.checks.schemas import (
     CheckListResponse,
@@ -45,7 +45,7 @@ async def list_checks(
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Define a check")
 async def create_check(
-    identity: MayAdminister,
+    identity: MayOperateChecks,
     db: DbSession,
     settings: AppSettings,
     request: CreateCheckRequest,
@@ -66,7 +66,7 @@ async def get_check(identity: CurrentIdentity, db: DbSession, check_id: uuid.UUI
 
 @router.patch("/{check_id}", summary="Edit a check, or pause it")
 async def update_check(
-    identity: MayAdminister,
+    identity: MayOperateChecks,
     db: DbSession,
     settings: AppSettings,
     check_id: uuid.UUID,
@@ -83,7 +83,7 @@ async def update_check(
 
 
 @router.delete("/{check_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Remove a check")
-async def delete_check(identity: MayAdminister, db: DbSession, check_id: uuid.UUID) -> None:
+async def delete_check(identity: MayOperateChecks, db: DbSession, check_id: uuid.UUID) -> None:
     await service.remove(
         db, org_id=identity.org_id, actor_user_id=identity.user.id, check_id=check_id
     )
@@ -109,7 +109,7 @@ async def state_changes(
     summary="Issue a new heartbeat URL; the previous one stops working",
 )
 async def issue_heartbeat_token(
-    identity: MayAdminister, db: DbSession, check_id: uuid.UUID
+    identity: MayOperateChecks, db: DbSession, check_id: uuid.UUID
 ) -> HeartbeatToken:
     return await service.issue_heartbeat_token(
         db, org_id=identity.org_id, actor_user_id=identity.user.id, check_id=check_id

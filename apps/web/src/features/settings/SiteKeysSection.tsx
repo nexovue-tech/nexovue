@@ -8,6 +8,7 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
 import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
+import { useCan } from "@/shared/identity";
 
 import type { SiteKeySummary } from "./api";
 import { useCreateSiteKey, useRevokeSiteKey, useSiteKeys } from "./api";
@@ -56,6 +57,7 @@ export function SiteKeysSection({ projectId }: { projectId: string | undefined }
   const keys = useSiteKeys(projectId);
   const create = useCreateSiteKey(projectId);
   const revoke = useRevokeSiteKey(projectId);
+  const canManage = useCan("manage_credentials");
 
   return (
     <section className="mt-8 shrink-0 border-line border-t pt-5">
@@ -67,12 +69,14 @@ export function SiteKeysSection({ projectId }: { projectId: string | undefined }
         <p className="mt-1 text-ink-dim text-sm leading-relaxed">{PUBLIC_NOTE}</p>
       </header>
 
-      <CreateSiteKeyForm
-        onCreate={(name, allowedOrigins) => create.mutate({ name, allowedOrigins })}
-        pending={create.isPending}
-        error={create.error}
-        disabled={projectId === undefined}
-      />
+      {canManage ? (
+        <CreateSiteKeyForm
+          onCreate={(name, allowedOrigins) => create.mutate({ name, allowedOrigins })}
+          pending={create.isPending}
+          error={create.error}
+          disabled={projectId === undefined}
+        />
+      ) : null}
 
       {projectId === undefined ? null : keys.isPending ? (
         <div className="">
@@ -94,6 +98,7 @@ export function SiteKeysSection({ projectId }: { projectId: string | undefined }
       ) : (
         <SiteKeyList
           keys={keys.data}
+          canManage={canManage}
           onRevoke={(key) => revoke.mutate(key.id)}
           revokingId={revoke.isPending ? revoke.variables : undefined}
           revokeError={revoke.error}
@@ -190,12 +195,14 @@ function CreateSiteKeyForm({
 
 function SiteKeyList({
   keys,
+  canManage,
   onRevoke,
   revokingId,
   revokeError,
   onDismissRevokeError,
 }: {
   keys: readonly SiteKeySummary[];
+  canManage: boolean;
   onRevoke: (key: SiteKeySummary) => void;
   revokingId: string | undefined;
   revokeError: unknown;
@@ -220,6 +227,7 @@ function SiteKeyList({
       <ul className="border-line border-t">
         {orderedKeys(keys).map((key) => (
           <SiteKeyRow
+            canManage={canManage}
             key={key.id}
             siteKey={key}
             now={now}
@@ -235,11 +243,13 @@ function SiteKeyList({
 function SiteKeyRow({
   siteKey,
   now,
+  canManage,
   onRevoke,
   revoking,
 }: {
   siteKey: SiteKeySummary;
   now: number;
+  canManage: boolean;
   onRevoke: (key: SiteKeySummary) => void;
   revoking: boolean;
 }) {
@@ -294,7 +304,7 @@ function SiteKeyRow({
           </p>
         </div>
 
-        {status.revoked ? null : (
+        {status.revoked || !canManage ? null : (
           <div className="flex shrink-0 items-center gap-2">
             <Button
               variant="secondary"

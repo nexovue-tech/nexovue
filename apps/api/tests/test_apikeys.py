@@ -49,7 +49,6 @@ from nexovue_api.deps import get_app_settings, get_db_session
 from nexovue_api.errors.exceptions import (
     InternalError,
     NotFoundError,
-    PermissionDeniedError,
 )
 from nexovue_api.settings import API_PREFIX, Settings
 
@@ -320,23 +319,6 @@ async def test_creating_a_key_records_who_minted_it_without_the_credential(
     assert created.api_key.key_hint not in str(entry.target)
 
 
-async def test_a_member_may_not_create_a_key(db: FakeControlPlane, acme: Tenant) -> None:
-    """Minting grants ingest for the whole organization; that is not everyone's."""
-    acme.user.role = "member"
-
-    with pytest.raises(PermissionDeniedError):
-        await service.create(
-            db,  # type: ignore[arg-type]
-            org_id=acme.organization.id,
-            actor=acme.user,
-            project_id=acme.project.id,
-            name="exporter",
-        )
-
-    assert db.minted == []
-    assert db.entries == []
-
-
 @pytest.mark.parametrize("role", ["owner", "admin"])
 async def test_an_owner_or_admin_may_create_a_key(
     db: FakeControlPlane, acme: Tenant, role: str
@@ -524,22 +506,6 @@ async def test_a_listing_shows_only_four_secret_characters(
     assert hint.endswith(secret[-4:])
     # Every secret character beyond the last four stays undisclosed.
     assert secret[:-4] not in hint
-
-
-async def test_a_member_may_not_revoke_a_key(db: FakeControlPlane, acme: Tenant) -> None:
-    """Revocation is irreversible and stops ingest, so it is not everyone's."""
-    acme.user.role = "member"
-
-    with pytest.raises(PermissionDeniedError):
-        await service.revoke(
-            db,  # type: ignore[arg-type]
-            org_id=acme.organization.id,
-            actor=acme.user,
-            key_id=acme.key.id,
-        )
-
-    assert acme.key.revoked_at is None
-    assert not [row for row in db.written if isinstance(row, AuditLogEntry)]
 
 
 @pytest.mark.parametrize("role", ["owner", "admin"])
@@ -780,37 +746,6 @@ async def test_a_site_key_belongs_to_its_own_tenant_only(
             org_id=acme.organization.id,
             actor=acme.user,
             key_id=globex.site_key.id,
-        )
-
-
-async def test_only_an_owner_or_admin_may_mint_a_site_key(
-    db: FakeControlPlane, acme: Tenant
-) -> None:
-    """It grants less than a secret key, but it is still a door onto ingest."""
-    acme.user.role = "member"
-
-    with pytest.raises(PermissionDeniedError):
-        await service.create_site_key(
-            db,  # type: ignore[arg-type]
-            org_id=acme.organization.id,
-            actor=acme.user,
-            project_id=acme.project.id,
-            name="marketing",
-            allowed_origins=["https://app.example.com"],
-        )
-
-
-async def test_only_an_owner_or_admin_may_revoke_a_site_key(
-    db: FakeControlPlane, acme: Tenant
-) -> None:
-    acme.user.role = "viewer"
-
-    with pytest.raises(PermissionDeniedError):
-        await service.revoke_site_key(
-            db,  # type: ignore[arg-type]
-            org_id=acme.organization.id,
-            actor=acme.user,
-            key_id=acme.site_key.id,
         )
 
 
