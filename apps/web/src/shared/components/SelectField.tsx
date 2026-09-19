@@ -20,6 +20,7 @@ export function SelectField<T extends { id: string }>({
   onChange,
   optionLabel,
   capped = false,
+  compactLabel = false,
 }: {
   label: string;
   value: string;
@@ -32,12 +33,17 @@ export function SelectField<T extends { id: string }>({
    * `containerd-shim-<64 hex>` pushed every control after it off a phone's screen.
    */
   capped?: boolean;
+  /** Keeps the label for assistive technology only on a phone, where the bar has no room. */
+  compactLabel?: boolean;
 }) {
   const id = useId();
 
   return (
     <div className="flex items-baseline gap-2">
-      <label htmlFor={id} className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+      <label
+        htmlFor={id}
+        className={`${compactLabel ? "sr-only sm:not-sr-only " : ""}font-mono text-2xs text-ink-dim uppercase tracking-caps`}
+      >
         {label}
       </label>
 

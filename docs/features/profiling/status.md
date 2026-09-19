@@ -26,8 +26,8 @@ None. Waiting on the founder to read the diff before the commit.
   was not met — the screens opened on a number and a chart — and now every graph, span and comparison leads
   with a sentence (`profile-reading.ts`). Also fixed: compare named one side only; "1 samples"; "100 % … more
   than any other function" for a lone function; filters shown in span mode; "time" captions on memory
-  profiles; a stopped profiler flagged only by a dim timestamp (US17.8). Still open, outside the feature: the
-  shared top bar crowds a pinned window on a phone.
+  profiles; a stopped profiler flagged only by a dim timestamp (US17.8). The shared top bar, which crowded
+  a pinned window on a phone, was fixed afterwards (below).
 
 - **Found by the founder — a long profile scrolled the whole page.** At the end of the functions table the
   page kept scrolling and dragged the sidebar and top bar out of view. The table's screen-reader caption
@@ -38,6 +38,12 @@ None. Waiting on the founder to read the diff before the commit.
   end and holds the page to the window: 1,674 against 720 without the fix, equal with it. Also: long
   function names were cut while the number columns took half the row — the numbers now have fixed widths,
   and the full name is on hover.
+
+- **The top bar on phones and tablets** (after the commit, founder's request). The bar never wrapped: at
+  390 px it was 274 px too wide live and 105 px pinned, so the refresh controls, "Pick a range" and "Back to
+  live" sat off the right edge; a 768 px tablet overflowed by 68 px. It is now two rows below desktop width —
+  project and refresh, then the window — with the pinned window in the screens' own short phrase and the exact
+  times on hover. `tools/e2e/tests/top-bar.spec.ts` checks every control at 360–1440 px, live and pinned.
 
 ## Next action
 

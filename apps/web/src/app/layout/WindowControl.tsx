@@ -5,6 +5,7 @@ import { SelectField } from "@/shared/components/SelectField";
 import { fromLocalInput, isUsableRange, toLocalInput } from "@/shared/local-instant";
 import {
   clearAbsoluteWindow,
+  describeWindowChoice,
   setAbsoluteWindow,
   setSelectedRangeId,
   TIME_RANGES,
@@ -30,10 +31,15 @@ export function WindowControl() {
 
   if (choice.kind === "absolute") {
     return (
-      <span className="flex items-center gap-2">
+      <span className="flex min-w-0 items-center gap-2">
         <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Window</span>
-        <span className="text-ink text-sm">
-          {new Date(choice.from).toLocaleString()} — {new Date(choice.to).toLocaleString()}
+        {/* The phrase every screen's subtitle uses, so the bar and the page say one
+            thing; the exact instants are one hover away. */}
+        <span
+          className="min-w-0 truncate text-ink text-sm"
+          title={`${new Date(choice.from).toLocaleString()} — ${new Date(choice.to).toLocaleString()}`}
+        >
+          {describeWindowChoice(choice)}
         </span>
         {/* The way back is on the control itself. A window somebody pinned during an
             incident is one they will want to leave, and hunting for how is its own
@@ -41,7 +47,7 @@ export function WindowControl() {
         <button
           type="button"
           onClick={clearAbsoluteWindow}
-          className="text-brand-text text-sm underline-offset-2 hover:underline"
+          className="shrink-0 text-brand-text text-sm underline-offset-2 hover:underline"
         >
           Back to live
         </button>

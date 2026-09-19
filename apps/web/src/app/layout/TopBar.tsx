@@ -19,7 +19,11 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
   const { projects, projectId } = useProjectSelection();
 
   return (
-    <header className="flex h-10 shrink-0 items-center gap-4 border-line border-b bg-surface px-4">
+    // One row on a desktop; below it, two — the window gets a row of its own. A tablet
+    // needs the second row too: the sidebar is open there and takes the width.
+    // A bar that did not wrap pushed the refresh controls, the range picker and "Back
+    // to live" off the right edge of a phone, where nobody could reach them.
+    <header className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-line border-b bg-surface px-4 py-1.5 lg:h-10 lg:flex-nowrap lg:py-0">
       {/* The one place an icon beats a word: it sits where every phone user already
           looks for navigation, and the accessible name carries the meaning. */}
       <button
@@ -33,6 +37,8 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
 
       {projects.length > 0 && projectId ? (
         <SelectField
+          capped
+          compactLabel
           label="Project"
           value={projectId}
           options={projects}
@@ -47,9 +53,11 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
         </span>
       )}
 
-      <span aria-hidden className="h-4 w-px bg-line" />
+      <span aria-hidden className="hidden h-4 w-px bg-line lg:block" />
 
-      <WindowControl />
+      <div className="order-last w-full lg:order-none lg:w-auto">
+        <WindowControl />
+      </div>
 
       <div className="flex-1" />
 

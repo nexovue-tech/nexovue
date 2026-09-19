@@ -49,7 +49,11 @@ export function RefreshControl() {
     // finished. Offering to un-pause something that was never paused would send a
     // reader looking for a control that would do nothing.
     return (
-      <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Pinned range</span>
+      // The window row already says it is pinned, and offers the way back; on a phone
+      // there is no room to say it twice.
+      <span className="hidden font-mono text-2xs text-ink-dim uppercase tracking-caps sm:inline">
+        Pinned range
+      </span>
     );
   }
 
@@ -66,7 +70,9 @@ export function RefreshControl() {
           Paused · showing {updatedAt ? updatedAt.toLocaleTimeString() : "—"}
         </span>
       ) : (
-        <span className="font-mono text-2xs text-ink-dim tabular-nums">
+        // The age is a comfort, not a warning, so a phone goes without it; the paused
+        // chip above is the one that must always show, and it does.
+        <span className="hidden font-mono text-2xs text-ink-dim tabular-nums sm:inline">
           {fetching ? "updating…" : describeAge(updatedAt)}
         </span>
       )}
@@ -86,6 +92,7 @@ export function RefreshControl() {
       </button>
 
       <SelectField
+        compactLabel
         label="Every"
         value={preference.intervalId}
         options={REFRESH_INTERVALS}
