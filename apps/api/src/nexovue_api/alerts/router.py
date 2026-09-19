@@ -13,6 +13,7 @@ from nexovue_api.alerts.schemas import (
     IncidentListResponse,
     IncidentSummary,
     MuteRuleRequest,
+    OpenIncidentCount,
     RuleListResponse,
     RuleSummary,
     UpdateRuleRequest,
@@ -82,6 +83,15 @@ async def list_incidents(
     identity: CurrentIdentity, db: DbSession, project_id: uuid.UUID
 ) -> IncidentListResponse:
     return await service.list_incidents(db, org_id=identity.org_id, project_id=project_id)
+
+
+# Before `/incidents/{incident_id}`, which would otherwise claim the path and refuse it
+# as a malformed id.
+@router.get("/incidents/open-count", summary="How many incidents are open, for the sidebar")
+async def open_incident_count(
+    identity: CurrentIdentity, db: DbSession, project_id: uuid.UUID
+) -> OpenIncidentCount:
+    return await service.open_incident_count(db, org_id=identity.org_id, project_id=project_id)
 
 
 @router.get("/incidents/{incident_id}", summary="One incident and who was told")

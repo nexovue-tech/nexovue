@@ -1,9 +1,11 @@
 """What an alert says, before any channel shapes it (FR16).
 
 Every message states the rule, the severity, what happened in words, when it
-started, how long it lasted when it is over, and one link to the evidence. It
-states nothing from the evidence itself (BR9, FR18): the failure's reason arrives
-here already stripped by `alerts.reasons`, and nothing else from a run is read.
+started, how long it lasted when it is over, and one link — to the incident, whose
+page links on to the evidence (D9). Not to the evidence itself: a check can be
+deleted, and a message is read long after it was sent. It states nothing from the
+evidence itself (BR9, FR18): the failure's reason arrives here already stripped by
+`alerts.reasons`, and nothing else from a run is read.
 
 Each channel renders this in its own format — email as plain text, Slack and
 Discord with a colour, Teams as a card, PagerDuty as an event (FR17).
@@ -14,7 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
-from urllib.parse import quote
 
 from nexovue_platform.alerts.model import SEVERITY_RANK
 
@@ -53,13 +54,12 @@ class _Said:
     recovered: str
     # Lines under the first, while it is open.
     facts: tuple[str, ...]
-    link: str
 
 
 def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
     """The words for one notification about one incident."""
     base = app_base_url.rstrip("/")
-    said = _said(notice, base)
+    said = _said(notice)
     label = notice.subject_label
     new_error = notice.condition_kind == "new_error_group"
 
@@ -112,16 +112,14 @@ def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
         severity=notice.severity,
         summary=summary,
         details=tuple(lines),
-        link=said.link,
+        link=f"{base}/alerts/incidents/{notice.incident_id}",
         rule_name=notice.rule_name,
         manage_link=f"{base}/alerts/rules/{notice.rule_id}" if notice.rule_id else None,
     )
 
 
-def _said(notice: Notice, base: str) -> _Said:
+def _said(notice: Notice) -> _Said:
     detail = notice.detail
-    service = str(detail.get("service") or "")
-    service_link = f"{base}/services/{quote(service, safe='')}" if service else f"{base}/alerts"
     match notice.condition_kind:
         case "service_error_rate" | "service_latency_p95":
             reading = str(detail.get("reading") or "reading")
@@ -141,7 +139,6 @@ def _said(notice: Notice, base: str) -> _Said:
                 still=f"{reading} is still at or over {threshold}",
                 recovered=f"{reading} is back under {threshold}",
                 facts=tuple(facts),
-                link=service_link,
             )
         case "service_silent":
             last_seen = detail.get("last_seen")
@@ -155,7 +152,6 @@ def _said(notice: Notice, base: str) -> _Said:
                 still="is still silent",
                 recovered="is sending again",
                 facts=quiet_facts,
-                link=service_link,
             )
         case "new_error_group":
             services = detail.get("services") or []
@@ -167,9 +163,6 @@ def _said(notice: Notice, base: str) -> _Said:
                 still="is still new",
                 recovered="",
                 facts=error_facts,
-                link=f"{base}/errors?service_name={quote(service, safe='')}"
-                if service
-                else f"{base}/errors",
             )
         case _:
             state = str(detail.get("state") or "")
@@ -179,13 +172,11 @@ def _said(notice: Notice, base: str) -> _Said:
                 facts.append(f"Why: {detail['reason']}.")
             if detail.get("location"):
                 facts.append(f"Seen from: {detail['location']}.")
-            check_id = detail.get("check_id")
             return _Said(
                 happening=happening,
                 still=f"is still {happening.removeprefix('is ')}",
                 recovered="recovered",
                 facts=tuple(facts),
-                link=f"{base}/synthetics/{check_id}" if check_id else f"{base}/alerts",
             )
 
 

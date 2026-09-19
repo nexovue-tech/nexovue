@@ -385,6 +385,46 @@ async def test_incidents_list_open_first_with_who_was_told(
     assert (told.channel_kind, told.kind, told.state) == ("owners", "opened", "delivered")
 
 
+async def test_the_sidebar_count_is_this_project_s_open_incidents_only(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    rule_id = (await _create(db, tenant)).id
+    await _open(db, tenant, rule_id, "check:critical")
+    warning = await _open(db, tenant, rule_id, "check:warning")
+    warning.severity = "warning"
+    closed = await _open(db, tenant, rule_id, "check:closed")
+    closed.resolved_at = datetime.now(UTC)
+    other = await provision_tenant(
+        db,
+        organization_name="Elsewhere",
+        email=f"elsewhere-{uuid.uuid4()}@example.test",
+        password="correct horse battery staple",
+    )
+    await _open(db, other, (await _create(db, other)).id, "check:elsewhere")
+    await db.flush()
+
+    count = await service.open_incident_count(
+        db, org_id=tenant.organization.id, project_id=tenant.project.id
+    )
+
+    assert (count.open, count.critical) == (2, 1)
+
+
+async def test_the_sidebar_count_refuses_another_organization_s_project(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    other = await provision_tenant(
+        db,
+        organization_name="Elsewhere",
+        email=f"elsewhere-{uuid.uuid4()}@example.test",
+        password="correct horse battery staple",
+    )
+    with pytest.raises(NotFoundError):
+        await service.open_incident_count(
+            db, org_id=tenant.organization.id, project_id=other.project.id
+        )
+
+
 async def test_a_check_shows_the_rules_that_cover_it_and_its_open_incident(
     db: AsyncSession, tenant: ProvisionedTenant
 ) -> None:
@@ -592,6 +632,31 @@ async def test_narrowing_a_service_rule_closes_the_service_it_dropped(
         request=UpdateRuleRequest(condition=condition | {"services": ["checkout"]}),
     )
     assert await _still_open(db, cart, checkout) == [False, True]
+
+
+async def test_an_incident_outlives_its_check_and_says_the_check_is_gone(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """Every alert links to its incident, so the incident must still read when the
+    check it was about is deleted — and say so, rather than link to "No such check"."""
+    check = await _check(db, tenant)
+    rules = await service.list_rules(
+        db, org_id=tenant.organization.id, project_id=tenant.project.id
+    )
+    incident = await _open(db, tenant, rules.rules[0].id, f"check:{check.id}")
+    incident.detail = {"check_id": str(check.id), "state": "down"}
+    await db.flush()
+
+    before = await service.get_incident(db, org_id=tenant.organization.id, incident_id=incident.id)
+    assert before.check_deleted is False
+
+    await checks.remove(
+        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, check_id=check.id
+    )
+
+    after = await service.get_incident(db, org_id=tenant.organization.id, incident_id=incident.id)
+    assert after.check_deleted is True
+    assert after.subject_label == incident.subject_label
 
 
 async def test_deleting_a_check_closes_its_open_incidents(

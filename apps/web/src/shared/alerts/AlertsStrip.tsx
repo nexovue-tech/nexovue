@@ -27,7 +27,11 @@ export function AlertsStrip({
     >
       <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Alerts</span>
       {open ? (
-        <Link to="/alerts" className="font-medium text-critical-text hover:underline">
+        <Link
+          to="/alerts/incidents/$incidentId"
+          params={{ incidentId: open.id }}
+          className="font-medium text-critical-text hover:underline"
+        >
           Open incident — {open.severity}, since {formatRelativeTime(open.opened_at)}
         </Link>
       ) : null}

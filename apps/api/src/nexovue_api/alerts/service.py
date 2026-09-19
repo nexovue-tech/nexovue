@@ -29,6 +29,7 @@ from nexovue_api.alerts.schemas import (
     IncidentListResponse,
     IncidentNotification,
     IncidentSummary,
+    OpenIncidentCount,
     RuleChannel,
     RuleListResponse,
     RuleSummary,
@@ -231,6 +232,15 @@ async def list_incidents(
     )
     summaries = await _incident_summaries(session, org_id=org_id, incidents=[*open_now, *recent])
     return IncidentListResponse(open=summaries[: len(open_now)], recent=summaries[len(open_now) :])
+
+
+async def open_incident_count(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> OpenIncidentCount:
+    """A count, not the list: every screen asks for it, every fifteen seconds."""
+    await projects.require_project(session, org_id=org_id, project_id=project_id)
+    counts = await queries.open_incident_counts(session, org_id=org_id, project_id=project_id)
+    return OpenIncidentCount(open=sum(counts.values()), critical=counts.get("critical", 0))
 
 
 async def get_incident(
@@ -436,6 +446,19 @@ async def _incident_summaries(
     notifications = await queries.notifications_of(
         session, org_id=org_id, incident_ids=list({incident.id for incident in incidents})
     )
+    checks = {incident.id: _check_of(incident) for incident in incidents}
+    existing: set[uuid.UUID] = set()
+    for project_id in {incident.project_id for incident in incidents if checks[incident.id]}:
+        existing |= await queries.existing_check_ids(
+            session,
+            org_id=org_id,
+            project_id=project_id,
+            check_ids=[
+                check
+                for incident in incidents
+                if incident.project_id == project_id and (check := checks[incident.id])
+            ],
+        )
     return [
         IncidentSummary(
             id=incident.id,
@@ -452,8 +475,10 @@ async def _incident_summaries(
             flapping=incident.flapping,
             muted=incident.muted,
             detail=incident.detail,
+            check_deleted=checks[incident.id] is not None and checks[incident.id] not in existing,
             notifications=[
                 IncidentNotification(
+                    id=notification.id,
                     channel_id=channel.id,
                     channel_name=channel.name,
                     channel_kind=channel.kind,
@@ -467,3 +492,14 @@ async def _incident_summaries(
         )
         for incident in incidents
     ]
+
+
+def _check_of(incident: Incident) -> uuid.UUID | None:
+    """The check an incident is about, if it is about one."""
+    check_id = incident.detail.get("check_id")
+    if incident.condition_kind != "check_state" or not check_id:
+        return None
+    try:
+        return uuid.UUID(str(check_id))
+    except ValueError:
+        return None

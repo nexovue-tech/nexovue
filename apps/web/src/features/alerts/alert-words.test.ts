@@ -13,6 +13,7 @@ import {
   emptyRuleDraft,
   fieldProblems,
   muteUntil,
+  openIncidentBadge,
   ruleDraftOf,
   ruleProblems,
   ruleRequestOf,
@@ -236,5 +237,28 @@ describe("service rules in words", () => {
       },
     });
     expect(ruleRequestOf(ruleDraftOf(stored), "p").condition).toEqual(stored.condition);
+  });
+});
+
+describe("the open-incident badge beside Alerts in the sidebar", () => {
+  it("shows nothing when nothing is open, rather than a 0 on every screen", () => {
+    expect(openIncidentBadge({ open: 0, critical: 0 })).toBeNull();
+  });
+
+  it("is critical when any open incident is, and names the count in words", () => {
+    expect(openIncidentBadge({ open: 3, critical: 1 })).toEqual({
+      text: "3",
+      label: "3 open incidents",
+      severity: "critical",
+    });
+    expect(openIncidentBadge({ open: 1, critical: 0 })).toEqual({
+      text: "1",
+      label: "1 open incident",
+      severity: "warning",
+    });
+  });
+
+  it("stops counting at 99", () => {
+    expect(openIncidentBadge({ open: 240, critical: 0 })?.text).toBe("99+");
   });
 });

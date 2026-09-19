@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from nexovue_platform.alerts.channels import READ_BY_MACHINES
-from sqlalchemy import DateTime, and_, delete, insert, literal, select, update
+from sqlalchemy import DateTime, and_, delete, func, insert, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
@@ -262,6 +262,23 @@ async def incidents(
     if subject_keys is not None:
         statement = statement.where(Incident.subject_key.in_(subject_keys))
     return list(await session.scalars(statement.order_by(Incident.opened_at.desc()).limit(limit)))
+
+
+async def open_incident_counts(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
+) -> dict[str, int]:
+    """Open incidents by severity, served by the partial index on open rows."""
+    statement = (
+        select(Incident.severity, func.count())
+        .where(
+            Incident.org_id == org_id,
+            Incident.project_id == project_id,
+            Incident.resolved_at.is_(None),
+        )
+        .group_by(Incident.severity)
+    )
+    rows = (await session.execute(statement)).tuples().all()
+    return dict(rows)
 
 
 async def find_incident(

@@ -114,6 +114,28 @@ test("a check that goes down opens an incident the Alerts screen and the check's
     const strip = page.getByRole("region", { name: "Alerts" });
     await expect(strip.getByText(/Open incident — critical/)).toBeVisible();
     await expect(strip.getByRole("link", { name: "Alert me about this" })).toBeVisible();
+
+    // The sidebar says so on every screen, and stops once the incident closes —
+    // deleting its check closes it.
+    const screens = page.getByRole("navigation", { name: "Screens" });
+    await expect(screens.getByRole("link", { name: "Alerts (1 open incident)" })).toBeVisible();
+    await page.request.delete(`/api/v1/checks/${checkId}`);
+    await expect(screens.getByRole("link", { name: "Alerts", exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+
+    // Every message links to the incident, and the incident outlives its check.
+    await page.goto("/alerts");
+    await page
+      .getByRole("region", { name: "Last 30 days" })
+      .getByRole("link", { name: /^Details of/ })
+      .first()
+      .click();
+    await expect(page).toHaveURL(/\/alerts\/incidents\/[0-9a-f-]{36}$/);
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("is down");
+    await expect(page.getByText(/^Resolved after/)).toBeVisible();
+    await expect(page.getByText(/has since been deleted/)).toBeVisible();
+    await expect(page.getByText(/^Opened → Organization owners/)).toBeVisible();
   } finally {
     await page.request.delete(`/api/v1/checks/${checkId}`);
   }

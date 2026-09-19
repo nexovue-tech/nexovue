@@ -8,6 +8,7 @@ see tests/helpers/live.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timedelta
@@ -106,7 +107,9 @@ async def test_the_owner_is_emailed_when_a_check_goes_down_and_when_it_recovers(
     opened, resolved = mailbox.to(tenant.owner_email)
     assert opened["subject"] == "[critical] Checkout API is down"
     assert "Why: expected status code less than 400, got 503." in opened["body"]
-    assert opened["link"] == f"{BASE_URL}/synthetics/{tenant.check_id}"
+    # One incident, so one page: the opening and the recovery link to the same place.
+    assert re.fullmatch(rf"{re.escape(BASE_URL)}/alerts/incidents/[0-9a-f-]{{36}}", opened["link"])
+    assert resolved["link"] == opened["link"]
     assert opened["rule_name"] == "Any check down"
     assert opened["manage_link"] == f"{BASE_URL}/alerts/rules/{tenant.default_rule_id}"
     assert resolved["subject"] == "[resolved] Checkout API recovered"

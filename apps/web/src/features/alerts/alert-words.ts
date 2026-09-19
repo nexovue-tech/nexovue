@@ -8,6 +8,8 @@ import type {
   Condition,
   ConditionKind,
   Incident,
+  IncidentNotification,
+  OpenIncidentCount,
   Severity,
   WriteRule,
 } from "./api";
@@ -154,6 +156,73 @@ export function describeDuration(
   const rest = minutes % 60;
   if (hours && rest) return `${hours} h ${rest} min`;
   return hours ? `${hours} h` : `${rest} min`;
+}
+
+/**
+ * What the incident is, in the words it opened with — "is down", "error rate 12.3%,
+ * over 5%" — whether or not it has since resolved.
+ */
+export function describeHappening(incident: Incident): string {
+  if (incident.condition_kind === "new_error_group") return "is a new error";
+  const detail = incident.detail;
+  if (detail.reading === "silence") return "went silent";
+  if (detail.reading && typeof detail.value === "number") {
+    const value =
+      detail.unit === "%" ? `${detail.value.toFixed(1)}%` : `${Math.round(detail.value)} ms`;
+    return `${detail.reading} ${value}, over ${detail.threshold}${detail.unit === "%" ? "%" : " ms"}`;
+  }
+  return detail.state ? `is ${detail.state}` : "fired";
+}
+
+/** Where an incident stands, in one line: open and for how long, or when it ended. */
+export function describeIncidentState(incident: Incident, now: Date = new Date()): string {
+  if (incident.is_event) return "Said once — a new error has nothing to resolve.";
+  if (incident.resolved_at === null) {
+    return `Open for ${describeDuration(incident.opened_at, null, now)}.`;
+  }
+  return `Resolved after ${describeDuration(incident.opened_at, incident.resolved_at)}.`;
+}
+
+const NOTIFICATION_KIND_WORDS: Record<IncidentNotification["kind"], string> = {
+  opened: "Opened",
+  escalated: "Got worse",
+  resolved: "Resolved",
+  repeated: "Reminder",
+  flapping: "Flapping",
+  closed: "Closed",
+};
+
+/** One line of "who was told": what was said, to whom, and whether it got there. */
+export function describeNotification(notification: IncidentNotification): string {
+  const what = `${NOTIFICATION_KIND_WORDS[notification.kind]} → ${notification.channel_name}`;
+  switch (notification.state) {
+    case "delivered":
+      return `${what}: delivered`;
+    case "failed":
+      return `${what}: failed${notification.reason ? ` — ${notification.reason}` : ""}`;
+    case "dropped":
+      return `${what}: not sent${notification.reason ? ` — ${notification.reason}` : ""}`;
+    default:
+      return `${what}: sending`;
+  }
+}
+
+/** Past this the badge stops counting; the Alerts screen has the rest. */
+const BADGE_MOST = 99;
+
+/**
+ * The badge beside Alerts in the sidebar, or null when nothing is open — a "0"
+ * would be one more thing on every screen to read and dismiss.
+ */
+export function openIncidentBadge(
+  count: OpenIncidentCount,
+): { text: string; label: string; severity: Severity } | null {
+  if (count.open === 0) return null;
+  return {
+    text: count.open > BADGE_MOST ? `${BADGE_MOST}+` : String(count.open),
+    label: count.open === 1 ? "1 open incident" : `${count.open} open incidents`,
+    severity: count.critical > 0 ? "critical" : "warning",
+  };
 }
 
 /** Who an incident's opening was sent to, and whether it got there. */

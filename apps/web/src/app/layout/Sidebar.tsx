@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 
 import { ArrowUpRight } from "lucide-react";
 
+import { OpenIncidentBadge } from "@/features/alerts/OpenIncidentBadge";
 import { Wordmark } from "@/shared/components/Logo";
 import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
 import { ThemeToggle } from "@/shared/theme/ThemeToggle";
@@ -50,12 +51,15 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
                     to={item.path}
                     onClick={onNavigate}
                     activeOptions={{ exact: item.path === "/" }}
-                    className="block border-transparent border-l-2 py-1 pr-3 pl-3.5 text-ink-dim text-sm hover:bg-hover hover:text-ink"
+                    // `relative` holds the badge's sr-only words inside the link; without
+                    // it they escape the scroller and stretch the page.
+                    className="relative flex items-center justify-between gap-2 border-transparent border-l-2 py-1 pr-3 pl-3.5 text-ink-dim text-sm hover:bg-hover hover:text-ink"
                     activeProps={{
                       className: "border-brand bg-raised font-medium text-ink",
                     }}
                   >
                     {item.title}
+                    {item.path === "/alerts" ? <OpenIncidentBadge /> : null}
                   </Link>
                 </li>
               ))}

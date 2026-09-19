@@ -69,6 +69,7 @@ class MuteRuleRequest(BaseModel):
 
 
 class IncidentNotification(BaseModel):
+    id: uuid.UUID
     channel_id: uuid.UUID
     channel_name: str
     channel_kind: str
@@ -93,8 +94,18 @@ class IncidentSummary(BaseModel):
     flapping: bool
     muted: bool
     detail: dict[str, Any]
+    # True when the incident was about a check that has since been deleted: its page
+    # says so instead of linking to "No such check".
+    check_deleted: bool
     # Which channels were told, and how that went.
     notifications: list[IncidentNotification]
+
+
+class OpenIncidentCount(BaseModel):
+    """What the sidebar shows beside Alerts: how many are open, and whether any is critical."""
+
+    open: int
+    critical: int
 
 
 class IncidentListResponse(BaseModel):

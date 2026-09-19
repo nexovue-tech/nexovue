@@ -8,6 +8,7 @@ import {
 import { AlertsScreen } from "@/features/alerts/AlertsScreen";
 import { ChannelDetailScreen } from "@/features/alerts/ChannelDetailScreen";
 import { ChannelsScreen } from "@/features/alerts/ChannelsScreen";
+import { IncidentScreen } from "@/features/alerts/IncidentScreen";
 import { EditRuleScreen, NewRuleScreen, parseNewRuleSearch } from "@/features/alerts/RuleEditor";
 import { AccountScreen } from "@/features/auth/AccountScreen";
 import { ForgotPasswordScreen } from "@/features/auth/ForgotPasswordScreen";
@@ -255,6 +256,13 @@ const ruleRoute = createRoute({
   component: EditRuleScreen,
 });
 
+// What every alert message links to: the incident outlives the check it was about.
+const incidentRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/alerts/incidents/$incidentId",
+  component: IncidentScreen,
+});
+
 const profilesRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/profiles",
@@ -446,6 +454,7 @@ const routeTree = rootRoute.addChildren([
     alertsRoute,
     newRuleRoute,
     ruleRoute,
+    incidentRoute,
     servicesRoute,
     serviceRoute,
     serviceMapRoute,

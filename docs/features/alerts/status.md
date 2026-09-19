@@ -169,6 +169,21 @@ healthchecks for the scheduler services and a watch on the oldest `pending` noti
 
 FR1, FR2 and FR10 amended and AC27 added, 2026-09-19, with the design's approval. After review, by the founder's decisions: BR5 and FR11 amended, D8 added.
 
+## Follow-up — the open-incident badge (2026-09-19)
+
+Founder's request, in place of web push and an in-app notification centre (neither reaches someone
+who is not looking at the console; see the spec's *Out of scope*, "Mobile push"). The sidebar shows
+how many incidents are open beside **Alerts**, tinted critical when any is, and nothing when none is.
+
+- `GET /alerts/incidents/open-count` — a count by severity, not the list, since every screen asks
+  every 15 seconds. Migration 0031 adds `ix_incidents_project_id_open` (partial, `resolved_at IS NULL`).
+- Validated: `test_alerts_live.py` (the count is this project's open incidents only; another
+  organization's project is refused), `alert-words.test.ts` (badge wording), and
+  `tools/e2e/tests/alerts.spec.ts` (the badge appears when a real check opens an incident and goes
+  when it closes); `just check` green.
+- Not done: the phone drawer is closed by default, so on a phone the badge is seen only once the
+  menu is opened.
+
 ## Documentation impact
 
 - `docs/decisions/` — ADR-012 (with *As built*), ADR-013 (one channel per claim, decision order, email

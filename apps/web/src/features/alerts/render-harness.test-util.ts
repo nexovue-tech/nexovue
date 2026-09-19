@@ -18,6 +18,7 @@ import { AlertsScreen } from "./AlertsScreen";
 import type { AlertRule, ChannelSummary, Incident } from "./api";
 import { ChannelDetailScreen } from "./ChannelDetailScreen";
 import { ChannelsScreen } from "./ChannelsScreen";
+import { IncidentScreen } from "./IncidentScreen";
 import { EditRuleScreen, NewRuleScreen, parseNewRuleSearch } from "./RuleEditor";
 
 /**
@@ -99,6 +100,7 @@ export function incident(overrides: Partial<Incident> = {}): Incident {
     is_event: false,
     flapping: false,
     muted: false,
+    check_deleted: false,
     detail: {
       check_id: "chk-1",
       state: "down",
@@ -107,6 +109,7 @@ export function incident(overrides: Partial<Incident> = {}): Incident {
     },
     notifications: [
       {
+        id: "n-opened",
         channel_id: "ch-owners",
         channel_name: "Organization owners",
         channel_kind: "owners",
@@ -240,6 +243,11 @@ export async function mountAt(url: string) {
         getParentRoute: () => shellRoute,
         path: "/alerts/rules/$ruleId",
         component: EditRuleScreen,
+      }),
+      createRoute({
+        getParentRoute: () => shellRoute,
+        path: "/alerts/incidents/$incidentId",
+        component: IncidentScreen,
       }),
       createRoute({
         getParentRoute: () => shellRoute,

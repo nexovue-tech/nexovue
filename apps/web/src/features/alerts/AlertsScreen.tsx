@@ -6,7 +6,13 @@ import { SkeletonRows } from "@/shared/components/Skeleton";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useSelection } from "@/shared/selection";
 import type { CheckChoice } from "./alert-words";
-import { describeCondition, describeDuration, describeTold, ruleStatus } from "./alert-words";
+import {
+  describeCondition,
+  describeDuration,
+  describeHappening,
+  describeTold,
+  ruleStatus,
+} from "./alert-words";
 import type { AlertRule, EvaluationStatus, Incident } from "./api";
 import { useAlertRules, useCheckChoices, useEvaluationStatus, useIncidents } from "./api";
 
@@ -170,12 +176,20 @@ function IncidentList({ incidents }: { incidents: readonly Incident[] }) {
                 <p className="mt-1 text-ink-dim text-sm">Why: {incident.detail.reason}</p>
               ) : null}
             </div>
-            <p className="shrink-0 text-ink-dim text-sm tabular-nums">
+            <p className="flex shrink-0 items-baseline gap-3 text-ink-dim text-sm tabular-nums">
               <time dateTime={incident.opened_at} title={formatTimestamp(incident.opened_at)}>
                 {incident.resolved_at === null
                   ? `for ${describeDuration(incident.opened_at, null)}`
                   : `lasted ${describeDuration(incident.opened_at, incident.resolved_at)}`}
               </time>
+              <Link
+                to="/alerts/incidents/$incidentId"
+                params={{ incidentId: incident.id }}
+                aria-label={`Details of ${incident.subject_label}`}
+                className="text-brand-text underline-offset-2 hover:underline"
+              >
+                Details
+              </Link>
             </p>
           </div>
         </li>
@@ -185,16 +199,8 @@ function IncidentList({ incidents }: { incidents: readonly Incident[] }) {
 }
 
 function happening(incident: Incident): string {
-  if (incident.condition_kind === "new_error_group") return "is a new error";
-  if (incident.resolved_at !== null) return "recovered";
-  const detail = incident.detail;
-  if (detail.reading === "silence") return "went silent";
-  if (detail.reading && typeof detail.value === "number") {
-    const value =
-      detail.unit === "%" ? `${detail.value.toFixed(1)}%` : `${Math.round(detail.value)} ms`;
-    return `${detail.reading} ${value}, over ${detail.threshold}${detail.unit === "%" ? "%" : " ms"}`;
-  }
-  return detail.state ? `is ${detail.state}` : "fired";
+  if (incident.resolved_at !== null && !incident.is_event) return "recovered";
+  return describeHappening(incident);
 }
 
 const SWEEP_NAMES: Record<EvaluationStatus["sweeps"][number]["name"], string> = {
@@ -244,7 +250,8 @@ function IncidentSubject({ incident }: { incident: Incident }) {
     );
   }
   const checkId = incident.detail.check_id;
-  if (checkId) {
+  // A deleted check's page is "No such check"; its incident's Details still reads.
+  if (checkId && !incident.check_deleted) {
     return (
       <Link
         to="/synthetics/$checkId"

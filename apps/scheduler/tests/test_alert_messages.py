@@ -37,10 +37,8 @@ def _notice(
 
 
 def test_an_opened_message_says_what_why_where_when_and_which_rule() -> None:
-    message = compose(
-        _notice("opened", reason="expected status code less than 400, got 503"),
-        app_base_url="https://app.nexovue.test/",
-    )
+    notice = _notice("opened", reason="expected status code less than 400, got 503")
+    message = compose(notice, app_base_url="https://app.nexovue.test/")
     assert message.summary == "[critical] Checkout API is down"
     assert message.details == (
         "Checkout API is down.",
@@ -49,7 +47,8 @@ def test_an_opened_message_says_what_why_where_when_and_which_rule() -> None:
         "Started: 2026-09-19 14:03 UTC.",
         "Rule: Any check down.",
     )
-    assert message.link == f"https://app.nexovue.test/synthetics/{CHECK_ID}"
+    # The incident, not the check: a check can be deleted, and the message outlives it.
+    assert message.link == f"https://app.nexovue.test/alerts/incidents/{notice.incident_id}"
     assert message.manage_link == f"https://app.nexovue.test/alerts/rules/{RULE_ID}"
 
 
@@ -143,7 +142,7 @@ def test_a_threshold_says_the_reading_the_threshold_and_the_traffic_behind_it() 
     message = compose(notice, app_base_url="https://app.nexovue.test")
     assert message.summary == "[critical] checkout error rate is 12.3%, at or over 5%"
     assert message.details[1] == "Over 5 minutes, ending two minutes ago, across 1,234 requests."
-    assert message.link == "https://app.nexovue.test/services/checkout"
+    assert message.link == f"https://app.nexovue.test/alerts/incidents/{notice.incident_id}"
 
 
 def test_a_threshold_recovery_says_it_is_back_under() -> None:
@@ -169,7 +168,7 @@ def test_a_silent_service_says_since_when() -> None:
     assert "Nothing received since 2026-09-19 14:03 UTC." in message.details
 
 
-def test_a_new_error_names_the_exception_and_links_to_the_errors_screen() -> None:
+def test_a_new_error_names_the_exception_and_links_to_its_incident() -> None:
     notice = dataclasses.replace(
         _notice("opened", severity="warning"),
         condition_kind="new_error_group",
@@ -179,7 +178,7 @@ def test_a_new_error_names_the_exception_and_links_to_the_errors_screen() -> Non
     message = compose(notice, app_base_url="https://app.nexovue.test")
     assert message.summary == "[warning] New error: KeyError in cart"
     assert "In: cart, checkout." in message.details
-    assert message.link == "https://app.nexovue.test/errors?service_name=cart"
+    assert message.link == f"https://app.nexovue.test/alerts/incidents/{notice.incident_id}"
 
 
 def test_services_going_silent_together_are_not_called_checks() -> None:

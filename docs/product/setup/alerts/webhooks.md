@@ -62,7 +62,7 @@ timestamp more than five minutes from your clock to refuse a replayed request.
     "rule": { "name": "Any check down" },
     "summary": "[critical] Checkout API is down",
     "details": ["Checkout API is down.", "Why: expected status code less than 400, got 503."],
-    "link": "https://app.nexovue.com/synthetics/…"
+    "link": "https://app.nexovue.com/alerts/incidents/01a0b65b-…"
   }
 }
 ```

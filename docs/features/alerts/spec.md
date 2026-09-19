@@ -252,8 +252,9 @@ organization's owners* — so a single-person account is alerted with zero confi
 
 - **FR16** — Every message states: the rule's name; severity; what fired, in words ("*Checkout API* is down
   from 2 locations: status 503, expected < 400"); the value against the threshold where there is one; when
-  it started; for *resolved*, how long it lasted; and one link to the evidence — the failing run for a
-  check, the error group, the service for a threshold or silence.
+  it started; for *resolved*, how long it lasted; and one link — to the **incident's page**, which links
+  on to the evidence (the check and its runs, the errors, the service for a threshold or silence) while
+  that evidence exists (D9). A message about several incidents links to the Alerts screen.
 - **FR17** — Each channel gets its native format: Slack and Discord messages with a colour by severity,
   Teams an Adaptive Card, email plain text with a subject that starts with the severity, PagerDuty a
   `trigger`/`resolve` event with `severity`, `summary`, `source` and `dedup_key`.
@@ -443,6 +444,12 @@ Accepted by the founder with the specification, 2026-09-18.
   nothing will evaluate them again. Every PagerDuty and webhook channel that was sent the opening is sent a
   *closed* notification — a *resolve* to PagerDuty, `incident.closed` to a webhook — so the alert does not
   stay open there for ever. People are not told: nothing recovered, and a person made the change.
+- **D9 — A message links to its incident, not to its evidence** (2026-09-19, amending FR16). The link went
+  to the check; a check deleted after the alert turned every message about it — email, Slack, PagerDuty,
+  webhook — into a link to "No such check". An incident is never deleted with its subject, so its page
+  (`/alerts/incidents/{id}`) is what a message links to: what broke, when, for how long, who was told,
+  and the evidence one link on — or that the check has since been deleted
+  (`docs/changes/alert-links-to-incident/`).
 
 ## Open decisions
 

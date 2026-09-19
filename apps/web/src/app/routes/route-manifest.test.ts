@@ -83,6 +83,8 @@ describe("the sidebar", () => {
       // F21: reached from the Alerts screen, a check's page, and the channel list.
       "/alerts/rules/new",
       "/alerts/rules/$ruleId",
+      // Reached from an alert message's link and the Alerts screen's rows.
+      "/alerts/incidents/$incidentId",
       "/settings/channels/$channelId",
     ]);
     const signedOut = new Set([

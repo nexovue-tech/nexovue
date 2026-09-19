@@ -543,6 +543,10 @@ describe("the alerts strip (F21, FR24)", () => {
       "the alerts strip",
     );
     expect(readable(strip)).toContain("Open incident — critical");
+    expect(
+      strip.querySelector('a[href="/alerts/incidents/inc-1"]'),
+      "the open incident links to itself",
+    ).not.toBeNull();
     expect(readable(strip)).toContain("Watched by Any check down");
     expect(strip.querySelector('a[href="/alerts/rules/new?check=chk-api"]')?.textContent).toBe(
       "Alert me about this",

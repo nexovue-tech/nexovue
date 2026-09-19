@@ -1282,6 +1282,11 @@ class Incident(Base):
             postgresql_where=text("resolved_at IS NULL"),
         ),
         Index("ix_incidents_project_id_opened_at", "project_id", "opened_at"),
+        Index(
+            "ix_incidents_project_id_open",
+            "project_id",
+            postgresql_where=text("resolved_at IS NULL"),
+        ),
         Index("ix_incidents_rule_id_subject_key_opened_at", "rule_id", "subject_key", "opened_at"),
     )
 

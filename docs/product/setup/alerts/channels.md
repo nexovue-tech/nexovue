@@ -34,9 +34,11 @@ it is triggered, so nobody stays paged.
 ## What a message says
 
 The rule's name, how bad it is, what happened, why, when it started, how long it
-lasted once it is over, and one link to the evidence — the failing check run, the
-service, or the error. Never a request or response body, a header, a secret, or a
-stack trace: those stay behind the link.
+lasted once it is over, and one link to the incident's page in nexovue. That page
+says what happened and who was told, and links on to the evidence — the check and
+its runs, the service, or the error — for as long as it exists: a message about a
+check you have since deleted still opens the incident. Never a request or response
+body, a header, a secret, or a stack trace: those stay behind the link.
 
 ## Keeping it quiet
 

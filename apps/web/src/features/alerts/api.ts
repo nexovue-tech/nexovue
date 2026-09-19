@@ -100,6 +100,7 @@ export interface WriteRule {
 }
 
 export interface IncidentNotification {
+  id: string;
   channel_id: string;
   channel_name: string;
   channel_kind: ChannelKind;
@@ -123,6 +124,8 @@ export interface Incident {
   is_event: boolean;
   flapping: boolean;
   muted: boolean;
+  // The check it was about has since been deleted (its page would say "No such check").
+  check_deleted: boolean;
   detail: {
     check_id?: string;
     state?: string;
@@ -212,6 +215,11 @@ export interface SendTestResult {
   reason: string | null;
 }
 
+export interface OpenIncidentCount {
+  open: number;
+  critical: number;
+}
+
 export interface Coverage {
   rules: AlertRule[];
   open_incidents: Incident[];
@@ -222,6 +230,10 @@ export interface Coverage {
 export const rulesQueryKey = (projectId: string) => ["alert-rules", projectId] as const;
 export const ruleQueryKey = (ruleId: string) => ["alert-rule", ruleId] as const;
 export const incidentsQueryKey = (projectId: string) => ["incidents", projectId] as const;
+export const incidentQueryKey = (incidentId: string) => ["incidents", "one", incidentId] as const;
+// Under "incidents", so every change that already refreshes the list refreshes the count.
+export const openIncidentCountQueryKey = (projectId: string) =>
+  ["incidents", "open-count", projectId] as const;
 export const channelsQueryKey = ["channels"] as const;
 export const channelQueryKey = (channelId: string) => ["channel", channelId] as const;
 export const deliveryLogQueryKey = (channelId: string) =>
@@ -309,6 +321,29 @@ export function useIncidents(projectId: string | undefined) {
     refetchInterval: INCIDENT_REFRESH_MS,
     queryFn: ({ signal }) =>
       apiClient.get<IncidentList>("alerts/incidents", {
+        searchParams: { project_id: projectId },
+        signal,
+      }),
+  });
+}
+
+/** One incident: what every alert message links to (FR16). */
+export function useIncident(incidentId: string) {
+  return useQuery({
+    queryKey: incidentQueryKey(incidentId),
+    refetchInterval: INCIDENT_REFRESH_MS,
+    queryFn: ({ signal }) => apiClient.get<Incident>(`alerts/incidents/${incidentId}`, { signal }),
+  });
+}
+
+/** The sidebar's count: asked on every screen, so a count rather than the list. */
+export function useOpenIncidentCount(projectId: string | undefined) {
+  return useQuery({
+    queryKey: openIncidentCountQueryKey(projectId ?? ""),
+    enabled: projectId !== undefined,
+    refetchInterval: INCIDENT_REFRESH_MS,
+    queryFn: ({ signal }) =>
+      apiClient.get<OpenIncidentCount>("alerts/incidents/open-count", {
         searchParams: { project_id: projectId },
         signal,
       }),
