@@ -70,7 +70,8 @@ The QA organization's test check (`f21-qa`, *Orders API*) was deleted through th
 
 ## Found outside F21 — not fixed, for their own change
 
-Seen during the final gates, 2026-09-19. None is caused by F21; each is recorded so it is not lost.
+Seen during the final gates, 2026-09-19. None is caused by F21. Taken up in
+[`docs/changes/gate-found-defects/`](../../changes/gate-found-defects/bug.md): all three fixed there.
 
 1. **The worker stays up after a fatal pipeline error.** A ClickHouse insert refused for memory
    (`MEMORY_LIMIT_EXCEEDED`) ended every pipeline — "the worker cannot continue" — but the process did not exit,

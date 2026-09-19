@@ -9,6 +9,7 @@ require (
 	github.com/lmittmann/tint v1.2.0
 	github.com/nexovue-tech/nexovue/packages/contracts v0.0.0
 	github.com/twmb/franz-go v1.21.6
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 	go.opentelemetry.io/proto/otlp v1.11.0
 	google.golang.org/protobuf v1.36.12
 )
@@ -30,7 +31,6 @@ require (
 	github.com/pascaldekloe/name v1.0.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
-	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect

@@ -33,6 +33,7 @@ from urllib.parse import SplitResult, urlsplit
 
 import clickhouse_connect
 import pytest
+from clickhouse_cleanup import delete_after_run
 from live import require_stack
 
 from nexovue_api.data.clickhouse.base import TenantFilterMissingError, TenantScopedRepository
@@ -134,10 +135,7 @@ async def fleet(clickhouse: Any) -> AsyncIterator[str]:
         yield tenant_id
     finally:
         for table in METRIC_TABLES:
-            await clickhouse.command(
-                f"ALTER TABLE {table} DELETE WHERE tenant_id = {_quoted(tenant_id)}",
-                settings={"mutations_sync": 2},
-            )
+            delete_after_run(table, tenant_id)
 
 
 def _window() -> tuple[datetime, datetime]:
@@ -232,10 +230,7 @@ async def redelivered_fleet(clickhouse: Any) -> AsyncIterator[str]:
         yield tenant_id
     finally:
         for table in METRIC_TABLES:
-            await clickhouse.command(
-                f"ALTER TABLE {table} DELETE WHERE tenant_id = {_quoted(tenant_id)}",
-                settings={"mutations_sync": 2},
-            )
+            delete_after_run(table, tenant_id)
 
 
 async def test_a_host_stored_twice_is_not_reported_as_sampling_twice_as_often(
@@ -712,10 +707,7 @@ async def partly_redelivered_fleet(clickhouse: Any) -> AsyncIterator[str]:
     try:
         yield tenant_id
     finally:
-        await clickhouse.command(
-            f"ALTER TABLE metrics_gauge DELETE WHERE tenant_id = {_quoted(tenant_id)}",
-            settings={"mutations_sync": 2},
-        )
+        delete_after_run("metrics_gauge", tenant_id)
 
 
 async def test_the_store_really_holds_the_duplicate_this_asserts_on(

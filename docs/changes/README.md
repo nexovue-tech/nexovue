@@ -18,3 +18,4 @@ Start from the [templates](../templates/README.md). Feature work belongs under [
 - [Plan holds tasks](plan-holds-tasks/change.md) — the plan and its task plan were two documents and two approvals for one ordering.
 - [QA-found defects](qa-found-defects/bug.md) — seven defects a hands-on pass found outside the feature it was testing, from a health check probing the wrong port to two chart colours that were one colour.
 - [Compose dependencies](compose-dependencies/change.md) — every service now waits for what it needs at start, and is handed no connection setting it ignores.
+- [Gate-found defects](gate-found-defects/bug.md) — a worker whose pipeline failed could never exit, a synthetics suite that judged a failing QA check, and test cleanups that filled development ClickHouse's memory with superseded parts.

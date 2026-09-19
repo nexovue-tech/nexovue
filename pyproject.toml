@@ -106,6 +106,9 @@ asyncio_mode = "auto"
 # tests/helpers holds `live`, the shared "a live suite fails rather than skips"
 # guard. It sits above the apps because the API and the scheduler both need it.
 pythonpath = ["tests/helpers", "packages/contracts/gen/python"]
+# Test tenants' ClickHouse rows are deleted once at the end of the run: a mutation
+# per test held thousands of superseded parts in memory (tests/helpers/clickhouse_cleanup.py).
+addopts = "-p clickhouse_cleanup"
 testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests"]
 
 [tool.uv.sources]

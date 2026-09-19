@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 import clickhouse_connect
 import pytest
+from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
 
@@ -87,11 +88,7 @@ async def tenant(client: AsyncClient) -> AsyncIterator[str]:
     try:
         yield tenant_id
     finally:
-        await client.command(
-            f"ALTER TABLE {ROLLUP_TABLE} DELETE WHERE tenant_id = %(tenant)s",
-            parameters={"tenant": tenant_id},
-            settings={"mutations_sync": "2"},
-        )
+        delete_after_run(ROLLUP_TABLE, tenant_id)
 
 
 async def _write_readings(

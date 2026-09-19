@@ -438,6 +438,10 @@ func (l *Loop[S]) Run(ctx context.Context, stages Processor[S]) error {
 	l.running.Store(true)
 	defer l.running.Store(false)
 	defer l.log.InfoContext(ctx, l.settings.Name+" stopped")
+	// On every way out, not only the loop's own: a turn that fails returns while
+	// its poll still blocks rebalancing, and leaving the group is a rebalance —
+	// Close would wait in LeaveGroup for ever, and the worker would never exit.
+	defer l.consumer.AllowRebalance()
 
 	l.nextHeartbeat = l.now().Add(heartbeatInterval)
 	plan := pollPlan{records: l.settings.MaxMessages, deadline: l.now().Add(l.settings.MaxDelay)}

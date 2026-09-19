@@ -28,6 +28,7 @@ from urllib.parse import urlsplit
 
 import clickhouse_connect
 import pytest
+from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
 
@@ -119,22 +120,32 @@ async def subject(client: AsyncClient) -> SyntheticSubject:
     duration at all, and only a successful run has phases that sum to one. Picking
     the busiest check by any reading handed this suite a heartbeat (no timing) or a
     check that has been failing all day (nothing to check the arithmetic against).
+
+    And only among checks with **no failed run** in the window: the busiest by
+    successes was once a check against a public site that failed half its runs, and
+    a run that never connected publishes fewer phases than five.
     """
     result = await client.query(
         f"""
-        SELECT tenant_id, project_id, check_id, count() AS readings
+        SELECT tenant_id, project_id, check_id,
+               countIf(metric_name = %(duration)s AND outcome IN ('up', 'degraded')) AS readings
         FROM (
-            SELECT tenant_id, project_id, {queries.CHECK_ID} AS check_id,
+            SELECT tenant_id, project_id, metric_name, {queries.CHECK_ID} AS check_id,
                    {queries.OUTCOME} AS outcome
             FROM metrics_gauge
-            WHERE metric_name = %(metric)s AND timestamp >= %(since)s
+            WHERE metric_name IN (%(duration)s, %(status)s) AND timestamp >= %(since)s
         )
-        WHERE outcome IN ('up', 'degraded')
         GROUP BY tenant_id, project_id, check_id
+        HAVING readings > 0
+           AND countIf(metric_name = %(status)s AND outcome NOT IN ('up', 'degraded')) = 0
         ORDER BY readings DESC
         LIMIT 2
         """,
-        parameters={"metric": queries.METRIC_DURATION, "since": _since()},
+        parameters={
+            "duration": queries.METRIC_DURATION,
+            "status": queries.METRIC_STATUS,
+            "since": _since(),
+        },
     )
     rows = [dict(zip(result.column_names, row, strict=True)) for row in result.result_rows]
     assert rows, (
@@ -292,14 +303,19 @@ async def test_the_readings_this_suite_asserts_on_are_visible_in_the_store(
     a second copy of the API's query.
     """
     result = await client.query(
-        """
+        f"""
         SELECT metric_name, count() AS readings
         FROM metrics_gauge
         WHERE tenant_id = %(tenant_id)s AND timestamp >= %(since)s
+          AND {queries.CHECK_ID} = %(check_id)s
         GROUP BY metric_name
         ORDER BY metric_name
         """,
-        parameters={"tenant_id": subject.tenant_id, "since": _since()},
+        parameters={
+            "tenant_id": subject.tenant_id,
+            "check_id": subject.check_id,
+            "since": _since(),
+        },
     )
     counts: dict[str, Any] = {row[0]: row[1] for row in result.result_rows}
 
@@ -422,10 +438,7 @@ async def redelivered(client: AsyncClient) -> AsyncIterator[RedeliveredProbe]:
     try:
         yield probe
     finally:
-        await client.command(
-            f"ALTER TABLE metrics_gauge DELETE WHERE tenant_id = {_sql_string(probe.tenant_id)}",
-            settings={"mutations_sync": 2},
-        )
+        delete_after_run("metrics_gauge", probe.tenant_id)
 
 
 async def test_a_probe_written_twice_reports_the_phase_total_it_measured_once(

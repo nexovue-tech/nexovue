@@ -32,6 +32,7 @@ from urllib.parse import urlsplit
 
 import clickhouse_connect
 import pytest
+from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
 
@@ -333,10 +334,7 @@ async def partly_redelivered_statement(client: AsyncClient) -> AsyncIterator[tup
     try:
         yield tenant_id, base
     finally:
-        await client.command(
-            f"ALTER TABLE metrics_gauge DELETE WHERE tenant_id = {_quoted(tenant_id)}",
-            settings={"mutations_sync": 2},
-        )
+        delete_after_run("metrics_gauge", tenant_id)
 
 
 async def test_the_store_really_holds_the_duplicate_this_asserts_on(

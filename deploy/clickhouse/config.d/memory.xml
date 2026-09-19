@@ -21,7 +21,18 @@
          override was tried on 2026-09-15 and reverted — see the comment in
          `compose.infra.yaml`, which records why it made things worse. This is
          the shape of the problem, not a misconfiguration. Raising the cap moves
-         the day it recurs and nothing else. -->
+         the day it recurs and nothing else.
+
+         **Cause found, 2026-09-19** (docs/changes/gate-found-defects/): the
+         live suites deleted their test tenants with a mutation after every
+         test. A mutation writes a new generation of every part, and each
+         superseded part's metadata stays in memory for `old_parts_lifetime`
+         (480 s) — 12,900 of them held 3.3 GiB, uncounted by the tracker. Those
+         suites now delete once per run (tests/helpers/clickhouse_cleanup.py);
+         the gate peaked at 3.42 GiB resident afterwards. What remains is the
+         product purge its own suites exercise, ~20 tenants x 21 tables.
+         Resident memory stays at its peak after the parts expire — the
+         allocator's, as above — so restarting still resets a long session. -->
     <max_server_memory_usage>4294967296</max_server_memory_usage>
 
     <!-- Defaults are sized for a dedicated server. On a laptop sharing memory

@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 import clickhouse_connect
 import pytest
 import pytest_asyncio
+from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
 
@@ -94,14 +95,6 @@ def _repository(client: AsyncClient, tenant_id: str) -> TenantScopedRepository:
 def _window() -> tuple[datetime, datetime]:
     end = datetime.now(UTC).replace(second=0, microsecond=0) + timedelta(minutes=1)
     return end - timedelta(hours=1), end
-
-
-async def _drop(client: AsyncClient, table: str, tenant_id: str) -> None:
-    await client.command(
-        f"ALTER TABLE {table} DELETE WHERE tenant_id = %(tenant)s",
-        parameters={"tenant": tenant_id},
-        settings={"mutations_sync": "2"},
-    )
 
 
 # --------------------------------------------------------------------- services
@@ -190,7 +183,7 @@ async def test_the_slowest_service_is_found_even_when_it_fails_for_nobody(
         assert "slow-and-healthy" not in [row.service_name for row in worst.services]
         assert slowest.services[0].service_name == "slow-and-healthy"
     finally:
-        await _drop(clickhouse, "endpoint_stats_1m", tenant)
+        delete_after_run("endpoint_stats_1m", tenant)
 
 
 async def test_a_failing_service_past_the_cap_is_returned_when_asked_for(
@@ -240,7 +233,7 @@ async def test_a_failing_service_past_the_cap_is_returned_when_asked_for(
         assert len(everything.services) == CAP
         assert [row.service_name for row in failing.services] == ["quiet-but-broken"]
     finally:
-        await _drop(clickhouse, "endpoint_stats_1m", tenant)
+        delete_after_run("endpoint_stats_1m", tenant)
 
 
 # ----------------------------------------------------------------------- errors
@@ -335,7 +328,7 @@ async def test_a_new_error_quieter_than_the_cap_is_returned_when_asked_for(
         # The same rule decides the filter and the marker the screen draws.
         assert all(group.started_in_window for group in fresh.groups)
     finally:
-        await _drop(clickhouse, "logs", tenant)
+        delete_after_run("logs", tenant)
 
 
 # --------------------------------------------------------------- infrastructure
@@ -424,7 +417,7 @@ async def test_a_container_is_returned_when_hosts_would_have_filled_the_answer(
         )
         assert {node.kind for node in machine.nodes} == {"host", "container"}
     finally:
-        await _drop(clickhouse, "metrics_gauge", tenant)
+        delete_after_run("metrics_gauge", tenant)
 
 
 def test_the_cap_this_suite_seeds_against_is_smaller_than_the_real_ones() -> None:

@@ -16,6 +16,10 @@ exclude_regex = ["_test\\.go"]
 # Editors write a file several times per save.
 delay = 400
 stop_on_error = true
+# Start the binary again when it exits, as the production restart policy does;
+# without it air waits for a source change and the container serves nothing.
+rerun = true
+rerun_delay = 5000
 
 [log]
 main_only = true
