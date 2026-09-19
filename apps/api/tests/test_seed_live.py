@@ -24,9 +24,10 @@ from live import require_stack
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from nexovue_api.data.postgres.models import Organization, SiteKey
+from nexovue_api.data.postgres.models import Organization, SiteKey, User
 from nexovue_api.seed import (
     DEV_ORG_SLUG,
+    DEV_OWNER_EMAIL,
     DEV_SITE_KEY,
     DEV_SITE_KEY_ORIGINS,
     seed,
@@ -169,3 +170,26 @@ async def test_seeding_a_database_that_already_has_the_tenant_changes_nothing(
     created = await seed(db)
 
     assert created is False
+
+
+async def test_the_seeded_owner_can_receive_alert_mail(fresh_database: AsyncSession) -> None:
+    """Alert mail goes only to verified owners; an unverified dev owner fails every test send."""
+    await seed(fresh_database)
+    await fresh_database.flush()
+
+    owner = await fresh_database.scalar(select(User).where(User.email == DEV_OWNER_EMAIL))
+    assert owner is not None
+    assert owner.email_verified_at is not None
+
+
+async def test_a_second_seed_verifies_an_owner_seeded_before_it_did(db: AsyncSession) -> None:
+    owner = await db.scalar(select(User).where(User.email == DEV_OWNER_EMAIL))
+    assert owner is not None, "the dev owner is missing; seed the database first"
+    owner.email_verified_at = None
+    await db.flush()
+
+    await seed(db)
+    await db.flush()
+
+    await db.refresh(owner)
+    assert owner.email_verified_at is not None

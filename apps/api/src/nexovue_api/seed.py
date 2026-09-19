@@ -4,11 +4,12 @@ One organization, one owner, a `production` project and one API key — created
 by calling signup's own service, so what a developer works against is the same
 four rows a real customer gets, produced by the same code (P1-49).
 
-Two things differ from a real signup, and both are passed in explicitly rather
-than reimplemented: the organization keeps the short `acme` slug, and the API
-key is a fixed constant. The demo app, the load generator and the e2e suite all
-need to know that key without a handshake. That is safe only because this
-database is local; nothing here may ever run against a deployed environment.
+Three things differ from a real signup: the organization keeps the short `acme`
+slug, the API key is a fixed constant, and the owner's address starts verified.
+The demo app, the load generator and the e2e suite all need to know that key
+without a handshake; alert mail goes only to verified owners, so an unverified
+dev owner would fail every alert test. That is safe only because this database
+is local; nothing here may ever run against a deployed environment.
 
     just seed
 """
@@ -16,6 +17,7 @@ database is local; nothing here may ever run against a deployed environment.
 import asyncio
 import os
 import uuid
+from datetime import UTC, datetime
 from typing import Final
 
 import structlog
@@ -23,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.data.postgres import postgres_dsn
-from nexovue_api.data.postgres.models import Organization, SiteKey
+from nexovue_api.data.postgres.models import Organization, SiteKey, User
 from nexovue_api.settings import DEFAULT_OTLP_ENDPOINT
 from nexovue_api.signup.service import provision_tenant
 
@@ -71,6 +73,7 @@ async def seed(session: AsyncSession) -> bool:
     existing = await session.scalar(select(Organization).where(Organization.slug == DEV_ORG_SLUG))
     if existing is not None:
         await _reconcile_site_key_origins(session, org_id=existing.id)
+        await _verify_owner(session, org_id=existing.id)
         return False
 
     tenant = await provision_tenant(
@@ -83,6 +86,7 @@ async def seed(session: AsyncSession) -> bool:
         api_key=DEV_API_KEY,
         api_key_name=DEV_API_KEY_NAME,
     )
+    tenant.user.email_verified_at = datetime.now(UTC)
     session.add(
         SiteKey(
             org_id=tenant.organization.id,
@@ -132,6 +136,22 @@ async def _reconcile_site_key_origins(session: AsyncSession, *, org_id: uuid.UUI
         added=added,
         origins=DEV_SITE_KEY_ORIGINS,
     )
+
+
+async def _verify_owner(session: AsyncSession, *, org_id: uuid.UUID) -> None:
+    """Verify the dev owner on a database seeded before the seed did it.
+
+    A second reconcile, for the same reason as the origins: an unverified owner
+    receives no alert mail, and the refusal reads like a broken channel. An owner
+    whose address was changed away from the seeded one is left alone.
+    """
+    owner = await session.scalar(
+        select(User).where(User.org_id == org_id, User.email == DEV_OWNER_EMAIL)
+    )
+    if owner is None or owner.email_verified_at is not None:
+        return
+    owner.email_verified_at = datetime.now(UTC)
+    _log.info("development owner email marked verified", email=DEV_OWNER_EMAIL)
 
 
 async def main() -> None:

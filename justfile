@@ -149,6 +149,38 @@ test-billable:
     [ -f .env ] && { set -a; . ./.env; set +a; }
     NEXOVUE_BILLABLE_LIVE_TESTS=1 uv run pytest apps/api/tests/test_notifications_live.py
 
+# Alert email from the dev stack: `real` sends through the provider in `.env` — every
+# Send test and every alert spends a real message — and `log` writes it to
+# `docker logs nexovue-scheduler-deliveries-1` again. Only the alert worker changes;
+# the next `just dev` is back to `log`.
+alert-email mode:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{mode}}" in
+      real)
+        [ -f .env ] || { echo "no .env: real alert email needs the EMAIL_* values from .env.example" >&2; exit 1; }
+        set -a; . ./.env; set +a
+        for name in EMAIL_API_KEY EMAIL_SENDING_DOMAIN EMAIL_FROM_ADDRESS EMAIL_REPLY_TO; do
+          [ -n "${!name:-}" ] || { echo "$name is empty in .env: a real provider needs all four EMAIL_* values" >&2; exit 1; }
+        done
+        export NEXOVUE_ALERT_EMAIL_PROVIDER="${EMAIL_PROVIDER:-resend}"
+        [ "$NEXOVUE_ALERT_EMAIL_PROVIDER" != console ] || NEXOVUE_ALERT_EMAIL_PROVIDER=resend
+        export NEXOVUE_ALERT_EMAIL_API_KEY="$EMAIL_API_KEY"
+        export NEXOVUE_ALERT_EMAIL_SENDING_DOMAIN="$EMAIL_SENDING_DOMAIN"
+        export NEXOVUE_ALERT_EMAIL_FROM_ADDRESS="$EMAIL_FROM_ADDRESS"
+        export NEXOVUE_ALERT_EMAIL_REPLY_TO="$EMAIL_REPLY_TO"
+        ;;
+      log) ;;
+      *) echo "alert-email takes real or log, not {{mode}}" >&2; exit 2 ;;
+    esac
+    docker compose -f {{compose}}/docker-compose.yaml up -d --no-deps --wait scheduler-deliveries
+    provider=$(docker compose -f {{compose}}/docker-compose.yaml exec -T scheduler-deliveries printenv EMAIL_PROVIDER)
+    if [ "$provider" = console ]; then
+      echo "Alert email goes to the log: docker logs -f nexovue-scheduler-deliveries-1 2>&1 | grep 'mail was rendered'"
+    else
+      echo "Alert email is REAL ($provider, from $NEXOVUE_ALERT_EMAIL_FROM_ADDRESS). Every alert and Send test spends a message. 'just alert-email log' to stop."
+    fi
+
 # ---------- end to end ----------
 
 # Deliberately NOT part of `just check` — the pre-commit gate must not require docker.

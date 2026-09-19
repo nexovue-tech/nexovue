@@ -514,7 +514,21 @@ services:
     volumes:
       - ../..:/workspace
       - python-venv:/workspace/.venv
-    environment: *scheduler-env
+    environment:
+      <<: *scheduler-env
+      # The one switch for real alert email in development: `just alert-email real`
+      # sets these from the root `.env` for this worker alone and restarts it;
+      # `just alert-email log`, or any `just dev`, puts it back to the log. They are
+      # read from the shell, not from `.env` — compose resolves `${...}` against this
+      # folder, not the repository root — so a value left in `.env` cannot turn real
+      # mail on by itself, and a test that trips a check never spends a real message.
+      # Only this worker sends alert mail and Send test; the API's account mail stays
+      # in its log.
+      EMAIL_PROVIDER: ${NEXOVUE_ALERT_EMAIL_PROVIDER:-console}
+      EMAIL_API_KEY: ${NEXOVUE_ALERT_EMAIL_API_KEY:-}
+      EMAIL_SENDING_DOMAIN: ${NEXOVUE_ALERT_EMAIL_SENDING_DOMAIN:-}
+      EMAIL_FROM_ADDRESS: ${NEXOVUE_ALERT_EMAIL_FROM_ADDRESS:-}
+      EMAIL_REPLY_TO: ${NEXOVUE_ALERT_EMAIL_REPLY_TO:-}
     depends_on:
       # The outbox is in Postgres and the queue in Redis; nothing is delivered
       # before both answer.
