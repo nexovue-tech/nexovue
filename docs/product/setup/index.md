@@ -14,6 +14,7 @@ to go next.
 | Your service has never been instrumented | Your language's page under [languages/](#languages) |
 | You run an OpenTelemetry Collector | [collector.md](collector.md) |
 | You want page-load, web-vital and JavaScript-error data from a browser | [browser.md](browser.md) |
+| You want to see which code a service spends its CPU and memory in | [Continuous profiling](profiling/continuous-profiling.md) (preview) |
 | You have set it all up and nothing has arrived | [troubleshooting.md](troubleshooting.md) |
 
 ## The two variables

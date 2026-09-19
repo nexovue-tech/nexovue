@@ -28,9 +28,9 @@ const counterTTL = 2 * window
 
 // Counter is the single operation the limiter needs from its store.
 type Counter interface {
-	// Increment adds one to key and returns the new count, giving the key ttl
-	// if it does not already have one.
-	Increment(ctx context.Context, key string, ttl time.Duration) (int64, error)
+	// Increment adds by to key and returns the new count, giving the key ttl if
+	// it does not already have one.
+	Increment(ctx context.Context, key string, by int64, ttl time.Duration) (int64, error)
 }
 
 // Decision is the answer for one request.
@@ -41,7 +41,8 @@ type Decision struct {
 	RetryAfter time.Duration
 }
 
-// Limiter counts requests per key.
+// Limiter counts requests per key — or, through AllowN, anything else a request
+// carries, such as profile samples.
 type Limiter struct {
 	counter   Counter
 	perSecond int64
@@ -75,14 +76,24 @@ func New(counter Counter, perSecond int) *Limiter {
 // about that, because whether ingest fails open or closed is a policy question
 // and not this package's to answer.
 func (l *Limiter) Allow(ctx context.Context, subject string) (Decision, error) {
+	return l.AllowN(ctx, subject, 1)
+}
+
+// AllowN counts n against subject's current window, for a limit on what requests
+// carry rather than on how many there are.
+//
+// A request larger than the whole budget is admitted when it arrives to an empty
+// window, and the window is then spent: refusing it would refuse it for ever, and
+// the sender would retry a request nothing can make smaller.
+func (l *Limiter) AllowN(ctx context.Context, subject string, n int64) (Decision, error) {
 	now := l.now()
 	key := counterKey(subject, now)
 
-	count, err := l.counter.Increment(ctx, key, counterTTL)
+	count, err := l.counter.Increment(ctx, key, n, counterTTL)
 	if err != nil {
 		return Decision{}, fmt.Errorf("counting %s: %w", key, err)
 	}
-	if count > l.perSecond {
+	if count > l.perSecond && count > n {
 		return Decision{Allowed: false, RetryAfter: untilNextWindow(now)}, nil
 	}
 	return Decision{Allowed: true}, nil
@@ -102,7 +113,12 @@ func (l *Limiter) Allow(ctx context.Context, subject string) (Decision, error) {
 // match the configured limit. That is the honest description and it is the one
 // the refusal has to carry.
 func (l *Limiter) AllowWhileCounterDown(subject string) Decision {
-	return l.fallback.allow(subject, l.now())
+	return l.AllowNWhileCounterDown(subject, 1)
+}
+
+// AllowNWhileCounterDown is AllowWhileCounterDown for n, as AllowN is Allow for n.
+func (l *Limiter) AllowNWhileCounterDown(subject string, n int64) Decision {
+	return l.fallback.allow(subject, float64(n), l.now())
 }
 
 // FallbackPerSecond is the number AllowWhileCounterDown refuses at, for the log

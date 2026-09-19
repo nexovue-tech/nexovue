@@ -372,3 +372,114 @@ async function postSignal(
   expect(response.status(), `receiver refused the batch: ${body}`).toBe(200);
   expect(JSON.parse(body)).toEqual({});
 }
+
+/** One stack, root last as OTLP orders them, and the CPU it accounts for. */
+export interface ProfiledStack {
+  frames: readonly string[];
+  nanoseconds: number;
+}
+
+/**
+ * One CPU profile of `service`, as OTLP/JSON profiles v1development: every string and
+ * frame is an index into the request's dictionary, entry zero of each table empty.
+ */
+export function profileBatch(service: string, stacks: readonly ProfiledStack[]) {
+  const strings = ["", "cpu", "nanoseconds"];
+  const functionIndex = new Map<string, number>();
+  const functionTable: object[] = [{}];
+  const locationTable: object[] = [{}];
+  const stackTable: object[] = [{}];
+  const indexOf = (name: string) => {
+    let found = functionIndex.get(name);
+    if (found === undefined) {
+      strings.push(name);
+      functionTable.push({ nameStrindex: strings.length - 1 });
+      locationTable.push({ lines: [{ functionIndex: functionTable.length - 1 }] });
+      found = locationTable.length - 1;
+      functionIndex.set(name, found);
+    }
+    return found;
+  };
+  const samples = stacks.map((stack) => {
+    stackTable.push({ locationIndices: stack.frames.map(indexOf) });
+    return { stackIndex: stackTable.length - 1, values: [String(stack.nanoseconds)] };
+  });
+  const now = BigInt(Date.now() - 1_000) * 1_000_000n;
+  return {
+    dictionary: { stringTable: strings, functionTable, locationTable, stackTable },
+    resourceProfiles: [
+      {
+        resource: { attributes: [{ key: "service.name", value: { stringValue: service } }] },
+        scopeProfiles: [
+          {
+            profiles: [
+              {
+                sampleType: { typeStrindex: 1, unitStrindex: 2 },
+                timeUnixNano: now.toString(),
+                samples,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+export async function exportProfiles(
+  request: APIRequestContext,
+  options: { endpoint: string; apiKey: string; batch: object },
+): Promise<void> {
+  await postSignal(request, "/v1development/profiles", options, options.batch);
+}
+
+/**
+ * A heavy CPU profile of `service`: `stacks` distinct stacks, `depth` frames deep,
+ * over 400 long function names — the size a busy JVM service sends, enough to fill
+ * the flame graph to its bound and the functions table past a screen.
+ */
+export function heavyProfileBatch(service: string, stacks: number, depth: number) {
+  const strings = ["", "cpu", "nanoseconds"];
+  const functionTable: object[] = [{}];
+  const locationTable: object[] = [{}];
+  for (let index = 0; index < 400; index++) {
+    strings.push(
+      `com.example.module${index % 12}.Service${index}.handleRequestWithAVeryLongName${index}`,
+    );
+    functionTable.push({ nameStrindex: strings.length - 1 });
+    locationTable.push({ lines: [{ functionIndex: functionTable.length - 1 }] });
+  }
+  const stackTable: object[] = [{}];
+  const samples: object[] = [];
+  for (let stack = 0; stack < stacks; stack++) {
+    const frames: number[] = [];
+    for (let frame = 0; frame < depth; frame++) {
+      frames.push(1 + ((stack * 7 + frame * 13 + (frame > depth - 4 ? stack : 0)) % 400));
+    }
+    stackTable.push({ locationIndices: frames });
+    samples.push({
+      stackIndex: stackTable.length - 1,
+      values: [String(1_000_000 * (1 + (stack % 17)))],
+    });
+  }
+  const now = BigInt(Date.now() - 60_000) * 1_000_000n;
+  return {
+    dictionary: { stringTable: strings, functionTable, locationTable, stackTable },
+    resourceProfiles: [
+      {
+        resource: { attributes: [{ key: "service.name", value: { stringValue: service } }] },
+        scopeProfiles: [
+          {
+            profiles: [
+              {
+                sampleType: { typeStrindex: 1, unitStrindex: 2 },
+                timeUnixNano: now.toString(),
+                samples,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}

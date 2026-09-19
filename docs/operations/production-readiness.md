@@ -73,6 +73,32 @@ Recommended for F21:
 - A healthcheck for the three scheduler services, and something watching the age of the oldest `pending`
   notification.
 
+## F17 — continuous profiling, assessed as one change (2026-09-19)
+
+Scope: is F17 safe to roll out, given the platform above? **NOT READY.** Every platform blocker applies; F17's
+own storage blocker was closed by the founder's NFR3 decision (D6), leaving it under *Capacity*. Verdicts are against the repository and the development stack; there is no target.
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| Migrations have a way back | ✓ | `0030_usage_profile_samples.py` drops its column; `000032_profile_samples.down.sql` drops the table. Neither downgrade has been *rehearsed* |
+| Topics exist where it deploys | ✗ | `profiles-raw` and `profiles-dlq` come from `deploy/kafka/topics.sh` only; no deploy target runs it — blocker 5's class. The receiver's publish to a missing topic answers 503 and the Collector retries |
+| Health checks | ✓ | `worker-profiles` carries the worker's `-health` check in the app compose; a flood-killed profiles worker restarts alone (measured, AC15) |
+| Isolation from other signals | ✓ | Own rate bucket, per-key sample budget, own topic and worker process: spans unaffected by a 400,000-samples-a-second flood (`docs/features/profiling/status.md`) |
+| Tenancy | ✓ | `test_tenant_isolation_live.py` sends a real profile under one key and reads it from another organization: 404 or nothing, on every route |
+| Hostile input | ✓ | Frame bound (413), shared attribute resolution, value overflow, index bounds — `internal/profiles/convert_test.go`, review findings H1/H2 |
+| Capacity | ✗ | NFR3 met as restated (D6): ~73 MB per busy core per day — a 4-core host stores ~4 GB over 14 days, and no host has been sized for it. No per-query memory cap on any API read (`READ_SETTINGS` bounds rows and time only) |
+| Backups | ✓ | `backup.sh` and `verify.sh` list `profiles-raw`; `profile_samples` is picked up with every table |
+| Monitoring | ✗ | Platform blocker 7: nothing watches the profiles worker or its lag |
+
+**Recommended for F17:**
+
+- A per-query `max_memory_usage` in `READ_SETTINGS` for every API read — a heavy read of any signal can still
+  exhaust a shared ClickHouse; the profile reads are bounded by their shape alone (196 MiB for a busy day).
+- A profile flood spread across many keys can still crash-loop `worker-profiles` (profiles only): fetches are
+  bounded compressed, and profile messages decompress by orders of magnitude. An uncompressed `profiles-raw`
+  or a fleet-wide budget would close it.
+- A request whose produce partly fails is retried whole; the parts the broker kept count twice in the graph.
+
 ## Recommended
 
 - Load-test against the chosen host, and replace the laptop limits with measured ones.

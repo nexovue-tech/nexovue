@@ -451,3 +451,31 @@ func equalNames(got, want []string) bool {
 	slices.Sort(right)
 	return slices.Equal(left, right)
 }
+
+// D1: profiles are metered in samples and cost nothing — no bytes toward the
+// allowance, and no service toward the bill, however many processes a
+// whole-host profiler reports.
+func TestProfilesAreCountedInSamplesAndBillNothing(t *testing.T) {
+	payload, err := proto.Marshal(&nexovuev1.ProfileSamples{Batches: []*nexovuev1.ProfileBatch{
+		{SampleType: "cpu", Samples: []*nexovuev1.Sample{{Value: 1}, {Value: 2}}},
+		{SampleType: "cpu", Samples: []*nexovuev1.Sample{{Value: 3}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	measured, err := countProfileSamples(payload)
+	if err != nil {
+		t.Fatalf("countProfileSamples: %v", err)
+	}
+	if measured.ProfileSamples != 3 {
+		t.Errorf("ProfileSamples = %d, want 3", measured.ProfileSamples)
+	}
+	if measured.Bytes != 0 || measured.BrowserBytes != 0 {
+		t.Errorf("bytes = %d/%d, want none: profiles do not spend the allowance while in preview",
+			measured.Bytes, measured.BrowserBytes)
+	}
+	if len(measured.Services) != 0 {
+		t.Errorf("services = %v, want none: a profiled process is not a billed service", measured.Services)
+	}
+}

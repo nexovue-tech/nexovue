@@ -79,7 +79,10 @@ func newInProcessLimiter(perSecond int64, maxSubjects int) *inProcessLimiter {
 //
 // A subject seen for the first time starts full, so an outage does not begin by
 // refusing everybody: the bucket is a burst allowance, not a debt.
-func (l *inProcessLimiter) allow(subject string, now time.Time) Decision {
+// allow spends n tokens. A cost larger than a full bucket is admitted from a full
+// one, for the reason AllowN admits one to an empty window, and leaves at most one
+// second of debt — as the shared counter spends at most the window it arrived in.
+func (l *inProcessLimiter) allow(subject string, n float64, now time.Time) Decision {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -93,10 +96,11 @@ func (l *inProcessLimiter) allow(subject string, now time.Time) Decision {
 	}
 	held.refill(now, l.perSecond)
 
-	if held.tokens < 1 {
-		return Decision{Allowed: false, RetryAfter: held.waitForOneToken(l.perSecond)}
+	needed := min(n, l.perSecond)
+	if held.tokens < needed {
+		return Decision{Allowed: false, RetryAfter: held.waitFor(needed, l.perSecond)}
 	}
-	held.tokens--
+	held.tokens = max(held.tokens-n, -l.perSecond)
 	return Decision{Allowed: true}
 }
 
@@ -132,8 +136,8 @@ func (b *tokenBucket) refill(now time.Time, perSecond float64) {
 	b.refilled = now
 }
 
-// waitForOneToken is how long until this bucket has earned a whole token, which
-// is what a refused caller is told to wait.
-func (b *tokenBucket) waitForOneToken(perSecond float64) time.Duration {
-	return time.Duration((1 - b.tokens) / perSecond * float64(time.Second))
+// waitFor is how long until this bucket has earned the tokens a refused caller
+// needs, which is what it is told to wait.
+func (b *tokenBucket) waitFor(needed, perSecond float64) time.Duration {
+	return time.Duration((needed - b.tokens) / perSecond * float64(time.Second))
 }

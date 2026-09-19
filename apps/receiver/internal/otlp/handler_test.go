@@ -40,9 +40,10 @@ const (
 	orgID     = "01996d5e-8f00-7a11-9c3e-4b2f6a8d1e00"
 	projectID = "01996d5e-9a40-7b22-8d4f-5c3a7b9e2f11"
 
-	spansTopic   = "spans-raw"
-	logsTopic    = "logs-raw"
-	metricsTopic = "metrics-raw"
+	spansTopic    = "spans-raw"
+	logsTopic     = "logs-raw"
+	metricsTopic  = "metrics-raw"
+	profilesTopic = "profiles-raw"
 
 	contentTypeProtobuf = "application/x-protobuf"
 	contentTypeJSON     = "application/json"
@@ -50,7 +51,7 @@ const (
 
 // testTopics gives each signal a distinct topic, so a batch published to the
 // wrong one shows up as the wrong name rather than as no name at all.
-var testTopics = ingest.Topics{Spans: spansTopic, Logs: logsTopic, Metrics: metricsTopic}
+var testTopics = ingest.Topics{Spans: spansTopic, Logs: logsTopic, Metrics: metricsTopic, Profiles: profilesTopic}
 
 // --- doubles -----------------------------------------------------------------
 
@@ -141,14 +142,14 @@ type countingCounter struct {
 	seen int64
 }
 
-func (c *countingCounter) Increment(context.Context, string, time.Duration) (int64, error) {
-	c.seen++
+func (c *countingCounter) Increment(_ context.Context, _ string, by int64, _ time.Duration) (int64, error) {
+	c.seen += by
 	return c.seen, nil
 }
 
 type brokenCounter struct{}
 
-func (brokenCounter) Increment(context.Context, string, time.Duration) (int64, error) {
+func (brokenCounter) Increment(context.Context, string, int64, time.Duration) (int64, error) {
 	return 0, errors.New("dial tcp: connection refused")
 }
 
@@ -187,6 +188,8 @@ type doorOptions struct {
 
 	counter        ratelimit.Counter
 	requestsPerSec int
+	// samplesPerSec sets the profiles door's sample budget; zero leaves it unset.
+	samplesPerSec int
 
 	// allowanceUsage replaces the unenforced default when a test is about the
 	// plan gate.
@@ -204,6 +207,13 @@ type doorOptions struct {
 
 	// traffic replaces the default when a test reads the summary the door wrote.
 	traffic *otlp.Traffic
+}
+
+func sampleBudget(opts doorOptions) *ratelimit.Limiter {
+	if opts.samplesPerSec == 0 {
+		return nil
+	}
+	return ratelimit.New(opts.counter, opts.samplesPerSec)
 }
 
 // testProduceBudget is long enough that a working broker never trips it, short
@@ -286,6 +296,7 @@ func browserDoorOptions(producer *countingProducer, opts doorOptions) otlp.Optio
 func sharedDoorOptions(producer *countingProducer, opts doorOptions) otlp.Options {
 	return otlp.Options{
 		Limiter:             ratelimit.New(opts.counter, opts.requestsPerSec),
+		ProfileSamples:      sampleBudget(opts),
 		Allowance:           allowance.New(opts.allowanceUsage, testAllowanceCache),
 		Publisher:           ingest.NewPublisher(publishingTo(producer, opts), testTopics, opts.produceBudget),
 		Logger:              opts.log,

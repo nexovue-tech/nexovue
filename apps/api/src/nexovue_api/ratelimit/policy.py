@@ -190,6 +190,7 @@ TELEMETRY_PATHS: Final = (
     f"{API_PREFIX}/synthetics",
     f"{API_PREFIX}/dbstats",
     f"{API_PREFIX}/rum",
+    f"{API_PREFIX}/profiles",
     f"{API_PREFIX}/usage",
 )
 

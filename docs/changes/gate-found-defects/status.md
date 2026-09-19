@@ -44,16 +44,29 @@ Nothing.
 
 ## Risks
 
-- **Production sizing: a purge holds memory for eight minutes.** Deleting an organization or project
-  runs `ALTER TABLE … DELETE` on 21 tables by design (`purge/queries.py`), and each re-writes every
+- **Production sizing: a purge holds memory for eight minutes.** Deleting an organization runs
+  `ALTER TABLE … DELETE` on 14 tables by design (`purge/queries.py`; deleting a project purges
+  nothing — its telemetry expires with retention), and each re-writes every
   part, whose superseded copies stay in memory for `old_parts_lifetime`. On a production store with far
   more parts than a laptop's, one purge is a transient spike and several close together are this bug
-  again. For the first deployment's sizing: measure one purge against the real part count.
+  again. Decided: erasures run as a nightly batch — ADR-014.
 - The product-purge suites (`test_deletion_live`, `test_purge_live`) still issue ~427 mutations a
   gate, because running the real purge is what they prove. The gate peaked at 3.42 GiB of 4.
 - Defect 1's fix is proved in development (the worker exited 30 ms after the failure and air started it
   again 5 s later) and by the probe against a real broker; the production path — PID 1 exiting under
   `restart: unless-stopped` — is not exercised by any running deployment, because none exists.
+- **Found after commit, fixed (uncommitted, with F17):** air's `rerun` restarted the binary with a
+  loop that a rebuild during its 5 s wait does not stop, so the rebuild started a second loop. The
+  development worker ran two copies; each new one joined the consumer groups, then failed to bind
+  `:8081` and exited, re-balancing the healthy copy every 5 s (108 exits in 3 minutes). Fixed twice
+  over:
+  - `deploy/air/*.toml` restart with a shell loop in `full_bin`, which air starts and kills as one
+    process group.
+  - `worker/run.go` binds the health port before any pipeline starts, so a second copy fails before
+    it touches Kafka.
+
+  Proved live: a second copy exits on the bind with no pipeline started; a killed binary is back in
+  5 s; after a rebuild there is one loop and one binary.
 - The probe runs only with `PROBE_KAFKA_BROKERS` set; `just check` compiles it and does not run it, as
   with the existing `storeprobe` probes.
 

@@ -20,6 +20,7 @@ class Signal(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     SIGNAL_SPANS: _ClassVar[Signal]
     SIGNAL_LOGS: _ClassVar[Signal]
     SIGNAL_METRICS: _ClassVar[Signal]
+    SIGNAL_PROFILES: _ClassVar[Signal]
 DOOR_UNSPECIFIED: Door
 DOOR_OTLP: Door
 DOOR_SYNTHETIC: Door
@@ -30,6 +31,7 @@ SIGNAL_UNSPECIFIED: Signal
 SIGNAL_SPANS: Signal
 SIGNAL_LOGS: Signal
 SIGNAL_METRICS: Signal
+SIGNAL_PROFILES: Signal
 
 class Envelope(_message.Message):
     __slots__ = ("tenant_id", "project_id", "door", "signal", "received_at_unix_nano", "ingest_id", "semconv_version", "payload")

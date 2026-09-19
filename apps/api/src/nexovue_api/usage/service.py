@@ -308,6 +308,7 @@ def _totals(rows: Sequence[UsageDaily], *, services: int) -> UsageTotals:
         spans=sum(row.spans for row in rows),
         logs=sum(row.logs for row in rows),
         metric_points=sum(row.metric_points for row in rows),
+        profile_samples=sum(row.profile_samples for row in rows),
         bytes_ingested=sum(row.bytes for row in rows),
         services=services,
     )
@@ -324,6 +325,7 @@ def _to_day_usage(
         spans=row.spans,
         logs=row.logs,
         metric_points=row.metric_points,
+        profile_samples=row.profile_samples,
         bytes_ingested=row.bytes,
         services=services_by_day.get((row.project_id, row.day), 0),
         settled=is_settled(row.day, frontier),

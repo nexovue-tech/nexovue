@@ -58,6 +58,11 @@ type Counts struct {
 	MetricPoints int64
 	Bytes        int64
 	BrowserBytes int64
+
+	// ProfileSamples is metered and shown, never billed while profiling is in
+	// preview (F17, D1): a profiles message adds nothing to Bytes, which is what
+	// the allowance spends, and names no service, which is what the plan prices.
+	ProfileSamples int64
 }
 
 // add folds one message's counts into a running total.
@@ -67,15 +72,17 @@ func (c *Counts) add(other Counts) {
 	c.MetricPoints += other.MetricPoints
 	c.Bytes += other.Bytes
 	c.BrowserBytes += other.BrowserBytes
+	c.ProfileSamples += other.ProfileSamples
 }
 
 // empty reports whether anything was counted, which is what lets a flush skip
 // a tenant that produced nothing.
 func (c Counts) empty() bool {
-	return c.Spans == 0 && c.Logs == 0 && c.MetricPoints == 0 && c.Bytes == 0
+	return c.Spans == 0 && c.Logs == 0 && c.MetricPoints == 0 && c.Bytes == 0 &&
+		c.ProfileSamples == 0
 }
 
-// Metered is one message: the four guardrail counters, and the services that
+// Metered is one message: the five guardrail counters, and the services that
 // carried them. The services are the bill — the plan prices per service
 // monitored — and the counters are what shows the volume behind it.
 type Metered struct {
@@ -160,7 +167,9 @@ type topic struct {
 	dlqTopic      string
 	// Messages, not rows: a meter counts what arrived, not what was stored.
 	maxMessages int
-	maxDelay    time.Duration
+	// maxBytes bounds one fetch; zero takes the consume package's default.
+	maxBytes int
+	maxDelay time.Duration
 }
 
 // usageGroupSuffix keeps this job's consumer group distinct from the group that
@@ -224,8 +233,28 @@ var (
 	}
 )
 
+// Profiles meters the profiles the receiver converted, counted in samples — and
+// only counted (F17, D1). The eBPF profiler profiles a whole host, so every
+// process on it arrives as a "service": charging bytes or naming services here
+// would bill a customer for their machine's system processes.
+var Profiles = Signal{
+	Name: "usage-counting-profiles",
+	wire: nexovuev1.Signal_SIGNAL_PROFILES,
+	topic: func(cfg config.Config) topic {
+		return topic{
+			name:          cfg.ProfileIngest.Topic,
+			consumerGroup: cfg.ProfileIngest.ConsumerGroup + usageGroupSuffix,
+			dlqTopic:      cfg.ProfileIngest.DLQTopic,
+			maxMessages:   cfg.ProfileIngest.MaxMessages,
+			maxBytes:      cfg.ProfileIngest.MaxBytes,
+			maxDelay:      cfg.ProfileIngest.MaxDelay,
+		}
+	},
+	countOne: countProfileSamples,
+}
+
 // AllSignals is every topic a full worker meters.
-var AllSignals = []Signal{Spans, Logs, Metrics}
+var AllSignals = []Signal{Spans, Logs, Metrics, Profiles}
 
 // Topic is the ingestion topic this signal is metered from. The store is
 // keyed by it, so the caller that builds one needs the name.
@@ -295,6 +324,20 @@ func countLogs(payload []byte) (Metered, error) {
 		}
 		metered.Logs += records
 		metered.attribute(resource.GetResource(), records)
+	}
+	return metered, nil
+}
+
+// countProfileSamples counts samples and nothing else: no bytes, no services (see
+// Profiles).
+func countProfileSamples(payload []byte) (Metered, error) {
+	var samples nexovuev1.ProfileSamples
+	if err := proto.Unmarshal(payload, &samples); err != nil {
+		return Metered{}, fmt.Errorf("decode ProfileSamples payload: %w", err)
+	}
+	var metered Metered
+	for _, batch := range samples.GetBatches() {
+		metered.ProfileSamples += int64(len(batch.GetSamples()))
 	}
 	return metered, nil
 }

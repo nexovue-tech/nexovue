@@ -17,7 +17,10 @@ import { formatErrors } from "@/shared/format/health";
 import { formatCount, formatPercent } from "@/shared/format/number";
 import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
+import { useProfiledServices } from "@/shared/profiles/api";
+import { ProfilingStrip } from "@/shared/profiles/ProfilingStrip";
 import { SCOPED_PATHS, scopedSearch } from "@/shared/scope";
+import type { LiveWindow } from "@/shared/selection";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
 import type { HostGroup, ServiceEdge } from "@/shared/service-peers";
 import { collapseAddressPeers, EDGE_QUEUE, isPlaceholderService } from "@/shared/service-peers";
@@ -127,6 +130,9 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
   return (
     <ServiceDetailView
       alerts={<ServiceAlerts projectId={projectId} serviceName={serviceName} />}
+      profiling={
+        <ServiceProfiling projectId={projectId} serviceName={serviceName} timeWindow={timeWindow} />
+      }
       serviceName={serviceName}
       windowLabel={windowPhrase}
       state={state}
@@ -194,6 +200,8 @@ export interface ServiceDetailViewProps {
   errors: PanelSource<ErrorGroupSummary>;
   /** The rules that watch this service and any open incident (F21, FR24). */
   alerts?: ReactNode;
+  /** Whether the service is profiled, beside its alerts (F17, FR11). */
+  profiling?: ReactNode;
 }
 
 /** Everything the screen shows, with no query client and no clock behind it. */
@@ -211,6 +219,7 @@ export function ServiceDetailView({
   dependencies,
   errors,
   alerts,
+  profiling,
 }: ServiceDetailViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -257,6 +266,7 @@ export function ServiceDetailView({
     <div className="flex h-full min-h-0 flex-col">
       <ServiceHeader serviceName={serviceName} windowLabel={windowLabel} state={state} row={row} />
       {alerts ? <div className="px-4">{alerts}</div> : null}
+      {profiling ? <div className="px-4">{profiling}</div> : null}
 
       {state === "pending" ? (
         <div className="px-4">
@@ -871,6 +881,27 @@ function MetricCells({ metrics }: { metrics: HealthMetrics }) {
         {formatDuration(metrics.p99_ms)}
       </span>
     </>
+  );
+}
+
+function ServiceProfiling({
+  projectId,
+  serviceName,
+  timeWindow,
+}: {
+  projectId: string | undefined;
+  serviceName: string;
+  timeWindow: LiveWindow;
+}) {
+  const phrase = useWindowPhrase();
+  const services = useProfiledServices(projectId, timeWindow);
+  if (services.isPending || services.isError) return null;
+  return (
+    <ProfilingStrip
+      serviceName={serviceName}
+      profiled={services.data.services.find((service) => service.service_name === serviceName)}
+      phrase={phrase}
+    />
   );
 }
 

@@ -19,12 +19,19 @@ export function SelectField<T extends { id: string }>({
   options,
   onChange,
   optionLabel,
+  capped = false,
 }: {
   label: string;
   value: string;
   options: readonly T[];
   onChange: (id: string) => void;
   optionLabel: (option: T) => string;
+  /**
+   * Holds the control to a readable width. A native select is as wide as its longest
+   * option, and some option sets carry names no one chose — a whole-host profiler's
+   * `containerd-shim-<64 hex>` pushed every control after it off a phone's screen.
+   */
+  capped?: boolean;
 }) {
   const id = useId();
 
@@ -40,7 +47,7 @@ export function SelectField<T extends { id: string }>({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           // pr-5 leaves room for the chevron; the select still owns the whole box.
-          className="cursor-pointer appearance-none rounded-sm border-none bg-transparent py-0.5 pr-5 pl-1 font-medium text-ink text-sm outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
+          className={`${capped ? "max-w-48 truncate " : ""}cursor-pointer appearance-none rounded-sm border-none bg-transparent py-0.5 pr-5 pl-1 font-medium text-ink text-sm outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1`}
         >
           {options.map((option) => (
             <option key={option.id} value={option.id}>

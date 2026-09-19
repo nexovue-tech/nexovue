@@ -91,7 +91,7 @@ if docker inspect -f '{{.State.Running}}' "$KAFKA_CONTAINER" 2>/dev/null | grep 
         pg_scalar "SELECT topic || ':' || partition_id || E'\t' || counted_through FROM $POSTGRES_WATERMARK_TABLE"
     }
 
-    ends=$(for topic in spans-raw logs-raw metrics-raw; do kafka_end_offsets "$topic"; done)
+    ends=$(for topic in spans-raw logs-raw metrics-raw profiles-raw; do kafka_end_offsets "$topic"; done)
     checked=0
     while IFS=$'\t' read -r partition_key offset; do
         [ -n "$partition_key" ] || continue

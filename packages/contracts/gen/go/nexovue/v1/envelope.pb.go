@@ -93,6 +93,8 @@ const (
 	Signal_SIGNAL_SPANS       Signal = 1
 	Signal_SIGNAL_LOGS        Signal = 2
 	Signal_SIGNAL_METRICS     Signal = 3
+	// nexovue.v1.ProfileSamples, not OTLP — see `payload` and ADR-015.
+	Signal_SIGNAL_PROFILES Signal = 4
 )
 
 // Enum value maps for Signal.
@@ -102,12 +104,14 @@ var (
 		1: "SIGNAL_SPANS",
 		2: "SIGNAL_LOGS",
 		3: "SIGNAL_METRICS",
+		4: "SIGNAL_PROFILES",
 	}
 	Signal_value = map[string]int32{
 		"SIGNAL_UNSPECIFIED": 0,
 		"SIGNAL_SPANS":       1,
 		"SIGNAL_LOGS":        2,
 		"SIGNAL_METRICS":     3,
+		"SIGNAL_PROFILES":    4,
 	}
 )
 
@@ -160,6 +164,10 @@ type Envelope struct {
 	SemconvVersion string `protobuf:"bytes,7,opt,name=semconv_version,json=semconvVersion,proto3" json:"semconv_version,omitempty"`
 	// OTLP protobuf, unmodified: one of ExportTraceServiceRequest,
 	// ExportLogsServiceRequest or ExportMetricsServiceRequest, per `signal`.
+	//
+	// The one exception is SIGNAL_PROFILES, whose payload is nexovue.v1.ProfileSamples:
+	// OTLP profiles is still a Development format that breaks between releases, so the
+	// receiver converts it and nothing behind the receiver reads OTLP profiles (ADR-015).
 	Payload       []byte `protobuf:"bytes,8,opt,name=payload,proto3" json:"payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -273,12 +281,13 @@ const file_nexovue_v1_envelope_proto_rawDesc = "" +
 	"\x0eDOOR_SYNTHETIC\x10\x02\x12\x0f\n" +
 	"\vDOOR_POLLER\x10\x03\x12\f\n" +
 	"\bDOOR_RUM\x10\x04\x12\x10\n" +
-	"\fDOOR_WEBHOOK\x10\x05*W\n" +
+	"\fDOOR_WEBHOOK\x10\x05*l\n" +
 	"\x06Signal\x12\x16\n" +
 	"\x12SIGNAL_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fSIGNAL_SPANS\x10\x01\x12\x0f\n" +
 	"\vSIGNAL_LOGS\x10\x02\x12\x12\n" +
-	"\x0eSIGNAL_METRICS\x10\x03B\xb8\x01\n" +
+	"\x0eSIGNAL_METRICS\x10\x03\x12\x13\n" +
+	"\x0fSIGNAL_PROFILES\x10\x04B\xb8\x01\n" +
 	"\x0ecom.nexovue.v1B\rEnvelopeProtoP\x01ZNgithub.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1;nexovuev1\xa2\x02\x03NXX\xaa\x02\n" +
 	"Nexovue.V1\xca\x02\n" +
 	"Nexovue\\V1\xe2\x02\x16Nexovue\\V1\\GPBMetadata\xea\x02\vNexovue::V1b\x06proto3"

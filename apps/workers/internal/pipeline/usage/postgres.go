@@ -114,13 +114,14 @@ const advanceOffsets = `
 // the usage screen shows.
 const addCounters = `
 	INSERT INTO usage_daily AS existing
-		(org_id, project_id, day, spans, logs, metric_points, bytes, browser_bytes)
+		(org_id, project_id, day, spans, logs, metric_points, bytes, browser_bytes, profile_samples)
 	SELECT projects.org_id, projects.id, counted.day,
 	       counted.spans, counted.logs, counted.metric_points,
-	       counted.bytes, counted.browser_bytes
+	       counted.bytes, counted.browser_bytes, counted.profile_samples
 	FROM unnest($1::text[], $2::text[], $3::date[],
-	            $4::bigint[], $5::bigint[], $6::bigint[], $7::bigint[], $8::bigint[])
-		AS counted(org_id, project_id, day, spans, logs, metric_points, bytes, browser_bytes)
+	            $4::bigint[], $5::bigint[], $6::bigint[], $7::bigint[], $8::bigint[], $9::bigint[])
+		AS counted(org_id, project_id, day, spans, logs, metric_points, bytes, browser_bytes,
+		           profile_samples)
 	JOIN projects
 		ON projects.id::text = counted.project_id
 		AND projects.org_id::text = counted.org_id
@@ -129,7 +130,8 @@ const addCounters = `
 	    logs          = existing.logs + excluded.logs,
 	    metric_points = existing.metric_points + excluded.metric_points,
 	    bytes         = existing.bytes + excluded.bytes,
-	    browser_bytes = existing.browser_bytes + excluded.browser_bytes`
+	    browser_bytes = existing.browser_bytes + excluded.browser_bytes,
+	    profile_samples = existing.profile_samples + excluded.profile_samples`
 
 // addServices records which services were billable on a day.
 //
@@ -308,7 +310,8 @@ func (s *PostgresStore) add(ctx context.Context, tx pgx.Tx, rows []Row) (int, er
 	columns := columnsOf(rows)
 	tag, err := tx.Exec(ctx, addCounters,
 		columns.orgIDs, columns.projectIDs, columns.days,
-		columns.spans, columns.logs, columns.metricPoints, columns.bytes, columns.browserBytes)
+		columns.spans, columns.logs, columns.metricPoints, columns.bytes, columns.browserBytes,
+		columns.profileSamples)
 	if err != nil {
 		return 0, fmt.Errorf("add usage counters: %w", err)
 	}
@@ -365,26 +368,28 @@ func newestReceived(progress map[int32]Progress) time.Time {
 // columns is one flush transposed, because the insert takes arrays rather than
 // a statement per row.
 type columns struct {
-	orgIDs       []string
-	projectIDs   []string
-	days         []time.Time
-	spans        []int64
-	logs         []int64
-	metricPoints []int64
-	bytes        []int64
-	browserBytes []int64
+	orgIDs         []string
+	projectIDs     []string
+	days           []time.Time
+	spans          []int64
+	logs           []int64
+	metricPoints   []int64
+	bytes          []int64
+	browserBytes   []int64
+	profileSamples []int64
 }
 
 func columnsOf(rows []Row) columns {
 	held := columns{
-		orgIDs:       make([]string, 0, len(rows)),
-		projectIDs:   make([]string, 0, len(rows)),
-		days:         make([]time.Time, 0, len(rows)),
-		spans:        make([]int64, 0, len(rows)),
-		logs:         make([]int64, 0, len(rows)),
-		metricPoints: make([]int64, 0, len(rows)),
-		bytes:        make([]int64, 0, len(rows)),
-		browserBytes: make([]int64, 0, len(rows)),
+		orgIDs:         make([]string, 0, len(rows)),
+		projectIDs:     make([]string, 0, len(rows)),
+		days:           make([]time.Time, 0, len(rows)),
+		spans:          make([]int64, 0, len(rows)),
+		logs:           make([]int64, 0, len(rows)),
+		metricPoints:   make([]int64, 0, len(rows)),
+		bytes:          make([]int64, 0, len(rows)),
+		browserBytes:   make([]int64, 0, len(rows)),
+		profileSamples: make([]int64, 0, len(rows)),
 	}
 	for _, row := range rows {
 		held.orgIDs = append(held.orgIDs, row.OrgID)
@@ -395,6 +400,7 @@ func columnsOf(rows []Row) columns {
 		held.metricPoints = append(held.metricPoints, row.MetricPoints)
 		held.bytes = append(held.bytes, row.Bytes)
 		held.browserBytes = append(held.browserBytes, row.BrowserBytes)
+		held.profileSamples = append(held.profileSamples, row.ProfileSamples)
 	}
 	return held
 }

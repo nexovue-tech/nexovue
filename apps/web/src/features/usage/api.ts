@@ -17,6 +17,8 @@ export interface UsageCounters {
   spans: number;
   logs: number;
   metric_points: number;
+  /** Counted and shown; not billed while profiling is in preview (F17, D1). */
+  profile_samples: number;
   bytes_ingested: number;
 }
 

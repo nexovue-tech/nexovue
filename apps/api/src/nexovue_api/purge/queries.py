@@ -42,6 +42,7 @@ DELETE_TENANT_ROWS: Final[dict[str, str]] = {
     ),
     "metrics_summary": "ALTER TABLE metrics_summary DELETE WHERE tenant_id = {tenant_id:String}",
     "web_vitals": "ALTER TABLE web_vitals DELETE WHERE tenant_id = {tenant_id:String}",
+    "profile_samples": "ALTER TABLE profile_samples DELETE WHERE tenant_id = {tenant_id:String}",
     "span_trace_lookup": (
         "ALTER TABLE span_trace_lookup DELETE WHERE tenant_id = {tenant_id:String}"
     ),
@@ -74,6 +75,8 @@ UNION ALL SELECT 'metrics_summary', count()
 FROM metrics_summary WHERE tenant_id = {tenant_id:String}
 UNION ALL SELECT 'web_vitals', count()
 FROM web_vitals WHERE tenant_id = {tenant_id:String}
+UNION ALL SELECT 'profile_samples', count()
+FROM profile_samples WHERE tenant_id = {tenant_id:String}
 UNION ALL SELECT 'span_trace_lookup', count()
 FROM span_trace_lookup WHERE tenant_id = {tenant_id:String}
 UNION ALL SELECT 'trace_summaries', count()

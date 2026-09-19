@@ -33,7 +33,11 @@ export function AppShell() {
   }, [navOpen, closeNav]);
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-page text-ink">
+    // `relative` makes the frame the containing block for anything absolutely placed
+    // inside a screen that is not itself positioned — a screen-reader caption among
+    // them. Without it such an element is placed against the page, stretches the
+    // document past the window, and scrolling drags the whole shell out of view.
+    <div className="relative flex h-dvh overflow-hidden bg-page text-ink">
       <Sidebar open={navOpen} onNavigate={closeNav} />
 
       {navOpen ? (

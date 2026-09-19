@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	spansTopic   = "spans-raw"
-	logsTopic    = "logs-raw"
-	metricsTopic = "metrics-raw"
+	spansTopic    = "spans-raw"
+	logsTopic     = "logs-raw"
+	metricsTopic  = "metrics-raw"
+	profilesTopic = "profiles-raw"
 
 	// testBudget is long enough that a working producer never trips it, short
 	// enough that a test proving the bound does not stall the suite.
@@ -37,7 +38,9 @@ const (
 
 // testTopics is the topic set every test publishes into, so a record landing on
 // the wrong one is visible as the wrong name rather than as no name at all.
-var testTopics = ingest.Topics{Spans: spansTopic, Logs: logsTopic, Metrics: metricsTopic}
+var testTopics = ingest.Topics{
+	Spans: spansTopic, Logs: logsTopic, Metrics: metricsTopic, Profiles: profilesTopic,
+}
 
 // fakeProducer records what would have been published.
 type fakeProducer struct {
@@ -443,6 +446,30 @@ func TestPublishBatchSendsMetricsToTheMetricsTopic(t *testing.T) {
 	}
 	if envelope.GetSignal() != nexovuev1.Signal_SIGNAL_METRICS {
 		t.Errorf("signal = %v, want SIGNAL_METRICS", envelope.GetSignal())
+	}
+}
+
+func TestPublishBatchSendsProfilesToTheProfilesTopic(t *testing.T) {
+	producer := &fakeProducer{}
+
+	err := ingest.NewPublisher(producer, testTopics, testBudget).PublishBatch(
+		context.Background(), identity(), time.Now(), ingest.Batch{
+			Signal:  nexovuev1.Signal_SIGNAL_PROFILES,
+			Request: &nexovuev1.ProfileSamples{Batches: []*nexovuev1.ProfileBatch{{}}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishBatch() = %v, want no error", err)
+	}
+	if len(producer.records) != 1 || producer.records[0].Topic != profilesTopic {
+		t.Fatalf("records = %v, want one on %q", producer.records, profilesTopic)
+	}
+	var envelope nexovuev1.Envelope
+	if err := proto.Unmarshal(producer.records[0].Value, &envelope); err != nil {
+		t.Fatalf("record value is not an Envelope: %v", err)
+	}
+	if envelope.GetSignal() != nexovuev1.Signal_SIGNAL_PROFILES {
+		t.Errorf("signal = %v, want SIGNAL_PROFILES", envelope.GetSignal())
 	}
 }
 

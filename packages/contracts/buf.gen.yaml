@@ -6,6 +6,10 @@ clean: true
 # Language-specific options stay out of the frozen contract.
 managed:
   enabled: true
+  # OTLP's own files keep OTLP's own Go package, so profiles.proto's KeyValue is
+  # go.opentelemetry.io/proto/otlp/common/v1 — the type every service already masks.
+  disable:
+    - module: buf.build/opentelemetry/opentelemetry
   override:
     - file_option: go_package_prefix
       value: github.com/nexovue-tech/nexovue/packages/contracts/gen/go

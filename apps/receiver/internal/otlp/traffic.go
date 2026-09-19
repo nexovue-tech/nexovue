@@ -56,9 +56,13 @@ const (
 	// conversation that cannot tell the two apart is unanswerable.
 	reasonThrottledInProcess = "throttled_in_process"
 
-	reasonInvalid     = "invalid"
-	reasonUnavailable = "unavailable"
-	reasonInternal    = "internal"
+	reasonInvalid = "invalid"
+
+	// reasonUnsupportedVersion is an OTLP profiles request in a version nexovue does
+	// not read: a Collector newer or older than the one the setup page names.
+	reasonUnsupportedVersion = "unsupported_version"
+	reasonUnavailable        = "unavailable"
+	reasonInternal           = "internal"
 
 	// reasonLimiterDown is not a refusal: the limiter failing open still admits
 	// the request. It is counted because losing the protection silently is how
@@ -83,7 +87,7 @@ var (
 		reasonThrottledInProcess,
 		reasonAllowanceSpent, reasonBrowserAllowanceSpent,
 		reasonOrganizationGone, reasonIngestSuspended,
-		reasonInvalid, reasonUnavailable, reasonInternal,
+		reasonInvalid, reasonUnsupportedVersion, reasonUnavailable, reasonInternal,
 	}
 	degradationReasons = []string{reasonLimiterDown, reasonAllowanceUnknown}
 )
@@ -100,13 +104,16 @@ const (
 	Spans      Unit = "spans"
 	LogRecords Unit = "log_records"
 	DataPoints Unit = "data_points"
+	// Samples is nexovue's unit for profiles — what the flame graph adds up — though
+	// OTLP's partial_success counts whole profiles.
+	Samples Unit = "samples"
 )
 
 // units fixes the summary's shape on the signal axis, the way refusalReasons
 // does on the reason axis: every window reports every door, so a door that took
 // nothing shows a zero rather than a missing field. A door absent from this
 // table would count nothing, which is the failure the summary exists to catch.
-var units = []Unit{Spans, LogRecords, DataPoints}
+var units = []Unit{Spans, LogRecords, DataPoints, Samples}
 
 // Summary line fields. Names follow the control plane's request log so all three
 // services answer one query.

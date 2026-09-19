@@ -30,7 +30,7 @@
          (480 s) — 12,900 of them held 3.3 GiB, uncounted by the tracker. Those
          suites now delete once per run (tests/helpers/clickhouse_cleanup.py);
          the gate peaked at 3.42 GiB resident afterwards. What remains is the
-         product purge its own suites exercise, ~20 tenants x 21 tables.
+         product purge its own suites exercise, ~33 tenants x 14 tables.
          Resident memory stays at its peak after the parts expire — the
          allocator's, as above — so restarting still resets a long session. -->
     <max_server_memory_usage>4294967296</max_server_memory_usage>

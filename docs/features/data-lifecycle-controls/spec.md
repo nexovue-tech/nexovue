@@ -10,6 +10,8 @@ tiers, and all GDPR workflow surfaces are not implemented.
 - Projects have replaceable masking and sampling configuration; workers mask before downstream use.
 - Retention derives from plan/project configuration.
 - Tenant purge/data-erasure paths exist for stored telemetry and control-plane data.
+  **Decided, not built:** organization erasure moves from per request to a nightly batch — see
+  [ADR-014](../../decisions/ADR-014-telemetry-erasure-runs-as-a-nightly-batch.md).
 - Source maps are uploaded as metadata plus object-store bytes and can be listed and used to
 symbolicate minified frames.
 

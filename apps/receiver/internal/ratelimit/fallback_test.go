@@ -130,7 +130,7 @@ func TestTheFallbackMapIsBounded(t *testing.T) {
 	now := fixedTime(t, "2026-09-07T10:00:00Z")
 
 	for attempt := range maxSubjects * 50 {
-		limiter.allow(string(rune('a'+attempt%26))+string(rune(attempt)), now)
+		limiter.allow(string(rune('a'+attempt%26))+string(rune(attempt)), 1, now)
 		if len(limiter.buckets) > maxSubjects {
 			t.Fatalf("held %d buckets after %d distinct keys, want at most %d",
 				len(limiter.buckets), attempt+1, maxSubjects)

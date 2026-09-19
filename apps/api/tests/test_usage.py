@@ -327,6 +327,7 @@ def _usage(
         spans=spans,
         logs=spans * 2,
         metric_points=spans * 3,
+        profile_samples=spans * 4,
         bytes=byte_count,
         browser_bytes=browser_byte_count,
     )
@@ -363,6 +364,7 @@ async def test_an_organization_sees_only_its_own_counters() -> None:
     assert mine.totals.spans == 150
     assert mine.totals.logs == 300
     assert mine.totals.metric_points == 450
+    assert mine.totals.profile_samples == 600
     assert mine.totals.bytes_ingested == 1_500
     assert theirs.totals.spans == 999
 

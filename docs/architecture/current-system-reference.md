@@ -117,7 +117,8 @@ Auto-creation is disabled on the broker; topics are created explicitly by `deplo
 | `spans-raw` | 12 | `apps/receiver` | `apps/workers` (trace assembly), `nexovue-workers-usage` (metering) | trace id — every partition is one trace-assembler's whole world |
 | `logs-raw` | 4 | `apps/receiver`, `apps/scheduler` (browser-flow check results) | `apps/workers` (log writing), `nexovue-workers-logs-usage` | tenant (organization) id |
 | `metrics-raw` | 4 | `apps/receiver`, `apps/scheduler` (check results, cloud/database poller results) | `apps/workers` (metric ingest), `nexovue-workers-metrics-usage` | tenant id |
-| `spans-dlq` / `logs-dlq` / `metrics-dlq` | 1 each | `apps/workers`, on decode/processing failure | none — nothing drains a dead-letter topic automatically | inherits the source record's key |
+| `profiles-raw` | 4 | `apps/receiver` (converted to `nexovue.v1.ProfileSamples` at the door, ADR-015) | `worker-profiles` (profile ingest), `nexovue-workers-profiles-usage` | tenant id |
+| `spans-dlq` / `logs-dlq` / `metrics-dlq` / `profiles-dlq` | 1 each | `apps/workers`, on decode/processing failure | none — nothing drains a dead-letter topic automatically | inherits the source record's key |
 
 Every raw topic: 7-day retention, roughly 16 MiB max message size (sized to the receiver's decoded-body cap plus envelope overhead — a previous 1 MiB default silently dropped any oversized trace, with the sender retrying an unshrinkable batch forever), `zstd` compression.
 
@@ -144,8 +145,9 @@ Parsed by `apps/receiver/internal/config/config.go`; a missing required variable
 - `RECEIVER_OTLP_HTTP_ADDR` (`:4318`), `RECEIVER_OTLP_GRPC_ADDR` (`:4317`), `RECEIVER_HEALTH_ADDR` (`:8081`)
 - `RECEIVER_MAX_BODY_BYTES` (4 MiB, wire/compressed cap), `RECEIVER_MAX_DECODED_BODY_BYTES` (16 MiB, decompressed cap)
 - `RECEIVER_API_KEY_CACHE_TTL` (30s, capped at 1 min), `RECEIVER_ALLOWANCE_CACHE_TTL` (30s, capped at 5 min)
-- `RECEIVER_RATE_LIMIT_PER_SECOND` (1000, per credential)
-- `KAFKA_SPANS_TOPIC`/`KAFKA_LOGS_TOPIC`/`KAFKA_METRICS_TOPIC` (defaults `spans-raw`/`logs-raw`/`metrics-raw`)
+- `RECEIVER_RATE_LIMIT_PER_SECOND` (1000, per credential and per signal bucket — profiles have their own)
+- `RECEIVER_PROFILE_SAMPLES_PER_SECOND` (20,000, per credential): profiles spend no allowance while in preview (F17, D1), so the profiles door also bounds samples, counted after conversion
+- `KAFKA_SPANS_TOPIC`/`KAFKA_LOGS_TOPIC`/`KAFKA_METRICS_TOPIC`/`KAFKA_PROFILES_TOPIC` (defaults `spans-raw`/`logs-raw`/`metrics-raw`/`profiles-raw`)
 
 ### 4.4 HTTP and gRPC surface
 
@@ -154,9 +156,10 @@ Parsed by `apps/receiver/internal/config/config.go`; a missing required variable
 | POST | `/v1/traces` | `/browser/v1/traces` | Full gate chain |
 | POST | `/v1/logs` | `/browser/v1/logs` | Full gate chain |
 | POST | `/v1/metrics` | `/browser/v1/metrics` | Full gate chain |
-| OPTIONS | same three paths | same three paths | CORS preflight only, unauthenticated |
+| POST | `/v1development/profiles` | — | Full gate chain, then conversion (ADR-015), the sample budget, and a split into records under the broker's limit. Another `/{version}/profiles` answers 404 naming the supported path |
+| OPTIONS | the three browser paths | same three paths | CORS preflight only, unauthenticated |
 
-gRPC serves the three standard OTLP collector services on `:4317`, for the server (secret-key) door only — no browser credential path exists on gRPC.
+gRPC serves the three standard OTLP collector services and `ProfilesService` (v1development) on `:4317`, for the server (secret-key) door only — no browser credential path exists on gRPC.
 
 Content types: `application/x-protobuf` and `application/json` on both doors; `text/plain` additionally on the browser door only, parsed as OTLP/JSON, because `navigator.sendBeacon` cannot set a `Content-Type` header outside a fixed browser safelist. `gzip` or absent (`identity`) `Content-Encoding` is accepted; anything else is refused.
 
@@ -215,7 +218,9 @@ Partition key: trace id for spans, tenant (organization) id for logs and metrics
 
 ### 5.1 Purpose
 
-One Go binary (`apps/workers/cmd/worker`) that consumes the receiver's raw Kafka topics, masks sensitive values, derives pre-sampling metrics, tail-samples traces, and writes everything to ClickHouse. Which pipelines a given process runs is chosen at startup by the `WORKER_PIPELINES` environment variable (default `all`), a comma-separated subset of `trace-assembly`, `log-writing`, `metric-ingest` — there is no separate pipeline name for metric derivation or the service-dependency graph; those run inside `trace-assembly`.
+One Go binary (`apps/workers/cmd/worker`) that consumes the receiver's raw Kafka topics, masks sensitive values, derives pre-sampling metrics, tail-samples traces, and writes everything to ClickHouse. Which pipelines a given process runs is chosen at startup by the `WORKER_PIPELINES` environment variable (default `all`), a comma-separated subset of `trace-assembly`, `log-writing`, `metric-ingest`, `profile-ingest` — there is no separate pipeline name for metric derivation or the service-dependency graph; those run inside `trace-assembly`. A process meters what it ingests.
+
+Every compose target runs two worker services: `worker` (`trace-assembly,log-writing,metric-ingest`) and `worker-profiles` (`profile-ingest`). Pipelines in one process share one memory cap, and a profile flood once OOM-killed the shared worker and stopped spans with it; `apps/api/tests/test_compose_signal_isolation.py` holds the split.
 
 ### 5.2 Delivery discipline (applies to every pipeline)
 
@@ -247,6 +252,10 @@ A permanent ClickHouse refusal (a row shape the store will never accept, as oppo
 ### 5.5 metric-ingest pipeline
 
 Consumes `metrics-raw`. Decodes and masks the full OTLP metrics payload, then dispatches each data point by its OTLP shape into one of five row builders — gauge, sum, histogram, exponential histogram, summary. A metric whose shape isn't recognized rejects the *whole message* (no table exists to hold it), rather than writing the other four shapes and silently dropping the fifth. Inserts happen in a fixed order across all five target tables, and the write watermark advances only after every one of the five inserts has been acknowledged — there is no cross-table transaction (ClickHouse has none), a gap the code tolerates explicitly because a metric row is never unique on its own; a reader must already group by series and timestamp.
+
+### 5.5a profile-ingest pipeline
+
+Consumes `profiles-raw`, whose payload is `nexovue.v1.ProfileSamples` — the receiver's conversion, not OTLP (ADR-015). Decode → mask resource and sample attributes (never frames) → one row per sample into `profile_samples`, stacks inline as parallel arrays leaf first, with an FNV-1a `stack_hash` → watermark after the insert. Retention is `min(project raw retention, 14)` days (F17, D2). Its fetches are bounded at 4 MiB (`WORKERS_PROFILES_BATCH_MAX_BYTES`), a quarter of the other pipelines', because profile messages decompress far past what they fetch. The usage meter counts samples only — no bytes, no services (D1).
 
 `metrics_sum` is deliberately a **shared table**: this pipeline's raw OTLP sum metrics and the trace-assembly pipeline's derived span counters (§5.3) land in the same table, distinguished only by `metric_name`.
 
@@ -425,7 +434,7 @@ A thin `fetch` wrapper (never axios — banned by the linter after a real supply
 
 One feature folder per screen area under `src/features/`, each holding its own typed API hooks and pure computation modules kept separate from the screen component so the computation can be unit-tested without rendering anything. Import direction is enforced by the linter, not just convention: a feature may never import another feature directly, may never escape its own directory with a relative `../` path, and may never import the app-composition layer — only shared code and the app layer may see across features.
 
-Screens present: traces (list + waterfall detail), logs (search + live tail), services (ranked list + trend), service map, errors (grouped, with browser-stack symbolication), RUM (Core Web Vitals), synthetics (every check with its confirmed state; new check with a Postman-style request editor and Run now; import from cURL, OpenAPI or Postman; a check page with runs, evidence, phase breakdown, state changes, edit, pause and delete), database (polled statement/connection stats), infrastructure (polled host/container metrics), usage, billing, settings (API keys, site keys, projects, profile), and onboarding.
+Screens present: traces (list + waterfall detail), logs (search + live tail), services (ranked list + trend), service map, errors (grouped, with browser-stack symbolication), RUM (Core Web Vitals), profiles (flame graph with search, zoom, filters, timeline and compare — preview; also a span's *Profile* section and a Profiling strip on the service page), synthetics (every check with its confirmed state; new check with a Postman-style request editor and Run now; import from cURL, OpenAPI or Postman; a check page with runs, evidence, phase breakdown, state changes, edit, pause and delete), database (polled statement/connection stats), infrastructure (polled host/container metrics), usage, billing, settings (API keys, site keys, projects, profile), and onboarding.
 
 Every numeric formatter follows one convention throughout the codebase: an absent or negative reading renders as an em-dash, never as `"0"` — a real zero and "we don't know" must never look the same to a reader of the screen.
 
@@ -467,6 +476,7 @@ Every table below carries `tenant_id` (and, except for the trace-lookup index, `
 | `span_trace_lookup` | MergeTree | A trace-id → time-range index, fed by a materialized view over `spans`, so a trace-id lookup doesn't have to scan every partition in the retention window |
 | `trace_summaries` | AggregatingMergeTree | One row per stored trace (span count, error count, root service, duration, worst severity) — written **after** sampling, since it indexes what can actually be opened |
 | `web_vitals` / `web_vitals_1m` | MergeTree / AggregatingMergeTree | Raw Core Web Vital readings and their per-minute p75 rollup |
+| `profile_samples` | MergeTree | One row per profile sample: stack inline (functions, files, lines, binaries, addresses — leaf first), value in its type's unit, service/host/version/environment, span link. Sorted by hour then `stack_hash`; retention ≤ 14 days, and reads refuse rows past it before the TTL merge removes them |
 | `span_ingest_offsets` / `span_written_offsets` / `ingest_written_offsets` | KeeperMap | Durable per-partition offset watermarks used for crash recovery — hold no customer data |
 
 Raw signal tables default to 30 days' retention, keyed off the platform's own receive clock rather than a customer-supplied timestamp (a device or application clock can claim any year, so it is never trusted to expire data). Rollup tables default to roughly 13 months. Retention is enforced by expiring whole storage parts rather than mutating rows, which is also what makes the tenant-erasure deletion (§6.7) cheap.

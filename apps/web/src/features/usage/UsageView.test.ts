@@ -28,6 +28,7 @@ function day(dayString: string, projectId: string, overrides: Partial<ProjectDay
     spans: 1_000,
     logs: 2_000,
     metric_points: 3_000,
+    profile_samples: 0,
     bytes_ingested: 42_100_000_000,
     services: 3,
     settled: true,
@@ -68,6 +69,7 @@ const USAGE: UsageResponse = {
     spans: 2_000,
     logs: 4_000,
     metric_points: 6_000,
+    profile_samples: 0,
     bytes_ingested: 84_200_000_000,
     services: 4,
   },
@@ -360,6 +362,15 @@ describe("UsageView", () => {
     const billable = summaryValue(container, "Billable services");
     expect(billable).toMatch(/^4(?!\d)/);
     expect(billable).toContain("a service reporting every day is one service");
+  });
+
+  it("shows profile samples as counted and not billed while profiling is in preview", () => {
+    const container = render({
+      usage: { ...USAGE, totals: { ...USAGE.totals, profile_samples: 12_345 } },
+    });
+
+    expect(container.textContent).toContain("Profile samples");
+    expect(container.textContent).toContain("12,345 · not billed in preview");
   });
 
   /* ---------------------------------------------------------- what is unfinished */

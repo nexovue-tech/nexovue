@@ -81,6 +81,12 @@ mypy_path = ["packages/contracts/gen/python", "tests/helpers"]  # ...but it must
 module = ["clickhouse_connect.*", "celery.*", "kombu.*", "pycurl.*", "confluent_kafka.*", "boto3.*", "botocore.*", "asyncpg.*", "re2.*"]
 ignore_missing_imports = true
 
+# The exclude above skips generated files, but a stub our code imports is still
+# checked; protoc's stubs are not ours to type either.
+[[tool.mypy.overrides]]
+module = ["nexovue.v1.*"]
+ignore_errors = true
+
 # Celery ships no type information, so `celery.beat.Scheduler` is Any and strict
 # mode refuses the subclass. The subclass is the documented extension point --
 # compose names it as beat's --scheduler -- so the rule is relaxed for this

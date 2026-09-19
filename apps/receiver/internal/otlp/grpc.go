@@ -6,6 +6,7 @@ import (
 
 	logscollectorpb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	metricscollectorpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	profilescollectorpb "go.opentelemetry.io/proto/otlp/collector/profiles/v1development"
 	tracecollectorpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -71,6 +72,21 @@ func (e *metricExporter) Export(
 	return &metricscollectorpb.ExportMetricsServiceResponse{}, nil
 }
 
+type profileExporter struct {
+	profilescollectorpb.UnimplementedProfilesServiceServer
+	opts Options
+}
+
+func (e *profileExporter) Export(
+	ctx context.Context,
+	request *profilescollectorpb.ExportProfilesServiceRequest,
+) (*profilescollectorpb.ExportProfilesServiceResponse, error) {
+	if err := runExport(ctx, e.opts, profilesDoor, request); err != nil {
+		return nil, err
+	}
+	return &profilescollectorpb.ExportProfilesServiceResponse{}, nil
+}
+
 // runExport runs the gate chain over an already-decoded batch — decoding is
 // grpc-go's work on this transport — and answers in the protocol's own terms.
 func runExport[Request proto.Message](
@@ -97,7 +113,7 @@ func runExport[Request proto.Message](
 		opts.record(ctx, door.grpcPath, door.unit, itemsNotRead, refused)
 		return refused.grpcError()
 	}
-	if refused := opts.throttle(ctx); refused != nil {
+	if refused := opts.throttle(ctx, door.rateBucket); refused != nil {
 		opts.record(ctx, door.grpcPath, door.unit, itemsNotRead, refused)
 		return refused.grpcError()
 	}
@@ -134,6 +150,13 @@ func registerExporters(server *grpc.Server, opts Options) {
 			return metrics.Export(ctx, request)
 		})
 	server.RegisterService(&metricsDesc, metrics)
+
+	profiles := &profileExporter{opts: opts}
+	profilesDesc := serviceDesc(profilescollectorpb.ProfilesService_ServiceDesc, opts, profilesDoor,
+		func(ctx context.Context, request *profilescollectorpb.ExportProfilesServiceRequest) (any, error) {
+			return profiles.Export(ctx, request)
+		})
+	server.RegisterService(&profilesDesc, profiles)
 }
 
 // serviceDesc is a generated collector descriptor with its one method handler

@@ -18,11 +18,11 @@ func NewValkeyCounter(client valkey.Client) ValkeyCounter {
 	return ValkeyCounter{client: client}
 }
 
-// Increment pipelines INCR and EXPIRE into one round trip. No Lua: two commands
+// Increment pipelines INCRBY and EXPIRE into one round trip. No Lua: two commands
 // sent together are cheaper than a script the server has to look up.
-func (c ValkeyCounter) Increment(ctx context.Context, key string, ttl time.Duration) (int64, error) {
+func (c ValkeyCounter) Increment(ctx context.Context, key string, by int64, ttl time.Duration) (int64, error) {
 	results := c.client.DoMulti(ctx,
-		c.client.B().Incr().Key(key).Build(),
+		c.client.B().Incrby().Key(key).Increment(by).Build(),
 		// NX so only the first request of a window sets the TTL. Without it
 		// every request would push the expiry out and the window would slide.
 		c.client.B().Expire().Key(key).Seconds(int64(ttl.Seconds())).Nx().Build(),

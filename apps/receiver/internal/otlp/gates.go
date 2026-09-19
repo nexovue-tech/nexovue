@@ -16,6 +16,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ingest"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/logging"
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ratelimit"
 )
 
 // The gate chain, written once for every door and every transport. HTTP and
@@ -195,7 +196,7 @@ func ingestRefusedReason(verdict allowance.Verdict) string {
 // throttle is the rate-limit gate. It answers before the payload is decoded,
 // which is the whole reason it sits above decoding rather than inside the
 // exporter.
-func (o Options) throttle(ctx context.Context) *refusal {
+func (o Options) throttle(ctx context.Context, bucket string) *refusal {
 	identity, ok := auth.FromContext(ctx)
 	if !ok {
 		// Only reachable if the gate order were rewired.
@@ -203,7 +204,36 @@ func (o Options) throttle(ctx context.Context) *refusal {
 			because(errors.New("rate limit gate ran before authentication"))
 	}
 
-	decision, err := o.Limiter.Allow(ctx, identity.KeyPrefix)
+	key := identity.KeyPrefix
+	if bucket != "" {
+		key += ":" + bucket
+	}
+	return o.spend(ctx, o.Limiter, key, 1, messageThrottled)
+}
+
+// spendProfileSamples is the profiles door's second limit, on the samples a request
+// carries rather than on how many requests: profiles do not spend the allowance while
+// they are in preview (F17, D1), so without it one key's flood would reach the
+// profiles pipeline unbounded — measured, it stalled profile ingest for every tenant.
+func (o Options) spendProfileSamples(ctx context.Context, samples int) *refusal {
+	if o.ProfileSamples == nil || samples == 0 {
+		return nil
+	}
+	identity, _ := auth.FromContext(ctx)
+	return o.spend(ctx, o.ProfileSamples, identity.KeyPrefix+":"+profileSamplesBucket,
+		int64(samples), messageProfileSamplesThrottled)
+}
+
+// spend counts n against one key's window of one limiter, failing open within
+// the limiter's own per-instance bound when the shared counter cannot answer.
+func (o Options) spend(
+	ctx context.Context,
+	limiter *ratelimit.Limiter,
+	key string,
+	n int64,
+	throttled string,
+) *refusal {
+	decision, err := limiter.AllowN(ctx, key, n)
 	if err != nil {
 		// Fail open. A Valkey blip must not turn into an ingest outage: losing
 		// a customer's telemetry costs more than briefly losing the protection,
@@ -220,7 +250,7 @@ func (o Options) throttle(ctx context.Context) *refusal {
 				slog.String(fieldReason, reasonLimiterDown),
 				slog.String(fieldError, logging.RedactCredentials(err.Error())))
 		}
-		if local := o.Limiter.AllowWhileCounterDown(identity.KeyPrefix); !local.Allowed {
+		if local := limiter.AllowNWhileCounterDown(key, n); !local.Allowed {
 			// The cause names the number that refused, because it is not the
 			// configured one. Without it the first support conversation about a
 			// refusal during an outage has nothing to answer with.
@@ -229,12 +259,12 @@ func (o Options) throttle(ctx context.Context) *refusal {
 				countedUnder(reasonThrottledInProcess).
 				because(fmt.Errorf(
 					"shared rate counter unreachable; refused by this receiver's own bound of %d/s",
-					o.Limiter.FallbackPerSecond()))
+					limiter.FallbackPerSecond()))
 		}
 		return nil
 	}
 	if !decision.Allowed {
-		return refuseUntil(code.Code_RESOURCE_EXHAUSTED, messageThrottled, decision.RetryAfter)
+		return refuseUntil(code.Code_RESOURCE_EXHAUSTED, throttled, decision.RetryAfter)
 	}
 	return nil
 }

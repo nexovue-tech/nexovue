@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/logwriting"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/metricwriting"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/profilewriting"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/traceassembly"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/usage"
@@ -45,6 +47,7 @@ const (
 	checkTraceAssembly = "trace-assembly"
 	checkLogWriting    = "log-writing"
 	checkMetricIngest  = "metric-ingest"
+	checkProfileIngest = "profile-ingest"
 )
 
 // Main is the whole body of every worker binary: it runs the named worker and
@@ -121,17 +124,25 @@ func run(serviceName string) error {
 		slog.String("pipelines", config.JoinPipelines(cfg.Pipelines)),
 	)
 
+	// Bound before any pipeline starts: a second copy on the same port must fail
+	// here, not after it has joined the consumer groups and taken their partitions.
+	listener, err := net.Listen("tcp", cfg.HealthAddr)
+	if err != nil {
+		return fmt.Errorf("health server: %w", err)
+	}
+
 	// Buffered so the first failure is recorded even if nothing is selecting
 	// on it yet, and so reporting one never blocks a pipeline's exit.
 	failures := make(chan error, 1)
 	stopPipelines, err := startPipelines(
 		ctx, cfg, store, control, log, stageOptions, registry, liveness, failures, stop)
 	if err != nil {
+		_ = listener.Close()
 		return err
 	}
 	defer stopPipelines()
 
-	return serveUntilSignal(ctx, log, server, failures, cfg.ShutdownTimeout)
+	return serveUntilSignal(ctx, log, server, listener, failures, cfg.ShutdownTimeout)
 }
 
 // startPipelines launches every pipeline this process is configured to run and
@@ -204,6 +215,21 @@ func startPipelines(
 		registry.Register(health.Check{Name: checkMetricIngest, Probe: metrics.Running})
 		liveness.Register(health.Check{Name: checkMetricIngest, Probe: metrics.Running})
 		go reportFailure(ctx, failures, shutdown, log, string(config.PipelineMetricIngest), func() error { return metrics.Run(ctx) })
+	}
+
+	if slices.Contains(cfg.Pipelines, config.PipelineProfileIngest) {
+		profiles, err := profilewriting.New(cfg, store, log, profilewriting.Options{
+			Masking:   masker,
+			Retention: stageOptions.Retention,
+		})
+		if err != nil {
+			stop()
+			return nil, err
+		}
+		started = append(started, profiles.Close)
+		registry.Register(health.Check{Name: checkProfileIngest, Probe: profiles.Running})
+		liveness.Register(health.Check{Name: checkProfileIngest, Probe: profiles.Running})
+		go reportFailure(ctx, failures, shutdown, log, string(config.PipelineProfileIngest), func() error { return profiles.Run(ctx) })
 	}
 
 	// Appended before the error is checked: a meter that started before a later
@@ -299,6 +325,7 @@ func usageSignals(pipelines []config.Pipeline) []usage.Signal {
 		config.PipelineTraceAssembly: usage.Spans,
 		config.PipelineLogWriting:    usage.Logs,
 		config.PipelineMetricIngest:  usage.Metrics,
+		config.PipelineProfileIngest: usage.Profiles,
 	}
 
 	var signals []usage.Signal
@@ -440,12 +467,13 @@ func serveUntilSignal(
 	ctx context.Context,
 	log *slog.Logger,
 	server *http.Server,
+	listener net.Listener,
 	pipelineFailures <-chan error,
 	shutdownTimeout time.Duration,
 ) error {
 	failed := make(chan error, 1)
 	go func() {
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			failed <- err
 		}
 	}()

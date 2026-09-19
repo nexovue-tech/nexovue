@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19nexovue/v1/envelope.proto\x12\nnexovue.v1\"\xab\x02\n\x08\x45nvelope\x12\x1b\n\ttenant_id\x18\x01 \x01(\tR\x08tenantId\x12\x1d\n\nproject_id\x18\x02 \x01(\tR\tprojectId\x12$\n\x04\x64oor\x18\x03 \x01(\x0e\x32\x10.nexovue.v1.DoorR\x04\x64oor\x12*\n\x06signal\x18\x04 \x01(\x0e\x32\x12.nexovue.v1.SignalR\x06signal\x12\x31\n\x15received_at_unix_nano\x18\x05 \x01(\x03R\x12receivedAtUnixNano\x12\x1b\n\tingest_id\x18\x06 \x01(\tR\x08ingestId\x12\'\n\x0fsemconv_version\x18\x07 \x01(\tR\x0esemconvVersion\x12\x18\n\x07payload\x18\x08 \x01(\x0cR\x07payload*p\n\x04\x44oor\x12\x14\n\x10\x44OOR_UNSPECIFIED\x10\x00\x12\r\n\tDOOR_OTLP\x10\x01\x12\x12\n\x0e\x44OOR_SYNTHETIC\x10\x02\x12\x0f\n\x0b\x44OOR_POLLER\x10\x03\x12\x0c\n\x08\x44OOR_RUM\x10\x04\x12\x10\n\x0c\x44OOR_WEBHOOK\x10\x05*W\n\x06Signal\x12\x16\n\x12SIGNAL_UNSPECIFIED\x10\x00\x12\x10\n\x0cSIGNAL_SPANS\x10\x01\x12\x0f\n\x0bSIGNAL_LOGS\x10\x02\x12\x12\n\x0eSIGNAL_METRICS\x10\x03\x42\xb8\x01\n\x0e\x63om.nexovue.v1B\rEnvelopeProtoP\x01ZNgithub.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1;nexovuev1\xa2\x02\x03NXX\xaa\x02\nNexovue.V1\xca\x02\nNexovue\\V1\xe2\x02\x16Nexovue\\V1\\GPBMetadata\xea\x02\x0bNexovue::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19nexovue/v1/envelope.proto\x12\nnexovue.v1\"\xab\x02\n\x08\x45nvelope\x12\x1b\n\ttenant_id\x18\x01 \x01(\tR\x08tenantId\x12\x1d\n\nproject_id\x18\x02 \x01(\tR\tprojectId\x12$\n\x04\x64oor\x18\x03 \x01(\x0e\x32\x10.nexovue.v1.DoorR\x04\x64oor\x12*\n\x06signal\x18\x04 \x01(\x0e\x32\x12.nexovue.v1.SignalR\x06signal\x12\x31\n\x15received_at_unix_nano\x18\x05 \x01(\x03R\x12receivedAtUnixNano\x12\x1b\n\tingest_id\x18\x06 \x01(\tR\x08ingestId\x12\'\n\x0fsemconv_version\x18\x07 \x01(\tR\x0esemconvVersion\x12\x18\n\x07payload\x18\x08 \x01(\x0cR\x07payload*p\n\x04\x44oor\x12\x14\n\x10\x44OOR_UNSPECIFIED\x10\x00\x12\r\n\tDOOR_OTLP\x10\x01\x12\x12\n\x0e\x44OOR_SYNTHETIC\x10\x02\x12\x0f\n\x0b\x44OOR_POLLER\x10\x03\x12\x0c\n\x08\x44OOR_RUM\x10\x04\x12\x10\n\x0c\x44OOR_WEBHOOK\x10\x05*l\n\x06Signal\x12\x16\n\x12SIGNAL_UNSPECIFIED\x10\x00\x12\x10\n\x0cSIGNAL_SPANS\x10\x01\x12\x0f\n\x0bSIGNAL_LOGS\x10\x02\x12\x12\n\x0eSIGNAL_METRICS\x10\x03\x12\x13\n\x0fSIGNAL_PROFILES\x10\x04\x42\xb8\x01\n\x0e\x63om.nexovue.v1B\rEnvelopeProtoP\x01ZNgithub.com/nexovue-tech/nexovue/packages/contracts/gen/go/nexovue/v1;nexovuev1\xa2\x02\x03NXX\xaa\x02\nNexovue.V1\xca\x02\nNexovue\\V1\xe2\x02\x16Nexovue\\V1\\GPBMetadata\xea\x02\x0bNexovue::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,7 +35,7 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_DOOR']._serialized_start=343
   _globals['_DOOR']._serialized_end=455
   _globals['_SIGNAL']._serialized_start=457
-  _globals['_SIGNAL']._serialized_end=544
+  _globals['_SIGNAL']._serialized_end=565
   _globals['_ENVELOPE']._serialized_start=42
   _globals['_ENVELOPE']._serialized_end=341
 # @@protoc_insertion_point(module_scope)

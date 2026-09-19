@@ -107,9 +107,9 @@ services:
           # every save recompiles inside it.
           memory: 768M
 
-  # One worker process runs every pipeline. WORKER_PIPELINES narrows the set,
-  # so the same image can be deployed several times with different selections
-  # once load justifies separating them.
+  # One image, deployed twice: `worker` runs spans, logs and metrics, and
+  # `worker-profiles` runs profiles alone (WORKER_PIPELINES chooses). The same image
+  # can be split further when load justifies it.
   worker:
     build:
       context: ../..
@@ -139,7 +139,10 @@ services:
       # supplies its own, and rotating it silently ends every correlation that
       # spans the change.
       WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:-7b6H4ZIcduE9aYaTRdv2LKQeIKR3hYf5w4IDCAdevfI=}
-      WORKER_PIPELINES: all
+      # Every pipeline but profiles, which run in `worker-profiles`: one process
+      # shares one memory cap, and a profile flood once OOM-killed this worker and
+      # stopped spans with it (F17, NFR1 — tests/test_compose_signal_isolation.py).
+      WORKER_PIPELINES: trace-assembly,log-writing,metric-ingest
       # Go's runtime profiles on the admin listener, which is not published to
       # the host — reach them with `docker compose exec worker wget -qO-
       # http://127.0.0.1:8081/debug/pprof/heap`. Off everywhere else: the
@@ -170,6 +173,67 @@ services:
         limits:
           # Trace assembly holds a trace-buffer window in memory; the other
           # pipelines stream through. Plus the compiler, which dev containers host.
+          memory: 1G
+
+
+  # Profiles only, in a process of their own (see `worker`'s WORKER_PIPELINES).
+  worker-profiles:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/go-dev.Dockerfile
+    command: air -c deploy/air/worker-profiles.toml
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - go-cache:/cache
+    environment:
+      # ~85% of production's 512M cap (`WORKER_PROFILES_MEMORY`), for the reason
+      # `worker` gives; the rest of this container's 1G is for the compiler.
+      GOMEMLIMIT: 435MiB
+      ENV: development
+      LOG_LEVEL: debug
+      LOG_FORMAT: console
+      KAFKA_BROKERS: kafka:9092
+      CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:9000/nexovue}
+      # Read-only, and only for per-project masking and sampling rules. Without
+      # it the worker runs on compiled-in defaults and says so at boot.
+      POSTGRES_DSN: ${DEV_POSTGRES_DSN:-postgresql://nexovue:nexovue_dev@postgres:5432/nexovue}
+      # Keys the pseudonyms a hashing masking rule produces. Fixed here so a
+      # pseudonym survives a restart in development; every deployment target
+      # supplies its own, and rotating it silently ends every correlation that
+      # spans the change.
+      WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:-7b6H4ZIcduE9aYaTRdv2LKQeIKR3hYf5w4IDCAdevfI=}
+      WORKER_PIPELINES: profile-ingest
+      # Go's runtime profiles on the admin listener, which is not published to
+      # the host — reach them with `docker compose exec worker-profiles wget -qO-
+      # http://127.0.0.1:8081/debug/pprof/heap`. Off everywhere else: the
+      # endpoints are unauthenticated.
+      WORKERS_PPROF_ENABLED: "true"
+    healthcheck:
+      # /healthz — liveness. It now covers the pipeline as well as the process,
+      # so a stopped consumer turns the container red; it deliberately does NOT
+      # probe Kafka or ClickHouse, because a restart cannot fix a dependency
+      # outage and would only crash-loop every worker on top of it.
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 180s
+    depends_on:
+      # Masking rules come from Postgres the moment the worker starts; without it
+      # every profile is masked by the built-in defaults until the first refresh.
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # One pipeline and its meter, plus the compiler, which dev containers host:
+          # air rebuilds beside the running worker. GOMEMLIMIT still holds the heap
+          # to production's 512M cap.
           memory: 1G
 
   api:

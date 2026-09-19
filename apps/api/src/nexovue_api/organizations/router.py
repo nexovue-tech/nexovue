@@ -33,6 +33,8 @@ async def delete_organization(
 ) -> DeletionAccepted:
     """202, not 204: the account is closed now and the erasure has not finished.
 
+    ADR-014 (decided, not built) moves the erasure below to a nightly batch.
+
     The background task is a head start, not the guarantee. It runs in this
     process and dies with it; what makes the erasure certain is the obligation
     the transaction below commits, which `service.erasures_still_owed` finds

@@ -63,6 +63,9 @@ const BYTES_COLUMN = "w-20 shrink-0 text-right";
    breakpoint reported "plenty of room" and the last column was cut off. A container
    query asks the element that actually constrains it. */
 const WIDE_ONLY = "hidden @2xl:block";
+/* One column more than `WIDE_ONLY` fits: profile samples, shown where the table has the
+   width for every column rather than squeezing the ones a bill is read from. */
+const WIDEST_ONLY = "hidden @4xl:block";
 
 /**
  * What this organization has ingested, and the services it is billed for.
@@ -241,6 +244,10 @@ function Summary({ usage }: { usage: UsageResponse }) {
         <Ingested term="Spans" value={formatCount(usage.totals.spans)} />
         <Ingested term="Logs" value={formatCount(usage.totals.logs)} />
         <Ingested term="Metric points" value={formatCount(usage.totals.metric_points)} />
+        <Ingested
+          term="Profile samples"
+          value={`${formatCount(usage.totals.profile_samples)} · not billed in preview`}
+        />
         <Ingested term="Bytes" value={formatDecimalBytes(usage.totals.bytes_ingested)} />
         {allowance ? <Ingested term="Included volume" value={allowance} /> : null}
       </dl>
@@ -425,6 +432,7 @@ function DayTable({ rows }: { rows: readonly UsageRow[] }) {
           <span className={COUNT_COLUMN}>Spans</span>
           <span className={`${COUNT_COLUMN} ${WIDE_ONLY}`}>Logs</span>
           <span className={`${COUNT_COLUMN} ${WIDE_ONLY}`}>Points</span>
+          <span className={`${COUNT_COLUMN} ${WIDEST_ONLY}`}>Profiles</span>
           <span className={BYTES_COLUMN}>Bytes</span>
         </div>
 
@@ -474,6 +482,9 @@ function DayRow({ row }: { row: UsageRow }) {
       </span>
       <span className={`${COUNT_COLUMN} ${WIDE_ONLY} font-mono text-2xs text-ink-dim`}>
         {formatCount(usage.metric_points)}
+      </span>
+      <span className={`${COUNT_COLUMN} ${WIDEST_ONLY} font-mono text-2xs text-ink-dim`}>
+        {formatCount(usage.profile_samples)}
       </span>
       <span className={`${BYTES_COLUMN} font-mono text-2xs text-ink-dim`}>
         {formatDecimalBytes(usage.bytes_ingested)}

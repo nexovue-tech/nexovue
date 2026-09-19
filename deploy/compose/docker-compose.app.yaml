@@ -150,9 +150,9 @@ services:
         limits:
           memory: 512M
 
-  # One worker process runs every pipeline; WORKER_PIPELINES narrows the set.
-  # Deploy this image more than once with different selections when load
-  # justifies separating them.
+  # One image, deployed twice: `worker` runs spans, logs and metrics, and
+  # `worker-profiles` runs profiles alone (WORKER_PIPELINES chooses). The same image
+  # can be split further when load justifies it.
   worker:
     <<: *service-defaults
     build:
@@ -175,7 +175,12 @@ services:
       GOMEMLIMIT: ${WORKER_GOMEMLIMIT:-650MiB}
       <<: *data-plane-env
       CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
-      WORKER_PIPELINES: ${WORKER_PIPELINES:-all}
+      # Every pipeline but profiles, which run in `worker-profiles`: one process
+      # shares one memory cap, and a profile flood once OOM-killed the worker and
+      # stopped spans with it (F17, NFR1 — tests/test_compose_signal_isolation.py).
+      # Fixed rather than overridable: a `.env` still carrying the old `all` would put
+      # profiles back in this process (tests/test_compose_signal_isolation.py).
+      WORKER_PIPELINES: trace-assembly,log-writing,metric-ingest
       # Required rather than optional: the worker treats an absent secret as
       # "hashing rules unavailable" and boots anyway, so a missing value here
       # would disable pseudonymisation without anything going red.
@@ -194,6 +199,44 @@ services:
       resources:
         limits:
           memory: ${WORKER_MEMORY:-768M}
+
+
+  # Profiles only, in a process of their own (see `worker`'s WORKER_PIPELINES).
+  worker-profiles:
+    <<: *service-defaults
+    image: nexovue/worker:${NEXOVUE_VERSION:-dev}
+    healthcheck:
+      test: ["CMD", "/worker", "-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    environment:
+      # Overrides the data-plane default below, because this service has its own
+      # memory limit. Keep it at roughly 85% of WORKER_PROFILES_MEMORY: the two are one
+      # setting in two places, and raising the limit without raising this leaves
+      # the extra memory unusable.
+      GOMEMLIMIT: ${WORKER_PROFILES_GOMEMLIMIT:-435MiB}
+      <<: *data-plane-env
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
+      WORKER_PIPELINES: profile-ingest
+      # Required rather than optional: the worker treats an absent secret as
+      # "hashing rules unavailable" and boots anyway, so a missing value here
+      # would disable pseudonymisation without anything going red.
+      WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:?set WORKERS_MASKING_HASH_SECRET}
+    depends_on:
+      # Masking rules come from Postgres the moment the worker starts; without it
+      # every profile is masked by the built-in defaults until the first refresh.
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_PROFILES_MEMORY:-512M}
 
   api:
     <<: *service-defaults

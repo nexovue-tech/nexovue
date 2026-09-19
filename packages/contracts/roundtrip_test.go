@@ -46,6 +46,7 @@ var expectations = []fixtureExpectation{
 	{"door1-traces.bin", nexovuev1.Door_DOOR_OTLP, nexovuev1.Signal_SIGNAL_SPANS, "01996d5e-9a40-7c01-a000-000000000001", 430, 1},
 	{"door1-logs.bin", nexovuev1.Door_DOOR_OTLP, nexovuev1.Signal_SIGNAL_LOGS, "01996d5e-9a40-7c01-a000-000000000002", 1_260, 1},
 	{"door1-metrics.bin", nexovuev1.Door_DOOR_OTLP, nexovuev1.Signal_SIGNAL_METRICS, "01996d5e-9a40-7c01-a000-000000000003", 60_080, 1},
+	{"door1-profiles.bin", nexovuev1.Door_DOOR_OTLP, nexovuev1.Signal_SIGNAL_PROFILES, "01996d5e-9a40-7c01-a000-00000000000a", 1_540, 1},
 	{"door2-synthetic-api.bin", nexovuev1.Door_DOOR_SYNTHETIC, nexovuev1.Signal_SIGNAL_METRICS, "01996d5e-9a40-7c01-a000-000000000004", 310, 1},
 	{"door2-synthetic-evidence.bin", nexovuev1.Door_DOOR_SYNTHETIC, nexovuev1.Signal_SIGNAL_LOGS, "01996d5e-9a40-7c01-a000-000000000005", 320, 1},
 	{"door3-rum-logs.bin", nexovuev1.Door_DOOR_RUM, nexovuev1.Signal_SIGNAL_LOGS, "01996d5e-9a40-7c01-a000-000000000009", 8_712, 1},
@@ -170,6 +171,13 @@ func otlpEntryCount(signal nexovuev1.Signal, payload []byte) (int, error) {
 			return 0, err
 		}
 		return len(request.GetResourceMetrics()), nil
+	case nexovuev1.Signal_SIGNAL_PROFILES:
+		// Not OTLP: the receiver converts profiles into nexovue's own message (ADR-015).
+		var samples nexovuev1.ProfileSamples
+		if err := proto.Unmarshal(payload, &samples); err != nil {
+			return 0, err
+		}
+		return len(samples.GetBatches()), nil
 	default:
 		return 0, errUnroutableSignal
 	}

@@ -1,6 +1,6 @@
 # Feature catalog
 
-> **Owner:** Raj · **Status:** Draft — living document · **Last updated:** 2026-09-16 — Phase 1 approved and reordered (§5): F18 first, then F21, F26, F31 and F36, with the website and deployment as parallel tracks
+> **Owner:** Raj · **Status:** Draft — living document · **Last updated:** 2026-09-19 — F21 built; F17 built as a preview. Earlier the same day: F17 moved into Phase 1 Track 1 after F21 (§5). Earlier: 2026-09-16 — Phase 1 approved and reordered: F18 first, then F21, F26, F31 and F36, with the website and deployment as parallel tracks
 > **How to use this doc:** every feature gets the same structure as F1 (the template): Description → User stories → Acceptance criteria → UI notes → Dependencies → Open questions. We fill features in one by one; a feature is "specified" when its acceptance criteria are testable.
 
 > ⚠️ **Built and specified are different questions, and §4 answers both separately.**
@@ -69,11 +69,11 @@
 | **F14** | Database monitoring | ✅ Yes | 🔲 | 0 | Ships as a view inside Infrastructure, not a screen of its own |
 | **F15** | RUM / Core Web Vitals | ✅ Yes | 🔲 | 0 | Screens built; **the browser SDK is unpublishable** (decision D6) |
 | **F16** | Session replay | 🔴 No | 🔲 | Later | Neither built nor scoped |
-| **F17** | Continuous profiling | 🔴 No | 🔲 | Later | OTel signal still early |
+| **F17** | Continuous profiling | ✅ Preview | ✅ | **1** | **Built 2026-09-19 as a preview** to the approved [spec](../features/profiling/spec.md) — see [status](../features/profiling/status.md); storage restated per busy core (D6) and met at ~73 MB a day. Before it: moved into Phase 1 Track 1, 2026-09-19, by founder decision. The OTel profiles signal entered public alpha in March 2026; its OTLP format is still *Development* (sent to `/v1development/profiles`) and will change, so the design must confine that format to the intake. Nothing collects profiles today |
 | **F18** | Synthetic checks | ✅ Yes | ✅ | **1** | **Built 2026-09-17** to the approved [spec](../features/synthetic-checks/spec.md): API, multistep API, heartbeat, TCP and DNS checks created, edited, paused and deleted in the console; any method, bodies, files, auth from write-only secrets; assertions; import from cURL, OpenAPI and Postman; Run now; confirmation from another location; up/degraded/down/misconfigured state with a timeline; maintenance windows; per-run evidence. **Browser checks removed** (D13). Awaiting the founder's review of the uncommitted change — see [status](../features/synthetic-checks/status.md) |
 | **F19** | SLO tracking | 🔴 No | 🔲 | Later | |
 | **F20** | Dashboards | 🟡 Partly | 🔶 | Later | The composed Overview is built and holds `/`; the **builder** is not |
-| **F21** | Alerts & notification connectors | 🔴 No | ✅ Designed 2026-09-19 | **1** | The largest gap in the product. Notification adapters and a scheduler exist to build on. **A live competitor already bundles detection + AI root-cause + code-fix suggestions** (Better Stack's AI SRE, confirmed 2026-09-14) — the gap on "tell me what broke and act on it" is wider than scoped in August |
+| **F21** | Alerts & notification connectors | ✅ Yes | ✅ | **1** | **Built 2026-09-19** to the approved [spec](../features/alerts/spec.md) — see [status](../features/alerts/status.md). Before it: The largest gap in the product. Notification adapters and a scheduler exist to build on. **A live competitor already bundles detection + AI root-cause + code-fix suggestions** (Better Stack's AI SRE, confirmed 2026-09-14) — the gap on "tell me what broke and act on it" is wider than scoped in August |
 | **F22** | Case management | 🔴 No | 🔲 | 2 | Depends on findings existing |
 | **F23** | Onboarding | ✅ Yes | 🔲 | 0 | Signup → two env vars → first-span celebration; auto-created defaults not built |
 | **F24** | Integration settings | 🟡 Partly | 🔲 | 2 | Keys, site keys, deploy webhooks, cloud and DB pollers, integration health all built; AWS role flow is not |
@@ -151,10 +151,11 @@ the first in strict order, the other two alongside it.
 | Order | Feature | Bar |
 |---|---|---|
 | 1 | **F18 — Synthetic checks** | **Complete to production level** — everything a customer expects of synthetic monitoring, specified in full before any code, through the SDD workflow |
-| 2 | **F21 — Alerts & notification connectors** | |
-| 3 | **F26 — Teams: invite, roles, membership** | |
-| 4 | **F31 — Platform admin console** | Must exist before the first paying cloud customer: onboarding goes through it |
-| 5 | **F36 — Customer read API** | |
+| 2 | **F21 — Alerts & notification connectors** | Built 2026-09-19 |
+| 3 | **F17 — Continuous profiling** | Added 2026-09-19 by founder decision, ahead of F26. Built on an alpha OpenTelemetry signal — see its §4 row |
+| 4 | **F26 — Teams: invite, roles, membership** | |
+| 5 | **F31 — Platform admin console** | Must exist before the first paying cloud customer: onboarding goes through it |
+| 6 | **F36 — Customer read API** | |
 
 **Track 2 — website redesign, in parallel.** A modern site for the product only, with SEO, pricing
 (self-hosted free; cloud plans paid; no free cloud tier) and the first payment
@@ -268,8 +269,12 @@ LCP/INP/CLS + page-load breakdown by page, geo, device; JS errors; correlation t
 ### F16 — Session Replay 🔲 TO SPECIFY
 Playback linked from errors/findings; PII masking on by default; retention rules.
 
-### F17 — Continuous Profiling 🔲 TO SPECIFY
-Flame graphs per service; "which code is slow/hot" linked from finding evidence where relevant.
+### F17 — Continuous Profiling ✅ BUILT (PREVIEW)
+Specified, designed and built 2026-09-19: [`spec.md`](../features/profiling/spec.md),
+[`design.md`](../features/profiling/design.md), [`plan.md`](../features/profiling/plan.md), ADR-015. OTLP
+profiles from the eBPF profiler or the `pprof` receiver; a Profiles screen with flame graph, search, zoom,
+filters, timeline and compare; a span's *Profile* section; a Profiling strip on the service page; samples
+metered, not billed, while the signal is in preview. Linking from finding evidence waits for F1.
 
 ### F18 — Synthetic Checks ✅ SPECIFIED
 Specified, designed and built through the SDD workflow: [`spec.md`](../features/synthetic-checks/spec.md),

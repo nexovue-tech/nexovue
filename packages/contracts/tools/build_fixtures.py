@@ -18,7 +18,7 @@ from pathlib import Path
 CONTRACTS_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(CONTRACTS_ROOT / "gen" / "python"))
 
-from nexovue.v1 import envelope_pb2  # noqa: E402
+from nexovue.v1 import envelope_pb2, profiles_pb2  # noqa: E402
 from opentelemetry.proto.collector.logs.v1 import (  # noqa: E402
     logs_service_pb2,
 )
@@ -374,6 +374,56 @@ def door1_metrics() -> envelope_pb2.Envelope:
         "01996d5e-9a40-7c01-a000-000000000003",
         received_offset_millis=60_080,
         payload=request.SerializeToString(),
+    )
+
+
+def door1_profiles() -> envelope_pb2.Envelope:
+    """CPU samples from the eBPF profiler, as the receiver converts them (ADR-015).
+
+    Three samples of one service: a named Go stack linked to a span, the same stack
+    again, and one whose leaf the profiler could not name — the three shapes the
+    worker stores differently.
+    """
+    handler = [
+        profiles_pb2.Frame(function="crypto/sha256.block", file="sha256block.go", line=41),
+        profiles_pb2.Frame(function="main.(*Cart).Checkout", file="cart.go", line=112),
+        profiles_pb2.Frame(function="net/http.(*conn).serve", file="server.go", line=2092),
+    ]
+    unnamed = [
+        profiles_pb2.Frame(binary="libc.so.6", address=0x9A4F0),
+        profiles_pb2.Frame(function="main.(*Cart).Checkout", file="cart.go", line=118),
+    ]
+    first = BASE_UNIX_NANO + 1_000 * NANOS_PER_MILLISECOND
+    payload = profiles_pb2.ProfileSamples(
+        batches=[
+            profiles_pb2.ProfileBatch(
+                resource_attributes=resource_for("checkout", "1.4.2", "go").attributes,
+                sample_type="cpu",
+                sample_unit="nanoseconds",
+                period=10_000_000,
+                period_type="cpu",
+                period_unit="nanoseconds",
+                samples=[
+                    profiles_pb2.Sample(
+                        frames=handler,
+                        value=30_000_000,
+                        time_unix_nano=first,
+                        trace_id=bytes.fromhex("4bf92f3577b34da6a3ce929d0e0e4736"),
+                        span_id=bytes.fromhex("00f067aa0ba902b7"),
+                        attributes=[string_attribute("thread.name", "worker-3")],
+                    ),
+                    profiles_pb2.Sample(frames=handler, value=10_000_000, time_unix_nano=first),
+                    profiles_pb2.Sample(frames=unnamed, value=10_000_000, time_unix_nano=first),
+                ],
+            )
+        ]
+    )
+    return envelope(
+        envelope_pb2.DOOR_OTLP,
+        envelope_pb2.SIGNAL_PROFILES,
+        "01996d5e-9a40-7c01-a000-00000000000a",
+        received_offset_millis=1_540,
+        payload=payload.SerializeToString(),
     )
 
 
@@ -1034,6 +1084,7 @@ FIXTURE_BUILDERS = {
     "door1-traces.bin": door1_traces,
     "door1-logs.bin": door1_logs,
     "door1-metrics.bin": door1_metrics,
+    "door1-profiles.bin": door1_profiles,
     "door2-synthetic-api.bin": door2_synthetic_api,
     "door2-synthetic-evidence.bin": door2_synthetic_evidence,
     "door3-rum-logs.bin": door3_rum_logs,

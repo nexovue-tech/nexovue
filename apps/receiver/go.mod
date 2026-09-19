@@ -11,6 +11,8 @@ require (
 	github.com/twmb/franz-go v1.21.6
 	github.com/valkey-io/valkey-go v1.0.77
 	go.opentelemetry.io/proto/otlp v1.11.0
+	go.opentelemetry.io/proto/otlp/collector/profiles/v1development v0.4.0
+	go.opentelemetry.io/proto/otlp/profiles/v1development v0.4.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260825221802-da73d73af1c5
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.12

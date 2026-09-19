@@ -47,8 +47,11 @@ create_topic() {
 create_topic spans-raw "$SPAN_PARTITIONS"
 create_topic logs-raw "$OTHER_PARTITIONS"
 create_topic metrics-raw "$OTHER_PARTITIONS"
+# Profiles carry nexovue.v1.ProfileSamples, not OTLP (ADR-015).
+create_topic profiles-raw "$OTHER_PARTITIONS"
 
 # Poison messages land here rather than blocking a partition (P1-20).
 create_topic spans-dlq 1
 create_topic logs-dlq 1
 create_topic metrics-dlq 1
+create_topic profiles-dlq 1

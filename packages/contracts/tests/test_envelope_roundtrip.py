@@ -11,7 +11,7 @@ from typing import Final
 
 import pytest
 from google.protobuf.message import Message
-from nexovue.v1 import envelope_pb2
+from nexovue.v1 import envelope_pb2, profiles_pb2
 from opentelemetry.proto.collector.logs.v1 import logs_service_pb2
 from opentelemetry.proto.collector.metrics.v1 import metrics_service_pb2
 from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
@@ -50,6 +50,13 @@ EXPECTATIONS: Final = [
         envelope_pb2.SIGNAL_METRICS,
         "01996d5e-9a40-7c01-a000-000000000003",
         60_080,
+    ),
+    (
+        "door1-profiles.bin",
+        envelope_pb2.DOOR_OTLP,
+        envelope_pb2.SIGNAL_PROFILES,
+        "01996d5e-9a40-7c01-a000-00000000000a",
+        1_540,
     ),
     (
         "door2-synthetic-api.bin",
@@ -106,11 +113,14 @@ def otlp_request_for(signal: envelope_pb2.Signal) -> Message:
         return logs_service_pb2.ExportLogsServiceRequest()
     if signal == envelope_pb2.SIGNAL_METRICS:
         return metrics_service_pb2.ExportMetricsServiceRequest()
+    if signal == envelope_pb2.SIGNAL_PROFILES:
+        # Not OTLP: the receiver converts profiles into nexovue's own message (ADR-015).
+        return profiles_pb2.ProfileSamples()
     raise AssertionError(f"signal {signal} routes to no OTLP request type")
 
 
 def resource_entries(request: Message) -> list[object]:
-    for field in ("resource_spans", "resource_logs", "resource_metrics"):
+    for field in ("resource_spans", "resource_logs", "resource_metrics", "batches"):
         if request.DESCRIPTOR.fields_by_name.get(field) is not None:
             return list(getattr(request, field))
     raise AssertionError("OTLP request carries no resource_* field")

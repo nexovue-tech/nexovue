@@ -22,6 +22,8 @@ enum Signal {
   SIGNAL_SPANS = 1;
   SIGNAL_LOGS = 2;
   SIGNAL_METRICS = 3;
+  // nexovue.v1.ProfileSamples, not OTLP — see `payload` and ADR-015.
+  SIGNAL_PROFILES = 4;
 }
 
 // Our metadata, typed, wrapped around an untouched OTLP payload.
@@ -51,5 +53,9 @@ message Envelope {
 
   // OTLP protobuf, unmodified: one of ExportTraceServiceRequest,
   // ExportLogsServiceRequest or ExportMetricsServiceRequest, per `signal`.
+  //
+  // The one exception is SIGNAL_PROFILES, whose payload is nexovue.v1.ProfileSamples:
+  // OTLP profiles is still a Development format that breaks between releases, so the
+  // receiver converts it and nothing behind the receiver reads OTLP profiles (ADR-015).
   bytes payload = 8;
 }

@@ -841,6 +841,11 @@ class UsageDaily(Base):
     # The part of `bytes` that came through the browser door, which the plan
     # budgets on its own. Never more than `bytes`.
     browser_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    # Profile samples (F17): metered and shown, never billed while profiling is in
+    # preview — they add nothing to `bytes` and name no service (spec D1).
+    profile_samples: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
 
 
 class UsageDailyService(Base):

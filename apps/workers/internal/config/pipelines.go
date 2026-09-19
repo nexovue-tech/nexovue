@@ -34,6 +34,10 @@ const (
 	// metric-derivation, which computes our own counters from traces: one reads
 	// metrics-raw, the other reads nothing at all.
 	PipelineMetricIngest Pipeline = "metric-ingest"
+
+	// PipelineProfileIngest writes the profiles the receiver converted into
+	// nexovue.v1.ProfileSamples (F17, ADR-015).
+	PipelineProfileIngest Pipeline = "profile-ingest"
 )
 
 // AllPipelines is the default: one process runs everything.
@@ -41,6 +45,7 @@ var AllPipelines = []Pipeline{
 	PipelineTraceAssembly,
 	PipelineLogWriting,
 	PipelineMetricIngest,
+	PipelineProfileIngest,
 }
 
 // ParsePipelines turns the WORKER_PIPELINES value into the set this process

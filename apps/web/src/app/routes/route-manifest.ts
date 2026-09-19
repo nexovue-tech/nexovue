@@ -22,6 +22,7 @@ export type NavPath =
   | "/services"
   | "/service-map"
   | "/traces"
+  | "/profiles"
   | "/errors"
   | "/logs"
   | "/rum"
@@ -56,6 +57,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { path: "/services", title: "Services" },
       { path: "/service-map", title: "Service map" },
       { path: "/traces", title: "Traces" },
+      { path: "/profiles", title: "Profiles" },
       { path: "/errors", title: "Errors" },
       { path: "/logs", title: "Logs" },
     ],

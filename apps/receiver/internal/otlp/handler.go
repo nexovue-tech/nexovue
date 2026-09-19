@@ -51,6 +51,9 @@ const brokerRetryAfter = 5 * time.Second
 const (
 	messageUnauthenticated = "invalid or missing " + auth.HeaderName + " credential"
 	messageThrottled       = "ingest rate limit exceeded for this key"
+	// A limit on samples rather than requests, said so: a sender with few requests
+	// would otherwise look for a request rate it is nowhere near.
+	messageProfileSamplesThrottled = "profile samples per second exceeded for this key, retry"
 
 	// Named apart from messageThrottled because the number this refused at is
 	// not the configured one: the shared counter is unreachable, so each
@@ -139,6 +142,10 @@ type Options struct {
 	Gatekeeper auth.Gatekeeper
 	Limiter    *ratelimit.Limiter
 
+	// ProfileSamples bounds the profile samples one key sends a second, counted
+	// after conversion (see spendProfileSamples). Nil sets no such bound.
+	ProfileSamples *ratelimit.Limiter
+
 	// Allowance is the plan gate: whether this organization has volume left in
 	// the month its plan includes, at this door. Shared by both doors and both
 	// transports — the total belongs to the organization, and the checker
@@ -192,9 +199,31 @@ type Doors struct {
 func Handler(doors Doors) http.Handler {
 	mux := http.NewServeMux()
 	mountSignals(mux, "", doors.Server, serverContentTypes)
+	mountProfiles(mux, doors.Server, serverContentTypes)
 	mountSignals(mux, BrowserPathPrefix, doors.Browser, browserContentTypes)
 	return mux
 }
+
+// mountProfiles serves OTLP profiles on the server entrance only, and answers every
+// other version's path with the one it should have used. The version is in the path
+// (`/v1development/profiles`), so a Collector speaking another would otherwise get
+// the mux's bare "404 page not found" and nothing to act on (ADR-015).
+func mountProfiles(mux *http.ServeMux, opts Options, accepts contentTypes) {
+	opts.accepts = accepts
+	route(mux, "", opts, profilesDoor)
+	mux.Handle("POST /{version}/profiles", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refused := refuse(code.Code_INVALID_ARGUMENT, unsupportedProfilesVersion).
+			answeredAs(http.StatusNotFound).
+			countedUnder(reasonUnsupportedVersion)
+		opts.record(r.Context(), r.URL.Path, Samples, itemsNotRead, refused)
+		writeRefusal(w, opts.accepts.replyCodec(r), refused)
+	}))
+}
+
+// unsupportedProfilesVersion is what a Collector speaking another OTLP profiles
+// version is told: where the version nexovue reads is accepted.
+const unsupportedProfilesVersion = "this OTLP profiles version is not supported; send OTLP profiles " +
+	"v1development to " + ProfilesPath
 
 // mountSignals fixes what one entrance reads at the point it is mounted, which
 // is the only place both entrances are named together and so the only place a
@@ -279,7 +308,7 @@ func withinAllowance(opts Options, at endpoint, next http.Handler) http.Handler 
 
 func throttle(opts Options, at endpoint, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if refused := opts.throttle(r.Context()); refused != nil {
+		if refused := opts.throttle(r.Context(), at.rateBucket); refused != nil {
 			opts.record(r.Context(), at.httpPath, at.unit, itemsNotRead, refused)
 			writeRefusal(w, opts.accepts.replyCodec(r), refused)
 			return

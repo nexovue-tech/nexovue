@@ -28,6 +28,7 @@ RAW_SIGNAL_TABLES: Final[tuple[str, ...]] = (
     "metrics_exp_histogram",
     "metrics_summary",
     "web_vitals",
+    "profile_samples",
 )
 
 # Derived from the raw signals and stored separately. These are the reason this

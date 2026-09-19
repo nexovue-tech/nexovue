@@ -76,6 +76,7 @@ func New(cfg config.Config, signal Signal, log *slog.Logger, opts Options) (*Pip
 		ConsumerGroup: settings.consumerGroup,
 		DLQTopic:      settings.dlqTopic,
 		MaxMessages:   settings.maxMessages,
+		MaxBytes:      settings.maxBytes,
 		MaxDelay:      settings.maxDelay,
 		// A partition can arrive from another worker, whose flushes this
 		// process never saw. Re-reading the durable watermark before counting

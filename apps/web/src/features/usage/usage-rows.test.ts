@@ -18,6 +18,7 @@ function usage(day: string, projectId: string, overrides: Partial<ProjectDayUsag
     spans: 100,
     logs: 200,
     metric_points: 300,
+    profile_samples: 0,
     bytes_ingested: 1_000,
     services: 3,
     settled: true,

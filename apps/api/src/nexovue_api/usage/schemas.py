@@ -9,10 +9,11 @@ from pydantic import BaseModel, Field
 
 
 class UsageCounters(BaseModel):
-    """What was ingested. Four counters, in the units they are metered in.
+    """What was ingested. Five counters, in the units they are metered in.
 
     The guardrail meter, not the bill: pricing is per service, and these
-    are the volume behind that price.
+    are the volume behind that price. Profile samples are shown and not
+    billed while profiling is in preview (F17, D1).
 
     `bytes_ingested` rather than `bytes`: the column is `usage_daily.bytes`, but
     a field of that name shadows a builtin everywhere it is unpacked.
@@ -21,6 +22,7 @@ class UsageCounters(BaseModel):
     spans: int = 0
     logs: int = 0
     metric_points: int = 0
+    profile_samples: int = 0
     bytes_ingested: int = 0
 
 

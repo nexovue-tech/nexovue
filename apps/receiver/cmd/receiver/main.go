@@ -91,8 +91,10 @@ func run() error {
 	// One set of collaborators for both transports and both doors: the gates
 	// behind them are the same code, and a second Options would be a second
 	// pipeline. Only the gatekeeper differs, and it is the whole difference.
+	counter := ratelimit.NewValkeyCounter(dependencies.valkey)
 	shared := otlp.Options{
-		Limiter: ratelimit.New(ratelimit.NewValkeyCounter(dependencies.valkey), cfg.RateLimitPerSecond),
+		Limiter:        ratelimit.New(counter, cfg.RateLimitPerSecond),
+		ProfileSamples: ratelimit.New(counter, cfg.ProfileSamplesPerSecond),
 		// One checker for both doors and both transports: the plan's total is
 		// the organization's, read once and split per door inside the checker,
 		// so a customer cannot buy more month by changing which entrance they
@@ -105,9 +107,10 @@ func run() error {
 				CacheMaxEntries: cfg.AllowanceCacheMaxEntries,
 			}),
 		Publisher: ingest.NewPublisher(dependencies.kafka, ingest.Topics{
-			Spans:   cfg.SpansTopic,
-			Logs:    cfg.LogsTopic,
-			Metrics: cfg.MetricsTopic,
+			Spans:    cfg.SpansTopic,
+			Logs:     cfg.LogsTopic,
+			Metrics:  cfg.MetricsTopic,
+			Profiles: cfg.ProfilesTopic,
 		}, cfg.ProduceTimeout),
 		Logger:              log,
 		Traffic:             traffic,
@@ -150,6 +153,7 @@ func run() error {
 		slog.String("spans_topic", cfg.SpansTopic),
 		slog.String("logs_topic", cfg.LogsTopic),
 		slog.String("metrics_topic", cfg.MetricsTopic),
+		slog.String("profiles_topic", cfg.ProfilesTopic),
 	)
 
 	// The heartbeat: without it a receiver serving nothing and a receiver

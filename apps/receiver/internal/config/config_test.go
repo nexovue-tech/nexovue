@@ -66,15 +66,17 @@ func TestLoadAcceptsTheMinimumEnvironment(t *testing.T) {
 	}
 	// Compose sets none of these, so every one of them needs a working default.
 	topics := map[string]string{
-		"KAFKA_SPANS_TOPIC":   cfg.SpansTopic,
-		"KAFKA_LOGS_TOPIC":    cfg.LogsTopic,
-		"KAFKA_METRICS_TOPIC": cfg.MetricsTopic,
+		"KAFKA_SPANS_TOPIC":    cfg.SpansTopic,
+		"KAFKA_LOGS_TOPIC":     cfg.LogsTopic,
+		"KAFKA_METRICS_TOPIC":  cfg.MetricsTopic,
+		"KAFKA_PROFILES_TOPIC": cfg.ProfilesTopic,
 	}
 	for variable, configured := range topics {
 		want := map[string]string{
-			"KAFKA_SPANS_TOPIC":   "spans-raw",
-			"KAFKA_LOGS_TOPIC":    "logs-raw",
-			"KAFKA_METRICS_TOPIC": "metrics-raw",
+			"KAFKA_SPANS_TOPIC":    "spans-raw",
+			"KAFKA_LOGS_TOPIC":     "logs-raw",
+			"KAFKA_METRICS_TOPIC":  "metrics-raw",
+			"KAFKA_PROFILES_TOPIC": "profiles-raw",
 		}[variable]
 		if configured != want {
 			t.Errorf("%s = %q, want the topic deploy/kafka/topics.sh creates, %q",
@@ -91,6 +93,9 @@ func TestLoadAcceptsTheMinimumEnvironment(t *testing.T) {
 	}
 	if cfg.RateLimitPerSecond <= 0 {
 		t.Errorf("RateLimitPerSecond = %d, want a positive default", cfg.RateLimitPerSecond)
+	}
+	if cfg.ProfileSamplesPerSecond != 20_000 {
+		t.Errorf("ProfileSamplesPerSecond = %d, want the recorded 20,000", cfg.ProfileSamplesPerSecond)
 	}
 	if cfg.PostgresMinConns <= 0 || cfg.PostgresMinConns > cfg.PostgresMaxConns {
 		t.Errorf("pool bounds = %d/%d, want a usable pair",

@@ -98,7 +98,7 @@ echo "manifest: measuring"
     # end offsets are below these is a restore into a different Kafka, and the
     # watermarks must not come back with the data.
     if docker inspect -f '{{.State.Running}}' "$KAFKA_CONTAINER" 2>/dev/null | grep -q true; then
-        for topic in spans-raw logs-raw metrics-raw; do
+        for topic in spans-raw logs-raw metrics-raw profiles-raw; do
             kafka_end_offsets "$topic" | sed 's/^/kafka.end./;s/:/=/2'
         done
     fi

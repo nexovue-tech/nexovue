@@ -3,9 +3,11 @@ version: v2
 modules:
   - path: proto
 
-# No deps: the envelope carries OTLP as opaque bytes and imports nothing. When a
-# proto here does import OTLP, add buf.build/opentelemetry/opentelemetry — from the
-# BSR, never vendored. See the README.
+# The envelope carries OTLP as opaque bytes and imports nothing. profiles.proto
+# imports OTLP's common.v1 for attributes, so the masker applies to them unchanged
+# (ADR-015) — from the BSR, never vendored, pinned by buf.lock. See the README.
+deps:
+  - buf.build/opentelemetry/opentelemetry
 
 lint:
   use:

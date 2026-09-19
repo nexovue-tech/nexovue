@@ -2,10 +2,13 @@ package otlp
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"time"
 
 	logscollectorpb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	metricscollectorpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
+	profilescollectorpb "go.opentelemetry.io/proto/otlp/collector/profiles/v1development"
 	tracecollectorpb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	"google.golang.org/genproto/googleapis/rpc/code"
@@ -16,6 +19,7 @@ import (
 
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ingest"
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/profiles"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/semconv"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/tracesplit"
 )
@@ -26,7 +30,20 @@ const (
 	TracesPath  = "/v1/traces"
 	LogsPath    = "/v1/logs"
 	MetricsPath = "/v1/metrics"
+
+	// ProfilesPath carries OTLP profiles in the one version nexovue reads. The path
+	// names the version — OTLP profiles is still Development — so a Collector speaking
+	// another one arrives somewhere else and is told which to send (ADR-015).
+	ProfilesPath = "/v1development/profiles"
 )
+
+// profilesRateBucket gives profiles a rate limit of their own. A profiled host sends
+// far more than its spans, and a shared budget would let a profiling flood refuse
+// the telemetry that says the service is down.
+const profilesRateBucket = "profiles"
+
+// profileSamplesBucket keys the profiles door's second limit, on samples.
+const profileSamplesBucket = "profile-samples"
 
 // exportMethod is the only method each OTLP collector service defines. Named so
 // the descriptors below and the generated ones cannot drift apart silently.
@@ -40,6 +57,10 @@ type endpoint struct {
 	httpPath string
 	grpcPath string
 	unit     Unit
+
+	// rateBucket names the key's rate-limit budget this door spends; empty is the
+	// key's own, which traces, logs and metrics share.
+	rateBucket string
 }
 
 // signalDoor is everything one signal does differently: the request it decodes,
@@ -109,6 +130,25 @@ var metricsDoor = signalDoor[*metricscollectorpb.ExportMetricsServiceRequest]{
 	accept:      acceptMetrics,
 }
 
+// profilesDoor reads OTLP profiles and publishes nexovue's own ProfileSamples: the one
+// door that converts rather than forwards (ADR-015). Mounted on the server entrance
+// only — a public site key has no profiles to send.
+var profilesDoor = signalDoor[*profilescollectorpb.ExportProfilesServiceRequest]{
+	endpoint: endpoint{
+		httpPath:   ProfilesPath,
+		grpcPath:   grpcPathOf(profilescollectorpb.ProfilesService_ServiceDesc),
+		unit:       Samples,
+		rateBucket: profilesRateBucket,
+	},
+	malformedMessage: "request is not a valid OTLP profiles v1development ExportProfilesServiceRequest",
+	newRequest: func() *profilescollectorpb.ExportProfilesServiceRequest {
+		return new(profilescollectorpb.ExportProfilesServiceRequest)
+	},
+	newResponse: func() proto.Message { return new(profilescollectorpb.ExportProfilesServiceResponse) },
+	countItems:  profiles.SampleCount,
+	accept:      acceptProfiles,
+}
+
 // grpcPathOf is the HTTP/2 path a gRPC export is a POST to. Logging it in the
 // same field the HTTP door logs /v1/traces in is what lets one query answer
 // "what did the receiver do" across both transports.
@@ -163,6 +203,57 @@ func acceptMetrics(
 		SemconvVersion: metricsSemconvVersion(request),
 		Request:        request,
 	})
+}
+
+// acceptProfiles converts before it publishes: nothing behind this door reads OTLP
+// profiles. A request whose indices point outside its dictionary is refused here,
+// with the reason, rather than published and lost in a worker.
+func acceptProfiles(
+	ctx context.Context,
+	opts Options,
+	receivedAt time.Time,
+	request *profilescollectorpb.ExportProfilesServiceRequest,
+) *refusal {
+	// The budget is spent on the request's own count, before conversion: conversion is
+	// the expensive step, and a key past its budget must not be able to buy it.
+	if refused := opts.spendProfileSamples(ctx, profiles.SampleCount(request)); refused != nil {
+		return refused
+	}
+	converted, err := profiles.Convert(request)
+	if errors.Is(err, profiles.ErrTooLarge) {
+		return refuse(code.Code_INVALID_ARGUMENT, err.Error()).
+			answeredAs(http.StatusRequestEntityTooLarge)
+	}
+	if err != nil {
+		return refuse(code.Code_INVALID_ARGUMENT, err.Error())
+	}
+	if len(converted.GetBatches()) == 0 {
+		// Every sample was empty — nothing to store, and nothing wrong with sending it.
+		return nil
+	}
+	// Written out, a request can outgrow the record the broker accepts; each part
+	// fits one, and the parts are one produce. A refused produce fails the request and
+	// the sender retries it: if the broker took some records of a refused produce,
+	// their samples arrive twice (at least once, ADR-002) — recorded in the feature's
+	// status as a known over-count.
+	parts, err := profiles.Split(converted, int(opts.MaxDecodedBodyBytes))
+	if err != nil {
+		return refuse(code.Code_INVALID_ARGUMENT, err.Error())
+	}
+	semconv := profilesSemconvVersion(request)
+	batches := make([]ingest.Batch, 0, len(parts))
+	for _, part := range parts {
+		batches = append(batches, ingest.Batch{
+			Signal:         nexovuev1.Signal_SIGNAL_PROFILES,
+			SemconvVersion: semconv,
+			Request:        part,
+		})
+	}
+	identity, _ := auth.FromContext(ctx)
+	if err := opts.Publisher.PublishBatches(ctx, identity, receivedAt, batches); err != nil {
+		return refuseUntil(code.Code_UNAVAILABLE, messageBrokerDown, brokerRetryAfter).because(err)
+	}
+	return nil
 }
 
 func acceptBatch(
@@ -241,6 +332,21 @@ func logsSemconvVersion(request *logscollectorpb.ExportLogsServiceRequest) strin
 	fallback := ""
 	for _, resource := range request.GetResourceLogs() {
 		for _, scope := range resource.GetScopeLogs() {
+			if version := semconv.FromSchemaURLs(scope.GetSchemaUrl()); version != "" {
+				return version
+			}
+		}
+		if fallback == "" {
+			fallback = semconv.FromSchemaURLs(resource.GetSchemaUrl())
+		}
+	}
+	return fallback
+}
+
+func profilesSemconvVersion(request *profilescollectorpb.ExportProfilesServiceRequest) string {
+	fallback := ""
+	for _, resource := range request.GetResourceProfiles() {
+		for _, scope := range resource.GetScopeProfiles() {
 			if version := semconv.FromSchemaURLs(scope.GetSchemaUrl()); version != "" {
 				return version
 			}

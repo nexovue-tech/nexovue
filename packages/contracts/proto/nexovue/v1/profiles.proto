@@ -1,0 +1,68 @@
+// Profiles as the receiver hands them on — nexovue's own shape, not OTLP's.
+//
+// The one exception to the envelope's "untouched OTLP" rule (ADR-015). OTLP profiles
+// is still a Development format and has broken compatibility between releases, so
+// the receiver converts it here and nothing behind the receiver ever reads it. This
+// message holds only what every OTLP profiles version so far has meant — a stack, a
+// value, its type and time, the span it ran under, its attributes — which is why it
+// can grow by addition alone. Frozen like the envelope: `buf breaking` guards it.
+syntax = "proto3";
+
+package nexovue.v1;
+
+import "opentelemetry/proto/common/v1/common.proto";
+
+// One OTLP profiles export request, converted. Published as an envelope payload
+// with `signal = SIGNAL_PROFILES`.
+message ProfileSamples {
+  repeated ProfileBatch batches = 1;
+}
+
+// The samples of one profile type from one resource.
+message ProfileBatch {
+  // The resource's attributes: service.name, host.name, service.version and the rest.
+  repeated opentelemetry.proto.common.v1.KeyValue resource_attributes = 1;
+
+  // What each sample's value counts, as the source named it: "cpu" in "nanoseconds",
+  // "alloc_space" in "bytes". Carried as sent, never translated.
+  string sample_type = 2;
+  string sample_unit = 3;
+
+  // The sampling period, when the source gave one: e.g. every 10,000,000 "nanoseconds"
+  // of "cpu". Zero and empty when it did not.
+  int64 period = 4;
+  string period_type = 5;
+  string period_unit = 6;
+
+  repeated Sample samples = 7;
+}
+
+message Sample {
+  // Leaf first: frames[0] is the function that was running.
+  repeated Frame frames = 1;
+
+  // The sample's value, summed over the times it was observed.
+  int64 value = 2;
+
+  // When: the sample's first timestamp, or the profile's own time when the sample
+  // carried none.
+  fixed64 time_unix_nano = 3;
+
+  // The span the sample ran under, when the source linked it; empty otherwise.
+  bytes trace_id = 4;
+  bytes span_id = 5;
+
+  // The profile's attributes and the sample's own, in that order.
+  repeated opentelemetry.proto.common.v1.KeyValue attributes = 6;
+}
+
+// One frame of a stack. A frame the source could name has `function`; one it could
+// not — native code without symbols — has `binary` and `address` instead, so it can
+// be shown as unsymbolized rather than as nothing.
+message Frame {
+  string function = 1;
+  string file = 2;
+  uint32 line = 3;
+  string binary = 4;
+  uint64 address = 5;
+}

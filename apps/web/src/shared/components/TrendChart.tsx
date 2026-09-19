@@ -78,6 +78,16 @@ export interface TrendChartProps {
   formatValue: (value: number) => string;
   /** Read by assistive technology in place of the canvas. */
   description: string;
+  /**
+   * Dragging across the chart selects a range, handed over in epoch seconds. Absent,
+   * the chart cannot be dragged — a selection that does nothing is a broken promise.
+   */
+  onSelectRange?: (fromSeconds: number, toSeconds: number) => void;
+  /**
+   * Draws each reading as a dot as well as a line. For sparse series: a reading with
+   * a gap on both sides has no neighbour to draw a line to, and is otherwise invisible.
+   */
+  showPoints?: boolean;
 }
 
 /**
@@ -97,16 +107,20 @@ function TrendCanvas({
   markers = [],
   formatValue,
   description,
+  onSelectRange,
+  showPoints = false,
 }: TrendChartProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const probeRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
   const labels = useMemo(() => (Array.isArray(label) ? label : [label as string]), [label]);
-  const latest = useRef({ labels, data, formatValue, markers });
+  const latest = useRef({ labels, data, formatValue, markers, onSelectRange });
+  // uPlot's options cannot change in place, so becoming draggable rebuilds the chart.
+  const selectable = onSelectRange !== undefined;
 
   useEffect(() => {
-    latest.current = { labels, data, formatValue, markers };
-  }, [labels, data, formatValue, markers]);
+    latest.current = { labels, data, formatValue, markers, onSelectRange };
+  }, [labels, data, formatValue, markers, onSelectRange]);
 
   // Markers are read through the ref rather than closed over, so a deploy
   // arriving after the chart was built is drawn on the next frame instead of
@@ -127,6 +141,8 @@ function TrendCanvas({
         (value) => latest.current.formatValue(value),
         latest.current.labels,
         () => latest.current.markers,
+        selectable ? (from, to) => latest.current.onSelectRange?.(from, to) : undefined,
+        showPoints,
       ),
       latest.current.data,
       host,
@@ -143,7 +159,7 @@ function TrendCanvas({
       chart.destroy();
       chartRef.current = null;
     };
-  }, []);
+  }, [selectable, showPoints]);
 
   useEffect(() => {
     chartRef.current?.setData(data);
@@ -220,18 +236,36 @@ function drawDeploys(chart: uPlot, markers: readonly DeployMarker[], palette: Ch
   context.restore();
 }
 
+/** A drag across the plot, as a range; a click without a drag is not a selection. */
+function selectRange(
+  chart: uPlot,
+  onSelectRange: (fromSeconds: number, toSeconds: number) => void,
+): void {
+  const { left, width } = chart.select;
+  if (width <= 0) return;
+  const from = chart.posToVal(left, "x");
+  const to = chart.posToVal(left + width, "x");
+  chart.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false);
+  if (to > from) onSelectRange(from, to);
+}
+
 function chartOptions(
   palette: ChartPalette,
   width: number,
   formatValue: (value: number) => string,
   labels: readonly string[],
   markers: () => readonly DeployMarker[],
+  onSelectRange?: (fromSeconds: number, toSeconds: number) => void,
+  showPoints = false,
 ): uPlot.Options {
   return {
     width,
-    // Drawn under the series, not over it: a deploy is context for the line,
-    // and a rule painted on top of the reading obscures the thing it explains.
-    hooks: { drawClear: [(chart) => drawDeploys(chart, markers(), palette)] },
+    hooks: {
+      // Drawn under the series, not over it: a deploy is context for the line,
+      // and a rule painted on top of the reading obscures the thing it explains.
+      drawClear: [(chart) => drawDeploys(chart, markers(), palette)],
+      setSelect: onSelectRange ? [(chart) => selectRange(chart, onSelectRange)] : [],
+    },
     height: CHART_HEIGHT,
     // One series is named by the heading above the chart, so a legend repeats
     // it. Several are not: three duration lines in one colour are three lines
@@ -239,7 +273,13 @@ function chartOptions(
     // the panel exists for — is invisible without knowing which is which.
     legend: { show: labels.length > 1, live: false },
     padding: [8, 8, 0, 0],
-    cursor: { y: false, points: { show: false }, drag: { x: false, y: false } },
+    cursor: {
+      y: false,
+      points: { show: false },
+      // The selection is handed on rather than zooming the chart in place: the
+      // screen owns the window, and every panel on it should follow.
+      drag: { x: onSelectRange !== undefined, y: false, setScale: false },
+    },
     scales: {
       x: { time: true },
       // Zero stays on the axis. A rate chart cropped to its own minimum turns a steady
@@ -283,7 +323,7 @@ function chartOptions(
         // is the typical request and the tail is context around it.
         width: index === 0 ? 1.5 : 1,
         dash: DASHES[Math.min(index, DASHES.length - 1)],
-        points: { show: false },
+        points: { show: showPoints, size: 5, fill: palette.line },
       })),
     ],
   };

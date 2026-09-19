@@ -60,6 +60,10 @@ go.opentelemetry.io/otel/trace v1.43.0 h1:BkNrHpup+4k4w+ZZ86CZoHHEkohws8AY+WTX09
 go.opentelemetry.io/otel/trace v1.43.0/go.mod h1:/QJhyVBUUswCphDVxq+8mld+AvhXZLhe+8WVFxiFff0=
 go.opentelemetry.io/proto/otlp v1.11.0 h1:5rrYs0Ykyj50sdU/JU0x8etU+LubXWb+gED6TbEdMIk=
 go.opentelemetry.io/proto/otlp v1.11.0/go.mod h1:SmVizdCOAm3XBtG1g1NnOdhW6jtddT72hLMhv8VwA8E=
+go.opentelemetry.io/proto/otlp/collector/profiles/v1development v0.4.0 h1:bJQIZnyUB2qsRnbQBO0q5BSym96WCGEv48q2ATLI4b0=
+go.opentelemetry.io/proto/otlp/collector/profiles/v1development v0.4.0/go.mod h1:fdbY5aZcJlGPp9LnmKOhyHm3IXwu8l5hQT5gcuTtSGY=
+go.opentelemetry.io/proto/otlp/profiles/v1development v0.4.0 h1:K8fVW1jW1xn4iKqvoUED5jDQhlJcYhQ1houjU8clQp0=
+go.opentelemetry.io/proto/otlp/profiles/v1development v0.4.0/go.mod h1:pD9EreXXWprVGOuyN/YOTap/X0bKu0Za4yVOiW55/ic=
 go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
 go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=
 golang.org/x/net v0.57.0 h1:K5+3DljvIuDG9/Jv9rvyMywYNFCQ9RSUY6OOTTkT+tE=

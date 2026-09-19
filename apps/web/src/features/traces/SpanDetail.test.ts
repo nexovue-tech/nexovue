@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -7,10 +8,13 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
+import type { ReactElement } from "react";
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { SELECTION_STORAGE_KEY, setSelectedProjectId } from "@/shared/selection";
 
 import type { Span } from "./api";
 import { SpanDetail } from "./SpanDetail";
@@ -22,10 +26,27 @@ beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });
 
+const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
+
+beforeEach(() => {
+  setSelectedProjectId("5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0099");
+  // The profile check never answers here: these tests are about the rest of the pane.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise(() => {})),
+  );
+});
+
 afterEach(() => {
   for (const root of mounted.splice(0)) act(() => root.unmount());
   document.body.replaceChildren();
+  vi.unstubAllGlobals();
 });
+
+function withQueries(element: ReactElement): ReactElement {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return createElement(QueryClientProvider, { client }, element);
+}
 
 const SPAN: Span = {
   span_id: "00f067aa0ba902b7",
@@ -56,7 +77,11 @@ function render(span: Partial<Span>): string {
   document.body.appendChild(container);
   const root = createRoot(container);
   mounted.push(root);
-  act(() => root.render(createElement(SpanDetail, { row, onClose: () => {} })));
+  act(() =>
+    root.render(
+      withQueries(createElement(SpanDetail, { traceId: TRACE_ID, row, onClose: () => {} })),
+    ),
+  );
   return (container.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
@@ -158,7 +183,7 @@ describe("the spans this one links to", () => {
       precedesParent: false,
     };
     const rootRoute = createRootRoute({
-      component: () => createElement(SpanDetail, { row, onClose: () => {} }),
+      component: () => createElement(SpanDetail, { traceId: TRACE_ID, row, onClose: () => {} }),
     });
     const tracesRoute = createRoute({
       getParentRoute: () => rootRoute,
@@ -175,7 +200,7 @@ describe("the spans this one links to", () => {
     document.body.appendChild(container);
     const root = createRoot(container);
     mounted.push(root);
-    await act(async () => root.render(createElement(RouterProvider, { router })));
+    await act(async () => root.render(withQueries(createElement(RouterProvider, { router }))));
     return container;
   }
 
@@ -208,5 +233,90 @@ describe("the spans this one links to", () => {
 
     expect(container.textContent).not.toContain("Links");
     expect(container.querySelector("a")).toBeNull();
+  });
+});
+
+describe("the span's profile", () => {
+  async function renderAnswered(answer: object): Promise<HTMLElement> {
+    const asked: URLSearchParams[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL) => {
+        asked.push(url.searchParams);
+        return new Response(JSON.stringify(answer), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+    const row: WaterfallRow = {
+      key: "row-1",
+      span: SPAN,
+      depth: 0,
+      childCount: 0,
+      orphaned: false,
+      precedesParent: false,
+    };
+    const rootRoute = createRootRoute({
+      component: () => createElement(SpanDetail, { traceId: TRACE_ID, row, onClose: () => {} }),
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([
+        createRoute({ getParentRoute: () => rootRoute, path: "/profiles", component: () => null }),
+      ]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    await router.load();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    mounted.push(root);
+    await act(async () => root.render(withQueries(createElement(RouterProvider, { router }))));
+    for (let round = 0; round < 30 && !container.textContent?.includes("Profile"); round += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+    expect(asked[0]?.get("trace_id")).toBe(TRACE_ID);
+    expect(asked[0]?.get("span_id")).toBe(SPAN.span_id);
+    return container;
+  }
+
+  it("opens the span's own samples when the profiler linked some to it (AC10)", async () => {
+    const container = await renderAnswered({ state: "linked", linked_samples: 3, types: ["cpu"] });
+    const link = [...container.querySelectorAll("a")].find((a) =>
+      a.textContent?.includes("Open this span's profile"),
+    );
+
+    expect(link?.textContent).toContain("3 samples");
+    expect(link?.getAttribute("href")).toContain(`trace=${TRACE_ID}`);
+    expect(link?.getAttribute("href")).toContain(`span=${SPAN.span_id}`);
+    expect(container.textContent).toContain("Preview");
+
+    // The screen reads the console's window: following the link pins it around the
+    // span, or an older span would open on the last hour and find nothing.
+    await act(async () => link?.click());
+    const stored = JSON.parse(localStorage.getItem(SELECTION_STORAGE_KEY) ?? "{}");
+    expect(stored.window).toEqual({
+      kind: "absolute",
+      from: "2026-09-13T09:55:00.000Z",
+      to: "2026-09-13T10:05:00.412Z",
+    });
+  });
+
+  it("says a profiled service caught no sample in this span, and why (AC10)", async () => {
+    const container = await renderAnswered({ state: "no_samples", linked_samples: 0, types: [] });
+
+    expect(container.textContent).toContain("no sample landed in this span");
+    expect(container.textContent).toContain("Open the service's profile");
+  });
+
+  it("says a service that is not profiled is not, with the way to set it up", async () => {
+    const container = await renderAnswered({ state: "not_profiled", linked_samples: 0, types: [] });
+
+    expect(container.textContent).toContain("payments isn't profiled");
+    expect(
+      container.querySelector('a[href="/docs/profiling/continuous-profiling"]'),
+    ).not.toBeNull();
   });
 });

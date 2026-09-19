@@ -58,9 +58,10 @@ type Config struct {
 
 	// Where each signal's envelopes are published. Configuration rather than
 	// literals, so a deployment can rename a topic without a build.
-	SpansTopic   string `env:"KAFKA_SPANS_TOPIC" envDefault:"spans-raw"`
-	LogsTopic    string `env:"KAFKA_LOGS_TOPIC" envDefault:"logs-raw"`
-	MetricsTopic string `env:"KAFKA_METRICS_TOPIC" envDefault:"metrics-raw"`
+	SpansTopic    string `env:"KAFKA_SPANS_TOPIC" envDefault:"spans-raw"`
+	LogsTopic     string `env:"KAFKA_LOGS_TOPIC" envDefault:"logs-raw"`
+	MetricsTopic  string `env:"KAFKA_METRICS_TOPIC" envDefault:"metrics-raw"`
+	ProfilesTopic string `env:"KAFKA_PROFILES_TOPIC" envDefault:"profiles-raw"`
 
 	// KafkaMaxBufferedBytes caps what the producer holds while the broker is
 	// behind. franz-go buffers without limit by default, so an outage would grow
@@ -101,6 +102,14 @@ type Config struct {
 	AllowanceCacheMaxEntries int           `env:"RECEIVER_ALLOWANCE_CACHE_MAX_ENTRIES" envDefault:"10000"`
 
 	RateLimitPerSecond int `env:"RECEIVER_RATE_LIMIT_PER_SECOND" envDefault:"1000"`
+
+	// ProfileSamplesPerSecond bounds one key's profile samples a second, because
+	// profiles spend no allowance while in preview (F17, D1). The eBPF profiler
+	// samples each busy core about 19 times a second, so a saturated 64-core host
+	// sends ~1,200: this is a fleet of such hosts per key, and a flood — measured
+	// at 400,000 a second from one key — is refused instead of stalling every
+	// tenant's profiles.
+	ProfileSamplesPerSecond int `env:"RECEIVER_PROFILE_SAMPLES_PER_SECOND" envDefault:"20000"`
 
 	// Pool sizes are stated rather than inherited: pgx defaults to one
 	// connection per CPU, which is far more than a cached key lookup needs and
@@ -176,6 +185,7 @@ func (c Config) validate() error {
 		notBlank("KAFKA_SPANS_TOPIC", c.SpansTopic),
 		notBlank("KAFKA_LOGS_TOPIC", c.LogsTopic),
 		notBlank("KAFKA_METRICS_TOPIC", c.MetricsTopic),
+		notBlank("KAFKA_PROFILES_TOPIC", c.ProfilesTopic),
 		positiveSize("RECEIVER_MAX_BODY_BYTES", c.MaxBodyBytes),
 		positiveSize("RECEIVER_MAX_DECODED_BODY_BYTES", c.MaxDecodedBodyBytes),
 		atLeastSize("RECEIVER_MAX_DECODED_BODY_BYTES", c.MaxDecodedBodyBytes,
@@ -195,6 +205,7 @@ func (c Config) validate() error {
 		atMostDuration("RECEIVER_ALLOWANCE_CACHE_TTL", c.AllowanceCacheTTL, MaxAllowanceCacheTTL),
 		positiveCount("RECEIVER_ALLOWANCE_CACHE_MAX_ENTRIES", c.AllowanceCacheMaxEntries),
 		positiveCount("RECEIVER_RATE_LIMIT_PER_SECOND", c.RateLimitPerSecond),
+		positiveCount("RECEIVER_PROFILE_SAMPLES_PER_SECOND", c.ProfileSamplesPerSecond),
 		positiveCount("RECEIVER_POSTGRES_MAX_CONNS", int(c.PostgresMaxConns)),
 		positiveCount("RECEIVER_POSTGRES_MIN_CONNS", int(c.PostgresMinConns)),
 		atMostCount("RECEIVER_POSTGRES_MIN_CONNS", int(c.PostgresMinConns),

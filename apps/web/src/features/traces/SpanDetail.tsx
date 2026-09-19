@@ -7,6 +7,7 @@ import { formatClockTime, formatDate } from "@/shared/format/time";
 
 import type { SpanLink } from "./api";
 import { httpStatusOf, normalizeStatus, spanFailed } from "./api";
+import { SpanProfile } from "./SpanProfile";
 import type { WaterfallRow } from "./trace-tree";
 
 /**
@@ -16,7 +17,15 @@ import type { WaterfallRow } from "./trace-tree";
  * which is the status message, the HTTP or RPC detail, and the attributes the service
  * attached. A span has one of those two, never both.
  */
-export function SpanDetail({ row, onClose }: { row: WaterfallRow; onClose: () => void }) {
+export function SpanDetail({
+  traceId,
+  row,
+  onClose,
+}: {
+  traceId: string;
+  row: WaterfallRow;
+  onClose: () => void;
+}) {
   const { span } = row;
   const failed = spanFailed(span);
   const httpStatus = httpStatusOf(span);
@@ -96,6 +105,8 @@ export function SpanDetail({ row, onClose }: { row: WaterfallRow; onClose: () =>
             <Entry term="Build" value={span.deployment_version} mono selectable />
           ) : null}
         </Section>
+
+        <SpanProfile traceId={traceId} span={span} />
 
         {span.http_method || span.http_route || httpStatus !== undefined ? (
           <Section title="HTTP">

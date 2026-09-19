@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -170,6 +171,27 @@ func TestPipelinesDefaultToAllOfThem(t *testing.T) {
 	}
 	if len(cfg.Pipelines) != len(config.AllPipelines) {
 		t.Errorf("Pipelines = %v, want all of %v", cfg.Pipelines, config.AllPipelines)
+	}
+}
+
+func TestProfileIngestRunsByDefaultOnTheReceiversTopics(t *testing.T) {
+	applyEnvironment(t, completeEnvironment())
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want no error", err)
+	}
+	if !slices.Contains(cfg.Pipelines, config.PipelineProfileIngest) {
+		t.Errorf("Pipelines = %v, want profile-ingest among the defaults", cfg.Pipelines)
+	}
+	// A quarter of the shared bound: profiles decompress to far more than they fetch.
+	if cfg.ProfileIngest.MaxBytes != 4<<20 {
+		t.Errorf("ProfileIngest.MaxBytes = %d, want 4 MiB", cfg.ProfileIngest.MaxBytes)
+	}
+	// Both must match the receiver's KAFKA_PROFILES_TOPIC default and deploy/kafka/topics.sh.
+	if cfg.ProfileIngest.Topic != "profiles-raw" || cfg.ProfileIngest.DLQTopic != "profiles-dlq" {
+		t.Errorf("ProfileIngest topics = %q, %q, want profiles-raw and profiles-dlq",
+			cfg.ProfileIngest.Topic, cfg.ProfileIngest.DLQTopic)
 	}
 }
 

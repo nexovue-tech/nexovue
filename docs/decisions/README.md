@@ -17,6 +17,8 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-011 — The API dispatches run-now tasks to the scheduler's broker](ADR-011-api-dispatches-run-now.md)
 - [ADR-012 — The scheduler evaluates alerts, reading ClickHouse through shared, tenant-bound statements](ADR-012-the-scheduler-evaluates-alerts.md)
 - [ADR-013 — Notifications are an outbox, written in the transaction that decided them](ADR-013-notifications-are-an-outbox.md)
+- [ADR-014 — Telemetry erasure runs as a nightly batch, not per deletion](ADR-014-telemetry-erasure-runs-as-a-nightly-batch.md)
+- [ADR-015 — Profiles are normalised at the intake, the one exception to the untouched envelope](ADR-015-profiles-are-normalised-at-the-intake.md)
 
 ## Earlier decisions, 0001–0112
 

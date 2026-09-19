@@ -328,6 +328,72 @@ def ingested_trace_id(newcomer: LiveTenant) -> str:
     return trace_id
 
 
+PROFILE_SERVICE: Final = "isolation-suite-profiled"
+
+
+def _export_probe_profile(api_key: SecretStr) -> None:
+    """Send one CPU sample through the profiles door (F17, AC7): a two-frame stack
+    under a service name no other tenant uses, as OTLP/JSON."""
+    now_ns = (int(time.time() * 1000) - PROBE_BACKDATE_MS) * NANOS_PER_MILLISECOND
+    request = {
+        "dictionary": {
+            "stringTable": ["", "cpu", "nanoseconds", "isolation.probe", "main"],
+            "functionTable": [{}, {"nameStrindex": 3}, {"nameStrindex": 4}],
+            "locationTable": [
+                {},
+                {"lines": [{"functionIndex": 1}]},
+                {"lines": [{"functionIndex": 2}]},
+            ],
+            "stackTable": [{}, {"locationIndices": [1, 2]}],
+        },
+        "resourceProfiles": [
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "service.name", "value": {"stringValue": PROFILE_SERVICE}}
+                    ]
+                },
+                "scopeProfiles": [
+                    {
+                        "profiles": [
+                            {
+                                "sampleType": {"typeStrindex": 1, "unitStrindex": 2},
+                                "timeUnixNano": str(now_ns),
+                                "samples": [{"stackIndex": 1, "values": ["10000000"]}],
+                            }
+                        ]
+                    }
+                ],
+            }
+        ],
+    }
+    response = httpx.post(
+        f"{RECEIVER_ORIGIN}/v1development/profiles",
+        json=request,
+        headers={"x-nexovue-key": api_key.get_secret_value()},
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    assert response.status_code == 200, f"the receiver refused the profile: {response.text}"
+
+
+def _profiled_services(tenant: LiveTenant, project_id: str) -> httpx.Response:
+    return tenant.client.get("/profiles/services", params={"project_id": project_id})
+
+
+@pytest.fixture(scope="module")
+def ingested_profile(newcomer: LiveTenant) -> None:
+    """A profile that exists, under the newcomer, stamped by its ingest key alone."""
+    _export_probe_profile(newcomer.api_key)
+    deadline = time.monotonic() + INGEST_DEADLINE_SECONDS
+    while time.monotonic() < deadline:
+        response = _profiled_services(newcomer, newcomer.project_id)
+        assert response.status_code == 200, response.text
+        if any(s["service_name"] == PROFILE_SERVICE for s in response.json()["services"]):
+            return
+        time.sleep(INGEST_POLL_SECONDS)
+    pytest.fail(f"the probe profile never became readable within {INGEST_DEADLINE_SECONDS}s")
+
+
 def _comparable(response: httpx.Response) -> dict[str, Any]:
     body: dict[str, Any] = response.json()
     return {key: value for key, value in body.items() if key not in _PER_REQUEST_FIELDS}
@@ -485,3 +551,36 @@ def test_a_session_for_an_organization_that_has_been_deleted_is_refused() -> Non
     finally:
         doomed.client.close()
         _soft_delete(doomed.org_id)
+
+
+def test_a_profile_ingested_with_one_organizations_key_never_surfaces_under_another(
+    newcomer: LiveTenant, seeded: LiveTenant, ingested_profile: None
+) -> None:
+    """F17 AC7: the seeded tenant cannot name the newcomer's project, and its own
+    profiled services, graph and filters never hold the newcomer's profile."""
+    for path, params in (
+        ("/profiles/services", {}),
+        ("/profiles/graph", {"service_name": PROFILE_SERVICE, "type": "cpu"}),
+        ("/profiles/filters", {"service_name": PROFILE_SERVICE, "type": "cpu"}),
+        ("/profiles/compare", {"service_name": PROFILE_SERVICE, "type": "cpu", "version": "x"}),
+    ):
+        foreign = seeded.client.get(path, params={"project_id": newcomer.project_id, **params})
+        assert foreign.status_code == 404, f"{path}: {foreign.text}"
+
+    own = _profiled_services(seeded, seeded.project_id)
+    assert own.status_code == 200, own.text
+    assert PROFILE_SERVICE not in {s["service_name"] for s in own.json()["services"]}
+
+    graph = seeded.client.get(
+        "/profiles/graph",
+        params={"project_id": seeded.project_id, "service_name": PROFILE_SERVICE, "type": "cpu"},
+    )
+    assert graph.status_code == 200, graph.text
+    assert graph.json()["samples"] == 0
+
+    mine = newcomer.client.get(
+        "/profiles/graph",
+        params={"project_id": newcomer.project_id, "service_name": PROFILE_SERVICE, "type": "cpu"},
+    )
+    assert mine.status_code == 200, mine.text
+    assert mine.json()["functions"][0]["name"] == "isolation.probe"

@@ -45,6 +45,7 @@ from nexovue_api.middleware.ratelimit import RateLimitMiddleware
 from nexovue_api.middleware.request_log import RequestLogMiddleware
 from nexovue_api.organizations import router as organizations_router
 from nexovue_api.profile import router as profile_router
+from nexovue_api.profiles import router as profiles_router
 from nexovue_api.projects import router as projects_router
 from nexovue_api.rum import router as rum_router
 from nexovue_api.servicemap import router as service_map_router
@@ -147,6 +148,7 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(logs_router.router)
     versioned.include_router(error_groups_router.router)
     versioned.include_router(rum_router.router)
+    versioned.include_router(profiles_router.router)
     versioned.include_router(source_maps_router.router)
     app.include_router(versioned)
 

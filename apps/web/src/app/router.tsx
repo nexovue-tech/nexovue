@@ -31,6 +31,7 @@ import { metricFilters } from "@/features/metrics/filters";
 import { MetricsScreen } from "@/features/metrics/MetricsScreen";
 import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
 import { OverviewScreen } from "@/features/overview/OverviewScreen";
+import { ProfilesScreen, parseProfilesSearch } from "@/features/profiles/ProfilesScreen";
 import { ProjectsScreen } from "@/features/projects/ProjectsScreen";
 import { rumFilters } from "@/features/rum/filters";
 import { RumScreen } from "@/features/rum/RumScreen";
@@ -254,6 +255,18 @@ const ruleRoute = createRoute({
   component: EditRuleScreen,
 });
 
+const profilesRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/profiles",
+  component: ProfilesRoute,
+  validateSearch: parseProfilesSearch,
+});
+
+/** The route owns the search; the screen owns what it means. */
+function ProfilesRoute() {
+  return <ProfilesScreen search={profilesRoute.useSearch()} />;
+}
+
 const rumRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/rum",
@@ -447,6 +460,7 @@ const routeTree = rootRoute.addChildren([
     importChecksRoute,
     checkRoute,
     rumRoute,
+    profilesRoute,
     settingsGeneralRoute,
     settingsAccountRoute,
     settingsApiKeysRoute,

@@ -58,6 +58,8 @@ type Topics struct {
 	Spans   string
 	Logs    string
 	Metrics string
+	// Profiles carries nexovue.v1.ProfileSamples, not OTLP (ADR-015).
+	Profiles string
 }
 
 // Publisher publishes envelopes to the ingestion topics.
@@ -117,20 +119,39 @@ func (p *Publisher) PublishBatch(
 	receivedAt time.Time,
 	batch Batch,
 ) error {
-	topic, err := p.topicFor(batch.Signal)
-	if err != nil {
-		return err
-	}
-
-	record, err := p.batchRecord(topic, identity, receivedAt, batch)
-	if err != nil {
-		return err
-	}
-	return p.publish(ctx, topic, []*kgo.Record{record})
+	return p.PublishBatches(ctx, identity, receivedAt, []Batch{batch})
 }
 
-// topicFor names the topic a signal is published to. An unmapped signal is our
-// bug, and publishing it to the wrong topic would be a parse crash downstream.
+// PublishBatches publishes several envelopes as one produce: one wait for the
+// broker, and the whole set acknowledged or refused together as far as one produce
+// can make it — a request the receiver split must not be answered part by part.
+func (p *Publisher) PublishBatches(
+	ctx context.Context,
+	identity auth.Identity,
+	receivedAt time.Time,
+	batches []Batch,
+) error {
+	if len(batches) == 0 {
+		return nil
+	}
+	topic, err := p.topicFor(batches[0].Signal)
+	if err != nil {
+		return err
+	}
+	records := make([]*kgo.Record, 0, len(batches))
+	for _, batch := range batches {
+		if batch.Signal != batches[0].Signal {
+			return fmt.Errorf("one publish carries one signal, got %v and %v", batches[0].Signal, batch.Signal)
+		}
+		record, err := p.batchRecord(topic, identity, receivedAt, batch)
+		if err != nil {
+			return err
+		}
+		records = append(records, record)
+	}
+	return p.publish(ctx, topic, records)
+}
+
 func (p *Publisher) topicFor(signal nexovuev1.Signal) (string, error) {
 	switch signal {
 	case nexovuev1.Signal_SIGNAL_SPANS:
@@ -139,6 +160,8 @@ func (p *Publisher) topicFor(signal nexovuev1.Signal) (string, error) {
 		return p.topics.Logs, nil
 	case nexovuev1.Signal_SIGNAL_METRICS:
 		return p.topics.Metrics, nil
+	case nexovuev1.Signal_SIGNAL_PROFILES:
+		return p.topics.Profiles, nil
 	case nexovuev1.Signal_SIGNAL_UNSPECIFIED:
 		fallthrough
 	default:

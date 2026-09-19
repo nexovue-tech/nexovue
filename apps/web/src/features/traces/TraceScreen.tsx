@@ -124,7 +124,11 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           // where there is not — at 375px a third column would leave no waterfall at all.
           className="fixed inset-x-0 bottom-0 z-20 h-[55dvh] border-line border-t bg-page shadow-overlay lg:static lg:h-auto lg:w-96 lg:shrink-0 lg:border-t-0 lg:border-l lg:shadow-none"
         >
-          <SpanDetail row={selectedRow} onClose={() => setSelectedSpanId(undefined)} />
+          <SpanDetail
+            traceId={detail.trace_id}
+            row={selectedRow}
+            onClose={() => setSelectedSpanId(undefined)}
+          />
         </aside>
       ) : null}
     </div>

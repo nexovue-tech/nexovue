@@ -7,7 +7,6 @@ tmp_dir = "/tmp/air/receiver"
 
 [build]
 cmd = "go build -o /tmp/air/receiver/app ./apps/receiver/cmd/receiver"
-entrypoint = "/tmp/air/receiver/app"
 # The monorepo holds three languages; watching all of it would rebuild Go on
 # every CSS edit.
 include_dir = ["apps/receiver", "packages/contracts/gen/go"]
@@ -16,10 +15,10 @@ exclude_regex = ["_test\\.go"]
 # Editors write a file several times per save.
 delay = 400
 stop_on_error = true
-# Start the binary again when it exits, as the production restart policy does;
-# without it air waits for a source change and the container serves nothing.
-rerun = true
-rerun_delay = 5000
+# Start the binary again when it exits, as the production restart policy does.
+# A shell loop rather than air's `rerun`: a rebuild during rerun's wait leaves
+# two restart loops, so two copies run; air kills this loop's whole group.
+full_bin = "while :; do /tmp/air/receiver/app; sleep 5; done"
 
 [log]
 main_only = true

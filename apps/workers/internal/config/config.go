@@ -72,6 +72,10 @@ type Config struct {
 	// customer-sent OTLP metrics to the five metric tables.
 	MetricIngest MetricIngest
 
+	// ProfileIngest configures the profile-ingest pipeline, which writes the
+	// profiles the receiver converted (F17, ADR-015).
+	ProfileIngest ProfileIngest
+
 	// Postgres is the optional control-plane connection the mask and sample
 	// stages read per-project settings from.
 	Postgres Postgres
@@ -124,6 +128,7 @@ func (c Config) validate() error {
 		c.Spans.validate(),
 		c.Logs.validate(),
 		c.MetricIngest.validate(),
+		c.ProfileIngest.validate(),
 		c.Postgres.validate(),
 		c.Masking.validate(),
 		c.Metrics.validate(),
