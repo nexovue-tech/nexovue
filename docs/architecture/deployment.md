@@ -6,6 +6,10 @@ Docker Compose powers local development and a production-replica configuration. 
 
 The on-premise Compose definition is intentionally a **skeleton, not yet runnable**. It has unresolved registry, sizing, web-assets/Caddy, browser-worker image, backup-storage, and public-gRPC decisions. It must not be described as a deployable production target.
 
+The scheduler runs three kinds of process: `scheduler-beat` (two replicas, one leader), `scheduler-light`
+(probes and alert evaluation; it alone is handed `CLICKHOUSE_DSN`), and `scheduler-deliveries` (alert delivery
+only, so a slow receiver never holds a probe's slot). All three read `EMAIL_*` and `APP_BASE_URL`.
+
 ## Required production properties
 
 Before deployment, establish immutable images and registry ownership, configuration/secrets delivery, capacity sizing, backup schedule and restore drill, release/rollback process, monitoring and alerting, public endpoint/TLS behavior, and a staging verification path.

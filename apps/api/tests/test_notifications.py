@@ -17,13 +17,14 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import nexovue_platform.email
 import pytest
+from nexovue_platform.email import build_email_sender
+from nexovue_platform.email.resend import SEND_ENDPOINT, ResendEmailSender
+from nexovue_platform.email.sender import EmailError, EmailSender, Message
+from nexovue_platform.email.settings import EmailSettings
 
 import nexovue_api
-from nexovue_api.notifications import build_email_sender
-from nexovue_api.notifications.resend import SEND_ENDPOINT, ResendEmailSender
-from nexovue_api.notifications.sender import EmailError, EmailSender, Message
-from nexovue_api.settings import EmailSettings
 
 SETTINGS = EmailSettings(
     provider="resend",
@@ -93,6 +94,23 @@ async def test_the_api_key_travels_as_a_bearer_token_and_not_in_the_body() -> No
 
     assert captured[0].headers["authorization"] == "Bearer re_test_key"
     assert "re_test_key" not in captured[0].content.decode()
+
+
+async def test_an_idempotency_key_reaches_the_provider_only_when_given() -> None:
+    """A retried alert must not mail again someone the first attempt reached (F21):
+    the provider drops a second send under the same key."""
+    captured: list[httpx.Request] = []
+    sender = _sender(_accepts(captured))
+    await sender.send(
+        to="someone@example.test",
+        message=Message.VERIFY_EMAIL,
+        data=VERIFY_DATA,
+        idempotency_key="alert-1-abc",
+    )
+    await sender.send(to="someone@example.test", message=Message.VERIFY_EMAIL, data=VERIFY_DATA)
+
+    assert captured[0].headers["idempotency-key"] == "alert-1-abc"
+    assert "idempotency-key" not in captured[1].headers
 
 
 async def test_a_missing_template_field_refuses_instead_of_sending() -> None:
@@ -176,14 +194,22 @@ def test_nothing_outside_the_composition_root_imports_a_provider() -> None:
     ResendEmailSender` compiles, passes, and makes the next switch a search
     through the tree rather than one edit.
     """
-    api_source = Path(nexovue_api.__file__).parent
-    allowed = {"notifications/__init__.py", "notifications/resend.py"}
+    # Every process that sends mail, not only the API: the scheduler sends alerts
+    # through the same port (F21), and is the next place a shortcut would appear.
+    email_package = Path(nexovue_platform.email.__file__).parent
+    repository = Path(nexovue_api.__file__).parents[4]
+    sources = (
+        repository / "apps" / "api" / "src",
+        repository / "apps" / "scheduler" / "src",
+        repository / "packages" / "py-platform" / "src",
+    )
+    allowed = {email_package / "__init__.py", email_package / "resend.py"}
 
     offenders = [
-        str(module.relative_to(api_source))
-        for module in api_source.rglob("*.py")
-        if str(module.relative_to(api_source)) not in allowed
-        and "ResendEmailSender" in module.read_text(encoding="utf-8")
+        str(module.relative_to(repository))
+        for source in sources
+        for module in source.rglob("*.py")
+        if module not in allowed and "ResendEmailSender" in module.read_text(encoding="utf-8")
     ]
     assert not offenders, (
         f"{offenders} name a provider directly. Ask `build_email_sender` for an `EmailSender` "

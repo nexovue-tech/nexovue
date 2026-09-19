@@ -366,6 +366,12 @@ services:
       S3_BUCKET: nexovue-dev
       S3_ACCESS_KEY_ID: nexovue_dev_access
       S3_SECRET_ACCESS_KEY: nexovue_dev_secret
+      # Alert email (F21) renders into the log, as the API's account mail does and
+      # for the API's reason: a test that trips a check must not spend a real
+      # message. The alert, link and all, is read with `docker logs`.
+      EMAIL_PROVIDER: console
+      # Where an alert's link lands: the app, built from the same port as `web`.
+      APP_BASE_URL: http://localhost:${WEB_HOST_PORT:-15173}
     depends_on:
       seaweedfs:
         # Files a check sends, and the objects its sweep deletes, live here. A
@@ -395,12 +401,19 @@ services:
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
       celery -A nexovue_scheduler.celery_app worker --concurrency 8 --loglevel info
+      --exclude-queues deliveries
     working_dir: /workspace
     volumes:
       - ../..:/workspace
       - python-venv:/workspace/.venv
-    environment: *scheduler-env
+    environment:
+      <<: *scheduler-env
+      # The service alert rules read the telemetry store (F21, ADR-012). This worker
+      # alone runs those sweeps, so it alone is handed the store.
+      CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
     depends_on:
+      clickhouse:
+        condition: service_healthy
       seaweedfs:
         # Files a check sends, and the objects its sweep deletes, live here. A
         # dependant that starts before the S3 gateway answers meets a refused
@@ -419,6 +432,40 @@ services:
           # during pool startup and the queue never drained, with the only
           # symptom a BrokenPipeError from Celery's own bootstrap.
           memory: 768M
+
+  # F21. Delivers alerts — email, Slack, Teams, Discord, PagerDuty, webhooks —
+  # from the outbox, and nothing else: a receiver that takes its full ten seconds
+  # holds one of these slots, never a probe's (plan Q1). `scheduler-light`
+  # excludes this queue for the same reason.
+  scheduler-deliveries:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/python-dev.Dockerfile
+    command: >-
+      uv run --package nexovue-scheduler
+      watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
+      celery -A nexovue_scheduler.celery_app worker --queues deliveries
+      --concurrency 4 --loglevel info --hostname deliveries@%h
+    working_dir: /workspace
+    volumes:
+      - ../..:/workspace
+      - python-venv:/workspace/.venv
+    environment: *scheduler-env
+    depends_on:
+      # The outbox is in Postgres and the queue in Redis; nothing is delivered
+      # before both answer.
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      seaweedfs:
+        # Named by the shared scheduler environment, so waited for rather than
+        # listed as a reasoned exception; it is up long before anything is due.
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 384M
 
   # ---------- tools ----------
   # The hand-written demo shop is gone. It was three services we controlled, and

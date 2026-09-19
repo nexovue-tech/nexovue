@@ -44,6 +44,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Final
 
+from nexovue_platform.email import EmailSender
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
@@ -55,7 +56,6 @@ from nexovue_api.auth.sessions import SessionStore, token_fingerprint
 from nexovue_api.auth.tokens import OneTimeTokenStore
 from nexovue_api.data.postgres.models import User
 from nexovue_api.errors.exceptions import InvalidRequestError
-from nexovue_api.notifications import EmailSender
 from nexovue_api.profile.schemas import ProfileUpdate, SessionSummary
 from nexovue_api.profile.timezones import stored_timezone
 

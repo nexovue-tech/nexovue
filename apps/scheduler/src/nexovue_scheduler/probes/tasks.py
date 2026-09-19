@@ -18,13 +18,13 @@ to that long.
 
 from __future__ import annotations
 
-import asyncio
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 from celery.exceptions import SoftTimeLimitExceeded
+from nexovue_platform.alerts.tasks import DELIVER_TASK, DELIVERIES_QUEUE
 from nexovue_platform.checks.config import HeartbeatCheckConfig, parse_config
 from nexovue_platform.checks.evidence import RunEvidence, StepEvidence
 from nexovue_platform.checks.maintenance import WindowSchedule, any_active
@@ -46,14 +46,17 @@ from nexovue_platform.telemetry.logging import get_logger
 from pydantic import ValidationError
 from redis import Redis
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine
 
+from nexovue_scheduler.alerts.incidents import GROUPING_WAIT_SECONDS
+from nexovue_scheduler.alerts.reasons import alert_reason
 from nexovue_scheduler.celery_app import app
 from nexovue_scheduler.checks import HEARTBEAT_TYPE, ScheduledCheck, load_enabled_checks
 from nexovue_scheduler.probes import heartbeat, runner, state_store
 from nexovue_scheduler.probes.files import ObjectStoreFiles
 from nexovue_scheduler.probes.fitting import fitted
 from nexovue_scheduler.probes.result import RunMeasurement
+from nexovue_scheduler.process_engine import with_engine
 from nexovue_scheduler.publish import ResultPublisher, build_envelope, build_evidence_envelope
 from nexovue_scheduler.settings import Settings, get_settings
 
@@ -77,8 +80,6 @@ DELIVERY_BACKOFF_SECONDS: Final = 2
 
 
 _publisher: ResultPublisher | None = None
-_engine: AsyncEngine | None = None
-_loop: asyncio.AbstractEventLoop | None = None
 _files: ObjectStoreFiles | None = None
 _redis: Redis | None = None
 
@@ -182,8 +183,10 @@ def record_outcome(
     location: str,
     observed_at: str,
     reason: str | None = None,
+    alert_reason: str | None = None,
 ) -> None:
-    """Apply one confirmed run to the check's state (FR27, FR28).
+    """Apply one confirmed run to the check's state (FR27, FR28), and to every
+    alert rule that watches it (F21).
 
     Retried with backoff when Postgres is unavailable: the reading is already
     published, so waiting costs nothing but how soon the state is current.
@@ -197,14 +200,27 @@ def record_outcome(
         location=location,
         observed_at=datetime.fromisoformat(observed_at),
         reason=reason,
+        alert_reason=alert_reason,
     )
     try:
-        changed_to = _with_engine(lambda engine: state_store.record(engine, recorded))
+        outcome_recorded = with_engine(lambda engine: state_store.record(engine, recorded))
     except Exception as failure:
         logger.warning("recording a check state failed; retrying", check_id=check_id)
         raise self.retry(exc=failure, countdown=2 ** (self.request.retries + 1)) from failure
-    if changed_to is not None:
-        logger.info("check state changed", check_id=check_id, state=changed_to, run_id=run_id)
+    if outcome_recorded.changed_to is not None:
+        logger.info(
+            "check state changed",
+            check_id=check_id,
+            state=outcome_recorded.changed_to,
+            run_id=run_id,
+            notifications=outcome_recorded.notifications,
+        )
+    if outcome_recorded.notifications:
+        # The fast path. Committed already, so a lost dispatch costs only the
+        # seconds until the delivery sweep finds the rows (ADR-013).
+        # After the grouping wait, so the delivery finds this opening together with
+        # any others that fail in the same half minute (FR13).
+        app.send_task(DELIVER_TASK, queue=DELIVERIES_QUEUE, countdown=GROUPING_WAIT_SECONDS + 1)
 
 
 @app.task(name=SWEEP_HEARTBEATS_TASK, bind=True, max_retries=0)
@@ -212,7 +228,7 @@ def sweep_heartbeats(self: Any) -> None:
     """Judge every heartbeat against its last call, publish the reading, and
     record the state. One query for all of them, once a minute (plan Q5)."""
     settings = get_settings()
-    heartbeats = _with_engine(
+    heartbeats = with_engine(
         lambda engine: load_enabled_checks(
             engine, all_locations=settings.probe_locations, only_type=HEARTBEAT_TYPE
         )
@@ -279,7 +295,7 @@ def sweep_unattached_files(self: Any) -> None:
             rows = (await connection.execute(_TAKE_UNATTACHED, parameters)).all()
         return [(str(org_id), str(file_id)) for file_id, org_id in rows]
 
-    taken = _with_engine(take)
+    taken = with_engine(take)
     for org_id, file_id in taken:
         try:
             _files_for_process().delete(org_id, file_id)
@@ -398,6 +414,7 @@ def _record_outcome(
             "location": location,
             "observed_at": observed_at.isoformat(),
             "reason": evidence.error,
+            "alert_reason": alert_reason(evidence),
         },
         queue=SHARED_QUEUE,
     )
@@ -478,19 +495,3 @@ def _judge_heartbeat(
         total_seconds=None,
     )
     return check, evidence, _messages(check, measurement, evidence, time.time_ns(), settings)
-
-
-def _with_engine(work: Any) -> Any:
-    """One small engine per worker process, on one event loop of its own.
-
-    Built on first use, after Celery's fork. A fresh engine per task opened a new
-    connection for every state write, and those arrive once per run of every check.
-    """
-    global _engine, _loop
-    if _loop is None:
-        _loop = asyncio.new_event_loop()
-    if _engine is None:
-        _engine = create_async_engine(
-            str(get_settings().postgres_dsn), pool_size=1, max_overflow=1, pool_pre_ping=True
-        )
-    return _loop.run_until_complete(work(_engine))

@@ -510,3 +510,79 @@ describe("editing", () => {
     expect(readable(container)).toContain("Saved. The next run uses this");
   });
 });
+
+describe("the alerts strip (F21, FR24)", () => {
+  it("shows the open incident, the rule that watches the check, and the way to add one", async () => {
+    stubApi({
+      ...syntheticsReads({ checks: [checkDefinition()] }),
+      "GET /alerts/coverage/checks/chk-api": json({
+        rules: [
+          {
+            id: "rule-default",
+            name: "Any check down",
+            muted_until: null,
+            enabled: true,
+            notifying_nobody: false,
+            channels: [{ id: "ch-owners", name: "Organization owners" }],
+          },
+        ],
+        open_incidents: [
+          {
+            id: "inc-1",
+            severity: "critical",
+            opened_at: minutesAgo(4),
+            rule_name: "Any check down",
+          },
+        ],
+      }),
+    });
+    const { container } = await mountAt("/synthetics/chk-api");
+
+    const strip = await waitFor(
+      () => container.querySelector('section[aria-label="Alerts"]'),
+      "the alerts strip",
+    );
+    expect(readable(strip)).toContain("Open incident — critical");
+    expect(readable(strip)).toContain("Watched by Any check down");
+    expect(strip.querySelector('a[href="/alerts/rules/new?check=chk-api"]')?.textContent).toBe(
+      "Alert me about this",
+    );
+  });
+
+  it("marks a muted rule, which watches but tells nobody until the mute ends", async () => {
+    stubApi({
+      ...syntheticsReads({ checks: [checkDefinition()] }),
+      "GET /alerts/coverage/checks/chk-api": json({
+        rules: [
+          {
+            id: "rule-default",
+            name: "Any check down",
+            muted_until: new Date(Date.now() + 3_600_000).toISOString(),
+            enabled: true,
+            notifying_nobody: false,
+            channels: [{ id: "ch-owners", name: "Organization owners" }],
+          },
+        ],
+        open_incidents: [],
+      }),
+    });
+    const { container } = await mountAt("/synthetics/chk-api");
+
+    const strip = await waitFor(
+      () => container.querySelector('section[aria-label="Alerts"]'),
+      "the alerts strip",
+    );
+    expect(readable(strip)).toContain("Watched by Any check down (muted)");
+  });
+
+  it("says plainly when nothing would tell anyone", async () => {
+    stubApi(syntheticsReads({ checks: [checkDefinition()] }));
+    const { container } = await mountAt("/synthetics/chk-api");
+
+    const strip = await waitFor(
+      () => container.querySelector('section[aria-label="Alerts"]'),
+      "the alerts strip",
+    );
+    expect(readable(strip)).toContain("No rule tells anyone when this breaks.");
+  });
+});

@@ -35,31 +35,18 @@ import re
 from typing import Any, Final
 
 from clickhouse_connect.driver.asyncclient import AsyncClient
+from nexovue_platform import tenant_statements
 
-# ClickHouse's server-side parameter syntax.
-TENANT_BINDING: Final = "{tenant_id:String}"
-
-# The predicate itself, not merely a mention of the parameter. Whitespace varies;
-# nothing else may.
-TENANT_PREDICATE: Final = re.compile(r"\btenant_id\s*=\s*\{tenant_id:String\}")
-
-# Comments and single-quoted literals are stripped before the predicate is looked
-# for, because ClickHouse does not substitute a parameter in either — text there
-# reads as the requirement while doing nothing.
-_COMMENTS: Final = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
-_STRING_LITERALS: Final = re.compile(r"'(?:[^'\\]|\\.|'')*'")
-
-# A single request must never be able to exhaust the server. These are the
-# last line of defence; the client is configured with them too, so a caller
-# would have to defeat both to run unbounded.
-MAX_EXECUTION_SECONDS: Final = 30
-MAX_RESULT_ROWS: Final = 500_000
-
-READ_SETTINGS: Final[dict[str, Any]] = {
-    "max_execution_time": MAX_EXECUTION_SECONDS,
-    "max_result_rows": MAX_RESULT_ROWS,
-    "result_overflow_mode": "throw",
-}
+# The binding, the predicate check and the read limits are shared with the
+# scheduler's reader (F21, ADR-012), so there is one definition of "this statement
+# is scoped to a tenant". Re-exported here for the modules that already import them.
+TENANT_BINDING: Final = tenant_statements.TENANT_BINDING
+TENANT_PREDICATE: Final = tenant_statements.TENANT_PREDICATE
+MAX_EXECUTION_SECONDS: Final = tenant_statements.MAX_EXECUTION_SECONDS
+MAX_RESULT_ROWS: Final = tenant_statements.MAX_RESULT_ROWS
+READ_SETTINGS: Final = tenant_statements.READ_SETTINGS
+TenantFilterMissingError = tenant_statements.TenantFilterMissingError
+binds_tenant = tenant_statements.binds_tenant
 
 # `ALTER TABLE ... DELETE` is a mutation: ClickHouse rewrites every affected
 # part, which takes as long as it takes. 0 is "record the obligation and
@@ -70,32 +57,6 @@ MUTATIONS_ASYNCHRONOUS: Final = 0
 # The only unscoped reads allowed: ClickHouse's own bookkeeping, which has no
 # tenant column to filter on.
 _READS_A_SYSTEM_TABLE: Final = re.compile(r"\bFROM\s+system\.", re.IGNORECASE)
-
-
-class TenantFilterMissingError(RuntimeError):
-    """A query reached the repository without binding a tenant.
-
-    Raised rather than silently scoped, because a query written without the
-    binding was written by someone who was not thinking about tenancy, and
-    the next one they write will be wrong too.
-    """
-
-    def __init__(self, sql: str) -> None:
-        super().__init__(
-            f"query has no `tenant_id = {TENANT_BINDING}` predicate outside of "
-            f"comments and string literals, and would read across tenants: "
-            f"{sql.strip()[:200]}"
-        )
-
-
-def _executable_text(sql: str) -> str:
-    """The SQL with everything ClickHouse will not act on removed."""
-    return _STRING_LITERALS.sub("''", _COMMENTS.sub(" ", sql))
-
-
-def binds_tenant(sql: str) -> bool:
-    """Whether the statement filters on the tenant, as opposed to mentioning it."""
-    return bool(TENANT_PREDICATE.search(_executable_text(sql)))
 
 
 class TenantScopedRepository:
@@ -198,7 +159,7 @@ class TenantScopedPurger:
         and the caller narrows it by bound value instead. Restricted to `system.`
         so this cannot become a second way to read telemetry.
         """
-        if not _READS_A_SYSTEM_TABLE.search(_executable_text(sql)):
+        if not _READS_A_SYSTEM_TABLE.search(tenant_statements.executable_text(sql)):
             raise SystemTableOnlyError(sql)
 
         result = await self._client.query(sql, parameters=parameters, settings=READ_SETTINGS)

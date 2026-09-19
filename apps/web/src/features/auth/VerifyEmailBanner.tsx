@@ -42,8 +42,10 @@ export function VerifyEmailBanner() {
       ) : (
         <>
           <span>
-            <span className="text-ink">{user.email}</span> is not verified yet. Nothing here needs
-            it — it is only how we reach you about the account.
+            {/* It gates one thing since F21: alerts to the organization's owners go only to
+                a verified address, so an address nobody controls is never paged. */}
+            <span className="text-ink">{user.email}</span> is not verified yet. Alerts to your
+            organization's owners are sent only to a verified address.
           </span>
           {resend.isError ? (
             <span className="text-ink">That did not go through. Try again in a moment.</span>

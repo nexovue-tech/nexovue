@@ -20,6 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from nexovue_scheduler.alerts.check_state import StateChange, on_check_state_change
 from nexovue_scheduler.probes.state import CurrentState, decide
 
 _ATTEMPTS: Final = 2
@@ -71,10 +72,21 @@ class RecordedOutcome:
     location: str
     observed_at: datetime
     reason: str | None
+    # The reason as an alert may carry it (BR9); see `alerts.reasons`.
+    alert_reason: str | None = None
 
 
-async def record(engine: AsyncEngine, outcome: RecordedOutcome) -> str | None:
-    """Apply one confirmed run. Returns the state changed to, if it changed.
+@dataclass(frozen=True, slots=True)
+class Recorded:
+    """What recording one run did: the state it changed to, if any, and how many
+    alert notifications that change wrote for delivery (F21)."""
+
+    changed_to: str | None = None
+    notifications: int = 0
+
+
+async def record(engine: AsyncEngine, outcome: RecordedOutcome) -> Recorded:
+    """Apply one confirmed run.
 
     A check deleted between its run and this write has nothing to record against;
     the foreign key refuses the row and that is reported as no change. Two first
@@ -97,20 +109,20 @@ async def record(engine: AsyncEngine, outcome: RecordedOutcome) -> str | None:
                 return await _apply(connection, outcome, parameters)
         except IntegrityError:
             continue
-    return None
+    return Recorded()
 
 
 async def _apply(
     connection: AsyncConnection, outcome: RecordedOutcome, parameters: dict[str, Any]
-) -> str | None:
+) -> Recorded:
     row = (await connection.execute(_CURRENT, parameters)).first()
     current = CurrentState(state=row.state, last_run_at=row.last_run_at) if row else None
     decision = decide(current, outcome.outcome, outcome.observed_at)
     if not decision.record:
-        return None
+        return Recorded()
     if decision.change_to is None:
         await connection.execute(_TOUCH_STATE, parameters)
-        return None
+        return Recorded()
 
     if current is None:
         await connection.execute(_INSERT_STATE, parameters)
@@ -119,4 +131,22 @@ async def _apply(
     await connection.execute(
         _INSERT_CHANGE, parameters | {"from_state": current.state if current else None}
     )
-    return decision.change_to
+    # In this transaction, on purpose: the state change and every alert it causes
+    # commit together or not at all (F21 design, *Check state — inline*). A crash
+    # after the commit has already recorded the notification; one before it has
+    # recorded neither, and `record_outcome`'s retry records both.
+    notifications = await on_check_state_change(
+        connection,
+        StateChange(
+            org_id=parameters["org_id"],
+            project_id=parameters["project_id"],
+            check_id=parameters["check_id"],
+            from_state=current.state if current else None,
+            to_state=decision.change_to,
+            at=outcome.observed_at,
+            run_id=outcome.run_id,
+            location=outcome.location,
+            alert_reason=outcome.alert_reason,
+        ),
+    )
+    return Recorded(changed_to=decision.change_to, notifications=notifications)

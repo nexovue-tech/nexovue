@@ -16,17 +16,19 @@ from datetime import datetime
 from math import ceil
 from typing import Final
 
+from nexovue_platform import readings
+
 # Exactly the levels the stored `AggregateFunction(quantiles(...), Float64)` was
 # built with. `quantilesMerge` refuses a state whose levels differ, so these are
 # not a preference — they are the column's own definition, repeated.
-QUANTILE_LEVELS: Final = (0.5, 0.95, 0.99)
-QUANTILE_ARGUMENTS: Final = ", ".join(str(level) for level in QUANTILE_LEVELS)
+QUANTILE_LEVELS: Final = readings.QUANTILE_LEVELS
+QUANTILE_ARGUMENTS: Final = readings.QUANTILE_ARGUMENTS
 
 # ClickHouse arrays are 1-based, and `quantilesMerge` returns them in the order
 # above.
-P50_INDEX: Final = 1
-P95_INDEX: Final = 2
-P99_INDEX: Final = 3
+P50_INDEX: Final = readings.P50_INDEX
+P95_INDEX: Final = readings.P95_INDEX
+P99_INDEX: Final = readings.P99_INDEX
 
 SECONDS_PER_MINUTE: Final = 60.0
 
@@ -63,9 +65,9 @@ def per_minute(count: int, minutes: float) -> float:
     return count / minutes if minutes > 0 else 0.0
 
 
-def failure_ratio(errors: int, total: int) -> float:
-    """The share of calls that failed, as a fraction. Nothing measured is 0.0."""
-    return errors / total if total > 0 else 0.0
+# Shared with the scheduler's error-rate rule (F21), so an alert and this screen
+# divide the same way.
+failure_ratio = readings.failure_ratio
 
 
 class Latency:

@@ -79,9 +79,13 @@ class SourceModule:
 
 
 def _api_modules() -> list[SourceModule]:
+    return _modules_under(API_SOURCE)
+
+
+def _modules_under(source: Path) -> list[SourceModule]:
     modules: list[SourceModule] = []
-    for path in sorted(API_SOURCE.rglob("*.py")):
-        relative = path.relative_to(API_SOURCE).with_suffix("")
+    for path in sorted(source.rglob("*.py")):
+        relative = path.relative_to(source).with_suffix("")
         parts = [part for part in relative.parts if part != "__init__"]
         modules.append(
             SourceModule(
@@ -94,6 +98,13 @@ def _api_modules() -> list[SourceModule]:
 
 
 API_MODULES: Final = _api_modules()
+
+# F21, ADR-012: the scheduler reads the telemetry store too, for the service
+# conditions, and is held to the same three rules. Its chokepoint is
+# `alerts.telemetry`, the one module allowed the raw driver.
+SCHEDULER_SOURCE: Final = _REPOSITORY_ROOT / "apps" / "scheduler" / "src" / "nexovue_scheduler"
+SCHEDULER_MODULES: Final = _modules_under(SCHEDULER_SOURCE)
+SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset({"alerts.telemetry"})
 
 
 def _telemetry_tables() -> frozenset[str]:
@@ -177,10 +188,11 @@ def _docstrings(tree: ast.AST) -> set[int]:
     return ids
 
 
-def _telemetry_sql() -> list[SqlLiteral]:
-    """Every string in the API that reads a telemetry table."""
+def _telemetry_sql(modules: list[SourceModule] | None = None) -> list[SqlLiteral]:
+    """Every string in the given source — the API's by default — that reads a
+    telemetry table."""
     found: list[SqlLiteral] = []
-    for module in API_MODULES:
+    for module in API_MODULES if modules is None else modules:
         prose = _docstrings(module.tree)
         for node in ast.walk(module.tree):
             if not isinstance(node, ast.Constant | ast.JoinedStr):
@@ -336,3 +348,50 @@ def _called_name(func: ast.expr) -> str | None:
     if isinstance(func, ast.Attribute):
         return func.attr
     return None
+
+
+# ------------------------------------------------------------ the scheduler (F21)
+
+
+def test_the_scheduler_source_this_check_walks_is_the_one_that_ships() -> None:
+    assert SCHEDULER_SOURCE.is_dir(), f"no scheduler source at {SCHEDULER_SOURCE}"
+    assert _telemetry_sql(SCHEDULER_MODULES), "no scheduler telemetry SQL found"
+
+
+def test_no_scheduler_statement_reading_a_telemetry_table_omits_the_tenant_binding() -> None:
+    unscoped = [
+        str(sql) for sql in _telemetry_sql(SCHEDULER_MODULES) if TENANT_BINDING not in sql.text
+    ]
+    assert not unscoped, (
+        f"these scheduler statements read a telemetry table without {TENANT_BINDING}: {unscoped}"
+    )
+
+
+def test_no_scheduler_statement_reading_a_telemetry_table_is_built_from_a_runtime_value() -> None:
+    constants_by_module = {
+        module.dotted_name: _module_level_names(module.tree) for module in SCHEDULER_MODULES
+    }
+    assembled = [
+        f"{sql} embeds {ast.unparse(expression)}"
+        for sql in _telemetry_sql(SCHEDULER_MODULES)
+        for expression in sql.interpolations
+        if not (
+            isinstance(expression, ast.Name) and expression.id in constants_by_module[sql.module]
+        )
+    ]
+    assert not assembled, f"scheduler SQL assembled from a runtime value: {assembled}"
+
+
+def test_nothing_in_the_scheduler_outside_its_chokepoint_holds_the_raw_driver() -> None:
+    offenders: list[str] = []
+    for module in SCHEDULER_MODULES:
+        if module.dotted_name in SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT:
+            continue
+        for node in ast.walk(module.tree):
+            reference = _raw_client_reference(node)
+            if reference is not None:
+                line, name = reference
+                offenders.append(f"{module}:{line} references {name}")
+    assert not offenders, (
+        f"the raw ClickHouse client escaped the scheduler's chokepoint: {offenders}"
+    )

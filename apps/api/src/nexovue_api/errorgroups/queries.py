@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Final
 
+from nexovue_platform import readings
+
 from nexovue_api.data.clickhouse import values
 
 # Bound to module constants because the statements below interpolate them, and
@@ -30,10 +32,10 @@ from nexovue_api.data.clickhouse import values
 ABSENT_TRACE_ID: Final = values.ABSENT_TRACE_ID
 ABSENT_SPAN_ID: Final = values.ABSENT_SPAN_ID
 
-# The attribute an SDK sets to choose its own grouping. Present and non-empty,
-# it replaces everything derived below. ClickHouse's JSON type reads a dot as a
-# path separator, so the flat key arrives as a two-level path.
-SDK_FINGERPRINT_PATH: Final = "grouping.fingerprint"
+# How an error group is identified is `nexovue_platform.readings`, shared with the
+# scheduler's new-error rule so an alert and this screen agree on what is new (F21).
+# Bound to module constants because only a name of this module may be spliced here.
+SDK_FINGERPRINT_PATH: Final = readings.SDK_FINGERPRINT_PATH
 
 # Which build an error came from, which is what a source map is matched on when
 # the bundler emitted no debug id. A span carries it as a promoted column; a log
@@ -45,51 +47,15 @@ SOURCE_SPAN: Final = "span"
 SOURCE_LOG: Final = "log"
 
 # ---------------------------------------------------------- message templating
-#
-# Grouping on the raw message would make one group per occurrence, because a
-# message routinely embeds an id, a path, a duration or an address. Each of
-# these collapses one class of embedded value to a fixed token, so that
-# "User 4f3a…6666 not found" and "User 9c8d…ffff not found" are one error.
-#
-# Order matters: a UUID contains digits and an email contains a hostname, so the
-# specific patterns run before the general ones.
 
-UUID_PLACEHOLDER: Final = "<uuid>"
-EMAIL_PLACEHOLDER: Final = "<email>"
-HEX_PLACEHOLDER: Final = "<hex>"
-NUMBER_PLACEHOLDER: Final = "<n>"
+UUID_PLACEHOLDER: Final = readings.UUID_PLACEHOLDER
+EMAIL_PLACEHOLDER: Final = readings.EMAIL_PLACEHOLDER
+HEX_PLACEHOLDER: Final = readings.HEX_PLACEHOLDER
+NUMBER_PLACEHOLDER: Final = readings.NUMBER_PLACEHOLDER
+MESSAGE_TEMPLATE_MAX_CHARS: Final = readings.MESSAGE_TEMPLATE_MAX_CHARS
 
-# Doubled backslashes: ClickHouse unescapes the string literal once before the
-# regular expression engine sees it.
-_UUID_PATTERN: Final = (
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
-_EMAIL_PATTERN: Final = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
-# Eight or more hex digits is an id, a hash or a token, never a word.
-_HEX_PATTERN: Final = r"\\b[0-9a-fA-F]{8,}"
-# No trailing word boundary: `45.12ms` must template as `<n>ms`, not `<n>.12ms`.
-_NUMBER_PATTERN: Final = r"\\b[0-9]+(\\.[0-9]+)?"
-_WHITESPACE_PATTERN: Final = r"\\s+"
-
-# A template longer than this is a payload dump, not a message. Truncating keeps
-# the group key bounded and the list readable.
-MESSAGE_TEMPLATE_MAX_CHARS: Final = 512
-
-_MESSAGE_TEMPLATE: Final = f"""
-        substring(
-            trim(replaceRegexpAll(replaceRegexpAll(replaceRegexpAll(replaceRegexpAll(
-                replaceRegexpAll(exception_message, '{_UUID_PATTERN}', '{UUID_PLACEHOLDER}'),
-                '{_EMAIL_PATTERN}', '{EMAIL_PLACEHOLDER}'),
-                '{_HEX_PATTERN}', '{HEX_PLACEHOLDER}'),
-                '{_NUMBER_PATTERN}', '{NUMBER_PLACEHOLDER}'),
-                '{_WHITESPACE_PATTERN}', ' ')),
-            1, {MESSAGE_TEMPLATE_MAX_CHARS})
-"""
-
-# The two ways a group id is derived, kept apart inside the hash so an SDK
-# fingerprint can never collide with a derived one.
-_SDK_NAMESPACE: Final = "sdk\\n"
-_DERIVED_NAMESPACE: Final = "derived\\n"
+_MESSAGE_TEMPLATE: Final = readings.MESSAGE_TEMPLATE_SQL
+_GROUP_ID: Final = readings.GROUP_ID_SQL
 
 # ------------------------------------------------------------ occurrence rows
 
@@ -190,11 +156,7 @@ _GROUPING: Final = f"""
     release,
     {_MESSAGE_TEMPLATE} AS message_template,
     sdk_fingerprint != '' AS grouped_by_sdk,
-    lower(hex(sipHash64(if(
-        sdk_fingerprint != '',
-        concat('{_SDK_NAMESPACE}', sdk_fingerprint),
-        concat('{_DERIVED_NAMESPACE}', exception_type, '\\n', message_template)
-    )))) AS group_id,
+    {_GROUP_ID} AS group_id,
     if(
         trace_ref NOT IN ('', '{ABSENT_TRACE_ID}') AND span_ref NOT IN ('', '{ABSENT_SPAN_ID}'),
         concat(trace_ref, ':', span_ref),

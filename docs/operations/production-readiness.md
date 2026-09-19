@@ -22,7 +22,7 @@ about production.
 | Migrations as a deploy step | ✗ | Neither `docker-compose.app.yaml` nor `docker-compose.onprem.yaml` runs alembic or the 31 ClickHouse migrations; only the manual `just migrate` |
 | Capacity | ? | Every limit is the laptop budget (`TODO(sizing)` in the on-prem compose; `memory.xml`). No load test against a target, because there is no target |
 | Health checks | ✓ | `docker-compose.app.yaml`: receiver `-health`, worker `-health`, API `/healthz`, web `wget` (lines 62, 108, 142, 209). `/healthz` is liveness only, by design (`health/router.py`) |
-| Logging / monitoring / alerting | ✗ | Services log structurally, but nothing watches nexovue itself. `monitoring.md` and `alerting.md` are stubs; F21 is unbuilt |
+| Logging / monitoring / alerting | ✗ | Services log structurally, but nothing watches nexovue itself. `monitoring.md` and `alerting.md` are stubs. F21 (2026-09-19) alerts customers about *their* checks and services; nothing is configured to alert us about nexovue, and no scheduler service has a healthcheck, so a dead `scheduler-deliveries` worker is visible only as notifications left `pending` |
 | Backup and restore evidence | ✗ | Tooling exists and is good (`just backup`, `verify.sh` compares row counts, schema revisions and ingest watermarks). **No restore has ever been performed**; no schedule, no off-host copy, no RPO/RTO |
 | Rollback | ✗ | Every ClickHouse migration has a `.down.sql`; `rollback.md` is a stub; never rehearsed |
 | TLS / public endpoints | ✗ | `deploy/caddy/Caddyfile` covers on-prem only. `otlp_endpoint` defaults to `http://localhost:14318`, which `settings.py` refuses at start-up — so the API cannot start in production until a real ingest hostname exists |
@@ -51,6 +51,27 @@ Each names the failure it prevents.
 9. **Self-hosted installs believe they are hosted.** They show a Razorpay billing screen and cap ingestion on the operator's own disk.
 10. **The on-prem compose has never run.**
 11. **Email delivery is unverified.** If production sends through `console`, partners cannot verify an address or reset a password.
+
+## F21 — alerts, assessed as one change (2026-09-19)
+
+Scope: is F21 safe to roll out, given the platform above? It adds no blocker of its own beyond the list
+above, and it depends on three of them:
+
+- **Email delivery (11).** The default rule emails the organization's owners; with `console` in production,
+  no alert reaches a person.
+- **Check secret key (8).** Channel secrets are sealed under the same key (ADR-010, amended); without it no
+  Slack, Teams, Discord, PagerDuty or webhook channel can be saved or delivered to, and rotating it loses
+  every channel secret as well.
+- **Migrations (5).** `0028_alerts` and `0029_alert_telemetry_state` must run before the scheduler starts, or
+  every sweep and every check state change fails. Both upgrade, downgrade and upgrade again in
+  `test_alerts_migration_live.py`.
+
+Recommended for F21:
+
+- A read-only ClickHouse user for `scheduler-light` (`TODO(hosting)` in both compose files) — today it reads
+  telemetry with the API's account, which can write.
+- A healthcheck for the three scheduler services, and something watching the age of the oldest `pending`
+  notification.
 
 ## Recommended
 

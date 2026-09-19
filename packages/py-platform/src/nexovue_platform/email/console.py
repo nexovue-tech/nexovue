@@ -30,11 +30,10 @@ import uuid
 from collections.abc import Mapping
 from typing import Any, Final
 
+from nexovue_platform.email.sender import Delivery, Message
+from nexovue_platform.email.settings import EmailSettings
+from nexovue_platform.email.templates import render
 from nexovue_platform.telemetry.logging import get_logger
-
-from nexovue_api.notifications.sender import Delivery, Message
-from nexovue_api.notifications.templates import render
-from nexovue_api.settings import EmailSettings
 
 logger = get_logger(__name__)
 
@@ -54,7 +53,14 @@ class ConsoleEmailSender:
     def __init__(self, settings: EmailSettings) -> None:
         self._settings = settings
 
-    async def send(self, *, to: str, message: Message, data: Mapping[str, Any]) -> Delivery:
+    async def send(
+        self,
+        *,
+        to: str,
+        message: Message,
+        data: Mapping[str, Any],
+        idempotency_key: str | None = None,
+    ) -> Delivery:
         # Rendered before anything is logged: a caller that omitted a field gets
         # the same `EmailError` here as it would in production.
         subject, body = render(message, data)

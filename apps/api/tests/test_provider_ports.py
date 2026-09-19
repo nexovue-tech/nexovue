@@ -17,14 +17,15 @@ import ast
 from pathlib import Path
 from typing import Final
 
+import nexovue_platform.email
 import pytest
 
-from nexovue_api import billing, notifications
+from nexovue_api import billing
 
 # The ports themselves. Everything in these packages is provider-agnostic by
 # definition; an implementation lives in a submodule named for its vendor.
 PORT_MODULES: Final = (
-    Path(notifications.__file__).parent / "sender.py",
+    Path(nexovue_platform.email.__file__).parent / "sender.py",
     Path(billing.__file__).parent / "processor.py",
 )
 
@@ -104,8 +105,9 @@ def test_every_port_is_a_protocol() -> None:
     what lets one live in another package, or be a test double with no import at
     all.
     """
+    from nexovue_platform.email.sender import EmailSender
+
     from nexovue_api.billing.processor import PaymentProcessor
-    from nexovue_api.notifications.sender import EmailSender
 
     for port in (EmailSender, PaymentProcessor):
         assert getattr(port, "_is_protocol", False), f"{port.__name__} must be a Protocol"

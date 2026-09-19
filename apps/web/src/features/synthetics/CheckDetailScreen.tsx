@@ -1,6 +1,7 @@
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-
+import { AlertsStrip } from "@/shared/alerts/AlertsStrip";
+import { useCheckCoverage } from "@/shared/alerts/api";
 import { isNotFound } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
 import { CopyButton } from "@/shared/components/CopyButton";
@@ -107,6 +108,9 @@ export function CheckDetailScreen() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <CheckHeader check={definition} />
+      <div className="min-w-0 px-4">
+        <CheckAlerts projectId={definition.project_id} checkId={definition.id} />
+      </div>
       <div className="min-w-0 px-4 pb-10">
         <Tabs
           label="Check"
@@ -135,6 +139,11 @@ export function CheckDetailScreen() {
       </div>
     </div>
   );
+}
+
+function CheckAlerts({ projectId, checkId }: { projectId: string; checkId: string }) {
+  const coverage = useCheckCoverage(projectId, checkId);
+  return <AlertsStrip coverage={coverage.data} newRuleSearch={{ check: checkId }} />;
 }
 
 function CheckHeader({ check }: { check: CheckDefinition }) {

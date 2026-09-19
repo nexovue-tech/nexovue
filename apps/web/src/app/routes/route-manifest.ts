@@ -18,6 +18,7 @@
 export type NavPath =
   | "/"
   | "/findings"
+  | "/alerts"
   | "/services"
   | "/service-map"
   | "/traces"
@@ -44,6 +45,9 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { path: "/", title: "Overview" },
       { path: "/findings", title: "Findings" },
+      // F21. Beside Findings: both answer "what is wrong", one found by us and one
+      // declared by a rule the customer wrote.
+      { path: "/alerts", title: "Alerts" },
     ],
   },
   {

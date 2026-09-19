@@ -116,22 +116,29 @@ _LIGHT_POSTGRES = (
     "from beat and the API, both of which wait for Postgres"
 )
 _INSIGHT = "apps/insight does not exist yet; its dependencies are decided when it is written"
+_DELIVERIES_KAFKA = (
+    "the alert deliveries worker (F21) never produces; the shared scheduler settings "
+    "require KAFKA_BROKERS, so the variable stays although it does not use it"
+)
 
 DELIBERATELY_UNDECLARED: Final[dict[str, dict[str, dict[str, str]]]] = {
     "docker-compose.yaml": {
         "web": {"api": _WEB_API},
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
         "scheduler-light": {"postgres": _LIGHT_POSTGRES},
+        "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
         "insight": {"redis": _INSIGHT},
     },
     "docker-compose.app.yaml": {
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
         "scheduler-light": {"postgres": _LIGHT_POSTGRES},
+        "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
         "insight": {"kafka": _INSIGHT, "ollama": _INSIGHT},
     },
     "docker-compose.onprem.yaml": {
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
         "scheduler-light": {"postgres": _LIGHT_POSTGRES},
+        "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
         "insight": {"ollama": _INSIGHT},
     },
     "compose.infra.yaml": {},

@@ -492,6 +492,9 @@ async def test_signing_up_records_the_organization_and_its_first_key(db: AsyncSe
     assert {entry.action for entry in entries} == {
         audit.ORGANIZATION_CREATED,
         audit.API_KEY_CREATED,
+        # F21: the owners channel and default alert rule every tenant starts with.
+        audit.NOTIFICATION_CHANNEL_CREATED,
+        audit.ALERT_RULE_CREATED,
     }
     assert all(entry.actor_user_id == tenant.user.id for entry in entries)
 
@@ -575,6 +578,8 @@ async def test_an_organization_cannot_revoke_another_organizations_key(db: Async
     assert [entry.action for entry in await _entries(db, victim.organization.id)] == [
         audit.ORGANIZATION_CREATED,
         audit.API_KEY_CREATED,
+        audit.NOTIFICATION_CHANNEL_CREATED,
+        audit.ALERT_RULE_CREATED,
     ]
 
 

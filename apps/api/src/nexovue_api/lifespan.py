@@ -17,6 +17,7 @@ from typing import Final
 import clickhouse_connect
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from fastapi import FastAPI
+from nexovue_platform.email import EMAIL_VARIABLES, EmailSender, build_email_sender
 from nexovue_platform.telemetry.logging import get_logger
 from redis.asyncio import ConnectionPool, Redis
 from sqlalchemy.ext.asyncio import (
@@ -26,15 +27,16 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from nexovue_api.alerts.evaluation import EvaluationReader, RedisEvaluationReader
 from nexovue_api.auth.sessions import SessionStore
+from nexovue_api.channels.send_test import CeleryChannelTester, ChannelTester
 from nexovue_api.checks.run_now import CeleryProbeBroker, ProbeBroker
 from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.health.checks import dependency_checks
 from nexovue_api.health.registry import CheckRegistry
-from nexovue_api.notifications import EmailSender, build_email_sender
 from nexovue_api.ratelimit.limiter import RateLimiter
 from nexovue_api.ratelimit.policy import FixedPlanLimits
-from nexovue_api.settings import EMAIL_VARIABLES, Settings
+from nexovue_api.settings import Settings
 
 logger = get_logger(__name__)
 
@@ -117,6 +119,10 @@ class Resources:
     email: EmailSender | None
     # None when no probe broker is configured; Run now refuses with 503.
     probes: ProbeBroker | None = None
+    # The same broker, for a channel's send test (F21); None refuses the same way.
+    channel_tests: ChannelTester | None = None
+    # When the scheduler last evaluated the service conditions (F21).
+    evaluations: EvaluationReader | None = None
 
 
 def build_lifespan(
@@ -191,6 +197,16 @@ async def open_resources(settings: Settings) -> Resources:
         probes=(
             CeleryProbeBroker(str(settings.probe_broker_url)) if settings.probe_broker_url else None
         ),
+        channel_tests=(
+            CeleryChannelTester(str(settings.probe_broker_url))
+            if settings.probe_broker_url
+            else None
+        ),
+        evaluations=(
+            RedisEvaluationReader(str(settings.probe_broker_url))
+            if settings.probe_broker_url
+            else None
+        ),
     )
 
 
@@ -236,6 +252,10 @@ async def close_resources(resources: Resources) -> None:
     """Close every pool, in the reverse order they were opened."""
     if resources.probes is not None:
         await resources.probes.close()
+    if resources.channel_tests is not None:
+        await resources.channel_tests.close()
+    if resources.evaluations is not None:
+        await resources.evaluations.close()
     await resources.clickhouse.close()
     await resources.redis.aclose()
     await resources.engine.dispose()

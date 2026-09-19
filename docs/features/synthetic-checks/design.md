@@ -263,8 +263,10 @@ Decided in the scheduler after a run and written to Postgres — the scheduler a
   (AC19, AC20).
 - **Every attempt is published**, marked `synthetic.check.attempt` and `synthetic.check.final`; uptime counts only
   final attempts, so retries stay visible.
-- **Transitions** among `up`, `degraded`, `down`, `misconfigured`, `paused`, `maintenance` write a
-  `check_state_changes` row — F21's input (FR28). An active maintenance window marks runs
+- **Transitions** among `up`, `degraded`, `down` and `misconfigured` write a `check_state_changes` row — F21's
+  input (FR28). A paused check is not run, so it records nothing; *paused* and *in maintenance* are read from the
+  check and its windows, never recorded as states. (Corrected 2026-09-18 by the F21 design: this line listed
+  both as recorded states, which the code never did.) An active maintenance window marks runs
   `synthetic.check.maintenance` and changes no state (AC23). Uptime excludes misconfigured, paused and maintenance
   runs (AC22).
 - **No stale queue (FR26).** Every task is dispatched with `expires = interval_seconds`.

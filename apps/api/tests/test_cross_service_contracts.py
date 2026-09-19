@@ -353,3 +353,32 @@ def test_run_now_sends_exactly_the_arguments_the_probe_task_accepts() -> None:
         if parameter.kind is inspect.Parameter.KEYWORD_ONLY
         and parameter.default is inspect.Parameter.empty
     } <= sent
+
+
+def test_send_test_sends_exactly_the_arguments_the_deliveries_task_accepts() -> None:
+    """F21. The same contract as Run now's: a renamed keyword would leave the console
+    waiting for an outcome the worker never writes."""
+    import inspect
+    import os
+
+    for name, value in {
+        "ENV": "development",
+        "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
+        "REDIS_URL": "redis://localhost:6379/1",
+        "KAFKA_BROKERS": "localhost:9092",
+    }.items():
+        os.environ.setdefault(name, value)
+
+    from nexovue_platform.alerts.tasks import SEND_TEST_TASK, send_test_arguments
+
+    from nexovue_scheduler.alerts import tasks
+
+    sent = set(send_test_arguments(org_id="o", channel_id="c", request_id="r"))
+    keyword_only = [
+        parameter
+        for parameter in inspect.signature(tasks.send_test.run).parameters.values()
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    ]
+
+    assert tasks.send_test.name == SEND_TEST_TASK
+    assert sent == {parameter.name for parameter in keyword_only}

@@ -41,6 +41,9 @@ const GUARDED = [
   "features/projects/MaintenanceWindowsSection.tsx",
   "features/synthetics/CheckForm.tsx",
   "features/synthetics/ImportScreen.tsx",
+  "features/alerts/RuleEditor.tsx",
+  "features/alerts/ChannelForm.tsx",
+  "features/alerts/ChannelDetailScreen.tsx",
 ];
 
 /** Submitted immediately, with no draft behind them. */
@@ -48,6 +51,9 @@ const UNGUARDED = [
   "features/projects/ProjectsScreen.tsx",
   "features/settings/ApiKeysScreen.tsx",
   "features/onboarding/OnboardingScreen.tsx",
+  // Lists with links; every draft on them lives in ChannelForm, which is guarded.
+  "features/alerts/AlertsScreen.tsx",
+  "features/alerts/ChannelsScreen.tsx",
 ];
 
 describe("AC19 is applied per form, not per screen", () => {

@@ -23,6 +23,7 @@ from nexovue_api.data.postgres.models import (
     AuditLogEntry,
     BillingSubscription,
     BillingWebhookDelivery,
+    NotificationChannel,
     Organization,
     Project,
     User,
@@ -58,10 +59,18 @@ async def delete_projects(session: AsyncSession, org_id: uuid.UUID) -> int:
     return await _rows_deleted(session, delete(Project).where(Project.org_id == org_id))
 
 
+async def delete_notification_channels(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """Where alerts went, and their sealed secrets. Takes the delivery log with them."""
+    return await _rows_deleted(
+        session, delete(NotificationChannel).where(NotificationChannel.org_id == org_id)
+    )
+
+
 DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitable[int]]]] = {
     "billing_webhook_deliveries": delete_billing_webhook_deliveries,
     "billing_subscriptions": delete_billing_subscriptions,
     "audit_log": delete_audit_log,
+    "notification_channels": delete_notification_channels,
     "users": delete_users,
     "projects": delete_projects,
 }

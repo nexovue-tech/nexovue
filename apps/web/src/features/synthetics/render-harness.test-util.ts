@@ -257,6 +257,7 @@ export function syntheticsReads({
   for (const check of checks) {
     handlers[`GET /checks/${check.id}`] = json(check);
     handlers[`GET /checks/${check.id}/state-changes`] = json({ check_id: check.id, changes: [] });
+    handlers[`GET /alerts/coverage/checks/${check.id}`] = json({ rules: [], open_incidents: [] });
     handlers[`GET /synthetics/checks/${check.id}/runs`] = json({
       check_id: check.id,
       runs: runs[check.id] ?? [],

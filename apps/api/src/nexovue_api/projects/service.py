@@ -32,6 +32,8 @@ from typing import Any, Final
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexovue_api.alerts import defaults as alert_defaults
+from nexovue_api.alerts import queries as alert_queries
 from nexovue_api.audit import service as audit
 from nexovue_api.data.postgres.models import DEFAULT_RETENTION_DAYS, Project
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
@@ -121,6 +123,10 @@ async def create(
     await _flush(session)
 
     audit.record_project_created(session, project=project, actor_user_id=actor_user_id)
+    # Any check down emails the owners from the project's first minute (F21, FR8).
+    await alert_defaults.provision_project(
+        session, org_id=org_id, project_id=project.id, actor_user_id=actor_user_id
+    )
     return _detail(project)
 
 
@@ -169,6 +175,7 @@ async def delete(
 
     deleted_at = datetime.now(UTC)
     project.deleted_at = deleted_at
+    await alert_queries.close_project(session, org_id=org_id, project_id=project_id, at=deleted_at)
     closed = ProjectDeleted(
         project_id=project.id,
         deleted_at=deleted_at,

@@ -1,7 +1,7 @@
 [project]
 name = "nexovue-platform"
 version = "0.1.0"
-description = "What the API and the scheduler both need: structured logging, request context, redaction, and what a synthetic check is"
+description = "What the API and the scheduler both need: structured logging, request context, redaction, what a synthetic check is, and transactional mail"
 requires-python = ">=3.13"
 license = "AGPL-3.0-only"
 dependencies = [
@@ -17,6 +17,9 @@ dependencies = [
     # Customer-typed patterns in assertions. RE2 matches in linear time, so no
     # pattern can hold a worker with catastrophic backtracking (BSD).
     "google-re2>=1.1",
+    # The mail provider's one HTTP call, shared by the API and the scheduler, which
+    # both send mail through `nexovue_platform.email` (F21).
+    "httpx>=0.28",
 ]
 
 [build-system]

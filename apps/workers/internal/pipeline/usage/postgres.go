@@ -151,6 +151,27 @@ const addServices = `
 		AND projects.org_id::text = seen.org_id
 	ON CONFLICT (org_id, project_id, day, service_name) DO NOTHING`
 
+// markServicesSeen records when each service in the flush was last heard, for
+// the alert that fires when one goes silent (F21). The flush's newest receive
+// time stands for every service in it: the meter knows which services a flush
+// carried, not the instant each one's message arrived, and ten seconds is finer
+// than any silence a rule may ask about.
+//
+// GREATEST, so a flush that counted only an older partition's backlog never
+// moves a service's time backwards. GROUP BY, because a flush that crossed
+// midnight carries a service on two days and one INSERT may not update a row
+// twice. Joined to projects for the reasons addServices is.
+const markServicesSeen = `
+	INSERT INTO service_last_seen AS seen_before (org_id, project_id, service_name, last_seen_at)
+	SELECT projects.org_id, projects.id, seen.service_name, $4::timestamptz
+	FROM unnest($1::text[], $2::text[], $3::text[]) AS seen(org_id, project_id, service_name)
+	JOIN projects
+		ON projects.id::text = seen.project_id
+		AND projects.org_id::text = seen.org_id
+	GROUP BY projects.org_id, projects.id, seen.service_name
+	ON CONFLICT (project_id, service_name) DO UPDATE
+	SET last_seen_at = GREATEST(seen_before.last_seen_at, excluded.last_seen_at)`
+
 const readOffsets = `
 	SELECT partition_id, counted_through FROM ` + offsetsTable + ` WHERE topic = $1`
 
@@ -233,6 +254,9 @@ func (s *PostgresStore) Apply(
 	if err != nil {
 		return Applied{}, err
 	}
+	if err := s.markServicesSeen(ctx, tx, rows, newestReceived(progress)); err != nil {
+		return Applied{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Applied{}, fmt.Errorf("commit usage transaction: %w", err)
 	}
@@ -305,6 +329,37 @@ func (s *PostgresStore) addServices(ctx context.Context, tx pgx.Tx, rows []Row) 
 		return 0, fmt.Errorf("add usage services: %w", err)
 	}
 	return int(tag.RowsAffected()), nil
+}
+
+// markServicesSeen moves each flushed service's last-seen time forward.
+func (s *PostgresStore) markServicesSeen(
+	ctx context.Context,
+	tx pgx.Tx,
+	rows []Row,
+	received time.Time,
+) error {
+	seen := servicesOf(rows)
+	if len(seen.names) == 0 || received.IsZero() {
+		// Nothing readable was counted, so nothing was heard.
+		return nil
+	}
+	if _, err := tx.Exec(ctx, markServicesSeen,
+		seen.orgIDs, seen.projectIDs, seen.names, received); err != nil {
+		return fmt.Errorf("mark services seen: %w", err)
+	}
+	return nil
+}
+
+// newestReceived is the latest receive time any partition in the flush reached,
+// or zero when the flush counted nothing readable.
+func newestReceived(progress map[int32]Progress) time.Time {
+	var newest time.Time
+	for _, reached := range progress {
+		if reached.ReceivedThrough.After(newest) {
+			newest = reached.ReceivedThrough
+		}
+	}
+	return newest
 }
 
 // columns is one flush transposed, because the insert takes arrays rather than

@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Final
 
-from nexovue_api.notifications.sender import EmailError, Message
+from nexovue_platform.email.sender import EmailError, Message
 
 # Subject and a plain-text body per message, filled from the caller's own
 # `data`. No HTML: these are one sentence and a link, and an HTML part is a
@@ -38,6 +38,18 @@ TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
         "Your nexovue invoice",
         "Your invoice for {period} is ready: {amount}\n\n{link}",
     ),
+    Message.ALERT: (
+        "{subject}",
+        "{body}\n\nOpen in nexovue: {link}\n\n"
+        'You receive this because the alert rule "{rule_name}" notifies this address. '
+        "Change or mute it: {manage_link}",
+    ),
+    Message.CHANNEL_FAILING: (
+        "Alerts are not reaching {channel_name}",
+        "nexovue has not been able to deliver to the {channel_kind} channel "
+        '"{channel_name}" for {failing_for}. The last attempt: {reason}.\n\n'
+        "Alerts meant for it are reaching nobody until it is fixed: {link}",
+    ),
 }
 
 
@@ -50,7 +62,8 @@ def render(message: Message, data: Mapping[str, Any]) -> tuple[str, str]:
     """
     subject, body = TEMPLATES[message]
     try:
-        return subject, body.format(**data)
+        # Both halves: an alert's subject is the caller's, like its body (F21).
+        return subject.format(**data), body.format(**data)
     except KeyError as missing:
         raise EmailError(
             f"{message.value} needs {missing} and the caller did not supply it"

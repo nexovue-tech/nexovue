@@ -1,7 +1,10 @@
 import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowLeft, ArrowRight } from "lucide-react";
+import type { ReactNode } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
+import { AlertsStrip } from "@/shared/alerts/AlertsStrip";
+import { useServiceCoverage } from "@/shared/alerts/api";
 import { DurationHeatmap } from "@/shared/components/DurationHeatmap";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
@@ -123,6 +126,7 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
 
   return (
     <ServiceDetailView
+      alerts={<ServiceAlerts projectId={projectId} serviceName={serviceName} />}
       serviceName={serviceName}
       windowLabel={windowPhrase}
       state={state}
@@ -188,6 +192,8 @@ export interface ServiceDetailViewProps {
   heatmap?: DurationHeatmapResponse;
   dependencies: PanelSource<ServiceEdge>;
   errors: PanelSource<ErrorGroupSummary>;
+  /** The rules that watch this service and any open incident (F21, FR24). */
+  alerts?: ReactNode;
 }
 
 /** Everything the screen shows, with no query client and no clock behind it. */
@@ -204,6 +210,7 @@ export function ServiceDetailView({
   heatmap,
   dependencies,
   errors,
+  alerts,
 }: ServiceDetailViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -249,6 +256,7 @@ export function ServiceDetailView({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ServiceHeader serviceName={serviceName} windowLabel={windowLabel} state={state} row={row} />
+      {alerts ? <div className="px-4">{alerts}</div> : null}
 
       {state === "pending" ? (
         <div className="px-4">
@@ -864,4 +872,15 @@ function MetricCells({ metrics }: { metrics: HealthMetrics }) {
       </span>
     </>
   );
+}
+
+function ServiceAlerts({
+  projectId,
+  serviceName,
+}: {
+  projectId: string | undefined;
+  serviceName: string;
+}) {
+  const coverage = useServiceCoverage(projectId, serviceName);
+  return <AlertsStrip coverage={coverage.data} newRuleSearch={{ service: serviceName }} />;
 }

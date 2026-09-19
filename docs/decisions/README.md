@@ -15,6 +15,8 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-009 — Regions are cells, and every organization belongs to one — India by default](ADR-009-regions-are-cells.md)
 - [ADR-010 — Check secrets are sealed with their own key, and only their names travel through the queue](ADR-010-check-secrets.md)
 - [ADR-011 — The API dispatches run-now tasks to the scheduler's broker](ADR-011-api-dispatches-run-now.md)
+- [ADR-012 — The scheduler evaluates alerts, reading ClickHouse through shared, tenant-bound statements](ADR-012-the-scheduler-evaluates-alerts.md)
+- [ADR-013 — Notifications are an outbox, written in the transaction that decided them](ADR-013-notifications-are-an-outbox.md)
 
 ## Earlier decisions, 0001–0112
 

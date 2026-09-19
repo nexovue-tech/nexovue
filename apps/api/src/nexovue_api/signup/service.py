@@ -1,4 +1,5 @@
-"""Creating a tenant: one organization, one owner, one project, one key.
+"""Creating a tenant: one organization, one owner, one project, one key — and
+the owners channel and default alert rule that make the first outage heard.
 
 These four rows are the whole of what it means for a customer to exist, and
 they are created in a single transaction — a half-provisioned tenant is an
@@ -21,6 +22,7 @@ from pydantic import SecretStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexovue_api.alerts import defaults as alert_defaults
 from nexovue_api.apikeys.service import allocate_unused_key
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.credentials import hash_password, is_valid_email, normalize_email
@@ -128,6 +130,17 @@ async def provision_tenant(
     # record the same two events, in the transaction that creates the tenant.
     audit.record_organization_created(session, organization=organization, owner=user)
     audit.record_api_key_created(session, api_key=minted_key, actor_user_id=user.id)
+    await _flush(session)
+
+    # The first check that goes down emails the owner, with nothing to set up (F21,
+    # FR8). After the organization and its key are recorded, so the audit trail
+    # reads in the order a person would tell it.
+    await alert_defaults.provision_organization(
+        session, org_id=organization.id, actor_user_id=user.id
+    )
+    await alert_defaults.provision_project(
+        session, org_id=organization.id, project_id=project.id, actor_user_id=user.id
+    )
     await _flush(session)
 
     return ProvisionedTenant(

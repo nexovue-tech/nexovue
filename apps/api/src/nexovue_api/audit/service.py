@@ -22,11 +22,13 @@ from typing import Final
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
+    AlertRule,
     ApiKey,
     AuditLogEntry,
     Check,
     DeployEvent,
     Integration,
+    NotificationChannel,
     Organization,
     Project,
     SiteKey,
@@ -80,6 +82,16 @@ CHECK_SECRET_DELETED: Final = "check_secret.deleted"
 MAINTENANCE_WINDOW_CREATED: Final = "maintenance_window.created"
 MAINTENANCE_WINDOW_UPDATED: Final = "maintenance_window.updated"
 MAINTENANCE_WINDOW_DELETED: Final = "maintenance_window.deleted"
+# F21. A channel is where our infrastructure will send on the customer's behalf,
+# and a rule decides who is woken; both are worth a trail (FR26). Never a secret.
+NOTIFICATION_CHANNEL_CREATED: Final = "notification_channel.created"
+NOTIFICATION_CHANNEL_UPDATED: Final = "notification_channel.updated"
+NOTIFICATION_CHANNEL_MUTED: Final = "notification_channel.muted"
+NOTIFICATION_CHANNEL_DELETED: Final = "notification_channel.deleted"
+ALERT_RULE_CREATED: Final = "alert_rule.created"
+ALERT_RULE_UPDATED: Final = "alert_rule.updated"
+ALERT_RULE_MUTED: Final = "alert_rule.muted"
+ALERT_RULE_DELETED: Final = "alert_rule.deleted"
 API_KEY_CREATED: Final = "api_key.created"
 API_KEY_REVOKED: Final = "api_key.revoked"
 # Named apart from the secret kind, because "a key was minted" is a different
@@ -112,6 +124,8 @@ SITE_KEY_TARGET: Final = "site_key"
 CHECK_TARGET: Final = "check"
 CHECK_SECRET_TARGET: Final = "check_secret"
 MAINTENANCE_WINDOW_TARGET: Final = "maintenance_window"
+NOTIFICATION_CHANNEL_TARGET: Final = "notification_channel"
+ALERT_RULE_TARGET: Final = "alert_rule"
 PROJECT_CHECKS_TARGET: Final = "project"
 INTEGRATION_TARGET: Final = "integration"
 WEBHOOK_SECRET_TARGET: Final = "webhook_secret"
@@ -429,6 +443,92 @@ def record_integration_deleted(
         actor_user_id=actor_user_id,
         action=INTEGRATION_DELETED,
         target=_target(INTEGRATION_TARGET, integration_id),
+    )
+
+
+def record_notification_channel_created(
+    db: AsyncSession, *, channel: NotificationChannel, actor_user_id: uuid.UUID
+) -> None:
+    """A new destination for this organization's alerts."""
+    _add(
+        db,
+        org_id=channel.org_id,
+        actor_user_id=actor_user_id,
+        action=NOTIFICATION_CHANNEL_CREATED,
+        target=_target(NOTIFICATION_CHANNEL_TARGET, channel.id),
+    )
+
+
+def record_alert_rule_created(
+    db: AsyncSession, *, rule: AlertRule, actor_user_id: uuid.UUID
+) -> None:
+    """A new rule deciding who is told when something breaks. The default rule a
+    project is created with is recorded too, in the name of whoever created it."""
+    _add(
+        db,
+        org_id=rule.org_id,
+        actor_user_id=actor_user_id,
+        action=ALERT_RULE_CREATED,
+        target=_target(ALERT_RULE_TARGET, rule.id),
+    )
+
+
+def record_notification_channel_updated(
+    db: AsyncSession, *, channel: NotificationChannel, actor_user_id: uuid.UUID
+) -> None:
+    """Renamed, reconfigured, or its secret replaced — which, the row does not say:
+    a secret's history is not worth keeping next to the rest."""
+    _channel_event(db, NOTIFICATION_CHANNEL_UPDATED, channel, actor_user_id)
+
+
+def record_notification_channel_muted(
+    db: AsyncSession, *, channel: NotificationChannel, actor_user_id: uuid.UUID
+) -> None:
+    """Muted or unmuted: somebody decided alerts here may go unheard for a while."""
+    _channel_event(db, NOTIFICATION_CHANNEL_MUTED, channel, actor_user_id)
+
+
+def record_notification_channel_deleted(
+    db: AsyncSession, *, channel: NotificationChannel, actor_user_id: uuid.UUID
+) -> None:
+    _channel_event(db, NOTIFICATION_CHANNEL_DELETED, channel, actor_user_id)
+
+
+def record_alert_rule_updated(
+    db: AsyncSession, *, rule: AlertRule, actor_user_id: uuid.UUID
+) -> None:
+    _rule_event(db, ALERT_RULE_UPDATED, rule, actor_user_id)
+
+
+def record_alert_rule_muted(db: AsyncSession, *, rule: AlertRule, actor_user_id: uuid.UUID) -> None:
+    _rule_event(db, ALERT_RULE_MUTED, rule, actor_user_id)
+
+
+def record_alert_rule_deleted(
+    db: AsyncSession, *, rule: AlertRule, actor_user_id: uuid.UUID
+) -> None:
+    _rule_event(db, ALERT_RULE_DELETED, rule, actor_user_id)
+
+
+def _channel_event(
+    db: AsyncSession, action: str, channel: NotificationChannel, actor_user_id: uuid.UUID
+) -> None:
+    _add(
+        db,
+        org_id=channel.org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(NOTIFICATION_CHANNEL_TARGET, channel.id),
+    )
+
+
+def _rule_event(db: AsyncSession, action: str, rule: AlertRule, actor_user_id: uuid.UUID) -> None:
+    _add(
+        db,
+        org_id=rule.org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(ALERT_RULE_TARGET, rule.id),
     )
 
 

@@ -80,6 +80,10 @@ describe("the sidebar", () => {
       "/synthetics/import",
       "/synthetics/$checkId",
       "/onboarding",
+      // F21: reached from the Alerts screen, a check's page, and the channel list.
+      "/alerts/rules/new",
+      "/alerts/rules/$ruleId",
+      "/settings/channels/$channelId",
     ]);
     const signedOut = new Set([
       "/login",

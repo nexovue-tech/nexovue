@@ -149,10 +149,13 @@ describe("the verify-email banner", () => {
     stubApi({ emailVerifiedAt: null });
     const container = await mountBanner();
 
-    // Verification gates nothing in Phase 1, so nothing here may claim it does.
+    // It gates one thing — alerts to the owners (F21) — and says exactly that, as an
+    // offer rather than an alarm: nothing is broken yet.
     expect(container.querySelector('[role="status"]')).not.toBeNull();
     expect(container.querySelector('[role="alert"]')).toBeNull();
-    expect(container.textContent).toContain("Nothing here needs it");
+    expect(container.textContent).toContain(
+      "Alerts to your organization's owners are sent only to a verified address.",
+    );
   });
 
   it("will not send a second link once one has been handed to the mail provider", async () => {

@@ -93,6 +93,12 @@ WEBHOOK_TIER: Final = Tier(quota=Quota(name="deploy-webhook", limit=60, window_s
 # shares the prefix and waits server-side, so one run costs one or two requests.
 RUN_NOW_PREFIX: Final = "/api/v1/check-runs"
 RUN_NOW_TIER: Final = Tier(quota=Quota(name="check-run-now", limit=30, window_seconds=60))
+
+# F21. A send test posts to a destination the caller chose — a webhook URL, a
+# chat channel — so it is Run now's kind of request, and tighter: a person
+# testing a channel sends a handful, and anything more is using us to post.
+SEND_TEST_PREFIX: Final = "/api/v1/channel-tests"
+SEND_TEST_TIER: Final = Tier(quota=Quota(name="channel-send-test", limit=10, window_seconds=60))
 # Parsing an OpenAPI description or a Postman collection is CPU the caller chose.
 CHECK_IMPORT_PREFIX: Final = "/api/v1/check-imports"
 CHECK_IMPORT_TIER: Final = Tier(quota=Quota(name="check-import", limit=20, window_seconds=60))
@@ -106,6 +112,7 @@ HEARTBEAT_TIER: Final = Tier(quota=Quota(name="heartbeat", limit=120, window_sec
 
 _OWN_TIERS: Final = (
     (RUN_NOW_PREFIX, RUN_NOW_TIER),
+    (SEND_TEST_PREFIX, SEND_TEST_TIER),
     (CHECK_IMPORT_PREFIX, CHECK_IMPORT_TIER),
     (CHECK_FILE_PREFIX, CHECK_FILE_TIER),
     (HEARTBEAT_PREFIX, HEARTBEAT_TIER),

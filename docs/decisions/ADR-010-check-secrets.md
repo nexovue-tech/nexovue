@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted 2026-09-17, with the F18 design. **Amended 2026-09-17** by the F18 plan's Q1 — see *Amendment*. Executed
+Accepted 2026-09-17, with the F18 design. **Amended 2026-09-17** by the F18 plan's Q1 — see *Amendment*. **Second
+amendment accepted 2026-09-19** with the F21 design — see *Amendment — notification channel secrets*. Executed
 in F18.
 
 ## Context
@@ -70,3 +71,18 @@ original rule exists to prevent.
 
 **Consequence.** A replaced secret reaches runs at beat's next refresh, like any other edit. The sealed value is now
 in Redis while a task waits; it is unreadable without the key, which Redis does not hold.
+
+## Amendment — notification channel secrets (accepted 2026-09-19, F21)
+
+**What changes.** F21's notification channels hold secrets too: Slack, Teams and Discord webhook URLs (the URL *is*
+the credential), PagerDuty routing keys, and the signing secret of a generic webhook. They are sealed with the same
+`SealedBox` and the same key, under their own purpose, `notification-channel`, with **associated data binding each
+value to its organization and channel id**, so a sealed value copied to another channel fails to open.
+
+**Why the same key rather than a third.** The process that opens them is the one that already holds this key — the
+scheduler, at delivery — and the API seals them at save, as it does for check secrets. A separate key would add a
+rotation procedure without separating anything: both keys would sit in the same two processes.
+
+**What does not change.** Write-only; never returned by a read; replaced, never read back; never logged. Rotation
+now re-seals channel secrets as well as check secrets, which the rotation procedure this ADR already requires must
+cover.

@@ -33,6 +33,9 @@ DELETED_DIRECTLY: Final[tuple[str, ...]] = (
     "billing_webhook_deliveries",
     "billing_subscriptions",
     "audit_log",
+    # Alert channels belong to the organization, not a project (F21, D4). Before
+    # `users`, whom a mute names, and before `projects`, whose rules send to them.
+    "notification_channels",
     "users",
     "projects",
 )
@@ -61,6 +64,17 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "source_maps": "projects",
     "usage_daily": "projects",
     "usage_daily_services": "projects",
+    # F21. A rule's channels and evaluations go with the rule; incidents and their
+    # notifications with the project; the delivery log with its channel.
+    "alert_rules": "projects",
+    "alert_rule_channels": "alert_rules",
+    "alert_evaluations": "alert_rules",
+    "incidents": "projects",
+    "notifications": "incidents",
+    "notification_attempts": "notification_channels",
+    "service_last_seen": "projects",
+    "error_groups_seen": "projects",
+    "error_group_watermarks": "projects",
     # The one child of `users` rather than of `projects`. It carries no `org_id`
     # on purpose — `models.UserRecoveryCode` argues why — so it is reached here
     # through the person it belongs to, and `users` is deleted directly above.

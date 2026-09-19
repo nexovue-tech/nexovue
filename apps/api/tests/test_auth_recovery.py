@@ -16,13 +16,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import pytest
+from nexovue_platform.email import Delivery, EmailError, EmailSender, Message
 
 from nexovue_api.auth import recovery
 from nexovue_api.auth.dependencies import _issued_before_reset
 from nexovue_api.auth.sessions import Session
 from nexovue_api.auth.tokens import EmailChange, OneTimeTokenStore, TokenPurpose
 from nexovue_api.data.postgres.models import User
-from nexovue_api.notifications import Delivery, EmailError, EmailSender, Message
 
 TTL: Final = 3600
 
@@ -60,7 +60,14 @@ class RecordingSender:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
 
-    async def send(self, *, to: str, message: Message, data: Mapping[str, Any]) -> Delivery:
+    async def send(
+        self,
+        *,
+        to: str,
+        message: Message,
+        data: Mapping[str, Any],
+        idempotency_key: str | None = None,
+    ) -> Delivery:
         self.sent.append({"to": to, "message": message, "data": dict(data)})
         return Delivery(provider_message_id="test-message-id")
 
@@ -314,7 +321,14 @@ class RefusingSender:
     def __init__(self) -> None:
         self.attempts = 0
 
-    async def send(self, *, to: str, message: Message, data: Mapping[str, Any]) -> Delivery:
+    async def send(
+        self,
+        *,
+        to: str,
+        message: Message,
+        data: Mapping[str, Any],
+        idempotency_key: str | None = None,
+    ) -> Delivery:
         self.attempts += 1
         raise EmailError("the mail provider refused the message (500): upstream unavailable")
 

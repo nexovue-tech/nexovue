@@ -281,11 +281,17 @@ services:
     image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
     command: >-
       celery -A nexovue_scheduler.celery_app worker
-      --concurrency 8 --loglevel info
+      --concurrency 8 --loglevel info --exclude-queues deliveries
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
+      # The service alert rules read the telemetry store (F21, ADR-012). This worker
+      # alone runs those sweeps. TODO(hosting): a read-only ClickHouse user; the
+      # API's account is used until the deployment provisions one.
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
     depends_on:
+      clickhouse:
+        condition: service_healthy
       # Kafka carries every check result and Redis is this worker's task queue.
       # Starting before either loses the first results after three delivery attempts.
       kafka:
@@ -296,6 +302,33 @@ services:
         # Files a check sends, and the objects its sweep deletes, live here. A
         # dependant that starts before the S3 gateway answers meets a refused
         # connection on its first object.
+        condition: service_healthy
+      scheduler-beat:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # F21. Delivers alerts — email, Slack, Teams, Discord, PagerDuty, webhooks —
+  # from the outbox, and nothing else: a receiver that takes its full ten seconds
+  # holds one of these slots, never a probe's (plan Q1). `scheduler-light`
+  # excludes this queue for the same reason.
+  scheduler-deliveries:
+    <<: *service-defaults
+    image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
+    command: >-
+      celery -A nexovue_scheduler.celery_app worker --queues deliveries
+      --concurrency 4 --loglevel info --hostname deliveries@%h
+    environment:
+      <<: *control-plane-env
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      seaweedfs:
         condition: service_healthy
       scheduler-beat:
         condition: service_started

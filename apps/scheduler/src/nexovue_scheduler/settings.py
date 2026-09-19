@@ -11,6 +11,7 @@ import sys
 from functools import lru_cache
 from typing import Annotated, Final, Literal
 
+from nexovue_platform.email.settings import EmailProvider, EmailSettings, email_settings
 from pydantic import Field, PostgresDsn, RedisDsn, ValidationError, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings import SettingsError as SettingsSourceError
@@ -99,6 +100,25 @@ class Settings(BaseSettings):
     # is an unverified connection carrying a database credential.
     rds_ca_bundle_path: str = "/etc/ssl/certs/rds-global-bundle.pem"
 
+    # --- alerts (F21) --------------------------------------------------------
+    # Alert email goes through the same port, provider and variables the API's
+    # account mail does — `nexovue_platform.email` — so both processes agree on
+    # whether mail is configured. All of these or none, as the API reads them.
+    email_provider: EmailProvider = "resend"
+    email_api_key: str = ""
+    email_sending_domain: str = ""
+    email_from_address: str = ""
+    email_reply_to: str = ""
+
+    # Where the console is, for the link every alert carries to its evidence
+    # (FR16). The same value the API puts in verification links.
+    app_base_url: str = ""
+
+    # The telemetry store, for the service threshold and new-error rules (ADR-012).
+    # A read-only user belongs here. Empty means those rules are not evaluated on
+    # this deployment, and the sweeps say so every minute rather than failing.
+    clickhouse_dsn: str = ""
+
     # --- beat leadership ----------------------------------------------------
     # More than one beat process runs, so that a dead one does not stop every
     # customer's checks. Only the holder of this lock schedules; the others wait
@@ -153,6 +173,17 @@ class Settings(BaseSettings):
     # OpenTelemetry Demo storefront, which compose publishes on the Docker host,
     # and a Docker host is a private address by construction.
     allow_private_probe_targets: bool = False
+
+    @property
+    def email(self) -> EmailSettings | None:
+        """The email settings, or None when mail is not configured."""
+        return email_settings(
+            provider=self.email_provider,
+            api_key=self.email_api_key,
+            sending_domain=self.email_sending_domain,
+            from_address=self.email_from_address,
+            reply_to=self.email_reply_to,
+        )
 
     @property
     def is_development(self) -> bool:

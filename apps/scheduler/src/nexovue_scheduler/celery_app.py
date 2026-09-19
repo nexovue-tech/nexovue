@@ -15,6 +15,16 @@ from __future__ import annotations
 
 from celery import Celery
 from kombu import Exchange, Queue
+from nexovue_platform.alerts.tasks import (
+    DELIVER_TASK,
+    DELIVERIES_QUEUE,
+    EVALUATE_NEW_ERRORS_TASK,
+    EVALUATE_SILENCE_TASK,
+    EVALUATE_THRESHOLDS_TASK,
+    PRUNE_ATTEMPTS_TASK,
+    SEND_TEST_TASK,
+    SWEEP_DELIVERIES_TASK,
+)
 from nexovue_platform.checks.task import (
     RECORD_OUTCOME_TASK,
     SHARED_QUEUE,
@@ -40,7 +50,9 @@ app.conf.update(
     # `light.local`, would publish to a binding nothing consumed.
     task_queues=tuple(
         Queue(name, Exchange(name, type="direct"), routing_key=name)
-        for name in (SHARED_QUEUE, probe_queue(_settings.prober_region))
+        # `deliveries` is declared so a producer and a consumer agree on it; only the
+        # deliveries worker consumes it, and `scheduler-light` excludes it (`-X`).
+        for name in (SHARED_QUEUE, probe_queue(_settings.prober_region), DELIVERIES_QUEUE)
     ),
     # Both ceilings come from settings so an operator can raise them without a
     # code change. A probe that hangs holds a worker slot, and a held slot is a
@@ -61,7 +73,12 @@ app.conf.update(
     # Workers must import the task modules to register them. Beat imports this
     # app too and so imports them as well, which is harmless: it dispatches by
     # name and never calls them.
-    imports=("nexovue_scheduler.probes.tasks", "nexovue_scheduler.pollers.tasks"),
+    imports=(
+        "nexovue_scheduler.probes.tasks",
+        "nexovue_scheduler.pollers.tasks",
+        "nexovue_scheduler.alerts.tasks",
+        "nexovue_scheduler.alerts.sweeps",
+    ),
 )
 
 # Routing lives here rather than on each task, so the queue a task lands on is
@@ -73,5 +90,12 @@ app.conf.task_routes = {
     RECORD_OUTCOME_TASK: {"queue": SHARED_QUEUE},
     SWEEP_HEARTBEATS_TASK: {"queue": SHARED_QUEUE},
     SWEEP_UNATTACHED_FILES_TASK: {"queue": SHARED_QUEUE},
+    DELIVER_TASK: {"queue": DELIVERIES_QUEUE},
+    SWEEP_DELIVERIES_TASK: {"queue": DELIVERIES_QUEUE},
+    SEND_TEST_TASK: {"queue": DELIVERIES_QUEUE},
+    PRUNE_ATTEMPTS_TASK: {"queue": SHARED_QUEUE},
+    EVALUATE_THRESHOLDS_TASK: {"queue": SHARED_QUEUE},
+    EVALUATE_SILENCE_TASK: {"queue": SHARED_QUEUE},
+    EVALUATE_NEW_ERRORS_TASK: {"queue": SHARED_QUEUE},
     "nexovue_scheduler.pollers.*": {"queue": SHARED_QUEUE},
 }

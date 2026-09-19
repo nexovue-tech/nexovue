@@ -51,6 +51,9 @@ from nexovue_api.checkfiles.service import tenant_prefix as check_files_prefix
 from nexovue_api.data.clickhouse.base import TenantScopedPurger
 from nexovue_api.data.objectstore import ObjectStore, ObjectStoreError
 from nexovue_api.data.postgres.models import (
+    AlertEvaluation,
+    AlertRule,
+    AlertRuleChannel,
     BillingSubscription,
     BillingWebhookDelivery,
     Check,
@@ -60,9 +63,16 @@ from nexovue_api.data.postgres.models import (
     CheckStateChange,
     CheckVariable,
     DeployEvent,
+    ErrorGroupSeen,
+    ErrorGroupWatermark,
+    Incident,
     Integration,
     MaintenanceWindow,
     MaintenanceWindowCheck,
+    Notification,
+    NotificationAttempt,
+    NotificationChannel,
+    ServiceLastSeen,
     SiteKey,
     SourceMap,
     UsageDaily,
@@ -151,6 +161,16 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "usage_daily",
     "usage_daily_services",
     "audit_log",
+    "notification_channels",
+    "alert_rules",
+    "alert_rule_channels",
+    "alert_evaluations",
+    "incidents",
+    "notifications",
+    "notification_attempts",
+    "service_last_seen",
+    "error_groups_seen",
+    "error_group_watermarks",
 )
 
 # What the fixture writes, per tenant, spelled out rather than counted at run
@@ -158,13 +178,25 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
 # that quietly stopped writing to a table would make the deletion of that table
 # unprovable while every assertion still passed. `users`, `projects`, `api_keys`
 # and `project_webhook_secrets` are one each because `provision_tenant` makes
-# one of each; `audit_log` is two because it records the organization and the
-# minted key.
+# one of each; `audit_log` is four because it records the organization, the
+# minted key, the owners channel and the default alert rule. Alert channels, rules
+# and their links are one more than written, for the same reason: every tenant is
+# created with an owners channel and a default rule sending to it (F21).
 FIXTURE_ROWS: Final[dict[str, int]] = {
     "api_keys": 1,
     "billing_subscriptions": ROWS_PER_TABLE,
     "billing_webhook_deliveries": ROWS_PER_TABLE,
-    "audit_log": 2,
+    "audit_log": 4,
+    "notification_channels": 1 + ROWS_PER_TABLE,
+    "alert_rules": 1 + ROWS_PER_TABLE,
+    "alert_rule_channels": 1 + ROWS_PER_TABLE,
+    "alert_evaluations": ROWS_PER_TABLE,
+    "incidents": ROWS_PER_TABLE,
+    "notifications": ROWS_PER_TABLE,
+    "notification_attempts": ROWS_PER_TABLE,
+    "service_last_seen": ROWS_PER_TABLE,
+    "error_groups_seen": ROWS_PER_TABLE,
+    "error_group_watermarks": 1,
     "checks": ROWS_PER_TABLE,
     "check_states": ROWS_PER_TABLE,
     "check_state_changes": ROWS_PER_TABLE,
@@ -465,6 +497,38 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectSt
         )
     await db.flush()
 
+    for index in range(ROWS_PER_TABLE):
+        await _write_alert_rows(db, tenant, index, now)
+    db.add_all(
+        [
+            *(
+                ServiceLastSeen(
+                    org_id=tenant.org_id,
+                    project_id=tenant.project_id,
+                    service_name=f"service-{index}",
+                    last_seen_at=now,
+                )
+                for index in range(ROWS_PER_TABLE)
+            ),
+            *(
+                ErrorGroupSeen(
+                    org_id=tenant.org_id,
+                    project_id=tenant.project_id,
+                    group_id=f"group-{index}",
+                    first_seen_at=now,
+                )
+                for index in range(ROWS_PER_TABLE)
+            ),
+            ErrorGroupWatermark(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                received_through=now,
+                baselined_at=now,
+            ),
+        ]
+    )
+    await db.flush()
+
     for index in range(MAPS_PER_TENANT):
         source_map_id = uuid.uuid4()
         key = f"{tenant_prefix(tenant.org_id)}{tenant.project_id}/{source_map_id}.map"
@@ -515,6 +579,76 @@ async def _tables_with_a_project(client: AsyncClient) -> frozenset[str]:
         "WHERE database = currentDatabase() AND name = 'project_id'"
     )
     return frozenset(str(row[0]) for row in result.result_rows)
+
+
+async def _write_alert_rows(db: AsyncSession, tenant: Tenant, index: int, now: datetime) -> None:
+    """One of everything F21 stores: a channel, a rule sending to it, an
+    evaluation, an incident, its notification and one delivery attempt."""
+    channel_id, rule_id, incident_id, batch_id = (uuid.uuid4() for _ in range(4))
+    db.add_all(
+        [
+            NotificationChannel(
+                id=channel_id,
+                org_id=tenant.org_id,
+                kind="email",
+                name=f"channel {index}",
+                config={"addresses": ["oncall@example.test"]},
+            ),
+            AlertRule(
+                id=rule_id,
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                name=f"rule {index}",
+                condition_kind="check_state",
+                condition={"kind": "check_state", "states": {"down": "critical"}},
+            ),
+        ]
+    )
+    await db.flush()
+    db.add_all(
+        [
+            AlertRuleChannel(org_id=tenant.org_id, rule_id=rule_id, channel_id=channel_id),
+            AlertEvaluation(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                rule_id=rule_id,
+                subject_key=f"service:checkout-{index}",
+                phase="ok",
+                phase_since=now,
+                evaluated_at=now,
+            ),
+            Incident(
+                id=incident_id,
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                rule_id=rule_id,
+                rule_name=f"rule {index}",
+                condition_kind="check_state",
+                subject_key=f"check:{index}",
+                subject_label=f"check {index}",
+                severity="critical",
+                opened_at=now,
+            ),
+        ]
+    )
+    await db.flush()
+    db.add_all(
+        [
+            Notification(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                incident_id=incident_id,
+                channel_id=channel_id,
+                kind="opened",
+                severity="critical",
+                batch_id=batch_id,
+            ),
+            NotificationAttempt(
+                org_id=tenant.org_id, channel_id=channel_id, batch_id=batch_id, outcome="delivered"
+            ),
+        ]
+    )
+    await db.flush()
 
 
 async def _row_counts(db: AsyncSession, tenant: Tenant) -> dict[str, int]:

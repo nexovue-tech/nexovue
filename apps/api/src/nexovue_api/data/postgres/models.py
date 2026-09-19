@@ -18,12 +18,23 @@ import uuid
 from datetime import date
 from typing import Any, Final
 
+from nexovue_platform.alerts.model import (
+    ATTEMPT_OUTCOMES,
+    CHANNEL_HEALTH,
+    CHANNEL_KINDS,
+    CONDITION_KINDS,
+    EVALUATION_PHASES,
+    NOTIFICATION_KINDS,
+    NOTIFICATION_STATES,
+    SEVERITIES,
+)
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
     Date,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -1076,3 +1087,315 @@ class AuditLogEntry(Base):
     at: Mapped[CreatedAt]
 
     __table_args__ = (Index("ix_audit_log_org_id_at", "org_id", "at"),)
+
+
+# --------------------------------------------------------------------- alerts
+# F21. The vocabulary is `nexovue_platform.alerts.model`, shared with the
+# scheduler that evaluates rules and delivers notifications (ADR-012, ADR-013).
+
+ALERT_NAME_MAX_LENGTH: Final = 120
+
+
+class NotificationChannel(Base):
+    """Where an organization's alerts go (FR1, D4).
+
+    What may be shown is in `config`; what grants access to the destination — a
+    webhook URL, a routing key, a signing secret — is `sealed_secret`, sealed with
+    the check-secret key and bound to this row (ADR-010, amended).
+    """
+
+    __tablename__ = "notification_channels"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    name: Mapped[str] = mapped_column(String(ALERT_NAME_MAX_LENGTH), nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    sealed_secret: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    quiet_hours: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    muted_until: Mapped[OptionalTimestamp]
+    muted_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    health: Mapped[str] = mapped_column(
+        String(SHORT_LABEL_LENGTH), nullable=False, server_default=text("'healthy'")
+    )
+    failing_since: Mapped[OptionalTimestamp]
+    last_delivered_at: Mapped[OptionalTimestamp]
+    failing_reported_at: Mapped[OptionalTimestamp]
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        CheckConstraint(f"kind IN ({_quoted(CHANNEL_KINDS)})", name="kind_is_known"),
+        CheckConstraint(f"health IN ({_quoted(CHANNEL_HEALTH)})", name="health_is_known"),
+        Index("ix_notification_channels_org_id", "org_id"),
+        # Exactly one owners channel per organization (FR2).
+        Index(
+            "uq_notification_channels_org_id_owners",
+            "org_id",
+            unique=True,
+            postgresql_where=text("kind = 'owners'"),
+        ),
+    )
+
+
+class AlertRule(Base):
+    """A project's condition, and who hears when it fires (FR5)."""
+
+    __tablename__ = "alert_rules"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(ALERT_NAME_MAX_LENGTH), nullable=False)
+    condition_kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    # Validated by `nexovue_platform.alerts.model`, which the scheduler parses too.
+    condition: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    renotify_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    muted_until: Mapped[OptionalTimestamp]
+    muted_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    created_at: Mapped[CreatedAt]
+    updated_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        CheckConstraint(
+            f"condition_kind IN ({_quoted(CONDITION_KINDS)})", name="condition_is_known"
+        ),
+        CheckConstraint(
+            "renotify_minutes IS NULL OR renotify_minutes >= 30", name="renotify_is_bounded"
+        ),
+        Index(
+            "ix_alert_rules_project_id_condition_kind",
+            "project_id",
+            "condition_kind",
+            postgresql_where=text("enabled"),
+        ),
+    )
+
+
+class AlertRuleChannel(Base):
+    """One channel a rule sends to."""
+
+    __tablename__ = "alert_rule_channels"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("alert_rules.id", ondelete="CASCADE"), primary_key=True
+    )
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("notification_channels.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    __table_args__ = (Index("ix_alert_rule_channels_channel_id", "channel_id"),)
+
+
+class AlertEvaluation(Base):
+    """A threshold rule's position for one subject, so waits survive a restart."""
+
+    __tablename__ = "alert_evaluations"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("alert_rules.id", ondelete="CASCADE"), nullable=False
+    )
+    subject_key: Mapped[str] = mapped_column(Text, nullable=False)
+    phase: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    phase_since: Mapped[RequiredTimestamp]
+    last_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    evaluated_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (
+        UniqueConstraint("rule_id", "subject_key"),
+        CheckConstraint(f"phase IN ({_quoted(EVALUATION_PHASES)})", name="phase_is_known"),
+    )
+
+
+class Incident(Base):
+    """One breach of one rule by one subject (FR9). At most one open per pair (BR1)."""
+
+    __tablename__ = "incidents"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    # SET NULL, with the name kept: deleting a rule does not erase what it caught.
+    rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("alert_rules.id", ondelete="SET NULL"), nullable=True
+    )
+    rule_name: Mapped[str] = mapped_column(String(ALERT_NAME_MAX_LENGTH), nullable=False)
+    condition_kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    subject_key: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_label: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    opened_at: Mapped[RequiredTimestamp]
+    resolved_at: Mapped[OptionalTimestamp]
+    is_event: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    flapping: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    muted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    detail: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+
+    __table_args__ = (
+        CheckConstraint(f"severity IN ({_quoted(SEVERITIES)})", name="severity_is_known"),
+        CheckConstraint(
+            f"condition_kind IN ({_quoted(CONDITION_KINDS)})", name="condition_is_known"
+        ),
+        CheckConstraint(
+            "resolved_at IS NULL OR resolved_at >= opened_at", name="resolves_after_it_opens"
+        ),
+        Index(
+            "uq_incidents_rule_id_subject_key_open",
+            "rule_id",
+            "subject_key",
+            unique=True,
+            postgresql_where=text("resolved_at IS NULL"),
+        ),
+        Index("ix_incidents_project_id_opened_at", "project_id", "opened_at"),
+        Index("ix_incidents_rule_id_subject_key_opened_at", "rule_id", "subject_key", "opened_at"),
+    )
+
+
+class Notification(Base):
+    """A decision to tell one channel about one incident: the outbox (ADR-013)."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    incident_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False
+    )
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("notification_channels.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    sequence: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("0"))
+    severity: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(SHORT_LABEL_LENGTH), nullable=False, server_default=text("'pending'")
+    )
+    deliver_after: Mapped[CreatedAt]
+    lease_until: Mapped[OptionalTimestamp]
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("0"))
+    outcome_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[CreatedAt]
+    delivered_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        UniqueConstraint("incident_id", "channel_id", "kind", "sequence"),
+        CheckConstraint(f"kind IN ({_quoted(NOTIFICATION_KINDS)})", name="kind_is_known"),
+        CheckConstraint(f"state IN ({_quoted(NOTIFICATION_STATES)})", name="state_is_known"),
+        CheckConstraint(f"severity IN ({_quoted(SEVERITIES)})", name="severity_is_known"),
+        Index(
+            "ix_notifications_due",
+            "deliver_after",
+            postgresql_where=text("state IN ('pending', 'delivering')"),
+        ),
+        Index("ix_notifications_channel_id_state", "channel_id", "state"),
+        Index("ix_notifications_batch_id", "batch_id"),
+    )
+
+
+class NotificationAttempt(Base):
+    """One try at delivering one batch: the delivery log (FR20), kept 30 days."""
+
+    __tablename__ = "notification_attempts"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("notification_channels.id", ondelete="CASCADE"), nullable=False
+    )
+    batch_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    attempted_at: Mapped[CreatedAt]
+    outcome: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    http_status: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(f"outcome IN ({_quoted(ATTEMPT_OUTCOMES)})", name="outcome_is_known"),
+        Index("ix_notification_attempts_channel_id_attempted_at", "channel_id", "attempted_at"),
+        Index("ix_notification_attempts_batch_id", "batch_id"),
+        Index("ix_notification_attempts_attempted_at", "attempted_at"),
+    )
+
+
+class ServiceLastSeen(Base):
+    """When a service last sent anything (F21, *service went silent*). Written by the
+    Go usage meter with `GREATEST`, so a late or replayed flush never moves it back."""
+
+    __tablename__ = "service_last_seen"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    service_name: Mapped[str] = mapped_column(String(SERVICE_NAME_LENGTH), primary_key=True)
+    last_seen_at: Mapped[RequiredTimestamp]
+
+
+class ErrorGroupSeen(Base):
+    """An error group a project has had. Inserting one is how a group is found new (AC8)."""
+
+    __tablename__ = "error_groups_seen"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    group_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    first_seen_at: Mapped[RequiredTimestamp]
+
+
+class ErrorGroupWatermark(Base):
+    """How far each project's new-error sweep has read, and when it finished its
+    baseline — empty while a history larger than one read is still being taken."""
+
+    __tablename__ = "error_group_watermarks"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    received_through: Mapped[RequiredTimestamp]
+    baselined_at: Mapped[OptionalTimestamp]

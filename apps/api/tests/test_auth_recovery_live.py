@@ -28,6 +28,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from live import require_stack
+from nexovue_platform.email import Delivery, Message
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -39,7 +40,6 @@ from nexovue_api.auth.sessions import Session
 from nexovue_api.auth.tokens import OneTimeTokenStore
 from nexovue_api.data.postgres.models import User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError
-from nexovue_api.notifications import Delivery, Message
 from nexovue_api.signup import service as signup
 from nexovue_api.signup.service import ProvisionedTenant
 
@@ -107,7 +107,14 @@ class RecordingSender:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
 
-    async def send(self, *, to: str, message: Message, data: Mapping[str, Any]) -> Delivery:
+    async def send(
+        self,
+        *,
+        to: str,
+        message: Message,
+        data: Mapping[str, Any],
+        idempotency_key: str | None = None,
+    ) -> Delivery:
         self.sent.append({"to": to, "message": message, "data": dict(data)})
         return Delivery(provider_message_id="live-suite")
 

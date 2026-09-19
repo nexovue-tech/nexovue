@@ -5,6 +5,10 @@ import {
   createRouter,
   Outlet,
 } from "@tanstack/react-router";
+import { AlertsScreen } from "@/features/alerts/AlertsScreen";
+import { ChannelDetailScreen } from "@/features/alerts/ChannelDetailScreen";
+import { ChannelsScreen } from "@/features/alerts/ChannelsScreen";
+import { EditRuleScreen, NewRuleScreen, parseNewRuleSearch } from "@/features/alerts/RuleEditor";
 import { AccountScreen } from "@/features/auth/AccountScreen";
 import { ForgotPasswordScreen } from "@/features/auth/ForgotPasswordScreen";
 import { GeneralScreen } from "@/features/auth/GeneralScreen";
@@ -230,6 +234,26 @@ const checkRoute = createRoute({
   validateSearch: parseCheckSearch,
 });
 
+const alertsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/alerts",
+  component: AlertsScreen,
+});
+
+// A static segment outranks the parameter, so `new` is never read as a rule id.
+const newRuleRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/alerts/rules/new",
+  component: NewRuleScreen,
+  validateSearch: parseNewRuleSearch,
+});
+
+const ruleRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/alerts/rules/$ruleId",
+  component: EditRuleScreen,
+});
+
 const rumRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/rum",
@@ -250,6 +274,18 @@ const settingsApiKeysRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/api-keys",
   component: ApiKeysScreen,
+});
+
+const settingsChannelsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/channels",
+  component: ChannelsScreen,
+});
+
+const settingsChannelRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/channels/$channelId",
+  component: ChannelDetailScreen,
 });
 
 const settingsProjectsRoute = createRoute({
@@ -394,6 +430,9 @@ const routeTree = rootRoute.addChildren([
   shellRoute.addChildren([
     overviewRoute,
     findingsRoute,
+    alertsRoute,
+    newRuleRoute,
+    ruleRoute,
     servicesRoute,
     serviceRoute,
     serviceMapRoute,
@@ -411,6 +450,8 @@ const routeTree = rootRoute.addChildren([
     settingsGeneralRoute,
     settingsAccountRoute,
     settingsApiKeysRoute,
+    settingsChannelsRoute,
+    settingsChannelRoute,
     settingsProjectsRoute,
     settingsBillingRoute,
     settingsUsageRoute,

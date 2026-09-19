@@ -14,6 +14,7 @@ from http import HTTPStatus
 
 import structlog
 from fastapi import APIRouter, Response
+from nexovue_platform.email import EmailError, EmailSender
 
 from nexovue_api.auth import recovery
 from nexovue_api.auth.cookies import set_session_cookie
@@ -23,7 +24,6 @@ from nexovue_api.auth.service import start_session
 from nexovue_api.auth.tokens import OneTimeTokenStore
 from nexovue_api.data.postgres.models import User
 from nexovue_api.deps import AppSettings, DbSession, OneTimeTokens, OptionalEmail, SessionStoreDep
-from nexovue_api.notifications import EmailError, EmailSender
 from nexovue_api.projects.schemas import ProjectSummary
 from nexovue_api.settings import Settings
 from nexovue_api.signup import service

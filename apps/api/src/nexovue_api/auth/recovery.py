@@ -55,6 +55,7 @@ from datetime import UTC, datetime
 from typing import Final
 
 import structlog
+from nexovue_platform.email import EmailError, EmailSender, Message
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,7 +65,6 @@ from nexovue_api.auth.queries import find_active_user_by_email
 from nexovue_api.auth.tokens import OneTimeTokenStore, TokenPurpose
 from nexovue_api.data.postgres.models import Organization, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError
-from nexovue_api.notifications import EmailError, EmailSender, Message
 
 # `users.email` is globally unique, and both of these already say what a person
 # should do about a collision. Imported rather than restated: a second wording

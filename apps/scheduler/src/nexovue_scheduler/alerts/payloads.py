@@ -1,0 +1,168 @@
+"""Each channel's native format (FR17), built from one `AlertMessage`.
+
+Pure: what goes over the wire is decided here and sent by `senders.http`, so every
+format can be read and tested without a receiver. Nothing is added that the
+message does not already carry, so BR9 holds here because it holds there.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from typing import Any, Final
+
+from nexovue_scheduler.alerts.messages import AlertMessage
+
+# Chat colours by what happened. Not design tokens: they are drawn by Slack and
+# Discord, on their own backgrounds, and read as the conventional traffic lights.
+_RED: Final = "#d92d20"
+_AMBER: Final = "#f79009"
+_GREEN: Final = "#12b76a"
+
+# The version of the webhook body's schema (FR4). A change a receiver would have
+# to handle is a new version, never an edit to this one.
+WEBHOOK_SCHEMA_VERSION: Final = 1
+
+PAGERDUTY_SUMMARY_LIMIT: Final = 1024
+PAGERDUTY_SOURCE: Final = "nexovue"
+
+
+def colour(message: AlertMessage) -> str:
+    if message.kind == "resolved":
+        return _GREEN
+    return _RED if message.severity == "critical" else _AMBER
+
+
+def _lines_with_link(message: AlertMessage) -> str:
+    return "\n".join((*message.details, f"Open in nexovue: {message.link}"))
+
+
+def slack(message: AlertMessage) -> bytes:
+    """An incoming-webhook message: the summary as text, so a notification preview
+    reads well, and the detail in a coloured attachment."""
+    body = {
+        "text": message.summary,
+        "attachments": [
+            {
+                "color": colour(message),
+                "fallback": message.summary,
+                "text": "\n".join(message.details) + f"\n<{message.link}|Open in nexovue>",
+            }
+        ],
+    }
+    return _json(body)
+
+
+def discord(message: AlertMessage) -> bytes:
+    body = {
+        "embeds": [
+            {
+                "title": message.summary[:256],
+                "description": _lines_with_link(message)[:4096],
+                "url": message.link,
+                "color": int(colour(message).removeprefix("#"), 16),
+            }
+        ],
+        # Never @everyone, however a check or rule happens to be named.
+        "allowed_mentions": {"parse": []},
+    }
+    return _json(body)
+
+
+def teams(message: AlertMessage) -> bytes:
+    """An Adaptive Card, which is what a Teams Workflows webhook posts."""
+    accent = {"#d92d20": "Attention", "#f79009": "Warning", "#12b76a": "Good"}[colour(message)]
+    card: dict[str, Any] = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": message.summary,
+                "weight": "Bolder",
+                "size": "Medium",
+                "wrap": True,
+                "color": accent,
+            },
+            *({"type": "TextBlock", "text": line, "wrap": True} for line in message.details),
+        ],
+        "actions": [{"type": "Action.OpenUrl", "title": "Open in nexovue", "url": message.link}],
+    }
+    body = {
+        "type": "message",
+        "attachments": [
+            {
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "contentUrl": None,
+                "content": card,
+            }
+        ],
+    }
+    return _json(body)
+
+
+def pagerduty(
+    message: AlertMessage, *, routing_key: str, dedup_key: str, subject: str, app_base_url: str
+) -> bytes:
+    """Events API v2. The incident's id is the `dedup_key`, so escalation updates the
+    alert PagerDuty already has and recovery resolves exactly it (AC20). An incident
+    closed without recovering resolves it too: nothing will ever send its recovery."""
+    if message.kind in ("resolved", "closed"):
+        return _json(
+            {"routing_key": routing_key, "event_action": "resolve", "dedup_key": dedup_key}
+        )
+    return _json(
+        {
+            "routing_key": routing_key,
+            "event_action": "trigger",
+            "dedup_key": dedup_key,
+            "payload": {
+                "summary": message.summary[:PAGERDUTY_SUMMARY_LIMIT],
+                "source": PAGERDUTY_SOURCE,
+                "severity": message.severity,
+                "component": subject,
+                "group": message.rule_name,
+                "custom_details": {"details": list(message.details)},
+            },
+            "links": [{"href": message.link, "text": "Open in nexovue"}],
+            "client": "nexovue",
+            "client_url": app_base_url or message.link,
+        }
+    )
+
+
+def webhook(
+    message: AlertMessage,
+    *,
+    incident_id: str,
+    subject: str,
+    opened_at: datetime,
+    resolved_at: datetime | None,
+    sent_at: datetime,
+) -> bytes:
+    """A documented, versioned JSON body (FR4). Its schema is in the product docs."""
+    return _json(
+        {
+            "version": WEBHOOK_SCHEMA_VERSION,
+            "type": f"incident.{message.kind}",
+            "timestamp": sent_at.astimezone(UTC).isoformat(),
+            "data": {
+                "incident": {
+                    "id": incident_id,
+                    "subject": subject,
+                    "severity": message.severity,
+                    "opened_at": opened_at.astimezone(UTC).isoformat(),
+                    "resolved_at": resolved_at.astimezone(UTC).isoformat() if resolved_at else None,
+                },
+                "rule": {"name": message.rule_name},
+                "summary": message.summary,
+                "details": list(message.details),
+                "link": message.link,
+            },
+        }
+    )
+
+
+def _json(body: dict[str, Any]) -> bytes:
+    return json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()

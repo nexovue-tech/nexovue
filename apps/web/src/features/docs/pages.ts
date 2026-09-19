@@ -32,6 +32,7 @@ const GROUPS: ReadonlyArray<{ id: string; label: string }> = [
   { id: "", label: "Start here" },
   { id: "languages", label: "Your language" },
   { id: "platforms", label: "Where it runs" },
+  { id: "alerts", label: "Alerts" },
 ];
 
 export interface DocGroup {

@@ -14,6 +14,7 @@ describe("arranging the published pages", () => {
       "Start here",
       "Your language",
       "Where it runs",
+      "Alerts",
     ]);
     expect(groups[0].pages[0].slug).toBe(INDEX_SLUG);
   });

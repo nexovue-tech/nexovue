@@ -22,6 +22,14 @@ from typing import Any, Final
 
 from celery.beat import ScheduleEntry, Scheduler
 from celery.schedules import schedule as run_every
+from nexovue_platform.alerts.tasks import (
+    DELIVERIES_QUEUE,
+    EVALUATE_NEW_ERRORS_TASK,
+    EVALUATE_SILENCE_TASK,
+    EVALUATE_THRESHOLDS_TASK,
+    PRUNE_ATTEMPTS_TASK,
+    SWEEP_DELIVERIES_TASK,
+)
 from nexovue_platform.checks.task import (
     RUN_CHECK_TASK,
     SHARED_QUEUE,
@@ -48,6 +56,18 @@ HEARTBEAT_SWEEP_SECONDS: Final = 60
 FILE_SWEEP_SECONDS: Final = 3600
 HEARTBEAT_SWEEP_ENTRY: Final = "sweep:heartbeats"
 FILE_SWEEP_ENTRY: Final = "sweep:unattached-files"
+
+# F21. The delivery sweep is the outbox's safety net: whatever the fast path did
+# not take is found within this long (ADR-013). The delivery log is pruned hourly.
+DELIVERY_SWEEP_SECONDS: Final = 15
+ATTEMPT_PRUNE_SECONDS: Final = 3600
+DELIVERY_SWEEP_ENTRY: Final = "sweep:alert-deliveries"
+# The service conditions, judged once a minute (ADR-012).
+EVALUATION_SECONDS: Final = 60
+THRESHOLD_EVALUATION_ENTRY: Final = "sweep:alert-thresholds"
+SILENCE_EVALUATION_ENTRY: Final = "sweep:alert-silence"
+NEW_ERROR_EVALUATION_ENTRY: Final = "sweep:alert-new-errors"
+ATTEMPT_PRUNE_ENTRY: Final = "sweep:alert-attempts"
 
 # A sweep judges every heartbeat, or every unattached file, in one task.
 SWEEP_SOFT_TIME_LIMIT_SECONDS: Final = 50
@@ -305,13 +325,30 @@ class PostgresScheduler(Scheduler):
         return entries
 
     def _sweep_entries(self) -> dict[str, ScheduleEntry]:
-        """The two periodic sweeps, kept across refreshes like any other entry."""
+        """The periodic sweeps, kept across refreshes like any other entry."""
         wanted = {
-            HEARTBEAT_SWEEP_ENTRY: (SWEEP_HEARTBEATS_TASK, HEARTBEAT_SWEEP_SECONDS),
-            FILE_SWEEP_ENTRY: (SWEEP_UNATTACHED_FILES_TASK, FILE_SWEEP_SECONDS),
+            HEARTBEAT_SWEEP_ENTRY: (SWEEP_HEARTBEATS_TASK, HEARTBEAT_SWEEP_SECONDS, SHARED_QUEUE),
+            FILE_SWEEP_ENTRY: (SWEEP_UNATTACHED_FILES_TASK, FILE_SWEEP_SECONDS, SHARED_QUEUE),
+            DELIVERY_SWEEP_ENTRY: (
+                SWEEP_DELIVERIES_TASK,
+                DELIVERY_SWEEP_SECONDS,
+                DELIVERIES_QUEUE,
+            ),
+            ATTEMPT_PRUNE_ENTRY: (PRUNE_ATTEMPTS_TASK, ATTEMPT_PRUNE_SECONDS, SHARED_QUEUE),
+            THRESHOLD_EVALUATION_ENTRY: (
+                EVALUATE_THRESHOLDS_TASK,
+                EVALUATION_SECONDS,
+                SHARED_QUEUE,
+            ),
+            SILENCE_EVALUATION_ENTRY: (EVALUATE_SILENCE_TASK, EVALUATION_SECONDS, SHARED_QUEUE),
+            NEW_ERROR_EVALUATION_ENTRY: (
+                EVALUATE_NEW_ERRORS_TASK,
+                EVALUATION_SECONDS,
+                SHARED_QUEUE,
+            ),
         }
         entries: dict[str, ScheduleEntry] = {}
-        for name, (task, seconds) in wanted.items():
+        for name, (task, seconds, queue) in wanted.items():
             interval = run_every(run_every=timedelta(seconds=seconds))
             existing = self._entries.get(name)
             if _unchanged(existing, interval, {}):
@@ -323,7 +360,7 @@ class PostgresScheduler(Scheduler):
                 schedule=interval,
                 kwargs={},
                 options={
-                    "queue": SHARED_QUEUE,
+                    "queue": queue,
                     "expires": seconds,
                     "soft_time_limit": SWEEP_SOFT_TIME_LIMIT_SECONDS,
                     "time_limit": SWEEP_TIME_LIMIT_SECONDS,

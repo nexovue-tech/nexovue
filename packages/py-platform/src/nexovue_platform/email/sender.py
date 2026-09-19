@@ -47,6 +47,11 @@ class Message(Enum):
     VERIFY_EMAIL = "verify_email"
     RESET_PASSWORD = "reset_password"
     INVOICE = "invoice"
+    # F21. An alert's words depend on what fired, so the alerts module composes
+    # the subject and body and this template frames them.
+    ALERT = "alert"
+    # Sent through email because the channel it is about is the one not working.
+    CHANNEL_FAILING = "channel_failing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +69,7 @@ class Delivery:
 class EmailSender(Protocol):
     """The only way mail leaves this application.
 
-    One method, because one method is all three messages need. A provider that
+    One method, because one method is all these messages need. A provider that
     wants batching, scheduling or campaigns is offering something this product
     does not send.
     """
@@ -75,8 +80,12 @@ class EmailSender(Protocol):
         to: str,
         message: Message,
         data: Mapping[str, Any],
+        idempotency_key: str | None = None,
     ) -> Delivery:
         """Send one message to one address.
+
+        `idempotency_key`, when given, makes a repeated send under the same key a
+        no-op at the provider — how a retried alert avoids mailing twice.
 
         `data` fills the message and is the caller's own vocabulary — a
         verification URL, an invoice total. An implementation maps it to whatever

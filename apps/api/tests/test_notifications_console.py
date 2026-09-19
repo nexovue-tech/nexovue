@@ -22,18 +22,14 @@ from typing import Any, Final
 
 import pytest
 import structlog
+from nexovue_platform.email import build_email_sender
+from nexovue_platform.email.console import MESSAGE_ID_PREFIX, ConsoleEmailSender
+from nexovue_platform.email.sender import EmailError, EmailSender, Message
+from nexovue_platform.email.settings import CONSOLE_FROM_ADDRESS, EMAIL_VARIABLES, EmailSettings
+from nexovue_platform.email.templates import TEMPLATES, render
 
 import nexovue_api
-from nexovue_api.notifications import build_email_sender
-from nexovue_api.notifications.console import MESSAGE_ID_PREFIX, ConsoleEmailSender
-from nexovue_api.notifications.sender import EmailError, EmailSender, Message
-from nexovue_api.notifications.templates import TEMPLATES
-from nexovue_api.settings import (
-    CONSOLE_FROM_ADDRESS,
-    EMAIL_VARIABLES,
-    EmailSettings,
-    Settings,
-)
+from nexovue_api.settings import Settings
 
 CONSOLE_SETTINGS: Final = EmailSettings(
     provider="console",
@@ -122,6 +118,20 @@ async def test_every_message_renders_so_none_is_only_exercised_in_production() -
             "amount": "$49.00",
             "link": "https://app.nexovue.com/invoices/1",
         },
+        Message.ALERT: {
+            "subject": "[critical] Checkout API is down",
+            "body": "Checkout API is down from 2 locations: status 503, expected < 400.",
+            "link": "https://app.nexovue.com/alerts/incidents/1",
+            "rule_name": "Any check down",
+            "manage_link": "https://app.nexovue.com/alerts/rules/1",
+        },
+        Message.CHANNEL_FAILING: {
+            "channel_name": "#incidents",
+            "channel_kind": "Slack",
+            "failing_for": "1 hour",
+            "reason": "the receiver answered 404",
+            "link": "https://app.nexovue.com/settings/channels/1",
+        },
     }
     assert set(data) == set(TEMPLATES), "a message was added without a case here"
 
@@ -179,3 +189,20 @@ def test_the_development_api_renders_mail_instead_of_sending_it() -> None:
         "Without it every signup in every test sends a real message against a "
         "metered quota, and nothing in the gate reports that it happened."
     )
+
+
+def test_a_subject_with_fields_is_filled_like_the_body() -> None:
+    """Found by driving F21 end to end: the alert email's subject reached the log as
+    the literal `{subject}`, because only bodies were ever filled — the first three
+    messages all had fixed subjects, so nothing noticed."""
+    subject, _ = render(
+        Message.ALERT,
+        {
+            "subject": "[critical] Orders API is down",
+            "body": "Orders API is down.",
+            "link": "https://app.nexovue.test/synthetics/1",
+            "rule_name": "Any check down",
+            "manage_link": "https://app.nexovue.test/alerts/rules/1",
+        },
+    )
+    assert subject == "[critical] Orders API is down"

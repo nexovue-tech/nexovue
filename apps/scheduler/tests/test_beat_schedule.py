@@ -18,6 +18,8 @@ from celery.schedules import schedule as run_every
 from nexovue_platform.checks.task import CheckDefinition
 
 from nexovue_scheduler.beat import (
+    ATTEMPT_PRUNE_ENTRY,
+    DELIVERY_SWEEP_ENTRY,
     FILE_SWEEP_ENTRY,
     HEARTBEAT_SWEEP_ENTRY,
     PostgresScheduler,
@@ -129,6 +131,17 @@ def test_a_heartbeat_has_no_probe_entry_and_the_sweeps_are_always_scheduled() ->
     assert not any(name.startswith("check:") for name in entries)
     assert entries[HEARTBEAT_SWEEP_ENTRY].options["queue"] == "light"
     assert FILE_SWEEP_ENTRY in entries
+
+
+def test_the_alert_sweeps_are_scheduled_on_their_own_queues() -> None:
+    """F21. The delivery sweep is the outbox's safety net (ADR-013), and runs on the
+    deliveries queue so its sends never take a probe's slot."""
+    entries = _scheduler()._sweep_entries()
+
+    delivery = entries[DELIVERY_SWEEP_ENTRY]
+    assert delivery.options["queue"] == "deliveries"
+    assert delivery.schedule.run_every.total_seconds() == 15
+    assert entries[ATTEMPT_PRUNE_ENTRY].options["queue"] == "light"
 
 
 def test_a_location_this_deployment_does_not_have_is_never_dispatched_to() -> None:

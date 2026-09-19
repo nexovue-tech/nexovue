@@ -29,10 +29,12 @@ from nexovue_api.audit import service as audit
 from nexovue_api.auth.dependencies import Identity
 from nexovue_api.auth.dependencies import get_current_identity as current_identity_dependency
 from nexovue_api.data.postgres.models import (
+    AlertRule,
     ApiKey,
     AuditLogEntry,
     Check,
     Integration,
+    NotificationChannel,
     Organization,
     Project,
     ProjectWebhookSecret,
@@ -108,6 +110,13 @@ class Tenant:
             door.id = uuid.uuid4()
             door.revoked_at = None
 
+        # Every organization is created with one (F21, FR2); a new project's default
+        # alert rule sends to it.
+        self.owners_channel = NotificationChannel(
+            org_id=self.organization.id, kind="owners", name="Organization owners", config={}
+        )
+        self.owners_channel.id = uuid.uuid4()
+
         # Empty by default: the ordinary project has no outbound work scheduled,
         # and a test that wants the refusal adds one.
         self.checks: list[Check] = []
@@ -173,6 +182,9 @@ class _Rows:
     def all(self) -> list[Any]:
         return self._rows
 
+    def __iter__(self) -> Any:
+        return iter(self._rows)
+
 
 class _Changed:
     """What `AsyncSession.execute` returns for a DML statement: a row count."""
@@ -213,6 +225,8 @@ class FakeControlPlane:
                 row.created_at = datetime.now(UTC)
                 row.deleted_at = None
                 self._owner_of(row.org_id).projects.append(row)
+            elif isinstance(row, AlertRule):
+                row.id = uuid.uuid4()
         self._flushed_through = len(self.written)
 
     async def scalar(self, statement: Any) -> Any:
@@ -233,9 +247,15 @@ class FakeControlPlane:
                     if project.id in values and project.deleted_at is None:
                         return project
             return None
+        if selected == "NotificationChannel" and "owners" in values:
+            return next((tenant.owners_channel for tenant in self._tenants_binding(values)), None)
         raise AssertionError(f"the fake store has no answer for {selected!r}")
 
     async def scalars(self, statement: Any) -> _Rows:
+        if statement.is_update:
+            # Closing a deleted project's incidents: alert rows are not modelled here;
+            # test_alert_defaults_live proves them.
+            return _Rows([])
         values = _bound_values(statement)
         selected = statement.column_descriptions[0]["name"]
         matched = [
@@ -252,6 +272,9 @@ class FakeControlPlane:
             return _Rows(self._metered_days(_bound_values(statement)))
 
         values = _bound_values(statement)
+        if statement.entity_description["name"] in {"Incident", "AlertRule"}:
+            # Alert rows are not modelled here; test_alert_defaults_live proves them.
+            return _Changed(0)
         doors = {
             "ApiKey": "api_keys",
             "SiteKey": "site_keys",
@@ -428,8 +451,11 @@ async def test_creating_a_project_records_who_created_it(
         request=ProjectCreateRequest(name="EU"),
     )
 
-    (entry,) = db.entries
+    entry, default_rule = db.entries
     assert entry.action == audit.PROJECT_CREATED
+    # F21: every project starts with the default alert rule, recorded in the same name.
+    assert default_rule.action == audit.ALERT_RULE_CREATED
+    assert default_rule.actor_user_id == acme.user.id
     assert entry.org_id == acme.organization.id
     assert entry.actor_user_id == acme.user.id
     assert entry.target == f"{audit.PROJECT_TARGET}:{created.id}"

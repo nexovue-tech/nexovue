@@ -31,6 +31,9 @@ dependencies = [
     # DNS monitors (F18): record types, a chosen resolver, and NXDOMAIN told
     # apart from a timeout — none of which `getaddrinfo` can say (ISC, 2.8).
     "dnspython>=2.8",
+    # F21: the service threshold and new-error rules read the telemetry store,
+    # read-only and through a tenant-scoped reader (ADR-012). The API's client.
+    "clickhouse-connect>=1.7",
 ]
 
 [build-system]

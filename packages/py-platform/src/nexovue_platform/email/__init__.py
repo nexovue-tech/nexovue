@@ -1,6 +1,10 @@
 """Transactional mail: the port, its implementations, and the one place that
 chooses between them.
 
+Shared because two processes send mail: the API (verification, password reset,
+invoices) and the scheduler (alerts, F21). One port, one set of templates, one
+`EMAIL_*` configuration, so the two cannot drift.
+
 **`build_email_sender` is the composition root, and it is the third part of the
 pattern.** A port and an adapter alone still make a caller name a provider at
 construction; this is what keeps that name in one file. Every caller asks for
@@ -13,15 +17,23 @@ the *value* — `EMAIL_API_KEY` stays neutral and survives the switch.
 
 from __future__ import annotations
 
-from nexovue_api.notifications.sender import Delivery, EmailError, EmailSender, Message
-from nexovue_api.settings import EmailProvider, EmailSettings
+from nexovue_platform.email.sender import Delivery, EmailError, EmailSender, Message
+from nexovue_platform.email.settings import (
+    EMAIL_VARIABLES,
+    EmailProvider,
+    EmailSettings,
+    email_settings,
+)
 
 __all__ = [
+    "EMAIL_VARIABLES",
     "Delivery",
     "EmailError",
     "EmailSender",
+    "EmailSettings",
     "Message",
     "build_email_sender",
+    "email_settings",
 ]
 
 
@@ -37,10 +49,10 @@ def build_email_sender(settings: EmailSettings) -> EmailSender:
         case "resend":
             # Imported here rather than at module scope so adding a provider
             # does not make every caller import every vendor's client.
-            from nexovue_api.notifications.resend import ResendEmailSender
+            from nexovue_platform.email.resend import ResendEmailSender
 
             return ResendEmailSender(settings)
         case "console":
-            from nexovue_api.notifications.console import ConsoleEmailSender
+            from nexovue_platform.email.console import ConsoleEmailSender
 
             return ConsoleEmailSender(settings)

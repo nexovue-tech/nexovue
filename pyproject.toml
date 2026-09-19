@@ -93,7 +93,12 @@ disallow_subclassing_any = false
 # would otherwise make every task untyped. Scoped to the task module so the rule
 # still applies everywhere else.
 [[tool.mypy.overrides]]
-module = ["nexovue_scheduler.probes.tasks", "nexovue_scheduler.pollers.tasks"]
+module = [
+    "nexovue_scheduler.probes.tasks",
+    "nexovue_scheduler.pollers.tasks",
+    "nexovue_scheduler.alerts.tasks",
+    "nexovue_scheduler.alerts.sweeps",
+]
 disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]

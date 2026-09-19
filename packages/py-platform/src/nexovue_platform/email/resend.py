@@ -1,7 +1,7 @@
 """Resend, behind `EmailSender`.
 
-**The only module in the API that knows a mail provider exists.** The port is
-next door and `tests/test_provider_ports.py` refuses a vendor's name there;
+**The only module that knows a mail provider exists.** The port is next door
+and `apps/api/tests/test_provider_ports.py` refuses a vendor's name there;
 every piece of Resend-shaped knowledge belongs here and nowhere above.
 
 **Why the HTTP call and not Resend's SDK.** Resend recommends its SDK, and for
@@ -26,9 +26,9 @@ from typing import Any, Final
 
 import httpx
 
-from nexovue_api.notifications.sender import Delivery, EmailError, Message
-from nexovue_api.notifications.templates import render
-from nexovue_api.settings import EmailSettings
+from nexovue_platform.email.sender import Delivery, EmailError, Message
+from nexovue_platform.email.settings import EmailSettings
+from nexovue_platform.email.templates import render
 
 SEND_ENDPOINT: Final = "https://api.resend.com/emails"
 
@@ -48,7 +48,14 @@ class ResendEmailSender:
         # network, and so a caller that already owns a pool can share it.
         self._client = client
 
-    async def send(self, *, to: str, message: Message, data: Mapping[str, Any]) -> Delivery:
+    async def send(
+        self,
+        *,
+        to: str,
+        message: Message,
+        data: Mapping[str, Any],
+        idempotency_key: str | None = None,
+    ) -> Delivery:
         subject, body = render(message, data)
         payload = {
             "from": self._settings.from_address,
@@ -58,6 +65,9 @@ class ResendEmailSender:
             "text": body,
         }
         headers = {"Authorization": f"Bearer {self._settings.api_key}"}
+        if idempotency_key is not None:
+            # Remembered by Resend for 24 hours, well past an alert's hour of retries.
+            headers["Idempotency-Key"] = idempotency_key
 
         try:
             if self._client is not None:

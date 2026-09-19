@@ -73,7 +73,7 @@
 | **F18** | Synthetic checks | ✅ Yes | ✅ | **1** | **Built 2026-09-17** to the approved [spec](../features/synthetic-checks/spec.md): API, multistep API, heartbeat, TCP and DNS checks created, edited, paused and deleted in the console; any method, bodies, files, auth from write-only secrets; assertions; import from cURL, OpenAPI and Postman; Run now; confirmation from another location; up/degraded/down/misconfigured state with a timeline; maintenance windows; per-run evidence. **Browser checks removed** (D13). Awaiting the founder's review of the uncommitted change — see [status](../features/synthetic-checks/status.md) |
 | **F19** | SLO tracking | 🔴 No | 🔲 | Later | |
 | **F20** | Dashboards | 🟡 Partly | 🔶 | Later | The composed Overview is built and holds `/`; the **builder** is not |
-| **F21** | Alerts & notification connectors | 🔴 No | 🔲 | **1** | The largest gap in the product. Notification adapters and a scheduler exist to build on. **A live competitor already bundles detection + AI root-cause + code-fix suggestions** (Better Stack's AI SRE, confirmed 2026-09-14) — the gap on "tell me what broke and act on it" is wider than scoped in August |
+| **F21** | Alerts & notification connectors | 🔴 No | ✅ Designed 2026-09-19 | **1** | The largest gap in the product. Notification adapters and a scheduler exist to build on. **A live competitor already bundles detection + AI root-cause + code-fix suggestions** (Better Stack's AI SRE, confirmed 2026-09-14) — the gap on "tell me what broke and act on it" is wider than scoped in August |
 | **F22** | Case management | 🔴 No | 🔲 | 2 | Depends on findings existing |
 | **F23** | Onboarding | ✅ Yes | 🔲 | 0 | Signup → two env vars → first-span celebration; auto-created defaults not built |
 | **F24** | Integration settings | 🟡 Partly | 🔲 | 2 | Keys, site keys, deploy webhooks, cloud and DB pollers, integration health all built; AWS role flow is not |
@@ -298,8 +298,13 @@ Two halves, at different stages:
 **The front door is unchanged**: the Findings feed (F1) is what a person lands on. What changed is
 that the other surface stopped being a lesser one.
 
-### F21 — Alerts & Notification Connectors 🔲 TO SPECIFY
-Connect Slack, Teams, WhatsApp, email, SMS, webhooks; what-triggers-what rules; smart grouping/anti-fatigue defaults; quiet hours.
+### F21 — Alerts & Notification Connectors ✅ DESIGNED
+Specified and approved 2026-09-18: [`docs/features/alerts/spec.md`](../features/alerts/spec.md); designed and
+approved 2026-09-19: [`design.md`](../features/alerts/design.md). Email, Slack,
+Microsoft Teams, Discord, PagerDuty and signed webhooks; alerts on check state, new error groups, service error
+rate and p95, and a service going silent; one incident per breach, flap guard, burst cap, mute, quiet hours and
+maintenance windows. **WhatsApp, SMS and a native Opsgenie connector are dropped** (D6): SMS and phone reach a
+person through PagerDuty, and Opsgenie ends support on 5 April 2027.
 
 ### F22 — Case Management 🔲 TO SPECIFY
 Auto-created cases from findings; list/detail with lifecycle (open → investigating → resolved); GitHub Issues/Jira connectors (create + status sync); case timeline.

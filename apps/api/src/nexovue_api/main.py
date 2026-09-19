@@ -15,10 +15,13 @@ from fastapi import APIRouter, FastAPI
 from nexovue_platform.telemetry.logging import configure_logging
 from starlette.middleware.cors import CORSMiddleware
 
+from nexovue_api.alerts import router as alerts_router
 from nexovue_api.apikeys import router as apikeys_router
 from nexovue_api.auth import router as auth_router
 from nexovue_api.billing import router as billing_router
 from nexovue_api.buildinfo import SERVICE_NAME
+from nexovue_api.channels import router as channels_router
+from nexovue_api.channels import test_router as channel_tests_router
 from nexovue_api.checkfiles import router as check_files_router
 from nexovue_api.checkimports import router as check_imports_router
 from nexovue_api.checkruns import router as check_runs_router
@@ -126,6 +129,9 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(check_files_router.router)
     versioned.include_router(check_secrets_router.router)
     versioned.include_router(maintenance_router.router)
+    versioned.include_router(alerts_router.router)
+    versioned.include_router(channels_router.router)
+    versioned.include_router(channel_tests_router.router)
     versioned.include_router(heartbeats_router.router)
     versioned.include_router(deploys_router.router)
     versioned.include_router(billing_router.router)

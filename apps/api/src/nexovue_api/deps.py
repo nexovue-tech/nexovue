@@ -20,19 +20,21 @@ from typing import Annotated, Final
 import structlog
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from fastapi import Depends
+from nexovue_platform.email import EMAIL_VARIABLES, EmailSender
 from nexovue_platform.telemetry.context import bind_tenant
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
+from nexovue_api.alerts.evaluation import EvaluationReader
 from nexovue_api.auth.sessions import Session, SessionStore, session_token_from_headers
 from nexovue_api.auth.tokens import OneTimeTokenStore
+from nexovue_api.channels.send_test import ChannelTester
 from nexovue_api.checks.run_now import ProbeBroker
 from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.errors.exceptions import DependencyUnavailableError, UnauthenticatedError
 from nexovue_api.lifespan import Resources
-from nexovue_api.notifications import EmailSender
-from nexovue_api.settings import EMAIL_VARIABLES, Settings
+from nexovue_api.settings import Settings
 
 logger = structlog.get_logger(__name__)
 
@@ -98,6 +100,19 @@ def get_probe_broker(
 ) -> ProbeBroker | None:
     """The scheduler's broker, or None when Run now is not configured."""
     return resources.probes
+
+
+def get_channel_tester(
+    resources: Annotated[Resources, Depends(get_resources)],
+) -> ChannelTester | None:
+    """The scheduler's broker for send tests, or None when it is not configured."""
+    return resources.channel_tests
+
+
+def get_evaluation_reader(
+    resources: Annotated[Resources, Depends(get_resources)],
+) -> EvaluationReader | None:
+    return resources.evaluations
 
 
 def get_email_sender(
@@ -181,6 +196,8 @@ SessionStoreDep = Annotated[SessionStore, Depends(get_session_store)]
 # Optional on purpose: only source maps need it, and they say so by name.
 ObjectStoreDep = Annotated[ObjectStore | None, Depends(get_object_store)]
 ProbeBrokerDep = Annotated[ProbeBroker | None, Depends(get_probe_broker)]
+ChannelTesterDep = Annotated[ChannelTester | None, Depends(get_channel_tester)]
+EvaluationReaderDep = Annotated[EvaluationReader | None, Depends(get_evaluation_reader)]
 # Not optional, unlike the object store: a route that asks for this one needs to
 # send, so the refusal belongs before the handler rather than inside it.
 EmailDelivery = Annotated[EmailSender, Depends(get_email_sender)]

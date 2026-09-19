@@ -92,3 +92,13 @@ def encode_sealed(sealed: bytes) -> str:
 
 def decode_sealed(encoded: str) -> bytes:
     return base64.b64decode(encoded)
+
+
+# F21, ADR-010 amended: notification channel secrets — a webhook URL that is itself
+# a credential, a PagerDuty routing key, a webhook's signing secret. The same key
+# as check secrets, their own purpose, bound to the organization and the channel.
+NOTIFICATION_CHANNEL_PURPOSE: Final = "notification-channel"
+
+
+def channel_secret_owner(org_id: str, channel_id: str) -> str:
+    return f"{org_id}:{channel_id}"

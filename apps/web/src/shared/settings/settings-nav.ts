@@ -9,6 +9,7 @@ export type SettingsPath =
   | "/settings/general"
   | "/settings/account"
   | "/settings/api-keys"
+  | "/settings/channels"
   | "/settings/projects"
   | "/settings/billing"
   | "/settings/usage";
@@ -64,6 +65,21 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
         path: "/settings/api-keys",
         title: "Ingest keys",
         keywords: ["api", "key", "token", "secret", "site key", "browser key", "otlp"],
+      },
+      {
+        path: "/settings/channels",
+        title: "Alert channels",
+        keywords: [
+          "alert",
+          "notification",
+          "slack",
+          "teams",
+          "discord",
+          "pagerduty",
+          "webhook",
+          "email",
+          "on-call",
+        ],
       },
       {
         path: "/settings/projects",

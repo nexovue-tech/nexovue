@@ -32,9 +32,8 @@ from typing import Final
 
 import pytest
 from live import require_opt_in, require_stack
-
-from nexovue_api.notifications import Message, build_email_sender
-from nexovue_api.settings import EMAIL_VARIABLES, EmailSettings
+from nexovue_platform.email import Message, build_email_sender
+from nexovue_platform.email.settings import EMAIL_VARIABLES, EmailSettings
 
 _PROVIDER: Final = os.environ.get("EMAIL_PROVIDER", "resend")
 _API_KEY: Final = os.environ.get("EMAIL_API_KEY", "")

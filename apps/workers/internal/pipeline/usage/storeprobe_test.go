@@ -85,6 +85,50 @@ func TestBrowserBytesAccumulateInTheColumn(t *testing.T) {
 	}
 }
 
+// A service's last-seen time moves forward with each flush that carries it, and
+// never back: a flush that counted only an older backlog must not make a live
+// service look quieter than it is (F21, *service went silent*).
+func TestServiceLastSeenOnlyMovesForward(t *testing.T) {
+	ctx := context.Background()
+	dsn := os.Getenv("PROBE_PG_DSN")
+	if dsn == "" {
+		t.Fatal("PROBE_PG_DSN is not set; this probe needs a live control plane")
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connecting: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	orgID, projectID := seedProbeTenant(ctx, t, pool)
+	store := NewPostgresStore(pool, "spans-"+probeSlug)
+	day := time.Date(2026, time.September, 19, 0, 0, 0, 0, time.UTC)
+	later := time.Date(2026, time.September, 19, 10, 0, 0, 0, time.UTC)
+	earlier := later.Add(-time.Hour)
+
+	for offset, received := range []time.Time{later, earlier} {
+		rows := []Row{{
+			OrgID: orgID, ProjectID: projectID, Day: day,
+			Counts: Counts{Spans: 1}, Services: []string{"checkout"},
+		}}
+		progress := map[int32]Progress{0: {Offset: int64(offset + 1), ReceivedThrough: received}}
+		if _, err := store.Apply(ctx, rows, progress); err != nil {
+			t.Fatalf("applying flush %d: %v", offset, err)
+		}
+	}
+
+	var lastSeen time.Time
+	err = pool.QueryRow(ctx,
+		`SELECT last_seen_at FROM service_last_seen
+		 WHERE project_id = $1::uuid AND service_name = 'checkout'`, projectID).Scan(&lastSeen)
+	if err != nil {
+		t.Fatalf("reading the row back: %v", err)
+	}
+	if !lastSeen.Equal(later) {
+		t.Errorf("last_seen_at = %v, want %v: an older flush moved it back", lastSeen, later)
+	}
+}
+
 // seedProbeTenant makes an organization and a project for the probe to write
 // against, and removes them again. The cascade takes the usage rows with them.
 func seedProbeTenant(ctx context.Context, t *testing.T, pool *pgxpool.Pool) (string, string) {

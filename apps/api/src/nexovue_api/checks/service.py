@@ -48,6 +48,7 @@ from nexovue_platform.checks.task import (
 from nexovue_platform.checks.templating import has_references
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexovue_api.alerts import service as alerts
 from nexovue_api.audit import service as audit
 from nexovue_api.checkfiles import service as files
 from nexovue_api.checks import queries, targets
@@ -308,6 +309,7 @@ async def remove(
     await files.detach_for_check(session, org_id=org_id, check_id=check.id)
     if not await queries.delete_check(session, org_id=org_id, check_id=check.id):
         raise NotFoundError("No such check.")
+    await alerts.close_incidents_of_check(session, org_id=org_id, check_id=check.id)
     audit.record_check_deleted(
         session, org_id=org_id, check_id=check_id, actor_user_id=actor_user_id
     )
