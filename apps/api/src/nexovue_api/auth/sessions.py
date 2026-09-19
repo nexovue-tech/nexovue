@@ -70,6 +70,23 @@ _CREATED_AT: Final = "created_at"
 _LAST_SEEN_AT: Final = "last_seen_at"
 _CLIENT_LABEL: Final = "client_label"
 _CLIENT_NETWORK: Final = "client_network"
+_IMPERSONATION: Final = "impersonation"
+
+
+@dataclass(frozen=True, slots=True)
+class Impersonation:
+    """nexovue support viewing the console as this session's person (F31, FR29).
+
+    Carried on an ordinary customer session so every screen renders as that person;
+    `get_current_identity` reads it to refuse every change, re-check the owner's
+    grant, and audit each request under `impersonation_id`.
+    """
+
+    impersonation_id: str
+    staff_label: str
+    reason: str
+    grant_id: str
+    until: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +103,7 @@ class Session:
     # a caller to remember it.
     last_seen_at: datetime | None = None
     client: ClientDescription = field(default_factory=ClientDescription.unknown)
+    impersonation: Impersonation | None = None
 
     @property
     def last_used_at(self) -> datetime:
@@ -117,9 +135,18 @@ class SessionStore:
         self._ttl_seconds = ttl_seconds
 
     async def create(
-        self, *, user_id: str, org_id: str, client: ClientDescription | None = None
+        self,
+        *,
+        user_id: str,
+        org_id: str,
+        client: ClientDescription | None = None,
+        impersonation: Impersonation | None = None,
     ) -> tuple[str, Session]:
-        """Mint a session and return the token to put in the cookie."""
+        """Mint a session and return the token to put in the cookie.
+
+        A support session (F31) lives only until its `until`, however long an
+        ordinary session would.
+        """
         token = secrets.token_urlsafe(TOKEN_BYTES)
         now = datetime.now(UTC)
         session = Session(
@@ -128,12 +155,14 @@ class SessionStore:
             created_at=now,
             last_seen_at=now,
             client=client or ClientDescription.unknown(),
+            impersonation=impersonation,
         )
+        ttl = self._ttl_seconds
+        if impersonation is not None:
+            ttl = max(1, min(ttl, int((impersonation.until - now).total_seconds())))
         fingerprint = token_fingerprint(token)
-        await self._redis.set(_key(fingerprint), _encode(session), ex=self._ttl_seconds)
-        await self._index(
-            user_id, fingerprint, expires_at=now + timedelta(seconds=self._ttl_seconds)
-        )
+        await self._redis.set(_key(fingerprint), _encode(session), ex=ttl)
+        await self._index(user_id, fingerprint, expires_at=now + timedelta(seconds=ttl))
         return token, session
 
     async def get(self, token: str) -> Session | None:
@@ -155,6 +184,15 @@ class SessionStore:
         if session is None:
             return None
         return await self._touch(fingerprint, session)
+
+    async def peek(self, token: str) -> Session | None:
+        """The session behind a token, read without recording that it was seen.
+
+        For the rate limiter, which runs before authentication and must not turn
+        every counted request into a "last used" write.
+        """
+        raw = await self._redis.get(_key(token_fingerprint(token)))
+        return _decode(raw) if raw is not None else None
 
     async def list_for(self, user_id: str) -> list[ActiveSession]:
         """Every live session for one user, newest first.
@@ -302,6 +340,7 @@ def _text(value: str | bytes) -> str:
 
 
 def _encode(session: Session) -> str:
+    impersonation = session.impersonation
     return json.dumps(
         {
             _USER_ID: session.user_id,
@@ -310,6 +349,15 @@ def _encode(session: Session) -> str:
             _LAST_SEEN_AT: session.last_used_at.isoformat(),
             _CLIENT_LABEL: session.client.label,
             _CLIENT_NETWORK: session.client.network,
+            _IMPERSONATION: None
+            if impersonation is None
+            else {
+                "id": impersonation.impersonation_id,
+                "staff": impersonation.staff_label,
+                "reason": impersonation.reason,
+                "grant": impersonation.grant_id,
+                "until": impersonation.until.isoformat(),
+            },
         }
     )
 
@@ -330,10 +378,23 @@ def _decode(raw: str | bytes) -> Session | None:
                 label=_optional_text(payload.get(_CLIENT_LABEL)),
                 network=_optional_text(payload.get(_CLIENT_NETWORK)),
             ),
+            impersonation=_impersonation(payload.get(_IMPERSONATION)),
         )
     except (ValueError, KeyError, TypeError):
         # A value we cannot read is a session we cannot trust.
         return None
+
+
+def _impersonation(value: Any) -> Impersonation | None:
+    if value is None:
+        return None
+    return Impersonation(
+        impersonation_id=str(value["id"]),
+        staff_label=str(value["staff"]),
+        reason=str(value["reason"]),
+        grant_id=str(value["grant"]),
+        until=datetime.fromisoformat(value["until"]),
+    )
 
 
 def _optional_moment(value: Any) -> datetime | None:

@@ -31,18 +31,16 @@ export default defineConfig({
   fullyParallel: true,
 
   /**
-   * How many browsers the API will carry, not how many this machine could drive.
+   * How many browsers run at once.
    *
    * Every browser reaches the API through the web container's proxy, so the API sees one
-   * caller for the whole suite and holds it to the telemetry tier: 60 ClickHouse-backed
-   * reads a minute and 4 in flight at once. A screen refetches every ten seconds and the
-   * logs screen costs two reads a tick, so a browser is worth roughly 13 reads a minute.
-   * Measured at Playwright's default of 6 workers on this machine: 80 reads in the
-   * busiest minute against a limit of 60, and the API refusing the excess — which the
-   * screens render as "could not be loaded" and the specs correctly fail on.
+   * address for the whole suite. That used to make the suite one caller: signed-in reads
+   * were counted per address, and four browsers shared 60 ClickHouse-backed reads a
+   * minute. They are now counted per person under a per-organization ceiling
+   * (`docs/changes/rate-limit-per-person/`), and each spec signs in as a person of its
+   * own, so a browser is held to its own budget, as a colleague in the same office is.
    *
-   * Four browsers is about 53 a minute, inside the limit with a little left for whoever
-   * else has the dev app open. Adding screens should make this suite slower, not flakier.
+   * What still binds is this machine: four browsers against one dev stack.
    */
   workers: 4,
 

@@ -42,10 +42,18 @@ class Quota:
 
 @dataclass(frozen=True, slots=True)
 class Tier:
-    """The quota a class of request is held to, and its concurrency cap."""
+    """The quota a class of request is held to, and its concurrency cap.
+
+    `quota` and `max_concurrent` hold one caller: a signed-in person, or an
+    address when nobody is signed in. `org_quota` and `org_max_concurrent` hold
+    a whole organization, however many of its people are reading — the ceiling
+    that protects the store from one tenant rather than from one person.
+    """
 
     quota: Quota
     max_concurrent: int | None = None
+    org_quota: Quota | None = None
+    org_max_concurrent: int | None = None
 
 
 AUTH_TIER: Final = Tier(quota=Quota(name="auth", limit=10, window_seconds=60))
@@ -76,8 +84,20 @@ TELEMETRY_TIER: Final = Tier(
     # wait would make a sixth read slow rather than absent. That is a larger
     # change than a number and is recorded rather than assumed.
     max_concurrent=8,
+    # **Per organization, however many of its people read** (founder,
+    # 2026-09-20; `docs/changes/rate-limit-per-person/`). Ten people with a
+    # screen each open is about 130 reads a minute; 600 leaves a team of that
+    # size room for an incident, and 32 scans in flight is four people's worth
+    # of the per-person cap — the tenant ceiling the cluster is protected by.
+    org_quota=Quota(name="telemetry-organization", limit=600, window_seconds=60),
+    org_max_concurrent=32,
 )
-DEFAULT_TIER: Final = Tier(quota=Quota(name="default", limit=300, window_seconds=60))
+DEFAULT_TIER: Final = Tier(
+    quota=Quota(name="default", limit=300, window_seconds=60),
+    # Postgres reads and writes are cheap next to a scan; the ceiling only stops
+    # one tenant's script from crowding everyone else's.
+    org_quota=Quota(name="default-organization", limit=1500, window_seconds=60),
+)
 
 # The one unauthenticated write in the control plane. It shared the default tier,
 # which meant anything on the internet could consume the quota signed-in users
@@ -173,6 +193,11 @@ AUTH_PATHS: Final = (
     # whole credential, so both are token guessing, throttled as a reset link
     # is; accepting also sets a password.
     f"{API_PREFIX}/invitations",
+    # Staff sign-in on the admin app (F31): a password and a code, the most
+    # valuable credential check there is.
+    "/admin/v1/sign-in",
+    # Spending a support ticket (F31): a 60-second, single-use credential.
+    f"{API_PREFIX}/support/view-as",
 )
 # **These must be the routers' real prefixes, and two of them were not.**
 # `/errors` and `/database` matched nothing: the routers are mounted at

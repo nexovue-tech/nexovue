@@ -12,6 +12,7 @@ the limit exists to avoid.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, Final
 
 from nexovue_platform.telemetry.logging import get_logger
@@ -20,12 +21,17 @@ from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from nexovue_api.auth.clients import client_ip_of
-from nexovue_api.auth.sessions import session_token_from_headers, token_fingerprint
+from nexovue_api.auth.sessions import (
+    Session,
+    SessionStore,
+    session_token_from_headers,
+    token_fingerprint,
+)
 from nexovue_api.errors import problems
 from nexovue_api.errors.handlers import problem_response
 from nexovue_api.ratelimit import headers as ratelimit_headers
 from nexovue_api.ratelimit.limiter import Decision, RateLimiter
-from nexovue_api.ratelimit.policy import AUTH_TIER, PlanLimits, Tier, tier_for_path
+from nexovue_api.ratelimit.policy import AUTH_TIER, PlanLimits, Quota, Tier, tier_for_path
 
 logger = get_logger(__name__)
 
@@ -35,6 +41,7 @@ _HTTP_SCOPE: Final = "http"
 SCOPE_IP: Final = "ip"
 SCOPE_EMAIL: Final = "email"
 SCOPE_SESSION: Final = "session"
+SCOPE_ORGANIZATION: Final = "organization"
 
 # An auth body is a handful of fields. Anything larger is not a login attempt,
 # and buffering it to read the email would be the attack rather than the defence.
@@ -51,6 +58,15 @@ TOO_MANY_CONCURRENT_DETAIL: Final = (
 Identity = tuple[str, str]
 
 
+@dataclass(frozen=True, slots=True)
+class Counted:
+    """One bucket a request is counted in: whose, how many, and how many at once."""
+
+    identity: Identity
+    quota: Quota
+    max_concurrent: int | None
+
+
 class RateLimitMiddleware:
     """Hold every request to the tier its path falls into."""
 
@@ -62,8 +78,10 @@ class RateLimitMiddleware:
         plan_limits: PlanLimits | None = None,
         enabled: bool = True,
         trusted_proxy_count: int = 0,
+        sessions: SessionStore | None = None,
     ) -> None:
         self._app = app
+        self._sessions = sessions
         self._limiter = limiter
         self._plan_limits = plan_limits
         self._enabled = enabled
@@ -76,48 +94,71 @@ class RateLimitMiddleware:
             await self._app(scope, receive, send)
             return
 
-        quota = tier.quota.scaled(await plan_limits.multiplier_for(_org_id(scope)))
-        receive, identities = await _identities(receive, tier, scope, self._client_ip(scope))
+        signed_in = None if tier is AUTH_TIER else await self._signed_in(scope)
+        multiplier = await plan_limits.multiplier_for(signed_in.org_id if signed_in else None)
+        if signed_in is not None:
+            counted = _per_person(tier, signed_in, multiplier)
+        else:
+            receive, identities = await _identities(receive, tier, scope, self._client_ip(scope))
+            counted = _per_address(tier, identities, multiplier)
 
         decision: Decision | None = None
-        for limit_scope, value in identities:
-            decision = await limiter.consume(scope=limit_scope, identity=value, quota=quota)
-            if not decision.allowed:
-                await self._reject(Request(scope, receive), decision, send)
+        for bucket in counted:
+            limit_scope, value = bucket.identity
+            outcome = await limiter.consume(scope=limit_scope, identity=value, quota=bucket.quota)
+            if not outcome.allowed:
+                await self._reject(Request(scope, receive), outcome, send)
                 return
+            # The first bucket is the caller's own; its state is what the headers report.
+            decision = decision or outcome
 
         assert decision is not None
-        await self._serve(scope, receive, send, tier, limiter, identities[0], decision)
+        await self._serve(scope, receive, send, limiter, counted, decision)
 
     async def _serve(
         self,
         scope: Scope,
         receive: Receive,
         send: Send,
-        tier: Tier,
         limiter: RateLimiter,
-        identity: Identity,
+        counted: list[Counted],
         decision: Decision,
     ) -> None:
-        """Run the request, holding a concurrency slot when the tier caps them."""
+        """Run the request, holding a concurrency slot in every bucket that caps them."""
         send = _with_limit_headers(send, decision)
-        if tier.max_concurrent is None:
-            await self._app(scope, receive, send)
-            return
-
-        limit_scope, value = identity
-        token = await limiter.acquire_slot(
-            scope=limit_scope, identity=value, max_concurrent=tier.max_concurrent
-        )
-        if token is None:
-            request = Request(scope, receive)
-            await self._reject(request, decision, send, detail=TOO_MANY_CONCURRENT_DETAIL)
-            return
-
+        held: list[tuple[Identity, str]] = []
         try:
+            for bucket in counted:
+                if bucket.max_concurrent is None:
+                    continue
+                limit_scope, value = bucket.identity
+                token = await limiter.acquire_slot(
+                    scope=limit_scope, identity=value, max_concurrent=bucket.max_concurrent
+                )
+                if token is None:
+                    request = Request(scope, receive)
+                    await self._reject(request, decision, send, detail=TOO_MANY_CONCURRENT_DETAIL)
+                    return
+                held.append((bucket.identity, token))
             await self._app(scope, receive, send)
         finally:
-            await limiter.release_slot(scope=limit_scope, identity=value, token=token)
+            for (limit_scope, value), token in held:
+                await limiter.release_slot(scope=limit_scope, identity=value, token=token)
+
+    async def _signed_in(self, scope: Scope) -> Session | None:
+        """The live session a request carries, or None — read without touching it.
+
+        Only a token that names a live session earns per-person counting: an
+        invented one resolves to nothing and is counted against its address, so
+        it buys a caller nothing.
+        """
+        sessions = self._sessions or getattr(
+            getattr(getattr(scope.get("app"), "state", None), "resources", None), "sessions", None
+        )
+        token = session_token_from_headers(Headers(scope=scope))
+        if sessions is None or not token:
+            return None
+        return await sessions.peek(token)
 
     async def _reject(
         self,
@@ -173,6 +214,45 @@ class RateLimitMiddleware:
             )
             or UNKNOWN_CLIENT
         )
+
+
+def _per_person(tier: Tier, session: Session, multiplier: float) -> list[Counted]:
+    """A signed-in read: counted for the person, then for their organization.
+
+    Not the address: a team in one office is several people behind one address,
+    and counting them together gave five colleagues one person's budget
+    (`docs/changes/rate-limit-per-person/`).
+    """
+    counted = [
+        Counted(
+            identity=(SCOPE_SESSION, f"user:{session.user_id}"),
+            quota=tier.quota.scaled(multiplier),
+            max_concurrent=tier.max_concurrent,
+        )
+    ]
+    if tier.org_quota is not None:
+        counted.append(
+            Counted(
+                identity=(SCOPE_ORGANIZATION, session.org_id),
+                quota=tier.org_quota.scaled(multiplier),
+                max_concurrent=tier.org_max_concurrent,
+            )
+        )
+    return counted
+
+
+def _per_address(tier: Tier, identities: list[Identity], multiplier: float) -> list[Counted]:
+    """Nobody signed in, or a sign-in route: every identity on the tier's quota,
+    with the concurrency cap on the address."""
+    quota = tier.quota.scaled(multiplier)
+    return [
+        Counted(
+            identity=identity,
+            quota=quota,
+            max_concurrent=tier.max_concurrent if index == 0 else None,
+        )
+        for index, identity in enumerate(identities)
+    ]
 
 
 def _with_limit_headers(send: Send, decision: Decision) -> Send:
@@ -258,9 +338,3 @@ def _session_identity(scope: Scope) -> str | None:
     token = session_token_from_headers(Headers(scope=scope))
     # The fingerprint, never the token: a Redis key is not a place for a credential.
     return f"tok:{token_fingerprint(token)}" if token else None
-
-
-def _org_id(scope: Scope) -> str | None:
-    state = scope.get("state") or {}
-    org_id = state.get("org_id")
-    return str(org_id) if org_id else None

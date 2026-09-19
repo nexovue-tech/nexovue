@@ -73,9 +73,8 @@ reopen it.
 
 None blocking. Two worth a decision later:
 
-- **The telemetry tier's quota and concurrency cap are keyed by IP first.** Every console user behind one NAT shares
-  60 reads a minute; the full e2e suite trips it (see *Validation*). Pre-existing, not F18's, but F18's detail screen
-  adds reads that hit it.
+- ~~**The telemetry tier's quota and concurrency cap are keyed by IP first.**~~ Resolved 2026-09-20: signed-in reads
+  are counted per person under a per-organization ceiling (`docs/changes/rate-limit-per-person/`).
 - **Refusing rather than briefly queueing a legitimate burst** (already recorded in `ratelimit/policy.py`).
 
 ## Blocked
