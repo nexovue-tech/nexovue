@@ -72,11 +72,14 @@ from nexovue_api.data.postgres.models import (
     Notification,
     NotificationAttempt,
     NotificationChannel,
+    PlanGrant,
     ServiceLastSeen,
     SiteKey,
     SourceMap,
+    SupportAccessGrant,
     UsageDaily,
     UsageDailyService,
+    WebsitePayment,
 )
 from nexovue_api.errors.exceptions import ConflictError, NotFoundError
 from nexovue_api.organizations import service
@@ -142,6 +145,9 @@ RECEIVER_READS_DELETION: Final = text(
 _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "billing_subscriptions",
     "billing_webhook_deliveries",
+    "website_payments",
+    "plan_grants",
+    "support_access_grants",
     "users",
     "projects",
     "api_keys",
@@ -186,6 +192,10 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "api_keys": 1,
     "billing_subscriptions": ROWS_PER_TABLE,
     "billing_webhook_deliveries": ROWS_PER_TABLE,
+    # F31: one per organization.
+    "website_payments": 1,
+    "plan_grants": 1,
+    "support_access_grants": 1,
     "audit_log": 4,
     "notification_channels": 1 + ROWS_PER_TABLE,
     "alert_rules": 1 + ROWS_PER_TABLE,
@@ -495,6 +505,28 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectSt
                 ),
             ]
         )
+    # F31: one of each per organization — a payment is unique to it.
+    db.add_all(
+        [
+            WebsitePayment(
+                org_id=tenant.org_id,
+                razorpay_payment_id=f"pay_{uuid.uuid4().hex[:12]}",
+                amount_minor=499_900,
+                currency="INR",
+            ),
+            PlanGrant(
+                org_id=tenant.org_id,
+                plan_slug="pro",
+                services=5,
+                starts_at=now,
+                ends_at=now + timedelta(days=30),
+                reason="deletion test",
+            ),
+            SupportAccessGrant(
+                org_id=tenant.org_id, granted_at=now, expires_at=now + timedelta(hours=72)
+            ),
+        ]
+    )
     await db.flush()
 
     for index in range(ROWS_PER_TABLE):

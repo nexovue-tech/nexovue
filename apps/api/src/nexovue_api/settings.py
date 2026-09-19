@@ -237,6 +237,10 @@ class Settings(BaseSettings):
     otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT
 
     rate_limit_enabled: bool = True
+    # Whether anyone may create an organization at /signup (F31, D10). On for
+    # self-hosted installs; off for nexovue's cloud, where a customer pays on the
+    # website first and is onboarded by staff (ADR-008).
+    signup_enabled: bool = True
     # How many proxies sit in front of us. Zero means X-Forwarded-For is a value
     # the client chose, and the direct peer is the only honest client address.
     trusted_proxy_count: Annotated[int, Field(ge=0, le=10)] = 0

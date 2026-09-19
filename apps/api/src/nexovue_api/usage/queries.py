@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexovue_api.data.postgres.models import (
     BillingSubscription,
     Plan,
+    PlanGrant,
     PlanPrice,
     UsageDaily,
     UsageDailyService,
@@ -405,3 +406,49 @@ async def metering_frontier(session: AsyncSession) -> MeteringFrontier:
         )
     ).one()
     return MeteringFrontier(counted_through=row[0], unknown_partitions=row[1])
+
+
+class PlanInForce(NamedTuple):
+    """The tier an organization is held to right now, and the services it is sized on.
+
+    A complimentary grant (F31, FR27), while active, wins over the paid plan; when it
+    ends by its own date the paid plan is in force again, with nothing rewritten.
+    """
+
+    slug: str
+    services_committed: int | None
+    granted: bool
+
+
+async def active_grant(
+    session: AsyncSession, *, org_id: uuid.UUID, at: datetime
+) -> PlanGrant | None:
+    """The complimentary grant in force at `at`, if any; the latest-started wins."""
+    statement = (
+        select(PlanGrant)
+        .where(
+            PlanGrant.org_id == org_id,
+            PlanGrant.starts_at <= at,
+            PlanGrant.ends_at > at,
+            (PlanGrant.ended_at.is_(None)) | (PlanGrant.ended_at > at),
+        )
+        .order_by(PlanGrant.starts_at.desc())
+        .limit(1)
+    )
+    found: PlanGrant | None = await session.scalar(statement)
+    return found
+
+
+async def plan_in_force(
+    session: AsyncSession, *, org_id: uuid.UUID, paid_plan: str, at: datetime
+) -> PlanInForce:
+    """The one Python answer to "what plan is this organization on". The receiver
+    asks the same question in its allowance statement (`allowance/postgres.go`)."""
+    grant = await active_grant(session, org_id=org_id, at=at)
+    if grant is not None:
+        return PlanInForce(slug=grant.plan_slug, services_committed=grant.services, granted=True)
+    return PlanInForce(
+        slug=paid_plan,
+        services_committed=await active_services_committed(session, org_id=org_id),
+        granted=False,
+    )

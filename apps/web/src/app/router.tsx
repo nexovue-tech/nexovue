@@ -45,6 +45,7 @@ import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
 import { parseServiceOrder, SERVICE_FILTERS } from "@/features/services/filters";
 import { ServicesScreen } from "@/features/services/ServicesScreen";
 import { ApiKeysScreen } from "@/features/settings/ApiKeysScreen";
+import { SupportAccessScreen } from "@/features/support/SupportAccessScreen";
 import { CheckDetailScreen, parseCheckSearch } from "@/features/synthetics/CheckDetailScreen";
 import { SYNTHETIC_FILTERS } from "@/features/synthetics/filters";
 import { ImportScreen } from "@/features/synthetics/ImportScreen";
@@ -312,6 +313,12 @@ const settingsAuditRoute = createRoute({
   component: AuditScreen,
 });
 
+const settingsSupportRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/support",
+  component: SupportAccessScreen,
+});
+
 const settingsChannelsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/channels",
@@ -503,6 +510,7 @@ const routeTree = rootRoute.addChildren([
     settingsApiKeysRoute,
     settingsMembersRoute,
     settingsAuditRoute,
+    settingsSupportRoute,
     settingsChannelsRoute,
     settingsChannelRoute,
     settingsProjectsRoute,

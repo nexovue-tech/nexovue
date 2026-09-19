@@ -67,6 +67,16 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+  build: {
+    rollupOptions: {
+      // Two entries: the customer console, and the staff admin console (F31,
+      // ADR-016), which imports only `shared/` and talks only to `/admin/v1`.
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        admin: fileURLToPath(new URL("./admin.html", import.meta.url)),
+      },
+    },
+  },
   server: {
     // The API is a separate service; the browser only ever knows the /api/v1/ path.
     proxy: {
@@ -77,6 +87,11 @@ export default defineConfig({
         // is answered by the dev server instead of forwarded, and the handshake
         // times out with nothing in the console to say why.
         ws: true,
+      },
+      // The staff admin console (F31, ADR-016): its own app and port.
+      "/admin/v1": {
+        target: process.env.NEXOVUE_ADMIN_API_ORIGIN ?? "http://localhost:18001",
+        changeOrigin: true,
       },
     },
   },

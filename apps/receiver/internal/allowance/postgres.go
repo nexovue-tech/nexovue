@@ -20,6 +20,11 @@ import (
 // across it; the browser's bytes are the part of them the meter counted
 // through the browser door.
 //
+// **The plan in force is a complimentary grant while one is active** (F31, FR27),
+// else the paid plan: the grant's plan prices the allowance and its services
+// size it. A grant ends by its own date, so nothing ever has to rewrite
+// `organizations.plan` back — `usage/queries.plan_in_force` is the API's twin.
+//
 // Both halves are LATERAL subqueries rather than joins with a GROUP BY, so an
 // organization with no price row and no metered day still returns its row and
 // is read as "nothing recorded" rather than as no answer at all.
@@ -27,16 +32,25 @@ const readMonthlyUsage = `
 	SELECT price.included_bytes_per_service,
 	       price.max_billed_services,
 	       price.browser_share_percent,
-	       committed.services_committed,
+	       COALESCE(granted.services, committed.services_committed),
 	       COALESCE(metered.bytes, 0),
 	       COALESCE(metered.browser_bytes, 0),
 	       org.deleted_at IS NOT NULL,
 	       org.ingest_suspended_at IS NOT NULL
 	FROM organizations org
 	LEFT JOIN LATERAL (
+		SELECT g.plan_slug, g.services
+		FROM plan_grants g
+		WHERE g.org_id = org.id
+		  AND g.starts_at <= now() AND g.ends_at > now()
+		  AND (g.ended_at IS NULL OR g.ended_at > now())
+		ORDER BY g.starts_at DESC
+		LIMIT 1
+	) granted ON true
+	LEFT JOIN LATERAL (
 		SELECT p.included_bytes_per_service, p.max_billed_services, p.browser_share_percent
 		FROM plan_prices p
-		WHERE p.plan_slug = org.plan AND p.effective_from <= $4
+		WHERE p.plan_slug = COALESCE(granted.plan_slug, org.plan) AND p.effective_from <= $4
 		ORDER BY p.effective_from DESC
 		LIMIT 1
 	) price ON true

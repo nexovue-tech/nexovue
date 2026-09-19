@@ -93,8 +93,9 @@ async def set_password(
 
 
 def display_name(user: User | None) -> str:
+    # No inviter means nexovue onboarded this owner by hand (F31, ADR-008).
     if user is None:
-        return "whoever invited you"
+        return "nexovue"
     return user.name or user.email
 
 

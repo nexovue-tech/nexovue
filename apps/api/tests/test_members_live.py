@@ -25,6 +25,7 @@ import pytest
 from live import require_stack
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from starlette.requests import Request
 
 from nexovue_api.audit import service as audit
 from nexovue_api.auth import set_password
@@ -121,7 +122,8 @@ async def _join(db: AsyncSession, acme: ProvisionedTenant, role: Role) -> User:
 
 async def _identity_of(db: AsyncSession, user: User, *, issued: datetime) -> Identity:
     session = Session(user_id=str(user.id), org_id=str(user.org_id), created_at=issued)
-    return await get_current_identity(session, db)
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+    return await get_current_identity(request, session, db)
 
 
 async def _actions(db: AsyncSession, org_id: uuid.UUID) -> list[str]:

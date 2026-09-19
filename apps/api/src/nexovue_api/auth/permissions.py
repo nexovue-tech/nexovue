@@ -31,6 +31,8 @@ class Action(StrEnum):
     # Making or unmaking an owner is an owner's act (BR3).
     MANAGE_OWNERS = "manage_owners"
     READ_AUDIT = "read_audit"
+    # Letting nexovue support view the console as a person (F31, BR14).
+    GRANT_SUPPORT = "grant_support"
     COMMIT_SPEND = "commit_spend"
     END_ORGANIZATION = "end_organization"
 
@@ -56,6 +58,8 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     # Deleting the tenant erases every other member's data and cannot be undone.
     Action.END_ORGANIZATION: _OWNERS,
     Action.MANAGE_OWNERS: _OWNERS,
+    # Consent to be viewed as is the account holder's, like the bill.
+    Action.GRANT_SUPPORT: _OWNERS,
 }
 
 
@@ -86,3 +90,12 @@ def may(role: str, action: Action) -> bool:
 def permissions_of(role: str) -> list[Action]:
     """Every action a role may perform, in declaration order."""
     return [action for action in Action if may(role, action)]
+
+
+# What a support view keeps (F31, BR15): reading. Every other action changes something.
+READS: Final = frozenset({Action.READ_AUDIT})
+
+
+def permissions_while_viewed(role: str) -> list[Action]:
+    """What the console offers while nexovue support views as someone in `role`."""
+    return [action for action in permissions_of(role) if action in READS]

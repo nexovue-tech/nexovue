@@ -54,6 +54,8 @@ class Message(Enum):
     CHANNEL_FAILING = "channel_failing"
     # F26. A person invited into an organization; the link sets their password.
     INVITE = "invite"
+    # F31. The first owner of an organization nexovue onboarded by hand.
+    WELCOME_OWNER = "welcome_owner"
 
 
 @dataclass(frozen=True, slots=True)

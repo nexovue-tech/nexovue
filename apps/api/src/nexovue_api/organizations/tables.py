@@ -32,6 +32,11 @@ TENANT_COLUMN: Final = "org_id"
 DELETED_DIRECTLY: Final[tuple[str, ...]] = (
     "billing_webhook_deliveries",
     "billing_subscriptions",
+    # F31. The payment that bought the organization, like the billing rows above;
+    # a comped plan; and the owner's consent to support, which names a user.
+    "website_payments",
+    "plan_grants",
+    "support_access_grants",
     "audit_log",
     # Alert channels belong to the organization, not a project (F21, D4). Before
     # `users`, whom a mute names, and before `projects`, whose rules send to them.
@@ -98,4 +103,8 @@ EXCLUDED_TABLES: Final[dict[str, str]] = {
         "ingestion it already counted: a silent, permanent over-count"
     ),
     "alembic_version": "Alembic's own bookkeeping; holds no customer data",
+    "staff_accounts": (
+        "nexovue's own staff (ADR-016), deliberately tenant-free; a staff member's "
+        "name on a customer's audit row is text, not a reference, so nothing dangles"
+    ),
 }

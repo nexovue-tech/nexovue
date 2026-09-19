@@ -117,6 +117,10 @@ EXEMPT: Final = {
     # Preview is a POST so the token travels in a body, not a logged URL.
     "preview_invitation",
     "accept_invitation",
+    # The staff admin app's sign-in (F31, ADR-016): how a staff session comes to
+    # exist. Every other admin route carries `CurrentStaff` — see
+    # `test_every_admin_route_but_sign_in_needs_a_staff_session`.
+    "sign_in",
     # A POST that reads. Symbolication turns minified frames back into original
     # ones and writes nothing; it is a POST because a stack trace does not fit
     # in a query string.
@@ -188,6 +192,8 @@ POLICY_OF: Final = {
     "members/router.py:withdraw_invitation": "MayManageMembers",
     "members/router.py:change_role": "MayManageMembers",
     "members/router.py:remove_member": "MayManageMembers",
+    "support/router.py:grant_support_access": "MayGrantSupport",
+    "support/router.py:withdraw_support_access": "MayGrantSupport",
 }
 
 # Reads that return a secret, and so are an action even though they change
@@ -197,6 +203,8 @@ SECRET_READS: Final = {
     # Not a secret, but the organization's history of who did what: an owner's
     # and an admin's to read (FR36, AC38).
     "audit/router.py:read_audit_log": "MayReadAudit",
+    # Every time support viewed as someone, and whether it may: the owner's.
+    "support/router.py:read_support_access": "MayGrantSupport",
 }
 
 
@@ -264,11 +272,31 @@ def _name(key: str) -> str:
     return key.rpartition(":")[2]
 
 
+STAFF_GATE: Final = "CurrentStaff"
+ADMIN_MODULE: Final = "admin/"
+
+
+def test_every_admin_route_but_sign_in_needs_a_staff_session() -> None:
+    """The admin app's gate is a staff session, not a customer role (ADR-016)."""
+    ungated = sorted(
+        key
+        for key, _, annotations in _all_handlers()
+        if key.startswith(ADMIN_MODULE)
+        and _name(key) != "sign_in"
+        and STAFF_GATE not in annotations
+    )
+    assert not ungated, f"{ungated} are admin routes without `CurrentStaff`"
+
+
 def test_every_mutating_route_is_gated_or_exempt() -> None:
-    """A new mutating route must be placed: in `POLICY_OF` with its policy, or in
-    `EXEMPT` with the reason it needs none."""
+    """A new mutating route must be placed: in `POLICY_OF` with its policy, behind a
+    staff session in the admin app, or in `EXEMPT` with the reason it needs none."""
     unplaced = sorted(
-        key for key, _ in _mutating() if key not in POLICY_OF and _name(key) not in EXEMPT
+        key
+        for key, annotations in _mutating()
+        if key not in POLICY_OF
+        and _name(key) not in EXEMPT
+        and not (key.startswith(ADMIN_MODULE) and STAFF_GATE in annotations)
     )
     assert not unplaced, (
         f"{unplaced} change something and are in neither POLICY_OF nor EXEMPT. Give each a "

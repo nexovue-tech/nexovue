@@ -11,10 +11,12 @@ their key.
 from __future__ import annotations
 
 from http import HTTPStatus
+from typing import Annotated, Final
 
 import structlog
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Depends, Response
 from nexovue_platform.email import EmailError, EmailSender
+from pydantic import BaseModel
 
 from nexovue_api.auth import recovery
 from nexovue_api.auth.cookies import set_session_cookie
@@ -24,6 +26,7 @@ from nexovue_api.auth.service import start_session
 from nexovue_api.auth.tokens import OneTimeTokenStore
 from nexovue_api.data.postgres.models import User
 from nexovue_api.deps import AppSettings, DbSession, OneTimeTokens, OptionalEmail, SessionStoreDep
+from nexovue_api.errors.exceptions import PermissionDeniedError
 from nexovue_api.projects.schemas import ProjectSummary
 from nexovue_api.settings import Settings
 from nexovue_api.signup import service
@@ -33,6 +36,38 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["signup"])
 
+SIGNUP_CLOSED: Final = (
+    "nexovue cloud is set up after purchase — choose a plan at nexovue.com and we will "
+    "set up your organization."
+)
+
+
+def require_signup_open(settings: AppSettings) -> None:
+    """nexovue's cloud: a customer pays on the website and is onboarded by staff
+    (ADR-008, D10). Declared first on the route, so a closed signup is refused
+    before any other dependency opens a store."""
+    if not settings.signup_enabled:
+        raise PermissionDeniedError(SIGNUP_CLOSED)
+
+
+SignupOpen = Annotated[None, Depends(require_signup_open)]
+
+
+class SignupStatus(BaseModel):
+    """Whether this deployment lets anyone create an organization (F31, FR30)."""
+
+    enabled: bool
+
+
+@router.get(
+    # Not under /signup: that prefix is the strict sign-in rate tier, and the
+    # signup screen asks this on every load.
+    "/system/signup",
+    summary="Whether signup is open on this deployment",
+)
+async def signup_status(settings: AppSettings) -> SignupStatus:
+    return SignupStatus(enabled=settings.signup_enabled)
+
 
 @router.post(
     "/signup",
@@ -40,6 +75,7 @@ router = APIRouter(tags=["signup"])
     summary="Create an organization, its owner, its first project and its first key",
 )
 async def sign_up(
+    _: SignupOpen,
     payload: SignupRequest,
     response: Response,
     db: DbSession,

@@ -1,0 +1,96 @@
+"""Postgres reads behind the admin console.
+
+**Cross-tenant by design** (ADR-016): staff search every organization. Only the
+search itself is unscoped, and it is named in `test_postgres_tenancy_structure`'s
+exemptions; every read about one organization names it.
+"""
+
+from __future__ import annotations
+
+import uuid
+from contextlib import suppress
+from datetime import date
+from typing import Final
+
+from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from nexovue_api.data.postgres.models import (
+    Organization,
+    Project,
+    UsageDaily,
+    User,
+    WebsitePayment,
+)
+
+SEARCH_LIMIT: Final = 50
+
+
+async def search_organizations(session: AsyncSession, needle: str) -> list[Organization]:
+    """Organizations whose name, slug or id matches, or that have a member with a
+    matching address. Newest first."""
+    pattern = f"%{needle.strip()}%"
+    by_member = select(User.org_id).where(User.email.ilike(pattern))
+    conditions: list[ColumnElement[bool]] = [
+        Organization.name.ilike(pattern),
+        Organization.slug.ilike(pattern),
+        Organization.id.in_(by_member),
+    ]
+    with suppress(ValueError):
+        conditions.append(Organization.id == uuid.UUID(needle.strip()))
+    statement = (
+        select(Organization)
+        .where(or_(*conditions))
+        .order_by(Organization.created_at.desc())
+        .limit(SEARCH_LIMIT)
+    )
+    return list(await session.scalars(statement))
+
+
+async def members_of(session: AsyncSession, *, org_id: uuid.UUID) -> list[User]:
+    statement = (
+        select(User)
+        .where(User.org_id == org_id, User.removed_at.is_(None))
+        .order_by(User.created_at)
+    )
+    return list(await session.scalars(statement))
+
+
+async def projects_of(session: AsyncSession, *, org_id: uuid.UUID) -> list[Project]:
+    statement = (
+        select(Project)
+        .where(Project.org_id == org_id, Project.deleted_at.is_(None))
+        .order_by(Project.created_at)
+    )
+    return list(await session.scalars(statement))
+
+
+async def last_ingest_days(session: AsyncSession, *, org_id: uuid.UUID) -> dict[uuid.UUID, date]:
+    statement = (
+        select(UsageDaily.project_id, func.max(UsageDaily.day))
+        .where(UsageDaily.org_id == org_id, UsageDaily.bytes > 0)
+        .group_by(UsageDaily.project_id)
+    )
+    rows = (await session.execute(statement)).tuples().all()
+    return {project_id: day for project_id, day in rows if day is not None}
+
+
+async def pending_owner(session: AsyncSession, *, org_id: uuid.UUID) -> User | None:
+    """The owner who has not set a password yet — an onboarded organization's first."""
+    statement = select(User).where(
+        User.org_id == org_id,
+        User.role == "owner",
+        User.password_hash.is_(None),
+        User.removed_at.is_(None),
+    )
+    found: User | None = await session.scalar(statement.limit(1))
+    return found
+
+
+async def payment_is_recorded(session: AsyncSession, razorpay_payment_id: str) -> bool:
+    """Whether a website payment already bought an organization. Unique system-wide,
+    like an ingest key's prefix, so not scoped by one."""
+    statement = select(WebsitePayment.id).where(
+        WebsitePayment.razorpay_payment_id == razorpay_payment_id
+    )
+    return await session.scalar(statement.limit(1)) is not None

@@ -50,6 +50,9 @@ CREDENTIAL_ENCRYPTION_VARIABLE: Final = "CREDENTIAL_ENCRYPTION_KEY"
 # Bound into every ciphertext, so a TOTP secret cannot be presented as the same
 # owner's credential of another kind. Check secrets have their own key and purpose.
 TOTP_PURPOSE: Final = "totp"
+# Staff second factors (F31, ADR-016) under their own purpose: a staff secret can
+# never be opened as a customer's, nor the reverse.
+STAFF_TOTP_PURPOSE: Final = "staff-totp"
 
 _KEY_MISCONFIGURED: Final = (
     "Two-factor authentication is not available on this deployment, so this could not be "
@@ -60,10 +63,10 @@ _KEY_MISCONFIGURED: Final = (
 class CredentialBox:
     """Seals and opens one kind of value, bound to the row that owns it."""
 
-    def __init__(self, key: bytes) -> None:
+    def __init__(self, key: bytes, *, purpose: str = TOTP_PURPOSE) -> None:
         if len(key) != KEY_BYTES:
             raise ValueError(f"{CREDENTIAL_ENCRYPTION_VARIABLE} must decode to {KEY_BYTES} bytes")
-        self._box = SealedBox(key, purpose=TOTP_PURPOSE)
+        self._box = SealedBox(key, purpose=purpose)
 
     def seal(self, plaintext: str, *, owner_id: str) -> bytes:
         """Encrypt, authenticating the owner so the ciphertext cannot be moved."""
@@ -83,7 +86,7 @@ class CredentialBox:
             raise InternalError("A stored credential could not be decrypted.") from unreadable
 
 
-def credential_box(configured_key: str) -> CredentialBox:
+def credential_box(configured_key: str, *, purpose: str = TOTP_PURPOSE) -> CredentialBox:
     """The box for this deployment, or a 503 naming nothing about the key.
 
     The variable name goes to the operator through the log the error handler
@@ -93,7 +96,7 @@ def credential_box(configured_key: str) -> CredentialBox:
     if not configured_key:
         raise DependencyUnavailableError(_KEY_MISCONFIGURED)
     try:
-        return CredentialBox(base64.urlsafe_b64decode(configured_key))
+        return CredentialBox(base64.urlsafe_b64decode(configured_key), purpose=purpose)
     except (ValueError, TypeError) as unusable:
         raise DependencyUnavailableError(_KEY_MISCONFIGURED) from unusable
 

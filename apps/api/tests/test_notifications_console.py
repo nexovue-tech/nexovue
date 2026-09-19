@@ -113,6 +113,11 @@ async def test_every_message_renders_so_none_is_only_exercised_in_production() -
     data: dict[Message, dict[str, Any]] = {
         Message.VERIFY_EMAIL: VERIFY_DATA,
         Message.RESET_PASSWORD: VERIFY_DATA,
+        Message.WELCOME_OWNER: {
+            "organization": "Acme Inc",
+            "link": "https://app.nexovue.com/invite?token=abc",
+            "expires_in": "7 days",
+        },
         Message.INVITE: {
             "inviter": "Raj",
             "organization": "Acme Inc",

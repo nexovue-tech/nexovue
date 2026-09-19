@@ -10,21 +10,30 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated, Final
 
 from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers
 from starlette.requests import HTTPConnection
 
+from nexovue_api.audit import service as audit
 from nexovue_api.auth.clients import ClientDescription, client_ip_of, describe_client
 from nexovue_api.auth.encryption import CredentialBox, credential_box
 from nexovue_api.auth.queries import load_identity
-from nexovue_api.auth.sessions import Session
+from nexovue_api.auth.sessions import Impersonation, Session
 from nexovue_api.auth.totp import SecondFactorStore
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import Organization, User
 from nexovue_api.deps import AppSettings, ClickHouseClient, CurrentSession, DbSession, RedisClient
-from nexovue_api.errors.exceptions import DependencyUnavailableError, UnauthenticatedError
+from nexovue_api.errors.exceptions import (
+    DependencyUnavailableError,
+    PermissionDeniedError,
+    UnauthenticatedError,
+)
+from nexovue_api.settings import API_PREFIX
+from nexovue_api.support import queries as support_queries
 
 SESSION_NO_LONGER_VALID: Final = "The session is no longer valid. Sign in again."
 
@@ -35,13 +44,24 @@ class Identity:
 
     user: User
     organization: Organization
+    # Set while nexovue support views the console as this person (F31, FR29).
+    impersonation: Impersonation | None = None
 
     @property
     def org_id(self) -> uuid.UUID:
         return self.organization.id
 
 
-async def get_current_identity(session: CurrentSession, db: DbSession) -> Identity:
+# What a support view may do besides read: sign out, which is how it ends.
+_SUPPORT_VIEW_MAY: Final = frozenset({f"{API_PREFIX}/auth/logout"})
+_READS: Final = frozenset({"GET", "HEAD", "OPTIONS"})
+SUPPORT_VIEW_READ_ONLY: Final = "Support view is read-only."
+SUPPORT_ACCESS_ENDED: Final = "Support access has ended. Ask the owner to grant it again."
+
+
+async def get_current_identity(
+    connection: HTTPConnection, session: CurrentSession, db: DbSession
+) -> Identity:
     """Resolve the session into a live user and organization, or a 401."""
     try:
         user_id = uuid.UUID(session.user_id)
@@ -64,7 +84,48 @@ async def get_current_identity(session: CurrentSession, db: DbSession) -> Identi
         # nothing to enumerate — Redis keys sessions by token fingerprint — so
         # the epoch on the user row is the revocation, and this is where it bites.
         raise UnauthenticatedError(SESSION_NO_LONGER_VALID)
-    return Identity(user=user, organization=organization)
+    if session.impersonation is not None:
+        await _hold_support_view(connection, session.impersonation, user, organization, db)
+    return Identity(user=user, organization=organization, impersonation=session.impersonation)
+
+
+async def _hold_support_view(
+    connection: HTTPConnection,
+    impersonation: Impersonation,
+    user: User,
+    organization: Organization,
+    db: AsyncSession,
+) -> None:
+    """Every request of a support view (F31, BR14, BR15, FR29): the owner's grant
+    must still stand, nothing may change, and the request is audited.
+
+    Enforced here, below every route, so no route can forget to: a route that
+    changes something is refused whatever role the viewed person holds.
+    """
+    now = datetime.now(UTC)
+    if impersonation.until <= now or not await support_queries.grant_is_live(
+        db,
+        org_id=organization.id,
+        grant_id=uuid.UUID(impersonation.grant_id),
+        at=now,
+    ):
+        raise UnauthenticatedError(SUPPORT_ACCESS_ENDED)
+    method = connection.scope.get("method", "GET")
+    path = connection.url.path
+    audit.record_support_view_request(
+        db,
+        org_id=organization.id,
+        viewed_id=user.id,
+        staff_label=impersonation.staff_label,
+        impersonation_id=uuid.UUID(impersonation.impersonation_id),
+        method=method,
+        path=path,
+    )
+    # Committed now, not with the request: a read that fails later — a 404, a 422 —
+    # rolls its transaction back, and the owner's record must still show the attempt.
+    await db.commit()
+    if method not in _READS and path not in _SUPPORT_VIEW_MAY:
+        raise PermissionDeniedError(SUPPORT_VIEW_READ_ONLY)
 
 
 def _issued_before_reset(session: Session, user: User) -> bool:

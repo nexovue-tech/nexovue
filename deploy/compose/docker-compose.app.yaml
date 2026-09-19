@@ -253,6 +253,9 @@ services:
     environment:
       <<: *control-plane-env
       CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # nexovue's cloud onboards customers after they pay (ADR-008, D10). A
+      # self-hosted install uses the on-prem file, where signup stays open.
+      SIGNUP_ENABLED: "${SIGNUP_ENABLED:-false}"
     ports:
       - "8000:8000"
     depends_on:
@@ -271,6 +274,39 @@ services:
       resources:
         limits:
           memory: 832M
+
+  # F31, ADR-016: nexovue staff's admin console. The API's image, its second app.
+  # Its own host in front of it is the deployment's (plan Q2); it is never routed
+  # from the customer host. Not in the on-prem file: self-hosted installs have no
+  # nexovue staff (plan Q3).
+  admin-api:
+    <<: *service-defaults
+    image: nexovue/api:${NEXOVUE_VERSION:-dev}
+    command: ["uvicorn", "nexovue_api.admin.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    environment:
+      <<: *control-plane-env
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+    ports:
+      - "8001:8000"
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   web:
     <<: *service-defaults

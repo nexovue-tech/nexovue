@@ -181,6 +181,12 @@ alert-email mode:
       echo "Alert email is REAL ($provider, from $NEXOVUE_ALERT_EMAIL_FROM_ADDRESS). Every alert and Send test spends a message. 'just alert-email log' to stop."
     fi
 
+# Staff accounts for the admin console (F31): `just staff create --email you@nexovue.com --name You`
+# enrols TOTP in this terminal; `just staff disable --email …` stops one signing in. Inside the
+# API container, where the database address and the credential key already are.
+staff *args:
+    docker compose -f {{compose}}/docker-compose.yaml exec api uv run --package nexovue-api python -m nexovue_api.staff {{args}}
+
 # ---------- end to end ----------
 
 # Deliberately NOT part of `just check` — the pre-commit gate must not require docker.

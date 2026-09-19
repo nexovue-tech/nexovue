@@ -62,6 +62,10 @@ from nexovue_api.data.postgres.base import (
 # SHA-256, hex.
 SET_PASSWORD_TOKEN_HASH_LENGTH: Final = 64
 
+# ADR-009. A region is added here, and in a migration, when it exists.
+REGIONS: Final = ("india", "india-south")
+REGION_LENGTH: Final = 32
+
 USER_ROLES: Final = ("owner", "admin", "member", "viewer")
 UserRole: Final = Enum(*USER_ROLES, name="user_role")
 
@@ -128,6 +132,10 @@ BillingSubscriptionStatus: Final = Enum(
 )
 
 
+def _quoted(values: tuple[str, ...]) -> str:
+    return ", ".join(f"'{value}'" for value in values)
+
+
 class Organization(Base):
     """The tenant. Billing, membership and isolation boundary; one per company."""
 
@@ -161,6 +169,13 @@ class Organization(Base):
     # a suspension without a reason is a support conversation starting from
     # nothing. The receiver never reads it.
     ingest_suspended_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Where this organization's data lives (ADR-009). Set when it is created;
+    # moving it is a per-customer migration, not an update of this column.
+    region: Mapped[str] = mapped_column(
+        String(REGION_LENGTH), nullable=False, server_default=text("'india'")
+    )
+
+    __table_args__ = (CheckConstraint(f"region IN ({_quoted(REGIONS)})", name="region_is_known"),)
 
 
 class User(Base):
@@ -424,10 +439,6 @@ CHECK_NAME_MAX_LENGTH: Final = 120
 FILE_NAME_MAX_LENGTH: Final = 255
 CONTENT_TYPE_MAX_LENGTH: Final = 255
 RUN_ID_LENGTH: Final = 36
-
-
-def _quoted(values: tuple[str, ...]) -> str:
-    return ", ".join(f"'{value}'" for value in values)
 
 
 class Check(Base):
@@ -1439,3 +1450,105 @@ class ErrorGroupWatermark(Base):
     )
     received_through: Mapped[RequiredTimestamp]
     baselined_at: Mapped[OptionalTimestamp]
+
+
+class StaffAccount(Base):
+    """nexovue's own staff (F31, ADR-016) — never a row in `users`.
+
+    No foreign key, role or flag connects the two. `totp_secret` is NOT NULL:
+    the terminal command that creates a staff account enrols the second factor
+    before the row exists, so there is no staff account without one.
+    """
+
+    __tablename__ = "staff_accounts"
+
+    id: Mapped[UuidPrimaryKey]
+    email: Mapped[str] = mapped_column(String(EMAIL_MAX_LENGTH), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Sealed with `CredentialBox` under the staff purpose, never stored in clear.
+    totp_secret: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[CreatedAt]
+    disabled_at: Mapped[OptionalTimestamp]
+
+
+class WebsitePayment(Base):
+    """The payment the website took before this organization existed (ADR-008, step 8).
+
+    One per organization: after it, the product's own billing owns renewals.
+    """
+
+    __tablename__ = "website_payments"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    razorpay_payment_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("staff_accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    recorded_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        CheckConstraint("amount_minor > 0", name="payment_is_positive"),
+        UniqueConstraint("org_id", name="uq_website_payments_org_id"),
+    )
+
+
+class PlanGrant(Base):
+    """A complimentary plan until a date (F31, FR27).
+
+    The plan in force is an active grant if there is one, else the paid plan.
+    Nothing rewrites `organizations.plan`, so a grant ends by its own date.
+    """
+
+    __tablename__ = "plan_grants"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    plan_slug: Mapped[str] = mapped_column(
+        String(SHORT_LABEL_LENGTH), ForeignKey("plans.slug", ondelete="RESTRICT"), nullable=False
+    )
+    # The services the allowance is sized on while the grant is in force.
+    services: Mapped[int] = mapped_column(Integer, nullable=False)
+    starts_at: Mapped[CreatedAt]
+    ends_at: Mapped[RequiredTimestamp]
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    granted_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("staff_accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    # Ended early by staff; NULL runs it to `ends_at`.
+    ended_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        CheckConstraint("ends_at > starts_at", name="grant_ends_after_it_starts"),
+        CheckConstraint("services > 0", name="grant_covers_a_service"),
+        Index("ix_plan_grants_org_id_ends_at", "org_id", "ends_at"),
+    )
+
+
+class SupportAccessGrant(Base):
+    """An owner's consent, for a time, to be viewed as by nexovue support (BR14)."""
+
+    __tablename__ = "support_access_grants"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    granted_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    granted_at: Mapped[CreatedAt]
+    expires_at: Mapped[RequiredTimestamp]
+    withdrawn_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        CheckConstraint("expires_at > granted_at", name="access_expires_after_it_starts"),
+        Index("ix_support_access_grants_org_id_expires_at", "org_id", "expires_at"),
+    )

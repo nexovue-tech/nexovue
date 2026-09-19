@@ -27,7 +27,8 @@ export function VerifyEmailBanner() {
   });
 
   const user = session.data?.user;
-  if (!user || user.email_verified_at !== null) return null;
+  // A support view is not the person, and may not send them mail.
+  if (!user || user.email_verified_at !== null || session.data?.support_view) return null;
 
   return (
     <p

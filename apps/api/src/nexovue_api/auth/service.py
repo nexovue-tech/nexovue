@@ -22,7 +22,7 @@ from nexovue_api.auth import second_factor
 from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.auth.credentials import normalize_email, verify_password
 from nexovue_api.auth.encryption import CredentialBox
-from nexovue_api.auth.permissions import permissions_of
+from nexovue_api.auth.permissions import permissions_of, permissions_while_viewed
 from nexovue_api.auth.queries import find_active_user_by_email, load_identity
 from nexovue_api.auth.schemas import IdentityResponse, OrganizationSummary, UserSummary
 from nexovue_api.auth.sessions import SessionStore
@@ -161,10 +161,20 @@ async def end_session(db: AsyncSession, sessions: SessionStore, token: str | Non
     except ValueError:
         # A session whose ids are not ids names nobody, so there is nobody to record.
         return
+    if ending.impersonation is not None:
+        # Support signing out of a view (F31): the person did not sign out.
+        audit.record_support_view_ended(
+            db,
+            org_id=org_id,
+            viewed_id=user_id,
+            staff_label=ending.impersonation.staff_label,
+            impersonation_id=uuid.UUID(ending.impersonation.impersonation_id),
+        )
+        return
     audit.record_session_ended(db, org_id=org_id, user_id=user_id)
 
 
-def describe_user(user: User) -> UserSummary:
+def describe_user(user: User, *, viewed_by_support: bool = False) -> UserSummary:
     """One place a `UserSummary` is built.
 
     It exists because there were two, and adding `email_verified_at` to the
@@ -179,14 +189,23 @@ def describe_user(user: User) -> UserSummary:
         role=user.role,
         timezone=user.timezone,
         email_verified_at=user.email_verified_at,
-        permissions=[str(action) for action in permissions_of(user.role)],
+        permissions=[
+            str(action)
+            for action in (
+                permissions_while_viewed(user.role)
+                if viewed_by_support
+                else permissions_of(user.role)
+            )
+        ],
     )
 
 
-def describe_identity(user: User, organization: Organization) -> IdentityResponse:
+def describe_identity(
+    user: User, organization: Organization, *, viewed_by_support: bool = False
+) -> IdentityResponse:
     """The shared body of login, signup's session, and `/auth/me`."""
     return IdentityResponse(
-        user=describe_user(user),
+        user=describe_user(user, viewed_by_support=viewed_by_support),
         organization=OrganizationSummary(
             id=organization.id, slug=organization.slug, name=organization.name
         ),

@@ -25,8 +25,11 @@ from nexovue_api.data.postgres.models import (
     BillingWebhookDelivery,
     NotificationChannel,
     Organization,
+    PlanGrant,
     Project,
+    SupportAccessGrant,
     User,
+    WebsitePayment,
 )
 
 
@@ -41,6 +44,25 @@ async def delete_billing_subscriptions(session: AsyncSession, org_id: uuid.UUID)
     """The paying arrangement, and the processor's reference for the customer."""
     return await _rows_deleted(
         session, delete(BillingSubscription).where(BillingSubscription.org_id == org_id)
+    )
+
+
+async def delete_website_payments(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """The website payment that bought the organization, and its processor reference."""
+    return await _rows_deleted(
+        session, delete(WebsitePayment).where(WebsitePayment.org_id == org_id)
+    )
+
+
+async def delete_plan_grants(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """Complimentary plans, with the reason staff gave for each."""
+    return await _rows_deleted(session, delete(PlanGrant).where(PlanGrant.org_id == org_id))
+
+
+async def delete_support_access_grants(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """The owner's consents to support; each names the owner who gave it."""
+    return await _rows_deleted(
+        session, delete(SupportAccessGrant).where(SupportAccessGrant.org_id == org_id)
     )
 
 
@@ -69,6 +91,9 @@ async def delete_notification_channels(session: AsyncSession, org_id: uuid.UUID)
 DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitable[int]]]] = {
     "billing_webhook_deliveries": delete_billing_webhook_deliveries,
     "billing_subscriptions": delete_billing_subscriptions,
+    "website_payments": delete_website_payments,
+    "plan_grants": delete_plan_grants,
+    "support_access_grants": delete_support_access_grants,
     "audit_log": delete_audit_log,
     "notification_channels": delete_notification_channels,
     "users": delete_users,

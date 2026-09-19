@@ -40,6 +40,15 @@ the same origin and cookie. An authorization bug that promotes a customer's role
   member exists (spec D9).
 - The admin app is cross-tenant by design, and is named as such to `test_postgres_tenancy_structure.py`
   rather than hidden from it.
+- **Built 2026-09-20 (F31, Stage 3).** Two consequences settled while building, each an assumption until the
+  deployment work of ADR-006 confirms it:
+  - *Production routing (plan Q2).* The production replica runs `admin-api` on its own port (8001) and never
+    routes it from the customer host. Its own hostname, and any IP restriction on it, are the deployment's
+    to add; nothing in the code assumes a name.
+  - *Self-hosted installs (plan Q3).* `admin-api` is not in the on-premise Compose file: a self-hosted
+    install has no nexovue staff, and its owners already hold every customer-side power.
+  - The admin page (`admin.html`) is built into the customer web image as a second entry. It holds no
+    secret; it is inert without a staff session and the admin API behind it.
 
 ## Rejected
 

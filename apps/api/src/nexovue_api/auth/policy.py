@@ -62,4 +62,5 @@ MayManageCredentials = Annotated[Identity, Depends(require(Action.MANAGE_CREDENT
 MayManageMembers = Annotated[Identity, Depends(require(Action.MANAGE_MEMBERS))]
 MayReadAudit = Annotated[Identity, Depends(require(Action.READ_AUDIT))]
 MayCommitSpend = Annotated[Identity, Depends(require(Action.COMMIT_SPEND))]
+MayGrantSupport = Annotated[Identity, Depends(require(Action.GRANT_SUPPORT))]
 MayEndTheOrganization = Annotated[Identity, Depends(require(Action.END_ORGANIZATION))]

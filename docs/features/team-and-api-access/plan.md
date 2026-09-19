@@ -232,21 +232,21 @@ them — they are signed out; try to demote the only owner — refused.
 *Judgeable:* `just staff create you@nexovue.com` enrols TOTP in the terminal; sign in at
 `http://localhost:15173/admin.html`; search finds `acme`.
 
-- [ ] **T25** — `apps/api/migrations/versions/0033_admin.py` · `staff_accounts`, `organizations.region`
+- [x] **T25** — `apps/api/migrations/versions/0033_admin.py` · `staff_accounts`, `organizations.region`
   (default `india`, CHECK), `support_access_grants`, `website_payments`, `plan_grants` · proved by
   `tests/test_admin_migration_live.py`
-- [ ] **T26** — new `staff/` (`cli.py`, `service.py`, `sessions.py`) · create (enrols TOTP; purpose
+- [x] **T26** — new `staff/` (`cli.py`, `service.py`, `sessions.py`) · create (enrols TOTP; purpose
   `staff-totp` on `CredentialBox`), disable; staff sessions in Redis `staff-session:`, cookie `nexovue_staff` ·
   proved by `tests/test_staff_live.py` (no account without a confirmed factor — AC26)
-- [ ] **T27** — `main.py` · extract `build_app(settings, routes)` from `create_app`; new `admin/main.py`
+- [x] **T27** — `main.py` · extract `build_app(settings, routes)` from `create_app`; new `admin/main.py`
   (`admin_app`) with admin routes only · proved by `tests/test_admin_app.py` (a customer session refused by
   every admin route, a staff cookie ignored by the customer app — AC27)
-- [ ] **T28** — new `admin/router.py`, `admin/service.py`, `admin/queries.py` · sign-in (password → TOTP),
+- [x] **T28** — new `admin/router.py`, `admin/service.py`, `admin/queries.py` · sign-in (password → TOTP),
   organization search and page (reusing `usage_for_organization`), each admin statement named in the tenancy
   `EXEMPT` as cross-tenant by design · proved by `tests/test_admin_live.py`
-- [ ] **T29** — `deploy/compose/docker-compose.yaml`, `docker-compose.app.yaml`, `justfile` · `admin-api`
+- [x] **T29** — `deploy/compose/docker-compose.yaml`, `docker-compose.app.yaml`, `justfile` · `admin-api`
   service (port 18001), `just staff …` · proved by `just dev` + `/healthz`
-- [ ] **T30** — web `apps/web/admin.html`, `src/admin/` (`main.tsx`, `SignInScreen`, `OrganizationsScreen`,
+- [x] **T30** — web `apps/web/admin.html`, `src/admin/` (`main.tsx`, `SignInScreen`, `OrganizationsScreen`,
   `OrganizationScreen`), `vite.config.ts` second input, dev proxy `/admin-api` → `admin-api:8000`,
   `deploy/nginx/web.conf` · proved by `src/admin/*.test.ts` and a structural test that `src/admin` imports
   only `shared/`
@@ -256,28 +256,28 @@ them — they are signed out; try to demote the only owner — refused.
 *Judgeable:* Onboard *Test Co* with an owner address and a payment id; the owner's *set your password* email
 appears in the API log; following it lands them in *Test Co*. With `SIGNUP_ENABLED=false`, `/signup` explains.
 
-- [ ] **T31** — `signup/service.py:76` · `password: str | None`, `region` · proved by
+- [x] **T31** — `signup/service.py:76` · `password: str | None`, `region` · proved by
   `tests/test_signup.py` and `tests/test_onboarding_live.py` (same rows as signup, table by table — AC24)
-- [ ] **T32** — `admin/service.py` · onboard (provision + set-password link + `WELCOME_OWNER` mail +
+- [x] **T32** — `admin/service.py` · onboard (provision + set-password link + `WELCOME_OWNER` mail +
   `website_payments` + audit), resend owner link · proved by `tests/test_onboarding_live.py` (AC23, AC25)
-- [ ] **T33** — `settings.py`, `signup/router.py`, new `GET /signup/status`, compose app env · signup switch ·
+- [x] **T33** — `settings.py`, `signup/router.py`, new `GET /signup/status`, compose app env · signup switch ·
   proved by `tests/test_signup_switch.py` (AC31)
-- [ ] **T34** — web `features/auth/SignupScreen.tsx`, admin `OnboardScreen.tsx` · proved by their tests
+- [x] **T34** — web `features/auth/SignupScreen.tsx`, admin `OnboardScreen.tsx` · proved by their tests
 
 ### Step 7 — Suspend, resume and comp from the console
 
 *Judgeable:* suspend `acme` with a reason — the receiver refuses its data; resume; comp *pro* until next month —
 the Usage screen shows the pro allowance.
 
-- [ ] **T35** — `suspend.py` · extract `close_valve`/`open_valve` into `organizations/valve.py` shared by CLI and
+- [x] **T35** — `suspend.py` · extract `close_valve`/`open_valve` into `organizations/valve.py` shared by CLI and
   admin · proved by new `tests/test_valve_live.py` (first tests of the valve) and T36
-- [ ] **T36** — `admin/router.py` · suspend/resume with reason, audit · proved by `tests/test_admin_live.py`
+- [x] **T36** — `admin/router.py` · suspend/resume with reason, audit · proved by `tests/test_admin_live.py`
   (AC28)
-- [ ] **T37** — `usage/queries.py` new `plan_in_force(session, *, org_id, on_day)`; replace every Python read
+- [x] **T37** — `usage/queries.py` new `plan_in_force(session, *, org_id, on_day)`; replace every Python read
   listed in C1 · proved by `tests/test_plan_in_force_live.py` (grant active, ended, none)
-- [ ] **T38** — `apps/receiver/internal/allowance/postgres.go:26-55` · active-grant LATERAL · proved by
+- [x] **T38** — `apps/receiver/internal/allowance/postgres.go:26-55` · active-grant LATERAL · proved by
   `allowance_test.go` new cases (grant widens allowance; ended grant does not)
-- [ ] **T39** — `admin/router.py` · grant / end comp, audit · proved by `tests/test_admin_live.py`
+- [x] **T39** — `admin/router.py` · grant / end comp, audit · proved by `tests/test_admin_live.py`
 
 ### Step 8 — Support access and *view as*
 
@@ -285,14 +285,14 @@ the Usage screen shows the pro allowance.
 shows the console with the banner and no edit controls; any write is refused; the owner's Audit log shows every
 page viewed.
 
-- [ ] **T40** — new `support/` (`router.py`, `service.py`) · grant/withdraw (owner, `Action.GRANT_SUPPORT`) ·
+- [x] **T40** — new `support/` (`router.py`, `service.py`) · grant/withdraw (owner, `Action.GRANT_SUPPORT`) ·
   proved by `tests/test_support_access_live.py`
-- [ ] **T41** — `admin/service.py`, `auth/sessions.py` (`impersonation` on `Session`), new
+- [x] **T41** — `admin/service.py`, `auth/sessions.py` (`impersonation` on `Session`), new
   `GET /support/view-as` · 60 s single-use ticket → session · proved by `tests/test_view_as_live.py`
-- [ ] **T42** — `auth/dependencies.py:44-73` · on an impersonation session: re-check the grant, refuse
+- [x] **T42** — `auth/dependencies.py:44-73` · on an impersonation session: re-check the grant, refuse
   non-GET/HEAD/OPTIONS; `middleware/support_audit.py` writes `support.view_request` rows · proved by
   `tests/test_view_as_live.py` (AC29, AC30: every mutating route in the app refused)
-- [ ] **T43** — web `app/layout/SupportBanner.tsx`, `features/support/SupportAccessScreen.tsx`, audit screen
+- [x] **T43** — web `app/layout/SupportBanner.tsx`, `features/support/SupportAccessScreen.tsx`, audit screen
   marks view-as rows; admin *View as* button · proved by their tests and `tools/e2e/tests/support.spec.ts`
 
 ## Stage 2 — Read API and MCP
@@ -428,3 +428,41 @@ Built as planned, with these changes, each for a reason found while building:
 - **Not done:** a render test of the billing screen by role (the gate is in place; its overview is a large
   fixture to stub). Recorded in `status.md`.
 
+
+### Stage 3 — Admin console (built 2026-09-20)
+
+Built as planned, with these changes, each for a reason found while building:
+
+- **Staff sign in in one step** — address, password and code together — not password then code. Every
+  failure answers one sentence, so the form cannot be used to learn which of the three was wrong, and a code
+  signs in once (`claim_step` keyed `staff:<id>`). The CLI is `staff/__main__.py` (`just staff create …`).
+- **Shared middleware, not `build_app`.** Both apps call `middleware/stack.py` `install_middleware`; each
+  mounts its own routers. `admin/main.py` serves `/admin/v1` with OpenAPI off.
+- **One admin screen file.** `src/admin/AdminApp.tsx` holds sign-in, search, organization and onboarding
+  behind hash routes; the dev proxy path is `/admin/v1`. Two structural tests gained one reasoned entry each:
+  the admin frame owns its page's `<main>`, and `admin/api.ts` is the admin app's one reading of a status
+  (`isSignedOut`), as `query-client.ts` is the console's.
+- **The signup switch is `GET /system/signup`**, not `/signup/status`: the auth tier's strict rate limit
+  covers `/signup*`, and a status read on every visit to `/signup` does not belong there. A closed switch
+  refuses with 403 before any other dependency runs (`SignupOpen`, declared first).
+- **The valve is proved in `test_admin_actions_live.py`** (console and terminal close the same valve, each
+  named in the audit log) rather than a separate `test_valve_live.py`; the plan in force likewise, rather
+  than `test_plan_in_force_live.py`.
+- **The receiver's grant is proved against a real Postgres** by `allowance/storeprobe_test.go` behind the
+  `storeprobe` build tag (`PROBE_PG_DSN`); `usageFrom` stays arithmetic. Seen red on the old SQL. `just check`
+  vets it; it is run by hand.
+- **Support-view auditing lives in `get_current_identity`**, not a middleware: it is where the session is
+  known to be a support view, and it runs below every route. **Each row is committed as it is written** — found
+  in the live check: a read that later failed (a 422) rolled its transaction back and took the row with it.
+- **`/auth/me` offers a support view reads only** (`permissions_while_viewed`: `read_audit`). The design hides
+  edit controls through `useCan`; without this the viewed owner's full permissions put every edit control on
+  screen for the API to refuse.
+- **The banner is `features/support/SupportBanner.tsx`** (mounted by `AppShell`, above the top bar) and hides
+  the verify-email offer during a view. *End now* is `POST /auth/logout`, the one write a view may make.
+- **The admin *View as* shows a link rather than opening a tab**: a tab opened after an awaited request is a
+  pop-up to the browser. The link works once, within 60 s.
+- **Organization deletion covers the new tables**: `website_payments`, `plan_grants` and
+  `support_access_grants` are deleted directly; `staff_accounts` is excluded as tenant-free
+  (`organizations/tables.py`).
+- **Not done:** `tools/e2e/tests/support.spec.ts`. It needs a staff account with a live TOTP inside the e2e
+  run; the same path was checked live instead (see `status.md`). Recorded as a risk.

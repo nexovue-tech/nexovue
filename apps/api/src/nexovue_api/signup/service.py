@@ -28,6 +28,7 @@ from nexovue_api.audit import service as audit
 from nexovue_api.auth.credentials import hash_password, is_valid_email, normalize_email
 from nexovue_api.data.postgres.models import (
     API_KEY_PREFIX_LENGTH,
+    REGIONS,
     ApiKey,
     Organization,
     Project,
@@ -73,19 +74,31 @@ class ProvisionedTenant:
     api_key: SecretStr
 
 
+# ADR-009: India unless nexovue onboards an organization into another region.
+DEFAULT_REGION: Final = "india"
+REGION_UNKNOWN_DETAIL: Final = "That is not a region nexovue runs in."
+
+
 async def provision_tenant(
     session: AsyncSession,
     *,
     organization_name: str,
     email: str,
-    password: str,
+    password: str | None,
     name: str | None = None,
+    region: str = DEFAULT_REGION,
     organization_slug: str | None = None,
     api_key: str | None = None,
     api_key_name: str = DEFAULT_API_KEY_NAME,
 ) -> ProvisionedTenant:
-    """Create a tenant. `organization_slug` and `api_key` are for the seed only."""
+    """Create a tenant. `organization_slug` and `api_key` are for the seed only.
+
+    `password` is None for an owner nexovue onboards by hand (F31, ADR-008): they
+    choose their own through a set-password link, and until then cannot sign in.
+    """
     address = normalize_email(email)
+    if region not in REGIONS:
+        raise InvalidRequestError(REGION_UNKNOWN_DETAIL)
     if not is_valid_email(address):
         raise InvalidRequestError(EMAIL_INVALID_DETAIL)
     if await queries.email_is_taken(session, address):
@@ -94,7 +107,7 @@ async def provision_tenant(
     slug = organization_slug or await _available_slug(session, slugify(organization_name))
     plaintext_key = api_key or await allocate_unused_key(session)
 
-    organization = Organization(slug=slug, name=organization_name)
+    organization = Organization(slug=slug, name=organization_name, region=region)
     session.add(organization)
     # Flush rather than commit: the ids are wanted, the transaction is not done.
     await _flush(session)
@@ -103,7 +116,7 @@ async def provision_tenant(
         org_id=organization.id,
         email=address,
         name=name,
-        password_hash=hash_password(password),
+        password_hash=hash_password(password) if password is not None else None,
         role=OWNER_ROLE,
     )
     project = Project(org_id=organization.id, slug=DEFAULT_PROJECT_SLUG, name=DEFAULT_PROJECT_NAME)

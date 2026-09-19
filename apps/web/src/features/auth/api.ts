@@ -332,3 +332,8 @@ export function previewInvitation(token: string) {
 export function acceptInvitation(input: { token: string; name: string; password: string }) {
   return apiClient.post<Session>("invitations/accept", input);
 }
+
+/** Whether this deployment lets anyone create an organization (F31, FR30). */
+export function signupStatus() {
+  return apiClient.get<{ enabled: boolean }>("system/signup");
+}

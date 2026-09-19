@@ -29,49 +29,46 @@ import sys
 from datetime import UTC, datetime
 from typing import Final
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.data.postgres import postgres_dsn
 from nexovue_api.data.postgres.models import Organization
+from nexovue_api.errors.exceptions import ConflictError
+from nexovue_api.organizations import valve
 
 EXIT_NO_SUCH_ORGANIZATION: Final = 2
 EXIT_ALREADY_IN_THAT_STATE: Final = 3
 
 
-async def close_valve(session: AsyncSession, slug: str, reason: str) -> str:
-    """Suspends ingest, and refuses a second close rather than restamping it.
+# Who closed or opened it, in the audit log: the terminal knows no staff identity.
+TERMINAL_OPERATOR: Final = "an operator at a terminal"
 
-    Restamping would move the suspension's start time and overwrite the reason
-    the customer is about to be told, which loses the only record of why.
-    """
+
+async def close_valve(session: AsyncSession, slug: str, reason: str) -> str:
+    """Suspends ingest through the one valve the console uses too (`valve.py`)."""
     organization = await _organization(session, slug)
-    if organization.ingest_suspended_at is not None:
-        raise _AlreadyInThatStateError(
-            f"{slug} was already suspended at "
-            f"{organization.ingest_suspended_at.isoformat()}: "
-            f"{organization.ingest_suspended_reason}"
+    try:
+        await valve.suspend(
+            session,
+            organization,
+            reason=reason,
+            actor_label=TERMINAL_OPERATOR,
+            now=datetime.now(UTC),
         )
-    await session.execute(
-        update(Organization)
-        .where(Organization.id == organization.id)
-        .values(ingest_suspended_at=datetime.now(UTC), ingest_suspended_reason=reason)
-    )
+    except ConflictError as already:
+        raise _AlreadyInThatStateError(str(already)) from already
     await session.commit()
     return f"{slug} suspended. Ingest is refused at every door within the receiver's cache TTL."
 
 
 async def open_valve(session: AsyncSession, slug: str) -> str:
-    """Resumes ingest. Clears the reason with it, because a reason outliving the
-    suspension it explains is a note that will be read as current."""
+    """Resumes ingest through the same valve."""
     organization = await _organization(session, slug)
-    if organization.ingest_suspended_at is None:
-        raise _AlreadyInThatStateError(f"{slug} is not suspended")
-    await session.execute(
-        update(Organization)
-        .where(Organization.id == organization.id)
-        .values(ingest_suspended_at=None, ingest_suspended_reason=None)
-    )
+    try:
+        await valve.resume(session, organization, actor_label=TERMINAL_OPERATOR)
+    except ConflictError as already:
+        raise _AlreadyInThatStateError(str(already)) from already
     await session.commit()
     return f"{slug} resumed. Data already refused while it was closed is not recoverable."
 

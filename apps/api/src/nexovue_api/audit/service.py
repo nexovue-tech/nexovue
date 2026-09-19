@@ -123,6 +123,18 @@ MEMBER_INVITE_WITHDRAWN: Final = "member.invite_withdrawn"
 MEMBER_JOINED: Final = "member.joined"
 MEMBER_ROLE_CHANGED: Final = "member.role_changed"
 MEMBER_REMOVED: Final = "member.removed"
+ORGANIZATION_ONBOARDED: Final = "organization.onboarded"
+ORGANIZATION_PAYMENT_RECORDED: Final = "organization.payment_recorded"
+ORGANIZATION_OWNER_LINK_SENT: Final = "organization.owner_link_sent"
+ORGANIZATION_INGEST_SUSPENDED: Final = "organization.ingest_suspended"
+ORGANIZATION_INGEST_RESUMED: Final = "organization.ingest_resumed"
+ORGANIZATION_PLAN_GRANTED: Final = "organization.plan_granted"
+ORGANIZATION_PLAN_GRANT_ENDED: Final = "organization.plan_grant_ended"
+SUPPORT_ACCESS_GRANTED: Final = "support.access_granted"
+SUPPORT_ACCESS_WITHDRAWN: Final = "support.access_withdrawn"
+SUPPORT_VIEW_STARTED: Final = "support.view_started"
+SUPPORT_VIEW_REQUEST: Final = "support.view_request"
+SUPPORT_VIEW_ENDED: Final = "support.view_ended"
 
 ORGANIZATION_TARGET: Final = "organization"
 USER_TARGET: Final = "user"
@@ -877,6 +889,209 @@ def record_member_removed(
         action=MEMBER_REMOVED,
         target=_target(USER_TARGET, member.id),
         detail={"email": email, "role": member.role},
+    )
+
+
+# F31: what nexovue staff do. The actor is a label, never a customer's user.
+
+
+def record_organization_onboarded(
+    db: AsyncSession, *, organization: Organization, owner_email: str, staff_label: str
+) -> None:
+    _add(
+        db,
+        org_id=organization.id,
+        actor_user_id=None,
+        actor_label=staff_label,
+        action=ORGANIZATION_ONBOARDED,
+        target=_target(ORGANIZATION_TARGET, organization.id),
+        detail={"owner": owner_email, "region": organization.region},
+    )
+
+
+def record_payment_recorded(
+    db: AsyncSession,
+    *,
+    organization: Organization,
+    payment_id: str,
+    amount_minor: int,
+    currency: str,
+    staff_label: str,
+) -> None:
+    _add(
+        db,
+        org_id=organization.id,
+        actor_user_id=None,
+        actor_label=staff_label,
+        action=ORGANIZATION_PAYMENT_RECORDED,
+        target=_target(ORGANIZATION_TARGET, organization.id),
+        detail={"payment": payment_id, "amount_minor": amount_minor, "currency": currency},
+    )
+
+
+def record_owner_link_sent(db: AsyncSession, *, owner: User, staff_label: str) -> None:
+    _add(
+        db,
+        org_id=owner.org_id,
+        actor_user_id=None,
+        actor_label=staff_label,
+        action=ORGANIZATION_OWNER_LINK_SENT,
+        target=_target(USER_TARGET, owner.id),
+        detail={"email": owner.email},
+    )
+
+
+def record_ingest_suspended(
+    db: AsyncSession, *, organization: Organization, reason: str, actor_label: str
+) -> None:
+    _add(
+        db,
+        org_id=organization.id,
+        actor_user_id=None,
+        actor_label=actor_label,
+        action=ORGANIZATION_INGEST_SUSPENDED,
+        target=_target(ORGANIZATION_TARGET, organization.id),
+        detail={"reason": reason},
+    )
+
+
+def record_ingest_resumed(
+    db: AsyncSession, *, organization: Organization, actor_label: str
+) -> None:
+    _add(
+        db,
+        org_id=organization.id,
+        actor_user_id=None,
+        actor_label=actor_label,
+        action=ORGANIZATION_INGEST_RESUMED,
+        target=_target(ORGANIZATION_TARGET, organization.id),
+    )
+
+
+def record_plan_granted(
+    db: AsyncSession,
+    *,
+    organization: Organization,
+    plan_slug: str,
+    services: int,
+    ends_at: str,
+    reason: str,
+    actor_label: str,
+) -> None:
+    _add(
+        db,
+        org_id=organization.id,
+        actor_user_id=None,
+        actor_label=actor_label,
+        action=ORGANIZATION_PLAN_GRANTED,
+        target=_target(ORGANIZATION_TARGET, organization.id),
+        detail={"plan": plan_slug, "services": services, "until": ends_at, "reason": reason},
+    )
+
+
+def record_plan_grant_ended(
+    db: AsyncSession, *, organization: Organization, plan_slug: str, actor_label: str
+) -> None:
+    _add(
+        db,
+        org_id=organization.id,
+        actor_user_id=None,
+        actor_label=actor_label,
+        action=ORGANIZATION_PLAN_GRANT_ENDED,
+        target=_target(ORGANIZATION_TARGET, organization.id),
+        detail={"plan": plan_slug},
+    )
+
+
+# F31: nexovue support viewing the console as a person, with the owner's consent.
+
+
+def record_support_access_granted(
+    db: AsyncSession, *, org_id: uuid.UUID, owner_id: uuid.UUID, until: str
+) -> None:
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=owner_id,
+        action=SUPPORT_ACCESS_GRANTED,
+        target=_target(ORGANIZATION_TARGET, org_id),
+        detail={"until": until},
+    )
+
+
+def record_support_access_withdrawn(
+    db: AsyncSession, *, org_id: uuid.UUID, owner_id: uuid.UUID
+) -> None:
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=owner_id,
+        action=SUPPORT_ACCESS_WITHDRAWN,
+        target=_target(ORGANIZATION_TARGET, org_id),
+    )
+
+
+def record_support_view_started(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    viewed: User,
+    staff_label: str,
+    reason: str,
+    impersonation_id: uuid.UUID,
+    until: str,
+) -> None:
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=None,
+        actor_label=staff_label,
+        impersonation_context=impersonation_id,
+        action=SUPPORT_VIEW_STARTED,
+        target=_target(USER_TARGET, viewed.id),
+        detail={"reason": reason, "until": until, "viewed": viewed.name or viewed.email},
+    )
+
+
+def record_support_view_request(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    viewed_id: uuid.UUID,
+    staff_label: str,
+    impersonation_id: uuid.UUID,
+    method: str,
+    path: str,
+) -> None:
+    """One per request made while viewing as someone (FR29, AC30)."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=None,
+        actor_label=staff_label,
+        impersonation_context=impersonation_id,
+        action=SUPPORT_VIEW_REQUEST,
+        target=_target(USER_TARGET, viewed_id),
+        detail={"request": f"{method} {path}"},
+    )
+
+
+def record_support_view_ended(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    viewed_id: uuid.UUID,
+    staff_label: str,
+    impersonation_id: uuid.UUID,
+) -> None:
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=None,
+        actor_label=staff_label,
+        impersonation_context=impersonation_id,
+        action=SUPPORT_VIEW_ENDED,
+        target=_target(USER_TARGET, viewed_id),
     )
 
 

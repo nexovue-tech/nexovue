@@ -62,11 +62,19 @@ class OrganizationSummary(BaseModel):
     name: str
 
 
+class SupportViewSummary(BaseModel):
+    """Set while nexovue support views the console as this person (F31)."""
+
+    staff: str
+    until: datetime
+
+
 class IdentityResponse(BaseModel):
     """The body login and `/auth/me` share."""
 
     user: UserSummary
     organization: OrganizationSummary
+    support_view: SupportViewSummary | None = None
 
 
 class LoginRequest(BaseModel):

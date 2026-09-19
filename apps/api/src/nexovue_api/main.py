@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, FastAPI
 from nexovue_platform.telemetry.logging import configure_logging
-from starlette.middleware.cors import CORSMiddleware
 
 from nexovue_api.alerts import router as alerts_router
 from nexovue_api.apikeys import router as apikeys_router
@@ -41,10 +40,7 @@ from nexovue_api.logs import router as logs_router
 from nexovue_api.maintenance import router as maintenance_router
 from nexovue_api.members import router as members_router
 from nexovue_api.metrics import router as metrics_router
-from nexovue_api.middleware.correlation import CorrelationIdMiddleware
-from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
-from nexovue_api.middleware.ratelimit import RateLimitMiddleware
-from nexovue_api.middleware.request_log import RequestLogMiddleware
+from nexovue_api.middleware.stack import install_middleware
 from nexovue_api.organizations import router as organizations_router
 from nexovue_api.profile import router as profile_router
 from nexovue_api.profiles import router as profiles_router
@@ -55,6 +51,7 @@ from nexovue_api.services import router as services_router
 from nexovue_api.settings import API_PREFIX, Settings, load_settings_or_exit
 from nexovue_api.signup import router as signup_router
 from nexovue_api.sourcemaps import router as source_maps_router
+from nexovue_api.support import router as support_router
 from nexovue_api.synthetics import router as synthetics_router
 from nexovue_api.system import router as system_router
 from nexovue_api.traces import router as traces_router
@@ -86,30 +83,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # with explicit settings gets those and not whatever the environment holds.
     app.state.settings = settings
 
-    _install_middleware(app, settings)
+    install_middleware(app, settings)
     install_error_handlers(app)
     _install_routes(app)
     return app
-
-
-def _install_middleware(app: FastAPI, settings: Settings) -> None:
-    app.add_middleware(
-        RateLimitMiddleware,
-        enabled=settings.rate_limit_enabled,
-        trusted_proxy_count=settings.trusted_proxy_count,
-    )
-    app.add_middleware(RequestLogMiddleware)
-    app.add_middleware(CorrelationIdMiddleware)
-    app.add_middleware(ExceptionBoundaryMiddleware)
-
-    if settings.cors_allowed_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=settings.cors_allowed_origins,
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
 
 
 def _install_routes(app: FastAPI) -> None:
@@ -126,6 +103,7 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(members_router.router)
     versioned.include_router(members_router.invitation_router)
     versioned.include_router(audit_router.router)
+    versioned.include_router(support_router.router)
     versioned.include_router(projects_router.router)
     versioned.include_router(apikeys_router.router)
     versioned.include_router(apikeys_router.site_key_router)

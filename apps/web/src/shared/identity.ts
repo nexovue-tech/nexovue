@@ -20,6 +20,7 @@ export type Action =
   | "manage_credentials"
   | "manage_members"
   | "manage_owners"
+  | "grant_support"
   | "read_audit"
   | "commit_spend"
   | "end_organization";
@@ -48,9 +49,18 @@ export interface AuthenticatedUser {
   permissions: Action[];
 }
 
+/** Set while nexovue support views the console as this person (F31): read-only. */
+export interface SupportView {
+  /** "Raj at nexovue". */
+  staff: string;
+  /** ISO timestamp; the session ends then whatever happens. */
+  until: string;
+}
+
 export interface Session {
   user: AuthenticatedUser;
   organization: Organization;
+  support_view?: SupportView | null;
 }
 
 export const sessionQueryKey = ["auth", "me"] as const;

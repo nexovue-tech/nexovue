@@ -69,6 +69,13 @@ EXEMPT: Final = {
     # An invite must say when an address belongs to another organization (D1),
     # and addresses are unique system-wide — `email_is_taken`'s reason.
     "find_by_email",
+    # The admin console's organization search (F31, ADR-016): staff search every
+    # tenant by design, from a separate app behind a staff session with a second
+    # factor. Every read about one organization after the search names it.
+    "search_organizations",
+    # A website payment buys one organization, and its processor id is unique
+    # system-wide — `key_prefix_is_taken`'s reason.
+    "payment_is_recorded",
 }
 
 

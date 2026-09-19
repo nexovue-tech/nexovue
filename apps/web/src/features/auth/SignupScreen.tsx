@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 
@@ -7,7 +7,7 @@ import { TextField } from "@/shared/components/TextField";
 import { rememberFirstSetup } from "@/shared/session";
 
 import { AuthScreenLayout, FormMessage } from "./AuthScreenLayout";
-import { PASSWORD_MIN_LENGTH, signup } from "./api";
+import { PASSWORD_MIN_LENGTH, signup, signupStatus } from "./api";
 import { describeFormProblem } from "./problem-fields";
 
 /**
@@ -15,6 +15,33 @@ import { describeFormProblem } from "./problem-fields";
  * the ingest key here and never again, so it is handed straight to the next screen.
  */
 export function SignupScreen() {
+  // Asked, not assumed (F31, D10): nexovue's cloud sets its customers up after they
+  // pay, and says so here rather than offering a form the API will refuse.
+  const status = useQuery({ queryKey: ["system", "signup"], queryFn: signupStatus });
+  // Nothing until the answer is in, so a closed signup never flashes a form first.
+  // A failed answer shows the form: the API refuses a closed signup regardless.
+  if (status.isPending) return null;
+  if (status.data?.enabled === false) {
+    return (
+      <AuthScreenLayout
+        title="nexovue cloud is set up for you"
+        intro="Choose a plan at nexovue.com. Once it is paid we set up your organization and email you a link to choose your password."
+        footer={
+          <p>
+            Already have an account?{" "}
+            <Link to="/login" className="text-brand-text hover:underline">
+              Sign in
+            </Link>
+            .
+          </p>
+        }
+      />
+    );
+  }
+  return <SignupForm />;
+}
+
+function SignupForm() {
   const navigate = useNavigate();
 
   const [companyName, setCompanyName] = useState("");

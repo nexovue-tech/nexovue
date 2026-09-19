@@ -26,6 +26,7 @@ from nexovue_api.auth.schemas import (
     PasswordResetRequest,
     SecondFactorChallenge,
     SecondFactorSubmission,
+    SupportViewSummary,
     TokenSubmission,
 )
 from nexovue_api.auth.sessions import session_token_from_headers
@@ -130,7 +131,15 @@ async def logout(
 
 @router.get("/me", summary="The signed-in user and their organization")
 async def me(identity: CurrentIdentity) -> IdentityResponse:
-    return service.describe_identity(identity.user, identity.organization)
+    # A support view is offered no control the read-only rule would refuse.
+    described = service.describe_identity(
+        identity.user, identity.organization, viewed_by_support=identity.impersonation is not None
+    )
+    if identity.impersonation is not None:
+        described.support_view = SupportViewSummary(
+            staff=identity.impersonation.staff_label, until=identity.impersonation.until
+        )
+    return described
 
 
 @router.post(

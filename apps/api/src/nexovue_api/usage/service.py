@@ -98,15 +98,24 @@ async def usage_for_organization(
         await queries.billing_currency(session, org_id=organization.id)
         or queries.DEFAULT_BILLING_CURRENCY
     )
+    # A complimentary grant, while active, is the plan in force (F31, FR27).
+    in_force = await queries.plan_in_force(
+        session, org_id=organization.id, paid_plan=organization.plan, at=datetime.now(UTC)
+    )
     price = await queries.find_effective_price(
-        session, plan_slug=organization.plan, currency=currency, on_day=to_day
+        session, plan_slug=in_force.slug, currency=currency, on_day=to_day
     )
 
     return UsageResponse(
-        plan=await _plan_of(session, organization),
+        plan=await _plan_of(session, in_force.slug),
         price=_price_summary(price),
         period=await _billing_period(
-            session, org_id=organization.id, to_day=to_day, price=price, frontier=frontier
+            session,
+            org_id=organization.id,
+            to_day=to_day,
+            price=price,
+            frontier=frontier,
+            services_committed=in_force.services_committed,
         ),
         cardinality=await _cardinality_warnings(session, org_id=organization.id, to_day=to_day),
         from_day=from_day,
@@ -156,7 +165,7 @@ def is_settled(day: date, frontier: MeteringFrontier) -> bool:
     return frontier.counted_through >= ends
 
 
-async def _plan_of(session: AsyncSession, organization: Organization) -> PlanSummary:
+async def _plan_of(session: AsyncSession, plan_slug: str) -> PlanSummary:
     """The tier this organization is on.
 
     `organizations.plan` is a non-null foreign key onto `plans.slug` with
@@ -164,7 +173,7 @@ async def _plan_of(session: AsyncSession, organization: Organization) -> PlanSum
     caller's mistake — reported as one, not papered over with a default tier
     that would misstate the customer's retention.
     """
-    plan = await queries.find_plan(session, slug=organization.plan)
+    plan = await queries.find_plan(session, slug=plan_slug)
     if plan is None:
         raise InternalError()
     return PlanSummary(
@@ -196,6 +205,9 @@ async def _billing_period(
     to_day: date,
     price: PlanPrice | None,
     frontier: MeteringFrontier,
+    # What sizes the allowance on a paid tier or a grant — the plan's own ceiling
+    # sizes it on the free one, and then this is unused. G6a.
+    services_committed: int | None,
 ) -> BillingPeriodUsage:
     """The calendar month around `to_day`, and what it has come to.
 
@@ -210,9 +222,6 @@ async def _billing_period(
         session, org_id=org_id, from_day=period.first_day, to_day=period.last_day
     )
     cost = billing.service_cost_minor_units(services, price)
-    # What sizes the allowance on a paid tier — the plan's own ceiling sizes it
-    # on the free one, and then this is unused. G6a.
-    services_committed = await queries.active_services_committed(session, org_id=org_id)
 
     return BillingPeriodUsage(
         first_day=period.first_day,

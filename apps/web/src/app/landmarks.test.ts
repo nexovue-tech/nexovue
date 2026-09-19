@@ -29,10 +29,14 @@ const within = (path: string) => path.replace(/^\/src\//, "");
  * `features/docs/DocsScreen.tsx` is the exception and stays one: the setup pages are
  * routed off the root rather than through the shell — unauthenticated, so somebody
  * can read them before signing up — and are therefore the whole page themselves.
+ *
+ * `admin/AdminApp.tsx` is the staff console's frame (F31): a separate page,
+ * `admin.html`, with no shell around it.
  */
 const MAY_RENDER_A_MAIN: readonly string[] = [
   "app/layout/AppShell.tsx",
   "features/docs/DocsScreen.tsx",
+  "admin/AdminApp.tsx",
 ];
 
 const RENDERS_A_MAIN = /<main[\s>]|role="main"/;

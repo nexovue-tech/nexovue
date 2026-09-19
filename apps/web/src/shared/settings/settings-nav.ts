@@ -13,6 +13,7 @@ export type SettingsPath =
   | "/settings/api-keys"
   | "/settings/members"
   | "/settings/audit"
+  | "/settings/support"
   | "/settings/channels"
   | "/settings/projects"
   | "/settings/billing"
@@ -85,6 +86,12 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
         title: "Audit log",
         requires: "read_audit",
         keywords: ["audit", "history", "activity", "who", "log", "security", "support"],
+      },
+      {
+        path: "/settings/support",
+        title: "Support access",
+        requires: "grant_support",
+        keywords: ["support", "help", "view as", "impersonate", "access", "nexovue"],
       },
       {
         path: "/settings/channels",

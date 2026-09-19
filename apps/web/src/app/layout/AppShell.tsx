@@ -2,6 +2,7 @@ import { Outlet } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
 import { VerifyEmailBanner } from "@/features/auth/VerifyEmailBanner";
+import { SupportBanner } from "@/features/support/SupportBanner";
 import { ErrorBoundary } from "@/shared/components/ErrorBoundary";
 import { useOnlineStatus } from "@/shared/hooks/use-online-status";
 
@@ -50,6 +51,8 @@ export function AppShell() {
       ) : null}
 
       <div className="flex min-w-0 flex-1 flex-col">
+        {/* Above everything: whoever reads the screen is not the person signed in. */}
+        <SupportBanner />
         <TopBar onOpenNav={openNav} />
 
         {online ? null : (
