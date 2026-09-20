@@ -1,0 +1,52 @@
+<clickhouse>
+    <!-- ClickHouse's own logs, bounded.
+
+         Every system log is on by default and none has a TTL, so each behaves
+         like any other MergeTree: it inserts, merges, holds part metadata in
+         memory and grows for ever. Measured on the development stack
+         (docs/changes/clickhouse-system-logs/): 6.7 GiB of the 7.3 GiB on disk
+         was ClickHouse describing itself, against ~600 MiB of actual customer
+         telemetry — 76 million rows of text_log, 319 million of
+         asynchronous_metric_log. Inside a 4 GiB server budget that is most of
+         the budget spent on tables nothing reads, which is why unrelated live
+         suites failed MEMORY_LIMIT_EXCEEDED and why restarting the container
+         appeared to fix them.
+
+         Off entirely. `remove="1"` is ClickHouse's own way of saying "do not
+         create this table": -->
+
+    <!-- The server's stderr, duplicated into a table. The log is already read
+         with `docker compose logs`; nothing queries this. -->
+    <text_log remove="1"/>
+
+    <!-- A sampling profiler's stack traces. Useful when profiling ClickHouse
+         itself, which is not something this project does. -->
+    <trace_log remove="1"/>
+
+    <!-- A row per processor per query: 21 million rows here, read by nobody. -->
+    <processors_profile_log remove="1"/>
+
+    <!-- Metrics about metrics, at one row per metric per second. It was the
+         largest table by row count in the whole database. `metric_log` below
+         keeps the same readings in a far cheaper shape. -->
+    <asynchronous_metric_log remove="1"/>
+
+    <!-- Kept, and bounded. These three are what an operator actually reads when
+         something is wrong: which query was slow, which merge ran, what memory
+         was doing. Three days outlives any debugging session and cannot grow
+         into the next quarter.
+
+         TTL is applied to the table at creation. An existing table keeps the
+         TTL it was made with, so a store that predates this file needs
+         `ALTER TABLE system.<name> MODIFY TTL …` once — noted in the change
+         record rather than scripted, because it is a one-time repair. -->
+    <query_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </query_log>
+    <part_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </part_log>
+    <metric_log>
+        <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+    </metric_log>
+</clickhouse>

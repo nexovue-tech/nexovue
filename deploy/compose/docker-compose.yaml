@@ -34,6 +34,12 @@ services:
       - "${KAFKA_HOST_PORT:-19092}:29092"
 
   clickhouse:
+    # Development only: superseded parts are dropped in 30 seconds rather than
+    # 480, because the gate's purge suites otherwise hold gigabytes of part
+    # metadata (docs/changes/clickhouse-system-logs/). Deployment targets keep
+    # ClickHouse's own answer — see the file for why.
+    volumes:
+      - ../clickhouse/config.d/dev-parts.xml:/etc/clickhouse-server/config.d/dev-parts.xml:ro
     ports:
       - "${CLICKHOUSE_HTTP_HOST_PORT:-18123}:8123"
       - "${CLICKHOUSE_NATIVE_HOST_PORT:-19000}:9000"
