@@ -432,6 +432,19 @@ class Settings(BaseSettings):
         return self.env == "development"
 
     @property
+    def console_docs_published(self) -> bool:
+        """Whether the *console* API describes itself to anyone who asks.
+
+        Off outside development (founder's decision, 2026-09-20). The document
+        names every endpoint, field and shape the console uses, including the
+        admin and billing routes — a map of the building, not a key to it, but a
+        free reconnaissance step for anyone probing us, and nothing a customer
+        needs. What a customer needs is the read surface, which is published
+        separately and always (`readsurface/`, F36 FR20).
+        """
+        return self.is_development
+
+    @property
     def session_cookie_secure(self) -> bool:
         """Secure everywhere but development, which is served over plain http."""
         return not self.is_development

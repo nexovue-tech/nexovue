@@ -130,6 +130,53 @@ def test_the_console_document_still_holds_everything(app: FastAPI, spec: dict[st
     assert f"{API_PREFIX}/members" in whole["paths"]
 
 
+def _app_in(env: str) -> FastAPI:
+    """The app as that environment builds it.
+
+    `OTLP_ENDPOINT` is overridden because settings refuse a localhost one
+    outside development — signup hands that address to every new account.
+    """
+    from nexovue_api.main import create_app
+
+    environment = {
+        **TEST_ENVIRONMENT,
+        "ENV": env,
+        "OTLP_ENDPOINT": "https://ingest.nexovue.com",
+    }
+    return create_app(Settings(**environment))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("env", ["production", "staging"])
+async def test_outside_development_the_console_describes_itself_to_nobody(env: str) -> None:
+    """The founder's decision, 2026-09-20: the console's own document names every
+    admin and billing route, and nothing a customer needs is in it."""
+    import httpx
+
+    transport = httpx.ASGITransport(app=_app_in(env))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        console = await client.get(f"{API_PREFIX}/openapi.json")
+        interactive = await client.get(f"{API_PREFIX}/docs")
+        read_api = await client.get(f"{API_PREFIX}{READ_SPEC_PATH}")
+
+    assert console.status_code == 404
+    assert interactive.status_code == 404
+    # The one customers were promised stays published, wherever this runs.
+    assert read_api.status_code == 200
+    assert len(read_api.json()["paths"]) > 0
+
+
+async def test_in_development_the_console_still_describes_itself() -> None:
+    """Taking the interactive docs away from a developer would be a different
+    decision, and not the one that was made."""
+    import httpx
+
+    transport = httpx.ASGITransport(app=_app_in("development"))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        console = await client.get(f"{API_PREFIX}/openapi.json")
+
+    assert console.status_code == 200
+
+
 async def test_the_document_is_served_without_a_credential(app: FastAPI) -> None:
     """A description nobody can fetch without a token is a description nobody
     fetches: the generator runs before the customer has wired one up."""

@@ -77,13 +77,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # until its ASGI app has been built, and the lifespan needs the server.
     assistant, assistant_app = assistant_server.build(settings)
 
+    # The console's own description is a development convenience; in every other
+    # environment it is off, and the read API publishes its own (F36, FR20).
+    published = settings.console_docs_published
     app = FastAPI(
         title=API_TITLE,
         lifespan=build_lifespan(settings, assistant=assistant),
         # Ours are problem+json; FastAPI's default handlers would emit its own
         # `{"detail": ...}` shape alongside them.
-        openapi_url=f"{API_PREFIX}/openapi.json",
-        docs_url=f"{API_PREFIX}/docs",
+        openapi_url=f"{API_PREFIX}/openapi.json" if published else None,
+        docs_url=f"{API_PREFIX}/docs" if published else None,
     )
 
     # Dependencies read configuration from here, so a test that builds the app
