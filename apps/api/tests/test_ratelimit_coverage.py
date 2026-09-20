@@ -36,7 +36,9 @@ _CLICKHOUSE_NAMES: Final = ("TenantRepository", "TenantScopedRepository")
 
 
 def _router_files() -> list[Path]:
-    return sorted((Path(nexovue_api.__file__).parent).rglob("router.py"))
+    # The source root rather than one package: a router is judged by where it
+    # reads from, never by which package it happens to sit in today.
+    return sorted((Path(nexovue_api.__file__).parents[1]).rglob("router.py"))
 
 
 def _prefixes(source: str) -> list[str]:

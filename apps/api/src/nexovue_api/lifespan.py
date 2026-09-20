@@ -38,6 +38,7 @@ from nexovue_api.health.registry import CheckRegistry
 from nexovue_api.ratelimit.limiter import RateLimiter
 from nexovue_api.ratelimit.policy import FixedPlanLimits
 from nexovue_api.settings import Settings
+from nexovue_api.superadmin.seed import seed_super_admin
 
 logger = get_logger(__name__)
 
@@ -146,6 +147,7 @@ def build_lifespan(
         app.state.rate_limiter = resources.rate_limiter
         app.state.plan_limits = FixedPlanLimits()
         app.state.health = CheckRegistry(dependency_checks(resources))
+        await _seed_the_operator(resources, settings)
         logger.info("api started", env=settings.env)
         try:
             if assistant is None:
@@ -158,6 +160,23 @@ def build_lifespan(
             logger.info("api stopped")
 
     return lifespan
+
+
+async def _seed_the_operator(resources: Resources, settings: Settings) -> None:
+    """Create or update nexovue's own operator from the environment.
+
+    At boot rather than in a migration: the password lives in the environment,
+    so rotating it is a restart. A failure here is logged and not raised — the
+    API serving customers must not be held hostage by the operator account.
+    """
+    try:
+        async with resources.session_factory() as session, session.begin():
+            operator = await seed_super_admin(session, settings)
+    except Exception:
+        logger.exception("the super admin could not be seeded")
+        return
+    if operator is not None:
+        logger.info("super admin ready", email=operator.email)
 
 
 async def open_resources(settings: Settings) -> Resources:

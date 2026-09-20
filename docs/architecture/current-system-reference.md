@@ -336,7 +336,7 @@ A concrete request path: a query parameter naming a project is first proven — 
 
 **Membership roles**: `owner`, `admin`, `member`, `viewer`. Since F26 the roles are one checked-in table of *actions* (`auth/permissions.py`), and each action has a named route dependency (`MayManageMembers`, `MayOperateChecks`, …). A structural test parses every mutating route and fails if it takes only a bare "who is signed in" dependency instead of the exact policy the table names for it, with a small documented exemption list (signup, login/logout, email-confirmation links opened from a mail client, and the signature-verified deploy webhook). `GET /auth/me` returns the caller's action list, and the console hides what a role may not do.
 
-**Three principals, not one.** A *person* is a session (above). A *token* is an API token (§6.6) and reaches only the documented read surface. *Staff* are nexovue's own people and do not exist in `users` at all: they live in `staff_accounts`, sign in with a password and a TOTP code, and work in a second FastAPI app (`nexovue_api.admin.main`) served on its own port behind its own cookie — neither app parses the other's session. A fourth, temporary principal exists during a **support view**: a customer session carrying an impersonation record, refused any method but `GET`/`HEAD`/`OPTIONS` below every route, audited on every request, and live only inside an owner's time-boxed grant.
+**Two principals, not one.** A *person* is a session (above). A *token* is an API token (§6.6) and reaches only the documented read surface. nexovue's own **operator** is not a third kind: since ADR-018 it is one `users` row with `role = "super_admin"` in a reserved organization, seeded at boot from the environment and reachable only through the ordinary sign-in page. What separates it is the role — which grants nothing inside any organization — plus a step-up: every `/api/v1/admin/…` route is refused unless the session was re-verified with a password or a TOTP code within the last 30 minutes, a stamp held on the session record so signing out revokes it. A third, temporary principal exists during a **support view**: a customer session carrying an impersonation record, refused any method but `GET`/`HEAD`/`OPTIONS` below every route, audited on every request, and live only inside an owner's time-boxed grant.
 
 ### 6.6 API keys and read tokens
 
@@ -350,7 +350,7 @@ Two entirely separate ingest credential kinds in two separate tables — secret 
 
 **Deleting a project** revokes every live credential the project holds (API keys, site keys, webhook secrets) immediately, because the receiver resolves an ingest key without joining the `projects` table — a soft-deleted flag alone would not actually stop new data arriving under that project's key.
 
-**Suspending an organization's ingest** writes exactly two columns on the organization row (a timestamp and a required, freely-typed reason — there is no default reason, because "a default reason is a reason nobody actually wrote"). Since F31 there are two ways in and one valve: the command-line tool, which records the actor as *an operator at a terminal*, and the staff admin console, which records the staff member by name. Both go through `organizations/valve.py` and both are audited.
+**Suspending an organization's ingest** writes exactly two columns on the organization row (a timestamp and a required, freely-typed reason — there is no default reason, because "a default reason is a reason nobody actually wrote"). Since F31 there are two ways in and one valve: the command-line tool, which records the actor as *an operator at a terminal*, and the platform area of the console, which records the operator by name. Both go through `organizations/valve.py` and both are audited.
 
 ### 6.8 Rate limiting
 
@@ -509,11 +509,10 @@ Owned entirely by `apps/api`, applied with Alembic. Selected tables (columns abb
 | `plans` / `plan_prices` | Tier definitions and append-only, currency-and-date-keyed price rows — a repricing is always a new row, never an edit, so an existing customer's signed rate never silently changes |
 | `api_keys` / `site_keys` | The two ingest credential kinds described in §4.5/§6.6, in separate tables by design |
 | `api_tokens` / `api_token_usage_daily` | Organization-owned read credentials (§6.6) and what each spent per day |
-| `staff_accounts` | nexovue's own staff: password, sealed TOTP secret. Deliberately tenant-free — staff are cross-tenant by design |
 | `website_payments` | The payment that bought an organization before it existed (one per organization) |
 | `plan_grants` | A complimentary plan until a date. The plan in force is an active grant if there is one, else `organizations.plan`, which nothing rewrites |
 | `support_access_grants` | An owner's time-boxed consent for nexovue support to view the console as one of their people |
-| `audit_log` | Who did what: actor, action, target, a JSONB detail, and — for a support view — the staff label and impersonation id |
+| `audit_log` | Who did what: actor, action, target, a JSONB detail, and — for a support view — the operator's label and impersonation id |
 | `checks` / `integrations` | Synthetic check and cloud/database connector definitions |
 | `deploy_events` / `project_webhook_secrets` | Deploy notifications and the signing secrets that authenticate them |
 | `usage_daily` / `usage_daily_services` / `usage_ingest_offsets` | Per-day, per-project counters and the distinct-service set that determines the billable quantity |

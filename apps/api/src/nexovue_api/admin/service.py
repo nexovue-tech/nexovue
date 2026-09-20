@@ -28,7 +28,6 @@ from nexovue_api.auth import set_password
 from nexovue_api.data.postgres.models import (
     Organization,
     PlanGrant,
-    StaffAccount,
     User,
     WebsitePayment,
 )
@@ -51,13 +50,17 @@ OWNER_ALREADY_ACTIVE: Final = "The owner has already set a password; there is no
 logger = structlog.get_logger(__name__)
 
 
-def staff_label(staff: StaffAccount) -> str:
-    """How a staff member is named in a customer's audit log (FR37)."""
-    return f"{staff.name} at nexovue"
+def operator_label(operator: User) -> str:
+    """How nexovue is named in a customer's audit log when we act (FR37).
+
+    A label, not a link: a customer reads their own history and should see who
+    it was, not the id of a row in a table they cannot open.
+    """
+    return f"{operator.name or operator.email} at nexovue"
 
 
 async def onboard(
-    db: AsyncSession, *, staff: StaffAccount, request: OnboardRequest, now: datetime
+    db: AsyncSession, *, operator: User, request: OnboardRequest, now: datetime
 ) -> tuple[User, Organization, str]:
     """A paying customer's organization, owner and payment, in one transaction (FR22).
 
@@ -83,16 +86,16 @@ async def onboard(
             razorpay_payment_id=request.payment.razorpay_payment_id,
             amount_minor=request.payment.amount_minor,
             currency=request.payment.currency,
-            recorded_by=staff.id,
+            recorded_by=operator.id,
         )
     )
     try:
         await db.flush()
     except IntegrityError as recorded:
         raise ConflictError(PAYMENT_ALREADY_RECORDED) from recorded
-    label = staff_label(staff)
+    label = operator_label(operator)
     audit.record_organization_onboarded(
-        db, organization=tenant.organization, owner_email=tenant.user.email, staff_label=label
+        db, organization=tenant.organization, owner_email=tenant.user.email, operator_label=label
     )
     audit.record_payment_recorded(
         db,
@@ -100,13 +103,13 @@ async def onboard(
         payment_id=request.payment.razorpay_payment_id,
         amount_minor=request.payment.amount_minor,
         currency=request.payment.currency,
-        staff_label=label,
+        operator_label=label,
     )
     return tenant.user, tenant.organization, token
 
 
 async def new_owner_link(
-    db: AsyncSession, *, staff: StaffAccount, org_id: uuid.UUID, now: datetime
+    db: AsyncSession, *, operator: User, org_id: uuid.UUID, now: datetime
 ) -> tuple[User, Organization, str]:
     """A fresh link for an owner who has not set a password yet; the old one dies."""
     organization = await db.get(Organization, org_id)
@@ -116,7 +119,7 @@ async def new_owner_link(
     if owner is None:
         raise ConflictError(OWNER_ALREADY_ACTIVE)
     token = set_password.issue(owner, now=now, lifetime=OWNER_LINK_LIFETIME)
-    audit.record_owner_link_sent(db, owner=owner, staff_label=staff_label(staff))
+    audit.record_owner_link_sent(db, owner=owner, operator_label=operator_label(operator))
     return owner, organization, token
 
 
@@ -144,7 +147,7 @@ async def mail_owner_link(
             idempotency_key=f"welcome:{set_password.hash_link(token)}",
         )
     except EmailError as failure:
-        logger.error("owner link mail refused; staff can resend", error=str(failure))
+        logger.error("owner link mail refused; the operator can resend", error=str(failure))
         return False
     return True
 
@@ -157,22 +160,24 @@ async def _organization(db: AsyncSession, org_id: uuid.UUID) -> Organization:
 
 
 async def suspend(
-    db: AsyncSession, *, staff: StaffAccount, org_id: uuid.UUID, reason: str, now: datetime
+    db: AsyncSession, *, operator: User, org_id: uuid.UUID, reason: str, now: datetime
 ) -> None:
     """The same valve the terminal command closes (FR26, AC28)."""
     organization = await _organization(db, org_id)
-    await valve.suspend(db, organization, reason=reason, actor_label=staff_label(staff), now=now)
+    await valve.suspend(
+        db, organization, reason=reason, actor_label=operator_label(operator), now=now
+    )
 
 
-async def resume(db: AsyncSession, *, staff: StaffAccount, org_id: uuid.UUID) -> None:
+async def resume(db: AsyncSession, *, operator: User, org_id: uuid.UUID) -> None:
     organization = await _organization(db, org_id)
-    await valve.resume(db, organization, actor_label=staff_label(staff))
+    await valve.resume(db, organization, actor_label=operator_label(operator))
 
 
 async def grant_plan(
     db: AsyncSession,
     *,
-    staff: StaffAccount,
+    operator: User,
     org_id: uuid.UUID,
     request: GrantRequest,
     now: datetime,
@@ -196,7 +201,7 @@ async def grant_plan(
             starts_at=now,
             ends_at=ends_at,
             reason=request.reason.strip(),
-            granted_by=staff.id,
+            granted_by=operator.id,
         )
     )
     audit.record_plan_granted(
@@ -206,21 +211,22 @@ async def grant_plan(
         services=request.services,
         ends_at=ends_at.isoformat(),
         reason=request.reason.strip(),
-        actor_label=staff_label(staff),
+        actor_label=operator_label(operator),
     )
     await db.flush()
 
 
-async def end_grant(
-    db: AsyncSession, *, staff: StaffAccount, org_id: uuid.UUID, now: datetime
-) -> None:
+async def end_grant(db: AsyncSession, *, operator: User, org_id: uuid.UUID, now: datetime) -> None:
     organization = await _organization(db, org_id)
     current = await usage_queries.active_grant(db, org_id=org_id, at=now)
     if current is None:
         raise ConflictError(NO_GRANT)
     current.ended_at = now
     audit.record_plan_grant_ended(
-        db, organization=organization, plan_slug=current.plan_slug, actor_label=staff_label(staff)
+        db,
+        organization=organization,
+        plan_slug=current.plan_slug,
+        actor_label=operator_label(operator),
     )
     await db.flush()
 

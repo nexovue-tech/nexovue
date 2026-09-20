@@ -464,6 +464,12 @@ Built as planned, with these changes, each for a reason found while building:
 - **Organization deletion covers the new tables**: `website_payments`, `plan_grants` and
   `support_access_grants` are deleted directly; `staff_accounts` is excluded as tenant-free
   (`organizations/tables.py`).
+- **Moved 2026-09-20, after the stage was pushed** (founder's request): `admin/` and `staff/` are now
+  `apps/api/src/nexovue_admin_api/`, a top-level package beside `nexovue_api` rather than inside it. The
+  tasks above name the paths as they were built. The move also required the four structural scanners to
+  walk the source root rather than one package — otherwise the most powerful routes in the system would
+  have quietly stopped being judged — and `pyproject.toml` to declare both modules, without which the
+  built wheel contained no admin API at all while every development check still passed.
 - **Not done:** `tools/e2e/tests/support.spec.ts`. It needs a staff account with a live TOTP inside the e2e
   run; the same path was checked live instead (see `status.md`). Recorded as a risk.
 

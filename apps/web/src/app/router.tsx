@@ -5,6 +5,9 @@ import {
   createRouter,
   Outlet,
 } from "@tanstack/react-router";
+import { OnboardScreen } from "@/features/admin/OnboardScreen";
+import { OrganizationScreen } from "@/features/admin/OrganizationScreen";
+import { PlatformScreen } from "@/features/admin/PlatformScreen";
 import { AlertsScreen } from "@/features/alerts/AlertsScreen";
 import { ChannelDetailScreen } from "@/features/alerts/ChannelDetailScreen";
 import { ChannelsScreen } from "@/features/alerts/ChannelsScreen";
@@ -302,6 +305,31 @@ const settingsApiKeysRoute = createRoute({
   component: ApiKeysScreen,
 });
 
+/* nexovue's own area (`docs/changes/super-admin-in-the-console/`): inside the
+   console, refused by the API and by the screen to anyone but the operator. */
+const platformRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/admin",
+  component: PlatformScreen,
+});
+
+const platformOnboardRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/admin/onboard",
+  component: OnboardScreen,
+});
+
+const platformOrganizationRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/admin/organizations/$orgId",
+  component: PlatformOrganizationRoute,
+});
+
+/** The route owns the address; the screen owns what is at it. */
+function PlatformOrganizationRoute() {
+  return <OrganizationScreen orgId={platformOrganizationRoute.useParams().orgId} />;
+}
+
 const settingsApiTokensRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/api-tokens",
@@ -516,6 +544,9 @@ const routeTree = rootRoute.addChildren([
     settingsAccountRoute,
     settingsApiKeysRoute,
     settingsMembersRoute,
+    platformRoute,
+    platformOnboardRoute,
+    platformOrganizationRoute,
     settingsApiTokensRoute,
     settingsAuditRoute,
     settingsSupportRoute,

@@ -13,18 +13,6 @@ from nexovue_api.usage.schemas import UsageResponse
 from nexovue_api.wire import IsoTimestamp
 
 
-class StaffSignIn(BaseModel):
-    email: EmailAddress
-    password: Annotated[str, Field(min_length=1, max_length=128)]
-    code: Annotated[str, Field(min_length=1, max_length=16)]
-
-
-class StaffSummary(BaseModel):
-    id: uuid.UUID
-    email: str
-    name: str
-
-
 class OrganizationRow(BaseModel):
     id: uuid.UUID
     slug: str

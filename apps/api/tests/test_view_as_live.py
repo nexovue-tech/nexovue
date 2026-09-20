@@ -118,7 +118,7 @@ async def _session_for(db: AsyncSession, redis: Redis, acme: ProvisionedTenant) 
         tickets,
         org_id=acme.organization.id,
         user_id=acme.user.id,
-        staff_label=STAFF,
+        operator_label=STAFF,
         reason="checkout shows no traces",
         now=_now(),
     )
@@ -130,7 +130,7 @@ async def _session_for(db: AsyncSession, redis: Redis, acme: ProvisionedTenant) 
         created_at=_now(),
         impersonation=Impersonation(
             impersonation_id=str(spent.impersonation_id),
-            staff_label=spent.staff_label,
+            operator_label=spent.operator_label,
             reason=spent.reason,
             grant_id=str(spent.grant_id),
             until=spent.until,
@@ -155,7 +155,7 @@ async def test_no_view_starts_without_the_owners_grant(db: AsyncSession, redis: 
             TicketStore(redis),
             org_id=acme.organization.id,
             user_id=acme.user.id,
-            staff_label=STAFF,
+            operator_label=STAFF,
             reason="help",
             now=_now(),
         )
@@ -170,7 +170,7 @@ async def test_a_ticket_works_once(db: AsyncSession, redis: Redis) -> None:
         tickets,
         org_id=acme.organization.id,
         user_id=acme.user.id,
-        staff_label=STAFF,
+        operator_label=STAFF,
         reason="help",
         now=_now(),
     )

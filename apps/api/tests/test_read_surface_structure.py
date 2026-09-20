@@ -25,7 +25,9 @@ import pytest
 
 from nexovue_api import auth
 
-API_SOURCE: Final = Path(auth.__file__).resolve().parents[1]
+# The source root rather than one package, so a route stays judged wherever the
+# packages are rearranged to.
+API_SOURCE: Final = Path(auth.__file__).resolve().parents[2]
 ROUTERS: Final = sorted(
     path for path in API_SOURCE.rglob("*.py") if "router" in path.read_text(encoding="utf-8")
 )
@@ -37,23 +39,23 @@ IDENTITY: Final = "CurrentIdentity"
 # nothing else may be reached by one. Keyed `<module path>:<handler>`, with the
 # route it serves, so the list reads as the documentation does.
 THE_SURFACE: Final = {
-    "projects/router.py:list_projects": "GET /projects",
-    "services/router.py:list_services": "GET /services",
-    "services/router.py:get_service": "GET /services/{service}",
-    "traces/router.py:list_traces": "GET /traces",
-    "traces/router.py:get_trace": "GET /traces/{trace_id}",
-    "logs/search.py:search": "GET /logs/search",
-    "metrics/router.py:list_metrics": "GET /metrics",
-    "metrics/router.py:read_histogram": "GET /metrics/{metric}/histogram",
-    "errorgroups/router.py:list_error_groups": "GET /error-groups",
-    "errorgroups/router.py:get_error_group": "GET /error-groups/{group_id}",
-    "alerts/router.py:list_incidents": "GET /alerts/incidents",
-    "alerts/router.py:get_incident": "GET /alerts/incidents/{incident_id}",
-    "checks/router.py:list_checks": "GET /checks",
-    "checks/router.py:get_check": "GET /checks/{check_id}",
-    "synthetics/router.py:list_check_results": "GET /synthetics/checks",
-    "synthetics/router.py:list_runs": "GET /synthetics/checks/{check_id}/runs",
-    "deploys/router.py:list_deploys": "GET /deploys",
+    "nexovue_api/projects/router.py:list_projects": "GET /projects",
+    "nexovue_api/services/router.py:list_services": "GET /services",
+    "nexovue_api/services/router.py:get_service": "GET /services/{service}",
+    "nexovue_api/traces/router.py:list_traces": "GET /traces",
+    "nexovue_api/traces/router.py:get_trace": "GET /traces/{trace_id}",
+    "nexovue_api/logs/search.py:search": "GET /logs/search",
+    "nexovue_api/metrics/router.py:list_metrics": "GET /metrics",
+    "nexovue_api/metrics/router.py:read_histogram": "GET /metrics/{metric}/histogram",
+    "nexovue_api/errorgroups/router.py:list_error_groups": "GET /error-groups",
+    "nexovue_api/errorgroups/router.py:get_error_group": "GET /error-groups/{group_id}",
+    "nexovue_api/alerts/router.py:list_incidents": "GET /alerts/incidents",
+    "nexovue_api/alerts/router.py:get_incident": "GET /alerts/incidents/{incident_id}",
+    "nexovue_api/checks/router.py:list_checks": "GET /checks",
+    "nexovue_api/checks/router.py:get_check": "GET /checks/{check_id}",
+    "nexovue_api/synthetics/router.py:list_check_results": "GET /synthetics/checks",
+    "nexovue_api/synthetics/router.py:list_runs": "GET /synthetics/checks/{check_id}/runs",
+    "nexovue_api/deploys/router.py:list_deploys": "GET /deploys",
 }
 
 

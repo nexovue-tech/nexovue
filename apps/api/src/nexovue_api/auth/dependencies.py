@@ -134,7 +134,7 @@ async def _hold_support_view(
         db,
         org_id=organization.id,
         viewed_id=user.id,
-        staff_label=impersonation.staff_label,
+        operator_label=impersonation.operator_label,
         impersonation_id=uuid.UUID(impersonation.impersonation_id),
         method=method,
         path=path,

@@ -69,6 +69,19 @@ class SupportViewSummary(BaseModel):
     until: datetime
 
 
+class EnterAdminMode(BaseModel):
+    """Either proof is enough: the password, or a second-factor code."""
+
+    password: str | None = None
+    code: str | None = None
+
+
+class AdminModeEntered(BaseModel):
+    """When the stamp lapses, so the console can ask again before it does."""
+
+    until: datetime
+
+
 class IdentityResponse(BaseModel):
     """The body login and `/auth/me` share."""
 

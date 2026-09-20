@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from nexovue_api.admin import service as admin
 from nexovue_api.admin.schemas import OnboardRequest, WebsitePaymentIn
 from nexovue_api.auth import set_password
-from nexovue_api.data.postgres.models import StaffAccount
+from nexovue_api.data.postgres.models import SUPER_ADMIN_ROLE, Organization, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 
@@ -82,16 +82,22 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-async def _staff(db: AsyncSession) -> StaffAccount:
-    staff = StaffAccount(
-        email=f"staff-{uuid.uuid4().hex[:8]}@nexovue.test",
+async def _operator(db: AsyncSession) -> User:
+    """nexovue's own operator: a user with the platform role, in its own
+    organization. The seed makes one at boot; this makes one per test."""
+    home = Organization(slug=f"nexovue-{uuid.uuid4().hex[:8]}", name="nexovue")
+    db.add(home)
+    await db.flush()
+    operator = User(
+        org_id=home.id,
+        email=f"operator-{uuid.uuid4().hex[:8]}@nexovue.com",
         name="Raj",
         password_hash="x",
-        totp_secret=b"sealed",
+        role=SUPER_ADMIN_ROLE,
     )
-    db.add(staff)
+    db.add(operator)
     await db.flush()
-    return staff
+    return operator
 
 
 def _request(payment: str | None = None, region: str = "india") -> OnboardRequest:
@@ -135,7 +141,7 @@ async def test_an_onboarded_organization_has_the_rows_a_signed_up_one_has(
     who onboarded and what was paid."""
     signed_up = await _tenant(db, "SignedUp")
     owner, organization, _ = await admin.onboard(
-        db, staff=await _staff(db), request=_request(), now=_now()
+        db, operator=await _operator(db), request=_request(), now=_now()
     )
     await db.flush()
 
@@ -152,7 +158,7 @@ async def test_an_onboarded_organization_has_the_rows_a_signed_up_one_has(
 async def test_the_owner_sets_their_own_password_through_the_link(db: AsyncSession) -> None:
     """AC23."""
     owner, organization, token = await admin.onboard(
-        db, staff=await _staff(db), request=_request(), now=_now()
+        db, operator=await _operator(db), request=_request(), now=_now()
     )
     had_no_password = owner.password_hash is None
 
@@ -167,18 +173,20 @@ async def test_the_owner_sets_their_own_password_through_the_link(db: AsyncSessi
 async def test_the_region_is_recorded_and_an_unknown_one_refused(db: AsyncSession) -> None:
     """AC25."""
     _, organization, _ = await admin.onboard(
-        db, staff=await _staff(db), request=_request(region="india-south"), now=_now()
+        db, operator=await _operator(db), request=_request(region="india-south"), now=_now()
     )
     assert organization.region == "india-south"
     with pytest.raises(InvalidRequestError, match="region"):
-        await admin.onboard(db, staff=await _staff(db), request=_request(region="mars"), now=_now())
+        await admin.onboard(
+            db, operator=await _operator(db), request=_request(region="mars"), now=_now()
+        )
 
 
 async def test_a_website_payment_is_recorded_once(db: AsyncSession) -> None:
-    staff = await _staff(db)
-    await admin.onboard(db, staff=staff, request=_request(payment="pay_once"), now=_now())
+    operator = await _operator(db)
+    await admin.onboard(db, operator=operator, request=_request(payment="pay_once"), now=_now())
     with pytest.raises(ConflictError, match="already recorded"):
-        await admin.onboard(db, staff=staff, request=_request(payment="pay_once"), now=_now())
+        await admin.onboard(db, operator=operator, request=_request(payment="pay_once"), now=_now())
     assert (
         await db.scalar(
             text("SELECT count(*) FROM website_payments WHERE razorpay_payment_id = 'pay_once'")
@@ -188,9 +196,13 @@ async def test_a_website_payment_is_recorded_once(db: AsyncSession) -> None:
 
 
 async def test_a_resent_owner_link_kills_the_old_one(db: AsyncSession) -> None:
-    staff = await _staff(db)
-    _, organization, first = await admin.onboard(db, staff=staff, request=_request(), now=_now())
-    _, _, second = await admin.new_owner_link(db, staff=staff, org_id=organization.id, now=_now())
+    operator = await _operator(db)
+    _, organization, first = await admin.onboard(
+        db, operator=operator, request=_request(), now=_now()
+    )
+    _, _, second = await admin.new_owner_link(
+        db, operator=operator, org_id=organization.id, now=_now()
+    )
     await db.flush()
 
     with pytest.raises(InvalidRequestError, match="no longer valid"):
@@ -199,10 +211,12 @@ async def test_a_resent_owner_link_kills_the_old_one(db: AsyncSession) -> None:
 
 
 async def test_no_link_is_resent_once_the_owner_has_joined(db: AsyncSession) -> None:
-    staff = await _staff(db)
-    _, organization, token = await admin.onboard(db, staff=staff, request=_request(), now=_now())
+    operator = await _operator(db)
+    _, organization, token = await admin.onboard(
+        db, operator=operator, request=_request(), now=_now()
+    )
     await set_password.set_password(db, token, name="Priya", password=PASSWORD, now=_now())
     await db.flush()
 
     with pytest.raises(ConflictError, match="already set a password"):
-        await admin.new_owner_link(db, staff=staff, org_id=organization.id, now=_now())
+        await admin.new_owner_link(db, operator=operator, org_id=organization.id, now=_now())

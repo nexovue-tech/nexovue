@@ -20,8 +20,10 @@ None — Stage 2 is waiting for the founder's review of the diff.
 - **Stage 1 — Team** (plan Steps 1–4, T1–T24): one permission table enforced on every route; invite,
   accept, list, resend, withdraw, change role, remove, transfer; the four roles reflected on every screen;
   the audit log screen. See `plan.md` → *Outcome* for what changed from the plan and why.
-- **Stage 3 — Admin console** (plan Steps 5–8, T25–T43): staff accounts with a second factor from the
-  terminal and their own app, cookie and port; organization search and page; onboarding a paying customer
+- **Stage 3 — Admin console** (plan Steps 5–8, T25–T43): ~~staff accounts with a second factor from the
+  terminal and their own app, cookie and port~~ **superseded 2026-09-20 by
+  [ADR-018](../../decisions/ADR-018-the-operator-is-a-user-in-the-console.md)** — one super-admin user in
+  the console behind a 30-minute step-up (`docs/changes/super-admin-in-the-console/`); organization search and page; onboarding a paying customer
   (organization, region, owner link, website payment); hosted signup closed by a switch; suspend and resume
   ingest; a complimentary plan until a date, read by the API and the receiver; the owner's support access and
   a read-only, audited *view as*.
@@ -41,8 +43,8 @@ remaining work is the production-readiness assessment (T57) once a deployment ta
   counted per network address, so a team in one office shared one person's budget
   (`docs/changes/rate-limit-per-person/`). `just e2e` from a clean start: 22 passed.
 
-- ~~Q2, Q3~~ — recorded in ADR-016 as built: the admin API has its own port and is never routed from the
-  customer host (its hostname is the deployment's to add); self-hosted installs do not run it.
+- ~~Q2, Q3~~ — **moot since ADR-018**: there is no admin host to route or restrict, and a self-hosted
+  install seeds no operator because both `SUPER_ADMIN_*` settings are unset.
 
 ## Blocked
 

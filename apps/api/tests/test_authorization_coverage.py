@@ -28,7 +28,10 @@ import pytest
 
 from nexovue_api import auth
 
-API_SOURCE: Final = Path(auth.__file__).resolve().parents[1]
+# The source root rather than one package, so a route moving between packages
+# stays judged. There is one package today; there were two, and the scanner did
+# not notice the day the most powerful routes in the system left its tree.
+API_SOURCE: Final = Path(auth.__file__).resolve().parents[2]
 # Every module, not only files named `router.py`: `channels/test_router.py` served
 # Send test for months without ever being judged, because the glob said
 # `*/router.py` and that file is not one.
@@ -117,10 +120,14 @@ EXEMPT: Final = {
     # Preview is a POST so the token travels in a body, not a logged URL.
     "preview_invitation",
     "accept_invitation",
-    # The staff admin app's sign-in (F31, ADR-016): how a staff session comes to
-    # exist. Every other admin route carries `CurrentStaff` — see
-    # `test_every_admin_route_but_sign_in_needs_a_staff_session`.
-    "sign_in",
+    # The platform gate itself (`docs/changes/super-admin-in-the-console/`).
+    # Both act only on the caller's own session and neither can reach another
+    # account. `enter_admin_mode` carries a gate stronger than any role — it
+    # verifies the password or a second-factor code, and refuses anyone but the
+    # operator whatever they present. `leave_admin_mode` only ever takes access
+    # away, so requiring a role to give it up would be a way to keep it.
+    "enter_admin_mode",
+    "leave_admin_mode",
     # A POST that reads. Symbolication turns minified frames back into original
     # ones and writes nothing; it is a POST because a stack trace does not fit
     # in a query string.
@@ -144,71 +151,86 @@ EXEMPT: Final = {
 # `<module path>:<handler>`. Changing a policy here is changing who may do
 # something (FR1), and it should read that way in review.
 POLICY_OF: Final = {
-    "alerts/router.py:create_rule": "MayOperateAlerts",
-    "alerts/router.py:update_rule": "MayOperateAlerts",
-    "alerts/router.py:mute_rule": "MayOperateAlerts",
-    "alerts/router.py:delete_rule": "MayOperateAlerts",
-    "maintenance/router.py:create_window": "MayOperateAlerts",
-    "maintenance/router.py:update_window": "MayOperateAlerts",
-    "maintenance/router.py:delete_window": "MayOperateAlerts",
-    "checks/router.py:create_check": "MayOperateChecks",
-    "checks/router.py:update_check": "MayOperateChecks",
-    "checks/router.py:delete_check": "MayOperateChecks",
-    "checks/router.py:issue_heartbeat_token": "MayOperateChecks",
-    "checkruns/router.py:run_now": "MayOperateChecks",
-    "checkfiles/router.py:upload_file": "MayOperateChecks",
-    "checkimports/router.py:preview_import": "MayOperateChecks",
-    "checkimports/router.py:confirm_import": "MayOperateChecks",
-    "sourcemaps/router.py:upload_source_map": "MayUploadSourceMaps",
-    "channels/router.py:create_channel": "MayManageChannels",
-    "channels/router.py:update_channel": "MayManageChannels",
-    "channels/router.py:rotate_signing_secret": "MayManageChannels",
-    "channels/router.py:mute_channel": "MayManageChannels",
-    "channels/router.py:set_quiet_hours": "MayManageChannels",
-    "channels/router.py:delete_channel": "MayManageChannels",
-    "channels/test_router.py:send_test": "MayManageChannels",
-    "checksecrets/router.py:write_secret": "MayManageCheckSecrets",
-    "checksecrets/router.py:delete_secret": "MayManageCheckSecrets",
-    "checksecrets/router.py:write_variable": "MayManageCheckSecrets",
-    "checksecrets/router.py:delete_variable": "MayManageCheckSecrets",
-    "projects/router.py:create_project": "MayConfigureProjects",
-    "projects/router.py:update_project": "MayConfigureProjects",
-    "projects/router.py:delete_project": "MayConfigureProjects",
-    "projects/router.py:replace_sampling_config": "MayConfigureProjects",
-    "projects/router.py:replace_masking_config": "MayConfigureProjects",
-    "apikeys/router.py:create_api_key": "MayManageCredentials",
-    "apikeys/router.py:revoke_api_key": "MayManageCredentials",
+    "nexovue_api/alerts/router.py:create_rule": "MayOperateAlerts",
+    "nexovue_api/alerts/router.py:update_rule": "MayOperateAlerts",
+    "nexovue_api/alerts/router.py:mute_rule": "MayOperateAlerts",
+    "nexovue_api/alerts/router.py:delete_rule": "MayOperateAlerts",
+    "nexovue_api/maintenance/router.py:create_window": "MayOperateAlerts",
+    "nexovue_api/maintenance/router.py:update_window": "MayOperateAlerts",
+    "nexovue_api/maintenance/router.py:delete_window": "MayOperateAlerts",
+    "nexovue_api/checks/router.py:create_check": "MayOperateChecks",
+    "nexovue_api/checks/router.py:update_check": "MayOperateChecks",
+    "nexovue_api/checks/router.py:delete_check": "MayOperateChecks",
+    "nexovue_api/checks/router.py:issue_heartbeat_token": "MayOperateChecks",
+    "nexovue_api/checkruns/router.py:run_now": "MayOperateChecks",
+    "nexovue_api/checkfiles/router.py:upload_file": "MayOperateChecks",
+    "nexovue_api/checkimports/router.py:preview_import": "MayOperateChecks",
+    "nexovue_api/checkimports/router.py:confirm_import": "MayOperateChecks",
+    "nexovue_api/sourcemaps/router.py:upload_source_map": "MayUploadSourceMaps",
+    "nexovue_api/channels/router.py:create_channel": "MayManageChannels",
+    "nexovue_api/channels/router.py:update_channel": "MayManageChannels",
+    "nexovue_api/channels/router.py:rotate_signing_secret": "MayManageChannels",
+    "nexovue_api/channels/router.py:mute_channel": "MayManageChannels",
+    "nexovue_api/channels/router.py:set_quiet_hours": "MayManageChannels",
+    "nexovue_api/channels/router.py:delete_channel": "MayManageChannels",
+    "nexovue_api/channels/test_router.py:send_test": "MayManageChannels",
+    "nexovue_api/checksecrets/router.py:write_secret": "MayManageCheckSecrets",
+    "nexovue_api/checksecrets/router.py:delete_secret": "MayManageCheckSecrets",
+    "nexovue_api/checksecrets/router.py:write_variable": "MayManageCheckSecrets",
+    "nexovue_api/checksecrets/router.py:delete_variable": "MayManageCheckSecrets",
+    "nexovue_api/projects/router.py:create_project": "MayConfigureProjects",
+    "nexovue_api/projects/router.py:update_project": "MayConfigureProjects",
+    "nexovue_api/projects/router.py:delete_project": "MayConfigureProjects",
+    "nexovue_api/projects/router.py:replace_sampling_config": "MayConfigureProjects",
+    "nexovue_api/projects/router.py:replace_masking_config": "MayConfigureProjects",
+    "nexovue_api/apikeys/router.py:create_api_key": "MayManageCredentials",
+    "nexovue_api/apikeys/router.py:revoke_api_key": "MayManageCredentials",
+    # The platform surface (`docs/changes/super-admin-in-the-console/`): nexovue's
+    # own operator, and only with a session re-verified in the last 30 minutes.
+    "nexovue_api/admin/router.py:onboard": "MayAdministerThePlatform",
+    "nexovue_api/admin/router.py:resend_owner_link": "MayAdministerThePlatform",
+    "nexovue_api/admin/router.py:suspend": "MayAdministerThePlatform",
+    "nexovue_api/admin/router.py:resume": "MayAdministerThePlatform",
+    "nexovue_api/admin/router.py:grant_plan": "MayAdministerThePlatform",
+    "nexovue_api/admin/router.py:end_grant": "MayAdministerThePlatform",
+    "nexovue_api/admin/router.py:view_as": "MayAdministerThePlatform",
     # F36. A read token is not an ingest key: one reads the organization's data,
     # the other writes into it, and they are withdrawn by different people's work.
-    "apitokens/router.py:create_api_token": "MayManageApiTokens",
-    "apitokens/router.py:revoke_api_token": "MayManageApiTokens",
-    "apikeys/router.py:create_site_key": "MayManageCredentials",
-    "apikeys/router.py:revoke_site_key": "MayManageCredentials",
-    "deploys/router.py:create_webhook_secret": "MayManageCredentials",
-    "deploys/router.py:revoke_webhook_secret": "MayManageCredentials",
-    "integrations/router.py:create_integration": "MayManageCredentials",
-    "integrations/router.py:delete_integration": "MayManageCredentials",
-    "billing/router.py:start_checkout": "MayCommitSpend",
-    "billing/router.py:cancel_subscription": "MayCommitSpend",
-    "organizations/router.py:delete_organization": "MayEndTheOrganization",
-    "members/router.py:invite_member": "MayManageMembers",
-    "members/router.py:resend_invitation": "MayManageMembers",
-    "members/router.py:withdraw_invitation": "MayManageMembers",
-    "members/router.py:change_role": "MayManageMembers",
-    "members/router.py:remove_member": "MayManageMembers",
-    "support/router.py:grant_support_access": "MayGrantSupport",
-    "support/router.py:withdraw_support_access": "MayGrantSupport",
+    "nexovue_api/apitokens/router.py:create_api_token": "MayManageApiTokens",
+    "nexovue_api/apitokens/router.py:revoke_api_token": "MayManageApiTokens",
+    "nexovue_api/apikeys/router.py:create_site_key": "MayManageCredentials",
+    "nexovue_api/apikeys/router.py:revoke_site_key": "MayManageCredentials",
+    "nexovue_api/deploys/router.py:create_webhook_secret": "MayManageCredentials",
+    "nexovue_api/deploys/router.py:revoke_webhook_secret": "MayManageCredentials",
+    "nexovue_api/integrations/router.py:create_integration": "MayManageCredentials",
+    "nexovue_api/integrations/router.py:delete_integration": "MayManageCredentials",
+    "nexovue_api/billing/router.py:start_checkout": "MayCommitSpend",
+    "nexovue_api/billing/router.py:cancel_subscription": "MayCommitSpend",
+    "nexovue_api/organizations/router.py:delete_organization": "MayEndTheOrganization",
+    "nexovue_api/members/router.py:invite_member": "MayManageMembers",
+    "nexovue_api/members/router.py:resend_invitation": "MayManageMembers",
+    "nexovue_api/members/router.py:withdraw_invitation": "MayManageMembers",
+    "nexovue_api/members/router.py:change_role": "MayManageMembers",
+    "nexovue_api/members/router.py:remove_member": "MayManageMembers",
+    "nexovue_api/support/router.py:grant_support_access": "MayGrantSupport",
+    "nexovue_api/support/router.py:withdraw_support_access": "MayGrantSupport",
 }
 
 # Reads that return a secret, and so are an action even though they change
 # nothing: a viewer reading every screen must not read these.
 SECRET_READS: Final = {
-    "deploys/router.py:read_webhook_secrets": "MayManageCredentials",
+    "nexovue_api/deploys/router.py:read_webhook_secrets": "MayManageCredentials",
     # Not a secret, but the organization's history of who did what: an owner's
     # and an admin's to read (FR36, AC38).
-    "audit/router.py:read_audit_log": "MayReadAudit",
+    "nexovue_api/audit/router.py:read_audit_log": "MayReadAudit",
     # Every time support viewed as someone, and whether it may: the owner's.
-    "support/router.py:read_support_access": "MayGrantSupport",
+    "nexovue_api/support/router.py:read_support_access": "MayGrantSupport",
+    # Not secrets either, but reads that cross every tenant: who the customers
+    # are, and everything about one of them. They change nothing, so the
+    # mutating rule above would never look at them — and the day one lost its
+    # gate, nothing else would notice (`docs/changes/super-admin-in-the-console/`).
+    "nexovue_api/admin/router.py:search_organizations": "MayAdministerThePlatform",
+    "nexovue_api/admin/router.py:organization": "MayAdministerThePlatform",
 }
 
 
@@ -276,31 +298,11 @@ def _name(key: str) -> str:
     return key.rpartition(":")[2]
 
 
-STAFF_GATE: Final = "CurrentStaff"
-ADMIN_MODULE: Final = "admin/"
-
-
-def test_every_admin_route_but_sign_in_needs_a_staff_session() -> None:
-    """The admin app's gate is a staff session, not a customer role (ADR-016)."""
-    ungated = sorted(
-        key
-        for key, _, annotations in _all_handlers()
-        if key.startswith(ADMIN_MODULE)
-        and _name(key) != "sign_in"
-        and STAFF_GATE not in annotations
-    )
-    assert not ungated, f"{ungated} are admin routes without `CurrentStaff`"
-
-
 def test_every_mutating_route_is_gated_or_exempt() -> None:
-    """A new mutating route must be placed: in `POLICY_OF` with its policy, behind a
-    staff session in the admin app, or in `EXEMPT` with the reason it needs none."""
+    """A new mutating route must be placed: in `POLICY_OF` with its policy, or in
+    `EXEMPT` with the reason it needs none."""
     unplaced = sorted(
-        key
-        for key, annotations in _mutating()
-        if key not in POLICY_OF
-        and _name(key) not in EXEMPT
-        and not (key.startswith(ADMIN_MODULE) and STAFF_GATE in annotations)
+        key for key, annotations in _mutating() if key not in POLICY_OF and _name(key) not in EXEMPT
     )
     assert not unplaced, (
         f"{unplaced} change something and are in neither POLICY_OF nor EXEMPT. Give each a "

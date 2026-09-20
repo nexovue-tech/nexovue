@@ -86,6 +86,10 @@ describe("the sidebar", () => {
       // Reached from an alert message's link and the Alerts screen's rows.
       "/alerts/incidents/$incidentId",
       "/settings/channels/$channelId",
+      // The platform area's own pages: the sidebar offers `/admin` to the
+      // operator, and these are reached from it.
+      "/admin/onboard",
+      "/admin/organizations/$orgId",
     ]);
     const signedOut = new Set([
       "/login",

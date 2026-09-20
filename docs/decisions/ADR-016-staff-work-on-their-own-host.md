@@ -2,6 +2,13 @@
 
 ## Status
 
+**Superseded 2026-09-20 by [ADR-018](ADR-018-the-operator-is-a-user-in-the-console.md)** — one
+operator, a `users` row in the console, behind a 30-minute step-up. The reasoning below is sound and
+is the reason ADR-018 states its cost plainly; what changed is the weight of that reasoning against a
+second app, a second console and a second credential for a single person. Everything this record
+describes as built was deleted in `docs/changes/super-admin-in-the-console/`. Read it before proposing
+the separate host again — it is the argument for it.
+
 Accepted 2026-09-19 — founder decision, with the F26 + F31 + F36 design (`docs/features/team-and-api-access/design.md`).
 
 ## Context
@@ -22,7 +29,7 @@ the same origin and cookie. An authorization bug that promotes a customer's role
    two. Staff actions are audited through `audit_log.actor_label` (migration 0004).
 2. **A staff account always has a confirmed TOTP second factor.** Accounts are created from a terminal
    command that enrols the factor before the row exists; there is no screen that creates staff.
-3. **The admin console is a second FastAPI app** (`nexovue_api.admin.main:app`) in the same package —
+3. **The admin console is a second FastAPI app** (`nexovue_admin_api.main:app`) in the same package —
    reusing its services, queries and database session — **served as its own compose service on its own
    host** (`NEXOVUE_ADMIN_HOST`) with its own session cookie (`nexovue_staff`, host-only). Neither app
    parses the other's cookie.
@@ -40,6 +47,13 @@ the same origin and cookie. An authorization bug that promotes a customer's role
   member exists (spec D9).
 - The admin app is cross-tenant by design, and is named as such to `test_postgres_tenancy_structure.py`
   rather than hidden from it.
+- **Amended 2026-09-20 (founder):** the admin app is its own top-level package, `nexovue_admin_api`,
+  beside `nexovue_api` under the API's source root — not a subpackage of it. It still imports the
+  customer package for models, settings, services and the database session, so this is a packaging and
+  deployment boundary rather than a code-independence one. Two things it forced, both worth knowing
+  before the next package is added: every structural scanner now walks the *source root* rather than one
+  package, and `pyproject.toml` names both modules, because the build backend ships only what it is told
+  about while an editable install hides the omission.
 - **Built 2026-09-20 (F31, Stage 3).** Two consequences settled while building, each an assumption until the
   deployment work of ADR-006 confirms it:
   - *Production routing (plan Q2).* The production replica runs `admin-api` on its own port (8001) and never

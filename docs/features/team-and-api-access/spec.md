@@ -2,6 +2,13 @@
 
 ## Status
 
+**Amended 2026-09-20** — Stage 3's separation is reversed by
+[ADR-018](../../decisions/ADR-018-the-operator-is-a-user-in-the-console.md): one operator, a `users`
+row signing in on the ordinary sign-in page, admin screens inside the console, and a 30-minute
+step-up re-authentication in place of the separate host. **BR13, FR21 and NFR4 below are rewritten**;
+everything else about Stage 3 — what the operator can do, and the consent and read-only rules on
+*view as* — is unchanged. See `docs/changes/super-admin-in-the-console/`.
+
 **Approved** — by the founder, 2026-09-19: every open decision as recommended, except **D6** (an MCP
 server is built in this feature) and **D7** (the audit-log screen is built in this feature). D13 (how
 the MCP server authenticates) was added with those two and follows its recommendation. See
@@ -264,16 +271,17 @@ and a read API has nobody to serve before that (D12).
   in use; organization created, owner link sent, payment recorded; ingest suspended and resumed; plan
   comped and ended; support access granted and withdrawn; view-as started and ended. With actor,
   target, before and after, and a reason where the action requires one.
-- **BR13 — Staff are not customers.** A staff identity is not a row in `users`, cannot sign in to the
-  customer console, and a customer login can never reach the admin console. Staff actions are recorded
-  with `actor_label`, never as a customer's user.
+- **BR13 — The operator holds nothing inside an organization** *(amended 2026-09-20, ADR-018)*. The
+  operator is a `users` row with `role = "super_admin"` in a reserved organization of its own; the role
+  grants no permission in any customer organization, and no customer role can reach the platform
+  surface. Its actions are audited as itself, as any user's are.
 - **BR14 — Seeing as a customer needs the customer's consent.** Without an active support-access grant
   from an owner, no *view as* can start. A grant is time-limited and an owner can withdraw it; withdrawal
   ends every *view as* in it.
 - **BR15 — Viewing as a customer changes nothing.** During *view as* every request that would change
   anything is refused, whatever the viewed person's role; the viewed person's permissions bound what is
   read, never staff's.
-- **BR16 — Every staff action states why.** Suspending, comping, and starting a *view as* require a
+- **BR16 — Every platform action states why.** Suspending, comping, and starting a *view as* require a
   written reason, stored with the audit row.
 
 ## Functional requirements
@@ -392,9 +400,11 @@ and a read API has nobody to serve before that (D12).
 
 ### Admin console (Stage 3)
 
-- **FR21** — Staff sign in to a separate admin surface (its own host name and session cookie) with a
-  password and a **mandatory** second factor; there is no staff account without one. Staff accounts are
-  created from a terminal command, not a screen (D9).
+- **FR21** *(amended 2026-09-20, ADR-018)* — The operator signs in on the ordinary sign-in page with
+  the ordinary session. The platform area is offered in the console only to `super_admin`, and every
+  `/admin` route is refused unless the session has been re-verified — password or second-factor code —
+  within the last 30 minutes. The account is seeded from `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD`
+  at API boot, never created by a screen or a request; both unset seeds nobody.
 - **FR22** — Onboarding creates, in one transaction: the organization (with its `region`, default
   `india`, from ADR-009's list), a default project, the owner as a user with no password, and the
   owner's set-password link (FR7), sent by email. It reuses signup's provisioning, so an onboarded
@@ -430,8 +440,10 @@ and a read API has nobody to serve before that (D12).
 - **NFR3** — Invite and token secrets have at least 128 bits of entropy.
 - **NFR5** — An MCP tool call answers within the same bounds as its read-surface endpoint; the server
   adds no store of its own.
-- **NFR4** — The admin surface is not reachable from a customer's session or origin: separate host,
-  separate cookie, and refusal of a customer session at the door.
+- **NFR4** *(amended 2026-09-20, ADR-018)* — The platform surface is not reachable from an ordinary
+  console session: the role is checked first, so a customer's session is refused before any credential
+  is examined, and the operator's own session reaches it only inside the step-up window. The stamp
+  lives on the session record, so signing out ends it.
 
 ## Error cases
 

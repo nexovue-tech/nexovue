@@ -27,7 +27,9 @@ from fastapi import Depends
 
 from nexovue_api.auth.dependencies import CurrentIdentity, Identity
 from nexovue_api.auth.permissions import ALLOWED, Action, may
+from nexovue_api.deps import CurrentSession
 from nexovue_api.errors.exceptions import PermissionDeniedError
+from nexovue_api.superadmin import adminmode
 
 
 def require(action: Action) -> Callable[[Identity], Identity]:
@@ -51,6 +53,19 @@ def refusal(action: Action) -> str:
     named = (f"an {role}" if role[0] in "aeiou" else f"a {role}" for role in roles)
     return f"Only {' or '.join(named)} can change this."
 
+
+async def _the_platform(identity: CurrentIdentity, session: CurrentSession) -> Identity:
+    """nexovue's operator, with a session re-verified in the last 30 minutes.
+
+    Not a row in the action table above: those are roles *inside* an
+    organization, and this is the surface that reaches across all of them
+    (`docs/changes/super-admin-in-the-console/`).
+    """
+    adminmode.holds_the_platform(identity.user, session)
+    return identity
+
+
+MayAdministerThePlatform = Annotated[Identity, Depends(_the_platform)]
 
 MayOperateChecks = Annotated[Identity, Depends(require(Action.OPERATE_CHECKS))]
 MayOperateAlerts = Annotated[Identity, Depends(require(Action.OPERATE_ALERTS))]

@@ -63,9 +63,6 @@ select = [
 # It lives under the API package because it needs the models and the DSN, not
 # because it is part of the service.
 "apps/api/src/nexovue_api/suspend.py" = ["T201"]
-# The same again for creating staff (F31): its reader is the person at the
-# terminal, who has to see the authenticator URI and type the code back.
-"apps/api/src/nexovue_api/staff/__main__.py" = ["T201"]
 
 [tool.mypy]
 python_version = "3.13"

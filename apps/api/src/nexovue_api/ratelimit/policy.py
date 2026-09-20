@@ -204,9 +204,9 @@ AUTH_PATHS: Final = (
     # whole credential, so both are token guessing, throttled as a reset link
     # is; accepting also sets a password.
     f"{API_PREFIX}/invitations",
-    # Staff sign-in on the admin app (F31): a password and a code, the most
-    # valuable credential check there is.
-    "/admin/v1/sign-in",
+    # Confirming it is you before the platform surface (F31): a password or a
+    # code, and the most valuable credential check there is.
+    f"{API_PREFIX}/auth/admin-mode",
     # Spending a support ticket (F31): a 60-second, single-use credential.
     f"{API_PREFIX}/support/view-as",
 )

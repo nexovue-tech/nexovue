@@ -30,13 +30,12 @@ const within = (path: string) => path.replace(/^\/src\//, "");
  * routed off the root rather than through the shell — unauthenticated, so somebody
  * can read them before signing up — and are therefore the whole page themselves.
  *
- * `admin/AdminApp.tsx` is the staff console's frame (F31): a separate page,
- * `admin.html`, with no shell around it.
+ * The platform screens are not here: they render inside the same shell as every
+ * other signed-in screen (`docs/changes/super-admin-in-the-console/`).
  */
 const MAY_RENDER_A_MAIN: readonly string[] = [
   "app/layout/AppShell.tsx",
   "features/docs/DocsScreen.tsx",
-  "admin/AdminApp.tsx",
 ];
 
 const RENDERS_A_MAIN = /<main[\s>]|role="main"/;

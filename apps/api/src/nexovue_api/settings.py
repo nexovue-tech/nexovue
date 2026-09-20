@@ -23,6 +23,7 @@ from pydantic import (
     Field,
     PostgresDsn,
     RedisDsn,
+    SecretStr,
     UrlConstraints,
     ValidationError,
     field_validator,
@@ -333,6 +334,13 @@ class Settings(BaseSettings):
     # No default — a link built against a guessed host is a link to nowhere, and
     # the failure is a customer who cannot verify rather than a stack trace.
     app_base_url: str = ""
+
+    # nexovue's own operator (`docs/changes/super-admin-in-the-console/`). Both
+    # absent means no super admin is seeded and the platform surface is
+    # unreachable, which is the right default for a self-hosted install: it has
+    # no nexovue to administer it. Set together or not at all.
+    super_admin_email: str = ""
+    super_admin_password: SecretStr = SecretStr("")
 
     # This API's own public base URL — the other hostname of the pair above.
     # It exists for one reason: the MCP server (F36) must be told which `Host`

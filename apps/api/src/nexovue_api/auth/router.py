@@ -20,6 +20,8 @@ from nexovue_api.auth.dependencies import (
     SecondFactors,
 )
 from nexovue_api.auth.schemas import (
+    AdminModeEntered,
+    EnterAdminMode,
     IdentityResponse,
     LoginRequest,
     PasswordReset,
@@ -37,6 +39,7 @@ from nexovue_api.deps import (
     OneTimeTokens,
     SessionStoreDep,
 )
+from nexovue_api.superadmin import adminmode
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -129,6 +132,47 @@ async def logout(
     clear_session_cookie(response, settings)
 
 
+@router.post("/admin-mode", summary="Confirm it is you, to administer the platform")
+async def enter_admin_mode(
+    request: Request,
+    identity: CurrentIdentity,
+    db: DbSession,
+    sessions: SessionStoreDep,
+    factors: SecondFactors,
+    box: OptionalCredentialEncryption,
+    submission: EnterAdminMode,
+) -> AdminModeEntered:
+    """Re-authenticate this session for the platform surface (30 minutes).
+
+    Refused for anyone but nexovue's operator, whatever they present: this
+    endpoint cannot be used to find out who holds the role.
+    """
+    until = await adminmode.enter(
+        db,
+        sessions,
+        factors,
+        box,
+        user=identity.user,
+        token=session_token_from_headers(request.headers),
+        password=submission.password,
+        code=submission.code,
+    )
+    return AdminModeEntered(until=until)
+
+
+@router.delete(
+    "/admin-mode",
+    status_code=HTTPStatus.NO_CONTENT,
+    summary="Step back out of the platform surface",
+)
+async def leave_admin_mode(
+    request: Request, identity: CurrentIdentity, sessions: SessionStoreDep
+) -> None:
+    """Idempotent, and available to anyone signed in: it only ever takes away."""
+    del identity
+    await adminmode.leave(sessions, token=session_token_from_headers(request.headers))
+
+
 @router.get("/me", summary="The signed-in user and their organization")
 async def me(identity: CurrentIdentity) -> IdentityResponse:
     # A support view is offered no control the read-only rule would refuse.
@@ -137,7 +181,7 @@ async def me(identity: CurrentIdentity) -> IdentityResponse:
     )
     if identity.impersonation is not None:
         described.support_view = SupportViewSummary(
-            staff=identity.impersonation.staff_label, until=identity.impersonation.until
+            staff=identity.impersonation.operator_label, until=identity.impersonation.until
         )
     return described
 

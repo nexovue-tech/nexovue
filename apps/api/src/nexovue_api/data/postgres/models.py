@@ -66,8 +66,16 @@ SET_PASSWORD_TOKEN_HASH_LENGTH: Final = 64
 REGIONS: Final = ("india", "india-south")
 REGION_LENGTH: Final = 32
 
+# What a person may be *inside an organization*. These are the roles
+# `auth/permissions.py` builds its table from.
 USER_ROLES: Final = ("owner", "admin", "member", "viewer")
-UserRole: Final = Enum(*USER_ROLES, name="user_role")
+# nexovue's own operator, and deliberately not one of the above: it appears in
+# no row of the permission table, so it grants nothing inside any organization.
+# What it unlocks is the platform surface, gated separately and only while the
+# session has been re-authenticated (`docs/changes/super-admin-in-the-console/`).
+SUPER_ADMIN_ROLE: Final = "super_admin"
+ALL_USER_ROLES: Final = (*USER_ROLES, SUPER_ADMIN_ROLE)
+UserRole: Final = Enum(*ALL_USER_ROLES, name="user_role")
 
 # Matches the production TTL on the ClickHouse tables. Per-project overrides
 # regenerate that TTL expression rather than running scheduled deletes.
@@ -1107,10 +1115,11 @@ class BillingWebhookDelivery(Base):
 class AuditLogEntry(Base):
     """Who changed what.
 
-    `actor_user_id` is null for actions the system took, and for actors who are
-    not rows in `users` — our own staff during an impersonated session, who
-    `actor_label` names instead. `org_id` is null only for a refused sign-in
-    against an address that matches no account, which belongs to no tenant.
+    `actor_user_id` is null for actions the system took, and where the row must
+    name nexovue rather than the account it acted on — a support view, which
+    `actor_label` labels "nexovue support" for the customer reading it. `org_id`
+    is null only for a refused sign-in against an address that matches no
+    account, which belongs to no tenant.
     """
 
     __tablename__ = "audit_log"
@@ -1456,26 +1465,6 @@ class ErrorGroupWatermark(Base):
     baselined_at: Mapped[OptionalTimestamp]
 
 
-class StaffAccount(Base):
-    """nexovue's own staff (F31, ADR-016) — never a row in `users`.
-
-    No foreign key, role or flag connects the two. `totp_secret` is NOT NULL:
-    the terminal command that creates a staff account enrols the second factor
-    before the row exists, so there is no staff account without one.
-    """
-
-    __tablename__ = "staff_accounts"
-
-    id: Mapped[UuidPrimaryKey]
-    email: Mapped[str] = mapped_column(String(EMAIL_MAX_LENGTH), nullable=False, unique=True)
-    name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    # Sealed with `CredentialBox` under the staff purpose, never stored in clear.
-    totp_secret: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    created_at: Mapped[CreatedAt]
-    disabled_at: Mapped[OptionalTimestamp]
-
-
 class WebsitePayment(Base):
     """The payment the website took before this organization existed (ADR-008, step 8).
 
@@ -1491,8 +1480,10 @@ class WebsitePayment(Base):
     razorpay_payment_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    # Who recorded it. A label on the record, not a dependency: the row stays
+    # when the person goes.
     recorded_by: Mapped[uuid.UUID | None] = mapped_column(
-        UuidType, ForeignKey("staff_accounts.id", ondelete="SET NULL"), nullable=True
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     recorded_at: Mapped[CreatedAt]
 
@@ -1523,10 +1514,11 @@ class PlanGrant(Base):
     starts_at: Mapped[CreatedAt]
     ends_at: Mapped[RequiredTimestamp]
     reason: Mapped[str] = mapped_column(Text, nullable=False)
+    # Who granted it, for the same reason `recorded_by` above names one.
     granted_by: Mapped[uuid.UUID | None] = mapped_column(
-        UuidType, ForeignKey("staff_accounts.id", ondelete="SET NULL"), nullable=True
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    # Ended early by staff; NULL runs it to `ends_at`.
+    # Ended early by nexovue; NULL runs it to `ends_at`.
     ended_at: Mapped[OptionalTimestamp]
 
     __table_args__ = (

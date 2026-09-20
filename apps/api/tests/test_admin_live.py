@@ -1,7 +1,8 @@
 """The admin console's organization search and page (F31, FR25) against real Postgres.
 
-Rolled back per test. What it proves: staff find an organization by name, slug,
-id or any member's address; the page shows its members (an invite as invited),
+Rolled back per test. What it proves: the operator finds an organization by name, slug,
+id or any member's address, and never nexovue's own organization; the page shows
+its members (an invite as invited),
 its projects, its region, and whether ingest is suspended and why; an unknown id
 is a 404.
 
@@ -19,13 +20,16 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import pytest
+from environment import TEST_ENVIRONMENT
 from live import require_stack
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.admin import service as admin
 from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
 from nexovue_api.members import service as members
+from nexovue_api.settings import Settings
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
+from nexovue_api.superadmin.seed import PLATFORM_NAME, PLATFORM_ORG_ID, seed_super_admin
 
 POSTGRES_DSN: Final = os.environ.get(
     "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
@@ -75,12 +79,22 @@ async def _tenant(db: AsyncSession, name: str) -> ProvisionedTenant:
     )
 
 
+def _operator_settings() -> Settings:
+    """The environment nexovue's own operator is seeded from."""
+    environment = {
+        **TEST_ENVIRONMENT,
+        "SUPER_ADMIN_EMAIL": f"operator-{uuid.uuid4().hex[:8]}@nexovue.com",
+        "SUPER_ADMIN_PASSWORD": PASSWORD,
+    }
+    return Settings(**environment)  # type: ignore[arg-type]
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
 @pytest.mark.parametrize("how", ["name", "slug", "id", "member address"])
-async def test_staff_find_an_organization_every_way_they_might_know_it(
+async def test_the_operator_finds_an_organization_every_way_they_might_know_it(
     db: AsyncSession, how: str
 ) -> None:
     acme = await _tenant(db, f"Findable{uuid.uuid4().hex[:6]}")
@@ -94,6 +108,17 @@ async def test_staff_find_an_organization_every_way_they_might_know_it(
     found = await admin.search(db, needle)
 
     assert acme.organization.id in {row.id for row in found.organizations}
+
+
+async def test_the_search_never_returns_nexovues_own_organization(db: AsyncSession) -> None:
+    """It is not a customer — no project, no usage, nothing to suspend or comp —
+    and it matches the word an operator is most likely to type."""
+    settings = _operator_settings()
+    await seed_super_admin(db, settings)
+
+    found = await admin.search(db, PLATFORM_NAME)
+
+    assert PLATFORM_ORG_ID not in {row.id for row in found.organizations}
 
 
 async def test_a_search_of_one_character_is_refused(db: AsyncSession) -> None:

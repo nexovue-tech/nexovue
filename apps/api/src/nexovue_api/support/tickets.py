@@ -1,9 +1,13 @@
-"""The single-use pass that carries staff from the admin host to the customer host.
+"""The single-use pass that opens a support view.
 
-A staff session and a customer session never share a cookie or an origin
-(ADR-016). Instead the admin app writes a ticket here — 60 seconds, spent on
-first use — and the customer app turns it into a read-only, time-bound customer
-session. Stored by its fingerprint, like every other token in Redis.
+The platform area writes a ticket here — 60 seconds, spent on first use — and
+`/support/view-as` turns it into a read-only, time-bound session as the person
+being viewed. Stored by its fingerprint, like every other token in Redis.
+
+Since ADR-018 both live on one origin under one cookie, so redeeming a ticket
+*replaces* the operator's own session in that browser until the view ends. The
+screen that issues it says so; a second cookie would be the other answer, and it
+would rebuild the separation ADR-018 removed.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ TOKEN_BYTES: Final = 32
 class ViewAsTicket:
     user_id: uuid.UUID
     org_id: uuid.UUID
-    staff_label: str
+    operator_label: str
     reason: str
     grant_id: uuid.UUID
     impersonation_id: uuid.UUID
@@ -44,7 +48,7 @@ class TicketStore:
         payload = {
             "user_id": str(ticket.user_id),
             "org_id": str(ticket.org_id),
-            "staff": ticket.staff_label,
+            "operator": ticket.operator_label,
             "reason": ticket.reason,
             "grant": str(ticket.grant_id),
             "impersonation": str(ticket.impersonation_id),
@@ -63,7 +67,7 @@ class TicketStore:
             return ViewAsTicket(
                 user_id=uuid.UUID(payload["user_id"]),
                 org_id=uuid.UUID(payload["org_id"]),
-                staff_label=str(payload["staff"]),
+                operator_label=str(payload["operator"]),
                 reason=str(payload["reason"]),
                 grant_id=uuid.UUID(payload["grant"]),
                 impersonation_id=uuid.UUID(payload["impersonation"]),

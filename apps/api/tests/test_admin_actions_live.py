@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.admin import service as admin
 from nexovue_api.admin.schemas import GrantRequest
-from nexovue_api.data.postgres.models import StaffAccount
+from nexovue_api.data.postgres.models import SUPER_ADMIN_ROLE, Organization, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 from nexovue_api.usage import queries as usage_queries
@@ -80,16 +80,22 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-async def _staff(db: AsyncSession) -> StaffAccount:
-    staff = StaffAccount(
-        email=f"staff-{uuid.uuid4().hex[:8]}@nexovue.test",
+async def _operator(db: AsyncSession) -> User:
+    """nexovue's own operator: a user with the platform role, in its own
+    organization. The seed makes one at boot; this makes one per test."""
+    home = Organization(slug=f"nexovue-{uuid.uuid4().hex[:8]}", name="nexovue")
+    db.add(home)
+    await db.flush()
+    operator = User(
+        org_id=home.id,
+        email=f"operator-{uuid.uuid4().hex[:8]}@nexovue.com",
         name="Raj",
         password_hash="x",
-        totp_secret=b"sealed",
+        role=SUPER_ADMIN_ROLE,
     )
-    db.add(staff)
+    db.add(operator)
     await db.flush()
-    return staff
+    return operator
 
 
 async def _audit(db: AsyncSession, org_id: uuid.UUID) -> list[tuple[str, str | None]]:
@@ -114,15 +120,19 @@ async def test_the_console_suspends_and_resumes_with_a_reason_on_the_record(
 ) -> None:
     """AC28: the same columns the terminal writes; who and why recorded."""
     acme = await _tenant(db, "Acme")
-    staff = await _staff(db)
+    operator = await _operator(db)
 
-    await admin.suspend(db, staff=staff, org_id=acme.organization.id, reason="abuse", now=_now())
+    await admin.suspend(
+        db, operator=operator, org_id=acme.organization.id, reason="abuse", now=_now()
+    )
     assert _valve(acme) == (True, "abuse")
 
     with pytest.raises(ConflictError, match="already suspended"):
-        await admin.suspend(db, staff=staff, org_id=acme.organization.id, reason="x", now=_now())
+        await admin.suspend(
+            db, operator=operator, org_id=acme.organization.id, reason="x", now=_now()
+        )
 
-    await admin.resume(db, staff=staff, org_id=acme.organization.id)
+    await admin.resume(db, operator=operator, org_id=acme.organization.id)
     assert _valve(acme) == (False, None)
     assert await _audit(db, acme.organization.id) == [
         ("organization.ingest_suspended", "Raj at nexovue"),
@@ -134,7 +144,7 @@ async def test_a_suspension_needs_a_reason(db: AsyncSession) -> None:
     acme = await _tenant(db, "Acme")
     with pytest.raises(InvalidRequestError, match="Say why"):
         await admin.suspend(
-            db, staff=await _staff(db), org_id=acme.organization.id, reason="  ", now=_now()
+            db, operator=await _operator(db), org_id=acme.organization.id, reason="  ", now=_now()
         )
 
 
@@ -154,12 +164,12 @@ async def test_the_terminal_closes_the_same_valve_and_is_named_as_such(db: Async
 
 async def test_a_grant_is_the_plan_in_force_until_it_ends(db: AsyncSession) -> None:
     acme = await _tenant(db, "Acme")
-    staff = await _staff(db)
+    operator = await _operator(db)
     paid = acme.organization.plan
 
     await admin.grant_plan(
         db,
-        staff=staff,
+        operator=operator,
         org_id=acme.organization.id,
         request=GrantRequest(
             plan="pro", services=4, ends_on=(_now() + timedelta(days=30)).date(), reason="pilot"
@@ -174,7 +184,7 @@ async def test_a_grant_is_the_plan_in_force_until_it_ends(db: AsyncSession) -> N
     page = await admin.page(db, org_id=acme.organization.id)
     assert page.plan_grant is not None and page.plan_grant.plan == "pro"
 
-    await admin.end_grant(db, staff=staff, org_id=acme.organization.id, now=_now())
+    await admin.end_grant(db, operator=operator, org_id=acme.organization.id, now=_now())
     after = await usage_queries.plan_in_force(
         db, org_id=acme.organization.id, paid_plan=paid, at=_now()
     )
@@ -183,12 +193,12 @@ async def test_a_grant_is_the_plan_in_force_until_it_ends(db: AsyncSession) -> N
 
 async def test_a_new_grant_replaces_the_one_in_force(db: AsyncSession) -> None:
     acme = await _tenant(db, "Acme")
-    staff = await _staff(db)
+    operator = await _operator(db)
     until = (_now() + timedelta(days=30)).date()
     for plan in ("pro", "scale"):
         await admin.grant_plan(
             db,
-            staff=staff,
+            operator=operator,
             org_id=acme.organization.id,
             request=GrantRequest(plan=plan, services=2, ends_on=until, reason="upgrade"),
             now=_now(),
@@ -216,7 +226,7 @@ async def test_a_grant_that_cannot_apply_is_refused(
     with pytest.raises(InvalidRequestError, match=refusal):
         await admin.grant_plan(
             db,
-            staff=await _staff(db),
+            operator=await _operator(db),
             org_id=acme.organization.id,
             request=GrantRequest(
                 plan=plan,

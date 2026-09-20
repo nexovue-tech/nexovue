@@ -29,12 +29,18 @@ export type NavPath =
   | "/synthetics"
   | "/infrastructure"
   | "/metrics"
-  | "/settings/general";
+  | "/settings/general"
+  | "/admin";
 
 export interface NavSection {
   /** Small-caps rule in the sidebar. */
   label: string;
   items: Array<{ path: NavPath; title: string }>;
+  /**
+   * Shown only to nexovue's own operator. Absent means everyone signed in sees
+   * it, which is every other section (`docs/changes/super-admin-in-the-console/`).
+   */
+  operatorOnly?: boolean;
 }
 
 export const NAV_SECTIONS: NavSection[] = [
@@ -77,5 +83,12 @@ export const NAV_SECTIONS: NavSection[] = [
     // preferences beside telemetry screens.
     label: "Account",
     items: [{ path: "/settings/general", title: "Settings" }],
+  },
+  {
+    // nexovue's own, and nobody else's: the customers of this deployment rather
+    // than the data of one. The API refuses it regardless of what is rendered.
+    label: "nexovue",
+    items: [{ path: "/admin", title: "Platform" }],
+    operatorOnly: true,
   },
 ];

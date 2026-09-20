@@ -61,7 +61,7 @@ async def delete_website_payments(session: AsyncSession, org_id: uuid.UUID) -> i
 
 
 async def delete_plan_grants(session: AsyncSession, org_id: uuid.UUID) -> int:
-    """Complimentary plans, with the reason staff gave for each."""
+    """Complimentary plans, with the reason nexovue gave for each."""
     return await _rows_deleted(session, delete(PlanGrant).where(PlanGrant.org_id == org_id))
 
 

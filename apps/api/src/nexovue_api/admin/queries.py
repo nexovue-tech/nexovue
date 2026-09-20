@@ -1,6 +1,6 @@
 """Postgres reads behind the admin console.
 
-**Cross-tenant by design** (ADR-016): staff search every organization. Only the
+**Cross-tenant by design** (ADR-018): the operator searches every organization. Only the
 search itself is unscoped, and it is named in `test_postgres_tenancy_structure`'s
 exemptions; every read about one organization names it.
 """
@@ -22,6 +22,7 @@ from nexovue_api.data.postgres.models import (
     User,
     WebsitePayment,
 )
+from nexovue_api.superadmin.seed import PLATFORM_ORG_ID
 
 SEARCH_LIMIT: Final = 50
 
@@ -40,7 +41,10 @@ async def search_organizations(session: AsyncSession, needle: str) -> list[Organ
         conditions.append(Organization.id == uuid.UUID(needle.strip()))
     statement = (
         select(Organization)
-        .where(or_(*conditions))
+        # nexovue's own organization is not a customer: it has no project, no
+        # usage and nothing to suspend or comp, and it matches "nexovue" — the
+        # word an operator is most likely to type.
+        .where(or_(*conditions), Organization.id != PLATFORM_ORG_ID)
         .order_by(Organization.created_at.desc())
         .limit(SEARCH_LIMIT)
     )

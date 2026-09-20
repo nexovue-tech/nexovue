@@ -27,7 +27,9 @@ from typing import Final
 from nexovue_api.data.clickhouse.base import TENANT_BINDING
 
 _REPOSITORY_ROOT: Final = Path(__file__).resolve().parents[3]
-API_SOURCE: Final = _REPOSITORY_ROOT / "apps" / "api" / "src" / "nexovue_api"
+# The API's source root rather than one package inside it: what is scanned
+# should not depend on how the packages happen to be arranged today.
+API_SOURCE: Final = _REPOSITORY_ROOT / "apps" / "api" / "src"
 CLICKHOUSE_MIGRATIONS: Final = _REPOSITORY_ROOT / "deploy" / "clickhouse" / "migrations"
 
 _CREATES_A_TABLE: Final = re.compile(
@@ -44,22 +46,22 @@ REPOSITORY_CLASS: Final = "TenantScopedRepository"
 # repository. Adding a module here is a deliberate decision, not a formality.
 MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset(
     {
-        "data.clickhouse.base",
-        "deps",
-        "lifespan",
-        "health.checks",
-        "auth.dependencies",
+        "nexovue_api.data.clickhouse.base",
+        "nexovue_api.deps",
+        "nexovue_api.lifespan",
+        "nexovue_api.health.checks",
+        "nexovue_api.auth.dependencies",
         # The deletion endpoint's wiring, and the only place a `TenantScopedPurger`
         # is built. It runs no statement: it takes the client from the lifespan and
         # hands it to the purger, which binds the tenant exactly as the repository
         # does for reads. `organizations.service` deliberately never sees a client.
-        "organizations.dependencies",
+        "nexovue_api.organizations.dependencies",
     }
 )
 
 # Where the repository may be built. A second site would be a second answer to
 # "which tenant is this?", and only one of them would come from the session.
-REPOSITORY_CONSTRUCTION_SITE: Final = ("auth.dependencies", "get_tenant_repository")
+REPOSITORY_CONSTRUCTION_SITE: Final = ("nexovue_api.auth.dependencies", "get_tenant_repository")
 
 _RAW_CLIENT_NAMES: Final = frozenset(
     {"clickhouse_connect", "AsyncClient", "ClickHouseClient", "get_clickhouse", "clickhouse"}

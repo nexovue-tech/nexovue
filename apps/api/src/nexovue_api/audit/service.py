@@ -17,6 +17,7 @@ when, and nothing that grants access to anything.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any, Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,6 +105,10 @@ API_TOKEN_REVOKED: Final = "api_token.revoked"
 SITE_KEY_CREATED: Final = "site_key.created"
 SITE_KEY_REVOKED: Final = "site_key.revoked"
 SESSION_DENIED: Final = "session.denied"
+# The platform gate (`docs/changes/super-admin-in-the-console/`): entering it,
+# and failing to. A refusal is the more interesting of the two.
+ADMIN_MODE_ENTERED: Final = "admin_mode.entered"
+ADMIN_MODE_REFUSED: Final = "admin_mode.refused"
 DEPLOY_RECORDED: Final = "deploy.recorded"
 DEPLOY_WEBHOOK_SECRET_VIEWED: Final = "deploy.webhook_secret_viewed"
 # The two halves of P1-77. The first is an event in the tenant's own history and
@@ -344,6 +349,29 @@ def record_api_key_created(
         actor_user_id=actor_user_id,
         action=API_KEY_CREATED,
         target=_target(API_KEY_TARGET, api_key.id),
+    )
+
+
+def record_admin_mode_entered(db: AsyncSession, *, user: User, until: datetime) -> None:
+    """nexovue's operator re-authenticated and took the platform surface."""
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=ADMIN_MODE_ENTERED,
+        target=_target(USER_TARGET, user.id),
+        detail={"until": until.isoformat()},
+    )
+
+
+def record_admin_mode_refused(db: AsyncSession, *, user: User) -> None:
+    """Somebody with the operator's session could not prove they were them."""
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=ADMIN_MODE_REFUSED,
+        target=_target(USER_TARGET, user.id),
     )
 
 
@@ -938,13 +966,13 @@ def record_member_removed(
 
 
 def record_organization_onboarded(
-    db: AsyncSession, *, organization: Organization, owner_email: str, staff_label: str
+    db: AsyncSession, *, organization: Organization, owner_email: str, operator_label: str
 ) -> None:
     _add(
         db,
         org_id=organization.id,
         actor_user_id=None,
-        actor_label=staff_label,
+        actor_label=operator_label,
         action=ORGANIZATION_ONBOARDED,
         target=_target(ORGANIZATION_TARGET, organization.id),
         detail={"owner": owner_email, "region": organization.region},
@@ -958,25 +986,25 @@ def record_payment_recorded(
     payment_id: str,
     amount_minor: int,
     currency: str,
-    staff_label: str,
+    operator_label: str,
 ) -> None:
     _add(
         db,
         org_id=organization.id,
         actor_user_id=None,
-        actor_label=staff_label,
+        actor_label=operator_label,
         action=ORGANIZATION_PAYMENT_RECORDED,
         target=_target(ORGANIZATION_TARGET, organization.id),
         detail={"payment": payment_id, "amount_minor": amount_minor, "currency": currency},
     )
 
 
-def record_owner_link_sent(db: AsyncSession, *, owner: User, staff_label: str) -> None:
+def record_owner_link_sent(db: AsyncSession, *, owner: User, operator_label: str) -> None:
     _add(
         db,
         org_id=owner.org_id,
         actor_user_id=None,
-        actor_label=staff_label,
+        actor_label=operator_label,
         action=ORGANIZATION_OWNER_LINK_SENT,
         target=_target(USER_TARGET, owner.id),
         detail={"email": owner.email},
@@ -1078,7 +1106,7 @@ def record_support_view_started(
     *,
     org_id: uuid.UUID,
     viewed: User,
-    staff_label: str,
+    operator_label: str,
     reason: str,
     impersonation_id: uuid.UUID,
     until: str,
@@ -1087,7 +1115,7 @@ def record_support_view_started(
         db,
         org_id=org_id,
         actor_user_id=None,
-        actor_label=staff_label,
+        actor_label=operator_label,
         impersonation_context=impersonation_id,
         action=SUPPORT_VIEW_STARTED,
         target=_target(USER_TARGET, viewed.id),
@@ -1100,7 +1128,7 @@ def record_support_view_request(
     *,
     org_id: uuid.UUID,
     viewed_id: uuid.UUID,
-    staff_label: str,
+    operator_label: str,
     impersonation_id: uuid.UUID,
     method: str,
     path: str,
@@ -1110,7 +1138,7 @@ def record_support_view_request(
         db,
         org_id=org_id,
         actor_user_id=None,
-        actor_label=staff_label,
+        actor_label=operator_label,
         impersonation_context=impersonation_id,
         action=SUPPORT_VIEW_REQUEST,
         target=_target(USER_TARGET, viewed_id),
@@ -1123,14 +1151,14 @@ def record_support_view_ended(
     *,
     org_id: uuid.UUID,
     viewed_id: uuid.UUID,
-    staff_label: str,
+    operator_label: str,
     impersonation_id: uuid.UUID,
 ) -> None:
     _add(
         db,
         org_id=org_id,
         actor_user_id=None,
-        actor_label=staff_label,
+        actor_label=operator_label,
         impersonation_context=impersonation_id,
         action=SUPPORT_VIEW_ENDED,
         target=_target(USER_TARGET, viewed_id),

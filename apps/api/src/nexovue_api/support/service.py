@@ -78,7 +78,7 @@ async def start_view(
     *,
     org_id: uuid.UUID,
     user_id: uuid.UUID,
-    staff_label: str,
+    operator_label: str,
     reason: str,
     now: datetime,
 ) -> str:
@@ -95,7 +95,7 @@ async def start_view(
         db,
         org_id=org_id,
         viewed=viewed,
-        staff_label=staff_label,
+        operator_label=operator_label,
         reason=reason.strip(),
         impersonation_id=impersonation_id,
         until=until.isoformat(),
@@ -105,7 +105,7 @@ async def start_view(
         ViewAsTicket(
             user_id=viewed.id,
             org_id=org_id,
-            staff_label=staff_label,
+            operator_label=operator_label,
             reason=reason.strip(),
             grant_id=grant.id,
             impersonation_id=impersonation_id,

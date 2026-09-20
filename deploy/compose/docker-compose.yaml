@@ -315,6 +315,17 @@ services:
       # The log carries the rendered body, so a verification link is followed by
       # copying it out of `docker logs nexovue-api-1`.
       EMAIL_PROVIDER: console
+      # nexovue's own operator (`docs/changes/super-admin-in-the-console/`). The
+      # API seeds this `users` row at boot and re-hashes the password every time,
+      # so rotating it is an edit here and a restart. Sign in on the ordinary
+      # sign-in page; the platform area appears in the sidebar and asks for this
+      # password again before it opens.
+      #
+      # A dev constant like the passwords above — it reaches nothing outside this
+      # machine. In deployment it is a real secret, and leaving both blank (a
+      # self-hosted install) seeds nobody.
+      SUPER_ADMIN_EMAIL: operator@nexovue.test
+      SUPER_ADMIN_PASSWORD: nexovue-dev-operator
     # The developer's own third-party credentials — the payment gateway
     # (`PAYMENTS_DOMESTIC_*`) and the mail provider (`EMAIL_*`).
     #
@@ -370,57 +381,6 @@ services:
         limits:
           # 832 MB is the runtime budget; `uv sync` on first start needs more.
           memory: 1024M
-
-  # F31, ADR-016: nexovue staff's admin console, a second app over the same
-  # package, on its own port and — in production — its own host. Same settings as
-  # the API; no customer route is served here, and none of these by the API.
-  admin-api:
-    build:
-      context: ../..
-      dockerfile: deploy/docker/python-dev.Dockerfile
-    command: >-
-      uv run --package nexovue-api
-      uvicorn nexovue_api.admin.main:app --host 0.0.0.0 --port 8000 --reload
-      --timeout-graceful-shutdown 10
-      --reload-dir apps/api/src
-    working_dir: /workspace
-    volumes:
-      - ../..:/workspace
-      - python-venv:/workspace/.venv
-    environment: *api-env
-    env_file:
-      - path: ../../.env
-        required: false
-    ports:
-      - "${ADMIN_API_HOST_PORT:-18001}:8000"
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/healthz")
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 60s
-    depends_on:
-      # After the API: both run `uv sync` into the shared venv on first start.
-      api:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      # The API's lifespan, which this app shares, opens both at start.
-      clickhouse:
-        condition: service_healthy
-      seaweedfs:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-
   web:
     build:
       context: ../..
@@ -435,8 +395,6 @@ services:
       # compose service name. The code's default is localhost:18000, which is
       # right when you run `pnpm dev` on the host and wrong in here.
       NEXOVUE_API_ORIGIN: http://api:8000
-      # The admin console's build entry (`admin.html`) calls /admin/v1 (F31).
-      NEXOVUE_ADMIN_API_ORIGIN: http://admin-api:8000
     ports:
       - "${WEB_HOST_PORT:-15173}:5173"
     healthcheck:

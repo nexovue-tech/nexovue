@@ -69,13 +69,20 @@ EXEMPT: Final = {
     # An invite must say when an address belongs to another organization (D1),
     # and addresses are unique system-wide — `email_is_taken`'s reason.
     "find_by_email",
-    # The admin console's organization search (F31, ADR-016): staff search every
-    # tenant by design, from a separate app behind a staff session with a second
-    # factor. Every read about one organization after the search names it.
+    # The platform's organization search (F31, ADR-018): nexovue's operator
+    # searches every tenant by design, behind the platform gate — the role plus a
+    # re-authentication no older than thirty minutes. Every read about one
+    # organization after the search names it.
     "search_organizations",
     # A website payment buys one organization, and its processor id is unique
     # system-wide — `key_prefix_is_taken`'s reason.
     "payment_is_recorded",
+    # nexovue's own operator, looked up by address at boot
+    # (`docs/changes/super-admin-in-the-console/`). It belongs to the platform's
+    # reserved organization, which this is what creates — so there is no tenant
+    # to scope by yet, and scoping by the one it is about to make would be a
+    # filter that can only ever match what it just wrote.
+    "seed_super_admin",
     # An API token's hash (F36), exactly as an ingest key's prefix: it is what a
     # caller presents *before* any organization is known, so it establishes the
     # tenant rather than being filtered by one. The row it returns is refused

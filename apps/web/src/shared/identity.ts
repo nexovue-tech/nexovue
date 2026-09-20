@@ -81,6 +81,21 @@ export function useSession() {
   });
 }
 
+/** nexovue's own operator, who administers the platform rather than a tenant. */
+export const OPERATOR_ROLE = "super_admin";
+
+/**
+ * Whether the signed-in person is nexovue's operator.
+ *
+ * A role rather than an action: the platform surface is not a tenant power and
+ * appears in no permission row, so `useCan` cannot answer this
+ * (`docs/changes/super-admin-in-the-console/`). False until the session has
+ * loaded, like `useCan`, so nothing flashes for a customer.
+ */
+export function useIsOperator(): boolean {
+  return useSession().data?.user.role === OPERATOR_ROLE;
+}
+
 /**
  * Whether the signed-in person may do `action`.
  *

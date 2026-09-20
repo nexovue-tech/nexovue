@@ -36,7 +36,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
@@ -68,6 +68,7 @@ _USER_ID: Final = "user_id"
 _ORG_ID: Final = "org_id"
 _CREATED_AT: Final = "created_at"
 _LAST_SEEN_AT: Final = "last_seen_at"
+_ADMIN_UNTIL: Final = "admin_until"
 _CLIENT_LABEL: Final = "client_label"
 _CLIENT_NETWORK: Final = "client_network"
 _IMPERSONATION: Final = "impersonation"
@@ -83,7 +84,7 @@ class Impersonation:
     """
 
     impersonation_id: str
-    staff_label: str
+    operator_label: str
     reason: str
     grant_id: str
     until: datetime
@@ -104,11 +105,20 @@ class Session:
     last_seen_at: datetime | None = None
     client: ClientDescription = field(default_factory=ClientDescription.unknown)
     impersonation: Impersonation | None = None
+    # Until when this session has recently proved who holds it (the platform
+    # surface, `docs/changes/super-admin-in-the-console/`). None means never.
+    # A session is a seven-day credential; the platform is not something a
+    # seven-day credential should reach on its own.
+    admin_until: datetime | None = None
 
     @property
     def last_used_at(self) -> datetime:
         """When a request last arrived on this session."""
         return self.last_seen_at or self.created_at
+
+    def in_admin_mode(self, now: datetime) -> bool:
+        """Whether the holder re-authenticated recently enough to administer."""
+        return self.admin_until is not None and now < self.admin_until
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +276,24 @@ class SessionStore:
         )
         return True
 
+    async def set_admin_until(self, token: str, until: datetime | None) -> Session | None:
+        """Stamp — or clear — this session's re-authentication (the platform gate).
+
+        Written onto the stored record rather than held beside it, so it dies
+        with the session and travels with it: revoking the session revokes the
+        platform access, and no second store can disagree about either. The
+        key's TTL is kept, because proving who you are does not lengthen a
+        session.
+        """
+        fingerprint = token_fingerprint(token)
+        raw = await self._redis.get(_key(fingerprint))
+        session = _decode(raw) if raw is not None else None
+        if session is None:
+            return None
+        stamped = replace(session, admin_until=until)
+        await self._redis.set(_key(fingerprint), _encode(stamped), keepttl=True)
+        return stamped
+
     async def revoke(self, token: str) -> None:
         """End a session now. Safe to call for one already gone.
 
@@ -293,13 +321,13 @@ class SessionStore:
         now = datetime.now(UTC)
         if (now - session.last_used_at).total_seconds() < LAST_SEEN_RESOLUTION_SECONDS:
             return session
-        seen = Session(
-            user_id=session.user_id,
-            org_id=session.org_id,
-            created_at=session.created_at,
-            last_seen_at=now,
-            client=session.client,
-        )
+        # `replace`, never a fresh `Session(...)`: this rewrite is what is
+        # stored from now on, so a field left out of it is a field silently
+        # dropped from a live session. Built by hand, it dropped
+        # `impersonation` — and a read-only support view became an ordinary
+        # session, as the customer, sixty seconds in
+        # (`docs/changes/super-admin-in-the-console/`).
+        seen = replace(session, last_seen_at=now)
         await self._redis.set(_key(fingerprint), _encode(seen), keepttl=True)
         return seen
 
@@ -360,11 +388,12 @@ def _encode(session: Session) -> str:
             _LAST_SEEN_AT: session.last_used_at.isoformat(),
             _CLIENT_LABEL: session.client.label,
             _CLIENT_NETWORK: session.client.network,
+            _ADMIN_UNTIL: None if session.admin_until is None else session.admin_until.isoformat(),
             _IMPERSONATION: None
             if impersonation is None
             else {
                 "id": impersonation.impersonation_id,
-                "staff": impersonation.staff_label,
+                "operator": impersonation.operator_label,
                 "reason": impersonation.reason,
                 "grant": impersonation.grant_id,
                 "until": impersonation.until.isoformat(),
@@ -389,6 +418,7 @@ def _decode(raw: str | bytes) -> Session | None:
                 label=_optional_text(payload.get(_CLIENT_LABEL)),
                 network=_optional_text(payload.get(_CLIENT_NETWORK)),
             ),
+            admin_until=_optional_moment(payload.get(_ADMIN_UNTIL)),
             impersonation=_impersonation(payload.get(_IMPERSONATION)),
         )
     except (ValueError, KeyError, TypeError):
@@ -401,7 +431,7 @@ def _impersonation(value: Any) -> Impersonation | None:
         return None
     return Impersonation(
         impersonation_id=str(value["id"]),
-        staff_label=str(value["staff"]),
+        operator_label=str(value["operator"]),
         reason=str(value["reason"]),
         grant_id=str(value["grant"]),
         until=datetime.fromisoformat(value["until"]),

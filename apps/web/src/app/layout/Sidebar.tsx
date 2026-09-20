@@ -4,6 +4,7 @@ import { ArrowUpRight } from "lucide-react";
 
 import { OpenIncidentBadge } from "@/features/alerts/OpenIncidentBadge";
 import { Wordmark } from "@/shared/components/Logo";
+import { useIsOperator } from "@/shared/identity";
 import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
 import { ThemeToggle } from "@/shared/theme/ThemeToggle";
 
@@ -21,6 +22,12 @@ import { NAV_SECTIONS } from "../routes/route-manifest";
  * content instead, and closes when a link is followed.
  */
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
+  // One section is nexovue's own. It is hidden rather than disabled: a customer
+  // has no business knowing the platform area exists, and the API refuses it
+  // whatever the sidebar shows.
+  const operator = useIsOperator();
+  const sections = NAV_SECTIONS.filter((section) => operator || !section.operatorOnly);
+
   return (
     <nav
       aria-label="Screens"
@@ -39,7 +46,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
       </Link>
 
       <div className="flex-1 overflow-y-auto py-3">
-        {NAV_SECTIONS.map((section) => (
+        {sections.map((section) => (
           <div key={section.label} className="mb-5">
             <h2 className="px-4 pb-1.5 font-mono text-2xs text-ink-dim uppercase tracking-caps">
               {section.label}

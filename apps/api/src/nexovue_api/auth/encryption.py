@@ -50,9 +50,6 @@ CREDENTIAL_ENCRYPTION_VARIABLE: Final = "CREDENTIAL_ENCRYPTION_KEY"
 # Bound into every ciphertext, so a TOTP secret cannot be presented as the same
 # owner's credential of another kind. Check secrets have their own key and purpose.
 TOTP_PURPOSE: Final = "totp"
-# Staff second factors (F31, ADR-016) under their own purpose: a staff secret can
-# never be opened as a customer's, nor the reverse.
-STAFF_TOTP_PURPOSE: Final = "staff-totp"
 
 _KEY_MISCONFIGURED: Final = (
     "Two-factor authentication is not available on this deployment, so this could not be "

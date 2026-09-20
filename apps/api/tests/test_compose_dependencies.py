@@ -123,7 +123,7 @@ _DELIVERIES_KAFKA = (
 
 DELIBERATELY_UNDECLARED: Final[dict[str, dict[str, dict[str, str]]]] = {
     "docker-compose.yaml": {
-        "web": {"api": _WEB_API, "admin-api": _WEB_API},
+        "web": {"api": _WEB_API},
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
         "scheduler-light": {"postgres": _LIGHT_POSTGRES},
         "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},

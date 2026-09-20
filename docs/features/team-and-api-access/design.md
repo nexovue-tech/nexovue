@@ -79,12 +79,14 @@ Every existing screen hides mutating controls through one hook, `useCan(action)`
 `permissions` list `GET /auth/me` returns (FR3). The settings rail (`shared/settings/settings-nav.ts`)
 filters its entries by the same list.
 
-**Admin console** — a second build entry of `apps/web` (`admin.html`, `src/admin/`), importing only
-`shared/` (ADR-016):
+**Platform area** *(amended 2026-09-20, ADR-018 — was a second build entry, `admin.html` +
+`src/admin/`)* — `src/features/admin/`, inside the console shell, offered in the sidebar to the
+operator alone. There is no sign-in screen of its own; in its place a *Confirm it is you* panel takes
+the password or a second-factor code and opens the area for 30 minutes:
 
 | Screen | What |
 |---|---|
-| Sign in | Email, password, then the TOTP code — no path without the code |
+| Confirm it is you | Password or TOTP code, shown in place of whichever screen was refused |
 | Organizations | Search box (name, slug, id, member email); results with plan, region, last ingest, suspended |
 | Organization | Members, projects, plan and comp, usage against allowance, last ingest per project, suspension (with suspend/resume + reason), website payment, support grant, *View as* per person, recent audit |
 | Onboard | Organization name, owner email and name, region, website payment id and amount |
@@ -226,22 +228,27 @@ projects, windows, integrations, keys). New actions: `member.invited`, `member.i
 `support.view_started`, `support.view_ended`, `support.view_request`. `audit_log` has no retention job;
 rows are kept (FR38).
 
-### 6. Admin console (FR21–FR30, ADR-016)
+### 6. Platform administration (FR21–FR30)
 
-**Staff are a table, not users (BR13).** `staff_accounts(id, email, name, password_hash, totp_secret
-sealed, created_at, disabled_at)`. A staff account is created by
-`python -m nexovue_api.staff create --email …`, which enrols TOTP in the terminal (prints the
-`otpauth://` URI, requires a code back) — there is no row without a confirmed factor (AC26, D9).
+> **Amended 2026-09-20 by [ADR-018](../../decisions/ADR-018-the-operator-is-a-user-in-the-console.md).**
+> The two paragraphs below replace the separate table, app, host and cookie this section described and
+> the F31 stage built. Everything after them — onboarding, suspension, comps, support access and *view
+> as* — is unchanged and still built as written. The change record is
+> `docs/changes/super-admin-in-the-console/`.
 
-**Its own host, app and cookie (NFR4).** `nexovue_api.admin.main:app` is a second FastAPI app in the
-same package — reusing services, queries and the database session — served as a compose service
-`admin-api` on its own port. In development it is reached directly and the admin build is served by the
-web dev server; the hosted cloud has no Caddy today, so routing its own host in production is the deploy
-work of ADR-006 (plan Q2). Self-hosted installs do not run it (plan Q3).
-Staff sessions live in Redis under `staff-session:`, cookie `nexovue_staff`, host-only, 8 hours. The
-customer app never reads `nexovue_staff`; the admin app never reads `nexovue_session` — a session for one
-is not even parsed by the other (AC27). Every admin route requires a staff session; the admin app has no
-unauthenticated route but sign-in.
+**One operator, an ordinary user (BR13).** A `users` row with `role = "super_admin"` in a reserved
+organization with a fixed id, seeded at API boot from `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD`
+(`superadmin/seed.py`) and re-hashed every boot, so rotation is an edit and a restart. Nothing a request
+can reach creates it, which is the one property the terminal command had that had to survive. The role
+grants nothing inside any organization; `staff_accounts` is dropped and the two columns that referenced
+it point at `users` (migration `0035`).
+
+**One app, one cookie, a step-up instead (NFR4).** The routes are `/api/v1/admin/…` in the customer
+API, each behind `MayAdministerThePlatform`, which refuses anyone but the operator — before looking at
+any credential, so the endpoint cannot be used to learn who holds the role — and then refuses the
+operator too unless the session carries a re-authentication no older than 30 minutes. `POST
+/auth/admin-mode` takes the password or a TOTP code and stamps `admin_until` on the session record
+itself; `DELETE` clears it, and revoking the session revokes it with no second place to disagree.
 
 **Onboarding (FR22–FR24).** `POST /admin/organizations` calls `provision_tenant` with `password=None`
 (its signature gains that: an owner who will set their own) plus `region`, then issues the set-password
@@ -298,9 +305,10 @@ granted_by, granted_at, expires_at, withdrawn_at)`; `POST/DELETE /support-access
 | `GET /signup/status` | unauthenticated |
 | `/api/mcp` | API token |
 
-**New admin API** (`admin-api`, `/admin/v1`): sign-in (password, then TOTP), sign-out; organization
-search and page; onboard; resend owner link; record payment; suspend/resume; grant/end comp; start/end
-*view as*.
+**Admin routes** *(amended 2026-09-20, ADR-018 — was a second app, `admin-api` on `/admin/v1`)*:
+`/api/v1/admin/…` behind `MayAdministerThePlatform` — organization search and page; onboard; resend
+owner link; record payment; suspend/resume; grant/end comp; start/end *view as*. Sign-in and sign-out
+are `/auth`'s, as for anyone else; `POST` and `DELETE /auth/admin-mode` open and close the surface.
 
 **Email:** two new `Message` members and templates — `INVITE` (inviter, organization, link, expiry) and
 `WELCOME_OWNER` (organization, link, expiry).
@@ -312,7 +320,8 @@ One Postgres migration per stage, each stating its reasoning in the file (`docs/
 - **Stage 1:** `users` + `set_password_token_hash`, `set_password_expires_at`, `invite_sent_at`,
   `removed_at`; partial unique index on `set_password_token_hash`; `audit_log (org_id, at DESC, id DESC)`.
 - **Stage 3:** `organizations.region`; `staff_accounts`; `support_access_grants`; `website_payments`;
-  `plan_grants`.
+  `plan_grants`. *(Amended 2026-09-20: `0035` drops `staff_accounts` again, adds the `super_admin` enum
+  value, and re-points `website_payments.recorded_by` and `plan_grants.granted_by` at `users`.)*
 - **Stage 2:** `api_tokens`; `api_token_usage_daily`.
 
 No backfill: every existing organization is `india`, every existing user is active and has a password.
@@ -363,8 +372,9 @@ No ClickHouse change.
 - Counters: `invites_sent_total{result}`, `api_token_requests_total{route}`, `mcp_tool_calls_total{tool,
   result}`, `support_view_sessions_total`.
 - Logs name token prefixes, staff labels and impersonation ids; never secrets.
-- Operations: `python -m nexovue_api.staff create|disable`; `NEXOVUE_ADMIN_HOST` and `SIGNUP_ENABLED` in
-  the deploy env; the admin host can be IP-restricted in Caddy (documented, off by default).
+- Operations *(amended 2026-09-20, ADR-018)*: `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` and
+  `SIGNUP_ENABLED` in the deploy env. There is no admin host to restrict; what bounds the surface is the
+  role and the 30-minute step-up.
 
 ## Alternatives and tradeoffs
 

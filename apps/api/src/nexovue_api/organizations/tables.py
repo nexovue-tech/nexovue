@@ -108,8 +108,4 @@ EXCLUDED_TABLES: Final[dict[str, str]] = {
         "ingestion it already counted: a silent, permanent over-count"
     ),
     "alembic_version": "Alembic's own bookkeeping; holds no customer data",
-    "staff_accounts": (
-        "nexovue's own staff (ADR-016), deliberately tenant-free; a staff member's "
-        "name on a customer's audit row is text, not a reference, so nothing dangles"
-    ),
 }

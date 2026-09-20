@@ -73,10 +73,10 @@ async def redeem_view_as(
     token, _ = await sessions.create(
         user_id=str(spent.user_id),
         org_id=str(spent.org_id),
-        client=ClientDescription(label=f"nexovue support — {spent.staff_label}", network=None),
+        client=ClientDescription(label=f"nexovue support — {spent.operator_label}", network=None),
         impersonation=Impersonation(
             impersonation_id=str(spent.impersonation_id),
-            staff_label=spent.staff_label,
+            operator_label=spent.operator_label,
             reason=spent.reason,
             grant_id=str(spent.grant_id),
             until=spent.until,

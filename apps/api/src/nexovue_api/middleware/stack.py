@@ -1,8 +1,9 @@
-"""The middleware every nexovue app runs, in one place.
+"""The middleware the API runs, in one place.
 
-Shared by the customer API (`main.py`) and the staff admin app (`admin/main.py`,
-ADR-016), so rate limiting, correlation ids, request logging and the exception
-boundary are the same on both and cannot drift apart.
+There was a second app once (ADR-016's staff admin API, superseded by ADR-018),
+and this module is what kept rate limiting, correlation ids, request logging and
+the exception boundary from drifting between them. One app applies it today; it
+stays here because that is still where the whole stack is legible at once.
 """
 
 from __future__ import annotations

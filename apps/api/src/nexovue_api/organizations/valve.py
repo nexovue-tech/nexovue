@@ -1,12 +1,12 @@
 """The ingest stop valve (P1-52), in one place for both of its callers.
 
-The terminal command (`suspend.py`, the 3 a.m. path) and the staff admin console
-(F31) close and open the same two columns through these functions, so the rules
+The terminal command (`suspend.py`, the 3 a.m. path) and the console's platform
+area (F31) close and open the same two columns through these functions, so the rules
 cannot drift apart: a reason is required to close, a second close is refused
 rather than restamped, and opening clears the reason with the suspension.
 
-Every close and open is audited, named for who did it — a staff member from the
-console, "an operator at a terminal" from the command.
+Every close and open is audited, named for who did it — nexovue's operator from
+the console, "an operator at a terminal" from the command.
 """
 
 from __future__ import annotations

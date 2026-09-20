@@ -167,7 +167,7 @@ async def end_session(db: AsyncSession, sessions: SessionStore, token: str | Non
             db,
             org_id=org_id,
             viewed_id=user_id,
-            staff_label=ending.impersonation.staff_label,
+            operator_label=ending.impersonation.operator_label,
             impersonation_id=uuid.UUID(ending.impersonation.impersonation_id),
         )
         return

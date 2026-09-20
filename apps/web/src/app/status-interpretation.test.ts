@@ -45,16 +45,11 @@ const within = (path: string) => path.replace(/^\/src\//, "");
  * fields a person just typed. Moving them into the query client would give one
  * function two unrelated jobs. Adding a fourth entry here is a decision, not a
  * formality: it means a second place now decides what a status means.
- *
- * `admin/api.ts` is a different app's (F31, `admin.html`): staff, their own API and
- * their own cookie, with no query client in common. It both produces its errors
- * and answers the one question the admin app asks of a status — is anyone signed in.
  */
 const MAY_READ_A_STATUS: readonly string[] = [
   "app/query-client.ts",
   "shared/api-client.ts",
   "features/auth/problem-fields.ts",
-  "admin/api.ts",
 ];
 
 /** `error.status === 401`, `status >= 500`, `response.status !== 204`. */
