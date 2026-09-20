@@ -43,6 +43,13 @@ dependencies = [
     # FastAPI parses no multipart body without it, so an upload endpoint cannot
     # exist until it is declared.
     "python-multipart>=0.0.20",
+    # The Model Context Protocol server an AI assistant reads through (F36,
+    # FR31, D13). The reference SDK, from the protocol's own authors: writing a
+    # transport by hand would mean tracking a moving spec for no gain, and the
+    # tools here are ordinary functions either way. Pinned below 3 — 2.x renamed
+    # the server class and moved the transport keywords, and the next major may
+    # do the same.
+    "mcp>=2.2,<3",
     # Source map symbolication: Sentry's library. `SourceMapCache.from_bytes`
     # takes the minified bytes *and* the map, and `lookup(line, col, context)`
     # returns the original file, line, name and surrounding source. Rejected the

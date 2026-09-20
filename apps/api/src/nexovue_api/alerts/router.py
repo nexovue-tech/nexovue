@@ -19,9 +19,10 @@ from nexovue_api.alerts.schemas import (
     UpdateRuleRequest,
     WriteRuleRequest,
 )
-from nexovue_api.auth.dependencies import CurrentIdentity
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader
 from nexovue_api.auth.policy import MayOperateAlerts
 from nexovue_api.deps import DbSession, EvaluationReaderDep
+from nexovue_api.projects.service import refuse_out_of_scope
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -80,9 +81,11 @@ async def delete_rule(identity: MayOperateAlerts, db: DbSession, rule_id: uuid.U
 
 @router.get("/incidents", summary="Open incidents first, then the last 30 days")
 async def list_incidents(
-    identity: CurrentIdentity, db: DbSession, project_id: uuid.UUID
+    reader: CurrentReader, db: DbSession, project_id: uuid.UUID
 ) -> IncidentListResponse:
-    return await service.list_incidents(db, org_id=identity.org_id, project_id=project_id)
+    """On the read surface (FR17): a person, or one of the organization's tokens."""
+    refuse_out_of_scope(reader, project_id)
+    return await service.list_incidents(db, org_id=reader.org_id, project_id=project_id)
 
 
 # Before `/incidents/{incident_id}`, which would otherwise claim the path and refuse it
@@ -96,9 +99,12 @@ async def open_incident_count(
 
 @router.get("/incidents/{incident_id}", summary="One incident and who was told")
 async def get_incident(
-    identity: CurrentIdentity, db: DbSession, incident_id: uuid.UUID
+    reader: CurrentReader, db: DbSession, incident_id: uuid.UUID
 ) -> IncidentSummary:
-    return await service.get_incident(db, org_id=identity.org_id, incident_id=incident_id)
+    """Takes no `project_id`, so the scope is compared against the row it loads."""
+    return await service.get_incident(
+        db, org_id=reader.org_id, incident_id=incident_id, project_scope=reader.project_scope
+    )
 
 
 @router.get("/coverage/services/{service_name}", summary="What alerts on one service")

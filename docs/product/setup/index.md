@@ -15,6 +15,7 @@ to go next.
 | You run an OpenTelemetry Collector | [collector.md](collector.md) |
 | You want page-load, web-vital and JavaScript-error data from a browser | [browser.md](browser.md) |
 | You want to see which code a service spends its CPU and memory in | [Continuous profiling](profiling/continuous-profiling.md) (preview) |
+| You want to *read* your data from a script, CI or an AI assistant | [api.md](api.md) — API tokens, the read surface, the MCP server |
 | You have set it all up and nothing has arrived | [troubleshooting.md](troubleshooting.md) |
 
 ## The two variables

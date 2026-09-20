@@ -11,6 +11,7 @@ export type SettingsPath =
   | "/settings/general"
   | "/settings/account"
   | "/settings/api-keys"
+  | "/settings/api-tokens"
   | "/settings/members"
   | "/settings/audit"
   | "/settings/support"
@@ -79,7 +80,12 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       {
         path: "/settings/api-keys",
         title: "Ingest keys",
-        keywords: ["api", "key", "token", "secret", "site key", "browser key", "otlp"],
+        keywords: ["api", "key", "secret", "site key", "browser key", "otlp", "write"],
+      },
+      {
+        path: "/settings/api-tokens",
+        title: "API tokens",
+        keywords: ["api", "token", "read", "ci", "script", "mcp", "assistant", "curl", "export"],
       },
       {
         path: "/settings/audit",

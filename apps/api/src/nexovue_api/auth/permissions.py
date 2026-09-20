@@ -27,6 +27,8 @@ class Action(StrEnum):
     CONFIGURE_PROJECTS = "configure_projects"
     # Ingest keys, site keys, deploy webhook secrets and integrations.
     MANAGE_CREDENTIALS = "manage_credentials"
+    # Read tokens for the organization's own data (F36, BR9).
+    MANAGE_API_TOKENS = "manage_api_tokens"
     MANAGE_MEMBERS = "manage_members"
     # Making or unmaking an owner is an owner's act (BR3).
     MANAGE_OWNERS = "manage_owners"
@@ -50,6 +52,7 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.MANAGE_CHECK_SECRETS: _ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: _ADMINISTRATORS,
     Action.MANAGE_CREDENTIALS: _ADMINISTRATORS,
+    Action.MANAGE_API_TOKENS: _ADMINISTRATORS,
     Action.MANAGE_MEMBERS: _ADMINISTRATORS,
     Action.READ_AUDIT: _ADMINISTRATORS,
     # Signing a mandate that debits an account every month, or ending it, is the

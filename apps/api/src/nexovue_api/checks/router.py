@@ -10,7 +10,7 @@ import uuid
 
 from fastapi import APIRouter, status
 
-from nexovue_api.auth.dependencies import CurrentIdentity
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader
 from nexovue_api.auth.policy import MayOperateChecks
 from nexovue_api.checks import service
 from nexovue_api.checks.schemas import (
@@ -24,20 +24,23 @@ from nexovue_api.checks.schemas import (
     UpdateCheckRequest,
 )
 from nexovue_api.deps import AppSettings, DbSession
+from nexovue_api.projects.service import refuse_out_of_scope
 
 router = APIRouter(prefix="/checks", tags=["checks"])
 
 
 @router.get("", summary="Every check on one project")
 async def list_checks(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     settings: AppSettings,
     project_id: uuid.UUID,
 ) -> CheckListResponse:
+    """On the read surface (FR17): a person, or one of the organization's tokens."""
+    refuse_out_of_scope(reader, project_id)
     return await service.list_for_project(
         db,
-        org_id=identity.org_id,
+        org_id=reader.org_id,
         project_id=project_id,
         available_locations=settings.probe_locations,
     )
@@ -60,8 +63,11 @@ async def create_check(
 
 
 @router.get("/{check_id}", summary="One check, with its confirmed state")
-async def get_check(identity: CurrentIdentity, db: DbSession, check_id: uuid.UUID) -> CheckSummary:
-    return await service.get(db, org_id=identity.org_id, check_id=check_id)
+async def get_check(reader: CurrentReader, db: DbSession, check_id: uuid.UUID) -> CheckSummary:
+    """Takes no `project_id`, so the scope is compared against the row it loads."""
+    return await service.get(
+        db, org_id=reader.org_id, check_id=check_id, project_scope=reader.project_scope
+    )
 
 
 @router.patch("/{check_id}", summary="Edit a check, or pause it")

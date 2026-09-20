@@ -18,6 +18,7 @@ export type Action =
   | "manage_check_secrets"
   | "configure_projects"
   | "manage_credentials"
+  | "manage_api_tokens"
   | "manage_members"
   | "manage_owners"
   | "grant_support"

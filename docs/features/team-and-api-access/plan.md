@@ -303,23 +303,23 @@ page viewed.
 localhost:18000/api/v1/services?project_id=…` answers; the same token on another project answers 404; a
 `POST` answers 403; revoke — 401.
 
-- [ ] **T44** — `apps/api/migrations/versions/0034_api_tokens.py`, models · `api_tokens`,
+- [x] **T44** — `apps/api/migrations/versions/0034_api_tokens.py`, models · `api_tokens`,
   `api_token_usage_daily` · proved by `tests/test_api_tokens_migration_live.py`
-- [ ] **T45** — new `apitokens/` (`router.py`, `service.py`, `queries.py`, `schemas.py`) · create (shown once),
+- [x] **T45** — new `apitokens/` (`router.py`, `service.py`, `queries.py`, `schemas.py`) · create (shown once),
   list, revoke, `Action.MANAGE_API_TOKENS`; hash lookup in tenancy `EXEMPT` · proved by
   `tests/test_api_tokens_live.py` (AC13, AC16, AC17)
-- [ ] **T46** — `deps.py:172-187`, `auth/dependencies.py` · `nvt_live_` branch; `CurrentReader`;
+- [x] **T46** — `deps.py:172-187`, `auth/dependencies.py` · `nvt_live_` branch; `CurrentReader`;
   `CurrentIdentity` refuses a token 403; ingest keys refused; scope check for query-param routes and in
   `alerts/service.get_incident` and `checks/service.get_check` (C6) · proved by
   `tests/test_read_surface_live.py` (AC14, AC15, AC21)
-- [ ] **T47** — the surface routes (services, traces, logs, metrics ×3, error groups, incidents, checks,
+- [x] **T47** — the surface routes (services, traces, logs, metrics ×3, error groups, incidents, checks,
   check results/runs, deploys list) · `CurrentReader`; new `tests/test_read_surface_structure.py` enumerates
   `CurrentReader` routes against a checked-in list · proved by that test
-- [ ] **T48** — `ratelimit/policy.py`, `middleware/ratelimit.py` · `TOKEN` tier (300/min, 8 concurrent) chosen by
+- [x] **T48** — `ratelimit/policy.py`, `middleware/ratelimit.py` · `TOKEN` tier (300/min, 8 concurrent) chosen by
   credential, concurrency keyed on the token; Redis `token-use`/`token-seen` and the minute fold into
   `api_token_usage_daily` · proved by `tests/test_ratelimit_policy.py`, `tests/test_api_tokens_live.py`
   (AC18, AC19)
-- [ ] **T49** — web `features/settings/ApiTokensScreen.tsx`, `api.ts`, nav + route · proved by
+- [x] **T49** — web `features/settings/ApiTokensScreen.tsx`, `api.ts`, nav + route · proved by
   `ApiTokensScreen.test.ts`
 
 ### Step 10 — Pages, and the documentation a customer follows
@@ -327,9 +327,9 @@ localhost:18000/api/v1/services?project_id=…` answers; the same token on anoth
 *Judgeable:* the `/docs/api` page's CI example, pasted into a terminal against the dev stack, prints the error
 rate and exits non-zero when it is over the threshold.
 
-- [ ] **T50** — `deploys/`, `synthetics/` (runs), `errorgroups/` · `(at,id)` cursor and `next_cursor`; bounded
+- [x] **T50** — `deploys/`, `synthetics/` (runs), `errorgroups/` · `(at,id)` cursor and `next_cursor`; bounded
   lists gain `truncated` · proved by each area's live test (AC20)
-- [ ] **T51** — `docs/product/setup/api.md` (+ link from `index.md`) · tokens, surface, pagination, limits,
+- [x] **T51** — `docs/product/setup/api.md` (+ link from `index.md`) · tokens, surface, pagination, limits,
   errors, CI example · proved by `tools/e2e/tests/api-docs.spec.ts` running the example (AC22)
 
 ### Step 11 — An AI assistant reads nexovue
@@ -337,22 +337,22 @@ rate and exits non-zero when it is over the threshold.
 *Judgeable:* `claude mcp add --transport http nexovue http://localhost:18000/api/mcp/ --header
 "Authorization: Bearer nvt_live_…"`, then ask "what is failing in production?" — it answers from the dev stack.
 
-- [ ] **T52** — `apps/api/pyproject.toml` · `mcp>=2.2,<3`; `uv lock` · proved by `just check`
-- [ ] **T53** — new `mcp/` (`server.py`, `tools.py`, `bounds.py`, `auth.py`) · `MCPServer`, stateless
+- [x] **T52** — `apps/api/pyproject.toml` · `mcp>=2.2,<3`; `uv lock` · proved by `just check`
+- [x] **T53** — new `mcp/` (`server.py`, `tools.py`, `bounds.py`, `auth.py`) · `MCPServer`, stateless
   `streamable_http_app(json_response=True)`, `TransportSecuritySettings` from settings, token wrapper; tools call
   the surface services; 100 rows / 32 KiB bounds · proved by `tests/test_mcp_tools.py` (every tool a read —
   AC34; bounds — AC35) and `tests/test_mcp_live.py` (scope parity with the endpoints — AC33)
-- [ ] **T54** — `main.py`, `lifespan.py`, `ratelimit/policy.py` · mount `/api/mcp`, enter
+- [x] **T54** — `main.py`, `lifespan.py`, `ratelimit/policy.py` · mount `/api/mcp`, enter
   `session_manager.run()`, TOKEN tier · proved by `tests/test_mcp_live.py`
-- [ ] **T55** — `docs/product/setup/api.md` MCP section; web *Connect an AI assistant* panel · proved by
+- [x] **T55** — `docs/product/setup/api.md` MCP section; web *Connect an AI assistant* panel · proved by
   `ApiTokensScreen.test.ts`; AC32 run by hand with Claude Code and recorded in `status.md`
 
 ### Step 12 — Close out
 
-- [ ] **T56** — `docs/product/feature-catalog.md` (F26, F31, F36 rows and sections),
+- [x] **T56** — `docs/product/feature-catalog.md` (F26, F31, F36 rows and sections),
   `docs/architecture/current-system-reference.md` (sessions index, receiver join, gates, tokens, admin app),
   `docs/features/account-access/spec.md` pointer · proved by review
-- [ ] **T57** — `docs/operations/production-readiness.md` · assessment for the three stages · proved by
+- [x] **T57** — `docs/operations/production-readiness.md` · assessment for the three stages · proved by
   `/readiness-check`
 
 ## New risks
@@ -466,3 +466,40 @@ Built as planned, with these changes, each for a reason found while building:
   (`organizations/tables.py`).
 - **Not done:** `tools/e2e/tests/support.spec.ts`. It needs a staff account with a live TOTP inside the e2e
   run; the same path was checked live instead (see `status.md`). Recorded as a risk.
+
+### Stage 2 — Read API and MCP (built 2026-09-20)
+
+Built as planned, with these changes, each for a reason found while building:
+
+- **The surface is a dependency, and a checked-in list.** `CurrentReader` (a person *or* a token) is what
+  makes a route reachable by a token; `test_read_surface_structure.py` holds the set of routes taking one
+  against `THE_SURFACE`, so widening it is a visible change in the same review. `get_tenant_repository` was
+  moved onto the reader, which keeps the tenancy chokepoint at exactly one construction site.
+- **`GET /projects` joined the surface**, which the design's first list did not have. Without it a token that
+  reads every project has no way to learn a project id, and every other endpoint takes one. A scoped token
+  sees only its own project there.
+- **A token is refused where a bearer becomes a session** (`deps.get_current_session`), not deeper in. Found
+  in the live check: the session lookup ran first, so a token on a write answered *"the session has
+  expired"* rather than *"API tokens are read-only"*. The wrong sentence sends a customer hunting in the
+  wrong place.
+- **The credential picks the rate-limit tier before the path does.** `tier_for(path, presented=…)`: a token
+  is counted against itself wherever it is pointed, including `/api/mcp`, and an unauthenticated MCP call is
+  still counted so a refusal is not free to repeat.
+- **Usage is counted where the token is resolved**, not in middleware, and Redis is read off the app rather
+  than taken as a dependency — a read that worked must not fail because a counter did not.
+- **The MCP package is `assistant/`, not `mcp/`.** A module named `mcp` inside the API would sit one typo
+  away from the SDK of the same name in every import line here.
+- **`mcp` 2.2.0's shape was checked against the published wheel before use**, not assumed: the class is
+  `MCPServer`, the transport keywords moved onto `streamable_http_app()`, and **`TransportSecuritySettings`
+  must be passed explicitly** — the SDK otherwise arms a localhost-only allowlist and answers `421` to every
+  request behind a real hostname, before any nexovue code runs.
+- **Two SDK behaviours cost a live debugging round each, and both are now in the code's comments**: a mounted
+  sub-application sets `scope["app"]` to *itself*, so the API's pools are carried on the request state; and a
+  plain exception's text is hidden from the model, so a domain refusal is re-raised as `ToolError` — without
+  it *"name a project"* reached the assistant as *"error executing tool"*.
+- **Bounded lists say so.** Rather than giving every capped list a cursor, the five that can hit a cap
+  (error groups, checks, incidents, check runs, deploys) gained `truncated`, and the documentation says which
+  endpoints page and which are capped. Traces and logs keep their keyset cursors.
+- **Not done:** `tools/e2e/tests/api-docs.spec.ts`. The documented CI example was instead run verbatim
+  against the development stack (see `status.md`), which is what AC22 asks for; a Playwright spec that shells
+  out to `curl` and `jq` would prove the same thing with more machinery.

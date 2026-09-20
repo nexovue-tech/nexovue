@@ -24,6 +24,7 @@ from nexovue_api.auth.clients import client_ip_of
 from nexovue_api.auth.sessions import (
     Session,
     SessionStore,
+    bearer_token_from_headers,
     session_token_from_headers,
     token_fingerprint,
 )
@@ -31,7 +32,14 @@ from nexovue_api.errors import problems
 from nexovue_api.errors.handlers import problem_response
 from nexovue_api.ratelimit import headers as ratelimit_headers
 from nexovue_api.ratelimit.limiter import Decision, RateLimiter
-from nexovue_api.ratelimit.policy import AUTH_TIER, PlanLimits, Quota, Tier, tier_for_path
+from nexovue_api.ratelimit.policy import (
+    AUTH_TIER,
+    TOKEN_TIER,
+    PlanLimits,
+    Quota,
+    Tier,
+    tier_for,
+)
 
 logger = get_logger(__name__)
 
@@ -42,6 +50,7 @@ SCOPE_IP: Final = "ip"
 SCOPE_EMAIL: Final = "email"
 SCOPE_SESSION: Final = "session"
 SCOPE_ORGANIZATION: Final = "organization"
+SCOPE_TOKEN: Final = "token"
 
 # An auth body is a handful of fields. Anything larger is not a login attempt,
 # and buffering it to read the email would be the attack rather than the defence.
@@ -88,10 +97,23 @@ class RateLimitMiddleware:
         self._trusted_proxy_count = trusted_proxy_count
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        tier = self._tier_for(scope)
+        presented = self._presented(scope)
+        tier = self._tier_for(scope, presented)
         limiter, plan_limits = self._dependencies(scope)
         if tier is None or limiter is None or plan_limits is None:
             await self._app(scope, receive, send)
+            return
+
+        if tier is TOKEN_TIER and presented is not None:
+            # A machine credential pays for itself: never the address it dialled
+            # from (one CI runner is many tokens) and never a person (there is
+            # none). The organization it belongs to is not known here — that
+            # costs a database read — and the per-token cap is what protects the
+            # cluster.
+            multiplier = await plan_limits.multiplier_for(None)
+            await self._limit(
+                scope, receive, send, limiter, _per_token(tier, presented, multiplier)
+            )
             return
 
         signed_in = None if tier is AUTH_TIER else await self._signed_in(scope)
@@ -102,6 +124,17 @@ class RateLimitMiddleware:
             receive, identities = await _identities(receive, tier, scope, self._client_ip(scope))
             counted = _per_address(tier, identities, multiplier)
 
+        await self._limit(scope, receive, send, limiter, counted)
+
+    async def _limit(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        limiter: RateLimiter,
+        counted: list[Counted],
+    ) -> None:
+        """Spend every bucket this request falls in, then serve it."""
         decision: Decision | None = None
         for bucket in counted:
             limit_scope, value = bucket.identity
@@ -182,10 +215,16 @@ class RateLimitMiddleware:
         )
         await response(request.scope, request.receive, send)
 
-    def _tier_for(self, scope: Scope) -> Tier | None:
+    def _tier_for(self, scope: Scope, presented: str | None) -> Tier | None:
         if not self._enabled or scope["type"] != _HTTP_SCOPE:
             return None
-        return tier_for_path(scope["path"])
+        return tier_for(scope["path"], presented=presented)
+
+    def _presented(self, scope: Scope) -> str | None:
+        """The bearer value, whatever kind of credential it is."""
+        if scope["type"] != _HTTP_SCOPE:
+            return None
+        return bearer_token_from_headers(Headers(scope=scope))
 
     def _dependencies(self, scope: Scope) -> tuple[RateLimiter | None, PlanLimits | None]:
         """Explicit wiring wins; otherwise take what the lifespan put on the app."""
@@ -239,6 +278,21 @@ def _per_person(tier: Tier, session: Session, multiplier: float) -> list[Counted
             )
         )
     return counted
+
+
+def _per_token(tier: Tier, presented: str, multiplier: float) -> list[Counted]:
+    """One bucket, the token's own, keyed by its fingerprint.
+
+    The fingerprint and never the token: a Redis key is not a place for a
+    credential, which is the rule the signed-out path already follows.
+    """
+    return [
+        Counted(
+            identity=(SCOPE_TOKEN, f"tok:{token_fingerprint(presented)}"),
+            quota=tier.quota.scaled(multiplier),
+            max_concurrent=tier.max_concurrent,
+        )
+    ]
 
 
 def _per_address(tier: Tier, identities: list[Identity], multiplier: float) -> list[Counted]:

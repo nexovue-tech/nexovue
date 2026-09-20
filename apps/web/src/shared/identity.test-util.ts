@@ -17,6 +17,7 @@ const ADMINISTER: Action[] = [
   "manage_check_secrets",
   "configure_projects",
   "manage_credentials",
+  "manage_api_tokens",
   "manage_members",
   "read_audit",
 ];

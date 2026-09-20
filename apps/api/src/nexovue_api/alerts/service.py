@@ -231,7 +231,11 @@ async def list_incidents(
         session, org_id=org_id, project_id=project_id, open_only=False, since=since
     )
     summaries = await _incident_summaries(session, org_id=org_id, incidents=[*open_now, *recent])
-    return IncidentListResponse(open=summaries[: len(open_now)], recent=summaries[len(open_now) :])
+    return IncidentListResponse(
+        open=summaries[: len(open_now)],
+        recent=summaries[len(open_now) :],
+        truncated=len(recent) >= queries.INCIDENT_PAGE,
+    )
 
 
 async def open_incident_count(
@@ -244,10 +248,16 @@ async def open_incident_count(
 
 
 async def get_incident(
-    session: AsyncSession, *, org_id: uuid.UUID, incident_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    incident_id: uuid.UUID,
+    project_scope: uuid.UUID | None = None,
 ) -> IncidentSummary:
+    """One incident. `project_scope` is a token's (BR11): an incident in another
+    of the organization's projects is the same 404 as one that does not exist."""
     incident = await queries.find_incident(session, org_id=org_id, incident_id=incident_id)
-    if incident is None:
+    if incident is None or (project_scope is not None and incident.project_id != project_scope):
         raise NotFoundError("No such incident.")
     [summary] = await _incident_summaries(session, org_id=org_id, incidents=[incident])
     return summary

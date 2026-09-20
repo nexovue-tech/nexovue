@@ -59,6 +59,7 @@ MayManageChannels = Annotated[Identity, Depends(require(Action.MANAGE_CHANNELS))
 MayManageCheckSecrets = Annotated[Identity, Depends(require(Action.MANAGE_CHECK_SECRETS))]
 MayConfigureProjects = Annotated[Identity, Depends(require(Action.CONFIGURE_PROJECTS))]
 MayManageCredentials = Annotated[Identity, Depends(require(Action.MANAGE_CREDENTIALS))]
+MayManageApiTokens = Annotated[Identity, Depends(require(Action.MANAGE_API_TOKENS))]
 MayManageMembers = Annotated[Identity, Depends(require(Action.MANAGE_MEMBERS))]
 MayReadAudit = Annotated[Identity, Depends(require(Action.READ_AUDIT))]
 MayCommitSpend = Annotated[Identity, Depends(require(Action.COMMIT_SPEND))]

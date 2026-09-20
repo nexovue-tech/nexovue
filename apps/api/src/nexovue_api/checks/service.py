@@ -72,6 +72,9 @@ from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, No
 from nexovue_api.maintenance import service as maintenance
 from nexovue_api.projects import service as projects
 
+# One sentence whether the check is another tenant's, outside a token's scope,
+# or never existed.
+NO_SUCH_CHECK: Final = "No such check."
 CANNOT_SAVE: Final = "This check cannot be saved. Each problem is named with its field."
 # Run now refuses the same definitions for the same reasons, but nobody asked to
 # save anything: telling them the save failed sends them looking for a save.
@@ -124,11 +127,22 @@ async def list_for_project(
     return CheckListResponse(
         checks=[_summary(row, states.get(row.id), windows.get(row.id, []), now) for row in rows],
         available_locations=available_locations,
+        truncated=len(rows) >= MAX_CHECKS_PER_PROJECT,
     )
 
 
-async def get(session: AsyncSession, *, org_id: uuid.UUID, check_id: uuid.UUID) -> CheckSummary:
+async def get(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    check_id: uuid.UUID,
+    project_scope: uuid.UUID | None = None,
+) -> CheckSummary:
+    """One check. `project_scope` is a token's (BR11): a check in another of the
+    organization's projects is the same 404 as one that does not exist."""
     check = await _require_check(session, org_id=org_id, check_id=check_id)
+    if project_scope is not None and check.project_id != project_scope:
+        raise NotFoundError(NO_SUCH_CHECK)
     return await _summary_of(session, check)
 
 
@@ -308,7 +322,7 @@ async def remove(
     check = await _require_check(session, org_id=org_id, check_id=check_id)
     await files.detach_for_check(session, org_id=org_id, check_id=check.id)
     if not await queries.delete_check(session, org_id=org_id, check_id=check.id):
-        raise NotFoundError("No such check.")
+        raise NotFoundError(NO_SUCH_CHECK)
     await alerts.close_incidents_of_check(session, org_id=org_id, check_id=check.id)
     audit.record_check_deleted(
         session, org_id=org_id, check_id=check_id, actor_user_id=actor_user_id
@@ -564,7 +578,7 @@ async def _require_check(session: AsyncSession, *, org_id: uuid.UUID, check_id: 
     """The check, or a 404 that does not say whether it exists elsewhere."""
     check = await queries.find_check(session, org_id=org_id, check_id=check_id)
     if check is None:
-        raise NotFoundError("No such check.")
+        raise NotFoundError(NO_SUCH_CHECK)
     return check
 
 

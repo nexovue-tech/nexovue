@@ -26,7 +26,7 @@ import pytest
 from environment import TEST_ENVIRONMENT
 
 from nexovue_api.audit import service as audit
-from nexovue_api.auth.dependencies import Identity
+from nexovue_api.auth.dependencies import Identity, Reader, get_current_reader
 from nexovue_api.auth.dependencies import get_current_identity as current_identity_dependency
 from nexovue_api.data.postgres.models import (
     AlertRule,
@@ -1025,6 +1025,11 @@ def _build_app(db: FakeControlPlane, identity: Identity) -> Any:
     app.dependency_overrides[get_app_settings] = lambda: settings
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[current_identity_dependency] = lambda: identity
+    # `GET /projects` is on the read surface (F36), so its principal is the
+    # reader — a person here, as it is for anyone signed in.
+    app.dependency_overrides[get_current_reader] = lambda: Reader(
+        org_id=identity.org_id, identity=identity
+    )
     return app
 
 

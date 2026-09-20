@@ -256,6 +256,10 @@ services:
       # nexovue's cloud onboards customers after they pay (ADR-008, D10). A
       # self-hosted install uses the on-prem file, where signup stays open.
       SIGNUP_ENABLED: "${SIGNUP_ENABLED:-false}"
+      # The API's own public hostname (F36). The MCP server answers only on the
+      # hosts it is told about; unset, it falls back to the console's host and
+      # localhost, which is right here and wrong behind two real names.
+      API_PUBLIC_URL: "${API_PUBLIC_URL:-}"
     ports:
       - "8000:8000"
     depends_on:

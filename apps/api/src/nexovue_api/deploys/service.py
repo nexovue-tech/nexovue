@@ -222,7 +222,9 @@ async def list_for_project(
     rows = await queries.list_deploy_events(
         session, org_id=org_id, project_id=project_id, limit=limit
     )
-    return DeployEventListResponse(deploys=[_summary(row) for row in rows])
+    return DeployEventListResponse(
+        deploys=[_summary(row) for row in rows], truncated=len(rows) >= limit
+    )
 
 
 async def webhook_secrets(

@@ -83,6 +83,9 @@ func TestAuthenticateRefusesUnusableKeys(t *testing.T) {
 		"too long":          {validKey + "x", ErrMalformedKey},
 		"non-base62 secret": {"nvk_live_devlocaldevlocaldevlo-", ErrMalformedKey},
 		"unknown prefix":    {"nvk_live_absentabsentabsentabse", ErrUnknownKey},
+		// F36, AC21: a read token is not an ingest credential. Its scheme is
+		// another one's, so the door refuses it before any lookup.
+		"api read token": {"nvt_live_ReadOnlyReadOnlyReadOnlyRead", ErrMalformedKey},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

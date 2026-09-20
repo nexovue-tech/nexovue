@@ -32,6 +32,8 @@ TENANT_COLUMN: Final = "org_id"
 DELETED_DIRECTLY: Final[tuple[str, ...]] = (
     "billing_webhook_deliveries",
     "billing_subscriptions",
+    # F36. The organization's read tokens; their daily counters cascade with them.
+    "api_tokens",
     # F31. The payment that bought the organization, like the billing rows above;
     # a comped plan; and the owner's consent to support, which names a user.
     "website_payments",
@@ -84,6 +86,9 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     # on purpose — `models.UserRecoveryCode` argues why — so it is reached here
     # through the person it belongs to, and `users` is deleted directly above.
     "user_recovery_codes": "users",
+    # F36. Keyed by token, carrying no `org_id`: the token it names carries one,
+    # and the counters die with it.
+    "api_token_usage_daily": "api_tokens",
 }
 
 # The organization row itself, which a deletion scrubs and keeps rather than

@@ -90,7 +90,11 @@ async def list_error_groups(
         ),
         parameters,
     )
-    return ErrorGroupListResponse(groups=[_to_summary(row, deploys) for row in rows])
+    return ErrorGroupListResponse(
+        groups=[_to_summary(row, deploys) for row in rows],
+        # A full page is the cap biting: there may be more this answer does not hold.
+        truncated=len(rows) >= limit,
+    )
 
 
 async def get_error_group(

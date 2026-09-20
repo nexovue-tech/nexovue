@@ -23,7 +23,10 @@ from fake_stores import use_fake_second_factors
 
 from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.auth.credentials import hash_password
-from nexovue_api.auth.dependencies import Identity, get_current_identity
+from nexovue_api.auth.dependencies import (
+    Reader,
+    get_current_reader,
+)
 from nexovue_api.auth.sessions import SESSION_COOKIE_NAME, Session
 from nexovue_api.data.postgres.models import Organization, User
 from nexovue_api.deps import get_app_settings, get_db_session, get_session_store
@@ -331,11 +334,14 @@ async def test_the_tenant_a_query_runs_as_comes_from_the_session_not_the_request
     app = _build_app(user=user, organization=organization, store=FakeSessionStore())
     seen: list[uuid.UUID] = []
 
-    async def pretend_identity() -> Identity:
+    async def pretend_reader() -> Reader:
         seen.append(organization.id)
         raise UnauthenticatedError("stop here")
 
-    app.dependency_overrides[get_current_identity] = pretend_identity
+    # `/traces` is on the read surface (F36), so its principal is the reader —
+    # a person or one of the organization's tokens. Either way the tenant comes
+    # from the credential and never from the request.
+    app.dependency_overrides[get_current_reader] = pretend_reader
 
     async with await _client(app) as client:
         await client.get(

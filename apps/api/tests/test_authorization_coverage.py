@@ -178,6 +178,10 @@ POLICY_OF: Final = {
     "projects/router.py:replace_masking_config": "MayConfigureProjects",
     "apikeys/router.py:create_api_key": "MayManageCredentials",
     "apikeys/router.py:revoke_api_key": "MayManageCredentials",
+    # F36. A read token is not an ingest key: one reads the organization's data,
+    # the other writes into it, and they are withdrawn by different people's work.
+    "apitokens/router.py:create_api_token": "MayManageApiTokens",
+    "apitokens/router.py:revoke_api_token": "MayManageApiTokens",
     "apikeys/router.py:create_site_key": "MayManageCredentials",
     "apikeys/router.py:revoke_site_key": "MayManageCredentials",
     "deploys/router.py:create_webhook_secret": "MayManageCredentials",

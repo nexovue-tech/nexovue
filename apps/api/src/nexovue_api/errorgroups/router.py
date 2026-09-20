@@ -21,7 +21,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
-from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
 from nexovue_api.deploys import service as deploys
 from nexovue_api.deps import DbSession
 from nexovue_api.errorgroups import service
@@ -30,7 +30,7 @@ from nexovue_api.errorgroups.schemas import (
     ErrorGroupListResponse,
     GroupTrendResponse,
 )
-from nexovue_api.projects.service import require_project
+from nexovue_api.projects.service import require_project, require_readable_project
 from nexovue_api.window import clamp_limit, resolve_window
 
 router = APIRouter(prefix="/error-groups", tags=["error-groups"])
@@ -42,7 +42,7 @@ ToTime = Annotated[datetime | None, Query(alias="to")]
 
 @router.get("", summary="Exceptions in a time window, grouped, most frequent first")
 async def list_error_groups(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     project_id: ProjectId,
@@ -54,7 +54,7 @@ async def list_error_groups(
         bool, Query(description="Only groups that began inside the window")
     ] = False,
 ) -> ErrorGroupListResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.list_error_groups(
         repository,
@@ -66,7 +66,7 @@ async def list_error_groups(
         new_only=new_only,
         deploys=await deploys.history_for_window(
             db,
-            org_id=identity.org_id,
+            org_id=reader.org_id,
             project_id=project.id,
             from_time=window_start,
             to_time=window_end,
@@ -97,7 +97,7 @@ async def group_trends(
 
 @router.get("/{group_id}", summary="One error group and its most recent instances")
 async def get_error_group(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     group_id: str,
@@ -105,7 +105,7 @@ async def get_error_group(
     from_time: FromTime = None,
     to_time: ToTime = None,
 ) -> ErrorGroupDetailResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.get_error_group(
         repository,
@@ -115,7 +115,7 @@ async def get_error_group(
         to_time=window_end,
         deploys=await deploys.history_for_window(
             db,
-            org_id=identity.org_id,
+            org_id=reader.org_id,
             project_id=project.id,
             from_time=window_start,
             to_time=window_end,

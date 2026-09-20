@@ -17,6 +17,7 @@ from typing import Final
 import clickhouse_connect
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from fastapi import FastAPI
+from mcp.server import MCPServer
 from nexovue_platform.email import EMAIL_VARIABLES, EmailSender, build_email_sender
 from nexovue_platform.telemetry.logging import get_logger
 from redis.asyncio import ConnectionPool, Redis
@@ -127,8 +128,16 @@ class Resources:
 
 def build_lifespan(
     settings: Settings,
+    *,
+    assistant: MCPServer | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
-    """A lifespan that opens the pools, publishes them on the app, and closes them."""
+    """A lifespan that opens the pools, publishes them on the app, and closes them.
+
+    `assistant` is the MCP server mounted at `/api/mcp` (F36). A mounted
+    sub-application's own lifespan never runs, so its session manager is entered
+    here — without it the route resolves and the first tool call fails with
+    "Task group is not initialized".
+    """
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -139,7 +148,11 @@ def build_lifespan(
         app.state.health = CheckRegistry(dependency_checks(resources))
         logger.info("api started", env=settings.env)
         try:
-            yield
+            if assistant is None:
+                yield
+            else:
+                async with assistant.session_manager.run():
+                    yield
         finally:
             await close_resources(resources)
             logger.info("api stopped")

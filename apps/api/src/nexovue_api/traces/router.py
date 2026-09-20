@@ -19,9 +19,9 @@ from typing import Annotated, Final
 
 from fastapi import APIRouter, Query, Response
 
-from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
 from nexovue_api.deps import DbSession
-from nexovue_api.projects.service import require_project
+from nexovue_api.projects.service import require_project, require_readable_project
 from nexovue_api.traces import service
 from nexovue_api.traces.schemas import TraceDetailResponse, TraceFacetsResponse, TraceListResponse
 from nexovue_api.window import clamp_limit, resolve_window
@@ -35,7 +35,7 @@ ToTime = Annotated[datetime | None, Query(alias="to")]
 
 @router.get("", summary="Traces in a time window, newest first")
 async def list_traces(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     project_id: ProjectId,
@@ -61,7 +61,7 @@ async def list_traces(
     limit: Annotated[int | None, Query(ge=1, le=service.MAX_LIMIT)] = None,
     cursor: Annotated[str | None, Query(description="Opaque marker from a previous page")] = None,
 ) -> TraceListResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.list_traces(
         repository,
@@ -170,11 +170,11 @@ async def facets(
 # or the facets request is answered as a trace whose id is "facets".
 @router.get("/{trace_id}", summary="One trace and its spans, flat")
 async def get_trace(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     trace_id: str,
     project_id: ProjectId,
 ) -> TraceDetailResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     return await service.get_trace(repository, project_id=str(project.id), trace_id=trace_id)

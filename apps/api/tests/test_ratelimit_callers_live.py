@@ -28,10 +28,12 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 
+from nexovue_api.apitokens.tokens import API_TOKEN_PREFIX
 from nexovue_api.auth.sessions import SessionStore
 from nexovue_api.middleware.ratelimit import RateLimitMiddleware
+from nexovue_api.ratelimit.headers import POLICY_HEADER, RETRY_AFTER_HEADER, STATE_HEADER
 from nexovue_api.ratelimit.limiter import RateLimiter
-from nexovue_api.ratelimit.policy import TELEMETRY_TIER, FixedPlanLimits
+from nexovue_api.ratelimit.policy import TELEMETRY_TIER, TOKEN_TIER, FixedPlanLimits
 from nexovue_api.settings import API_PREFIX
 
 REDIS_URL: Final = os.environ.get("NEXOVUE_REDIS_URL", "redis://localhost:16379/0")
@@ -162,3 +164,44 @@ async def test_signed_out_reads_are_counted_against_their_address(redis: Redis) 
     async with _client(_app(redis), _address()) as anonymous:
         assert set(await _reads(anonymous, None, PER_PERSON)) == {200}
         assert await _reads(anonymous, None, 1) == [429]
+
+
+def _a_token() -> str:
+    """A token-shaped value. The middleware counts by fingerprint, never by row."""
+    return f"{API_TOKEN_PREFIX}{uuid.uuid4().hex}"
+
+
+async def test_a_token_spends_its_own_budget_and_not_the_address_it_dialled_from(
+    redis: Redis,
+) -> None:
+    """FR19, AC19. One CI runner may hold several tokens; one must not spend another."""
+    first, second = _a_token(), _a_token()
+    async with _client(_app(redis), _address()) as runner:
+        assert set(await _reads(runner, first, TOKEN_TIER.quota.limit)) == {200}
+        assert await _reads(runner, first, 1) == [429]
+
+        # The address is spent; the second token is not.
+        assert await _reads(runner, second, 1) == [200]
+
+
+async def test_a_refused_token_is_told_the_policy_and_when_to_retry(redis: Redis) -> None:
+    """AC19: the documented headers, on the answer that refuses."""
+    token = _a_token()
+    async with _client(_app(redis), _address()) as runner:
+        await _reads(runner, token, TOKEN_TIER.quota.limit)
+        refused = await runner.get(READ, headers={"Authorization": f"Bearer {token}"})
+
+    assert refused.status_code == 429
+    assert TOKEN_TIER.quota.name in refused.headers[POLICY_HEADER]
+    assert TOKEN_TIER.quota.name in refused.headers[STATE_HEADER]
+    assert int(refused.headers[RETRY_AFTER_HEADER]) >= 1
+    assert refused.json()["violated-policies"] == [TOKEN_TIER.quota.name]
+
+
+async def test_a_persons_reads_are_not_spent_by_a_token_at_the_same_desk(redis: Redis) -> None:
+    person = await _person(redis, str(uuid.uuid4()))
+    token = _a_token()
+    async with _client(_app(redis), _address()) as desk:
+        await _reads(desk, token, TOKEN_TIER.quota.limit)
+
+        assert await _reads(desk, person, PER_PERSON) == [200] * PER_PERSON

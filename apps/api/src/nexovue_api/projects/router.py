@@ -15,7 +15,7 @@ import uuid
 
 from fastapi import APIRouter, status
 
-from nexovue_api.auth.dependencies import CurrentIdentity
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader
 from nexovue_api.auth.policy import MayConfigureProjects
 from nexovue_api.deps import DbSession
 from nexovue_api.projects import service
@@ -35,8 +35,16 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 @router.get("", summary="Every project in the signed-in organization")
-async def list_projects(identity: CurrentIdentity, db: DbSession) -> ProjectListResponse:
-    return await service.list_for_organization(db, identity.org_id)
+async def list_projects(reader: CurrentReader, db: DbSession) -> ProjectListResponse:
+    """On the read surface (F36, FR17): it is how a token — and an assistant
+    reading through one — learns which project ids the rest of the surface takes.
+    A scoped token sees only the project it may read (BR11)."""
+    listed = await service.list_for_organization(db, reader.org_id)
+    if reader.project_scope is None:
+        return listed
+    return ProjectListResponse(
+        projects=[project for project in listed.projects if project.id == reader.project_scope]
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, summary="Create a project")

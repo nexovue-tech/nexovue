@@ -16,6 +16,8 @@ from nexovue_platform.telemetry.logging import configure_logging
 
 from nexovue_api.alerts import router as alerts_router
 from nexovue_api.apikeys import router as apikeys_router
+from nexovue_api.apitokens import router as apitokens_router
+from nexovue_api.assistant import server as assistant_server
 from nexovue_api.audit import router as audit_router
 from nexovue_api.auth import router as auth_router
 from nexovue_api.billing import router as billing_router
@@ -70,9 +72,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         env=settings.env,
     )
 
+    # Built before the app: the MCP server's session manager does not exist
+    # until its ASGI app has been built, and the lifespan needs the server.
+    assistant, assistant_app = assistant_server.build(settings)
+
     app = FastAPI(
         title=API_TITLE,
-        lifespan=build_lifespan(settings),
+        lifespan=build_lifespan(settings, assistant=assistant),
         # Ours are problem+json; FastAPI's default handlers would emit its own
         # `{"detail": ...}` shape alongside them.
         openapi_url=f"{API_PREFIX}/openapi.json",
@@ -86,6 +92,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_middleware(app, settings)
     install_error_handlers(app)
     _install_routes(app)
+    # Mounted after the routers: a mount matches every path beneath it, and the
+    # API's own routes must be tried first.
+    app.mount(assistant_server.MCP_PATH, assistant_app)
     return app
 
 
@@ -107,6 +116,7 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(projects_router.router)
     versioned.include_router(apikeys_router.router)
     versioned.include_router(apikeys_router.site_key_router)
+    versioned.include_router(apitokens_router.router)
     versioned.include_router(checks_router.router)
     versioned.include_router(check_runs_router.router)
     versioned.include_router(check_imports_router.router)

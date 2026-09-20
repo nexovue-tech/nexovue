@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexovue_api.alerts import defaults as alert_defaults
 from nexovue_api.alerts import queries as alert_queries
 from nexovue_api.audit import service as audit
+from nexovue_api.auth.dependencies import Reader
 from nexovue_api.data.postgres.models import DEFAULT_RETENTION_DAYS, Project
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.projects import config, queries
@@ -53,6 +54,10 @@ from nexovue_api.projects.schemas import (
 # different way from an organization slug would give the product two answers to
 # the same question.
 from nexovue_api.signup.slugs import disambiguate, slugify
+
+# One sentence, whether the project belongs to another tenant, is outside a
+# token's scope, or never existed: three answers would be three ways to probe.
+NO_SUCH_PROJECT: Final = "No such project."
 
 # How many suffixed forms of a derived slug are tried before giving up, matching
 # `signup.service.MAX_SLUG_ATTEMPTS`.
@@ -254,8 +259,32 @@ async def require_project(
     """The project, or a 404 that does not say whether it exists elsewhere."""
     project = await queries.find_project(session, org_id=org_id, project_id=project_id)
     if project is None:
-        raise NotFoundError("No such project.")
+        raise NotFoundError(NO_SUCH_PROJECT)
     return project
+
+
+def refuse_out_of_scope(reader: Reader, project_id: uuid.UUID) -> None:
+    """Refuse a project outside a token's scope, with the 404 a stranger gets.
+
+    For routes whose service already proves the project belongs to the caller's
+    organization: this adds the scope half without a second lookup.
+    """
+    if not reader.may_read_project(project_id):
+        raise NotFoundError(NO_SUCH_PROJECT)
+
+
+async def require_readable_project(
+    session: AsyncSession, *, reader: Reader, project_id: uuid.UUID
+) -> Project:
+    """The project a read-surface caller named, within what they may read.
+
+    A token scoped to one project asking about another gets the same 404 as a
+    project that does not exist (BR11, AC15) — byte-identical, and raised before
+    the lookup, so the two cannot drift apart or be told apart by timing.
+    """
+    if not reader.may_read_project(project_id):
+        raise NotFoundError(NO_SUCH_PROJECT)
+    return await require_project(session, org_id=reader.org_id, project_id=project_id)
 
 
 def _require_confirmation_for(newly_disabled: frozenset[str], confirmed: list[str]) -> None:

@@ -54,6 +54,7 @@ from nexovue_api.data.postgres.models import (
     AlertEvaluation,
     AlertRule,
     AlertRuleChannel,
+    ApiToken,
     BillingSubscription,
     BillingWebhookDelivery,
     Check,
@@ -145,6 +146,7 @@ RECEIVER_READS_DELETION: Final = text(
 _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "billing_subscriptions",
     "billing_webhook_deliveries",
+    "api_tokens",
     "website_payments",
     "plan_grants",
     "support_access_grants",
@@ -192,6 +194,8 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "api_keys": 1,
     "billing_subscriptions": ROWS_PER_TABLE,
     "billing_webhook_deliveries": ROWS_PER_TABLE,
+    # F36: one read token per organization.
+    "api_tokens": 1,
     # F31: one per organization.
     "website_payments": 1,
     "plan_grants": 1,
@@ -506,8 +510,16 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectSt
             ]
         )
     # F31: one of each per organization — a payment is unique to it.
+    # F36: one read token, whose daily counters go with it by cascade.
     db.add_all(
         [
+            ApiToken(
+                org_id=tenant.org_id,
+                name="CI",
+                token_prefix=f"nvt_live_{uuid.uuid4().hex[:11]}",
+                token_hash=uuid.uuid4().hex * 2,
+                expires_at=now + timedelta(days=90),
+            ),
             WebsitePayment(
                 org_id=tenant.org_id,
                 razorpay_payment_id=f"pay_{uuid.uuid4().hex[:12]}",

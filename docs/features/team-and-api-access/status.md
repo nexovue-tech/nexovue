@@ -2,13 +2,13 @@
 
 ## Lifecycle status
 
-**In development** — Stage 1 (Team) built and pushed 2026-09-19 (`a9ae18d`). Stage 3 (admin console)
-built and verified 2026-09-20, awaiting the founder's review. Stage 2 (read API and MCP) is planned and not
-started.
+**Implemented, awaiting the founder's review.** All three stages are built: Stage 1 (Team) pushed
+2026-09-19 (`a9ae18d`); Stage 3 (admin console) and the rate-limit fix pushed 2026-09-20 (`c48b4e4`,
+`2321745`); Stage 2 (read API and MCP) built 2026-09-20 and **uncommitted**.
 
 ## Current task
 
-None — Stage 3 is waiting for the founder's review of the diff.
+None — Stage 2 is waiting for the founder's review of the diff.
 
 ## Completed
 
@@ -25,11 +25,15 @@ None — Stage 3 is waiting for the founder's review of the diff.
   (organization, region, owner link, website payment); hosted signup closed by a switch; suspend and resume
   ingest; a complimentary plan until a date, read by the API and the receiver; the owner's support access and
   a read-only, audited *view as*.
+- **Stage 2 — Read API and MCP** (plan Steps 9–12, T44–T57): organization-owned read tokens, scoped and
+  expiring, shown once; a read surface held to a checked-in list by a structural test; per-token rate limits
+  and daily usage counters; the console screen and the *Connect an AI assistant* panel; an MCP server at
+  `/api/mcp` with nine read-only tools; customer documentation at `docs/product/setup/api.md`.
 
 ## Next action
 
-Founder: review the Stage 3 diff (and the rate-limit change beside it, `docs/changes/rate-limit-per-person/`)
-and say **push**. Then approve starting Stage 2 (read API and MCP, plan Steps 9–12).
+Founder: review the Stage 2 diff and say **push**. F26, F31 and F36 are then all built, and the feature's
+remaining work is the production-readiness assessment (T57) once a deployment target exists.
 
 ## Open decisions
 
@@ -51,6 +55,19 @@ See `plan.md` → *New risks*. Found while building Stages 1 and 3:
 - **No render test of the billing screen by role.** Its checkout and cancel controls are gated
   (`useCan("commit_spend")`) and the API refuses a non-owner regardless; the test was not written because
   its overview fixture is large. Every other screen with a control has an owner/viewer pair.
+- **The console shows the MCP endpoint as its own origin + `/api/mcp/`**, the same way every other API
+  call it makes is same-origin. A deployment that routes `/api/v1` to the API but not `/api/mcp` would
+  print a URL that 404s. Route both, or the panel lies.
+- **The MCP server answers only on the hosts it is told.** `API_PUBLIC_URL` names the API's own hostname;
+  unset it falls back to the console's host and localhost. In a deployment where the API and the console
+  have different names and the variable is not set, **every MCP request answers 421** — inside the SDK,
+  before any nexovue code runs. Set it with the hostnames (plan Q2's deployment work).
+- **The MCP server shares the API's process and pools.** A tool call holds a Postgres session and the
+  ClickHouse client like any read; it is counted against the token's tier (300/min, 8 in flight), so one
+  assistant cannot crowd the console — but an assistant's reads and a customer's screens draw on the same
+  connections. Worth a measurement before the first busy tenant.
+- **No e2e of the documented CI example.** `api-docs.spec.ts` was not written; the example was extracted
+  from the page and run verbatim against the development stack instead (Validation, Stage 2).
 - **No e2e of *view as*.** `support.spec.ts` was not written: it needs a staff account with a live TOTP
   inside the e2e run. The path was checked live instead (Validation, Stage 3), and every rule it rests on is
   a live API test.
@@ -68,6 +85,39 @@ See `plan.md` → *New risks*. Found while building Stages 1 and 3:
   development. The e2e reads the link from the API log.
 
 ## Validation
+
+Stage 2, 2026-09-20:
+
+- API: `test_api_tokens_migration_live.py` (6 — unique secret and prefix, ends after it starts, unknown role
+  refused, a token outlives its maker, counters die with it, down-and-up), `test_api_tokens_live.py` (12 —
+  AC13, AC16–AC18: shown once and hashed, revoked and expired refused apart, another tenant's invisible,
+  audited without the secret), `test_read_surface_live.py` (10 — AC14, AC15, AC21: scope, the byte-identical
+  404, a token refused by a person's route, ingest keys refused, counting), `test_read_surface_structure.py`
+  (35 — the surface is exactly the documented list, each entry a GET taking a reader),
+  `test_mcp_tools.py` (25 — AC34, AC35: the tool set, each a read, each described, and the bounds),
+  `test_mcp_live.py` (7 — AC33: only a live token reaches the tools, carrying its own scope; usage counted),
+  `test_ratelimit.py` + `test_ratelimit_callers_live.py` (AC19 — the token tier by credential, per-token
+  budgets, the documented headers).
+- Receiver: `auth_test.go` gains a read token to the malformed-key table (AC21's ingest half).
+- Web: `ApiTokensScreen.test.ts` (4 — a member sees no controls; status and maker per row; scope and expiry
+  sent as chosen and the secret shown once; the assistant command carries a placeholder).
+- Live, development stack:
+  - A token read `GET /services` and `GET /projects` (200), a write answered **403** *"API tokens are
+    read-only and reach only the documented read API"*, and an ingest key reading answered **401** with its
+    own sentence. Revoking the token made the next request **401** (AC16).
+  - MCP: `initialize` and `tools/list` over HTTP returned the nine tools; `list_projects` and
+    `list_services` returned real data (flagd, 311,003 requests, 2.76% errors over 24 h); a call with no
+    project returned the refusal sentence itself rather than "error executing tool".
+  - AC22: the CI example in `docs/product/setup/api.md` was extracted from the page and run **as written**
+    against the stack — it printed the service's error rate, exited 0 under the threshold and 1 over it.
+- `just check`, 2026-09-20: **exit 0** — Go 34 packages; Python **4,057 passed** (3 skipped); web **1,314**
+  + browser SDK 120; `mypy`, lint, format and contracts clean. Development ClickHouse again needed a restart
+  and a drained mutation queue before the run (see *Risks*); with that done the gate is green in one pass.
+- `just e2e` from a clean start: **22 passed**.
+- Four defects the gate caught in this stage's own code, each fixed: the organization deletion did not
+  classify `api_tokens`; `GET /projects` moving to the read surface broke a role test's harness; the MCP
+  tools built a second tenant-scoped repository, which the chokepoint test forbids; and the token tables
+  needed seeding in the deletion fixture for its negative control to mean anything.
 
 Stage 3, 2026-09-20:
 

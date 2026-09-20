@@ -14,19 +14,36 @@ from datetime import UTC, datetime
 from typing import Annotated, Final
 
 from fastapi import Depends
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers
 from starlette.requests import HTTPConnection
 
+from nexovue_api.apitokens import service as api_tokens
+from nexovue_api.apitokens import usage as token_usage
+from nexovue_api.apitokens.tokens import (
+    INGEST_KEY_SCHEMES,
+    INGEST_KEYS_CANNOT_READ,
+    TOKENS_ARE_READ_ONLY,
+    looks_like_api_token,
+)
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.clients import ClientDescription, client_ip_of, describe_client
 from nexovue_api.auth.encryption import CredentialBox, credential_box
 from nexovue_api.auth.queries import load_identity
-from nexovue_api.auth.sessions import Impersonation, Session
+from nexovue_api.auth.sessions import Impersonation, Session, bearer_token_from_headers
 from nexovue_api.auth.totp import SecondFactorStore
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
-from nexovue_api.data.postgres.models import Organization, User
-from nexovue_api.deps import AppSettings, ClickHouseClient, CurrentSession, DbSession, RedisClient
+from nexovue_api.data.postgres.models import ApiToken, Organization, User
+from nexovue_api.deps import (
+    AppSettings,
+    ClickHouseClient,
+    CurrentSession,
+    DbSession,
+    RedisClient,
+    SessionStoreDep,
+    get_current_session,
+)
 from nexovue_api.errors.exceptions import (
     DependencyUnavailableError,
     PermissionDeniedError,
@@ -63,6 +80,7 @@ async def get_current_identity(
     connection: HTTPConnection, session: CurrentSession, db: DbSession
 ) -> Identity:
     """Resolve the session into a live user and organization, or a 401."""
+    _refuse_a_token_here(connection)
     try:
         user_id = uuid.UUID(session.user_id)
         org_id = uuid.UUID(session.org_id)
@@ -141,11 +159,102 @@ def _issued_before_reset(session: Session, user: User) -> bool:
 CurrentIdentity = Annotated[Identity, Depends(get_current_identity)]
 
 
+@dataclass(frozen=True, slots=True)
+class Reader:
+    """Who may read one organization's data: a person, or one of its tokens.
+
+    The read surface (FR17) depends on this instead of `Identity`, which is what
+    makes the surface a *list*: a route reachable by a token is a route that asked
+    for a `Reader`, and every other route still asks for a person and refuses a
+    token outright. `project_scope` is the token's, and is None for a person and
+    for a token that reads every project (BR11).
+    """
+
+    org_id: uuid.UUID
+    project_scope: uuid.UUID | None = None
+    token_id: uuid.UUID | None = None
+    # The person, when it is one. None for a token — there is no user behind it.
+    identity: Identity | None = None
+
+    @property
+    def is_token(self) -> bool:
+        return self.token_id is not None
+
+    def may_read_project(self, project_id: uuid.UUID) -> bool:
+        """Whether this caller's scope covers a project. A person's covers all."""
+        return self.project_scope is None or self.project_scope == project_id
+
+
+def _presented_bearer(connection: HTTPConnection) -> str | None:
+    return bearer_token_from_headers(connection.headers)
+
+
+def _refuse_a_token_here(connection: HTTPConnection) -> None:
+    """A token on a route that asks for a person: 403, saying where tokens work.
+
+    Below every such route rather than inside each one, so a route added next
+    month cannot forget that a token is not a session.
+    """
+    presented = _presented_bearer(connection)
+    if presented is not None and looks_like_api_token(presented):
+        raise PermissionDeniedError(TOKENS_ARE_READ_ONLY)
+
+
+def _counter_for(connection: HTTPConnection) -> Redis | None:
+    """Redis, when this process has one.
+
+    Read from the app rather than taken as a dependency, deliberately: counting
+    a token's use must not be a *precondition* of reading. A test app, or a
+    process without the pools open, reads perfectly well and counts nothing.
+    """
+    resources = getattr(getattr(connection.scope.get("app"), "state", None), "resources", None)
+    redis: Redis | None = getattr(resources, "redis", None)
+    return redis
+
+
+async def get_current_reader(
+    connection: HTTPConnection, db: DbSession, sessions: SessionStoreDep
+) -> Reader:
+    """The caller of a read-surface route: a signed-in person, or a live token.
+
+    An ingest key is refused in its own sentence (AC21): it is a credential the
+    customer holds, and "the session has expired" would send them looking in the
+    wrong place.
+    """
+    presented = _presented_bearer(connection)
+    if presented is not None and presented.startswith(INGEST_KEY_SCHEMES):
+        raise UnauthenticatedError(INGEST_KEYS_CANNOT_READ)
+    if presented is not None and looks_like_api_token(presented):
+        now = datetime.now(UTC)
+        token = await api_tokens.token_for(db, presented, now=now)
+        counter = _counter_for(connection)
+        if counter is not None:
+            await token_usage.count_request(counter, db, token=token, now=now)
+        return _reader_for_token(token)
+    session = await get_current_session(connection, sessions)
+    identity = await get_current_identity(connection, session, db)
+    return Reader(org_id=identity.org_id, identity=identity)
+
+
+def _reader_for_token(token: ApiToken) -> Reader:
+    return Reader(org_id=token.org_id, project_scope=token.project_id, token_id=token.id)
+
+
+CurrentReader = Annotated[Reader, Depends(get_current_reader)]
+
+
 def get_tenant_repository(
-    identity: CurrentIdentity, clickhouse: ClickHouseClient
+    reader: CurrentReader, clickhouse: ClickHouseClient
 ) -> TenantScopedRepository:
-    """A telemetry reader bound to the caller's organization, and only to it."""
-    return TenantScopedRepository(clickhouse, tenant_id=str(identity.org_id))
+    """A telemetry reader bound to the caller's organization, and only to it.
+
+    Built from a `Reader`, so one construction site serves a person and a token
+    alike — `test_tenant_chokepoint_structure.py` holds it to exactly one site,
+    which is why the assistant's tools call *this* function with a reader they
+    already have rather than building their own: a second site would be a second
+    answer to "which tenant is this?".
+    """
+    return TenantScopedRepository(clickhouse, tenant_id=str(reader.org_id))
 
 
 TenantRepository = Annotated[TenantScopedRepository, Depends(get_tenant_repository)]

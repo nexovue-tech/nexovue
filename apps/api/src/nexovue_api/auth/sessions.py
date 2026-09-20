@@ -304,14 +304,25 @@ class SessionStore:
         return seen
 
 
+def bearer_token_from_headers(headers: Headers) -> str | None:
+    """The `Authorization: Bearer` value, whatever kind of credential it is.
+
+    Separate from `session_token_from_headers` because the caller here is asking
+    "what did they present?", not "which session is this?": an API token and an
+    ingest key are both bearer values and neither names a session.
+    """
+    authorization = headers.get(AUTHORIZATION_HEADER, "")
+    if authorization.lower().startswith(BEARER_PREFIX):
+        return authorization[len(BEARER_PREFIX) :].strip() or None
+    return None
+
+
 def session_token_from_headers(
     headers: Headers, *, cookie_name: str = SESSION_COOKIE_NAME
 ) -> str | None:
     """The session token a request carries, from its cookie or bearer header."""
-    authorization = headers.get(AUTHORIZATION_HEADER, "")
-    if authorization.lower().startswith(BEARER_PREFIX):
-        return authorization[len(BEARER_PREFIX) :].strip() or None
-    return _cookie(headers, cookie_name)
+    bearer = bearer_token_from_headers(headers)
+    return bearer if bearer is not None else _cookie(headers, cookie_name)
 
 
 def _cookie(headers: Headers, name: str) -> str | None:

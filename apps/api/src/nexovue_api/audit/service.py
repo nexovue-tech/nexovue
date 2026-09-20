@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nexovue_api.data.postgres.models import (
     AlertRule,
     ApiKey,
+    ApiToken,
     AuditLogEntry,
     Check,
     DeployEvent,
@@ -94,6 +95,10 @@ ALERT_RULE_MUTED: Final = "alert_rule.muted"
 ALERT_RULE_DELETED: Final = "alert_rule.deleted"
 API_KEY_CREATED: Final = "api_key.created"
 API_KEY_REVOKED: Final = "api_key.revoked"
+# F36. A read credential, named apart from the ingest ones: one writes and one
+# reads, and an audit that called both "a key" would hide which.
+API_TOKEN_CREATED: Final = "api_token.created"
+API_TOKEN_REVOKED: Final = "api_token.revoked"
 # Named apart from the secret kind, because "a key was minted" is a different
 # event depending on which one: one grants server ingest, the other a browser's.
 SITE_KEY_CREATED: Final = "site_key.created"
@@ -139,6 +144,7 @@ SUPPORT_VIEW_ENDED: Final = "support.view_ended"
 ORGANIZATION_TARGET: Final = "organization"
 USER_TARGET: Final = "user"
 API_KEY_TARGET: Final = "api_key"
+API_TOKEN_TARGET: Final = "api_token"
 SITE_KEY_TARGET: Final = "site_key"
 CHECK_TARGET: Final = "check"
 CHECK_SECRET_TARGET: Final = "check_secret"
@@ -338,6 +344,42 @@ def record_api_key_created(
         actor_user_id=actor_user_id,
         action=API_KEY_CREATED,
         target=_target(API_KEY_TARGET, api_key.id),
+    )
+
+
+def record_api_token_created(
+    db: AsyncSession, *, token: ApiToken, actor_user_id: uuid.UUID
+) -> None:
+    """A read credential was minted, by whom, and what it may read.
+
+    The detail carries the scope and the expiry, never the secret: an audit row
+    is readable by every admin, and the secret was shown once to one person.
+    """
+    _add(
+        db,
+        org_id=token.org_id,
+        actor_user_id=actor_user_id,
+        action=API_TOKEN_CREATED,
+        target=_target(API_TOKEN_TARGET, token.id),
+        detail={
+            "name": token.name,
+            "project_id": str(token.project_id) if token.project_id else None,
+            "expires_at": token.expires_at.isoformat(),
+        },
+    )
+
+
+def record_api_token_revoked(
+    db: AsyncSession, *, token: ApiToken, actor_user_id: uuid.UUID
+) -> None:
+    """A read credential was withdrawn, and by whom."""
+    _add(
+        db,
+        org_id=token.org_id,
+        actor_user_id=actor_user_id,
+        action=API_TOKEN_REVOKED,
+        target=_target(API_TOKEN_TARGET, token.id),
+        detail={"name": token.name},
     )
 
 

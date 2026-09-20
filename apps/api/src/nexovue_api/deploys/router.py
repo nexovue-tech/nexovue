@@ -17,7 +17,7 @@ from typing import Annotated, Final
 
 from fastapi import APIRouter, Query, Request, status
 
-from nexovue_api.auth.dependencies import CurrentIdentity
+from nexovue_api.auth.dependencies import CurrentReader
 from nexovue_api.auth.policy import MayManageCredentials
 from nexovue_api.deploys import service, signatures
 from nexovue_api.deploys.schemas import (
@@ -29,6 +29,7 @@ from nexovue_api.deploys.schemas import (
 )
 from nexovue_api.deps import DbSession
 from nexovue_api.errors.exceptions import InvalidRequestError
+from nexovue_api.projects.service import refuse_out_of_scope
 
 router = APIRouter(prefix="/deploys", tags=["deploys"])
 
@@ -63,13 +64,15 @@ async def receive_deploy(
 
 @router.get("", summary="Recent deploys on one project")
 async def list_deploys(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     project_id: uuid.UUID,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> DeployEventListResponse:
+    """On the read surface (FR17): a person, or one of the organization's tokens."""
+    refuse_out_of_scope(reader, project_id)
     return await service.list_for_project(
-        db, org_id=identity.org_id, project_id=project_id, limit=limit
+        db, org_id=reader.org_id, project_id=project_id, limit=limit
     )
 
 

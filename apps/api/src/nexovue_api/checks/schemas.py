@@ -71,6 +71,9 @@ class CheckListResponse(BaseModel):
     checks: list[CheckSummary]
     # Where a check can run from on this deployment.
     available_locations: list[str]
+    # F36, AC20: a capped list says when the cap bit, so a caller reading through
+    # the API knows the answer is partial rather than assuming it is complete.
+    truncated: bool = False
 
 
 class CreatedCheck(CheckSummary):

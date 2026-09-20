@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Path, Query
 
-from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
 from nexovue_api.deps import DbSession
 from nexovue_api.metrics import service
 from nexovue_api.metrics.schemas import (
@@ -16,7 +16,7 @@ from nexovue_api.metrics.schemas import (
     HistogramResponse,
     MetricCatalogueResponse,
 )
-from nexovue_api.projects.service import require_project
+from nexovue_api.projects.service import require_project, require_readable_project
 from nexovue_api.window import resolve_window
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
@@ -45,7 +45,7 @@ ReadableOnly = Annotated[bool, Query(description="Only names this console can dr
 
 @router.get("", summary="Every metric this project reported, busiest first")
 async def list_metrics(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     project_id: ProjectId,
@@ -55,7 +55,7 @@ async def list_metrics(
     shape: Shape = None,
     readable_only: ReadableOnly = False,
 ) -> MetricCatalogueResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.list_metrics(
         repository,
@@ -70,7 +70,7 @@ async def list_metrics(
 
 @router.get("/{metric_name}/histogram", summary="One histogram metric's distribution")
 async def read_histogram(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     metric_name: MetricName,
@@ -78,7 +78,7 @@ async def read_histogram(
     from_time: FromTime = None,
     to_time: ToTime = None,
 ) -> HistogramResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.read_histogram(
         repository,

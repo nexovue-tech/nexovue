@@ -334,6 +334,13 @@ class Settings(BaseSettings):
     # the failure is a customer who cannot verify rather than a stack trace.
     app_base_url: str = ""
 
+    # This API's own public base URL — the other hostname of the pair above.
+    # It exists for one reason: the MCP server (F36) must be told which `Host`
+    # headers it answers on, and the SDK refuses everything else with 421. Left
+    # empty it falls back to the app's host and to localhost, which is right in
+    # development, where both are the same machine.
+    api_public_url: str = ""
+
     # A verification link is followed at leisure; a reset link is a live
     # credential to somebody's account. Different lifetimes, and the difference
     # is the reason they are two settings rather than one.

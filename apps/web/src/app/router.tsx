@@ -10,6 +10,7 @@ import { ChannelDetailScreen } from "@/features/alerts/ChannelDetailScreen";
 import { ChannelsScreen } from "@/features/alerts/ChannelsScreen";
 import { IncidentScreen } from "@/features/alerts/IncidentScreen";
 import { EditRuleScreen, NewRuleScreen, parseNewRuleSearch } from "@/features/alerts/RuleEditor";
+import { ApiTokensScreen } from "@/features/apitokens/ApiTokensScreen";
 import { AuditScreen } from "@/features/audit/AuditScreen";
 import { AcceptInviteScreen } from "@/features/auth/AcceptInviteScreen";
 import { AccountScreen } from "@/features/auth/AccountScreen";
@@ -301,6 +302,12 @@ const settingsApiKeysRoute = createRoute({
   component: ApiKeysScreen,
 });
 
+const settingsApiTokensRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/settings/api-tokens",
+  component: ApiTokensScreen,
+});
+
 const settingsMembersRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/members",
@@ -509,6 +516,7 @@ const routeTree = rootRoute.addChildren([
     settingsAccountRoute,
     settingsApiKeysRoute,
     settingsMembersRoute,
+    settingsApiTokensRoute,
     settingsAuditRoute,
     settingsSupportRoute,
     settingsChannelsRoute,

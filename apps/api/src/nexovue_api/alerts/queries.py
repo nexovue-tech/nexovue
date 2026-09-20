@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from nexovue_platform.alerts.channels import READ_BY_MACHINES
 from sqlalchemy import DateTime, and_, delete, func, insert, literal, select, update
@@ -20,6 +20,10 @@ from nexovue_api.data.postgres.models import (
     Notification,
     NotificationChannel,
 )
+
+# How many incidents one read returns. Named so the service can say whether the
+# cap bit (F36, AC20) rather than repeating the number.
+INCIDENT_PAGE: Final = 200
 
 
 async def owners_channel(session: AsyncSession, *, org_id: uuid.UUID) -> NotificationChannel | None:
@@ -252,7 +256,7 @@ async def incidents(
     open_only: bool,
     since: datetime,
     subject_keys: list[str] | None = None,
-    limit: int = 200,
+    limit: int = INCIDENT_PAGE,
 ) -> list[Incident]:
     statement = select(Incident).where(Incident.org_id == org_id, Incident.project_id == project_id)
     if open_only:

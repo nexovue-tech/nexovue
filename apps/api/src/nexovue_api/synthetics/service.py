@@ -248,6 +248,7 @@ async def list_runs(
     return CheckRunListResponse(
         check_id=check_id,
         runs=[_to_run(row) for row in rows if int(row["status_points"])],
+        truncated=len(rows) >= limit,
     )
 
 

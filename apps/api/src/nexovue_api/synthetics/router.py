@@ -23,9 +23,9 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from nexovue_platform.checks.config import CheckType
 
-from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
 from nexovue_api.deps import DbSession
-from nexovue_api.projects.service import require_project
+from nexovue_api.projects.service import require_project, require_readable_project
 from nexovue_api.synthetics import service
 from nexovue_api.synthetics.schemas import (
     CheckResultListResponse,
@@ -46,7 +46,7 @@ ToTime = Annotated[datetime | None, Query(alias="to")]
 
 @router.get("/checks", summary="Every check's readings over a window")
 async def list_check_results(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     project_id: ProjectId,
@@ -55,7 +55,7 @@ async def list_check_results(
     check_type: Annotated[CheckType | None, Query(description="Only checks of this kind")] = None,
     down_only: Annotated[bool, Query(description="Only checks whose last probe failed")] = False,
 ) -> CheckResultListResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.list_check_results(
         repository,
@@ -102,7 +102,7 @@ async def phase_breakdown(
 
 @router.get("/checks/{check_id}/runs", summary="Individual probes, newest first")
 async def list_runs(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     check_id: uuid.UUID,
@@ -111,7 +111,7 @@ async def list_runs(
     to_time: ToTime = None,
     limit: Annotated[int | None, Query(ge=1, le=service.MAX_RUN_LIMIT)] = None,
 ) -> CheckRunListResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.list_runs(
         repository,

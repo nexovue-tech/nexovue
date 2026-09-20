@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final, Protocol
 
+from nexovue_api.apitokens.tokens import looks_like_api_token
 from nexovue_api.settings import API_PREFIX
 
 
@@ -97,6 +98,16 @@ DEFAULT_TIER: Final = Tier(
     # Postgres reads and writes are cheap next to a scan; the ceiling only stops
     # one tenant's script from crowding everyone else's.
     org_quota=Quota(name="default-organization", limit=1500, window_seconds=60),
+)
+
+# F36. A machine, not a browser: one CI runner pulling a nightly report is not
+# six screens fanning out, so the telemetry tier's 60-a-minute per person is the
+# wrong shape for it. Counted per token, so one customer's script cannot spend
+# another's, and capped at 8 in flight for the same reason the telemetry tier is
+# — a scan is what costs ClickHouse, whoever asked for it.
+TOKEN_TIER: Final = Tier(
+    quota=Quota(name="token", limit=300, window_seconds=60),
+    max_concurrent=8,
 )
 
 # The one unauthenticated write in the control plane. It shared the default tier,
@@ -208,6 +219,9 @@ AUTH_PATHS: Final = (
 #
 # `test_ratelimit_covers_every_clickhouse_router` compares this list against the
 # routers themselves, so the next rename is caught rather than discovered.
+# F36. The MCP endpoint is a token's, always: it takes no session and no cookie.
+ASSISTANT_PATH: Final = "/api/mcp"
+
 TELEMETRY_PATHS: Final = (
     f"{API_PREFIX}/traces",
     f"{API_PREFIX}/logs",
@@ -226,6 +240,25 @@ TELEMETRY_PATHS: Final = (
 # Probes must answer while the API is being hammered; that is the whole point
 # of them. They are also what an orchestrator uses to decide to restart us.
 EXEMPT_PATHS: Final = ("/healthz", "/readyz")
+
+
+def tier_for(path: str, *, presented: str | None = None) -> Tier | None:
+    """The tier a request falls into, by credential first and then by path.
+
+    An API token is counted as a token wherever it is pointed (FR19): the path
+    says what is being read, and the credential says whose allowance pays for it.
+    The health probes stay exempt regardless — an orchestrator carries no
+    credential, and a token pointed at `/healthz` learns nothing.
+    """
+    if path in EXEMPT_PATHS:
+        return None
+    if presented is not None and looks_like_api_token(presented):
+        return TOKEN_TIER
+    if path.startswith(ASSISTANT_PATH):
+        # An assistant with no token, or a bad one, is still a caller to count:
+        # otherwise the refusal itself is free to repeat.
+        return TOKEN_TIER
+    return tier_for_path(path)
 
 
 def tier_for_path(path: str) -> Tier | None:

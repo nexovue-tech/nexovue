@@ -17,9 +17,9 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query
 
-from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
 from nexovue_api.deps import DbSession
-from nexovue_api.projects.service import require_project
+from nexovue_api.projects.service import require_project, require_readable_project
 from nexovue_api.services import service
 from nexovue_api.services.schemas import (
     EndpointListResponse,
@@ -52,7 +52,7 @@ Order = Annotated[
 
 @router.get("", summary="Every service in a time window, worst first")
 async def list_services(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     project_id: ProjectId,
@@ -63,7 +63,7 @@ async def list_services(
     with_errors: WithErrors = False,
     order: Order = "worst",
 ) -> ServiceListResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.list_services(
         repository,
@@ -155,7 +155,7 @@ async def list_project_endpoints(
 
 @router.get("/{service_name}", summary="One service in a time window")
 async def get_service(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     service_name: str,
@@ -170,7 +170,7 @@ async def get_service(
     that a service actually *named* `trend` or `endpoints` is unreachable here — a
     collision the collection sub-resources already carry, not one this route invents.
     """
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await service.get_service(
         repository,

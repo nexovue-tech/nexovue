@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from nexovue_api.apitokens.tokens import API_TOKEN_PREFIX
 from nexovue_api.ratelimit.headers import (
     POLICY_HEADER,
     RETRY_AFTER_HEADER,
@@ -16,7 +17,9 @@ from nexovue_api.ratelimit.policy import (
     AUTH_TIER,
     DEFAULT_TIER,
     TELEMETRY_TIER,
+    TOKEN_TIER,
     Quota,
+    tier_for,
     tier_for_path,
 )
 from nexovue_api.settings import API_PREFIX
@@ -48,6 +51,50 @@ from nexovue_api.settings import API_PREFIX
 )
 def test_tier_for_path(path: str, expected: object) -> None:
     assert tier_for_path(path) is expected
+
+
+A_TOKEN = f"{API_TOKEN_PREFIX}CIreadsCIreadsCIreadsCIreadsCIre"
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        # A token pays its own allowance wherever it is pointed (F36, FR19): the
+        # path says what is read, the credential says whose budget pays.
+        (f"{API_PREFIX}/traces", TOKEN_TIER),
+        (f"{API_PREFIX}/checks", TOKEN_TIER),
+        (f"{API_PREFIX}/alerts/incidents", TOKEN_TIER),
+        # An orchestrator's probe carries no credential, and a token pointed at
+        # one learns nothing — so exempt stays exempt.
+        ("/healthz", None),
+    ],
+)
+def test_a_token_is_counted_as_a_token_whatever_it_reads(path: str, expected: object) -> None:
+    assert tier_for(path, presented=A_TOKEN) is expected
+
+
+@pytest.mark.parametrize(
+    ("presented", "expected"),
+    [
+        (None, TELEMETRY_TIER),
+        ("a-session-token", TELEMETRY_TIER),
+        ("nvk_live_devlocaldevlocaldevloc", TELEMETRY_TIER),
+    ],
+    ids=["signed out", "session", "ingest key"],
+)
+def test_every_other_credential_falls_on_the_path_tier(
+    presented: str | None, expected: object
+) -> None:
+    """Only an API token changes the tier. An ingest key is refused elsewhere,
+    and must not buy a machine's allowance on its way to that refusal."""
+    assert tier_for(f"{API_PREFIX}/traces", presented=presented) is expected
+
+
+def test_a_token_reads_more_than_a_person_and_still_caps_concurrency() -> None:
+    """FR19: a nightly pull is not six screens, but a scan is still a scan."""
+    assert TOKEN_TIER.quota.limit > TELEMETRY_TIER.quota.limit
+    assert TOKEN_TIER.max_concurrent == TELEMETRY_TIER.max_concurrent
+    assert TOKEN_TIER.org_quota is None
 
 
 def test_the_auth_tier_is_the_strictest() -> None:

@@ -80,6 +80,10 @@ DEFAULT_RETENTION_DAYS: Final = 30
 # hidden, which is entropy enough that lengthening the prefix costs nothing.
 API_KEY_PREFIX_LENGTH: Final = 16
 
+# `nvt_live_` plus the first characters of the secret: what a customer reads in
+# the token list, and what a secret scanner matches. The rest is never stored.
+API_TOKEN_PREFIX_LENGTH: Final = 20
+
 # `nvp_live_<22 chars>` in full. Stored whole and in the clear, because a site key
 # is printed in the page that carries it — there is no secret half to withhold, so
 # there is no prefix to split off.
@@ -1552,3 +1556,69 @@ class SupportAccessGrant(Base):
         CheckConstraint("expires_at > granted_at", name="access_expires_after_it_starts"),
         Index("ix_support_access_grants_org_id_expires_at", "org_id", "expires_at"),
     )
+
+
+class ApiToken(Base):
+    """An organization's read credential for its own data (F36, FR13, ADR-017).
+
+    The organization's, not a person's: `created_by` is a label for the list and
+    goes to NULL when that person is removed, so a teammate leaving cannot stop
+    a pipeline (BR9). `project_id` NULL reads every project; set, it reads that
+    one and answers a question about another exactly as a project that does not
+    exist does (BR11).
+
+    Stored as ingest keys are — SHA-256, never argon2 — because this is verified
+    on every request, and a 190-bit generated secret has nothing for stretching
+    to protect. `token_prefix` is the plaintext head: it is what a customer sees
+    in the list to tell two tokens apart, and what a leaked-secret scanner
+    matches on.
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH), nullable=False)
+    role: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False, default="read")
+    token_prefix: Mapped[str] = mapped_column(
+        String(API_TOKEN_PREFIX_LENGTH), nullable=False, unique=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(SHA256_HEX_LENGTH), nullable=False, unique=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[CreatedAt]
+    # Every token ends; the customer chooses when.
+    expires_at: Mapped[RequiredTimestamp]
+    revoked_at: Mapped[OptionalTimestamp]
+    last_used_at: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        CheckConstraint("role IN ('read')", name="token_role_is_known"),
+        CheckConstraint("expires_at > created_at", name="token_expires_after_it_is_made"),
+        Index("ix_api_tokens_org_id", "org_id"),
+    )
+
+
+class ApiTokenUsageDaily(Base):
+    """What one token spent on one day (F36, AC18).
+
+    Folded from Redis at most once a minute per token, so showing a customer
+    what their automation costs them is not a Postgres write per request. It
+    carries no `org_id`: the token it names does, and the row dies with it.
+    """
+
+    __tablename__ = "api_token_usage_daily"
+
+    token_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("api_tokens.id", ondelete="CASCADE"), primary_key=True
+    )
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+    __table_args__ = (CheckConstraint("requests >= 0", name="token_requests_do_not_go_backwards"),)

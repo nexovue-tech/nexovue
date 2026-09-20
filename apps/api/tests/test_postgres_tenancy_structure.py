@@ -76,6 +76,11 @@ EXEMPT: Final = {
     # A website payment buys one organization, and its processor id is unique
     # system-wide — `key_prefix_is_taken`'s reason.
     "payment_is_recorded",
+    # An API token's hash (F36), exactly as an ingest key's prefix: it is what a
+    # caller presents *before* any organization is known, so it establishes the
+    # tenant rather than being filtered by one. The row it returns is refused
+    # unless it is live, and every read after it is scoped by `reader.org_id`.
+    "find_by_hash",
 }
 
 

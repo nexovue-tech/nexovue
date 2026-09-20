@@ -20,6 +20,7 @@ from sqlalchemy import CursorResult, delete, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
+    ApiToken,
     AuditLogEntry,
     BillingSubscription,
     BillingWebhookDelivery,
@@ -45,6 +46,11 @@ async def delete_billing_subscriptions(session: AsyncSession, org_id: uuid.UUID)
     return await _rows_deleted(
         session, delete(BillingSubscription).where(BillingSubscription.org_id == org_id)
     )
+
+
+async def delete_api_tokens(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """The organization's read credentials. Their daily counters go by cascade."""
+    return await _rows_deleted(session, delete(ApiToken).where(ApiToken.org_id == org_id))
 
 
 async def delete_website_payments(session: AsyncSession, org_id: uuid.UUID) -> int:
@@ -91,6 +97,7 @@ async def delete_notification_channels(session: AsyncSession, org_id: uuid.UUID)
 DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitable[int]]]] = {
     "billing_webhook_deliveries": delete_billing_webhook_deliveries,
     "billing_subscriptions": delete_billing_subscriptions,
+    "api_tokens": delete_api_tokens,
     "website_payments": delete_website_payments,
     "plan_grants": delete_plan_grants,
     "support_access_grants": delete_support_access_grants,

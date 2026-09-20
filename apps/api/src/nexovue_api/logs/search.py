@@ -37,13 +37,13 @@ from typing import Annotated, Any, Final
 from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, Field
 
-from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.auth.dependencies import CurrentIdentity, CurrentReader, TenantRepository
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.deps import DbSession
 from nexovue_api.errors.exceptions import InvalidRequestError
 from nexovue_api.logs.schemas import LogRecord
-from nexovue_api.projects.service import require_project
+from nexovue_api.projects.service import require_project, require_readable_project
 from nexovue_api.window import clamp_limit, receive_window, resolve_window
 from nexovue_api.wire import to_iso_millis
 
@@ -433,7 +433,7 @@ ToTime = Annotated[datetime | None, Query(alias="to")]
 
 @router.get("/search", summary="Log records matching a search, newest first")
 async def search(
-    identity: CurrentIdentity,
+    reader: CurrentReader,
     db: DbSession,
     repository: TenantRepository,
     project_id: ProjectId,
@@ -452,7 +452,7 @@ async def search(
     limit: Annotated[int | None, Query(ge=1, le=MAX_LIMIT)] = None,
     cursor: Annotated[str | None, Query(description="Opaque marker from a previous page")] = None,
 ) -> LogSearchResponse:
-    project = await require_project(db, org_id=identity.org_id, project_id=project_id)
+    project = await require_readable_project(db, reader=reader, project_id=project_id)
     window_start, window_end = resolve_window(from_time, to_time)
     return await search_logs(
         repository,

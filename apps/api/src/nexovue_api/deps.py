@@ -27,12 +27,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
 from nexovue_api.alerts.evaluation import EvaluationReader
-from nexovue_api.auth.sessions import Session, SessionStore, session_token_from_headers
+from nexovue_api.apitokens.tokens import TOKENS_ARE_READ_ONLY, looks_like_api_token
+from nexovue_api.auth.sessions import (
+    Session,
+    SessionStore,
+    bearer_token_from_headers,
+    session_token_from_headers,
+)
 from nexovue_api.auth.tokens import OneTimeTokenStore
 from nexovue_api.channels.send_test import ChannelTester
 from nexovue_api.checks.run_now import ProbeBroker
 from nexovue_api.data.objectstore import ObjectStore
-from nexovue_api.errors.exceptions import DependencyUnavailableError, UnauthenticatedError
+from nexovue_api.errors.exceptions import (
+    DependencyUnavailableError,
+    PermissionDeniedError,
+    UnauthenticatedError,
+)
 from nexovue_api.lifespan import Resources
 from nexovue_api.settings import Settings
 
@@ -174,6 +184,14 @@ async def get_current_session(
     sessions: Annotated[SessionStore, Depends(get_session_store)],
 ) -> Session:
     """The caller's session, or a 401. Also puts tenancy on every later log line."""
+    presented = bearer_token_from_headers(connection.headers)
+    if presented is not None and looks_like_api_token(presented):
+        # Here rather than deeper in: this is where a bearer value becomes a
+        # session, so it is the one place that can tell a caller their token is
+        # the wrong credential for this route instead of "your session expired"
+        # (F36, FR15).
+        raise PermissionDeniedError(TOKENS_ARE_READ_ONLY)
+
     token = session_token_from_headers(connection.headers)
     if token is None:
         raise UnauthenticatedError("This endpoint requires a signed-in session.")
