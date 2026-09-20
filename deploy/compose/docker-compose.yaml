@@ -240,10 +240,14 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/python-dev.Dockerfile
+    # `--timeout-graceful-shutdown`: uvicorn otherwise waits for open client
+    # connections for ever, so one held-open curl wedges every reload until the
+    # container is restarted by hand. Ten seconds is long enough for a real
+    # request to finish and short enough that a stray one costs nothing.
     command: >-
       uv run --package nexovue-api
       uvicorn nexovue_api.main:app --host 0.0.0.0 --port 8000 --reload
-      --reload-dir apps/api/src
+      --reload-dir apps/api/src --timeout-graceful-shutdown 10
     working_dir: /workspace
     volumes:
       - ../..:/workspace
@@ -371,6 +375,7 @@ services:
     command: >-
       uv run --package nexovue-api
       uvicorn nexovue_api.admin.main:app --host 0.0.0.0 --port 8000 --reload
+      --timeout-graceful-shutdown 10
       --reload-dir apps/api/src
     working_dir: /workspace
     volumes:

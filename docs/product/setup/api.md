@@ -70,6 +70,20 @@ and reach only the documented read API.**
 Most take `project_id` as a query parameter, and a window as `from` and `to`
 (ISO-8601). Leaving the window out reads the last hour.
 
+**Machine-readable.** The same list is published as OpenAPI 3.1 at
+`GET /api/v1/openapi.read.json` — no credential needed to fetch it — so you can
+generate a typed client rather than writing calls by hand:
+
+```bash
+curl -s https://api.nexovue.com/api/v1/openapi.read.json -o nexovue.json
+npx @openapitools/openapi-generator-cli generate \
+  -i nexovue.json -g typescript-fetch -o ./nexovue-client
+```
+
+It describes this surface and nothing else, declares the bearer token every
+endpoint needs, and is generated from the routes themselves — so it cannot
+drift from what a token can actually reach.
+
 ## Paging
 
 Two endpoints return a cursor, because their lists are long by nature:

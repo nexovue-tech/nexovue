@@ -55,6 +55,10 @@ See `plan.md` → *New risks*. Found while building Stages 1 and 3:
 - **No render test of the billing screen by role.** Its checkout and cancel controls are gated
   (`useCan("commit_spend")`) and the API refuses a non-owner regardless; the test was not written because
   its overview fixture is large. Every other screen with a control has an owner/viewer pair.
+- **The console's OpenAPI document (`/api/v1/openapi.json`) is public and describes all 138 endpoints**,
+  including every admin and billing route, with no security scheme declared. That is a map, not data, and
+  most API companies publish one — but whether it stays public is a decision nobody has made. The
+  read-surface document exists precisely so that closing it would cost customers nothing.
 - **The console shows the MCP endpoint as its own origin + `/api/mcp/`**, the same way every other API
   call it makes is same-origin. A deployment that routes `/api/v1` to the API but not `/api/mcp` would
   print a URL that 404s. Route both, or the panel lies.
@@ -114,6 +118,13 @@ Stage 2, 2026-09-20:
   + browser SDK 120; `mypy`, lint, format and contracts clean. Development ClickHouse again needed a restart
   and a drained mutation queue before the run (see *Risks*); with that done the gate is green in one pass.
 - `just e2e` from a clean start: **22 passed**.
+- Added after the stage was pushed (founder's request, 2026-09-20): the assistant panel and the
+  documentation became client-neutral — Claude Code, Cursor, VS Code, Codex, Windsurf, Zed, Gemini CLI and
+  Claude Desktop, each with the one detail that otherwise makes it look broken — and the read surface is
+  now published as OpenAPI at `GET /api/v1/openapi.read.json`, built from the routes and proved by
+  `test_read_surface_spec.py` (16). Two defects that found: `/logs/search` published itself as `/search`
+  (a nested router's own path is not the path it is served at), and a first version described half the
+  console, because every telemetry route reaches the reader *through* the ClickHouse repository.
 - Four defects the gate caught in this stage's own code, each fixed: the organization deletion did not
   classify `api_tokens`; `GET /projects` moving to the read surface broke a role test's harness; the MCP
   tools built a second tenant-scoped repository, which the chokepoint test forbids; and the token tables
