@@ -1,6 +1,6 @@
 # Feature catalog
 
-> **Owner:** Raj · **Status:** Draft — living document · **Last updated:** 2026-09-19 — F21 built; F17 built as a preview. Earlier the same day: F17 moved into Phase 1 Track 1 after F21 (§5). Earlier: 2026-09-16 — Phase 1 approved and reordered: F18 first, then F21, F26, F31 and F36, with the website and deployment as parallel tracks
+> **Owner:** Raj · **Status:** Draft — living document · **Last updated:** 2026-09-21 — **audited against the code, not re-read.** Track 1 complete; F31 and F36 corrected from `🔴 No` to `✅ Yes` (their own notes already said "Built 2026-09-20"); F25 has a real specification awaiting approval; the specification backlog named below. Earlier: 2026-09-19 — F21 built; F17 built as a preview. Earlier the same day: F17 moved into Phase 1 Track 1 after F21 (§5). Earlier: 2026-09-16 — Phase 1 approved and reordered: F18 first, then F21, F26, F31 and F36, with the website and deployment as parallel tracks
 > **How to use this doc:** every feature gets the same structure as F1 (the template): Description → User stories → Acceptance criteria → UI notes → Dependencies → Open questions. We fill features in one by one; a feature is "specified" when its acceptance criteria are testable.
 
 > ⚠️ **Built and specified are different questions, and §4 answers both separately.**
@@ -11,6 +11,14 @@
 >
 > Acceptance criteria are written in the present tense because that is what an acceptance criterion
 > is — a statement to test against once built. Read every `AC` below as *must*, never as *does*.
+>
+> **Eleven built features have no acceptance criteria** — F8, F9, F10, F11, F12, F13, F14, F15, F23,
+> F24, F25. The order they should be written in, ranked by what it costs to be wrong rather than by
+> what is quickest, is in [`../features/README.md`](../features/README.md). It is not a formality:
+> the usage-billing baseline was 21 lines, and in its absence the billing screen charged for every
+> service monitored while the bank charged the committed count
+> ([`commitment-is-the-bill-ceiling`](../changes/commitment-is-the-bill-ceiling/bug.md)) — a defect
+> one acceptance criterion would have caught before a customer did.
 
 ---
 
@@ -77,19 +85,19 @@
 | **F22** | Case management | 🔴 No | 🔲 | 2 | Depends on findings existing |
 | **F23** | Onboarding | ✅ Yes | 🔲 | 0 | Signup → two env vars → first-span celebration; auto-created defaults not built |
 | **F24** | Integration settings | 🟡 Partly | 🔲 | 2 | Keys, site keys, deploy webhooks, cloud and DB pollers, integration health all built; AWS role flow is not |
-| **F25** | Usage & cost view | ✅ Yes | 🔲 | 0 | Usage, allowance, projected cost, billing, charge history |
+| **F25** | Usage & cost view | ✅ Yes | 🔶 | 0 | Usage, allowance, projected cost, billing, charge history. **A real specification exists since 2026-09-21** and awaits approval — 14 business rules, 15 acceptance criteria, six gaps marked. Writing it found a hole nothing was holding: the allowance rule is implemented in Python and in Go and neither checked the other ([AC25.15](../features/usage-billing/spec.md)) |
 | **F26** | RBAC / user management | ✅ Yes | ✅ | **1** | **Built 2026-09-19** as Stage 1 of [Team, API and admin access](../features/team-and-api-access/spec.md) (with F31 and F36): invite by email, accept, four roles on every route and screen, remove, transfer ownership, audit log screen — see [status](../features/team-and-api-access/status.md) |
 | **F27** | Data controls | 🟡 Partly | 🔲 | 2 | Masking, plan retention, tenant purge and CSV export built; archival tiers and a GDPR surface are not |
 | **F28** | Deployment / release tracking | 🟡 Partly | 🔲 | 2 | Deploy webhooks, chart markers and error-to-deploy linkage built; the release-comparison screen is not |
 | **F29** | LLM / AI-app observability | 🔴 No | 🔲 | Later | `gen_ai.*` attributes already land and are queryable; no screen, no metric contract |
 | **F30** | Public status page | 🔴 No | 🔲 | Later | |
-| **F31** | Admin console (internal) | 🔴 No | ✅ | **1** | **Built 2026-09-20** as Stage 3 of [Team, API and admin access](../features/team-and-api-access/spec.md): one super-admin user seeded from the environment signs in on the ordinary sign-in page and opens the platform area with a 30-minute step-up ([ADR-018](../decisions/ADR-018-the-operator-is-a-user-in-the-console.md), which supersedes ADR-016's separate app the same day); onboard a paying customer after the website payment ([ADR-008](../decisions/ADR-008-the-website-takes-the-first-payment.md)); hosted signup closed by a switch; suspend and resume ingest; comp a plan until a date; read-only, audited *view as* inside the owner's grant — see [status](../features/team-and-api-access/status.md) |
+| **F31** | Admin console (internal) | ✅ Yes | ✅ | **1** | **Built 2026-09-20** as Stage 3 of [Team, API and admin access](../features/team-and-api-access/spec.md): one super-admin user seeded from the environment signs in on the ordinary sign-in page and opens the platform area with a 30-minute step-up ([ADR-018](../decisions/ADR-018-the-operator-is-a-user-in-the-console.md), which supersedes ADR-016's separate app the same day); onboard a paying customer after the website payment ([ADR-008](../decisions/ADR-008-the-website-takes-the-first-payment.md)); hosted signup closed by a switch; suspend and resume ingest; comp a plan until a date; read-only, audited *view as* inside the owner's grant — see [status](../features/team-and-api-access/status.md) |
 | **F32** | Account, organization & project access | ✅ Yes | 🔲 | 0 | Signup, verification, recovery, profile, TOTP second factor, active sessions, sign-out-everywhere |
 | **F33** | Telemetry intake & data protection | ✅ Yes | 🔲 | 0 | OTLP HTTP and gRPC, browser intake, site keys, origin allowlist, masking, tail sampling, tenant isolation |
 | **F34** | Metrics explorer | ✅ Yes | 🔲 | 0 | Catalogue with name/shape/readable filters, histograms, duration heatmaps. *Added 2026-09-14 — it shipped without a catalogue entry* |
 | **F35** | Setup documentation (public) | ✅ Yes | 🔲 | 0 | Fifteen pages served unauthenticated at `/docs`, compiled from `docs/product/setup/`. *Added 2026-09-14* |
-| **F36** | Customer read API | 🔴 No | ✅ | **1** | **Built 2026-09-20** as Stage 2 of [Team, API and admin access](../features/team-and-api-access/spec.md): organization-owned read tokens (`nvt_live_`, scoped, expiring, revocable, shown once); a documented read surface over `/api/v1` held to a checked-in list; per-token rate limits and daily usage; a hosted read-only **MCP server** at `/api/mcp` for AI assistants; customer documentation at [setup/api.md](setup/api.md) — see [status](../features/team-and-api-access/status.md) |
-| **F37** | Self-hosted install & operation | 🟡 Skeleton | 🔲 | **1** | `docker-compose.onprem.yaml` and the operations docs exist and are marked, correctly, as unverified. No images, no registry, no release, no runbook. **Licence decided and declared 2026-09-15: AGPL-3.0, browser SDK Apache-2.0; transitive licence audit and git-history secret scan both clean.** Delivered as the deployment track of Phase 1 ([ADR-006](../decisions/ADR-006-terraform-with-two-delivery-paths.md)). *Added 2026-09-14* |
+| **F36** | Customer read API | ✅ Yes | ✅ | **1** | **Built 2026-09-20** as Stage 2 of [Team, API and admin access](../features/team-and-api-access/spec.md): organization-owned read tokens (`nvt_live_`, scoped, expiring, revocable, shown once); a documented read surface over `/api/v1` held to a checked-in list; per-token rate limits and daily usage; a hosted read-only **MCP server** at `/api/mcp` for AI assistants; customer documentation at [setup/api.md](setup/api.md) — see [status](../features/team-and-api-access/status.md) |
+| **F37** | Self-hosted install & operation | 🟡 Skeleton | 🔲 | **1** | **The only Phase 1 feature still unbuilt and unspecified**, and the whole of Track 1 is now behind it. `docker-compose.onprem.yaml` and the operations docs exist and are marked, correctly, as unverified. No images, no registry, no release, no runbook. **Two pieces landed 2026-09-21**: the first owner is seeded from `FIRST_OWNER_EMAIL` so an install has a way in without leaving signup open (`docs/changes/seeded-from-the-environment/`), and signup is closed unless a target opens it (`docs/changes/signup-closed-by-default/`). Both are correct and **unrehearsed** — the compose target has still never run. It also owns readiness blockers 9 and 10: there is no deployment-mode concept anywhere in the code, so a self-hosted install shows a Razorpay billing screen and caps ingestion on the operator's own disk. **Licence decided and declared 2026-09-15: AGPL-3.0, browser SDK Apache-2.0; transitive licence audit and git-history secret scan both clean.** Delivered as the deployment track of Phase 1 ([ADR-006](../decisions/ADR-006-terraform-with-two-delivery-paths.md)). *Added 2026-09-14* |
 
 **Named capabilities inside features (so they aren't lost):** BubbleUp-style attribute/outlier
 analysis → F20 + F2 evidence · service ownership metadata → F8/F9 · telemetry-value transparency
@@ -146,16 +154,24 @@ admit a second user to an organization, or run anywhere but a laptop.
 customer pays ([ADR-008](../decisions/ADR-008-the-website-takes-the-first-payment.md)). Three tracks:
 the first in strict order, the other two alongside it.
 
-**Track 1 — features, in order**
+**Track 1 — features, in order. ✅ Complete 2026-09-20.**
 
-| Order | Feature | Bar |
-|---|---|---|
-| 1 | **F18 — Synthetic checks** | **Complete to production level** — everything a customer expects of synthetic monitoring, specified in full before any code, through the SDD workflow |
-| 2 | **F21 — Alerts & notification connectors** | Built 2026-09-19 |
-| 3 | **F17 — Continuous profiling** | Added 2026-09-19 by founder decision, ahead of F26. Built on an alpha OpenTelemetry signal — see its §4 row |
-| 4 | **F26 — Teams: invite, roles, membership** | |
-| 5 | **F31 — Platform admin console** | Must exist before the first paying cloud customer: onboarding goes through it |
-| 6 | **F36 — Customer read API** | |
+All six are built, committed and on `main`. Verified against the code on 2026-09-21, not read off
+this table: two rows below it still said `🔴 No` in their *Built* column while their own notes said
+"Built 2026-09-20".
+
+| Order | Feature | Bar | State |
+|---|---|---|---|
+| 1 | **F18 — Synthetic checks** | **Complete to production level** — everything a customer expects of synthetic monitoring, specified in full before any code, through the SDD workflow | ✅ 2026-09-17 |
+| 2 | **F21 — Alerts & notification connectors** | | ✅ 2026-09-19 |
+| 3 | **F17 — Continuous profiling** | Added 2026-09-19 by founder decision, ahead of F26. Built on an alpha OpenTelemetry signal — see its §4 row | ✅ 2026-09-19, as a preview |
+| 4 | **F26 — Teams: invite, roles, membership** | | ✅ 2026-09-19 |
+| 5 | **F31 — Platform admin console** | Must exist before the first paying cloud customer: onboarding goes through it | ✅ 2026-09-20 |
+| 6 | **F36 — Customer read API** | | ✅ 2026-09-20 |
+
+**So Track 3 is the critical path now**, not a parallel one: nothing runs beside it but the website.
+And **F37 is the only Phase 1 feature still unbuilt and unspecified** — it is not a seventh item
+here, it is Track 3's own first bullet wearing a feature number.
 
 **Track 2 — website redesign, in parallel.** A modern site for the product only, with SEO, pricing
 (self-hosted free; cloud plans paid; no free cloud tier) and the first payment
@@ -169,7 +185,12 @@ the first in strict order, the other two alongside it.
 - Terraform, with Ansible for Linux servers and Helm for Kubernetes ([ADR-006](../decisions/ADR-006-terraform-with-two-delivery-paths.md))
 - The preparations for moving between clouds ([ADR-007](../decisions/ADR-007-migrating-between-clouds.md)) and regions ([ADR-009](../decisions/ADR-009-regions-are-cells.md))
 - **A trial run on Oracle Cloud.** Always Free is 2 OCPUs / 12 GB since June 2026 — a trial and staging environment, not one for a paying customer
-- The blockers in [`../operations/production-readiness.md`](../operations/production-readiness.md)
+- The blockers in [`../operations/production-readiness.md`](../operations/production-readiness.md) —
+  **ten of eleven remain**, re-checked against the code on 2026-09-21 rather than re-read. Blocker 3
+  (public signup) was cleared that day, and its stated evidence had been stale for days: the switch
+  and the invite flow both already existed, and what was actually missing was the *default*
+  (`docs/changes/signup-closed-by-default/`). Blockers **9 and 10 are F37**, so this bullet and the
+  one above it are the same work counted twice.
 
 Docker Hub allows 100 anonymous pulls per six hours **per IP**. A single self-hosted install pulls
 about a dozen images and is unaffected; nodes or runners sharing one NAT address share that budget, so

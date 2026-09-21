@@ -308,16 +308,39 @@ def _export_probe_trace(api_key: SecretStr) -> str:
 
 
 def _wait_until_readable(tenant: LiveTenant, trace_id: str) -> None:
-    """Block until the tenant's own session can read the trace it just sent."""
+    """Block until the tenant can read the trace it just sent — by id *and* in the list.
+
+    **Both, because they are two different writes.** Fetching one trace reads the
+    span rows; listing traces reads the summary the assembler derives from them,
+    and the second lands after the first. Waiting only for the fetch and then
+    asserting on the list is waiting for the wrong thing — which is how
+    `test_a_new_organizations_trace_list_holds_nothing_but_its_own` failed under
+    the parallel gate on 2026-09-21 with an empty set, on a trace that was
+    already fetchable by id.
+
+    The suite had been serial, where the summary happened to land inside the
+    first poll. Six workers made the stack busy enough for the gap to show.
+    """
     deadline = time.monotonic() + INGEST_DEADLINE_SECONDS
     while time.monotonic() < deadline:
-        response = tenant.client.get(
-            f"/traces/{trace_id}", params={"project_id": tenant.project_id}
-        )
-        if response.status_code == 200:
+        fetched = tenant.client.get(f"/traces/{trace_id}", params={"project_id": tenant.project_id})
+        if fetched.status_code == 200 and _appears_in_the_list(tenant, trace_id):
             return
         time.sleep(INGEST_POLL_SECONDS)
-    pytest.fail(f"the probe trace never became readable within {INGEST_DEADLINE_SECONDS}s")
+    pytest.fail(
+        f"the probe trace never became both fetchable and listable within "
+        f"{INGEST_DEADLINE_SECONDS}s"
+    )
+
+
+def _appears_in_the_list(tenant: LiveTenant, trace_id: str) -> bool:
+    """Whether the trace has reached the summary the list is served from."""
+    listed = tenant.client.get(
+        "/traces", params={"project_id": tenant.project_id, "limit": MAX_PAGE}
+    )
+    if listed.status_code != 200:
+        return False
+    return any(trace["trace_id"] == trace_id for trace in listed.json()["traces"])
 
 
 @pytest.fixture(scope="module")
