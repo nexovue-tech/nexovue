@@ -1,0 +1,48 @@
+{
+  "_why": "The allowance rule is written twice — once in Python for the screens, once in Go for the ingest door — and both say in comments that the two must agree. Nothing checked it. A divergence refuses a paying customer at a limit the screen never showed them, which is the failure the comments name and neither could prevent. These cases are read by apps/api/tests and by apps/receiver, so the agreement is a fact rather than an assertion (AC25.15, docs/features/usage-billing/spec.md).",
+  "_rule": "A plan that caps the services it bills sets the count. A plan with no cap is sized on what the customer committed to. Neither present is null, which enforces nothing — deliberately not zero, which is a plan that includes nothing.",
+  "cases": [
+    {
+      "name": "the free tier caps at its own ceiling",
+      "max_billed_services": 3,
+      "services_committed": null,
+      "expected": 3
+    },
+    {
+      "name": "the plan's own cap wins over a larger commitment",
+      "max_billed_services": 3,
+      "services_committed": 8,
+      "expected": 3
+    },
+    {
+      "name": "the plan's own cap wins over a smaller commitment too",
+      "max_billed_services": 3,
+      "services_committed": 1,
+      "expected": 3
+    },
+    {
+      "name": "a paying tier is sized on what the customer committed to",
+      "max_billed_services": null,
+      "services_committed": 26,
+      "expected": 26
+    },
+    {
+      "name": "a paying tier with no active subscription enforces nothing",
+      "max_billed_services": null,
+      "services_committed": null,
+      "expected": null
+    },
+    {
+      "name": "a cap of zero is a plan that includes nothing, not an absent cap",
+      "max_billed_services": 0,
+      "services_committed": 9,
+      "expected": 0
+    },
+    {
+      "name": "a commitment of zero is likewise a statement, not an absence",
+      "max_billed_services": null,
+      "services_committed": 0,
+      "expected": 0
+    }
+  ]
+}
