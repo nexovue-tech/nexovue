@@ -55,19 +55,36 @@ def calendar_month_of(day: date) -> BillingPeriod:
     return BillingPeriod(day.replace(day=1), day.replace(day=days_in_month))
 
 
-def billed_services(services: int, price: PlanPrice | None) -> int:
+def billed_services(
+    services: int, price: PlanPrice | None, services_committed: int | None = None
+) -> int:
     """The quantity actually charged: the union, held down by the ceiling.
 
-    The cap applies to the service-count component of the bill. A null
-    ceiling is uncapped, which is not a ceiling of zero — without the price row
-    there is no ceiling to apply and the quantity stands as counted.
+    **The ceiling is `allowance_service_count`'s, which is the same rule.** A
+    plan that caps the services it bills sets the count; a plan with no cap —
+    every paying tier — is held to what the customer committed to when they
+    authorised the mandate. That is their own ceiling: they chose it, they can
+    see it, and they raise it themselves, and it is the `quantity` the processor
+    charges against.
+
+    This did not apply that rule and was not given the number, so the screen and
+    the bank disagreed: a customer monitoring 28 services on a commitment of 26
+    read `28 x rate` while the mandate charged 26. "The bill has a ceiling" is
+    one of the four pricing promises in `docs/product/vision.md`; this is where
+    it is kept for the service-count component.
+
+    No ceiling at all — an unpriced tier, or a paid one with no active
+    subscription — is uncapped, which is not a ceiling of zero.
     """
-    if price is None or price.max_billed_services is None:
+    ceiling = allowance_service_count(price, services_committed)
+    if ceiling is None:
         return services
-    return min(services, price.max_billed_services)
+    return min(services, ceiling)
 
 
-def service_cost_minor_units(services: int, price: PlanPrice | None) -> int | None:
+def service_cost_minor_units(
+    services: int, price: PlanPrice | None, services_committed: int | None = None
+) -> int | None:
     """What the period's services cost, or None when no rate is recorded.
 
     None, never zero: an unpriced tier is not a free one, and the absence is
@@ -76,7 +93,8 @@ def service_cost_minor_units(services: int, price: PlanPrice | None) -> int | No
     """
     if price is None:
         return None
-    return billed_services(services, price) * price.price_per_service_minor_units
+    billed = billed_services(services, price, services_committed)
+    return billed * price.price_per_service_minor_units
 
 
 def allowance_service_count(price: PlanPrice | None, services_committed: int | None) -> int | None:

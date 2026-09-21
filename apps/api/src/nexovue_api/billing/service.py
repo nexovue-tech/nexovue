@@ -448,16 +448,16 @@ async def _period(
         session, org_id=org_id, from_day=month.first_day, to_day=month.last_day
     )
     frontier = await usage_queries.metering_frontier(session)
-    cost = usage_billing.service_cost_minor_units(services, price)
-    # What sizes the allowance on a paid tier. G6a.
+    # What sizes the allowance on a paid tier, and what caps the bill. G6a.
     services_committed = await usage_queries.active_services_committed(session, org_id=org_id)
+    cost = usage_billing.service_cost_minor_units(services, price, services_committed)
 
     return BillingPeriodUsage(
         first_day=month.first_day,
         last_day=month.last_day,
         settled=usage_service.is_settled(month.last_day, frontier),
         services=services,
-        billed_services=usage_billing.billed_services(services, price),
+        billed_services=usage_billing.billed_services(services, price, services_committed),
         bytes_ingested=ingested.total,
         browser_bytes_ingested=ingested.browser,
         service_cost_minor_units=cost,

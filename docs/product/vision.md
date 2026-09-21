@@ -171,10 +171,19 @@ infrastructure and APM that would carry them — a service is finer than a host,
 has to sit below a per-host price. That is the comparison the number is built to win, and the one
 worth re-checking when it changes.
 
-**Still open, and the migration says so:** the pricing decision states both that we block above the allowance
-*and* that overage stays live and bills. Those are two different products. `max_billed_services`
-caps the free tier at three; what happens when a **paid** tier exceeds its included volume is
-undecided, and the usage screen says in words that overage is not in the figure it shows.
+**Two overage questions, and only one of them is open.** They were being run together by one
+number until 2026-09-21 (`docs/changes/commitment-is-the-bill-ceiling/`):
+
+- **Service count — settled.** The customer's committed count is the ceiling on the service-count
+  component: they chose it, they can see it, they raise it themselves, and it is the `quantity` the
+  mandate charges. `max_billed_services` caps the free tier at three; above that, every paying tier
+  is capped by the commitment. This is the "bill has a ceiling" promise, and `billed_services` did
+  not honour it until that change — the screen charged for every service monitored while the bank
+  charged the commitment.
+- **Volume — open.** The pricing decision states both that we block above the allowance *and* that
+  overage stays live and bills. Those are two different products. What happens when a **paid** tier
+  exceeds its included *bytes* is undecided, and the usage screen says in words that overage is not
+  in the figure it shows.
 
 M1's measurements are what made this decidable — marginal cost is **$0.0017 per million spans**
 against Dash0's $0.60 list, so infrastructure is a rounding error against any defensible price. The

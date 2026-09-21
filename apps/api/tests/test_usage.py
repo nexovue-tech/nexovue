@@ -784,6 +784,42 @@ async def test_an_uncapped_price_bills_every_service() -> None:
     assert response.period.service_cost_minor_units == 3_000
 
 
+async def test_the_commitment_is_the_ceiling_on_a_plan_that_caps_nothing() -> None:
+    """**What the customer authorised is the most they can be charged.**
+
+    `services_committed` is the ceiling: the customer chose it, it is the
+    `quantity` on the mandate the bank charges, and `allowance_service_count`
+    already says so in as many words — "a plan with no cap is sized on what the
+    customer committed to when they authorised the mandate, which is their own
+    ceiling". `billed_services` did not apply that rule, and was not even given
+    the number.
+
+    The consequence was two figures about one bill. A customer monitoring 28
+    services on a commitment of 26 read `28 x rate` on the billing screen while
+    Razorpay charged the mandate's quantity of 26. Under-charging rather than
+    over-charging, so it cost nexovue rather than the customer — but the screen
+    was wrong either way, and "the bill has a ceiling" is one of the four
+    pricing promises in `docs/product/vision.md`.
+    """
+    many = [_service(ORG_ID, PROJECT_ID, TO_DAY, f"service-{index}") for index in range(5)]
+
+    response = await _priced(many, price=_price(ceiling=None), services_committed=2)
+
+    assert response.period.services == 5, "what they monitored is still reported"
+    assert response.period.billed_services == 2, "what they committed to is what they pay for"
+    assert response.period.service_cost_minor_units == 2_000
+
+
+async def test_the_plans_own_ceiling_still_wins_over_a_larger_commitment() -> None:
+    """The free tier caps at three however much somebody committed to, which is
+    the same precedence `allowance_service_count` uses."""
+    many = [_service(ORG_ID, PROJECT_ID, TO_DAY, f"service-{index}") for index in range(10)]
+
+    response = await _priced(many, price=_price(ceiling=3), services_committed=8)
+
+    assert response.period.billed_services == 3
+
+
 async def test_a_month_the_meter_has_not_finished_is_not_settled() -> None:
     """A month in progress is labelled, never shown as a small bill."""
     store = FakeUsageStore(_ROWS, [PRO_PLAN], counted_through=datetime(2026, 8, 12, tzinfo=UTC))

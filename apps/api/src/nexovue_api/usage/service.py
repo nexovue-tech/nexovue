@@ -221,7 +221,7 @@ async def _billing_period(
     ingested = await queries.bytes_in_range(
         session, org_id=org_id, from_day=period.first_day, to_day=period.last_day
     )
-    cost = billing.service_cost_minor_units(services, price)
+    cost = billing.service_cost_minor_units(services, price, services_committed)
 
     return BillingPeriodUsage(
         first_day=period.first_day,
@@ -230,7 +230,7 @@ async def _billing_period(
         # which is never true of the month in progress.
         settled=is_settled(period.last_day, frontier),
         services=services,
-        billed_services=billing.billed_services(services, price),
+        billed_services=billing.billed_services(services, price, services_committed),
         bytes_ingested=ingested.total,
         browser_bytes_ingested=ingested.browser,
         service_cost_minor_units=cost,
