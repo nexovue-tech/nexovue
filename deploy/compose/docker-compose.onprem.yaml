@@ -237,6 +237,15 @@ services:
       FIRST_ORGANIZATION_NAME: ${FIRST_ORGANIZATION_NAME:-My organization}
       FIRST_OWNER_EMAIL: ${FIRST_OWNER_EMAIL:?set FIRST_OWNER_EMAIL — the account you will sign in as}
       FIRST_OWNER_PASSWORD: ${FIRST_OWNER_PASSWORD:?set FIRST_OWNER_PASSWORD — at least 8 characters}
+      # **Closed.** The owner above is this install's way in, so public signup is
+      # not needed — and left open it means a stranger who finds the page creates
+      # an organization inside somebody else's deployment and sends telemetry at
+      # their expense. Teammates arrive by invitation from the owner.
+      #
+      # Overridable, because an install that wants to be a small multi-tenant
+      # service of its own is a legitimate thing to want; it just is not the
+      # default anybody should get without asking.
+      SIGNUP_ENABLED: "${SIGNUP_ENABLED:-false}"
       # No super admin on a self-hosted install: there is no nexovue inside it to
       # administer it, and the platform surface stays unreachable.
     depends_on:

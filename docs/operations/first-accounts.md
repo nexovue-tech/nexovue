@@ -79,12 +79,13 @@ The start-up log says which of these it was:
 | Log line | What happened |
 |---|---|
 | nothing at all | Both variables were empty. Nothing was attempted |
+| *"this install already has one"* | Not a first run — an organization already exists here. Sign in with the account it was created with |
 | *"shorter than the minimum the sign-up form enforces"* | The password is under eight characters |
 | *"that address already signs in here"* | Some other account already uses that address — often the same address set for `SUPER_ADMIN_EMAIL` too |
 | *"the first organization could not be seeded"* | Something else failed. The API still starts: an API that will not boot is worse than an install whose first account has to be made another way |
 
-An install that already has a customer organization is **not** a first run, and
-nothing is created. Deleting your organization and restarting does not bring it
+An install that already has a customer organization is **not** a first run,
+nothing is created, and the log says so. Deleting your organization and restarting does not bring it
 back — that would be the installer overruling a decision you made.
 
 ---

@@ -2,7 +2,7 @@
 
 ## Current status
 
-**NOT READY.** Assessed 2026-09-16 against a release of both hosted SaaS **and** a self-hosted install.
+**NOT READY.** Assessed 2026-09-16, blocker 3 re-assessed and cleared 2026-09-21 against a release of both hosted SaaS **and** a self-hosted install.
 There is no release date: hosted deployment follows the first paying cloud customer
 ([ADR-008](../decisions/ADR-008-the-website-takes-the-first-payment.md)), and this list is the deployment
 track of Phase 1 (`feature-catalog.md` §5). Scope: the whole repository.
@@ -30,7 +30,7 @@ about production.
 | Release process | ✗ | No `.github/` directory; no registry (`TODO(registry)`); no version file, changelog or release tag |
 | Smoke tests | ✗ | Eight e2e specs run against the local stack only; nothing runs after a deploy |
 | Operational ownership | ✗ | One person; `incident-response.md` is seven lines; no on-call path |
-| Invite-only access | ✗ | Signup is open to anyone; `auth/policy.py:5`: "there is no invite flow"; no setting closes signup |
+| Invite-only access | ✓ | **Verified 2026-09-21.** `SIGNUP_ENABLED` closes public signup and **defaults to closed** — `signup/router.require_signup_open` refuses before any store is opened, and `GET /system/signup` lets the screen say why. Every target states its choice: `true` in development, `:-false` in both deployment files. People join by invitation (F26 `members.invite`) and new organizations by the admin console's onboarding (F31); a self-hosted install gets its owner from `FIRST_OWNER_EMAIL`. *This row said "there is no invite flow" and "no setting closes signup" until today; both had been untrue since F26 and F31 shipped* |
 | Email in production | ? | Provider is `resend` or `console` (`settings.py:50`); whether a Resend account and a verified sending domain exist was not checked |
 | Self-hosted mode | ✗ | No deployment-mode concept in the code; billing and the receiver's allowance valve are unconditional |
 | On-prem compose | ✗ | Declares itself "SKELETON, NOT YET RUNNABLE" with ten `TODO`s; never run |
@@ -42,7 +42,7 @@ Each names the failure it prevents.
 
 1. **No hosting target.** There is nothing to deploy to, and no item above can be verified until there is.
 2. **Images are built on a laptop.** With no CI, registry or tag, nobody can say which commit is running on the server, and a bad deploy has no known-good image to return to.
-3. **Signup is public.** Anyone who finds the signup page creates an organization and sends telemetry to our servers at our cost, capped only by the free allowance. An invite-only beta cannot be enforced.
+3. ~~**Signup is public.**~~ **Cleared 2026-09-21** (`docs/changes/signup-closed-by-default/`). The switch and the invite flow both existed already — this blocker outlived them, and what was actually missing was the *default*: a deployment that set nothing got an open signup page. It is closed unless a target opens one, and all three say which they want.
 4. **No ingest hostname with TLS.** The API refuses to start with the default `otlp_endpoint`; without a public TLS host, no partner can send data.
 5. **Migrations are not part of a deploy.** A new image against an old schema starts services whose queries fail, and workers write against columns that do not exist yet.
 6. **No backup has ever been restored.** A lost volume takes every partner's accounts and telemetry with it, with no rehearsed way back.

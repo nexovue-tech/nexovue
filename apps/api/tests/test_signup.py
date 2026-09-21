@@ -177,7 +177,10 @@ async def test_the_tenant_is_committed_before_its_session_is_minted(
     from nexovue_api.signup import service
 
     log = _OrderLog()
-    settings = Settings(**TEST_ENVIRONMENT)  # type: ignore[arg-type]
+    # Signup is closed unless a deployment opens it, so a suite that drives the
+    # public endpoint says so — the same sentence `docker-compose.yaml` says for
+    # development (`docs/changes/signup-closed-by-default/`).
+    settings = Settings(**{**TEST_ENVIRONMENT, "SIGNUP_ENABLED": "true"})  # type: ignore[arg-type]
 
     organization = Organization(slug="acme", name="Acme Inc")
     organization.id = uuid.uuid4()

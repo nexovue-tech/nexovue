@@ -279,6 +279,12 @@ services:
       # self-hosted install) seeds nobody.
       SUPER_ADMIN_EMAIL: operator@nexovue.test
       SUPER_ADMIN_PASSWORD: nexovue-dev-operator
+      # **Open here, and said out loud.** The setting is closed by default now,
+      # so every target states what it wants. Development and the e2e suite both
+      # create tenants through the public endpoint the way a customer would —
+      # `tools/e2e/tests/support/accounts.ts` and `test_tenant_isolation_live`
+      # would have nothing to sign up with if this were inherited.
+      SIGNUP_ENABLED: "true"
     # The developer's own third-party credentials — the payment gateway
     # (`PAYMENTS_DOMESTIC_*`) and the mail provider (`EMAIL_*`).
     #

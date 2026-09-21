@@ -91,6 +91,15 @@ async def seed_first_organization(session: AsyncSession, settings: Settings) -> 
         return None
 
     if await already_in_use(session):
+        # Said rather than skipped silently. An operator who set the variables
+        # and got nothing would otherwise have to tell this apart from "I set
+        # them wrong" and from "they were empty", which all looked identical —
+        # and this is the one that means *stop editing the compose file, the
+        # account you are looking for already exists*.
+        _log.info(
+            "the first organization was not created: this install already has one",
+            hint="sign in with the account it was created with, or invite yourself from it",
+        )
         return None
 
     address = normalize_email(email)

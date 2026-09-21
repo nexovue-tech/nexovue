@@ -238,10 +238,21 @@ class Settings(BaseSettings):
     otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT
 
     rate_limit_enabled: bool = True
-    # Whether anyone may create an organization at /signup (F31, D10). On for
-    # self-hosted installs; off for nexovue's cloud, where a customer pays on the
-    # website first and is onboarded by staff (ADR-008).
-    signup_enabled: bool = True
+    # Whether anyone who finds the page may create an organization at /signup
+    # (F31, D10). **Closed unless a deployment opens it**, and every target says
+    # which it wants rather than inheriting one.
+    #
+    # This defaulted to open, for a reason that no longer holds: a self-hosted
+    # install had no other way in, so closing signup left it with no account at
+    # all. `FIRST_OWNER_EMAIL` is that other way in now
+    # (`docs/changes/seeded-from-the-environment/`), and an open default on
+    # somebody else's install means a stranger who finds the page creates an
+    # organization inside it and sends telemetry at their expense.
+    #
+    # nexovue's cloud has never wanted it: a customer pays on the website and is
+    # onboarded by staff (ADR-008). Development and the e2e suite do, and
+    # `docker-compose.yaml` says so.
+    signup_enabled: bool = False
     # How many proxies sit in front of us. Zero means X-Forwarded-For is a value
     # the client chose, and the direct peer is the only honest client address.
     trusted_proxy_count: Annotated[int, Field(ge=0, le=10)] = 0
