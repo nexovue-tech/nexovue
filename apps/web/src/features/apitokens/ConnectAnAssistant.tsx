@@ -148,7 +148,7 @@ export function ConnectAnAssistant() {
       <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">
         Connect an AI assistant
       </h2>
-      <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+      <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
         Any MCP client that reaches a remote server with a header can read this organization&rsquo;s
         services, errors, incidents and checks — with a token you create above, and nothing more. It
         reads; there is no tool that changes anything.
@@ -182,10 +182,10 @@ export function ConnectAnAssistant() {
       </div>
 
       {client.note ? (
-        <p className="mt-2 text-ink-dim text-xs leading-relaxed">{client.note}</p>
+        <p className="max-w-3xl mt-2 text-ink-dim text-xs leading-relaxed">{client.note}</p>
       ) : null}
 
-      <p className="mt-3 text-ink-dim text-xs leading-relaxed">
+      <p className="max-w-3xl mt-3 text-ink-dim text-xs leading-relaxed">
         Replace the placeholder with a token you created above. Revoking that token ends the
         assistant&rsquo;s access on its next call.
       </p>

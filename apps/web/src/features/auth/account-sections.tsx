@@ -174,7 +174,7 @@ export function PasswordSection() {
 
         <div className="flex flex-col gap-4">
           <TextField
-            label="Current password"
+            label="Your current password"
             name="current_password"
             type="password"
             value={currentPassword}
@@ -320,7 +320,7 @@ export function SecondFactorSection() {
         <form onSubmit={turnOff} noValidate className="max-w-sm">
           {problem.message ? <FormProblem message={problem.message} /> : null}
           <TextField
-            label="Current password"
+            label="Your password, to turn this on"
             name="current_password"
             type="password"
             value={currentPassword}
@@ -386,7 +386,7 @@ export function SecondFactorSection() {
       <form onSubmit={startEnrolment} noValidate className="max-w-sm">
         {problem.message ? <FormProblem message={problem.message} /> : null}
         <TextField
-          label="Current password"
+          label="Your password, to turn this off"
           name="current_password"
           type="password"
           value={currentPassword}

@@ -13,6 +13,7 @@ import { formatBinaryBytes } from "@/shared/format/bytes";
 import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useLiveWindow, useSelection, useWindowPhrase } from "@/shared/selection";
+import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
 import type { NodeSummary, NodeTrendPoint, SignalSummary } from "./api";
 import { nodeSeriesKey, useNodes, useNodeTrend, useSignals } from "./api";
 import { DatabasesView } from "./databases/DatabasesView";
@@ -161,8 +162,8 @@ export function InfrastructureScreen() {
         </div>
         {view === "hosts" ? (
           <p className="mt-1 text-ink-dim text-sm">
-            The hosts, containers and reporting processes behind your services, over the last{" "}
-            {windowPhrase}. A dash is a measurement nobody sent, never a zero.
+            The hosts, containers and reporting processes behind your services, over {windowPhrase}.
+            A dash is a measurement nobody sent, never a zero.
           </p>
         ) : null}
       </header>
@@ -247,7 +248,20 @@ function NothingReporting({
   return (
     <EmptyState
       title="No host metrics have arrived"
-      detail="Nothing is scraping your machines yet. Host and container metrics come from a collector you run — enable the hostmetrics receiver in your OpenTelemetry Collector (and docker_stats for containers), point its OTLP exporter at your ingest endpoint with your API key, and the fleet appears here on the next scrape. We have no agent to install: this screen shows what your collector sends and nothing else."
+      // Shortened to the two sentences somebody can act on, with the rest a click
+      // away: six lines of centred prose is a wall, not an answer
+      // (`docs/quality/console-review-2026-09-20.md`).
+      detail="Host and container metrics come from a collector you run — there is no nexovue agent to install. Enable the hostmetrics receiver in your OpenTelemetry Collector (and docker_stats for containers), point it at your ingest endpoint, and your fleet appears here on the next scrape."
+      action={
+        <a
+          href={SETUP_DOCS_PATH}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-brand-text text-sm hover:underline"
+        >
+          Read the collector setup
+        </a>
+      }
     />
   );
 }

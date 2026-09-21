@@ -5,8 +5,8 @@ is the credential for that: it belongs to your organization rather than to a
 person, it reads and never writes, and it is the same credential an AI assistant
 uses through the MCP server at the end of this page.
 
-> The hosted hostname is not settled — nexovue is not deployed yet. The examples
-> below use `https://api.nexovue.com`; in local development the API is
+> The examples below use `https://api.nexovue.com`. Use the address your own
+> console is served from; in local development the API is
 > `http://localhost:18000`.
 
 ## Create a token

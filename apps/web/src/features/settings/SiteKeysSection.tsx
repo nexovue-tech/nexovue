@@ -66,7 +66,7 @@ export function SiteKeysSection({ projectId }: { projectId: string | undefined }
           <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">Browser keys</h2>
           <PublicBadge />
         </div>
-        <p className="mt-1 text-ink-dim text-sm leading-relaxed">{PUBLIC_NOTE}</p>
+        <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">{PUBLIC_NOTE}</p>
       </header>
 
       {canManage ? (
@@ -150,7 +150,7 @@ function CreateSiteKeyForm({
       >
         <div className="min-w-64 flex-1">
           <TextField
-            label="Name this key"
+            label="Name this browser key"
             name="site-key-name"
             value={name}
             onChange={setName}
@@ -169,7 +169,7 @@ function CreateSiteKeyForm({
             className="border border-line bg-surface px-3 py-2 font-mono text-ink text-sm"
             placeholder="https://app.example.com"
           />
-          <span className="text-ink-dim text-xs leading-relaxed">{ORIGIN_HINT}</span>
+          <span className="max-w-3xl text-ink-dim text-xs leading-relaxed">{ORIGIN_HINT}</span>
         </label>
 
         <div className="flex items-center gap-2">
@@ -212,7 +212,7 @@ function SiteKeyList({
 
   return (
     <div>
-      <p className="pb-3 text-ink-dim text-sm leading-relaxed">{ORIGIN_NOTE}</p>
+      <p className="max-w-3xl pb-3 text-ink-dim text-sm leading-relaxed">{ORIGIN_NOTE}</p>
 
       {revokeError ? (
         <div className="pb-3">
@@ -275,11 +275,11 @@ function SiteKeyRow({
             <CopyButton value={siteKey.public_key} label="browser key" />
           </div>
 
-          <p className="mt-2 text-ink-dim text-sm leading-relaxed">
+          <p className="max-w-3xl mt-2 text-ink-dim text-sm leading-relaxed">
             {describeSiteKeyTraffic(status)}
           </p>
 
-          <p className="mt-2 text-ink-dim text-xs leading-relaxed">
+          <p className="max-w-3xl mt-2 text-ink-dim text-xs leading-relaxed">
             Reports from{" "}
             {siteKey.allowed_origins.length === 0 ? (
               <span className="text-warning-text">
@@ -323,7 +323,7 @@ function SiteKeyRow({
           <p className="font-medium text-ink text-sm">Retire {siteKey.name}?</p>
           {/* No "this key leaked" wording anywhere: a key that was never secret
               cannot leak, and offering that action would teach the wrong model. */}
-          <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+          <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
             Pages still carrying this key stop reporting within a minute. It cannot be undone —
             create a new key and redeploy your site to replace it. Retire a browser key when the
             site is gone or has moved to a new key, not because the value was seen: it was always

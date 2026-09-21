@@ -8,14 +8,24 @@ import { ApiError } from "@/shared/api-client";
  * (`{ field, reason }`, field being a Pydantic location like `body.email`). Anything
  * without a field lands on the form.
  *
- * 401, 403, 429 and 5xx are absent on purpose — app/query-client.ts owns those. What
+ * 401, 429 and 5xx are absent on purpose — app/query-client.ts owns those. What
  * is left here is the part only the form can explain.
+ *
+ * **403 was absent too, and should not have been.** The query client suppresses
+ * its toast on the reasoning that "a refusal is a property of the screen, the
+ * route boundary renders it" — but the boundary only ever sees a *query*;
+ * `throwOnError` is a query option. A refused **write** therefore fell through
+ * every layer and said nothing at all: during a support view, pressing Save on
+ * this form left the name in the box, no message, and a `PATCH /profile 403
+ * "Support view is read-only."` in the API log that only we could see. Found by
+ * hand on 2026-09-21 (`docs/changes/console-review-fixes/`).
  */
 
 const HTTP_UNAUTHORIZED = 401;
 
 /** A 401 with no problem body. Rare enough to be a proxy, not the API. */
 const UNEXPLAINED_REFUSAL = "Those details were not accepted. Check them and try again.";
+const HTTP_FORBIDDEN = 403;
 const HTTP_CONFLICT = 409;
 const HTTP_UNPROCESSABLE = 422;
 
@@ -86,6 +96,13 @@ export function describeFormProblem(error: unknown): FormProblem {
     // of a rule whose whole value is that it does not vary. The fallback below is for
     // a 401 that arrived without a problem body at all.
     return { message: error.problem?.detail ?? UNEXPLAINED_REFUSAL, fieldErrors: {} };
+  }
+
+  if (error.status === HTTP_FORBIDDEN) {
+    // The API's own sentence, for the reason the 401 above gives: it already
+    // says why in words a customer can act on — "Support view is read-only",
+    // "Only an owner can change this" — and a second copy here would drift.
+    return { message: error.problem?.detail ?? "You may not do that.", fieldErrors: {} };
   }
 
   if (error.status === HTTP_CONFLICT) {

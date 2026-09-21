@@ -180,8 +180,8 @@ _FIRST_ATTEMPT: Final = text(
 _INSERT_ATTEMPT: Final = text(
     """
     INSERT INTO notification_attempts
-        (org_id, channel_id, batch_id, attempted_at, outcome, http_status, reason)
-    VALUES (:org_id, :channel_id, :batch_id, :now, :outcome, :http_status, :reason)
+        (org_id, channel_id, batch_id, attempted_at, outcome, http_status, reason, kind)
+    VALUES (:org_id, :channel_id, :batch_id, :now, :outcome, :http_status, :reason, :kind)
     """
 )
 _DELIVERED: Final = text(
@@ -406,6 +406,7 @@ async def record(
             "outcome": "retrying" if outcome == "retry" else outcome,
             "http_status": result.http_status,
             "reason": reason,
+            "kind": "notification",
         },
     )
     channel_keys = {"org_id": batch.channel.org_id, "channel_id": batch.channel.id, "now": now}

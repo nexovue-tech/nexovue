@@ -94,6 +94,67 @@ async def test_a_test_reaches_the_receiver_labelled_as_a_test(
     assert "[test] A test message from nexovue" in request.body.decode()
 
 
+async def test_a_test_is_written_to_the_delivery_log_as_a_test(
+    engine: AsyncEngine, tenant: AlertTenant, recording_site: RecordingSite
+) -> None:
+    """D2 (`docs/changes/console-review-fixes/`): the channel counted a test in
+    "last delivered" while the log that promises every attempt showed none, so a
+    customer who pressed Send test found nothing where they went to look."""
+    channel_id = await _slack_channel(engine, tenant, recording_site.url("/slack/x"))
+
+    await send_test(
+        engine,
+        _outbound(),
+        org_id=tenant.org_id,
+        channel_id=channel_id,
+        request_id="r1",
+        now=datetime.now(UTC),
+    )
+
+    async with engine.connect() as connection:
+        rows = (
+            await connection.execute(
+                text(
+                    "SELECT outcome, http_status, kind FROM notification_attempts "
+                    "WHERE org_id = :org AND channel_id = :channel"
+                ),
+                {"org": tenant.org_id, "channel": channel_id},
+            )
+        ).all()
+    assert [tuple(row) for row in rows] == [("delivered", 200, "test")]
+
+
+async def test_a_failed_test_is_in_the_log_too(
+    engine: AsyncEngine, tenant: AlertTenant, recording_site: RecordingSite
+) -> None:
+    """The more useful half: a test that did not arrive is exactly what somebody
+    opens the log to find."""
+    recording_site.replies["/slack/x"] = Reply(status=404, body=b"no_service")
+    channel_id = await _slack_channel(engine, tenant, recording_site.url("/slack/x"))
+
+    await send_test(
+        engine,
+        _outbound(),
+        org_id=tenant.org_id,
+        channel_id=channel_id,
+        request_id="r1",
+        now=datetime.now(UTC),
+    )
+
+    async with engine.connect() as connection:
+        row = (
+            await connection.execute(
+                text(
+                    "SELECT outcome, kind, reason FROM notification_attempts "
+                    "WHERE org_id = :org AND channel_id = :channel"
+                ),
+                {"org": tenant.org_id, "channel": channel_id},
+            )
+        ).one()
+    assert (row.outcome, row.kind) == ("failed", "test")
+    assert row.reason == "the receiver answered 404: no_service"
+
+
 async def test_a_failed_test_says_why(
     engine: AsyncEngine, tenant: AlertTenant, recording_site: RecordingSite
 ) -> None:

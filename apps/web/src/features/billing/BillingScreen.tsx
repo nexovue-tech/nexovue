@@ -91,7 +91,7 @@ export function BillingScreen() {
         {canSpend ? (
           <Upgrade overview={overview.data} currency={overview.data.currency} />
         ) : (
-          <p className="max-w-2xl text-ink-dim text-sm">
+          <p className="max-w-3xl text-ink-dim text-sm">
             Changing the plan or the subscription is the owner's: it commits the organization to a
             recurring charge.
           </p>
@@ -102,12 +102,20 @@ export function BillingScreen() {
   );
 }
 
+/**
+ * The section that answers "what am I paying and how much of it have I used".
+ *
+ * Full width, like every other settings screen since the review: what was capped
+ * was the whole section, which left a fifth of a wide window empty beside a
+ * progress bar that had every reason to be long. The sentences keep their own
+ * measure.
+ */
 function ThisMonth({ overview }: { overview: BillingOverview }) {
   const { period, plan, price } = overview;
   const fraction = allowanceFraction(period);
 
   return (
-    <section className="flex max-w-2xl flex-col gap-4">
+    <section className="flex flex-col gap-4">
       <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">This month</h2>
 
       <dl className="flex flex-col gap-3 text-sm">
@@ -141,9 +149,9 @@ function ThisMonth({ overview }: { overview: BillingOverview }) {
           />
         </div>
       )}
-      <p className="text-ink-dim text-sm leading-relaxed">{describeAllowance(period)}</p>
+      <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">{describeAllowance(period)}</p>
       {period.browser_included_bytes === null ? null : (
-        <p className="text-ink-dim text-sm leading-relaxed">
+        <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">
           Of that, at most {formatDecimalBytes(period.browser_included_bytes)} may come from the
           browser. {formatDecimalBytes(period.browser_bytes_ingested)} has so far, and anything it
           does not use stays available to your servers.
@@ -237,9 +245,11 @@ function Arrangement({ overview, canSpend }: { overview: BillingOverview; canSpe
   if (!subscription) return null;
 
   return (
-    <section className="flex max-w-2xl flex-col gap-4">
+    <section className="flex flex-col gap-4">
       <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Subscription</h2>
-      <p className="text-ink text-sm leading-relaxed">{describeSubscription(subscription)}</p>
+      <p className="max-w-3xl text-ink text-sm leading-relaxed">
+        {describeSubscription(subscription)}
+      </p>
 
       {subscription.status === "cancelled" || !canSpend ? null : confirming ? (
         <div className="rounded border border-warning-border bg-warning-subtle p-4 text-sm">
@@ -299,12 +309,12 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
 
   if (!availability.available) {
     return (
-      <section className="flex max-w-2xl flex-col gap-3">
+      <section className="flex flex-col gap-3">
         <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{heading}</h2>
-        <p className="text-ink-dim text-sm leading-relaxed">{availability.reason}</p>
+        <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">{availability.reason}</p>
         {availability.nextStep === null ? null : (
           <>
-            <p className="text-ink text-sm leading-relaxed">{availability.nextStep}</p>
+            <p className="max-w-3xl text-ink text-sm leading-relaxed">{availability.nextStep}</p>
             {/* The tiers stay on screen while the customer decides whether the
                 move is worth it. Shown rather than offered: pressing one would
                 start the second mandate the API refuses, so none is pressable. */}
@@ -323,20 +333,22 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
 
   if (!choosing) {
     return (
-      <section className="flex max-w-2xl flex-col gap-3">
+      <section className="flex flex-col gap-3">
         <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{heading}</h2>
-        {unfinished ? <p className="text-ink text-sm leading-relaxed">{unfinished}</p> : null}
+        {unfinished ? (
+          <p className="max-w-3xl text-ink text-sm leading-relaxed">{unfinished}</p>
+        ) : null}
         {/* Says what the code does today, which is bill the commitment. A later
             change moves the bill back to services actually monitored once the
             charge can be raised; this copy changes with it. What it must not do
             meanwhile is imply the number limits services — it does not, and a
             customer reading it as a limit would be wrong. */}
-        <p className="text-ink-dim text-sm leading-relaxed">
+        <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">
           You choose how many services to pay for. That number sets your monthly bill and your
           monthly volume — each plan below says how much volume one service buys. We never bill past
           it and never charge overage.
         </p>
-        <p className="text-ink-dim text-sm leading-relaxed">
+        <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">
           <strong className="text-ink">It is not a limit on how many services you run.</strong> Send
           from as many as you like; they share the same monthly volume, so a quiet service leaves
           more for a busy one.
@@ -350,10 +362,10 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
 
   if (!chosen) {
     return (
-      <section className="flex max-w-2xl flex-col gap-4">
+      <section className="flex flex-col gap-4">
         <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">{heading}</h2>
         {overview.plans.length === 0 ? (
-          <p className="text-ink-dim text-sm leading-relaxed">
+          <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">
             No other plan is priced in {currency} yet.
           </p>
         ) : (
@@ -428,7 +440,7 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
         />
 
         {countError ? null : (
-          <p className="text-ink text-sm leading-relaxed">
+          <p className="max-w-3xl text-ink text-sm leading-relaxed">
             {formatMoney(monthlyTotalMinorUnits(chosen, count), chosen.currency)} a month —{" "}
             {formatMoney(chosen.price_per_service_minor_units, chosen.currency)} ×{" "}
             {formatCount(count)}.
@@ -462,7 +474,7 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
             Back
           </Button>
         </div>
-        <p className="text-ink-dim text-xs leading-relaxed">
+        <p className="max-w-3xl text-ink-dim text-xs leading-relaxed">
           You will authorise the mandate with your payment provider. Your card and bank details
           never reach us.
         </p>
@@ -496,10 +508,12 @@ function Charges({ overview }: { overview: BillingOverview }) {
   if (overview.subscription === null) return null;
 
   return (
-    <section className="flex max-w-2xl flex-col gap-4">
+    <section className="flex flex-col gap-4">
       <h2 className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Charges</h2>
-      <p className="text-ink-dim text-sm leading-relaxed">{HISTORY_IS_NOT_AN_INVOICE}</p>
-      <p className="text-ink-dim text-sm leading-relaxed">{PAYMENT_METHOD_IS_THE_PROVIDERS}</p>
+      <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">{HISTORY_IS_NOT_AN_INVOICE}</p>
+      <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">
+        {PAYMENT_METHOD_IS_THE_PROVIDERS}
+      </p>
 
       {history.isPending ? (
         <SkeletonRows rows={3} label="Loading charges" />

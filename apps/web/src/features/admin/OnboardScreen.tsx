@@ -44,7 +44,7 @@ export function OnboardScreen() {
   const ready = organizationName.trim() && ownerEmail.trim() && paymentId.trim() && amount.trim();
 
   return (
-    <section aria-label="Onboard" className="mx-auto w-full max-w-lg px-4 py-6">
+    <section aria-label="Onboard" className="w-full max-w-lg px-4 py-5">
       <Link to="/admin" className="text-ink-dim text-sm hover:text-ink">
         All organizations
       </Link>
@@ -104,6 +104,7 @@ export function OnboardScreen() {
           onChange={setOwnerName}
         />
         <SelectField
+          stacked
           label="Region"
           value={region}
           options={REGIONS}

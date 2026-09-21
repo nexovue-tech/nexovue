@@ -278,6 +278,18 @@ function WorstServices({ services }: { services: readonly OverviewService[] }) {
         </Link>
       </div>
 
+      {/* Three unlabelled numbers is what this was: the KPI band above names them,
+          but not on the same line as the rows
+          (`docs/quality/console-review-2026-09-20.md`). The widths match the row
+          below exactly, so a heading cannot drift off its column. */}
+      <div className="flex items-center gap-3 border-line-subtle border-b px-4 pb-1 font-mono text-2xs text-ink-dim uppercase tracking-caps">
+        <span className="w-2 shrink-0" />
+        <span className="min-w-0 flex-1">Service</span>
+        <span className="w-20 shrink-0 text-right">Req/min</span>
+        <span className="w-28 shrink-0 text-right">Errors</span>
+        <span className="w-16 shrink-0 text-right">p95</span>
+      </div>
+
       <ul>
         {services.map((row) => (
           <li key={row.service_name}>

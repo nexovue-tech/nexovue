@@ -32,10 +32,12 @@ from nexovue_api.support.tickets import TicketStore
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-@router.get("/organizations", summary="Find an organization by name, slug, id or member email")
+@router.get("/organizations", summary="Every customer, or the ones a needle matches")
 async def search_organizations(
-    operator: MayAdministerThePlatform, db: DbSession, q: str
+    operator: MayAdministerThePlatform, db: DbSession, q: str | None = None
 ) -> OrganizationSearch:
+    """`q` absent lists every customer, newest first. It is optional because the
+    screen opens as a list and the search narrows it."""
     return await service.search(db, q)
 
 

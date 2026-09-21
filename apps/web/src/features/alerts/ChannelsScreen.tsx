@@ -69,7 +69,12 @@ export function ChannelsScreen() {
             onRetry={() => void channels.refetch()}
           />
         ) : (
-          <ul aria-label="Channels" className="max-w-3xl border-line border-t">
+          // **The row is the width of the screen; the sentence inside it is not.**
+          // Capped, this list stopped two thirds across a wide window and put
+          // "Last delivered" in the middle of the page rather than on the right
+          // edge every other list in the console uses. The prose inside the row
+          // already reads at a measure.
+          <ul aria-label="Channels" className="border-line border-t">
             {ordered.map((channel) => (
               <ChannelRow key={channel.id} channel={channel} />
             ))}
@@ -91,7 +96,7 @@ function ChannelRow({ channel }: { channel: ChannelSummary }) {
         params={{ channelId: channel.id }}
         className="group flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1"
       >
-        <div className="min-w-0">
+        <div className="min-w-0 max-w-3xl">
           <p className="flex flex-wrap items-baseline gap-x-2">
             <span className="font-medium text-base text-ink group-hover:underline">
               {channel.name}

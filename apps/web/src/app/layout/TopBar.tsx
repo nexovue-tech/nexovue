@@ -1,6 +1,7 @@
 import { Menu } from "lucide-react";
 
 import { SelectField } from "@/shared/components/SelectField";
+import { useIsOperator } from "@/shared/identity";
 import { useProjectSelection } from "@/shared/projects";
 import { setSelectedProjectId } from "@/shared/selection";
 
@@ -17,6 +18,11 @@ import { WindowControl } from "./WindowControl";
  */
 export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
   const { projects, projectId } = useProjectSelection();
+  // nexovue's own operator reads no telemetry: their organization holds no
+  // project and their screens answer no time range, so both controls would say
+  // "—" over every screen they can open
+  // (`docs/quality/console-review-2026-09-20.md`).
+  const operator = useIsOperator();
 
   return (
     // One row on a desktop; below it, two — the window gets a row of its own. A tablet
@@ -30,12 +36,15 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
         type="button"
         onClick={onOpenNav}
         aria-label="Open navigation"
-        className="-ml-1 rounded p-1 text-ink-dim hover:text-ink md:hidden"
+        // 44px square on the phone it exists for: at 24 it was the smallest
+        // control in the console and the only way to reach another screen
+        // (`docs/quality/console-review-2026-09-20.md`).
+        className="-ml-2 flex size-11 items-center justify-center rounded text-ink-dim hover:text-ink md:hidden"
       >
         <Menu size={16} aria-hidden="true" />
       </button>
 
-      {projects.length > 0 && projectId ? (
+      {operator ? null : projects.length > 0 && projectId ? (
         <SelectField
           capped
           compactLabel
@@ -53,11 +62,15 @@ export function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
         </span>
       )}
 
-      <span aria-hidden className="hidden h-4 w-px bg-line lg:block" />
+      {operator ? null : (
+        <>
+          <span aria-hidden className="hidden h-4 w-px bg-line lg:block" />
 
-      <div className="order-last w-full lg:order-none lg:w-auto">
-        <WindowControl />
-      </div>
+          <div className="order-last w-full lg:order-none lg:w-auto">
+            <WindowControl />
+          </div>
+        </>
+      )}
 
       <div className="flex-1" />
 

@@ -38,24 +38,34 @@ export function SettingsLayout({
   useNothingLive();
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-      {/* **Centred, and capped once for every settings screen.** Left-aligned, the
-          content ended a third of the way across a wide window and the rest read as
-          missing rather than as margin; uncapped, a preference row stretched until its
-          control was two hundred pixels from the label that names it. The cap is the
-          same on every screen so the rail does not jump sideways as a reader moves
-          between them. */}
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-5 py-6 md:flex-row md:gap-10">
+    // **The rail stays; the setting scrolls.** One scroll container held both, so
+    // reading to the bottom of the audit log took the list of settings off screen
+    // with it and coming back meant scrolling up past a page of rows. At `md` and
+    // up the row is the height of the pane and each column scrolls on its own,
+    // which is what a fixed rail means. Below `md` the rail is a collapsed
+    // disclosure rather than a column, so the page stays one scroller there —
+    // two nested ones on a phone is how a list stops scrolling under a thumb.
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto md:overflow-hidden">
+      {/* **The page uses the window; the prose inside it does not.**
+          Left-aligned like the rest of the console — it used to be centred, which
+          made the page's left edge jump every time somebody moved between Alerts
+          and Settings. It is now uncapped, like every telemetry screen: a `7xl`
+          cap left a wide window's right quarter empty, and a settings screen is as
+          often a table — members, tokens, keys, the audit log, the usage ledger —
+          as it is a form. The cap that matters is inward, on the sentences: a line
+          of explanation carries `max-w-3xl`, roughly 90 characters, past which a
+          reader loses the start of the next line. A table does not have to. */}
+      <div className="flex w-full flex-col gap-8 px-4 py-6 md:h-full md:min-h-0 md:flex-row md:gap-10 md:py-0">
         <SettingsNav />
 
         {/* A column inside the shell's main landmark, not a second landmark. Two of
             them is invalid HTML and gives a screen reader's landmark list a duplicate
             to choose between; `AppShell` owns the page's one. */}
-        <div className="min-w-0 flex-1 pb-10">
+        <div className="min-w-0 flex-1 pb-10 md:h-full md:min-h-0 md:overflow-y-auto md:pt-6">
           <header>
             <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">{title}</h1>
             {description ? (
-              <p className="mt-1 text-ink-dim text-sm leading-relaxed">{description}</p>
+              <p className="mt-1 max-w-3xl text-ink-dim text-sm leading-relaxed">{description}</p>
             ) : null}
           </header>
 
@@ -75,6 +85,11 @@ export function SettingsLayout({
  */
 function SettingsNav() {
   const [typed, setTyped] = useState("");
+  // Collapsed on a phone. Open, the rail is a search box and thirteen links —
+  // about 480px of navigation above the screen somebody actually asked for
+  // (`docs/quality/console-review-2026-09-20.md`). At `md` and up it is a
+  // column beside the content and is always shown.
+  const [open, setOpen] = useState(false);
   const needle = typed.trim().toLowerCase();
   const permissions = useSession().data?.user.permissions;
 
@@ -94,49 +109,83 @@ function SettingsNav() {
   );
 
   return (
-    <nav aria-label="Settings" className="w-full shrink-0 md:w-52">
-      <input
-        type="search"
-        value={typed}
-        onChange={(event) => setTyped(event.target.value)}
-        aria-label="Find a setting"
-        placeholder="Find a setting"
-        className="w-full border border-line bg-surface px-2 py-1 text-ink text-sm placeholder:text-ink-dim focus:border-brand focus:outline-none"
-      />
+    // Scrolls on its own at `md`, so a rail longer than the window is still
+    // reachable without moving the setting beside it.
+    <nav
+      aria-label="Settings"
+      className="w-full shrink-0 md:h-full md:w-52 md:overflow-y-auto md:py-6"
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((shown) => !shown)}
+        aria-expanded={open}
+        className="-mx-2 flex min-h-11 w-[calc(100%+1rem)] items-center justify-between rounded px-2 text-ink text-sm hover:bg-hover md:hidden"
+      >
+        <span className="font-medium">All settings</span>
+        <span aria-hidden="true" className="text-ink-dim">
+          {open ? "−" : "+"}
+        </span>
+      </button>
 
-      {groups.length === 0 ? (
-        // Never a blank rail: a reader who mistyped would otherwise see a
-        // settings screen with no way out of it.
-        <p className="mt-4 text-ink-dim text-xs leading-relaxed">
-          Nothing here is called that. Clear the box to see everything.
-        </p>
-      ) : (
-        <ul className="mt-4 flex flex-col gap-5">
-          {groups.map((group) => (
-            <li key={group.label}>
-              <p className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
-                {group.label}
-              </p>
-              <ul className="mt-1.5 flex flex-col">
-                {group.items.map((item) => (
-                  <li key={item.path}>
-                    <NavItem path={item.path} title={item.title} />
-                  </li>
-                ))}
-              </ul>
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className={`${open ? "block" : "hidden"} md:block`}>
+        <input
+          type="search"
+          value={typed}
+          onChange={(event) => setTyped(event.target.value)}
+          aria-label="Find a setting"
+          placeholder="Find a setting"
+          className="w-full border border-line bg-surface px-2 py-1 text-ink text-sm placeholder:text-ink-dim focus:border-brand focus:outline-none"
+        />
+
+        {groups.length === 0 ? (
+          // Never a blank rail: a reader who mistyped would otherwise see a
+          // settings screen with no way out of it.
+          <p className="mt-4 text-ink-dim text-xs leading-relaxed">
+            Nothing here is called that. Clear the box to see everything.
+          </p>
+        ) : (
+          <ul className="mt-4 flex flex-col gap-5">
+            {groups.map((group) => (
+              <li key={group.label}>
+                <p className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+                  {group.label}
+                </p>
+                <ul className="mt-1.5 flex flex-col">
+                  {group.items.map((item) => (
+                    <li key={item.path}>
+                      <NavItem
+                        path={item.path}
+                        title={item.title}
+                        onNavigate={() => setOpen(false)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </nav>
   );
 }
 
-function NavItem({ path, title }: { path: SettingsPath; title: string }) {
+function NavItem({
+  path,
+  title,
+  onNavigate,
+}: {
+  path: SettingsPath;
+  title: string;
+  onNavigate: () => void;
+}) {
   return (
     <Link
       to={path}
-      className="-mx-2 block rounded px-2 py-1 text-ink-dim text-sm hover:bg-hover hover:text-ink"
+      onClick={onNavigate}
+      // `min-h-11` rather than padding alone: on a phone these are the tap
+      // targets, and 28px is below what a finger reliably hits.
+      className="-mx-2 flex min-h-11 items-center rounded px-2 text-ink-dim text-sm hover:bg-hover hover:text-ink md:min-h-0 md:py-1"
       activeProps={{ className: "bg-raised font-medium text-ink" }}
     >
       {title}

@@ -32,16 +32,19 @@ const ROW_HEIGHT = 46;
 const OVERSCAN_ROWS = 8;
 
 /* Column widths, declared once so the header and every row cannot drift apart. */
-const SERVICES_COLUMN = "hidden w-40 shrink-0 lg:block";
+const SERVICES_COLUMN = "hidden w-40 shrink-0 pl-3 lg:block";
 /* The last column to earn its width: a deploy is a lead, and the two facts beside it —
    what threw and when it started — are the ones nobody may lose to make room. */
-const DEPLOY_COLUMN = "hidden w-32 shrink-0 xl:block";
+const DEPLOY_COLUMN = "hidden w-32 shrink-0 pl-3 xl:block";
 const COUNT_COLUMN = "w-16 shrink-0 text-right";
 const STARTED_COLUMN = "w-28 shrink-0 text-right";
 const LAST_SEEN_COLUMN = "hidden w-24 shrink-0 text-right sm:block";
 /* 104px of sparkline plus its 12px gutter, so the drawing does not push into the row's
-   own right padding. Reserved on every row so nothing shifts when a group has no trend. */
-const TREND_COLUMN = "w-29 shrink-0 pl-3";
+   own right padding. Reserved on every row so nothing shifts when a group has no trend.
+   Gone below `sm`: it was taking 116px of a 390px screen while the exception — the one
+   column somebody is reading — was squeezed to "RangeEr…"
+   (`docs/quality/console-review-2026-09-20.md`). */
+const TREND_COLUMN = "hidden w-29 shrink-0 pl-3 sm:block";
 
 /**
  * Every exception in the window, grouped — a hundred identical crashes on one line.
@@ -355,13 +358,13 @@ function GroupRow({
             Dimmed and abbreviated to the version, because it is a lead and not a
             finding — the panel carries the sentence saying what it is not. */}
         <span
-          className={`${DEPLOY_COLUMN} truncate pl-3 font-mono text-2xs text-ink-dim`}
+          className={`${DEPLOY_COLUMN} truncate font-mono text-2xs text-ink-dim`}
           title={afterDeploy === undefined ? undefined : `${afterDeploy}. ${DEPLOY_IS_NOT_A_CAUSE}`}
         >
           {deploy === null ? UNKNOWN : `after ${deploy.version}`}
         </span>
 
-        <span className={`${SERVICES_COLUMN} truncate pl-3 font-mono text-2xs text-ink-dim`}>
+        <span className={`${SERVICES_COLUMN} truncate font-mono text-2xs text-ink-dim`}>
           {describeServices(group.services)}
         </span>
 

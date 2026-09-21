@@ -19,6 +19,7 @@ from datetime import date
 from typing import Any, Final
 
 from nexovue_platform.alerts.model import (
+    ATTEMPT_KINDS,
     ATTEMPT_OUTCOMES,
     CHANNEL_HEALTH,
     CHANNEL_KINDS,
@@ -1409,9 +1410,12 @@ class NotificationAttempt(Base):
     outcome: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
     http_status: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # What it carried: an alert, or somebody pressing Send test.
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="notification")
 
     __table_args__ = (
         CheckConstraint(f"outcome IN ({_quoted(ATTEMPT_OUTCOMES)})", name="outcome_is_known"),
+        CheckConstraint(f"kind IN ({_quoted(ATTEMPT_KINDS)})", name="kind_is_known"),
         Index("ix_notification_attempts_channel_id_attempted_at", "channel_id", "attempted_at"),
         Index("ix_notification_attempts_batch_id", "batch_id"),
         Index("ix_notification_attempts_attempted_at", "attempted_at"),

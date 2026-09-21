@@ -1,8 +1,10 @@
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useState } from "react";
 
+import { isNotFound } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
 import { CopyButton } from "@/shared/components/CopyButton";
+import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
@@ -56,22 +58,57 @@ export function ChannelDetailScreen() {
       {channel.isPending ? (
         <SkeletonRows rows={5} label="Loading the channel" />
       ) : channel.isError ? (
-        <InlineFailure
-          title="The channel could not be loaded"
-          error={channel.error}
-          onRetry={() => void channel.refetch()}
-        />
+        // **A channel that is gone is not a channel that failed to load.** Both
+        // used to offer "Try again", which can only ever fail again — the same
+        // dead end a deleted check's page already avoids. A bookmark kept after
+        // somebody removed the channel is the way a customer reaches this.
+        isNotFound(channel.error) ? (
+          <EmptyState
+            title="No such channel"
+            detail="It may have been removed, or it belongs to another organization."
+            action={
+              <Link to="/settings/channels" className="text-brand-text text-sm hover:underline">
+                Back to every channel
+              </Link>
+            }
+          />
+        ) : (
+          <InlineFailure
+            title="The channel could not be loaded"
+            error={channel.error}
+            onRetry={() => void channel.refetch()}
+          />
+        )
       ) : (
-        <div className="flex max-w-3xl flex-col gap-8">
-          <Overview channel={channel.data} />
-          {canManage ? <SendTest channel={channel.data} /> : null}
-          {canManage && channel.data.kind !== "owners" ? <Settings channel={channel.data} /> : null}
-          {canManage ? <Mute channel={channel.data} /> : null}
-          {canManage && PEOPLE_READ.has(channel.data.kind) ? (
-            <Quiet channel={channel.data} />
-          ) : null}
+        // **Two columns from `xl`, and the delivery log across both.** Stacked in
+        // one `3xl` column these were seven short panels down the left of the
+        // window with its right third empty — and the log, which is a table and
+        // the longest thing here, was the one part squeezed. Each panel keeps a
+        // measure because each is prose and a form; what changed is that they no
+        // longer queue single file to keep it.
+        <div className="flex flex-col gap-8">
+          <div className="flex flex-col gap-8 xl:flex-row xl:items-start xl:gap-10">
+            <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-8">
+              <Overview channel={channel.data} />
+              {canManage && channel.data.kind !== "owners" ? (
+                <Settings channel={channel.data} />
+              ) : null}
+            </div>
+            <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-8">
+              {canManage ? <SendTest channel={channel.data} /> : null}
+              {canManage ? <Mute channel={channel.data} /> : null}
+              {canManage && PEOPLE_READ.has(channel.data.kind) ? (
+                <Quiet channel={channel.data} />
+              ) : null}
+            </div>
+          </div>
+
           <DeliveryLog channelId={channel.data.id} />
-          {canManage && channel.data.kind !== "owners" ? <Remove channel={channel.data} /> : null}
+          {canManage && channel.data.kind !== "owners" ? (
+            <div className="max-w-3xl">
+              <Remove channel={channel.data} />
+            </div>
+          ) : null}
         </div>
       )}
     </SettingsLayout>
@@ -381,7 +418,7 @@ function Quiet({ channel }: { channel: ChannelSummary }) {
       <h2 id="quiet-hours" className="font-medium font-serif text-base text-ink">
         Quiet hours
       </h2>
-      <p className="text-ink-dim text-sm leading-relaxed">
+      <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">
         Warnings raised during these hours wait, and arrive together when they end. Critical alerts
         are never held. Times are in {timezone}.
       </p>
@@ -479,6 +516,9 @@ function DeliveryLog({ channelId }: { channelId: string }) {
                 {attempt.http_status !== null ? (
                   <span className="text-ink-dim"> · {attempt.http_status}</span>
                 ) : null}
+                {attempt.kind === "test" ? (
+                  <span className="text-ink-dim"> · Send test</span>
+                ) : null}
                 {attempt.notifications.length > 0 ? (
                   <span className="text-ink-dim"> · {attempt.notifications.join(", ")}</span>
                 ) : null}
@@ -513,7 +553,7 @@ function Remove({ channel }: { channel: ChannelSummary }) {
       {confirming ? (
         <div className="border-critical-solid border-l-2 bg-critical-subtle px-3 py-3">
           <p className="font-medium text-ink text-sm">Remove {channel.name}?</p>
-          <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+          <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
             {channel.rules.length === 0
               ? "No rule sends here."
               : `These rules will stop sending here: ${channel.rules.map((rule) => rule.name).join(", ")}. A rule left with no channel will show as notifying nobody.`}{" "}

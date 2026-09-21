@@ -173,8 +173,16 @@ function row(container: HTMLElement, name: string): HTMLElement {
   return found;
 }
 
+/**
+ * Every control the *screen* offers. The settings rail is excluded on purpose:
+ * its "All settings" disclosure is navigation chrome shown at phone width, and
+ * counting it here would make this suite fail on a layout change rather than on
+ * a permission one.
+ */
 const buttons = (element: HTMLElement) =>
-  [...element.querySelectorAll("button")].map((button) => button.textContent?.trim());
+  [...element.querySelectorAll("button")]
+    .filter((button) => button.closest('nav[aria-label="Settings"]') === null)
+    .map((button) => button.textContent?.trim());
 
 const optionsIn = (element: HTMLElement) =>
   [...element.querySelectorAll("option")].map((option) => option.textContent);

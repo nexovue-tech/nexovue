@@ -3,6 +3,7 @@ import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  Link,
   Outlet,
 } from "@tanstack/react-router";
 import { OnboardScreen } from "@/features/admin/OnboardScreen";
@@ -587,8 +588,14 @@ function NotFound() {
         No screen at this address
       </h1>
       <p className="mt-3 text-ink-dim text-md">
-        Every Phase 1 route is listed in the sidebar. This one is not one of them.
+        Nothing is served at this address. Every screen this console has is in the menu.
       </p>
+      {/* A link, not a sentence pointing at the sidebar: on a phone the sidebar is
+          a drawer, and this screen used to leave a reader with nothing to press
+          (`docs/quality/console-review-2026-09-20.md`). */}
+      <Link to="/" className="mt-4 inline-block font-medium text-brand-text hover:underline">
+        Back to Overview
+      </Link>
     </section>
   );
 }

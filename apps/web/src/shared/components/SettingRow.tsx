@@ -32,7 +32,10 @@ export function SettingRow({
   return (
     <div className="border-line-subtle border-b py-3 last:border-b-0">
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-        <div className="min-w-0">
+        {/* Capped so the control stays on the row. Uncapped, a description long
+            enough to wrap took the whole line and pushed the thing it describes
+            onto the next one. */}
+        <div className="min-w-0 max-w-2xl">
           <p className="text-ink text-sm">{label}</p>
           {description ? (
             <p className="mt-0.5 text-ink-dim text-xs leading-relaxed">{description}</p>
@@ -50,6 +53,12 @@ export function SettingRow({
  *
  * The heading and its one line carry what the group is; the rows carry what can
  * be done. A group that cannot say what it is in one line is two groups.
+ *
+ * **Two columns from `lg`: what this is on the left, what to do about it on the
+ * right.** Stacked, a settings screen is one narrow column of forms with a third
+ * of a wide window empty beside it — the form cannot be widened, because a text
+ * field the width of a page is harder to fill, so the space is spent on the
+ * explanation instead. Below `lg` it stacks, which is the same reading order.
  */
 export function SettingGroup({
   title,
@@ -61,12 +70,14 @@ export function SettingGroup({
   children: ReactNode;
 }) {
   return (
-    <section className="mt-8 first:mt-0">
-      <h2 className="font-medium font-serif text-ink text-lg tracking-tight">{title}</h2>
-      {description ? (
-        <p className="mt-1 text-ink-dim text-sm leading-relaxed">{description}</p>
-      ) : null}
-      <div className="mt-3 border-line border-t">{children}</div>
+    <section className="mt-8 first:mt-0 lg:flex lg:gap-10">
+      <div className="lg:w-64 lg:shrink-0 lg:pt-1">
+        <h2 className="font-medium font-serif text-ink text-lg tracking-tight">{title}</h2>
+        {description ? (
+          <p className="mt-1 text-ink-dim text-sm leading-relaxed">{description}</p>
+        ) : null}
+      </div>
+      <div className="mt-3 min-w-0 flex-1 border-line border-t lg:mt-0">{children}</div>
     </section>
   );
 }

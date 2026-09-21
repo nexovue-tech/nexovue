@@ -1,8 +1,14 @@
 """*Send test*: a labelled message through the real path, and its outcome (FR3).
 
-Nothing is recorded in the delivery log — a test is not a notification — but a
-success does mean the channel works, so it heals a failing channel as a delivery
-would (FR21).
+A success means the channel works, so it heals a failing channel as a delivery
+would (FR21) — and it is written to the delivery log, marked as a test.
+
+**It used to be left out**, on the reasoning that a test is not a notification.
+What that produced was a channel reading "Last delivered 21 hr. ago" directly
+above a log promising every attempt of the last 30 days and showing none
+(`docs/changes/console-review-fixes/`, D2). The log is where somebody looks
+after pressing this button; leaving the one attempt they made out of it is the
+reverse of what the log is for.
 """
 
 from __future__ import annotations
@@ -25,6 +31,13 @@ _CHANNEL: Final = text(
     """
     SELECT id, org_id, kind, name, config, sealed_secret FROM notification_channels
     WHERE org_id = :org_id AND id = :id
+    """
+)
+_RECORD: Final = text(
+    """
+    INSERT INTO notification_attempts
+        (org_id, channel_id, batch_id, attempted_at, outcome, http_status, reason, kind)
+    VALUES (:org_id, :channel_id, :batch_id, :now, :outcome, :http_status, :reason, 'test')
     """
 )
 _HEALED: Final = text(
@@ -77,8 +90,24 @@ async def send_test(
         result = await send(
             engine, outbound, channel, _test(link, "resolved", dedup_key=dedup_key), now=now
         )
-    if result.outcome == "delivered":
-        async with engine.begin() as connection:
+    # A batch id of its own: a test carries no notifications, and the log joins
+    # on it to say what an attempt was about.
+    async with engine.begin() as connection:
+        await connection.execute(
+            _RECORD,
+            {
+                "org_id": org_id,
+                "channel_id": channel_id,
+                "batch_id": uuid.uuid4(),
+                "now": now,
+                # Delivered or not: a test is never retried, so there is no
+                # third outcome to record for one.
+                "outcome": "delivered" if result.outcome == "delivered" else "failed",
+                "http_status": result.http_status,
+                "reason": result.reason,
+            },
+        )
+        if result.outcome == "delivered":
             await connection.execute(_HEALED, {"org_id": org_id, "id": channel_id, "now": now})
     return _outcome(result)
 

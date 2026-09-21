@@ -7,6 +7,7 @@ import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SelectField } from "@/shared/components/SelectField";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
+import { plural } from "@/shared/format/plural";
 import { formatRelativeTime, formatTimestamp } from "@/shared/format/time";
 import { useCan } from "@/shared/identity";
 import { useProjects } from "@/shared/projects";
@@ -15,6 +16,7 @@ import { SettingsLayout } from "@/shared/settings/SettingsLayout";
 import type { ApiTokenCreated, ApiTokenSummary, TokenStatus } from "./api";
 import { useApiTokens, useCreateApiToken, useRevokeApiToken } from "./api";
 import { ConnectAnAssistant } from "./ConnectAnAssistant";
+import { orderedTokens } from "./token-order";
 
 /**
  * The organization's read tokens (F36): what CI, a script or an AI assistant
@@ -93,7 +95,7 @@ function MintedToken({ created, onDismiss }: { created: ApiTokenCreated; onDismi
       <h2 className="font-medium font-serif text-ink text-lg tracking-tight">
         {created.api_token.name} is ready
       </h2>
-      <p className="mt-2 text-ink-dim text-sm leading-relaxed">{created.notice}</p>
+      <p className="max-w-3xl mt-2 text-ink-dim text-sm leading-relaxed">{created.notice}</p>
 
       <div className="mt-3 flex items-center gap-3 border border-line bg-surface px-3 py-2">
         <code className="min-w-0 flex-1 select-all break-all font-mono text-ink text-sm">
@@ -143,33 +145,35 @@ function CreateTokenForm({ onCreated }: { onCreated: (created: ApiTokenCreated) 
         }}
       >
         <div className="min-w-56 flex-1">
-          <TextField
-            label="Name"
-            name="token-name"
-            value={name}
-            onChange={setName}
-            hint="What uses it — “Nightly report”, “CI”. It is what you will revoke by."
+          <TextField label="Name" name="token-name" value={name} onChange={setName} />
+        </div>
+        <div className="w-44">
+          <SelectField
+            stacked
+            label="Reads"
+            value={scope}
+            options={[
+              { id: EVERY_PROJECT, label: "Every project" },
+              ...(projects.data ?? []).map((project) => ({ id: project.id, label: project.name })),
+            ]}
+            onChange={setScope}
+            optionLabel={(option) => option.label}
           />
         </div>
-        <SelectField
-          label="Reads"
-          value={scope}
-          options={[
-            { id: EVERY_PROJECT, label: "Every project" },
-            ...(projects.data ?? []).map((project) => ({ id: project.id, label: project.name })),
-          ]}
-          onChange={setScope}
-          optionLabel={(option) => option.label}
-          capped
-        />
-        <SelectField
-          label="Expires in"
-          value={expiry}
-          options={EXPIRIES}
-          onChange={setExpiry}
-          optionLabel={(option) => option.label}
-        />
-        <div className="pb-1">
+        <div className="w-36">
+          <SelectField
+            stacked
+            label="Expires in"
+            value={expiry}
+            options={EXPIRIES}
+            onChange={setExpiry}
+            optionLabel={(option) => option.label}
+          />
+        </div>
+        {/* No shim, and no `items-end` guesswork: every control in the row is
+            `stacked` — a label over a box of the same height — so they line up
+            by construction (`docs/changes/console-review-fixes/`). */}
+        <div>
           <Button
             type="submit"
             pending={create.isPending}
@@ -180,6 +184,9 @@ function CreateTokenForm({ onCreated }: { onCreated: (created: ApiTokenCreated) 
           </Button>
         </div>
       </form>
+      <p className="mt-2 max-w-3xl text-ink-dim text-xs leading-relaxed">
+        Name it after what uses it — “Nightly report”, “CI”. It is what you will revoke by.
+      </p>
       {create.error ? <InlineFailure title="No token was created" error={create.error} /> : null}
     </section>
   );
@@ -196,7 +203,7 @@ function TokenList({ tokens, canManage }: { tokens: ApiTokenSummary[]; canManage
   return (
     <>
       <ul className="border-line border-t" aria-label="API tokens">
-        {tokens.map((token) => (
+        {orderedTokens(tokens).map((token) => (
           <li key={token.id} className="border-line-subtle border-b py-3">
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
               <p className="min-w-0 text-ink text-sm">
@@ -242,7 +249,7 @@ function TokenList({ tokens, canManage }: { tokens: ApiTokenSummary[]; canManage
                 ? `revoked ${formatRelativeTime(token.revoked_at)}`
                 : `expires ${formatTimestamp(token.expires_at)}`}{" "}
               · last used {token.last_used_at ? formatRelativeTime(token.last_used_at) : "never"} ·{" "}
-              {token.requests_today} requests today
+              {token.requests_today} {plural(token.requests_today, "request")} today
             </p>
           </li>
         ))}

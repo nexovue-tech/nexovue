@@ -37,7 +37,7 @@ export function CheckSecretsSection({ projectId }: { projectId: string }) {
     <section className="flex flex-col gap-4">
       <div className="max-w-2xl">
         <h3 className="font-medium font-serif text-ink text-base tracking-tight">Check secrets</h3>
-        <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+        <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
           Tokens, passwords and keys your checks send. Write{" "}
           <code className="font-mono text-ink text-xs">{secretReference("NAME")}</code> in a
           check&rsquo;s URL, a header or the body, or pick the secret in a check&rsquo;s
@@ -140,7 +140,7 @@ function SecretRow({ projectId, secret }: { projectId: string; secret: CheckSecr
       {mode === "confirming-delete" ? (
         <div className="mt-3 border-critical-solid border-l-2 bg-critical-subtle px-3 py-3">
           <p className="font-medium text-ink text-sm">Delete {secret.name}?</p>
-          <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+          <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
             {secret.used_by_checks === 0 ? (
               <>
                 No check uses <code className="font-mono text-ink">{reference}</code>.

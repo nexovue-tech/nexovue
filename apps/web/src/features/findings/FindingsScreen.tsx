@@ -8,8 +8,9 @@ import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
 import { useLiveWindow, useSelection } from "@/shared/selection";
 
-import type { Finding, ProjectTotals } from "./api";
+import type { CheckCounts, Finding, ProjectTotals } from "./api";
 import { useCheckCounts, useFindings, useProjectSummary } from "./api";
+import { headlineFor } from "./headline";
 import { orderFindings } from "./ordering";
 
 /**
@@ -59,7 +60,7 @@ export interface FindingsViewProps {
   error?: unknown;
   onRetry: () => void;
   totals?: ProjectTotals;
-  checks?: { total: number; passing: number };
+  checks?: CheckCounts;
 }
 
 export function FindingsView({
@@ -105,7 +106,7 @@ export function FindingsView({
           </p>
         </div>
       ) : ordered.length === 0 ? (
-        <HealthyState totals={totals} checks={checks} />
+        <SummaryState totals={totals} checks={checks} />
       ) : (
         <ul className="shrink-0 border-line border-t">
           {ordered.map((found) => (
@@ -120,22 +121,29 @@ export function FindingsView({
 }
 
 /**
- * When nothing is wrong, the RED summary is the content.
+ * When the feed is empty, the RED summary is the content.
+ *
+ * Named for what it is rather than for what it says: it used to be `HealthyState`,
+ * which was the assumption behind the defect — an empty feed was taken for a
+ * healthy system, and the headline said so over evidence that disagreed.
  *
  * A page that says only "all systems normal" gives a reader no way to confirm it, which
  * is how a reassuring screen becomes one nobody trusts. The numbers are the evidence for
- * the sentence above them.
+ * the sentence above them — and, since the review, the sentence is *derived* from them
+ * (`headline.ts`) rather than asserted over the top of them.
  */
-function HealthyState({
-  totals,
-  checks,
-}: {
-  totals?: ProjectTotals;
-  checks?: { total: number; passing: number };
-}) {
+function SummaryState({ totals, checks }: { totals?: ProjectTotals; checks?: CheckCounts }) {
+  const headline = headlineFor(totals, checks);
+
   return (
     <section className="shrink-0 border-line border-t px-4 py-6">
-      <h2 className="font-medium font-serif text-ink text-lg tracking-tight">All systems normal</h2>
+      <h2
+        className={`font-medium font-serif text-lg tracking-tight ${
+          headline.wrong ? "text-critical-text" : "text-ink"
+        }`}
+      >
+        {headline.title}
+      </h2>
 
       <p className="mt-2 text-ink-dim text-sm">
         {totals ? (
@@ -144,9 +152,10 @@ function HealthyState({
             {checks && checks.total > 0
               ? ` · ${formatCount(checks.passing)} of ${formatCount(checks.total)} ${plural(checks.total, "synthetic check")} passing`
               : ""}
+            {headline.wrong ? ". Synthetics has the failing ones." : ""}
           </>
         ) : (
-          "Nothing has reported to this project yet."
+          "Send a span, a log or a metric and this fills in."
         )}
       </p>
 

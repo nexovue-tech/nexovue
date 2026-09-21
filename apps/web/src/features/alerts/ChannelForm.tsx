@@ -133,6 +133,7 @@ export function ChannelForm({
       }}
     >
       <SelectField
+        stacked
         label="Kind"
         value={draft.kind}
         options={KINDS}
@@ -165,6 +166,7 @@ export function ChannelForm({
 
       {draft.kind === "pagerduty" ? (
         <SelectField
+          stacked
           label="Region"
           value={draft.region}
           options={REGIONS}

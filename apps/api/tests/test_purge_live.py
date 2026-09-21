@@ -34,6 +34,7 @@ from urllib.parse import urlsplit
 import clickhouse_connect
 import pytest
 import pytest_asyncio
+from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
 
@@ -158,6 +159,16 @@ async def two_tenants(clickhouse: AsyncClient) -> AsyncIterator[tuple[str, str]]
 
     Fresh ids every run, so the suite can never collide with a real
     organization's rows in the shared dev store.
+
+    **The cleanup is handed to the session, not waited on here.** It used to run
+    a full purge per tenant per test and wait for every mutation to finish: six
+    tests, twelve purges, each rewriting every part of every telemetry table
+    (ADR-014 — a tenant is not a partition). Measured 2026-09-20: 34 of this
+    file's 57 seconds were teardown. Nothing reads these rows afterwards — they
+    belong to a UUID nothing else knows — so they go on the list
+    `clickhouse_cleanup` empties once at the end of the run, which is the
+    mechanism that file was written for. The tests that *prove* a purge works
+    still call it in their own body and still wait for it.
     """
     purged, spared = str(uuid.uuid4()), str(uuid.uuid4())
     await _write_fixture_rows(clickhouse, purged)
@@ -166,7 +177,8 @@ async def two_tenants(clickhouse: AsyncClient) -> AsyncIterator[tuple[str, str]]
         yield purged, spared
     finally:
         for tenant_id in (purged, spared):
-            await _purge_now(clickhouse, tenant_id)
+            for table in PURGED_TABLES:
+                delete_after_run(table, tenant_id)
 
 
 async def test_the_fixture_writes_rows_this_suite_could_lose(

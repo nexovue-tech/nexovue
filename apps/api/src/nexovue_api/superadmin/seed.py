@@ -19,6 +19,7 @@ telemetry, no bill.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Final
 
 import structlog
@@ -74,6 +75,12 @@ async def seed_super_admin(session: AsyncSession, settings: Settings) -> User | 
             name=PLATFORM_NAME,
             password_hash=hash_password(password),
             role=SUPER_ADMIN_ROLE,
+            # Verified on sight. The address comes from the environment, not from
+            # somebody typing it, so there is nothing to confirm — and the console
+            # was asking the operator to verify an address that is often a `.test`
+            # one nothing can deliver to
+            # (`docs/quality/console-review-2026-09-20.md`, D9).
+            email_verified_at=datetime.now(UTC),
         )
         session.add(operator)
         await session.flush()
@@ -110,3 +117,5 @@ def _adopt(operator: User, *, organization_id: uuid.UUID, password: str) -> None
     operator.role = SUPER_ADMIN_ROLE
     operator.password_hash = hash_password(password)
     operator.removed_at = None
+    if operator.email_verified_at is None:
+        operator.email_verified_at = datetime.now(UTC)

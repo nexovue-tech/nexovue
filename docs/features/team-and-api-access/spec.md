@@ -414,7 +414,9 @@ and a read API has nobody to serve before that (D12).
 - **FR24** — A payment reference (the website's Razorpay payment id and amount) can be recorded against
   an organization once; the organization's plan is then the product's billing's to renew (ADR-008,
   step 8).
-- **FR25** — Organization search by name, slug, id, or member email; the organization page shows members
+- **FR25** — The platform screen **lists every customer, newest first**, capped, and says so when the
+  cap cut the list; a search narrows that list by name, slug, id, or member email. nexovue's own
+  organization is not a customer and appears on neither. The organization page shows members
   and roles, projects, plan and comp, usage against allowance (from the existing usage read), last ingest
   per project, suspension with reason, support-access state, and its recent audit rows.
 - **FR26** — Suspend and resume write the same `ingest_suspended_at` / `ingest_suspended_reason` the CLI

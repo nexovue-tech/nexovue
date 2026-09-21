@@ -79,6 +79,13 @@ interface CheckSummary {
   up: boolean | null;
 }
 
+/** What the screen knows about this project's checks. */
+export interface CheckCounts {
+  total: number;
+  passing: number;
+  down: number;
+}
+
 interface CheckListResponse {
   checks: CheckSummary[];
 }
@@ -129,6 +136,10 @@ export function useCheckCounts(
     select: (response) => ({
       total: response.checks.length,
       passing: response.checks.filter((check) => check.up === true).length,
+      // Counted apart from "not passing": a check that has not run in this
+      // window is a gap in what we can see, and the headline may only call a
+      // check down when a probe said so (`headline.ts`).
+      down: response.checks.filter((check) => check.up === false).length,
     }),
   });
 }

@@ -38,13 +38,10 @@ The console shows you the exact value when you sign up, and again on the
 onboarding screen. `https://ingest.nexovue.com` above is an example. In local
 development the receiver's published port is `http://localhost:14318`.
 
-> **The hosted hostname is not settled.** nexovue is not deployed yet, so there
-> is no published ingest hostname to put here. Every example in this section
-> uses `https://ingest.nexovue.com` as a placeholder. The real value is whatever
-> the console hands you — it comes from the `OTLP_ENDPOINT` setting on the API,
-> which falls back to `http://localhost:14318` when a deployment does not set
-> it. A deployment that leaves it unset will hand its customers a localhost
-> endpoint, so it must be set alongside `NEXOVUE_INGEST_HOST`.
+> **Use the endpoint your own console shows you.** `https://ingest.nexovue.com`
+> is the example written throughout this section; the address your account was
+> given is on the onboarding screen and under **Settings → Ingest keys**, and it
+> is the one to copy. In local development it is `http://localhost:14318`.
 
 **`OTEL_EXPORTER_OTLP_HEADERS`** carries your ingest key in the header
 `x-nexovue-key`. The variable holds a comma-separated list of `name=value`
@@ -100,10 +97,10 @@ port and its own TLS termination, and that decision has not been taken.
 If your exporter is configured for gRPC, switch it to `http/protobuf`. No signal
 is missing over HTTP — all three go over both transports.
 
-> **Not settled yet.** Whether OTLP/gRPC gets a public port, or is multiplexed
-> on 443, is an open deployment decision. Until it is taken, treat gRPC as a
-> local-development transport. The decision is recorded in
-> `deploy/caddy/Caddyfile`.
+> **gRPC is not published on the hosted endpoint.** Use `http/protobuf` against
+> the address your console shows; gRPC works against a receiver you run
+> yourself. Nothing is missing over HTTP — traces, logs and metrics all go over
+> both.
 
 ## Languages
 

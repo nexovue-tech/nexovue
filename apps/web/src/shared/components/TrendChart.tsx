@@ -17,6 +17,9 @@ import { useTheme } from "@/shared/theme/use-theme";
 
 export const CHART_HEIGHT = 132;
 
+/** Half of the widest x-axis label, which is what the last tick needs to its right. */
+const X_LABEL_OVERHANG = 24;
+
 /** Room above the tallest bucket, so the peak is not clipped by the axis. */
 const Y_HEADROOM = 1.1;
 
@@ -272,7 +275,11 @@ function chartOptions(
     // nobody can tell apart, and a p99 pulling away from a p95 — the reading
     // the panel exists for — is invisible without knowing which is which.
     legend: { show: labels.length > 1, live: false },
-    padding: [8, 8, 0, 0],
+    // The right padding is the last x label's overhang, not a margin: a tick
+    // label is centred on its tick, so the final one loses its right half to the
+    // plot's edge without room to sit in — "6:40pm" rendered as "6:40p" and
+    // ":00" as ":0C" (`docs/quality/console-review-2026-09-20.md`, D6).
+    padding: [8, X_LABEL_OVERHANG, 0, 0],
     cursor: {
       y: false,
       points: { show: false },

@@ -293,6 +293,7 @@ async def delivery_log(
                 http_status=attempt.http_status,
                 reason=attempt.reason,
                 notifications=about,
+                kind=attempt.kind,
             )
             for attempt, about in entries
         ]

@@ -16,6 +16,10 @@ import { useEnterAdminMode } from "./api";
  *
  * Shown in place of the screen rather than over it: what is behind this has not
  * loaded, and a dialog floating over an empty page suggests otherwise.
+ *
+ * Centred in the pane, because it is the whole of what the screen is asking. Left
+ * at the top-left it read as a widget on a page that had failed to load the rest
+ * of itself, with the window's whole right side empty beside it.
  */
 export function ConfirmItIsYou({ onConfirmed }: { onConfirmed: () => void }) {
   const [password, setPassword] = useState("");
@@ -23,59 +27,64 @@ export function ConfirmItIsYou({ onConfirmed }: { onConfirmed: () => void }) {
   const confirm = useEnterAdminMode();
 
   return (
-    <section aria-label="Confirm it is you" className="max-w-lg border border-line px-4 py-4">
-      <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">
-        Confirm it is you
-      </h2>
-      <p className="mt-1 text-ink-dim text-sm leading-relaxed">
-        The platform area needs your password again. It stays open for 30 minutes, and closes when
-        you sign out.
-      </p>
-
-      {/* Neither field is required on its own — either one opens the area — so
-          the browser must not hold the submit back for the empty one. */}
-      <form
-        className="mt-3 flex flex-col gap-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!password.trim() && !code.trim()) return;
-          confirm.mutate(code.trim() ? { code: code.trim() } : { password }, {
-            onSuccess: () => onConfirmed(),
-          });
-        }}
+    <div className="flex min-h-full items-center justify-center px-4 py-10">
+      <section
+        aria-label="Confirm it is you"
+        className="w-full max-w-lg border border-line bg-surface px-5 py-5"
       >
-        <TextField
-          label="Password"
-          name="password"
-          type="password"
-          value={password}
-          onChange={setPassword}
-          autoComplete="current-password"
-          required={false}
-        />
-        <TextField
-          label="Or a two-factor code"
-          name="code"
-          value={code}
-          onChange={setCode}
-          hint="If you have an authenticator enrolled, a code works instead of the password."
-          required={false}
-        />
-        <div>
-          <Button
-            type="submit"
-            pending={confirm.isPending}
-            pendingLabel="Confirming…"
-            disabled={!password.trim() && !code.trim()}
-          >
-            Confirm
-          </Button>
-        </div>
-      </form>
+        <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">
+          Confirm it is you
+        </h2>
+        <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+          The platform area needs your password again. It stays open for 30 minutes, and closes when
+          you sign out.
+        </p>
 
-      {confirm.error ? (
-        <InlineFailure title="That did not open the platform area" error={confirm.error} />
-      ) : null}
-    </section>
+        {/* Neither field is required on its own — either one opens the area — so
+          the browser must not hold the submit back for the empty one. */}
+        <form
+          className="mt-3 flex flex-col gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!password.trim() && !code.trim()) return;
+            confirm.mutate(code.trim() ? { code: code.trim() } : { password }, {
+              onSuccess: () => onConfirmed(),
+            });
+          }}
+        >
+          <TextField
+            label="Password"
+            name="password"
+            type="password"
+            value={password}
+            onChange={setPassword}
+            autoComplete="current-password"
+            required={false}
+          />
+          <TextField
+            label="Or a two-factor code"
+            name="code"
+            value={code}
+            onChange={setCode}
+            hint="If you have an authenticator enrolled, a code works instead of the password."
+            required={false}
+          />
+          <div>
+            <Button
+              type="submit"
+              pending={confirm.isPending}
+              pendingLabel="Confirming…"
+              disabled={!password.trim() && !code.trim()}
+            >
+              Confirm
+            </Button>
+          </div>
+        </form>
+
+        {confirm.error ? (
+          <InlineFailure title="That did not open the platform area" error={confirm.error} />
+        ) : null}
+      </section>
+    </div>
   );
 }

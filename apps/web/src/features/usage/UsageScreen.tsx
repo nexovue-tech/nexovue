@@ -217,7 +217,7 @@ function Summary({ usage }: { usage: UsageResponse }) {
             <p className="font-semibold font-serif text-2xl text-ink tracking-tight">
               {formatCount(usage.totals.services)}
             </p>
-            <p className="mt-1 text-ink-dim text-sm leading-relaxed">{UNION_CAPTION}</p>
+            <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">{UNION_CAPTION}</p>
           </dd>
         </div>
 
@@ -285,7 +285,7 @@ function Cost({ period, planName }: { period: BillingPeriod; planName: string })
     return (
       <>
         <p className="text-base text-ink">{NO_COST_LABEL}</p>
-        <p className="mt-1 text-ink-dim text-sm leading-relaxed">{NO_COST_REASON}</p>
+        <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">{NO_COST_REASON}</p>
       </>
     );
   }
@@ -301,7 +301,7 @@ function Cost({ period, planName }: { period: BillingPeriod; planName: string })
         <span className="font-semibold font-serif text-2xl text-ink tracking-tight">{amount}</span>
         {period.settled ? null : <StillMetering />}
       </p>
-      <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+      <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
         {describeCostBasis(period, planName)} {describePeriodProgress(period)}{" "}
         {describeOverage(period)}
       </p>
@@ -354,7 +354,7 @@ function CardinalityNotices({
               </p>
             ))}
             {warning.families.length > 0 ? (
-              <p className="mt-1 text-ink-dim leading-relaxed">
+              <p className="max-w-3xl mt-1 text-ink-dim leading-relaxed">
                 {CARDINALITY_REMEDY} {NOTHING_IS_CAPPED}
               </p>
             ) : null}
@@ -391,7 +391,9 @@ function Rate({ price, planName }: { price: PlanPrice | null; planName: string }
     return (
       <>
         <p className="text-base text-ink">{NO_PRICE_LABEL}</p>
-        <p className="mt-1 text-ink-dim text-sm leading-relaxed">{describeNoPrice(planName)}</p>
+        <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
+          {describeNoPrice(planName)}
+        </p>
       </>
     );
   }
@@ -400,7 +402,7 @@ function Rate({ price, planName }: { price: PlanPrice | null; planName: string }
   return (
     <>
       <p className="text-base text-ink">{formatRate(price)}</p>
-      <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+      <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
         {describeRateStart(price)}
         {ceiling ? ` ${ceiling}` : ""}
       </p>

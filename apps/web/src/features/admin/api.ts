@@ -19,6 +19,33 @@ export function needsReAuthentication(error: unknown): boolean {
   );
 }
 
+const HTTP_FORBIDDEN = 403;
+
+/**
+ * Which refusals the screen answers itself, and which belong to the boundary.
+ *
+ * `app/query-client.ts` throws every 403 to the route error boundary, on the
+ * reasoning that a refusal is a property of the screen rather than a passing
+ * event. That is right for a customer told they may not read something, and
+ * wrong for exactly one case: a step-up that has lapsed is answerable *here*,
+ * by confirming it is you. Thrown, it replaced the screen with "this session
+ * may not perform that action" and left no way to confirm at all — the operator
+ * was locked out of the platform area by the control meant to protect it.
+ *
+ * So the platform reads keep the global rule and carve out that one refusal.
+ * Every other 403 still reaches the boundary.
+ */
+export function throwUnlessTheStepUpLapsed(error: unknown): boolean {
+  if (needsReAuthentication(error)) return false;
+  return error instanceof ApiError && error.status === HTTP_FORBIDDEN;
+}
+
+export interface OrganizationSearch {
+  organizations: OrganizationRow[];
+  /** True when the cap cut the list short. */
+  truncated: boolean;
+}
+
 export interface OrganizationRow {
   id: string;
   slug: string;
@@ -51,17 +78,29 @@ export interface OrganizationPage {
 export const organizationsKey = (q: string) => ["platform", "organizations", q] as const;
 export const organizationKey = (id: string) => ["platform", "organization", id] as const;
 
+/**
+ * Every customer, or the ones a needle matches.
+ *
+ * **The screen opens as a list.** It used to open as a search box over nothing,
+ * which asks an operator to recall a name before it will show them anything —
+ * fine at a thousand customers, wrong at the number nexovue has, where the
+ * question is usually "who are they" rather than "find this one" (founder,
+ * 2026-09-21). A needle of one character is still refused: it matches most of
+ * the list and reads as a filter that did not work.
+ */
 export function useOrganizations(q: string) {
+  const needle = q.trim();
+
   return useQuery({
-    queryKey: organizationsKey(q),
+    queryKey: organizationsKey(needle),
     queryFn: ({ signal }) =>
-      apiClient.get<{ organizations: OrganizationRow[] }>("admin/organizations", {
-        searchParams: { q },
+      apiClient.get<OrganizationSearch>("admin/organizations", {
+        searchParams: needle.length > 0 ? { q: needle } : {},
         signal,
       }),
-    select: (response) => response.organizations,
-    enabled: q.trim().length > 1,
+    enabled: needle.length !== 1,
     retry: false,
+    throwOnError: throwUnlessTheStepUpLapsed,
   });
 }
 
@@ -71,6 +110,7 @@ export function useOrganization(orgId: string) {
     queryFn: ({ signal }) =>
       apiClient.get<OrganizationPage>(`admin/organizations/${orgId}`, { signal }),
     retry: false,
+    throwOnError: throwUnlessTheStepUpLapsed,
   });
 }
 

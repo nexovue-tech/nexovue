@@ -184,6 +184,26 @@ export function useChangeOwnPassword() {
  * The caller is signed out here as well, which is why the screen navigates to /login on
  * success rather than treating the next 401 as a lapse.
  */
+/**
+ * Sign out of this browser, and only this one.
+ *
+ * The console had no such thing: the only way out was *Sign out everywhere*,
+ * which ends the session on every phone and laptop the account is signed in on.
+ * A shared machine is the ordinary case for wanting out of one of them.
+ *
+ * A hard navigation rather than a router push, for the reason the support view
+ * uses one: the cookie is gone, every cached answer on the page was fetched with
+ * it, and the cheapest way to be certain none of it is still on screen is to
+ * start the app again.
+ */
+export function useSignOut() {
+  return useMutation({
+    mutationKey: ["auth", "sign-out"],
+    mutationFn: () => apiClient.post<void>("auth/logout"),
+    onSuccess: () => window.location.assign("/login"),
+  });
+}
+
 export function useSignOutEverywhere() {
   return useMutation({
     mutationKey: ["profile", "sign-out-everywhere"],

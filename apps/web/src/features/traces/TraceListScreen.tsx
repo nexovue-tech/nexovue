@@ -150,6 +150,10 @@ export function TraceListScreen() {
             <span className="min-w-0 flex-1">Request</span>
             <span className="hidden w-24 text-right sm:block">Spans</span>
             <span className="w-20 text-right">Took</span>
+            {/* The bar's own column. Unlabelled — it draws "Took" — but present,
+                because without it every heading to its right was a column out
+                (`docs/quality/console-review-2026-09-20.md`, D7). */}
+            <span aria-hidden="true" className={DURATION_BAR_COLUMN} />
             <span className="w-20 text-right sm:w-24">When</span>
           </div>
 
@@ -299,7 +303,11 @@ function AttributeFilter({
 }) {
   return (
     <form
-      className="flex items-baseline gap-2"
+      // Wrapping, and the inputs free to shrink: at 390px this row used to put
+      // Apply 22px past the edge of a page that cannot scroll sideways, so the
+      // filter could not be applied at all
+      // (`docs/quality/console-review-2026-09-20.md`, D3).
+      className="flex flex-wrap items-baseline gap-2"
       onSubmit={(event) => {
         event.preventDefault();
         const form = new FormData(event.currentTarget);
@@ -318,14 +326,14 @@ function AttributeFilter({
         defaultValue={filters.attr ?? ""}
         placeholder="db.system"
         aria-label="Span attribute name"
-        className="w-32 min-w-0 rounded-sm border border-line bg-surface px-2 py-0.5 font-mono text-ink text-xs outline-none placeholder:text-ink-dim hover:border-line-strong focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
+        className="w-32 min-w-24 flex-1 rounded-sm border border-line bg-surface px-2 py-0.5 font-mono text-ink text-xs outline-none placeholder:text-ink-dim hover:border-line-strong focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
       />
       <input
         name="attr_value"
         defaultValue={filters.attrValue ?? ""}
         placeholder="postgresql"
         aria-label="Span attribute value"
-        className="w-32 min-w-0 rounded-sm border border-line bg-surface px-2 py-0.5 font-mono text-ink text-xs outline-none placeholder:text-ink-dim hover:border-line-strong focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
+        className="w-32 min-w-24 flex-1 rounded-sm border border-line bg-surface px-2 py-0.5 font-mono text-ink text-xs outline-none placeholder:text-ink-dim hover:border-line-strong focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-1"
       />
       <button
         type="submit"

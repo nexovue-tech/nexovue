@@ -95,6 +95,16 @@ async def test_the_operator_is_created_with_its_own_role(db: AsyncSession) -> No
     assert organization.id == PLATFORM_ORG_ID
 
 
+async def test_the_operator_is_verified_on_sight(db: AsyncSession) -> None:
+    """D9 (`docs/quality/console-review-2026-09-20.md`): the address comes from
+    the environment, so there is nobody to confirm it — and the console was
+    asking the operator to verify a `.test` address nothing can deliver to."""
+    operator = await seed_super_admin(db, _operator_settings())
+
+    assert operator is not None
+    assert operator.email_verified_at is not None
+
+
 async def test_seeding_twice_changes_nothing_a_caller_can_see(db: AsyncSession) -> None:
     settings = _operator_settings()
     first = await seed_super_admin(db, settings)

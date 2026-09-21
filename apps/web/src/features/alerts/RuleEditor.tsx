@@ -369,6 +369,7 @@ function RuleForm({
         <fieldset className="flex flex-col gap-3">
           <legend className="font-medium font-serif text-base text-ink">Noise</legend>
           <SelectField
+            stacked
             label="Repeat"
             value={draft.renotify}
             options={RENOTIFY}
@@ -489,6 +490,7 @@ function Watch({
           </p>
         ) : (
           <SelectField
+            stacked
             label="When"
             value={draft.kind}
             options={KINDS}
@@ -563,6 +565,7 @@ function Watch({
         ) : (
           <>
             <SelectField
+              stacked
               label="Severity"
               value={draft.severity}
               options={SEVERITIES}

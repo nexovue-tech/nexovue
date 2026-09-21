@@ -45,11 +45,21 @@ const within = (path: string) => path.replace(/^\/src\//, "");
  * fields a person just typed. Moving them into the query client would give one
  * function two unrelated jobs. Adding a fourth entry here is a decision, not a
  * formality: it means a second place now decides what a status means.
+ *
+ * `features/admin/api.ts` is the fourth, and the decision was made on 2026-09-21
+ * after the console locked its own operator out. The query client throws every
+ * 403 to the route boundary — right for "you may not read this", wrong for the
+ * one refusal the screen can answer: a lapsed step-up, whose whole answer is a
+ * password box on that screen. Thrown, it replaced the screen with an error and
+ * left no way to confirm. The platform reads therefore keep the global rule and
+ * carve out that single refusal, which means naming the status to say which one
+ * still belongs to the boundary.
  */
 const MAY_READ_A_STATUS: readonly string[] = [
   "app/query-client.ts",
   "shared/api-client.ts",
   "features/auth/problem-fields.ts",
+  "features/admin/api.ts",
 ];
 
 /** `error.status === 401`, `status >= 500`, `response.status !== 204`. */

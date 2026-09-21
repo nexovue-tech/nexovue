@@ -10,7 +10,7 @@ import type { CheckResultSummary, PhaseBucket } from "./api";
 import { useCheckRuns, usePhaseBreakdown } from "./api";
 import { PhaseChart } from "./PhaseChart";
 import type { PhaseReading, SeriesToken } from "./phase-series";
-import { buildPhasePlot, dominantPhase } from "./phase-series";
+import { buildPhasePlot, describeBreakdown } from "./phase-series";
 import { RunStrip } from "./RunStrip";
 
 /**
@@ -22,15 +22,6 @@ import { RunStrip } from "./RunStrip";
  * chart is the largest thing on the screen, and the sentence above it says the answer
  * out loud before anyone reads an axis.
  */
-
-/** What each phase actually is, so the sentence explains rather than names. */
-const PHASE_MEANING: Record<string, string> = {
-  dns: "resolving the name",
-  tcp: "opening the connection",
-  tls: "the TLS handshake",
-  ttfb: "the server thinking before it answered",
-  transfer: "sending the response body",
-};
 
 const SERIES_MARK_CLASS: Record<SeriesToken, string> = {
   1: "bg-series-1",
@@ -79,7 +70,10 @@ export function PhaseBreakdownPanel({ projectId, check, timeWindow }: PhaseBreak
         Where the time goes
       </h2>
       <p className="mt-1 max-w-2xl text-ink-dim text-sm leading-relaxed">
-        {describeBreakdown(plot.legend, plot.meanTotalMs)}
+        {describeBreakdown(plot.legend, plot.meanTotalMs, {
+          runs: check.runs,
+          successfulRuns: check.successful_runs,
+        })}
       </p>
 
       {plot.bucketCount === 0 ? (
@@ -200,18 +194,6 @@ function hoveredBucketOf(
 }
 
 /** The sentence the chart is evidence for. */
-function describeBreakdown(legend: readonly PhaseReading[], meanTotalMs: number): string {
-  const worst = dominantPhase(legend);
-  if (!worst || meanTotalMs <= 0) {
-    return "Each probe is timed in five phases — dns, tcp, tls, ttfb and transfer — which together are the whole request.";
-  }
-
-  const share = Math.round(worst.sharePercent);
-  const meaning = PHASE_MEANING[worst.phase];
-  const explanation = meaning ? ` — ${meaning}` : "";
-  return `${worst.phase} is ${share}% of the mean ${formatDuration(meanTotalMs)}${explanation}.`;
-}
-
 /** What the canvas would say if it could be read. */
 function chartDescription(
   legend: readonly PhaseReading[],

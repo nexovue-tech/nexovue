@@ -39,6 +39,7 @@ from urllib.parse import urlsplit
 
 import clickhouse_connect
 import pytest
+from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
 from sqlalchemy import text
@@ -344,8 +345,13 @@ async def two_tenants_with_telemetry(
 ) -> AsyncIterator[tuple[Tenant, Tenant]]:
     """The same two tenants, with rows in every purged ClickHouse table.
 
-    Both are purged on the way out, including the one the tests prove was
-    untouched — after the assertions have run.
+    Both are cleaned up on the way out, including the one the tests prove was
+    untouched — after the assertions have run, and **without waiting**. A purge
+    per tenant per test is a mutation per table per test, each rewriting every
+    part (ADR-014); measured 2026-09-20, it was 12 of this file's 34 seconds.
+    These rows belong to a UUID nothing else reads, so they join the list
+    `clickhouse_cleanup` empties once at the end of the session. The test that
+    proves an erasure empties the store still runs and waits for its own.
     """
     for tenant in two_tenants:
         await _write_telemetry_rows(clickhouse, str(tenant.org_id))
@@ -353,8 +359,8 @@ async def two_tenants_with_telemetry(
         yield two_tenants
     finally:
         for tenant in two_tenants:
-            purge = TenantPurge(TenantScopedPurger(clickhouse, str(tenant.org_id)))
-            await purge.run(deadline_seconds=ERASURE_DEADLINE_SECONDS)
+            for table in PURGED_TABLES:
+                delete_after_run(table, str(tenant.org_id))
 
 
 async def _build_tenant(db: AsyncSession, store: ObjectStore, label: str) -> Tenant:

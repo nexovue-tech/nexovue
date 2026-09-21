@@ -203,6 +203,8 @@ export interface DeliveryAttempt {
   id: string;
   attempted_at: string;
   outcome: "delivered" | "retrying" | "failed";
+  /** A Send test travels the same path as an alert and is logged beside them. */
+  kind: "notification" | "test";
   http_status: number | null;
   reason: string | null;
   notifications: string[];

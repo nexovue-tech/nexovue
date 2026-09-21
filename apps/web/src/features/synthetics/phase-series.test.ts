@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PhaseBreakdown, PhaseBucket } from "./api";
-import { buildPhasePlot, dominantPhase, seriesTokenFor } from "./phase-series";
+import { buildPhasePlot, describeBreakdown, dominantPhase, seriesTokenFor } from "./phase-series";
 
 /** The five phases the HTTP prober reports, in the order the endpoint serves them. */
 const PHASES = ["dns", "tcp", "tls", "ttfb", "transfer"];
@@ -159,5 +159,40 @@ describe("dominantPhase", () => {
 
   it("has no answer when there is nothing to read", () => {
     expect(dominantPhase([])).toBeUndefined();
+  });
+});
+
+describe("the sentence over the chart says what it measured (D4)", () => {
+  const legend = [
+    { phase: "dns", seriesToken: 1 as const, meanMs: 3.5, sharePercent: 40 },
+    { phase: "ttfb", seriesToken: 4 as const, meanMs: 5.2, sharePercent: 60 },
+  ];
+
+  it("explains the phase when the runs it measured actually succeeded", () => {
+    const said = describeBreakdown(legend, 8.7, { runs: 60, successfulRuns: 60 });
+
+    expect(said).toContain("the server thinking before it answered");
+    expect(said).not.toContain("failed");
+  });
+
+  it("never narrates a server answering when no run in the window did", () => {
+    // The defect: 0% uptime, every run refused at the connection, and the screen
+    // still read "ttfb is 60% of the mean 8.7ms — the server thinking before it
+    // answered".
+    const said = describeBreakdown(legend, 8.7, { runs: 60, successfulRuns: 0 });
+
+    expect(said).not.toContain("the server thinking");
+    expect(said).toContain("up to the point each run failed");
+  });
+
+  it("owns up to the failures it folded in", () => {
+    const said = describeBreakdown(legend, 8.7, { runs: 60, successfulRuns: 57 });
+
+    expect(said).toContain("3 of 60 runs failed");
+    expect(said).toContain("ends early");
+  });
+
+  it("says only what a phase is when there is nothing to measure", () => {
+    expect(describeBreakdown([], 0)).toContain("five phases");
   });
 });

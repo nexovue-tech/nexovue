@@ -104,6 +104,9 @@ class DeliveryAttempt(BaseModel):
     reason: str | None
     # What the attempt was about: incident subjects and what happened to them.
     notifications: list[str]
+    # `notification` or `test` — a Send test goes through the same path and is
+    # logged with it, named so nobody reads one as an alert that fired.
+    kind: str
 
 
 class DeliveryLogResponse(BaseModel):

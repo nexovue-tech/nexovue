@@ -27,24 +27,36 @@ from nexovue_api.superadmin.seed import PLATFORM_ORG_ID
 SEARCH_LIMIT: Final = 50
 
 
-async def search_organizations(session: AsyncSession, needle: str) -> list[Organization]:
-    """Organizations whose name, slug or id matches, or that have a member with a
-    matching address. Newest first."""
-    pattern = f"%{needle.strip()}%"
-    by_member = select(User.org_id).where(User.email.ilike(pattern))
-    conditions: list[ColumnElement[bool]] = [
-        Organization.name.ilike(pattern),
-        Organization.slug.ilike(pattern),
-        Organization.id.in_(by_member),
-    ]
-    with suppress(ValueError):
-        conditions.append(Organization.id == uuid.UUID(needle.strip()))
+async def search_organizations(
+    session: AsyncSession, needle: str | None = None
+) -> list[Organization]:
+    """Every customer, newest first — or the ones a needle matches.
+
+    **No needle is the ordinary case.** One operator with a handful of customers
+    opens this screen to see who they are, not to recall a name they already
+    know; the search narrows a list that is already on screen
+    (`docs/changes/platform-list-first/`). A needle matches the name, the slug,
+    the id, or a member's address.
+    """
+    conditions: list[ColumnElement[bool]] = []
+    if needle and needle.strip():
+        pattern = f"%{needle.strip()}%"
+        by_member = select(User.org_id).where(User.email.ilike(pattern))
+        conditions = [
+            Organization.name.ilike(pattern),
+            Organization.slug.ilike(pattern),
+            Organization.id.in_(by_member),
+        ]
+        with suppress(ValueError):
+            conditions.append(Organization.id == uuid.UUID(needle.strip()))
     statement = (
         select(Organization)
         # nexovue's own organization is not a customer: it has no project, no
         # usage and nothing to suspend or comp, and it matches "nexovue" — the
         # word an operator is most likely to type.
-        .where(or_(*conditions), Organization.id != PLATFORM_ORG_ID)
+        # `or_()` with nothing in it is false, so an absent needle drops the
+        # clause entirely rather than matching no row.
+        .where(*([or_(*conditions)] if conditions else []), Organization.id != PLATFORM_ORG_ID)
         .order_by(Organization.created_at.desc())
         .limit(SEARCH_LIMIT)
     )

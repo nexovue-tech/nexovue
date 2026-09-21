@@ -4,6 +4,7 @@ import { type FormEvent, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { TextField } from "@/shared/components/TextField";
+import { OPERATOR_ROLE } from "@/shared/identity";
 import { takeReturnTo } from "@/shared/session";
 
 import { AuthScreenLayout, FormMessage, FormNotice } from "./AuthScreenLayout";
@@ -14,6 +15,13 @@ import { PASSWORD_WAS_RESET, SIGNED_OUT_EVERYWHERE } from "./search";
 
 /** Where someone lands when they did not arrive from somewhere specific. */
 const DEFAULT_DESTINATION = "/traces";
+
+/**
+ * nexovue's own operator has no project, so every customer screen answers "no
+ * such project" for them — including the one above. Their console is the
+ * platform area and nothing else (`docs/changes/console-review-fixes/`).
+ */
+const OPERATORS_DESTINATION = "/admin";
 
 /**
  * What another screen sends someone here to read.
@@ -52,7 +60,14 @@ export function LoginScreen({ notice }: LoginSearch) {
 
   async function landInside(session: Awaited<ReturnType<typeof submitSecondFactor>>) {
     queryClient.setQueryData(sessionQueryKey, session);
-    await navigate({ to: takeReturnTo() ?? DEFAULT_DESTINATION, replace: true });
+    // A remembered route is still honoured for a customer — it is where they
+    // were going. The operator has nowhere else to be, and a remembered
+    // customer screen would only refuse them.
+    const destination =
+      session.user.role === OPERATOR_ROLE
+        ? OPERATORS_DESTINATION
+        : (takeReturnTo() ?? DEFAULT_DESTINATION);
+    await navigate({ to: destination, replace: true });
   }
 
   const signIn = useMutation({

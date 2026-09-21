@@ -62,7 +62,7 @@ export function GeneralScreen() {
       <SettingGroup title="Account">
         <SettingRow
           label="Email address"
-          description="Changing it has to re-verify the new address, which is not built yet."
+          description="This is where sign-in links and alerts to you are sent. Write in from it to change it — a new address has to be re-verified before it can receive either."
           control={<span className="text-ink-dim text-sm">{user.email}</span>}
         />
       </SettingGroup>

@@ -385,6 +385,7 @@ function WindowForm({
 
       <div className="flex flex-col gap-1.5">
         <SelectField
+          stacked
           label="Repeats"
           value={draft.recurrence}
           options={RECURRENCE_OPTIONS}

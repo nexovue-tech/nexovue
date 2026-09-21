@@ -366,6 +366,11 @@ export function rowHeight(row: LogRow, expanded: string | undefined): number {
  *
  * So both are offered, each labelled with what it will actually contain — the
  * buffer one with its own line count, so nobody presses it expecting the window.
+ *
+ * It used to say "the N lines on screen", which was the one thing it is not: the
+ * screen shows the whole window, and the buffer holds only what the tail carried
+ * since it opened. A heading of 202 lines over a button offering 5 reads as a
+ * bug (`docs/quality/console-review-2026-09-20.md`, D5).
  */
 function ExportControls({
   exportUrl,
@@ -387,10 +392,11 @@ function ExportControls({
       <button
         type="button"
         disabled={held === 0}
-        onClick={() => downloadBuffer(buffer, "nexovue-logs-on-screen.csv")}
+        onClick={() => downloadBuffer(buffer, "nexovue-logs-live-tail.csv")}
         className="text-ink-dim underline underline-offset-4 hover:text-ink disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
       >
-        Download the {formatCount(held)} {plural(held, "line", "lines")} on screen
+        Download the {formatCount(held)} {plural(held, "line", "lines")} that arrived while you
+        watched
       </button>
     </div>
   );

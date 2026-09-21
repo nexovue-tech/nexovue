@@ -104,7 +104,7 @@ export function ApiKeysScreen() {
           <h2 className="font-semibold font-serif text-ink text-lg tracking-tight">Server keys</h2>
           <SecretBadge />
         </div>
-        <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+        <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
           The keys your services authenticate with when they export telemetry. A project can hold
           several at once, which is what lets you replace one without an outage. The secret is shown
           once, at creation, and never again.
@@ -190,7 +190,7 @@ function MintedKey({ created, onDismiss }: { created: ApiKeyCreated; onDismiss: 
       <h2 className="font-medium font-serif text-ink text-lg tracking-tight">
         {created.api_key.name} is ready
       </h2>
-      <p className="mt-2 text-ink-dim text-sm leading-relaxed">{created.notice}</p>
+      <p className="max-w-3xl mt-2 text-ink-dim text-sm leading-relaxed">{created.notice}</p>
 
       <div className="mt-3 flex items-center gap-3 border border-line bg-surface px-3 py-2">
         <code className="min-w-0 flex-1 select-all break-all font-mono text-ink text-sm">
@@ -199,7 +199,7 @@ function MintedKey({ created, onDismiss }: { created: ApiKeyCreated; onDismiss: 
         <CopyButton value={created.key} label="API key" />
       </div>
 
-      <p className="mt-3 text-ink-dim text-sm leading-relaxed">
+      <p className="max-w-3xl mt-3 text-ink-dim text-sm leading-relaxed">
         Set it as <code className="font-mono text-2xs text-ink">NEXOVUE_API_KEY</code> in the
         services you want it to carry, deploy, then come back and watch the key you are replacing go
         quiet before you revoke it.
@@ -236,7 +236,7 @@ function CreateKeyForm({
   return (
     <section className="mb-4 border border-line bg-surface px-4 py-3">
       {rotating ? (
-        <p className="mb-3 text-ink text-sm leading-relaxed">
+        <p className="max-w-3xl mb-3 text-ink text-sm leading-relaxed">
           Replacing <span className="font-mono text-2xs">{rotating.key_hint}</span> ({rotating.name}
           ). Both keys work until you revoke the old one, so deploy this replacement first and
           withdraw the old key once it has gone quiet.
@@ -252,14 +252,16 @@ function CreateKeyForm({
       >
         <div className="min-w-64 flex-1">
           <TextField
-            label="Name this key"
+            label="Name this server key"
             name="api-key-name"
             value={value}
             onChange={setName}
-            hint="Name it after what carries it, so the list still makes sense in six months."
           />
         </div>
-        <div className="flex items-center gap-2 pb-1">
+        {/* No `pb-*` shim: the field no longer carries a hint, so every control in
+            the row is label-plus-control and `items-end` lines them up on the
+            control (`docs/changes/console-review-fixes/`). The hint is below. */}
+        <div className="flex items-center gap-2">
           <Button type="submit" pending={pending} pendingLabel="Creating…" disabled={disabled}>
             {rotating ? "Create replacement" : "Create key"}
           </Button>
@@ -276,6 +278,9 @@ function CreateKeyForm({
           ) : null}
         </div>
       </form>
+      <p className="mt-2 max-w-3xl text-ink-dim text-xs leading-relaxed">
+        Name it after what carries it, so the list still makes sense in six months.
+      </p>
 
       {error ? (
         <div className="mt-3">
@@ -317,7 +322,7 @@ function KeyList({
             : `${live} live keys. Any of them authenticates; withdrawing one leaves the rest working.`}
         </p>
       </div>
-      <p className="pb-3 text-ink-dim text-sm leading-relaxed">{PRECISION_NOTE}</p>
+      <p className="max-w-3xl pb-3 text-ink-dim text-sm leading-relaxed">{PRECISION_NOTE}</p>
 
       {revokeError ? (
         <div className="pb-3">
@@ -374,7 +379,9 @@ function KeyRow({
             <SecretBadge />
             {status.revoked ? <RevokedBadge /> : <TrafficBadge traffic={status.traffic} />}
           </div>
-          <p className="mt-1 text-ink-dim text-sm leading-relaxed">{describeTraffic(status)}</p>
+          <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
+            {describeTraffic(status)}
+          </p>
           <p className="mt-1 font-mono text-2xs text-ink-dim">
             Created {formatTimestamp(apiKey.created_at)}
             {apiKey.last_used_at
@@ -435,12 +442,12 @@ function LeakConfirmation({
   return (
     <div className="mt-3 border-critical-solid border-l-2 bg-critical-subtle px-3 py-3">
       <p className="font-medium text-ink text-sm">Revoke {apiKey.name} immediately?</p>
-      <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+      <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
         {stopsTraffic
           ? "This key is still carrying traffic. Revoking it stops those services from sending telemetry within a minute, and it cannot be undone — the replacement for a revoked key is a new key. Do this when the secret is already exposed and every minute it stays live is a minute somebody else can use it."
           : "Nothing is currently sending with this key, so revoking it should stop nothing. It cannot be undone — the replacement for a revoked key is a new key."}
       </p>
-      <p className="mt-2 text-ink-dim text-sm leading-relaxed">
+      <p className="max-w-3xl mt-2 text-ink-dim text-sm leading-relaxed">
         If the key has <em>not</em> leaked, cancel and use Rotate instead: it creates a replacement
         while this one keeps working, so nothing goes down.
       </p>
@@ -498,7 +505,7 @@ function IngestTarget() {
         </code>
         <CopyButton value={`${endpointLine}\n${headersLine}`} label="both variables" />
       </div>
-      <p className="mt-2 text-ink-dim text-xs leading-relaxed">
+      <p className="max-w-3xl mt-2 text-ink-dim text-xs leading-relaxed">
         Where each one goes, per language and per platform, is in{" "}
         <a
           href={SETUP_DOCS_PATH}

@@ -62,8 +62,10 @@ def _busiest(table: str, time_column: str, where: str = "1") -> tuple[str, str]:
     ).result_rows
     if not found:
         pytest.fail(
-            f"no {table} rows in the last day to read — send some traffic with "
-            "`just otel-demo up` or `just load`"
+            f"no {table} rows in the last day matching `{where}` — send traffic that "
+            "produces them. `just load` covers spans, logs and browser errors; an "
+            "exception carried as a *span event* comes only from `just otel-demo up`, "
+            "which is what this suite's error-group reads need."
         )
     return str(found[0][0]), str(found[0][1])
 

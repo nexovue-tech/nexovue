@@ -360,6 +360,34 @@ async def test_the_delivery_log_says_what_each_attempt_was_about(
         404,
         "the receiver answered 404: no_service",
     )
+    assert attempt.kind == "notification"
+
+
+async def test_a_send_test_is_in_the_log_and_says_it_was_one(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """D2: the channel's own "last delivered" counted a test while the log that
+    promises every attempt showed none, so the two contradicted each other."""
+    created = await _create(db, tenant, kind="slack", name="#incidents", secret=SLACK_URL)
+    db.add(
+        NotificationAttempt(
+            org_id=tenant.organization.id,
+            channel_id=created.id,
+            batch_id=uuid.uuid4(),
+            outcome="delivered",
+            http_status=200,
+            reason=None,
+            kind="test",
+        )
+    )
+    await db.flush()
+
+    log = await service.delivery_log(db, org_id=tenant.organization.id, channel_id=created.id)
+    [attempt] = log.attempts
+    assert (attempt.kind, attempt.outcome) == ("test", "delivered")
+    # Nothing to be "about": a test carries no notifications, and the screen
+    # names it from its kind rather than from an empty list.
+    assert attempt.notifications == []
 
 
 async def test_quiet_hours_are_validated_and_kept_for_channels_people_read(

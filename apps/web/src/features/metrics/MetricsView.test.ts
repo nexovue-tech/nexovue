@@ -187,7 +187,11 @@ describe("what a metric we cannot draw is told", () => {
 
     expect(text).toContain("queue.depth");
     expect(text).toContain("900");
-    expect(text).toContain("no chart yet");
+    // A dash under "Opens", not a phrase repeated on every gauge in the list:
+    // what the screen can open is said once, in the subtitle
+    // (`docs/quality/console-review-2026-09-20.md`).
+    expect(text).toContain("Opens");
+    expect(text).toContain("A histogram opens its distribution here");
   });
 
   it("does not offer a chart for a shape that has no reader", async () => {

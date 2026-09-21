@@ -199,7 +199,9 @@ export function MetricsView({
         <p className="mt-1 text-ink-dim text-sm">
           {narrowed
             ? `The metrics matching these filters, of everything reported over ${windowLabel}.`
-            : `Every metric this project reported over ${windowLabel}, busiest first.`}
+            : `Every metric this project reported over ${windowLabel}, busiest first.`}{" "}
+          A histogram opens its distribution here; a gauge or a counter is listed with what it
+          carries, and is charted on the screen that owns it.
         </p>
       </header>
 
@@ -333,7 +335,7 @@ function Catalogue({
         <span className="w-16 shrink-0 text-right">Unit</span>
         <span className="w-20 shrink-0 text-right">Series</span>
         <span className="w-20 shrink-0 text-right">Points</span>
-        <span className="w-24 shrink-0 text-right" />
+        <span className="w-24 shrink-0 text-right">Opens</span>
       </div>
 
       <ul className="min-h-0 flex-1 overflow-y-auto">
@@ -395,7 +397,7 @@ function MetricRow({
         {formatCount(metric.points)}
       </span>
       <span className="w-24 shrink-0 text-right font-mono text-2xs text-ink-dim">
-        {metric.readable ? "" : "no chart yet"}
+        {metric.readable ? "distribution" : UNKNOWN}
       </span>
     </button>
   );

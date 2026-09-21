@@ -34,6 +34,7 @@ from nexovue_api.data.postgres.models import (
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.organizations import valve
 from nexovue_api.signup.service import provision_tenant
+from nexovue_api.superadmin.seed import PLATFORM_NAME
 from nexovue_api.usage import queries as usage_queries
 from nexovue_api.usage.service import usage_for_organization
 
@@ -55,8 +56,18 @@ def operator_label(operator: User) -> str:
 
     A label, not a link: a customer reads their own history and should see who
     it was, not the id of a row in a table they cannot open.
+
+    **"nexovue at nexovue" is not a name.** The seeded operator is called after
+    the company, which is right for the account and wrong in this sentence — a
+    customer's log read "nexovue at nexovue viewed as Dev Owner", and the banner
+    over their console said the same. An operator whose name *is* the company is
+    named for what they are instead (found 2026-09-21,
+    `docs/changes/console-review-fixes/`).
     """
-    return f"{operator.name or operator.email} at nexovue"
+    name = (operator.name or "").strip()
+    if not name or name.casefold() == PLATFORM_NAME.casefold():
+        return f"{PLATFORM_NAME} support"
+    return f"{name} at {PLATFORM_NAME}"
 
 
 async def onboard(
@@ -231,11 +242,23 @@ async def end_grant(db: AsyncSession, *, operator: User, org_id: uuid.UUID, now:
     await db.flush()
 
 
-async def search(db: AsyncSession, needle: str) -> OrganizationSearch:
-    if len(needle.strip()) < MIN_NEEDLE:
+async def search(db: AsyncSession, needle: str | None = None) -> OrganizationSearch:
+    """Every customer, or the ones a needle matches.
+
+    A needle still has to be worth running: one character matches most of the
+    list and reads as a broken filter. No needle at all is not a short one — it
+    is the screen asking who the customers are.
+    """
+    trimmed = (needle or "").strip()
+    if trimmed and len(trimmed) < MIN_NEEDLE:
         raise InvalidRequestError("Search for at least two characters.")
-    found = await queries.search_organizations(db, needle)
-    return OrganizationSearch(organizations=[_row(organization) for organization in found])
+    found = await queries.search_organizations(db, trimmed or None)
+    return OrganizationSearch(
+        organizations=[_row(organization) for organization in found],
+        # The list is capped; saying so is the difference between "you have this
+        # many customers" and "this is as many as we will show you".
+        truncated=len(found) >= queries.SEARCH_LIMIT,
+    )
 
 
 async def page(db: AsyncSession, *, org_id: uuid.UUID) -> OrganizationPage:

@@ -26,6 +26,9 @@ class OrganizationRow(BaseModel):
 
 class OrganizationSearch(BaseModel):
     organizations: list[OrganizationRow]
+    """Whether the cap cut the list short, so the screen can say so rather than
+    letting an operator read a partial list as the whole one."""
+    truncated: bool = False
 
 
 class MemberRow(BaseModel):

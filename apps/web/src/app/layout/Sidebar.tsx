@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 
 import { OpenIncidentBadge } from "@/features/alerts/OpenIncidentBadge";
+import { SignedInAs } from "@/features/auth/SignedInAs";
 import { Wordmark } from "@/shared/components/Logo";
 import { useIsOperator } from "@/shared/identity";
 import { SETUP_DOCS_PATH } from "@/shared/setup-docs";
@@ -22,11 +23,16 @@ import { NAV_SECTIONS } from "../routes/route-manifest";
  * content instead, and closes when a link is followed.
  */
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
-  // One section is nexovue's own. It is hidden rather than disabled: a customer
-  // has no business knowing the platform area exists, and the API refuses it
-  // whatever the sidebar shows.
+  // One section is nexovue's own, and it is the *only* one its operator is shown.
+  // The role holds no permission inside any organization, so every telemetry and
+  // settings screen would refuse them or come back empty — thirteen links to
+  // nowhere (`docs/quality/console-review-2026-09-20.md`, D8). A customer is
+  // shown the reverse, and never learns the platform area exists; the API refuses
+  // it either way.
   const operator = useIsOperator();
-  const sections = NAV_SECTIONS.filter((section) => operator || !section.operatorOnly);
+  const sections = NAV_SECTIONS.filter((section) =>
+    operator ? section.operatorOnly : !section.operatorOnly,
+  );
 
   return (
     <nav
@@ -38,7 +44,10 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
       }`}
     >
       <Link
-        to="/"
+        // Home is the platform area for nexovue's own operator: `/` is the
+        // customer Overview, which answers "no such project" to a role that
+        // holds none (`docs/changes/console-review-fixes/`).
+        to={operator ? "/admin" : "/"}
         onClick={onNavigate}
         className="flex h-10 items-center border-line border-b px-4"
       >
@@ -60,7 +69,9 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
                     activeOptions={{ exact: item.path === "/" }}
                     // `relative` holds the badge's sr-only words inside the link; without
                     // it they escape the scroller and stretch the page.
-                    className="relative flex items-center justify-between gap-2 border-transparent border-l-2 py-1 pr-3 pl-3.5 text-ink-dim text-sm hover:bg-hover hover:text-ink"
+                    // Taller on a phone, where the sidebar is a drawer and these
+                    // are tap targets rather than a dense column to scan.
+                    className="relative flex min-h-11 items-center justify-between gap-2 border-transparent border-l-2 pr-3 pl-3.5 text-ink-dim text-sm hover:bg-hover hover:text-ink md:min-h-0 md:py-1"
                     activeProps={{
                       className: "border-brand bg-raised font-medium text-ink",
                     }}
@@ -73,6 +84,16 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
             </ul>
           </div>
         ))}
+      </div>
+
+      {/* **Who is signed in, and the way out.** The console had neither: the only
+          sign-out was *Sign out everywhere*, four clicks deep under Settings →
+          Account, which ends the session on every device the account is signed in
+          on. Here because there is no user menu in the top bar and this is where a
+          reader looks for one; the address is the reminder of *which* account is
+          about to be signed out, which matters to anyone who keeps two. */}
+      <div className="flex shrink-0 items-center justify-between gap-2 border-line border-t px-4 py-2.5">
+        <SignedInAs />
       </div>
 
       {/* Below the navigation rather than in it: the documentation is not a screen

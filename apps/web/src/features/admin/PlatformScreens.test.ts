@@ -13,6 +13,7 @@ import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { ApiError } from "@/shared/api-client";
 import { PERMISSIONS_OF, type TestRole } from "@/shared/identity.test-util";
 
 import { OrganizationScreen } from "./OrganizationScreen";
@@ -32,10 +33,26 @@ import { PlatformScreen } from "./PlatformScreen";
  * 4. Either proof opening the area, so neither field may be `required` on its
  *    own: the browser holds a submit back for an empty required field, and the
  *    operator sees a button that does nothing.
+ * 5. The lapsed refusal reaching the route boundary instead of the screen —
+ *    found by hand on 2026-09-21, after this suite had passed for a day against
+ *    a query client that did not behave like the app's.
  */
+
+const HTTP_FORBIDDEN = 403;
 
 const ORG = "00000000-0000-0000-0000-0000000000a1";
 const PRIYA = "00000000-0000-0000-0000-0000000000b2";
+
+const ROW = {
+  id: ORG,
+  slug: "acme",
+  name: "Acme",
+  region: "india",
+  plan: "pro",
+  created_at: "2026-09-01T09:00:00Z",
+  deleted: false,
+  suspended: false,
+};
 
 const ORGANIZATION = {
   organization: {
@@ -95,7 +112,13 @@ const LAPSED = {
 
 function stubApi(
   role: TestRole | "super_admin",
-  options: { platform?: unknown; status?: number; entered?: string[] } = {},
+  options: {
+    platform?: unknown;
+    status?: number;
+    entered?: string[];
+    list?: unknown;
+    searched?: string[];
+  } = {},
 ) {
   vi.stubGlobal(
     "fetch",
@@ -117,6 +140,11 @@ function stubApi(
         options.entered?.push(String(init?.body));
         return json({ until: "2026-09-20T12:00:00Z" });
       }
+      if (url.pathname.endsWith("/admin/organizations")) {
+        if (options.status === 403) return problem(LAPSED, 403);
+        options.searched?.push(url.search);
+        return json(options.list ?? { organizations: [ROW], truncated: false });
+      }
       if (url.pathname.includes("/admin/organizations")) {
         if (options.status === 403) return problem(LAPSED, 403);
         return json(options.platform ?? ORGANIZATION);
@@ -137,8 +165,21 @@ async function settle() {
 async function mount(screen: () => React.ReactElement, path = "/admin") {
   const container = document.createElement("div");
   document.body.append(container);
+  // **The app's own 403 rule, restated here on purpose.** `app/query-client.ts`
+  // throws every 403 to the route error boundary; a bare client does not, and a
+  // bare client is what let the step-up panel pass this suite while the real
+  // console replaced the whole screen with "this session may not perform that
+  // action" and offered no way to confirm. A feature may not import `app/`, so
+  // the rule is copied with its reason rather than skipped.
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: {
+        retry: false,
+        throwOnError: (error: unknown) =>
+          error instanceof ApiError && error.status === HTTP_FORBIDDEN,
+      },
+      mutations: { retry: false },
+    },
   });
   const rootRoute = createRootRoute();
   const route = createRoute({
@@ -193,6 +234,27 @@ describe("the platform area", () => {
     await settle();
 
     expect(JSON.parse(entered[0] as string)).toEqual({ password: "a long operator password" });
+  });
+
+  it("opens as a list of customers, without being asked to search (founder, 2026-09-21)", async () => {
+    // It used to open as a search box over an empty screen, which asks an
+    // operator to recall a name before it will show them anything.
+    const searched: string[] = [];
+    stubApi("super_admin", { searched });
+    const container = await mount(() => createElement(PlatformScreen));
+
+    expect(container.querySelector('ul[aria-label="Organizations"]')).not.toBeNull();
+    expect(container.textContent).toContain("Acme");
+    expect(container.textContent).toContain("1 customer");
+    // Asked for everything, not for a needle.
+    expect(searched).toEqual([""]);
+  });
+
+  it("says when the list is the newest of more, rather than reading as all of them", async () => {
+    stubApi("super_admin", { list: { organizations: [ROW], truncated: true } });
+    const container = await mount(() => createElement(PlatformScreen));
+
+    expect(container.textContent).toContain("Search to reach the rest");
   });
 
   it("shows the operator one organization, with the valve and the plan", async () => {

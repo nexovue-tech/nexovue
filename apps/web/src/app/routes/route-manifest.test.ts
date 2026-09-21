@@ -115,3 +115,25 @@ describe("the sidebar", () => {
     expect(unreachable).toEqual([]);
   });
 });
+
+describe("whose screens the sidebar offers", () => {
+  // D8 (`docs/quality/console-review-2026-09-20.md`): nexovue's operator holds no
+  // permission inside any organization, so a sidebar that offers them Traces and
+  // Settings offers thirteen refusals. A customer, conversely, must never learn
+  // the platform area exists.
+  const operatorSections = NAV_SECTIONS.filter((section) => section.operatorOnly);
+
+  it("keeps nexovue's own section out of every customer's sidebar", () => {
+    const customerPaths = NAV_SECTIONS.filter((section) => !section.operatorOnly).flatMap(
+      (section) => section.items.map((item) => item.path),
+    );
+
+    expect(customerPaths).not.toContain("/admin");
+  });
+
+  it("has exactly one section for the operator, and it is the platform", () => {
+    expect(operatorSections.flatMap((section) => section.items.map((item) => item.path))).toEqual([
+      "/admin",
+    ]);
+  });
+});

@@ -1,3 +1,5 @@
+import { formatDuration } from "@/shared/format/duration";
+
 import type { PhaseBreakdown, PhaseBucket } from "./api";
 
 /**
@@ -143,4 +145,58 @@ function durationOf(bucket: PhaseBucket, phase: string): number {
 function mean(values: readonly number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/** What each phase actually is, so the sentence explains rather than names. */
+const PHASE_MEANING: Record<string, string> = {
+  dns: "resolving the name",
+  tcp: "opening the connection",
+  tls: "the TLS handshake",
+  ttfb: "the server thinking before it answered",
+  transfer: "sending the response body",
+};
+
+const ALL_PHASES =
+  "Each probe is timed in five phases — dns, tcp, tls, ttfb and transfer — which together are the whole request.";
+
+/** How many of the window's runs the readings above were measured from. */
+export interface RunCoverage {
+  runs: number;
+  successfulRuns: number;
+}
+
+/**
+ * The sentence over the chart.
+ *
+ * **A failed run is timed too**, and its phases are real: DNS still resolved
+ * before the connection was refused (`probes/http_check.py`). What is not real
+ * is the explanation — "the server thinking before it answered" was printed
+ * over a window in which no server answered at all
+ * (`docs/quality/console-review-2026-09-20.md`, D4). So the sentence says what
+ * the readings were measured from whenever some of the runs failed, and drops
+ * the per-phase meaning entirely when none of them succeeded.
+ */
+export function describeBreakdown(
+  legend: readonly PhaseReading[],
+  meanTotalMs: number,
+  coverage?: RunCoverage,
+): string {
+  const worst = dominantPhase(legend);
+  if (!worst || meanTotalMs <= 0) return ALL_PHASES;
+
+  const failed = coverage ? coverage.runs - coverage.successfulRuns : 0;
+  const share = Math.round(worst.sharePercent);
+  const total = formatDuration(meanTotalMs);
+
+  if (coverage && coverage.runs > 0 && coverage.successfulRuns === 0) {
+    return `${worst.phase} is ${share}% of the mean ${total} — measured up to the point each run failed, not to an answer.`;
+  }
+
+  const meaning = PHASE_MEANING[worst.phase];
+  const explanation = meaning ? ` — ${meaning}` : "";
+  const caveat =
+    failed > 0
+      ? ` ${failed} of ${coverage?.runs} runs failed and are counted here, and a failed run ends early.`
+      : "";
+  return `${worst.phase} is ${share}% of the mean ${total}${explanation}.${caveat}`;
 }

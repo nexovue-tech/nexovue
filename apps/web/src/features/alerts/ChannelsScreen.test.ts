@@ -12,6 +12,7 @@ import {
   json,
   mountAt,
   OWNERS,
+  problem,
   readable,
   stubApi,
   typeInto,
@@ -209,5 +210,33 @@ describe("an email channel's settings", () => {
       "the second save",
     );
     expect(sends[1].body).toEqual({ name: "On call" });
+  });
+});
+
+/**
+ * A bookmark outlives the thing it points at.
+ *
+ * Somebody removes a channel; a teammate who kept its page open, or bookmarked
+ * it, opens it again. That used to read "The channel could not be loaded" over a
+ * "Try again" button that can only ever fail again. A deleted check's page has
+ * said "No such check" with a way back since F18; this is the same answer.
+ */
+describe("a channel that does not exist", () => {
+  it("says so, with the way back, instead of offering a retry that cannot work", async () => {
+    stubApi({
+      ...alertReads({ channels: [] }),
+      "GET /channels/gone": problem(404, "No channel with this id in this organization."),
+    });
+    const { container } = await mountAt("/settings/channels/gone");
+
+    await waitFor(() => readable(container).includes("No such channel"), "the not-found state");
+    // Two links point at the list — the header's "All channels" and this one — so
+    // the assertion is that one of them is the way out of the empty state, not
+    // that the first link on the page is.
+    const back = [...container.querySelectorAll('a[href="/settings/channels"]')].map(
+      (link) => link.textContent,
+    );
+    expect(back).toContain("Back to every channel");
+    expect(readable(container)).not.toContain("Try again");
   });
 });

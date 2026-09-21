@@ -50,6 +50,9 @@ export function AlertsScreen() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-8 overflow-y-auto px-4 pt-5 pb-10">
+      {/* Capped like the lists below it: full width, its buttons sat 300px to the
+          right of the content they act on
+          (`docs/quality/console-review-2026-09-20.md`). */}
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <h1 className="font-semibold font-serif text-ink text-xl tracking-tight">Alerts</h1>
@@ -154,16 +157,25 @@ function nothingOpen(recent: readonly Incident[]): string {
     : "Nothing is open.";
 }
 
+/**
+ * **The row is the width of the screen; the sentence inside it is not.**
+ *
+ * Capping the whole list left a third of a wide window empty and pushed "for 20 h
+ * 28 min · Details" into the middle of the page, away from the edge every other
+ * list in the console puts its right-hand column on. The reason line is prose and
+ * still reads at a measure (`max-w-3xl`), so the width is spent on the layout
+ * rather than on longer lines.
+ */
 function IncidentList({ incidents }: { incidents: readonly Incident[] }) {
   return (
-    <ul className="max-w-4xl border-line border-t">
+    <ul className="border-line border-t">
       {incidents.map((incident) => (
         <li
           key={incident.id}
           className={`border-line-subtle border-b border-l-2 py-3 pl-3 ${SEVERITY_RULE[incident.severity]}`}
         >
           <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-            <div className="min-w-0">
+            <div className="min-w-0 max-w-3xl">
               <p className="flex flex-wrap items-baseline gap-x-2">
                 {/* The words carry the severity; the rule on the left only repeats it. */}
                 <span
@@ -227,7 +239,7 @@ function EvaluationBehind({ status }: { status: EvaluationStatus | undefined }) 
   return (
     <div
       role="status"
-      className="max-w-4xl border-warning-solid border-l-2 bg-warning-subtle px-3 py-2"
+      className="max-w-3xl border-warning-solid border-l-2 bg-warning-subtle px-3 py-2"
     >
       {behind.map((sweep) => (
         <p key={sweep.name} className="text-ink text-sm">
@@ -284,13 +296,13 @@ function RuleList({
   canOperate: boolean;
 }) {
   return (
-    <ul className="max-w-4xl border-line border-t">
+    <ul className="border-line border-t">
       {rules.map((rule) => {
         const status = ruleStatus(rule);
         return (
           <li key={rule.id} className="border-line-subtle border-b py-3">
             <RuleRowFrame ruleId={rule.id} linked={canOperate}>
-              <div className="min-w-0">
+              <div className="min-w-0 max-w-3xl">
                 <p className="flex flex-wrap items-baseline gap-x-2">
                   <span className="font-medium text-base text-ink group-hover:underline">
                     {rule.name}

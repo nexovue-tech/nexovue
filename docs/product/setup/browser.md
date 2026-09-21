@@ -99,13 +99,11 @@ Call `init` once, as early in the page as you can. Earlier means the page-load
 span covers more of the load, and an error thrown before `init` runs is an error
 nobody records.
 
-> **Distribution is not settled.** `@nexovue/browser-sdk` is built in the
-> nexovue repository and is not published to a package registry or a CDN today,
-> so neither the `npm install` nor a hosted `<script src>` above is something a
-> customer can do yet. The built file is `dist/nexovue-rum.min.js` and the
-> script-tag build exposes the global `nexovue`. How customers obtain it — npm,
-> a CDN the ingest host serves, or a file they host themselves — is an open
-> decision.
+> **The SDK is not on npm or a CDN yet.** Write to us and we will send you the
+> built file — `nexovue-rum.min.js`, which defines the global `nexovue` — to
+> host alongside your own scripts. Everything below describes that file; the
+> `npm install` and `<script src>` lines are what they will become once it is
+> published.
 
 ### Options
 

@@ -47,7 +47,7 @@ const BASE: FindingsViewProps = {
   isError: false,
   onRetry: () => {},
   totals: TOTALS,
-  checks: { total: 3, passing: 3 },
+  checks: { total: 3, passing: 3, down: 0 },
 };
 
 function render(overrides: Partial<FindingsViewProps> = {}): HTMLElement {
@@ -117,9 +117,20 @@ describe("the healthy state carries the evidence for its own claim", () => {
   });
 
   it("names how many synthetic checks are passing", () => {
-    const text = readable({ checks: { total: 3, passing: 2 } });
+    const text = readable({ checks: { total: 3, passing: 2, down: 0 } });
 
     expect(text).toContain("2 of 3");
+  });
+
+  it("stops saying everything is normal once a check is down (D1)", () => {
+    // The evidence and the headline are read from the same numbers now, so the
+    // screen cannot contradict itself the way it did on a project whose four
+    // checks were all failing.
+    const text = readable({ checks: { total: 4, passing: 0, down: 4 } });
+
+    expect(text).not.toContain("All systems normal");
+    expect(text).toContain("4 checks are down");
+    expect(text).toContain("0 of 4");
   });
 
   it("does not invent a summary when nothing has reported", () => {
@@ -127,6 +138,7 @@ describe("the healthy state carries the evidence for its own claim", () => {
     const text = readable({ totals: undefined, checks: undefined });
 
     expect(text).toContain("Nothing has reported to this project yet");
+    expect(text).not.toContain("All systems normal");
     expect(text).not.toContain("8,400");
   });
 });

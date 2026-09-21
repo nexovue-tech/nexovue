@@ -457,7 +457,11 @@ function BreakdownRow({ group }: { group: ReadableGroup }) {
 function BreakdownValue({ cell }: { cell: BreakdownCell }) {
   return (
     <td
-      className={`py-1.5 pl-3 text-right font-mono text-2xs tabular-nums ${
+      // `whitespace-nowrap`: "2.42 s" was breaking after the number, so every
+      // reading in the table was two lines tall
+      // (`docs/quality/console-review-2026-09-20.md`). The table scrolls
+      // sideways rather than wrapping if it runs out of room.
+      className={`whitespace-nowrap py-1.5 pl-3 text-right font-mono text-2xs tabular-nums ${
         cell.core ? "" : "hidden md:table-cell"
       } ${RATING_STYLES[cell.rating]}`}
       title={`${cell.label} — ${cell.detail}`}

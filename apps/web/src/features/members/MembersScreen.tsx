@@ -75,6 +75,12 @@ function InviteForm({ own }: { own: Role }) {
   return (
     <section className="mb-6 border border-line bg-surface px-4 py-3" aria-label="Invite">
       <form
+        // **Aligned on the controls, not on the tallest box.** A `TextField`
+        // carries its hint inside it, so `items-end` lined the select and the
+        // button up with the bottom of a *hint* — which is why they used to need
+        // `pb-1` and `pb-2` shims, and why a hint that wrapped moved them again.
+        // The hint is a line under the form now, and the three controls line up
+        // by construction (`docs/changes/console-review-fixes/`).
         className="flex flex-wrap items-end gap-3"
         onSubmit={(event) => {
           event.preventDefault();
@@ -97,11 +103,11 @@ function InviteForm({ own }: { own: Role }) {
             type="email"
             value={email}
             onChange={setEmail}
-            hint="They get a link to choose a password. It works once, for seven days."
           />
         </div>
-        <div className="pb-2">
+        <div className="w-40">
           <SelectField
+            stacked
             label="As"
             value={role}
             options={roles}
@@ -111,13 +117,17 @@ function InviteForm({ own }: { own: Role }) {
             optionLabel={(option) => option.label}
           />
         </div>
-        <div className="pb-1">
+        <div>
           <Button type="submit" pending={invite.isPending} pendingLabel="Inviting…">
             Send invite
           </Button>
         </div>
       </form>
-      <p className="mt-2 text-ink-dim text-xs">{roles.find((each) => each.id === role)?.says}.</p>
+      <p className="mt-2 text-ink-dim text-xs">
+        They get a link to choose a password. It works once, for seven days. As a{" "}
+        {roles.find((each) => each.id === role)?.label.toLowerCase()}:{" "}
+        {roles.find((each) => each.id === role)?.says}.
+      </p>
       {sent ? (
         <p role="status" className="mt-2 text-ink text-sm">
           {sent.invite_sent_at
@@ -244,7 +254,7 @@ function RemoveConfirmation({ member, onDone }: { member: Member; onDone: () => 
   return (
     <div className="mt-3 border-critical-solid border-l-2 bg-critical-subtle px-3 py-3">
       <p className="font-medium text-ink text-sm">Remove {name} from this organization?</p>
-      <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+      <p className="max-w-3xl mt-1 text-ink-dim text-sm leading-relaxed">
         They are signed out everywhere on their next click and cannot sign in again unless someone
         invites them back. The checks, rules and channels they made stay and keep working.
       </p>

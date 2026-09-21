@@ -49,6 +49,12 @@ NOTIFICATION_STATES: Final = ("pending", "delivering", "delivered", "failed", "d
 
 ATTEMPT_OUTCOMES: Final = ("delivered", "retrying", "failed")
 
+# What an attempt carried. A *Send test* goes through the same channel by the
+# same path, so it belongs in the delivery log the customer reads afterwards —
+# named, so nobody mistakes a test for an alert that fired
+# (`docs/changes/console-review-fixes/`).
+ATTEMPT_KINDS: Final = ("notification", "test")
+
 # A threshold rule's position for one subject (F21 Step 5).
 EVALUATION_PHASES: Final = ("ok", "pending", "firing", "resolving", "insufficient")
 

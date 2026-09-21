@@ -24,7 +24,9 @@ from environment import TEST_ENVIRONMENT
 from live import require_stack
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from nexovue_api.admin import queries
 from nexovue_api.admin import service as admin
+from nexovue_api.data.postgres.models import User
 from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
 from nexovue_api.members import service as members
 from nexovue_api.settings import Settings
@@ -119,6 +121,49 @@ async def test_the_search_never_returns_nexovues_own_organization(db: AsyncSessi
     found = await admin.search(db, PLATFORM_NAME)
 
     assert PLATFORM_ORG_ID not in {row.id for row in found.organizations}
+
+
+async def test_the_screen_opens_as_a_list_of_every_customer(db: AsyncSession) -> None:
+    """Founder, 2026-09-21: the platform screen opens as a list and the search
+    narrows it, rather than opening as a search box over nothing."""
+    acme = await _tenant(db, f"Listed{uuid.uuid4().hex[:6]}")
+
+    found = await admin.search(db)
+
+    # Newest first, so one created a moment ago is on the first page whether or
+    # not the development store holds more than the cap — it usually does, which
+    # is what `truncated` is for and what the next test covers.
+    assert acme.organization.id in {row.id for row in found.organizations}
+
+
+async def test_the_list_says_when_it_is_only_the_newest(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A capped list read as the whole list is how an operator concludes a
+    customer does not exist."""
+    for index in range(2):
+        await _tenant(db, f"Capped{index}{uuid.uuid4().hex[:6]}")
+    monkeypatch.setattr(queries, "SEARCH_LIMIT", 1)
+    found = await admin.search(db)
+
+    assert len(found.organizations) == 1
+    assert found.truncated is True
+
+
+def test_the_operator_is_named_for_what_they_are_when_they_carry_the_company_name() -> None:
+    """A customer's audit log read "nexovue at nexovue viewed as Dev Owner"
+    (`docs/changes/console-review-fixes/`)."""
+    named = User(email="raj@nexovue.com", name="Raj", org_id=uuid.uuid4(), password_hash="x")
+    company = User(
+        email="operator@nexovue.test", name="nexovue", org_id=uuid.uuid4(), password_hash="x"
+    )
+    nameless = User(
+        email="operator@nexovue.test", name=None, org_id=uuid.uuid4(), password_hash="x"
+    )
+
+    assert admin.operator_label(named) == "Raj at nexovue"
+    assert admin.operator_label(company) == "nexovue support"
+    assert admin.operator_label(nameless) == "nexovue support"
 
 
 async def test_a_search_of_one_character_is_refused(db: AsyncSession) -> None:

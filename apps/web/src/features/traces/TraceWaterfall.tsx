@@ -1,7 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { formatDuration } from "@/shared/format/duration";
+import { formatDurationOn } from "@/shared/format/duration";
 
 import type { Span } from "./api";
 import { buildTimeline, timelineTicks } from "./trace-timeline";
@@ -88,7 +88,7 @@ export function TraceWaterfall({
               }`}
               style={{ left: `${tick.percent}%` }}
             >
-              {formatDuration(tick.atMs)}
+              {formatDurationOn(tick.atMs, timeline.spanMs)}
             </span>
           ))}
         </div>
