@@ -307,7 +307,11 @@ async def notifications_of(
             NotificationChannel.org_id == org_id,
             Notification.incident_id.in_(incident_ids),
         )
-        .order_by(Notification.created_at)
+        # `id` breaks the tie: `created_at` is the transaction's clock, and an
+        # incident that notified three channels at once wrote all three in one
+        # transaction — so without this the three read in a different order each
+        # time somebody opens the incident.
+        .order_by(Notification.created_at, Notification.id)
     )
     for notification, channel in (await session.execute(statement)).all():
         grouped[notification.incident_id].append((notification, channel))

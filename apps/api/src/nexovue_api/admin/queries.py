@@ -64,10 +64,26 @@ async def search_organizations(
 
 
 async def members_of(session: AsyncSession, *, org_id: uuid.UUID) -> list[User]:
+    """Everyone in the organization who has not been removed, oldest first.
+
+    **`id` is the tiebreak, and it is load-bearing.** `created_at` defaults to
+    Postgres `now()`, which is *transaction* start time — so every row written in
+    one transaction shares it to the microsecond, and an owner and the teammate
+    they invited in the same request sort in whichever order the planner
+    happened to produce. The list a human reads then changes between two loads of
+    the same page.
+
+    Found 2026-09-21 by the parallel gate, as `test_admin_live` returning
+    `[viewer, owner]` where it had always returned `[owner, viewer]`. Nothing had
+    changed but the plan. `members/queries.members_of` already ordered this way;
+    this copy was written without it.
+
+    Ids are uuidv7, so the tiebreak is itself time-ordered rather than arbitrary.
+    """
     statement = (
         select(User)
         .where(User.org_id == org_id, User.removed_at.is_(None))
-        .order_by(User.created_at)
+        .order_by(User.created_at, User.id)
     )
     return list(await session.scalars(statement))
 
@@ -76,7 +92,10 @@ async def projects_of(session: AsyncSession, *, org_id: uuid.UUID) -> list[Proje
     statement = (
         select(Project)
         .where(Project.org_id == org_id, Project.deleted_at.is_(None))
-        .order_by(Project.created_at)
+        # Same tiebreak, same reason: projects created in one transaction share a
+        # `created_at`, and a list that reorders itself between loads reads as a
+        # bug in the data rather than in the sort.
+        .order_by(Project.created_at, Project.id)
     )
     return list(await session.scalars(statement))
 

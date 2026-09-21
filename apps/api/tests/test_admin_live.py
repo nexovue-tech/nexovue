@@ -171,6 +171,52 @@ async def test_a_search_of_one_character_is_refused(db: AsyncSession) -> None:
         await admin.search(db, "a")
 
 
+async def test_the_member_list_holds_its_order_when_a_clock_cannot_separate_two_rows(
+    db: AsyncSession,
+) -> None:
+    """The order of a list a human reads must not depend on the query planner.
+
+    **The premise is the point.** `created_at` defaults to Postgres `now()`,
+    which is *transaction* start time, so an owner and the teammate they invited
+    in the same request share it to the microsecond. `ORDER BY created_at` alone
+    is then unordered between them, and the admin's member list silently
+    reordered itself between two loads of the same page.
+
+    Found 2026-09-21 by the parallel gate — `test_the_page_shows_people_...`
+    returned `[viewer, owner]` where it had returned `[owner, viewer]` for weeks.
+    Nothing had changed but the plan. This asserts the tie exists *and* that it
+    is broken the same way every time, so the next person to drop the tiebreak
+    fails here rather than shipping a list that shuffles.
+    """
+    acme = await _tenant(db, "Acme")
+    await members.invite(
+        db, actor=acme.user, email=f"t-{uuid.uuid4()}@example.test", role="viewer", now=_now()
+    )
+    await db.flush()
+
+    page = await admin.page(db, org_id=acme.organization.id)
+    stamps = {member.id: member for member in page.members}
+    assert len(page.members) == 2
+
+    owner, viewer = page.members
+    assert (owner.role, viewer.role) == ("owner", "viewer"), (
+        "the owner is the older row and must come first"
+    )
+
+    # The premise: were these separable by their clocks, the tiebreak would not
+    # be doing anything and this test would be proving nothing.
+    rows = await queries.members_of(db, org_id=acme.organization.id)
+    assert rows[0].created_at == rows[1].created_at, (
+        "these two rows no longer share a `created_at`, so this test no longer "
+        "exercises the tie it exists for. If `CreatedAt` stopped defaulting to "
+        "`now()`, say so here rather than deleting the ordering."
+    )
+    # uuidv7 is time-ordered, so the tiebreak agrees with the order of creation
+    # rather than being merely stable.
+    assert rows[0].id < rows[1].id
+    assert list(stamps) == [row.id for row in rows]
+
+
 async def test_the_page_shows_people_projects_region_and_suspension(db: AsyncSession) -> None:
     acme = await _tenant(db, "Acme")
     await members.invite(
