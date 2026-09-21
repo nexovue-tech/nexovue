@@ -204,8 +204,14 @@ Web Vitals and errors (F2), not stacks.
 
 ## Non-functional requirements
 
-- **NFR1 — No effect on the other signals.** Profiles have their own door and pipeline; a flood or a
-  failure of profiles must not delay or refuse spans, logs or metrics.
+- **NFR1 — No effect on the other signals, as far as the door can hold it** *(amended 2026-09-20 —
+  `docs/changes/one-worker-again/`)*. Profiles have their own rate bucket, their own per-key
+  samples-per-second budget, their own topic and a bounded fetch, so a flood is refused or throttled
+  before it reaches the pipeline. What is **no longer** promised is isolation inside the worker:
+  every pipeline shares one process again by the founder's decision, so a flood that survives the
+  door and exhausts that process's memory stops spans, logs and metrics with it until the backlog
+  drains. Splitting the worker is one environment variable and a memory limit if that trade is ever
+  revisited.
 - **NFR2 — Reading speed.** A service's flame graph for one hour renders in under 3 s at the p95 for a
   service reporting from up to 20 hosts; a day in under 10 s.
 - **NFR3 — Storage.** Profiling at the eBPF default sampling rate costs no more than 100 MB of stored
@@ -258,8 +264,10 @@ Web Vitals and errors (F2), not stacks.
   samples metered.
 - **AC14** — Profiles older than the project's profile retention must not be returned, and a tenant's
   profiles must be erased by the tenant erasure (inventory test extended).
-- **AC15** — A flood of profiles that exhausts their pipeline must not delay spans, logs or metrics
-  from the same organization (NFR1).
+- **AC15** *(amended 2026-09-20)* — A flood of profiles must be refused or throttled **at the
+  receiver**, per key and per organization, rather than passed to the pipeline (NFR1). It is no
+  longer an acceptance criterion that a flood surviving the door leaves the other signals running:
+  one worker process carries them all.
 - **AC16** — Every profiling screen and the setup page must carry the preview label (FR13).
 - **AC17** — Every state in `docs/design/principles.md` rule 3 must be handled on the Profiles screen.
 - **AC18** — The flame graph must meet NFR2 on the development stack with profiling data from 20

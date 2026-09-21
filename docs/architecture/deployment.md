@@ -10,10 +10,13 @@ The scheduler runs three kinds of process: `scheduler-beat` (two replicas, one l
 (probes and alert evaluation; it alone is handed `CLICKHOUSE_DSN`), and `scheduler-deliveries` (alert delivery
 only, so a slow receiver never holds a probe's slot). All three read `EMAIL_*` and `APP_BASE_URL`.
 
-The worker runs as two services: `worker` (spans, logs, metrics) and `worker-profiles` (profile ingest and
-its meter, 512 MiB), so a profile flood cannot take the other signals' process down with it (F17, NFR1). A
-deployment that sets `WORKER_PIPELINES=all` on one service puts them back together, and
-`test_compose_signal_isolation.py` fails on it.
+The worker runs as one service carrying every pipeline — spans, logs, metrics and profiles — with the
+memory the two services it replaced carried between them (1280 MiB in deployment, `GOMEMLIMIT` at ~85% of
+it). `WORKER_PIPELINES` is what splits it: give a second service the same image and a narrower list, and
+halve this one's memory limit to pay for it. Profiles ran that way from 2026-09-19 to 2026-09-20
+(`docs/changes/one-worker-again/`); what a single process costs is that a flood which exhausts the cap
+stops every signal until the backlog drains. `test_compose_worker_memory.py` holds the heap ceiling and
+the container limit together, which is the part that keeps the kernel out of it.
 
 ## Required production properties
 

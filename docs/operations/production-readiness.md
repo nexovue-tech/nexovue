@@ -82,7 +82,7 @@ own storage blocker was closed by the founder's NFR3 decision (D6), leaving it u
 |---|---|---|
 | Migrations have a way back | ✓ | `0030_usage_profile_samples.py` drops its column; `000032_profile_samples.down.sql` drops the table. Neither downgrade has been *rehearsed* |
 | Topics exist where it deploys | ✗ | `profiles-raw` and `profiles-dlq` come from `deploy/kafka/topics.sh` only; no deploy target runs it — blocker 5's class. The receiver's publish to a missing topic answers 503 and the Collector retries |
-| Health checks | ✓ | `worker-profiles` carries the worker's `-health` check in the app compose; a flood-killed profiles worker restarts alone (measured, AC15) |
+| Health checks | ✓ | `worker` carries the `-health` check in the app compose; a killed worker restarts on its own. Since 2026-09-20 it carries every pipeline, so a flood-killed worker takes every signal with it until it is back (`docs/changes/one-worker-again/`) |
 | Isolation from other signals | ✓ | Own rate bucket, per-key sample budget, own topic and worker process: spans unaffected by a 400,000-samples-a-second flood (`docs/features/profiling/status.md`) |
 | Tenancy | ✓ | `test_tenant_isolation_live.py` sends a real profile under one key and reads it from another organization: 404 or nothing, on every route |
 | Hostile input | ✓ | Frame bound (413), shared attribute resolution, value overflow, index bounds — `internal/profiles/convert_test.go`, review findings H1/H2 |
@@ -94,7 +94,7 @@ own storage blocker was closed by the founder's NFR3 decision (D6), leaving it u
 
 - A per-query `max_memory_usage` in `READ_SETTINGS` for every API read — a heavy read of any signal can still
   exhaust a shared ClickHouse; the profile reads are bounded by their shape alone (196 MiB for a busy day).
-- A profile flood spread across many keys can still crash-loop `worker-profiles` (profiles only): fetches are
+- A profile flood spread across many keys can still crash-loop `worker` — and since 2026-09-20 that stops every signal, not profiles alone: fetches are
   bounded compressed, and profile messages decompress by orders of magnitude. An uncompressed `profiles-raw`
   or a fleet-wide budget would close it.
 - A request whose produce partly fails is retried whole; the parts the broker kept count twice in the graph.

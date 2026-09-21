@@ -114,8 +114,9 @@ services:
           memory: 768M
 
   # One image, deployed twice: `worker` runs spans, logs and metrics, and
-  # `worker-profiles` runs profiles alone (WORKER_PIPELINES chooses). The same image
-  # can be split further when load justifies it.
+  # `WORKER_PIPELINES` chooses what a worker process runs; one process runs them
+  # all here. It can be split again — profiles ran alone until 2026-09-20 — by
+  # giving a second service the same image and a different list.
   worker:
     build:
       context: ../..
@@ -129,9 +130,9 @@ services:
       # Go's collector cannot see a cgroup limit — as of Go 1.26 the proposal to
       # derive this from the cgroup is still open — so without it the heap doubles
       # freely and the kernel kills the process first. Measured: the worker was
-      # OOM-killed at 1017 MB RSS against this 1 GiB cap. ~85%, leaving the rest
-      # for stacks and everything outside the heap.
-      GOMEMLIMIT: 870MiB
+      # OOM-killed at 1017 MB RSS against a 1 GiB cap. ~85% of the limit below,
+      # leaving the rest for stacks and everything outside the heap.
+      GOMEMLIMIT: 1300MiB
       ENV: development
       LOG_LEVEL: debug
       LOG_FORMAT: console
@@ -145,10 +146,12 @@ services:
       # supplies its own, and rotating it silently ends every correlation that
       # spans the change.
       WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:-7b6H4ZIcduE9aYaTRdv2LKQeIKR3hYf5w4IDCAdevfI=}
-      # Every pipeline but profiles, which run in `worker-profiles`: one process
-      # shares one memory cap, and a profile flood once OOM-killed this worker and
-      # stopped spans with it (F17, NFR1 — tests/test_compose_signal_isolation.py).
-      WORKER_PIPELINES: trace-assembly,log-writing,metric-ingest
+      # Every pipeline, in one process (founder, 2026-09-20 —
+      # `docs/changes/one-worker-again/`). Profiles ran in a service of their own
+      # from 2026-09-19, after a flood from one organization OOM-killed this
+      # worker and stopped spans with it; they share this budget again, which is
+      # why the cap above carries what both used to have.
+      WORKER_PIPELINES: all
       # Go's runtime profiles on the admin listener, which is not published to
       # the host — reach them with `docker compose exec worker wget -qO-
       # http://127.0.0.1:8081/debug/pprof/heap`. Off everywhere else: the
@@ -177,70 +180,11 @@ services:
     deploy:
       resources:
         limits:
-          # Trace assembly holds a trace-buffer window in memory; the other
-          # pipelines stream through. Plus the compiler, which dev containers host.
-          memory: 1G
-
-
-  # Profiles only, in a process of their own (see `worker`'s WORKER_PIPELINES).
-  worker-profiles:
-    build:
-      context: ../..
-      dockerfile: deploy/docker/go-dev.Dockerfile
-    command: air -c deploy/air/worker-profiles.toml
-    working_dir: /workspace
-    volumes:
-      - ../..:/workspace
-      - go-cache:/cache
-    environment:
-      # ~85% of production's 512M cap (`WORKER_PROFILES_MEMORY`), for the reason
-      # `worker` gives; the rest of this container's 1G is for the compiler.
-      GOMEMLIMIT: 435MiB
-      ENV: development
-      LOG_LEVEL: debug
-      LOG_FORMAT: console
-      KAFKA_BROKERS: kafka:9092
-      CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:9000/nexovue}
-      # Read-only, and only for per-project masking and sampling rules. Without
-      # it the worker runs on compiled-in defaults and says so at boot.
-      POSTGRES_DSN: ${DEV_POSTGRES_DSN:-postgresql://nexovue:nexovue_dev@postgres:5432/nexovue}
-      # Keys the pseudonyms a hashing masking rule produces. Fixed here so a
-      # pseudonym survives a restart in development; every deployment target
-      # supplies its own, and rotating it silently ends every correlation that
-      # spans the change.
-      WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:-7b6H4ZIcduE9aYaTRdv2LKQeIKR3hYf5w4IDCAdevfI=}
-      WORKER_PIPELINES: profile-ingest
-      # Go's runtime profiles on the admin listener, which is not published to
-      # the host — reach them with `docker compose exec worker-profiles wget -qO-
-      # http://127.0.0.1:8081/debug/pprof/heap`. Off everywhere else: the
-      # endpoints are unauthenticated.
-      WORKERS_PPROF_ENABLED: "true"
-    healthcheck:
-      # /healthz — liveness. It now covers the pipeline as well as the process,
-      # so a stopped consumer turns the container red; it deliberately does NOT
-      # probe Kafka or ClickHouse, because a restart cannot fix a dependency
-      # outage and would only crash-loop every worker on top of it.
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8081/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 180s
-    depends_on:
-      # Masking rules come from Postgres the moment the worker starts; without it
-      # every profile is masked by the built-in defaults until the first refresh.
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          # One pipeline and its meter, plus the compiler, which dev containers host:
-          # air rebuilds beside the running worker. GOMEMLIMIT still holds the heap
-          # to production's 512M cap.
-          memory: 1G
+          # Trace assembly holds a trace-buffer window and profile ingest holds a
+          # decoded payload; the other pipelines stream through. Plus the
+          # compiler, which dev containers host. 1.5G is the two caps this
+          # service was split into, put back together.
+          memory: 1536M
 
   api:
     build:
@@ -315,6 +259,15 @@ services:
       # The log carries the rendered body, so a verification link is followed by
       # copying it out of `docker logs nexovue-api-1`.
       EMAIL_PROVIDER: console
+      # One proxy sits in front of this API: the web container, which is how a
+      # browser and the end-to-end suite reach it. Saying so lets the rate
+      # limiter count the caller rather than the proxy — without it every
+      # browser on this machine is one client, and the suite's four workers
+      # share one signup allowance (`docs/changes/faster-gate/`). The API is
+      # also published directly on 18000, where anything on this machine could
+      # claim any address; that is a development convenience, and the deployment
+      # targets set this from their own topology.
+      TRUSTED_PROXY_COUNT: 1
       # nexovue's own operator (`docs/changes/super-admin-in-the-console/`). The
       # API seeds this `users` row at boot and re-hashes the password every time,
       # so rotating it is an edit here and a restart. Sign in on the ordinary

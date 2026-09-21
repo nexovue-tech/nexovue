@@ -117,7 +117,7 @@ Auto-creation is disabled on the broker; topics are created explicitly by `deplo
 | `spans-raw` | 12 | `apps/receiver` | `apps/workers` (trace assembly), `nexovue-workers-usage` (metering) | trace id — every partition is one trace-assembler's whole world |
 | `logs-raw` | 4 | `apps/receiver`, `apps/scheduler` (browser-flow check results) | `apps/workers` (log writing), `nexovue-workers-logs-usage` | tenant (organization) id |
 | `metrics-raw` | 4 | `apps/receiver`, `apps/scheduler` (check results, cloud/database poller results) | `apps/workers` (metric ingest), `nexovue-workers-metrics-usage` | tenant id |
-| `profiles-raw` | 4 | `apps/receiver` (converted to `nexovue.v1.ProfileSamples` at the door, ADR-015) | `worker-profiles` (profile ingest), `nexovue-workers-profiles-usage` | tenant id |
+| `profiles-raw` | 4 | `apps/receiver` (converted to `nexovue.v1.ProfileSamples` at the door, ADR-015) | `worker` (profile ingest), `nexovue-workers-profiles-usage` | tenant id |
 | `spans-dlq` / `logs-dlq` / `metrics-dlq` / `profiles-dlq` | 1 each | `apps/workers`, on decode/processing failure | none — nothing drains a dead-letter topic automatically | inherits the source record's key |
 
 Every raw topic: 7-day retention, roughly 16 MiB max message size (sized to the receiver's decoded-body cap plus envelope overhead — a previous 1 MiB default silently dropped any oversized trace, with the sender retrying an unshrinkable batch forever), `zstd` compression.
@@ -220,7 +220,7 @@ Partition key: trace id for spans, tenant (organization) id for logs and metrics
 
 One Go binary (`apps/workers/cmd/worker`) that consumes the receiver's raw Kafka topics, masks sensitive values, derives pre-sampling metrics, tail-samples traces, and writes everything to ClickHouse. Which pipelines a given process runs is chosen at startup by the `WORKER_PIPELINES` environment variable (default `all`), a comma-separated subset of `trace-assembly`, `log-writing`, `metric-ingest`, `profile-ingest` — there is no separate pipeline name for metric derivation or the service-dependency graph; those run inside `trace-assembly`. A process meters what it ingests.
 
-Every compose target runs two worker services: `worker` (`trace-assembly,log-writing,metric-ingest`) and `worker-profiles` (`profile-ingest`). Pipelines in one process share one memory cap, and a profile flood once OOM-killed the shared worker and stopped spans with it; `apps/api/tests/test_compose_signal_isolation.py` holds the split.
+Every compose target runs one worker service carrying every pipeline (`WORKER_PIPELINES: all`). Profiles ran in a second service, `worker-profiles`, from 2026-09-19 to 2026-09-20, after a profile flood OOM-killed the shared worker and stopped spans with it; the founder reversed that on 2026-09-20 (`docs/changes/one-worker-again/`). The single worker carries both budgets — 1280 MiB in deployment, 1536 MiB in development — and `apps/api/tests/test_compose_worker_memory.py` holds `GOMEMLIMIT` at about 85% of whatever the container limit is, which is the setting that keeps the kernel from resolving the question.
 
 ### 5.2 Delivery discipline (applies to every pipeline)
 

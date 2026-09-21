@@ -170,23 +170,28 @@ services:
       redis:
         condition: service_healthy
 
-  # One image, deployed twice: `worker` runs spans, logs and metrics, and
-  # `worker-profiles` runs profiles alone (WORKER_PIPELINES chooses). The same image
-  # can be split further when load justifies it.
+  # One image, deployed once, running every pipeline (`WORKER_PIPELINES` chooses).
+  # Deploying it twice with two lists is how it splits — profiles ran alone from
+  # 2026-09-19 to 2026-09-20 — and a split service would need a memory limit of
+  # its own, and this one's reduced to match.
   worker:
     <<: *service-defaults
     image: *image-base
     environment:
+      # Go's collector cannot see a cgroup limit, so without this the heap grows
+      # until the kernel kills the process. ~85% of the limit below; the two are
+      # one setting in two places, and this file was missing its half entirely
+      # (`docs/changes/one-worker-again/`).
+      GOMEMLIMIT: ${WORKER_GOMEMLIMIT:-1088MiB}
       # The worker was the one service missing this merge, so it had no broker
       # or store address at all — it could not have reached either.
       <<: *data-plane-env
       CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
-      # Every pipeline but profiles, which run in `worker-profiles`: one process
-      # shares one memory cap, and a profile flood once OOM-killed the worker and
-      # stopped spans with it (F17, NFR1 — tests/test_compose_signal_isolation.py).
-      # Fixed rather than overridable: a `.env` still carrying the old `all` would put
-      # profiles back in this process (tests/test_compose_signal_isolation.py).
-      WORKER_PIPELINES: trace-assembly,log-writing,metric-ingest
+      # Every pipeline, in one process (founder, 2026-09-20 —
+      # `docs/changes/one-worker-again/`). They share one memory cap, which is why
+      # the limit below carries what the two services it replaces carried: a
+      # profile flood that exhausts it stops spans with it, as it did in September.
+      WORKER_PIPELINES: all
       # Required rather than optional: the worker treats an absent secret as
       # "hashing rules unavailable" and boots anyway, so a missing value here
       # would disable pseudonymisation without anything going red.
@@ -205,34 +210,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${WORKER_MEMORY:-768M}
+          # 768M for spans, logs and metrics plus 512M for profiles, in one
+          # process now. Raising it means raising GOMEMLIMIT with it.
+          memory: ${WORKER_MEMORY:-1280M}
 
-
-  # Profiles only, in a process of their own (see `worker`'s WORKER_PIPELINES).
-  worker-profiles:
-    <<: *service-defaults
-    image: *image-base
-    environment:
-      <<: *data-plane-env
-      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
-      WORKER_PIPELINES: profile-ingest
-      # Required rather than optional: the worker treats an absent secret as
-      # "hashing rules unavailable" and boots anyway, so a missing value here
-      # would disable pseudonymisation without anything going red.
-      WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:?set WORKERS_MASKING_HASH_SECRET}
-    depends_on:
-      # Masking rules come from Postgres the moment the worker starts; without it
-      # every profile is masked by the built-in defaults until the first refresh.
-      kafka:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: ${WORKER_PROFILES_MEMORY:-512M}
 
   api:
     <<: *service-defaults

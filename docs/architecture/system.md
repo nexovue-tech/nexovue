@@ -44,10 +44,12 @@ Added 2026-09-19; the design is [`features/profiling/design.md`](../features/pro
 - **The unstable format stops at the door** (ADR-015): the receiver converts OTLP profiles
   `v1development` into `nexovue.v1.ProfileSamples`, splits it into records under the broker's limit, and
   nothing behind it reads OTLP profiles.
-- **Profiles cannot delay the other signals** (NFR1, AC15): their own rate bucket and a per-key
-  samples-per-second budget at the door, their own topic, and their own worker process
-  (`worker-profiles`) — a profile flood that kills that process stops profiles alone. Measured
-  2026-09-19; see the feature's `status.md`.
+- **Profiles are held back at the door, not in the worker** (NFR1, AC15, amended 2026-09-20): their
+  own rate bucket and a per-key samples-per-second budget at the receiver, their own topic, and a
+  4 MiB bound on what the worker fetches at once. They ran in a worker process of their own from
+  2026-09-19 to 2026-09-20; with one worker again, **a profile flood that exhausts its memory stops
+  the other signals with it** until Kafka's backlog drains. Measured on 2026-09-19 and accepted
+  knowingly — `docs/changes/one-worker-again/`.
 - Stored in `profile_samples`, read by `/profiles/*`, shown on the Profiles screen, a span's *Profile*
   section and the service page's Profiling strip.
 

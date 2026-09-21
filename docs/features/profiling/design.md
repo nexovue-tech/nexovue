@@ -171,9 +171,12 @@ a "top slow functions" alert; any AI summary.
 - **Usage**: `usage.Profiles` signal counting samples, `Counts.ProfileSamples`, and a
   `usage_daily.profile_samples` column (Postgres migration) — metered and shown, not billed (D1).
 
-- **Deployment** (added at implementation, after the flood measurement in `status.md`): profiles run
-  in their own worker service, `worker-profiles`, with fetches bounded at 4 MiB. Pipelines in one
-  process share one memory cap, and a profile flood OOM-killed the shared worker and stopped spans.
+- **Deployment** (added at implementation after the flood measurement in `status.md`; **reversed
+  2026-09-20 by the founder** — `docs/changes/one-worker-again/`): profiles ran in a worker service
+  of their own, `worker-profiles`, for one day. They run in the single `worker` again, with fetches
+  still bounded at 4 MiB and that worker carrying both memory budgets. Pipelines in one process
+  share one cap, and a profile flood OOM-killed the shared worker and stopped spans — which is the
+  risk that returns with them.
 - **Not stored**: a batch's `period` and `period_type` travel in `ProfileSamples` but have no
   column — no screen reads them. Converting CPU samples into time needs them; a column is added when
   a screen does.

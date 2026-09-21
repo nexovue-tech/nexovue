@@ -80,9 +80,11 @@ Nothing.
 
 - **A partly failed produce double-counts.** A split request is one produce; if the broker keeps some records
   and refuses others, the sender retries the whole request and the kept parts count twice in the graph.
-- **A flood across many keys can crash-loop `worker-profiles`** — profiles only: fetches are bounded by
-  compressed size, and profile messages decompress by orders of magnitude. Measured: one key's flood is
-  throttled at the door and the worker holds; many keys were not tested.
+- **A flood across many keys can crash-loop the worker** — and since 2026-09-20 that worker is the one
+  every signal runs in, so spans, logs and metrics stop with it until the backlog drains
+  (`docs/changes/one-worker-again/`). Fetches are bounded by compressed size, and profile messages
+  decompress by orders of magnitude. Measured: one key's flood is throttled at the door and the worker
+  holds; many keys were not tested.
 - **No per-query memory cap on API reads** (platform): `READ_SETTINGS` bounds rows and time only. The profile
   reads are bounded by their shape (196 MiB for a 20-host day); a heavy read of any signal can still exhaust a
   shared ClickHouse.
@@ -145,7 +147,8 @@ Nothing.
   flame graphs again, run it as the setup page shows, with the demo's ingest key.
 - Removed: `nexovue-pprof-collector`, which scraped the worker's heap as `nexovue-worker` to prove AC2. Its
   rows (~715,000 per heap type, demo project) stay until the 14-day retention ends.
-- `worker` and `worker-profiles` are two services now (`docker compose up -d` applied it).
+- `worker` and `worker-profiles` were two services from 2026-09-19; one again from 2026-09-20, by the
+  founder's decision (`docs/changes/one-worker-again/`).
 - Removed today, all throwaway: the flood backlogs on `profiles-raw` (both profile consumer groups moved to the
   end), and the partition holding the 8.7 M NFR2 measurement rows and a few test-tenant rows.
 
