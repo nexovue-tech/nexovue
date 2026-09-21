@@ -27,6 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.auth.credentials import hash_password, normalize_email
+from nexovue_api.auth.schemas import PASSWORD_MIN_LENGTH
 from nexovue_api.data.postgres.models import SUPER_ADMIN_ROLE, Organization, User
 from nexovue_api.settings import Settings
 
@@ -56,6 +57,15 @@ async def seed_super_admin(session: AsyncSession, settings: Settings) -> User | 
     """
     email, password = settings.super_admin_email, settings.super_admin_password.get_secret_value()
     if not email or not password:
+        return None
+    # The same rule the sign-up form applies, applied to the environment. Nothing
+    # else stands between a compose file and the hash, and this is the account
+    # that administers every customer on the deployment.
+    if len(password) < PASSWORD_MIN_LENGTH:
+        _log.warning(
+            "the super admin was not seeded: the password is shorter than the minimum",
+            minimum=PASSWORD_MIN_LENGTH,
+        )
         return None
 
     address = normalize_email(email)

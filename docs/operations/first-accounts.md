@@ -1,0 +1,133 @@
+# The first accounts: who exists before anyone signs in
+
+Two accounts in nexovue are created from **environment variables** rather than
+through a screen, because in both cases there is nobody yet who could use a
+screen to create them. They are mirror images of each other, and an install uses
+**one or the other, never both**.
+
+> **Status.** The mechanism is built and tested. The on-premise Compose target it
+> is written for still declares itself a skeleton
+> (`docs/operations/production-readiness.md`), so nothing here has been run
+> against a real self-hosted install yet. Treat the procedure as correct and
+> unrehearsed.
+
+---
+
+## Which one applies to you
+
+| You are | You set | You get |
+|---|---|---|
+| **Running nexovue yourself** (self-hosted / on-premise) | `FIRST_OWNER_*` | Your own organization, and the owner account you sign in as |
+| **nexovue, operating the hosted service** | `SUPER_ADMIN_*` | The operator account that administers customers |
+
+A self-hosted install sets **no** `SUPER_ADMIN_*`. There is no nexovue inside
+your install to administer it, and with those unset the whole platform area is
+unreachable rather than merely hidden.
+
+The hosted service sets **no** `FIRST_OWNER_*`. Customers there arrive through
+signup, and an organization conjured at boot would belong to nobody.
+
+---
+
+## Self-hosted: your first account
+
+Set these before the first start:
+
+```bash
+FIRST_ORGANIZATION_NAME="Acme Inc"          # optional; defaults to "My organization"
+FIRST_OWNER_EMAIL="you@acme.example"        # the address you will sign in with
+FIRST_OWNER_PASSWORD="at least 8 characters"
+```
+
+On the first start, nexovue creates **exactly what a customer who signed up
+would get** — through the same code, so your install is not the one tenant whose
+defaults nobody tested:
+
+- your organization, on the **free** plan
+- your user, with the **owner** role and the address already verified
+- a project called **`production`**
+- an **ingest key**, for sending telemetry
+- a **deploy webhook secret**
+- a notification channel, **"Organization owners"**
+- an alert rule, **"Any check down"**, wired to that channel
+
+That last pair is the point: the first check that goes down emails you, with
+nothing to set up.
+
+### Three things to know
+
+**It runs once.** The variables are read on the first start and never again.
+Change your password in the console afterwards — a later restart will **not**
+reset it. This is deliberate: after the first start the account is yours, and a
+restart that reset your password to whatever is still in a compose file would
+take your own account away from you.
+
+You can remove the two variables from your environment once you have signed in.
+
+**Your ingest key is not printed.** It is a live credential, and a secret written
+to a log file is a secret. Sign in and create one under **Settings → Ingest
+keys**, which is what that screen is for.
+
+**The password rule applies.** Shorter than eight characters and nothing is
+created — the log says so and the install comes up with no account, rather than
+with a weak one. Fix the variable and restart.
+
+### If nothing was created
+
+The start-up log says which of these it was:
+
+| Log line | What happened |
+|---|---|
+| nothing at all | Both variables were empty. Nothing was attempted |
+| *"shorter than the minimum the sign-up form enforces"* | The password is under eight characters |
+| *"that address already signs in here"* | Some other account already uses that address — often the same address set for `SUPER_ADMIN_EMAIL` too |
+| *"the first organization could not be seeded"* | Something else failed. The API still starts: an API that will not boot is worse than an install whose first account has to be made another way |
+
+An install that already has a customer organization is **not** a first run, and
+nothing is created. Deleting your organization and restarting does not bring it
+back — that would be the installer overruling a decision you made.
+
+---
+
+## nexovue's own operator
+
+```bash
+SUPER_ADMIN_EMAIL="operator@nexovue.com"
+SUPER_ADMIN_PASSWORD="at least 8 characters"
+```
+
+This creates a reserved organization holding one `super_admin` user and nothing
+else: no projects, no telemetry, no bill. The role grants **nothing** inside any
+customer organization and everything on the platform surface — and only while
+the session has been re-authenticated in the last 30 minutes.
+
+**Unlike the account above, this password is rewritten on every start.** That is
+the rotation procedure: change the variable, restart. The environment is the
+truth for this account because it is nexovue's own, not a customer's.
+
+The same eight-character minimum applies, for the same reason: nothing stands
+between a compose file and the password hash, and this is the account that can
+see every customer.
+
+---
+
+## Why environment variables at all
+
+The most powerful account in a system should not be creatable by anything a
+request can reach. Both of these exist before there is any way in:
+
+- a self-hoster has nobody to invite them — they are the first person in the
+  system, and the alternative is leaving signup open to the internet
+- nexovue's operator must not be creatable by a signup form, however well guarded
+
+An environment variable is readable by whoever can already read the host's
+configuration — which is the same person who could read the database. It grants
+nothing they did not already have.
+
+## Related
+
+- `docs/changes/super-admin-in-the-console/` — why the operator is a role and a
+  re-authentication rather than a separate application
+- `docs/changes/seeded-from-the-environment/` — this change
+- `docs/operations/production-readiness.md` — what still stands between this and
+  a rollout

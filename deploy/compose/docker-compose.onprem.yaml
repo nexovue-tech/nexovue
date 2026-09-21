@@ -221,6 +221,24 @@ services:
     environment:
       <<: *control-plane-env
       CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # **The way in.** This install has nobody to invite its first person, so
+      # the first organization and its owner are created at boot from these.
+      # Demanded rather than passed through: an install that starts with no
+      # account has no way to reach its own console, and after the stack is up
+      # is a worse time to learn that than start-up.
+      #
+      # Here rather than in `control-plane-env`, because the API is the only
+      # process that seeds anything — the schedulers share that block and would
+      # otherwise each hold a password they never read.
+      #
+      # Read once. Change the password in the console afterwards; a later restart
+      # will not reset it, and both can be removed from the environment once the
+      # first sign-in has happened. See `docs/operations/first-accounts.md`.
+      FIRST_ORGANIZATION_NAME: ${FIRST_ORGANIZATION_NAME:-My organization}
+      FIRST_OWNER_EMAIL: ${FIRST_OWNER_EMAIL:?set FIRST_OWNER_EMAIL — the account you will sign in as}
+      FIRST_OWNER_PASSWORD: ${FIRST_OWNER_PASSWORD:?set FIRST_OWNER_PASSWORD — at least 8 characters}
+      # No super admin on a self-hosted install: there is no nexovue inside it to
+      # administer it, and the platform surface stays unreachable.
     depends_on:
       postgres:
         condition: service_healthy

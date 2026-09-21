@@ -38,6 +38,7 @@ from nexovue_api.health.registry import CheckRegistry
 from nexovue_api.ratelimit.limiter import RateLimiter
 from nexovue_api.ratelimit.policy import FixedPlanLimits
 from nexovue_api.settings import Settings
+from nexovue_api.signup.first_run import seed_first_organization
 from nexovue_api.superadmin.seed import seed_super_admin
 
 logger = get_logger(__name__)
@@ -148,6 +149,10 @@ def build_lifespan(
         app.state.plan_limits = FixedPlanLimits()
         app.state.health = CheckRegistry(dependency_checks(resources))
         await _seed_the_operator(resources, settings)
+        # After the operator, so that an install configuring both cannot have the
+        # customer's address adopted as the platform's — and so the "that address
+        # already signs in here" refusal happens in the right direction.
+        await _seed_the_first_organization(resources, settings)
         logger.info("api started", env=settings.env)
         try:
             if assistant is None:
@@ -177,6 +182,25 @@ async def _seed_the_operator(resources: Resources, settings: Settings) -> None:
         return
     if operator is not None:
         logger.info("super admin ready", email=operator.email)
+
+
+async def _seed_the_first_organization(resources: Resources, settings: Settings) -> None:
+    """Create the first customer organization on a self-hosted install.
+
+    Once, on the first run, and never again — the account belongs to the customer
+    after that. Its own transaction rather than the operator's, so a failure in
+    one cannot roll back the other. A failure is logged and not raised, for the
+    same reason as above: an API that will not start is worse than an install
+    whose first account has to be created another way.
+    """
+    try:
+        async with resources.session_factory() as session, session.begin():
+            organization = await seed_first_organization(session, settings)
+    except Exception:
+        logger.exception("the first organization could not be seeded")
+        return
+    if organization is not None:
+        logger.info("first organization ready", slug=organization.slug)
 
 
 async def open_resources(settings: Settings) -> Resources:

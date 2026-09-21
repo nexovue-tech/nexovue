@@ -231,6 +231,13 @@ services:
       # to come up without them. Rotation is an edit and a restart.
       SUPER_ADMIN_EMAIL: "${SUPER_ADMIN_EMAIL:-}"
       SUPER_ADMIN_PASSWORD: "${SUPER_ADMIN_PASSWORD:-}"
+      # The customer's own first account. Left empty here on purpose: this is the
+      # hosted replica, where customers arrive through signup and an organization
+      # created at boot would belong to nobody. It is the self-hosted file below
+      # that fills these in.
+      FIRST_ORGANIZATION_NAME: "${FIRST_ORGANIZATION_NAME:-}"
+      FIRST_OWNER_EMAIL: "${FIRST_OWNER_EMAIL:-}"
+      FIRST_OWNER_PASSWORD: "${FIRST_OWNER_PASSWORD:-}"
     ports:
       - "8000:8000"
     depends_on:

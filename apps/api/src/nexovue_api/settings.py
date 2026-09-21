@@ -342,6 +342,26 @@ class Settings(BaseSettings):
     super_admin_email: str = ""
     super_admin_password: SecretStr = SecretStr("")
 
+    # **The customer's own first account, for a self-hosted install** — the other
+    # half of the pair above, and its mirror image. There, nexovue administers
+    # the platform; here, somebody who installed nexovue administers their own
+    # organization, and there is nobody to invite them because they are the first
+    # person in the system.
+    #
+    # All three absent means nothing is seeded, which is the right default for
+    # the hosted service: customers there arrive through signup, and an
+    # organization conjured at boot would belong to nobody.
+    #
+    # **Read once, on the first run, and never again** — unlike the operator
+    # above, whose password this rewrites every boot. After the first boot the
+    # account is the customer's: they change the password in the console, and a
+    # restart that reset it to whatever is in a compose file would take their
+    # account away from them. It is the convention a self-hoster expects
+    # (Grafana's `GF_SECURITY_ADMIN_PASSWORD` behaves the same way).
+    first_organization_name: str = "My organization"
+    first_owner_email: str = ""
+    first_owner_password: SecretStr = SecretStr("")
+
     # This API's own public base URL — the other hostname of the pair above.
     # It exists for one reason: the MCP server (F36) must be told which `Host`
     # headers it answers on, and the SDK refuses everything else with 421. Left

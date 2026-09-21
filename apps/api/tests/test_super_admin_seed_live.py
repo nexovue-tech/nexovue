@@ -76,6 +76,15 @@ def _operator_settings(password: str = "a long operator password") -> Settings:
     )
 
 
+async def test_a_password_under_the_minimum_seeds_no_operator(db: AsyncSession) -> None:
+    """The account that administers every customer must not be weaker than one a
+    customer could create. Nothing stands between the environment and the hash
+    here, so the sign-up form's own minimum is applied at this boundary."""
+    settings = _operator_settings(password="short")
+
+    assert await seed_super_admin(db, settings) is None
+
+
 async def test_no_settings_seed_no_operator(db: AsyncSession) -> None:
     """A self-hosted install has no nexovue to administer it."""
     assert await seed_super_admin(db, _settings()) is None
