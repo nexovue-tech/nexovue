@@ -10,7 +10,9 @@ from pydantic import BaseModel
 from nexovue_api.wire import IsoTimestamp
 
 # What the screen filters by. Each is a set of action prefixes (`queries.KINDS`).
-EventKind = Literal["people", "credentials", "sign_in", "configuration", "support"]
+# `changes` is everything that is not a sign-in, defined by what it excludes
+# rather than by what it lists — see `queries.KINDS`.
+EventKind = Literal["people", "credentials", "sign_in", "configuration", "support", "changes"]
 
 
 class AuditActor(BaseModel):

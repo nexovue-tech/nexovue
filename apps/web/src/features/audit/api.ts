@@ -4,7 +4,13 @@ import { apiClient } from "@/shared/api-client";
 
 /** The audit log read (F26, FR36). Shapes are the API's `audit/schemas.py`. */
 
-export type EventKind = "people" | "credentials" | "sign_in" | "configuration" | "support";
+export type EventKind =
+  | "people"
+  | "credentials"
+  | "sign_in"
+  | "configuration"
+  | "support"
+  | "changes";
 
 export interface AuditActor {
   kind: "person" | "staff" | "system";

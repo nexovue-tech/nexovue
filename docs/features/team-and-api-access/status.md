@@ -4,7 +4,7 @@
 
 **Implemented, awaiting the founder's review.** All three stages are built: Stage 1 (Team) pushed
 2026-09-19 (`a9ae18d`); Stage 3 (admin console) and the rate-limit fix pushed 2026-09-20 (`c48b4e4`,
-`2321745`); Stage 2 (read API and MCP) built 2026-09-20 and **uncommitted**.
+`2321745`); Stage 2 (read API and MCP) built 2026-09-20 and committed (`65555a9`, `d1c0301`, `667f010`).
 
 ## Current task
 

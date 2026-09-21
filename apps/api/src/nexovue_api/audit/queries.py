@@ -32,6 +32,16 @@ KINDS: Final[dict[EventKind, tuple[str, ...]]] = {
     "support": ("support.",),
 }
 
+# **`changes` is the one filter defined by exclusion.** Seventeen consecutive
+# "signed in" rows bury the events the log exists for, and this is the answer to
+# that: everything somebody *did*, with the sign-ins left out.
+#
+# It subtracts rather than lists, because listing would mean a new action kind
+# nobody remembered to add here vanishing from the default view of an audit log.
+# Adding a prefix to `sign_in` is the only way to hide something, and that is a
+# visible decision in a file about hiding things.
+NOT_A_CHANGE: Final = KINDS["sign_in"]
+
 
 async def page(
     session: AsyncSession,
@@ -51,7 +61,11 @@ async def page(
     )
     if actor_id is not None:
         statement = statement.where(AuditLogEntry.actor_user_id == actor_id)
-    if kind is not None:
+    if kind == "changes":
+        statement = statement.where(
+            *(~AuditLogEntry.action.startswith(prefix) for prefix in NOT_A_CHANGE)
+        )
+    elif kind is not None:
         statement = statement.where(
             or_(*(AuditLogEntry.action.startswith(prefix) for prefix in KINDS[kind]))
         )

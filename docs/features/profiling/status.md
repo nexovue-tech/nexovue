@@ -2,9 +2,12 @@
 
 ## Lifecycle status
 
-**Built, reviewed, QA'd — awaiting the founder.** All five steps of the approved plan are implemented and
-proved; nothing is committed. NFR3 decided (D6, option A). Production readiness: **NOT READY** — the platform's
-blockers (`docs/operations/production-readiness.md`, *F17*).
+**Released to `main`.** All five steps of the approved plan are implemented, proved and committed;
+NFR3 decided (D6, option A). Profiles were moved into a process of their own on 2026-09-19 and back
+out of it on 2026-09-20 (`docs/changes/one-worker-again/`). Production readiness: **NOT READY** —
+the platform's blockers (`docs/operations/production-readiness.md`, *F17*).
+
+*This said "awaiting the founder" until 2026-09-21, after the work had shipped.*
 
 ## Current task
 

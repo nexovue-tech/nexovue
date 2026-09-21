@@ -163,11 +163,18 @@ cannot tell apart.
 
 ### D12. A third-party watermark on a customer screen (LOW — a decision, not a bug)
 
-**Not fixed — a decision for you.** Removing React Flow's attribution without a Pro licence would breach their terms.
+**Decided and fixed 2026-09-21 — and the claim below was wrong.** This said removing React Flow's
+attribution "would breach their terms". It would not. `@xyflow/react` 12.11.5 is **plain MIT**: the
+only condition is that the copyright notice travel with copies of the software, which the lockfile
+and the dependency audit satisfy. There is no display requirement anywhere in the licence.
 
-The service map renders React Flow's **"React Flow"** attribution bottom-right, on desktop and
-mobile. It is the free-tier requirement. Keep it knowingly or license it away — but it should be a
-decision, not a surprise.
+xyflow *ask* you to keep the badge or subscribe to Pro, which is a courtesy and not a term. It is
+hidden now (`ServiceMapScreen.tsx`, `hideAttribution: true`): this is a paid console, a vendor's
+badge in it reads as ours, and supporting xyflow is a Pro subscription rather than a badge in a
+customer's service map. One word puts it back.
+
+**Worth remembering as a review lesson**: an unverified legal claim kept a decision frozen for a
+day. The licence text was in `node_modules` the whole time.
 
 ## Layout and spacing — where the console disagrees with itself
 
@@ -329,8 +336,10 @@ by construction rather than by shim.
 - **Metrics repeated "no chart yet" on every row** with nothing saying why — **fixed**: the column
   is called *Opens*, and the subtitle says once that a histogram opens its distribution here.
 - **API tokens listed revoked ones first** — **fixed**: live first, history below.
-- **The audit log is drowned in sign-ins** *(not changed)* — folding repeated sign-ins is a
-  behaviour change to a record customers read, and it should be specified before it is built.
+- **The audit log is drowned in sign-ins** — **fixed 2026-09-21**, but not by folding. Collapsing an
+  audit log's own rows is a behaviour change to a record customers read; the WHAT filter opens on
+  **"Changes only"** instead, which subtracts sign-ins and hides nothing else, with "Everything" one
+  click away.
 - **Billing does not explain 28 monitored against 26 committed**, and the Scale card under CHANGE
   PLAN carries no control *(not changed)* — both are billing decisions, not layout.
 - **Settings' General/Account split**, and an organization's name being editable nowhere *(not

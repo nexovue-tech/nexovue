@@ -2,7 +2,8 @@
 
 ## Lifecycle status
 
-**Implemented, awaiting the founder's review of the diff.** Nothing is committed.
+**Released to `main`** as `3f8f212`, "The bill honours the ceiling the customer authorised", after the founder read the diff on
+2026-09-21. Not deployed — nexovue has no deployment target.
 
 ## Current task
 
@@ -19,7 +20,7 @@ None.
 
 ## Next action
 
-Founder: review the diff and say **push**.
+None — this is in history.
 
 This was reached by a different route than the one approved. The founder chose **billing the
 overage** on 2026-09-21, on a recommendation made before `docs/product/vision.md` §5 and

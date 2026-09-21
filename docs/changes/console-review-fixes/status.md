@@ -2,7 +2,8 @@
 
 ## Lifecycle status
 
-**Implemented, awaiting the founder's review of the diff.** Nothing is committed.
+**Released to `main`** as `29707b7`, "The console stops overstating, stops wasting the window, and lines up", after the founder read the diff on
+2026-09-21. Not deployed — nexovue has no deployment target.
 
 ## Current task
 
@@ -91,7 +92,7 @@ None — every planned task is done and the gate is green.
 
 ## Next action
 
-Founder: review the diff and say **push**. The platform screen's own record is
+None — this is in history. The platform screen's own record is
 `docs/changes/platform-list-first/`.
 
 ## Open decisions

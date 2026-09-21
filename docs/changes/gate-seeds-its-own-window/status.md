@@ -2,7 +2,8 @@
 
 ## Lifecycle status
 
-**Implemented, awaiting the founder's review of the diff.** Nothing is committed.
+**Released to `main`** as `2f3d46f`, "The gate seeds the window it asserts on, and stops going red with time", after the founder read the diff on
+2026-09-21. Not deployed — nexovue has no deployment target.
 
 ## Current task
 
@@ -24,7 +25,7 @@ None.
 
 ## Next action
 
-Founder: review the diff and say **push**.
+None — this is in history.
 
 ## Open decisions
 

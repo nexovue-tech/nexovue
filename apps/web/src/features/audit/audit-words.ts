@@ -52,6 +52,11 @@ export function describeEntry(entry: AuditEntry): string {
 }
 
 export const KIND_LABELS: readonly { id: string; label: string }[] = [
+  // **First, and the default.** Seventeen consecutive "signed in" rows buried
+  // the events the log exists for. This hides nothing — "Everything" is one
+  // click away and still holds every row — it only stops the screen opening on
+  // the least interesting thing in it.
+  { id: "changes", label: "Changes only" },
   { id: "", label: "Everything" },
   { id: "people", label: "People" },
   { id: "credentials", label: "Keys and secrets" },

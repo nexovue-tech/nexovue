@@ -26,19 +26,11 @@ Founder: read the diff, then say **push**. Then decide the finding under *Open d
 
 ## Open decisions
 
-- **Every API write commits after its response is sent.** Found while running this change's E2E:
-  `alerts.spec.ts` "a new organization…" failed once under the parallel run — the channel list kept
-  showing only the owners after *Connect Webhook*. The API log shows `POST /channels 201` at
-  15:16:02.644 and the list's refetch `GET /channels 200` at 15:16:02.655, 11 ms later, with no further
-  read. `get_db_session` (`apps/api/src/nexovue_api/deps.py:54`) commits in a yield dependency's exit, and
-  FastAPI's default dependency scope (`"request"`) runs that exit *after* the response is sent
-  (FastAPI docs, *Advanced Dependencies*; `fastapi` 0.141.1 here). So a client that re-reads at once can
-  read before the commit. The signup instance of this was fixed alone
-  (`docs/changes/signup-session-before-commit/`); the cause is platform-wide. The likely fix is
-  `Depends(get_db_session, scope="function")`, which commits before the response — but it needs an audit
-  of every route that reads the session after its function returns (streaming responses, the log-tail
-  WebSocket). Out of this change's scope; its own change record, on the founder's word.
-  **Resolved** by `docs/changes/commit-before-response/`.
+- ~~**Every API write commits after its response is sent.**~~ **Fixed** in `dcfc9b2`, "Every API
+  write commits before its response is sent": `DbSession` carries
+  `Depends(get_db_session, scope="function")`, which FastAPI ends *before* the response goes out.
+  This entry outlived the fix and was reported as pending on 2026-09-21 by reading it rather than
+  the code — `deps.py:212` is the answer, and a document is not.
 
 ## Blocked
 

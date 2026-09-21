@@ -145,6 +145,52 @@ async def test_each_filter_narrows_to_what_it_names(db: AsyncSession) -> None:
     assert recent.entries == []
 
 
+async def test_changes_hides_sign_ins_and_nothing_else(db: AsyncSession) -> None:
+    """The filter the screen opens on.
+
+    Seventeen consecutive "signed in" rows buried the events the log exists for
+    (`docs/quality/console-review-2026-09-20.md`). This subtracts sign-ins rather
+    than listing what it keeps, so an action kind nobody remembered to name still
+    appears — the opposite default from the one that would quietly hide a row
+    from an audit log.
+    """
+    acme = await _tenant(db, "Acme")
+    await _history(db, acme, 5)
+    member, token = await members.invite(
+        db, actor=acme.user, email=f"t-{uuid.uuid4()}@example.test", role="member", now=_now()
+    )
+    await set_password.set_password(db, token, name="Priya", password=PASSWORD, now=_now())
+    members.record_joined(db, member=member)
+    # An action no `KINDS` entry names. It is a change, so it must survive.
+    db.add(
+        AuditLogEntry(
+            org_id=acme.organization.id,
+            actor_user_id=acme.user.id,
+            action="something.nobody.classified",
+            target=f"org:{acme.organization.id}",
+            at=_now(),
+        )
+    )
+    await db.flush()
+
+    everything = await read.read_page(db, org_id=acme.organization.id, limit=200)
+    changes = await read.read_page(db, org_id=acme.organization.id, kind="changes", limit=200)
+
+    actions = [entry.action for entry in changes.entries]
+    assert actions, "the filter the screen opens on cannot come back empty"
+    assert not any(action.startswith(("session.", "user.")) for action in actions), (
+        f"a sign-in survived the changes filter: {actions}"
+    )
+    assert "something.nobody.classified" in actions, (
+        "an action no kind names was hidden. `changes` subtracts sign-ins; it does "
+        "not list what it keeps, precisely so this cannot happen."
+    )
+    assert "member.joined" in actions and "member.invited" in actions
+
+    hidden = len(everything.entries) - len(changes.entries)
+    assert hidden >= 5, f"the five seeded sign-ins should be what is left out, {hidden} were"
+
+
 async def test_a_removed_person_is_still_named(db: AsyncSession) -> None:
     """BR6: removing someone never rewrites what they did."""
     acme = await _tenant(db, "Acme")

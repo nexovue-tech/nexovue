@@ -2,8 +2,12 @@
 
 ## Lifecycle status
 
-**Implemented, reviewed, uncommitted** — all six steps built and proved; `/review-diff` and `/readiness-check`
-done 2026-09-19. Left uncommitted for the founder to read the diff before it becomes history.
+**Released to `main`.** All six steps built and proved; `/review-diff` and `/readiness-check` done
+2026-09-19, committed after the founder read the diff. Not deployed — nexovue has no deployment
+target (`docs/operations/production-readiness.md`).
+
+*This said "uncommitted" until 2026-09-21, long after the work was in history.* A status that
+outlives its own state is worse than no status: it is the document a later session believes.
 
 ## Current task
 

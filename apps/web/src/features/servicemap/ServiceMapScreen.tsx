@@ -133,7 +133,17 @@ export function ServiceMapScreen() {
               nodesConnectable={false}
               elementsSelectable={false}
               panOnScroll
-              proOptions={{ hideAttribution: false }}
+              // **Hidden, and the licence permits it.** `@xyflow/react` 12.11.5 is
+              // plain MIT — its only condition is that the copyright notice travel
+              // with copies of the software, which `pnpm-lock.yaml` and the
+              // dependency audit satisfy. There is no display requirement, and the
+              // badge was previously kept on a belief that removing it would breach
+              // their terms (`docs/quality/console-review-2026-09-20.md`), which was
+              // wrong. xyflow ask you to keep it or subscribe to Pro as a courtesy;
+              // this is a paid console and a vendor's badge in it reads as ours.
+              // Supporting them is a Pro subscription, not a badge in a customer's
+              // service map. One word here puts it back.
+              proOptions={{ hideAttribution: true }}
             />
           </div>
         </>

@@ -13,7 +13,14 @@ import type { AuditFilters, EventKind } from "./api";
 import { useAuditLog, usePeople } from "./api";
 import { describeEntry, KIND_LABELS, RANGES } from "./audit-words";
 
-const KINDS = new Set<string>(["people", "credentials", "sign_in", "configuration", "support"]);
+const KINDS = new Set<string>([
+  "people",
+  "credentials",
+  "sign_in",
+  "configuration",
+  "support",
+  "changes",
+]);
 
 function isKind(value: string): value is EventKind {
   return KINDS.has(value);
@@ -28,7 +35,9 @@ export function AuditScreen() {
   const allowed = useCan("read_audit");
   const session = useSession();
   const [actor, setActor] = useState("");
-  const [kind, setKind] = useState("");
+  // Opens on what somebody did, not on who signed in. `""` — every row — is the
+  // next option down.
+  const [kind, setKind] = useState("changes");
   const [range, setRange] = useState("7d");
 
   const hours = RANGES.find((each) => each.id === range)?.hours ?? null;

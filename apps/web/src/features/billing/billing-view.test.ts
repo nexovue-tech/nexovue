@@ -345,13 +345,20 @@ describe("what a customer whose plan is already live can do", () => {
    * section with one sentence and nothing to press, so a paying customer could
    * not see what else existed, let alone move to it.
    */
-  it("is told the two steps rather than only that it cannot be done", () => {
+  it("is told the two steps, in the order they happen", () => {
     const answer = checkoutAvailability(overviewWith({ subscription: subscription() }));
 
     expect(answer.available).toBe(false);
     if (answer.available) return;
-    expect(answer.nextStep).toContain("cancel this subscription");
-    expect(answer.nextStep).toContain("choose the new plan");
+    expect(answer.nextStep).toContain("Cancel this subscription");
+    // **Not "choose the new plan here".** The plans below cannot be pressed
+    // until the subscription is cancelled, so an instruction to choose one now
+    // describes a control the customer can see and cannot use — which reads as
+    // a broken button rather than as a sequence. The sentence has to say what
+    // the list is for while it is inert.
+    expect(answer.nextStep).toContain("become choosable");
+    expect(answer.nextStep).toContain("compare them first");
+    expect(answer.nextStep).not.toContain("choose the new plan here");
   });
 
   /**

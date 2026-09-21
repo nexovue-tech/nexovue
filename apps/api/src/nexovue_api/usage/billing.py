@@ -175,13 +175,12 @@ def browser_cap_bytes(price: PlanPrice | None, services_committed: int | None) -
     number from the same row, with the same rounding. Divergence here is a
     customer refused at a limit the screen never showed them.
 
-    The one place the two deliberately differ: on a row with no ceiling on
-    billed services — every paying tier — the receiver records no allowance at
-    all and enforces nothing, while this returns a figure from the services
-    counted so far. That figure is a description, not a boundary, and
-    `allowance_is_enforced` is what says so. Sending it lets the screen show a
-    paying customer their included volume without implying a door that would
-    ever refuse them.
+    They no longer differ. This described a hole rather than a design: a paying
+    tier once had no ceiling recorded at the door at all, so this returned a
+    description while the receiver enforced nothing. Both are now sized on the
+    customer's committed count (`allowance_service_count` here,
+    `allowanceServiceCount` there), so the figure this returns is the boundary
+    the door applies.
     """
     included = included_bytes(price, services_committed)
     if included is None or price is None or price.browser_share_percent is None:

@@ -2,7 +2,8 @@
 
 ## Lifecycle status
 
-**Implemented, awaiting the founder's review of the diff.** Nothing is committed.
+**Released to `main`** as `d2a3b35`, "One console, one sign-in, and a role that unlocks
+nexovue's own", on 2026-09-20. Not deployed — nexovue has no deployment target.
 
 ## Current task
 
@@ -30,7 +31,7 @@ None — the work is finished and reviewed against `docs/quality/code-review.md`
 
 ## Next action
 
-Founder: review the diff and say **push**.
+None — this is in history.
 
 ## Open decisions
 

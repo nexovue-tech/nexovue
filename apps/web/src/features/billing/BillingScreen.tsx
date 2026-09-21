@@ -338,11 +338,14 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
         {unfinished ? (
           <p className="max-w-3xl text-ink text-sm leading-relaxed">{unfinished}</p>
         ) : null}
-        {/* Says what the code does today, which is bill the commitment. A later
-            change moves the bill back to services actually monitored once the
-            charge can be raised; this copy changes with it. What it must not do
-            meanwhile is imply the number limits services — it does not, and a
-            customer reading it as a limit would be wrong. */}
+        {/* **This is the promise, and the code keeps it now.** This comment used
+            to say the bill would later move back to services actually monitored
+            "once the charge can be raised" — which contradicted the sentence
+            directly under it, and `billed_services` was in fact counting every
+            service while the mandate charged the commitment
+            (`docs/changes/commitment-is-the-bill-ceiling/`). The copy was right
+            and the code was wrong. Changing this text now means changing a
+            pricing promise, not a label. */}
         <p className="max-w-3xl text-ink-dim text-sm leading-relaxed">
           You choose how many services to pay for. That number sets your monthly bill and your
           monthly volume — each plan below says how much volume one service buys. We never bill past

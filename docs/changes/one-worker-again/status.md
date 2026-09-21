@@ -2,7 +2,8 @@
 
 ## Lifecycle status
 
-**Implemented, awaiting the founder's review of the diff.** Nothing is committed.
+**Released to `main`** as `c78e6f9`, "Profiles go back into the worker, carrying both memory budgets", after the founder read the diff on
+2026-09-21. Not deployed — nexovue has no deployment target.
 
 ## Current task
 
@@ -29,7 +30,7 @@ None.
 
 ## Next action
 
-Founder: review the diff and say **push**.
+None — this is in history.
 
 ## Open decisions
 

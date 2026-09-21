@@ -250,8 +250,13 @@ export function checkoutAvailability(overview: BillingOverview): CheckoutAvailab
     return {
       available: false,
       reason: "This organization already has an active subscription.",
+      // **The order, said in the order it happens.** This read "cancel this
+      // subscription above, then choose the new plan here" beside a list of
+      // plans that cannot be pressed — so the sentence described a control the
+      // customer could see and not use, which reads as a broken button rather
+      // than as a sequence (`docs/quality/console-review-2026-09-20.md`).
       nextStep:
-        "To move to a different plan, cancel this subscription under Subscription above, then choose the new plan here. Two mandates would otherwise charge at once, so they are taken one at a time.",
+        "Cancel this subscription under Subscription above, and the plans below become choosable. They are listed here now so you can compare them first. Two mandates would otherwise charge at once, so they are taken one at a time.",
     };
   }
   return { available: true };
