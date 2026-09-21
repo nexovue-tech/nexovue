@@ -27,6 +27,8 @@ import { dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
+import { workerIndex } from "./worker-client";
+
 /** AUTH_TIER in apps/api/src/nexovue_api/ratelimit/policy.py, per client address. */
 const AUTH_LIMIT = 10;
 const AUTH_WINDOW_MS = 60_000;
@@ -36,8 +38,19 @@ const RESERVED_FOR_PEOPLE = 2;
 const SUITE_ALLOWANCE = AUTH_LIMIT - RESERVED_FOR_PEOPLE;
 
 /** Build output, like every other file the suite writes. See playwright.config.ts. */
+/**
+ * One ledger per worker, because one worker is now one client.
+ *
+ * It was one ledger for the whole suite while every browser reached the API from
+ * the proxy's address and shared its allowance. Each worker presents its own
+ * address now (`worker-client.ts`), so each has its own ten a minute — and a
+ * shared ledger would pace them against a limit none of them is subject to.
+ *
+ * Still a file rather than memory: a worker is a process, and two runs a minute
+ * apart really do share one server window.
+ */
 const LEDGER_PATH = fileURLToPath(
-  new URL("../../node_modules/.playwright/auth-quota.json", import.meta.url),
+  new URL(`../../node_modules/.playwright/auth-quota-${workerIndex()}.json`, import.meta.url),
 );
 const LOCK_PATH = `${LEDGER_PATH}.lock`;
 

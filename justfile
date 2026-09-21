@@ -4,7 +4,7 @@
 compose := "deploy/compose"
 
 # go.work members. Go tooling runs per-module: `./...` from the root sees no packages.
-go_modules := "apps/receiver apps/workers packages/contracts tools/rebalanceprobe"
+go_modules := "apps/receiver apps/workers packages/contracts tools/gateseed tools/rebalanceprobe"
 
 # Migration targets. Both default to the dev stack's published ports; override
 # either to point at another environment.
@@ -120,7 +120,12 @@ test-go:
     # they need a live control plane, but a file nothing compiles rots unseen.
     for m in {{go_modules}}; do (cd "$m" && go vet -tags storeprobe ./... && go test -count=1 ./...); done
 
-test-py:
+# Put the telemetry the live read suites need into the dev stack, through the
+# ingest path a customer uses. Idempotent, and a no-op under NEXOVUE_SKIP_LIVE_TESTS.
+gate-seed:
+    go run ./tools/gateseed
+
+test-py: gate-seed
     #!/usr/bin/env bash
     set -uo pipefail
     # `.env` if it exists, because the live suites need what it holds. Every
@@ -130,7 +135,17 @@ test-py:
     # offline suites with it — a gate that fails for a reason unrelated to the
     # code is a gate people learn to ignore.
     [ -f .env ] && { set -a; . ./.env; set +a; }
-    uv run pytest
+    # **Six workers, distributed by file.** The suite is 80% waiting on real
+    # Postgres, ClickHouse, Redis and Kafka, so it parallelises almost perfectly:
+    # measured 2026-09-21, 248s serial, 71s at four, 61s at six, 63s at eight —
+    # past six the shared development stack is the limit, not this machine
+    # (`docs/changes/faster-gate/`).
+    #
+    # `--dist loadfile` rather than spreading tests: a file's tests share its
+    # fixtures, and a suite whose fixture writes rows for one tenant must not have
+    # two workers inside it at once. It is not in `addopts`, so running one file
+    # by hand stays serial and readable.
+    uv run pytest -n 6 --dist loadfile
     code=$?
     if [ $code -eq 5 ]; then echo "no tests collected yet — see the testing policy"; exit 0; fi
     exit $code

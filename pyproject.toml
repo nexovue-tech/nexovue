@@ -23,6 +23,10 @@ dev = [
     "mypy>=1.13",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    # The suite is 80% waiting on real stores (`docs/changes/faster-gate/`), which
+    # is what this is for. Distribution is by file, so a file's tests keep sharing
+    # their fixtures and two workers never run one suite's teardown at once.
+    "pytest-xdist>=3.6",
     # The API's tests and FastAPI's TestClient both drive httpx directly. It was
     # undeclared until now and arrived only as a transitive dependency of the
     # scheduler, so removing it there broke a suite that never named it.

@@ -5,6 +5,7 @@ use (
 	./apps/workers
 	./packages/contracts
 	./tools/chaos
+	./tools/gateseed
 	./tools/loadgen
 	./tools/rebalanceprobe
 )

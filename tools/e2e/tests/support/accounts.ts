@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import { type Page, type Response, test } from "@playwright/test";
 
 import { deferAuthRequests, takeAuthAllowance } from "./auth-quota";
+import { workerAddress } from "./worker-client";
 
 export interface NewAccount {
   company: string;
@@ -43,6 +44,7 @@ export function newAccount(): NewAccount {
 
 /** Fills the real form and submits it. The product decides where the browser lands. */
 export async function signUp(page: Page, account: NewAccount): Promise<void> {
+  await asThisWorkersClient(page);
   await page.goto("/signup");
   await page.getByLabel("Company").fill(account.company);
   await page.getByLabel("Email").fill(account.email);
@@ -53,10 +55,23 @@ export async function signUp(page: Page, account: NewAccount): Promise<void> {
 
 /** The returning user's door. A rejected password is the product answering, not a fault. */
 export async function signIn(page: Page, email: string, password: string): Promise<void> {
+  await asThisWorkersClient(page);
   await page.goto("/login");
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(password);
   await submitAuthForm(page, "Sign in", LOGIN_PATH);
+}
+
+/**
+ * Everything this page sends from now on comes from this worker's own address.
+ *
+ * Set here rather than in a fixture so no spec has to know about it: the auth
+ * doors are the only rate limit the suite can collide with, and both of them go
+ * through this file. See `worker-client.ts` for why four workers are four
+ * callers rather than one.
+ */
+async function asThisWorkersClient(page: Page): Promise<void> {
+  await page.setExtraHTTPHeaders({ "x-forwarded-for": workerAddress() });
 }
 
 /**

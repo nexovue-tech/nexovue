@@ -33,16 +33,18 @@ export default defineConfig({
   /**
    * How many browsers run at once.
    *
-   * Every browser reaches the API through the web container's proxy, so the API sees one
-   * address for the whole suite. That used to make the suite one caller: signed-in reads
-   * were counted per address, and four browsers shared 60 ClickHouse-backed reads a
-   * minute. They are now counted per person under a per-organization ceiling
-   * (`docs/changes/rate-limit-per-person/`), and each spec signs in as a person of its
-   * own, so a browser is held to its own budget, as a colleague in the same office is.
+   * Signed-in reads are counted per person under a per-organization ceiling
+   * (`docs/changes/rate-limit-per-person/`) and each spec signs in as a person of its own,
+   * so a browser is held to its own budget, as a colleague in the same office is. The
+   * *auth* doors were the shared one — ten a minute per address, and every browser
+   * arriving from the proxy's — until each worker was given an address of its own
+   * (`tests/support/worker-client.ts`).
    *
-   * What still binds is this machine: four browsers against one dev stack.
+   * What binds now is this machine and one development stack. Measured 2026-09-21, after
+   * that change: four workers 104s, six 91s, eight 112s — past six they queue behind each
+   * other's ClickHouse reads and the run gets slower, not faster.
    */
-  workers: 4,
+  workers: 6,
 
   forbidOnly: !!process.env.CI,
   // One retry on CI covers infrastructure noise. Locally a flake must be visible as one.

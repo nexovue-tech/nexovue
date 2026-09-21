@@ -36,6 +36,9 @@ deploy/data/
 # `go build` at the repo root drops the loadgen binary here.
 /loadgen
 
+# `go build ./...` inside a tool's own module drops its binary beside its source.
+/tools/gateseed/gateseed
+
 # Agent worktrees: a full repo copy, never part of the tree.
 .claude/worktrees/
 

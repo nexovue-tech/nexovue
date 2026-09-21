@@ -96,6 +96,42 @@ async def reporting(clickhouse: AsyncClient) -> tuple[str, str]:
     return str(tenant_id), str(project_id)
 
 
+@pytest_asyncio.fixture
+async def histogram_metric(clickhouse: AsyncClient, reporting: tuple[str, str]) -> str:
+    """The histogram with the most points in this tenant's window.
+
+    **Named, not hard-coded.** Four tests here asked for `k6.http_req_duration`,
+    which is the OpenTelemetry demo's load generator's own latency — so the suite
+    could only run after somebody had started twenty-one containers by hand, and
+    turned red on a clean tree once that data aged out of the window. The subject
+    is *a real histogram*, not that one: whatever a generator has put here, the
+    read must fold it over its own bounds. `just gate-seed` supplies one, and the
+    demo still satisfies this when it is running.
+    """
+    tenant_id, project_id = reporting
+    start, end = _window()
+    result = await clickhouse.query(
+        # **`explicit_bounds` must not be empty.** A real store holds histograms
+        # with no bounds at all — an exponential one folds into a single
+        # unbounded bucket — and these tests are about folding a distribution
+        # *over its bounds*. Discovered rather than assumed: the first run of
+        # this fixture picked `ad`/`kafka`'s bucketless histogram and the merge
+        # test failed on correct behaviour.
+        "SELECT metric_name FROM metrics_histogram "
+        "WHERE tenant_id = %(tenant)s AND project_id = %(project)s "
+        "AND timestamp >= %(since)s AND timestamp <= %(until)s "
+        "AND notEmpty(explicit_bounds) "
+        "GROUP BY metric_name ORDER BY count() DESC LIMIT 1",
+        parameters={"tenant": tenant_id, "project": project_id, "since": start, "until": end},
+    )
+    assert result.result_rows, (
+        "no bucketed histogram points in this tenant's window. This suite asserts on "
+        "real instrumentation, so an empty store is a failure here rather than a pass "
+        "— run `just gate-seed`, which is what the gate does."
+    )
+    return str(result.result_rows[0][0])
+
+
 def _window() -> tuple[datetime, datetime]:
     end = datetime.now(UTC)
     return end - LOOKBACK, end
@@ -258,17 +294,21 @@ async def _histogram(
 
 
 async def test_a_real_histogram_merges_into_one_distribution_over_its_own_bounds(
-    clickhouse: AsyncClient, reporting: tuple[str, str]
+    clickhouse: AsyncClient, reporting: tuple[str, str], histogram_metric: str
 ) -> None:
-    """`k6.http_req_duration` is the load generator's own latency, sixteen
-    buckets over fifteen bounds. The offline suite cannot tell you `sumForEach`
-    and the `argMax`/`argMin` subtraction parse, or that they agree about array
-    lengths."""
-    answer = await _histogram(clickhouse, reporting, "k6.http_req_duration")
+    """A real exporter's latency, folded into one distribution. The offline suite
+    cannot tell you `sumForEach` and the `argMax`/`argMin` subtraction parse, or
+    that they agree about array lengths.
+
+    **The lengths are the assertion, not the number.** This asserted fifteen
+    bounds, which was true of k6's ladder and of nothing else — a fact about the
+    generator that happened to be running, dressed as a fact about the read.
+    """
+    answer = await _histogram(clickhouse, reporting, histogram_metric)
 
     assert answer.merged is True, "one metric, one layout, one distribution"
     (layout,) = answer.layouts
-    assert len(layout.bounds) == 15
+    assert len(layout.bounds) > 0, "a histogram the read folded has bounds to fold over"
     assert len(layout.bucket_counts) == len(layout.bounds) + 1, (
         "a histogram has one more bucket than it has bounds: the last is unbounded"
     )
@@ -278,7 +318,7 @@ async def test_a_real_histogram_merges_into_one_distribution_over_its_own_bounds
 
 
 async def test_the_window_delta_is_far_below_the_number_of_points_stored(
-    clickhouse: AsyncClient, reporting: tuple[str, str]
+    clickhouse: AsyncClient, reporting: tuple[str, str], histogram_metric: str
 ) -> None:
     """The defect this read exists to avoid, measured against the store.
 
@@ -299,16 +339,22 @@ async def test_the_window_delta_is_far_below_the_number_of_points_stored(
             SELECT series_hash, max(count) - min(count) AS delta, sum(count) AS points_total
             FROM metrics_histogram
             WHERE tenant_id = %(tenant)s AND project_id = %(project)s
-              AND metric_name = 'k6.http_req_duration'
+              AND metric_name = %(metric)s
               AND timestamp >= %(since)s AND timestamp <= %(until)s
             GROUP BY series_hash
         )
         """,
-        parameters={"tenant": tenant_id, "project": project_id, "since": start, "until": end},
+        parameters={
+            "tenant": tenant_id,
+            "project": project_id,
+            "metric": histogram_metric,
+            "since": start,
+            "until": end,
+        },
     )
     naive, largest_series_delta = stored.result_rows[0]
 
-    answer = await _histogram(clickhouse, reporting, "k6.http_req_duration", window)
+    answer = await _histogram(clickhouse, reporting, histogram_metric, window)
     (layout,) = answer.layouts
 
     assert naive > 0, "no points to compare against"
@@ -335,11 +381,11 @@ async def test_the_window_delta_is_far_below_the_number_of_points_stored(
 
 
 async def test_percentiles_come_back_ordered_and_inside_the_bounds(
-    clickhouse: AsyncClient, reporting: tuple[str, str]
+    clickhouse: AsyncClient, reporting: tuple[str, str], histogram_metric: str
 ) -> None:
     """Estimates, but not arbitrary ones: each must sit inside the range its own
     buckets describe, and they must not go backwards."""
-    answer = await _histogram(clickhouse, reporting, "k6.http_req_duration")
+    answer = await _histogram(clickhouse, reporting, histogram_metric)
     (layout,) = answer.layouts
 
     estimates = [layout.p50, layout.p75, layout.p90, layout.p95, layout.p99]
@@ -445,7 +491,7 @@ async def test_a_service_sending_histograms_gets_a_heatmap_over_its_own_bounds(
 
 
 async def test_the_first_column_is_a_delta_and_not_the_whole_history(
-    clickhouse: AsyncClient, reporting: tuple[str, str]
+    clickhouse: AsyncClient, reporting: tuple[str, str], histogram_metric: str
 ) -> None:
     """The defect the extra read exists to prevent.
 
@@ -466,9 +512,14 @@ async def test_the_first_column_is_a_delta_and_not_the_whole_history(
 
     predating = await clickhouse.query(
         "SELECT count() FROM metrics_histogram WHERE tenant_id = %(tenant)s "
-        "AND project_id = %(project)s AND metric_name = 'k6.http_req_duration' "
+        "AND project_id = %(project)s AND metric_name = %(metric)s "
         "AND timestamp >= %(since)s AND start_timestamp < %(since)s",
-        parameters={"tenant": tenant_id, "project": project_id, "since": start},
+        parameters={
+            "tenant": tenant_id,
+            "project": project_id,
+            "metric": histogram_metric,
+            "since": start,
+        },
     )
     if not int(predating.result_rows[0][0]):
         pytest.skip(
@@ -476,7 +527,7 @@ async def test_the_first_column_is_a_delta_and_not_the_whole_history(
             "predecessor to subtract and there is no pre-window history to leak"
         )
 
-    answer = await _histogram(clickhouse, reporting, "k6.http_req_duration")
+    answer = await _histogram(clickhouse, reporting, histogram_metric)
     heatmap = await _heatmap(clickhouse, reporting, "frontend")
     totals = [column.total for column in heatmap.columns if column.total > 0]
 

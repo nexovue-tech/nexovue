@@ -5,12 +5,15 @@
  * into one row carrying the count and the span of time they cover, and opening that row
  * has to show the stack the throw actually carried.
  *
- * **The exception arrives as a log record, not as a span event.** That is not a
- * shortcut — it is the only path that works. `spans.exception_type` and
- * `spans.exception_message` exist as columns and nothing in the worker writes them
- * (P1-30, corrected in the plan on 2026-08-30), so the span half of the grouping query
- * has never returned a row. A spec built on a span event would fail for a reason that
- * has nothing to do with this screen.
+ * **The exception arrives here as a log record, not as a span event**, and that is a
+ * choice about this spec rather than a limit of the product: a log record is the
+ * shortest honest path to one error group, and the grouping query reads both columns.
+ *
+ * It used to say nothing wrote `spans.exception_type`. That was true when this was
+ * written (P1-30, 2026-08-30) and stopped being true when the span writer learned to
+ * promote an `exception` event — `traceassembly/block.go` writes both columns now, and
+ * `otlpvalue.Exception` documents the two paths together so a spelling cannot drift
+ * between them. The span path is exercised by the OpenTelemetry demo rather than here.
  */
 
 import { expect, type Locator, type Page, test } from "@playwright/test";
