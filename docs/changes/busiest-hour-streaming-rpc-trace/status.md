@@ -2,7 +2,8 @@
 
 ## Lifecycle status
 
-**Implemented and verified, live. Founder chose option 2: harden the test.** Uncommitted.
+**Implemented, verified live, and committed.** Founder chose option 2: harden the test.
+Committed as `ee8bbd7` (investigation) and `f68dbf5` (the fix).
 
 ## Current task
 
@@ -35,7 +36,7 @@ None.
 
 ## Next action
 
-Founder: read the diff, then say **commit**.
+None. Committed; nothing further pending on this record.
 
 ## Open decisions
 
