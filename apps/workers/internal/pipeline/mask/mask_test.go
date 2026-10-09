@@ -110,16 +110,18 @@ func TestDefaultRulesMaskWhatCanNeverBeNeededForDebugging(t *testing.T) {
 // destroys the data an engineer came to read.
 func TestDefaultRulesLeaveOrdinaryTelemetryAlone(t *testing.T) {
 	cases := map[string]struct{ key, value string }{
-		"http route":            {"http.route", "/checkout"},
-		"db statement":          {"db.statement", "SELECT * FROM carts WHERE id = $1"},
-		"user agent":            {"http.request.header.user-agent", "curl/8.4.0"},
-		"order id":              {"order.id", "1234567890123"},
-		"digits failing luhn":   {"order.id", "4111111111111112"},
-		"twenty digits":         {"trace.correlation", "12345678901234567890"},
-		"twelve digits":         {"invoice.number", "411111111111"},
-		"timestamp":             {"event.at", "2026-08-27T10:00:00Z"},
-		"cookie policy url":     {"policy.url", "https://example.test/cookies-policy"},
-		"tokenizer description": {"model.name", "sentencepiece"},
+		"http route":                {"http.route", "/checkout"},
+		"db statement":              {"db.statement", "SELECT * FROM carts WHERE id = $1"},
+		"user agent":                {"http.request.header.user-agent", "curl/8.4.0"},
+		"order id":                  {"order.id", "1234567890123"},
+		"digits failing luhn":       {"order.id", "4111111111111112"},
+		"twenty digits":             {"trace.correlation", "12345678901234567890"},
+		"twelve digits":             {"invoice.number", "411111111111"},
+		"timestamp":                 {"event.at", "2026-08-27T10:00:00Z"},
+		"cookie policy url":         {"policy.url", "https://example.test/cookies-policy"},
+		"tokenizer description":     {"model.name", "sentencepiece"},
+		"gen_ai input token count":  {"gen_ai.usage.input_tokens", "842"},
+		"gen_ai output token count": {"gen_ai.usage.output_tokens", "156"},
 	}
 
 	for name, tc := range cases {

@@ -46,14 +46,27 @@ var DefaultRuleNames = []string{
 
 // credentialKeyMarkers are the key substrings the credential rule matches.
 // api_key is spelled three ways in the wild and all three mean the same thing.
+//
+// **"token" is not here.** It needs the plural exception below, which a plain
+// substring list cannot express.
 var credentialKeyMarkers = []string{
 	"password",
 	"secret",
-	"token",
 	"api_key",
 	"apikey",
 	"api-key",
 }
+
+// tokenMarker is "token" matched on its own, everywhere except immediately
+// before a trailing "s".
+//
+// Found seeding `gen_ai.usage.input_tokens`/`output_tokens` for F29: a bare
+// substring match on "token" masked both, unconditionally, before any screen
+// could ever read a real count. A credential key is never pluralised this way
+// — access_token, session_token, api_token, refresh_token all end singular —
+// while a count of tokens almost always is, so the plural is the one case
+// this rule can give back at no cost to what it exists to catch.
+const tokenMarker = "token"
 
 // headerNames matched by the header rules. A captured header arrives as an
 // attribute whose last dotted segment is the header name, which is what these
@@ -253,7 +266,7 @@ func (r Rules) families() []family {
 // and what it is replaced with.
 func (r Rules) masksKey(key string) (action, bool) {
 	lowered := strings.ToLower(key)
-	if r.credentialKeys.on && containsAny(lowered, credentialKeyMarkers) {
+	if r.credentialKeys.on && (containsAny(lowered, credentialKeyMarkers) || containsSingularToken(lowered)) {
 		return r.credentialKeys.action, true
 	}
 	if r.authorizationHeader.on && headerNameIn(lowered, authorizationHeaderNames) {
@@ -357,6 +370,25 @@ func headerNameIn(loweredKey string, names []string) bool {
 		}
 	}
 	return false
+}
+
+// containsSingularToken reports whether lowered contains "token" anywhere it
+// is not immediately followed by "s". Scans past a plural occurrence rather
+// than stopping at the first one, so "tokens_token" — unrealistic, but not
+// ruled out — still matches on its second, genuinely singular occurrence.
+func containsSingularToken(lowered string) bool {
+	rest := lowered
+	for {
+		at := strings.Index(rest, tokenMarker)
+		if at < 0 {
+			return false
+		}
+		after := at + len(tokenMarker)
+		if after >= len(rest) || rest[after] != 's' {
+			return true
+		}
+		rest = rest[after:]
+	}
 }
 
 func containsAny(lowered string, markers []string) bool {
