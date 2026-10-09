@@ -112,7 +112,7 @@ today, with no new ingestion.
   the shared prefix, a future rename degrades to that field reading as absent until a small,
   config-level update — never a broken query, never a migration.
 - NFR29.3 — Bounded by the same ClickHouse row/time caps every other API read already carries
-  (`docs/engineering/api.md`'s `READ_SETTINGS`) — no new exemption for this screen.
+  (`data/clickhouse/base.py`'s `READ_SETTINGS`) — no new exemption for this screen.
 
 ## Error cases
 
@@ -122,7 +122,7 @@ today, with no new ingestion.
 - A span carrying a `gen_ai.*` attribute but no recognizable model-name attribute: grouped under an
   explicit "unlabeled model" bucket. Never silently dropped, never guessed at.
 - ClickHouse unreachable: the same deferred-connection, 503-on-first-use behavior every other screen
-  already has (`docs/architecture/backend.md`). Nothing bespoke for this feature.
+  already has (`apps/api/src/nexovue_api/lifespan.py`). Nothing bespoke for this feature.
 
 ## Acceptance criteria
 
