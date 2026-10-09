@@ -6,6 +6,15 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	// Registers gzip as a decodable grpc-encoding, nothing more: the import
+	// has no exported symbol because codecs self-register in encoding's global
+	// map on init. Without it a Collector-side gRPC exporter that compresses —
+	// several do by default — is refused `Unimplemented: Decompressor is not
+	// installed for grpc-encoding "gzip"` before any gate in this package ever
+	// runs. MaxRecvMsgSize below already assumed this: its own comment states
+	// the cap is sized post-decompression, which only matters once decoding a
+	// compressed message is actually possible.
+	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/keepalive"
 )
 
@@ -30,7 +39,7 @@ const (
 	maxConnectionAgeGrace = 5 * time.Minute
 )
 
-// GRPCServer is the OTLP/gRPC transport, serving all three collector services.
+// GRPCServer is the OTLP/gRPC transport, serving all four collector services.
 // Its lifecycle mirrors *http.Server's so the process starts and drains every
 // listener the same way.
 type GRPCServer struct {

@@ -233,3 +233,25 @@ services:
       - NEXOVUE_RUM_RELEASE=${NEXOVUE_RUM_RELEASE:?set NEXOVUE_RUM_RELEASE}
     volumes:
       - ${NEXOVUE_OVERLAY_DIR:?set by otel-demo.sh}/frontend-proxy-envoy.tmpl.yaml:/home/envoy/envoy.tmpl.yaml:ro
+
+  # Door 5. From `compose.profiling.yaml`, which this project's only other
+  # service — `firepit`, upstream's own profiling UI — is deliberately left
+  # out of: nexovue has its own Profiles screen, and firepit's default port is
+  # 8080, which the storefront already owns.
+  #
+  # Like image-provider and frontend-proxy, this exporter reads no
+  # OTEL_EXPORTER_OTLP_HEADERS — it is a static Collector config, not an SDK —
+  # so the key is patched into a copy of its own file instead. Unlike those
+  # two, the Collector expands `${env:NAME}` on its own; there is no envsubst
+  # step to extend, so the environment variable and the patched file are the
+  # whole change.
+  otel-ebpf-profiler:
+    environment:
+      - NEXOVUE_INGEST_KEY=${NEXOVUE_INGEST_KEY:?set NEXOVUE_INGEST_KEY}
+    volumes:
+      - ${NEXOVUE_OVERLAY_DIR:?set by otel-demo.sh}/otelcol-ebpf-profiling.yml:/etc/nexovue-ebpf-profiler-config.yaml:ro
+    # Replaces upstream's command outright — compose does not merge this field
+    # — to point at the patched file above instead of the pinned clone's.
+    command:
+      - --config=/etc/nexovue-ebpf-profiler-config.yaml
+      - --feature-gates=service.profilesSupport

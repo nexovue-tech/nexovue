@@ -1,0 +1,47 @@
+# Door 5 — the demo's eBPF profiler, pointed at our receiver *with a key*.
+#
+# A verbatim copy of upstream `src/otel-collector/otelcol-ebpf-profiling.yml` at
+# tag 3.0.0, plus one block: `headers` on the `otlp_grpc/collector` exporter.
+# Unlike nginx and Envoy, the OpenTelemetry Collector's own config already
+# expands `${env:NAME}` natively — no envsubst step exists to add a line to —
+# so this is the whole patch. Without it every profile it exports is refused
+# 401 at our door, the same failure the nginx and Envoy copies exist to avoid.
+#
+# `NEXOVUE_INGEST_KEY` reaches this file because the service override in
+# compose.nexovue.yaml adds it to the container's environment; upstream's own
+# service definition passes through only OTEL_COLLECTOR_HOST and
+# OTEL_COLLECTOR_PORT_GRPC.
+#
+# Re-check this file against the clone whenever UPSTREAM_REF moves.
+#
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+receivers:
+  profiling:
+    samples_per_second: 19
+    include_env_vars: "OTEL_SERVICE_NAME,OTEL_RESOURCE_ATTRIBUTES"
+
+processors:
+  transform/set_service_name:
+    error_mode: ignore
+    profile_statements:
+      - context: resource
+        statements:
+          - set(attributes["service.name"], attributes["process.environment_variable.OTEL_SERVICE_NAME"]) where attributes["process.environment_variable.OTEL_SERVICE_NAME"] != nil
+          - delete_key(attributes, "process.environment_variable.OTEL_SERVICE_NAME")
+
+exporters:
+  otlp_grpc/collector:
+    endpoint: ${env:OTEL_COLLECTOR_HOST}:${env:OTEL_COLLECTOR_PORT_GRPC}
+    tls:
+      insecure: true
+    headers:
+      x-nexovue-key: ${env:NEXOVUE_INGEST_KEY}
+
+service:
+  pipelines:
+    profiles:
+      receivers: [profiling]
+      processors: [transform/set_service_name]
+      exporters: [otlp_grpc/collector]

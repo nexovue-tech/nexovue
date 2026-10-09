@@ -21,7 +21,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
 )
 
-// OTLP/gRPC's three collector services, served over the same gates as the HTTP
+// OTLP/gRPC's four collector services, served over the same gates as the HTTP
 // doors. They hold no state of their own: everything they decide lives in
 // gates.go and signals.go, which is what keeps the second transport from
 // becoming a second pipeline.
@@ -128,7 +128,7 @@ func runExport[Request proto.Message](
 	return nil
 }
 
-// registerExporters mounts all three collector services on the server.
+// registerExporters mounts all four collector services on the server.
 func registerExporters(server *grpc.Server, opts Options) {
 	traces := &traceExporter{opts: opts}
 	tracesDesc := serviceDesc(tracecollectorpb.TraceService_ServiceDesc, opts, tracesDoor,

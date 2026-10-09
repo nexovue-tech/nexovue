@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # P1-62, then P1-63 — the OpenTelemetry Demo, and every door it can reach.
 #
-# Runs the upstream OpenTelemetry Demo — 21 containers, 18 of them sending
+# Runs the upstream OpenTelemetry Demo — 22 containers, 19 of them sending
 # telemetry, in ten languages — against our receiver, so the screens are judged
 # on telemetry we did not write. Our own demo app was three Go services that
 # agreed with themselves; this one does not.
 #
-# **It opens five doors, not one.** P1-62 fed door 1 and left four screens empty,
+# **It opens six doors, not one.** P1-62 fed door 1 and left four screens empty,
 # which is a strange thing for the daily traffic source to do. Now:
 #
 #   door 1  every service reports, and so does the storefront's own browser —
@@ -16,6 +16,8 @@
 #   door 2  two checks doors.py creates, probing the storefront
 #   door 3  our browser SDK, injected into the shop's pages by Envoy
 #   door 4a a signed deploy event carrying the release the pages report
+#   door 5  the demo's eBPF profiler, privileged and watching every process in
+#           the Docker VM — the services it names, and nexovue's own
 #
 #   door 4b is **not** opened. `astronomy-db` has pg_stat_statements preloaded
 #           and a monitoring_user granted, and the poller refuses password auth
@@ -28,6 +30,10 @@
 # Measured on 2026-09-06, images already pulled: 2007 MiB resident across the
 # 21 containers, about four minutes from `up` to the first full service map.
 # It was 1641 across 20 before the collector and k6's browser scenario.
+#
+# Door 5 added 2026-10-09: `otel-ebpf-profiler` measured at 254 MiB resident,
+# ~1% CPU, once traffic was flowing — profile samples arriving at roughly 240
+# a minute across the demo's own services plus the Docker VM's.
 #
 # Needs `just dev`, which now starts the probe workers too: without them the
 # checks are created and never probed, and `up` refuses rather than pretending.
@@ -101,6 +107,9 @@ readonly WAVE_BACKING=(flagd valkey-cart astronomy-db)
 readonly WAVE_SERVICES=(product-catalog quote currency shipping email payment recommendation ad cart checkout image-provider)
 readonly WAVE_EDGE=(frontend frontend-proxy)
 readonly WAVE_TRAFFIC=(load-generator)
+# Started after the services, not before: it profiles the demo's own CPU use,
+# and there is none to sample until something is running.
+readonly WAVE_PROFILING=(otel-ebpf-profiler)
 # Started between the backing stores and the services: checkout produces to the
 # topic, so the broker has to exist before it does.
 readonly WAVE_QUEUE=(kafka accounting fraud-detection)
@@ -117,6 +126,7 @@ compose() {
         --env-file "${HERE}/nexovue.env" \
         -f "${UPSTREAM_DIR}/compose.yaml" \
         "${full_layer[@]}" \
+        -f "${UPSTREAM_DIR}/compose.profiling.yaml" \
         -f "${HERE}/compose.nexovue.yaml" \
         "$@"
 }
@@ -226,6 +236,7 @@ cmd_up() {
     report_headroom
     start_wave "edge" "${WAVE_EDGE[@]}"
     wait_for_settle 45
+    start_wave "profiling" "${WAVE_PROFILING[@]}"
     start_wave "traffic" "${WAVE_TRAFFIC[@]}"
     wait_for_settle 30
 
