@@ -15,6 +15,7 @@ function span(startMs: number, durationMs: number): Span {
     status_code: "UNSET",
     status_message: "",
     attributes: {},
+    is_model_call: false,
   };
 }
 

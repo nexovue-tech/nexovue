@@ -151,6 +151,9 @@ class SpanDetail(BaseModel):
     events: list[SpanEvent] = Field(default_factory=list)
     links: list[SpanLink] = Field(default_factory=list)
     attributes: dict[str, Any] = Field(default_factory=dict)
+    # F29: any attribute under `llm_observability.queries.GEN_AI_ATTRIBUTE_PREFIX`.
+    # Computed from `attributes` above, not a second read — see `service._to_span`.
+    is_model_call: bool = False
 
 
 class TraceDetailResponse(BaseModel):

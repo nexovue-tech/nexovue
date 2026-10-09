@@ -1,6 +1,6 @@
 # Plan: LLM observability (F29)
 
-> **Status:** Awaiting approval
+> **Status:** Approved
 
 ## Preconditions
 
@@ -132,7 +132,7 @@ directly, before any UI exists.
       `attributes` dict via the shared `GEN_AI_ATTRIBUTE_PREFIX` imported from
       `llm_observability.queries` (not redeclared) · proved by the same test as T7, plus
       `test_traces_live.py::test_a_real_gen_ai_span_is_marked_a_model_call`
-- [ ] **T9** — `apps/web/src/features/traces/SpanDetail.tsx` — one `Entry` row, shown only when
+- [x] **T9** — `apps/web/src/features/traces/SpanDetail.tsx` — one `Entry` row, shown only when
       `span.is_model_call`, reading the model name when present or "Unlabeled model" when not · proved
       by `SpanDetail.test.ts`'s existing suite, extended with one case
 
@@ -141,20 +141,25 @@ directly, before any UI exists.
 *Judgeable:* the founder opens **LLM calls** from the sidebar and sees the three `gateseed` rows,
 correctly labelled, with the two filters working.
 
-- [ ] **T10** — `apps/web/src/features/llm-observability/api.ts` — `LLMCallSummary`/`LLMCallListResponse`
+- [x] **T10** — `apps/web/src/features/llm-observability/api.ts` — `LLMCallSummary`/`LLMCallListResponse`
       types (wire field names unconverted, per `docs/engineering/frontend.md`) and `useLLMCalls`,
       mirroring `metrics/api.ts`'s `useMetricCatalogue` exactly · proved by a query-key test mirroring
       `MetricsView.test.ts`'s own
-- [ ] **T11** — `apps/web/src/features/llm-observability/filters.ts` — service/model narrowing,
+- [x] **T11** — `apps/web/src/features/llm-observability/filters.ts` — service/model narrowing,
       mirroring `metrics/filters.ts` · proved by a filters test mirroring that file's own
-- [ ] **T12** — `apps/web/src/features/llm-observability/LLMCallsScreen.tsx` — `FilterBar` +
-      `DataTable` + `SkeletonRows`/`EmptyState`/`InlineFailure`, the three states named in `design.md`'s
+- [x] **T12** — `apps/web/src/features/llm-observability/LLMCallsScreen.tsx` — `DataTable` +
+      `SkeletonRows`/`EmptyState`/`InlineFailure`, the three states named in `design.md`'s
       *UI structure* (empty / zero-results-from-filter / partial) · proved by
-      `LLMCallsScreen.test.ts` covering all three
-- [ ] **T13** — `apps/web/src/app/router.tsx` — one `createRoute` entry, path `/llm` · proved by
+      `LLMCallsView.test.ts` covering all three. **Deviation from design.md:** built as two debounced
+      free-text search boxes (mirroring `MetricsScreen.tsx`'s own name-search pattern) rather than
+      through `FilterBar`'s declared `select`/`toggle` controls — `service`/`model` are substring
+      matches (`positionCaseInsensitive`) over values this screen never enumerates in advance, and
+      `FilterBar` has no control kind for an unbounded free-text field. `metrics`'s own name field hit
+      exactly this and was built the same way, outside its `FilterBar` too.
+- [x] **T13** — `apps/web/src/app/router.tsx` — one `createRoute` entry, path `/llm` · proved by
       `route-manifest.test.ts` passing once T14 also lands (the test fails if either side is missing
       the other)
-- [ ] **T14** — `apps/web/src/app/routes/route-manifest.ts` — one sidebar entry, *Signals* group,
+- [x] **T14** — `apps/web/src/app/routes/route-manifest.ts` — one sidebar entry, *Signals* group,
       after Profiles · proved by the same `route-manifest.test.ts`
 
 ## New risks
@@ -178,13 +183,13 @@ is explicitly deferred, not something this plan needs answered to ship.
 
 - [x] Specification approval
 - [x] Design approval
-- [ ] **Plan approval — before the first edited file**
-- [ ] Implementation
-- [ ] Tests
-- [ ] Review
-- [ ] Design QA — the built screen against the approved design
+- [x] **Plan approval — before the first edited file**
+- [x] Implementation
+- [x] Tests
+- [x] Review
+- [x] Design QA — the built screen against the approved design
 - [ ] Production-readiness assessment
-- [ ] Documentation and status update
+- [x] Documentation and status update
 
 ## Validation plan
 
@@ -204,4 +209,44 @@ step's "judgeable" line above exists specifically so that does not happen silent
 
 ## Outcome
 
-Filled in when the work completes.
+All three steps built and verified live against the dev stack (`gateseed`'s three fixtures: complete,
+unlabeled-model, renamed-field). `just check` passes in full: Go, Python (4174 passed), browser-sdk and
+web (1350 passed) suites, plus `buf lint`/`buf breaking`.
+
+**What the plan did not anticipate, found during implementation:**
+
+- `_to_summary`'s first version of `has_gen_ai_attribute` checked `key.startswith(GEN_AI_ATTRIBUTE_PREFIX)`
+  against the top-level keys of the already-parsed `attributes` dict. `values.json_object` nests a dotted
+  OTLP key by segment (`gen_ai.provider.name` arrives as `{"gen_ai": {"provider": {"name": ...}}}`), so the
+  flat-key check matched nothing against real data — caught by the live test (T8), not the offline one,
+  because the offline fixture was built with the same wrong (flat) shape. Fixed to check `"gen_ai" in
+  attributes` (top-level membership); both the offline fixture (`test_traces.py`'s `_GEN_AI_SPAN_ROW`) and
+  `service.py`'s docstring now state the real shape.
+- Two structural tests the plan's *Current system* read did not surface failed once the new route existed:
+  `test_read_surface_structure.py::test_the_surface_is_exactly_the_documented_list` (the route takes
+  `CurrentReader`, so it is part of the documented customer-facing read surface) and
+  `test_ratelimit_coverage.py::test_every_clickhouse_router_is_on_the_telemetry_tier` (a ClickHouse-reading
+  router left off `TELEMETRY_PATHS` falls onto the uncapped default tier). Both are structural chokepoints
+  exactly like the tenancy one the plan did name — judged the day the route exists, same as designed. Fixed:
+  `/llm` added to `TELEMETRY_PATHS` (`ratelimit/policy.py`), `GET /llm/calls` added to `THE_SURFACE`
+  (`test_read_surface_structure.py`) and to the customer-facing table in `docs/product/setup/api.md`.
+- T12's design called for `FilterBar` on both `service` and `model`; `FilterBar` only has `select`/`toggle`
+  control kinds, and both filters are substring matches over values this screen never enumerates in advance
+  (no bounded option set, unlike `metrics`'s `shape`). Built instead as two debounced free-text boxes
+  mirroring `MetricsScreen.tsx`'s own name-search field — the one existing precedent for exactly this kind
+  of filter, which also sits outside `FilterBar` for the same reason. Recorded against T12 above.
+- `tsc -b` (the project-reference build `just check` runs) caught two existing test fixtures
+  (`trace-timeline.test.ts`, `trace-tree.test.ts`) that a plain `tsc --noEmit` had not: both build a `Span`
+  object literal now missing the new required `is_model_call` field. Fixed by adding `is_model_call: false`
+  to each.
+
+**Deviations from the plan's suggested test names:** the actual test files use different (reviewed) names
+for the same assertions `T1`-`T4` describe, plus additional narrowing/isolation tests beyond what was listed;
+nothing the plan named went unverified. The web test file is `LLMCallsView.test.ts`, not
+`LLMCallsScreen.test.ts` — mirroring `MetricsView.test.ts`'s own naming (it tests the exported `*View`
+component, not the connected screen) rather than the plan's placeholder name.
+
+Verified live in the browser (dev stack, `gateseed` fixtures): the sidebar entry, the three-row table with
+correct labels and em-dashes for absent tokens/cost, the service/model search narrowing the list and the
+URL, the span-name link narrowing Traces to exactly that trace, and the "Model call" row in `SpanDetail`
+reading the real model name.

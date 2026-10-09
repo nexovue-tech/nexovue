@@ -731,3 +731,36 @@ async def test_a_service_and_an_operation_together_match_one_span_not_two(
         assert int(answer.result_rows[0][0]) > 0, (
             "a trace matched with the service on one span and the operation on another"
         )
+
+
+async def test_a_real_gen_ai_span_is_marked_a_model_call(clickhouse: AsyncClient) -> None:
+    """F29: against a real, stored span — not a fake row standing in for one.
+
+    Reads whichever `gateseed`-seeded gen_ai trace is found, rather than one
+    `tools/gateseed` happens to produce first: the rule being proved is
+    "a real stored attribute reaches `is_model_call`", not which fixture does.
+    """
+    found = await clickhouse.query(
+        "SELECT tenant_id, project_id, trace_id FROM spans "
+        "WHERE service_name = {service:String} "
+        "AND toString(getSubcolumn(span_attrs, {attr:String})) != '' "
+        # Newest, not merely any — an older run from before a worker restart
+        # is still in the store and is not what this suite is meant to prove.
+        "ORDER BY timestamp DESC LIMIT 1",
+        parameters={"service": "gateseed", "attr": "gen_ai.provider.name"},
+    )
+    assert found.result_rows, (
+        "no gen_ai span from service_name='gateseed' — run `go run ./tools/gateseed` "
+        "against the dev stack first"
+    )
+    tenant_id, project_id, trace_id = (values.text(value) for value in found.result_rows[0])
+
+    detail = await service.get_trace(
+        TenantScopedRepository(clickhouse, tenant_id=tenant_id),
+        project_id=project_id,
+        trace_id=trace_id,
+    )
+
+    assert any(span.is_model_call for span in detail.spans), (
+        "a span known to carry a gen_ai.* attribute was not marked a model call"
+    )

@@ -62,6 +62,7 @@ const SPAN: Span = {
   http_route: "/charge",
   http_status: 500,
   attributes: { tier: "gold" },
+  is_model_call: false,
 };
 
 function render(span: Partial<Span>): string {
@@ -133,6 +134,32 @@ describe("the build a span ran on", () => {
     // An empty row under a term reads as "this build has no name", which is a
     // different claim from "the service did not say".
     expect(render({ deployment_version: "" })).not.toContain("Build");
+  });
+});
+
+describe("a span that is a model call", () => {
+  it("names the model when the span carries one", () => {
+    const text = render({
+      is_model_call: true,
+      attributes: { gen_ai: { request: { model: "claude-fable-5-1" } } },
+    });
+
+    expect(text).toContain("Model call");
+    expect(text).toContain("claude-fable-5-1");
+  });
+
+  it("says the model is unlabeled when the span carries no model name", () => {
+    const text = render({
+      is_model_call: true,
+      attributes: { gen_ai: { provider: { name: "anthropic" } } },
+    });
+
+    expect(text).toContain("Model call");
+    expect(text).toContain("unlabeled model");
+  });
+
+  it("shows no model-call row at all on an ordinary span", () => {
+    expect(render({ is_model_call: false })).not.toContain("Model call");
   });
 });
 

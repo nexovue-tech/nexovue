@@ -66,6 +66,7 @@ and reach only the documented read API.**
 | `GET /synthetics/checks` | Check results in a window |
 | `GET /synthetics/checks/{check_id}/runs` | One check's recent runs |
 | `GET /deploys` | Recent deploys, newest first |
+| `GET /llm/calls` | Every model call reported in a window, grouped by service, span and model |
 
 Most take `project_id` as a query parameter, and a window as `from` and `to`
 (ISO-8601). Leaving the window out reads the last hour.

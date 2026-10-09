@@ -102,6 +102,8 @@ export interface Span {
   /** Spans in *other* traces this one points at — a queue hop, usually. */
   links?: SpanLink[];
   attributes: Record<string, unknown>;
+  /** Whether this span carries any `gen_ai.*` attribute. See F29. */
+  is_model_call: boolean;
 }
 
 export interface SpanEvent {

@@ -20,6 +20,7 @@ from typing import Any, Final
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
+from nexovue_api.llm_observability.service import has_gen_ai_attribute
 from nexovue_api.traces import queries
 from nexovue_api.traces.cursor import TracePageCursor, decode_cursor
 from nexovue_api.traces.queries import TraceFilters
@@ -613,6 +614,7 @@ def _ordered(endpoints: Iterable[TraceEndpoint]) -> list[TraceEndpoint]:
 
 
 def _to_span(row: dict[str, Any]) -> SpanDetail:
+    attributes = values.json_object(row["attributes_json"])
     return SpanDetail(
         span_id=values.text(row["span_id"]),
         parent_span_id=values.text(row["parent_span_id"]),
@@ -634,7 +636,11 @@ def _to_span(row: dict[str, Any]) -> SpanDetail:
         deployment_version=values.text(row["deployment_version"]),
         events=_to_events(row["events_json"]),
         links=_to_links(row),
-        attributes=values.json_object(row["attributes_json"]),
+        attributes=attributes,
+        # F29: `has_gen_ai_attribute` is the one place this rule is expressed in
+        # Python — read here because this span's attributes are already
+        # parsed, not fetched again for one boolean.
+        is_model_call=has_gen_ai_attribute(attributes),
     )
 
 

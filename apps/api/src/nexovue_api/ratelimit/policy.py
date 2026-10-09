@@ -235,6 +235,7 @@ TELEMETRY_PATHS: Final = (
     f"{API_PREFIX}/rum",
     f"{API_PREFIX}/profiles",
     f"{API_PREFIX}/usage",
+    f"{API_PREFIX}/llm",
 )
 
 # Probes must answer while the API is being hammered; that is the whole point

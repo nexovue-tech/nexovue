@@ -33,6 +33,8 @@ import { FindingsScreen } from "@/features/findings/FindingsScreen";
 import { databaseFilters } from "@/features/infrastructure/databases/filters";
 import { infrastructureFilters } from "@/features/infrastructure/filters";
 import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
+import { llmCallFilters } from "@/features/llm-observability/filters";
+import { LLMCallsScreen } from "@/features/llm-observability/LLMCallsScreen";
 import { LogsScreen, scopedService } from "@/features/logs/LogsScreen";
 import { severityFilterById } from "@/features/logs/severity";
 import { MembersScreen } from "@/features/members/MembersScreen";
@@ -214,6 +216,13 @@ const metricsRoute = createRoute({
     ...metricFilters(search),
     ...(typeof search.metric === "string" && search.metric ? { metric: search.metric } : {}),
   }),
+});
+
+const llmCallsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/llm",
+  component: LLMCallsScreen,
+  validateSearch: (search: Record<string, unknown>) => llmCallFilters(search),
 });
 
 const syntheticsRoute = createRoute({
@@ -541,6 +550,7 @@ const routeTree = rootRoute.addChildren([
     checkRoute,
     rumRoute,
     profilesRoute,
+    llmCallsRoute,
     settingsGeneralRoute,
     settingsAccountRoute,
     settingsApiKeysRoute,

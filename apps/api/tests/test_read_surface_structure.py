@@ -56,6 +56,7 @@ THE_SURFACE: Final = {
     "nexovue_api/synthetics/router.py:list_check_results": "GET /synthetics/checks",
     "nexovue_api/synthetics/router.py:list_runs": "GET /synthetics/checks/{check_id}/runs",
     "nexovue_api/deploys/router.py:list_deploys": "GET /deploys",
+    "nexovue_api/llm_observability/router.py:list_llm_calls": "GET /llm/calls",
 }
 
 

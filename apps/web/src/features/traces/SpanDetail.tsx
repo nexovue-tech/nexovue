@@ -104,6 +104,7 @@ export function SpanDetail({
           {span.deployment_version ? (
             <Entry term="Build" value={span.deployment_version} mono selectable />
           ) : null}
+          {span.is_model_call ? <Entry term="Model call" value={modelNameOf(attributes)} /> : null}
         </Section>
 
         <SpanProfile traceId={traceId} span={span} />
@@ -284,4 +285,12 @@ function readableValue(value: unknown): string {
   if (value === null || value === undefined) return "—";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+/** The flattened `gen_ai.request.model` attribute, or an explicit placeholder
+ * when a model call did not name its model — mirrors the API's own
+ * "unlabeled model" fallback (`llm_observability/service.py`). */
+function modelNameOf(attributes: Array<[string, string]>): string {
+  const match = attributes.find(([key]) => key === "gen_ai.request.model");
+  return match ? match[1] : "unlabeled model";
 }

@@ -121,6 +121,17 @@ _GRPC_SPAN_ROW: tuple[Any, ...] = (
     "{}",
 )
 
+# F29: a span carrying a gen_ai.* attribute, otherwise identical to the HTTP
+# shape above — only `attributes_json` differs. Nested, not flat-dotted: this
+# is the real shape `toJSONString(span_attrs)` produces for a dotted OTLP key
+# (ClickHouse's JSON type nests by segment), confirmed against a real span
+# after a flat-key version of this fixture passed against a check that could
+# not actually have matched live data.
+_GEN_AI_SPAN_ROW: tuple[Any, ...] = (
+    *_HTTP_SPAN_ROW[:-1],
+    '{"gen_ai":{"request":{"model":"claude-fable-5-1"}}}',
+)
+
 
 class FakeQueryResult:
     def __init__(self, column_names: list[str], result_rows: list[tuple[Any, ...]]) -> None:
@@ -325,6 +336,17 @@ async def test_the_detail_response_reports_the_trace_as_the_contract_names_it() 
     assert detail.spans[0].span_id == "00f067aa0ba902b7"
     assert detail.spans[0].parent_span_id == "", "a root span carries an empty string, never null"
     assert detail.spans[0].attributes == {"tier": "gold"}
+    assert detail.spans[0].is_model_call is False
+
+
+async def test_a_span_with_a_gen_ai_attribute_is_marked_a_model_call() -> None:
+    """F29: the same rule the LLM-calls screen's own SQL expresses, read here
+    in Python because this span's attributes are already parsed."""
+    detail = await service.get_trace(
+        _repository(TENANT_A, _GEN_AI_SPAN_ROW), project_id=PROJECT, trace_id=TRACE_A
+    )
+
+    assert detail.spans[0].is_model_call is True
 
 
 async def test_a_grpc_span_reports_its_rpc_identity_and_not_an_http_one() -> None:
