@@ -21,8 +21,10 @@ var BOUNDS = []float64{5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 
 // right to: a misspelt key in one of four places is a field the receiver
 // silently ignores.
 const (
-	keyAttributes = "attributes"
-	keyName       = "name"
+	keyAttributes  = "attributes"
+	keyName        = "name"
+	keyResource    = "resource"
+	keyStartUnixNs = "startTimeUnixNano"
 )
 
 // id returns a random OTLP id: 16 bytes for a trace, 8 for a span, hex encoded.
@@ -78,12 +80,12 @@ func Traces(cfg Config, count int, at time.Time) map[string]any {
 	for i := range count {
 		start := at.Add(-time.Duration(i) * time.Millisecond)
 		span := map[string]any{
-			"traceId":           id(16),
-			"spanId":            id(8),
-			keyName:             "GET /seeded",
-			"kind":              2, // SPAN_KIND_SERVER
-			"startTimeUnixNano": nanos(start),
-			"endTimeUnixNano":   nanos(start.Add(SlowEnough)),
+			"traceId":         id(16),
+			"spanId":          id(8),
+			keyName:           "GET /seeded",
+			"kind":            2, // SPAN_KIND_SERVER
+			keyStartUnixNs:    nanos(start),
+			"endTimeUnixNano": nanos(start.Add(SlowEnough)),
 			keyAttributes: []any{
 				attribute("http.request.method", "GET"),
 				attribute("url.path", "/seeded"),
@@ -104,7 +106,7 @@ func Traces(cfg Config, count int, at time.Time) map[string]any {
 	}
 
 	return map[string]any{"resourceSpans": []any{map[string]any{
-		"resource":   resource(cfg.ServiceName),
+		keyResource:  resource(cfg.ServiceName),
 		"scopeSpans": []any{map[string]any{"spans": spans}},
 	}}}
 }
@@ -143,13 +145,13 @@ func Metrics(cfg Config, at time.Time) map[string]any {
 				weight--
 			}
 			points = append(points, map[string]any{
-				"startTimeUnixNano": nanos(at.Add(-time.Duration(cfg.Exports) * 10 * time.Second)),
-				"timeUnixNano":      nanos(at.Add(-time.Duration(cfg.Exports-export) * 10 * time.Second)),
-				"count":             total(counts),
-				"sum":               sum,
-				"bucketCounts":      copied(counts),
-				"explicitBounds":    BOUNDS,
-				keyAttributes:       []any{attribute("http.route", route)},
+				keyStartUnixNs:   nanos(at.Add(-time.Duration(cfg.Exports) * 10 * time.Second)),
+				"timeUnixNano":   nanos(at.Add(-time.Duration(cfg.Exports-export) * 10 * time.Second)),
+				"count":          total(counts),
+				"sum":            sum,
+				"bucketCounts":   copied(counts),
+				"explicitBounds": BOUNDS,
+				keyAttributes:    []any{attribute("http.route", route)},
 			})
 		}
 	}
@@ -165,8 +167,79 @@ func Metrics(cfg Config, at time.Time) map[string]any {
 	}
 	scope := map[string]any{"metrics": []any{metric}}
 	return map[string]any{"resourceMetrics": []any{map[string]any{
-		"resource":     resource(cfg.ServiceName),
+		keyResource:    resource(cfg.ServiceName),
 		"scopeMetrics": []any{scope},
+	}}}
+}
+
+// GenAISpans builds one OTLP/JSON export of three model-call spans, each its
+// own trace, for F29 (LLM observability).
+//
+// **Three, not one, because the screen's hardest requirement is what happens
+// when a field is missing or renamed, not the happy path.** `market-analysis-
+// 2026-09.md` §13: the `gen_ai.*` convention has already broken one field name
+// once (`gen_ai.system` → `gen_ai.provider.name`, Aug 2025) and carries no
+// stability guarantee yet, which is why F29's spec identifies a model call
+// generically — any `gen_ai.`-prefixed attribute — rather than by a fixed
+// schema. These three spans are what proves that holds:
+//
+//  1. every current field present (`gen_ai.provider.name`, `gen_ai.request.model`,
+//     `gen_ai.response.model`, `gen_ai.usage.input_tokens/output_tokens`) — the
+//     row a customer mostly sends;
+//  2. a provider present but no model-name field at all — the "unlabeled
+//     model" bucket, and no token usage either, so the same row also proves a
+//     missing reading renders as an em dash rather than a false zero;
+//  3. a model-name field under a name this screen does not look for — standing
+//     in for the next rename before it happens, so AC29.6 has something to
+//     assert against without waiting for the convention to actually move
+//     again.
+//
+// Current field names confirmed 2026-10-09 against the semantic-conventions
+// repository, not assumed — the whole reason these spans have to be real
+// enough to query is that an invented shape could not catch a real drift.
+func GenAISpans(cfg Config, at time.Time) map[string]any {
+	start := func(offset int) time.Time { return at.Add(-time.Duration(offset) * time.Millisecond) }
+	span := func(start time.Time, name string, attrs ...any) any {
+		return map[string]any{
+			"traceId":         id(16),
+			"spanId":          id(8),
+			keyName:           name,
+			"kind":            3, // SPAN_KIND_CLIENT: a call to an external model provider.
+			keyStartUnixNs:    nanos(start),
+			"endTimeUnixNano": nanos(start.Add(SlowEnough)),
+			keyAttributes:     attrs,
+		}
+	}
+
+	spans := []any{
+		span(start(0), "chat claude-fable-5-1",
+			attribute("gen_ai.operation.name", "chat"),
+			attribute("gen_ai.provider.name", "anthropic"),
+			attribute("gen_ai.request.model", "claude-fable-5-1"),
+			attribute("gen_ai.response.model", "claude-fable-5-1"),
+			attribute("gen_ai.usage.input_tokens", "842"),
+			attribute("gen_ai.usage.output_tokens", "156"),
+		),
+		span(start(1), "chat",
+			attribute("gen_ai.operation.name", "chat"),
+			attribute("gen_ai.provider.name", "openai"),
+			// Deliberately no request.model, response.model, or usage — the
+			// "unlabeled model" and "missing reading" cases in one span.
+		),
+		span(start(2), "chat gen_ai_test_model",
+			attribute("gen_ai.operation.name", "chat"),
+			attribute("gen_ai.provider.name", "anthropic"),
+			// A model-name field under a name this feature does not read,
+			// standing in for a future rename of gen_ai.request.model.
+			attribute("gen_ai.request.model_name", "gen_ai_test_model"),
+			attribute("gen_ai.usage.input_tokens", "310"),
+			attribute("gen_ai.usage.output_tokens", "48"),
+		),
+	}
+
+	return map[string]any{"resourceSpans": []any{map[string]any{
+		keyResource:  resource(cfg.ServiceName),
+		"scopeSpans": []any{map[string]any{"spans": spans}},
 	}}}
 }
 

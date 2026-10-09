@@ -223,6 +223,82 @@ func TestAnArrivalIsCountedAgainstItsOwnBaseline(t *testing.T) {
 	}
 }
 
+// attributesOf flattens a span's attribute list into a map, the shape every
+// assertion below actually wants to read.
+func attributesOf(t *testing.T, span map[string]any) map[string]string {
+	t.Helper()
+	encoded, err := json.Marshal(span[keyAttributes])
+	if err != nil {
+		t.Fatalf("encoding attributes: %v", err)
+	}
+	var walked []struct {
+		Key   string `json:"key"`
+		Value struct {
+			StringValue string `json:"stringValue"`
+		} `json:"value"`
+	}
+	if err := json.Unmarshal(encoded, &walked); err != nil {
+		t.Fatalf("decoding attributes: %v", err)
+	}
+	out := make(map[string]string, len(walked))
+	for _, attr := range walked {
+		out[attr.Key] = attr.Value.StringValue
+	}
+	return out
+}
+
+func TestGenAISpansSendsThreeCallsEachItsOwnTrace(t *testing.T) {
+	cfg := settings(t)
+	spans := spansOf(t, GenAISpans(cfg, time.Now()))
+
+	if len(spans) != 3 {
+		t.Fatalf("want 3 spans, got %d", len(spans))
+	}
+	seen := map[string]bool{}
+	for _, span := range spans {
+		id, _ := span["traceId"].(string)
+		if id == "" || seen[id] {
+			t.Fatalf("trace id %q missing or reused: each call must be its own trace", id)
+		}
+		seen[id] = true
+		if kind, _ := span["kind"].(float64); kind != 3 {
+			t.Errorf("kind = %v, want 3 (SPAN_KIND_CLIENT): a model call is a call to an external service", kind)
+		}
+		if _, ok := attributesOf(t, span)["gen_ai.provider.name"]; !ok {
+			t.Errorf("span %q carries no gen_ai.provider.name: every seeded call must, or the "+
+				"arrival query in main.go undercounts", span[keyName])
+		}
+	}
+}
+
+func TestGenAISpansCoversTheThreeCasesF29MustTellApart(t *testing.T) {
+	cfg := settings(t)
+	spans := spansOf(t, GenAISpans(cfg, time.Now()))
+
+	complete, unlabeled, renamed := attributesOf(t, spans[0]), attributesOf(t, spans[1]), attributesOf(t, spans[2])
+
+	if complete["gen_ai.request.model"] == "" || complete["gen_ai.usage.input_tokens"] == "" {
+		t.Error("the first span must carry both a model name and token usage: it is the happy-path row")
+	}
+
+	if _, ok := unlabeled["gen_ai.request.model"]; ok {
+		t.Error("the second span must carry no model-name field: it is the \"unlabeled model\" case")
+	}
+	if _, ok := unlabeled["gen_ai.usage.input_tokens"]; ok {
+		t.Error("the second span must carry no usage field: it also proves a missing reading, not a zero one")
+	}
+
+	if _, ok := renamed["gen_ai.request.model"]; ok {
+		t.Error("the third span must NOT carry gen_ai.request.model: it stands in for that field being renamed")
+	}
+	if renamed["gen_ai.request.model_name"] == "" {
+		t.Error("the third span must carry its model name under a field this feature does not read")
+	}
+	if renamed["gen_ai.provider.name"] == "" {
+		t.Error("the third span must still carry gen_ai.provider.name: only the model field is meant to be renamed")
+	}
+}
+
 func TestCountedAtLeastReadsClickHousesAnswer(t *testing.T) {
 	for _, row := range []struct {
 		answer  string

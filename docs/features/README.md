@@ -10,6 +10,10 @@ requirements, and they move through the lifecycle in `docs/engineering/workflow.
 - [Usage and billing](usage-billing/spec.md) — **Proposed 2026-09-21**, F25. The first baseline
   rewritten into a real specification, with fourteen business rules, fifteen acceptance criteria and
   the gaps named rather than smoothed over.
+- [LLM observability](llm-observability/spec.md) — **Proposed 2026-10-09**, F29. Reprioritized ahead
+  of F37 by the founder. A screen and generic, attribute-driven reads over `gen_ai.*` data already
+  landing in `spans` — no new ingestion. Agent-trajectory views and a frozen metric contract are both
+  explicitly deferred, with the reasoning on record.
 
 ## The specification backlog
 

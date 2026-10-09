@@ -14,9 +14,10 @@
 // newest histogram point crossed a two-day lookback. A gate that fails for a
 // reason unrelated to the code is a gate people learn to ignore.
 //
-// This sends the three things those suites cannot find for themselves — traces,
-// a span carrying an exception event, and a cumulative histogram — and waits for
-// the ingest path to make them readable before it returns.
+// This sends the four things those suites cannot find for themselves — traces,
+// a span carrying an exception event, a cumulative histogram, and three
+// gen_ai model-call spans for F29 — and waits for the ingest path to make them
+// readable before it returns.
 //
 // It is not a load generator. It sends the smallest amount that satisfies the
 // assertions; `just load` still exists for measuring throughput.
@@ -68,13 +69,16 @@ func run() error {
 	if err := export(ctx, client, cfg, metricsPath, Metrics(cfg, at)); err != nil {
 		return err
 	}
+	if err := export(ctx, client, cfg, tracesPath, GenAISpans(cfg, at)); err != nil {
+		return err
+	}
 
 	started := time.Now()
 	if err := WaitFor(ctx, client, cfg, expected); err != nil {
 		return err
 	}
 	fmt.Printf(
-		"gateseed: %d traces, one exception and %d histogram points readable after %s.\n",
+		"gateseed: %d traces, one exception, %d histogram points and three gen_ai calls readable after %s.\n",
 		cfg.Traces, cfg.Series*cfg.Exports, time.Since(started).Round(time.Millisecond),
 	)
 	return nil
@@ -108,6 +112,19 @@ func arrivals(cfg Config) []Arrival {
 			Expect: cfg.Series * cfg.Exports,
 			Statement: fmt.Sprintf(
 				"SELECT count() FROM metrics_histogram WHERE metric_name = '%s'", cfg.MetricName,
+			),
+		},
+		{
+			// All three of GenAISpans' spans set this field, including the one
+			// standing in for a future rename of the model-name field — only the
+			// model name is renamed there, not the provider, so this still counts
+			// it as a gen_ai call.
+			What:   "the seeded gen_ai calls",
+			Expect: 3,
+			Statement: fmt.Sprintf(
+				"SELECT count() FROM spans WHERE service_name = '%s' "+
+					"AND toString(getSubcolumn(span_attrs, 'gen_ai.provider.name')) != ''",
+				cfg.ServiceName,
 			),
 		},
 	}
