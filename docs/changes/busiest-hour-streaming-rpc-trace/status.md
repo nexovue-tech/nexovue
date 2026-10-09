@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-**Investigated and fully root-caused. Not fixed — awaiting the founder's choice of remedy.**
+**Implemented and verified, live. Founder chose option 2: harden the test.** Uncommitted.
 
 ## Current task
 
-None. Waiting on the founder's decision among the three options below.
+None.
 
 ## Completed
 
@@ -22,45 +22,50 @@ None. Waiting on the founder's decision among the three options below.
   reconnecting roughly every ten minutes since 10:46, and several long k6 browser sessions — because
   the demo has been running continuously for about seven hours, far longer than ordinary use.
 
+## Completed
+
+- `apps/api/tests/test_traces_live.py::test_the_summary_and_the_span_grouping_name_the_same_traces`
+  no longer takes one page from each listing path and fails if nothing on it is wholly inside the
+  window. It now pages both independently (`MAX_PAGES_SEARCHED = 20`, 500 traces) via each path's own
+  `next_cursor`, accumulating every page's results into the same comparison, until a shared trace
+  wholly inside the window turns up or both sides are exhausted.
+- Verified both directions against the real, untouched pathological data: reverted only this file
+  and re-ran — failed with the exact assertion already on record. Restored the fix and re-ran —
+  passed. Same ClickHouse state on both sides of the change.
+
 ## Next action
 
-Founder: choose one —
-
-1. **Leave it.** Self-resolving the next time the stack is rebuilt fresh, or once this hour's data
-   ages past the busiest-error-hour selection on its own. No code change. Risk: reproduces again the
-   next time a demo session runs this long.
-2. **Harden the test.** When the first page has nothing wholly inside, look at the next page instead
-   of failing — the data proves good candidates exist, just not on page one. A real, bounded
-   robustness fix, and the only one of the three that stops this from recurring on a future long
-   session. Recommended.
-3. **Wipe ClickHouse now** (`just fresh` or a targeted delete of this tenant's data) for an immediate
-   clean slate. Fast, but destructive to today's accumulated demo history — losing the F29 fixture
-   data and otel-demo's other state for no gain beyond immediacy, and does not prevent a recurrence.
+Founder: read the diff, then say **commit**.
 
 ## Open decisions
 
-Which of the three above. Not decided here because changing an existing, already-tuned test's
-selection strategy (option 2) is a real behavior change to code with its own documented history
-(`T3-7`), and wiping data (option 3) is irreversible for today's session — both are the founder's
-call, not a default I should pick.
+None.
 
 ## Blocked
 
-On the decision above.
+Nothing.
 
 ## Risks
 
-- Whichever option is *not* chosen stays a live risk. Option 1 leaves the test fragile to the next
-  long-running session; option 3 leaves the underlying test fragility completely unaddressed, just
-  hidden until data accumulates again.
+- `MAX_PAGES_SEARCHED = 20` is a bound, not a guarantee — a window with genuinely nothing short
+  enough anywhere in it still fails loudly, by design, rather than searching forever. If a future
+  session leaves the demo running long enough that even 500 traces are all too long, this bound
+  would need raising; nothing suggests that's imminent.
 - Not investigated here, and worth a separate look if it recurs: whether the ~10-minute
   `payment`→`flagd` reconnect pattern is itself worth filing upstream against the OpenTelemetry Demo,
-  since it's accumulating ever-growing trace data for the life of the demo process with no natural
-  end — a demo left running for days would presumably make this worse, not just today's seven hours.
+  since it accumulates ever-growing trace data for the life of the demo process with no natural end
+  — a demo left running for days would presumably make this worse than today's seven hours did.
 
 ## Validation
 
-N/A — no fix implemented pending the decision above.
+- Red, reproduced a second time with the fix stashed: identical assertion text to the original
+  report, against the same unmodified ClickHouse state.
+- Green, with the fix restored: `1 passed`, same state, same query.
+- `ruff check`/`ruff format --check`/`mypy .`: clean on the changed file (a transient mypy-cache
+  error from a concurrently running `just check` process was observed once and did not reproduce on
+  a clean run — not a real issue).
+- `just check`, full run: **exit 0.** Python 4142 passed, 4 skipped, 0 failed; every Go package
+  `ok`; web 1335 passed; `buf lint`/`buf breaking` clean.
 
 ## Documentation impact
 

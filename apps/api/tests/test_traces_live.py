@@ -43,7 +43,7 @@ from nexovue_api.traces import queries
 # when it is imported in its own right — the redundant alias is what says so.
 from nexovue_api.traces import service as service
 from nexovue_api.traces.queries import TraceFilters
-from nexovue_api.traces.schemas import TraceFacetsResponse
+from nexovue_api.traces.schemas import TraceFacetsResponse, TraceSummary
 
 CLICKHOUSE_DSN: Final = os.environ.get(
     "NEXOVUE_CLICKHOUSE_DSN", "clickhouse://nexovue:nexovue_dev@localhost:18123/nexovue"
@@ -60,6 +60,16 @@ WIDEST_WINDOW: Final = timedelta(days=7)
 ONE_HOUR: Final = timedelta(hours=1)
 
 PAGE: Final = 25
+
+# How many pages `test_the_summary_and_the_span_grouping_name_the_same_traces` searches before
+# giving up on finding a trace wholly inside its window. Both listings order newest first, so page
+# one is exactly the traces most likely to still be running past the window's edge — ordinarily
+# rare enough to cost nothing, but a development stack left running for hours can fill a whole page
+# with nothing short enough (`busiest-hour-streaming-rpc-trace`, 2026-10-09: a reconnecting gRPC
+# stream and a long k6 session did exactly that). 20 pages is 500 traces, comfortably past the
+# eighth page a wider scan found a candidate in that same incident, while still failing loudly if
+# a window genuinely has nothing short enough anywhere in it.
+MAX_PAGES_SEARCHED: Final = 20
 
 
 def _reachable(dsn: str) -> bool:
@@ -591,31 +601,6 @@ async def test_the_summary_and_the_span_grouping_name_the_same_traces(
     inner_start = busiest.window_start + timedelta(minutes=5)
     inner_end = busiest.window_end - timedelta(minutes=5)
 
-    from_summary = await service.list_traces(
-        _repository(clickhouse, busiest.tenant_id),
-        project_id=busiest.project_id,
-        from_time=inner_start,
-        to_time=inner_end,
-        filters=TraceFilters(),
-        limit=PAGE,
-        cursor=None,
-    )
-    from_spans = await service._list_by_grouping_spans(
-        _repository(clickhouse, busiest.tenant_id),
-        project_id=busiest.project_id,
-        from_time=inner_start,
-        to_time=inner_end,
-        filters=TraceFilters(),
-        limit=PAGE,
-        cursor=None,
-    )
-
-    assert from_summary.traces, "the summary answered nothing for a window that holds traces"
-    summarised = {trace.trace_id: trace for trace in from_summary.traces}
-    grouped = {trace.trace_id: trace for trace in from_spans.traces}
-    shared = summarised.keys() & grouped.keys()
-    assert shared, "the two paths named no trace in common"
-
     # The docstring above said the comparison was over traces wholly inside the
     # window and the code never did it — it narrowed the window by five minutes
     # and then compared everything shared, which is not the same thing. A trace
@@ -629,18 +614,73 @@ async def test_the_summary_and_the_span_grouping_name_the_same_traces(
         whether a timestamp carries an offset, and comparing them raw raises."""
         return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
-    def _spans_the_whole_trace(trace_id: str) -> bool:
-        summary = summarised[trace_id]
+    def _spans_the_whole_trace(summary: TraceSummary) -> bool:
         started = _utc(summary.start_time)
         return started >= _utc(inner_start) and started + timedelta(
             milliseconds=summary.duration_ms
         ) <= _utc(inner_end)
 
-    wholly_inside = {trace_id for trace_id in shared if _spans_the_whole_trace(trace_id)}
+    # Both listings order newest first (`queries.py`), so page one is exactly
+    # the traces most likely to still be running past the window's edge — rare
+    # enough on an ordinary run to cost nothing, but not rare on a development
+    # stack left running for hours: a reconnecting gRPC stream and a long k6
+    # session filled a whole page with nothing short enough to qualify
+    # (`busiest-hour-streaming-rpc-trace`, 2026-10-09). Paging past a page with
+    # nothing wholly inside, rather than failing on page one, is what survives
+    # that — a wider scan during that incident found good candidates well
+    # within the first ten pages.
+    repository = _repository(clickhouse, busiest.tenant_id)
+    summarised: dict[str, TraceSummary] = {}
+    grouped: dict[str, TraceSummary] = {}
+    summary_cursor: str | None = None
+    spans_cursor: str | None = None
+    summary_exhausted = spans_exhausted = False
+    wholly_inside: set[str] = set()
+
+    for _ in range(MAX_PAGES_SEARCHED):
+        if not summary_exhausted:
+            from_summary = await service.list_traces(
+                repository,
+                project_id=busiest.project_id,
+                from_time=inner_start,
+                to_time=inner_end,
+                filters=TraceFilters(),
+                limit=PAGE,
+                cursor=summary_cursor,
+            )
+            summarised.update({trace.trace_id: trace for trace in from_summary.traces})
+            summary_cursor = from_summary.next_cursor
+            summary_exhausted = summary_cursor is None
+
+        if not spans_exhausted:
+            from_spans = await service._list_by_grouping_spans(
+                repository,
+                project_id=busiest.project_id,
+                from_time=inner_start,
+                to_time=inner_end,
+                filters=TraceFilters(),
+                limit=PAGE,
+                cursor=spans_cursor,
+            )
+            grouped.update({trace.trace_id: trace for trace in from_spans.traces})
+            spans_cursor = from_spans.next_cursor
+            spans_exhausted = spans_cursor is None
+
+        shared = summarised.keys() & grouped.keys()
+        wholly_inside = {
+            trace_id for trace_id in shared if _spans_the_whole_trace(summarised[trace_id])
+        }
+        if wholly_inside or (summary_exhausted and spans_exhausted):
+            break
+
+    assert summarised, "the summary answered nothing for a window that holds traces"
+    shared = summarised.keys() & grouped.keys()
+    assert shared, "the two paths named no trace in common"
     # Without this the suite could pass having compared nothing, which is the
     # failure mode the filter itself introduces.
     assert wholly_inside, (
-        f"{len(shared)} traces are in both answers and none lies wholly inside "
+        f"searched {len(summarised)} summarised / {len(grouped)} grouped traces and none of the "
+        f"{len(shared)} shared ones lies wholly inside "
         f"{inner_start.isoformat()}..{inner_end.isoformat()}, so this compared nothing"
     )
 

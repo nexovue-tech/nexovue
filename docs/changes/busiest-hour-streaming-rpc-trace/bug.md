@@ -73,10 +73,17 @@ short trace) and a specific, if unusual, traffic shape — not a defect a custom
 
 ## Fix plan and validation
 
-Not implemented without a decision — see `status.md`'s *Open decisions*. Three options, weighed
-there: leave it (self-resolving after the stack's data ages out or the demo is next restarted
-clean), harden the test to look past the first page when the first page has nothing wholly inside,
-or wipe ClickHouse now for an immediate clean slate.
+Founder chose: harden the test. `test_the_summary_and_the_span_grouping_name_the_same_traces` no
+longer fetches one page from each listing path and fails if nothing on it is wholly inside the
+window — it pages both independently (`MAX_PAGES_SEARCHED = 20`, 500 traces) until a shared trace
+wholly inside the window turns up or both sides are exhausted, accumulating every page's results
+into the same comparison rather than discarding them. Both `list_traces` and
+`_list_by_grouping_spans` already return a `next_cursor` for exactly this.
+
+Verified both directions against the real, unmodified pathological data (no data was touched or
+reset): reverted only this file and re-ran — failed with the identical assertion recorded above.
+Restored the fix and re-ran — passed. Same ClickHouse state both times, same assertion either side
+of the change, proving the fix and not a coincidence of timing.
 
 ## Status
 
