@@ -37,7 +37,7 @@ from nexovue_api.data.postgres.models import (
 )
 from nexovue_api.settings import Settings
 from nexovue_api.signup import first_run
-from nexovue_api.superadmin.seed import PLATFORM_ORG_ID
+from nexovue_api.superadmin.seed import PLATFORM_ORG_ID, seed_super_admin
 
 POSTGRES_DSN: Final = os.environ.get(
     "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
@@ -249,19 +249,16 @@ async def test_a_taken_address_is_refused_rather_than_raised(db: AsyncSession) -
 
     The operator is seeded first, so an install naming the same address for both
     reaches this — and an API that refuses to start would be a hard way to learn
-    about a typo.
+    about a typo. Seeded through `seed_super_admin` itself, not a hand-built
+    `User` row: that row's `org_id` names the platform organization, which only
+    `seed_super_admin` creates, and a deployment with no `SUPER_ADMIN_EMAIL` set
+    never has, which is exactly this suite's own environment on 2026-10-09.
     """
     taken = f"taken-{uuid.uuid4().hex[:8]}@example.test"
-    db.add(
-        User(
-            org_id=PLATFORM_ORG_ID,
-            email=taken,
-            name="Someone",
-            password_hash=hash_password(PASSWORD),
-            role="owner",
-        )
+    operator = await seed_super_admin(
+        db, _settings(SUPER_ADMIN_EMAIL=taken, SUPER_ADMIN_PASSWORD=PASSWORD)
     )
-    await db.flush()
+    assert operator is not None
 
     assert (
         await first_run.seed_first_organization(db, _owner_settings(FIRST_OWNER_EMAIL=taken))

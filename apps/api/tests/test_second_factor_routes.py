@@ -441,8 +441,18 @@ async def test_the_enrolment_code_cannot_also_sign_in(app: FastAPI, user: User) 
     not pass the challenge that follows."""
     async with _client(app) as client:
         await _sign_in(client, user)
-        secret, _ = await _enrol(client)
+        offered = await client.post(
+            f"{PROFILE}/two-factor/enrol", json={"current_password": PASSWORD}
+        )
+        assert offered.status_code == 200, offered.text
+        secret = offered.json()["secret"]
+
+        # Captured once and reused for the replay below, never re-derived: a
+        # second `pyotp.TOTP(secret).now()` call can land in the next 30s step
+        # and silently assert about a code that was never submitted to confirm.
         used_to_enrol = pyotp.TOTP(secret).now()
+        confirmed = await client.post(f"{PROFILE}/two-factor/confirm", json={"code": used_to_enrol})
+        assert confirmed.status_code == 200, confirmed.text
         client.cookies.clear()
 
         challenge = (await _sign_in(client, user)).json()["challenge"]
