@@ -18,6 +18,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Final
 
+from nexovue_platform import erasure
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.checkfiles import queries
@@ -35,17 +36,12 @@ from nexovue_api.errors.exceptions import (
 )
 from nexovue_api.projects import service as projects
 
-_KEY_ROOT: Final = "synthetics"
+_KEY_ROOT: Final = erasure.CHECK_FILES_ROOT
 
 _NO_STORE: Final = (
     "Files cannot be attached on this deployment because it has no object storage configured."
 )
 _STORE_FAILED: Final = "The file could not be stored just now. Nothing was saved; try again."
-
-
-def tenant_prefix(org_id: uuid.UUID) -> str:
-    """Every check file one organization owns, as a key prefix for erasure."""
-    return f"{_KEY_ROOT}/{org_id}/"
 
 
 def object_key(org_id: uuid.UUID, file_id: uuid.UUID) -> str:

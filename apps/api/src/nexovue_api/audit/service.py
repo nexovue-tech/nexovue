@@ -20,6 +20,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Final
 
+from nexovue_platform import erasure
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
@@ -111,11 +112,10 @@ ADMIN_MODE_ENTERED: Final = "admin_mode.entered"
 ADMIN_MODE_REFUSED: Final = "admin_mode.refused"
 DEPLOY_RECORDED: Final = "deploy.recorded"
 DEPLOY_WEBHOOK_SECRET_VIEWED: Final = "deploy.webhook_secret_viewed"
-# The two halves of P1-77. The first is an event in the tenant's own history and
-# is erased with it; the second outlives the tenant on purpose — see
-# `record_organization_erased`.
-ORGANIZATION_DELETION_REQUESTED: Final = "organization.deletion_requested"
-ORGANIZATION_ERASED: Final = "organization.erased"
+# The two halves of P1-77, both tenantless so they outlive the tenant. The
+# scheduler writes the second when the nightly erasure is proved (ADR-014).
+ORGANIZATION_DELETION_REQUESTED: Final = erasure.DELETION_REQUESTED_ACTION
+ORGANIZATION_ERASED: Final = erasure.ERASED_ACTION
 # P1-76. A project is an ingest surface, so creating and closing one is worth the
 # same trail a key is; renaming is recorded for the reason `check.updated` is —
 # an edit is how a thing that was reviewed becomes a different thing.
@@ -767,38 +767,19 @@ def record_deploy_webhook_secret_viewed(
     )
 
 
-def record_organization_deletion_requested(
-    db: AsyncSession, *, org_id: uuid.UUID, actor_user_id: uuid.UUID
-) -> None:
+def record_organization_deletion_requested(db: AsyncSession, *, org_id: uuid.UUID) -> None:
     """The owner asked for the tenant to be closed and erased.
 
-    Written under the organization, so it is erased along with everything else
-    it names. `record_organization_erased` is what survives.
-    """
-    _add(
-        db,
-        org_id=org_id,
-        actor_user_id=actor_user_id,
-        action=ORGANIZATION_DELETION_REQUESTED,
-        target=_target(ORGANIZATION_TARGET, org_id),
-    )
-
-
-def record_organization_erased(db: AsyncSession, *, org_id: uuid.UUID) -> None:
-    """The erasure finished. The one entry deliberately left without a tenant.
-
-    Every other row naming this organization has just been deleted, this one
-    included if it carried `org_id` — the column cascades. A null one does not,
-    which is what makes this the certificate that the erasure happened at all.
-    It names an id and a time and nothing else: the actor is gone, and an
-    organization id identifies no person.
+    Tenantless, like the scheduler's `organization.erased` certificate: the
+    request deletes every row naming the organization, and nothing would erase
+    an entry written under it. It names an id and a time, and no person.
     """
     _add(
         db,
         org_id=None,
         actor_user_id=None,
-        action=ORGANIZATION_ERASED,
-        target=_target(ORGANIZATION_TARGET, org_id),
+        action=ORGANIZATION_DELETION_REQUESTED,
+        target=erasure.organization_target(org_id),
     )
 
 
@@ -869,15 +850,6 @@ def masking_rule_target(project_id: uuid.UUID, rule: str) -> str:
     without saying which, which is the only fact worth recording here.
     """
     return f"{_target(PROJECT_TARGET, project_id)}:{rule}"
-
-
-def erasure_certificate_target(org_id: uuid.UUID) -> str:
-    """The `target` an `organization.erased` entry carries, for finding one.
-
-    Public so the deletion can ask whether it already certified an organization
-    without restating the format the entry was written with.
-    """
-    return _target(ORGANIZATION_TARGET, org_id)
 
 
 # F26: people coming into and leaving an organization. `detail` carries what an

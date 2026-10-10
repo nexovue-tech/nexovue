@@ -10,6 +10,7 @@ import uuid
 from typing import Final
 from urllib.parse import urlsplit
 
+from nexovue_platform import erasure
 from sqlalchemy.ext.asyncio import AsyncSession
 from symbolic.sourcemapcache import SourceMapCache
 
@@ -41,18 +42,8 @@ MAP_CONTENT_TYPE: Final = "application/json"
 # if a key were ever mixed up, and the row id makes each upload its own object —
 # a re-uploaded build supersedes in the table, never by overwriting bytes another
 # row still points at.
-_KEY_ROOT: Final = "source-maps"
+_KEY_ROOT: Final = erasure.SOURCE_MAPS_ROOT
 _KEY_TEMPLATE: Final = _KEY_ROOT + "/{org_id}/{project_id}/{source_map_id}.map"
-
-
-def tenant_prefix(org_id: uuid.UUID) -> str:
-    """Every source map object one organization owns, as a key prefix.
-
-    Built from the same root as the keys themselves, because a deletion that
-    named the prefix separately would keep working after the layout changed and
-    silently stop erasing anything.
-    """
-    return f"{_KEY_ROOT}/{org_id}/"
 
 
 async def list_source_maps(

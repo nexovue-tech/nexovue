@@ -70,8 +70,9 @@ class Settings(BaseSettings):
     # Empty means a check that uses a secret cannot run here, and says so.
     check_secret_key: str = ""
 
-    # Where the files checks send are kept: the API's object store, read-only
-    # from here. All four or none, as the API reads them.
+    # The API's object store: the files checks send, read here, and every
+    # upload a deleted organization left, erased here at night. All four or
+    # none, as the API reads them.
     s3_endpoint: str | None = None
     s3_bucket: str | None = None
     s3_access_key_id: str | None = None
@@ -108,6 +109,18 @@ class Settings(BaseSettings):
     # A read-only user belongs here. Empty means those rules are not evaluated on
     # this deployment, and the sweeps say so every minute rather than failing.
     clickhouse_dsn: str = ""
+
+    # --- erasing deleted organizations (ADR-014) ----------------------------
+    # The one credential in nexovue that can delete telemetry. Empty means no
+    # deleted organization is erased on this deployment, and the erasure task
+    # says so at ERROR every hour rather than doing nothing quietly.
+    clickhouse_eraser_dsn: str = ""
+    # The UTC hour the nightly erasure runs in. Move it to the hour with the
+    # least ingest once production traffic shows which that is.
+    erasure_hour_utc: Annotated[int, Field(ge=0, le=23)] = 2
+    # The most organizations one group of mutations names. A larger queue is
+    # erased in groups, waiting out `old_parts_lifetime` between them.
+    erasure_batch_size: Annotated[int, Field(gt=0, le=1000)] = 100
 
     # --- beat leadership ----------------------------------------------------
     # More than one beat process runs, so that a dead one does not stop every

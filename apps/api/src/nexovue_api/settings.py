@@ -183,9 +183,6 @@ class Settings(BaseSettings):
     # (deploy/clickhouse/users.d/reader.xml). It can only read, and the server
     # bounds its memory and time whatever a query asks for.
     clickhouse_dsn: ClickHouseDsn
-    # The writer: tenant erasure alone (purge/). Separate so a read path can
-    # never hold a credential that deletes.
-    clickhouse_writer_dsn: ClickHouseDsn
 
     # --- Postgres pool: sized here, never left to the library default -------
     postgres_pool_size: Annotated[int, Field(ge=1, le=100)] = 10

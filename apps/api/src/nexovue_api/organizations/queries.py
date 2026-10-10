@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any, Final, cast
 
-from sqlalchemy import CursorResult, delete, exists, select
+from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
@@ -132,24 +132,6 @@ async def lock_organization(session: AsyncSession, org_id: uuid.UUID) -> Organiz
     statement = select(Organization).where(Organization.id == org_id).with_for_update()
     found: Organization | None = await session.scalar(statement)
     return found
-
-
-async def tombstoned_organization_ids(session: AsyncSession) -> list[uuid.UUID]:
-    """Every organization marked deleted, whether or not its erasure finished."""
-    statement = select(Organization.id).where(Organization.deleted_at.is_not(None))
-    return list(await session.scalars(statement))
-
-
-async def erasure_is_certified(session: AsyncSession, *, action: str, target: str) -> bool:
-    """Whether the tenantless entry that certifies an erasure has been written."""
-    statement = select(
-        exists().where(
-            AuditLogEntry.org_id.is_(None),
-            AuditLogEntry.action == action,
-            AuditLogEntry.target == target,
-        )
-    )
-    return bool(await session.scalar(statement))
 
 
 async def _rows_deleted(session: AsyncSession, statement: Any) -> int:

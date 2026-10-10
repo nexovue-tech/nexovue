@@ -20,7 +20,7 @@ India is the default. A customer must also be able to move between regions later
 Checked before deciding:
 
 - **Organizations and projects have no region field** (`data/postgres/models.py`).
-- **No tool copies one customer's data.** `TenantScopedPurger` deletes a tenant's telemetry; nothing
+- **No tool copies one customer's data.** the nightly erasure (`nexovue_scheduler.erasure`) deletes a deleted tenant's telemetry; nothing
   exports or copies it.
 - **`s3_region` defaults to `us-east-1`** (`settings.py:289`). Its comment explains why — SeaweedFS
   ignores the value and AWS signing needs one — but on real S3 in India the default is simply wrong.
@@ -48,7 +48,7 @@ platform between clouds ([ADR-007](ADR-007-migrating-between-clouds.md)):
 1. Copy that organization's Postgres rows, ClickHouse rows and objects into the new region.
 2. Ingest into both regions for a short window.
 3. Change the organization's region.
-4. Remove its data from the old region with the existing `TenantScopedPurger`.
+4. Remove its data from the old region by deleting the organization there; the old region's nightly erasure (ADR-014) erases it.
 
 ### Prepared now
 

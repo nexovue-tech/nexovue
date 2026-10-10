@@ -346,7 +346,7 @@ Two entirely separate ingest credential kinds in two separate tables — secret 
 
 ### 6.7 Organizations, projects, and the ingest stop valve
 
-**Deleting an organization** is a two-phase, cross-store operation: the customer-visible request scrubs the row's identifying fields and stamps a deletion timestamp, returning immediately — the row itself is deliberately kept (not deleted), because the receiver's allowance gate reads exactly this row to decide whether to refuse ingestion, and "no row" there would mean *admit* rather than *refuse*. A background erasure then submits an asynchronous ClickHouse deletion mutation scoped to the tenant, deletes the tenant's object-store prefix, deletes rows from every directly-owned Postgres table, waits for ClickHouse to confirm the telemetry is actually gone, and finally writes a tenant-less audit certificate (naming no organization, so it survives the very cascade that deletes every other row naming that tenant) proving the erasure completed.
+**Deleting an organization** is a two-phase, cross-store operation (ADR-014). The request is one Postgres transaction: it cancels every live payment arrangement at the processor (refusing if it cannot), deletes the rows of every directly-owned table (so the owner's email is free for a new signup at once), scrubs the organization row's identifying fields and stamps a deletion timestamp — the row itself is deliberately kept, because the receiver's allowance gate reads exactly this row to decide whether to refuse ingestion, and "no row" there would mean *admit* rather than *refuse*. The telemetry and uploaded files are erased by the scheduler once a night (`ERASURE_HOUR_UTC`, default 02:00): one `ALTER TABLE … DELETE WHERE tenant_id IN (…)` per table naming every owed organization, one table at a time so only one table's superseded parts are held in memory; then, per organization proved to have no rows left, its object-store prefixes are deleted and a tenant-less audit certificate is written. One with rows left (records that landed after the mutation) stays owed for the next night; one owed past three days is logged at ERROR. The API holds no ClickHouse credential that writes; the scheduler's `CLICKHOUSE_ERASER_DSN` is the only one.
 
 **Deleting a project** revokes every live credential the project holds (API keys, site keys, webhook secrets) immediately, because the receiver resolves an ingest key without joining the `projects` table — a soft-deleted flag alone would not actually stop new data arriving under that project's key.
 
@@ -381,7 +381,6 @@ Each follows the same internal layout: `router.py` (HTTP only, no SQL, no busine
 | `dbstats` | Slow-statement and connection-health readings from a polled customer database |
 | `usage` | Per-organization usage counters and the same allowance arithmetic the receiver enforces |
 | `billing` | Plan, pricing, checkout, and the payment-processor webhook |
-| `purge` | The tenant-scoped ClickHouse deletion used by organization erasure — a library, not its own endpoint |
 | `integrations` | Cloud/database connector definitions, with no credentials ever stored server-side |
 
 ### 6.10 Billing, in more detail

@@ -23,6 +23,7 @@ TASK_MODULES: Final = (
     "nexovue_scheduler.alerts.sweeps",
     "nexovue_scheduler.jobs.expiry",
     "nexovue_scheduler.billing",
+    "nexovue_scheduler.erasure.run",
 )
 
 _TASKS: dict[str, Callable[..., None]] = {}

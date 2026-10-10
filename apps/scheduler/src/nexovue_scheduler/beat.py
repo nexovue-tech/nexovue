@@ -47,6 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler.billing import END_LAPSED_GRACE_TASK
 from nexovue_scheduler.checks import ScheduledCheck, load_enabled_checks
+from nexovue_scheduler.erasure import ERASE_OWED_TASK
 from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.jobs.expiry import SWEEP_EXPIRED_TASK
 from nexovue_scheduler.leader import LeaderLock
@@ -82,6 +83,14 @@ EXPIRY_SWEEP_ENTRY: Final = "sweep:expired-rows"
 # A payment's grace period is days long; an hour late ending it costs nothing.
 GRACE_SWEEP_SECONDS: Final = 3600
 GRACE_SWEEP_ENTRY: Final = "sweep:payment-grace"
+
+# Deleted organizations are erased once a night (ADR-014). Asked hourly; the task
+# works only in `ERASURE_HOUR_UTC`. A night's mutations can run for hours, so it
+# has limits of its own and holds one `light` slot while it runs.
+ERASURE_SECONDS: Final = 3600
+ERASURE_ENTRY: Final = "sweep:erase-deleted-organizations"
+ERASURE_SOFT_TIME_LIMIT_SECONDS: Final = 4 * 3600
+ERASURE_TIME_LIMIT_SECONDS: Final = 4 * 3600 + 300
 
 # A sweep judges every heartbeat, or every unattached file, in one task.
 SWEEP_SOFT_TIME_LIMIT_SECONDS: Final = 50
@@ -348,16 +357,20 @@ class Beat:
             ),
             EXPIRY_SWEEP_ENTRY: (SWEEP_EXPIRED_TASK, EXPIRY_SWEEP_SECONDS, SHARED_QUEUE),
             GRACE_SWEEP_ENTRY: (END_LAPSED_GRACE_TASK, GRACE_SWEEP_SECONDS, SHARED_QUEUE),
+            ERASURE_ENTRY: (ERASE_OWED_TASK, ERASURE_SECONDS, SHARED_QUEUE),
         }
+        # A sweep fits in a minute; the night's erasure does not.
+        limits = {ERASURE_ENTRY: (ERASURE_SOFT_TIME_LIMIT_SECONDS, ERASURE_TIME_LIMIT_SECONDS)}
         entries: dict[str, Entry] = {}
         now = self._monotonic()
         for name, (task, seconds, queue_name) in wanted.items():
+            soft, hard = limits.get(name, (SWEEP_SOFT_TIME_LIMIT_SECONDS, SWEEP_TIME_LIMIT_SECONDS))
             request = JobRequest(
                 task=task,
                 queue=queue_name,
                 expires_seconds=seconds,
-                soft_limit_seconds=SWEEP_SOFT_TIME_LIMIT_SECONDS,
-                hard_limit_seconds=SWEEP_TIME_LIMIT_SECONDS,
+                soft_limit_seconds=soft,
+                hard_limit_seconds=hard,
             )
             existing = self._entries.get(name)
             if existing is not None and _unchanged(existing, seconds, request):

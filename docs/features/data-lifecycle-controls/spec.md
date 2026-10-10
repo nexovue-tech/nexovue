@@ -17,7 +17,7 @@ symbolicate minified frames.
 
 ## Code evidence
 
-`apps/api/src/nexovue_api/projects/router.py`, `purge/`, `sourcemaps/router.py`,
+`apps/api/src/nexovue_api/projects/router.py`, `apps/scheduler/src/nexovue_scheduler/erasure/`, `sourcemaps/router.py`,
 `apps/workers/internal/pipeline/mask/`, and `projectconfig/` are authoritative. Migration
 `0017_source_maps_are_metadata_the_bytes_live_in_object_storage.py` records source-map storage
 ownership.

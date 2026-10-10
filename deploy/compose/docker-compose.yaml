@@ -203,9 +203,8 @@ services:
       POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
       # The API reads ClickHouse over HTTP but takes the same clickhouse:// DSN
       # shape the workers use, and derives the port from it.
-      # Reads as the read-only account; erasure alone holds the writer (docs/changes/clickhouse-protects-itself).
+      # Reads as the read-only account; the API holds no ClickHouse credential that writes.
       CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_READER_DSN:-clickhouse://nexovue_reader:nexovue_reader_dev@clickhouse:8123/nexovue}
-      CLICKHOUSE_WRITER_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
       # Source map bytes. The generic S3 API only — SeaweedFS here,
       # AWS S3 in deployment. The dev credentials are the ones in
       # deploy/seaweedfs/s3.json; the API creates the bucket at boot in
@@ -444,6 +443,9 @@ services:
       # alone runs those sweeps, so it alone is handed the store.
       # Reads only: the read-only account.
       CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_READER_DSN:-clickhouse://nexovue_reader:nexovue_reader_dev@clickhouse:8123/nexovue}
+      # The nightly erasure of deleted organizations (ADR-014) runs on this worker.
+      # Until group 6 provisions a user that can only delete, the admin account.
+      CLICKHOUSE_ERASER_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
     depends_on:
       clickhouse:
         condition: service_healthy

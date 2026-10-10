@@ -24,14 +24,10 @@ every tenant's rows while containing the required text:
     ... WHERE '{tenant_id:String}' != ''               -- inside a string literal
     SELECT {tenant_id:String}, ... FROM spans          -- projected, not filtered
 
-**Reads and the one writer.** `TenantScopedRepository` is the read path. Deleting
-a tenant's telemetry is the one operation whose whole job is to name a tenant, so
-it binds through the same predicate — `TenantScopedPurger` — but is a separate
-class, because it is built from an operator's deletion request rather than from a
-browsing session and no reader should hold a DELETE verb.
+**Reads only.** The API connects as a user that can only read. Erasing a
+deleted tenant's telemetry is the scheduler's, at night (ADR-014).
 """
 
-import re
 from typing import Any, Final
 
 from clickhouse_connect.driver.asyncclient import AsyncClient
@@ -47,16 +43,6 @@ MAX_RESULT_ROWS: Final = tenant_statements.MAX_RESULT_ROWS
 READ_SETTINGS: Final = tenant_statements.READ_SETTINGS
 TenantFilterMissingError = tenant_statements.TenantFilterMissingError
 binds_tenant = tenant_statements.binds_tenant
-
-# `ALTER TABLE ... DELETE` is a mutation: ClickHouse rewrites every affected
-# part, which takes as long as it takes. 0 is "record the obligation and
-# return" — the server has it durably and resumes it across a restart, so the
-# caller observes completion rather than waiting on the statement.
-MUTATIONS_ASYNCHRONOUS: Final = 0
-
-# The only unscoped reads allowed: ClickHouse's own bookkeeping, which has no
-# tenant column to filter on.
-_READS_A_SYSTEM_TABLE: Final = re.compile(r"\bFROM\s+system\.", re.IGNORECASE)
 
 
 class TenantScopedRepository:
@@ -91,76 +77,9 @@ class TenantScopedRepository:
 async def _tenant_scoped_read(
     client: AsyncClient, sql: str, bound: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    """One read through the binding, for the repository and the purger alike."""
+    """One read through the binding."""
     if not binds_tenant(sql):
         raise TenantFilterMissingError(sql)
 
     result = await client.query(sql, parameters=bound, settings=READ_SETTINGS)
     return [dict(zip(result.column_names, row, strict=True)) for row in result.result_rows]
-
-
-class SystemTableOnlyError(RuntimeError):
-    """An unscoped read named something other than a `system.` table.
-
-    The unscoped door exists for ClickHouse's own bookkeeping, which carries no
-    tenant column. Anything else reaching it would read every tenant's rows.
-    """
-
-    def __init__(self, sql: str) -> None:
-        super().__init__(f"unscoped reads may only name a system table: {sql.strip()[:200]}")
-
-
-class TenantScopedPurger:
-    """Removes one tenant's telemetry, and reports what is left.
-
-    Constructed from a deletion request, never from a session. It binds the
-    tenant through the same predicate the read path does, so a purge statement
-    that forgot the filter is refused here rather than deleting the store.
-    """
-
-    def __init__(self, client: AsyncClient, tenant_id: str) -> None:
-        self._client = client
-        self._tenant_id = tenant_id
-
-    @property
-    def tenant_id(self) -> str:
-        """Whose rows this purger removes. Read by the caller that reports on it."""
-        return self._tenant_id
-
-    @property
-    def database(self) -> str:
-        """The ClickHouse database in play — `system.mutations` spans all of them."""
-        return str(self._client.database)
-
-    async def delete(self, statement: str) -> None:
-        """Submit one `ALTER TABLE ... DELETE`. Returns once the server holds it."""
-        if not binds_tenant(statement):
-            raise TenantFilterMissingError(statement)
-
-        await self._client.command(
-            statement,
-            parameters={"tenant_id": self._tenant_id},
-            settings={"mutations_sync": MUTATIONS_ASYNCHRONOUS},
-        )
-
-    async def query(
-        self, sql: str, parameters: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
-        """A read scoped to the tenant being purged — how many rows are left."""
-        bound: dict[str, Any] = {**(parameters or {}), "tenant_id": self._tenant_id}
-        return await _tenant_scoped_read(self._client, sql, bound)
-
-    async def query_server_metadata(
-        self, sql: str, parameters: dict[str, Any]
-    ) -> list[dict[str, Any]]:
-        """A read of ClickHouse's own bookkeeping — mutation progress and failures.
-
-        No tenant predicate is possible: `system.mutations` has no tenant column,
-        and the caller narrows it by bound value instead. Restricted to `system.`
-        so this cannot become a second way to read telemetry.
-        """
-        if not _READS_A_SYSTEM_TABLE.search(tenant_statements.executable_text(sql)):
-            raise SystemTableOnlyError(sql)
-
-        result = await self._client.query(sql, parameters=parameters, settings=READ_SETTINGS)
-        return [dict(zip(result.column_names, row, strict=True)) for row in result.result_rows]

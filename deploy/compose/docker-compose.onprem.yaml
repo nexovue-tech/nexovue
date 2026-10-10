@@ -213,9 +213,8 @@ services:
     image: *image-base
     environment:
       <<: *control-plane-env
-      # Reads as the read-only account; erasure alone holds the writer (docs/changes/clickhouse-protects-itself).
+      # Reads as the read-only account; the API holds no ClickHouse credential that writes.
       CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
-      CLICKHOUSE_WRITER_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
       # **The way in.** This install has nobody to invite its first person, so
       # the first organization and its owner are created at boot from these.
       # Demanded rather than passed through: an install that starts with no
@@ -283,6 +282,9 @@ services:
       # API's account is used until the deployment provisions one.
       # Reads only: the read-only account.
       CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # The nightly erasure of deleted organizations (ADR-014) runs on this worker.
+      # Until group 6 provisions a user that can only delete, the admin account.
+      CLICKHOUSE_ERASER_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
     depends_on:
       clickhouse:
         condition: service_healthy

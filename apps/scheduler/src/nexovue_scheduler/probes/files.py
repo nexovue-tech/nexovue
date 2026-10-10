@@ -14,6 +14,7 @@ from typing import Any, Final
 import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+from nexovue_platform import erasure
 
 from nexovue_scheduler.probes.failures import MisconfiguredError, ProberError
 from nexovue_scheduler.settings import Settings
@@ -21,12 +22,13 @@ from nexovue_scheduler.settings import Settings
 MAX_CACHED_FILES: Final = 64
 MAX_CACHED_BYTES: Final = 32 * 1024 * 1024
 _MISSING_CODES: Final = frozenset({"NoSuchKey", "404"})
-_KEY_ROOT: Final = "synthetics"
+# One page of keys per delete request; the S3 API's own maximum.
+_KEYS_PER_REQUEST: Final = 1000
 
 
 def object_key(org_id: str, file_id: str) -> str:
     """The API's key for a check file. `checkfiles/service.py` builds the same."""
-    return f"{_KEY_ROOT}/{org_id}/files/{file_id}"
+    return f"{erasure.CHECK_FILES_ROOT}/{org_id}/files/{file_id}"
 
 
 class ObjectStoreFiles:
@@ -55,6 +57,40 @@ class ObjectStoreFiles:
             self._store().delete_object(Bucket=self._bucket, Key=object_key(org_id, file_id))
         except (BotoCoreError, ClientError) as refused:
             raise ProberError("a file could not be deleted from storage") from refused
+
+    def delete_prefix(self, prefix: str) -> int:
+        """Every object under one tenant prefix, a page at a time; how many went.
+
+        For the nightly erasure (ADR-014). A prefix rather than keys from rows,
+        because the request already deleted the rows, and an object whose row was
+        never written is still the customer's.
+        """
+        if not prefix.endswith("/") or prefix.count("/") < 2:
+            raise ProberError(f"refused a prefix that does not name one tenant's folder: {prefix}")
+        store = self._store()
+        deleted = 0
+        try:
+            pages = store.get_paginator("list_objects_v2").paginate(
+                Bucket=self._bucket,
+                Prefix=prefix,
+                PaginationConfig={"PageSize": _KEYS_PER_REQUEST},
+            )
+            for page in pages:
+                keys = [{"Key": stored["Key"]} for stored in page.get("Contents", ())]
+                if not keys:
+                    continue
+                refused = store.delete_objects(
+                    Bucket=self._bucket, Delete={"Objects": keys, "Quiet": True}
+                ).get("Errors", ())
+                # Reported per key rather than raised by the client.
+                if refused:
+                    raise ProberError(f"the store kept {len(refused)} object(s) under {prefix}")
+                deleted += len(keys)
+        except (BotoCoreError, ClientError) as failed:
+            raise ProberError(f"objects under {prefix} could not be deleted") from failed
+        for key in [cached for cached in self._cache if cached.startswith(prefix)]:
+            self._cached_bytes -= len(self._cache.pop(key))
+        return deleted
 
     def _download(self, key: str, file_id: str) -> bytes:
         try:

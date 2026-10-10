@@ -112,8 +112,6 @@ class Resources:
     engine: AsyncEngine
     session_factory: async_sessionmaker[AsyncSession]
     clickhouse: ClickHouseConnection
-    # Tenant erasure only; see Settings.clickhouse_writer_dsn.
-    clickhouse_writer: ClickHouseConnection
     sessions: SessionStore
     rate_limiter: RateLimiter
     token_owners: TokenOwners
@@ -253,7 +251,6 @@ async def open_resources(settings: Settings) -> Resources:
         engine=engine,
         session_factory=session_factory,
         clickhouse=ClickHouseConnection(connect_clickhouse(settings.clickhouse_dsn)),
-        clickhouse_writer=ClickHouseConnection(connect_clickhouse(settings.clickhouse_writer_dsn)),
         sessions=SessionStore(session_factory, ttl_seconds=settings.session_ttl_seconds),
         rate_limiter=RateLimiter(session_factory, instances=settings.api_instances),
         token_owners=TokenOwners(session_factory),
@@ -305,7 +302,6 @@ async def _open_object_store(settings: Settings) -> ObjectStore | None:
 async def close_resources(resources: Resources) -> None:
     """Close every pool, in the reverse order they were opened."""
     await resources.clickhouse.close()
-    await resources.clickhouse_writer.close()
     await resources.engine.dispose()
 
 

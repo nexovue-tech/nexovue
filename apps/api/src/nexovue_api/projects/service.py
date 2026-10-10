@@ -10,7 +10,7 @@ webhook secret — and refuses while work is still going *out* in the project's
 name, because an enabled check makes requests to somebody's systems from our
 infrastructure and stopping that is the customer's decision rather than a side
 effect of this endpoint. It does **not** touch telemetry already in ClickHouse.
-Nothing here can: `TenantScopedPurger` binds an organization and there is no
+Nothing here can: the nightly erasure names organizations and there is no
 project-scoped equivalent, an `ALTER TABLE ... DELETE` cannot be recalled once
 submitted, and the rows expire on their own because retention is stamped on each
 one when it is written. So the stored data becomes unreadable — every

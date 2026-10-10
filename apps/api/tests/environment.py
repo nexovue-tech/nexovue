@@ -19,7 +19,6 @@ TEST_ENVIRONMENT: Final[dict[str, str]] = {
     "LOG_LEVEL": "warn",
     "POSTGRES_DSN": "postgresql://nexovue:secret@localhost:5432/nexovue",
     "CLICKHOUSE_DSN": "clickhouse://nexovue_reader:secret@localhost:8123/nexovue",
-    "CLICKHOUSE_WRITER_DSN": "clickhouse://nexovue:secret@localhost:8123/nexovue",
 }
 
 for name, value in TEST_ENVIRONMENT.items():

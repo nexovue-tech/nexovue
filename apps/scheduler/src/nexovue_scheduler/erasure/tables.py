@@ -2,10 +2,10 @@
 
 The inventory is here rather than inferred at run time so that "what a deletion
 covers" is reviewable in the source. It is held against the schema twice:
-`tests/test_purge_inventory.py` reads the migrations, and
-`tests/test_purge_live.py` asks the running server. Either one fails on a table
+`tests/test_erasure_inventory.py` reads the migrations, and
+`tests/test_erasure_live.py` asks the running server. Either one fails on a table
 carrying `tenant_id` that this list omits — so a table added next month breaks
-the purge test the day it is created, rather than leaving rows behind the first
+the erasure tests the day it is created, rather than leaving rows behind the first
 time somebody is deleted.
 """
 
@@ -31,8 +31,8 @@ RAW_SIGNAL_TABLES: Final[tuple[str, ...]] = (
     "profile_samples",
 )
 
-# Derived from the raw signals and stored separately. These are the reason this
-# package exists: a mutation on `spans` does not reach a materialized view or a
+# Derived from the raw signals and stored separately. Each needs its own
+# statement: a mutation on `spans` does not reach a materialized view or a
 # rollup the worker writes directly, so every one of them has to be named.
 DERIVED_TABLES: Final[tuple[str, ...]] = (
     "span_trace_lookup",

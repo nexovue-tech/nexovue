@@ -19,6 +19,9 @@ KNOWN_VARIABLES = (
     "LOG_FORMAT",
     *EMAIL_VARIABLES,
     "APP_BASE_URL",
+    "CLICKHOUSE_ERASER_DSN",
+    "ERASURE_HOUR_UTC",
+    "ERASURE_BATCH_SIZE",
 )
 
 
@@ -92,3 +95,28 @@ def test_the_console_provider_needs_nothing_else(monkeypatch: pytest.MonkeyPatch
     configured = get_settings().email
     assert configured is not None
     assert configured.provider == "console"
+
+
+def test_the_nightly_erasure_runs_at_two_utc_unless_told_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _apply(monkeypatch, COMPLETE_ENVIRONMENT)
+
+    settings = get_settings()
+
+    assert settings.erasure_hour_utc == 2
+    assert settings.erasure_batch_size == 100
+    assert settings.clickhouse_eraser_dsn == ""
+
+
+@pytest.mark.parametrize(
+    ("name", "value"), [("ERASURE_HOUR_UTC", "24"), ("ERASURE_BATCH_SIZE", "0")]
+)
+def test_an_impossible_erasure_setting_is_named(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, name: value})
+
+    with pytest.raises(SettingsError) as failure:
+        get_settings()
+    assert name in str(failure.value)

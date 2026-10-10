@@ -19,7 +19,6 @@ COMPLETE_ENVIRONMENT = {
     "CLICKHOUSE_DSN": "clickhouse://nexovue_reader:secret@localhost:8123/nexovue",
     # Erasure's own credential (docs/changes/clickhouse-protects-itself): required,
     # so a deployment cannot quietly run every read as an account that can delete.
-    "CLICKHOUSE_WRITER_DSN": "clickhouse://nexovue:secret@localhost:8123/nexovue",
 }
 
 KNOWN_VARIABLES = (
@@ -77,7 +76,6 @@ def test_missing_required_variable_is_named(monkeypatch: pytest.MonkeyPatch, mis
         ("LOG_LEVEL", "verbose"),
         ("LOG_FORMAT", "logfmt"),
         ("CLICKHOUSE_DSN", "http://localhost:8123/nexovue"),
-        ("CLICKHOUSE_WRITER_DSN", "http://localhost:8123/nexovue"),
         ("POSTGRES_DSN", "mysql://localhost:3306/nexovue"),
         ("POSTGRES_POOL_SIZE", "0"),
         ("CLICKHOUSE_MAX_RESULT_ROWS", "0"),
@@ -152,6 +150,5 @@ def _settings(*, env: str, otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT) -> Settin
         env=env,
         postgres_dsn=TEST_ENVIRONMENT["POSTGRES_DSN"],
         clickhouse_dsn=TEST_ENVIRONMENT["CLICKHOUSE_DSN"],
-        clickhouse_writer_dsn=TEST_ENVIRONMENT["CLICKHOUSE_WRITER_DSN"],
         otlp_endpoint=otlp_endpoint,
     )

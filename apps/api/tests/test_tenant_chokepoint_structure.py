@@ -51,11 +51,6 @@ MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset(
         "nexovue_api.lifespan",
         "nexovue_api.health.checks",
         "nexovue_api.auth.dependencies",
-        # The deletion endpoint's wiring, and the only place a `TenantScopedPurger`
-        # is built. It runs no statement: it takes the client from the lifespan and
-        # hands it to the purger, which binds the tenant exactly as the repository
-        # does for reads. `organizations.service` deliberately never sees a client.
-        "nexovue_api.organizations.dependencies",
     }
 )
 
@@ -106,7 +101,17 @@ API_MODULES: Final = _api_modules()
 # `alerts.telemetry`, the one module allowed the raw driver.
 SCHEDULER_SOURCE: Final = _REPOSITORY_ROOT / "apps" / "scheduler" / "src" / "nexovue_scheduler"
 SCHEDULER_MODULES: Final = _modules_under(SCHEDULER_SOURCE)
-SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset({"alerts.telemetry"})
+# ADR-014: the nightly erasure's store is the second, and the only client in
+# nexovue that can delete telemetry.
+SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset({"alerts.telemetry", "erasure.store"})
+
+# ADR-014's deliberate exception to one tenant per statement: erasing every
+# deleted organization at once. Allowed in this module alone, binding a list that
+# only `OWED_TENANTS_MAKER` constructs — from organizations already deleted.
+MANY_TENANT_MODULE: Final = "erasure.statements"
+OWED_TENANTS_BINDING: Final = "tenant_id IN {owed_tenants:Array(String)}"
+OWED_TENANTS_TYPE: Final = "OwedTenants"
+OWED_TENANTS_MAKER: Final = ("erasure.owed", "take_owed")
 
 
 def _telemetry_tables() -> frozenset[str]:
@@ -362,10 +367,44 @@ def test_the_scheduler_source_this_check_walks_is_the_one_that_ships() -> None:
 
 def test_no_scheduler_statement_reading_a_telemetry_table_omits_the_tenant_binding() -> None:
     unscoped = [
-        str(sql) for sql in _telemetry_sql(SCHEDULER_MODULES) if TENANT_BINDING not in sql.text
+        str(sql)
+        for sql in _telemetry_sql(SCHEDULER_MODULES)
+        if TENANT_BINDING not in sql.text
+        and not (sql.module == MANY_TENANT_MODULE and OWED_TENANTS_BINDING in sql.text)
     ]
     assert not unscoped, (
         f"these scheduler statements read a telemetry table without {TENANT_BINDING}: {unscoped}"
+    )
+
+
+def test_the_many_tenant_binding_lives_in_one_module() -> None:
+    """A copy of the erasure's statement anywhere else could be fed any list."""
+    elsewhere = [
+        f"{module}:{node.lineno}"
+        for module in SCHEDULER_MODULES + API_MODULES
+        if module.dotted_name != MANY_TENANT_MODULE
+        for node in ast.walk(module.tree)
+        if isinstance(node, ast.Constant | ast.JoinedStr)
+        and id(node) not in _docstrings(module.tree)
+        and "owed_tenants:Array(String)" in _static_text(node)
+    ]
+    assert not elsewhere, (
+        f"the many-tenant binding appears outside {MANY_TENANT_MODULE}: {elsewhere}"
+    )
+
+
+def test_only_the_owed_query_makes_a_list_of_tenants_to_erase() -> None:
+    """The list is what decides whose telemetry goes. It may come from one
+    query — organizations already marked deleted — and nowhere else."""
+    sites = set()
+    for module in SCHEDULER_MODULES + API_MODULES:
+        owners = _enclosing_functions(module.tree)
+        for node in ast.walk(module.tree):
+            if isinstance(node, ast.Call) and _called_name(node.func) == OWED_TENANTS_TYPE:
+                sites.add((module.dotted_name, owners.get(node, "<module scope>")))
+
+    assert sites == {OWED_TENANTS_MAKER}, (
+        f"{OWED_TENANTS_TYPE} is constructed outside {OWED_TENANTS_MAKER}: {sorted(sites)}"
     )
 
 

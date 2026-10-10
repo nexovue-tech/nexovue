@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from live import require_stack
+from nexovue_platform import erasure
 from nexovue_platform.checks.config import parse_config
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -570,7 +571,7 @@ async def test_a_file_over_three_megabytes_is_refused_and_one_under_is_kept(
         ).one()
         assert detached.check_id is None and detached.detached_at is not None
     finally:
-        await store.delete_prefix(check_files.tenant_prefix(org))
+        await store.delete_prefix(f"{erasure.CHECK_FILES_ROOT}/{org}/")
 
 
 # --- imports never overwrite (review finding) ---------------------------------------

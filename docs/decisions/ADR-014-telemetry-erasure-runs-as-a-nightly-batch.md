@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted 2026-09-19 by the founder. **Not built** — it shapes the rest of P1-77 (account and
-organization deletion). Found by `docs/changes/gate-found-defects/`.
+Accepted 2026-09-19 by the founder. **Built 2026-10-11** in readiness group 4
+([deletion-finishes](../changes/deletion-finishes/change.md)), with point 7 amended below. Found by
+`docs/changes/gate-found-defects/`.
 
 ## Context
 
@@ -48,7 +49,10 @@ retried.
    stays owed and is taken again the next night — the retry that does not exist today.
 6. **An erasure owed for more than three days raises an alert to the operators.** Privacy law asks
    for erasure without undue delay; a nightly run meets it, and a stuck one must not go unseen.
-7. Postgres rows and object-store files are erased by the same run, for the same tenants.
+7. Object-store files are erased by the same run, for the same tenants. **Amended 2026-10-11 by the
+   founder:** Postgres rows are deleted by the request itself, in its one transaction. An email is
+   unique across nexovue, so rows left for the night would refuse the same person's new signup until
+   then; and they are ordinary row deletes, carrying none of the memory risk this decision exists for.
 
 ## Rejected
 
@@ -62,6 +66,16 @@ retried.
   at night.
 - **Lowering `old_parts_lifetime`.** Frees the memory sooner but shortens the window ClickHouse keeps
   superseded parts for recovery after a crash, for every write, to protect one rare operation.
+
+## As built
+
+`nexovue_scheduler.erasure`: `owed.take_owed` is the one query that makes the tenant list (an
+`OwedTenants`), `statements` holds the many-tenant `ALTER TABLE … DELETE WHERE tenant_id IN
+{owed_tenants:Array(String)}` per table, `store` is the only client that can delete, and `run` waits
+for each table's mutation before the next. The chokepoint structure test allows the many-tenant
+binding in `erasure.statements` alone and the list's construction in `erasure.owed` alone. Beat asks
+hourly; the task works only in `ERASURE_HOUR_UTC`, so a leader changing hands cannot run two in a
+night.
 
 ## Consequences
 

@@ -1,27 +1,17 @@
-"""Deleting one organization, against real Postgres, SeaweedFS and ClickHouse.
+"""Deleting one organization, against real Postgres.
 
 **Why two tenants.** A deletion that takes too much is worse than one that takes
 too little, and a single-tenant fixture cannot tell those apart: a `DELETE FROM
 users` with no predicate passes it. So every table gets rows for two
 organizations, one is deleted, and the other is counted before and after and
-must be identical — in Postgres, in the object store and in the telemetry store.
+must be identical.
 
-**Why it is not flaky.** The ClickHouse half of a deletion is a mutation, which
-returns before the rows are gone. `service.erase` waits on the condition itself
-— row counts reaching zero — and this suite never sleeps.
+**Postgres only.** The request deletes the rows; the telemetry and the uploaded
+files are the scheduler's nightly erasure, proved in
+`apps/scheduler/tests/test_erasure_live.py` (ADR-014).
 
-**What it leaves behind.** Nothing outside its own two tenants. Postgres runs
-inside one transaction that is always rolled back. The object store and
-ClickHouse have no transaction, so the fixture erases both of its tenants on the
-way out, including the one the tests prove was untouched — after the assertions
-have run.
-
-**Telemetry is set up only where it is asserted about.** Three tests make a
-claim about ClickHouse and take `two_tenants_with_telemetry`; the rest take
-`two_tenants`, which is Postgres and the object store alone. Fixture rows in a
-telemetry table are not free to clear — each costs a mutation over a store that
-is also holding the OpenTelemetry demo — and writing rows no test reads is how
-a suite starts failing on the server's memory rather than on its own subject.
+**What it leaves behind.** Nothing: it runs inside one transaction that is
+always rolled back.
 
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
@@ -32,26 +22,20 @@ import os
 import socket
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, cast
 from urllib.parse import urlsplit
 
-import clickhouse_connect
 import pytest
-from clickhouse_cleanup import delete_after_run
-from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
+from nexovue_platform import erasure
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from nexovue_api.audit import service as audit
 from nexovue_api.auth.queries import load_identity
 from nexovue_api.billing import BillingError, CancellationOutcome, ConfiguredProcessor
 from nexovue_api.checkfiles.service import object_key as check_file_key
-from nexovue_api.checkfiles.service import tenant_prefix as check_files_prefix
-from nexovue_api.data.clickhouse.base import TenantScopedPurger
-from nexovue_api.data.objectstore import ObjectStore, ObjectStoreError
 from nexovue_api.data.postgres.models import (
     AlertEvaluation,
     AlertRule,
@@ -89,11 +73,7 @@ from nexovue_api.data.postgres.models import (
     ViewAsTicketRecord,
     WebsitePayment,
 )
-from nexovue_api.errors.exceptions import (
-    ConflictError,
-    DependencyUnavailableError,
-    NotFoundError,
-)
+from nexovue_api.errors.exceptions import ConflictError, DependencyUnavailableError
 from nexovue_api.organizations import service
 from nexovue_api.organizations.tables import (
     DELETED_DIRECTLY,
@@ -102,32 +82,13 @@ from nexovue_api.organizations.tables import (
     TENANT_COLUMN,
     TOMBSTONED_TABLE,
 )
-from nexovue_api.purge import TenantPurge
-from nexovue_api.purge.tables import PURGED_TABLES
-from nexovue_api.settings import ObjectStoreSettings
 from nexovue_api.signup.service import provision_tenant
-from nexovue_api.sourcemaps.service import tenant_prefix
 
 POSTGRES_DSN: Final = os.environ.get(
     "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
 )
 ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
-CLICKHOUSE_DSN: Final = os.environ.get(
-    "NEXOVUE_CLICKHOUSE_DSN", "clickhouse://nexovue:nexovue_dev@localhost:18123/nexovue"
-)
-S3_ENDPOINT: Final = os.environ.get("NEXOVUE_TEST_S3_ENDPOINT", "http://localhost:18333")
-S3_BUCKET: Final = "nexovue-test-deletion"
-
 REACHABILITY_TIMEOUT_SECONDS: Final = 1.0
-
-# Generous, for the same reason the purge suite's is: a mutation over the dev
-# store's parts is not instant, and a slow machine should fail on a real problem
-# rather than on this number.
-ERASURE_DEADLINE_SECONDS: Final = 120
-# Used where a test asserts about Postgres or the object store and not about the
-# telemetry having finished. The mutations are still submitted; only the wait is
-# skipped, which is exactly what the obligation exists to make safe.
-NO_WAIT_SECONDS: Final = 0
 
 # Enough rows per table that "the other tenant is untouched" is a statement
 # about a set rather than about one row.
@@ -136,9 +97,6 @@ MAPS_PER_TENANT: Final = 2
 
 PASSWORD: Final = "correct horse battery staple"
 MAP_BYTES: Final = b'{"version":3,"sources":[],"names":[],"mappings":""}'
-
-# The three rollups partition on `minute`; everything else on `received_at`.
-_MINUTE_KEYED_TABLES: Final = frozenset({"endpoint_stats_1m", "service_edges_1m", "web_vitals_1m"})
 
 # The receiver's own read of the deletion flag, copied from the SELECT in
 # `apps/receiver/internal/allowance/postgres.go`. Asserted verbatim so that "the
@@ -202,7 +160,8 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
 # unprovable while every assertion still passed. `users`, `projects`, `api_keys`
 # and `project_webhook_secrets` are one each because `provision_tenant` makes
 # one of each; `audit_log` is four because it records the organization, the
-# minted key, the owners channel and the default alert rule. Alert channels, rules
+# minted key, the owners channel and the default alert rule — all under the
+# tenant, so all deleted; the request's own entry is tenantless. Alert channels, rules
 # and their links are one more than written, for the same reason: every tenant is
 # created with an owners channel and a default rule sending to it (F21).
 FIXTURE_ROWS: Final[dict[str, int]] = {
@@ -267,13 +226,9 @@ def _reachable(url: str, default_port: int) -> bool:
 
 
 require_stack(
-    reachable=(
-        _reachable(POSTGRES_DSN, 5432)
-        and _reachable(CLICKHOUSE_DSN, 8123)
-        and _reachable(S3_ENDPOINT, 8333)
-    ),
+    reachable=_reachable(POSTGRES_DSN, 5432),
     suite="the live organization deletion suite",
-    remedy=("Postgres, ClickHouse or SeaweedFS is not answering — start them with `just dev`"),
+    remedy="Postgres is not answering — start it with `just dev`",
 )
 
 
@@ -284,7 +239,7 @@ class Tenant:
     org_id: uuid.UUID
     user_id: uuid.UUID
     project_id: uuid.UUID
-    object_keys: list[str] = field(default_factory=list)
+    email: str
 
 
 @pytest.fixture
@@ -305,103 +260,33 @@ async def db() -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-async def clickhouse() -> AsyncIterator[AsyncClient]:
-    parsed = urlsplit(CLICKHOUSE_DSN)
-    client = await clickhouse_connect.get_async_client(
-        host=parsed.hostname or "localhost",
-        port=parsed.port or 8123,
-        username=parsed.username or "default",
-        password=parsed.password or "",
-        database=(parsed.path or "/default").lstrip("/"),
-    )
-    try:
-        yield client
-    finally:
-        await client.close()
-
-
-@pytest.fixture
-async def store() -> ObjectStore:
-    """A real client against a bucket this suite owns."""
-    store = ObjectStore(
-        ObjectStoreSettings(
-            endpoint=S3_ENDPOINT,
-            bucket=S3_BUCKET,
-            access_key_id=os.environ.get("NEXOVUE_TEST_S3_KEY", "nexovue_dev_access"),
-            secret_access_key=os.environ.get("NEXOVUE_TEST_S3_SECRET", "nexovue_dev_secret"),
-            region="us-east-1",
-        )
-    )
-    await store.ensure_bucket()
-    return store
-
-
-@pytest.fixture
-async def two_tenants(db: AsyncSession, store: ObjectStore) -> AsyncIterator[tuple[Tenant, Tenant]]:
-    """A tenant to delete and a tenant that must survive it, in Postgres and S3.
+async def two_tenants(db: AsyncSession) -> tuple[Tenant, Tenant]:
+    """A tenant to delete and a tenant that must survive it.
 
     Fresh ids every run, so the suite can never collide with the seeded
-    organization or with the OpenTelemetry demo's rows in the shared dev store.
-
-    No telemetry. A test that asserts nothing about ClickHouse must not write
-    rows there: every fixture row costs a mutation to clear afterwards, and a
-    store that is also holding the demo has a memory ceiling those mutations
-    reach. `two_tenants_with_telemetry` is what the three tests that do make a
-    claim about the telemetry store ask for.
+    organization.
     """
-    deleted = await _build_tenant(db, store, "deleted")
-    spared = await _build_tenant(db, store, "spared")
-    try:
-        yield deleted, spared
-    finally:
-        for tenant in (deleted, spared):
-            await store.delete_prefix(tenant_prefix(tenant.org_id))
-            await store.delete_prefix(check_files_prefix(tenant.org_id))
+    return await _build_tenant(db, "deleted"), await _build_tenant(db, "spared")
 
 
-@pytest.fixture
-async def two_tenants_with_telemetry(
-    two_tenants: tuple[Tenant, Tenant], clickhouse: AsyncClient
-) -> AsyncIterator[tuple[Tenant, Tenant]]:
-    """The same two tenants, with rows in every purged ClickHouse table.
-
-    Both are cleaned up on the way out, including the one the tests prove was
-    untouched — after the assertions have run, and **without waiting**. A purge
-    per tenant per test is a mutation per table per test, each rewriting every
-    part (ADR-014); measured 2026-09-20, it was 12 of this file's 34 seconds.
-    These rows belong to a UUID nothing else reads, so they join the list
-    `clickhouse_cleanup` empties once at the end of the session. The test that
-    proves an erasure empties the store still runs and waits for its own.
-    """
-    for tenant in two_tenants:
-        await _write_telemetry_rows(clickhouse, str(tenant.org_id))
-    try:
-        yield two_tenants
-    finally:
-        for tenant in two_tenants:
-            for table in PURGED_TABLES:
-                delete_after_run(table, str(tenant.org_id))
-
-
-async def _build_tenant(db: AsyncSession, store: ObjectStore, label: str) -> Tenant:
+async def _build_tenant(db: AsyncSession, label: str) -> Tenant:
     """One organization with a row in every Postgres table a deletion touches."""
+    email = f"{label}-{uuid.uuid4()}@example.test"
     provisioned = await provision_tenant(
-        db,
-        organization_name=f"Deletion {label}",
-        email=f"{label}-{uuid.uuid4()}@example.test",
-        password=PASSWORD,
+        db, organization_name=f"Deletion {label}", email=email, password=PASSWORD
     )
     await db.flush()
     tenant = Tenant(
         org_id=provisioned.organization.id,
         user_id=provisioned.user.id,
         project_id=provisioned.project.id,
+        email=email,
     )
-    await _write_postgres_rows(db, tenant, store)
+    await _write_postgres_rows(db, tenant)
     return tenant
 
 
-async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectStore) -> None:
+async def _write_postgres_rows(db: AsyncSession, tenant: Tenant) -> None:
     """Fill every table `provision_tenant` does not already touch."""
     day = datetime.now(UTC).date()
     now = datetime.now(UTC)
@@ -430,8 +315,6 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectSt
         )
         await db.flush()
         key = check_file_key(tenant.org_id, file_id)
-        await store.put(key, MAP_BYTES, content_type="application/octet-stream")
-        tenant.object_keys.append(key)
         db.add_all(
             [
                 CheckState(
@@ -601,9 +484,7 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectSt
 
     for index in range(MAPS_PER_TENANT):
         source_map_id = uuid.uuid4()
-        key = f"{tenant_prefix(tenant.org_id)}{tenant.project_id}/{source_map_id}.map"
-        await store.put(key, MAP_BYTES, content_type="application/json")
-        tenant.object_keys.append(key)
+        key = f"{erasure.SOURCE_MAPS_ROOT}/{tenant.org_id}/{tenant.project_id}/{source_map_id}.map"
         db.add(
             SourceMap(
                 id=source_map_id,
@@ -661,33 +542,6 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectSt
         {"id": tenant.project_id},
     )
     await db.flush()
-
-
-async def _write_telemetry_rows(client: AsyncClient, tenant_id: str) -> None:
-    """One tenant's rows in every purged ClickHouse table, timestamped now.
-
-    Rows differ by `project_id` because it is second in the sort key of the
-    aggregating tables, where identical rows would collapse to one.
-    """
-    written_at = datetime.now(UTC).replace(tzinfo=None)
-    has_project = await _tables_with_a_project(client)
-    for table in PURGED_TABLES:
-        time_column = "minute" if table in _MINUTE_KEYED_TABLES else "received_at"
-        columns = ["tenant_id", time_column]
-        rows: list[list[Any]] = [[tenant_id, written_at] for _ in range(ROWS_PER_TABLE)]
-        if table in has_project:
-            columns.append("project_id")
-            for index, row in enumerate(rows):
-                row.append(f"deletion-fixture-{index}")
-        await client.insert(table, rows, column_names=columns)
-
-
-async def _tables_with_a_project(client: AsyncClient) -> frozenset[str]:
-    result = await client.query(
-        "SELECT table FROM system.columns "
-        "WHERE database = currentDatabase() AND name = 'project_id'"
-    )
-    return frozenset(str(row[0]) for row in result.result_rows)
 
 
 async def _write_alert_rows(db: AsyncSession, tenant: Tenant, index: int, now: datetime) -> None:
@@ -782,23 +636,6 @@ async def _count(db: AsyncSession, sql: str, parameters: dict[str, Any]) -> int:
     return int((await db.execute(text(sql), parameters)).scalar_one())
 
 
-async def _stored_keys(store: ObjectStore, tenant: Tenant) -> list[str]:
-    """Which of this tenant's uploaded objects the store still holds."""
-    present = []
-    for key in tenant.object_keys:
-        try:
-            await store.get(key)
-        except ObjectStoreError:
-            continue
-        present.append(key)
-    return present
-
-
-def _purge_for(clickhouse: AsyncClient, tenant: Tenant) -> TenantPurge:
-    """What `organizations/dependencies.py` builds for a request, built here."""
-    return TenantPurge(TenantScopedPurger(clickhouse, str(tenant.org_id)))
-
-
 class _Processor:
     """The fixture's arrangements were taken through a processor named "test";
     this stands in for it and records every cancellation it is asked for."""
@@ -825,20 +662,10 @@ def _payments(processor: _Processor | None = None) -> ConfiguredProcessor:
     )
 
 
-async def _delete_and_erase(
-    db: AsyncSession,
-    clickhouse: AsyncClient,
-    store: ObjectStore,
-    tenant: Tenant,
-    *,
-    wait_seconds: float,
-) -> service.ErasureOutcome:
-    """The whole endpoint, both phases, as a caller would drive it."""
-    await service.request_deletion(
-        db, org_id=tenant.org_id, actor_user_id=tenant.user_id, payments=_payments()
-    )
+async def _delete(db: AsyncSession, tenant: Tenant) -> None:
+    """The endpoint's one transaction, as the route drives it."""
+    await service.request_deletion(db, org_id=tenant.org_id, payments=_payments())
     await db.flush()
-    return await service.erase(db, _purge_for(clickhouse, tenant), store, wait_seconds=wait_seconds)
 
 
 async def test_the_fixture_gives_both_tenants_the_same_rows(
@@ -858,85 +685,62 @@ async def test_the_fixture_gives_both_tenants_the_same_rows(
 
 
 async def test_deleting_an_organization_empties_every_table_it_owned(
-    db: AsyncSession,
-    clickhouse: AsyncClient,
-    store: ObjectStore,
-    two_tenants_with_telemetry: tuple[Tenant, Tenant],
+    db: AsyncSession, two_tenants: tuple[Tenant, Tenant]
 ) -> None:
-    """The obligation itself, in all three stores.
+    """The request alone, before any erasure has run (founder decision 2026-10-11).
 
     `organizations` is expected to hold its one row afterwards: the tombstone is
     the deletion's record of itself, and
     `test_the_tombstone_keeps_no_words_the_customer_wrote` proves it carries
     nothing of the customer's.
     """
-    deleted, _ = two_tenants_with_telemetry
+    deleted, _ = two_tenants
     assert await _row_counts(db, deleted) == FIXTURE_ROWS
 
-    outcome = await _delete_and_erase(
-        db, clickhouse, store, deleted, wait_seconds=ERASURE_DEADLINE_SECONDS
-    )
+    await _delete(db, deleted)
 
     after = await _row_counts(db, deleted)
     assert after == dict.fromkeys(FIXTURE_ROWS, 0) | {TOMBSTONED_TABLE: 1}, (
-        f"the deletion did not leave exactly the tombstone: {after}"
+        f"the request did not leave exactly the tombstone: {after}"
     )
-    assert outcome.objects_deleted == MAPS_PER_TENANT + ROWS_PER_TABLE  # maps and check files
-    assert outcome.is_complete, f"telemetry still present: {outcome.telemetry_remaining}"
-    assert not await _stored_keys(store, deleted)
+
+
+async def test_the_owner_can_sign_up_again_at_once(
+    db: AsyncSession, two_tenants: tuple[Tenant, Tenant]
+) -> None:
+    """An email is unique across nexovue, so a person row left for the night
+    would refuse the same person's new signup until then."""
+    deleted, _ = two_tenants
+    await _delete(db, deleted)
+
+    again = await provision_tenant(
+        db, organization_name="Deletion again", email=deleted.email, password=PASSWORD
+    )
+    await db.flush()
+
+    assert again.organization.id != deleted.org_id
 
 
 async def test_deleting_an_organization_leaves_the_other_untouched(
-    db: AsyncSession,
-    clickhouse: AsyncClient,
-    store: ObjectStore,
-    two_tenants_with_telemetry: tuple[Tenant, Tenant],
+    db: AsyncSession, two_tenants: tuple[Tenant, Tenant]
 ) -> None:
     """Every statement filters one tenant; only that tenant may go."""
-    deleted, spared = two_tenants_with_telemetry
+    deleted, spared = two_tenants
     before = await _row_counts(db, spared)
-    objects_before = await _stored_keys(store, spared)
     assert before == FIXTURE_ROWS
 
-    await _delete_and_erase(db, clickhouse, store, deleted, wait_seconds=ERASURE_DEADLINE_SECONDS)
+    await _delete(db, deleted)
 
     after = await _row_counts(db, spared)
     assert after == before, (
         f"deleting {deleted.org_id} changed rows belonging to {spared.org_id}: "
         f"before={before} after={after}"
     )
-    assert await _stored_keys(store, spared) == objects_before
-    assert await _telemetry_rows(clickhouse, spared.org_id) > 0
-
-
-async def test_the_source_map_objects_go_and_the_bucket_stays(
-    db: AsyncSession,
-    clickhouse: AsyncClient,
-    store: ObjectStore,
-    two_tenants: tuple[Tenant, Tenant],
-) -> None:
-    """Prefix deletion is the part nothing in the purge package touches.
-
-    The bucket is asserted to survive because SeaweedFS has shipped a
-    DeleteObjects that removed it (seaweedfs#1806); a deletion that emptied the
-    whole store would otherwise pass every assertion above.
-    """
-    deleted, spared = two_tenants
-    assert await _stored_keys(store, deleted) == deleted.object_keys
-
-    await _delete_and_erase(db, clickhouse, store, deleted, wait_seconds=NO_WAIT_SECONDS)
-
-    assert not await _stored_keys(store, deleted)
-    assert await _stored_keys(store, spared) == spared.object_keys
-    # The bucket answers, which it would not if the multi-delete had taken it.
-    assert await store.delete_prefix("does-not-exist/") == 0
 
 
 @pytest.mark.parametrize("omitted", sorted(DELETED_DIRECTLY))
 async def test_a_table_left_out_of_the_deletion_is_named_rather_than_missed(
     db: AsyncSession,
-    clickhouse: AsyncClient,
-    store: ObjectStore,
     two_tenants: tuple[Tenant, Tenant],
     monkeypatch: pytest.MonkeyPatch,
     omitted: str,
@@ -956,7 +760,7 @@ async def test_a_table_left_out_of_the_deletion_is_named_rather_than_missed(
         tuple(table for table in DELETED_DIRECTLY if table != omitted),
     )
 
-    await _delete_and_erase(db, clickhouse, store, deleted, wait_seconds=NO_WAIT_SECONDS)
+    await _delete(db, deleted)
 
     after = await _row_counts(db, deleted)
     left_behind = {
@@ -980,10 +784,7 @@ async def test_the_request_alone_ends_every_session_and_closes_the_door(
     deleted, spared = two_tenants
     assert await load_identity(db, user_id=deleted.user_id, org_id=deleted.org_id) is not None
 
-    await service.request_deletion(
-        db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments()
-    )
-    await db.flush()
+    await _delete(db, deleted)
 
     assert await load_identity(db, user_id=deleted.user_id, org_id=deleted.org_id) is None
     refused = await db.execute(RECEIVER_READS_DELETION, {"org_id": deleted.org_id})
@@ -1004,10 +805,7 @@ async def test_the_tombstone_keeps_no_words_the_customer_wrote(
     )
     slug, name = original.one()
 
-    await service.request_deletion(
-        db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments()
-    )
-    await db.flush()
+    await _delete(db, deleted)
 
     scrubbed = await db.execute(
         text("SELECT slug, name FROM organizations WHERE id = :org_id"),
@@ -1033,9 +831,7 @@ async def test_closing_an_organization_stops_every_charge_first(
     )
     processor = _Processor()
 
-    await service.request_deletion(
-        db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments(processor)
-    )
+    await service.request_deletion(db, org_id=deleted.org_id, payments=_payments(processor))
 
     assert live and sorted(processor.ended_now) == sorted(live)
     spared_live = await db.scalar(
@@ -1054,15 +850,10 @@ async def test_an_organization_whose_charges_cannot_be_stopped_is_not_closed(
 
     with pytest.raises(DependencyUnavailableError):
         await service.request_deletion(
-            db,
-            org_id=deleted.org_id,
-            actor_user_id=deleted.user_id,
-            payments=_payments(_Processor(reachable=False)),
+            db, org_id=deleted.org_id, payments=_payments(_Processor(reachable=False))
         )
     with pytest.raises(DependencyUnavailableError):
-        await service.request_deletion(
-            db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=None
-        )
+        await service.request_deletion(db, org_id=deleted.org_id, payments=None)
 
     organization = await db.get(Organization, deleted.org_id)
     assert organization is not None and organization.deleted_at is None
@@ -1073,68 +864,35 @@ async def test_a_second_deletion_request_is_refused(
 ) -> None:
     """The first `deleted_at` is when the erasure became owed; nothing may move it."""
     deleted, _ = two_tenants
-    accepted = await service.request_deletion(
-        db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments()
-    )
+    accepted = await service.request_deletion(db, org_id=deleted.org_id, payments=_payments())
     await db.flush()
     with pytest.raises(ConflictError):
-        await service.request_deletion(
-            db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments()
-        )
+        await service.request_deletion(db, org_id=deleted.org_id, payments=_payments())
     assert accepted.organization_id == deleted.org_id
 
 
-async def test_erasing_an_organization_nobody_asked_to_delete_is_refused(
-    db: AsyncSession,
-    clickhouse: AsyncClient,
-    store: ObjectStore,
-    two_tenants: tuple[Tenant, Tenant],
+async def test_the_request_records_its_obligation_without_naming_anyone(
+    db: AsyncSession, two_tenants: tuple[Tenant, Tenant]
 ) -> None:
-    """The one guard between `erase` and a live customer's rows."""
-    _, spared = two_tenants
-    before = await _row_counts(db, spared)
+    """The night finds the obligation as a tombstone with no certificate. The
+    request's own entry outlives the rows it deleted, so it names no person."""
+    deleted, _ = two_tenants
+    target = erasure.organization_target(deleted.org_id)
 
-    with pytest.raises(NotFoundError):
-        await service.erase(db, _purge_for(clickhouse, spared), store, wait_seconds=NO_WAIT_SECONDS)
+    await _delete(db, deleted)
 
-    assert await _row_counts(db, spared) == before
-
-
-async def test_an_unfinished_erasure_stays_owed_and_a_finished_one_does_not(
-    db: AsyncSession,
-    clickhouse: AsyncClient,
-    store: ObjectStore,
-    two_tenants_with_telemetry: tuple[Tenant, Tenant],
-) -> None:
-    """The obligation, read back the way a sweep would read it.
-
-    No migration carries it: the tombstone says an erasure is owed and the
-    tenantless audit entry says it was discharged. This is that pair, asked for
-    by `erasures_still_owed`.
-    """
-    deleted, _ = two_tenants_with_telemetry
-    assert deleted.org_id not in await service.erasures_still_owed(db)
-
-    await service.request_deletion(
-        db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments()
-    )
-    await db.flush()
-    assert deleted.org_id in await service.erasures_still_owed(db)
-
-    outcome = await service.erase(
-        db, _purge_for(clickhouse, deleted), store, wait_seconds=ERASURE_DEADLINE_SECONDS
-    )
-    await db.flush()
-
-    assert outcome.is_complete
-    assert deleted.org_id not in await service.erasures_still_owed(db)
-    certificate = await _count(
-        db,
-        "SELECT count(*) FROM audit_log WHERE org_id IS NULL AND action = :action "
-        "AND target = :target",
-        {"action": audit.ORGANIZATION_ERASED, "target": f"organization:{deleted.org_id}"},
-    )
-    assert certificate == 1, "the erasure certificate must outlive the tenant it certifies"
+    entries = (
+        await db.execute(
+            text(
+                "SELECT org_id, actor_user_id, actor_label, action FROM audit_log "
+                "WHERE target = :target"
+            ),
+            {"target": target},
+        )
+    ).all()
+    assert [tuple(entry) for entry in entries] == [
+        (None, None, None, erasure.DELETION_REQUESTED_ACTION)
+    ]
 
 
 async def test_the_database_holds_no_table_this_deletion_has_not_classified(
@@ -1226,11 +984,3 @@ async def test_every_cascade_the_inventory_relies_on_is_really_a_cascade(
         f"the deletion relies on these cascades and the database does not have them "
         f"as NOT NULL ON DELETE CASCADE: {broken}"
     )
-
-
-async def _telemetry_rows(client: AsyncClient, org_id: uuid.UUID) -> int:
-    result = await client.query(
-        "SELECT count() FROM spans WHERE tenant_id = {tenant_id:String}",
-        parameters={"tenant_id": str(org_id)},
-    )
-    return int(result.result_rows[0][0])

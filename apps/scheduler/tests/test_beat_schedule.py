@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from nexovue_scheduler.beat import (
     ATTEMPT_PRUNE_ENTRY,
     DELIVERY_SWEEP_ENTRY,
+    ERASURE_ENTRY,
+    ERASURE_SOFT_TIME_LIMIT_SECONDS,
     EXPIRY_SWEEP_ENTRY,
     FILE_SWEEP_ENTRY,
     HEARTBEAT_SWEEP_ENTRY,
@@ -149,6 +151,17 @@ def test_the_alert_sweeps_are_scheduled_on_their_own_queues() -> None:
     assert delivery.request.queue == "deliveries"
     assert delivery.interval_seconds == 15
     assert entries[ATTEMPT_PRUNE_ENTRY].request.queue == "light"
+
+
+def test_the_nightly_erasure_is_asked_hourly_with_hours_to_run() -> None:
+    """ADR-014. The task works only in its hour; its mutations can take hours, so
+    a sweep's one-minute limit would kill every night's run."""
+    erasure = _scheduler()._sweep_entries()[ERASURE_ENTRY]
+
+    assert erasure.interval_seconds == 3600
+    assert erasure.request.queue == "light"
+    assert erasure.request.soft_limit_seconds == ERASURE_SOFT_TIME_LIMIT_SECONDS
+    assert erasure.request.hard_limit_seconds > erasure.request.soft_limit_seconds
 
 
 def test_a_location_this_deployment_does_not_have_is_never_dispatched_to() -> None:

@@ -8,13 +8,12 @@ remembered to write.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, status
+from fastapi import APIRouter, status
 
 from nexovue_api.auth.policy import MayEndTheOrganization
 from nexovue_api.billing.dependencies import OptionalDomesticPayments
 from nexovue_api.deps import DbSession
 from nexovue_api.organizations import service
-from nexovue_api.organizations.dependencies import ApplicationResources, TenantErasure
 from nexovue_api.organizations.schemas import DeletionAccepted
 
 router = APIRouter(prefix="/organization", tags=["organization"])
@@ -28,27 +27,8 @@ router = APIRouter(prefix="/organization", tags=["organization"])
 async def delete_organization(
     identity: MayEndTheOrganization,
     db: DbSession,
-    resources: ApplicationResources,
-    erasure: TenantErasure,
     payments: OptionalDomesticPayments,
-    background: BackgroundTasks,
 ) -> DeletionAccepted:
-    """202, not 204: the account is closed now and the erasure has not finished.
-
-    ADR-014 (decided, not built) moves the erasure below to a nightly batch.
-
-    The background task is a head start, not the guarantee. It runs in this
-    process and dies with it; what makes the erasure certain is the obligation
-    the transaction below commits, which `service.erasures_still_owed` finds
-    again afterwards.
-    """
-    accepted = await service.request_deletion(
-        db, org_id=identity.org_id, actor_user_id=identity.user.id, payments=payments
-    )
-    background.add_task(
-        service.erase_after_response,
-        resources.session_factory,
-        erasure,
-        resources.object_store,
-    )
-    return accepted
+    """202, not 204: the account is closed and its rows are gone now; its
+    telemetry and files are erased by the scheduler's nightly run (ADR-014)."""
+    return await service.request_deletion(db, org_id=identity.org_id, payments=payments)
