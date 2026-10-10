@@ -89,12 +89,17 @@ require_stack(
 
 @dataclass(frozen=True, slots=True)
 class SyntheticSubject:
-    """A tenant that actually has readings, and one that does not."""
+    """A tenant that actually has readings, the clean hour they are read in, and
+    one that has none."""
 
     tenant_id: str
     project_id: str
     check_id: str
     other_tenant_id: str
+    # The most recent hour in which this check ran and never failed — the window
+    # every assertion about real prober output reads.
+    start: datetime
+    end: datetime
 
 
 @pytest.fixture
@@ -111,7 +116,7 @@ async def client() -> AsyncIterator[AsyncClient]:
 
 @pytest.fixture
 async def subject(client: AsyncClient) -> SyntheticSubject:
-    """The tenant with the most synthetic readings, plus a stranger's id.
+    """The most recent hour a check ran and never failed, plus a stranger's id.
 
     Raw client on purpose: asking "who has data" is a question no tenant-scoped
     query can ask, and it is setup rather than a claim about the API.
@@ -121,25 +126,27 @@ async def subject(client: AsyncClient) -> SyntheticSubject:
     the busiest check by any reading handed this suite a heartbeat (no timing) or a
     check that has been failing all day (nothing to check the arithmetic against).
 
-    And only among checks with **no failed run** in the window: the busiest by
-    successes was once a check against a public site that failed half its runs, and
-    a run that never connected publishes fewer phases than five.
+    And an **hour with no failed run**, not two days of them: a run that never
+    connected publishes fewer phases than five, which two assertions here cannot
+    tolerate. Requiring the whole lookback to be clean made one outage of a
+    check's target fail this suite for two days after the target came back
+    (docs/changes/synthetics-suite-reads-a-clean-hour).
     """
     result = await client.query(
         f"""
-        SELECT tenant_id, project_id, check_id,
+        SELECT tenant_id, project_id, check_id, hour,
                countIf(metric_name = %(duration)s AND outcome IN ('up', 'degraded')) AS readings
         FROM (
             SELECT tenant_id, project_id, metric_name, {queries.CHECK_ID} AS check_id,
-                   {queries.OUTCOME} AS outcome
+                   {queries.OUTCOME} AS outcome, toStartOfHour(timestamp) AS hour
             FROM metrics_gauge
             WHERE metric_name IN (%(duration)s, %(status)s) AND timestamp >= %(since)s
         )
-        GROUP BY tenant_id, project_id, check_id
+        GROUP BY tenant_id, project_id, check_id, hour
         HAVING readings > 0
            AND countIf(metric_name = %(status)s AND outcome NOT IN ('up', 'degraded')) = 0
-        ORDER BY readings DESC
-        LIMIT 2
+        ORDER BY hour DESC, readings DESC
+        LIMIT 1
         """,
         parameters={
             "duration": queries.METRIC_DURATION,
@@ -149,20 +156,37 @@ async def subject(client: AsyncClient) -> SyntheticSubject:
     )
     rows = [dict(zip(result.column_names, row, strict=True)) for row in result.result_rows]
     assert rows, (
-        "no successful synthetic probe in ClickHouse for the last two days. This "
-        "suite asserts on real prober output, so an empty store is a failure here, "
-        "not a pass — check that the scheduler is running and that at least one "
-        "check is passing."
+        "no hour in the last two days in which a synthetic check ran and never "
+        "failed. This suite asserts on real prober output, so an empty store is a "
+        "failure here, not a pass — check that the scheduler is running and that "
+        "at least one check's target is up."
     )
+    chosen = rows[0]
+    start = chosen["hour"].replace(tzinfo=UTC)
 
-    strangers = {str(row["tenant_id"]) for row in rows} - {str(rows[0]["tenant_id"])}
+    # A second real tenant is the sharper test; a random id proves the same thing
+    # when the dev stack happens to hold only one.
+    strangers = await client.query(
+        """
+        SELECT DISTINCT tenant_id FROM metrics_gauge
+        WHERE metric_name = %(status)s AND timestamp >= %(since)s AND tenant_id != %(tenant)s
+        LIMIT 1
+        """,
+        parameters={
+            "status": queries.METRIC_STATUS,
+            "since": _since(),
+            "tenant": chosen["tenant_id"],
+        },
+    )
     return SyntheticSubject(
-        tenant_id=str(rows[0]["tenant_id"]),
-        project_id=str(rows[0]["project_id"]),
-        check_id=str(rows[0]["check_id"]),
-        # A second real tenant is the sharper test; a random id proves the same
-        # thing when the dev stack happens to hold only one.
-        other_tenant_id=next(iter(strangers), str(uuid.uuid4())),
+        tenant_id=str(chosen["tenant_id"]),
+        project_id=str(chosen["project_id"]),
+        check_id=str(chosen["check_id"]),
+        other_tenant_id=(
+            str(strangers.result_rows[0][0]) if strangers.result_rows else str(uuid.uuid4())
+        ),
+        start=start,
+        end=start + timedelta(hours=1),
     )
 
 
@@ -181,7 +205,7 @@ def _repository(client: AsyncClient, tenant_id: str) -> TenantScopedRepository:
 async def test_a_check_that_ran_reports_its_runs_and_its_uptime(
     client: AsyncClient, subject: SyntheticSubject
 ) -> None:
-    start, end = _window()
+    start, end = subject.start, subject.end
 
     results = await service.list_check_results(
         _repository(client, subject.tenant_id),
@@ -204,7 +228,7 @@ async def test_the_phase_breakdown_names_every_phase_of_a_request(
     client: AsyncClient, subject: SyntheticSubject
 ) -> None:
     """The reading that makes a check worth more than a ping."""
-    start, end = _window()
+    start, end = subject.start, subject.end
 
     breakdown = await service.phase_breakdown(
         _repository(client, subject.tenant_id),
@@ -231,10 +255,8 @@ async def test_the_phases_of_a_probe_sum_to_the_duration_it_reported(
     measuring different things, and the chart would be attributing time to the
     wrong part of the request.
     """
-    start, end = _window()
+    start, end = subject.start, subject.end
 
-    # The whole window, not the newest page: a check that has been failing all day
-    # still has passing runs earlier in it, and this test is about arithmetic.
     runs = await service.list_runs(
         _repository(client, subject.tenant_id),
         project_id=subject.project_id,
@@ -257,7 +279,7 @@ async def test_another_tenant_reads_none_of_these_checks(
     client: AsyncClient, subject: SyntheticSubject
 ) -> None:
     """Real rows, real ClickHouse, and the wrong tenant sees none of them."""
-    start, end = _window()
+    start, end = subject.start, subject.end
 
     stolen = await service.list_check_results(
         _repository(client, subject.other_tenant_id),
@@ -306,7 +328,8 @@ async def test_the_readings_this_suite_asserts_on_are_visible_in_the_store(
         f"""
         SELECT metric_name, count() AS readings
         FROM metrics_gauge
-        WHERE tenant_id = %(tenant_id)s AND timestamp >= %(since)s
+        WHERE tenant_id = %(tenant_id)s
+          AND timestamp >= %(start)s AND timestamp < %(end)s
           AND {queries.CHECK_ID} = %(check_id)s
         GROUP BY metric_name
         ORDER BY metric_name
@@ -314,7 +337,8 @@ async def test_the_readings_this_suite_asserts_on_are_visible_in_the_store(
         parameters={
             "tenant_id": subject.tenant_id,
             "check_id": subject.check_id,
-            "since": _since(),
+            "start": subject.start,
+            "end": subject.end,
         },
     )
     counts: dict[str, Any] = {row[0]: row[1] for row in result.result_rows}
@@ -336,7 +360,7 @@ async def test_a_checks_buckets_account_for_every_run_its_summary_counted(
     check that ran once as having run eight times, and the row's own number would
     disagree with its line.
     """
-    from_time, to_time = _window()
+    from_time, to_time = subject.start, subject.end
     repository = _repository(client, subject.tenant_id)
 
     summaries = await service.list_check_results(
@@ -363,7 +387,7 @@ async def test_a_bucket_nothing_succeeded_in_reports_no_duration_rather_than_zer
     failing bucket to find, so this asserts the invariant rather than the existence of a
     failure — it bites the first time one occurs.
     """
-    from_time, to_time = _window()
+    from_time, to_time = subject.start, subject.end
     trends = await service.check_trends(
         _repository(client, subject.tenant_id),
         project_id=subject.project_id,

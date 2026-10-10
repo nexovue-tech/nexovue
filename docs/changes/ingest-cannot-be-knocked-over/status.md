@@ -2,8 +2,7 @@
 
 ## Lifecycle status
 
-Implemented and verified on the development stack — awaiting the founder's review before commit.
-Not committed, not pushed.
+Implemented and verified on the development stack. Committed as `455410b`; not pushed.
 
 ## Current task
 
@@ -59,7 +58,8 @@ None.
 
 ## Next action
 
-Founder: review the diff and the two decisions below, then say **commit**.
+None. Both open decisions below were taken by the founder on 2026-10-10: yes to each, as their own
+records (`synthetics-suite-reads-a-clean-hour`, and the narrowing follow-up).
 
 ## Open decisions
 
