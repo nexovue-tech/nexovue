@@ -169,9 +169,9 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 	}
 
 	p.block.reset()
-	// inBlock is exactly the records whose rows are in the block, which is what
-	// has to be parked if the store refuses it.
-	var inBlock []*kgo.Record
+	// held is exactly the records whose rows are in the block, each with its own
+	// rows, which is what a refusal is narrowed over.
+	var held []heldProfile
 	for at, record := range polled.Records {
 		// At or below the watermark: the store acknowledged these rows before the
 		// process died, so the replay skips them whole.
@@ -190,16 +190,16 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 		for _, r := range rows {
 			p.block.append(r)
 		}
-		inBlock = append(inBlock, record)
+		held = append(held, heldProfile{record: record, rows: rows})
 		if p.block.rows() < p.maxRows {
 			continue
 		}
-		if err := p.writeChunk(ctx, inBlock, polled.Positions[:at+1]); err != nil {
+		if err := p.writeChunk(ctx, held, polled.Positions[:at+1]); err != nil {
 			return stored{}, err
 		}
-		inBlock = inBlock[:0]
+		held = held[:0]
 	}
-	return stored{}, p.writeChunk(ctx, inBlock, polled.Positions)
+	return stored{}, p.writeChunk(ctx, held, polled.Positions)
 }
 
 // writeChunk inserts what has accumulated, then records how far the batch's
@@ -207,18 +207,19 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 // a watermark claimed before the insert would make a replay skip rows nothing
 // wrote.
 //
-// A refusal does not end the pipeline: the chunk's records are parked and the
-// watermark still moves, because a partition can never advance past rows the
-// store will refuse every time.
+// A refusal does not end the pipeline: it is narrowed to the records whose own
+// rows the store refuses, those are parked, every other record is written, and
+// the watermark still moves — a partition can never advance past rows the store
+// will refuse every time.
 func (p *Pipeline) writeChunk(
 	ctx context.Context,
-	inBlock []*kgo.Record,
+	held []heldProfile,
 	covered []consume.Position,
 ) error {
 	rows := p.block.rows()
 	if rows > 0 {
 		err := p.loop.Retry(ctx, "insert "+table, func(callCtx context.Context) error {
-			return p.insert(callCtx, rows)
+			return p.insert(callCtx, p.block)
 		})
 		switch {
 		case err == nil:
@@ -226,13 +227,15 @@ func (p *Pipeline) writeChunk(
 		case !consume.IsPermanent(err):
 			return err
 		default:
-			parked, parkErr := consume.ParkRefused(ctx, p.loop, inBlock, err)
-			if parkErr != nil {
-				return parkErr
+			parked, parkedRows, narrowErr := narrowProfiles(ctx, held, err, p.insertRows, p.loop.Park)
+			if narrowErr != nil {
+				return narrowErr
 			}
-			p.parked += uint64(parked) //nolint:gosec // a count is never negative
-			p.log.ErrorContext(ctx, "the store refused an insert; parked its records rather than retried",
-				slog.Int("messages", parked),
+			p.parked += uint64(parked)             //nolint:gosec // a count is never negative
+			p.written += uint64(rows - parkedRows) //nolint:gosec // never negative
+			p.log.ErrorContext(ctx, "the store refused an insert; parked only the records it refused",
+				slog.Int("messages_parked", parked),
+				slog.Int("messages_in_chunk", len(held)),
 				slog.String("error", err.Error()),
 			)
 		}
@@ -246,10 +249,16 @@ func (p *Pipeline) writeChunk(
 	})
 }
 
-func (p *Pipeline) insert(ctx context.Context, rows int) error {
+func (p *Pipeline) insert(ctx context.Context, b *block) error {
+	rows := b.rows()
+	if rows == 0 {
+		// Narrowing can hand over records that carried no samples; an empty
+		// insert is nothing to ask the store.
+		return nil
+	}
 	query := ch.Query{
-		Body:     p.block.columns.Into(table),
-		Input:    p.block.columns,
+		Body:     b.columns.Into(table),
+		Input:    b.columns,
 		Settings: []ch.Setting{{Key: jsonAsStringSetting, Value: "1"}},
 	}
 	if err := p.pool.Do(ctx, query); err != nil {
@@ -288,4 +297,50 @@ func profileRetention(raw uint16) uint16 {
 		return MaxRetentionDays
 	}
 	return raw
+}
+
+// heldProfile is one record and the rows it put in the block.
+type heldProfile struct {
+	record *kgo.Record
+	rows   []row
+}
+
+// narrowProfiles writes what the store accepts of a refused chunk and parks the
+// records it refuses, reporting how many records it parked and the rows they
+// held.
+func narrowProfiles(
+	ctx context.Context,
+	held []heldProfile,
+	refusal error,
+	insert func(context.Context, []row) error,
+	park func(context.Context, *kgo.Record, error) error,
+) (parked, parkedRows int, err error) {
+	err = consume.Narrow(ctx, held, refusal,
+		func(ctx context.Context, subset []heldProfile) error {
+			var rows []row
+			for _, h := range subset {
+				rows = append(rows, h.rows...)
+			}
+			return insert(ctx, rows)
+		},
+		func(ctx context.Context, h heldProfile, cause error) error {
+			if err := park(ctx, h.record, cause); err != nil {
+				return err
+			}
+			parked++
+			parkedRows += len(h.rows)
+			return nil
+		})
+	return parked, parkedRows, err
+}
+
+// insertRows writes rows as one block under the retry budget.
+func (p *Pipeline) insertRows(ctx context.Context, rows []row) error {
+	scratch := newBlock()
+	for _, r := range rows {
+		scratch.append(r)
+	}
+	return p.loop.Retry(ctx, "insert "+table, func(callCtx context.Context) error {
+		return p.insert(callCtx, scratch)
+	})
 }

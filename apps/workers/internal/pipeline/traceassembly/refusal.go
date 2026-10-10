@@ -41,7 +41,7 @@ func (p *Pipeline) writeSpans(ctx context.Context) error {
 
 // salvage writes what the store accepts of rows and parks what it refuses.
 func (p *Pipeline) salvage(ctx context.Context, rows []spanRow, refusal error) error {
-	return salvageRows(ctx, rows, refusal, p.insertRows, p.parkSpan)
+	return consume.Narrow(ctx, rows, refusal, p.insertRows, p.parkSpan)
 }
 
 // insertRows writes rows as one block under the retry budget.
@@ -53,39 +53,6 @@ func (p *Pipeline) insertRows(ctx context.Context, rows []spanRow) error {
 	return p.loop.Retry(ctx, "insert spans", func(callCtx context.Context) error {
 		return p.writer.insert(callCtx, scratch)
 	})
-}
-
-// salvageRows halves a refused set of rows until each refusal is one row,
-// writing every half the store accepts and parking every single row it refuses.
-// One bad row among n costs about 2·log₂(n) inserts.
-//
-// A failure that is not a refusal still ends the pipeline, exactly as before:
-// the batch is re-consumed, and halves already written here are written again —
-// the duplicate the at-least-once contract accepts, never a hole.
-func salvageRows(
-	ctx context.Context,
-	rows []spanRow,
-	refusal error,
-	write func(context.Context, []spanRow) error,
-	park func(context.Context, spanRow, error) error,
-) error {
-	if len(rows) == 1 {
-		return park(ctx, rows[0], refusal)
-	}
-	middle := len(rows) / 2
-	for _, half := range [][]spanRow{rows[:middle], rows[middle:]} {
-		err := write(ctx, half)
-		switch {
-		case err == nil:
-		case consume.IsPermanent(err):
-			if salvageErr := salvageRows(ctx, half, err, write, park); salvageErr != nil {
-				return salvageErr
-			}
-		default:
-			return err
-		}
-	}
-	return nil
 }
 
 // parkSpan sets one refused row aside on the dead-letter topic.

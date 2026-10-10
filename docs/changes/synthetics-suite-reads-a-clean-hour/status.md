@@ -34,7 +34,8 @@ Nothing.
 
 ## Validation
 
-The suite run above; `just check` with the next change.
+The suite run above, and `just check` with `refusals-narrowed-to-the-record`: Python 4174 passed,
+0 errors — this suite included.
 
 ## Specification impact
 

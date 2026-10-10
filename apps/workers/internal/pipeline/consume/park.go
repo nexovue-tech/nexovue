@@ -52,29 +52,6 @@ func attribution(cause error) dlq.Context {
 	}
 }
 
-// Parker is how a pipeline sets a message aside. *Loop is one; tests use fakes,
-// so the decisions around parking are provable without a broker.
-type Parker interface {
-	Park(ctx context.Context, record *kgo.Record, cause error) error
-}
-
-// ParkRefused moves aside every record whose rows were in an insert the store
-// refused, and reports how many it parked.
-//
-// The chunk, not the offending record: an insert reports which rows it
-// rejected only by message, and one bad record is carried in a block with up to
-// several thousand good ones. Parking all of them keeps every record — the
-// dead-letter topic holds them for reprocessing — and is what lets the offset
-// move. Before this, one refused row stopped every pipeline for every tenant.
-func ParkRefused(ctx context.Context, parker Parker, covered []*kgo.Record, cause error) (int, error) {
-	for _, record := range covered {
-		if err := parker.Park(ctx, record, cause); err != nil {
-			return 0, err
-		}
-	}
-	return len(covered), nil
-}
-
 // ParkRow parks one row the store refused when no source message can be named —
 // a span released by the sampler batches after the records that carried it
 // were let go (commit.go). The row is already masked, which is why it, and not

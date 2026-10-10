@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/ClickHouse/ch-go/chpool"
-	"github.com/ClickHouse/ch-go/proto"
 	"github.com/twmb/franz-go/pkg/kgo"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 
@@ -226,9 +225,9 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 
 	p.resetBlocks()
 	messages, points := 0, 0
-	// inBlock is exactly the records whose rows are in the blocks, which is what
-	// has to be parked if the store refuses them.
-	var inBlock []*kgo.Record
+	// held is exactly the records whose rows are in the blocks, each with its own
+	// rows, which is what a refusal is narrowed over.
+	var held []heldMetric
 	for at, record := range polled.Records {
 		// A record at or below the watermark had its rows acknowledged by the
 		// store before this process died, and is skipped whole. It cannot need
@@ -247,21 +246,21 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 			continue
 		}
 		p.appendRows(batch)
-		inBlock = append(inBlock, record)
+		held = append(held, heldMetric{record: record, rows: batch})
 		messages++
 
 		if p.blockRows() < p.maxRows {
 			continue
 		}
-		inserted, err := p.writeChunk(ctx, inBlock, polled.Positions[:at+1])
+		inserted, err := p.writeChunk(ctx, held, polled.Positions[:at+1])
 		if err != nil {
 			return stored{}, err
 		}
 		points += inserted
-		inBlock = inBlock[:0]
+		held = held[:0]
 	}
 
-	inserted, err := p.writeChunk(ctx, inBlock, polled.Positions)
+	inserted, err := p.writeChunk(ctx, held, polled.Positions)
 	if err != nil {
 		return stored{}, err
 	}
@@ -290,35 +289,28 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 // in a fixed order inside one call, so a batch whose gauge rows landed and
 // whose histogram rows did not has no watermark at all and is replayed whole.
 //
-// A refusal is the one failure that does not end the pipeline. ClickHouse
-// refused rows it will refuse again, so the partition could never advance past
-// them: the chunk's records are parked and the watermark still moves. The five
-// inserts are not atomic, so the tables written before the refused one keep
-// their rows — and a replay from the dead-letter topic would write those again.
+// A refusal is the one failure that does not end the pipeline: it is narrowed to
+// the records whose own rows the refusing table will not take, those are parked,
+// and every other record is written — see writeTables.
 func (p *Pipeline) writeChunk(
 	ctx context.Context,
-	inBlock []*kgo.Record,
+	held []heldMetric,
 	covered []consume.Position,
 ) (int, error) {
 	rows := p.blockRows()
-	err := p.insertBlocks(ctx)
+	parked, unstored, err := writeTables(ctx, held, p.insertAccumulated, p.insertSubset, p.loop.Park)
 	p.resetBlocks()
-	switch {
-	case err == nil:
-		p.written += countOf(rows)
-	case !consume.IsPermanent(err):
+	if err != nil {
 		return 0, err
-	default:
-		parked, parkErr := consume.ParkRefused(ctx, p.loop, inBlock, err)
-		if parkErr != nil {
-			return 0, parkErr
-		}
+	}
+	rows -= unstored
+	p.written += countOf(rows)
+	if parked > 0 {
 		p.parked += countOf(parked)
-		p.log.ErrorContext(ctx, "the store refused an insert; parked its records rather than retried",
-			slog.Int("messages", parked),
-			slog.String("error", err.Error()),
+		p.log.ErrorContext(ctx, "the store refused an insert; parked only the records it refused",
+			slog.Int("messages_parked", parked),
+			slog.Int("messages_in_chunk", len(held)),
 		)
-		rows = 0
 	}
 
 	if len(covered) == 0 {
@@ -383,40 +375,6 @@ func (p *Pipeline) resetBlocks() {
 func (p *Pipeline) blockRows() int {
 	return p.gauge.rows() + p.sum.rows() + p.histogram.rows() +
 		p.expHistogram.rows() + p.summary.rows()
-}
-
-// pending is one table's share of a batch, ready to insert.
-type pending struct {
-	table   string
-	rows    int
-	columns proto.Input
-}
-
-// insertBlocks writes every non-empty block under the loop's retry budget. An
-// empty block is not sent at all, so a metric with no data points leaves no row
-// rather than a row of zeros.
-//
-// The order is fixed so a partial failure always leaves the same prefix
-// written, which makes the state after one recognisable rather than arbitrary.
-func (p *Pipeline) insertBlocks(ctx context.Context) error {
-	blocks := []pending{
-		{gaugeTable, p.gauge.rows(), p.gauge.columns},
-		{sumTable, p.sum.rows(), p.sum.columns},
-		{histogramTable, p.histogram.rows(), p.histogram.columns},
-		{expHistogramTable, p.expHistogram.rows(), p.expHistogram.columns},
-		{summaryTable, p.summary.rows(), p.summary.columns},
-	}
-	for _, block := range blocks {
-		if block.rows == 0 {
-			continue
-		}
-		if err := p.loop.Retry(ctx, "insert "+block.table, func(callCtx context.Context) error {
-			return p.writer.insert(callCtx, block.table, block.rows, block.columns)
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // countOf widens a count that cannot be negative. Row and mask counts come back

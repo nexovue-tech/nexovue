@@ -237,10 +237,10 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 	p.block.reset()
 	p.resetVitals()
 	messages, masked, stored := 0, 0, 0
-	// inBlock is exactly the records whose rows are in the block, which is what
-	// has to be parked if the store refuses it. Skipped and parked records are
-	// deliberately not in it.
-	var inBlock []*kgo.Record
+	// held is exactly the records whose rows are in the block, each with its own
+	// rows, which is what a refusal is narrowed over. Skipped and parked records
+	// are deliberately not in it.
+	var held []heldLog
 
 	for at, record := range polled.Records {
 		// A record at or below the watermark had its rows acknowledged by the
@@ -263,7 +263,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 			p.block.append(row)
 		}
 		p.holdVitals(readings)
-		inBlock = append(inBlock, record)
+		held = append(held, heldLog{record: record, rows: rows})
 		masked += maskedHere
 		messages++
 
@@ -272,15 +272,15 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 		}
 		// Flushed at a message boundary, so every record up to and including
 		// this one is finished with, whichever way it went.
-		inserted, err := p.writeChunk(ctx, inBlock, polled.Positions[:at+1])
+		inserted, err := p.writeChunk(ctx, held, polled.Positions[:at+1])
 		if err != nil {
 			return written{}, err
 		}
 		stored += inserted
-		inBlock = inBlock[:0]
+		held = held[:0]
 	}
 
-	inserted, err := p.writeChunk(ctx, inBlock, polled.Positions)
+	inserted, err := p.writeChunk(ctx, held, polled.Positions)
 	if err != nil {
 		return written{}, err
 	}
@@ -310,7 +310,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (written, 
 // or ahead of the committed offsets — and that gap is the replay this skips.
 func (p *Pipeline) writeChunk(
 	ctx context.Context,
-	inBlock []*kgo.Record,
+	held []heldLog,
 	covered []consume.Position,
 ) (int, error) {
 	rows := p.block.rows()
@@ -325,7 +325,7 @@ func (p *Pipeline) writeChunk(
 	p.block.reset()
 	p.resetVitals()
 
-	stored := 0
+	var stored int
 	switch {
 	case err == nil:
 		p.logsWritten += countOf(rows)
@@ -334,22 +334,29 @@ func (p *Pipeline) writeChunk(
 	case !consume.IsPermanent(err):
 		return 0, err
 	default:
-		// ClickHouse refused these rows and will refuse them again, so the
-		// partition can never advance past them on its own. Park them: the
-		// records are kept on the dead-letter topic rather than dropped, and
-		// every other tenant's ingest keeps running. Before this, one malformed
-		// record stopped every signal for every tenant for an hour.
+		// ClickHouse refused rows it will refuse again, so the partition can never
+		// advance past them on its own. The refusal is narrowed to the records
+		// whose own rows it refuses: those are parked — kept on the dead-letter
+		// topic, not dropped — and every other record in the chunk is written.
+		// Before this, one malformed record stopped every signal for every tenant
+		// for an hour; after the first fix, it still cost its whole chunk.
 		//
-		// The watermark still advances over them. Parked is not stored, but it
+		// The watermark advances over all of them. Parked is not stored, but it
 		// is just as finished: a replay that re-inserted them would be refused
 		// again and park a second copy on the dead-letter topic.
-		parked, parkErr := consume.ParkRefused(ctx, p.loop, inBlock, err)
-		if parkErr != nil {
-			return 0, parkErr
+		parked, parkedRows, narrowErr := narrowLogs(ctx, held, err, p.insertRows, p.loop.Park)
+		if narrowErr != nil {
+			return 0, narrowErr
 		}
 		p.parked += countOf(parked)
-		p.log.ErrorContext(ctx, "the store refused an insert; parked its records rather than retried",
-			slog.Int("messages", parked),
+		stored = rows - parkedRows
+		p.logsWritten += countOf(stored)
+		// The vitals went in before the refused insert, for the whole chunk —
+		// a parked record's readings included, as before narrowing existed.
+		p.vitalsWritten += countOf(promoted)
+		p.log.ErrorContext(ctx, "the store refused an insert; parked only the records it refused",
+			slog.Int("messages_parked", parked),
+			slog.Int("messages_in_chunk", len(held)),
 			slog.String("error", err.Error()),
 		)
 	}
@@ -486,4 +493,50 @@ func countOf(n int) uint64 {
 		return 0
 	}
 	return uint64(n)
+}
+
+// heldLog is one record and the rows it put in the block.
+type heldLog struct {
+	record *kgo.Record
+	rows   []logRow
+}
+
+// narrowLogs writes what the store accepts of a refused chunk and parks the
+// records it refuses, reporting how many records it parked and how many rows
+// they held.
+func narrowLogs(
+	ctx context.Context,
+	held []heldLog,
+	refusal error,
+	insert func(context.Context, []logRow) error,
+	park func(context.Context, *kgo.Record, error) error,
+) (parked, parkedRows int, err error) {
+	err = consume.Narrow(ctx, held, refusal,
+		func(ctx context.Context, subset []heldLog) error {
+			var rows []logRow
+			for _, h := range subset {
+				rows = append(rows, h.rows...)
+			}
+			return insert(ctx, rows)
+		},
+		func(ctx context.Context, h heldLog, cause error) error {
+			if err := park(ctx, h.record, cause); err != nil {
+				return err
+			}
+			parked++
+			parkedRows += len(h.rows)
+			return nil
+		})
+	return parked, parkedRows, err
+}
+
+// insertRows writes rows as one block under the retry budget.
+func (p *Pipeline) insertRows(ctx context.Context, rows []logRow) error {
+	scratch := newLogBlock()
+	for _, row := range rows {
+		scratch.append(row)
+	}
+	return p.loop.Retry(ctx, "insert logs", func(callCtx context.Context) error {
+		return p.writer.insert(callCtx, scratch)
+	})
 }
