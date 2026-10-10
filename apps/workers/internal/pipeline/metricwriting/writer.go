@@ -7,6 +7,8 @@ import (
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/chpool"
 	"github.com/ClickHouse/ch-go/proto"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/storefailure"
 )
 
 // jsonAsStringSetting lets a JSON column travel the native protocol as one JSON
@@ -39,7 +41,7 @@ func (w *writer) insert(ctx context.Context, table string, rows int, columns pro
 		},
 	}
 	if err := w.pool.Do(ctx, query); err != nil {
-		return fmt.Errorf("insert %d rows into %s: %w", rows, table, err)
+		return storefailure.Judged(fmt.Errorf("insert %d rows into %s: %w", rows, table, err))
 	}
 	return nil
 }

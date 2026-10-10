@@ -7,7 +7,6 @@ import (
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/chpool"
 
-	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/insertdedup"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/storefailure"
 )
@@ -92,11 +91,7 @@ func (w *Writer) insertRollup(ctx context.Context, stats []Stat) error {
 // rather than retrying until the whole process gives up.
 func (w *Writer) do(ctx context.Context, query ch.Query, describe string) error {
 	if err := w.pool.Do(ctx, query); err != nil {
-		wrapped := fmt.Errorf("%s: %w", describe, err)
-		if storefailure.RefusedTheData(err) {
-			return consume.AsPermanent(wrapped)
-		}
-		return wrapped
+		return storefailure.Judged(fmt.Errorf("%s: %w", describe, err))
 	}
 	return nil
 }

@@ -169,6 +169,53 @@ func (a *Authenticator) Authenticate(ctx context.Context, presented string) (Ide
 	return identity, nil
 }
 
+// Verdict is what Screen can say about a key from what this process already
+// holds.
+type Verdict int
+
+const (
+	// VerdictRefused means missing, malformed, or a key the cache already knows
+	// is unknown, revoked, or carries the wrong secret.
+	VerdictRefused Verdict = iota
+	// VerdictUnseen means well-formed and not in the cache. Only Authenticate
+	// can answer it.
+	VerdictUnseen
+	// VerdictKnown means the cache holds a live row whose hash this key matches.
+	VerdictKnown
+)
+
+// Screen judges a key without leaving the process: a format check, a cache
+// read and a hash comparison, and never the KeyReader.
+//
+// It exists for the gRPC door's tap handle, which runs before a request body is
+// read and must not block. It is a pre-check, not the gate: every admitted
+// request is still authenticated in full.
+//
+// Expired entries count, asymmetrically. A key that matched a live row is still
+// known after its entry expires, or every customer's steady traffic would be
+// treated as a stranger's every thirty seconds. A miss is believed only while
+// it is fresh: a stale one would refuse a key created since — and refuse it
+// forever, because a refused request never reaches Authenticate to refresh it.
+func (a *Authenticator) Screen(presented string) Verdict {
+	if presented == "" || checkFormat(presented) != nil {
+		return VerdictRefused
+	}
+	stored, fresh, held := a.cache.Peek(lookupPrefix(presented))
+	switch {
+	case !held:
+		return VerdictUnseen
+	case !stored.Found:
+		if fresh {
+			return VerdictRefused
+		}
+		return VerdictUnseen
+	case subtle.ConstantTimeCompare([]byte(HashKey(presented)), []byte(stored.KeyHash)) != 1:
+		return VerdictRefused
+	default:
+		return VerdictKnown
+	}
+}
+
 // IsCallerFault reports whether err means the caller presented a bad key, as
 // opposed to the control plane being unreachable.
 func IsCallerFault(err error) bool {

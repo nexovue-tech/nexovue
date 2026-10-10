@@ -207,6 +207,10 @@ type doorOptions struct {
 
 	// traffic replaces the default when a test reads the summary the door wrote.
 	traffic *otlp.Traffic
+
+	// admission replaces the roomy default when a test is about the in-flight
+	// budget. One per fixture, shared by both doors, as in the receiver.
+	admission *otlp.Admission
 }
 
 func sampleBudget(opts doorOptions) *ratelimit.Limiter {
@@ -250,6 +254,9 @@ func (o *doorOptions) applyDefaults() {
 	}
 	if o.log == nil {
 		o.log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if o.admission == nil {
+		o.admission = otlp.NewAdmission(64, 64)
 	}
 	if o.traffic == nil {
 		o.traffic = otlp.NewTraffic()
@@ -301,6 +308,7 @@ func sharedDoorOptions(producer *countingProducer, opts doorOptions) otlp.Option
 		Publisher:           ingest.NewPublisher(publishingTo(producer, opts), testTopics, opts.produceBudget),
 		Logger:              opts.log,
 		Traffic:             opts.traffic,
+		Admission:           opts.admission,
 		MaxBodyBytes:        opts.maxBodyBytes,
 		MaxDecodedBodyBytes: opts.maxBodyBytes * 4,
 	}
@@ -546,6 +554,26 @@ func TestOverLimitIsRefusedBeforeTheBodyIsRead(t *testing.T) {
 	}
 	if got := rpcStatus(t, response).GetCode(); got != int32(code.Code_RESOURCE_EXHAUSTED) {
 		t.Errorf("status code = %d, want RESOURCE_EXHAUSTED", got)
+	}
+}
+
+// The in-flight budget is shared with the gRPC door, and on this door too it is
+// spent before the body is read: a full receiver answers with a delay rather
+// than holding one more body to refuse it later.
+func TestExportBeyondTheInFlightBudgetIsRefusedBeforeTheBodyIsRead(t *testing.T) {
+	d := newDoor(t, doorOptions{admission: otlp.NewAdmission(0, 0)})
+
+	// A body far larger than the cap: if it were read, the answer would be 413.
+	response := post(t, d, bytes.Repeat([]byte{0}, 4<<20), nil)
+
+	if response.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusTooManyRequests)
+	}
+	if response.Header().Get("Retry-After") == "" {
+		t.Error("a load refusal must say when to retry")
+	}
+	if len(d.producer.records) != 0 {
+		t.Error("an export with no room reached the broker")
 	}
 }
 

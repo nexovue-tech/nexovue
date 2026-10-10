@@ -7,7 +7,6 @@ import (
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/chpool"
 
-	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/storefailure"
 )
 
@@ -39,11 +38,7 @@ func (w *logWriter) insert(ctx context.Context, block *logBlock) error {
 		},
 	}
 	if err := w.pool.Do(ctx, query); err != nil {
-		wrapped := fmt.Errorf("insert %d logs: %w", block.rows(), err)
-		if storefailure.RefusedTheData(err) {
-			return consume.AsPermanent(wrapped)
-		}
-		return wrapped
+		return storefailure.Judged(fmt.Errorf("insert %d logs: %w", block.rows(), err))
 	}
 	return nil
 }

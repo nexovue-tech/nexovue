@@ -177,3 +177,83 @@ func TestAuthenticateReportsALookupFailureSeparately(t *testing.T) {
 		t.Error("an unreachable control plane must not be reported as a bad key")
 	}
 }
+
+// Screen runs on the gRPC door's tap handle, before a body is read and on the
+// connection's own I/O goroutine, so it must answer from memory alone.
+func TestScreenNeverReadsTheKeyStore(t *testing.T) {
+	keys := seededKeys(validKey)
+	auth := newTestAuthenticator(keys)
+
+	for _, key := range []string{"", "nvk_live_devlocal", validKey, "nvk_live_absentabsentabsentabse"} {
+		auth.Screen(key)
+	}
+	if keys.reads != 0 {
+		t.Fatalf("Screen read api_keys %d times, want 0", keys.reads)
+	}
+}
+
+func TestScreenJudgesFromTheCache(t *testing.T) {
+	impostor := validKey[:LookupPrefixLength] + strings.Repeat("z", len(validKey)-LookupPrefixLength)
+	unknown := "nvk_live_absentabsentabsentabse"
+
+	auth := newTestAuthenticator(seededKeys(validKey))
+	// Before anything is cached, a well-formed key can only be "unseen".
+	if got := auth.Screen(validKey); got != VerdictUnseen {
+		t.Errorf("Screen(valid, uncached) = %v, want VerdictUnseen", got)
+	}
+	// Warm the cache with one hit and one miss, as real traffic would.
+	if _, err := auth.Authenticate(context.Background(), validKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.Authenticate(context.Background(), unknown); !errors.Is(err, ErrUnknownKey) {
+		t.Fatal(err)
+	}
+
+	cases := map[string]struct {
+		key  string
+		want Verdict
+	}{
+		"absent":                       {"", VerdictRefused},
+		"malformed":                    {"nvk_live_devlocal", VerdictRefused},
+		"known valid":                  {validKey, VerdictKnown},
+		"cached miss":                  {unknown, VerdictRefused},
+		"right prefix, wrong secret":   {impostor, VerdictRefused},
+		"well-formed, never looked up": {"nvk_live_neverseenneverseenneve", VerdictUnseen},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := auth.Screen(tc.key); got != tc.want {
+				t.Errorf("Screen(%q) = %v, want %v", tc.key, got, tc.want)
+			}
+		})
+	}
+}
+
+// A customer's key stays known past its cache entry's expiry, or steady
+// traffic would be screened as a stranger's every TTL. A miss does not: a
+// stale one would refuse a key created since, permanently, because a refused
+// request never reaches Authenticate to refresh the entry.
+func TestScreenTrustsAnExpiredHitButNotAnExpiredMiss(t *testing.T) {
+	unknown := "nvk_live_absentabsentabsentabse"
+	auth := newTestAuthenticator(seededKeys(validKey))
+	now := time.Now()
+	auth.cache.UseClock(func() time.Time { return now })
+
+	if _, err := auth.Authenticate(context.Background(), validKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.Authenticate(context.Background(), unknown); !errors.Is(err, ErrUnknownKey) {
+		t.Fatal(err)
+	}
+	if got := auth.Screen(unknown); got != VerdictRefused {
+		t.Errorf("Screen(fresh miss) = %v, want VerdictRefused", got)
+	}
+
+	now = now.Add(time.Hour)
+	if got := auth.Screen(validKey); got != VerdictKnown {
+		t.Errorf("Screen(expired hit) = %v, want VerdictKnown", got)
+	}
+	if got := auth.Screen(unknown); got != VerdictUnseen {
+		t.Errorf("Screen(expired miss) = %v, want VerdictUnseen", got)
+	}
+}

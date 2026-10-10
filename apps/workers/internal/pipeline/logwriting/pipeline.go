@@ -343,9 +343,15 @@ func (p *Pipeline) writeChunk(
 		// The watermark still advances over them. Parked is not stored, but it
 		// is just as finished: a replay that re-inserted them would be refused
 		// again and park a second copy on the dead-letter topic.
-		if parkErr := p.parkRefusedChunk(ctx, inBlock, err); parkErr != nil {
+		parked, parkErr := consume.ParkRefused(ctx, p.loop, inBlock, err)
+		if parkErr != nil {
 			return 0, parkErr
 		}
+		p.parked += countOf(parked)
+		p.log.ErrorContext(ctx, "the store refused an insert; parked its records rather than retried",
+			slog.Int("messages", parked),
+			slog.String("error", err.Error()),
+		)
 	}
 	return stored, p.advanceWritten(ctx, covered)
 }
@@ -402,27 +408,6 @@ func (p *Pipeline) Settle(context.Context, time.Time) error { return nil }
 // absorbed is simply not committed, and the next owner of the partition reads
 // it again.
 func (p *Pipeline) Drain(context.Context, time.Time) error { return nil }
-
-// parkRefusedChunk moves aside every record whose rows were in the insert the
-// store refused.
-//
-// The chunk, not the offending record: the insert reports which *rows* it
-// rejected only by message, and one bad record is carried in a block with up to
-// several thousand good ones. Parking all of them keeps every record — the DLQ
-// topic holds them for reprocessing — and is what lets the offset move.
-func (p *Pipeline) parkRefusedChunk(ctx context.Context, covered []*kgo.Record, cause error) error {
-	for _, record := range covered {
-		if err := p.loop.Park(ctx, record, cause); err != nil {
-			return err
-		}
-		p.parked++
-	}
-	p.log.ErrorContext(ctx, "the store refused an insert; parked its records rather than retried",
-		slog.Int("messages", len(covered)),
-		slog.String("error", cause.Error()),
-	)
-	return nil
-}
 
 // holdVitals keeps one message's readings until the chunk they belong to is
 // written, folding each into the per-minute rollup as it arrives.

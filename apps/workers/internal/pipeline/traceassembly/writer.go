@@ -6,6 +6,8 @@ import (
 
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/chpool"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/storefailure"
 )
 
 // jsonAsStringSetting lets a JSON column travel the native protocol as one
@@ -52,7 +54,7 @@ func (w *spanWriter) insert(ctx context.Context, block *spanBlock) error {
 		},
 	}
 	if err := w.pool.Do(ctx, query); err != nil {
-		return fmt.Errorf("insert %d spans: %w", block.rows(), err)
+		return storefailure.Judged(fmt.Errorf("insert %d spans: %w", block.rows(), err))
 	}
 	return nil
 }

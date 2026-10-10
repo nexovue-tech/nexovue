@@ -44,7 +44,12 @@ func newGRPCDoor(t *testing.T, opts doorOptions) grpcDoor {
 	opts.applyDefaults()
 
 	producer := &countingProducer{err: opts.produceErr}
-	server := otlp.NewGRPCServer("bufconn", serverDoorOptions(producer, opts))
+	door := serverDoorOptions(producer, opts)
+	screen, screens := door.Gatekeeper.(otlp.Screener)
+	if !screens {
+		t.Fatal("the server door's gatekeeper cannot screen a key before the body is read")
+	}
+	server := otlp.NewGRPCServer("bufconn", door, screen)
 
 	listener := bufconn.Listen(bufconnBufferSize)
 	served := make(chan error, 1)

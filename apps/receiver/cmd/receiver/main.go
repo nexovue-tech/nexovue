@@ -114,6 +114,7 @@ func run() error {
 		}, cfg.ProduceTimeout),
 		Logger:              log,
 		Traffic:             traffic,
+		Admission:           otlp.NewAdmission(cfg.MaxInflightExports, cfg.MaxUnverifiedExports),
 		MaxBodyBytes:        cfg.MaxBodyBytes,
 		MaxDecodedBodyBytes: cfg.MaxDecodedBodyBytes,
 	}
@@ -124,8 +125,9 @@ func run() error {
 		CacheMaxEntries: cfg.APIKeyCacheMaxEntries,
 	}
 
+	serverKeys := auth.New(keys, withRecorder(credentialCache, keyUses))
 	serverDoor := shared
-	serverDoor.Gatekeeper = auth.New(keys, withRecorder(credentialCache, keyUses))
+	serverDoor.Gatekeeper = serverKeys
 
 	browserDoor := shared
 	browserDoor.Gatekeeper = auth.NewSite(siteKeys, withRecorder(credentialCache, siteKeyUses))
@@ -139,7 +141,7 @@ func run() error {
 		otlp.Handler(otlp.Doors{Server: serverDoor, Browser: browserDoor}))
 	// gRPC serves no browser, so it serves no public key: the transport is given
 	// the server door alone rather than being told to refuse one.
-	overGRPC := otlp.NewGRPCServer(cfg.OTLPGRPCAddr, serverDoor)
+	overGRPC := otlp.NewGRPCServer(cfg.OTLPGRPCAddr, serverDoor, serverKeys)
 
 	log.InfoContext(ctx, "receiver starting",
 		slog.String("revision", info.Revision),

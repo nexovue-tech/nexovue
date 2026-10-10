@@ -84,6 +84,24 @@ func (c *Cache[V]) Lookup(key string) (V, bool) {
 	return held.value, true
 }
 
+// Peek returns whatever is held for key, expired or not, and whether it is
+// still inside its lifetime.
+//
+// Never an answer to authenticate with — Lookup is that. It is for a pre-check
+// that only decides how cautiously to treat a request the full check will still
+// judge: a key that was valid a minute ago is very likely still a customer's.
+func (c *Cache[V]) Peek(key string) (value V, fresh, held bool) {
+	c.mu.RLock()
+	stored, ok := c.entries[key]
+	now := c.now()
+	c.mu.RUnlock()
+
+	if !ok {
+		return value, false, false
+	}
+	return stored.value, now.Before(stored.expiresAt), true
+}
+
 // Store keeps a value for as long as its kind of answer is believed.
 func (c *Cache[V]) Store(key string, value V) {
 	c.mu.Lock()

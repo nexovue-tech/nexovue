@@ -28,6 +28,7 @@ func defaultOptions() sample.Options {
 		DecisionTTL: time.Minute,
 		MaxTraces:   1000,
 		MaxSpans:    10000,
+		MaxBytes:    1 << 30,
 	}
 }
 
@@ -302,6 +303,7 @@ func TestHealthyTracesAreKeptAtRoughlyTheConfiguredRate(t *testing.T) {
 				DecisionTTL: time.Minute,
 				MaxTraces:   traces + 1,
 				MaxSpans:    traces + 1,
+				MaxBytes:    1 << 30,
 			})
 			for range traces {
 				buffer.Add(base, facts(nextID(), time.Millisecond, false), "span")
@@ -326,6 +328,7 @@ func TestAFullBufferClosesTheOldestTracesEarly(t *testing.T) {
 		DecisionTTL: time.Minute,
 		MaxTraces:   10,
 		MaxSpans:    10,
+		MaxBytes:    1 << 30,
 	})
 
 	released := 0
@@ -409,9 +412,10 @@ func TestPolicyFromJSONLayersOverTheDeploymentDefault(t *testing.T) {
 
 func TestNewRefusesAnUnboundedBuffer(t *testing.T) {
 	cases := map[string]sample.Options{
-		"no window":      {DecisionTTL: time.Minute, MaxTraces: 1, MaxSpans: 1},
-		"no trace limit": {Window: time.Second, DecisionTTL: time.Minute, MaxSpans: 1},
-		"no span limit":  {Window: time.Second, DecisionTTL: time.Minute, MaxTraces: 1},
+		"no window":      {DecisionTTL: time.Minute, MaxTraces: 1, MaxSpans: 1, MaxBytes: 1},
+		"no trace limit": {Window: time.Second, DecisionTTL: time.Minute, MaxSpans: 1, MaxBytes: 1},
+		"no span limit":  {Window: time.Second, DecisionTTL: time.Minute, MaxTraces: 1, MaxBytes: 1},
+		"no byte limit":  {Window: time.Second, DecisionTTL: time.Minute, MaxTraces: 1, MaxSpans: 1},
 	}
 	for name, options := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -429,5 +433,36 @@ func facts(traceID string, duration time.Duration, errored bool) sample.Facts {
 		Start:     base,
 		Duration:  duration,
 		Errored:   errored,
+	}
+}
+
+// The counts alone allowed 500,000 held spans against a 1 GiB worker, and one
+// span can carry megabytes: the buffer is bounded by what it holds, too. When
+// the bytes run out the oldest trace closes early, decided on what has arrived,
+// exactly as the count limits already do — nothing is lost, only judged sooner.
+func TestTheBufferIsBoundedInBytesAsWellAsCount(t *testing.T) {
+	const megabyte = 1 << 20
+	buffer := newBuffer(t, keepEverythingSlow(), sample.Options{
+		Window:      time.Hour,
+		DecisionTTL: time.Minute,
+		MaxTraces:   1000,
+		MaxSpans:    1000,
+		MaxBytes:    10 * megabyte,
+	})
+
+	released := 0
+	for i := range 50 {
+		heavy := facts(fmt.Sprintf("%032x", i+1), time.Millisecond, true) // errored: always kept
+		heavy.Bytes = megabyte
+		released += len(buffer.Add(base, heavy, "span"))
+		if held := buffer.Stats().BufferedBytes; held > 10*megabyte {
+			t.Fatalf("buffer holds %d bytes, past its %d-byte bound", held, 10*megabyte)
+		}
+	}
+	if released != 40 {
+		t.Errorf("released %d spans early, want 40: fifty 1 MiB traces into a 10 MiB buffer", released)
+	}
+	if closed := buffer.Stats().ClosedEarly; closed != 40 {
+		t.Errorf("closed %d traces early, want 40 — the bound is a judgement brought forward, never a drop", closed)
 	}
 }

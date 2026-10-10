@@ -49,8 +49,22 @@ type GRPCServer struct {
 
 // NewGRPCServer returns the OTLP/gRPC listener bound to addr, running the same
 // gate chain the HTTP doors run.
-func NewGRPCServer(addr string, opts Options) *GRPCServer {
+//
+// screen is the door's credential pre-check, run before a body is read; the
+// admitted export is then authenticated in full like any other.
+func NewGRPCServer(addr string, opts Options, screen Screener) *GRPCServer {
+	served := map[string]Unit{
+		tracesDoor.grpcPath:   tracesDoor.unit,
+		logsDoor.grpcPath:     logsDoor.unit,
+		metricsDoor.grpcPath:  metricsDoor.unit,
+		profilesDoor.grpcPath: profilesDoor.unit,
+	}
 	server := grpc.NewServer(
+		// Before the body: refuse a key that cannot be valid and an export there
+		// is no room to hold, rather than read 16 MiB to find out. See
+		// admission.go; this hook is experimental in grpc-go, and the tests in
+		// grpc_test.go fail the build if it changes underneath us.
+		grpc.InTapHandle(opts.Admission.tap(opts, screen, served)),
 		// Stated rather than inherited: grpc-go's own default is 4 MiB, and it
 		// applies the limit to the message both on the wire and again after
 		// decompression. The decoded cap is therefore the one to use — it is

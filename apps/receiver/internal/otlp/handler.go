@@ -156,6 +156,10 @@ type Options struct {
 	Logger    *slog.Logger
 	Traffic   *Traffic
 
+	// Admission is the receiver's in-flight export budget, one per process and
+	// shared by both doors and both transports.
+	Admission *Admission
+
 	// MaxBodyBytes caps the request as it arrives; MaxDecodedBodyBytes caps
 	// what a compressed one may expand to.
 	MaxBodyBytes        int64
@@ -253,7 +257,8 @@ func route[Request proto.Message](
 			fromAllowedOrigin(opts, signal.endpoint,
 				withinAllowance(opts, signal.endpoint,
 					throttle(opts, signal.endpoint,
-						export(opts, signal))))))))
+						admitted(opts, signal.endpoint,
+							export(opts, signal)))))))))
 	mux.Handle("OPTIONS "+signal.httpPath, http.HandlerFunc(preflight))
 }
 
@@ -313,6 +318,22 @@ func throttle(opts Options, at endpoint, next http.Handler) http.Handler {
 			writeRefusal(w, opts.accepts.replyCodec(r), refused)
 			return
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// admitted takes a slot from the receiver's in-flight budget for the time this
+// export is held, and is the last gate before the body is read: everything
+// above it costs a header, everything below it a body. See admission.go.
+func admitted(opts Options, at endpoint, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		release, refused := opts.Admission.admit()
+		if refused != nil {
+			opts.record(r.Context(), at.httpPath, at.unit, itemsNotRead, refused)
+			writeRefusal(w, opts.accepts.replyCodec(r), refused)
+			return
+		}
+		defer release()
 		next.ServeHTTP(w, r)
 	})
 }

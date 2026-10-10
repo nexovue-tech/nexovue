@@ -68,6 +68,9 @@ type Pipeline struct {
 
 	writer *spanWriter
 	block  *spanBlock
+	// pending is the rows in block, kept so a refused insert can be narrowed to
+	// the rows it refused (refusal.go).
+	pending []spanRow
 
 	// summaries fills `trace_summaries`, the per-trace row the trace list is a
 	// sort-key read of. It is fed the rows the sampler released — after the
@@ -118,6 +121,12 @@ type Pipeline struct {
 	// again by the new owner.
 	disownedCountedSpans uint64
 	disownedEdgeCalls    uint64
+
+	// spansParked counts spans the store refused, each parked on the dead-letter
+	// topic by itself; derivedRowsRefused counts derived rows it refused, which
+	// were stepped over. Flat is normal; either climbing names a bad row.
+	spansParked        uint64
+	derivedRowsRefused uint64
 
 	// topic is the one this pipeline consumes, so a rebalance callback can tell
 	// which of its partitions are ours.
@@ -251,6 +260,7 @@ func samplingOptions(cfg config.Sampling) sample.Options {
 		DecisionTTL: cfg.DecisionTTL,
 		MaxTraces:   cfg.MaxTraces,
 		MaxSpans:    cfg.MaxSpans,
+		MaxBytes:    cfg.MaxBytes,
 		FirstTraces: cfg.FirstTraces,
 	}
 }
@@ -316,6 +326,8 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Int("spans_disowned", p.disownedSpans),
 		slog.Uint64("counted_spans_disowned", p.disownedCountedSpans),
 		slog.Uint64("edge_calls_disowned", p.disownedEdgeCalls),
+		slog.Uint64("spans_parked", p.spansParked),
+		slog.Uint64("derived_rows_refused", p.derivedRowsRefused),
 		slog.Int("summarised_traces", summaries.OpenTraces),
 		slog.Uint64("trace_summaries_written", summaries.Written),
 		// Revised counts traces that gained a span after their row was written.
@@ -353,7 +365,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (spanStora
 	}
 
 	produced := spanStorage{spansStoredAt: polled.At.Add(p.sampling.Window)}
-	p.block.reset()
+	p.startBlock()
 	messages, spans := 0, 0
 	var skew skewReport
 	for _, record := range polled.Records {
@@ -384,7 +396,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (spanStora
 		messages++
 	}
 
-	if err := p.insertBounded(ctx); err != nil {
+	if err := p.writeSpans(ctx); err != nil {
 		return spanStorage{}, err
 	}
 	if err := p.insertSummaries(ctx, p.summaries.Drain(polled.At)); err != nil {
@@ -472,9 +484,9 @@ func holdsAnythingBack(decision ingeststate.Decision, batch ingeststate.Range) b
 // Settle releases the traces whose window has closed and writes the counters
 // whose minute is complete. The loop commits what that made storable.
 func (p *Pipeline) Settle(ctx context.Context, now time.Time) error {
-	p.block.reset()
+	p.startBlock()
 	p.appendRows(now, p.stages.buffer.Expire(now))
-	if err := p.insertBounded(ctx); err != nil {
+	if err := p.writeSpans(ctx); err != nil {
 		return err
 	}
 	// Before the watermark below claims these spans are stored: a summary lost
@@ -562,9 +574,9 @@ func (p *Pipeline) settleDerived(
 // Drain writes everything still held, which is what makes a planned shutdown
 // lose nothing. The loop commits it afterwards.
 func (p *Pipeline) Drain(ctx context.Context, now time.Time) error {
-	p.block.reset()
+	p.startBlock()
 	p.appendRows(now, p.stages.buffer.Drain(now))
-	if err := p.writer.insert(ctx, p.block); err != nil {
+	if err := p.writeSpans(ctx); err != nil {
 		return err
 	}
 	if err := p.insertSummaries(ctx, p.summaries.DrainAll()); err != nil {
@@ -590,9 +602,10 @@ func (p *Pipeline) insertEdges(ctx context.Context, edges []serviceedges.Edge) e
 	if len(edges) == 0 {
 		return nil
 	}
-	return p.loop.Retry(ctx, "insert service edges", func(callCtx context.Context) error {
+	err := p.loop.Retry(ctx, "insert service edges", func(callCtx context.Context) error {
 		return p.edges.Insert(callCtx, edges)
 	})
+	return p.stepOverRefusal(ctx, "service_edges_1m", len(edges), err)
 }
 
 // insertCounters writes derived counters, guarded the same way and for the same
@@ -601,9 +614,10 @@ func (p *Pipeline) insertCounters(ctx context.Context, points []derive.Point) er
 	if len(points) == 0 {
 		return nil
 	}
-	return p.loop.Retry(ctx, "insert counters", func(callCtx context.Context) error {
+	err := p.loop.Retry(ctx, "insert counters", func(callCtx context.Context) error {
 		return p.metrics.Insert(callCtx, points)
 	})
+	return p.stepOverRefusal(ctx, "metrics_sum", len(points), err)
 }
 
 // insertEndpoints writes the derived endpoint rollup, guarded the same way and
@@ -614,9 +628,10 @@ func (p *Pipeline) insertEndpoints(ctx context.Context, stats []derive.EndpointS
 	if len(stats) == 0 {
 		return nil
 	}
-	return p.loop.Retry(ctx, "insert endpoint rollup", func(callCtx context.Context) error {
+	err := p.loop.Retry(ctx, "insert endpoint rollup", func(callCtx context.Context) error {
 		return p.endpoints.Insert(callCtx, stats)
 	})
+	return p.stepOverRefusal(ctx, "endpoint_stats_1m", len(stats), err)
 }
 
 // insertSummaries writes the per-trace rows behind the trace list.
@@ -629,16 +644,16 @@ func (p *Pipeline) insertSummaries(ctx context.Context, rows []summaryRow) error
 	if len(rows) == 0 {
 		return nil
 	}
-	return p.loop.Retry(ctx, "insert trace summaries", func(callCtx context.Context) error {
+	err := p.loop.Retry(ctx, "insert trace summaries", func(callCtx context.Context) error {
 		return p.summaryWriter.insert(callCtx, rows)
 	})
+	return p.stepOverRefusal(ctx, "trace_summaries", len(rows), err)
 }
 
-// insertBounded writes the accumulated block under a deadline.
-func (p *Pipeline) insertBounded(ctx context.Context) error {
-	return p.loop.Retry(ctx, "insert spans", func(callCtx context.Context) error {
-		return p.writer.insert(callCtx, p.block)
-	})
+// startBlock empties the block and the rows it holds, together.
+func (p *Pipeline) startBlock() {
+	p.block.reset()
+	p.pending = p.pending[:0]
 }
 
 // appendRows queues the released rows for `spans` and folds each into its
@@ -647,6 +662,7 @@ func (p *Pipeline) insertBounded(ctx context.Context) error {
 func (p *Pipeline) appendRows(now time.Time, rows []spanRow) {
 	for _, row := range rows {
 		p.block.append(row)
+		p.pending = append(p.pending, row)
 		p.summaries.Observe(now, row)
 	}
 }

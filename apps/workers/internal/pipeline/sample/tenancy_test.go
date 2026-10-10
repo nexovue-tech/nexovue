@@ -15,7 +15,7 @@ func newTestBuffer(t *testing.T) *Buffer[string] {
 	t.Helper()
 	b, err := New[string](Options{
 		Window: time.Second, DecisionTTL: time.Minute,
-		MaxTraces: 100, MaxSpans: 1000,
+		MaxTraces: 100, MaxSpans: 1000, MaxBytes: 1 << 30,
 	}, fixedPolicy{Policy{KeepErrors: true, SlowThreshold: time.Hour, HealthyPercent: 0}})
 	if err != nil {
 		t.Fatalf("buffer: %v", err)

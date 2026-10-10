@@ -226,6 +226,9 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 
 	p.resetBlocks()
 	messages, points := 0, 0
+	// inBlock is exactly the records whose rows are in the blocks, which is what
+	// has to be parked if the store refuses them.
+	var inBlock []*kgo.Record
 	for at, record := range polled.Records {
 		// A record at or below the watermark had its rows acknowledged by the
 		// store before this process died, and is skipped whole. It cannot need
@@ -244,19 +247,21 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 			continue
 		}
 		p.appendRows(batch)
+		inBlock = append(inBlock, record)
 		messages++
 
 		if p.blockRows() < p.maxRows {
 			continue
 		}
-		inserted, err := p.writeChunk(ctx, polled.Positions[:at+1])
+		inserted, err := p.writeChunk(ctx, inBlock, polled.Positions[:at+1])
 		if err != nil {
 			return stored{}, err
 		}
 		points += inserted
+		inBlock = inBlock[:0]
 	}
 
-	inserted, err := p.writeChunk(ctx, polled.Positions)
+	inserted, err := p.writeChunk(ctx, inBlock, polled.Positions)
 	if err != nil {
 		return stored{}, err
 	}
@@ -271,8 +276,8 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 
 // writeChunk inserts what has accumulated across the five blocks, then records
 // how far the batch's offsets are written. It reports how many rows the store
-// took. The blocks are emptied only on success: a failure ends the pipeline,
-// and the batch is re-consumed from the broker.
+// took. A failure that is not a refusal ends the pipeline, and the batch is
+// re-consumed from the broker.
 //
 // The order is the substance. The watermark is written only once ClickHouse has
 // acknowledged all five inserts — never before them. A watermark claimed early
@@ -284,13 +289,37 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 // It is also what closes the five-table gap named above: the tables are written
 // in a fixed order inside one call, so a batch whose gauge rows landed and
 // whose histogram rows did not has no watermark at all and is replayed whole.
-func (p *Pipeline) writeChunk(ctx context.Context, covered []consume.Position) (int, error) {
+//
+// A refusal is the one failure that does not end the pipeline. ClickHouse
+// refused rows it will refuse again, so the partition could never advance past
+// them: the chunk's records are parked and the watermark still moves. The five
+// inserts are not atomic, so the tables written before the refused one keep
+// their rows — and a replay from the dead-letter topic would write those again.
+func (p *Pipeline) writeChunk(
+	ctx context.Context,
+	inBlock []*kgo.Record,
+	covered []consume.Position,
+) (int, error) {
 	rows := p.blockRows()
-	if err := p.insertBlocks(ctx); err != nil {
-		return 0, err
-	}
+	err := p.insertBlocks(ctx)
 	p.resetBlocks()
-	p.written += countOf(rows)
+	switch {
+	case err == nil:
+		p.written += countOf(rows)
+	case !consume.IsPermanent(err):
+		return 0, err
+	default:
+		parked, parkErr := consume.ParkRefused(ctx, p.loop, inBlock, err)
+		if parkErr != nil {
+			return 0, parkErr
+		}
+		p.parked += countOf(parked)
+		p.log.ErrorContext(ctx, "the store refused an insert; parked its records rather than retried",
+			slog.Int("messages", parked),
+			slog.String("error", err.Error()),
+		)
+		rows = 0
+	}
 
 	if len(covered) == 0 {
 		return rows, nil

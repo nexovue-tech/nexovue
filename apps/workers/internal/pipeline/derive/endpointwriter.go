@@ -9,6 +9,7 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/insertdedup"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/storefailure"
 )
 
 // endpointsTable is the insert target, named once so the statement and the
@@ -142,7 +143,7 @@ func (w *EndpointWriter) Insert(ctx context.Context, stats []EndpointStat) error
 		Settings: []ch.Setting{{Key: insertdedup.Setting, Value: deduplicationToken(stats)}},
 	}
 	if err := w.pool.Do(ctx, query); err != nil {
-		return fmt.Errorf("insert %d endpoint rollup rows: %w", w.block.rows(), err)
+		return storefailure.Judged(fmt.Errorf("insert %d endpoint rollup rows: %w", w.block.rows(), err))
 	}
 	return nil
 }

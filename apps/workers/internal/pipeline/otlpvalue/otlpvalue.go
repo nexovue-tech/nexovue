@@ -56,6 +56,17 @@ func JSONText(value any) string {
 // indistinguishable from the sender never having set it.
 const DroppedAttributesKey = "nexovue.dropped_attributes"
 
+// MaxDepth bounds how deeply a stored attribute nests.
+//
+// ClickHouse refuses a JSON value nested about a thousand levels deep, and that
+// refusal is permanent: one span with an attribute key of `a.a.a…` repeated
+// 1,100 times — each dot is a level — stopped the span pipeline until the
+// refusal handling parked it (docs/changes/ingest-cannot-be-knocked-over). Far
+// above any semantic-convention key, far below the store's limit. An attribute
+// whose key alone reaches past it is dropped and named under
+// DroppedAttributesKey; a value nested past it becomes null where it crosses.
+const MaxDepth = 64
+
 // AttributesMap converts OTLP attributes to the nested shape ClickHouse stores.
 //
 // A dot in an attribute key is a literal character to OTLP and a path separator
@@ -76,6 +87,11 @@ const DroppedAttributesKey = "nexovue.dropped_attributes"
 //
 // An attribute with no key is skipped: it cannot be addressed as a subcolumn.
 func AttributesMap(attributes []*commonpb.KeyValue) map[string]any {
+	return attributesMapAt(attributes, 0)
+}
+
+// attributesMapAt is AttributesMap for a map that itself sits depth levels down.
+func attributesMapAt(attributes []*commonpb.KeyValue, depth int) map[string]any {
 	values := make(map[string]any, len(attributes))
 	var dropped []string
 
@@ -83,14 +99,17 @@ func AttributesMap(attributes []*commonpb.KeyValue) map[string]any {
 		if attribute == nil || attribute.GetKey() == "" {
 			continue
 		}
-		if !insertAtPath(values, splitPath(attribute.GetKey()), Value(attribute.GetValue())) {
+		path := splitPath(attribute.GetKey())
+		if depth+len(path) > MaxDepth ||
+			!insertAtPath(values, path, valueAt(attribute.GetValue(), depth+len(path))) {
 			dropped = append(dropped, attribute.GetKey())
 		}
 	}
 
-	if dropped != nil {
-		// Recorded through the same path logic, so it cannot itself collide
-		// with a real attribute and take the record down.
+	// Recorded through the same path logic, so it cannot itself collide with a
+	// real attribute and take the record down — and only while the record of it
+	// fits under the cap too.
+	if dropped != nil && depth+len(splitPath(DroppedAttributesKey)) <= MaxDepth {
 		insertAtPath(values, splitPath(DroppedAttributesKey), dropped)
 	}
 	return values
@@ -149,6 +168,12 @@ func insertAtPath(values map[string]any, path []string, value any) bool {
 // unrecognised value becomes null rather than being dropped, so the attribute
 // key still appears and the gap is visible in a query.
 func Value(value *commonpb.AnyValue) any {
+	return valueAt(value, 0)
+}
+
+// valueAt converts a value that sits depth levels down, and gives null for a
+// list or map that would nest past MaxDepth.
+func valueAt(value *commonpb.AnyValue, depth int) any {
 	if value == nil {
 		return nil
 	}
@@ -164,9 +189,15 @@ func Value(value *commonpb.AnyValue) any {
 	case *commonpb.AnyValue_BytesValue:
 		return base64.StdEncoding.EncodeToString(typed.BytesValue)
 	case *commonpb.AnyValue_ArrayValue:
-		return ArrayValue(typed.ArrayValue)
+		if depth >= MaxDepth {
+			return nil
+		}
+		return arrayAt(typed.ArrayValue, depth+1)
 	case *commonpb.AnyValue_KvlistValue:
-		return AttributesMap(typed.KvlistValue.GetValues())
+		if depth >= MaxDepth {
+			return nil
+		}
+		return attributesMapAt(typed.KvlistValue.GetValues(), depth)
 	default:
 		return nil
 	}
@@ -175,10 +206,14 @@ func Value(value *commonpb.AnyValue) any {
 // ArrayValue converts an OTLP array, preserving element order and position — an
 // unrenderable element becomes null rather than shortening the array.
 func ArrayValue(array *commonpb.ArrayValue) []any {
+	return arrayAt(array, 1)
+}
+
+func arrayAt(array *commonpb.ArrayValue, depth int) []any {
 	source := array.GetValues()
 	values := make([]any, 0, len(source))
 	for _, element := range source {
-		values = append(values, Value(element))
+		values = append(values, valueAt(element, depth))
 	}
 	return values
 }

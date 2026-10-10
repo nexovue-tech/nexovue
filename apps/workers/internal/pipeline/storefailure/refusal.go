@@ -13,6 +13,8 @@ import (
 
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/proto"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 )
 
 // RefusedTheData reports whether ClickHouse rejected the rows themselves rather
@@ -32,4 +34,15 @@ func RefusedTheData(err error) bool {
 		proto.ErrIllegalColumn,   // e.g. a JSON path used where it cannot be
 		proto.ErrCannotParseText, // malformed on the wire, not in flight
 	)
+}
+
+// Judged returns an insert's error marked permanent when the store refused the
+// data itself, and unchanged otherwise — so the retry loop gives up on a
+// refusal at once and keeps waiting out an outage. Every writer that inserts
+// rows returns through it.
+func Judged(err error) error {
+	if err != nil && RefusedTheData(err) {
+		return consume.AsPermanent(err)
+	}
+	return err
 }

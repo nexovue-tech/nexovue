@@ -26,6 +26,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/storefailure"
 )
 
 // MaxRetentionDays caps how long profiles are kept whatever the project's raw
@@ -168,6 +169,9 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 	}
 
 	p.block.reset()
+	// inBlock is exactly the records whose rows are in the block, which is what
+	// has to be parked if the store refuses it.
+	var inBlock []*kgo.Record
 	for at, record := range polled.Records {
 		// At or below the watermark: the store acknowledged these rows before the
 		// process died, so the replay skips them whole.
@@ -186,29 +190,52 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (stored, e
 		for _, r := range rows {
 			p.block.append(r)
 		}
+		inBlock = append(inBlock, record)
 		if p.block.rows() < p.maxRows {
 			continue
 		}
-		if err := p.writeChunk(ctx, polled.Positions[:at+1]); err != nil {
+		if err := p.writeChunk(ctx, inBlock, polled.Positions[:at+1]); err != nil {
 			return stored{}, err
 		}
+		inBlock = inBlock[:0]
 	}
-	return stored{}, p.writeChunk(ctx, polled.Positions)
+	return stored{}, p.writeChunk(ctx, inBlock, polled.Positions)
 }
 
 // writeChunk inserts what has accumulated, then records how far the batch's
 // offsets are written — in that order, and only after ClickHouse acknowledged:
 // a watermark claimed before the insert would make a replay skip rows nothing
 // wrote.
-func (p *Pipeline) writeChunk(ctx context.Context, covered []consume.Position) error {
+//
+// A refusal does not end the pipeline: the chunk's records are parked and the
+// watermark still moves, because a partition can never advance past rows the
+// store will refuse every time.
+func (p *Pipeline) writeChunk(
+	ctx context.Context,
+	inBlock []*kgo.Record,
+	covered []consume.Position,
+) error {
 	rows := p.block.rows()
 	if rows > 0 {
-		if err := p.loop.Retry(ctx, "insert "+table, func(callCtx context.Context) error {
+		err := p.loop.Retry(ctx, "insert "+table, func(callCtx context.Context) error {
 			return p.insert(callCtx, rows)
-		}); err != nil {
+		})
+		switch {
+		case err == nil:
+			p.written += uint64(rows) //nolint:gosec // a row count is never negative
+		case !consume.IsPermanent(err):
 			return err
+		default:
+			parked, parkErr := consume.ParkRefused(ctx, p.loop, inBlock, err)
+			if parkErr != nil {
+				return parkErr
+			}
+			p.parked += uint64(parked) //nolint:gosec // a count is never negative
+			p.log.ErrorContext(ctx, "the store refused an insert; parked its records rather than retried",
+				slog.Int("messages", parked),
+				slog.String("error", err.Error()),
+			)
 		}
-		p.written += uint64(rows) //nolint:gosec // a row count is never negative
 	}
 	p.block.reset()
 	if len(covered) == 0 {
@@ -226,7 +253,7 @@ func (p *Pipeline) insert(ctx context.Context, rows int) error {
 		Settings: []ch.Setting{{Key: jsonAsStringSetting, Value: "1"}},
 	}
 	if err := p.pool.Do(ctx, query); err != nil {
-		return fmt.Errorf("insert %d rows into %s: %w", rows, table, err)
+		return storefailure.Judged(fmt.Errorf("insert %d rows into %s: %w", rows, table, err))
 	}
 	return nil
 }

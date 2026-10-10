@@ -9,6 +9,7 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/insertdedup"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/storefailure"
 )
 
 // edgesTable is the insert target, named once so the statement and the column
@@ -145,7 +146,7 @@ func (w *Writer) Insert(ctx context.Context, edges []Edge) error {
 		Settings: []ch.Setting{{Key: insertdedup.Setting, Value: deduplicationToken(edges)}},
 	}
 	if err := w.pool.Do(ctx, query); err != nil {
-		return fmt.Errorf("insert %d service edges: %w", w.block.rows(), err)
+		return storefailure.Judged(fmt.Errorf("insert %d service edges: %w", w.block.rows(), err))
 	}
 	return nil
 }

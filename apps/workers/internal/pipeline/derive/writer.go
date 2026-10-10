@@ -7,6 +7,8 @@ import (
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/chpool"
 	"github.com/ClickHouse/ch-go/proto"
+
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/storefailure"
 )
 
 // metricsTable is the insert target, named once so the statement and the column
@@ -121,7 +123,7 @@ func (w *Writer) Insert(ctx context.Context, points []Point) error {
 		},
 	}
 	if err := w.pool.Do(ctx, query); err != nil {
-		return fmt.Errorf("insert %d metric points: %w", w.block.rows(), err)
+		return storefailure.Judged(fmt.Errorf("insert %d metric points: %w", w.block.rows(), err))
 	}
 	return nil
 }

@@ -106,7 +106,25 @@ func (r spanRow) sampleFacts(partition int32) sample.Facts {
 		Errored:    r.errored(),
 		TraceState: r.TraceState,
 		Partition:  partition,
+		Bytes:      r.approximateBytes(),
 	}
+}
+
+// spanRowOverhead is a held row's fixed cost — the struct, its ids and its
+// times — before the variable-length text it carries.
+const spanRowOverhead = 256
+
+// approximateBytes is roughly what holding this row costs: its text fields,
+// which are what can make one span megabytes, plus a fixed overhead. An
+// estimate for a memory bound, not an accounting.
+func (r spanRow) approximateBytes() int {
+	size := spanRowOverhead + len(r.SpanAttrs) + len(r.ResourceAttrs) + len(r.Events) +
+		len(r.StatusMessage) + len(r.ExceptionMessage) + len(r.ExceptionType) +
+		len(r.SpanName) + len(r.ServiceName) + len(r.TraceState)
+	for _, link := range r.Links {
+		size += len(link.TraceID) + len(link.SpanID) + len(link.Attributes)
+	}
+	return size
 }
 
 // stages are the per-record half of the pipeline: decode → mask → derive →

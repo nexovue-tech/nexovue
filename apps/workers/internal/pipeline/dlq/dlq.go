@@ -31,8 +31,14 @@ const (
 	HeaderIngestID   = "nexovue-ingest-id"
 	HeaderTenantID   = "nexovue-tenant-id"
 	HeaderProjectID  = "nexovue-project-id"
+	HeaderPayload    = "nexovue-parked-payload"
 	headerTimeFormat = time.RFC3339Nano
 )
+
+// PayloadRow names a parked message whose value is one stored row as JSON — a
+// row the store refused after it had already been decoded and masked — rather
+// than the source message's own bytes. Absent means the source message.
+const PayloadRow = "row-json"
 
 // Producer is the broker as this package uses it. An interface so parking is
 // testable without a Kafka cluster, matching how the receiver publishes.
@@ -46,6 +52,9 @@ type Context struct {
 	IngestID  string
 	TenantID  string
 	ProjectID string
+	// Payload says what the parked value is when it is not the source message;
+	// see PayloadRow.
+	Payload string
 }
 
 // Queue parks messages on one dead-letter topic.
@@ -99,7 +108,8 @@ func (q *Queue) headers(record *kgo.Record, reason string, details Context) []kg
 	}
 	headers = appendIfSet(headers, HeaderIngestID, details.IngestID)
 	headers = appendIfSet(headers, HeaderTenantID, details.TenantID)
-	return appendIfSet(headers, HeaderProjectID, details.ProjectID)
+	headers = appendIfSet(headers, HeaderProjectID, details.ProjectID)
+	return appendIfSet(headers, HeaderPayload, details.Payload)
 }
 
 func appendIfSet(headers []kgo.RecordHeader, key, value string) []kgo.RecordHeader {

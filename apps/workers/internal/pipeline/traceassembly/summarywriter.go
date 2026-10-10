@@ -9,6 +9,7 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/otlpvalue"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/storefailure"
 )
 
 // summariesTable is the insert target, named once so the statement and the
@@ -128,7 +129,7 @@ func (w *summaryWriter) insert(ctx context.Context, rows []summaryRow) error {
 
 	query := ch.Query{Body: w.block.statement(), Input: w.block.columns}
 	if err := w.pool.Do(ctx, query); err != nil {
-		return fmt.Errorf("insert %d trace summaries: %w", len(rows), err)
+		return storefailure.Judged(fmt.Errorf("insert %d trace summaries: %w", len(rows), err))
 	}
 	return nil
 }

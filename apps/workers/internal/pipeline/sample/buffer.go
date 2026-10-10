@@ -32,6 +32,10 @@ type Facts struct {
 	// topic is implicit — one buffer serves one pipeline, and a pipeline consumes
 	// one topic.
 	Partition int32
+
+	// Bytes is roughly what holding the row costs, which MaxBytes bounds. The
+	// counts alone could not: one span may carry megabytes of attributes.
+	Bytes int
 }
 
 // Options bound the buffer. Every limit is required: an unbounded map on the
@@ -52,6 +56,10 @@ type Options struct {
 	// is a worse sample than waiting but is never lost data.
 	MaxTraces int
 	MaxSpans  int
+	// MaxBytes caps the same buffer by what it holds rather than how many: the
+	// span limit allows 500,000 spans, and a span can carry megabytes, against a
+	// worker that runs in 1 GiB. Reaching it closes the oldest traces early too.
+	MaxBytes int
 
 	// FirstTraces is how many traces a project stores whole before the
 	// percentage applies to it at all, so a new customer's first span is never
@@ -69,6 +77,8 @@ func (o Options) validate() error {
 		return errors.New("sample: MaxTraces must be positive")
 	case o.MaxSpans <= 0:
 		return errors.New("sample: MaxSpans must be positive")
+	case o.MaxBytes <= 0:
+		return errors.New("sample: MaxBytes must be positive")
 	case o.FirstTraces < 0:
 		return errors.New("sample: FirstTraces must not be negative")
 	}
@@ -79,6 +89,7 @@ func (o Options) validate() error {
 type Stats struct {
 	OpenTraces    int
 	BufferedSpans int
+	BufferedBytes int
 	TracesKept    uint64
 	TracesDropped uint64
 	SpansKept     uint64
@@ -120,6 +131,7 @@ type Buffer[T any] struct {
 	open      map[traceKey]*openTrace[T]
 	openOrder queue[traceKey]
 	spans     int
+	bytes     int
 
 	decided      map[traceKey]verdict
 	decidedOrder queue[traceKey]
@@ -145,6 +157,7 @@ type openTrace[T any] struct {
 	// project is taken from the first span; a trace belongs to one project.
 	project  string
 	closesAt time.Time
+	bytes    int
 }
 
 // buffered is one held span and the partition its record arrived on. The
@@ -153,6 +166,7 @@ type openTrace[T any] struct {
 // id, but nothing in this package may assume it.
 type buffered[T any] struct {
 	partition int32
+	bytes     int
 	row       T
 }
 
@@ -221,12 +235,14 @@ func (b *Buffer[T]) Add(now time.Time, facts Facts, row T) []T {
 	}
 	trace.observe(facts, row)
 	b.spans++
+	b.bytes += facts.Bytes
 
 	return b.enforceLimits()
 }
 
 func (t *openTrace[T]) observe(facts Facts, row T) {
-	t.rows = append(t.rows, buffered[T]{partition: facts.Partition, row: row})
+	t.rows = append(t.rows, buffered[T]{partition: facts.Partition, bytes: facts.Bytes, row: row})
+	t.bytes += facts.Bytes
 	t.facts.errored = t.facts.errored || facts.Errored
 	if t.facts.traceState == "" {
 		t.facts.traceState = facts.TraceState
@@ -275,10 +291,11 @@ func (b *Buffer[T]) Drain(now time.Time) []T {
 	return release
 }
 
-// enforceLimits closes the oldest traces until the buffer is inside both caps.
+// enforceLimits closes the oldest traces until the buffer is inside every cap.
 func (b *Buffer[T]) enforceLimits() []T {
 	var release []T
-	for len(b.open) > b.options.MaxTraces || b.spans > b.options.MaxSpans {
+	for len(b.open) > b.options.MaxTraces || b.spans > b.options.MaxSpans ||
+		b.bytes > b.options.MaxBytes {
 		traceID, ok := b.openOrder.pop()
 		if !ok {
 			break
@@ -307,6 +324,7 @@ func (b *Buffer[T]) close(now time.Time, key traceKey, trace *openTrace[T], rele
 
 	delete(b.open, key)
 	b.spans -= len(trace.rows)
+	b.bytes -= trace.bytes
 	b.rememberVerdict(now, key, keep)
 
 	if !keep {
@@ -350,6 +368,8 @@ func (b *Buffer[T]) Disown(partitions []int32) Disowned {
 		for _, held := range trace.rows {
 			if _, gone := leaving[held.partition]; gone {
 				dropped.Spans++
+				trace.bytes -= held.bytes
+				b.bytes -= held.bytes
 				continue
 			}
 			kept = append(kept, held)
@@ -419,5 +439,6 @@ func (b *Buffer[T]) Stats() Stats {
 	current := b.stats
 	current.OpenTraces = len(b.open)
 	current.BufferedSpans = b.spans
+	current.BufferedBytes = b.bytes
 	return current
 }

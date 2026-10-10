@@ -82,6 +82,9 @@ type Sampling struct {
 
 	MaxTraces int `env:"WORKERS_SAMPLING_MAX_TRACES" envDefault:"50000"`
 	MaxSpans  int `env:"WORKERS_SAMPLING_MAX_SPANS" envDefault:"500000"`
+	// MaxBytes bounds what the buffer holds, not just how many: a quarter of the
+	// worker's 1 GiB, sized from the laptop until a load test replaces it.
+	MaxBytes int `env:"WORKERS_SAMPLING_MAX_BYTES" envDefault:"268435456"`
 }
 
 func (s Sampling) validate() error {
@@ -93,6 +96,7 @@ func (s Sampling) validate() error {
 		nonNegativeCount("WORKERS_SAMPLING_FIRST_TRACES", s.FirstTraces),
 		positiveCount("WORKERS_SAMPLING_MAX_TRACES", s.MaxTraces),
 		positiveCount("WORKERS_SAMPLING_MAX_SPANS", s.MaxSpans),
+		positiveCount("WORKERS_SAMPLING_MAX_BYTES", s.MaxBytes),
 	)
 }
 

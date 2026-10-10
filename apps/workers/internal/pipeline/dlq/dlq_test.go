@@ -124,3 +124,25 @@ func TestAFailedParkIsReported(t *testing.T) {
 		t.Errorf("Park() = %v, want it to wrap the broker's error", err)
 	}
 }
+
+// A refused row parked without its source message says so, or whoever reads the
+// topic would try to decode a row as an envelope.
+func TestARowIsMarkedAsARowNotAnEnvelope(t *testing.T) {
+	producer := &fakeProducer{}
+	queue := dlq.New(producer, "spans-dlq", "nexovue-workers")
+
+	err := queue.Park(context.Background(), poisonRecord(), "refused", dlq.Context{Payload: dlq.PayloadRow})
+	if err != nil {
+		t.Fatalf("Park() = %v, want no error", err)
+	}
+	if got := headerValue(producer.published[0], dlq.HeaderPayload); got != dlq.PayloadRow {
+		t.Errorf("payload header = %q, want %q", got, dlq.PayloadRow)
+	}
+
+	if err := queue.Park(context.Background(), poisonRecord(), "unreadable", dlq.Context{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := headerValue(producer.published[1], dlq.HeaderPayload); got != "" {
+		t.Errorf("a source message was marked %q; absent means the message itself", got)
+	}
+}

@@ -223,7 +223,7 @@ func TestPipelineStageDefaultsMatchTheRecordedDecisions(t *testing.T) {
 	if cfg.Sampling.FirstTraces != 100 {
 		t.Errorf("Sampling.FirstTraces = %d, want 100", cfg.Sampling.FirstTraces)
 	}
-	if cfg.Sampling.MaxTraces <= 0 || cfg.Sampling.MaxSpans <= 0 {
+	if cfg.Sampling.MaxTraces <= 0 || cfg.Sampling.MaxSpans <= 0 || cfg.Sampling.MaxBytes <= 0 {
 		t.Error("the sampling buffer has no default bound; an unbounded map is an outage waiting")
 	}
 	if cfg.Metrics.LateGrace <= 0 {

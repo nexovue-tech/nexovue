@@ -86,6 +86,15 @@ type Config struct {
 	MaxBodyBytes        int64 `env:"RECEIVER_MAX_BODY_BYTES" envDefault:"4194304"`
 	MaxDecodedBodyBytes int64 `env:"RECEIVER_MAX_DECODED_BODY_BYTES" envDefault:"16777216"`
 
+	// MaxInflightExports bounds how many export bodies this process holds at
+	// once, across both doors and both transports; MaxUnverifiedExports is the
+	// smaller share for gRPC exports whose key the process has never seen. A
+	// full-size export measured ≈ 46 MiB held, so the defaults keep the worst
+	// case under the development receiver's 768 MiB — sized from the laptop
+	// until a load test on the hosting target replaces them.
+	MaxInflightExports   int `env:"RECEIVER_MAX_INFLIGHT_EXPORTS" envDefault:"8"`
+	MaxUnverifiedExports int `env:"RECEIVER_MAX_UNVERIFIED_EXPORTS" envDefault:"2"`
+
 	// APIKeyCacheTTL bounds how long a revoked key keeps working, so it is
 	// validated against a ceiling rather than merely required to be positive.
 	APIKeyCacheTTL        time.Duration `env:"RECEIVER_API_KEY_CACHE_TTL" envDefault:"30s"`
@@ -196,6 +205,8 @@ func (c Config) validate() error {
 			c.MaxRecordBytes()),
 		atMostSize("RECEIVER_MAX_DECODED_BODY_BYTES plus envelope overhead",
 			c.MaxRecordBytes(), "the largest batch franz-go accepts", MaxProducerBatchBytes),
+		positiveCount("RECEIVER_MAX_INFLIGHT_EXPORTS", c.MaxInflightExports),
+		positiveCount("RECEIVER_MAX_UNVERIFIED_EXPORTS", c.MaxUnverifiedExports),
 		positiveDuration("RECEIVER_PRODUCE_TIMEOUT", c.ProduceTimeout),
 		positiveDuration("RECEIVER_INGEST_SUMMARY_INTERVAL", c.IngestSummaryInterval),
 		positiveDuration("RECEIVER_API_KEY_CACHE_TTL", c.APIKeyCacheTTL),

@@ -38,6 +38,7 @@ func stagesFor(t *testing.T, healthyPercent int) *stages {
 			HealthyPercent: healthyPercent,
 			MaxTraces:      100_000,
 			MaxSpans:       1_000_000,
+			MaxBytes:       1 << 30,
 		},
 		Metrics: config.Metrics{LateGrace: 0},
 	}
