@@ -97,12 +97,20 @@ type Arrival struct {
 	Baseline int
 	// Expect is how many rows this run adds on top of the baseline.
 	Expect int
+	// Exists waits for the statement to count at least Expect, whatever was
+	// there before — for a reading this run does not add itself, such as a
+	// probe the scheduler runs on its own clock.
+	Exists bool
 }
 
 // Baselines counts each arrival as it stands before anything is sent.
 func Baselines(ctx context.Context, client *http.Client, cfg Config, arrivals []Arrival) ([]Arrival, error) {
 	counted := make([]Arrival, 0, len(arrivals))
 	for _, arrival := range arrivals {
+		if arrival.Exists {
+			counted = append(counted, arrival)
+			continue
+		}
 		answer, err := query(ctx, client, cfg.ClickHouse, arrival.Statement)
 		if err != nil {
 			return nil, err

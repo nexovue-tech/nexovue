@@ -25,6 +25,16 @@ const (
 	keyName        = "name"
 	keyResource    = "resource"
 	keyStartUnixNs = "startTimeUnixNano"
+	keyEndUnixNs   = "endTimeUnixNano"
+	keyTimeUnixNs  = "timeUnixNano"
+	keyKey         = "key"
+	keyTraceID     = "traceId"
+	keySpanID      = "spanId"
+	keyKind        = "kind"
+	keyResourceSp  = "resourceSpans"
+	keyScopeSpans  = "scopeSpans"
+	keyValue       = "value"
+	keySpans       = "spans"
 )
 
 // id returns a random OTLP id: 16 bytes for a trace, 8 for a span, hex encoded.
@@ -43,7 +53,7 @@ func nanos(at time.Time) string {
 }
 
 func attribute(key, value string) map[string]any {
-	return map[string]any{"key": key, "value": map[string]any{"stringValue": value}}
+	return map[string]any{keyKey: key, keyValue: map[string]any{"stringValue": value}}
 }
 
 // resource names the service every seeded signal belongs to. One service, named
@@ -80,12 +90,12 @@ func Traces(cfg Config, count int, at time.Time) map[string]any {
 	for i := range count {
 		start := at.Add(-time.Duration(i) * time.Millisecond)
 		span := map[string]any{
-			"traceId":         id(16),
-			"spanId":          id(8),
-			keyName:           "GET /seeded",
-			"kind":            2, // SPAN_KIND_SERVER
-			keyStartUnixNs:    nanos(start),
-			"endTimeUnixNano": nanos(start.Add(SlowEnough)),
+			keyTraceID:     id(16),
+			keySpanID:      id(8),
+			keyName:        "GET /seeded",
+			keyKind:        2, // SPAN_KIND_SERVER
+			keyStartUnixNs: nanos(start),
+			keyEndUnixNs:   nanos(start.Add(SlowEnough)),
 			keyAttributes: []any{
 				attribute("http.request.method", "GET"),
 				attribute("url.path", "/seeded"),
@@ -94,8 +104,8 @@ func Traces(cfg Config, count int, at time.Time) map[string]any {
 		if i == 0 {
 			span["status"] = map[string]any{"code": 2, "message": "seeded failure"}
 			span["events"] = []any{map[string]any{
-				"timeUnixNano": nanos(start.Add(SlowEnough / 2)),
-				keyName:        "exception",
+				keyTimeUnixNs: nanos(start.Add(SlowEnough / 2)),
+				keyName:       "exception",
 				keyAttributes: []any{
 					attribute("exception.type", "GateSeedError"),
 					attribute("exception.message", "a seeded exception, so the error-group reads have one"),
@@ -105,9 +115,9 @@ func Traces(cfg Config, count int, at time.Time) map[string]any {
 		spans = append(spans, span)
 	}
 
-	return map[string]any{"resourceSpans": []any{map[string]any{
-		keyResource:  resource(cfg.ServiceName),
-		"scopeSpans": []any{map[string]any{"spans": spans}},
+	return map[string]any{keyResourceSp: []any{map[string]any{
+		keyResource:   resource(cfg.ServiceName),
+		keyScopeSpans: []any{map[string]any{keySpans: spans}},
 	}}}
 }
 
@@ -146,7 +156,7 @@ func Metrics(cfg Config, at time.Time) map[string]any {
 			}
 			points = append(points, map[string]any{
 				keyStartUnixNs:   nanos(at.Add(-time.Duration(cfg.Exports) * 10 * time.Second)),
-				"timeUnixNano":   nanos(at.Add(-time.Duration(cfg.Exports-export) * 10 * time.Second)),
+				keyTimeUnixNs:    nanos(at.Add(-time.Duration(cfg.Exports-export) * 10 * time.Second)),
 				"count":          total(counts),
 				"sum":            sum,
 				"bucketCounts":   copied(counts),
@@ -201,13 +211,13 @@ func GenAISpans(cfg Config, at time.Time) map[string]any {
 	start := func(offset int) time.Time { return at.Add(-time.Duration(offset) * time.Millisecond) }
 	span := func(start time.Time, name string, attrs ...any) any {
 		return map[string]any{
-			"traceId":         id(16),
-			"spanId":          id(8),
-			keyName:           name,
-			"kind":            3, // SPAN_KIND_CLIENT: a call to an external model provider.
-			keyStartUnixNs:    nanos(start),
-			"endTimeUnixNano": nanos(start.Add(SlowEnough)),
-			keyAttributes:     attrs,
+			keyTraceID:     id(16),
+			keySpanID:      id(8),
+			keyName:        name,
+			keyKind:        3, // SPAN_KIND_CLIENT: a call to an external model provider.
+			keyStartUnixNs: nanos(start),
+			keyEndUnixNs:   nanos(start.Add(SlowEnough)),
+			keyAttributes:  attrs,
 		}
 	}
 
@@ -237,9 +247,9 @@ func GenAISpans(cfg Config, at time.Time) map[string]any {
 		),
 	}
 
-	return map[string]any{"resourceSpans": []any{map[string]any{
-		keyResource:  resource(cfg.ServiceName),
-		"scopeSpans": []any{map[string]any{"spans": spans}},
+	return map[string]any{keyResourceSp: []any{map[string]any{
+		keyResource:   resource(cfg.ServiceName),
+		keyScopeSpans: []any{map[string]any{keySpans: spans}},
 	}}}
 }
 
@@ -269,4 +279,108 @@ func copied(counts []uint64) []uint64 {
 	out := make([]uint64, len(counts))
 	copy(out, counts)
 	return out
+}
+
+// EdgeLead is how far in the past the seeded calls are timestamped.
+//
+// A service edge is a per-minute sum, written only once its minute has closed —
+// a minute, plus the pairing window, plus the late grace. Seeded now, the gate
+// would wait up to a minute for its edges; seeded three minutes back, the minute
+// is already closed and the edges are written on the worker's next settle. Well
+// inside the seven days of past skew the worker trusts.
+const EdgeLead = 3 * time.Minute
+
+// Edge service names, all derived from the seeder's own so they are obviously
+// ours on the service map.
+func callerService(cfg Config) string  { return cfg.ServiceName + "-caller" }
+func healthyService(cfg Config) string { return cfg.ServiceName + "-healthy" }
+func failingService(cfg Config) string { return cfg.ServiceName + "-failing" }
+
+// ServiceEdges builds one OTLP/JSON export of two calls: a CLIENT span in the
+// caller answered by a SERVER child in a callee — the pairing the worker derives
+// an edge from — once to a healthy callee and once to a failing one.
+//
+// **Two edges, one failing.** The service-map suite proves its "failing only"
+// filter narrows the map, which needs a failing edge to keep and a healthy one to
+// drop. Until this, only the OpenTelemetry demo's own traffic supplied either.
+func ServiceEdges(cfg Config, at time.Time) map[string]any {
+	call := func(callee string, failed bool) (client, server map[string]any) {
+		traceID, clientID := id(16), id(8)
+		client = map[string]any{
+			keyTraceID: traceID, keySpanID: clientID, keyName: "call " + callee,
+			keyKind:        3, // SPAN_KIND_CLIENT
+			keyStartUnixNs: nanos(at), keyEndUnixNs: nanos(at.Add(20 * time.Millisecond)),
+		}
+		server = map[string]any{
+			keyTraceID: traceID, keySpanID: id(8), "parentSpanId": clientID, keyName: "serve",
+			keyKind:        2, // SPAN_KIND_SERVER
+			keyStartUnixNs: nanos(at.Add(time.Millisecond)),
+			keyEndUnixNs:   nanos(at.Add(19 * time.Millisecond)),
+		}
+		if failed {
+			failure := map[string]any{"code": 2, "message": "seeded failing dependency"}
+			client["status"], server["status"] = failure, failure
+		}
+		return client, server
+	}
+	healthyClient, healthyServer := call(healthyService(cfg), false)
+	failingClient, failingServer := call(failingService(cfg), true)
+
+	spansOf := func(service string, spans ...any) map[string]any {
+		return map[string]any{
+			keyResource:   resource(service),
+			keyScopeSpans: []any{map[string]any{keySpans: spans}},
+		}
+	}
+	return map[string]any{keyResourceSp: []any{
+		spansOf(callerService(cfg), healthyClient, failingClient),
+		spansOf(healthyService(cfg), healthyServer),
+		spansOf(failingService(cfg), failingServer),
+	}}
+}
+
+// DatabaseServer is the server address the seeded database readings name.
+const DatabaseServer = "gateseed-postgres"
+
+// DatabaseReadings builds one OTLP/JSON export of the two gauges the database
+// screens read: a statement's mean duration and the connection count by state,
+// with the attributes the collector's Postgres receiver attaches. Until this,
+// only the OpenTelemetry demo's own Postgres supplied them.
+func DatabaseReadings(cfg Config, at time.Time) map[string]any {
+	gauge := func(name, unit string, points ...any) map[string]any {
+		return map[string]any{keyName: name, "unit": unit, "gauge": map[string]any{"dataPoints": points}}
+	}
+	statement := func(hash string, seconds float64) map[string]any {
+		return map[string]any{
+			keyTimeUnixNs: nanos(at),
+			"asDouble":    seconds,
+			keyAttributes: []any{
+				attribute("db.query.hash", hash),
+				attribute("db.system.name", "postgresql"),
+				attribute("db.namespace", cfg.ServiceName),
+				map[string]any{keyKey: "db.client.operation.calls", keyValue: map[string]any{"intValue": "3"}},
+			},
+		}
+	}
+	connections := func(state string, count int) map[string]any {
+		return map[string]any{
+			keyTimeUnixNs: nanos(at),
+			"asInt":       strconv.Itoa(count),
+			keyAttributes: []any{attribute("db.client.connection.state", state)},
+		}
+	}
+	databaseResource := map[string]any{keyAttributes: []any{
+		attribute("service.name", cfg.ServiceName),
+		attribute("server.address", DatabaseServer),
+		map[string]any{keyKey: "server.port", keyValue: map[string]any{"intValue": "5432"}},
+	}}
+	return map[string]any{"resourceMetrics": []any{map[string]any{
+		keyResource: databaseResource,
+		"scopeMetrics": []any{map[string]any{"metrics": []any{
+			gauge("db.client.operation.duration", "s",
+				statement("gateseed-select", 0.012), statement("gateseed-update", 0.048)),
+			gauge("db.client.connection.count", "{connection}",
+				connections("idle", 4), connections("active", 1)),
+		}}},
+	}}}
 }

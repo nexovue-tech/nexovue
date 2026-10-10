@@ -30,7 +30,24 @@ const (
 	defaultExports = "6"
 	defaultSeries  = "3"
 
-	defaultWait     = "90s"
+	// The API the gate's synthetic check is created through, signed in as the
+	// development stack's seeded owner — the same account and defaults
+	// tools/otel-demo/doors.py uses.
+	defaultAPI         = "http://localhost:18000"
+	defaultDevEmail    = "nexovue@nexovue.com"
+	defaultDevPassword = "nexovue-dev" //nolint:gosec // G101: the dev stack's seeded login, not a secret
+
+	// What the gate's check probes, as the probe workers reach it: the API's own
+	// liveness endpoint. Something the stack always runs, so the synthetics suite
+	// no longer depends on the OpenTelemetry demo. Through the Docker host's
+	// published port, not the compose name `api`: the API refuses a check aimed
+	// at one of our own service names (checks/targets.py, INTERNAL_HOSTNAMES),
+	// and it is right to.
+	defaultProbeTarget = "http://host.docker.internal:18000/healthz"
+
+	// Generous: a check created this run is probed on its first scheduled turn,
+	// up to a minute later.
+	defaultWait     = "150s"
 	defaultPoll     = "500ms"
 	defaultTimeout  = "10s"
 	defaultService  = "gateseed"
@@ -61,6 +78,13 @@ type Config struct {
 
 	ServiceName string
 	MetricName  string
+
+	// API, DevEmail and DevPassword are how the gate's synthetic check is
+	// created; ProbeTarget is the URL it probes.
+	API         string
+	DevEmail    string
+	DevPassword string
+	ProbeTarget string
 
 	// Wait bounds how long the seeder waits for the ingest path to deliver what
 	// it sent. Poll is how often it asks.
@@ -109,6 +133,10 @@ func Load() (Config, error) {
 		},
 		ServiceName: env("NEXOVUE_SEED_SERVICE", defaultService),
 		MetricName:  env("NEXOVUE_SEED_METRIC", defaultMetric),
+		API:         env("NEXOVUE_SEED_API_URL", defaultAPI),
+		DevEmail:    env("NEXOVUE_DEV_EMAIL", defaultDevEmail),
+		DevPassword: env("NEXOVUE_DEV_PASSWORD", defaultDevPassword),
+		ProbeTarget: env("NEXOVUE_SEED_PROBE_TARGET", defaultProbeTarget),
 		Disabled:    env("NEXOVUE_SKIP_LIVE_TESTS", defaultDisabled) != "",
 	}
 

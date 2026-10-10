@@ -144,7 +144,7 @@ async def test_both_metric_names_have_readings_in_the_store(client: AsyncClient)
     published = {str(name) for name, _ in result.result_rows}
     assert published == {queries.METRIC_OPERATION_DURATION, queries.METRIC_CONNECTION_COUNT}, (
         "door 4b's readings are missing from the store, so everything below would "
-        f"assert against nothing. Run `just otel-demo up`. Found: {published}"
+        f"assert against nothing. Run `just gate-seed`, which seeds both. Found: {published}"
     )
 
 

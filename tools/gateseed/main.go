@@ -56,9 +56,14 @@ func run() error {
 	client := &http.Client{Timeout: cfg.RequestTimeout}
 	at := time.Now().UTC()
 
+	gateCheck, err := EnsureGateCheck(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
 	// Counted first, so the wait below is for *this* run's rows and not for rows
 	// a run a minute ago left behind.
-	expected, err := Baselines(ctx, client, cfg, arrivals(cfg))
+	expected, err := Baselines(ctx, client, cfg, arrivals(cfg, gateCheck))
 	if err != nil {
 		return err
 	}
@@ -72,13 +77,20 @@ func run() error {
 	if err := export(ctx, client, cfg, tracesPath, GenAISpans(cfg, at)); err != nil {
 		return err
 	}
+	if err := export(ctx, client, cfg, tracesPath, ServiceEdges(cfg, at.Add(-EdgeLead))); err != nil {
+		return err
+	}
+	if err := export(ctx, client, cfg, metricsPath, DatabaseReadings(cfg, at)); err != nil {
+		return err
+	}
 
 	started := time.Now()
 	if err := WaitFor(ctx, client, cfg, expected); err != nil {
 		return err
 	}
 	fmt.Printf(
-		"gateseed: %d traces, one exception, %d histogram points and three gen_ai calls readable after %s.\n",
+		"gateseed: %d traces, one exception, %d histogram points, three gen_ai calls, two "+
+			"service edges, four database readings and a passing probe readable after %s.\n",
 		cfg.Traces, cfg.Series*cfg.Exports, time.Since(started).Round(time.Millisecond),
 	)
 	return nil
@@ -90,7 +102,7 @@ func run() error {
 // No time bound on the statements: `Baselines` counts each one before anything
 // is sent and the wait is for that many more. Rows this tool wrote days ago are
 // in the baseline, so they can neither satisfy the wait nor break it.
-func arrivals(cfg Config) []Arrival {
+func arrivals(cfg Config, gateCheck string) []Arrival {
 	return []Arrival{
 		{
 			What:   "the seeded traces",
@@ -125,6 +137,37 @@ func arrivals(cfg Config) []Arrival {
 				"SELECT count() FROM spans WHERE service_name = '%s' "+
 					"AND toString(getSubcolumn(span_attrs, 'gen_ai.provider.name')) != ''",
 				cfg.ServiceName,
+			),
+		},
+		{
+			What:   "the seeded service edges",
+			Expect: 2,
+			Statement: fmt.Sprintf(
+				"SELECT count() FROM service_edges_1m WHERE client_service = '%s'", callerService(cfg),
+			),
+		},
+		{
+			What:   "the seeded database readings",
+			Expect: 4,
+			Statement: fmt.Sprintf(
+				"SELECT count() FROM metrics_gauge WHERE metric_name IN "+
+					"('db.client.operation.duration', 'db.client.connection.count') "+
+					"AND toString(resource_attrs.server.address) = '%s'", DatabaseServer,
+			),
+		},
+		{
+			// Not this run's row: the scheduler probes on its own clock. What the
+			// synthetics suite needs is a passing probe of a target the stack
+			// always runs within the hour it reads, so that is what is waited for —
+			// instantly on every run but the one that created the check.
+			What:   "a passing probe of the gate's own check",
+			Expect: 1,
+			Exists: true,
+			Statement: fmt.Sprintf(
+				"SELECT count() FROM metrics_gauge WHERE metric_name = 'synthetic.check.status' "+
+					"AND toString(resource_attrs.synthetic.check.id) = '%s' "+
+					"AND toString(attrs.synthetic.check.outcome) = 'up' "+
+					"AND timestamp >= now() - INTERVAL 1 HOUR", gateCheck,
 			),
 		},
 	}

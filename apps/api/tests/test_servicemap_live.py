@@ -92,7 +92,7 @@ async def calling(clickhouse: AsyncClient) -> tuple[str, str]:
     assert result.result_rows, (
         "no service edges in ClickHouse for the last two days. This suite asserts on "
         "real instrumentation, so an empty store is a failure here rather than a pass "
-        "— run `just otel-demo up` or `just load`."
+        "— run `just gate-seed`, which is what the gate does (two edges, one failing)."
     )
     tenant_id, project_id, _ = result.result_rows[0]
     return str(tenant_id), str(project_id)

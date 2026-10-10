@@ -208,9 +208,17 @@ func TestAnArrivalIsCountedAgainstItsOwnBaseline(t *testing.T) {
 	// second run inside that window be satisfied by the first run's rows, and the
 	// seeder returned in 7ms having waited for nothing. A statement with no time
 	// bound cannot do that, because the older rows are in the baseline.
-	for _, arrival := range arrivals(cfg) {
+	for _, arrival := range arrivals(cfg, "gate-check-id") {
 		if arrival.Expect < 1 {
 			t.Errorf("%s expects %d rows, which no wait can confirm", arrival.What, arrival.Expect)
+		}
+		if arrival.Exists {
+			// The opposite rule: a reading this run does not add has no baseline
+			// to separate it from last week's, so only a window can.
+			if !strings.Contains(arrival.Statement, "timestamp") {
+				t.Errorf("%s waits for a reading to exist with no window: last week's would do", arrival.What)
+			}
+			continue
 		}
 		if strings.Contains(arrival.Statement, "received_at") ||
 			strings.Contains(arrival.Statement, "timestamp") {
@@ -316,6 +324,69 @@ func TestCountedAtLeastReadsClickHousesAnswer(t *testing.T) {
 	} {
 		if got := countedAtLeast(row.answer, row.atLeast); got != row.want {
 			t.Errorf("countedAtLeast(%q, %d) = %v, want %v", row.answer, row.atLeast, got, row.want)
+		}
+	}
+}
+
+// The service map's "failing only" filter needs a failing edge to keep and a
+// healthy one to drop, and an edge is a CLIENT span answered by a SERVER child.
+func TestServiceEdgesAreTwoCallsAndOnlyOneFails(t *testing.T) {
+	cfg := settings(t)
+	export := ServiceEdges(cfg, time.Now())
+
+	encoded, err := json.Marshal(export)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		ResourceSpans []struct {
+			ScopeSpans []struct {
+				Spans []struct {
+					TraceID      string         `json:"traceId"`
+					SpanID       string         `json:"spanId"`
+					ParentSpanID string         `json:"parentSpanId"`
+					Kind         int            `json:"kind"`
+					Status       map[string]any `json:"status"`
+				} `json:"spans"`
+			} `json:"scopeSpans"`
+		} `json:"resourceSpans"`
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.ResourceSpans) != 3 {
+		t.Fatalf("%d services, want the caller and two callees", len(decoded.ResourceSpans))
+	}
+	clients := decoded.ResourceSpans[0].ScopeSpans[0].Spans
+	failing := 0
+	for i, callee := range decoded.ResourceSpans[1:] {
+		server := callee.ScopeSpans[0].Spans[0]
+		if clients[i].Kind != 3 || server.Kind != 2 {
+			t.Errorf("call %d: kinds %d→%d, want CLIENT (3) answered by SERVER (2)", i, clients[i].Kind, server.Kind)
+		}
+		if server.ParentSpanID != clients[i].SpanID || server.TraceID != clients[i].TraceID {
+			t.Errorf("call %d: the server span is not the client span's child, so no edge pairs", i)
+		}
+		if server.Status != nil {
+			failing++
+		}
+	}
+	if failing != 1 {
+		t.Errorf("%d failing calls, want exactly one", failing)
+	}
+}
+
+func TestDatabaseReadingsCarryWhatTheScreensGroupBy(t *testing.T) {
+	encoded, err := json.Marshal(DatabaseReadings(settings(t), time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needed := range []string{
+		"db.client.operation.duration", "db.client.connection.count",
+		"db.query.hash", "db.system.name", "db.client.connection.state", DatabaseServer,
+	} {
+		if !strings.Contains(string(encoded), needed) {
+			t.Errorf("the database readings never mention %q", needed)
 		}
 	}
 }
