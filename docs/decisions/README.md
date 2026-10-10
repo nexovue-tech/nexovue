@@ -22,6 +22,8 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-016 — Staff work on their own host, as their own kind of account](ADR-016-staff-work-on-their-own-host.md) — **superseded by ADR-018**
 - [ADR-017 — A read token is its own credential, and the read API is the routes that accept it](ADR-017-a-read-token-is-its-own-credential.md)
 - [ADR-018 — nexovue's operator is a user in the console, behind a step-up](ADR-018-the-operator-is-a-user-in-the-console.md)
+- [ADR-019 — nexovue ships as two images, and each role runs as its own container](ADR-019-two-images-each-role-its-own-container.md)
+- [ADR-020 — Postgres carries what Redis held, Redis goes, and object storage is optional](ADR-020-postgres-carries-what-redis-held.md)
 
 ## Earlier decisions, 0001–0112
 

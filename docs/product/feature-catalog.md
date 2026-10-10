@@ -186,11 +186,10 @@ here, it is Track 3's own first bullet wearing a feature number.
 - The preparations for moving between clouds ([ADR-007](../decisions/ADR-007-migrating-between-clouds.md)) and regions ([ADR-009](../decisions/ADR-009-regions-are-cells.md))
 - **A trial run on Oracle Cloud.** Always Free is 2 OCPUs / 12 GB since June 2026 — a trial and staging environment, not one for a paying customer
 - The blockers in [`../operations/production-readiness.md`](../operations/production-readiness.md) —
-  **ten of eleven remain**, re-checked against the code on 2026-09-21 rather than re-read. Blocker 3
-  (public signup) was cleared that day, and its stated evidence had been stale for days: the switch
-  and the invite flow both already existed, and what was actually missing was the *default*
-  (`docs/changes/signup-closed-by-default/`). Blockers **9 and 10 are F37**, so this bullet and the
-  one above it are the same work counted twice.
+  **twenty-two open**, from a full review of every built feature on 2026-10-10: the ten still open
+  from 2026-09-21 plus twelve new ones. That document's *Fix order* is the plan for this track, and
+  the blockers are fixed before F37 is specified. Blockers **9 and 10 are F37**, so this bullet and
+  the one above it are partly the same work counted twice.
 
 Docker Hub allows 100 anonymous pulls per six hours **per IP**. A single self-hosted install pulls
 about a dozen images and is unaffected; nodes or runners sharing one NAT address share that budget, so
@@ -474,7 +473,32 @@ missing — no hosting target, no image registry, no CI/CD, no staging, no immut
 no runbook. There is no `just` recipe for it; it has never been run.
 
 **What the operator is being asked to run**, which the spec has to be honest about: five stateful
-systems — ClickHouse, Kafka, Postgres, Redis, SeaweedFS.
+systems today — ClickHouse, Kafka, Postgres, Redis, SeaweedFS. **Decided 2026-10-10: three.** Redis
+goes (its contents move to Postgres) and object storage gets a local-disk option for a single server
+([ADR-020](../decisions/ADR-020-postgres-carries-what-redis-held.md)); nexovue itself ships as two
+images, `nexovue` and `nexovue-pipeline`
+([ADR-019](../decisions/ADR-019-two-images-each-role-its-own-container.md)).
+
+**The developer experience the founder asked for (2026-10-10): pull it and run it, configuring
+nothing.** Clone or download one file, run an installer, `docker compose up -d`, open the console.
+What that takes, as found that day — the starting list for this spec:
+
+1. Multi-arch images published on Docker Hub (blocker 2).
+2. One compose file that runs as shipped (blocker 10).
+3. An installer that generates every password and key — today about eighteen values must be invented
+   by hand or the stack refuses to start.
+4. Schema migrations and Kafka topics applied on first start and on every upgrade (blocker 5).
+5. The first owner from `FIRST_OWNER_EMAIL` — **already built**.
+6. A self-hosted mode: no billing screen, no ingestion cap (blocker 9).
+7. A smaller memory profile — the full stack is budgeted at about 12 GB.
+8. A three-step install page beside the existing send-data setup docs.
+9. Upgrading by pulling a new tag.
+
+**Open decision for this spec — trial and production modes.** Two of the readiness fixes make
+nexovue refuse to start in production without a real ingest hostname (blocker 4) or a real email
+provider (blocker 11). That is right on a server and stops a developer trying it on a laptop. Proposed:
+a *trial* mode (localhost allowed, links printed to the log instead of emailed, small memory) as the
+quickstart default, and a *production* mode that refuses to start unsafely. Not yet decided.
 
 **What a self-hoster pays: nothing — decided 2026-09-14.** Free to self-host, paid to have us host
 it. So this feature builds **no licence machinery**: no key issuance, no validation, no expiry, no

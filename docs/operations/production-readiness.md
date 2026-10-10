@@ -2,14 +2,23 @@
 
 ## Current status
 
-**NOT READY.** Assessed 2026-09-16, blocker 3 re-assessed and cleared 2026-09-21 against a release of both hosted SaaS **and** a self-hosted install.
-There is no release date: hosted deployment follows the first paying cloud customer
-([ADR-008](../decisions/ADR-008-the-website-takes-the-first-payment.md)), and this list is the deployment
-track of Phase 1 (`feature-catalog.md` §5). Scope: the whole repository.
+**NOT READY.** Re-assessed in full on **2026-10-10**, against a release of both hosted SaaS **and** a
+self-hosted install. Scope: the whole repository — the platform checklist, every open blocker
+re-verified against the code rather than this document, and every built feature reviewed in seven
+areas (platform, ingest, API security, reads and storage, scheduler and integrations, billing and
+data, web console and browser SDK).
 
-There is no deployment target, so nothing below was checked against one. Every verdict is against
-the repository and the local stack, and says so. A green `docker compose` on a laptop is not evidence
-about production.
+There is no deployment target, so nothing below was checked against one. Every verdict is against the
+repository and the development stack, and says so. A green `docker compose` on a laptop is not
+evidence about production.
+
+**This list is the plan for Phase 1 Track 3** (`feature-catalog.md` §5): the blockers below are fixed
+before F37 is specified, then F37 closes the ones that belong to it.
+
+What changed since 2026-09-21: every then-open blocker is still open; the `deploy/` tree has not moved
+since that day. Twelve new blockers were found (12-23) — in what the deployment files never set, in
+ingest, in the shared stores, in billing and in deletion. Two rows of the previous assessment were
+wrong (health checks, restore evidence) and are corrected below.
 
 ## Checklist, item by item
 
@@ -18,39 +27,153 @@ about production.
 | Item | Verdict | Evidence |
 |---|---|---|
 | Hosting target | ✗ | `docs/operations/deployment.md`: "no approved production hosting target" |
-| Configuration / secrets | ✗ | App and on-prem compose demand secrets with `${VAR:?}` (13 and 18 uses); dev defaults (`nexovue_dev`) live only in `compose.infra.yaml`. **No external secrets manager** anywhere in `deploy/` or `apps/*/src` |
-| Migrations as a deploy step | ✗ | Neither `docker-compose.app.yaml` nor `docker-compose.onprem.yaml` runs alembic or the 31 ClickHouse migrations; only the manual `just migrate` |
-| Capacity | ? | Every limit is the laptop budget (`TODO(sizing)` in the on-prem compose; `memory.xml`). No load test against a target, because there is no target |
-| Health checks | ✓ | `docker-compose.app.yaml`: receiver `-health`, worker `-health`, API `/healthz`, web `wget` (lines 62, 108, 142, 209). `/healthz` is liveness only, by design (`health/router.py`) |
-| Logging / monitoring / alerting | ✗ | Services log structurally, but nothing watches nexovue itself. `monitoring.md` and `alerting.md` are stubs. F21 (2026-09-19) alerts customers about *their* checks and services; nothing is configured to alert us about nexovue, and no scheduler service has a healthcheck, so a dead `scheduler-deliveries` worker is visible only as notifications left `pending` |
-| Backup and restore evidence | ✗ | Tooling exists and is good (`just backup`, `verify.sh` compares row counts, schema revisions and ingest watermarks). **No restore has ever been performed**; no schedule, no off-host copy, no RPO/RTO |
-| Rollback | ✗ | Every ClickHouse migration has a `.down.sql`; `rollback.md` is a stub; never rehearsed |
-| TLS / public endpoints | ✗ | `deploy/caddy/Caddyfile` covers on-prem only. `otlp_endpoint` defaults to `http://localhost:14318`, which `settings.py` refuses at start-up — so the API cannot start in production until a real ingest hostname exists |
-| Security review | ✗ | None performed. **Clean:** git-history secret scan and transitive licence audit (2026-09-15). F18 (2026-09-17) removed browser checks and their plaintext `fill` text; check credentials are sealed, write-only secrets (ADR-010) |
-| Release process | ✗ | No `.github/` directory; no registry (`TODO(registry)`); no version file, changelog or release tag |
-| Smoke tests | ✗ | Eight e2e specs run against the local stack only; nothing runs after a deploy |
+| Configuration / secrets | ✗ | `${VAR:?}` demands in the app and on-prem compose; no external secrets manager. **Neither deployment file passes `OTLP_ENDPOINT` or `CREDENTIAL_ENCRYPTION_KEY` to the API** (only dev `docker-compose.yaml:229`); the hosted file never sets `TRUSTED_PROXY_COUNT` (only on-prem `:59`) — blockers 4, 16, 17 |
+| Migrations as a deploy step | ✗ | No alembic or ClickHouse migrate call in any compose file or Dockerfile — only `justfile:248-254`. 35 alembic + 32 ClickHouse migrations. `topics.sh` is not run by any target either, and broker auto-create is off (`compose.infra.yaml:40`) |
+| Capacity | ? | Laptop limits (`TODO(sizing)`, `docker-compose.onprem.yaml:88`); no load test, no target. `scheduler-light` at 256M in the hosted file is a limit dev already measured OOM-killing it (`docker-compose.yaml:476-481`) — blocker 22 |
+| Health checks | ✗ *(was ✓)* | receiver, worker, API, web are checked (`docker-compose.app.yaml:123,165,212,265`). **None of the three scheduler services is**: `health.serve_probes` (`apps/scheduler/.../health.py:65`) has no caller anywhere |
+| Logging / monitoring / alerting | ✗ | Structured logs only. Neither Go service exports metrics (no consumer lag, no DLQ depth); the console's production log sink is a no-op (`apps/web/src/shared/logger.ts`, `configureLogger` never called). `monitoring.md`/`alerting.md` are stubs, and `alerting.md` still calls F21 "separately planned" |
+| Backup and restore evidence | ✗ | **Corrected:** two full local restore cycles *were* run on 2026-09-04 (`84832a3`) — this row said none had been. That drill predates about twenty migrations and has not been repeated; never against a deployed target; no schedule, off-host copy, RPO or RTO |
+| Rollback | ✗ | `rollback.md` is a stub; never rehearsed. Most ClickHouse `.down.sql` files drop tables or columns (`000001`-`000007`, `000032`, and seven column drops), and `000024`'s down would double-count endpoint stats against the current worker — so a ClickHouse rollback means *restore the backup and roll the images back together*, never `migrate down` |
+| TLS / public endpoints | ✗ | `deploy/caddy/Caddyfile` serves on-prem only, and the on-prem file has no `web` service it routes to. The hosted file publishes 4317/4318/8000/8080 as plain HTTP with no edge — blockers 4, 18 |
+| Security review | ✗ | This review is the first since the 2026-09-15 secret scan and licence audit (both clean) |
+| Release process | ✗ | No `.github/` or other CI; no registry (`TODO(registry)`); no version file or changelog; the only tag is `backup-trailers-20260915` |
+| Smoke tests | ✗ | Twelve e2e specs, local only; nothing runs after a deploy |
 | Operational ownership | ✗ | One person; `incident-response.md` is seven lines; no on-call path |
-| Invite-only access | ✓ | **Verified 2026-09-21.** `SIGNUP_ENABLED` closes public signup and **defaults to closed** — `signup/router.require_signup_open` refuses before any store is opened, and `GET /system/signup` lets the screen say why. Every target states its choice: `true` in development, `:-false` in both deployment files. People join by invitation (F26 `members.invite`) and new organizations by the admin console's onboarding (F31); a self-hosted install gets its owner from `FIRST_OWNER_EMAIL`. *This row said "there is no invite flow" and "no setting closes signup" until today; both had been untrue since F26 and F31 shipped* |
-| Email in production | ? | Provider is `resend` or `console` (`settings.py:50`); whether a Resend account and a verified sending domain exist was not checked |
-| Self-hosted mode | ✗ | No deployment-mode concept in the code; billing and the receiver's allowance valve are unconditional |
-| On-prem compose | ✗ | Declares itself "SKELETON, NOT YET RUNNABLE" with ten `TODO`s; never run |
-| Check secret key | ✗ | `CHECK_SECRET_KEY` seals check secrets in the API and opens them in the probe workers (ADR-010). The app and on-prem compose files demand it; no key exists for any deployment, and no rotation procedure exists — rotating it today would make every stored check secret unreadable |
+| Invite-only access | ✓ | `SIGNUP_ENABLED` defaults closed in both deployment files (`app:223`, `onprem:248`). The comment at `docker-compose.app.yaml:221-222` ("the on-prem file, where signup stays open") is stale |
+| Email in production | ? | `EMAIL_PROVIDER:-` is blank in the hosted file; nothing refuses `console` in production; no bounce handling; whether a Resend domain exists was not checked |
+| Self-hosted mode | ✗ | No deployment-mode concept anywhere in `apps/` or `packages/` |
+| On-prem compose | ✗ | "SKELETON, NOT YET RUNNABLE"; twelve `TODO`s; never run |
+| Secret keys and rotation | ✗ | `CHECK_SECRET_KEY` (check and channel secrets) and `CREDENTIAL_ENCRYPTION_KEY` (TOTP) each seal with one key and no key id (`probes/secrets.py:36-47`, `auth/encryption.py`) — rotating either loses everything it sealed |
 
 ## Blockers
 
-Each names the failure it prevents.
+Each names the failure it prevents, and which target it stops: **H** hosted, **S** self-hosted.
+Numbers 1-11 keep the numbers other documents already cite.
 
-1. **No hosting target.** There is nothing to deploy to, and no item above can be verified until there is.
-2. **Images are built on a laptop.** With no CI, registry or tag, nobody can say which commit is running on the server, and a bad deploy has no known-good image to return to.
-3. ~~**Signup is public.**~~ **Cleared 2026-09-21** (`docs/changes/signup-closed-by-default/`). The switch and the invite flow both existed already — this blocker outlived them, and what was actually missing was the *default*: a deployment that set nothing got an open signup page. It is closed unless a target opens one, and all three say which they want.
-4. **No ingest hostname with TLS.** The API refuses to start with the default `otlp_endpoint`; without a public TLS host, no partner can send data.
-5. **Migrations are not part of a deploy.** A new image against an old schema starts services whose queries fail, and workers write against columns that do not exist yet.
-6. **No backup has ever been restored.** A lost volume takes every partner's accounts and telemetry with it, with no rehearsed way back.
-7. **Nothing tells us nexovue is down.** A dead receiver drops partners' telemetry and the first signal is a partner's message.
-8. **No check secret key and no way to rotate one.** Without `CHECK_SECRET_KEY` no check can use a secret; with one and no re-sealing procedure, a leaked key cannot be replaced without losing every stored secret.
-9. **Self-hosted installs believe they are hosted.** They show a Razorpay billing screen and cap ingestion on the operator's own disk.
-10. **The on-prem compose has never run.**
-11. **Email delivery is unverified.** If production sends through `console`, partners cannot verify an address or reset a password.
+### Still open from 2026-09-21
+
+1. **No hosting target.** *(H)* There is nothing to deploy to, and no item above can be verified until there is.
+2. **Images are built on a laptop.** *(H, S)* With no CI, registry or tag, nobody can say which commit is running, and a bad deploy has no known-good image to return to. A self-hosted operator has nothing to pull.
+3. ~~**Signup is public.**~~ **Cleared 2026-09-21** (`docs/changes/signup-closed-by-default/`); re-verified 2026-10-10.
+4. **No ingest hostname with TLS — and the API cannot start on any deployed target.** *(H, S)* The settings validator refuses the localhost `OTLP_ENDPOINT` default (`settings.py:313-320`, reproduced), and **neither deployment file passes `OTLP_ENDPOINT` to the container at all**, so the API exits at boot whatever the operator sets.
+5. **Migrations and Kafka topics are not part of a deploy.** *(H, S)* A new image against an old schema starts services whose queries fail; a fresh install's receiver has no topics to publish to and answers 503 to every export.
+6. **No restore has been performed against anything but a laptop, and the one drill is stale.** *(H, S)* A lost volume takes every customer's accounts and telemetry with it, with no rehearsed way back — the 2026-09-04 drill predates about twenty migrations.
+7. **Nothing tells us nexovue is down.** *(H, S)* A dead receiver drops customers' telemetry and the first signal is a customer's message. The scheduler is worse: none of its three services has a liveness probe, so a dead beat silently stops every customer's checks and a dead delivery worker leaves every alert in the outbox.
+8. **Neither encryption key can be rotated.** *(H, S)* `CHECK_SECRET_KEY` seals check *and* notification-channel secrets; `CREDENTIAL_ENCRYPTION_KEY` seals TOTP secrets. Each is one key with no key id, so a leaked key cannot be replaced without making every check, Slack/PagerDuty/webhook channel and 2FA enrolment unreadable at once.
+9. **Self-hosted installs believe they are hosted.** *(S)* They show a Razorpay billing screen and cap ingestion on the operator's own disk.
+10. **The on-prem compose has never run — and its console could not answer.** *(S)* Beyond the twelve `TODO`s, the Caddyfile routes the console to `web:8080` and the on-prem file declares no `web` service (only `web-assets-init`; its own `TODO(caddy)` at `:138`), so every console request would answer 502.
+11. **Email delivery is unverified, and production accepts the `console` provider.** *(H, S)* Nothing refuses `console` outside development; with it, no one can verify an address, reset a password, or receive an alert.
+
+### New on 2026-10-10
+
+12. **One row ClickHouse refuses stops all ingest for every customer.** *(H, S)* Only the log and vitals writers treat a refused row as permanent (`storefailure.RefusedTheData`, `logwriting/writer.go:43`, `vitals/writer.go:96`). The span, summary, metric, profile, service-edge and derive writers return a plain error; `Loop.Retry` retries two minutes and exits (`consume/retry.go:74-79`), and the restarted worker re-reads the same batch. One worker runs every pipeline, so every signal stops — the exact one-hour outage `permanent.go` records, fixed then for logs alone.
+13. **The public gRPC port can be exhausted without an API key.** *(H, S)* grpc-go receives, decompresses (to 16 MiB) and unmarshals the whole message before `runExport` authenticates (`otlp/grpc.go:98-104`, `grpcserver.go:62`), and no concurrent-stream or in-flight limit exists. Enough parallel gzip bodies kill the receiver, dropping every tenant's telemetry. The HTTP door authenticates before it reads.
+14. **No read is bounded in memory, so one heavy read fails every query on the shared ClickHouse — ingest included.** *(H, S)* `READ_SETTINGS` caps time and rows only (`tenant_statements.py:36-40`); the server reports `max_memory_usage = 0`, and nothing caps the window a caller asks for (`window.py`). At the server's 4 GiB ceiling every query fails, the workers' inserts with them.
+15. **Redis evicts state that cannot be rebuilt.** *(H, S)* The one Valkey runs `allkeys-lru` at 384 MB (`compose.infra.yaml:158-162`) on the assumption it holds only counters and cache. It also holds sessions, password-reset and verification tokens, the Celery broker (probe runs, alert deliveries) and the beat leader lock. Under memory pressure it silently signs customers out, voids reset links, drops queued check runs, and can briefly let two beats schedule.
+16. **Behind any proxy, every customer shares one login throttle.** *(H)* `TRUSTED_PROXY_COUNT` defaults to 0 (`settings.py:258`) and the hosted file never sets it, so all customers appear as the proxy's address. The auth tier is 10 a minute (`ratelimit/policy.py:60`): the eleventh login, signup or reset attempt *across all customers* in a minute gets a 429, and the per-organization tiers collapse the same way.
+17. **Two-factor sign-in cannot be enabled on any deployed install.** *(H, S)* `CREDENTIAL_ENCRYPTION_KEY` is not passed by either deployment file, so enrolment answers 503 (`auth/dependencies.py:314`). (Its rotation is blocker 8.)
+18. **The hosted target has no edge in front of the console.** *(H)* `docker-compose.app.yaml` publishes web and API directly. The console's nginx (`deploy/nginx/web.conf`) has no `/api` route — `try_files … /index.html` answers every API call with the HTML page and 200, which the client cannot parse — and there is no TLS and no security header on this path; all of that lives only in the on-prem Caddyfile.
+19. **The documented content-security policy blocks checkout.** *(H)* The billing screen loads `https://checkout.razorpay.com/v1/checkout.js` (`billing/razorpay.py:63`, `checkout-handoff.ts:55`); the Caddyfile's CSP allows scripts from `'self'` and one hash and frames from `'self'` only. The first hosted edge built from it makes every payment fail with `SCRIPT_BLOCKED`.
+20. **Closing an organization keeps charging its card.** *(H)* `organizations/service.request_deletion` and `erase` delete the `billing_subscriptions` rows (`organizations/queries.py:37-44,98-99`) and never cancel the subscription at the processor; nothing in `organizations/` references billing beyond those deletes. The mandate keeps debiting for up to twelve cycles, and each later `subscription.charged` names a subscription we no longer hold, so it is logged and ignored — money taken with no record left to refund from.
+21. **A customer who checks out twice is debited twice.** *(H)* `begin_plan_change` refuses only when the *latest* row is `active` (`billing/service.py:795-804`); any number of `pending` checkouts can exist, two authorised tabs make two live mandates, and `end_subscription` ends only the latest. *(Rated recommended by the area review; raised here — charging a customer twice is not a recommendation.)*
+22. **Erasures owed to a deleted organization are never retried.** *(H, S)* `erasures_still_owed` (`organizations/service.py:170`) is the deletion guarantee the router cites, and its only callers are tests; no scheduler job runs it. An API restart mid-erasure, or rows that land after the purge mutation (which `purge/service.py` itself says need a re-purge), leave a deleted customer's telemetry and objects in place.
+23. **The hosted scheduler's memory limit is one dev already saw kill it.** *(H)* `scheduler-light` is capped at 256M (`docker-compose.app.yaml:338`); the dev file records 256M "OOM-killed [children] during pool startup and the queue never drained" and runs 768M.
+
+## Recommended
+
+Grouped by area; each names the failure. Items that are a business choice are marked **decision**.
+
+**Ingest**
+- Export consumer lag and DLQ depth from both Go services — without them blocker 7 has nothing to watch.
+- DLQ records disappear silently after the topic's 7-day retention (`topics.sh:24,62-65`); no replay or inspection tool, no runbook.
+- A Postgres outage refuses all ingest within ~30 s: the key cache never serves a stale entry (`cache/cache.go:80`), and exceeding 10,000 entries drops the whole cache at once (`:127`).
+- A batch resent after the 5 s delivery timeout is stored twice; `spans` is a plain `MergeTree` and derived counters double (`cmd/receiver/main.go:243`). *(Already recorded; confirmed.)*
+- The tail-sampling buffer caps traces and spans but not bytes (`config/pipeline.go:83-84`); large-attribute spans can OOM the 1 GiB worker, taking every pipeline with it.
+- Unmasked telemetry sits in `*-raw`/`*-dlq` topics for 7 days and goes into backups; masking happens only in the worker.
+- `topics.sh` defaults `REPLICATION=1` and sets no `min.insync.replicas` — an acknowledged write lives on one broker's disk.
+
+**API security**
+- No request-body cap on unauthenticated routes (login, signup, reset read the whole JSON; the limiter peeks 8 KB; no edge `max_size`).
+- Heartbeat tokens are in the URL path, which the request and error logs record in full — anyone with log access can forge "job ran" pings (`heartbeats/router.py:19`, `middleware/request_log.py:55`). The same route's GET+POST `api_route` produces a duplicate OpenAPI operation id.
+- The platform operator enters admin mode with a password *or* a code, even when enrolled in 2FA (`superadmin/adminmode.py:107-120`), and that password is rewritten from an env var every boot.
+- No per-account login lockout — ~14,400 guesses a day against one account from rotating addresses.
+- No `Origin`/`Sec-Fetch-Site` check on unsafe methods; `SameSite=Lax` does not separate sibling `*.nexovue.com` hosts such as the website.
+- Security headers exist only on the on-prem Caddy path (see blocker 18).
+- **Decision:** API tokens outlive the member who minted them (`apitokens/service.py:132-151`; nothing in `members/` revokes them). Intended or not, it should be stated.
+
+**Reads and storage**
+- A ClickHouse read-only user with its own settings profile: today every service uses one account holding every grant, including DROP, FILE, URL and S3 — tenant separation rests entirely on the code-level check. This is also where blocker 14's memory cap belongs, and where `scheduler-light`'s read-only account (F21's open item) comes from.
+- The log live tail bypasses every rate limit and concurrency cap (`middleware/ratelimit.py:219,225` skips WebSockets; `logs/tail.py:518-547` opens one poller per unchecked `project_id`).
+- Deleting a tenant rewrites every part of all 14 telemetry tables (`ALTER DELETE`; a tenant is not a partition) — a whole-store rewrite competing with ingest for memory.
+- The LLM-calls read has no `LIMIT` or truncation flag (`llm_observability/queries.py`) — a span name carrying an id grows the response until it hits the 500,000-row ceiling and fails as an error.
+- API tokens have no organization-wide concurrency ceiling (`TOKEN_TIER`: 8 per token, unlimited tokens).
+- The client's 15 s timeout never applies to tenant reads — `READ_SETTINGS`' 30 s wins (`lifespan.py:238`).
+- `deploy/clickhouse/backfill-trace-summaries.sh` runs `docker exec` against a container named for the laptop, with the dev password as default.
+
+**Scheduler and integrations**
+- The database poller writes resolved internal addresses into the customer-visible integration health (`pollers/postgres_connect.py:212-215` → `pollers/health.py:42`) — a customer can map our network. The probes deliberately omit them (`probes/addresses.py:115-117`).
+- Deploy-webhook replay protection depends on an optional delivery-id header (`deploys/service.py:92-95`); a captured signed request without it records a new deploy every time. The comment at `:89-92` says a replay returns the stored deploy; the code raises `ConflictError`.
+- AWS pollers set no client timeouts — a hung STS/CloudWatch call holds a worker slot to the task's 60 s hard limit.
+- Dev keeps probe queues on Redis DB 1; both deployment files put everything on DB 0.
+
+**Billing and data**
+- Out-of-order webhooks can re-grant a paid plan: `SUBSCRIPTION_ACTIVATED` sets `active` even on a `cancelled` row (`billing/service.py:197-203`).
+- **Decision:** `subscription.halted` (payment permanently failed) changes nothing, so the customer keeps the paid tier indefinitely (`razorpay.py:120-121`).
+- A missing `x-razorpay-event-id` is accepted as `""` (`razorpay.py:370`), so after the first, every id-less event — a cancellation included — is dropped as a duplicate.
+- Nothing refuses sandbox payments in production: the hosted file defaults `PAYMENTS_DOMESTIC_ENV` to `sandbox` (`docker-compose.app.yaml:80`).
+- Credentials inside URLs are not masked — nothing scans `url.full`/`http.url` query strings (`mask/rules.go:24-37`).
+- CSV exports are open to formula injection: customer text starting `=`, `+`, `-`, `@` is written raw (`logs/search.py:341-359`, `traces/service.py:768`).
+- **Decision:** the seeded plans are still placeholders (`0005_plans_table.py:31-37`); the prices in `0015`/`0023` appear in no decision document.
+- No GDPR self-service: no personal data export, no person-level account deletion.
+- No alembic migration uses `CREATE INDEX CONCURRENTLY` or a `lock_timeout` — harmless today, a write outage on the first index added to a grown table.
+- Billing downgrades `0020`, `0022`, `0026` drop billing data — mark them roll-forward only.
+
+**Web console and browser SDK**
+- Production drops every browser error: the logger's production sink is a no-op and `configureLogger` is never called.
+- `index.html` gets heuristic caching (`web.conf` sets `Cache-Control` on `/assets/` only), so a cached page can point at hashed assets a deploy removed — a blank app.
+- Every route ships in one 1.34 MB chunk (400 kB gzipped).
+- `style-src 'unsafe-inline'` sits beside a report-only strict policy no browser has ever loaded the console under.
+- The browser SDK has no client-side sampling; all volume control falls on the receiver's allowance.
+- The SDK is `"private": true` at 0.1.0; publishing needs the release work in blocker 2.
+
+**Platform, carried over**
+- Load-test against the chosen host and replace the laptop limits with measured ones.
+- Rehearse one rollback to the previous tag — as image-plus-restore for ClickHouse (see *Rollback*).
+- An external secrets manager instead of an environment file on the host.
+- Write runbooks only from procedures actually executed.
+- If the repository goes public for the self-hosted release: the CLA text (ADR-005) and `CONTRIBUTING.md`.
+
+**Stale documents found by this review** — `alerting.md` (F21 "separately planned"), the comment at `docker-compose.app.yaml:221-222`, `purge/__init__.py:3` ("Nothing calls this yet"), and the feature catalog's F15 ("unpublishable") and F29 ("no screen") rows.
+
+## Fix order
+
+The founder's plan for now: fix the blockers, with the recommendations beside them where they share
+the work, before F37 is specified. Grouped so each package is one change record:
+
+1. **Ingest cannot be knocked over** — 12, 13 (+ consumer-lag/DLQ metrics, sampling-buffer bytes).
+2. **The shared stores protect themselves** — 14, 15, 23 (+ ClickHouse read-only user and settings profile, live-tail caps, token org ceiling, LLM-calls limit). **Blocker 15 is closed by removing Redis**, not by splitting it: what Redis holds moves to Postgres and Celery is replaced by a Postgres task queue ([ADR-020](../decisions/ADR-020-postgres-carries-what-redis-held.md)).
+3. **Money is right** — 20, 21 (+ out-of-order webhooks, empty delivery id, sandbox-in-production guard, the `halted` decision).
+4. **Deletion finishes** — 22 (+ the purge strategy that stops rewriting the whole store).
+5. **Keys can be rotated** — 8, 17.
+6. **Deployment configuration tells the truth** — 4, 11, 16, 18, 19 (+ request-body cap, security headers on the hosted path, `index.html` caching).
+7. **We can see ourselves** — 7 (+ browser error sink).
+8. **F37 and hosting** — 1, 2, 5, 6, 9, 10: images and CI (as the two images of
+   [ADR-019](../decisions/ADR-019-two-images-each-role-its-own-container.md)), migrations as a deploy
+   step, the deployment-mode concept, the runnable on-prem install, a restore against a real target,
+   and connecting a cloud monitor to what group 7 reports. **Deferred by the founder (2026-10-10)
+   until groups 1-7 and 9 are done.**
+9. **The remaining recommendations** — everything above that no group carries (personal data export
+   and deletion, console code splitting, SDK sampling, and the rest of *Recommended*). The founder
+   chose to fix these now, after group 7.
+
+**Founder decisions taken for this plan (2026-10-10):** one change record per group; every
+recommendation fixed in this round; a permanently failed payment gets a grace period and then drops to
+the free plan (group 3); telemetry erasure is ADR-014's nightly batch, built in group 4; API tokens
+stay the organization's when their creator leaves, as ADR-017 already decided; group 7 makes nexovue
+report its own health, and what watches it waits for the hosting choice; the hosting target is chosen
+in group 8; nexovue ships as two images (ADR-019); Redis is removed and object storage gets a
+local-disk option, leaving ClickHouse, Kafka and Postgres as the only required services, with
+Postgres kept required rather than replaced by SQLite (ADR-020).
 
 ## F21 — alerts, assessed as one change (2026-09-19)
 
@@ -66,12 +189,12 @@ above, and it depends on three of them:
   every sweep and every check state change fails. Both upgrade, downgrade and upgrade again in
   `test_alerts_migration_live.py`.
 
-Recommended for F21:
+Recommended for F21 (both still open 2026-10-10, now tracked above):
 
 - A read-only ClickHouse user for `scheduler-light` (`TODO(hosting)` in both compose files) — today it reads
   telemetry with the API's account, which can write.
 - A healthcheck for the three scheduler services, and something watching the age of the oldest `pending`
-  notification.
+  notification — now part of blocker 7.
 
 ## F17 — continuous profiling, assessed as one change (2026-09-19)
 
@@ -86,24 +209,13 @@ own storage blocker was closed by the founder's NFR3 decision (D6), leaving it u
 | Isolation from other signals | ✓ | Own rate bucket, per-key sample budget, own topic and worker process: spans unaffected by a 400,000-samples-a-second flood (`docs/features/profiling/status.md`) |
 | Tenancy | ✓ | `test_tenant_isolation_live.py` sends a real profile under one key and reads it from another organization: 404 or nothing, on every route |
 | Hostile input | ✓ | Frame bound (413), shared attribute resolution, value overflow, index bounds — `internal/profiles/convert_test.go`, review findings H1/H2 |
-| Capacity | ✗ | NFR3 met as restated (D6): ~73 MB per busy core per day — a 4-core host stores ~4 GB over 14 days, and no host has been sized for it. No per-query memory cap on any API read (`READ_SETTINGS` bounds rows and time only) |
+| Capacity | ✗ | NFR3 met as restated (D6): ~73 MB per busy core per day — a 4-core host stores ~4 GB over 14 days, and no host has been sized for it. No per-query memory cap on any API read — now blocker 14 |
 | Backups | ✓ | `backup.sh` and `verify.sh` list `profiles-raw`; `profile_samples` is picked up with every table |
 | Monitoring | ✗ | Platform blocker 7: nothing watches the profiles worker or its lag |
 
 **Recommended for F17:**
 
-- A per-query `max_memory_usage` in `READ_SETTINGS` for every API read — a heavy read of any signal can still
-  exhaust a shared ClickHouse; the profile reads are bounded by their shape alone (196 MiB for a busy day).
 - A profile flood spread across many keys can still crash-loop `worker` — and since 2026-09-20 that stops every signal, not profiles alone: fetches are
   bounded compressed, and profile messages decompress by orders of magnitude. An uncompressed `profiles-raw`
   or a fleet-wide budget would close it.
 - A request whose produce partly fails is retried whole; the parts the broker kept count twice in the graph.
-
-## Recommended
-
-- Load-test against the chosen host, and replace the laptop limits with measured ones.
-- Rehearse one rollback to the previous tag.
-- Set beta plan limits deliberately. The free plan is 7-day retention and 2 GiB per service, and `0005_plans_table.py` says these rows "are expected to be edited before launch".
-- An external secrets manager instead of an environment file on the host.
-- Write runbooks only from procedures actually executed.
-- If the repository goes public for the self-hosted release: the CLA text (ADR-005) and `CONTRIBUTING.md`.
