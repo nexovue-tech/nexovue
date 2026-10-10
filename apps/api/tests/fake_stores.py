@@ -1,4 +1,4 @@
-"""Redis-backed stores, in a dict, with the real interfaces.
+"""Postgres-backed stores, in a dict, with the real interfaces.
 
 Shared rather than copied into each suite, for the reason `environment.py` is
 shared: the alternative is five in-memory second-factor stores drifting apart
@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from nexovue_api.auth.dependencies import get_second_factor_store
+from nexovue_api.auth.tokens import ID_VALUED_PURPOSES, EmailChange, TokenPurpose
 from nexovue_api.auth.totp import MAX_CHALLENGE_ATTEMPTS, Challenge, PendingEnrolment
 
 
@@ -50,7 +51,10 @@ class FakeSecondFactorStore:
     async def read_challenge(self, *, token: str) -> Challenge | None:
         return self.challenges.get(token)
 
-    async def record_failed_attempt(self, *, token: str, challenge: Challenge) -> None:
+    async def record_failed_attempt(self, *, token: str) -> None:
+        challenge = self.challenges.get(token)
+        if challenge is None:
+            return
         if challenge.attempts + 1 >= MAX_CHALLENGE_ATTEMPTS:
             self.challenges.pop(token, None)
             return
@@ -67,6 +71,57 @@ class FakeSecondFactorStore:
             return False
         self.claimed.add(claim)
         return True
+
+
+class FakeOneTimeTokenStore:
+    """Mailed links in a dictionary, spent once and only for their purpose.
+
+    For the flows around the store. The store's own guarantees — single use under
+    a race, expiry, nothing stored in the clear — are proved against Postgres in
+    `test_auth_recovery_live.py`.
+    """
+
+    def __init__(self) -> None:
+        self.claims: dict[tuple[TokenPurpose, str], tuple[str, str | None]] = {}
+        self.lifetimes: list[int] = []
+        self.minted = 0
+
+    async def issue(self, *, purpose: TokenPurpose, user_id: str, ttl_seconds: int) -> str:
+        if purpose not in ID_VALUED_PURPOSES:
+            raise ValueError(f"{purpose.value} carries more than a user id; use its own methods")
+        return self._mint(purpose, user_id, None, ttl_seconds)
+
+    async def consume(self, *, purpose: TokenPurpose, token: str) -> str | None:
+        if purpose not in ID_VALUED_PURPOSES:
+            raise ValueError(f"{purpose.value} carries more than a user id; use its own methods")
+        claim = self.claims.pop((purpose, token), None)
+        return None if claim is None else claim[0]
+
+    async def issue_email_change(self, *, user_id: str, new_email: str, ttl_seconds: int) -> str:
+        return self._mint(TokenPurpose.CHANGE_EMAIL, user_id, new_email, ttl_seconds)
+
+    async def consume_email_change(self, *, token: str) -> EmailChange | None:
+        claim = self.claims.pop((TokenPurpose.CHANGE_EMAIL, token), None)
+        if claim is None or claim[1] is None:
+            return None
+        return EmailChange(user_id=claim[0], new_email=claim[1])
+
+    async def revoke_all_for(self, *, purpose: TokenPurpose, user_id: str) -> int:
+        spent = [
+            key for key, claim in self.claims.items() if key[0] is purpose and claim[0] == user_id
+        ]
+        for key in spent:
+            del self.claims[key]
+        return len(spent)
+
+    def _mint(
+        self, purpose: TokenPurpose, user_id: str, new_email: str | None, ttl_seconds: int
+    ) -> str:
+        self.minted += 1
+        token = f"token-{self.minted}"
+        self.claims[(purpose, token)] = (user_id, new_email)
+        self.lifetimes.append(ttl_seconds)
+        return token
 
 
 def use_fake_second_factors(app: Any) -> FakeSecondFactorStore:

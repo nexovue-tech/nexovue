@@ -21,8 +21,8 @@ The last viewer to leave stops it, so a closed tab releases everything it held.
 
 **Transport.** The feed reads ClickHouse on an interval rather than subscribing
 to a broker, and that is a real limitation, not a preference — see the module's
-`POLL_INTERVAL_SECONDS` note and the P1-43 report. Redis pub/sub is the right
-long-term source; nothing publishes log records to it today.
+`POLL_INTERVAL_SECONDS` note and the P1-43 report. A stream from the ingest
+pipeline is the right long-term source; nothing publishes log records to one today.
 """
 
 from __future__ import annotations

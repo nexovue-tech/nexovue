@@ -52,7 +52,7 @@ is.
    | receiver | `nexovue-pipeline` | Two or more; scales with incoming traffic |
    | worker | `nexovue-pipeline` | One or more, up to one per Kafka partition |
    | api | `nexovue` | Two or more in the hosted cloud |
-   | scheduler-beat | `nexovue` | Two: one leads through the existing Redis leader lock, one stands by |
+   | scheduler-beat | `nexovue` | Two: one leads through a Postgres advisory lock (ADR-020; Redis's leader lock until 2026-10-10), one stands by |
    | scheduler-light | `nexovue` | One or more |
    | scheduler-deliveries | `nexovue` | One or more |
 

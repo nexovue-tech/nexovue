@@ -25,7 +25,8 @@ Checked before deciding:
   start"*; needs a replica identity — the primary key by default — to replicate updates and deletes;
   does not replicate sequences; and the PostgreSQL documentation describes a switch-over this way as
   costing *"only several seconds of downtime"*.
-- **Sessions live in Redis**, keyed by token fingerprint (`data/postgres/models.py:180`).
+- **Sessions live in Redis**, keyed by token fingerprint (`data/postgres/models.py:180`). *(Since
+  2026-10-10, ADR-020: in the Postgres `sessions` table, so they move with Postgres's replication.)*
 
 ## Decision
 
@@ -63,7 +64,7 @@ it.
 | 1 | Customers are only ever given **our hostname** for ingest and the console — never a cloud load-balancer name or an IP | `otlp_endpoint` is printed at signup and written into customers' exporters and pages; a provider address there forces every customer to reconfigure |
 | 2 | Postgres runs with **`wal_level = logical`** from its first production start | Setting it later requires a restart of production |
 | 3 | **Every Postgres table has a primary key**, enforced by a structural test in the manner of `test_postgres_tenancy_structure.py` | Logical replication cannot replicate an update or delete without one |
-| 4 | **Backup, restore and verify for every store** | Today they cover Postgres and ClickHouse. **Not object storage, and not Redis** |
+| 4 | **Backup, restore and verify for every store** | Today they cover Postgres and ClickHouse. **Not object storage** (Redis was removed 2026-10-10, ADR-020) |
 | 5 | **The open overcount defect is fixed** (decisions 0060 → 0061 → 0075) | A migration replays and backfills overlapping data by design, which is exactly where duplicate rows appear — and this defect's stated cause has already been disproven once |
 | 6 | **Workers can target a different ClickHouse under a different consumer group by configuration alone** | Step 4 depends on it |
 | 7 | **A rehearsed migration** between two throwaway hosts, before any customer depends on one | A procedure that has never run is not a procedure |
@@ -78,8 +79,8 @@ it.
 
 ## Consequences
 
-- **Everyone is signed out once** unless Redis keys are migrated too. No data is lost, but it is a
-  customer-visible disruption and must be either migrated or announced.
+- ~~**Everyone is signed out once** unless Redis keys are migrated too.~~ No longer true since 2026-10-10
+  (ADR-020): sessions are Postgres rows and are carried by the same logical replication.
 - The tables inspected use UUID primary keys, so the sequence restriction barely touches us. Item 3's
   test is what turns "the tables inspected" into "every table".
 - **Unverified:** whether OTLP over **gRPC** passes through Cloudflare's proxy. Fronting both hosts

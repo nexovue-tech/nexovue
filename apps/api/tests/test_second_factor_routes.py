@@ -1,6 +1,6 @@
 """The session list and the two-step sign-in, driven through the real app (T64).
 
-In the shape `test_auth_routes.py` established: Postgres and Redis are replaced
+In the shape `test_auth_routes.py` established: Postgres and the stores on it are replaced
 by dependency overrides, and what is under test is the wiring — which body comes
 back, which status, what the cookie does, and what is *absent* from a response.
 
@@ -76,7 +76,7 @@ class FakeSessionStore:
     async def revoke(self, token: str) -> None:
         self.sessions.pop(token, None)
 
-    async def list_for(self, user_id: str) -> list[ActiveSession]:
+    async def list_for(self, *, org_id: str, user_id: str) -> list[ActiveSession]:
         found = [
             ActiveSession(
                 id=_fingerprint(token),
@@ -85,13 +85,17 @@ class FakeSessionStore:
                 client=session.client,
             )
             for token, session in self.sessions.items()
-            if session.user_id == user_id
+            if session.user_id == user_id and session.org_id == org_id
         ]
         return sorted(found, key=lambda entry: entry.created_at, reverse=True)
 
-    async def revoke_one_of(self, *, user_id: str, session_id: str) -> bool:
+    async def revoke_one_of(self, *, org_id: str, user_id: str, session_id: str) -> bool:
         for token, session in list(self.sessions.items()):
-            if _fingerprint(token) == session_id and session.user_id == user_id:
+            if (
+                _fingerprint(token) == session_id
+                and session.user_id == user_id
+                and session.org_id == org_id
+            ):
                 del self.sessions[token]
                 return True
         return False

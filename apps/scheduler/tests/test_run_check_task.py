@@ -8,32 +8,33 @@ from typing import Any
 
 import pytest
 
-# The Celery app reads its settings at import, and the task module imports the
-# app. Development values, so a private target is reachable (see recording_site).
+# Development values, so a private target is reachable (see recording_site).
 for _name, _value in {
     "ENV": "development",
     "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
-    "REDIS_URL": "redis://localhost:6379/1",
     "KAFKA_BROKERS": "localhost:9092",
     "ALLOW_PRIVATE_PROBE_TARGETS": "true",
 }.items():
     os.environ.setdefault(_name, _value)
 
 from nexovue_platform.checks.task import RECORD_OUTCOME_TASK, RUN_CHECK_TASK  # noqa: E402
+from nexovue_platform.jobs import JobRequest  # noqa: E402
 from probe_fixtures import definition, status_below_400  # noqa: E402
 from recording_site import RecordingSite, Reply  # noqa: E402
 
-from nexovue_scheduler.celery_app import app  # noqa: E402
+from nexovue_scheduler.jobs import results as stored_results  # noqa: E402
 from nexovue_scheduler.probes import tasks  # noqa: E402
 from nexovue_scheduler.settings import get_settings  # noqa: E402
 
 
 class _Sent:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
+    """The jobs a run hands on, as they would be added to the queue."""
 
-    def __call__(self, name: str, **options: Any) -> None:
-        self.calls.append({"name": name, **options})
+    def __init__(self) -> None:
+        self.calls: list[JobRequest] = []
+
+    def __call__(self, request: JobRequest) -> None:
+        self.calls.append(request)
 
 
 class _Publisher:
@@ -44,33 +45,42 @@ class _Publisher:
         self.envelopes.extend((envelope, topic) for topic, _, envelope in messages)
 
 
-class _Redis:
-    def __init__(self) -> None:
-        self.values: dict[str, tuple[str, int]] = {}
+class _Results:
+    """What a Run now leaves for the API, as `job_results` would hold it."""
 
-    def set(self, key: str, value: str, ex: int) -> None:
-        self.values[key] = (value, ex)
+    def __init__(self) -> None:
+        self.stored: list[dict[str, Any]] = []
+
+    async def __call__(self, _engine: Any, **result: Any) -> None:
+        self.stored.append(result)
 
 
 @pytest.fixture
-def harness(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[_Sent, _Publisher, _Redis]]:
-    sent, publisher, redis = _Sent(), _Publisher(), _Redis()
-    monkeypatch.setattr(app, "send_task", sent)
+def harness(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[_Sent, _Publisher, _Results]]:
+    sent, publisher, results = _Sent(), _Publisher(), _Results()
+    monkeypatch.setattr(tasks, "enqueue", sent)
     monkeypatch.setattr(tasks, "_publisher_for_process", lambda: publisher)
-    monkeypatch.setattr(tasks, "_redis_for_process", lambda: redis)
+    monkeypatch.setattr(stored_results, "store", results)
+    monkeypatch.setattr(tasks, "with_engine", lambda work: _complete(work(None)))
     monkeypatch.setenv("ALLOW_PRIVATE_PROBE_TARGETS", "true")
     monkeypatch.setenv("ENV", "development")
     get_settings.cache_clear()
-    yield sent, publisher, redis
+    yield sent, publisher, results
     get_settings.cache_clear()
 
 
+def _complete(work: Any) -> Any:
+    import asyncio
+
+    return asyncio.run(work)
+
+
 def _run(check: Any, **arguments: Any) -> None:
-    tasks.run_check.run(definition=check.model_dump(mode="json"), **arguments)
+    tasks.run_check(definition=check.model_dump(mode="json"), **arguments)
 
 
 def test_a_failure_is_confirmed_from_the_next_location_before_state_is_touched(
-    harness: tuple[_Sent, _Publisher, _Redis], recording_site: RecordingSite
+    harness: tuple[_Sent, _Publisher, _Results], recording_site: RecordingSite
 ) -> None:
     sent, publisher, _ = harness
     recording_site.replies["/"] = Reply(status=503)
@@ -85,18 +95,21 @@ def test_a_failure_is_confirmed_from_the_next_location_before_state_is_touched(
 
     _run(check, location="mumbai", attempt=1)
 
-    assert [call["name"] for call in sent.calls] == [RUN_CHECK_TASK]
+    assert [call.task for call in sent.calls] == [RUN_CHECK_TASK]
     retry = sent.calls[0]
-    assert (retry["queue"], retry["kwargs"]["attempt"], retry["kwargs"]["location"]) == (
+    assert (retry.queue, retry.kwargs["attempt"], retry.kwargs["location"]) == (
         "light.hyderabad",
         2,
         "hyderabad",
     )
+    # It waits for the blip to pass, and is worthless once the next run is due.
+    assert retry.countdown_seconds > 0
+    assert retry.expires_seconds == check.interval_seconds
     assert len(publisher.envelopes) == 2, "the unconfirmed attempt is still published"
 
 
 def test_with_one_location_the_confirmation_comes_from_the_same_place(
-    harness: tuple[_Sent, _Publisher, _Redis], recording_site: RecordingSite
+    harness: tuple[_Sent, _Publisher, _Results], recording_site: RecordingSite
 ) -> None:
     """AC20."""
     sent, _, _ = harness
@@ -109,11 +122,11 @@ def test_with_one_location_the_confirmation_comes_from_the_same_place(
         locations=["local"],
     )
     _run(check, location="local", attempt=1)
-    assert sent.calls[0]["queue"] == "light.local"
+    assert sent.calls[0].queue == "light.local"
 
 
 def test_the_last_attempt_records_the_outcome_after_publishing(
-    harness: tuple[_Sent, _Publisher, _Redis], recording_site: RecordingSite
+    harness: tuple[_Sent, _Publisher, _Results], recording_site: RecordingSite
 ) -> None:
     sent, publisher, _ = harness
     recording_site.replies["/"] = Reply(status=500)
@@ -127,14 +140,16 @@ def test_the_last_attempt_records_the_outcome_after_publishing(
 
     _run(check, location="local", attempt=2)
 
-    assert [call["name"] for call in sent.calls] == [RECORD_OUTCOME_TASK]
-    assert sent.calls[0]["kwargs"]["outcome"] == "down"
-    assert sent.calls[0]["queue"] == "light"
+    assert [call.task for call in sent.calls] == [RECORD_OUTCOME_TASK]
+    assert sent.calls[0].kwargs["outcome"] == "down"
+    assert sent.calls[0].queue == "light"
+    # A state write retries while Postgres is away, so it may run more than once.
+    assert sent.calls[0].max_attempts > 1
     assert len(publisher.envelopes) == 2
 
 
 def test_a_passing_retry_records_up_so_the_state_never_changed(
-    harness: tuple[_Sent, _Publisher, _Redis], recording_site: RecordingSite
+    harness: tuple[_Sent, _Publisher, _Results], recording_site: RecordingSite
 ) -> None:
     """AC19: the failed attempt recorded nothing; only the passing one is recorded."""
     sent, _, _ = harness
@@ -145,14 +160,14 @@ def test_a_passing_retry_records_up_so_the_state_never_changed(
         }
     )
     _run(check, location="local", attempt=2)
-    assert sent.calls[0]["kwargs"]["outcome"] == "up"
+    assert sent.calls[0].kwargs["outcome"] == "up"
 
 
 def test_run_now_records_nothing_and_leaves_its_result_for_the_api(
-    harness: tuple[_Sent, _Publisher, _Redis], recording_site: RecordingSite
+    harness: tuple[_Sent, _Publisher, _Results], recording_site: RecordingSite
 ) -> None:
     """AC24."""
-    sent, publisher, redis = harness
+    sent, publisher, results = harness
     recording_site.replies["/"] = Reply(status=500)
     check = definition(
         {
@@ -165,13 +180,18 @@ def test_run_now_records_nothing_and_leaves_its_result_for_the_api(
 
     assert sent.calls == []
     assert publisher.envelopes == []
-    key = f"nexovue:check-run:{check.org_id}:req-1"
-    stored, ttl = redis.values[key]
-    assert '"outcome":"down"' in stored and ttl > 0
+    [stored] = results.stored
+    assert (stored["org_id"], stored["request_id"], stored["kind"]) == (
+        check.org_id,
+        "req-1",
+        "check_run",
+    )
+    assert stored["payload"]["outcome"] == "down"
+    assert stored["ttl_seconds"] > 0
 
 
 def test_a_run_inside_a_maintenance_window_is_marked_and_changes_no_state(
-    harness: tuple[_Sent, _Publisher, _Redis], recording_site: RecordingSite
+    harness: tuple[_Sent, _Publisher, _Results], recording_site: RecordingSite
 ) -> None:
     """AC23: the run is published, marked, and no state is recorded — even a failure."""
     from datetime import UTC, datetime, timedelta

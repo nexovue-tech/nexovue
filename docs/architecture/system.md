@@ -15,13 +15,13 @@ Nexovue is a multi-tenant observability platform. It accepts OpenTelemetry trace
 | `apps/receiver` | OTLP HTTP/gRPC and browser ingestion, authentication, gates, envelope creation, Kafka publish |
 | `apps/workers` | Kafka consumption, masking, derivation, sampling, storage, usage metering |
 | `apps/api` | Postgres control-plane owner and tenant-scoped telemetry API |
-| `apps/scheduler` | Celery-based synthetic probes and CloudWatch/Postgres pollers; alert evaluation and delivery (F21) |
+| `apps/scheduler` | Synthetic probes and CloudWatch/Postgres pollers; alert evaluation and delivery (F21) |
 | `apps/web` | React console |
 | `packages/contracts` | Frozen internal protobuf envelope, and `ProfileSamples` — the one payload of nexovue's own (ADR-015) |
 
 ## Data stores
 
-Kafka is the durable buffer. ClickHouse stores telemetry and rollups. Postgres owns organizations, users, projects, credentials, billing, checks, integrations, deploy events, and audit state. Redis/Valkey stores sessions, rate-limit state, Celery broker state, scheduler leadership, send-test outcomes and when each alert sweep last ran. SeaweedFS or S3 stores source-map bytes.
+Kafka is the durable buffer. ClickHouse stores telemetry and rollups. Postgres owns organizations, users, projects, credentials, billing, checks, integrations, deploy events, and audit state; since ADR-020 it also holds sessions, one-time links, second-factor state, the auth tier's rate-limit windows, the scheduler's job queue (`jobs`) and job results (Run now and send-test outcomes), when each alert sweep last ran, and beat leadership as an advisory lock. Other rate limits are counted in each process. SeaweedFS or S3 stores source-map bytes.
 
 ## Alerts (F21)
 

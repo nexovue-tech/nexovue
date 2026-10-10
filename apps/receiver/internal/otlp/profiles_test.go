@@ -1,10 +1,8 @@
 package otlp_test
 
 import (
-	"context"
 	"net/http"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -175,27 +173,10 @@ func TestTheBrowserEntranceDoesNotTakeProfiles(t *testing.T) {
 	}
 }
 
-// keyedCounter counts per rate-limit key, which is what tells a profiles bucket from
-// the key's own.
-type keyedCounter struct {
-	mu   sync.Mutex
-	seen map[string]int64
-}
-
-func (c *keyedCounter) Increment(_ context.Context, key string, by int64, _ time.Duration) (int64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.seen == nil {
-		c.seen = map[string]int64{}
-	}
-	c.seen[key] += by
-	return c.seen[key], nil
-}
-
 // AC15, the receiver's half: a profiling flood spends its own budget, never the one
 // the key's traces need.
 func TestProfilesSpendTheirOwnRateBudget(t *testing.T) {
-	d := newDoor(t, doorOptions{counter: &keyedCounter{}, requestsPerSec: 1})
+	d := newDoor(t, doorOptions{requestsPerSec: 1})
 	body, _ := proto.Marshal(profilesRequest())
 
 	if first := postTo(t, d, otlp.ProfilesPath, body, nil); first.Code != http.StatusOK {
@@ -215,7 +196,7 @@ func TestProfilesSpendTheirOwnRateBudget(t *testing.T) {
 // sends a second: past it, a retryable refusal that says samples, and the key's
 // spans untouched.
 func TestProfileSamplesPastTheKeysBudgetAreRefusedAndSpansAreNot(t *testing.T) {
-	d := newDoor(t, doorOptions{counter: &keyedCounter{}, requestsPerSec: 100, samplesPerSec: 3})
+	d := newDoor(t, doorOptions{requestsPerSec: 100, samplesPerSec: 3})
 	request := profilesRequest()
 	profile := request.GetResourceProfiles()[0].GetScopeProfiles()[0].GetProfiles()[0]
 	profile.Samples = append(profile.Samples, profile.GetSamples()[0], profile.GetSamples()[0])

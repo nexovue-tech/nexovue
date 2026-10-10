@@ -319,7 +319,6 @@ def test_run_now_sends_exactly_the_arguments_the_probe_task_accepts() -> None:
     for name, value in {
         "ENV": "development",
         "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
-        "REDIS_URL": "redis://localhost:6379/1",
         "KAFKA_BROKERS": "localhost:9092",
     }.items():
         os.environ.setdefault(name, value)
@@ -338,18 +337,21 @@ def test_run_now_sends_exactly_the_arguments_the_probe_task_accepts() -> None:
         interval_seconds=60,
         locations=["local"],
     )
+    from nexovue_scheduler.jobs.registry import registered
+
     sent = set(run_now_arguments(definition, "local", "request"))
+    run_check = registered()[RUN_CHECK_TASK]
     accepted = {
         parameter.name
-        for parameter in inspect.signature(tasks.run_check.run).parameters.values()
+        for parameter in inspect.signature(run_check).parameters.values()
         if parameter.kind is inspect.Parameter.KEYWORD_ONLY
     }
 
-    assert tasks.run_check.name == RUN_CHECK_TASK
+    assert run_check is tasks.run_check
     assert sent <= accepted
     assert {
         parameter.name
-        for parameter in inspect.signature(tasks.run_check.run).parameters.values()
+        for parameter in inspect.signature(run_check).parameters.values()
         if parameter.kind is inspect.Parameter.KEYWORD_ONLY
         and parameter.default is inspect.Parameter.empty
     } <= sent
@@ -364,7 +366,6 @@ def test_send_test_sends_exactly_the_arguments_the_deliveries_task_accepts() -> 
     for name, value in {
         "ENV": "development",
         "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
-        "REDIS_URL": "redis://localhost:6379/1",
         "KAFKA_BROKERS": "localhost:9092",
     }.items():
         os.environ.setdefault(name, value)
@@ -372,13 +373,53 @@ def test_send_test_sends_exactly_the_arguments_the_deliveries_task_accepts() -> 
     from nexovue_platform.alerts.tasks import SEND_TEST_TASK, send_test_arguments
 
     from nexovue_scheduler.alerts import tasks
+    from nexovue_scheduler.jobs.registry import registered
 
     sent = set(send_test_arguments(org_id="o", channel_id="c", request_id="r"))
+    send_test = registered()[SEND_TEST_TASK]
     keyword_only = [
         parameter
-        for parameter in inspect.signature(tasks.send_test.run).parameters.values()
+        for parameter in inspect.signature(send_test).parameters.values()
         if parameter.kind is inspect.Parameter.KEYWORD_ONLY
     ]
 
-    assert tasks.send_test.name == SEND_TEST_TASK
+    assert send_test is tasks.send_test
     assert sent == {parameter.name for parameter in keyword_only}
+
+
+def test_every_task_beat_and_the_api_add_is_one_a_worker_runs() -> None:
+    """A job named for a task no worker registers is claimed and fails, every
+    interval, for ever: the queue's version of a queue nothing consumes."""
+    import os
+
+    for name, value in {
+        "ENV": "development",
+        "POSTGRES_DSN": "postgresql://u:p@localhost:5432/d",
+        "KAFKA_BROKERS": "localhost:9092",
+    }.items():
+        os.environ.setdefault(name, value)
+
+    from nexovue_platform.alerts import tasks as alert_tasks
+    from nexovue_platform.checks import task as check_tasks
+
+    from nexovue_scheduler import beat
+    from nexovue_scheduler.jobs.expiry import SWEEP_EXPIRED_TASK
+    from nexovue_scheduler.jobs.registry import registered
+
+    added = {
+        check_tasks.RUN_CHECK_TASK,
+        check_tasks.RECORD_OUTCOME_TASK,
+        check_tasks.SWEEP_HEARTBEATS_TASK,
+        check_tasks.SWEEP_UNATTACHED_FILES_TASK,
+        alert_tasks.DELIVER_TASK,
+        alert_tasks.SWEEP_DELIVERIES_TASK,
+        alert_tasks.PRUNE_ATTEMPTS_TASK,
+        alert_tasks.EVALUATE_THRESHOLDS_TASK,
+        alert_tasks.EVALUATE_SILENCE_TASK,
+        alert_tasks.EVALUATE_NEW_ERRORS_TASK,
+        alert_tasks.SEND_TEST_TASK,
+        SWEEP_EXPIRED_TASK,
+        *beat.POLL_TASKS.values(),
+    }
+
+    assert added <= set(registered())

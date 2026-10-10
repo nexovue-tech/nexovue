@@ -12,7 +12,7 @@ from functools import lru_cache
 from typing import Annotated, Final, Literal
 
 from nexovue_platform.email.settings import EmailProvider, EmailSettings, email_settings
-from pydantic import Field, PostgresDsn, RedisDsn, ValidationError, field_validator
+from pydantic import Field, PostgresDsn, ValidationError, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings import SettingsError as SettingsSourceError
 
@@ -38,19 +38,9 @@ class Settings(BaseSettings):
 
     # --- infrastructure, named identically in every service -----------------
     postgres_dsn: PostgresDsn
-    redis_url: RedisDsn
     # NoDecode keeps pydantic-settings from JSON-decoding the value, so the
     # validator below sees the comma-separated string the Go services read.
     kafka_brokers: Annotated[list[str], NoDecode, Field(min_length=1)]
-
-    # Probes are served on their own port: a Celery worker has no HTTP surface
-    # of its own, and an orchestrator still has to be able to ask.
-    scheduler_health_port: Annotated[int, Field(ge=1, le=65535)] = 8081
-
-    # Every task gets a hard ceiling. A probe that hangs holds a worker slot,
-    # and a held slot is a check that silently stops running.
-    task_soft_time_limit_seconds: Annotated[int, Field(gt=0)] = 30
-    task_hard_time_limit_seconds: Annotated[int, Field(gt=0)] = 60
 
     # --- publishing ---------------------------------------------------------
     # Named here rather than shared, the same way the receiver and the worker
@@ -121,20 +111,9 @@ class Settings(BaseSettings):
 
     # --- beat leadership ----------------------------------------------------
     # More than one beat process runs, so that a dead one does not stop every
-    # customer's checks. Only the holder of this lock schedules; the others wait
-    # and take over. Two beats scheduling at once would double every check,
-    # which is the failure this exists to prevent.
-    beat_leader_key: str = "nexovue:scheduler:beat-leader"
-
-    # How long the lock survives without a refresh. This is the longest a check
-    # can be delayed by a leader dying: the successor cannot know the holder is
-    # gone until the key expires. Short enough to bound that gap, long enough to
-    # outlive a slow tick.
-    beat_leader_ttl_seconds: Annotated[int, Field(gt=0)] = 30
-
-    # How often a follower asks whether the lock is free. It is also how often
-    # the leader refreshes, and must stay well under the TTL or the leader will
-    # expire itself while still running.
+    # customer's checks. Only the holder of the leader lock (`leader.py`)
+    # schedules; the others ask this often whether it is free. It is also the
+    # longest a check can wait for a successor once a leader dies.
     beat_leader_poll_seconds: Annotated[int, Field(gt=0)] = 5
 
     # How often the schedule is re-read from Postgres. This is the delay between

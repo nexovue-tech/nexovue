@@ -21,7 +21,6 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from nexovue_api.apitokens import service as api_tokens
-from nexovue_api.apitokens import usage as token_usage
 from nexovue_api.apitokens.tokens import looks_like_api_token
 from nexovue_api.auth.sessions import bearer_token_from_headers
 from nexovue_api.errors.exceptions import UnauthenticatedError
@@ -66,13 +65,12 @@ class AssistantAuthentication:
             except UnauthenticatedError as refused:
                 await _refuse(send, refused.detail)
                 return
-            await token_usage.count_request(resources.redis, session, token=token, now=now)
+            resources.token_usage.count(token.id, now)
             reader = {
                 "org_id": token.org_id,
                 "project_scope": token.project_id,
                 "token_id": token.id,
             }
-            await session.commit()
 
         state = scope.setdefault("state", {})
         state[READER_KEY] = reader

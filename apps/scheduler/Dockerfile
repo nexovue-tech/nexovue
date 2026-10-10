@@ -1,4 +1,4 @@
-# Production image for the scheduler: Celery beat and the light worker queue.
+# Production image for the scheduler: beat, and the workers that run its jobs.
 FROM python:3.13-slim-trixie AS build
 COPY --from=ghcr.io/astral-sh/uv:0.12.6 /uv /usr/local/bin/uv
 
@@ -33,6 +33,5 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 
 RUN useradd --system --uid 10001 nexovue
 USER nexovue
-EXPOSE 8081
-# The queues come from the app: `light` and `light.$PROBER_REGION`.
-CMD ["celery", "-A", "nexovue_scheduler.celery_app", "worker"]
+# A worker on `light` and `light.$PROBER_REGION`; compose names the role per service.
+CMD ["python", "-m", "nexovue_scheduler", "worker"]

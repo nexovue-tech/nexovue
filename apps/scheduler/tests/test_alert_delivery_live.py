@@ -1,4 +1,4 @@
-"""Step 1 end to end, below Celery: a check goes down, and its owner gets an email;
+"""Step 1 end to end, below the job queue: a check goes down, and its owner gets an email;
 it recovers, and the owner is told how long it lasted (AC5, AC21).
 
 The mail port is a recorder, so what is asserted is exactly what the provider

@@ -88,7 +88,7 @@ async def authenticate_second_factor(
 
     user, organization = found
     if not await second_factor.verify(db, second_factors, box, user=user, code=code):
-        await second_factors.record_failed_attempt(token=challenge_token, challenge=challenge)
+        await second_factors.record_failed_attempt(token=challenge_token)
         await _record_refusal(db, user=user)
         raise UnauthenticatedError(SECOND_FACTOR_NOT_ACCEPTED)
 

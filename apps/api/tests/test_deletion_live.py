@@ -69,6 +69,8 @@ from nexovue_api.data.postgres.models import (
     ErrorGroupWatermark,
     Incident,
     Integration,
+    Job,
+    JobResult,
     MaintenanceWindow,
     MaintenanceWindowCheck,
     Notification,
@@ -76,11 +78,13 @@ from nexovue_api.data.postgres.models import (
     NotificationChannel,
     PlanGrant,
     ServiceLastSeen,
+    SessionRecord,
     SiteKey,
     SourceMap,
     SupportAccessGrant,
     UsageDaily,
     UsageDailyService,
+    ViewAsTicketRecord,
     WebsitePayment,
 )
 from nexovue_api.errors.exceptions import ConflictError, NotFoundError
@@ -180,6 +184,10 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "service_last_seen",
     "error_groups_seen",
     "error_group_watermarks",
+    "sessions",
+    "view_as_tickets",
+    "jobs",
+    "job_results",
 )
 
 # What the fixture writes, per tenant, spelled out rather than counted at run
@@ -231,6 +239,12 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "usage_daily": ROWS_PER_TABLE,
     "usage_daily_services": ROWS_PER_TABLE,
     "users": 1,
+    # ADR-020: what Redis held. One signed-in session and one support ticket for
+    # the tenant's person; one queued job and one uncollected result.
+    "sessions": 1,
+    "view_as_tickets": 1,
+    "jobs": 1,
+    "job_results": 1,
 }
 
 
@@ -595,6 +609,45 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant, store: ObjectSt
                 size_bytes=len(MAP_BYTES),
             )
         )
+
+    later = now + timedelta(hours=1)
+    db.add_all(
+        [
+            SessionRecord(
+                token_hash=uuid.uuid4().hex * 2,
+                user_id=tenant.user_id,
+                org_id=tenant.org_id,
+                expires_at=later,
+            ),
+            ViewAsTicketRecord(
+                token_hash=uuid.uuid4().hex * 2,
+                user_id=tenant.user_id,
+                org_id=tenant.org_id,
+                operator_label="support",
+                reason="deletion test",
+                grant_id=uuid.uuid4(),
+                impersonation_id=uuid.uuid4(),
+                until=later,
+                expires_at=later,
+            ),
+            Job(
+                queue="light",
+                task="deletion-test",
+                kwargs={},
+                org_id=tenant.org_id,
+                max_attempts=1,
+                soft_limit_seconds=1,
+                hard_limit_seconds=2,
+            ),
+            JobResult(
+                request_id=uuid.uuid4(),
+                org_id=tenant.org_id,
+                kind="check_run",
+                payload={},
+                expires_at=later,
+            ),
+        ]
+    )
 
     # No model declares this table, so it is written the way the worker does.
     await db.execute(

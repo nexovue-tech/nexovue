@@ -88,6 +88,13 @@ EXEMPT: Final = {
     # tenant rather than being filtered by one. The row it returns is refused
     # unless it is live, and every read after it is scoped by `reader.org_id`.
     "find_by_hash",
+    # A session and a support ticket are found by the token's hash alone (ADR-020),
+    # for `find_by_hash`'s reason: the token is what a caller presents before any
+    # organization is known, and the row it finds names the tenant.
+    "_session_by_token_hash",
+    "_update_by_token_hash",
+    "_end_by_token_hash",
+    "_spend_ticket_by_token_hash",
 }
 
 

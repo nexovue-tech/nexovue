@@ -635,7 +635,6 @@ class TestSettings:
             postgres_dsn="postgresql://nexovue:secret@localhost:5432/nexovue",
             clickhouse_dsn="clickhouse://nexovue:secret@localhost:8123/nexovue",
             clickhouse_writer_dsn="clickhouse://nexovue:secret@localhost:8123/nexovue",
-            redis_url="redis://localhost:6379/0",
             payments_domestic_app_id="TEST_APP_ID",
         )
 
@@ -647,7 +646,6 @@ class TestSettings:
             postgres_dsn="postgresql://nexovue:secret@localhost:5432/nexovue",
             clickhouse_dsn="clickhouse://nexovue:secret@localhost:8123/nexovue",
             clickhouse_writer_dsn="clickhouse://nexovue:secret@localhost:8123/nexovue",
-            redis_url="redis://localhost:6379/0",
             payments_domestic_app_id="TEST_APP_ID",
             payments_domestic_secret_key=SECRET,
             payments_domestic_base_url="https://sandbox.example.test/pg/",

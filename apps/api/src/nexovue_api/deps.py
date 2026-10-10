@@ -22,7 +22,6 @@ from clickhouse_connect.driver.asyncclient import AsyncClient
 from fastapi import Depends
 from nexovue_platform.email import EMAIL_VARIABLES, EmailSender
 from nexovue_platform.telemetry.context import bind_tenant
-from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
@@ -80,10 +79,6 @@ CLICKHOUSE_UNAVAILABLE_DETAIL: Final = (
 )
 
 
-def get_redis(resources: Annotated[Resources, Depends(get_resources)]) -> Redis:
-    return resources.redis
-
-
 async def get_clickhouse(resources: Annotated[Resources, Depends(get_resources)]) -> AsyncClient:
     """The analytics client, connected on the first request that needs one.
 
@@ -105,23 +100,21 @@ def get_object_store(
     return resources.object_store
 
 
-def get_probe_broker(
-    resources: Annotated[Resources, Depends(get_resources)],
-) -> ProbeBroker | None:
-    """The scheduler's broker, or None when Run now is not configured."""
+def get_probe_broker(resources: Annotated[Resources, Depends(get_resources)]) -> ProbeBroker:
+    """Where Run now adds its job and reads its result."""
     return resources.probes
 
 
 def get_channel_tester(
     resources: Annotated[Resources, Depends(get_resources)],
-) -> ChannelTester | None:
-    """The scheduler's broker for send tests, or None when it is not configured."""
+) -> ChannelTester:
+    """Where a send test adds its job and reads its outcome."""
     return resources.channel_tests
 
 
 def get_evaluation_reader(
     resources: Annotated[Resources, Depends(get_resources)],
-) -> EvaluationReader | None:
+) -> EvaluationReader:
     return resources.evaluations
 
 
@@ -169,12 +162,6 @@ def get_optional_email_sender(
     return resources.email
 
 
-def get_one_time_tokens(
-    resources: Annotated[Resources, Depends(get_resources)],
-) -> OneTimeTokenStore:
-    return OneTimeTokenStore(resources.redis)
-
-
 def get_session_store(resources: Annotated[Resources, Depends(get_resources)]) -> SessionStore:
     return resources.sessions
 
@@ -210,19 +197,25 @@ AppSettings = Annotated[Settings, Depends(get_app_settings)]
 # exit after it, so a client re-reading on a 2xx could read the old rows, and a
 # failed commit followed a success already sent.
 DbSession = Annotated[AsyncSession, Depends(get_db_session, scope="function")]
-RedisClient = Annotated[Redis, Depends(get_redis)]
 ClickHouseClient = Annotated[AsyncClient, Depends(get_clickhouse)]
 CurrentSession = Annotated[Session, Depends(get_current_session)]
 SessionStoreDep = Annotated[SessionStore, Depends(get_session_store)]
 # Optional on purpose: only source maps need it, and they say so by name.
 ObjectStoreDep = Annotated[ObjectStore | None, Depends(get_object_store)]
-ProbeBrokerDep = Annotated[ProbeBroker | None, Depends(get_probe_broker)]
-ChannelTesterDep = Annotated[ChannelTester | None, Depends(get_channel_tester)]
-EvaluationReaderDep = Annotated[EvaluationReader | None, Depends(get_evaluation_reader)]
+ProbeBrokerDep = Annotated[ProbeBroker, Depends(get_probe_broker)]
+ChannelTesterDep = Annotated[ChannelTester, Depends(get_channel_tester)]
+EvaluationReaderDep = Annotated[EvaluationReader, Depends(get_evaluation_reader)]
 # Not optional, unlike the object store: a route that asks for this one needs to
 # send, so the refusal belongs before the handler rather than inside it.
 EmailDelivery = Annotated[EmailSender, Depends(get_email_sender)]
 # Optional, like the object store, and for one caller: signup must not fail
 # because mail could not go. Everything else uses EmailDelivery.
 OptionalEmail = Annotated[EmailSender | None, Depends(get_optional_email_sender)]
+
+
+def get_one_time_tokens(db: DbSession) -> OneTimeTokenStore:
+    """On the request's own transaction, so a link is spent with the work it authorises."""
+    return OneTimeTokenStore(db)
+
+
 OneTimeTokens = Annotated[OneTimeTokenStore, Depends(get_one_time_tokens)]

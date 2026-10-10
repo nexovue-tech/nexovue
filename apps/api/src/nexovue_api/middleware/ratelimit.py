@@ -40,6 +40,7 @@ from nexovue_api.ratelimit.policy import (
     Tier,
     tier_for,
 )
+from nexovue_api.ratelimit.token_owners import TokenOwners
 
 logger = get_logger(__name__)
 
@@ -69,10 +70,13 @@ Identity = tuple[str, str]
 
 @dataclass(frozen=True, slots=True)
 class Counted:
-    """One bucket a request is counted in: whose, how many, and how many at once."""
+    """One bucket a request is counted in: whose, how many, and how many at once.
+
+    No quota is a bucket that only caps what is in flight.
+    """
 
     identity: Identity
-    quota: Quota
+    quota: Quota | None
     max_concurrent: int | None
 
 
@@ -88,9 +92,11 @@ class RateLimitMiddleware:
         enabled: bool = True,
         trusted_proxy_count: int = 0,
         sessions: SessionStore | None = None,
+        token_owners: TokenOwners | None = None,
     ) -> None:
         self._app = app
         self._sessions = sessions
+        self._token_owners = token_owners
         self._limiter = limiter
         self._plan_limits = plan_limits
         self._enabled = enabled
@@ -107,12 +113,12 @@ class RateLimitMiddleware:
         if tier is TOKEN_TIER and presented is not None:
             # A machine credential pays for itself: never the address it dialled
             # from (one CI runner is many tokens) and never a person (there is
-            # none). The organization it belongs to is not known here — that
-            # costs a database read — and the per-token cap is what protects the
-            # cluster.
-            multiplier = await plan_limits.multiplier_for(None)
+            # none) — but its organization's ceiling holds however many tokens
+            # that organization mints.
+            owner = await self._organization_of(scope, presented)
+            multiplier = await plan_limits.multiplier_for(owner)
             await self._limit(
-                scope, receive, send, limiter, _per_token(tier, presented, multiplier)
+                scope, receive, send, limiter, _per_token(tier, presented, owner, multiplier)
             )
             return
 
@@ -137,6 +143,8 @@ class RateLimitMiddleware:
         """Spend every bucket this request falls in, then serve it."""
         decision: Decision | None = None
         for bucket in counted:
+            if bucket.quota is None:
+                continue
             limit_scope, value = bucket.identity
             outcome = await limiter.consume(scope=limit_scope, identity=value, quota=bucket.quota)
             if not outcome.allowed:
@@ -159,24 +167,24 @@ class RateLimitMiddleware:
     ) -> None:
         """Run the request, holding a concurrency slot in every bucket that caps them."""
         send = _with_limit_headers(send, decision)
-        held: list[tuple[Identity, str]] = []
+        held: list[Identity] = []
         try:
             for bucket in counted:
                 if bucket.max_concurrent is None:
                     continue
                 limit_scope, value = bucket.identity
-                token = await limiter.acquire_slot(
+                granted = await limiter.acquire_slot(
                     scope=limit_scope, identity=value, max_concurrent=bucket.max_concurrent
                 )
-                if token is None:
+                if not granted:
                     request = Request(scope, receive)
                     await self._reject(request, decision, send, detail=TOO_MANY_CONCURRENT_DETAIL)
                     return
-                held.append((bucket.identity, token))
+                held.append(bucket.identity)
             await self._app(scope, receive, send)
         finally:
-            for (limit_scope, value), token in held:
-                await limiter.release_slot(scope=limit_scope, identity=value, token=token)
+            for limit_scope, value in held:
+                await limiter.release_slot(scope=limit_scope, identity=value)
 
     async def _signed_in(self, scope: Scope) -> Session | None:
         """The live session a request carries, or None — read without touching it.
@@ -192,6 +200,12 @@ class RateLimitMiddleware:
         if sessions is None or not token:
             return None
         return await sessions.peek(token)
+
+    async def _organization_of(self, scope: Scope, presented: str) -> str | None:
+        owners = self._token_owners or getattr(
+            getattr(scope.get("app"), "state", None), "token_owners", None
+        )
+        return None if owners is None else await owners.organization_of(presented)
 
     async def _reject(
         self,
@@ -280,19 +294,29 @@ def _per_person(tier: Tier, session: Session, multiplier: float) -> list[Counted
     return counted
 
 
-def _per_token(tier: Tier, presented: str, multiplier: float) -> list[Counted]:
-    """One bucket, the token's own, keyed by its fingerprint.
+def _per_token(tier: Tier, presented: str, owner: str | None, multiplier: float) -> list[Counted]:
+    """The token's own bucket, keyed by its fingerprint, then its organization's.
 
-    The fingerprint and never the token: a Redis key is not a place for a
-    credential, which is the rule the signed-out path already follows.
+    The fingerprint and never the token: a counter key is not a place for a
+    credential, which is the rule the signed-out path already follows. A token
+    that is not ours has no organization, and authentication refuses it next.
     """
-    return [
+    counted = [
         Counted(
             identity=(SCOPE_TOKEN, f"tok:{token_fingerprint(presented)}"),
             quota=tier.quota.scaled(multiplier),
             max_concurrent=tier.max_concurrent,
         )
     ]
+    if owner is not None and (tier.org_quota is not None or tier.org_max_concurrent is not None):
+        counted.append(
+            Counted(
+                identity=(SCOPE_ORGANIZATION, owner),
+                quota=None if tier.org_quota is None else tier.org_quota.scaled(multiplier),
+                max_concurrent=tier.org_max_concurrent,
+            )
+        )
+    return counted
 
 
 def _per_address(tier: Tier, identities: list[Identity], multiplier: float) -> list[Counted]:
@@ -388,7 +412,7 @@ def _email_from(body: bytes) -> str | None:
 
 
 def _session_identity(scope: Scope) -> str | None:
-    """A stable id for a signed-in caller, without putting the token in a Redis key."""
+    """A stable id for a signed-in caller, without putting the token in a counter key."""
     token = session_token_from_headers(Headers(scope=scope))
-    # The fingerprint, never the token: a Redis key is not a place for a credential.
+    # The fingerprint, never the token: a counter key is not a place for a credential.
     return f"tok:{token_fingerprint(token)}" if token else None

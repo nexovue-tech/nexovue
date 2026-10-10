@@ -2,30 +2,29 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Final
 
 from nexovue_platform.alerts.tasks import (
     DELIVER_TASK,
     PRUNE_ATTEMPTS_TASK,
+    SEND_TEST_RESULT_KIND,
     SEND_TEST_RESULT_TTL_SECONDS,
     SEND_TEST_TASK,
     SWEEP_DELIVERIES_TASK,
-    send_test_result_key,
 )
 from nexovue_platform.checks.sealing import NOTIFICATION_CHANNEL_PURPOSE, SealedBox, decode_key
 from nexovue_platform.email import build_email_sender
 from nexovue_platform.telemetry.logging import get_logger
-from redis import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler.alerts import health, incidents, outbox
 from nexovue_scheduler.alerts import send_test as channel_test
 from nexovue_scheduler.alerts.delivery import deliver_due
 from nexovue_scheduler.alerts.dispatch import Outbound
-from nexovue_scheduler.celery_app import app
+from nexovue_scheduler.jobs import results
+from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import with_engine
 from nexovue_scheduler.settings import get_settings
 
@@ -35,17 +34,16 @@ logger = get_logger(__name__)
 ATTEMPTS_KEPT: Final = timedelta(days=30)
 
 _outbound: Outbound | None = None
-_redis: Redis | None = None
 
 
-@app.task(name=DELIVER_TASK, bind=True, max_retries=0)
-def deliver(self: Any) -> None:
+@task(DELIVER_TASK)
+def deliver() -> None:
     """The fast path, dispatched after a commit that wrote notifications."""
     _deliver_due()
 
 
-@app.task(name=SWEEP_DELIVERIES_TASK, bind=True, max_retries=0)
-def sweep_deliveries(self: Any) -> None:
+@task(SWEEP_DELIVERIES_TASK)
+def sweep_deliveries() -> None:
     """The safety net: anything due that the fast path did not take (ADR-013), the
     repeats open incidents are owed (FR10), and which channels are failing (FR21)."""
 
@@ -70,8 +68,8 @@ def sweep_deliveries(self: Any) -> None:
         logger.info("reported failing alert channels", channels=reported)
 
 
-@app.task(name=SEND_TEST_TASK, bind=True, max_retries=0)
-def send_test(self: Any, *, org_id: str, channel_id: str, request_id: str) -> None:
+@task(SEND_TEST_TASK)
+def send_test(*, org_id: str, channel_id: str, request_id: str) -> None:
     """Send one labelled test and leave the outcome for the API to collect (FR3)."""
     outcome = with_engine(
         lambda engine: channel_test.send_test(
@@ -83,21 +81,24 @@ def send_test(self: Any, *, org_id: str, channel_id: str, request_id: str) -> No
             now=datetime.now(UTC),
         )
     )
-    _redis_for_process().set(
-        send_test_result_key(org_id, request_id),
-        json.dumps(
-            {
+    with_engine(
+        lambda engine: results.store(
+            engine,
+            kind=SEND_TEST_RESULT_KIND,
+            org_id=org_id,
+            request_id=request_id,
+            payload={
                 "delivered": outcome.delivered,
                 "http_status": outcome.http_status,
                 "reason": outcome.reason,
-            }
-        ),
-        ex=SEND_TEST_RESULT_TTL_SECONDS,
+            },
+            ttl_seconds=SEND_TEST_RESULT_TTL_SECONDS,
+        )
     )
 
 
-@app.task(name=PRUNE_ATTEMPTS_TASK, bind=True, max_retries=0)
-def prune_attempts(self: Any) -> None:
+@task(PRUNE_ATTEMPTS_TASK)
+def prune_attempts() -> None:
     before = datetime.now(UTC) - ATTEMPTS_KEPT
 
     async def prune(engine: AsyncEngine) -> int:
@@ -145,10 +146,3 @@ def _secret_box(configured_key: str) -> SealedBox | None:
     except ValueError:
         logger.error("CHECK_SECRET_KEY is not a usable key; channel secrets cannot be opened")
         return None
-
-
-def _redis_for_process() -> Redis:
-    global _redis
-    if _redis is None:
-        _redis = Redis.from_url(str(get_settings().redis_url))
-    return _redis

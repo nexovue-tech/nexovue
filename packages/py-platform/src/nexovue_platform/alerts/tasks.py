@@ -25,12 +25,6 @@ EVALUATE_NEW_ERRORS_TASK: Final = "nexovue_scheduler.alerts.evaluate_new_errors"
 EVALUATIONS: Final = ("thresholds", "silence", "new_errors")
 
 
-def evaluation_status_key(evaluation: str) -> str:
-    """Where a sweep leaves when it last finished, and why, if it skipped — what the
-    Alerts screen reads to say evaluation is behind (spec, *Error cases*)."""
-    return f"nexovue:alerts:evaluation:{evaluation}"
-
-
 # Dispatched by the API, by name, as Run now is (ADR-011): the API imports no
 # scheduler code, and `test_cross_service_contracts.py` holds the arguments.
 SEND_TEST_TASK: Final = "nexovue_scheduler.alerts.send_test"
@@ -38,13 +32,10 @@ SEND_TEST_TASK: Final = "nexovue_scheduler.alerts.send_test"
 # How long a send test's outcome waits to be collected. The API waits ten seconds
 # for it; the rest is room for a console that asks again.
 SEND_TEST_RESULT_TTL_SECONDS: Final = 300
+# What a send test's outcome is filed under in `job_results`.
+SEND_TEST_RESULT_KIND: Final = "channel_test"
 
 
 def send_test_arguments(*, org_id: str, channel_id: str, request_id: str) -> dict[str, str]:
     """What the API sends and the worker accepts, spelled once."""
     return {"org_id": org_id, "channel_id": channel_id, "request_id": request_id}
-
-
-def send_test_result_key(org_id: str, request_id: str) -> str:
-    """Tenant first, so a guessed request id from another organization finds nothing."""
-    return f"nexovue:channel-test:{org_id}:{request_id}"

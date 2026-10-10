@@ -3,9 +3,9 @@
 // runs for a caller we cannot name.
 //
 // Verification is a prefix lookup plus a constant-time hash comparison, cached
-// in this process. The cache is deliberately not in Valkey: a network hop on
-// the hot path costs more than the Postgres lookup it would save, and the set
-// of keys one receiver sees is small.
+// in this process. Deliberately not in a shared store: a network hop on the hot
+// path costs more than the Postgres lookup it would save, and the set of keys
+// one receiver sees is small.
 package auth
 
 import (

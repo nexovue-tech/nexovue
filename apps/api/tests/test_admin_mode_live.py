@@ -1,4 +1,4 @@
-"""The platform gate (`docs/changes/super-admin-in-the-console/`), on real Redis.
+"""The platform gate (`docs/changes/super-admin-in-the-console/`), on real Postgres.
 
 The admin surface lives on the customer origin now, so a session that reaches
 the console must not reach the platform by itself. What stands between them is
@@ -23,53 +23,92 @@ from urllib.parse import urlsplit
 
 import pytest
 from live import require_stack
-from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
-from nexovue_api.auth.credentials import hash_password
 from nexovue_api.auth.sessions import Session, SessionStore
 from nexovue_api.auth.totp import SecondFactorStore
 from nexovue_api.data.postgres.models import SUPER_ADMIN_ROLE, User
 from nexovue_api.errors.exceptions import PermissionDeniedError, UnauthenticatedError
+from nexovue_api.signup import service as signup
 from nexovue_api.superadmin import adminmode
 
-REDIS_URL: Final = os.environ.get("NEXOVUE_REDIS_URL", "redis://localhost:16379/0")
+POSTGRES_DSN: Final = os.environ.get(
+    "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
+)
+ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
 PASSWORD: Final = "a long operator password"
 
 
 def _reachable(url: str) -> bool:
     parts = urlsplit(url)
     try:
-        with socket.create_connection((parts.hostname or "localhost", parts.port or 6379), 2):
+        with socket.create_connection((parts.hostname or "localhost", parts.port or 5432), 2):
             return True
     except OSError:
         return False
 
 
 require_stack(
-    reachable=_reachable(REDIS_URL),
+    reachable=_reachable(POSTGRES_DSN),
     suite="apps/api/tests/test_admin_mode_live.py",
-    remedy="Redis is not reachable — run `just up`",
+    remedy="Postgres is not reachable — run `just up`",
 )
 
 
 @pytest.fixture
-async def sessions() -> AsyncIterator[SessionStore]:
-    redis = Redis.from_url(REDIS_URL)
+async def connection() -> AsyncIterator[AsyncConnection]:
+    """One connection in a transaction that is always rolled back."""
+    engine = create_async_engine(ASYNC_DSN)
     try:
-        yield SessionStore(redis, ttl_seconds=600)
+        async with engine.connect() as held:
+            transaction = await held.begin()
+            try:
+                yield held
+            finally:
+                await transaction.rollback()
     finally:
-        await redis.aclose()
+        await engine.dispose()
 
 
-def _person(role: str) -> User:
-    person = User(
-        org_id=uuid.uuid4(),
-        email=f"{role}-{uuid.uuid4().hex[:8]}@example.test",
-        name="Raj",
-        password_hash=hash_password(PASSWORD),
-        role=role,
+@pytest.fixture
+async def db(connection: AsyncConnection) -> AsyncIterator[AsyncSession]:
+    session = AsyncSession(bind=connection, expire_on_commit=False)
+    try:
+        yield session
+    finally:
+        await session.close()
+
+
+@pytest.fixture
+def sessions(connection: AsyncConnection) -> SessionStore:
+    """The store's transactions as savepoints on the test's own connection."""
+    return SessionStore(
+        async_sessionmaker(
+            bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint"
+        ),
+        ttl_seconds=600,
     )
-    person.id = uuid.uuid4()
+
+
+async def _person(db: AsyncSession, role: str) -> User:
+    """A real person, so a session can name them."""
+    suffix = uuid.uuid4().hex[:8]
+    person = (
+        await signup.provision_tenant(
+            db,
+            organization_name=f"Admin Mode {suffix}",
+            email=f"{role}-{suffix}@example.test",
+            password=PASSWORD,
+            name="Raj",
+        )
+    ).user
+    person.role = role
+    await db.flush()
     return person
 
 
@@ -84,7 +123,7 @@ async def _entered(
     db: Any, sessions: SessionStore, operator: User, token: str, **presented: Any
 ) -> datetime:
     # Cast rather than build a real store: what this suite is about is the
-    # password path, and reaching Redis for a factor nobody enrolled would only
+    # password path, and reaching a store for a factor nobody enrolled would only
     # hide the assertion below that says it must not be reached.
     factors = cast(SecondFactorStore, _NoFactors())
     return await adminmode.enter(
@@ -116,9 +155,9 @@ class _Audit:
 
 
 async def test_the_operator_takes_the_platform_by_proving_it_is_them(
-    sessions: SessionStore,
+    db: AsyncSession, sessions: SessionStore
 ) -> None:
-    operator = _person(SUPER_ADMIN_ROLE)
+    operator = await _person(db, SUPER_ADMIN_ROLE)
     token, _ = await sessions.create(user_id=str(operator.id), org_id=str(operator.org_id))
 
     until = await _entered(_Audit(), sessions, operator, token, password=PASSWORD, code=None)
@@ -130,8 +169,8 @@ async def test_the_operator_takes_the_platform_by_proving_it_is_them(
     adminmode.holds_the_platform(operator, stamped)
 
 
-async def test_a_wrong_password_takes_nothing(sessions: SessionStore) -> None:
-    operator = _person(SUPER_ADMIN_ROLE)
+async def test_a_wrong_password_takes_nothing(db: AsyncSession, sessions: SessionStore) -> None:
+    operator = await _person(db, SUPER_ADMIN_ROLE)
     token, _ = await sessions.create(user_id=str(operator.id), org_id=str(operator.org_id))
 
     with pytest.raises(PermissionDeniedError) as refused:
@@ -144,12 +183,12 @@ async def test_a_wrong_password_takes_nothing(sessions: SessionStore) -> None:
 
 
 async def test_a_refused_attempt_is_written_down_before_the_refusal(
-    sessions: SessionStore,
+    db: AsyncSession, sessions: SessionStore
 ) -> None:
     """The refusal is the interesting row, and the 403 would roll it back if it
     were left to the request's own transaction (`auth/service._record_refusal`
     is the same case)."""
-    operator = _person(SUPER_ADMIN_ROLE)
+    operator = await _person(db, SUPER_ADMIN_ROLE)
     token, _ = await sessions.create(user_id=str(operator.id), org_id=str(operator.org_id))
     log = _Audit()
 
@@ -161,11 +200,11 @@ async def test_a_refused_attempt_is_written_down_before_the_refusal(
 
 @pytest.mark.parametrize("role", ["owner", "admin", "member", "viewer"])
 async def test_nobody_else_gets_in_however_good_their_password(
-    sessions: SessionStore, role: str
+    db: AsyncSession, sessions: SessionStore, role: str
 ) -> None:
     """Refused for the role, before the password is even looked at — so this
     cannot be used to learn who the operator is."""
-    person = _person(role)
+    person = await _person(db, role)
     token, _ = await sessions.create(user_id=str(person.id), org_id=str(person.org_id))
 
     with pytest.raises(PermissionDeniedError) as refused:
@@ -174,8 +213,8 @@ async def test_nobody_else_gets_in_however_good_their_password(
     assert refused.value.detail == adminmode.NOT_THE_OPERATOR
 
 
-async def test_the_stamp_lapses_and_the_gate_closes_again() -> None:
-    operator = _person(SUPER_ADMIN_ROLE)
+async def test_the_stamp_lapses_and_the_gate_closes_again(db: AsyncSession) -> None:
+    operator = await _person(db, SUPER_ADMIN_ROLE)
     now = datetime.now(UTC)
     session = Session(
         user_id=str(operator.id),
@@ -193,8 +232,8 @@ async def test_the_stamp_lapses_and_the_gate_closes_again() -> None:
     assert closed.value.detail == adminmode.NEEDS_RE_AUTHENTICATION
 
 
-async def test_stepping_out_ends_it_immediately(sessions: SessionStore) -> None:
-    operator = _person(SUPER_ADMIN_ROLE)
+async def test_stepping_out_ends_it_immediately(db: AsyncSession, sessions: SessionStore) -> None:
+    operator = await _person(db, SUPER_ADMIN_ROLE)
     token, _ = await sessions.create(user_id=str(operator.id), org_id=str(operator.org_id))
     await _entered(_Audit(), sessions, operator, token, password=PASSWORD, code=None)
 
@@ -205,10 +244,12 @@ async def test_stepping_out_ends_it_immediately(sessions: SessionStore) -> None:
     assert stamped.admin_until is None
 
 
-async def test_the_platform_cannot_outlive_the_session(sessions: SessionStore) -> None:
+async def test_the_platform_cannot_outlive_the_session(
+    db: AsyncSession, sessions: SessionStore
+) -> None:
     """The stamp is on the session record, so revoking one revokes both. A
     marker held anywhere else could disagree with it."""
-    operator = _person(SUPER_ADMIN_ROLE)
+    operator = await _person(db, SUPER_ADMIN_ROLE)
     token, _ = await sessions.create(user_id=str(operator.id), org_id=str(operator.org_id))
     await _entered(_Audit(), sessions, operator, token, password=PASSWORD, code=None)
 

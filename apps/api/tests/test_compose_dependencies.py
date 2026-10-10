@@ -111,10 +111,6 @@ _BEAT_KAFKA = (
     "beat never produces; the shared scheduler settings require KAFKA_BROKERS, "
     "so the variable stays although beat does not use it"
 )
-_LIGHT_POSTGRES = (
-    "the probe worker opens Postgres on its first task, and its work only arrives "
-    "from beat and the API, both of which wait for Postgres"
-)
 _INSIGHT = "apps/insight does not exist yet; its dependencies are decided when it is written"
 _DELIVERIES_KAFKA = (
     "the alert deliveries worker (F21) never produces; the shared scheduler settings "
@@ -125,19 +121,15 @@ DELIBERATELY_UNDECLARED: Final[dict[str, dict[str, dict[str, str]]]] = {
     "docker-compose.yaml": {
         "web": {"api": _WEB_API},
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
-        "scheduler-light": {"postgres": _LIGHT_POSTGRES},
         "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
-        "insight": {"redis": _INSIGHT},
     },
     "docker-compose.app.yaml": {
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
-        "scheduler-light": {"postgres": _LIGHT_POSTGRES},
         "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
         "insight": {"kafka": _INSIGHT, "ollama": _INSIGHT},
     },
     "docker-compose.onprem.yaml": {
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
-        "scheduler-light": {"postgres": _LIGHT_POSTGRES},
         "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
         "insight": {"ollama": _INSIGHT},
     },
@@ -193,7 +185,7 @@ def test_every_service_gated_on_health_is_listed_here() -> None:
 
 # Services whose health check cannot be reduced to one port, with the reason. Kafka's
 # probe runs the broker's own API-versions client, which is a stronger statement than
-# a socket being open. Postgres, ClickHouse and Redis each serve exactly one port and
-# probe it with their own client — `pg_isready`, an HTTP ping, `redis-cli ping` — so
+# a socket being open. Postgres and ClickHouse each serve exactly one port and
+# probe it with their own client — `pg_isready`, an HTTP ping — so
 # there is no second port a dependant could be waiting on by mistake.
-_NO_SINGLE_PORT: Final[frozenset[str]] = frozenset({"kafka", "postgres", "clickhouse", "redis"})
+_NO_SINGLE_PORT: Final[frozenset[str]] = frozenset({"kafka", "postgres", "clickhouse"})

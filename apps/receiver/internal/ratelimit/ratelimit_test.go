@@ -1,33 +1,9 @@
 package ratelimit
 
 import (
-	"context"
-	"errors"
-	"strings"
 	"testing"
 	"time"
 )
-
-// fakeCounter records what the limiter asked for and answers with a running
-// count, so the window arithmetic can be tested without a Valkey instance.
-type fakeCounter struct {
-	counts map[string]int64
-	ttls   map[string]time.Duration
-	err    error
-}
-
-func newFakeCounter() *fakeCounter {
-	return &fakeCounter{counts: map[string]int64{}, ttls: map[string]time.Duration{}}
-}
-
-func (f *fakeCounter) Increment(_ context.Context, key string, by int64, ttl time.Duration) (int64, error) {
-	if f.err != nil {
-		return 0, f.err
-	}
-	f.counts[key] += by
-	f.ttls[key] = ttl
-	return f.counts[key], nil
-}
 
 func fixedTime(t *testing.T, value string) time.Time {
 	t.Helper()
@@ -38,174 +14,198 @@ func fixedTime(t *testing.T, value string) time.Time {
 	return parsed
 }
 
+// atInstant pins the limiter's clock so the bucket's arithmetic is provable
+// without sleeping.
+func atInstant(limiter *Limiter, now *time.Time) {
+	limiter.now = func() time.Time { return *now }
+}
+
 func TestAllowPermitsUpToTheLimitAndRefusesAfterIt(t *testing.T) {
 	const limit = 3
-	counter := newFakeCounter()
-	limiter := New(counter, limit)
-	limiter.now = func() time.Time { return fixedTime(t, "2026-08-27T10:00:00Z") }
+	limiter := New(limit, 1)
+	now := fixedTime(t, "2026-08-27T10:00:00Z")
+	atInstant(limiter, &now)
 
 	for attempt := 1; attempt <= limit; attempt++ {
-		decision, err := limiter.Allow(context.Background(), "prefix")
-		if err != nil {
-			t.Fatalf("Allow() = %v, want no error", err)
-		}
-		if !decision.Allowed {
+		if !limiter.Allow("prefix").Allowed {
 			t.Fatalf("request %d of %d was refused, want allowed", attempt, limit)
 		}
 	}
 
-	decision, err := limiter.Allow(context.Background(), "prefix")
-	if err != nil {
-		t.Fatalf("Allow() = %v, want no error", err)
-	}
+	decision := limiter.Allow("prefix")
 	if decision.Allowed {
-		t.Error("the request past the limit was allowed")
+		t.Fatalf("request %d was allowed; the limit is %d", limit+1, limit)
 	}
-	if decision.RetryAfter <= 0 {
-		t.Error("a refused request must say how long to wait")
-	}
-}
-
-func TestAllowStartsAFreshCountEachSecond(t *testing.T) {
-	counter := newFakeCounter()
-	limiter := New(counter, 1)
-
-	now := fixedTime(t, "2026-08-27T10:00:00.900Z")
-	limiter.now = func() time.Time { return now }
-
-	if decision, _ := limiter.Allow(context.Background(), "prefix"); !decision.Allowed {
-		t.Fatal("the first request of a window was refused")
-	}
-	if decision, _ := limiter.Allow(context.Background(), "prefix"); decision.Allowed {
-		t.Fatal("the second request of a one-per-second window was allowed")
-	}
-
-	now = now.Add(200 * time.Millisecond) // crosses the second boundary
-	if decision, _ := limiter.Allow(context.Background(), "prefix"); !decision.Allowed {
-		t.Error("the next window did not start with an empty count")
-	}
-	if len(counter.counts) != 2 {
-		t.Errorf("used %d counters, want one per window", len(counter.counts))
+	if decision.RetryAfter <= 0 || decision.RetryAfter > time.Second {
+		t.Errorf("RetryAfter = %v, want a wait inside one second", decision.RetryAfter)
 	}
 }
 
-func TestAllowKeepsSubjectsApart(t *testing.T) {
-	counter := newFakeCounter()
-	limiter := New(counter, 1)
-	limiter.now = func() time.Time { return fixedTime(t, "2026-08-27T10:00:00Z") }
+// Each receiver holds its share: three receivers each allow a third, so the
+// fleet together allows the configured rate.
+func TestEachReceiverEnforcesItsShare(t *testing.T) {
+	limiter := New(300, 3)
+	now := fixedTime(t, "2026-08-27T10:00:00Z")
+	atInstant(limiter, &now)
 
-	if decision, _ := limiter.Allow(context.Background(), "first"); !decision.Allowed {
-		t.Fatal("the first subject's only request was refused")
+	if got := limiter.PerSecond(); got != 100 {
+		t.Fatalf("PerSecond() = %d, want 100: a third of 300", got)
 	}
-	if decision, _ := limiter.Allow(context.Background(), "second"); !decision.Allowed {
-		t.Error("one subject's traffic consumed another subject's budget")
+	if !limiter.AllowN("prefix", 100).Allowed {
+		t.Fatal("this receiver's whole share was refused")
+	}
+	if limiter.Allow("prefix").Allowed {
+		t.Error("allowed past this receiver's share")
 	}
 }
 
-func TestAllowNamesAndExpiresItsCounters(t *testing.T) {
-	counter := newFakeCounter()
-	limiter := New(counter, 10)
-	limiter.now = func() time.Time { return fixedTime(t, "2026-08-27T10:00:00Z") }
-
-	if _, err := limiter.Allow(context.Background(), "prefix"); err != nil {
-		t.Fatalf("Allow() = %v, want no error", err)
-	}
-	for key, ttl := range counter.ttls {
-		if !strings.HasPrefix(key, keyNamespace) {
-			t.Errorf("counter key %q does not start with %q", key, keyNamespace)
-		}
-		if ttl <= window {
-			t.Errorf("counter TTL %s does not outlive its %s window", ttl, window)
+// A share smaller than one, and a limit this package cannot divide by, are not
+// configurations the receiver boots with — config.validate refuses them — but
+// arithmetic on them must not be undefined here either.
+func TestAShareIsNeverZero(t *testing.T) {
+	for _, limiter := range []*Limiter{New(2, 10), New(0, 1), New(5, 0)} {
+		if got := limiter.PerSecond(); got < minimumPerSecond {
+			t.Errorf("PerSecond() = %d, want at least %d", got, minimumPerSecond)
 		}
 	}
 }
 
-func TestAllowReportsACounterFailure(t *testing.T) {
-	unreachable := errors.New("dial tcp: connection refused")
-	limiter := New(&fakeCounter{err: unreachable}, 10)
+// Tokens come back with time, so a key that slowed down is not silenced.
+func TestTheBucketRefillsWithTime(t *testing.T) {
+	limiter := New(1, 1)
+	now := fixedTime(t, "2026-09-07T10:00:00Z")
+	atInstant(limiter, &now)
 
-	if _, err := limiter.Allow(context.Background(), "prefix"); !errors.Is(err, unreachable) {
-		t.Fatalf("Allow() = %v, want the counter failure so the caller can decide", err)
+	limiter.Allow("prefix")
+	if limiter.Allow("prefix").Allowed {
+		t.Fatal("the burst was not spent")
+	}
+
+	now = now.Add(time.Second)
+
+	if !limiter.Allow("prefix").Allowed {
+		t.Error("a second later the bucket has refilled and must allow again")
 	}
 }
 
-func TestRetryAfterCoversTheRestOfTheWindow(t *testing.T) {
-	cases := map[string]struct {
-		at   string
-		want time.Duration
-	}{
-		"start of a window":  {"2026-08-27T10:00:00.000Z", time.Second},
-		"middle of a window": {"2026-08-27T10:00:00.250Z", 750 * time.Millisecond},
-		"end of a window":    {"2026-08-27T10:00:00.999Z", time.Millisecond},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			if got := untilNextWindow(fixedTime(t, tc.at)); got != tc.want {
-				t.Errorf("untilNextWindow() = %s, want %s", got, tc.want)
-			}
-		})
+// A token bucket, not a fixed window: a key cannot spend a full second at the end
+// of one second and another full second at the start of the next.
+func TestABurstAcrossASecondBoundaryIsStillOneSecondsWorth(t *testing.T) {
+	limiter := New(10, 1)
+	now := fixedTime(t, "2026-09-07T10:00:00.900Z")
+	atInstant(limiter, &now)
+	limiter.AllowN("prefix", 10)
+
+	now = fixedTime(t, "2026-09-07T10:00:01.000Z")
+
+	if limiter.AllowN("prefix", 10).Allowed {
+		t.Error("a second second's worth was allowed a tenth of a second later")
 	}
 }
 
-// AllowN is the same window counted in what requests carry — profile samples.
-func TestAllowNSpendsTheWindowInWhatRequestsCarry(t *testing.T) {
-	limiter := New(newFakeCounter(), 100)
-	limiter.now = func() time.Time { return fixedTime(t, "2026-08-27T10:00:00Z") }
+// An idle key must not bank a burst it was never entitled to: a key silent for
+// an hour still gets one second's worth, not an hour's.
+func TestAnIdleKeyDoesNotBankABurst(t *testing.T) {
+	const perSecond = 4
+	limiter := New(perSecond, 1)
+	now := fixedTime(t, "2026-09-07T10:00:00Z")
+	atInstant(limiter, &now)
 
-	if decision, _ := limiter.AllowN(context.Background(), "prefix", 60); !decision.Allowed {
+	limiter.Allow("prefix")
+	now = now.Add(time.Hour)
+
+	allowed := 0
+	for range perSecond * 4 {
+		if limiter.Allow("prefix").Allowed {
+			allowed++
+		}
+	}
+	if allowed != perSecond {
+		t.Errorf("allowed %d after an idle hour, want %d: the bucket caps at one second",
+			allowed, perSecond)
+	}
+}
+
+// One key's burst is not another's: a noisy tenant must not spend a quiet one's.
+func TestKeysAreKeptApart(t *testing.T) {
+	limiter := New(1, 1)
+	now := fixedTime(t, "2026-09-07T10:00:00Z")
+	atInstant(limiter, &now)
+
+	limiter.Allow("noisy")
+	if limiter.Allow("noisy").Allowed {
+		t.Fatal("the noisy key's burst was not spent")
+	}
+	if !limiter.Allow("quiet").Allowed {
+		t.Error("a second key was refused for the first key's traffic")
+	}
+}
+
+// The map is bounded: the key prefix on an invalid request is attacker-chosen.
+func TestTheMapIsBounded(t *testing.T) {
+	limiter := New(4, 1)
+	now := fixedTime(t, "2026-09-07T10:00:00Z")
+	atInstant(limiter, &now)
+
+	for attempt := range maxSubjects * 3 {
+		limiter.Allow(string(rune(attempt)))
+		if len(limiter.buckets) > maxSubjects {
+			t.Fatalf("held %d buckets after %d distinct keys, want at most %d",
+				len(limiter.buckets), attempt+1, maxSubjects)
+		}
+	}
+}
+
+// A clock that steps backwards must not hand out credit.
+func TestTimeGoingBackwardsEarnsNothing(t *testing.T) {
+	limiter := New(1, 1)
+	now := fixedTime(t, "2026-09-07T10:00:00Z")
+	atInstant(limiter, &now)
+	limiter.Allow("prefix")
+
+	now = now.Add(-time.Hour)
+
+	if limiter.Allow("prefix").Allowed {
+		t.Error("time going backwards refilled the bucket")
+	}
+}
+
+// AllowN is the same allowance counted in what requests carry — profile samples.
+func TestAllowNSpendsWhatRequestsCarry(t *testing.T) {
+	limiter := New(100, 1)
+	now := fixedTime(t, "2026-08-27T10:00:00Z")
+	atInstant(limiter, &now)
+
+	if !limiter.AllowN("prefix", 60).Allowed {
 		t.Fatal("60 of a 100 budget was refused")
 	}
-	if decision, _ := limiter.AllowN(context.Background(), "prefix", 60); decision.Allowed {
+	if limiter.AllowN("prefix", 60).Allowed {
 		t.Error("120 of a 100 budget was allowed")
 	}
-	limiter.now = func() time.Time { return fixedTime(t, "2026-08-27T10:00:01Z") }
-	if decision, _ := limiter.AllowN(context.Background(), "prefix", 60); !decision.Allowed {
-		t.Error("the next second's budget was not fresh")
+	now = now.Add(time.Second)
+	if !limiter.AllowN("prefix", 60).Allowed {
+		t.Error("a second later the budget had not refilled")
 	}
 }
 
 // Refusing a request larger than the whole budget would refuse it for ever; the
-// sender cannot make it smaller. It goes through alone, and spends the window.
-func TestARequestLargerThanTheBudgetIsAdmittedAloneInAnEmptyWindow(t *testing.T) {
-	limiter := New(newFakeCounter(), 100)
-	limiter.now = func() time.Time { return fixedTime(t, "2026-08-27T10:00:00Z") }
-
-	if decision, _ := limiter.AllowN(context.Background(), "prefix", 500); !decision.Allowed {
-		t.Fatal("a 500-unit request to an empty window was refused")
-	}
-	if decision, _ := limiter.AllowN(context.Background(), "prefix", 1); decision.Allowed {
-		t.Error("the window it spent still admitted more")
-	}
-}
-
-func TestTheFallbackSpendsTheSameUnits(t *testing.T) {
-	limiter := New(newFakeCounter(), 100)
+// sender cannot make it smaller. It goes through from a full bucket, and leaves
+// at most one second of debt.
+func TestARequestLargerThanTheBudgetIsAdmittedFromAFullBucket(t *testing.T) {
+	limiter := New(100, 1)
 	now := fixedTime(t, "2026-08-27T10:00:00Z")
-	limiter.now = func() time.Time { return now }
-	budget := float64(limiter.FallbackPerSecond())
+	atInstant(limiter, &now)
 
-	if decision := limiter.AllowNWhileCounterDown("prefix", int64(budget)); !decision.Allowed {
-		t.Fatal("a full bucket refused its own size")
-	}
-	decision := limiter.AllowNWhileCounterDown("prefix", 1)
-	if decision.Allowed || decision.RetryAfter <= 0 {
-		t.Errorf("an empty bucket answered %+v, want a refusal with a wait", decision)
-	}
-}
-
-// An oversized request while Valkey is down leaves at most one second of debt, as
-// the shared counter spends at most the window it arrived in.
-func TestTheFallbacksDebtIsAtMostOneSecond(t *testing.T) {
-	limiter := New(newFakeCounter(), 100)
-	now := fixedTime(t, "2026-08-27T10:00:00Z")
-	limiter.now = func() time.Time { return now }
-	if decision := limiter.AllowNWhileCounterDown("prefix", 1_000_000); !decision.Allowed {
+	if !limiter.AllowN("prefix", 1_000_000).Allowed {
 		t.Fatal("an oversized request to a full bucket was refused")
+	}
+	if limiter.Allow("prefix").Allowed {
+		t.Error("the bucket it spent still admitted more")
 	}
 
 	now = now.Add(2 * time.Second)
 
-	if decision := limiter.AllowNWhileCounterDown("prefix", 1); !decision.Allowed {
-		t.Errorf("two seconds after, still refused: %+v", decision)
+	if !limiter.Allow("prefix").Allowed {
+		t.Error("two seconds after, still refused: the debt must be at most one second")
 	}
 }

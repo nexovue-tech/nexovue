@@ -16,10 +16,9 @@ if TYPE_CHECKING:  # pragma: no cover — import cycle at runtime, types only he
     from nexovue_api.lifespan import Resources
 
 DEPENDENCY_POSTGRES: Final = "postgres"
-DEPENDENCY_REDIS: Final = "redis"
 DEPENDENCY_CLICKHOUSE: Final = "clickhouse"
 
-# ClickHouse can be slower to answer than the other two under load, and a
+# ClickHouse can be slower to answer than Postgres under load, and a
 # readiness flap on the query store is more disruptive than a slow probe.
 CLICKHOUSE_PROBE_TIMEOUT_SECONDS: Final = 3.0
 
@@ -30,7 +29,6 @@ def dependency_checks(resources: Resources) -> list[Check]:
     """Every dependency this service needs to serve a request."""
     return [
         Check(name=DEPENDENCY_POSTGRES, probe=_postgres_probe(resources)),
-        Check(name=DEPENDENCY_REDIS, probe=_redis_probe(resources)),
         Check(
             name=DEPENDENCY_CLICKHOUSE,
             probe=_clickhouse_probe(resources),
@@ -45,13 +43,6 @@ def _postgres_probe(resources: Resources) -> Probe:
         # condition that should take this replica out of rotation.
         async with resources.engine.connect() as connection:
             await connection.execute(_SELECT_ONE)
-
-    return probe
-
-
-def _redis_probe(resources: Resources) -> Probe:
-    async def probe() -> None:
-        await resources.redis.ping()
 
     return probe
 

@@ -270,7 +270,10 @@ func TestGRPCUnreachableControlPlaneIsRetryable(t *testing.T) {
 }
 
 func TestGRPCOverLimitIsRefusedWithRetryInfo(t *testing.T) {
-	d := newGRPCDoor(t, doorOptions{counter: &countingCounter{seen: 5}, requestsPerSec: 1})
+	d := newGRPCDoor(t, doorOptions{requestsPerSec: 1})
+	if _, err := d.export(t, exportRequest(traceID(0x10))); err != nil {
+		t.Fatalf("the export that spends the second's allowance: %v", err)
+	}
 
 	_, err := d.export(t, exportRequest(traceID(0x11)))
 
@@ -285,20 +288,9 @@ func TestGRPCOverLimitIsRefusedWithRetryInfo(t *testing.T) {
 	if delay <= 0 || delay > time.Second {
 		t.Errorf("retry delay = %s, want a wait inside the one-second window", delay)
 	}
-	if len(d.producer.records) != 0 {
-		t.Error("a throttled export reached the broker")
-	}
-}
-
-// A Valkey outage must not become an ingest outage.
-func TestGRPCUnavailableLimiterFailsOpen(t *testing.T) {
-	d := newGRPCDoor(t, doorOptions{counter: brokenCounter{}})
-
-	if _, err := d.export(t, exportRequest(traceID(0x11))); err != nil {
-		t.Fatalf("export: %v, want telemetry to survive a limiter blip", err)
-	}
 	if len(d.producer.records) != 1 {
-		t.Errorf("produced %d records, want 1", len(d.producer.records))
+		t.Errorf("published %d records, want only the export that spent the allowance",
+			len(d.producer.records))
 	}
 }
 

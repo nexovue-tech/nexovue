@@ -6,8 +6,8 @@ The receiver is a Go service that accepts OTLP over HTTP and gRPC plus browser O
 
 Workers are a Go binary with trace-assembly, log-writing, and metric-writing pipelines. They decode an envelope, mask its payload, derive pre-sampling span metrics, tail-sample traces where applicable, insert ClickHouse rows and rollups, then commit Kafka offsets only after all writes acknowledge.
 
-The FastAPI API owns the Postgres control plane and reads tenant-scoped telemetry from ClickHouse. It does not participate in the ingestion path. Scheduler workers use Celery: they run API, multistep, TCP, DNS and heartbeat checks and CloudWatch/Postgres pollers, encode results as envelopes, and publish directly to Kafka.
+The FastAPI API owns the Postgres control plane and reads tenant-scoped telemetry from ClickHouse. It does not participate in the ingestion path. Scheduler workers claim jobs from the Postgres `jobs` table (ADR-020): they run API, multistep, TCP, DNS and heartbeat checks and CloudWatch/Postgres pollers, encode results as envelopes, and publish directly to Kafka.
 
 ## Boundaries
 
-`apps/api` is the only Postgres schema owner. Receiver and workers read configuration and identity but do not use Postgres as a general write path. Scheduler reads schedules from Postgres and updates integration health only. See `current-system-reference.md` for pipeline details.
+`apps/api` is the only Postgres schema owner. Receiver and workers read configuration and identity but do not use Postgres as a general write path. Scheduler reads schedules from Postgres and writes only integration health and the rows of its own job queue. See `current-system-reference.md` for pipeline details.

@@ -43,6 +43,10 @@ DELETED_DIRECTLY: Final[tuple[str, ...]] = (
     # Alert channels belong to the organization, not a project (F21, D4). Before
     # `users`, whom a mute names, and before `projects`, whose rules send to them.
     "notification_channels",
+    # ADR-020. Queued work for this organization, and what a Run now or a send
+    # test found; neither hangs off a person or a project.
+    "jobs",
+    "job_results",
     "users",
     "projects",
 )
@@ -89,6 +93,14 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     # F36. Keyed by token, carrying no `org_id`: the token it names carries one,
     # and the counters die with it.
     "api_token_usage_daily": "api_tokens",
+    # ADR-020: what Redis held, each keyed by the person it belongs to. Sessions
+    # and support tickets carry `org_id` too, but the person is the parent.
+    "sessions": "users",
+    "view_as_tickets": "users",
+    "one_time_tokens": "users",
+    "totp_enrolments": "users",
+    "totp_challenges": "users",
+    "totp_spent_codes": "users",
 }
 
 # The organization row itself, which a deletion scrubs and keeps rather than
@@ -108,4 +120,11 @@ EXCLUDED_TABLES: Final[dict[str, str]] = {
         "ingestion it already counted: a silent, permanent over-count"
     ),
     "alembic_version": "Alembic's own bookkeeping; holds no customer data",
+    "alert_evaluation_status": (
+        "when each alert sweep last finished — one row per sweep, across every tenant"
+    ),
+    "rate_limit_windows": (
+        "the auth tier's counters, keyed by a fingerprint of an address or IP and gone "
+        "within the hour; nothing in a row names a tenant"
+    ),
 }

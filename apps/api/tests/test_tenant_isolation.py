@@ -14,7 +14,7 @@ Three layers are attacked, in the order an intruder meets them:
 * the values in between — can a crafted `project_id` or `trace_id` break out
   of its parameter binding.
 
-Postgres, Redis and ClickHouse are replaced by fakes that enforce the same
+Postgres and ClickHouse are replaced by fakes that enforce the same
 predicates the real stores do, so a query that stops filtering by tenant fails
 here rather than passing quietly.
 """
@@ -671,7 +671,7 @@ async def test_a_project_id_that_is_not_a_uuid_never_reaches_a_query(
 async def test_a_session_for_a_deleted_organization_is_refused(
     tenant_a: Tenant, tenant_b: Tenant
 ) -> None:
-    """The token outlives the row in Redis; the identity lookup must not."""
+    """The session outlives the row; the identity lookup must not."""
     stack = _build_stack([tenant_a, tenant_b])
 
     async with signed_in(stack, tenant_a) as client:

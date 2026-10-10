@@ -48,7 +48,7 @@ class ApiTokenSummary(BaseModel):
     expires_at: datetime
     revoked_at: datetime | None
     last_used_at: datetime | None
-    # What this token spent today, folded from Redis at most once a minute.
+    # What this token spent today, as of the last once-a-minute write.
     requests_today: int
     # "live", "revoked" or "expired" — computed, never stored, so a token that
     # expires while nobody is looking does not need a job to change its row.

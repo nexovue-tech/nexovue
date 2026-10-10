@@ -6,4 +6,4 @@ The FastAPI service exposes versioned `/api/v1/` routes and operational health r
 
 Postgres queries pass an organization identifier explicitly. ClickHouse access is centralized in `apps/api/src/nexovue_api/data/clickhouse/base.py`: statements include a tenant binding and the repository refuses statements that do not. Static and structural tests enforce these tenant boundaries.
 
-Sessions live in Redis. API telemetry reads use rate limits and concurrency controls. Authentication, password recovery, API/site keys, projects, billing, checks, integrations, deploys, telemetry reads, data deletion, and source-map metadata are implemented domains.
+Sessions live in Postgres. API telemetry reads use rate limits and concurrency controls, counted in each process (limit ÷ `API_INSTANCES`); the authentication tier is counted exactly in Postgres. Readiness checks Postgres and ClickHouse. Authentication, password recovery, API/site keys, projects, billing, checks, integrations, deploys, telemetry reads, data deletion, and source-map metadata are implemented domains.

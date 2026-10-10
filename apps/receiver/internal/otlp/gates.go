@@ -3,7 +3,6 @@ package otlp
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -122,11 +121,11 @@ func (o Options) authenticate(ctx context.Context, presentedKey string) (context
 // withinAllowance is the plan gate: has this organization spent the volume its
 // plan includes for the calendar month, at the door this export came through.
 //
-// It sits above the limiter for the reason the origin gate does. The answer is
-// an in-process cache lookup, so an organization whose free month is over is
-// turned away without a Valkey round trip — which matters precisely in the case
-// this gate exists for, one that is sending hard and being refused for all of
-// it.
+// It sits above the limiter for the reason the origin gate does: an export
+// refused for its plan must not spend the key's rate budget as well. The answer
+// is an in-process cache lookup, so an organization whose free month is over is
+// turned away cheaply — which matters precisely in the case this gate exists for,
+// one that is sending hard and being refused for all of it.
 //
 // Only a plan with a ceiling on its billed services has an allowance to spend,
 // so nothing paying is ever refused here.
@@ -208,7 +207,7 @@ func (o Options) throttle(ctx context.Context, bucket string) *refusal {
 	if bucket != "" {
 		key += ":" + bucket
 	}
-	return o.spend(ctx, o.Limiter, key, 1, messageThrottled)
+	return o.spend(o.Limiter, key, 1, messageThrottled)
 }
 
 // spendProfileSamples is the profiles door's second limit, on the samples a request
@@ -220,50 +219,13 @@ func (o Options) spendProfileSamples(ctx context.Context, samples int) *refusal 
 		return nil
 	}
 	identity, _ := auth.FromContext(ctx)
-	return o.spend(ctx, o.ProfileSamples, identity.KeyPrefix+":"+profileSamplesBucket,
+	return o.spend(o.ProfileSamples, identity.KeyPrefix+":"+profileSamplesBucket,
 		int64(samples), messageProfileSamplesThrottled)
 }
 
-// spend counts n against one key's window of one limiter, failing open within
-// the limiter's own per-instance bound when the shared counter cannot answer.
-func (o Options) spend(
-	ctx context.Context,
-	limiter *ratelimit.Limiter,
-	key string,
-	n int64,
-	throttled string,
-) *refusal {
-	decision, err := limiter.AllowN(ctx, key, n)
-	if err != nil {
-		// Fail open. A Valkey blip must not turn into an ingest outage: losing
-		// a customer's telemetry costs more than briefly losing the protection,
-		// and the broker and payload caps still bound the damage.
-		//
-		// Open, not unbounded. The body cap and the broker limit one
-		// request and the throughput behind it; neither limits requests per
-		// second, and an outage is exactly when the platform has least headroom
-		// to absorb a burst. The bound below is per receiver instance and sized
-		// well above the configured limit — it is there to stop a burst, not to
-		// stand in for a counter it cannot see.
-		if o.Traffic.Degraded(reasonLimiterDown) {
-			o.Logger.WarnContext(ctx, "rate limiter unavailable, allowing request",
-				slog.String(fieldReason, reasonLimiterDown),
-				slog.String(fieldError, logging.RedactCredentials(err.Error())))
-		}
-		if local := limiter.AllowNWhileCounterDown(key, n); !local.Allowed {
-			// The cause names the number that refused, because it is not the
-			// configured one. Without it the first support conversation about a
-			// refusal during an outage has nothing to answer with.
-			return refuseUntil(code.Code_RESOURCE_EXHAUSTED,
-				messageThrottledInProcess, local.RetryAfter).
-				countedUnder(reasonThrottledInProcess).
-				because(fmt.Errorf(
-					"shared rate counter unreachable; refused by this receiver's own bound of %d/s",
-					limiter.FallbackPerSecond()))
-		}
-		return nil
-	}
-	if !decision.Allowed {
+// spend counts n against one key's allowance in one limiter.
+func (o Options) spend(limiter *ratelimit.Limiter, key string, n int64, throttled string) *refusal {
+	if decision := limiter.AllowN(key, n); !decision.Allowed {
 		return refuseUntil(code.Code_RESOURCE_EXHAUSTED, throttled, decision.RetryAfter)
 	}
 	return nil

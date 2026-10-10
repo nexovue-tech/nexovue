@@ -14,19 +14,18 @@ from datetime import UTC, datetime
 from typing import Annotated, Final
 
 from fastapi import Depends
-from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import Headers
 from starlette.requests import HTTPConnection
 
 from nexovue_api.apitokens import service as api_tokens
-from nexovue_api.apitokens import usage as token_usage
 from nexovue_api.apitokens.tokens import (
     INGEST_KEY_SCHEMES,
     INGEST_KEYS_CANNOT_READ,
     TOKENS_ARE_READ_ONLY,
     looks_like_api_token,
 )
+from nexovue_api.apitokens.usage import TokenUsage
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.clients import ClientDescription, client_ip_of, describe_client
 from nexovue_api.auth.encryption import CredentialBox, credential_box
@@ -40,15 +39,16 @@ from nexovue_api.deps import (
     ClickHouseClient,
     CurrentSession,
     DbSession,
-    RedisClient,
     SessionStoreDep,
     get_current_session,
+    get_resources,
 )
 from nexovue_api.errors.exceptions import (
     DependencyUnavailableError,
     PermissionDeniedError,
     UnauthenticatedError,
 )
+from nexovue_api.lifespan import Resources
 from nexovue_api.settings import API_PREFIX
 from nexovue_api.support import queries as support_queries
 
@@ -98,9 +98,9 @@ async def get_current_identity(
         # told why, not that their session merely expired (F26, spec error cases).
         raise UnauthenticatedError(f"You are no longer a member of {organization.name}.")
     if _issued_before_reset(session, user):
-        # P1-71: a password reset ends every session it did not issue. There is
-        # nothing to enumerate — Redis keys sessions by token fingerprint — so
-        # the epoch on the user row is the revocation, and this is where it bites.
+        # P1-71: a password reset ends every session it did not issue. The epoch
+        # on the user row is the revocation — one write, with no list of sessions
+        # to walk and none made mid-walk to miss — and this is where it bites.
         raise UnauthenticatedError(SESSION_NO_LONGER_VALID)
     if session.impersonation is not None:
         await _hold_support_view(connection, session.impersonation, user, organization, db)
@@ -200,16 +200,16 @@ def _refuse_a_token_here(connection: HTTPConnection) -> None:
         raise PermissionDeniedError(TOKENS_ARE_READ_ONLY)
 
 
-def _counter_for(connection: HTTPConnection) -> Redis | None:
-    """Redis, when this process has one.
+def _usage_for(connection: HTTPConnection) -> TokenUsage | None:
+    """The process's usage counter, when it has one.
 
     Read from the app rather than taken as a dependency, deliberately: counting
     a token's use must not be a *precondition* of reading. A test app, or a
     process without the pools open, reads perfectly well and counts nothing.
     """
     resources = getattr(getattr(connection.scope.get("app"), "state", None), "resources", None)
-    redis: Redis | None = getattr(resources, "redis", None)
-    return redis
+    usage: TokenUsage | None = getattr(resources, "token_usage", None)
+    return usage
 
 
 async def get_current_reader(
@@ -227,9 +227,9 @@ async def get_current_reader(
     if presented is not None and looks_like_api_token(presented):
         now = datetime.now(UTC)
         token = await api_tokens.token_for(db, presented, now=now)
-        counter = _counter_for(connection)
-        if counter is not None:
-            await token_usage.count_request(counter, db, token=token, now=now)
+        usage = _usage_for(connection)
+        if usage is not None:
+            usage.count(token.id, now)
         return _reader_for_token(token)
     session = await get_current_session(connection, sessions)
     identity = await get_current_identity(connection, session, db)
@@ -281,9 +281,11 @@ def get_client_description(connection: HTTPConnection, settings: AppSettings) ->
 CurrentClient = Annotated[ClientDescription, Depends(get_client_description)]
 
 
-def get_second_factor_store(redis: RedisClient) -> SecondFactorStore:
-    """The Redis state around a second factor: offers, challenges, spent codes."""
-    return SecondFactorStore(redis)
+def get_second_factor_store(
+    resources: Annotated[Resources, Depends(get_resources)],
+) -> SecondFactorStore:
+    """The short-lived state around a second factor: offers, challenges, spent codes."""
+    return SecondFactorStore(resources.session_factory)
 
 
 SecondFactors = Annotated[SecondFactorStore, Depends(get_second_factor_store)]

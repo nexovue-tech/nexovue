@@ -181,7 +181,7 @@ async def remove(
     address = member.email
     member.removed_at = now
     # The sessions epoch: every session this person holds is refused on its
-    # next request, with nothing to enumerate in Redis.
+    # next request, in one write.
     member.sessions_valid_from = now
     # Frees the address (it is globally unique) so the person can sign up again
     # or be invited back as someone new; `name` stays for history (FR11, BR6).

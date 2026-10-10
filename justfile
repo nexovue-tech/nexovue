@@ -19,7 +19,7 @@ _default:
 
 # ---------- running ----------
 
-# The Celery probe workers were behind a `doors` profile until 2026-09-06, on the
+# The scheduler's probe workers were behind a `doors` profile until 2026-09-06, on the
 # reasoning that the full stack is rarely needed at once — but `just otel-demo up`
 # is the daily traffic source and refuses without them, so the extra step was a
 # papercut on the common path. Measured idle: 393 MiB across four containers
@@ -136,7 +136,7 @@ test-py: gate-seed
     # code is a gate people learn to ignore.
     [ -f .env ] && { set -a; . ./.env; set +a; }
     # **Six workers, distributed by file.** The suite is 80% waiting on real
-    # Postgres, ClickHouse, Redis and Kafka, so it parallelises almost perfectly:
+    # Postgres, ClickHouse and Kafka, so it parallelises almost perfectly:
     # measured 2026-09-21, 248s serial, 71s at four, 61s at six, 63s at eight —
     # past six the shared development stack is the limit, not this machine
     # (`docs/changes/faster-gate/`).

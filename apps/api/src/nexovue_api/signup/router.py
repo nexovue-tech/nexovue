@@ -93,9 +93,8 @@ async def sign_up(
         name=payload.name,
     )
 
-    # The session lands in Redis at once, but these rows commit only when the
-    # request ends: mint it after the tenant is durable, or a fast next call
-    # finds a session naming a tenant Postgres cannot see yet.
+    # The session is written in a transaction of its own and names these rows by
+    # foreign key: commit the tenant first, or the session has nothing to name.
     await db.commit()
 
     # Named, so the very first session is not the one device a customer cannot

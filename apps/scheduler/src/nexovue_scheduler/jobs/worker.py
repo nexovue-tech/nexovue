@@ -1,0 +1,208 @@
+"""A worker: claims jobs from its queues and runs each in a child process.
+
+**One slot per child, a fixed number of children** — the shape of Celery's
+prefork pool, so `scheduler-light` still runs eight probes at once and
+`scheduler-deliveries` four. A child is reused job after job; one killed at its
+hard limit, or one that died, is replaced before its slot takes another job.
+
+**It polls every second and wakes early on `NOTIFY`.** The poll is what picks up
+beat's work and every retry; the notification only shortens the wait for a
+person who pressed Run now or Send test.
+
+**Stopping is orderly.** On SIGTERM it claims nothing more and waits for what it
+is running. A job still running when the process is killed outright keeps its
+lease until the lease lapses, and is then claimed again by another worker if it
+has an attempt left.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import multiprocessing
+import os
+import socket
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from multiprocessing.connection import Connection
+from multiprocessing.context import SpawnProcess
+from typing import Any, Final
+
+import asyncpg
+from nexovue_platform.jobs import NOTIFY_CHANNEL
+from nexovue_platform.telemetry.logging import get_logger
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from nexovue_scheduler.jobs import child, queue, registry
+from nexovue_scheduler.jobs.queue import ClaimedJob
+
+logger = get_logger(__name__)
+
+POLL_SECONDS: Final = 1.0
+# How long a lost notification connection waits before it is tried again; the
+# poll carries every job meanwhile.
+RELISTEN_SECONDS: Final = 30.0
+KILLED: Final = "killed"
+
+_SPAWN = multiprocessing.get_context("spawn")
+
+
+class Slot:
+    """One child process and the pipe to it."""
+
+    def __init__(self, modules: tuple[str, ...] = registry.TASK_MODULES) -> None:
+        self._modules = modules
+        self._process: SpawnProcess | None = None
+        self._pipe: Connection | None = None
+        self.start()
+
+    def start(self) -> None:
+        ours, theirs = _SPAWN.Pipe()
+        process = _SPAWN.Process(target=child.serve, args=(theirs, self._modules), daemon=True)
+        process.start()
+        theirs.close()
+        self._process, self._pipe = process, ours
+
+    async def run(self, job: ClaimedJob) -> tuple[Any, ...]:
+        """Run one job in the child; kill and replace the child at the hard limit."""
+        assert self._pipe is not None
+        self._pipe.send((job.task, job.kwargs, job.soft_limit_seconds, job.attempts))
+        finished = await asyncio.to_thread(self._pipe.poll, job.hard_limit_seconds)
+        if finished:
+            try:
+                outcome: tuple[Any, ...] = self._pipe.recv()
+                return outcome
+            except (EOFError, OSError):
+                self._replace()
+                return (child.FAILED, "the child running it died")
+        self._replace()
+        return (KILLED, f"killed at its hard time limit of {job.hard_limit_seconds}s")
+
+    def stop(self) -> None:
+        if self._pipe is not None:
+            self._pipe.close()
+        if self._process is not None:
+            self._process.join(timeout=5)
+            if self._process.is_alive():
+                self._process.kill()
+
+    def _replace(self) -> None:
+        if self._process is not None:
+            self._process.kill()
+            self._process.join()
+        if self._pipe is not None:
+            self._pipe.close()
+        self.start()
+
+
+class Worker:
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        *,
+        listen_dsn: str,
+        queues: list[str],
+        concurrency: int,
+        task_modules: tuple[str, ...] = registry.TASK_MODULES,
+    ) -> None:
+        self._engine = engine
+        self._listen_dsn = listen_dsn
+        self._queues = queues
+        # Unique per worker, not per process: the lease fence is this name, and two
+        # workers sharing one would finish each other's jobs.
+        self._name = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+        self._idle = [Slot(task_modules) for _ in range(concurrency)]
+        self._running: set[asyncio.Task[None]] = set()
+        self._wake = asyncio.Event()
+        self._listener: asyncpg.Connection | None = None
+        self._relisten_at = 0.0
+
+    async def run(self, stop: asyncio.Event) -> None:
+        logger.info("worker started", queues=self._queues, concurrency=len(self._idle))
+        loop = asyncio.get_running_loop()
+        # One thread per slot waits on its child's pipe, so a full pool never
+        # queues a job's wait — and so its hard limit — behind another's.
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=len(self._idle) + 2))
+        try:
+            while not stop.is_set():
+                if self._listener is None and loop.time() >= self._relisten_at:
+                    await self._listen()
+                if self._idle:
+                    await self._claim_into_idle_slots()
+                self._wake.clear()
+                waiting = asyncio.ensure_future(self._wake.wait())
+                stopping = asyncio.ensure_future(stop.wait())
+                await asyncio.wait(
+                    {waiting, stopping}, timeout=POLL_SECONDS, return_when=asyncio.FIRST_COMPLETED
+                )
+                waiting.cancel()
+                stopping.cancel()
+        finally:
+            logger.info("worker stopping; finishing what it is running", running=len(self._running))
+            if self._running:
+                await asyncio.gather(*self._running, return_exceptions=True)
+            for slot in self._idle:
+                slot.stop()
+            if self._listener is not None:
+                await self._listener.close()
+
+    async def _claim_into_idle_slots(self) -> None:
+        try:
+            jobs = await queue.claim(
+                self._engine, queues=self._queues, worker=self._name, limit=len(self._idle)
+            )
+        except Exception:
+            logger.exception("jobs could not be claimed; trying again")
+            return
+        for job in jobs:
+            slot = self._idle.pop()
+            running = asyncio.create_task(self._run(slot, job))
+            self._running.add(running)
+            running.add_done_callback(self._running.discard)
+
+    async def _run(self, slot: Slot, job: ClaimedJob) -> None:
+        try:
+            outcome = await slot.run(job)
+            await self._record(job, outcome)
+        except Exception:
+            # The lease lapses and the job is claimed again if it has an attempt
+            # left; nothing here is worth stopping the worker for.
+            logger.exception("a job's outcome could not be recorded", task=job.task)
+        finally:
+            self._idle.append(slot)
+            self._wake.set()
+
+    async def _record(self, job: ClaimedJob, outcome: tuple[Any, ...]) -> None:
+        kind = outcome[0]
+        if kind == child.RETRY:
+            countdown, reason = outcome[1], outcome[2]
+            if job.may_retry:
+                await queue.retry_later(
+                    self._engine, job, worker=self._name, countdown=countdown, error=reason
+                )
+                return
+            logger.error(
+                "a job asked to retry with no attempt left", task=job.task, attempts=job.attempts
+            )
+        elif kind == KILLED:
+            logger.error(
+                "a job was killed at its hard time limit", task=job.task, reason=outcome[1]
+            )
+        await queue.finish(self._engine, job, worker=self._name)
+
+    async def _listen(self) -> None:
+        try:
+            self._listener = await asyncpg.connect(self._listen_dsn)
+            await self._listener.add_listener(NOTIFY_CHANNEL, self._notified)
+            self._listener.add_termination_listener(self._listener_lost)
+        except Exception:
+            logger.warning("job notifications are unavailable; polling only")
+            self._listener = None
+            self._relisten_at = asyncio.get_running_loop().time() + RELISTEN_SECONDS
+
+    def _notified(self, _connection: Any, _pid: int, _channel: str, payload: str) -> None:
+        if payload in self._queues:
+            self._wake.set()
+
+    def _listener_lost(self, _connection: Any) -> None:
+        self._listener = None
+        self._relisten_at = asyncio.get_running_loop().time() + RELISTEN_SECONDS

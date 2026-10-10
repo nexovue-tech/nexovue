@@ -15,7 +15,7 @@ from stretching. Passwords, typed by humans, use argon2.
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Final
 
 from nexovue_platform.alerts.model import (
@@ -54,6 +54,7 @@ from nexovue_api.data.postgres.base import (
     CreatedAt,
     OptionalTimestamp,
     RequiredTimestamp,
+    TimestampTz,
     UuidPrimaryKey,
     UuidType,
 )
@@ -219,8 +220,8 @@ class User(Base):
     email_verified_at: Mapped[OptionalTimestamp]
     # Sessions created before this are refused (migration 0019). NULL means no
     # reset has happened. It is the whole of "a password reset ends every live
-    # session": Redis keys sessions by token fingerprint, so there is nothing to
-    # enumerate, and this comparison rides a user row every request already loads.
+    # session": one write, no session list to walk, and this comparison rides a
+    # user row every request already loads.
     sessions_valid_from: Mapped[OptionalTimestamp]
     # The TOTP shared secret, sealed by `auth/encryption.py` and authenticated
     # against this row's id — so a copy of somebody else's ciphertext will not
@@ -1604,8 +1605,8 @@ class ApiToken(Base):
 class ApiTokenUsageDaily(Base):
     """What one token spent on one day (F36, AC18).
 
-    Folded from Redis at most once a minute per token, so showing a customer
-    what their automation costs them is not a Postgres write per request. It
+    Counted in each API process and added here once a minute, so showing a
+    customer what their automation costs them is not a Postgres write per request. It
     carries no `org_id`: the token it names does, and the row dies with it.
     """
 
@@ -1618,3 +1619,241 @@ class ApiTokenUsageDaily(Base):
     requests: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
     __table_args__ = (CheckConstraint("requests >= 0", name="token_requests_do_not_go_backwards"),)
+
+
+# What Redis held until migration 0037 (ADR-020). Every short-lived row carries
+# `expires_at`: reads filter on it, and the scheduler's expiry sweep deletes it.
+# SHA-256, hex, of a token, ticket, challenge or code — never the value itself.
+TOKEN_FINGERPRINT_LENGTH: Final = 64
+ONE_TIME_TOKEN_PURPOSES: Final = ("verify_email", "reset_password", "change_email")
+JOB_RESULT_KINDS: Final = ("check_run", "channel_test")
+
+
+class SessionRecord(Base):
+    """A signed-in browser, read on every authenticated request (`auth/sessions.py`).
+
+    Keyed by the token's fingerprint, so a dump of this table is not a set of
+    usable credentials. Revoking every session at once is still
+    `users.sessions_valid_from`.
+    """
+
+    __tablename__ = "sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(TOKEN_FINGERPRINT_LENGTH), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[CreatedAt]
+    last_seen_at: Mapped[datetime] = mapped_column(
+        TimestampTz, nullable=False, server_default=text("now()")
+    )
+    expires_at: Mapped[RequiredTimestamp]
+    client_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_network: Mapped[str | None] = mapped_column(Text, nullable=True)
+    admin_until: Mapped[OptionalTimestamp]
+    impersonation_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    impersonation_operator: Mapped[str | None] = mapped_column(Text, nullable=True)
+    impersonation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    impersonation_grant_id: Mapped[uuid.UUID | None] = mapped_column(UuidType, nullable=True)
+    impersonation_until: Mapped[OptionalTimestamp]
+
+    __table_args__ = (
+        CheckConstraint(
+            "num_nulls(impersonation_id, impersonation_operator, impersonation_reason,"
+            " impersonation_grant_id, impersonation_until) IN (0, 5)",
+            name="impersonation_is_whole_or_absent",
+        ),
+        Index("ix_sessions_user_id_expires_at", "user_id", "expires_at"),
+        Index("ix_sessions_expires_at", "expires_at"),
+    )
+
+
+class OneTimeToken(Base):
+    """A mailed link, spent once (`auth/tokens.py`)."""
+
+    __tablename__ = "one_time_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(TOKEN_FINGERPRINT_LENGTH), primary_key=True)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    new_email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[CreatedAt]
+    expires_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (
+        CheckConstraint(
+            f"purpose IN ({', '.join(repr(p) for p in ONE_TIME_TOKEN_PURPOSES)})",
+            name="purpose_is_known",
+        ),
+        CheckConstraint(
+            "(purpose = 'change_email') = (new_email IS NOT NULL)",
+            name="only_a_change_of_address_names_an_address",
+        ),
+        Index("ix_one_time_tokens_user_id", "user_id"),
+        Index("ix_one_time_tokens_expires_at", "expires_at"),
+    )
+
+
+class ViewAsTicketRecord(Base):
+    """The single-use pass that opens a support view (`support/tickets.py`)."""
+
+    __tablename__ = "view_as_tickets"
+
+    token_hash: Mapped[str] = mapped_column(String(TOKEN_FINGERPRINT_LENGTH), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    operator_label: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    grant_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    impersonation_id: Mapped[uuid.UUID] = mapped_column(UuidType, nullable=False)
+    until: Mapped[RequiredTimestamp]
+    expires_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (Index("ix_view_as_tickets_expires_at", "expires_at"),)
+
+
+class TotpEnrolment(Base):
+    """A shown but unconfirmed authenticator secret, sealed (`auth/totp.py`)."""
+
+    __tablename__ = "totp_enrolments"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    sealed_secret: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    expires_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (Index("ix_totp_enrolments_expires_at", "expires_at"),)
+
+
+class TotpChallenge(Base):
+    """A sign-in past its password and not yet its code, with its attempt budget."""
+
+    __tablename__ = "totp_challenges"
+
+    token_hash: Mapped[str] = mapped_column(String(TOKEN_FINGERPRINT_LENGTH), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    expires_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (
+        CheckConstraint("attempts >= 0", name="attempts_do_not_go_negative"),
+        Index("ix_totp_challenges_expires_at", "expires_at"),
+    )
+
+
+class TotpSpentCode(Base):
+    """A code already used, refused until it could no longer be valid."""
+
+    __tablename__ = "totp_spent_codes"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    code_hash: Mapped[str] = mapped_column(String(TOKEN_FINGERPRINT_LENGTH), primary_key=True)
+    expires_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (Index("ix_totp_spent_codes_expires_at", "expires_at"),)
+
+
+class JobResult(Base):
+    """What a Run now or a send test found, until the API collects it."""
+
+    __tablename__ = "job_results"
+
+    request_id: Mapped[uuid.UUID] = mapped_column(UuidType, primary_key=True)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    expires_at: Mapped[RequiredTimestamp]
+
+    __table_args__ = (
+        CheckConstraint(
+            f"kind IN ({', '.join(repr(k) for k in JOB_RESULT_KINDS)})", name="kind_is_known"
+        ),
+        Index("ix_job_results_expires_at", "expires_at"),
+    )
+
+
+class AlertEvaluationStatus(Base):
+    """When each alert sweep last finished, and why it skipped if it did."""
+
+    __tablename__ = "alert_evaluation_status"
+
+    evaluation: Mapped[str] = mapped_column(Text, primary_key=True)
+    finished_at: Mapped[RequiredTimestamp]
+    skipped: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class RateLimitWindow(Base):
+    """The auth tier's exact count for one key in one fixed window.
+
+    The key is a fingerprint, so an address being guessed at is not stored.
+    """
+
+    __tablename__ = "rate_limit_windows"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(TimestampTz, primary_key=True)
+    hits: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("hits > 0", name="a_window_counts_something"),
+        Index("ix_rate_limit_windows_window_start", "window_start"),
+    )
+
+
+class Job(Base):
+    """One unit of scheduled or requested work — the queue that replaced Celery.
+
+    Claimed with `FOR UPDATE SKIP LOCKED` under a lease; a worker that dies
+    leaves its lease to lapse and the job is claimed again. `org_id` is NULL
+    for a sweep, and set where the work is one organization's, so erasing it
+    removes its queued work.
+    """
+
+    __tablename__ = "jobs"
+
+    id: Mapped[UuidPrimaryKey]
+    queue: Mapped[str] = mapped_column(Text, nullable=False)
+    task: Mapped[str] = mapped_column(Text, nullable=False)
+    kwargs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True
+    )
+    run_after: Mapped[datetime] = mapped_column(
+        TimestampTz, nullable=False, server_default=text("now()")
+    )
+    expires_at: Mapped[OptionalTimestamp]
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    soft_limit_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    hard_limit_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_until: Mapped[OptionalTimestamp]
+    leased_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        CheckConstraint("attempts >= 0", name="attempts_do_not_go_negative"),
+        CheckConstraint("max_attempts >= 1", name="a_job_runs_at_least_once"),
+        CheckConstraint(
+            "soft_limit_seconds > 0 AND hard_limit_seconds > soft_limit_seconds",
+            name="the_hard_limit_follows_the_soft",
+        ),
+        Index("ix_jobs_queue_run_after", "queue", "run_after"),
+        Index("ix_jobs_org_id", "org_id"),
+    )

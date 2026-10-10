@@ -27,8 +27,10 @@ SHARED_QUEUE: Final = "light"
 
 # How long a Run now result waits to be collected. Long enough for a slow
 # request and a console that polls, short enough that a response body does not
-# linger in Redis.
+# linger in `job_results`.
 RUN_NOW_RESULT_TTL_SECONDS: Final = 300
+# What a Run now's result is filed under in `job_results`.
+RUN_NOW_RESULT_KIND: Final = "check_run"
 
 
 # Room above a check's own time limits for opening secrets, reading files and
@@ -37,7 +39,7 @@ TASK_OVERHEAD_SECONDS: Final = 15
 
 
 def time_limits_for(config: dict[str, Any]) -> dict[str, int]:
-    """The soft and hard task limits for one run, as `apply_async` options.
+    """The soft and hard limits for one run, as `JobRequest` fields.
 
     Every dispatch sets them — beat, a confirmation, Run now. A run under the
     worker's default limit could be cut off mid-request, and libcurl reports our
@@ -48,8 +50,8 @@ def time_limits_for(config: dict[str, Any]) -> dict[str, int]:
     except ValidationError:
         run_seconds = 0
     return {
-        "soft_time_limit": run_seconds + TASK_OVERHEAD_SECONDS,
-        "time_limit": run_seconds + 2 * TASK_OVERHEAD_SECONDS,
+        "soft_limit_seconds": run_seconds + TASK_OVERHEAD_SECONDS,
+        "hard_limit_seconds": run_seconds + 2 * TASK_OVERHEAD_SECONDS,
     }
 
 
@@ -57,11 +59,6 @@ def probe_queue(location: str) -> str:
     """Where a run from `location` is dispatched. A worker consumes only its own
     location's queue, which is what makes a location a place rather than a label."""
     return f"{SHARED_QUEUE}.{location}"
-
-
-def run_now_result_key(org_id: str, request_id: str) -> str:
-    """Tenant first, so a guessed request id from another organization finds nothing."""
-    return f"nexovue:check-run:{org_id}:{request_id}"
 
 
 class _Task(BaseModel):

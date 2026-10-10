@@ -1,77 +1,49 @@
-"""Redis-backed rate limiting and concurrency capping.
+"""Rate limiting and concurrency capping, without a shared counter store (ADR-020).
 
-Both algorithms run as Lua scripts because both are read-then-write: with the
-steps split across round trips, two API replicas racing on the same key each see
-the pre-write count and both let the request through. Lua runs atomically inside
-Redis, so the check and the claim cannot be interleaved.
+**Most limits are counted in this process.** Each API process holds a sliding
+window per caller and a count of what is in flight, and enforces its share —
+the limit divided by `API_INSTANCES`. On one process that is exact; across
+several it is exact only when traffic spreads evenly, and the founder accepted
+that for reads, whose limits protect the cluster rather than an account.
 
-The window is a **sliding log** — a sorted set of request timestamps — rather
-than a fixed counter. A fixed window lets a caller spend a full allowance at
-23:59:59 and another at 00:00:00; on a login endpoint that is exactly the burst
-the limit exists to stop.
+**The auth tier is counted exactly, in Postgres.** Login, signup and reset are
+where a limit stops password guessing, so they get one upsert per attempt on a
+fixed window shared by every process — and when Postgres cannot answer, the
+attempt is refused rather than waved through.
+
+The in-process window is a **sliding log** of request times rather than a fixed
+counter: a fixed window lets a caller spend a full allowance at 23:59:59 and
+another at 00:00:00. The exact tier accepts that edge, because one database
+round trip per attempt is what it can afford, and its limit is ten.
 """
 
 from __future__ import annotations
 
 import time
-import uuid
-from dataclasses import dataclass
+from collections import OrderedDict, deque
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from typing import Final
 
-from redis.asyncio import Redis
+from nexovue_platform.telemetry.logging import get_logger
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from nexovue_api.auth.sessions import token_fingerprint
+from nexovue_api.data.postgres.models import RateLimitWindow
 from nexovue_api.ratelimit.policy import Quota
 
-KEY_PREFIX: Final = "ratelimit"
-CONCURRENCY_PREFIX: Final = "concurrency"
-
-MILLISECONDS_PER_SECOND: Final = 1000
-
-# A slot held by a process that died must not be lost forever. Nothing on the
-# control plane should take longer than this, so anything older is a leak.
-CONCURRENCY_SLOT_TTL_SECONDS: Final = 60
+logger = get_logger(__name__)
 
 # Returned when a caller is over its limit but the reset is sub-second; a client
 # told to wait zero seconds retries immediately and stays blocked.
 MINIMUM_RETRY_AFTER_SECONDS: Final = 1
 
-_SLIDING_WINDOW_SCRIPT: Final = """
-local key        = KEYS[1]
-local now_ms     = tonumber(ARGV[1])
-local window_ms  = tonumber(ARGV[2])
-local limit      = tonumber(ARGV[3])
-local member     = ARGV[4]
-
-redis.call('ZREMRANGEBYSCORE', key, '-inf', now_ms - window_ms)
-local used = redis.call('ZCARD', key)
-
-if used >= limit then
-  local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
-  local reset_ms = window_ms - (now_ms - tonumber(oldest[2]))
-  return {0, 0, reset_ms}
-end
-
-redis.call('ZADD', key, now_ms, member)
-redis.call('PEXPIRE', key, window_ms)
-return {1, limit - used - 1, window_ms}
-"""
-
-_ACQUIRE_SLOT_SCRIPT: Final = """
-local key    = KEYS[1]
-local now_ms = tonumber(ARGV[1])
-local ttl_ms = tonumber(ARGV[2])
-local cap    = tonumber(ARGV[3])
-local token  = ARGV[4]
-
-redis.call('ZREMRANGEBYSCORE', key, '-inf', now_ms - ttl_ms)
-if redis.call('ZCARD', key) >= cap then
-  return 0
-end
-
-redis.call('ZADD', key, now_ms, token)
-redis.call('PEXPIRE', key, ttl_ms)
-return 1
-"""
+# How many callers' windows one process remembers. Past this the least recently
+# seen is forgotten, so a flood of invented addresses costs memory once.
+MAX_TRACKED_CALLERS: Final = 100_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,61 +61,131 @@ class Decision:
 
 
 class RateLimiter:
-    """Sliding-window limits and concurrency slots over one Redis connection."""
+    """Every limit a request is held to: exact quotas in Postgres, the rest here."""
 
-    def __init__(self, redis: Redis) -> None:
-        self._redis = redis
-        self._consume = redis.register_script(_SLIDING_WINDOW_SCRIPT)
-        self._acquire = redis.register_script(_ACQUIRE_SLOT_SCRIPT)
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession], *, instances: int
+    ) -> None:
+        self._exact = ExactWindows(session_factory)
+        self._local = LocalLimits(instances=instances)
 
     async def consume(self, *, scope: str, identity: str, quota: Quota) -> Decision:
         """Count one request against ``quota`` for ``identity``."""
-        now_ms = _now_ms()
-        window_ms = quota.window_seconds * MILLISECONDS_PER_SECOND
-        allowed, remaining, reset_ms = await self._consume(
-            keys=[_window_key(scope, quota.name, identity)],
-            # The clock comes from the caller rather than Redis TIME so the
-            # script stays deterministic and safe to replicate.
-            args=[now_ms, window_ms, quota.limit, uuid.uuid4().hex],
+        if quota.exact:
+            return await self._exact.consume(scope=scope, identity=identity, quota=quota)
+        return self._local.consume(scope=scope, identity=identity, quota=quota)
+
+    async def acquire_slot(self, *, scope: str, identity: str, max_concurrent: int) -> bool:
+        """Claim one in-flight slot; False when this caller is already at the cap."""
+        return self._local.acquire_slot(
+            scope=scope, identity=identity, max_concurrent=max_concurrent
         )
+
+    async def release_slot(self, *, scope: str, identity: str) -> None:
+        """Give back an in-flight slot claimed by `acquire_slot`."""
+        self._local.release_slot(scope=scope, identity=identity)
+
+
+class LocalLimits:
+    """This process's share of each limit, held in memory.
+
+    Nothing here awaits, so on one event loop each check-and-claim is atomic.
+    """
+
+    def __init__(self, *, instances: int, clock: Callable[[], float] = time.monotonic) -> None:
+        self._instances = instances
+        self._clock = clock
+        self._windows: OrderedDict[tuple[str, str, str], deque[float]] = OrderedDict()
+        self._in_flight: dict[tuple[str, str], int] = {}
+
+    def consume(self, *, scope: str, identity: str, quota: Quota) -> Decision:
+        share = self._share(quota)
+        key = (quota.name, scope, identity)
+        now = self._clock()
+        window = self._windows.pop(key, None) or deque()
+        self._windows[key] = window
+        while window and window[0] <= now - share.window_seconds:
+            window.popleft()
+        while len(self._windows) > MAX_TRACKED_CALLERS:
+            self._windows.popitem(last=False)
+
+        if len(window) >= share.limit:
+            reset = window[0] + share.window_seconds - now
+            return Decision(
+                allowed=False, quota=share, remaining=0, reset_seconds=_whole_seconds(reset)
+            )
+        window.append(now)
         return Decision(
-            allowed=bool(allowed),
+            allowed=True,
+            quota=share,
+            remaining=share.limit - len(window),
+            reset_seconds=share.window_seconds,
+        )
+
+    def acquire_slot(self, *, scope: str, identity: str, max_concurrent: int) -> bool:
+        key = (scope, identity)
+        held = self._in_flight.get(key, 0)
+        if held >= max(1, max_concurrent // self._instances):
+            return False
+        self._in_flight[key] = held + 1
+        return True
+
+    def release_slot(self, *, scope: str, identity: str) -> None:
+        key = (scope, identity)
+        held = self._in_flight.get(key, 0) - 1
+        if held > 0:
+            self._in_flight[key] = held
+        else:
+            self._in_flight.pop(key, None)
+
+    def _share(self, quota: Quota) -> Quota:
+        return replace(quota, limit=max(1, quota.limit // self._instances))
+
+
+class ExactWindows:
+    """A fixed window per caller in `rate_limit_windows`, shared by every process.
+
+    The key holds a fingerprint of the identity, never the identity: an address
+    somebody is guessing passwords for is not stored.
+    """
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+
+    async def consume(self, *, scope: str, identity: str, quota: Quota) -> Decision:
+        now = datetime.now(UTC)
+        window = timedelta(seconds=quota.window_seconds)
+        window_start = datetime.fromtimestamp(
+            now.timestamp() // quota.window_seconds * quota.window_seconds, UTC
+        )
+        reset = _whole_seconds((window_start + window - now).total_seconds())
+        counted = insert(RateLimitWindow).values(
+            key=f"{quota.name}:{scope}:{token_fingerprint(identity)}",
+            window_start=window_start,
+            hits=1,
+        )
+        try:
+            async with self._session_factory.begin() as db:
+                hits = await db.scalar(
+                    counted.on_conflict_do_update(
+                        index_elements=[RateLimitWindow.key, RateLimitWindow.window_start],
+                        set_={"hits": RateLimitWindow.hits + 1},
+                    ).returning(RateLimitWindow.hits)
+                )
+        except (SQLAlchemyError, OSError):
+            # Refused, not allowed: this tier exists to stop password guessing,
+            # and a guesser must not be waved through because the count is down.
+            logger.exception("the auth limit could not be counted; refusing", policy=quota.name)
+            return Decision(allowed=False, quota=quota, remaining=0, reset_seconds=reset)
+        used = hits or 0
+        return Decision(
+            allowed=used <= quota.limit,
             quota=quota,
-            remaining=int(remaining),
-            reset_seconds=_ms_to_whole_seconds(int(reset_ms)),
+            remaining=max(0, quota.limit - used),
+            reset_seconds=reset,
         )
 
-    async def acquire_slot(self, *, scope: str, identity: str, max_concurrent: int) -> str | None:
-        """Claim one in-flight slot, returning its token, or None when full."""
-        token = uuid.uuid4().hex
-        granted = await self._acquire(
-            keys=[_concurrency_key(scope, identity)],
-            args=[
-                _now_ms(),
-                CONCURRENCY_SLOT_TTL_SECONDS * MILLISECONDS_PER_SECOND,
-                max_concurrent,
-                token,
-            ],
-        )
-        return token if granted else None
 
-    async def release_slot(self, *, scope: str, identity: str, token: str) -> None:
-        """Give back an in-flight slot. Safe to call for a slot already expired."""
-        await self._redis.zrem(_concurrency_key(scope, identity), token)
-
-
-def _window_key(scope: str, quota_name: str, identity: str) -> str:
-    return f"{KEY_PREFIX}:{quota_name}:{scope}:{identity}"
-
-
-def _concurrency_key(scope: str, identity: str) -> str:
-    return f"{CONCURRENCY_PREFIX}:{scope}:{identity}"
-
-
-def _now_ms() -> int:
-    return int(time.time() * MILLISECONDS_PER_SECOND)
-
-
-def _ms_to_whole_seconds(milliseconds: int) -> int:
+def _whole_seconds(seconds: float) -> int:
     """Round up: telling a client to wait 0 s when 400 ms remain just bounces it."""
-    return -(-max(0, milliseconds) // MILLISECONDS_PER_SECOND)
+    return max(0, -int(-seconds // 1))

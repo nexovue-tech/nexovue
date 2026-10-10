@@ -310,15 +310,18 @@ async def reset_password(
     **The session revocation is the half that is easy to leave out.** Somebody
     resetting a password may be doing it because an attacker holds their old
     one, and an attacker with a live session does not need the password again.
-    `sessions_valid_from` is what ends them: Redis keys sessions by token
-    fingerprint, so there is nothing to enumerate, and one write invalidates
-    every session in existence for this user (migration 0019).
+    `sessions_valid_from` is what ends them: one write invalidates every
+    session in existence for this user (migration 0019).
+
+    **Every other reset link for the account is spent with this one.** A second
+    link still sitting in an inbox would otherwise reset the new password too.
 
     The session the *caller* is holding, if any, is ended with the rest. The
     router signs them in again or does not; what must not happen is a reset that
     leaves older sessions alive because one of them was convenient.
     """
     user = await _user_behind(db, tokens, purpose=TokenPurpose.RESET_PASSWORD, token=token)
+    await tokens.revoke_all_for(purpose=TokenPurpose.RESET_PASSWORD, user_id=str(user.id))
     user.password_hash = hash_password(new_password)
     user.sessions_valid_from = datetime.now(UTC)
     # A reset proves control of the address as surely as following a

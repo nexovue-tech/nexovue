@@ -136,23 +136,6 @@ func publishingTo(counting *countingProducer, opts doorOptions) ingest.Producer 
 	return counting
 }
 
-// countingCounter returns an ever-increasing count, so a test seeds `seen` to
-// place a request either inside or past its window's budget.
-type countingCounter struct {
-	seen int64
-}
-
-func (c *countingCounter) Increment(_ context.Context, _ string, by int64, _ time.Duration) (int64, error) {
-	c.seen += by
-	return c.seen, nil
-}
-
-type brokenCounter struct{}
-
-func (brokenCounter) Increment(context.Context, string, int64, time.Duration) (int64, error) {
-	return 0, errors.New("dial tcp: connection refused")
-}
-
 // staticUsage stands in for the control plane's record of a month. The zero
 // value is an organization on a plan that enforces nothing, which is what every
 // test that is not about the allowance wants.
@@ -186,7 +169,6 @@ type doorOptions struct {
 	siteKeys    auth.SiteKeyReader
 	siteOrigins []string
 
-	counter        ratelimit.Counter
 	requestsPerSec int
 	// samplesPerSec sets the profiles door's sample budget; zero leaves it unset.
 	samplesPerSec int
@@ -217,7 +199,7 @@ func sampleBudget(opts doorOptions) *ratelimit.Limiter {
 	if opts.samplesPerSec == 0 {
 		return nil
 	}
-	return ratelimit.New(opts.counter, opts.samplesPerSec)
+	return ratelimit.New(opts.samplesPerSec, 1)
 }
 
 // testProduceBudget is long enough that a working broker never trips it, short
@@ -234,9 +216,6 @@ func (o *doorOptions) applyDefaults() {
 	}
 	if o.siteKeys == nil {
 		o.siteKeys = staticSiteKeys{origins: o.siteOrigins}
-	}
-	if o.counter == nil {
-		o.counter = &countingCounter{}
 	}
 	if o.requestsPerSec == 0 {
 		o.requestsPerSec = 1000
@@ -302,7 +281,7 @@ func browserDoorOptions(producer *countingProducer, opts doorOptions) otlp.Optio
 
 func sharedDoorOptions(producer *countingProducer, opts doorOptions) otlp.Options {
 	return otlp.Options{
-		Limiter:             ratelimit.New(opts.counter, opts.requestsPerSec),
+		Limiter:             ratelimit.New(opts.requestsPerSec, 1),
 		ProfileSamples:      sampleBudget(opts),
 		Allowance:           allowance.New(opts.allowanceUsage, testAllowanceCache),
 		Publisher:           ingest.NewPublisher(publishingTo(producer, opts), testTopics, opts.produceBudget),
@@ -540,7 +519,10 @@ func TestUnreachableControlPlaneIsRetryable(t *testing.T) {
 }
 
 func TestOverLimitIsRefusedBeforeTheBodyIsRead(t *testing.T) {
-	d := newDoor(t, doorOptions{counter: &countingCounter{seen: 5}, requestsPerSec: 1})
+	d := newDoor(t, doorOptions{requestsPerSec: 1})
+	if spent := post(t, d, encodedRequest(t, exportRequest(traceID(0x10))), nil); spent.Code != http.StatusOK {
+		t.Fatalf("the export that spends the second's allowance: status = %d", spent.Code)
+	}
 
 	// A body far larger than the cap: if it were read, the answer would be 413.
 	response := post(t, d, bytes.Repeat([]byte{0}, 4<<20), nil)
@@ -574,21 +556,6 @@ func TestExportBeyondTheInFlightBudgetIsRefusedBeforeTheBodyIsRead(t *testing.T)
 	}
 	if len(d.producer.records) != 0 {
 		t.Error("an export with no room reached the broker")
-	}
-}
-
-// A Valkey outage must not become an ingest outage.
-func TestUnavailableLimiterFailsOpen(t *testing.T) {
-	d := newDoor(t, doorOptions{counter: brokenCounter{}})
-
-	response := post(t, d, encodedRequest(t, exportRequest(traceID(0x11))), nil)
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d: telemetry must survive a limiter blip",
-			response.Code, http.StatusOK)
-	}
-	if len(d.producer.records) != 1 {
-		t.Errorf("produced %d records, want 1", len(d.producer.records))
 	}
 }
 

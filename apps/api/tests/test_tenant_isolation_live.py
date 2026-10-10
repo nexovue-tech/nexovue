@@ -557,7 +557,7 @@ def test_a_newcomers_session_cannot_see_the_seeded_organizations_traces(
 
 
 def test_a_session_for_an_organization_that_has_been_deleted_is_refused() -> None:
-    """The token outlives the row in Redis, so the identity lookup must not."""
+    """The session outlives the row, so the identity lookup must not."""
     doomed = _sign_up()
     try:
         # The body, not just the code: the three 401s this endpoint can answer

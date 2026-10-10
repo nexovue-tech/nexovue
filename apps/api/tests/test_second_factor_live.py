@@ -1,13 +1,13 @@
-"""The session index and the second factor against the real stores (T64).
+"""The second factor against real Postgres (T64).
 
-The offline suites prove the rules. This one proves the two claims that a double
-cannot: **Redis really holds a per-user index that a customer's own list is
-built from**, and **Postgres really holds a sealed secret and argon2 recovery
-codes, under a constraint that refuses a half-armed account.**
+The offline suites prove the rules. This one proves what a double cannot:
+**Postgres really holds a sealed secret and argon2 recovery codes, under a
+constraint that refuses a half-armed account**, and the short-lived state around
+a sign-in — the attempt budget and the spent code — really holds.
 
-Postgres work runs inside a transaction that is rolled back, so the suite leaves
-the development database as it found it. Redis has no such luxury, so every
-session it mints carries a short TTL.
+Everything runs inside one transaction that is rolled back, so the suite leaves
+the development database as it found it. The store's own transactions become
+savepoints on that connection.
 """
 
 from __future__ import annotations
@@ -22,17 +22,19 @@ from urllib.parse import urlsplit
 import pyotp
 import pytest
 from live import require_stack
-from redis.asyncio import Redis
-from sqlalchemy import text
+from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from nexovue_api.auth import recovery_codes, second_factor
-from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.auth.encryption import credential_box, generate_key
-from nexovue_api.auth.sessions import SessionStore
-from nexovue_api.auth.totp import SecondFactorStore
-from nexovue_api.data.postgres.models import User, UserRecoveryCode
+from nexovue_api.auth.totp import MAX_CHALLENGE_ATTEMPTS, SecondFactorStore
+from nexovue_api.data.postgres.models import TotpEnrolment, User, UserRecoveryCode
 from nexovue_api.signup import service as signup
 from nexovue_api.signup.service import ProvisionedTenant
 
@@ -40,15 +42,9 @@ POSTGRES_DSN: Final = os.environ.get(
     "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
 )
 ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
-REDIS_URL: Final = os.environ.get("NEXOVUE_REDIS_URL", "redis://localhost:16379/0")
 REACHABILITY_TIMEOUT_SECONDS: Final = 1.0
 
-# Long enough that nothing here races it, short enough that a crashed run leaves
-# nothing behind for more than a minute.
-TEST_TTL_SECONDS: Final = 60
-
 PASSWORD: Final = "correct-horse-battery"
-CHROME_ON_MAC: Final = ClientDescription(label="Chrome on macOS", network="203.0.113.0/24")
 
 
 def _reachable(url: str, default_port: int) -> bool:
@@ -64,46 +60,45 @@ def _reachable(url: str, default_port: int) -> bool:
 
 
 require_stack(
-    reachable=_reachable(POSTGRES_DSN, 5432) and _reachable(REDIS_URL, 6379),
-    suite="the live second-factor and session-list suite",
-    remedy="Postgres or Redis is not running — start them with `just dev`",
+    reachable=_reachable(POSTGRES_DSN, 5432),
+    suite="the live second-factor suite",
+    remedy="Postgres is not running — start it with `just dev`",
 )
 
 
 @pytest.fixture
-async def db() -> AsyncIterator[AsyncSession]:
-    """A session in a transaction that is always rolled back."""
+async def connection() -> AsyncIterator[AsyncConnection]:
+    """One connection in a transaction that is always rolled back."""
     engine = create_async_engine(ASYNC_DSN)
     try:
-        async with engine.connect() as connection:
-            transaction = await connection.begin()
-            session = AsyncSession(bind=connection)
+        async with engine.connect() as held:
+            transaction = await held.begin()
             try:
-                yield session
+                yield held
             finally:
-                await session.close()
                 await transaction.rollback()
     finally:
         await engine.dispose()
 
 
 @pytest.fixture
-async def redis() -> AsyncIterator[Redis]:
-    client: Redis = Redis.from_url(REDIS_URL)
+async def db(connection: AsyncConnection) -> AsyncIterator[AsyncSession]:
+    session = AsyncSession(bind=connection)
     try:
-        yield client
+        yield session
     finally:
-        await client.aclose()
+        await session.close()
 
 
 @pytest.fixture
-def sessions(redis: Redis) -> SessionStore:
-    return SessionStore(redis, ttl_seconds=TEST_TTL_SECONDS)
-
-
-@pytest.fixture
-def second_factors(redis: Redis) -> SecondFactorStore:
-    return SecondFactorStore(redis)
+def second_factors(connection: AsyncConnection) -> SecondFactorStore:
+    """The store's transactions as savepoints, so they see — and roll back with —
+    the tenant this test made."""
+    return SecondFactorStore(
+        async_sessionmaker(
+            bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint"
+        )
+    )
 
 
 async def _tenant(db: AsyncSession) -> ProvisionedTenant:
@@ -118,120 +113,57 @@ async def _tenant(db: AsyncSession) -> ProvisionedTenant:
     )
 
 
-# ------------------------------------------------------- the session index
+# ------------------------------------------- the state around a sign-in
 
 
-async def test_a_minted_session_appears_in_its_own_users_list(
-    db: AsyncSession, sessions: SessionStore
+async def test_the_fifth_wrong_code_ends_the_challenge(
+    db: AsyncSession, second_factors: SecondFactorStore
 ) -> None:
-    """The index is written beside the session key, so the list is real."""
+    """Five is generous for somebody copying six digits and miserly for somebody
+    guessing them."""
     user = (await _tenant(db)).user
+    await db.flush()
+    token = await second_factors.open_challenge(user_id=str(user.id))
 
-    token, _ = await sessions.create(
-        user_id=str(user.id), org_id=str(user.org_id), client=CHROME_ON_MAC
+    for spent in range(1, MAX_CHALLENGE_ATTEMPTS):
+        await second_factors.record_failed_attempt(token=token)
+        challenge = await second_factors.read_challenge(token=token)
+        assert challenge is not None
+        assert challenge.attempts == spent
+    await second_factors.record_failed_attempt(token=token)
+
+    assert await second_factors.read_challenge(token=token) is None
+
+
+async def test_a_code_is_claimed_once(db: AsyncSession, second_factors: SecondFactorStore) -> None:
+    """A code observed over a shoulder must not sign anybody in a second time."""
+    user = (await _tenant(db)).user
+    await db.flush()
+
+    assert await second_factors.claim_step(user_id=str(user.id), code="123456")
+    assert not await second_factors.claim_step(user_id=str(user.id), code="123456")
+    assert await second_factors.claim_step(user_id=str(user.id), code="654321")
+
+
+async def test_a_new_enrolment_replaces_the_one_before_and_a_lapsed_one_is_gone(
+    db: AsyncSession, second_factors: SecondFactorStore
+) -> None:
+    """The QR code on screen now is the only one that may be confirmed."""
+    user = (await _tenant(db)).user
+    await db.flush()
+    await second_factors.offer_enrolment(user_id=str(user.id), sealed_secret=b"first")
+    await second_factors.offer_enrolment(user_id=str(user.id), sealed_secret=b"second")
+
+    offer = await second_factors.take_enrolment(user_id=str(user.id))
+    assert offer is not None
+    assert offer.sealed_secret == b"second"
+
+    await db.execute(
+        update(TotpEnrolment)
+        .where(TotpEnrolment.user_id == user.id)
+        .values(expires_at=text("now() - interval '1 second'"))
     )
-    listed = await sessions.list_for(str(user.id))
-
-    assert [entry.client for entry in listed] == [CHROME_ON_MAC]
-    assert await sessions.get(token) is not None
-
-
-async def test_one_users_list_never_holds_anothers_session(
-    db: AsyncSession, sessions: SessionStore
-) -> None:
-    """**The scoping claim against a real store.** The index key is built from
-    the user id the caller's own session names, so there is nothing a request
-    could supply that reaches another set."""
-    mine = (await _tenant(db)).user
-    theirs = (await _tenant(db)).user
-    await sessions.create(user_id=str(mine.id), org_id=str(mine.org_id))
-    await sessions.create(user_id=str(theirs.id), org_id=str(theirs.org_id))
-
-    assert len(await sessions.list_for(str(mine.id))) == 1
-    assert len(await sessions.list_for(str(theirs.id))) == 1
-
-
-async def test_a_session_id_that_is_not_yours_will_not_end_it(
-    db: AsyncSession, sessions: SessionStore
-) -> None:
-    """**Membership is the authorization.** Holding somebody else's id — which
-    is only a SHA-256 digest of their token — must buy nothing."""
-    mine = (await _tenant(db)).user
-    theirs = (await _tenant(db)).user
-    their_token, _ = await sessions.create(user_id=str(theirs.id), org_id=str(theirs.org_id))
-    (their_entry,) = await sessions.list_for(str(theirs.id))
-
-    refused = await sessions.revoke_one_of(user_id=str(mine.id), session_id=their_entry.id)
-
-    assert refused is False
-    assert await sessions.get(their_token) is not None, "another user's session was ended"
-
-
-async def test_ending_one_session_removes_it_from_the_store_and_the_index(
-    db: AsyncSession, sessions: SessionStore
-) -> None:
-    user = (await _tenant(db)).user
-    first, _ = await sessions.create(user_id=str(user.id), org_id=str(user.org_id))
-    second, _ = await sessions.create(user_id=str(user.id), org_id=str(user.org_id))
-    entries = {entry.id: entry for entry in await sessions.list_for(str(user.id))}
-    from nexovue_api.auth.sessions import token_fingerprint
-
-    ended = await sessions.revoke_one_of(user_id=str(user.id), session_id=token_fingerprint(first))
-
-    assert ended is True
-    assert await sessions.get(first) is None
-    assert await sessions.get(second) is not None
-    assert [entry.id for entry in await sessions.list_for(str(user.id))] == [
-        token_fingerprint(second)
-    ]
-    assert len(entries) == 2
-
-
-async def test_a_session_whose_key_has_gone_drops_out_of_the_list(
-    db: AsyncSession, sessions: SessionStore, redis: Redis
-) -> None:
-    """**The drift migration 0019 warned about, answered.** The key is the truth
-    and the index is a cache of it, so a member the key's TTL outran must not be
-    shown as a live session."""
-    from nexovue_api.auth.sessions import token_fingerprint
-
-    user = (await _tenant(db)).user
-    token, _ = await sessions.create(user_id=str(user.id), org_id=str(user.org_id))
-    await redis.delete(f"session:{token_fingerprint(token)}")
-
-    assert await sessions.list_for(str(user.id)) == []
-
-
-async def test_signing_out_of_a_session_the_normal_way_also_clears_the_index(
-    db: AsyncSession, sessions: SessionStore
-) -> None:
-    user = (await _tenant(db)).user
-    token, _ = await sessions.create(user_id=str(user.id), org_id=str(user.org_id))
-
-    await sessions.revoke(token)
-
-    assert await sessions.list_for(str(user.id)) == []
-
-
-async def test_the_store_holds_a_coarse_client_and_not_the_request_that_made_it(
-    db: AsyncSession, sessions: SessionStore, redis: Redis
-) -> None:
-    """**The privacy decision, checked where it would actually leak.** What is in
-    Redis is what a dump of Redis discloses."""
-    from nexovue_api.auth.sessions import token_fingerprint
-
-    user = (await _tenant(db)).user
-    token, _ = await sessions.create(
-        user_id=str(user.id), org_id=str(user.org_id), client=CHROME_ON_MAC
-    )
-
-    stored = await redis.get(f"session:{token_fingerprint(token)}")
-
-    assert stored is not None
-    assert b"Chrome on macOS" in stored
-    assert b"203.0.113.0/24" in stored
-    assert b"Mozilla" not in stored
-    assert b"203.0.113.42" not in stored
+    assert await second_factors.take_enrolment(user_id=str(user.id)) is None
 
 
 # ------------------------------------------------- the second factor in Postgres

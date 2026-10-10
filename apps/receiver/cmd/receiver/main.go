@@ -15,7 +15,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/valkey-io/valkey-go"
 
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/allowance"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/auth"
@@ -32,7 +31,6 @@ import (
 const (
 	dependencyKafka    = "kafka"
 	dependencyPostgres = "postgres"
-	dependencyValkey   = "valkey"
 )
 
 func main() {
@@ -75,7 +73,6 @@ func run() error {
 	registry := health.NewRegistry()
 	registry.Register(health.Check{Name: dependencyKafka, Probe: dependencies.kafka.Ping})
 	registry.Register(health.Check{Name: dependencyPostgres, Probe: dependencies.postgres.Ping})
-	registry.Register(health.Check{Name: dependencyValkey, Probe: dependencies.pingValkey})
 
 	traffic := otlp.NewTraffic()
 
@@ -91,10 +88,10 @@ func run() error {
 	// One set of collaborators for both transports and both doors: the gates
 	// behind them are the same code, and a second Options would be a second
 	// pipeline. Only the gatekeeper differs, and it is the whole difference.
-	counter := ratelimit.NewValkeyCounter(dependencies.valkey)
 	shared := otlp.Options{
-		Limiter:        ratelimit.New(counter, cfg.RateLimitPerSecond),
-		ProfileSamples: ratelimit.New(counter, cfg.ProfileSamplesPerSecond),
+		// This receiver's share of each limit, counted in process (ADR-020).
+		Limiter:        ratelimit.New(cfg.RateLimitPerSecond, cfg.Instances),
+		ProfileSamples: ratelimit.New(cfg.ProfileSamplesPerSecond, cfg.Instances),
 		// One checker for both doors and both transports: the plan's total is
 		// the organization's, read once and split per door inside the checker,
 		// so a customer cannot buy more month by changing which entrance they
@@ -214,7 +211,6 @@ func grpcListener(server *otlp.GRPCServer) listener {
 type dependencies struct {
 	kafka    *kgo.Client
 	postgres *pgxpool.Pool
-	valkey   valkey.Client
 }
 
 // dial opens every client, closing whatever it already opened if a later one
@@ -254,14 +250,6 @@ func dial(ctx context.Context, cfg config.Config) (opened *dependencies, err err
 	if opened.postgres, err = postgresPool(ctx, cfg); err != nil {
 		return nil, err
 	}
-
-	options, err := valkey.ParseURL(cfg.RedisURL)
-	if err != nil {
-		return nil, bootFailure("valkey url", err)
-	}
-	if opened.valkey, err = valkey.NewClient(options); err != nil {
-		return nil, bootFailure("valkey client", err)
-	}
 	return opened, nil
 }
 
@@ -296,13 +284,6 @@ func (d *dependencies) close() {
 	if d.postgres != nil {
 		d.postgres.Close()
 	}
-	if d.valkey != nil {
-		d.valkey.Close()
-	}
-}
-
-func (d *dependencies) pingValkey(ctx context.Context) error {
-	return d.valkey.Do(ctx, d.valkey.B().Ping().Build()).Error()
 }
 
 // serveUntilSignal runs every listener until the process is asked to stop, then

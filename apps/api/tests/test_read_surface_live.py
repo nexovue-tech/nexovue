@@ -19,12 +19,12 @@ from urllib.parse import urlsplit
 
 import pytest
 from live import require_stack
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from starlette.requests import Request
 
 from nexovue_api.apitokens import service as api_tokens
-from nexovue_api.apitokens import usage as token_usage
 from nexovue_api.apitokens.tokens import INGEST_KEYS_CANNOT_READ, TOKENS_ARE_READ_ONLY
+from nexovue_api.apitokens.usage import TokenUsage
 from nexovue_api.auth.dependencies import Reader, get_current_identity, get_current_reader
 from nexovue_api.auth.sessions import Session
 from nexovue_api.errors.exceptions import (
@@ -120,31 +120,6 @@ async def _token(
         now=_now(),
     )
     return made.token.get_secret_value()
-
-
-class _CountingRedis:
-    """Enough Redis for the token counters: one integer and one NX flag.
-
-    A stand-in rather than the real thing, because what these tests judge is who
-    may read what; `test_api_token_usage_live.py` counts against real Redis.
-    """
-
-    def __init__(self) -> None:
-        self.counts: dict[str, int] = {}
-        self.claimed: set[str] = set()
-
-    async def incr(self, key: str) -> int:
-        self.counts[key] = self.counts.get(key, 0) + 1
-        return self.counts[key]
-
-    async def expire(self, key: str, seconds: int) -> bool:
-        return True
-
-    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool:
-        if nx and key in self.claimed:
-            return False
-        self.claimed.add(key)
-        return True
 
 
 class _NoSessions:
@@ -273,20 +248,28 @@ async def test_a_signed_in_person_reads_the_surface_with_no_scope(db: AsyncSessi
 async def test_a_token_request_marks_the_token_used_and_counts_the_day(
     db: AsyncSession,
 ) -> None:
-    """AC18: the minute's first request writes; the rest only count in Redis."""
+    """AC18: requests are counted in memory and added to the day once a minute —
+    added, never overwritten, so two processes' counts both land."""
     acme = await _tenant(db)
     presented = await _token(db, acme, project_id=None)
-    redis = _CountingRedis()
     token = await api_tokens.token_for(db, presented, now=_now())
+    await db.flush()
+    connection = await db.connection()
+    usage = TokenUsage(
+        async_sessionmaker(
+            bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint"
+        )
+    )
 
     for _ in range(3):
-        await token_usage.count_request(cast(Any, redis), db, token=token, now=_now())
-    await db.flush()
+        usage.count(token.id, _now())
+    await usage.flush()
+    for _ in range(2):
+        usage.count(token.id, _now())
+    await usage.flush()
+    org_id = acme.organization.id
+    db.expire_all()
 
-    [listed] = (
-        await api_tokens.list_for_organization(db, org_id=acme.organization.id, now=_now())
-    ).api_tokens
+    [listed] = (await api_tokens.list_for_organization(db, org_id=org_id, now=_now())).api_tokens
     assert listed.last_used_at is not None
-    # Three requests counted in Redis; one fold, carrying the count at that moment.
-    assert list(redis.counts.values()) == [3]
-    assert listed.requests_today == 1
+    assert listed.requests_today == 5

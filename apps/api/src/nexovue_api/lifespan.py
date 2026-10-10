@@ -9,6 +9,7 @@ machine happens to be running.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
@@ -20,7 +21,6 @@ from fastapi import FastAPI
 from mcp.server import MCPServer
 from nexovue_platform.email import EMAIL_VARIABLES, EmailSender, build_email_sender
 from nexovue_platform.telemetry.logging import get_logger
-from redis.asyncio import ConnectionPool, Redis
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -28,15 +28,17 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from nexovue_api.alerts.evaluation import EvaluationReader, RedisEvaluationReader
+from nexovue_api.alerts.evaluation import EvaluationReader, PostgresEvaluationReader
+from nexovue_api.apitokens.usage import TokenUsage
 from nexovue_api.auth.sessions import SessionStore
-from nexovue_api.channels.send_test import CeleryChannelTester, ChannelTester
-from nexovue_api.checks.run_now import CeleryProbeBroker, ProbeBroker
+from nexovue_api.channels.send_test import ChannelTester, JobsChannelTester
+from nexovue_api.checks.run_now import JobsProbeBroker, ProbeBroker
 from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.health.checks import dependency_checks
 from nexovue_api.health.registry import CheckRegistry
 from nexovue_api.ratelimit.limiter import RateLimiter
 from nexovue_api.ratelimit.policy import FixedPlanLimits
+from nexovue_api.ratelimit.token_owners import TokenOwners
 from nexovue_api.settings import DEFAULT_CLICKHOUSE_HTTP_PORT, ClickHouseDsn, Settings
 from nexovue_api.signup.first_run import seed_first_organization
 from nexovue_api.superadmin.seed import seed_super_admin
@@ -68,7 +70,7 @@ class ClickHouseConnection:
     ClickHouse was restarting left the API dead — "Application startup failed.
     Exiting." — until somebody restarted the container by hand.
 
-    Lazy instead, so the API boots and every screen that needs Postgres or Redis
+    Lazy instead, so the API boots and every screen that needs only Postgres
     keeps working. A screen that needs ClickHouse gets a 503 naming a dependency,
     which is both true and actionable.
     """
@@ -109,12 +111,13 @@ class Resources:
 
     engine: AsyncEngine
     session_factory: async_sessionmaker[AsyncSession]
-    redis: Redis
     clickhouse: ClickHouseConnection
     # Tenant erasure only; see Settings.clickhouse_writer_dsn.
     clickhouse_writer: ClickHouseConnection
     sessions: SessionStore
     rate_limiter: RateLimiter
+    token_owners: TokenOwners
+    token_usage: TokenUsage
     # None when no object store is configured. Source map upload and
     # symbolication refuse by name in that case; nothing else needs one.
     object_store: ObjectStore | None
@@ -122,12 +125,11 @@ class Resources:
     # still serves, and the two flows that must send — verification and password
     # reset — refuse by naming the variables that are missing.
     email: EmailSender | None
-    # None when no probe broker is configured; Run now refuses with 503.
-    probes: ProbeBroker | None = None
-    # The same broker, for a channel's send test (F21); None refuses the same way.
-    channel_tests: ChannelTester | None = None
+    # The scheduler's job queue, for Run now (ADR-011) and a channel's send test.
+    probes: ProbeBroker
+    channel_tests: ChannelTester
     # When the scheduler last evaluated the service conditions (F21).
-    evaluations: EvaluationReader | None = None
+    evaluations: EvaluationReader
 
 
 def build_lifespan(
@@ -148,6 +150,7 @@ def build_lifespan(
         resources = await open_resources(settings)
         app.state.resources = resources
         app.state.rate_limiter = resources.rate_limiter
+        app.state.token_owners = resources.token_owners
         app.state.plan_limits = FixedPlanLimits()
         app.state.health = CheckRegistry(dependency_checks(resources))
         await _seed_the_operator(resources, settings)
@@ -156,6 +159,7 @@ def build_lifespan(
         # already signs in here" refusal happens in the right direction.
         await _seed_the_first_organization(resources, settings)
         logger.info("api started", env=settings.env)
+        flushing = asyncio.create_task(resources.token_usage.flush_every_minute())
         try:
             if assistant is None:
                 yield
@@ -163,6 +167,10 @@ def build_lifespan(
                 async with assistant.session_manager.run():
                     yield
         finally:
+            flushing.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await flushing
+            await resources.token_usage.flush()
             await close_resources(resources)
             logger.info("api stopped")
 
@@ -219,13 +227,6 @@ async def open_resources(settings: Settings) -> Resources:
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    redis = Redis(
-        connection_pool=ConnectionPool.from_url(
-            str(settings.redis_url), max_connections=settings.postgres_pool_size
-        ),
-        decode_responses=True,
-    )
-
     def connect_clickhouse(dsn: ClickHouseDsn) -> Callable[[], Awaitable[AsyncClient]]:
         async def connect() -> AsyncClient:
             return await clickhouse_connect.get_async_client(
@@ -251,24 +252,15 @@ async def open_resources(settings: Settings) -> Resources:
         email=_open_email(settings),
         engine=engine,
         session_factory=session_factory,
-        redis=redis,
         clickhouse=ClickHouseConnection(connect_clickhouse(settings.clickhouse_dsn)),
         clickhouse_writer=ClickHouseConnection(connect_clickhouse(settings.clickhouse_writer_dsn)),
-        sessions=SessionStore(redis, ttl_seconds=settings.session_ttl_seconds),
-        rate_limiter=RateLimiter(redis),
-        probes=(
-            CeleryProbeBroker(str(settings.probe_broker_url)) if settings.probe_broker_url else None
-        ),
-        channel_tests=(
-            CeleryChannelTester(str(settings.probe_broker_url))
-            if settings.probe_broker_url
-            else None
-        ),
-        evaluations=(
-            RedisEvaluationReader(str(settings.probe_broker_url))
-            if settings.probe_broker_url
-            else None
-        ),
+        sessions=SessionStore(session_factory, ttl_seconds=settings.session_ttl_seconds),
+        rate_limiter=RateLimiter(session_factory, instances=settings.api_instances),
+        token_owners=TokenOwners(session_factory),
+        token_usage=TokenUsage(session_factory),
+        probes=JobsProbeBroker(session_factory),
+        channel_tests=JobsChannelTester(session_factory),
+        evaluations=PostgresEvaluationReader(session_factory),
     )
 
 
@@ -312,15 +304,8 @@ async def _open_object_store(settings: Settings) -> ObjectStore | None:
 
 async def close_resources(resources: Resources) -> None:
     """Close every pool, in the reverse order they were opened."""
-    if resources.probes is not None:
-        await resources.probes.close()
-    if resources.channel_tests is not None:
-        await resources.channel_tests.close()
-    if resources.evaluations is not None:
-        await resources.evaluations.close()
     await resources.clickhouse.close()
     await resources.clickhouse_writer.close()
-    await resources.redis.aclose()
     await resources.engine.dispose()
 
 

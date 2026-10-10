@@ -22,7 +22,6 @@ from pydantic import (
     AnyUrl,
     Field,
     PostgresDsn,
-    RedisDsn,
     SecretStr,
     UrlConstraints,
     ValidationError,
@@ -193,7 +192,6 @@ class Settings(BaseSettings):
     # The writer: tenant erasure alone (purge/). Separate so a read path can
     # never hold a credential that deletes.
     clickhouse_writer_dsn: ClickHouseDsn
-    redis_url: RedisDsn
 
     # --- Postgres pool: sized here, never left to the library default -------
     postgres_pool_size: Annotated[int, Field(ge=1, le=100)] = 10
@@ -235,15 +233,15 @@ class Settings(BaseSettings):
     # consuming `light.<location>`.
     probe_locations: Annotated[list[str], NoDecode, Field(min_length=1)] = ["local"]
 
-    # The scheduler's broker, which Run now dispatches through (ADR-011). Unset
-    # means Run now answers 503 rather than dispatching nowhere.
-    probe_broker_url: RedisDsn | None = None
-
     # Where a customer points their OTLP exporter. Signup hands this back, so it
     # has to name the receiver as the *customer* reaches it, not as we reach it.
     otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT
 
     rate_limit_enabled: bool = True
+    # How many API processes share the traffic. Each enforces its share of every
+    # in-memory limit — the limit divided by this — so a deployment running
+    # three replicas says 3, or each would allow three times the policy.
+    api_instances: Annotated[int, Field(ge=1)] = 1
     # Whether anyone who finds the page may create an organization at /signup
     # (F31, D10). **Closed unless a deployment opens it**, and every target says
     # which it wants rather than inheriting one.

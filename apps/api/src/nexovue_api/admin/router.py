@@ -25,7 +25,7 @@ from nexovue_api.admin.schemas import (
     ViewAsTicketOut,
 )
 from nexovue_api.auth.policy import MayAdministerThePlatform
-from nexovue_api.deps import AppSettings, DbSession, OptionalEmail, RedisClient
+from nexovue_api.deps import AppSettings, DbSession, OptionalEmail
 from nexovue_api.support import service as support
 from nexovue_api.support.tickets import TicketStore
 
@@ -144,7 +144,6 @@ async def end_grant(operator: MayAdministerThePlatform, db: DbSession, org_id: u
 async def view_as(
     operator: MayAdministerThePlatform,
     db: DbSession,
-    redis: RedisClient,
     settings: AppSettings,
     org_id: uuid.UUID,
     request: ViewAsRequest,
@@ -153,7 +152,7 @@ async def view_as(
     for the owner's own console, and the session it makes is read-only."""
     ticket = await support.start_view(
         db,
-        TicketStore(redis),
+        TicketStore(db),
         org_id=org_id,
         user_id=request.user_id,
         operator_label=service.operator_label(operator.user),

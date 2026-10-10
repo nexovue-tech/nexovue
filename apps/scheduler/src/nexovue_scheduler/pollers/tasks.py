@@ -15,7 +15,7 @@ from typing import Any, Final
 
 from nexovue_platform.telemetry.logging import get_logger
 
-from nexovue_scheduler.celery_app import app
+from nexovue_scheduler.jobs.registry import Retry, task
 from nexovue_scheduler.pollers import cloudwatch, integrations, postgres_connect, postgres_stats
 from nexovue_scheduler.pollers.aws import assume_customer_role, session_name_for
 from nexovue_scheduler.pollers.envelope import build_cloudwatch_envelope, build_postgres_envelope
@@ -42,8 +42,9 @@ _publisher: ResultPublisher | None = None
 def _publisher_for_process() -> ResultPublisher:
     """One producer per worker process, built on first use.
 
-    Celery forks workers and a Kafka producer's background thread does not
-    survive a fork, so it is created after the fork rather than at import.
+    Built in the worker's child process on its first task, rather than at
+    import: a Kafka producer's background thread belongs to the process that
+    made it.
     """
     global _publisher
     if _publisher is None:
@@ -51,9 +52,8 @@ def _publisher_for_process() -> ResultPublisher:
     return _publisher
 
 
-@app.task(name=CLOUDWATCH_TASK, bind=True, max_retries=2)
+@task(CLOUDWATCH_TASK)
 def poll_cloudwatch(
-    self: Any,
     *,
     integration_id: str,
     org_id: str,
@@ -68,7 +68,7 @@ def poll_cloudwatch(
     """
     settings = get_settings()
     try:
-        _poll_cloudwatch(settings, integration_id, org_id, project_id, config, external_id, self)
+        _poll_cloudwatch(settings, integration_id, org_id, project_id, config, external_id)
     except Exception as failure:
         # Recorded before re-raising, so the customer sees why. Assuming a role
         # is where this fails in practice, and both causes — a trust policy that
@@ -85,7 +85,6 @@ def _poll_cloudwatch(
     project_id: str,
     config: dict[str, Any],
     external_id: str | None,
-    task: Any,
 ) -> None:
     """The poll itself, so the task above is only about reporting the outcome."""
     grant = integrations.role_grant_from(config, external_id)
@@ -120,12 +119,11 @@ def _poll_cloudwatch(
         account_id=grant.account_id,
         window=window,
     )
-    _publish_or_retry(task, envelope, org_id=org_id, integration_id=integration_id)
+    _publish_or_retry(envelope, org_id=org_id, integration_id=integration_id)
 
 
-@app.task(name=POSTGRES_TASK, bind=True, max_retries=2)
+@task(POSTGRES_TASK)
 def poll_postgres(
-    self: Any,
     *,
     integration_id: str,
     org_id: str,
@@ -136,7 +134,7 @@ def poll_postgres(
     """Read one database's statement and connection statistics and publish them."""
     settings = get_settings()
     try:
-        _poll_postgres(settings, integration_id, org_id, project_id, config, external_id, self)
+        _poll_postgres(settings, integration_id, org_id, project_id, config, external_id)
     except Exception as failure:
         report_failure(settings, integration_id, str(failure))
         raise
@@ -150,7 +148,6 @@ def _poll_postgres(
     project_id: str,
     config: dict[str, Any],
     external_id: str | None,
-    task: Any,
 ) -> None:
     """The poll itself, so the task above is only about reporting the outcome."""
     target = integrations.database_target_from(config, external_id)
@@ -187,7 +184,7 @@ def _poll_postgres(
         server_port=target.port,
         window=window,
     )
-    _publish_or_retry(task, envelope, org_id=org_id, integration_id=integration_id)
+    _publish_or_retry(envelope, org_id=org_id, integration_id=integration_id)
 
 
 async def _read_database(
@@ -217,7 +214,7 @@ async def _read_database(
         await connection.close()
 
 
-def _publish_or_retry(task: Any, envelope: bytes, *, org_id: str, integration_id: str) -> None:
+def _publish_or_retry(envelope: bytes, *, org_id: str, integration_id: str) -> None:
     """Delivery is the only thing worth retrying.
 
     A system that answered honestly and reported a bad number is a measurement;
@@ -228,4 +225,4 @@ def _publish_or_retry(task: Any, envelope: bytes, *, org_id: str, integration_id
         _publisher_for_process().publish(envelope, org_id=org_id)
     except Exception as failure:
         logger.warning("publishing a poll result failed; retrying", integration_id=integration_id)
-        raise task.retry(exc=failure, countdown=5) from failure
+        raise Retry(countdown=5, reason=str(failure)) from failure

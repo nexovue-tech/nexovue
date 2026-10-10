@@ -11,9 +11,9 @@
 // because a request from an origin the key does not cover must not spend the
 // owner's rate budget. The allowance gate follows for the same reason and one
 // more: it answers from an in-process cache, so an organization whose plan
-// month is spent is refused without a Valkey round trip. The limiter comes
-// before the payload is read so a tenant over its limit costs us a Valkey round
-// trip rather than a megabyte of parsing. The gates live in gates.go and every
+// month is spent is refused without a database round trip. The limiter comes
+// before the payload is read so a tenant over its limit costs us a map lookup
+// rather than a megabyte of parsing. The gates live in gates.go and every
 // door runs the same ones over both transports: only where the credential is
 // read from and how a verdict is written differ.
 //
@@ -60,8 +60,6 @@ const (
 	// receiver is bounding itself at a multiple of the limit. A
 	// customer told only "rate limit exceeded" would check their configured
 	// limit, find themselves under it, and be right.
-	messageThrottledInProcess = "ingest rate limit exceeded: the shared rate counter is " +
-		"unavailable and a per-receiver limit is in force, retry"
 	messageBrokerDown  = "ingestion buffer unavailable, retry"
 	messageUnavailable = "receiver cannot serve this request, retry"
 )

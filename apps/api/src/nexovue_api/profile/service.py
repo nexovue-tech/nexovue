@@ -1,9 +1,7 @@
 """Changing your own account. No HTTP, no SQL text.
 
 **One write ends every session, and it is the same write in both directions.**
-Redis keys sessions on `session:<fingerprint(token)>` and `SessionStore.revoke`
-takes a *token*, so nothing maps a user to their sessions and "end them all" has
-no query to run. `users.sessions_valid_from` is the answer migration 0019 chose:
+`users.sessions_valid_from` is the answer migration 0019 chose:
 a session created before it is refused in `auth.dependencies`, so setting it to
 `now()` invalidates every session in existence for that user in a single write.
 That migration says in as many words that a *future* reason to end every session
@@ -203,7 +201,7 @@ async def list_sessions(
             network=session.client.network,
             current=session.id == here,
         )
-        for session in await sessions.list_for(str(user.id))
+        for session in await sessions.list_for(org_id=str(user.org_id), user_id=str(user.id))
     ]
 
 
@@ -221,7 +219,9 @@ async def end_one_session(
     one 404, so this cannot be used to learn that another account's session is
     live.
     """
-    ended = await sessions.revoke_one_of(user_id=str(user.id), session_id=session_id)
+    ended = await sessions.revoke_one_of(
+        org_id=str(user.org_id), user_id=str(user.id), session_id=session_id
+    )
     if ended:
         audit.record_session_ended(db, org_id=user.org_id, user_id=user.id)
     return ended

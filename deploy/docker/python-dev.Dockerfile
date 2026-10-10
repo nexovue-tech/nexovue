@@ -5,7 +5,7 @@ FROM python:3.13-slim-trixie
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.6 /uv /uvx /usr/local/bin/
 
-# watchmedo restarts Celery workers on edit. It is a dev-image tool only and is
+# watchmedo restarts the scheduler on edit. It is a dev-image tool only and is
 # deliberately absent from apps/scheduler/pyproject.toml.
 RUN pip install --no-cache-dir "watchdog[watchmedo]==6.0.0"
 

@@ -1,7 +1,7 @@
 """Turning a second factor on, off, and proving it at sign-in.
 
 No HTTP and no SQL text, like the rest of this package: the router owns the
-status code, `totp.py` owns the Redis state, `recovery_codes.py` owns the codes,
+status code, `totp.py` owns the short-lived state, `recovery_codes.py` owns the codes,
 and what is left here is the decision.
 
 **Enrolment is two steps and cannot be one.** A secret stored the moment it is
@@ -9,7 +9,7 @@ generated belongs to an account whose owner may have mistyped it into their
 authenticator, closed the tab, or scanned a QR code that never rendered — and
 the next thing that happens to them is being locked out of their own product by
 a control they were trying to add. So the first step only *offers* a secret, the
-offer lives in Redis and expires on its own, and the account changes when the
+offer lives in `totp_enrolments` and lapses on its own, and the account changes when the
 customer sends back a code the offer produces. That is the whole reason
 `users.totp_confirmed_at` exists rather than a boolean.
 
@@ -121,7 +121,7 @@ async def begin_enrolment(
     """Offer a secret. Nothing on the account changes until a code confirms it.
 
     The secret is sealed before it goes anywhere, so even the ten-minute holding
-    place in Redis never sees the base32 string.
+    place in `totp_enrolments` never sees the base32 string.
     """
     _require_password(user, current_password)
     if is_enabled(user):

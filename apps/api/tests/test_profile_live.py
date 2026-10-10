@@ -1,4 +1,4 @@
-"""Profile and security against real Postgres and real Redis (P1-72).
+"""Profile and security against real Postgres (P1-72).
 
 The offline suite proves the rules. This one proves the **stores agree**, and in
 particular the one claim that cannot be shown offline: after a sign-out, a
@@ -8,9 +8,9 @@ about whether the column it reads is on the row a real request loads. Here the
 identity is resolved the way a request resolves it — through `load_identity` —
 against a row a real change wrote.
 
-Postgres work runs inside a transaction that is rolled back, so the suite leaves
-the development database as it found it. Redis has no such luxury, so every
-session it mints carries a short TTL.
+Everything runs inside one transaction that is rolled back, so the suite leaves
+the development database as it found it; the session store's transactions are
+savepoints on that connection.
 """
 
 from __future__ import annotations
@@ -25,8 +25,12 @@ from urllib.parse import urlsplit
 
 import pytest
 from live import require_stack
-from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from nexovue_api.auth.credentials import verify_password
 from nexovue_api.auth.dependencies import _issued_before_reset
@@ -43,7 +47,6 @@ POSTGRES_DSN: Final = os.environ.get(
     "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
 )
 ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
-REDIS_URL: Final = os.environ.get("NEXOVUE_REDIS_URL", "redis://localhost:16379/0")
 REACHABILITY_TIMEOUT_SECONDS: Final = 1.0
 
 # Long enough that nothing here races it, short enough that a crashed run leaves
@@ -67,36 +70,44 @@ def _reachable(url: str, default_port: int) -> bool:
 
 
 require_stack(
-    reachable=_reachable(POSTGRES_DSN, 5432) and _reachable(REDIS_URL, 6379),
+    reachable=_reachable(POSTGRES_DSN, 5432),
     suite="the live profile-and-security suite",
-    remedy="Postgres or Redis is not running — start them with `just dev`",
+    remedy="Postgres is not running — start it with `just dev`",
 )
 
 
 @pytest.fixture
-async def db() -> AsyncIterator[AsyncSession]:
-    """A session in a transaction that is always rolled back."""
+async def connection() -> AsyncIterator[AsyncConnection]:
+    """One connection in a transaction that is always rolled back."""
     engine = create_async_engine(ASYNC_DSN)
     try:
-        async with engine.connect() as connection:
-            transaction = await connection.begin()
-            session = AsyncSession(bind=connection)
+        async with engine.connect() as held:
+            transaction = await held.begin()
             try:
-                yield session
+                yield held
             finally:
-                await session.close()
                 await transaction.rollback()
     finally:
         await engine.dispose()
 
 
 @pytest.fixture
-async def sessions() -> AsyncIterator[SessionStore]:
-    redis: Redis = Redis.from_url(REDIS_URL)
+async def db(connection: AsyncConnection) -> AsyncIterator[AsyncSession]:
+    session = AsyncSession(bind=connection)
     try:
-        yield SessionStore(redis, ttl_seconds=TEST_TTL_SECONDS)
+        yield session
     finally:
-        await redis.aclose()
+        await session.close()
+
+
+@pytest.fixture
+def sessions(connection: AsyncConnection) -> SessionStore:
+    return SessionStore(
+        async_sessionmaker(
+            bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint"
+        ),
+        ttl_seconds=TEST_TTL_SECONDS,
+    )
 
 
 async def _tenant(db: AsyncSession, *, password: str = OLD_PASSWORD) -> ProvisionedTenant:
@@ -144,7 +155,7 @@ async def test_signing_out_everywhere_stops_an_older_session_resolving(
         "a session that predates the sign-out still resolves; the customer asked "
         "to be signed out everywhere and was not"
     )
-    assert await sessions.get(token) is None, "the caller's own token survived in Redis"
+    assert await sessions.get(token) is None, "the caller's own token survived"
     after = _session_created_at(user, datetime.now(UTC) + timedelta(seconds=1))
     assert not _issued_before_reset(after, reloaded), "signing in again would be refused"
 
@@ -171,7 +182,7 @@ async def test_a_password_change_keeps_this_session_and_ends_the_others(
     assert verify_password(reloaded.password_hash, NEW_PASSWORD)
     assert not verify_password(reloaded.password_hash, OLD_PASSWORD)
     assert _issued_before_reset(old_session, reloaded), "an older session still resolves"
-    assert await sessions.get(old_token) is None, "the old token survived in Redis"
+    assert await sessions.get(old_token) is None, "the old token survived"
 
     minted = await sessions.get(new_token)
     assert minted is not None, "the replacement session was not stored"

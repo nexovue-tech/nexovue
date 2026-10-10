@@ -1,55 +1,37 @@
-"""Sessions in Redis, expired by Redis.
+"""Sessions in Postgres, read on every request (ADR-020).
 
-The store holds a hash of the token, never the token itself: a dump of Redis is
-then a list of expiry times, not a set of usable credentials. Expiry is the key's
-TTL rather than a timestamp we compare — a store that forgets on its own cannot
-accumulate live sessions nobody cleans up.
+The store holds a hash of the token, never the token itself: a dump of the
+table is a list of expiry times, not a set of usable credentials. A session's
+lifetime is `expires_at`, fixed when it is made; every read filters on it, so a
+lapsed row is already gone to every caller, and the scheduler's expiry sweep
+deletes it later.
 
-**There is now a per-user index, and migration 0019 argued against one.** That
-argument was about *revocation*, and it still holds: ending every session is one
-write to `users.sessions_valid_from`, with nothing to enumerate and nothing to
-drift, and this file has not taken that job back. What 0019 did not have to
-answer is *listing*, and listing has no equivalent trick — a customer asking
-"what is signed in as me?" is asking for the set itself, and a set has to exist
-somewhere. So the index is added for the question that needs it and not for the
-one that does not.
+**Revoking every session is still one write to `users.sessions_valid_from`**
+(migration 0019), with nothing to enumerate. The `(user_id, expires_at)` index
+is for the other question — a customer asking "what is signed in as me?" is
+asking for the set itself.
 
-0019's two objections are answered rather than dismissed:
-
-*A second write on every login.* It is one `ZADD` beside a `SET` that is already
-happening, on the rarest request the API serves.
-
-*Drift as entries expire underneath it.* The score is the session's own expiry, so
-`ZREMRANGEBYSCORE` removes everything that has lapsed in a single call, and a
-member whose key has nevertheless gone is dropped when the list is read. The
-index is therefore a cache of the truth, never the truth: a session is live
-because its key is live, and the list is filtered by that.
-
-**Revoking one session is proved to be the caller's own.** The id a client holds
-is a member of exactly one user's index, so membership *is* the authorization
-check — there is no path where a caller supplies an id and the store looks it up
-without first asking whether that id belongs to them.
+**Revoking one session is proved to be the caller's own.** The delete names
+both the session and the caller's user, so an id that is not theirs is answered
+exactly like one that never existed.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import secrets
+import uuid
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Final
 
-from redis.asyncio import Redis
+from sqlalchemy import delete, insert, select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.datastructures import Headers
 
 from nexovue_api.auth.clients import ClientDescription
+from nexovue_api.data.postgres.models import SessionRecord
 
-SESSION_KEY_PREFIX: Final = "session"
-# Distinct from the prefix above rather than a child of it: a session key ends in
-# a 64-character fingerprint, and a scan or a pattern delete written for one must
-# not sweep up the other.
-SESSION_INDEX_PREFIX: Final = "session-index"
 SESSION_COOKIE_NAME: Final = "nexovue_session"
 AUTHORIZATION_HEADER: Final = "authorization"
 BEARER_PREFIX: Final = "bearer "
@@ -60,18 +42,9 @@ TOKEN_BYTES: Final = 32
 
 # How stale "last used" is allowed to be before a read writes it back. Every
 # authenticated request passes through `get`, so recording the moment exactly
-# would mean a Redis write per request to serve a column nobody reads at that
+# would mean a write per request to serve a column nobody reads at that
 # resolution. A minute is finer than any sentence the screen says.
 LAST_SEEN_RESOLUTION_SECONDS: Final = 60
-
-_USER_ID: Final = "user_id"
-_ORG_ID: Final = "org_id"
-_CREATED_AT: Final = "created_at"
-_LAST_SEEN_AT: Final = "last_seen_at"
-_ADMIN_UNTIL: Final = "admin_until"
-_CLIENT_LABEL: Final = "client_label"
-_CLIENT_NETWORK: Final = "client_network"
-_IMPERSONATION: Final = "impersonation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,7 +101,7 @@ class ActiveSession:
     `id` is the token's fingerprint — SHA-256 of it, which `token_fingerprint`
     already describes as a stable, non-reversible id. It cannot be turned back
     into the token, and holding one grants nothing: ending a session by id
-    requires it to be in the caller's own index first.
+    requires it to be one of the caller's own.
     """
 
     id: str
@@ -138,10 +111,17 @@ class ActiveSession:
 
 
 class SessionStore:
-    """Create, read, list, extend and revoke sessions."""
+    """Create, read, list and revoke sessions.
 
-    def __init__(self, redis: Redis, *, ttl_seconds: int) -> None:
-        self._redis = redis
+    Each call is its own short transaction from the factory, not the request's:
+    the rate limiter reads sessions before any request transaction exists, and
+    signup mints one after committing the tenant it names.
+    """
+
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession], *, ttl_seconds: int
+    ) -> None:
+        self._session_factory = session_factory
         self._ttl_seconds = ttl_seconds
 
     async def create(
@@ -167,12 +147,23 @@ class SessionStore:
             client=client or ClientDescription.unknown(),
             impersonation=impersonation,
         )
-        ttl = self._ttl_seconds
+        expires_at = now + timedelta(seconds=self._ttl_seconds)
         if impersonation is not None:
-            ttl = max(1, min(ttl, int((impersonation.until - now).total_seconds())))
-        fingerprint = token_fingerprint(token)
-        await self._redis.set(_key(fingerprint), _encode(session), ex=ttl)
-        await self._index(user_id, fingerprint, expires_at=now + timedelta(seconds=ttl))
+            expires_at = max(now + timedelta(seconds=1), min(expires_at, impersonation.until))
+        async with self._session_factory.begin() as db:
+            await db.execute(
+                insert(SessionRecord).values(
+                    token_hash=token_fingerprint(token),
+                    user_id=uuid.UUID(user_id),
+                    org_id=uuid.UUID(org_id),
+                    created_at=now,
+                    last_seen_at=now,
+                    expires_at=expires_at,
+                    client_label=session.client.label,
+                    client_network=session.client.network,
+                    **_impersonation_columns(impersonation),
+                )
+            )
         return token, session
 
     async def get(self, token: str) -> Session | None:
@@ -182,18 +173,19 @@ class SessionStore:
         this is the one place every authenticated request already passes through,
         so it is the only place "last used" can be observed without adding a
         round trip to some other path. The write is skipped unless the stored
-        moment is more than `LAST_SEEN_RESOLUTION_SECONDS` old, and it keeps the
-        key's remaining TTL rather than restarting it — a session's lifetime is
-        fixed at creation and being seen must not extend it.
+        moment is more than `LAST_SEEN_RESOLUTION_SECONDS` old, and it never
+        touches `expires_at` — a session's lifetime is fixed at creation and
+        being seen must not extend it.
         """
         fingerprint = token_fingerprint(token)
-        raw = await self._redis.get(_key(fingerprint))
-        if raw is None:
-            return None
-        session = _decode(raw)
+        session = await self._session_by_token_hash(fingerprint)
         if session is None:
             return None
-        return await self._touch(fingerprint, session)
+        now = datetime.now(UTC)
+        if (now - session.last_used_at).total_seconds() < LAST_SEEN_RESOLUTION_SECONDS:
+            return session
+        await self._update_by_token_hash(fingerprint, last_seen_at=now)
+        return replace(session, last_seen_at=now)
 
     async def peek(self, token: str) -> Session | None:
         """The session behind a token, read without recording that it was seen.
@@ -201,135 +193,101 @@ class SessionStore:
         For the rate limiter, which runs before authentication and must not turn
         every counted request into a "last used" write.
         """
-        raw = await self._redis.get(_key(token_fingerprint(token)))
-        return _decode(raw) if raw is not None else None
+        return await self._session_by_token_hash(token_fingerprint(token))
 
-    async def list_for(self, user_id: str) -> list[ActiveSession]:
+    async def list_for(self, *, org_id: str, user_id: str) -> list[ActiveSession]:
         """Every live session for one user, newest first.
 
-        Scoped by construction: the index key is built from the user id the
+        Scoped by construction: the user and organization are the ones the
         caller's own session names, so there is no argument a request could
-        supply that would reach another user's set.
+        supply that would reach another user's sessions.
         """
-        index_key = _index_key(user_id)
-        now = datetime.now(UTC)
-        await self._redis.zremrangebyscore(index_key, "-inf", now.timestamp())
-
-        fingerprints = [_text(member) for member in await self._redis.zrange(index_key, 0, -1)]
-        if not fingerprints:
-            return []
-
-        stored = await self._redis.mget([_key(fingerprint) for fingerprint in fingerprints])
-        live: list[ActiveSession] = []
-        lapsed: list[str] = []
-        for fingerprint, raw in zip(fingerprints, stored, strict=True):
-            session = _decode(raw) if raw is not None else None
-            # A member whose key has gone is an index entry the key's own TTL
-            # outran. Dropped here rather than trusted: the key is the truth.
-            if session is None or session.user_id != user_id:
-                lapsed.append(fingerprint)
-                continue
-            live.append(
-                ActiveSession(
-                    id=fingerprint,
-                    created_at=session.created_at,
-                    last_seen_at=session.last_used_at,
-                    client=session.client,
+        async with self._session_factory() as db:
+            rows = await db.scalars(
+                select(SessionRecord)
+                .where(
+                    SessionRecord.org_id == uuid.UUID(org_id),
+                    SessionRecord.user_id == uuid.UUID(user_id),
+                    SessionRecord.expires_at > datetime.now(UTC),
                 )
+                .order_by(SessionRecord.created_at.desc())
             )
-        if lapsed:
-            await self._redis.zrem(index_key, *lapsed)
-        return sorted(live, key=lambda entry: entry.created_at, reverse=True)
+            return [
+                ActiveSession(
+                    id=row.token_hash,
+                    created_at=row.created_at,
+                    last_seen_at=row.last_seen_at,
+                    client=ClientDescription(label=row.client_label, network=row.client_network),
+                )
+                for row in rows
+            ]
 
-    async def revoke_one_of(self, *, user_id: str, session_id: str) -> bool:
+    async def revoke_one_of(self, *, org_id: str, user_id: str, session_id: str) -> bool:
         """End a single session of this user's. False when it is not theirs.
 
-        The membership test is the authorization: an id that is not in this
-        user's index is answered identically to one that never existed, so a
-        caller cannot use this endpoint to learn that somebody else's session
-        is live.
+        The user is part of the predicate, which is the authorization: an id
+        that is not this user's is answered identically to one that never
+        existed, so a caller cannot use this to learn that somebody else's
+        session is live.
         """
-        if await self._redis.zscore(_index_key(user_id), session_id) is None:
-            return False
-        await self._redis.delete(_key(session_id))
-        await self._redis.zrem(_index_key(user_id), session_id)
-        return True
-
-    async def extend(self, token: str) -> bool:
-        """Slide the expiry forward for an active session.
-
-        The index score moves with it. A key that outlived its index entry would
-        keep working while vanishing from the customer's own list, which is a
-        worse failure than either half alone.
-        """
-        fingerprint = token_fingerprint(token)
-        raw = await self._redis.get(_key(fingerprint))
-        session = _decode(raw) if raw is not None else None
-        if session is None:
-            return False
-        if not await self._redis.expire(_key(fingerprint), self._ttl_seconds):
-            return False
-        await self._index(
-            session.user_id,
-            fingerprint,
-            expires_at=datetime.now(UTC) + timedelta(seconds=self._ttl_seconds),
-        )
-        return True
+        async with self._session_factory.begin() as db:
+            ended = await db.scalar(
+                delete(SessionRecord)
+                .where(
+                    SessionRecord.token_hash == session_id,
+                    SessionRecord.org_id == uuid.UUID(org_id),
+                    SessionRecord.user_id == uuid.UUID(user_id),
+                    SessionRecord.expires_at > datetime.now(UTC),
+                )
+                .returning(SessionRecord.token_hash)
+            )
+        return ended is not None
 
     async def set_admin_until(self, token: str, until: datetime | None) -> Session | None:
         """Stamp — or clear — this session's re-authentication (the platform gate).
 
-        Written onto the stored record rather than held beside it, so it dies
-        with the session and travels with it: revoking the session revokes the
-        platform access, and no second store can disagree about either. The
-        key's TTL is kept, because proving who you are does not lengthen a
-        session.
+        Written onto the session's own row, so it dies with the session:
+        revoking the session revokes the platform access, and no second store
+        can disagree about either. `expires_at` is untouched, because proving
+        who you are does not lengthen a session.
         """
-        fingerprint = token_fingerprint(token)
-        raw = await self._redis.get(_key(fingerprint))
-        session = _decode(raw) if raw is not None else None
-        if session is None:
-            return None
-        stamped = replace(session, admin_until=until)
-        await self._redis.set(_key(fingerprint), _encode(stamped), keepttl=True)
-        return stamped
+        return await self._update_by_token_hash(token_fingerprint(token), admin_until=until)
 
     async def revoke(self, token: str) -> None:
-        """End a session now. Safe to call for one already gone.
+        """End a session now. Safe to call for one already gone."""
+        await self._end_by_token_hash(token_fingerprint(token))
 
-        The owner is read before the delete so the index entry goes with it.
-        A stale member would be dropped on the next read anyway; removing it
-        here keeps the list honest for a customer who is watching it.
-        """
-        fingerprint = token_fingerprint(token)
-        raw = await self._redis.get(_key(fingerprint))
-        session = _decode(raw) if raw is not None else None
-        await self._redis.delete(_key(fingerprint))
-        if session is not None:
-            await self._redis.zrem(_index_key(session.user_id), fingerprint)
+    # The token is what *establishes* the tenant, as an ingest key's prefix does,
+    # so these three are found by its hash alone; `test_postgres_tenancy_structure`
+    # carries them in EXEMPT with that reason.
 
-    async def _index(self, user_id: str, fingerprint: str, *, expires_at: datetime) -> None:
-        """Record a live session against its user, scored by when it lapses."""
-        index_key = _index_key(user_id)
-        await self._redis.zadd(index_key, {fingerprint: expires_at.timestamp()})
-        # The index must outlive its longest member and no longer, so a user who
-        # never returns leaves nothing behind.
-        await self._redis.expire(index_key, self._ttl_seconds)
+    async def _session_by_token_hash(self, fingerprint: str) -> Session | None:
+        async with self._session_factory() as db:
+            row = await db.scalar(
+                select(SessionRecord).where(
+                    SessionRecord.token_hash == fingerprint,
+                    SessionRecord.expires_at > datetime.now(UTC),
+                )
+            )
+            return None if row is None else _session(row)
 
-    async def _touch(self, fingerprint: str, session: Session) -> Session:
-        """Record that this session was used, at minute resolution."""
-        now = datetime.now(UTC)
-        if (now - session.last_used_at).total_seconds() < LAST_SEEN_RESOLUTION_SECONDS:
-            return session
-        # `replace`, never a fresh `Session(...)`: this rewrite is what is
-        # stored from now on, so a field left out of it is a field silently
-        # dropped from a live session. Built by hand, it dropped
-        # `impersonation` — and a read-only support view became an ordinary
-        # session, as the customer, sixty seconds in
-        # (`docs/changes/super-admin-in-the-console/`).
-        seen = replace(session, last_seen_at=now)
-        await self._redis.set(_key(fingerprint), _encode(seen), keepttl=True)
-        return seen
+    async def _update_by_token_hash(self, fingerprint: str, **values: object) -> Session | None:
+        """Change a live session's row, and return it as it now stands."""
+        async with self._session_factory.begin() as db:
+            row = await db.scalar(
+                update(SessionRecord)
+                .where(
+                    SessionRecord.token_hash == fingerprint,
+                    SessionRecord.expires_at > datetime.now(UTC),
+                )
+                .values(**values)
+                .returning(SessionRecord)
+            )
+            return None if row is None else _session(row)
+
+    async def _end_by_token_hash(self, fingerprint: str) -> None:
+        async with self._session_factory.begin() as db:
+            await db.execute(delete(SessionRecord).where(SessionRecord.token_hash == fingerprint))
 
 
 def bearer_token_from_headers(headers: Headers) -> str | None:
@@ -366,81 +324,44 @@ def token_fingerprint(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _key(fingerprint: str) -> str:
-    return f"{SESSION_KEY_PREFIX}:{fingerprint}"
-
-
-def _index_key(user_id: str) -> str:
-    return f"{SESSION_INDEX_PREFIX}:{user_id}"
-
-
-def _text(value: str | bytes) -> str:
-    return value.decode() if isinstance(value, bytes) else value
-
-
-def _encode(session: Session) -> str:
-    impersonation = session.impersonation
-    return json.dumps(
-        {
-            _USER_ID: session.user_id,
-            _ORG_ID: session.org_id,
-            _CREATED_AT: session.created_at.isoformat(),
-            _LAST_SEEN_AT: session.last_used_at.isoformat(),
-            _CLIENT_LABEL: session.client.label,
-            _CLIENT_NETWORK: session.client.network,
-            _ADMIN_UNTIL: None if session.admin_until is None else session.admin_until.isoformat(),
-            _IMPERSONATION: None
-            if impersonation is None
-            else {
-                "id": impersonation.impersonation_id,
-                "operator": impersonation.operator_label,
-                "reason": impersonation.reason,
-                "grant": impersonation.grant_id,
-                "until": impersonation.until.isoformat(),
-            },
-        }
+def _session(row: SessionRecord) -> Session:
+    return Session(
+        user_id=str(row.user_id),
+        org_id=str(row.org_id),
+        created_at=row.created_at,
+        last_seen_at=row.last_seen_at,
+        client=ClientDescription(label=row.client_label, network=row.client_network),
+        admin_until=row.admin_until,
+        impersonation=_impersonation(row),
     )
 
 
-def _decode(raw: str | bytes) -> Session | None:
-    text = _text(raw)
-    try:
-        payload: Any = json.loads(text)
-        created_at = datetime.fromisoformat(payload[_CREATED_AT])
-        return Session(
-            user_id=payload[_USER_ID],
-            org_id=payload[_ORG_ID],
-            created_at=created_at,
-            # A session minted before this field existed has only ever been
-            # created; `Session.last_used_at` then reads it as its creation.
-            last_seen_at=_optional_moment(payload.get(_LAST_SEEN_AT)),
-            client=ClientDescription(
-                label=_optional_text(payload.get(_CLIENT_LABEL)),
-                network=_optional_text(payload.get(_CLIENT_NETWORK)),
-            ),
-            admin_until=_optional_moment(payload.get(_ADMIN_UNTIL)),
-            impersonation=_impersonation(payload.get(_IMPERSONATION)),
-        )
-    except (ValueError, KeyError, TypeError):
-        # A value we cannot read is a session we cannot trust.
-        return None
-
-
-def _impersonation(value: Any) -> Impersonation | None:
-    if value is None:
+def _impersonation(row: SessionRecord) -> Impersonation | None:
+    # The table's CHECK holds the five columns all set or all empty.
+    if (
+        row.impersonation_id is None
+        or row.impersonation_operator is None
+        or row.impersonation_reason is None
+        or row.impersonation_grant_id is None
+        or row.impersonation_until is None
+    ):
         return None
     return Impersonation(
-        impersonation_id=str(value["id"]),
-        operator_label=str(value["operator"]),
-        reason=str(value["reason"]),
-        grant_id=str(value["grant"]),
-        until=datetime.fromisoformat(value["until"]),
+        impersonation_id=str(row.impersonation_id),
+        operator_label=row.impersonation_operator,
+        reason=row.impersonation_reason,
+        grant_id=str(row.impersonation_grant_id),
+        until=row.impersonation_until,
     )
 
 
-def _optional_moment(value: Any) -> datetime | None:
-    return datetime.fromisoformat(value) if isinstance(value, str) else None
-
-
-def _optional_text(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None
+def _impersonation_columns(impersonation: Impersonation | None) -> dict[str, object]:
+    if impersonation is None:
+        return {}
+    return {
+        "impersonation_id": uuid.UUID(impersonation.impersonation_id),
+        "impersonation_operator": impersonation.operator_label,
+        "impersonation_reason": impersonation.reason,
+        "impersonation_grant_id": uuid.UUID(impersonation.grant_id),
+        "impersonation_until": impersonation.until,
+    }

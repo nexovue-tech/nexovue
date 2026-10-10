@@ -151,9 +151,9 @@ async def test_the_tenant_is_committed_before_its_session_is_minted(
 ) -> None:
     """P1-71 follow-on: the session store is not in the request's transaction.
 
-    A session written to Redis before the rows it names are committed resolves
-    to no tenant until the commit lands, and every call in that window is a 401
-    on a brand-new account. Order is the fix, so order is what this pins.
+    A session written before the rows it names are committed names rows its
+    foreign key cannot find, and signup fails on a brand-new account. Order is
+    the fix, so order is what this pins.
     """
     import uuid
     from collections.abc import AsyncIterator

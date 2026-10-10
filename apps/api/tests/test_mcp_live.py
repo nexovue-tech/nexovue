@@ -1,4 +1,4 @@
-"""The MCP endpoint's door (F36, FR33, AC33), against real Postgres and Redis.
+"""The MCP endpoint's door (F36, FR33, AC33), against real Postgres.
 
 What it proves: the assistant endpoint takes the same token the read API takes
 and nothing else; a refusal is one sentence a model can repeat; a request that
@@ -24,7 +24,6 @@ from urllib.parse import urlsplit
 import httpx
 import pytest
 from live import require_stack
-from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -34,6 +33,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from nexovue_api.apitokens import service as api_tokens
+from nexovue_api.apitokens.usage import TokenUsage
 from nexovue_api.assistant.auth import NO_TOKEN, READER_KEY, AssistantAuthentication
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 
@@ -41,7 +41,6 @@ POSTGRES_DSN: Final = os.environ.get(
     "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
 )
 ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
-REDIS_URL: Final = os.environ.get("NEXOVUE_REDIS_URL", "redis://localhost:16379/0")
 PASSWORD: Final = "correct horse battery staple"
 INGEST_KEY: Final = "nvk_live_devlocaldevlocaldevloc"
 
@@ -56,9 +55,9 @@ def _reachable(url: str, port: int) -> bool:
 
 
 require_stack(
-    reachable=_reachable(POSTGRES_DSN, 5432) and _reachable(REDIS_URL, 6379),
+    reachable=_reachable(POSTGRES_DSN, 5432),
     suite="apps/api/tests/test_mcp_live.py",
-    remedy="Postgres or Redis is not reachable — run `just up`",
+    remedy="Postgres is not reachable — run `just up`",
 )
 
 
@@ -119,11 +118,11 @@ async def _token(
 
 
 class _Resources:
-    """What the wrapper reads off the app: a session factory and Redis."""
+    """What the wrapper reads off the app: a session factory and the usage counter."""
 
-    def __init__(self, engine: Any, redis: Redis) -> None:
+    def __init__(self, engine: Any) -> None:
         self.session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        self.redis = redis
+        self.token_usage = TokenUsage(self.session_factory)
 
 
 def _app(resources: _Resources, seen: list[dict[str, Any]]) -> Any:
@@ -153,15 +152,6 @@ def _app(resources: _Resources, seen: list[dict[str, Any]]) -> Any:
     return _App()
 
 
-@pytest.fixture
-async def redis() -> AsyncIterator[Redis]:
-    client = Redis.from_url(REDIS_URL)
-    try:
-        yield client
-    finally:
-        await client.aclose()
-
-
 async def _call(app: Any, presented: str | None) -> httpx.Response:
     headers = {"Authorization": f"Bearer {presented}"} if presented else {}
     transport = httpx.ASGITransport(app=app)
@@ -169,11 +159,9 @@ async def _call(app: Any, presented: str | None) -> httpx.Response:
         return await client.post("/api/mcp/", json={"jsonrpc": "2.0"}, headers=headers)
 
 
-async def test_an_assistant_with_no_token_is_told_where_to_get_one(
-    engine: AsyncEngine, redis: Redis
-) -> None:
+async def test_an_assistant_with_no_token_is_told_where_to_get_one(engine: AsyncEngine) -> None:
     seen: list[dict[str, Any]] = []
-    app = _app(_Resources(engine, redis), seen)
+    app = _app(_Resources(engine), seen)
 
     answer = await _call(app, None)
 
@@ -189,10 +177,10 @@ async def test_an_assistant_with_no_token_is_told_where_to_get_one(
     ids=["invented token", "ingest key", "session token"],
 )
 async def test_nothing_but_a_live_api_token_reaches_the_tools(
-    engine: AsyncEngine, redis: Redis, presented: str
+    engine: AsyncEngine, presented: str
 ) -> None:
     seen: list[dict[str, Any]] = []
-    app = _app(_Resources(engine, redis), seen)
+    app = _app(_Resources(engine), seen)
 
     answer = await _call(app, presented)
 
@@ -201,14 +189,14 @@ async def test_nothing_but_a_live_api_token_reaches_the_tools(
 
 
 async def test_a_live_token_carries_its_organization_and_scope_to_the_tools(
-    db: AsyncSession, engine: AsyncEngine, redis: Redis
+    db: AsyncSession, engine: AsyncEngine
 ) -> None:
     """AC33: a tool cannot see what its endpoint would refuse, because it is
     handed the same organization and the same project scope."""
     acme = await _tenant(db)
     presented = await _token(db, acme, project_id=acme.project.id)
     seen: list[dict[str, Any]] = []
-    app = _app(_Resources(engine, redis), seen)
+    app = _app(_Resources(engine), seen)
 
     answer = await _call(app, presented)
 
@@ -223,14 +211,17 @@ async def test_a_live_token_carries_its_organization_and_scope_to_the_tools(
 
 
 async def test_an_assistant_request_counts_against_the_token(
-    db: AsyncSession, engine: AsyncEngine, redis: Redis
+    db: AsyncSession, engine: AsyncEngine
 ) -> None:
     """FR33: it updates the token's last used, exactly as an HTTP read does."""
     acme = await _tenant(db)
     presented = await _token(db, acme, project_id=None)
-    app = _app(_Resources(engine, redis), [])
+    resources = _Resources(engine)
+    app = _app(resources, [])
 
     await _call(app, presented)
+    # Counted in memory; the once-a-minute write is what the list reads.
+    await resources.token_usage.flush()
 
     listed = await api_tokens.list_for_organization(
         db, org_id=acme.organization.id, now=datetime.now(UTC)
@@ -240,7 +231,7 @@ async def test_an_assistant_request_counts_against_the_token(
 
 
 async def test_a_revoked_token_is_refused_in_a_sentence_a_model_can_repeat(
-    db: AsyncSession, engine: AsyncEngine, redis: Redis
+    db: AsyncSession, engine: AsyncEngine
 ) -> None:
     acme = await _tenant(db)
     presented = await _token(db, acme, project_id=None)
@@ -254,7 +245,7 @@ async def test_a_revoked_token_is_refused_in_a_sentence_a_model_can_repeat(
     )
     await db.commit()
     seen: list[dict[str, Any]] = []
-    app = _app(_Resources(engine, redis), seen)
+    app = _app(_Resources(engine), seen)
 
     answer = await _call(app, presented)
 

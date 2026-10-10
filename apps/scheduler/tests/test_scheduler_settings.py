@@ -10,7 +10,6 @@ from nexovue_scheduler.settings import Settings, SettingsError, get_settings
 COMPLETE_ENVIRONMENT = {
     "ENV": "development",
     "POSTGRES_DSN": "postgresql://nexovue:secret@localhost:5432/nexovue",
-    "REDIS_URL": "redis://localhost:6379/1",
     "KAFKA_BROKERS": "localhost:29092",
 }
 
@@ -18,7 +17,6 @@ KNOWN_VARIABLES = (
     *COMPLETE_ENVIRONMENT,
     "LOG_LEVEL",
     "LOG_FORMAT",
-    "SCHEDULER_HEALTH_PORT",
     *EMAIL_VARIABLES,
     "APP_BASE_URL",
 )
@@ -55,7 +53,7 @@ def test_missing_required_variable_is_named(monkeypatch: pytest.MonkeyPatch, mis
 
 
 def test_no_secret_carries_a_default() -> None:
-    for name in ("postgres_dsn", "redis_url", "kafka_brokers"):
+    for name in ("postgres_dsn", "kafka_brokers"):
         assert Settings.model_fields[name].is_required(), f"{name} must have no default"
 
 

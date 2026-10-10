@@ -34,8 +34,8 @@ include:
   - path: compose.infra.yaml
 
 x-data-plane-env: &data-plane-env
-  # What both Go services read. Each adds its own: the receiver its Redis
-  # address, the worker its ClickHouse address. Merge keys cannot remove a
+  # What both Go services read. Each adds its own: the worker its ClickHouse
+  # address. Merge keys cannot remove a
   # variable, so nothing either service ignores belongs here.
   ENV: production
   LOG_LEVEL: info
@@ -50,7 +50,6 @@ x-control-plane-env: &control-plane-env
   LOG_LEVEL: info
   LOG_FORMAT: json
   POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-  REDIS_URL: redis://redis:6379/0
   # Caddy is the only hop in front of the API here, so the caller's address
   # is the last entry X-Forwarded-For. Left at the default 0 the middleware
   # correctly refuses to trust the header and falls back to the direct peer
@@ -66,7 +65,6 @@ x-control-plane-env: &control-plane-env
   S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
   S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
   CHECK_SECRET_KEY: ${CHECK_SECRET_KEY:?set CHECK_SECRET_KEY}
-  PROBE_BROKER_URL: redis://redis:6379/0
   PROBE_LOCATIONS: local
   PROBER_REGION: local
   # Where every emailed link lands — verification, password reset, and an
@@ -108,9 +106,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-
-  redis:
-    <<: *service-defaults
 
   seaweedfs:
     # TODO(cold tier): the deployment decision is AWS S3, not SeaweedFS
@@ -162,13 +157,10 @@ services:
     #   registry path above is decided. The anchor documents the base only.
     environment:
       <<: *data-plane-env
-      REDIS_URL: redis://redis:6379/0
     depends_on:
       kafka:
         condition: service_healthy
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
 
   # One image, deployed once, running every pipeline (`WORKER_PIPELINES` chooses).
@@ -256,8 +248,6 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
-      redis:
-        condition: service_healthy
 
   # The web app is static files, so the proxy serves them directly rather than
   # running a container whose only job is to hand back bytes that never change
@@ -273,24 +263,18 @@ services:
   scheduler-beat:
     <<: *service-defaults
     image: *image-base
-    command: >-
-      celery -A nexovue_scheduler.celery_app beat
-      --scheduler nexovue_scheduler.beat:PostgresScheduler
+    command: python -m nexovue_scheduler beat
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
 
   scheduler-light:
     <<: *service-defaults
     image: *image-base
-    command: >-
-      celery -A nexovue_scheduler.celery_app worker
-      --concurrency 8 --loglevel info --exclude-queues deliveries
+    command: python -m nexovue_scheduler worker --concurrency 8
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
@@ -302,11 +286,11 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
-      # Kafka carries every check result and Redis is this worker's task queue.
+      # Kafka carries every check result and Postgres holds this worker's job queue.
       # Starting before either loses the first results after three delivery attempts.
       kafka:
         condition: service_healthy
-      redis:
+      postgres:
         condition: service_healthy
 
   # F21. Delivers alerts — email, Slack, Teams, Discord, PagerDuty, webhooks —
@@ -316,16 +300,12 @@ services:
   scheduler-deliveries:
     <<: *service-defaults
     image: *image-base
-    command: >-
-      celery -A nexovue_scheduler.celery_app worker --queues deliveries
-      --concurrency 4 --loglevel info --hostname deliveries@%h
+    command: python -m nexovue_scheduler worker --queues deliveries --concurrency 4
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
 
 # TODO(backups): P1-51 owns the runbook. Volume snapshots alone do not give a

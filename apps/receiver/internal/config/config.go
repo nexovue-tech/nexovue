@@ -54,7 +54,6 @@ type Config struct {
 
 	KafkaBrokers []string `env:"KAFKA_BROKERS,required,notEmpty" envSeparator:","`
 	PostgresDSN  string   `env:"POSTGRES_DSN,required,notEmpty"`
-	RedisURL     string   `env:"REDIS_URL,required,notEmpty"`
 
 	// Where each signal's envelopes are published. Configuration rather than
 	// literals, so a deployment can rename a topic without a build.
@@ -111,6 +110,11 @@ type Config struct {
 	AllowanceCacheMaxEntries int           `env:"RECEIVER_ALLOWANCE_CACHE_MAX_ENTRIES" envDefault:"10000"`
 
 	RateLimitPerSecond int `env:"RECEIVER_RATE_LIMIT_PER_SECOND" envDefault:"1000"`
+
+	// How many receivers share the traffic. Each counts in its own memory and
+	// enforces its share — every per-second limit divided by this — so a fleet of
+	// three says 3, or each would allow three times the policy (ADR-020).
+	Instances int `env:"RECEIVER_INSTANCES" envDefault:"1"`
 
 	// ProfileSamplesPerSecond bounds one key's profile samples a second, because
 	// profiles spend no allowance while in preview (F17, D1). The eBPF profiler
@@ -190,7 +194,6 @@ func (c Config) validate() error {
 		listeningAddress("RECEIVER_HEALTH_ADDR", c.HealthAddr),
 		noBlankEntries("KAFKA_BROKERS", c.KafkaBrokers),
 		connectionURL("POSTGRES_DSN", c.PostgresDSN, "postgres", "postgresql"),
-		connectionURL("REDIS_URL", c.RedisURL, "redis", "rediss"),
 		notBlank("KAFKA_SPANS_TOPIC", c.SpansTopic),
 		notBlank("KAFKA_LOGS_TOPIC", c.LogsTopic),
 		notBlank("KAFKA_METRICS_TOPIC", c.MetricsTopic),
@@ -216,6 +219,7 @@ func (c Config) validate() error {
 		atMostDuration("RECEIVER_ALLOWANCE_CACHE_TTL", c.AllowanceCacheTTL, MaxAllowanceCacheTTL),
 		positiveCount("RECEIVER_ALLOWANCE_CACHE_MAX_ENTRIES", c.AllowanceCacheMaxEntries),
 		positiveCount("RECEIVER_RATE_LIMIT_PER_SECOND", c.RateLimitPerSecond),
+		positiveCount("RECEIVER_INSTANCES", c.Instances),
 		positiveCount("RECEIVER_PROFILE_SAMPLES_PER_SECOND", c.ProfileSamplesPerSecond),
 		positiveCount("RECEIVER_POSTGRES_MAX_CONNS", int(c.PostgresMaxConns)),
 		positiveCount("RECEIVER_POSTGRES_MIN_CONNS", int(c.PostgresMinConns)),

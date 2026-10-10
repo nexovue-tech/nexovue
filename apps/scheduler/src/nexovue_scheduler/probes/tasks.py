@@ -23,7 +23,6 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
-from celery.exceptions import SoftTimeLimitExceeded
 from nexovue_platform.alerts.tasks import DELIVER_TASK, DELIVERIES_QUEUE
 from nexovue_platform.checks.config import HeartbeatCheckConfig, parse_config
 from nexovue_platform.checks.evidence import RunEvidence, StepEvidence
@@ -31,6 +30,7 @@ from nexovue_platform.checks.maintenance import WindowSchedule, any_active
 from nexovue_platform.checks.task import (
     RECORD_OUTCOME_TASK,
     RUN_CHECK_TASK,
+    RUN_NOW_RESULT_KIND,
     RUN_NOW_RESULT_TTL_SECONDS,
     SHARED_QUEUE,
     SWEEP_HEARTBEATS_TASK,
@@ -39,24 +39,25 @@ from nexovue_platform.checks.task import (
     MaintenanceSchedule,
     new_run_id,
     probe_queue,
-    run_now_result_key,
     time_limits_for,
 )
+from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from pydantic import ValidationError
-from redis import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler.alerts.incidents import GROUPING_WAIT_SECONDS
 from nexovue_scheduler.alerts.reasons import alert_reason
-from nexovue_scheduler.celery_app import app
 from nexovue_scheduler.checks import HEARTBEAT_TYPE, ScheduledCheck, load_enabled_checks
+from nexovue_scheduler.jobs import results
+from nexovue_scheduler.jobs.registry import Retry, SoftTimeLimit, task
+from nexovue_scheduler.jobs.registry import attempt as current_attempt
 from nexovue_scheduler.probes import heartbeat, runner, state_store
 from nexovue_scheduler.probes.files import ObjectStoreFiles
 from nexovue_scheduler.probes.fitting import fitted
 from nexovue_scheduler.probes.result import RunMeasurement
-from nexovue_scheduler.process_engine import with_engine
+from nexovue_scheduler.process_engine import enqueue, with_engine
 from nexovue_scheduler.publish import ResultPublisher, build_envelope, build_evidence_envelope
 from nexovue_scheduler.settings import Settings, get_settings
 
@@ -73,6 +74,9 @@ RETRY_DELAY_SECONDS: Final = 5
 UNATTACHED_FILE_LIFETIME: Final = timedelta(hours=24)
 DETACHED_FILE_LIFETIME: Final = timedelta(hours=1)
 
+# A state write retries five times with growing backoff while Postgres is away.
+RECORD_OUTCOME_ATTEMPTS: Final = 6
+
 # Delivery is retried here, not by re-running the task: a re-run is a new probe —
 # another request to the customer's API, under a new run id nothing can collapse.
 DELIVERY_ATTEMPTS: Final = 3
@@ -81,15 +85,14 @@ DELIVERY_BACKOFF_SECONDS: Final = 2
 
 _publisher: ResultPublisher | None = None
 _files: ObjectStoreFiles | None = None
-_redis: Redis | None = None
 
 
 def _publisher_for_process() -> ResultPublisher:
     """One producer per worker process, built on first use.
 
-    Celery forks workers, and a Kafka producer's background thread does not
-    survive a fork — so it is created after the fork, on first task, rather than
-    at import.
+    Built in the worker's child process, on its first task, rather than at
+    import: a Kafka producer's background thread belongs to the process that
+    made it.
     """
     global _publisher
     if _publisher is None:
@@ -104,16 +107,8 @@ def _files_for_process() -> ObjectStoreFiles:
     return _files
 
 
-def _redis_for_process() -> Redis:
-    global _redis
-    if _redis is None:
-        _redis = Redis.from_url(str(get_settings().redis_url))
-    return _redis
-
-
-@app.task(name=RUN_CHECK_TASK, bind=True, max_retries=2)
+@task(RUN_CHECK_TASK)
 def run_check(
-    self: Any,
     *,
     definition: dict[str, Any],
     location: str,
@@ -171,9 +166,8 @@ def run_check(
         _record_outcome(check, evidence, location, started)
 
 
-@app.task(name=RECORD_OUTCOME_TASK, bind=True, max_retries=5)
+@task(RECORD_OUTCOME_TASK)
 def record_outcome(
-    self: Any,
     *,
     check_id: str,
     org_id: str,
@@ -206,7 +200,7 @@ def record_outcome(
         outcome_recorded = with_engine(lambda engine: state_store.record(engine, recorded))
     except Exception as failure:
         logger.warning("recording a check state failed; retrying", check_id=check_id)
-        raise self.retry(exc=failure, countdown=2 ** (self.request.retries + 1)) from failure
+        raise Retry(countdown=2 ** current_attempt(), reason=str(failure)) from failure
     if outcome_recorded.changed_to is not None:
         logger.info(
             "check state changed",
@@ -220,11 +214,17 @@ def record_outcome(
         # seconds until the delivery sweep finds the rows (ADR-013).
         # After the grouping wait, so the delivery finds this opening together with
         # any others that fail in the same half minute (FR13).
-        app.send_task(DELIVER_TASK, queue=DELIVERIES_QUEUE, countdown=GROUPING_WAIT_SECONDS + 1)
+        enqueue(
+            JobRequest(
+                task=DELIVER_TASK,
+                queue=DELIVERIES_QUEUE,
+                countdown_seconds=GROUPING_WAIT_SECONDS + 1,
+            )
+        )
 
 
-@app.task(name=SWEEP_HEARTBEATS_TASK, bind=True, max_retries=0)
-def sweep_heartbeats(self: Any) -> None:
+@task(SWEEP_HEARTBEATS_TASK)
+def sweep_heartbeats() -> None:
     """Judge every heartbeat against its last call, publish the reading, and
     record the state. One query for all of them, once a minute (plan Q5)."""
     settings = get_settings()
@@ -238,7 +238,7 @@ def sweep_heartbeats(self: Any) -> None:
     for scheduled in heartbeats:
         try:
             result = _judge_heartbeat(scheduled, now, settings)
-        except SoftTimeLimitExceeded:
+        except SoftTimeLimit:
             raise
         except Exception:
             logger.exception("judging a heartbeat failed", check_id=str(scheduled.id))
@@ -275,8 +275,8 @@ _TAKE_UNATTACHED: Final = text(
 )
 
 
-@app.task(name=SWEEP_UNATTACHED_FILES_TASK, bind=True, max_retries=0)
-def sweep_unattached_files(self: Any) -> None:
+@task(SWEEP_UNATTACHED_FILES_TASK)
+def sweep_unattached_files() -> None:
     """Remove files no check uses: an upload nobody saved a day on (FR4), and a file
     a check stopped using — or a deleted check's — an hour on (BR9).
 
@@ -384,17 +384,20 @@ def _confirm_elsewhere(check: CheckDefinition, location: str, attempt: int) -> N
     locations = check.locations
     position = locations.index(location) if location in locations else -1
     next_location = locations[(position + 1) % len(locations)]
-    app.send_task(
-        RUN_CHECK_TASK,
-        kwargs={
-            "definition": check.model_dump(mode="json"),
-            "location": next_location,
-            "attempt": attempt + 1,
-        },
-        queue=probe_queue(next_location),
-        countdown=RETRY_DELAY_SECONDS,
-        expires=check.interval_seconds,
-        **time_limits_for(check.config),
+    enqueue(
+        JobRequest(
+            task=RUN_CHECK_TASK,
+            queue=probe_queue(next_location),
+            kwargs={
+                "definition": check.model_dump(mode="json"),
+                "location": next_location,
+                "attempt": attempt + 1,
+            },
+            org_id=check.org_id,
+            countdown_seconds=RETRY_DELAY_SECONDS,
+            expires_seconds=check.interval_seconds,
+            **time_limits_for(check.config),
+        )
     )
 
 
@@ -403,28 +406,37 @@ def _record_outcome(
 ) -> None:
     if check.check_id is None:
         return
-    app.send_task(
-        RECORD_OUTCOME_TASK,
-        kwargs={
-            "check_id": check.check_id,
-            "org_id": check.org_id,
-            "project_id": check.project_id,
-            "outcome": evidence.outcome,
-            "run_id": evidence.run_id,
-            "location": location,
-            "observed_at": observed_at.isoformat(),
-            "reason": evidence.error,
-            "alert_reason": alert_reason(evidence),
-        },
-        queue=SHARED_QUEUE,
+    enqueue(
+        JobRequest(
+            task=RECORD_OUTCOME_TASK,
+            queue=SHARED_QUEUE,
+            kwargs={
+                "check_id": check.check_id,
+                "org_id": check.org_id,
+                "project_id": check.project_id,
+                "outcome": evidence.outcome,
+                "run_id": evidence.run_id,
+                "location": location,
+                "observed_at": observed_at.isoformat(),
+                "reason": evidence.error,
+                "alert_reason": alert_reason(evidence),
+            },
+            org_id=check.org_id,
+            max_attempts=RECORD_OUTCOME_ATTEMPTS,
+        )
     )
 
 
 def _store_run_now_result(org_id: str, request_id: str, evidence: RunEvidence) -> None:
-    _redis_for_process().set(
-        run_now_result_key(org_id, request_id),
-        evidence.model_dump_json(),
-        ex=RUN_NOW_RESULT_TTL_SECONDS,
+    with_engine(
+        lambda engine: results.store(
+            engine,
+            kind=RUN_NOW_RESULT_KIND,
+            org_id=org_id,
+            request_id=request_id,
+            payload=evidence.model_dump(mode="json"),
+            ttl_seconds=RUN_NOW_RESULT_TTL_SECONDS,
+        )
     )
 
 

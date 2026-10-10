@@ -16,7 +16,8 @@ through the scheduler's queue** (FR21, AC18).
 Three facts constrain it:
 
 - **Checks run in the scheduler, not the API.** And beat embeds each check's whole definition in the Celery
-  task it dispatches, which sits in Redis.
+  task it dispatches, which sits in Redis. *(Since 2026-10-10, ADR-020: in a row of the Postgres `jobs`
+  table.)*
 - **`auth/encryption.py` already provides `CredentialBox`** — AES-256-GCM with associated data — used today
   for TOTP secrets under a key the API holds. It protects against a database dump, a backup or a read-only
   SQL injection; its own docstring says it does not protect against an attacker who owns the process holding
@@ -70,7 +71,8 @@ delays a state change and never a reading.
 original rule exists to prevent.
 
 **Consequence.** A replaced secret reaches runs at beat's next refresh, like any other edit. The sealed value is now
-in Redis while a task waits; it is unreadable without the key, which Redis does not hold.
+in the queue while a task waits — a row of the Postgres `jobs` table since 2026-10-10 (ADR-020), Redis before; it is
+unreadable without the key, which the queue does not hold.
 
 ## Amendment — notification channel secrets (accepted 2026-09-19, F21)
 

@@ -429,7 +429,7 @@ async def test_quiet_hours_are_validated_and_kept_for_channels_people_read(
 
 
 class _RecordingTester:
-    """Stands in for the broker: records what was dispatched, answers what it holds."""
+    """Stands in for the job queue: records what was dispatched, answers what it holds."""
 
     def __init__(self) -> None:
         self.dispatched: list[dict[str, str]] = []
@@ -442,8 +442,15 @@ class _RecordingTester:
     async def collect(self, *, org_id: str, request_id: str) -> SendTestResult | None:
         return self.outcomes.get((org_id, request_id))
 
-    async def close(self) -> None:
-        return None
+
+class _UnreachableQueue:
+    """A queue whose database has gone away."""
+
+    async def dispatch(self, *, org_id: str, channel_id: str, request_id: str) -> None:
+        raise ConnectionRefusedError("the job queue is not answering")
+
+    async def collect(self, *, org_id: str, request_id: str) -> SendTestResult | None:
+        raise ConnectionRefusedError("the job queue is not answering")
 
 
 async def test_a_send_test_is_dispatched_only_for_the_callers_own_channel(
@@ -481,9 +488,12 @@ async def test_a_send_test_is_dispatched_only_for_the_callers_own_channel(
     assert theirs.pending
 
 
-async def test_a_send_test_says_so_when_no_worker_can_be_reached(
+async def test_a_send_test_says_so_when_its_queue_cannot_be_reached(
     db: AsyncSession, tenant: ProvisionedTenant
 ) -> None:
+    """A 503 naming the dependency, not a 500 naming nothing."""
     created = await _create(db, tenant, kind="slack", name="#incidents", secret=SLACK_URL)
     with pytest.raises(DependencyUnavailableError):
-        await service.dispatch_test(db, None, org_id=tenant.organization.id, channel_id=created.id)
+        await service.dispatch_test(
+            db, _UnreachableQueue(), org_id=tenant.organization.id, channel_id=created.id
+        )

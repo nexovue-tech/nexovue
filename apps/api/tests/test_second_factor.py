@@ -507,8 +507,7 @@ async def test_a_challenge_is_thrown_away_after_enough_wrong_codes() -> None:
     token = await store.open_challenge(user_id="u1")
 
     for _ in range(MAX_CHALLENGE_ATTEMPTS):
-        challenge = await store.read_challenge(token=token)
-        assert challenge is not None
-        await store.record_failed_attempt(token=token, challenge=challenge)
+        assert await store.read_challenge(token=token) is not None
+        await store.record_failed_attempt(token=token)
 
     assert await store.read_challenge(token=token) is None

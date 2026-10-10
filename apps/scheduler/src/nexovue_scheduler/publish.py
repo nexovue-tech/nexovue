@@ -84,7 +84,7 @@ UNIT_DAYS: Final = "d"
 
 # How long a probe waits for the broker to confirm its result. A check whose
 # measurement never reached Kafka is a blind minute, so the task fails loudly
-# and Celery retries rather than reporting success on a dropped result.
+# and the delivery is retried rather than reporting success on a dropped result.
 DELIVERY_TIMEOUT_SECONDS: Final = 10
 
 

@@ -1,8 +1,8 @@
 """Dispatching a run and waiting, briefly, for what it saw.
 
 Nothing a Run now does is recorded: the worker publishes no measurement and
-writes no state (AC24). The result waits in Redis under a key that begins with
-the organization, so another tenant's request id reads nothing.
+writes no state (AC24). The result waits in `job_results` and is read only for
+the organization that asked, so another tenant's request id reads nothing.
 """
 
 from __future__ import annotations
@@ -23,26 +23,17 @@ from nexovue_api.errors.exceptions import DependencyUnavailableError
 POLL_INTERVAL_SECONDS: Final = 0.5
 MAX_WAIT_SECONDS: Final = 25
 
-_UNAVAILABLE: Final = (
-    "Run now is not available on this deployment: the API cannot reach the probe workers."
-)
-
-
-def _require(broker: ProbeBroker | None) -> ProbeBroker:
-    if broker is None:
-        raise DependencyUnavailableError(_UNAVAILABLE)
-    return broker
+_UNAVAILABLE: Final = "Run now is not available right now: the probe queue cannot be reached."
 
 
 async def dispatch(
     session: AsyncSession,
-    broker: ProbeBroker | None,
+    probes: ProbeBroker,
     *,
     org_id: uuid.UUID,
     request: RunNowRequest,
     available_locations: list[str],
 ) -> RunNowAccepted:
-    probes = _require(broker)
     location = request.location or available_locations[0]
     definition = await checks.run_now_definition(
         session,
@@ -64,14 +55,13 @@ async def dispatch(
 
 
 async def result(
-    broker: ProbeBroker | None, *, org_id: uuid.UUID, request_id: str, wait_seconds: float
+    probes: ProbeBroker, *, org_id: uuid.UUID, request_id: str, wait_seconds: float
 ) -> RunNowResult:
     """The result, waiting up to `wait_seconds` for it to arrive.
 
     Waiting here rather than having the console poll every half second keeps a
     run to one or two requests against the rate limit.
     """
-    probes = _require(broker)
     deadline = time.monotonic() + min(wait_seconds, MAX_WAIT_SECONDS)
     while True:
         try:

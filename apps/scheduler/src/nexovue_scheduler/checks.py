@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 HEARTBEAT_TYPE: Final = "heartbeat"
 
 # Only enabled rows, and only the columns a run needs. `interval_seconds` is
-# validated here rather than trusted: it reaches Celery as a schedule, and a
+# validated here rather than trusted: it becomes beat's interval, and a
 # zero would spin.
 _ENABLED_CHECKS: Final = text(
     """

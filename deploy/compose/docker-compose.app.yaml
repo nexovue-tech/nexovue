@@ -22,8 +22,8 @@ include:
   - path: compose.infra.yaml
 
 x-data-plane-env: &data-plane-env
-  # What both Go services read. Each adds its own: the receiver its Redis
-  # address, the worker its ClickHouse address. Merge keys cannot remove a
+  # What both Go services read. Each adds its own: the worker its ClickHouse
+  # address. Merge keys cannot remove a
   # variable, so nothing either service ignores belongs here.
   ENV: production
   LOG_LEVEL: info
@@ -38,7 +38,6 @@ x-control-plane-env: &control-plane-env
   LOG_LEVEL: info
   LOG_FORMAT: json
   POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-  REDIS_URL: redis://redis:6379/0
   S3_ENDPOINT: http://seaweedfs:8333
   S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
   S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
@@ -48,7 +47,6 @@ x-control-plane-env: &control-plane-env
   # uses a secret, and would only find out at the first run.
   CHECK_SECRET_KEY: ${CHECK_SECRET_KEY:?set CHECK_SECRET_KEY}
   # Run now dispatches to the probe workers through their broker (ADR-011).
-  PROBE_BROKER_URL: redis://redis:6379/0
   # Every probe location this deployment has, and the one this container is.
   PROBE_LOCATIONS: ${PROBE_LOCATIONS:-local}
   PROBER_REGION: ${PROBER_REGION:-local}
@@ -88,9 +86,6 @@ services:
   # wants a crashed container to stay down and be looked at. These three are
   # redeclared for the policy alone; the rest of their definition is inherited.
   kafka:
-    <<: *service-defaults
-
-  redis:
     <<: *service-defaults
 
   seaweedfs:
@@ -135,7 +130,6 @@ services:
       # worker was OOM-killed at 1017 MB RSS against a 1 GiB cap. ~85% of this
       # service's 512M, leaving the rest for stacks and everything off-heap.
       GOMEMLIMIT: 435MiB
-      REDIS_URL: redis://redis:6379/0
     ports:
       - "4317:4317"
       - "4318:4318"
@@ -143,8 +137,6 @@ services:
       kafka:
         condition: service_healthy
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     deploy:
       resources:
@@ -253,8 +245,6 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -285,9 +275,7 @@ services:
       context: ../..
       dockerfile: apps/scheduler/Dockerfile
     image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
-    command: >-
-      celery -A nexovue_scheduler.celery_app beat
-      --scheduler nexovue_scheduler.beat:PostgresScheduler
+    command: python -m nexovue_scheduler beat
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
@@ -299,8 +287,6 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -309,9 +295,7 @@ services:
   scheduler-light:
     <<: *service-defaults
     image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
-    command: >-
-      celery -A nexovue_scheduler.celery_app worker
-      --concurrency 8 --loglevel info --exclude-queues deliveries
+    command: python -m nexovue_scheduler worker --concurrency 8
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
@@ -323,11 +307,11 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
-      # Kafka carries every check result and Redis is this worker's task queue.
+      # Kafka carries every check result and Postgres holds this worker's job queue.
       # Starting before either loses the first results after three delivery attempts.
       kafka:
         condition: service_healthy
-      redis:
+      postgres:
         condition: service_healthy
       seaweedfs:
         # Files a check sends, and the objects its sweep deletes, live here. A
@@ -339,7 +323,7 @@ services:
     deploy:
       resources:
         limits:
-          # What dev measured it needs: 256M OOM-killed its pool children at startup
+          # What dev measured it needs: 256M OOM-killed its child processes at startup
           # and the queue never drained (docker-compose.yaml, scheduler-light).
           memory: 768M
 
@@ -350,16 +334,12 @@ services:
   scheduler-deliveries:
     <<: *service-defaults
     image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
-    command: >-
-      celery -A nexovue_scheduler.celery_app worker --queues deliveries
-      --concurrency 4 --loglevel info --hostname deliveries@%h
+    command: python -m nexovue_scheduler worker --queues deliveries --concurrency 4
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       seaweedfs:
         condition: service_healthy
@@ -407,8 +387,6 @@ services:
       postgres:
         condition: service_healthy
       clickhouse:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     deploy:
       resources:

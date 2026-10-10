@@ -1,9 +1,9 @@
-"""Verification and reset against real Postgres and real Redis (P1-70, P1-71).
+"""Verification and reset against real Postgres (P1-70, P1-71).
 
-The offline suite proves the rules. This one proves the **stores agree**: a
-token that Redis really expires, a `email_verified_at` that Postgres really
-writes, and — the one that matters most — a session that really stops resolving
-once a reset has happened.
+The offline suite proves the flows. This one proves the **store**: a token that
+really works once, even when two requests race for it; that really expires; that
+is never stored in the clear; and — the one that matters most — a session that
+really stops resolving once a reset has happened.
 
 That last one cannot be shown offline. `_issued_before_reset` is a comparison,
 and a comparison passing in isolation says nothing about whether the column it
@@ -12,12 +12,13 @@ the way a request resolves it, through `load_identity`, against a row a real
 reset wrote.
 
 Postgres work runs inside a transaction that is rolled back, so the suite leaves
-the development database as it found it. Redis has no such luxury, so every key
-it writes carries a short TTL and a namespace of its own.
+the development database as it found it. The one exception is the race, which
+needs two transactions that really commit; it removes its tenant afterwards.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import uuid
@@ -29,16 +30,16 @@ from urllib.parse import urlsplit
 import pytest
 from live import require_stack
 from nexovue_platform.email import Delivery, Message
-from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy import delete, select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from nexovue_api.auth import recovery
 from nexovue_api.auth.credentials import verify_password
 from nexovue_api.auth.dependencies import _issued_before_reset
 from nexovue_api.auth.queries import load_identity
 from nexovue_api.auth.sessions import Session
-from nexovue_api.auth.tokens import OneTimeTokenStore
-from nexovue_api.data.postgres.models import User
+from nexovue_api.auth.tokens import EmailChange, OneTimeTokenStore, TokenPurpose
+from nexovue_api.data.postgres.models import OneTimeToken, Organization, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError
 from nexovue_api.signup import service as signup
 from nexovue_api.signup.service import ProvisionedTenant
@@ -47,11 +48,8 @@ POSTGRES_DSN: Final = os.environ.get(
     "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
 )
 ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
-REDIS_URL: Final = os.environ.get("NEXOVUE_REDIS_URL", "redis://localhost:16379/0")
 REACHABILITY_TIMEOUT_SECONDS: Final = 1.0
 
-# Long enough that nothing here races it, short enough that a crashed run leaves
-# nothing behind for more than a minute.
 TEST_TTL_SECONDS: Final = 60
 
 
@@ -68,9 +66,9 @@ def _reachable(url: str, default_port: int) -> bool:
 
 
 require_stack(
-    reachable=_reachable(POSTGRES_DSN, 5432) and _reachable(REDIS_URL, 6379),
+    reachable=_reachable(POSTGRES_DSN, 5432),
     suite="the live account-recovery suite",
-    remedy="Postgres or Redis is not running — start them with `just dev`",
+    remedy="Postgres is not running — start it with `just dev`",
 )
 
 
@@ -92,12 +90,9 @@ async def db() -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-async def tokens() -> AsyncIterator[OneTimeTokenStore]:
-    redis: Redis = Redis.from_url(REDIS_URL)
-    try:
-        yield OneTimeTokenStore(redis)
-    finally:
-        await redis.aclose()
+def tokens(db: AsyncSession) -> OneTimeTokenStore:
+    """On the test's own transaction, as the request's session carries it."""
+    return OneTimeTokenStore(db)
 
 
 class RecordingSender:
@@ -158,8 +153,7 @@ async def test_a_real_verification_round_trip_writes_the_column(
 async def test_the_same_verification_link_cannot_be_followed_twice(
     db: AsyncSession, tokens: OneTimeTokenStore
 ) -> None:
-    """Against a real Redis, because single use is `GETDEL`'s atomicity and a
-    dict cannot demonstrate that the server behaves the same way."""
+    """Spent by a delete, so the second follow finds nothing."""
     tenant = await _tenant(db)
     sender = RecordingSender()
     await recovery.send_verification(
@@ -296,7 +290,7 @@ async def test_the_address_does_not_move_until_the_link_is_followed(
 async def test_the_same_change_link_cannot_be_followed_twice(
     db: AsyncSession, tokens: OneTimeTokenStore
 ) -> None:
-    """Against a real Redis, because single use is `GETDEL`'s atomicity."""
+    """Spent by a delete, so the second follow finds nothing."""
     tenant = await _tenant(db)
     first = f"once-{uuid.uuid4().hex[:12]}@nexovue.test"
     token = await _change_link(db, tokens, user=tenant.user, to=first)
@@ -309,8 +303,8 @@ async def test_the_same_change_link_cannot_be_followed_twice(
 async def test_a_change_link_cannot_be_spent_at_the_other_endpoints(
     db: AsyncSession, tokens: OneTimeTokenStore
 ) -> None:
-    """The purpose is part of the Redis key, and this is that claim against a
-    real server: a 24-hour change link must not open the reset endpoint."""
+    """The purpose is part of every lookup: a 24-hour change link must not open
+    the reset endpoint."""
     tenant = await _tenant(db)
     token = await _change_link(
         db, tokens, user=tenant.user, to=f"purpose-{uuid.uuid4().hex[:12]}@nexovue.test"
@@ -432,3 +426,177 @@ async def test_a_reset_also_proves_the_address(db: AsyncSession, tokens: OneTime
     await recovery.reset_password(db, tokens, token=token, new_password="a-brand-new-one")
 
     assert user.email_verified_at is not None
+
+
+# ------------------------------------------------------------- the store itself
+
+
+async def test_a_token_works_once_and_never_again(
+    db: AsyncSession, tokens: OneTimeTokenStore
+) -> None:
+    """Reuse is the attack: a reset link forwarded, screenshotted or left in a
+    mail archive must not open the account a second time."""
+    user_id = str((await _tenant(db)).user.id)
+    token = await tokens.issue(
+        purpose=TokenPurpose.RESET_PASSWORD, user_id=user_id, ttl_seconds=TEST_TTL_SECONDS
+    )
+
+    assert await tokens.consume(purpose=TokenPurpose.RESET_PASSWORD, token=token) == user_id
+    assert await tokens.consume(purpose=TokenPurpose.RESET_PASSWORD, token=token) is None
+
+
+async def test_a_token_is_one_purposes_and_no_others(
+    db: AsyncSession, tokens: OneTimeTokenStore
+) -> None:
+    """Without the purpose in the lookup, the weaker of two links would set the
+    strength of both: a 24-hour verification link would become a password reset,
+    and a verification link that could move an address would let a signup mail
+    rewrite an account."""
+    user_id = str((await _tenant(db)).user.id)
+    verify = await tokens.issue(
+        purpose=TokenPurpose.VERIFY_EMAIL, user_id=user_id, ttl_seconds=TEST_TTL_SECONDS
+    )
+    change = await tokens.issue_email_change(
+        user_id=user_id, new_email="new@nexovue.test", ttl_seconds=TEST_TTL_SECONDS
+    )
+
+    assert await tokens.consume(purpose=TokenPurpose.RESET_PASSWORD, token=verify) is None
+    assert await tokens.consume_email_change(token=verify) is None
+    assert await tokens.consume(purpose=TokenPurpose.RESET_PASSWORD, token=change) is None
+    assert await tokens.consume(purpose=TokenPurpose.VERIFY_EMAIL, token=change) is None
+    # And each is still unspent for the purpose it was issued for.
+    assert await tokens.consume(purpose=TokenPurpose.VERIFY_EMAIL, token=verify) == user_id
+    assert await tokens.consume_email_change(token=change) == EmailChange(
+        user_id=user_id, new_email="new@nexovue.test"
+    )
+
+
+async def test_a_change_link_carries_the_address_it_was_minted_for(
+    db: AsyncSession, tokens: OneTimeTokenStore
+) -> None:
+    """**The reason the address is bound to the token and not on the row.** A
+    second request must not change what the first link applies."""
+    user_id = str((await _tenant(db)).user.id)
+    first = await tokens.issue_email_change(
+        user_id=user_id, new_email="first@nexovue.test", ttl_seconds=TEST_TTL_SECONDS
+    )
+    second = await tokens.issue_email_change(
+        user_id=user_id, new_email="second@nexovue.test", ttl_seconds=TEST_TTL_SECONDS
+    )
+
+    assert await tokens.consume_email_change(token=first) == EmailChange(
+        user_id=user_id, new_email="first@nexovue.test"
+    )
+    assert await tokens.consume_email_change(token=second) == EmailChange(
+        user_id=user_id, new_email="second@nexovue.test"
+    )
+
+
+async def test_the_token_itself_is_never_stored(
+    db: AsyncSession, tokens: OneTimeTokenStore
+) -> None:
+    """A dump of the table must be a list of expiry times, not usable credentials."""
+    user_id = (await _tenant(db)).user.id
+    token = await tokens.issue(
+        purpose=TokenPurpose.RESET_PASSWORD, user_id=str(user_id), ttl_seconds=TEST_TTL_SECONDS
+    )
+
+    stored = (
+        await db.execute(select(OneTimeToken).where(OneTimeToken.user_id == user_id))
+    ).scalars()
+    for row in stored:
+        assert token not in (row.token_hash, row.purpose, row.new_email)
+
+
+async def test_each_purpose_carries_its_own_lifetime(
+    db: AsyncSession, tokens: OneTimeTokenStore
+) -> None:
+    user_id = (await _tenant(db)).user.id
+    await tokens.issue(purpose=TokenPurpose.VERIFY_EMAIL, user_id=str(user_id), ttl_seconds=86400)
+    await tokens.issue(purpose=TokenPurpose.RESET_PASSWORD, user_id=str(user_id), ttl_seconds=3600)
+
+    rows = (
+        await db.execute(
+            select(OneTimeToken.purpose, OneTimeToken.expires_at - OneTimeToken.created_at).where(
+                OneTimeToken.user_id == user_id
+            )
+        )
+    ).all()
+    lifetimes = {purpose: round(span.total_seconds() / 60) for purpose, span in rows}
+    assert lifetimes == {"verify_email": 24 * 60, "reset_password": 60}
+
+
+async def test_an_expired_token_is_refused(db: AsyncSession, tokens: OneTimeTokenStore) -> None:
+    """Expiry is a column every read checks, not a sweep somebody has to run first."""
+    user_id = (await _tenant(db)).user.id
+    token = await tokens.issue(
+        purpose=TokenPurpose.RESET_PASSWORD, user_id=str(user_id), ttl_seconds=TEST_TTL_SECONDS
+    )
+    await db.execute(
+        update(OneTimeToken)
+        .where(OneTimeToken.user_id == user_id)
+        .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+    )
+
+    assert await tokens.consume(purpose=TokenPurpose.RESET_PASSWORD, token=token) is None
+
+
+async def test_an_empty_token_is_refused(tokens: OneTimeTokenStore) -> None:
+    """A blank field must not become a lookup that could match something."""
+    assert await tokens.consume(purpose=TokenPurpose.RESET_PASSWORD, token="") is None
+
+
+async def test_a_reset_spends_every_other_reset_link_for_the_account(
+    db: AsyncSession, tokens: OneTimeTokenStore
+) -> None:
+    """A second link still sitting in an inbox must not reset the new password.
+    Listing a person's links is what makes this possible."""
+    tenant = await _tenant(db)
+    user_id = str(tenant.user.id)
+    used = await tokens.issue(
+        purpose=TokenPurpose.RESET_PASSWORD, user_id=user_id, ttl_seconds=TEST_TTL_SECONDS
+    )
+    older = await tokens.issue(
+        purpose=TokenPurpose.RESET_PASSWORD, user_id=user_id, ttl_seconds=TEST_TTL_SECONDS
+    )
+    verify = await tokens.issue(
+        purpose=TokenPurpose.VERIFY_EMAIL, user_id=user_id, ttl_seconds=TEST_TTL_SECONDS
+    )
+
+    await recovery.reset_password(db, tokens, token=used, new_password="the-new-one")
+
+    assert await tokens.consume(purpose=TokenPurpose.RESET_PASSWORD, token=older) is None
+    # Only the reset links: a verification link is not a way into the account.
+    assert await tokens.consume(purpose=TokenPurpose.VERIFY_EMAIL, token=verify) == user_id
+
+
+async def test_two_requests_racing_for_one_link_cannot_both_win() -> None:
+    """Single use under a race, in two real transactions: the attacker racing the
+    customer with the same reset link. One delete gets the row; the other waits
+    on its lock and then finds nothing."""
+    engine = create_async_engine(ASYNC_DSN)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    org_id: uuid.UUID | None = None
+    try:
+        async with factory.begin() as setup:
+            tenant = await _tenant(setup)
+            org_id = tenant.organization.id
+            token = await OneTimeTokenStore(setup).issue(
+                purpose=TokenPurpose.RESET_PASSWORD,
+                user_id=str(tenant.user.id),
+                ttl_seconds=TEST_TTL_SECONDS,
+            )
+
+        async def spend() -> str | None:
+            async with factory.begin() as racer:
+                return await OneTimeTokenStore(racer).consume(
+                    purpose=TokenPurpose.RESET_PASSWORD, token=token
+                )
+
+        outcomes = await asyncio.gather(spend(), spend())
+        assert sorted(outcome is None for outcome in outcomes) == [False, True], outcomes
+    finally:
+        if org_id is not None:
+            async with factory.begin() as cleanup:
+                await cleanup.execute(delete(Organization).where(Organization.id == org_id))
+        await engine.dispose()

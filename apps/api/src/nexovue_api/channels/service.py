@@ -388,31 +388,30 @@ def _summary(channel: NotificationChannel, rules: list[AlertRule]) -> ChannelSum
 TEST_POLL_SECONDS: Final = 0.5
 MAX_TEST_WAIT_SECONDS: Final = 10
 _TESTS_UNAVAILABLE: Final = (
-    "Send test is not available on this deployment: the API cannot reach the delivery workers."
+    "Send test is not available right now: the delivery queue cannot be reached."
 )
 
 
 async def dispatch_test(
     session: AsyncSession,
-    tester: ChannelTester | None,
+    tester: ChannelTester,
     *,
     org_id: uuid.UUID,
     channel_id: uuid.UUID,
 ) -> SendTestAccepted:
-    if tester is None:
-        raise DependencyUnavailableError(_TESTS_UNAVAILABLE)
     await _require(session, org_id=org_id, channel_id=channel_id)
-    request_id = uuid.uuid4().hex
-    await tester.dispatch(org_id=str(org_id), channel_id=str(channel_id), request_id=request_id)
+    request_id = str(uuid.uuid4())
+    try:
+        await tester.dispatch(org_id=str(org_id), channel_id=str(channel_id), request_id=request_id)
+    except Exception as unreachable:
+        raise DependencyUnavailableError(_TESTS_UNAVAILABLE) from unreachable
     return SendTestAccepted(request_id=request_id)
 
 
 async def test_result(
-    tester: ChannelTester | None, *, org_id: uuid.UUID, request_id: str, wait_seconds: float
+    tester: ChannelTester, *, org_id: uuid.UUID, request_id: str, wait_seconds: float
 ) -> SendTestResult:
     """The outcome, waiting up to `wait_seconds` for it — the pattern Run now uses."""
-    if tester is None:
-        raise DependencyUnavailableError(_TESTS_UNAVAILABLE)
     deadline = time.monotonic() + min(wait_seconds, MAX_TEST_WAIT_SECONDS)
     while True:
         found = await tester.collect(org_id=str(org_id), request_id=request_id)

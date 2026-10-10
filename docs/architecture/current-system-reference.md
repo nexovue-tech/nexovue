@@ -39,7 +39,7 @@ The system is built as five independently deployable services plus two shared li
 | `apps/receiver` | Go | Terminates OTLP over HTTP and gRPC, authenticates the caller, enforces rate limits and plan allowance, converts everything into one internal message shape, publishes to Kafka |
 | `apps/workers` | Go | Consumes Kafka, masks sensitive values, derives metrics from every span before any sampling happens, tail-samples traces, writes everything to ClickHouse |
 | `apps/api` | Python (FastAPI) | Owns the Postgres schema (organizations, users, projects, credentials, billing), reads ClickHouse, serves the REST API the web app calls |
-| `apps/scheduler` | Python (Celery) | Runs synthetic API, multistep, TCP, DNS and heartbeat checks and polls customer cloud/database metrics, on a schedule stored in Postgres |
+| `apps/scheduler` | Python | Runs synthetic API, multistep, TCP, DNS and heartbeat checks and polls customer cloud/database metrics, on a schedule stored in Postgres |
 | `apps/web` | TypeScript (React) | The console — traces, logs, services, service map, errors, RUM, synthetics, database, infrastructure, usage, billing, settings |
 | `packages/browser-sdk` | TypeScript | The JavaScript SDK a customer drops into their own web page to send RUM data |
 | `packages/contracts` | Protobuf (Go + Python generated) | The one internal envelope message every ingestion path normalizes into before Kafka |
@@ -67,16 +67,15 @@ Every message that eventually reaches ClickHouse arrives through one of five typ
 
 **Data plane** (telemetry): `apps/receiver` → Kafka → `apps/workers` → ClickHouse. Nothing in this path ever touches a customer's Postgres row directly except to read tenant/project identity and per-project masking/sampling/retention configuration.
 
-**Control plane** (everything else): `apps/api` owns Postgres — organizations, users, sessions, projects, API keys, site keys, checks, integrations, deploy events, billing, audit log — and is the only service that writes it. `apps/scheduler` reads Postgres for check/integration definitions but writes almost nothing back (only integration health status). `apps/receiver` and `apps/workers` read Postgres only for authentication/authorization and per-project configuration; neither ever writes to it.
+**Control plane** (everything else): `apps/api` owns Postgres — organizations, users, sessions, projects, API keys, site keys, checks, integrations, deploy events, billing, audit log — and is the only service that writes it. `apps/scheduler` reads Postgres for check/integration definitions but writes almost nothing back (only integration health status, and the rows of its own job queue — `jobs`, `job_results` — ADR-020). `apps/receiver` and `apps/workers` read Postgres only for authentication/authorization and per-project configuration; neither ever writes to it.
 
 ### 2.3 Infrastructure
 
 | System | Role |
 |---|---|
 | Kafka | The broker between ingestion and storage. Every telemetry topic has a matching dead-letter topic that nothing drains automatically. |
-| Postgres (with the `vector` extension installed) | Control plane: tenancy, credentials, billing, audit. |
+| Postgres (with the `vector` extension installed) | Control plane: tenancy, credentials, billing, audit. Since ADR-020 also sessions, one-time links, rate-limit windows for the auth tier, the scheduler's job queue and its beat leader lock (an advisory lock). |
 | ClickHouse (with an embedded Keeper coordination service) | Telemetry store: raw signals plus pre-computed rollups. Keeper backs the durable offset-watermark tables the workers use to survive a restart without losing data. They bound double-counting rather than eliminating it — see [§18](#18-known-gaps-and-inconsistencies-found-in-the-code). |
-| Redis (image: Valkey) | Sessions, one-second rate-limit windows, the Celery broker for `apps/scheduler`, and the scheduler's leader-election lock. |
 | SeaweedFS (S3-compatible) | Object storage for uploaded source maps. |
 
 ### 2.4 The shape of a request
@@ -134,7 +133,7 @@ The Go binary at `apps/receiver/cmd/receiver/main.go` terminates OTLP over both 
 
 ### 4.2 Startup and shutdown
 
-`main.go:52-168`: load config → build the logger → install a signal-cancellable context → dial Kafka/Postgres/Valkey (closing whatever was already opened if a later dial fails) → build health checks → wire two credential doors (secret-key and public-site-key) sharing one set of collaborators → start the admin, OTLP/HTTP, and OTLP/gRPC listeners → launch background goroutines for a periodic traffic summary and non-blocking "credential last used" recorders.
+`main.go:52-168`: load config → build the logger → install a signal-cancellable context → dial Kafka/Postgres (closing whatever was already opened if a later dial fails) → build health checks → wire two credential doors (secret-key and public-site-key) sharing one set of collaborators → start the admin, OTLP/HTTP, and OTLP/gRPC listeners → launch background goroutines for a periodic traffic summary and non-blocking "credential last used" recorders.
 
 On `SIGTERM`/`SIGINT`: every listener gets `SHUTDOWN_TIMEOUT` (default 20s) to drain, on a fresh deadline rather than the already-cancelled request context; the gRPC server calls `GracefulStop()` and falls back to a hard stop if the drain budget expires.
 
@@ -145,7 +144,7 @@ Parsed by `apps/receiver/internal/config/config.go`; a missing required variable
 - `RECEIVER_OTLP_HTTP_ADDR` (`:4318`), `RECEIVER_OTLP_GRPC_ADDR` (`:4317`), `RECEIVER_HEALTH_ADDR` (`:8081`)
 - `RECEIVER_MAX_BODY_BYTES` (4 MiB, wire/compressed cap), `RECEIVER_MAX_DECODED_BODY_BYTES` (16 MiB, decompressed cap)
 - `RECEIVER_API_KEY_CACHE_TTL` (30s, capped at 1 min), `RECEIVER_ALLOWANCE_CACHE_TTL` (30s, capped at 5 min)
-- `RECEIVER_RATE_LIMIT_PER_SECOND` (1000, per credential and per signal bucket — profiles have their own)
+- `RECEIVER_RATE_LIMIT_PER_SECOND` (1000, per credential and per signal bucket — profiles have their own); `RECEIVER_INSTANCES` (1) divides it between replicas
 - `RECEIVER_PROFILE_SAMPLES_PER_SECOND` (20,000, per credential): profiles spend no allowance while in preview (F17, D1), so the profiles door also bounds samples, counted after conversion
 - `KAFKA_SPANS_TOPIC`/`KAFKA_LOGS_TOPIC`/`KAFKA_METRICS_TOPIC`/`KAFKA_PROFILES_TOPIC` (defaults `spans-raw`/`logs-raw`/`metrics-raw`/`profiles-raw`)
 
@@ -184,7 +183,7 @@ Two independent gates, run in order allowance → rate-limit.
 
 **Allowance**: is this organization's monthly included volume spent, at the door this export is using? One cached Postgres read per organization joins the plan, its price row, any active paid subscription, and the month's usage sum. The organization's whole allowance is one pool; only the browser door additionally has an optional percentage cap of that pool — an unused browser share remains reachable by the server door, never reserved. Both gates fail open on a control-plane read error, admitting the request, because a brief infrastructure outage is judged to cost less than losing telemetry outright.
 
-**Rate limiting**: a fixed one-second window per credential, counted in Valkey with an atomic increment-and-expire. If Valkey is unreachable, an in-process token-bucket fallback admits requests up to a bounded burst, explicitly documented as a *per-receiver-instance* bound — the effective fleet-wide ceiling is that number times the replica count.
+**Rate limiting**: an in-process token bucket per credential, refilling at `RECEIVER_RATE_LIMIT_PER_SECOND` ÷ `RECEIVER_INSTANCES` (default 1), so each replica enforces its share of the fleet-wide limit. There is no shared counter store (ADR-020); the share is exact only when traffic spreads evenly across replicas.
 
 ### 4.7 Envelope construction and publishing
 
@@ -194,7 +193,7 @@ Partition key: trace id for spans, tenant (organization) id for logs and metrics
 
 ### 4.8 Health
 
-`GET /healthz` (liveness) touches nothing external and always returns `200` — checking a shared dependency here would let one bad dependency restart every replica of every service at once. `GET /readyz` (readiness) checks Kafka, Postgres, and Valkey in parallel under individual timeouts and returns `503` if any fails. Both are served on a separate admin port (`RECEIVER_HEALTH_ADDR`, default `:8081`) so probes still answer when the data ports are saturated.
+`GET /healthz` (liveness) touches nothing external and always returns `200` — checking a shared dependency here would let one bad dependency restart every replica of every service at once. `GET /readyz` (readiness) checks Kafka and Postgres in parallel under individual timeouts and returns `503` if any fails. Both are served on a separate admin port (`RECEIVER_HEALTH_ADDR`, default `:8081`) so probes still answer when the data ports are saturated.
 
 ### 4.9 Package map
 
@@ -208,7 +207,7 @@ Partition key: trace id for spans, tenant (organization) id for logs and metrics
 | `internal/ingest` | Envelope construction and Kafka publishing, with retry-of-failed-subset semantics |
 | `internal/logging` | Structured logger shared with the workers, credential redaction |
 | `internal/otlp` | The HTTP/gRPC doors: gate chain, CORS, origin allow-listing, body decoding, per-signal wiring |
-| `internal/ratelimit` | Per-credential rate limiting via Valkey plus a bounded in-process fallback |
+| `internal/ratelimit` | Per-credential in-process token buckets, each replica enforcing its share |
 | `internal/semconv` | Extracts the OpenTelemetry semantic-conventions version from a schema URL |
 | `internal/tracesplit` | Splits one trace export into per-trace-id groups for correct Kafka partitioning |
 
@@ -305,7 +304,7 @@ A FastAPI application that owns the Postgres schema, reads (never writes) ClickH
 
 The app factory (`wire.py`) builds the FastAPI app with `openapi_url`/`docs_url` deliberately versioned under `/api/v1`, installs middleware in a fixed request-processing order (exception boundary → correlation id → request logging → rate limiting → CORS if configured), registers four exception handlers that turn every raised error into one uniform RFC 9457 problem+json shape, and mounts one router per domain package.
 
-**Lifespan**: Postgres and Redis connect lazily (the pool opens no connection eagerly); ClickHouse is deliberately *not* connected at boot — connecting eagerly was observed to make the whole API refuse to start during a brief ClickHouse restart, so a ClickHouse failure now surfaces as a `503` on first use instead. The object store and the email sender are each optional as a whole group: if any one of their required settings is missing, the entire feature reports itself unconfigured rather than half-working, and the screens that need it degrade explicitly (source-map upload refuses by name; email-dependent flows either refuse with a named cause or, for signup verification specifically, degrade to a logged warning without blocking signup).
+**Lifespan**: Postgres connects lazily (the pool opens no connection eagerly); ClickHouse is deliberately *not* connected at boot — connecting eagerly was observed to make the whole API refuse to start during a brief ClickHouse restart, so a ClickHouse failure now surfaces as a `503` on first use instead. The object store and the email sender are each optional as a whole group: if any one of their required settings is missing, the entire feature reports itself unconfigured rather than half-working, and the screens that need it degrade explicitly (source-map upload refuses by name; email-dependent flows either refuse with a named cause or, for signup verification specifically, degrade to a logged warning without blocking signup).
 
 ### 6.3 Configuration
 
@@ -313,7 +312,8 @@ Selected settings (see `apps/api/src/nexovue_api/settings.py`):
 
 - Pool sizing is always explicit, never a driver default: `POSTGRES_POOL_SIZE` (10), `POSTGRES_MAX_OVERFLOW` (5), `CLICKHOUSE_POOL_SIZE` (8).
 - ClickHouse query guards, applied both at the client-connection level and again per-statement: a 15–30 second execution timeout and a 100,000–500,000 row cap, with overflow treated as an error rather than a silent truncation.
-- `SESSION_TTL_SECONDS` (7 days) — the Redis key's own TTL is the expiry mechanism, not a stored timestamp comparison.
+- `SESSION_TTL_SECONDS` (7 days) — stored as the session row's `expires_at`; every read filters on it, and the scheduler's expiry sweep deletes lapsed rows.
+- `API_INSTANCES` (1) — how many API processes share the in-process rate limits; each enforces the limit divided by this (§6.8).
 - `TRUSTED_PROXY_COUNT` (0 by default) — how many `X-Forwarded-For` hops to trust when resolving a caller's real address; left at 0 behind a real reverse proxy, every caller collapses onto one rate-limit bucket.
 - Email, object storage, and domestic payments are each an all-or-nothing settings group.
 
@@ -330,9 +330,9 @@ A concrete request path: a query parameter naming a project is first proven — 
 
 **Password hashing**: Argon2. Verification always runs the hasher, even for an unknown email (checked against a fixed dummy hash) — so an unknown-account lookup costs the same time as a wrong password, closing a timing-based account-enumeration channel.
 
-**Sessions**: stored in Redis, keyed by a SHA-256 hash of the token (the store never holds the plaintext, so a Redis dump alone is not a usable credential). The token itself is 256 bits of randomness, never stretched. Expiry is the Redis key's own TTL. Cookie: `HttpOnly`, `SameSite=Lax`, `Secure` everywhere except local development, and deliberately carries **no `Domain` attribute** — a host-only cookie can never travel to a sibling subdomain such as the public ingestion hostname.
+**Sessions**: stored in the Postgres `sessions` table, keyed by a SHA-256 hash of the token (the store never holds the plaintext, so a database dump alone is not a usable credential) and read on every authenticated request. The token itself is 256 bits of randomness, never stretched. Expiry is the row's `expires_at`; `last_seen_at` is rewritten at most once a minute. Cookie: `HttpOnly`, `SameSite=Lax`, `Secure` everywhere except local development, and deliberately carries **no `Domain` attribute** — a host-only cookie can never travel to a sibling subdomain such as the public ingestion hostname.
 
-**Password reset / email change**: one-time tokens live in Redis, keyed by purpose so a verification token can't be replayed against the reset endpoint, and are consumed with an atomic read-and-delete so two racing requests can't both succeed. Requesting a password reset always returns the same response regardless of whether the email exists — including when the mail provider itself fails — closing an account-existence oracle that an earlier version of the endpoint had. Resetting a password invalidates *every* existing session for that user in one write (there is no Redis index to enumerate them individually).
+**Password reset / email change**: one-time tokens live in the Postgres `one_time_tokens` table, keyed by purpose so a verification token can't be replayed against the reset endpoint, and are spent with `DELETE … RETURNING` on the request's own transaction so two racing requests can't both succeed. Requesting a password reset always returns the same response regardless of whether the email exists — including when the mail provider itself fails — closing an account-existence oracle that an earlier version of the endpoint had. Resetting a password invalidates *every* existing session for that user in one write (`users.sessions_valid_from`) and spends every other outstanding reset link for that user. Second-factor state (enrolments, challenges, spent codes) lives in three further tables, each written in its own short transaction.
 
 **Membership roles**: `owner`, `admin`, `member`, `viewer`. Since F26 the roles are one checked-in table of *actions* (`auth/permissions.py`), and each action has a named route dependency (`MayManageMembers`, `MayOperateChecks`, …). A structural test parses every mutating route and fails if it takes only a bare "who is signed in" dependency instead of the exact policy the table names for it, with a small documented exemption list (signup, login/logout, email-confirmation links opened from a mail client, and the signature-verified deploy webhook). `GET /auth/me` returns the caller's action list, and the console hides what a role may not do.
 
@@ -340,7 +340,7 @@ A concrete request path: a query parameter naming a project is first proven — 
 
 ### 6.6 API keys and read tokens
 
-**Read tokens (`nvt_live_…`)** are the third credential kind and the only one that reads: they belong to the organization rather than to a person (so a departing teammate does not break CI), carry a project scope or read every project, always expire, and are SHA-256-hashed at rest and shown once. A route is on the **read surface** if and only if it depends on `CurrentReader` rather than `CurrentIdentity`; a structural test holds that set against a checked-in list, so widening what a token can read is a visible change. A token on any other route is refused 403, an ingest key presented to the API is refused with its own sentence, and the receiver refuses a read token by its scheme. Tokens are counted per token (300/minute) and their use is folded from Redis into a daily counter at most once a minute. The same token authenticates the **MCP server** mounted at `/api/mcp`, whose tools call the same service functions the surface routes call, bounded to 100 rows and 32 KiB per answer.
+**Read tokens (`nvt_live_…`)** are the third credential kind and the only one that reads: they belong to the organization rather than to a person (so a departing teammate does not break CI), carry a project scope or read every project, always expire, and are SHA-256-hashed at rest and shown once. A route is on the **read surface** if and only if it depends on `CurrentReader` rather than `CurrentIdentity`; a structural test holds that set against a checked-in list, so widening what a token can read is a visible change. A token on any other route is refused 403, an ingest key presented to the API is refused with its own sentence, and the receiver refuses a read token by its scheme. Tokens are counted per token (300/minute, under an organization-wide ceiling of 32 in flight) and their use is counted in memory and added to `api_token_usage_daily` once a minute and at shutdown — a crash loses up to a minute of counts. The same token authenticates the **MCP server** mounted at `/api/mcp`, whose tools call the same service functions the surface routes call, bounded to 100 rows and 32 KiB per answer.
 
 Two entirely separate ingest credential kinds in two separate tables — secret server keys and public browser site keys — matching the receiver's own split (§4.5). Secret keys are SHA-256-hashed at rest and shown once, at creation, and never again; a listing shows only a short hint (scheme plus the last few characters). Site keys are stored in the clear (they're already public, printed in a customer's page source) and restricted by an allowed-origins list. Revocation, for both kinds, is one-way and idempotent — there is no un-revoke.
 
@@ -354,7 +354,7 @@ Two entirely separate ingest credential kinds in two separate tables — secret 
 
 ### 6.8 Rate limiting
 
-A sliding-window log in Redis (not a fixed-window counter, which would let a caller burst a full window's allowance twice in one second at the boundary), plus a separate concurrency-slot cap for the most expensive endpoints (telemetry reads), both applied as atomic Lua scripts so the check-and-claim step can't race across replicas. Five named tiers, and the credential now decides the tier before the path does: an API token is counted against itself (300 a minute, 8 in flight) wherever it is pointed, including the MCP endpoint. A signed-in person is counted **per person** under a per-organization ceiling — counting a whole office against its one shared address was a defect fixed on 2026-09-20 — while signed-out callers stay on their address. Beyond that: authentication routes get the tightest per-minute limit (checked per IP *and* per email, closing the credential-stuffing surface); telemetry reads get a moderate per-minute limit plus a hard concurrency cap (the concurrency cap is what actually protects ClickHouse from many simultaneous scans); everything else gets a generous default; the one unauthenticated write (the deploy webhook) gets its own tier so it can't consume budget signed-in users need.
+A sliding-window log held in each API process (not a fixed-window counter, which would let a caller burst a full window's allowance twice in one second at the boundary), plus a separate concurrency-slot cap for the most expensive endpoints (telemetry reads); each process enforces the limit divided by `API_INSTANCES`, which is exact on one process and exact across several only when traffic spreads evenly (ADR-020). The authentication tier is the exception: counted exactly in Postgres (`rate_limit_windows`, one upsert per attempt on a fixed one-minute window, keyed by a fingerprint rather than the address), and refused with `429` when Postgres cannot answer. Five named tiers, and the credential now decides the tier before the path does: an API token is counted against itself (300 a minute, 8 in flight) wherever it is pointed, including the MCP endpoint. A signed-in person is counted **per person** under a per-organization ceiling — counting a whole office against its one shared address was a defect fixed on 2026-09-20 — while signed-out callers stay on their address. Beyond that: authentication routes get the tightest per-minute limit (checked per IP *and* per email, closing the credential-stuffing surface); telemetry reads get a moderate per-minute limit plus a hard concurrency cap (the concurrency cap is what actually protects ClickHouse from many simultaneous scans); everything else gets a generous default; the one unauthenticated write (the deploy webhook) gets its own tier so it can't consume budget signed-in users need.
 
 ### 6.9 Domain read packages
 
@@ -370,7 +370,7 @@ Each follows the same internal layout: `router.py` (HTTP only, no SQL, no busine
 | `rum` | Core Web Vitals summary and breakdown |
 | `synthetics` | Synthetic check results over a window, phase breakdown, individual runs, a run's evidence, run counts |
 | `checks` | Synthetic check *definitions* (Postgres): typed configuration, project-aware validation including request-forgery target rules, confirmed state and state changes, heartbeat tokens |
-| `checkruns` | Run now: dispatches a definition to a probe worker through the scheduler's broker and waits for its result in Redis (ADR-011) |
+| `checkruns` | Run now: inserts a job for a probe worker into the Postgres `jobs` table, sends `NOTIFY`, and waits for its result in `job_results` (ADR-011) |
 | `checkimports` | Previewing and confirming checks from a cURL command, an OpenAPI description or a Postman collection; parsing only, no network |
 | `checksecrets` | Project secrets (sealed, write-only) and variables that checks use as `{{secret.NAME}}` and `{{name}}` (ADR-010) |
 | `checkfiles` | Files a check sends in a request: rows in Postgres, bytes in object storage under `synthetics/{org_id}/files/` |
@@ -396,19 +396,21 @@ The payment-processor integration is behind an abstract port with no vendor voca
 
 ### 7.1 Purpose
 
-A Celery service running two kinds of measurement: synthetic checks (API and multistep API requests, TCP connections, DNS resolution, and heartbeats judged against their last call) and pollers (reading a customer's AWS CloudWatch RDS metrics or Postgres statistics). There is deliberately no Celery result backend — each task builds its own OTLP-shaped envelope and publishes it directly to Kafka, following the exact same internal envelope contract every other door uses.
+A job-queue service running two kinds of measurement: synthetic checks (API and multistep API requests, TCP connections, DNS resolution, and heartbeats judged against their last call) and pollers (reading a customer's AWS CloudWatch RDS metrics or Postgres statistics). There is deliberately no result store for measurements — each task builds its own OTLP-shaped envelope and publishes it directly to Kafka, following the exact same internal envelope contract every other door uses.
 
 ### 7.2 Scheduling
 
-The schedule is not code — a custom Celery beat scheduler re-reads the `checks` and `integrations` tables from Postgres on a refresh timer (default 30s). It builds one entry per enabled check **per probe location**, dispatched to that location's queue (`light.<location>`), with the *entire* definition in the task's arguments — variables, file names, maintenance windows, and the secrets it uses **still sealed** — so the worker that runs the check never queries Postgres on the path of a measurement (ADR-010's amendment). Each entry expires with its interval, so a late run is dropped rather than queued, and a check's first run is offset by a stable hash of its id so checks saved together do not fire together. Heartbeats have no entry of their own; a sweep judges them every minute. A second sweep deletes uploaded files no saved check uses, a day after upload.
+The schedule is not code — beat (`python -m nexovue_scheduler beat`, its own asyncio loop) re-reads the `checks` and `integrations` tables from Postgres on a refresh timer (default 30s). It builds one entry per enabled check **per probe location**, dispatched to that location's queue (`light.<location>`), with the *entire* definition in the task's arguments — variables, file names, maintenance windows, and the secrets it uses **still sealed** — so the worker that runs the check never queries Postgres on the path of a measurement (ADR-010's amendment). Each entry expires with its interval, so a late run is dropped rather than queued, and a check's first run is offset by a stable hash of its id so checks saved together do not fire together. Heartbeats have no entry of their own; a sweep judges them every minute. A second sweep deletes uploaded files no saved check uses, a day after upload.
 
-Because two beat replicas run for availability, only one may actually schedule at a time: a Redis lock, refreshed continuously by whoever holds it, decides leadership. A follower holds an empty schedule and does nothing. When a leader dies, the lock expires and the new leader rebuilds its schedule from zero — deliberately not firing a backlog of everything that was "due" while no leader existed.
+Beat inserts each due entry as a row in the Postgres `jobs` table (ADR-020), and marks the entry fired only after the insert. Workers (`python -m nexovue_scheduler worker`, one for `light` and `light.<region>`, one for `deliveries`) claim rows with `FOR UPDATE SKIP LOCKED` under a lease of the task's hard limit plus 30 seconds, run each in a fixed pool of spawned child processes (a soft limit raises inside the task; the child is killed at the hard limit and replaced), and poll every second, waking early on `LISTEN`/`NOTIFY`. A worker that dies leaves its job to be re-claimed once the lease lapses, if the job has attempts left.
+
+Because two beat replicas run for availability, only one may actually schedule at a time: a Postgres advisory lock, held on a dedicated connection, decides leadership. A follower polls for the lock every five seconds and does nothing else. When a leader dies, its connection drops, the lock is freed and the new leader rebuilds its schedule from zero — deliberately not firing a backlog of everything that was "due" while no leader existed.
 
 ### 7.3 Synthetic checks
 
 Five kinds exist, validated by one shared model (`packages/py-platform/.../checks/config.py`) in the API and parsed from it in the scheduler: `api` (one request — any method, headers, query, a text/JSON/XML/form/multipart/binary body, basic/bearer/API-key auth from secrets — judged by assertions on status, headers, body text, a JSONPath value, response time or certificate days), `multistep` (requests in order, passing extracted values forward), `tcp`, `dns` (via dnspython, optionally against a chosen resolver), and `heartbeat`. Requests go through libcurl, timing DNS/TCP/TLS/time-to-first-byte/transfer phases separately; multipart bodies are built in memory, never on the worker's disk. Every connection — each redirect hop, a TCP host, a chosen DNS resolver — passes a strict egress guard that refuses loopback, link-local, private and cloud-metadata addresses at the moment of connection (not merely at validation time), with a narrower, development-only relaxation for private ranges alone. Customer patterns run on RE2, and JSONPath's regex functions are disabled, so no customer input can backtrack a worker.
 
-A run's outcome is `up`, `degraded` (passing but slower than a threshold), `down`, `misconfigured` (an undefined `{{name}}`, a deleted secret or file — the author's to fix) or `prober_error` (ours). A failing target is still a successful task — "down" is a measurement and always published. A `down` result is **confirmed** by re-dispatching the check to the next location (or the same one when there is only one) before it counts; every attempt is published, marked `final` or not. After publishing, the final attempt dispatches a separate task that records the check's state in Postgres (`check_states`, `check_state_changes`); a run during a maintenance window is marked and changes no state. Every opened secret is redacted from the evidence by value (as typed, URL-encoded, JSON-escaped and base64) before anything leaves the worker. Run now executes the same code path, publishes nothing, and leaves its result in Redis for five minutes.
+A run's outcome is `up`, `degraded` (passing but slower than a threshold), `down`, `misconfigured` (an undefined `{{name}}`, a deleted secret or file — the author's to fix) or `prober_error` (ours). A failing target is still a successful task — "down" is a measurement and always published. A `down` result is **confirmed** by re-dispatching the check to the next location (or the same one when there is only one) before it counts; every attempt is published, marked `final` or not. After publishing, the final attempt dispatches a separate task that records the check's state in Postgres (`check_states`, `check_state_changes`); a run during a maintenance window is marked and changes no state. Every opened secret is redacted from the evidence by value (as typed, URL-encoded, JSON-escaped and base64) before anything leaves the worker. Run now executes the same code path, publishes nothing, and leaves its result in `job_results` for five minutes.
 
 ### 7.4 Pollers
 
@@ -588,7 +590,6 @@ just dev     # brings up every infrastructure and application container, creates
 | 18123 | ClickHouse | HTTP protocol (used by `apps/api`) |
 | 19000 | ClickHouse | Native protocol (used by `apps/workers` and the migration tool) |
 | 19092 | Kafka | Client bootstrap |
-| 16379 | Redis | Sessions, rate limiting, Celery broker |
 | 18333 / 19333 | SeaweedFS | S3 API / cluster status |
 | 14317 / 14318 | receiver | OTLP gRPC / OTLP HTTP (and the browser door) |
 | 18000 | api | Control-plane REST API |
@@ -660,7 +661,7 @@ These are the standards actually enforced by the repository's own lint configura
 - **Configuration**: a variable with no default is required, and a service exits at boot naming exactly which variable is missing or invalid — never starts with a guessed value. Credentials never have a default anywhere in code.
 - **Logging**: identical field names across the Go and Python services (`ts`, `level`, `msg`, `service`, `env`, `trace_id`, `span_id`, `correlation_id`, `org_id`, `project_id`), identical level meanings (`error` — a human must look; `warn` — degraded but handled; `info` — a state change worth a permanent record; `debug` — development-only detail), JSON in production and a human-readable console format in development.
 - **Comments**: short, explaining *why*, not what — code that needs a long comment to explain what it does is restructured instead. Every migration file, in particular, states its own reasoning and, where relevant, the specific measurement that justified it.
-- **Naming**: env vars in `SCREAMING_SNAKE_CASE`, shared infrastructure variables use one identical name across every service that reads them (`KAFKA_BROKERS`, `POSTGRES_DSN`, `CLICKHOUSE_DSN`, `REDIS_URL`), Kafka topics follow `<signal>-raw` / `<signal>-dlq`, ClickHouse/Postgres tables and columns are snake_case, HTTP routes are versioned and resource-plural.
+- **Naming**: env vars in `SCREAMING_SNAKE_CASE`, shared infrastructure variables use one identical name across every service that reads them (`KAFKA_BROKERS`, `POSTGRES_DSN`, `CLICKHOUSE_DSN`), Kafka topics follow `<signal>-raw` / `<signal>-dlq`, ClickHouse/Postgres tables and columns are snake_case, HTTP routes are versioned and resource-plural.
 - **Testing**: a suite that cannot reach a dependency it needs must fail loudly, never silently skip and report the same green as a suite that actually ran — this exact guard exists independently in the Python live-test helper and is the explicit reasoning behind the Go test suite's `-count=1` convention.
 - **Generated code is committed, not built on the fly**, and is excluded from every linter/type-checker configuration by name.
 
@@ -668,7 +669,7 @@ These are the standards actually enforced by the repository's own lint configura
 
 ## 18. Known gaps and inconsistencies found in the code
 
-Recorded here because they were found while tracing the flows above, not because they were documented anywhere else. Re-verified against the source on 2026-09-12. Gaps that turned out to be removable were removed from the code rather than from this list: the `synthetic-results` topic nothing produced to or consumed from, the `sessions` Postgres table nothing wrote (the session store is Redis, §6.5), a development retention-override script written against a schema that no longer exists, and two query helpers (`deploys.queries.webhook_keys`, `integrations.queries.find_integration`) no service called.
+Recorded here because they were found while tracing the flows above, not because they were documented anywhere else. Re-verified against the source on 2026-09-12. Gaps that turned out to be removable were removed from the code rather than from this list: the `synthetic-results` topic nothing produced to or consumed from, the `sessions` Postgres table nothing wrote at the time (sessions have since moved into a new `sessions` table, §6.5), a development retention-override script written against a schema that no longer exists, and two query helpers (`deploys.queries.webhook_keys`, `integrations.queries.find_integration`) no service called.
 
 - **The `DOOR_WEBHOOK` envelope value** is defined in the protobuf contract but is never constructed by any code path. Deploy webhooks are written to Postgres by `apps/api` and never enter the envelope path.
 - **Three of the five raw OTLP metric tables** (`metrics_histogram`, `metrics_exp_histogram`, `metrics_summary`) are written, masked, and retained, but the only API code that touches them is tenant erasure — a customer sending an OTLP histogram or summary metric today has it stored with nothing in the product reading it back.

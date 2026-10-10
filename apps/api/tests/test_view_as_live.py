@@ -1,4 +1,4 @@
-"""Support access and *view as* (F31, FR28, FR29, BR14, BR15, AC29, AC30) on Postgres and Redis.
+"""Support access and *view as* (F31, FR28, FR29, BR14, BR15, AC29, AC30) on Postgres.
 
 What it proves: staff cannot start a view without the owner's grant; the ticket
 works once; a support session reads as the person and every read is audited under
@@ -19,7 +19,6 @@ from urllib.parse import urlsplit
 
 import pytest
 from live import require_stack
-from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from starlette.requests import Request
@@ -43,7 +42,6 @@ POSTGRES_DSN: Final = os.environ.get(
     "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
 )
 ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
-REDIS_URL: Final = os.environ.get("NEXOVUE_REDIS_URL", "redis://localhost:16379/0")
 
 
 def _reachable(url: str, port: int) -> bool:
@@ -56,9 +54,9 @@ def _reachable(url: str, port: int) -> bool:
 
 
 require_stack(
-    reachable=_reachable(POSTGRES_DSN, 5432) and _reachable(REDIS_URL, 6379),
+    reachable=_reachable(POSTGRES_DSN, 5432),
     suite="apps/api/tests/test_view_as_live.py",
-    remedy="Postgres or Redis is not reachable — run `just up`",
+    remedy="Postgres is not reachable — run `just up`",
 )
 
 
@@ -76,15 +74,6 @@ async def db() -> AsyncIterator[AsyncSession]:
                 await transaction.rollback()
     finally:
         await engine.dispose()
-
-
-@pytest.fixture
-async def redis() -> AsyncIterator[Redis]:
-    client = Redis.from_url(REDIS_URL)
-    try:
-        yield client
-    finally:
-        await client.aclose()
 
 
 PASSWORD: Final = "correct horse battery staple"
@@ -110,9 +99,9 @@ def _request(method: str, path: str) -> Request:
     )
 
 
-async def _session_for(db: AsyncSession, redis: Redis, acme: ProvisionedTenant) -> Session:
+async def _session_for(db: AsyncSession, acme: ProvisionedTenant) -> Session:
     await support.grant(db, owner=acme.user, hours=72, now=_now())
-    tickets = TicketStore(redis)
+    tickets = TicketStore(db)
     ticket = await support.start_view(
         db,
         tickets,
@@ -147,12 +136,12 @@ async def _support_rows(db: AsyncSession, org_id: uuid.UUID) -> list[AuditLogEnt
     return list(rows)
 
 
-async def test_no_view_starts_without_the_owners_grant(db: AsyncSession, redis: Redis) -> None:
+async def test_no_view_starts_without_the_owners_grant(db: AsyncSession) -> None:
     acme = await _tenant(db)
     with pytest.raises(ConflictError, match="has not granted support access"):
         await support.start_view(
             db,
-            TicketStore(redis),
+            TicketStore(db),
             org_id=acme.organization.id,
             user_id=acme.user.id,
             operator_label=STAFF,
@@ -161,10 +150,10 @@ async def test_no_view_starts_without_the_owners_grant(db: AsyncSession, redis: 
         )
 
 
-async def test_a_ticket_works_once(db: AsyncSession, redis: Redis) -> None:
+async def test_a_ticket_works_once(db: AsyncSession) -> None:
     acme = await _tenant(db)
     await support.grant(db, owner=acme.user, hours=24, now=_now())
-    tickets = TicketStore(redis)
+    tickets = TicketStore(db)
     ticket = await support.start_view(
         db,
         tickets,
@@ -179,11 +168,11 @@ async def test_a_ticket_works_once(db: AsyncSession, redis: Redis) -> None:
 
 
 async def test_a_support_view_reads_as_the_person_and_every_read_is_audited(
-    db: AsyncSession, redis: Redis
+    db: AsyncSession,
 ) -> None:
     """AC30."""
     acme = await _tenant(db)
-    session = await _session_for(db, redis, acme)
+    session = await _session_for(db, acme)
 
     identity = await get_current_identity(_request("GET", f"{API_PREFIX}/services"), session, db)
     await db.flush()
@@ -197,12 +186,10 @@ async def test_a_support_view_reads_as_the_person_and_every_read_is_audited(
     assert rows[1].detail == {"request": f"GET {API_PREFIX}/services"}
 
 
-async def test_a_read_that_fails_is_still_on_the_owners_record(
-    db: AsyncSession, redis: Redis
-) -> None:
+async def test_a_read_that_fails_is_still_on_the_owners_record(db: AsyncSession) -> None:
     """A 404 or 422 rolls the request's transaction back; the audit row must survive it."""
     acme = await _tenant(db)
-    session = await _session_for(db, redis, acme)
+    session = await _session_for(db, acme)
     await db.commit()  # The view as it stood before this request.
     org_id = acme.organization.id
 
@@ -213,12 +200,10 @@ async def test_a_read_that_fails_is_still_on_the_owners_record(
     assert [row.detail for row in rows[1:]] == [{"request": f"GET {API_PREFIX}/services"}]
 
 
-async def test_a_support_view_is_offered_nothing_it_would_be_refused(
-    db: AsyncSession, redis: Redis
-) -> None:
+async def test_a_support_view_is_offered_nothing_it_would_be_refused(db: AsyncSession) -> None:
     """The console hides every control by these permissions; the owner's are narrowed to reads."""
     acme = await _tenant(db)
-    session = await _session_for(db, redis, acme)
+    session = await _session_for(db, acme)
 
     identity = await get_current_identity(_request("GET", f"{API_PREFIX}/auth/me"), session, db)
     described = await me(identity)
@@ -231,11 +216,11 @@ async def test_a_support_view_is_offered_nothing_it_would_be_refused(
 
 @pytest.mark.parametrize("method", ["POST", "PATCH", "PUT", "DELETE"])
 async def test_nothing_changes_during_a_support_view_and_the_attempt_is_kept(
-    db: AsyncSession, redis: Redis, method: str
+    db: AsyncSession, method: str
 ) -> None:
     """BR15, AC29: refused below every route, whatever the viewed person's role."""
     acme = await _tenant(db)
-    session = await _session_for(db, redis, acme)
+    session = await _session_for(db, acme)
     db.commit = db.flush  # type: ignore[method-assign]
 
     with pytest.raises(PermissionDeniedError, match="read-only"):
@@ -245,29 +230,27 @@ async def test_nothing_changes_during_a_support_view_and_the_attempt_is_kept(
     assert rows[-1].detail == {"request": f"{method} {API_PREFIX}/checks"}
 
 
-async def test_signing_out_is_the_one_way_out(db: AsyncSession, redis: Redis) -> None:
+async def test_signing_out_is_the_one_way_out(db: AsyncSession) -> None:
     acme = await _tenant(db)
-    session = await _session_for(db, redis, acme)
+    session = await _session_for(db, acme)
     identity = await get_current_identity(
         _request("POST", f"{API_PREFIX}/auth/logout"), session, db
     )
     assert identity.impersonation is not None
 
 
-async def test_withdrawing_the_grant_ends_the_view_on_its_next_request(
-    db: AsyncSession, redis: Redis
-) -> None:
+async def test_withdrawing_the_grant_ends_the_view_on_its_next_request(db: AsyncSession) -> None:
     acme = await _tenant(db)
-    session = await _session_for(db, redis, acme)
+    session = await _session_for(db, acme)
     await support.withdraw(db, owner=acme.user, now=_now())
 
     with pytest.raises(UnauthenticatedError, match="Support access has ended"):
         await get_current_identity(_request("GET", f"{API_PREFIX}/services"), session, db)
 
 
-async def test_the_owner_sees_every_view(db: AsyncSession, redis: Redis) -> None:
+async def test_the_owner_sees_every_view(db: AsyncSession) -> None:
     acme = await _tenant(db)
-    await _session_for(db, redis, acme)
+    await _session_for(db, acme)
 
     state = await support.state(db, org_id=acme.organization.id, now=_now())
 

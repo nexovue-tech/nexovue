@@ -95,10 +95,18 @@ def test_a_token_reads_more_than_a_person_and_still_caps_concurrency() -> None:
     assert TOKEN_TIER.quota.limit > TELEMETRY_TIER.quota.limit
     assert TOKEN_TIER.max_concurrent == TELEMETRY_TIER.max_concurrent
     assert TOKEN_TIER.org_quota is None
+    # An organization's tokens together are held to the telemetry tier's ceiling.
+    assert TOKEN_TIER.org_max_concurrent == TELEMETRY_TIER.org_max_concurrent
 
 
 def test_the_auth_tier_is_the_strictest() -> None:
     assert AUTH_TIER.quota.limit < TELEMETRY_TIER.quota.limit < DEFAULT_TIER.quota.limit
+
+
+def test_only_the_auth_tier_is_counted_exactly() -> None:
+    """The one tier where a guess let through costs an account (ADR-020)."""
+    assert AUTH_TIER.quota.exact
+    assert not any(t.quota.exact for t in (TELEMETRY_TIER, DEFAULT_TIER, TOKEN_TIER))
 
 
 def test_only_the_clickhouse_tier_caps_concurrency() -> None:

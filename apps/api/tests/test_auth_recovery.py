@@ -13,39 +13,20 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import pytest
+from fake_stores import FakeOneTimeTokenStore
 from nexovue_platform.email import Delivery, EmailError, EmailSender, Message
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.auth import recovery
 from nexovue_api.auth.dependencies import _issued_before_reset
 from nexovue_api.auth.sessions import Session
-from nexovue_api.auth.tokens import EmailChange, OneTimeTokenStore, TokenPurpose
+from nexovue_api.auth.tokens import OneTimeTokenStore, TokenPurpose
 from nexovue_api.data.postgres.models import User
 
 TTL: Final = 3600
-
-
-class FakeRedis:
-    """Just enough Redis: set with a TTL, and getdel.
-
-    A real Redis is not needed to prove single use — what must be shown is that
-    `consume` removes the key in the same call that reads it, and a dict shows
-    that as well as a server does.
-    """
-
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-        self.expiries: dict[str, int] = {}
-
-    async def set(self, key: str, value: str, ex: int | None = None) -> None:
-        self.values[key] = value
-        if ex is not None:
-            self.expiries[key] = ex
-
-    async def getdel(self, key: str) -> str | None:
-        return self.values.pop(key, None)
 
 
 class RecordingSender:
@@ -77,9 +58,9 @@ def _sender() -> EmailSender:
     return RecordingSender()
 
 
-def _store() -> tuple[OneTimeTokenStore, FakeRedis]:
-    redis = FakeRedis()
-    return OneTimeTokenStore(redis), redis  # type: ignore[arg-type]
+def _store() -> tuple[OneTimeTokenStore, FakeOneTimeTokenStore]:
+    fake = FakeOneTimeTokenStore()
+    return cast(OneTimeTokenStore, fake), fake
 
 
 def _user(**overrides: Any) -> User:
@@ -92,148 +73,18 @@ def _user(**overrides: Any) -> User:
     return user
 
 
-# --------------------------------------------------------------- the token store
+# The token store's own guarantees — single use, purpose, nothing stored in the
+# clear, expiry — are proved against Postgres in `test_auth_recovery_live.py`.
 
 
-async def test_a_token_works_once_and_never_again() -> None:
-    """Reuse is the attack: a reset link forwarded, screenshotted or left in a
-    mail archive must not open the account a second time."""
-    tokens, _ = _store()
-    token = await tokens.issue(
-        purpose=TokenPurpose.RESET_PASSWORD, user_id="user-1", ttl_seconds=TTL
-    )
-
-    assert await tokens.consume(purpose=TokenPurpose.RESET_PASSWORD, token=token) == "user-1"
-    assert await tokens.consume(purpose=TokenPurpose.RESET_PASSWORD, token=token) is None
-
-
-async def test_a_verification_token_cannot_be_spent_as_a_reset_token() -> None:
-    """Without the purpose in the key, the weaker of the two links would set the
-    strength of both: a 24-hour verification link would become a 24-hour
-    password reset."""
-    tokens, _ = _store()
-    token = await tokens.issue(purpose=TokenPurpose.VERIFY_EMAIL, user_id="user-1", ttl_seconds=TTL)
-
-    assert await tokens.consume(purpose=TokenPurpose.RESET_PASSWORD, token=token) is None
-    # And it is still unspent for the purpose it was issued for.
-    assert await tokens.consume(purpose=TokenPurpose.VERIFY_EMAIL, token=token) == "user-1"
-
-
-async def test_the_token_itself_is_never_stored() -> None:
-    """A dump of Redis must be a list of expiry times, not usable credentials —
-    the property `sessions.py` states and this store inherits."""
-    tokens, redis = _store()
-    token = await tokens.issue(
-        purpose=TokenPurpose.RESET_PASSWORD, user_id="user-1", ttl_seconds=TTL
-    )
-
-    assert token not in "".join(redis.values)
-    assert all(token not in key for key in redis.values)
-
-
-async def test_each_purpose_carries_its_own_lifetime() -> None:
-    tokens, redis = _store()
-    await tokens.issue(purpose=TokenPurpose.VERIFY_EMAIL, user_id="u", ttl_seconds=86400)
-    await tokens.issue(purpose=TokenPurpose.RESET_PASSWORD, user_id="u", ttl_seconds=3600)
-
-    assert sorted(redis.expiries.values()) == [3600, 86400]
-
-
-async def test_an_empty_token_is_refused_without_a_lookup() -> None:
-    """A blank field must not become a key lookup that could match something."""
-    tokens, redis = _store()
-    redis.values[""] = "user-1"
-
-    assert await tokens.consume(purpose=TokenPurpose.RESET_PASSWORD, token="") is None
-
-
-# ------------------------------------------------- the change-of-address claim
-
-
-async def test_a_change_link_carries_the_address_it_was_minted_for() -> None:
-    """**The reason the address is in the token and not on the row.**
-
-    A `users.pending_email` column would be overwritten by a second request, and
-    following the first link would then apply an address that link never proved
-    — control of one inbox standing in as proof of another.
-    """
-    tokens, _ = _store()
-    first = await tokens.issue_email_change(
-        user_id="user-1", new_email="first@acme.test", ttl_seconds=TTL
-    )
-    second = await tokens.issue_email_change(
-        user_id="user-1", new_email="second@acme.test", ttl_seconds=TTL
-    )
-
-    assert (await tokens.consume_email_change(token=first)) == EmailChange(
-        user_id="user-1", new_email="first@acme.test"
-    )
-    assert (await tokens.consume_email_change(token=second)) == EmailChange(
-        user_id="user-1", new_email="second@acme.test"
-    )
-
-
-async def test_a_change_link_works_once_and_never_again() -> None:
-    tokens, _ = _store()
-    token = await tokens.issue_email_change(
-        user_id="user-1", new_email="new@acme.test", ttl_seconds=TTL
-    )
-
-    assert await tokens.consume_email_change(token=token) is not None
-    assert await tokens.consume_email_change(token=token) is None
-
-
-@pytest.mark.parametrize("purpose", [TokenPurpose.VERIFY_EMAIL, TokenPurpose.RESET_PASSWORD])
-async def test_a_change_link_cannot_be_spent_as_another_kind(purpose: TokenPurpose) -> None:
-    """A change link lives as long as a verification link. Without the purpose
-    in the key it would be a 24-hour password reset."""
-    tokens, _ = _store()
-    token = await tokens.issue_email_change(
-        user_id="user-1", new_email="new@acme.test", ttl_seconds=TTL
-    )
-
-    assert await tokens.consume(purpose=purpose, token=token) is None
-    assert await tokens.consume_email_change(token=token) is not None
-
-
-@pytest.mark.parametrize("purpose", [TokenPurpose.VERIFY_EMAIL, TokenPurpose.RESET_PASSWORD])
-async def test_another_kind_of_token_cannot_be_spent_as_a_change(purpose: TokenPurpose) -> None:
-    """The other direction, which is the dangerous one: a verification link that
-    could move an address would let a signup mail rewrite an account."""
-    tokens, _ = _store()
-    token = await tokens.issue(purpose=purpose, user_id="user-1", ttl_seconds=TTL)
-
-    assert await tokens.consume_email_change(token=token) is None
-    assert await tokens.consume(purpose=purpose, token=token) == "user-1"
-
-
-@pytest.mark.parametrize("method", ["issue", "consume"])
-async def test_a_change_purpose_cannot_be_reached_through_the_id_valued_methods(
-    method: str,
-) -> None:
-    """A programming error, refused where it is made. `consume` would otherwise
-    hand back a JSON document where its caller expected a user id."""
-    tokens, _ = _store()
+async def test_a_change_purpose_cannot_be_reached_through_the_id_valued_methods() -> None:
+    """A programming error, refused where it is made, before any statement runs."""
+    tokens = OneTimeTokenStore(cast(AsyncSession, None))
 
     with pytest.raises(ValueError, match="more than a user id"):
-        if method == "issue":
-            await tokens.issue(purpose=TokenPurpose.CHANGE_EMAIL, user_id="u", ttl_seconds=TTL)
-        else:
-            await tokens.consume(purpose=TokenPurpose.CHANGE_EMAIL, token="t")
-
-
-@pytest.mark.parametrize("stored", ["not json at all", '"a string"', "{}", '{"user_id": 7}'])
-async def test_a_claim_that_will_not_decode_is_refused_rather_than_raising(stored: str) -> None:
-    """The only way to hold one of these is to have written it into Redis by
-    hand. A caller that crashed on it would be a caller that can be made to
-    crash from outside the application."""
-    tokens, redis = _store()
-    token = await tokens.issue_email_change(
-        user_id="user-1", new_email="new@acme.test", ttl_seconds=TTL
-    )
-    redis.values[next(iter(redis.values))] = stored
-
-    assert await tokens.consume_email_change(token=token) is None
+        await tokens.issue(purpose=TokenPurpose.CHANGE_EMAIL, user_id="u", ttl_seconds=TTL)
+    with pytest.raises(ValueError, match="more than a user id"):
+        await tokens.consume(purpose=TokenPurpose.CHANGE_EMAIL, token="t")
 
 
 # ------------------------------------------------------------------ the flows

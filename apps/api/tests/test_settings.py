@@ -20,7 +20,6 @@ COMPLETE_ENVIRONMENT = {
     # Erasure's own credential (docs/changes/clickhouse-protects-itself): required,
     # so a deployment cannot quietly run every read as an account that can delete.
     "CLICKHOUSE_WRITER_DSN": "clickhouse://nexovue:secret@localhost:8123/nexovue",
-    "REDIS_URL": "redis://localhost:6379/0",
 }
 
 KNOWN_VARIABLES = (
@@ -92,7 +91,7 @@ def test_malformed_value_is_named(monkeypatch: pytest.MonkeyPatch, name: str, va
 
 def test_no_secret_carries_a_default() -> None:
     """A credential with a default is a credential that will be used by accident."""
-    for name in ("postgres_dsn", "clickhouse_dsn", "redis_url"):
+    for name in ("postgres_dsn", "clickhouse_dsn"):
         assert Settings.model_fields[name].is_required(), f"{name} must have no default"
 
 
@@ -151,6 +150,5 @@ def _settings(*, env: str, otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT) -> Settin
         postgres_dsn=TEST_ENVIRONMENT["POSTGRES_DSN"],
         clickhouse_dsn=TEST_ENVIRONMENT["CLICKHOUSE_DSN"],
         clickhouse_writer_dsn=TEST_ENVIRONMENT["CLICKHOUSE_WRITER_DSN"],
-        redis_url=TEST_ENVIRONMENT["REDIS_URL"],
         otlp_endpoint=otlp_endpoint,
     )

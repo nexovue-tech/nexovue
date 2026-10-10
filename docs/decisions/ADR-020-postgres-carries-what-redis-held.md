@@ -3,8 +3,8 @@
 ## Status
 
 Accepted 2026-10-10 — explicit founder decision, reached while planning the Phase 1 Track 3 fixes.
-Not yet executed. Redis's removal is built in group 2 of the fix order in
-`docs/operations/production-readiness.md`; the local-disk object store with the self-hosted install
+**Decision 1 executed 2026-10-10** in readiness group 2b (`docs/changes/redis-goes/`); its open
+questions are closed below. The local-disk object store is still to come, with the self-hosted install
 (group 8, F37). Postgres stays **required** — considered and kept, see *Rejected*.
 
 ## Context
@@ -54,15 +54,29 @@ when an organization is erased. The API already treats it as optional (`deps.get
 
 The infrastructure an install needs becomes **ClickHouse, Kafka and Postgres**, plus local disk.
 
-## Open, for group 2's design
+## Open, for group 2's design — closed 2026-10-10
+
+Both were answered in `docs/changes/redis-goes/` and built there; the answers follow each question.
 
 - **The Postgres task queue.** Celery's documentation lists only RabbitMQ, Redis and SQS as stable
   brokers; its SQLAlchemy transport is experimental and can run messages twice with several workers.
   Candidates (procrastinate, PgQueuer, or our own on the `SKIP LOCKED` pattern the alert outbox and
   probe claims already use) are compared there, against current maintenance and our own load.
+
+  **Decided: our own.** A `jobs` table claimed with `FOR UPDATE SKIP LOCKED` under a lease, the
+  contract in `nexovue_platform/jobs.py` and the runtime in `nexovue_scheduler/jobs/`, rather than
+  procrastinate or PgQueuer. Our schedule is table-driven, so our own beat stays; procrastinate has no
+  documented hard time limit. Beat's leader is a Postgres advisory lock; only Run now and send-test
+  send `NOTIFY`.
 - **Rate limits across many API containers.** In-process counters multiply every limit by the number
   of API containers. Acceptable for one server; whether the hosted cloud keeps a shared counter — and
   where — is decided in that design, not assumed here.
+
+  **Decided: no shared counter store.** The API counts read tiers and in-flight caps in each process,
+  each enforcing the limit divided by `API_INSTANCES`; the authentication tier is counted exactly in
+  Postgres (`rate_limit_windows`) and refuses when Postgres cannot answer. The receiver counts in
+  process only, divided by `RECEIVER_INSTANCES`. Redis is removed entirely — not kept as an optional
+  counter store.
 
 ## Rejected
 
@@ -85,6 +99,8 @@ The infrastructure an install needs becomes **ClickHouse, Kafka and Postgres**, 
   Run now all move together; their time limits and acknowledgement guarantees (`celery_app.py`) are
   restated against whichever queue is chosen.
 - **ADR-011** (the API dispatches Run now to the scheduler's broker) and **ADR-013** (notifications are
-  an outbox) are amended by this when group 2 is built: the broker becomes Postgres.
+  an outbox) are amended by this when group 2 is built: the broker becomes Postgres. *(2026-10-10:
+  ADR-011 amended; ADR-013's decision names no broker and stands unchanged — its `deliver` dispatch
+  now goes through `jobs`.)*
 - `compose.infra.yaml`, both deployment files and the backup tooling lose Redis; the backup format
   loses nothing, because nothing in Redis was ever durable.

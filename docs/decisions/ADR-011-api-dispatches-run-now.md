@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted 2026-09-17, with the F18 design. Executed in F18: `POST /check-runs` dispatches, `GET /check-runs/{id}` waits up to 25 s for the result; the task's arguments are held against the worker's signature in `test_cross_service_contracts.py`.
+Accepted 2026-09-17, with the F18 design. Executed in F18: `POST /check-runs` dispatches, `GET /check-runs/{id}` waits up to 25 s for the result; the task's arguments are held against the worker's signature in `test_cross_service_contracts.py`. **Amended 2026-10-10** by ADR-020 — see *Amendment*.
 
 ## Context
 
@@ -39,3 +39,19 @@ The API does already connect to Redis, for sessions and rate limits.
   anyway, since scheduled checks stop too.
 - The API and the scheduler now agree on task names and argument shapes. That is a contract, and belongs in
   the cross-service contract tests (`apps/api/tests/test_cross_service_contracts.py`).
+
+## Amendment — 2026-10-10: Run now dispatches through the `jobs` table
+
+**What changed.** Redis and Celery are gone (ADR-020, `docs/changes/redis-goes/`). The API no longer has a
+broker client: it inserts a Run now job into the Postgres `jobs` table — through the contract in
+`nexovue_platform/jobs.py`, still without importing scheduler code — with an expiry of 60 seconds, and sends
+`NOTIFY` on `nexovue_jobs` so an idle worker picks it up at once. The worker writes its result to `job_results`
+(kept 300 seconds), and the API reads it filtered by organization, request id and kind. Send test works the same
+way.
+
+**What does not change.** Decisions 2, 4 and 5: the run publishes nothing and writes no state, the console
+polls, and Run now keeps its own quota.
+
+**Consequence.** The API's runtime dependency on the broker is gone; Run now depends on Postgres, which the API
+needs anyway. There is no "broker not configured" refusal any more; a database failure is a `503` naming the
+dependency.

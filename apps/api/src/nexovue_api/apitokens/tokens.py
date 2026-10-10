@@ -49,6 +49,6 @@ def looks_like_api_token(candidate: str) -> bool:
     """Whether a bearer value is claiming to be an API token.
 
     A claim, not proof: it decides which lookup runs, so a session token is never
-    hashed against `api_tokens` and a token is never looked up in Redis.
+    hashed against `api_tokens` and a token is never looked up as a session.
     """
     return candidate.startswith(API_TOKEN_PREFIX)

@@ -315,9 +315,8 @@ def record_email_changed(db: AsyncSession, *, user: User) -> None:
 def record_all_sessions_ended(db: AsyncSession, *, user: User) -> None:
     """Every session on this account was ended at once (P1-72).
 
-    One row, not one per session: there is nothing to enumerate — Redis keys
-    sessions by token fingerprint — so what happened is a single write to
-    `users.sessions_valid_from`, and that is what this records.
+    One row, not one per session: what happened is a single write to
+    `users.sessions_valid_from`, which ends them all, and that is what this records.
     """
     _add(
         db,

@@ -49,13 +49,6 @@ const (
 	// the only refusal here that a person has to lift by hand.
 	reasonIngestSuspended = "ingest_suspended"
 
-	// reasonThrottledInProcess is the fallback bound refusing while the shared
-	// rate counter is unreachable. Counted apart from
-	// reasonThrottled because the number it refused at is not the configured
-	// one — it is a multiple of it, per receiver instance — and a support
-	// conversation that cannot tell the two apart is unanswerable.
-	reasonThrottledInProcess = "throttled_in_process"
-
 	reasonInvalid = "invalid"
 
 	// reasonUnsupportedVersion is an OTLP profiles request in a version nexovue does
@@ -64,13 +57,8 @@ const (
 	reasonUnavailable        = "unavailable"
 	reasonInternal           = "internal"
 
-	// reasonLimiterDown is not a refusal: the limiter failing open still admits
-	// the request. It is counted because losing the protection silently is how
-	// the next incident starts.
-	reasonLimiterDown = "limiter_unavailable"
-
-	// reasonAllowanceUnknown is the same shape: the plan gate failing open
-	// still admits the request, and a window of these is ingest nobody billed.
+	// reasonAllowanceUnknown is not a refusal: the plan gate failing open still
+	// admits the request, and a window of these is ingest nobody billed.
 	reasonAllowanceUnknown = "allowance_unavailable"
 )
 
@@ -84,12 +72,11 @@ var (
 	// missing and did exactly that.
 	refusalReasons = []string{
 		reasonUnauthenticated, reasonForbiddenOrigin, reasonThrottled,
-		reasonThrottledInProcess,
 		reasonAllowanceSpent, reasonBrowserAllowanceSpent,
 		reasonOrganizationGone, reasonIngestSuspended,
 		reasonInvalid, reasonUnsupportedVersion, reasonUnavailable, reasonInternal,
 	}
-	degradationReasons = []string{reasonLimiterDown, reasonAllowanceUnknown}
+	degradationReasons = []string{reasonAllowanceUnknown}
 )
 
 // Unit is what one signal's telemetry is counted in — the thing a customer

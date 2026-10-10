@@ -1,4 +1,4 @@
-# Shared infrastructure — Kafka, ClickHouse, Postgres, Redis, SeaweedFS.
+# Shared infrastructure — Kafka, ClickHouse, Postgres, SeaweedFS.
 #
 # Every compose target pulls this in with `include:`, never with `-f` layering.
 # `-f` merges sequences by APPENDING, so a dev bind mount added in one file
@@ -150,34 +150,6 @@ services:
         limits:
           memory: 1024M
 
-  # Valkey: the BSD-3 fork of Redis. Keeps the service name because the
-  # protocol, the URL scheme and every client library are still Redis.
-  redis:
-    image: valkey/valkey:8.1.4-alpine
-    hostname: redis
-    command:
-      - valkey-server
-      - --appendonly
-      - "yes"
-      # Rate-limit counters and hot cache are both reconstructible, so evict
-      # rather than start refusing writes when the cap is reached.
-      - --maxmemory
-      - 384mb
-      - --maxmemory-policy
-      - allkeys-lru
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-
   seaweedfs:
     image: chrislusf/seaweedfs:4.44
     hostname: seaweedfs
@@ -212,5 +184,4 @@ volumes:
   kafka-data:
   clickhouse-data:
   postgres-data:
-  redis-data:
   seaweedfs-data:

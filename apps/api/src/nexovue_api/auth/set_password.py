@@ -5,10 +5,9 @@ of an organization nexovue onboards by hand (F31, ADR-008 step 7). Either way
 the person proves they control the address by following a link sent to it, and
 chooses a password nobody else has seen.
 
-**The link lives on the `users` row, as its SHA-256.** Not in the Redis one-time
-store: a pending invite is listed with its expiry, and a resend must kill the link
-it replaces, and that store can do neither (`auth/tokens.py`). The plaintext is
-only ever in the email.
+**The link lives on the `users` row, as its SHA-256.** Not in `one_time_tokens`:
+a pending invite is listed with its expiry from this row, and a resend kills the
+link it replaces in the same write. The plaintext is only ever in the email.
 
 **A refusal says as little as it can.** A link that never existed, was spent,
 withdrawn or replaced all get one message. Only *expired* is told apart, because

@@ -9,7 +9,6 @@ require (
 	github.com/lmittmann/tint v1.2.0
 	github.com/nexovue-tech/nexovue/packages/contracts v0.0.0
 	github.com/twmb/franz-go v1.21.6
-	github.com/valkey-io/valkey-go v1.0.77
 	go.opentelemetry.io/proto/otlp v1.11.0
 	go.opentelemetry.io/proto/otlp/collector/profiles/v1development v0.4.0
 	go.opentelemetry.io/proto/otlp/profiles/v1development v0.4.0

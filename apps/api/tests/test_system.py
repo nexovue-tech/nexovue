@@ -13,7 +13,6 @@ def _settings(otlp_endpoint: str) -> Settings:
         env="development",
         postgres_dsn=TEST_ENVIRONMENT["POSTGRES_DSN"],
         clickhouse_dsn=TEST_ENVIRONMENT["CLICKHOUSE_DSN"],
-        redis_url=TEST_ENVIRONMENT["REDIS_URL"],
         otlp_endpoint=otlp_endpoint,
     )
 

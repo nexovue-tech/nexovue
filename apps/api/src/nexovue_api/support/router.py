@@ -17,7 +17,7 @@ from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.auth.cookies import set_session_cookie
 from nexovue_api.auth.policy import MayGrantSupport
 from nexovue_api.auth.sessions import Impersonation
-from nexovue_api.deps import AppSettings, DbSession, RedisClient, SessionStoreDep
+from nexovue_api.deps import AppSettings, DbSession, SessionStoreDep
 from nexovue_api.errors.exceptions import UnauthenticatedError
 from nexovue_api.support import service
 from nexovue_api.support.schemas import GrantSupportAccess, SupportAccessState
@@ -28,8 +28,8 @@ TICKET_SPENT: Final = "This support link has already been used, or has expired."
 router = APIRouter(tags=["support"])
 
 
-def get_tickets(redis: RedisClient) -> TicketStore:
-    return TicketStore(redis)
+def get_tickets(db: DbSession) -> TicketStore:
+    return TicketStore(db)
 
 
 Tickets = Annotated[TicketStore, Depends(get_tickets)]

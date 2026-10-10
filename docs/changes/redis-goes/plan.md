@@ -1,6 +1,6 @@
 # Plan: Redis goes (readiness group 2b)
 
-> **Status:** Approved 2026-10-10
+> **Status:** Complete 2026-10-10
 >
 > One document: the order of the work and its tasks. The founder approves this plan before any file is
 > edited.
@@ -122,53 +122,53 @@ onboarding; `checks/targets.py:45` forbidding `redis` as a probe hostname; redac
 *Judgeable:* sign in, see your sessions in Profile, revoke one, enrol and use a second factor, reset a
 password, view-as from support — all working; then `FLUSHALL` Redis and you are **still signed in**.
 
-- [ ] **T1** — `apps/api/migrations/versions/0037_redis_goes.py` · the 8 tables of design §1 (`jobs` with a
+- [x] **T1** — `apps/api/migrations/versions/0037_redis_goes.py` · the 8 tables of design §1 (`jobs` with a
   nullable `org_id`, see Q1), indexes, reasoning in the docstring; downgrade drops them ·
   proved by `just migrate` up/down/up.
-- [ ] **T2** — `data/postgres/models.py` · ORM models for the 8 tables.
-- [ ] **T3** — `organizations/tables.py` + `organizations/queries.py` · classify each table: `sessions`,
+- [x] **T2** — `data/postgres/models.py` · ORM models for the 8 tables.
+- [x] **T3** — `organizations/tables.py` + `organizations/queries.py` · classify each table: `sessions`,
   `job_results` cascade from organizations; `one_time_tokens`, `second_factor_state`, `totp_spent_steps`
   cascade from users; `jobs` deleted directly (`delete_jobs`); `alert_evaluation_status`,
   `rate_limit_windows` excluded (no tenant) · proved by `test_deletion_live.py` (its classifier tests fail
   red on the unclassified tables first; `_COUNT_BY_ORG`, `FIXTURE_ROWS`, `_write_postgres_rows` extended).
-- [ ] **T4** — `auth/sessions.py` · `SessionStore(session_factory, ttl_seconds)` on SQL, same interface;
+- [x] **T4** — `auth/sessions.py` · `SessionStore(session_factory, ttl_seconds)` on SQL, same interface;
   `extend` deleted · proved by `test_session_store_live.py` rewritten against Postgres (every field
   survives the last-seen rewrite; expired row invisible; `revoke_one_of` refuses another user's session).
-- [ ] **T5** — `auth/tokens.py` · `OneTimeTokenStore(db)` on the request's session — spending a link
+- [x] **T5** — `auth/tokens.py` · `OneTimeTokenStore(db)` on the request's session — spending a link
   commits with the work it authorises; `revoke_all_for` implemented · proved by
   `test_auth_recovery_live.py` (two concurrent consumes: one wins; no plaintext in the row — moved here from
   `test_auth_recovery.py`, whose `FakeRedis` goes; `revoke_all_for` red then green).
-- [ ] **T6** — `auth/totp.py` · `SecondFactorStore(db)` on SQL; the Redis-justifying docstring (:17-37)
+- [x] **T6** — `auth/totp.py` · `SecondFactorStore(db)` on SQL; the Redis-justifying docstring (:17-37)
   rewritten · proved by `test_second_factor_live.py` (5th failed attempt closes the challenge; a step claims
   once).
-- [ ] **T7** — `support/tickets.py`, `support/router.py`, `admin/router.py` · `TicketStore(db)` · proved by
+- [x] **T7** — `support/tickets.py`, `support/router.py`, `admin/router.py` · `TicketStore(db)` · proved by
   `test_view_as_live.py`.
-- [ ] **T8** — `lifespan.py`, `deps.py`, `auth/dependencies.py` · stores wired from Postgres; `RedisClient`
+- [x] **T8** — `lifespan.py`, `deps.py`, `auth/dependencies.py` · stores wired from Postgres; `RedisClient`
   no longer reaches them.
-- [ ] **T9** — `apps/api/tests/fake_stores.py` · `FakeOneTimeTokenStore` for `test_profile.py:164`, which
+- [x] **T9** — `apps/api/tests/fake_stores.py` · `FakeOneTimeTokenStore` for `test_profile.py:164`, which
   used `test_auth_recovery.FakeRedis` · proved by `test_profile.py`.
-- [ ] **T10** — `apps/api/tests/test_admin_mode_live.py`, `test_profile_live.py`,
+- [x] **T10** — `apps/api/tests/test_admin_mode_live.py`, `test_profile_live.py`,
   `test_ratelimit_callers_live.py` · build `SessionStore` from Postgres.
-- [ ] **T11** — `test_sessions_survive_redis_live.py` (new) · sign in over HTTP, flush Redis, `/me` still
+- [x] **T11** — ~~`test_sessions_survive_redis_live.py` (new)~~ done by hand on the live API instead (see Outcome) · sign in over HTTP, flush Redis, `/me` still
   answers · red today, green after T4. (Deleted in step 5 with Redis itself; its job is to prove step 1.)
 
 ### Step 2 — the API stops counting in Redis
 
 *Judgeable:* with Redis stopped, the API serves screens and still refuses the 11th login in a minute.
 
-- [ ] **T12** — `settings.py` · `api_instances: int = 1` (`API_INSTANCES`), positive.
-- [ ] **T13** — `ratelimit/limiter.py` · `InProcessLimiter`: sliding window per `(quota, scope, identity)`
+- [x] **T12** — `settings.py` · `api_instances: int = 1` (`API_INSTANCES`), positive.
+- [x] **T13** — `ratelimit/limiter.py` · `InProcessLimiter`: sliding window per `(quota, scope, identity)`
   in a bounded map, slots as counters, limits divided by `api_instances` (floor 1); the Lua scripts go ·
   proved by a new `test_ratelimit_limiter.py` (window slides; cap of N; map bounded; slot released).
-- [ ] **T14** — `ratelimit/auth_window.py` (new) · `consume` as one upsert on `rate_limit_windows`; a
+- [x] **T14** — `ratelimit/auth_window.py` (new) · `consume` as one upsert on `rate_limit_windows`; a
   Postgres failure refuses (429, not 500) · proved by `test_auth_limit_live.py` (11th attempt refused; two
   API processes simulated by two limiters share the count — the thing in-process cannot do).
-- [ ] **T15** — `middleware/ratelimit.py` · auth tier → T14, others → T13; token tier resolves its
+- [x] **T15** — `middleware/ratelimit.py` · auth tier → T14, others → T13; token tier resolves its
   organization through a 60 s in-process cache over `apitokens/queries.find_by_hash` ·
   `ratelimit/policy.py` `TOKEN_TIER` gains `org_max_concurrent=32` · proved by
   `test_ratelimit_callers_live.py` (new case: two tokens of one org share the ceiling, red then green) and
   `test_ratelimit.py:96` updated.
-- [ ] **T16** — `apitokens/usage.py` · in-process counts per token, flushed each minute by a lifespan task
+- [x] **T16** — `apitokens/usage.py` · in-process counts per token, flushed each minute by a lifespan task
   (`count += n`, `last_used_at`), and once more on shutdown · `assistant/auth.py`,
   `auth/dependencies.py:203-232` · proved by `test_read_surface_live.py` (its `_CountingRedis` goes) and
   `test_mcp_live.py`.
@@ -179,44 +179,44 @@ password, view-as from support — all working; then `FLUSHALL` Redis and you ar
 `scheduler-light` mid-run and the job runs again on the restarted worker; `docker compose stop` the leading
 beat and the other one takes over within 5 s.
 
-- [ ] **T17** — `packages/py-platform/src/nexovue_platform/jobs.py` (new) · `JobRequest` (task, queue,
+- [x] **T17** — `packages/py-platform/src/nexovue_platform/jobs.py` (new) · `JobRequest` (task, queue,
   kwargs, `run_after`, `expires_at`, limits, `org_id`), the enqueue SQL string, `NOTIFY` channel names; no
   driver imported · proved by `test_cross_service_contracts.py` (the import boundary, unchanged).
-- [ ] **T18** — `apps/scheduler/src/nexovue_scheduler/jobs/` (new): `registry.py` (task name → function,
+- [x] **T18** — `apps/scheduler/src/nexovue_scheduler/jobs/` (new): `registry.py` (task name → function,
   `max_attempts`), `worker.py` (claim with `SKIP LOCKED`, LISTEN, child pool), `child.py` (soft limit as
   `SoftTimeLimit` raised by `SIGALRM`, hard limit kills), `retry.py` (`Retry(countdown)`), `expiry.py`
   (sweeps every expired row of design §1 in batches) · proved by `test_jobs_live.py`: claimed once under
   two workers; expired job dropped; soft limit lets the task clean up; hard limit kills and retries;
   a killed worker's job reclaimed after its lease; retry honours countdown; NOTIFY wakes under 1 s.
-- [ ] **T19** — `probes/tasks.py`, `pollers/tasks.py`, `alerts/tasks.py`, `alerts/sweeps.py` · decorators →
+- [x] **T19** — `probes/tasks.py`, `pollers/tasks.py`, `alerts/tasks.py`, `alerts/sweeps.py` · decorators →
   registry; `self.retry` → `Retry`; `SoftTimeLimitExceeded` → `SoftTimeLimit`; `send_task` → enqueue;
   results → `job_results` / `alert_evaluation_status` upserts; the three `_redis_for_process` go ·
   proved by `test_run_check_task.py` (asserts the enqueued rows instead of `send_task` calls).
-- [ ] **T20** — `beat.py` · its own loop: due-ness computed from each entry's interval and last enqueue
+- [x] **T20** — `beat.py` · its own loop: due-ness computed from each entry's interval and last enqueue
   (the hash offset kept), enqueues instead of `apply_async`; `leader.py` → `pg_try_advisory_lock` on a
   dedicated connection · proved by `test_beat_schedule.py` (asserts job requests, not Celery options),
   `test_beat_shutdown.py`, and `test_leader_live.py` rewritten: one holder of two; holder's connection
   closed → the other wins on its next poll.
-- [ ] **T21** — `apps/scheduler/src/nexovue_scheduler/__main__.py` (new) · `python -m nexovue_scheduler
+- [x] **T21** — `apps/scheduler/src/nexovue_scheduler/__main__.py` (new) · `python -m nexovue_scheduler
   beat|worker --queues … --exclude-queues … --concurrency N`; `celery_app.py` and `health.py`'s dead
   `serve_probes`/`redis_check` deleted; `Dockerfile` CMD.
-- [ ] **T22** — `checks/run_now.py`, `channels/send_test.py`, `alerts/evaluation.py` · enqueue on the
+- [x] **T22** — `checks/run_now.py`, `channels/send_test.py`, `alerts/evaluation.py` · enqueue on the
   request's session + NOTIFY; results from `job_results`; `PostgresEvaluationReader`; never `None` ·
   proved by `test_cross_service_contracts.py:313-384` (enqueued names and kwargs match the registry —
   red until T18 registers them) and a live Run-now through the API.
-- [ ] **T23** — compose ×3 · scheduler commands → T21; scheduler-beat keeps `replicas: 2` in dev.
+- [x] **T23** — compose ×3 · scheduler commands → T21; scheduler-beat keeps `replicas: 2` in dev.
 
 ### Step 4 — the receiver counts in process
 
 *Judgeable:* ingest runs with Redis stopped; a flood over the limit is refused with 429.
 
-- [ ] **T24** — `internal/ratelimit/` · `Limiter` becomes the token bucket at `perSecond ÷
+- [x] **T24** — `internal/ratelimit/` · `Limiter` becomes the token bucket at `perSecond ÷
   RECEIVER_INSTANCES`, burst one second; `Counter`, `valkey.go`, `AllowWhileCounterDown` and the 10× multiple
   go · proved by `ratelimit_test.go` (rewritten), `fallback_test.go` folded in.
-- [ ] **T25** — `internal/otlp/gates.go`, `handler.go`, `traffic.go` · the limiter-down branch,
+- [x] **T25** — `internal/otlp/gates.go`, `handler.go`, `traffic.go` · the limiter-down branch,
   `reasonLimiterDown`, `messageThrottledInProcess` go · `limiterfallback_test.go` deleted;
   `handler_test.go`, `grpc_test.go` lose their counter fakes.
-- [ ] **T26** — `cmd/receiver/main.go`, `internal/config/config.go` · Valkey dial, readiness check,
+- [x] **T26** — `cmd/receiver/main.go`, `internal/config/config.go` · Valkey dial, readiness check,
   `REDIS_URL` go; `RECEIVER_INSTANCES` (default 1) · proved by `config_test.go`.
 
 ### Step 5 — Redis is gone
@@ -224,17 +224,17 @@ beat and the other one takes over within 5 s.
 *Judgeable:* `docker compose ps` shows no `redis`; `git grep -i -E 'celery|valkey|redis_url|probe_broker'`
 outside `docs/` and the customer-peer files returns nothing; `just check` green.
 
-- [ ] **T27** — `compose.infra.yaml`, `docker-compose.yaml`, `.app.yaml`, `.onprem.yaml`, both
+- [x] **T27** — `compose.infra.yaml`, `docker-compose.yaml`, `.app.yaml`, `.onprem.yaml`, both
   `.env.example`, justfile comments, `python-dev.Dockerfile` comment · Redis service, volume, port, env and
   `depends_on` removed · proved by `test_compose_dependencies.py` (its `redis` exceptions go).
-- [ ] **T28** — `settings.py` (`redis_url`, `probe_broker_url`), `health/checks.py`, `lifespan.py`,
+- [x] **T28** — `settings.py` (`redis_url`, `probe_broker_url`), `health/checks.py`, `lifespan.py`,
   scheduler `settings.py` (`redis_url`, `beat_leader_*` TTL) · proved by `test_settings.py`,
   `test_scheduler_settings.py`, `test_system.py`.
-- [ ] **T29** — `apps/api/pyproject.toml`, `apps/scheduler/pyproject.toml`, root `pyproject.toml` mypy
+- [x] **T29** — `apps/api/pyproject.toml`, `apps/scheduler/pyproject.toml`, root `pyproject.toml` mypy
   overrides, `uv.lock`, `apps/receiver/go.mod`/`go.sum` · `redis`, `celery[redis]`, `valkey-go` removed.
-- [ ] **T30** — test environment: `environment.py:23`, `test_billing.py`, `test_notifications_console.py`,
+- [x] **T30** — test environment: `environment.py:23`, `test_billing.py`, `test_notifications_console.py`,
   `test_system.py`, `test_cross_service_contracts.py:322,367` · `REDIS_URL` removed; T11 deleted.
-- [ ] **T31** — `docs/decisions/ADR-011…`, `ADR-020…`, `decision-log.md`, `docs/architecture/` pages that
+- [x] **T31** — `docs/decisions/ADR-011…`, `ADR-020…`, `decision-log.md`, `docs/architecture/` pages that
   name Redis or Celery, `docs/operations/production-readiness.md` (group 2b done), `docs/changes/README.md`.
 
 ## New risks
@@ -260,12 +260,12 @@ outside `docs/` and the customer-peer files returns nothing; `just check` green.
 - [x] Specification approval — not applicable (no customer-facing change)
 - [x] Design approval — 2026-10-10
 - [x] **Plan approval — before the first edited file** — 2026-10-10
-- [ ] Implementation
-- [ ] Tests
-- [ ] Review
-- [ ] Design QA — not applicable
+- [x] Implementation
+- [x] Tests
+- [x] Review
+- [x] Design QA — not applicable
 - [ ] Production-readiness assessment
-- [ ] Documentation and status update
+- [x] Documentation and status update
 
 ## Validation plan
 
@@ -281,4 +281,31 @@ every check and alert runs on, so it is judged by hand before step 4 starts.
 
 ## Outcome
 
-Filled in when the work completes.
+Built as planned in five steps; Redis, Celery and Valkey are gone from every service, compose file,
+setting, dependency and test. `just check` green (Python 4209 passed, 3 pre-existing deliberate
+skips; web 1352; browser SDK 120; Go and Python lint and types clean). Evidence per step is in
+`status.md`.
+
+What changed from the plan, and why:
+
+- **Ten tables, not eight.** Second-factor state is three tables (a challenge is per sign-in, so
+  keying it by user would let two browsers overwrite each other; the spent marker is keyed on the code,
+  as in Redis), and view-as tickets are a typed table of their own.
+- **`SecondFactorStore` commits on its own**, not on the request's transaction: a wrong code answers
+  401, which rolls the request back, and the spent attempt must survive it.
+- **T11 was done by hand** rather than as a test to be deleted in step 5.
+- **The rate-limit callers suite became offline** (`test_ratelimit_callers.py`): its tiers are in
+  memory now.
+- **The API's Redis went in step 3**, not 5, once nothing in it used Redis.
+- **A dead worker re-runs a job only if the job has attempts left** (record_outcome 6, pollers 3,
+  everything else 1, covered by the next interval or sweep). Celery redelivered everything; this is
+  bounded on purpose and a lost job is logged by name.
+- **Session lookups by token hash go through three named helpers**, exempted from the tenancy check
+  for `find_by_hash`'s reason; listing and ending one's own sessions now also filter by organization.
+- **Found in the full check: the claim over-leased.** `id IN (SELECT … LIMIT n FOR UPDATE SKIP
+  LOCKED)` let Postgres re-run the subquery; one claim for two slots took twenty jobs and its worker
+  died holding them. The claim is now a `MATERIALIZED` CTE, and each worker's lease name is unique
+  per worker rather than per process.
+- **Not done by hand: a live ingest flood** for step 4. The 429-before-reading-the-body path is
+  covered by the door tests over both transports.
+

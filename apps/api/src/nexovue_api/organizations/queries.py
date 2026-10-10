@@ -24,6 +24,8 @@ from nexovue_api.data.postgres.models import (
     AuditLogEntry,
     BillingSubscription,
     BillingWebhookDelivery,
+    Job,
+    JobResult,
     NotificationChannel,
     Organization,
     PlanGrant,
@@ -78,7 +80,7 @@ async def delete_audit_log(session: AsyncSession, org_id: uuid.UUID) -> int:
 
 
 async def delete_users(session: AsyncSession, org_id: uuid.UUID) -> int:
-    """The people. Their sessions go with them, by cascade."""
+    """The people. Their sessions, links and second-factor state go with them, by cascade."""
     return await _rows_deleted(session, delete(User).where(User.org_id == org_id))
 
 
@@ -94,6 +96,16 @@ async def delete_notification_channels(session: AsyncSession, org_id: uuid.UUID)
     )
 
 
+async def delete_jobs(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """Work queued for this organization and not yet run."""
+    return await _rows_deleted(session, delete(Job).where(Job.org_id == org_id))
+
+
+async def delete_job_results(session: AsyncSession, org_id: uuid.UUID) -> int:
+    """What a Run now or a send test found, not yet collected."""
+    return await _rows_deleted(session, delete(JobResult).where(JobResult.org_id == org_id))
+
+
 DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitable[int]]]] = {
     "billing_webhook_deliveries": delete_billing_webhook_deliveries,
     "billing_subscriptions": delete_billing_subscriptions,
@@ -103,6 +115,8 @@ DELETE_TENANT_ROWS: Final[dict[str, Callable[[AsyncSession, uuid.UUID], Awaitabl
     "support_access_grants": delete_support_access_grants,
     "audit_log": delete_audit_log,
     "notification_channels": delete_notification_channels,
+    "jobs": delete_jobs,
+    "job_results": delete_job_results,
     "users": delete_users,
     "projects": delete_projects,
 }

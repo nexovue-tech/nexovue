@@ -7,7 +7,7 @@
 #
 # Profiles:
 #   default  infrastructure + the services on the walking-skeleton path
-#   doors    Celery probes and pollers
+#   doors    the scheduler: beat, probes, pollers and alert delivery
 #   tools    demo app and load generator
 #
 # Every service is capped to the laptop budget. Core total is ~10 GB inside a
@@ -48,10 +48,6 @@ services:
     ports:
       - "${POSTGRES_HOST_PORT:-15432}:5432"
 
-  redis:
-    ports:
-      - "${REDIS_HOST_PORT:-16379}:6379"
-
   seaweedfs:
     ports:
       - "${SEAWEEDFS_S3_HOST_PORT:-18333}:8333"
@@ -81,7 +77,6 @@ services:
       LOG_FORMAT: console
       KAFKA_BROKERS: kafka:9092
       POSTGRES_DSN: ${DEV_POSTGRES_DSN:-postgresql://nexovue:nexovue_dev@postgres:5432/nexovue}
-      REDIS_URL: redis://redis:6379/0
       # Go's runtime profiles on the admin listener, which is not published to
       # the host — reach them with `docker compose exec receiver wget -qO-
       # http://127.0.0.1:8081/debug/pprof/heap`. Off everywhere else: the
@@ -102,8 +97,6 @@ services:
       kafka:
         condition: service_healthy
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     deploy:
       resources:
@@ -213,7 +206,6 @@ services:
       # Reads as the read-only account; erasure alone holds the writer (docs/changes/clickhouse-protects-itself).
       CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_READER_DSN:-clickhouse://nexovue_reader:nexovue_reader_dev@clickhouse:8123/nexovue}
       CLICKHOUSE_WRITER_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
-      REDIS_URL: redis://redis:6379/0
       # Source map bytes. The generic S3 API only — SeaweedFS here,
       # AWS S3 in deployment. The dev credentials are the ones in
       # deploy/seaweedfs/s3.json; the API creates the bucket at boot in
@@ -229,8 +221,6 @@ services:
       # constant for the same reason; without it two-factor sign-in answers 503
       # in development, which is how customer TOTP went untried here until now.
       CREDENTIAL_ENCRYPTION_KEY: 1tru1EuwOqD39XZm1z-sb2mrRHEFmbD_vreXaw2YZE8=
-      # Run now dispatches through the scheduler's broker, which is database 1.
-      PROBE_BROKER_URL: redis://redis:6379/1
       PROBE_LOCATIONS: local
       # Where a browser lands: the **app**, never this API. Verification links,
       # password resets and the return from a payment all point at a screen,
@@ -327,8 +317,6 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
-      redis:
-        condition: service_healthy
       # The API creates its bucket at boot — `lifespan._open_object_store` calls
       # `ensure_bucket()` — so this is a hard dependency and was missing until
       # 2026-09-08. Without it a cold start races: the API comes up first, the
@@ -380,7 +368,7 @@ services:
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
-      celery -A nexovue_scheduler.celery_app beat --scheduler nexovue_scheduler.beat:PostgresScheduler
+      python -m nexovue_scheduler beat
     working_dir: /workspace
     volumes:
       - ../..:/workspace
@@ -390,8 +378,6 @@ services:
       LOG_LEVEL: debug
       LOG_FORMAT: console
       POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
-      # Database 1 keeps probe queues out of the rate-limit counters on 0.
-      REDIS_URL: redis://redis:6379/1
       KAFKA_BROKERS: kafka:9092
       # The envelope bindings are generated output, not an installed package,
       # so every Python service that speaks the envelope adds them itself.
@@ -429,14 +415,12 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     deploy:
       # Two, deliberately. One beat is a single point of failure, and the thing
       # it decides is when every customer's checks run — losing it stops all
-      # monitoring with nothing to say so. They share a Redis lock and only the
-      # holder schedules, so this does not double every check; see
-      # nexovue_scheduler.leader.
+      # monitoring with nothing to say so. They contend for one Postgres advisory
+      # lock and only the holder schedules, so this does not double every check;
+      # see nexovue_scheduler.leader.
       replicas: 2
       resources:
         limits:
@@ -449,8 +433,7 @@ services:
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
-      celery -A nexovue_scheduler.celery_app worker --concurrency 8 --loglevel info
-      --exclude-queues deliveries
+      python -m nexovue_scheduler worker --concurrency 8
     working_dir: /workspace
     volumes:
       - ../..:/workspace
@@ -469,18 +452,17 @@ services:
         # dependant that starts before the S3 gateway answers meets a refused
         # connection on its first object.
         condition: service_healthy
-      redis:
+      postgres:
         condition: service_healthy
       kafka:
         condition: service_healthy
     deploy:
       resources:
         limits:
-          # Eight prefork children, each a full interpreter now holding
-          # librdkafka, libcurl and protobuf. At 256M -- the figure from before
-          # this service had any C extensions -- the children were OOM-killed
-          # during pool startup and the queue never drained, with the only
-          # symptom a BrokenPipeError from Celery's own bootstrap.
+          # Eight child processes, each a full interpreter holding librdkafka,
+          # libcurl and protobuf. At 256M -- the figure from before this service
+          # had any C extensions -- the children were OOM-killed at startup and
+          # the queue never drained.
           memory: 768M
 
   # F21. Delivers alerts — email, Slack, Teams, Discord, PagerDuty, webhooks —
@@ -494,8 +476,7 @@ services:
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
-      celery -A nexovue_scheduler.celery_app worker --queues deliveries
-      --concurrency 4 --loglevel info --hostname deliveries@%h
+      python -m nexovue_scheduler worker --queues deliveries --concurrency 4
     working_dir: /workspace
     volumes:
       - ../..:/workspace
@@ -516,11 +497,8 @@ services:
       EMAIL_FROM_ADDRESS: ${NEXOVUE_ALERT_EMAIL_FROM_ADDRESS:-}
       EMAIL_REPLY_TO: ${NEXOVUE_ALERT_EMAIL_REPLY_TO:-}
     depends_on:
-      # The outbox is in Postgres and the queue in Redis; nothing is delivered
-      # before both answer.
+      # The outbox and the job queue are both in Postgres.
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       seaweedfs:
         # Named by the shared scheduler environment, so waited for rather than
@@ -572,7 +550,6 @@ services:
       LOG_FORMAT: console
       POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
       CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
-      REDIS_URL: redis://redis:6379/0
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
     depends_on:
       postgres:

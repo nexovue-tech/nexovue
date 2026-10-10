@@ -14,7 +14,6 @@ func completeEnvironment() map[string]string {
 		"ENV":           config.EnvDevelopment,
 		"KAFKA_BROKERS": "localhost:9092",
 		"POSTGRES_DSN":  "postgresql://nexovue:secret@localhost:5432/nexovue",
-		"REDIS_URL":     "redis://localhost:6379/0",
 	}
 }
 
@@ -24,12 +23,12 @@ func applyEnvironment(t *testing.T, values map[string]string) {
 	t.Helper()
 	known := []string{
 		"ENV", "LOG_LEVEL", "LOG_FORMAT", "RECEIVER_OTLP_HTTP_ADDR",
-		"RECEIVER_OTLP_GRPC_ADDR", "RECEIVER_HEALTH_ADDR", "KAFKA_BROKERS", "POSTGRES_DSN", "REDIS_URL",
+		"RECEIVER_OTLP_GRPC_ADDR", "RECEIVER_HEALTH_ADDR", "KAFKA_BROKERS", "POSTGRES_DSN",
 		"KAFKA_SPANS_TOPIC", "KAFKA_LOGS_TOPIC", "KAFKA_METRICS_TOPIC",
 		"RECEIVER_MAX_BODY_BYTES", "RECEIVER_MAX_DECODED_BODY_BYTES",
 		"RECEIVER_MAX_INFLIGHT_EXPORTS", "RECEIVER_MAX_UNVERIFIED_EXPORTS",
 		"RECEIVER_API_KEY_CACHE_TTL", "RECEIVER_API_KEY_CACHE_MAX_ENTRIES",
-		"RECEIVER_RATE_LIMIT_PER_SECOND", "RECEIVER_POSTGRES_MAX_CONNS",
+		"RECEIVER_RATE_LIMIT_PER_SECOND", "RECEIVER_INSTANCES", "RECEIVER_POSTGRES_MAX_CONNS",
 		"RECEIVER_POSTGRES_MIN_CONNS", "SHUTDOWN_TIMEOUT",
 		"RECEIVER_KAFKA_MAX_BUFFERED_BYTES", "RECEIVER_PRODUCE_TIMEOUT",
 		"RECEIVER_INGEST_SUMMARY_INTERVAL",
@@ -105,7 +104,7 @@ func TestLoadAcceptsTheMinimumEnvironment(t *testing.T) {
 }
 
 func TestLoadNamesEachMissingRequiredVariable(t *testing.T) {
-	for _, missing := range []string{"ENV", "KAFKA_BROKERS", "POSTGRES_DSN", "REDIS_URL"} {
+	for _, missing := range []string{"ENV", "KAFKA_BROKERS", "POSTGRES_DSN"} {
 		t.Run(missing, func(t *testing.T) {
 			values := completeEnvironment()
 			delete(values, missing)
@@ -152,6 +151,7 @@ func TestLoadRejectsMalformedValues(t *testing.T) {
 		"cache ttl past the revocation ceiling": {"RECEIVER_API_KEY_CACHE_TTL", "10m"},
 		"zero cache ceiling":                    {"RECEIVER_API_KEY_CACHE_MAX_ENTRIES", "0"},
 		"zero rate limit":                       {"RECEIVER_RATE_LIMIT_PER_SECOND", "0"},
+		"zero receivers":                        {"RECEIVER_INSTANCES", "0"},
 		"zero produce timeout":                  {"RECEIVER_PRODUCE_TIMEOUT", "0s"},
 		"zero summary interval":                 {"RECEIVER_INGEST_SUMMARY_INTERVAL", "0s"},
 		// franz-go fails a record larger than its buffer outright, and no

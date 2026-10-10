@@ -4,7 +4,7 @@
 the test client is deprecated in favour of httpx2, and calling the ASGI app
 in-process needs neither and exercises the same middleware stack.
 
-Postgres, Redis and ClickHouse are replaced by dependency overrides. What is
+Postgres and ClickHouse are replaced by dependency overrides. What is
 under test is the wiring — status codes, the cookie, and the fact that an
 endpoint refuses to answer without a session — not the stores.
 """
@@ -281,7 +281,7 @@ async def test_me_says_what_the_person_may_do(user: User, organization: Organiza
 async def test_a_session_naming_a_user_that_is_gone_is_401(
     user: User, organization: Organization
 ) -> None:
-    """The row was deleted while the token was still live in Redis."""
+    """The row was deleted while the session was still live."""
     store = FakeSessionStore()
     app = _build_app(user=user, organization=organization, store=store)
 

@@ -64,7 +64,6 @@ def _settings(**mail: str) -> Settings:
         postgres_dsn="postgresql://nexovue:secret@localhost:5432/nexovue",
         clickhouse_dsn="clickhouse://nexovue:secret@localhost:8123/nexovue",
         clickhouse_writer_dsn="clickhouse://nexovue:secret@localhost:8123/nexovue",
-        redis_url="redis://localhost:6379/0",
         **mail,  # type: ignore[arg-type]
     )
 

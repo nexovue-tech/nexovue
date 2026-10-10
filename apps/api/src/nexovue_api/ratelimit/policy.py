@@ -17,7 +17,7 @@ A plan may raise them; see :class:`PlanLimits`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, Protocol
 
 from nexovue_api.apitokens.tokens import looks_like_api_token
@@ -26,19 +26,21 @@ from nexovue_api.settings import API_PREFIX
 
 @dataclass(frozen=True, slots=True)
 class Quota:
-    """One counted allowance: ``limit`` requests per ``window_seconds``."""
+    """One counted allowance: ``limit`` requests per ``window_seconds``.
+
+    `exact` counts it in Postgres, shared by every API process, rather than as
+    each process's share in memory — for the one tier where a guess let through
+    costs an account (`ratelimit/limiter.py`).
+    """
 
     name: str
     limit: int
     window_seconds: int
+    exact: bool = False
 
     def scaled(self, multiplier: float) -> Quota:
         """The same quota widened for a paying plan."""
-        return Quota(
-            name=self.name,
-            limit=max(1, int(self.limit * multiplier)),
-            window_seconds=self.window_seconds,
-        )
+        return replace(self, limit=max(1, int(self.limit * multiplier)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +59,7 @@ class Tier:
     org_max_concurrent: int | None = None
 
 
-AUTH_TIER: Final = Tier(quota=Quota(name="auth", limit=10, window_seconds=60))
+AUTH_TIER: Final = Tier(quota=Quota(name="auth", limit=10, window_seconds=60, exact=True))
 
 # The most telemetry reads one screen asks for at once. Service detail wants the
 # service, its trend, its endpoints, its dependencies, its errors and its duration
@@ -105,9 +107,13 @@ DEFAULT_TIER: Final = Tier(
 # wrong shape for it. Counted per token, so one customer's script cannot spend
 # another's, and capped at 8 in flight for the same reason the telemetry tier is
 # — a scan is what costs ClickHouse, whoever asked for it.
+#
+# **And per organization, at the telemetry tier's ceiling** (readiness group 2b):
+# a customer minting tokens must not multiply what one tenant may have in flight.
 TOKEN_TIER: Final = Tier(
     quota=Quota(name="token", limit=300, window_seconds=60),
     max_concurrent=8,
+    org_max_concurrent=32,
 )
 
 # The one unauthenticated write in the control plane. It shared the default tier,

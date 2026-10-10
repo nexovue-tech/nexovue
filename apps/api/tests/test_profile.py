@@ -1,6 +1,6 @@
 """The profile endpoints, driven through the real app (P1-72).
 
-Postgres and Redis are replaced by dependency overrides, in the shape
+Postgres and the stores on it are replaced by dependency overrides, in the shape
 `test_auth_routes.py` established. What is under test here is the *rules* —
 which body is refused, which session survives, what the cookie does — and the
 two structural facts that make these routes safe to expose to every role: no
@@ -16,18 +16,18 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import httpx
 import pytest
 from environment import TEST_ENVIRONMENT
-from fake_stores import use_fake_second_factors
-from fastapi import FastAPI
 
 # The token double and the mail double both already exist next door, written for
 # the flows this file now shares. Importing them beats a second copy that has to
 # be kept in step.
-from test_auth_recovery import FakeRedis, RecordingSender
+from fake_stores import FakeOneTimeTokenStore, use_fake_second_factors
+from fastapi import FastAPI
+from test_auth_recovery import RecordingSender
 
 from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.auth.credentials import hash_password, verify_password
@@ -158,10 +158,9 @@ def sender() -> RecordingSender:
 
 @pytest.fixture
 def tokens() -> OneTimeTokenStore:
-    """The real store over a dictionary. Single use is what it is under test for,
-    and `FakeRedis` is `GETDEL` faithfully enough to show it — the same double
-    the recovery suite uses, imported rather than written a second time."""
-    return OneTimeTokenStore(FakeRedis())  # type: ignore[arg-type]
+    """Links in a dictionary, spent once — the store's own single use under a race
+    is proved against Postgres in `test_auth_recovery_live.py`."""
+    return cast(OneTimeTokenStore, FakeOneTimeTokenStore())
 
 
 @pytest.fixture
@@ -564,7 +563,7 @@ async def test_a_malformed_address_never_reaches_the_provider(
 async def test_the_link_carries_a_change_token_and_not_a_verification_one(
     app: FastAPI, user: User, sender: RecordingSender, tokens: OneTimeTokenStore
 ) -> None:
-    """The purpose is part of the Redis key. Without that, this 24-hour link
+    """The purpose is part of every token lookup. Without that, this 24-hour link
     would also open `/auth/verify-email`, and the weaker of the two would set
     the strength of both."""
     async with _signed_in(app, user) as client:

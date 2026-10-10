@@ -2,26 +2,25 @@
 
 The API never contacts a channel's destination itself — outbound requests to
 addresses a customer chose stay off the control plane (ADR-011's reason, reused).
-The task is sent by name, so no scheduler code is imported, and the outcome waits
-in Redis under a tenant-first key.
+The job is added by name, so no scheduler code is imported, and the outcome waits
+in `job_results`, found only under the organization that asked.
 """
 
 from __future__ import annotations
 
-import json
 from typing import Final, Protocol
 
-import anyio
-from celery import Celery
 from nexovue_platform.alerts.tasks import (
     DELIVERIES_QUEUE,
+    SEND_TEST_RESULT_KIND,
     SEND_TEST_TASK,
     send_test_arguments,
-    send_test_result_key,
 )
-from redis.asyncio import Redis
+from nexovue_platform.jobs import JobRequest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nexovue_api.channels.schemas import SendTestResult
+from nexovue_api.checks.run_now import add_job, collect_result
 
 # A test nobody picks up within this is dropped rather than sent minutes later to
 # a person who has stopped waiting.
@@ -33,41 +32,38 @@ class ChannelTester(Protocol):
 
     async def collect(self, *, org_id: str, request_id: str) -> SendTestResult | None: ...
 
-    async def close(self) -> None: ...
 
+class JobsChannelTester:
+    """The scheduler's job queue, reached the way Run now reaches it."""
 
-class CeleryChannelTester:
-    """The scheduler's own broker, reached the way Run now reaches it."""
-
-    def __init__(self, broker_url: str) -> None:
-        self._celery = Celery("nexovue-api-channel-tests", broker=broker_url)
-        self._celery.conf.update(broker_connection_retry_on_startup=False, result_backend=None)
-        self._redis = Redis.from_url(broker_url, decode_responses=True)
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
 
     async def dispatch(self, *, org_id: str, channel_id: str, request_id: str) -> None:
-        # kombu publishes synchronously; off the event loop, as Run now does.
-        await anyio.to_thread.run_sync(
-            lambda: self._celery.send_task(
-                SEND_TEST_TASK,
+        await add_job(
+            self._session_factory,
+            JobRequest(
+                task=SEND_TEST_TASK,
+                queue=DELIVERIES_QUEUE,
                 kwargs=send_test_arguments(
                     org_id=org_id, channel_id=channel_id, request_id=request_id
                 ),
-                queue=DELIVERIES_QUEUE,
-                expires=DISPATCH_EXPIRY_SECONDS,
-            )
+                org_id=org_id,
+                expires_seconds=DISPATCH_EXPIRY_SECONDS,
+            ),
         )
 
     async def collect(self, *, org_id: str, request_id: str) -> SendTestResult | None:
-        stored = await self._redis.get(send_test_result_key(org_id, request_id))
-        if stored is None:
+        outcome = await collect_result(
+            self._session_factory, kind=SEND_TEST_RESULT_KIND, org_id=org_id, request_id=request_id
+        )
+        if outcome is None:
             return None
-        outcome = json.loads(stored)
+        status = outcome.get("http_status")
+        reason = outcome.get("reason")
         return SendTestResult(
             pending=False,
-            delivered=bool(outcome["delivered"]),
-            http_status=outcome["http_status"],
-            reason=outcome["reason"],
+            delivered=bool(outcome.get("delivered")),
+            http_status=status if isinstance(status, int) else None,
+            reason=reason if isinstance(reason, str) else None,
         )
-
-    async def close(self) -> None:
-        await self._redis.aclose()

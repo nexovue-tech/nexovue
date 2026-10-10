@@ -40,7 +40,6 @@ from nexovue_api.audit import service as audit
 from nexovue_api.data.postgres.models import AlertRule, Incident, NotificationChannel
 from nexovue_api.errors.exceptions import (
     ConflictError,
-    DependencyUnavailableError,
     InvalidRequestError,
     NotFoundError,
 )
@@ -314,11 +313,7 @@ async def coverage_of_service(
     )
 
 
-async def evaluation_status(reader: EvaluationReader | None) -> EvaluationStatus:
-    if reader is None:
-        raise DependencyUnavailableError(
-            "Evaluation status is not available: the API cannot reach the scheduler's broker."
-        )
+async def evaluation_status(reader: EvaluationReader) -> EvaluationStatus:
     return await reader.status()
 
 
