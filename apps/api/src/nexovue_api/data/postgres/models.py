@@ -140,7 +140,9 @@ PROCESSOR_REFERENCE_LENGTH: Final = 255
 # What a subscription is doing, in this product's words rather than a
 # processor's. `pending` is a checkout that was started and not yet authorised;
 # every processor calls that something different and none of it belongs here.
-BILLING_SUBSCRIPTION_STATUSES: Final = ("pending", "active", "cancelled")
+# `lapsed`: a payment failed for good and its grace ran out. Unlike `cancelled`
+# nobody ended it, so a late successful charge brings it back (migration 0038).
+BILLING_SUBSCRIPTION_STATUSES: Final = ("pending", "active", "cancelled", "lapsed")
 BillingSubscriptionStatus: Final = Enum(
     *BILLING_SUBSCRIPTION_STATUSES, name="billing_subscription_status"
 )
@@ -1047,6 +1049,9 @@ class BillingSubscription(Base):
     # flags, because "since when" is the question an invoice dispute asks.
     activated_at: Mapped[OptionalTimestamp]
     cancelled_at: Mapped[OptionalTimestamp]
+    # Set when the processor gives up on the payments: the paid tier holds until
+    # then, and the scheduler's grace sweep marks the row `lapsed` after it.
+    grace_until: Mapped[OptionalTimestamp]
 
     __table_args__ = (
         # One arrangement per reference per processor. Two processors may
@@ -1110,6 +1115,8 @@ class BillingWebhookDelivery(Base):
         # too: scoping it per tenant would let the same delivery be replayed
         # under a different organization's name.
         UniqueConstraint("processor", "delivery_id"),
+        # A blank id would make every later blank delivery its duplicate.
+        CheckConstraint("delivery_id <> ''", name="a_delivery_names_its_event"),
         Index("ix_billing_webhook_deliveries_org_id_received_at", "org_id", "received_at"),
     )
 

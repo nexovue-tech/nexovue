@@ -28,7 +28,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from http import HTTPStatus
 from typing import Any, Final
@@ -36,6 +36,7 @@ from typing import Any, Final
 import httpx
 import pytest
 from environment import TEST_ENVIRONMENT
+from pydantic import ValidationError
 
 from nexovue_api.billing import (
     BillingError,
@@ -108,7 +109,6 @@ SETTINGS: Final = DomesticPaymentSettings(
     provider="razorpay",
     app_id="TEST_APP_ID",
     secret_key=SECRET,
-    environment="sandbox",
     base_url="https://sandbox.example.test/pg",
     webhook_secret=SECRET,
 )
@@ -134,6 +134,12 @@ class CapturingSession:
         self.statements.append(statement)
         return self._answers.pop(0) if self._answers else None
 
+    async def scalars(self, statement: Any) -> Any:
+        """A list-shaped answer, preloaded as a list in the same queue."""
+        self.statements.append(statement)
+        rows = self._answers.pop(0) if self._answers else []
+        return _Listed(rows)
+
     def add(self, instance: Any) -> None:
         self.staged.append(instance)
 
@@ -144,6 +150,17 @@ class CapturingSession:
 
     def staged_of(self, kind: type) -> list[Any]:
         return [row for row in self.staged if isinstance(row, kind)]
+
+
+class _Listed:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[Any]:
+        return list(self._rows)
+
+    def __iter__(self) -> Any:
+        return iter(self._rows)
 
 
 @dataclass
@@ -165,6 +182,7 @@ class StubProcessor:
     subscription_ref: str = SUBSCRIPTION_REF
     checkouts: list[dict[str, Any]] = field(default_factory=list)
     cancelled: list[str] = field(default_factory=list)
+    cancelled_immediately: list[str] = field(default_factory=list)
     cancellation: CancellationOutcome = CancellationOutcome.REQUESTED
 
     def required_contact_fields(self) -> frozenset[ContactField]:
@@ -202,10 +220,14 @@ class StubProcessor:
             processor_customer_ref="cust_1",
         )
 
-    async def cancel(self, *, subscription_ref: str) -> CancellationOutcome:
+    async def cancel(
+        self, *, subscription_ref: str, immediately: bool = False
+    ) -> CancellationOutcome:
         if self.refusal is not None:
             raise self.refusal
         self.cancelled.append(subscription_ref)
+        if immediately:
+            self.cancelled_immediately.append(subscription_ref)
         return self.cancellation
 
     def event_from_webhook(self, *, body: bytes, headers: dict[str, str]) -> BillingEvent:
@@ -659,6 +681,37 @@ class TestSettings:
         # with a redirect and others with a 404.
         assert configured.base_url == "https://sandbox.example.test/pg"
 
+    @staticmethod
+    def _with_key(env: str, app_id: str) -> Settings:
+        return Settings(
+            env=env,
+            postgres_dsn="postgresql://nexovue:secret@localhost:5432/nexovue",
+            clickhouse_dsn="clickhouse://nexovue:secret@localhost:8123/nexovue",
+            clickhouse_writer_dsn="clickhouse://nexovue:secret@localhost:8123/nexovue",
+            otlp_endpoint="https://ingest.example.test",
+            payments_domestic_app_id=app_id,
+            payments_domestic_secret_key=SECRET,
+        )
+
+    @pytest.mark.parametrize("key", ["rzp_test_abc123", "TEST_APP_ID"])
+    def test_production_refuses_a_key_that_is_not_live(self, key: str) -> None:
+        """Readiness group 3. The setting meant to stop this changed nothing — both
+        of its values were the same host — and the hosted file defaulted it to
+        sandbox. Razorpay's key decides which books a charge writes to, so the key
+        is what is checked: a test key in production takes no real money and
+        grants real plans."""
+        with pytest.raises(ValidationError, match="PAYMENTS_DOMESTIC_APP_ID"):
+            self._with_key("production", key)
+
+    def test_a_live_key_is_refused_outside_production(self) -> None:
+        """A laptop or a staging install must not be able to debit a real card."""
+        with pytest.raises(ValidationError, match="PAYMENTS_DOMESTIC_APP_ID"):
+            self._with_key("development", "rzp_live_abc123")
+
+    def test_each_estate_starts_with_its_own_key(self) -> None:
+        assert self._with_key("production", "rzp_live_abc123").domestic_payments is not None
+        assert self._with_key("development", "rzp_test_abc123").domestic_payments is not None
+
 
 # ------------------------------------------------------------------- the door
 
@@ -672,7 +725,7 @@ def _build_app(session: CapturingSession) -> Any:
     # Imported here so `environment` has already populated the configuration
     # `main` reads when it builds its module-level app.
     from nexovue_api.billing.dependencies import get_domestic_payments
-    from nexovue_api.deps import get_app_settings, get_db_session
+    from nexovue_api.deps import get_app_settings, get_db_session, get_optional_email_sender
     from nexovue_api.main import create_app
 
     settings = Settings(**TEST_ENVIRONMENT)  # type: ignore[arg-type]
@@ -683,6 +736,7 @@ def _build_app(session: CapturingSession) -> Any:
 
     app.dependency_overrides[get_app_settings] = lambda: settings
     app.dependency_overrides[get_db_session] = db_override
+    app.dependency_overrides[get_optional_email_sender] = lambda: None
     app.dependency_overrides[get_domestic_payments] = lambda: _configured(
         RazorpayPaymentProcessor(SETTINGS)
     )
@@ -847,6 +901,24 @@ class TestThePlanFollowsTheProcessor:
         )
 
         assert organization.plan == "pro"
+
+    async def test_a_late_activation_does_not_bring_a_cancelled_plan_back(self) -> None:
+        """Webhooks arrive out of order. An `activated` landing after `cancelled`
+        put a customer who had left back on a paid tier, with nothing to pay it."""
+        organization = _organization(plan="free")
+        ended = _pending(status=service.STATUS_CANCELLED)
+        session = CapturingSession(answers=[ended, None, organization])
+
+        outcome = await service.record_from_webhook(
+            session,  # type: ignore[arg-type]
+            configured=_configured(StubProcessor(event=_event())),
+            body=b"{}",
+            headers={},
+        )
+
+        assert outcome.outcome is DeliveryOutcome.RECORDED
+        assert ended.status == service.STATUS_CANCELLED
+        assert organization.plan == "free"
 
     async def test_an_event_for_an_organization_that_is_gone_is_still_accepted(self) -> None:
         """The delivery was signed, so refusing it asks the processor to send it
@@ -1039,7 +1111,7 @@ class TestStartingACheckout:
         adapter: the price out of `plan_prices` and the URL out of APP_BASE_URL."""
         processor = StubProcessor()
         # find_plan, latest_subscription, find_effective_price.
-        session = CapturingSession(answers=[_plan_row(), None, _PRO_PRICE])
+        session = CapturingSession(answers=[_plan_row(), None, [], _PRO_PRICE])
 
         handoff = await service.begin_plan_change(
             session,  # type: ignore[arg-type]
@@ -1067,7 +1139,7 @@ class TestStartingACheckout:
         """The processor holds what the bank's notice needs and we hold
         no copy. Nothing carrying a phone number may be staged for the store."""
         processor = StubProcessor()
-        session = CapturingSession(answers=[_plan_row(), None, _PRO_PRICE])
+        session = CapturingSession(answers=[_plan_row(), None, [], _PRO_PRICE])
 
         await service.begin_plan_change(
             session,  # type: ignore[arg-type]
@@ -1119,7 +1191,7 @@ class TestStartingACheckout:
             services_committed=SERVICES_COMMITTED,
         )
         processor = StubProcessor()
-        session = CapturingSession(answers=[_plan_row(), live])
+        session = CapturingSession(answers=[_plan_row(), None, [live]])
 
         with pytest.raises(ConflictError):
             await service.begin_plan_change(
@@ -1178,7 +1250,7 @@ class TestEndingASubscription:
             services_committed=SERVICES_COMMITTED,
         )
         processor = StubProcessor()
-        session = CapturingSession(answers=[live])
+        session = CapturingSession(answers=[[live]])
 
         await service.end_subscription(
             session,  # type: ignore[arg-type]
@@ -1204,7 +1276,7 @@ class TestEndingASubscription:
         )
         processor = StubProcessor(cancellation=CancellationOutcome.ALREADY_ENDED)
         organization = _organization(plan="pro")
-        session = CapturingSession(answers=[live, organization])
+        session = CapturingSession(answers=[[live], organization])
 
         await service.end_subscription(
             session,  # type: ignore[arg-type]
@@ -1230,7 +1302,7 @@ class TestEndingASubscription:
             services_committed=SERVICES_COMMITTED,
         )
         processor = StubProcessor(refusal=BillingError("the processor refused the call: teapot"))
-        session = CapturingSession(answers=[live])
+        session = CapturingSession(answers=[[live]])
 
         with pytest.raises(DependencyUnavailableError) as refused:
             await service.end_subscription(
@@ -1253,7 +1325,7 @@ class TestEndingASubscription:
             services_committed=SERVICES_COMMITTED,
         )
         processor = StubProcessor(refusal=BillingError("account 42 is suspended, ref XYZ"))
-        session = CapturingSession(answers=[live])
+        session = CapturingSession(answers=[[live]])
 
         with pytest.raises(DependencyUnavailableError) as refused:
             await service.end_subscription(
@@ -1280,7 +1352,7 @@ class TestEndingASubscription:
             services_committed=SERVICES_COMMITTED,
         )
         organization = _organization(plan="pro")
-        session = CapturingSession(answers=[live])
+        session = CapturingSession(answers=[[live]])
 
         await service.end_subscription(
             session,  # type: ignore[arg-type]
@@ -1291,7 +1363,7 @@ class TestEndingASubscription:
         assert organization.plan == "pro"
 
     async def test_an_organization_with_nothing_live_is_refused(self) -> None:
-        session = CapturingSession(answers=[None])
+        session = CapturingSession(answers=[[]])
 
         with pytest.raises(ConflictError, match="no live subscription"):
             await service.end_subscription(
@@ -1313,7 +1385,7 @@ class TestEndingASubscription:
             services_committed=SERVICES_COMMITTED,
         )
         processor = StubProcessor()
-        session = CapturingSession(answers=[foreign])
+        session = CapturingSession(answers=[[foreign]])
 
         with pytest.raises(ConflictError, match="not taken out through"):
             await service.end_subscription(
@@ -1939,7 +2011,7 @@ class TestChangingPlanWhileOneIsLive:
             currency="USD",
         )
         processor = StubProcessor()
-        session = CapturingSession(answers=[_plan_row("scale"), live])
+        session = CapturingSession(answers=[_plan_row("scale"), None, [live]])
 
         with pytest.raises(ConflictError, match="Cancel it before starting another"):
             await service.begin_plan_change(
@@ -1955,19 +2027,76 @@ class TestChangingPlanWhileOneIsLive:
         assert processor.checkouts == []
         assert session.staged_of(BillingSubscription) == []
 
-    async def test_a_cancelled_arrangement_does_not_block_the_next_one(self) -> None:
-        """The two-step path has to actually work: cancel, then subscribe."""
-        ended = BillingSubscription(
-            org_id=ORG_ID,
-            processor=PROCESSOR_NAME,
-            subscription_ref=SUBSCRIPTION_REF,
-            plan_slug="pro",
-            status=service.STATUS_CANCELLED,
-            services_committed=SERVICES_COMMITTED,
-            currency="USD",
-        )
+    async def test_a_checkout_supersedes_one_never_authorised(self) -> None:
+        """Blocker 21. Only the newest row was checked, so two tabs — or a checkout
+        abandoned and started again — left two mandates a customer could
+        authorise, and both debited. The earlier one is ended now, at the
+        processor, before the new one starts."""
+        earlier = _pending()
+        earlier.subscription_ref = "sub_earlier"
         processor = StubProcessor()
-        session = CapturingSession(answers=[_plan_row("scale"), ended, _PRO_PRICE])
+        session = CapturingSession(answers=[_plan_row(), None, [earlier], _PRO_PRICE])
+
+        await service.begin_plan_change(
+            session,  # type: ignore[arg-type]
+            configured=_configured(processor),
+            organization=_organization(),
+            billing_email=OWNER_EMAIL,
+            request=_checkout_request(),
+            app_base_url="https://app.example.test",
+            today=TODAY,
+        )
+
+        assert processor.cancelled_immediately == ["sub_earlier"]
+        assert earlier.status == service.STATUS_CANCELLED
+        assert len(processor.checkouts) == 1
+
+    async def test_a_checkout_that_cannot_end_the_earlier_one_starts_nothing(self) -> None:
+        earlier = _pending()
+        processor = StubProcessor(refusal=BillingError("down"))
+        session = CapturingSession(answers=[_plan_row(), None, [earlier], _PRO_PRICE])
+
+        with pytest.raises(DependencyUnavailableError):
+            await service.begin_plan_change(
+                session,  # type: ignore[arg-type]
+                configured=_configured(processor),
+                organization=_organization(),
+                billing_email=OWNER_EMAIL,
+                request=_checkout_request(),
+                app_base_url="https://app.example.test",
+                today=TODAY,
+            )
+
+        assert earlier.status == service.STATUS_PENDING
+        assert processor.checkouts == []
+
+    async def test_ending_a_subscription_ends_every_live_arrangement(self) -> None:
+        """`end_subscription` cancelled only the newest row, so a second live
+        mandate kept debiting after the customer pressed Cancel."""
+        older = _pending(status=service.STATUS_ACTIVE)
+        older.subscription_ref = "sub_older"
+        newer = _pending()
+        newer.subscription_ref = "sub_newer"
+        processor = StubProcessor()
+        session = CapturingSession(answers=[[older, newer], _organization(plan="pro")])
+
+        await service.end_subscription(
+            session,  # type: ignore[arg-type]
+            configured=_configured(processor),
+            organization=_organization(plan="pro"),
+        )
+
+        assert sorted(processor.cancelled) == ["sub_newer", "sub_older"]
+        # The unauthorised checkout ends now; the paid mandate at its period end.
+        assert processor.cancelled_immediately == ["sub_newer"]
+        assert newer.status == service.STATUS_CANCELLED
+        assert older.status == service.STATUS_ACTIVE
+
+    async def test_a_cancelled_arrangement_does_not_block_the_next_one(self) -> None:
+        """The two-step path has to actually work: cancel, then subscribe. A
+        cancelled arrangement is not live, so the read of live ones finds nothing."""
+        processor = StubProcessor()
+        session = CapturingSession(answers=[_plan_row("scale"), None, [], _PRO_PRICE])
 
         await service.begin_plan_change(
             session,  # type: ignore[arg-type]
@@ -1980,3 +2109,107 @@ class TestChangingPlanWhileOneIsLive:
         )
 
         assert len(processor.checkouts) == 1
+
+
+class _Mail:
+    """Records what would have been mailed; `refuse` makes every send fail."""
+
+    def __init__(self, *, refuse: bool = False) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.refuse = refuse
+
+    async def send(self, *, to: str, message: Any, data: Any, idempotency_key: Any = None) -> Any:
+        if self.refuse:
+            from nexovue_platform.email import EmailError
+
+            raise EmailError("the provider is down")
+        self.sent.append({"to": to, "message": message, "data": dict(data), "key": idempotency_key})
+
+
+class TestAPaymentThatFailedForGood:
+    """Founder decision (b), 2026-10-10: when the processor stops retrying, the
+    plan holds for 7 days, the owners are told the date, then it drops to free."""
+
+    async def _halt(self, subscription: BillingSubscription, mail: _Mail) -> None:
+        session = CapturingSession(
+            answers=[subscription, None, _organization(plan="pro"), _plan_row(), [OWNER_EMAIL]]
+        )
+        await service.record_from_webhook(
+            session,  # type: ignore[arg-type]
+            configured=_configured(
+                StubProcessor(event=_event(BillingEventKind.SUBSCRIPTION_HALTED))
+            ),
+            body=b"{}",
+            headers={},
+            email=mail,
+            app_base_url="https://app.example.test",
+        )
+
+    async def test_the_plan_holds_for_seven_days_and_the_owners_are_told_until_when(
+        self,
+    ) -> None:
+        live = _pending(status=service.STATUS_ACTIVE)
+        mail = _Mail()
+        before = datetime.now(UTC)
+
+        await self._halt(live, mail)
+
+        assert live.status == service.STATUS_ACTIVE
+        assert live.grace_until is not None
+        assert timedelta(days=7) <= live.grace_until - before < timedelta(days=7, minutes=1)
+        [notice] = mail.sent
+        assert notice["to"] == OWNER_EMAIL
+        assert notice["data"]["until"] == live.grace_until.strftime("%d %B %Y")
+        assert notice["data"]["link"] == "https://app.example.test/settings/billing"
+
+    async def test_a_repeated_halt_does_not_move_the_end_date(self) -> None:
+        first_end = datetime.now(UTC) + timedelta(days=2)
+        live = _pending(status=service.STATUS_ACTIVE)
+        live.grace_until = first_end
+        mail = _Mail()
+
+        await self._halt(live, mail)
+
+        assert live.grace_until == first_end
+        assert mail.sent == []
+
+    async def test_mail_that_cannot_go_does_not_refuse_the_delivery(self) -> None:
+        live = _pending(status=service.STATUS_ACTIVE)
+
+        await self._halt(live, _Mail(refuse=True))
+
+        assert live.grace_until is not None
+
+    async def test_a_payment_in_the_grace_period_ends_it(self) -> None:
+        live = _pending(status=service.STATUS_ACTIVE)
+        live.grace_until = datetime.now(UTC) + timedelta(days=3)
+        session = CapturingSession(answers=[live, None])
+
+        await service.record_from_webhook(
+            session,  # type: ignore[arg-type]
+            configured=_configured(StubProcessor(event=_event(BillingEventKind.PAYMENT_SUCCEEDED))),
+            body=b"{}",
+            headers={},
+        )
+
+        ended_grace: datetime | None = live.grace_until
+        assert ended_grace is None
+        assert live.status == service.STATUS_ACTIVE
+
+    async def test_a_late_payment_brings_a_lapsed_plan_back(self) -> None:
+        """Nobody ended a lapsed arrangement — it was only unpaid. The processor
+        resumes a halted subscription when the card is fixed, and the customer
+        who paid gets what they paid for."""
+        lapsed = _pending(status=service.STATUS_LAPSED)
+        organization = _organization(plan="free")
+        session = CapturingSession(answers=[lapsed, None, organization])
+
+        await service.record_from_webhook(
+            session,  # type: ignore[arg-type]
+            configured=_configured(StubProcessor(event=_event(BillingEventKind.PAYMENT_SUCCEEDED))),
+            body=b"{}",
+            headers={},
+        )
+
+        assert lapsed.status == service.STATUS_ACTIVE
+        assert organization.plan == "pro"

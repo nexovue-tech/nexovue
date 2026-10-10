@@ -45,12 +45,6 @@ LogFormat = Literal["json", "console"]
 DomesticPaymentProvider = Literal["razorpay"]
 
 
-# A processor runs two estates with two sets of credentials and two hostnames.
-# Named rather than a bool because "is production" is a question about the
-# *account*, not about our own deployment: a staging install may legitimately
-# hold live keys, and a production install may not yet have any.
-PaymentEnvironment = Literal["sandbox", "production"]
-
 # ClickHouse speaks two protocols on two ports. Every service names the store
 # with the same variable and the same scheme; only the port differs, because the
 # API talks HTTP and the Go workers talk the native protocol.
@@ -115,7 +109,6 @@ class DomesticPaymentSettings:
     # The signing key. It is both the API credential *and* the key a webhook
     # signature is verified with, which is why nothing else may hold it.
     secret_key: str
-    environment: PaymentEnvironment
     # The processor's API root. Derived from the provider unless overridden —
     # see `PROVIDER_API_ROOTS`, and the misconfiguration that motivated it.
     base_url: str
@@ -134,7 +127,7 @@ class DomesticPaymentSettings:
     currencies: frozenset[str] = frozenset()
 
 
-# Each provider's API root, per environment.
+# Each provider's API root.
 #
 # **Derived rather than configured, because it was got wrong the first time it
 # mattered**: the provider was switched to `razorpay` while `base_url` still held
@@ -143,15 +136,16 @@ class DomesticPaymentSettings:
 #
 # Still overridable by `PAYMENTS_DOMESTIC_BASE_URL` — a test transport and a
 # vendor's regional host both need it — but nothing has to set it to be right.
-PROVIDER_API_ROOTS: Final[dict[str, dict[str, str]]] = {
-    # One host for both, and the key's own prefix decides which books it writes
-    # to: `rzp_test_` is the sandbox, `rzp_live_` is not.
+PROVIDER_API_ROOTS: Final[dict[str, str]] = {
     # https://razorpay.com/docs/api/
-    "razorpay": {
-        "sandbox": "https://api.razorpay.com/v1",
-        "production": "https://api.razorpay.com/v1",
-    },
+    "razorpay": "https://api.razorpay.com/v1",
 }
+
+# **The key decides test or live, not a setting** (readiness group 3). Razorpay
+# has one host for both; a `rzp_test_` key writes to the test books and takes no
+# money, a `rzp_live_` key debits real cards. `PAYMENTS_DOMESTIC_ENV` chose
+# between two identical hosts and was deleted for it.
+LIVE_KEY_PREFIXES: Final[dict[str, str]] = {"razorpay": "rzp_live_"}
 
 
 # The environment variables an unconfigured payment processor tells the caller
@@ -290,7 +284,6 @@ class Settings(BaseSettings):
     payments_domestic_provider: DomesticPaymentProvider = "razorpay"
     payments_domestic_app_id: str = ""
     payments_domestic_secret_key: str = ""
-    payments_domestic_env: PaymentEnvironment = "sandbox"
     payments_domestic_base_url: str = ""
     payments_domestic_webhook_secret: str = ""
     # Comma-separated, e.g. "INR" or "INR,USD". Empty until a deployment knows
@@ -321,6 +314,30 @@ class Settings(BaseSettings):
                 f"OTLP_ENDPOINT is {self.otlp_endpoint!r}, which no customer can reach. "
                 f"Signup hands this to every new account and the onboarding screen prints "
                 f"it. Set it to the receiver's public address in {self.env}."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _payments_match_the_estate(self) -> Settings:
+        """Production takes real money with a live key; nothing else may hold one.
+
+        A test key in production grants paid plans for payments that never
+        happen; a live key on a laptop or a staging install debits real cards.
+        Both are refused at start-up, naming the variable.
+        """
+        app_id = self.payments_domestic_app_id
+        if not app_id:
+            return self
+        live = app_id.startswith(LIVE_KEY_PREFIXES[self.payments_domestic_provider])
+        if self.env == "production" and not live:
+            raise ValueError(
+                "PAYMENTS_DOMESTIC_APP_ID is not a live key, so production would grant paid "
+                "plans for payments that never happen. Set the live key."
+            )
+        if self.env != "production" and live:
+            raise ValueError(
+                f"PAYMENTS_DOMESTIC_APP_ID is a live key, so {self.env} would debit real cards. "
+                "Use a test key outside production."
             )
         return self
 
@@ -419,13 +436,9 @@ class Settings(BaseSettings):
             provider=provider,
             app_id=self.payments_domestic_app_id,
             secret_key=self.payments_domestic_secret_key,
-            environment=self.payments_domestic_env,
             # A trailing slash would make every path double-slashed, which some
             # gateways answer with a redirect and others with a 404.
-            base_url=(
-                self.payments_domestic_base_url
-                or PROVIDER_API_ROOTS[provider][self.payments_domestic_env]
-            ).rstrip("/"),
+            base_url=(self.payments_domestic_base_url or PROVIDER_API_ROOTS[provider]).rstrip("/"),
             webhook_secret=(
                 self.payments_domestic_webhook_secret or self.payments_domestic_secret_key
             ),

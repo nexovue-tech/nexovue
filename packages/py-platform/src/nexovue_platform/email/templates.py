@@ -57,6 +57,15 @@ TEMPLATES: Final[dict[Message, tuple[str, str]]] = {
         "The link expires in {expires_in} and can be used once. If it expires, reply to "
         "this email and we will send a new one.",
     ),
+    Message.PAYMENT_FAILED: (
+        "Payment for {organization} failed — your plan ends on {until}",
+        "We could not collect the payment for {organization}'s {plan} plan, and the "
+        "payment provider has stopped retrying.\n\n"
+        "The plan stays active until {until}. Update the card or bank account with your "
+        "provider, or subscribe again here, before then:\n\n{link}\n\n"
+        "If nothing is paid by {until}, {organization} moves to the free plan. "
+        "Nothing you have already sent is deleted.",
+    ),
     Message.INVITE: (
         "{inviter} invited you to {organization} on nexovue",
         "{inviter} invited you to join {organization} on nexovue as {role_phrase}.\n\n"

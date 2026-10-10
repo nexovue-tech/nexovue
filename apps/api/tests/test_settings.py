@@ -31,6 +31,9 @@ KNOWN_VARIABLES = (
     "RATE_LIMIT_ENABLED",
     "TRUSTED_PROXY_COUNT",
     "CORS_ALLOWED_ORIGINS",
+    # The developer's `.env` holds a test key, which production refuses.
+    "PAYMENTS_DOMESTIC_APP_ID",
+    "PAYMENTS_DOMESTIC_SECRET_KEY",
 )
 
 

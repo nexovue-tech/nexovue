@@ -115,10 +115,10 @@ EVENT_KINDS: Final = {
     # Every invoice raised and the mandate spent. The arrangement is over, which
     # is what this product does about it either way.
     "subscription.completed": BillingEventKind.SUBSCRIPTION_CANCELLED,
-    # A charge failed and is being retried; then retries were exhausted. Both are
-    # a payment that did not happen, and neither ends the arrangement.
+    # A charge failed and is being retried: one card declining is not a reason to
+    # act. Then retries were exhausted, which is — the grace period starts.
     "subscription.pending": BillingEventKind.PAYMENT_FAILED,
-    "subscription.halted": BillingEventKind.PAYMENT_FAILED,
+    "subscription.halted": BillingEventKind.SUBSCRIPTION_HALTED,
 }
 
 # Accepted and acted on by nobody: authentication is the step before activation
@@ -276,7 +276,9 @@ class RazorpayPaymentProcessor:
             raise BillingError("the processor created a plan without an id")
         return plan_ref
 
-    async def cancel(self, *, subscription_ref: str) -> CancellationOutcome:
+    async def cancel(
+        self, *, subscription_ref: str, immediately: bool = False
+    ) -> CancellationOutcome:
         """End a subscription, and treat one that is already over as success.
 
         `cancel_at_cycle_end` is 1: **future charges stop and the period the
@@ -304,7 +306,7 @@ class RazorpayPaymentProcessor:
             await self._call(
                 "POST",
                 SUBSCRIPTION_CANCEL_PATH.format(subscription_ref=subscription_ref),
-                {"cancel_at_cycle_end": CANCEL_AT_CYCLE_END},
+                {"cancel_at_cycle_end": CANCEL_NOW if immediately else CANCEL_AT_CYCLE_END},
             )
         except BillingError:
             # Idempotent by *asking*, not by pattern-matching an error message:
@@ -364,10 +366,15 @@ class RazorpayPaymentProcessor:
             raise BillingError(
                 "the delivery names no subscription, so there is nothing to resolve it against"
             )
+        delivery_id = received.get(DELIVERY_HEADER, "").strip()
+        if not delivery_id:
+            # Refused rather than recorded under "": deduplication is keyed on this,
+            # and a blank one makes every later blank delivery a "duplicate".
+            raise BillingError("the delivery carries no event id, so it cannot be deduplicated")
         return BillingEvent(
             kind=kind,
             subscription_ref=subscription_ref,
-            delivery_id=received.get(DELIVERY_HEADER, ""),
+            delivery_id=delivery_id,
             amount=_charged(document),
         )
 

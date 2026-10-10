@@ -64,7 +64,11 @@ class BillingEventKind(Enum):
     SUBSCRIPTION_ACTIVATED = "subscription_activated"
     SUBSCRIPTION_CANCELLED = "subscription_cancelled"
     PAYMENT_SUCCEEDED = "payment_succeeded"
+    # One charge failed and the processor is retrying it.
     PAYMENT_FAILED = "payment_failed"
+    # The processor has stopped retrying: no more money will come unless the
+    # customer acts. The arrangement is not over — a fixed card resumes it.
+    SUBSCRIPTION_HALTED = "subscription_halted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,9 +374,15 @@ class PaymentProcessor(Protocol):
         """
         ...
 
-    async def cancel(self, *, subscription_ref: str) -> CancellationOutcome:
+    async def cancel(
+        self, *, subscription_ref: str, immediately: bool = False
+    ) -> CancellationOutcome:
         """End a subscription. Idempotent: cancelling a cancelled one is not an
         error, because a customer pressing twice must not see a failure.
+
+        By default at the end of the period already paid for; `immediately` for
+        an arrangement whose organization is going, or a checkout superseded
+        before it charged.
 
         **The outcome says whether an event is still coming**, and the caller
         needs it: a subscription the processor reports as already over will

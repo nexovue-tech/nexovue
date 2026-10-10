@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from typing import Final
 
 from sqlalchemy import Row, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,7 @@ from nexovue_api.data.postgres.models import (
     BillingSubscription,
     BillingWebhookDelivery,
     Organization,
+    User,
 )
 
 
@@ -73,6 +75,43 @@ async def subscription_by_processor_ref(
         BillingSubscription.subscription_ref == subscription_ref,
     )
     found: BillingSubscription | None = await session.scalar(statement)
+    return found
+
+
+# Every state in which an arrangement can still debit: a checkout that may yet be
+# authorised, a live mandate, and one halted for failed payments, which the
+# processor resumes if the card is fixed.
+LIVE_STATUSES: Final = ("pending", "active", "lapsed")
+
+
+async def live_subscriptions(
+    session: AsyncSession, *, org_id: uuid.UUID
+) -> Sequence[BillingSubscription]:
+    """Every arrangement of this organization that could still take money, oldest first."""
+    statement = (
+        select(BillingSubscription)
+        .where(
+            BillingSubscription.org_id == org_id,
+            BillingSubscription.status.in_(LIVE_STATUSES),
+        )
+        .order_by(BillingSubscription.created_at, BillingSubscription.id)
+    )
+    return (await session.scalars(statement)).all()
+
+
+async def owner_addresses(session: AsyncSession, *, org_id: uuid.UUID) -> list[str]:
+    """Where a billing notice goes: every current owner of the organization."""
+    statement = select(User.email).where(
+        User.org_id == org_id, User.role == "owner", User.removed_at.is_(None)
+    )
+    return list(await session.scalars(statement))
+
+
+async def lock_organization(session: AsyncSession, *, org_id: uuid.UUID) -> Organization | None:
+    """The organization row, held until this transaction ends, so two checkouts —
+    two tabs — take turns rather than each seeing no live arrangement."""
+    statement = select(Organization).where(Organization.id == org_id).with_for_update()
+    found: Organization | None = await session.scalar(statement)
     return found
 
 

@@ -56,6 +56,9 @@ class Message(Enum):
     INVITE = "invite"
     # F31. The first owner of an organization nexovue onboarded by hand.
     WELCOME_OWNER = "welcome_owner"
+    # The processor gave up collecting a subscription's payments; the paid plan
+    # holds for a grace period, and this says until when (readiness group 3).
+    PAYMENT_FAILED = "payment_failed"
 
 
 @dataclass(frozen=True, slots=True)

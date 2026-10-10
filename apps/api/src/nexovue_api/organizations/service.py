@@ -48,6 +48,8 @@ from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nexovue_api.audit import service as audit
+from nexovue_api.billing import ConfiguredProcessor
+from nexovue_api.billing import service as billing
 from nexovue_api.checkfiles.service import tenant_prefix as check_files_prefix
 from nexovue_api.data.objectstore import ObjectStore
 from nexovue_api.data.postgres.models import Organization
@@ -93,19 +95,30 @@ class ErasureOutcome:
 
 
 async def request_deletion(
-    session: AsyncSession, *, org_id: uuid.UUID, actor_user_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    payments: ConfiguredProcessor | None,
 ) -> DeletionAccepted:
     """Close the account now and record that its data is owed an erasure.
 
-    Everything here is one transaction, and it is deliberately small: a mark, a
-    scrub and an audit entry. Nothing that can run for minutes belongs in the
-    request that a person is waiting on.
+    Everything here is one transaction, and it is deliberately small: stopping
+    the charges, a mark, a scrub and an audit entry. Nothing that can run for
+    minutes belongs in the request that a person is waiting on.
+
+    **The charges stop first** (readiness blocker 20). Closing used to delete the
+    subscription rows and never tell the processor, which kept debiting with no
+    record left to refund from. If the processor cannot be reached the closing
+    is refused and nothing is scrubbed.
     """
     organization = await queries.lock_organization(session, org_id)
     if organization is None:
         raise NotFoundError("No such organization.")
     if organization.deleted_at is not None:
         raise ConflictError(ALREADY_DELETED)
+
+    await billing.stop_every_charge(session, configured=payments, org_id=org_id)
 
     deleted_at = datetime.now(UTC)
     _scrub(organization, deleted_at=deleted_at)

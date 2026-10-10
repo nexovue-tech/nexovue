@@ -518,7 +518,7 @@ Owned entirely by `apps/api`, applied with Alembic. Selected tables (columns abb
 | `checks` / `integrations` | Synthetic check and cloud/database connector definitions |
 | `deploy_events` / `project_webhook_secrets` | Deploy notifications and the signing secrets that authenticate them |
 | `usage_daily` / `usage_daily_services` / `usage_ingest_offsets` | Per-day, per-project counters and the distinct-service set that determines the billable quantity |
-| `billing_subscriptions` / `billing_webhook_deliveries` | Paid-arrangement state and a global (not per-tenant) idempotency record of processed webhook deliveries |
+| `billing_subscriptions` / `billing_webhook_deliveries` | Paid-arrangement state (`pending`, `active` — with `grace_until` while a failed payment's 7-day grace runs — `cancelled`, `lapsed`) and a global (not per-tenant) idempotency record of processed webhook deliveries, whose event id may not be blank. One live checkout per organization; closing an organization cancels its arrangements at the processor first; the scheduler's hourly `billing.end_lapsed_grace` ends a grace that has run out |
 | `source_maps` | Metadata pointing at object-store bytes — never the bytes themselves |
 | `project_first_traces` | The sampling carve-out counter described in §5.3 and §13, Flow 6 |
 | `audit_log` | Every consequential action, with the actor and target recorded but never a credential value |

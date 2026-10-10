@@ -45,6 +45,7 @@ from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from nexovue_scheduler.billing import END_LAPSED_GRACE_TASK
 from nexovue_scheduler.checks import ScheduledCheck, load_enabled_checks
 from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.jobs.expiry import SWEEP_EXPIRED_TASK
@@ -77,6 +78,10 @@ ATTEMPT_PRUNE_ENTRY: Final = "sweep:alert-attempts"
 # The rows that lapse rather than being removed (ADR-020): sessions, links, results, jobs.
 EXPIRY_SWEEP_SECONDS: Final = 60
 EXPIRY_SWEEP_ENTRY: Final = "sweep:expired-rows"
+
+# A payment's grace period is days long; an hour late ending it costs nothing.
+GRACE_SWEEP_SECONDS: Final = 3600
+GRACE_SWEEP_ENTRY: Final = "sweep:payment-grace"
 
 # A sweep judges every heartbeat, or every unattached file, in one task.
 SWEEP_SOFT_TIME_LIMIT_SECONDS: Final = 50
@@ -342,6 +347,7 @@ class Beat:
                 SHARED_QUEUE,
             ),
             EXPIRY_SWEEP_ENTRY: (SWEEP_EXPIRED_TASK, EXPIRY_SWEEP_SECONDS, SHARED_QUEUE),
+            GRACE_SWEEP_ENTRY: (END_LAPSED_GRACE_TASK, GRACE_SWEEP_SECONDS, SHARED_QUEUE),
         }
         entries: dict[str, Entry] = {}
         now = self._monotonic()

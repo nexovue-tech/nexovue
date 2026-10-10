@@ -55,7 +55,6 @@ SETTINGS: Final = DomesticPaymentSettings(
     provider="razorpay",
     app_id="rzp_test_APPID",
     secret_key=API_SECRET,
-    environment="sandbox",
     base_url=BASE_URL,
     webhook_secret=WEBHOOK_SECRET,
 )
@@ -208,6 +207,17 @@ class TestSignatureVerification:
         with pytest.raises(SignatureInvalidError):
             _processor().event_from_webhook(body=body, headers={DELIVERY_HEADER: DELIVERY_ID})
 
+    def test_a_delivery_with_no_event_id_is_refused(self) -> None:
+        """Deduplication is keyed on the event id. Taken as `""` when absent, the
+        first id-less delivery was recorded and every later one dropped as its
+        duplicate — a cancellation included — and one for another organization
+        broke the unique index: a 500 the processor resends for ever."""
+        body = _payload()
+        headers = {name: value for name, value in _headers(body).items() if name != DELIVERY_HEADER}
+
+        with pytest.raises(BillingError, match="event id"):
+            _processor().event_from_webhook(body=body, headers=headers)
+
     def test_header_names_are_matched_without_regard_to_case(self) -> None:
         """HTTP field names are case-insensitive and a dict has already lost it."""
         body = _payload()
@@ -228,7 +238,7 @@ class TestTranslation:
             ("subscription.cancelled", BillingEventKind.SUBSCRIPTION_CANCELLED),
             ("subscription.completed", BillingEventKind.SUBSCRIPTION_CANCELLED),
             ("subscription.pending", BillingEventKind.PAYMENT_FAILED),
-            ("subscription.halted", BillingEventKind.PAYMENT_FAILED),
+            ("subscription.halted", BillingEventKind.SUBSCRIPTION_HALTED),
         ],
     )
     def test_each_event_this_product_acts_on(self, event: str, kind: BillingEventKind) -> None:
@@ -458,6 +468,20 @@ class TestCancelling:
         await _processor(handler).cancel(subscription_ref=SUBSCRIPTION_REF)
 
         assert sent == [{"cancel_at_cycle_end": 1}]
+
+    async def test_ending_one_now_does_not_wait_for_the_cycle(self) -> None:
+        """An organization being deleted: there is no customer left to finish a
+        paid period for, and every later debit would be taken from somebody we
+        no longer hold a record of."""
+        sent: list[dict[str, object]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"id": SUBSCRIPTION_REF, "status": "cancelled"})
+
+        await _processor(handler).cancel(subscription_ref=SUBSCRIPTION_REF, immediately=True)
+
+        assert sent == [{"cancel_at_cycle_end": 0}]
 
     async def test_a_subscription_that_never_charged_is_ended_now(self) -> None:
         """The one case the vendor refuses, because there is no cycle under way

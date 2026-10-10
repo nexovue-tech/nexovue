@@ -142,6 +142,9 @@ def _app_in(env: str) -> FastAPI:
         **TEST_ENVIRONMENT,
         "ENV": env,
         "OTLP_ENDPOINT": "https://ingest.nexovue.com",
+        # Not the developer's test key from `.env`: production refuses one, and
+        # what is under test here is the console, not payments.
+        "PAYMENTS_DOMESTIC_APP_ID": "",
     }
     return create_app(Settings(**environment))  # type: ignore[arg-type]
 

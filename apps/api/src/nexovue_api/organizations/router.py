@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, status
 
 from nexovue_api.auth.policy import MayEndTheOrganization
+from nexovue_api.billing.dependencies import OptionalDomesticPayments
 from nexovue_api.deps import DbSession
 from nexovue_api.organizations import service
 from nexovue_api.organizations.dependencies import ApplicationResources, TenantErasure
@@ -29,6 +30,7 @@ async def delete_organization(
     db: DbSession,
     resources: ApplicationResources,
     erasure: TenantErasure,
+    payments: OptionalDomesticPayments,
     background: BackgroundTasks,
 ) -> DeletionAccepted:
     """202, not 204: the account is closed now and the erasure has not finished.
@@ -41,7 +43,7 @@ async def delete_organization(
     again afterwards.
     """
     accepted = await service.request_deletion(
-        db, org_id=identity.org_id, actor_user_id=identity.user.id
+        db, org_id=identity.org_id, actor_user_id=identity.user.id, payments=payments
     )
     background.add_task(
         service.erase_after_response,

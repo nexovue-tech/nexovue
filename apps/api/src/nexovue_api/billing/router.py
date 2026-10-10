@@ -41,7 +41,7 @@ from nexovue_api.billing.schemas import (
     PaymentHistory,
     StartCheckoutRequest,
 )
-from nexovue_api.deps import AppSettings, DbSession
+from nexovue_api.deps import AppSettings, DbSession, OptionalEmail
 from nexovue_api.errors.exceptions import InvalidRequestError
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -62,10 +62,14 @@ async def receive_billing_event(
     db: DbSession,
     request: Request,
     payments: DomesticPayments,
+    email: OptionalEmail,
+    settings: AppSettings,
 ) -> DeliveryAcknowledgement:
     return await service.record_from_webhook(
         db,
         configured=payments,
+        email=email,
+        app_base_url=settings.app_base_url,
         body=await _bounded_body(request),
         # The whole header set, because which ones carry the signature, the
         # timestamp and the delivery id is the processor's business and

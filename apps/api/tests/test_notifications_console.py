@@ -118,6 +118,12 @@ async def test_every_message_renders_so_none_is_only_exercised_in_production() -
             "link": "https://app.nexovue.com/invite?token=abc",
             "expires_in": "7 days",
         },
+        Message.PAYMENT_FAILED: {
+            "organization": "Acme Inc",
+            "plan": "Pro",
+            "until": "17 October 2026",
+            "link": "https://app.nexovue.com/settings/billing",
+        },
         Message.INVITE: {
             "inviter": "Raj",
             "organization": "Acme Inc",

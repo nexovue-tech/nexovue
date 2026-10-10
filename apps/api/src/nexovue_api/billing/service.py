@@ -31,11 +31,12 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Final
 
 import structlog
+from nexovue_platform.email import EmailError, EmailSender, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.billing import (
@@ -106,6 +107,12 @@ MALFORMED_DELIVERY_DETAIL: Final = (
 STATUS_PENDING: Final = "pending"
 STATUS_ACTIVE: Final = "active"
 STATUS_CANCELLED: Final = "cancelled"
+STATUS_LAPSED: Final = "lapsed"
+
+# How long a paid plan holds after the processor stops retrying a failed payment
+# — founder decision (b), 2026-10-10. Long enough to fix a card, short enough not
+# to give much service away. The scheduler's grace sweep ends it.
+GRACE_PERIOD: Final = timedelta(days=7)
 
 # Where an organization lands with no live arrangement, and the tier every
 # organization starts on. Named rather than spelled `"free"` at each use: it is
@@ -123,6 +130,8 @@ async def record_from_webhook(
     configured: ConfiguredProcessor,
     body: bytes,
     headers: dict[str, str],
+    email: EmailSender | None = None,
+    app_base_url: str = "",
 ) -> DeliveryAcknowledgement:
     """Act on a billing event, if and only if the processor signed it."""
     try:
@@ -163,7 +172,15 @@ async def record_from_webhook(
     ):
         return DeliveryAcknowledgement(outcome=DeliveryOutcome.DUPLICATE)
 
-    await _apply(session, event=event, subscription=subscription)
+    grace_started = await _apply(session, event=event, subscription=subscription)
+    if grace_started:
+        await _tell_the_owners_payment_failed(
+            session,
+            subscription=subscription,
+            email=email,
+            app_base_url=app_base_url,
+            delivery_id=event.delivery_id,
+        )
     queries.add_delivery(
         session,
         BillingWebhookDelivery(
@@ -184,33 +201,91 @@ async def record_from_webhook(
 
 async def _apply(
     session: AsyncSession, *, event: BillingEvent, subscription: BillingSubscription
-) -> None:
+) -> bool:
     """Bring the arrangement's row in line with what the event said.
 
-    The row is resolved by the caller and always exists here. It used to be
-    created on the spot when a webhook named one we had not seen — possible only
-    while the event carried an organization id in the processor's own tags. With
-    that gone an unknown reference cannot be attributed at all, so the
-    caller refuses it there rather than inventing an owner here.
+    The row is resolved by the caller and always exists here. Returns whether a
+    grace period started, which is the one outcome the owners are written to about.
     """
     now = datetime.now(UTC)
     match event.kind:
         case BillingEventKind.SUBSCRIPTION_ACTIVATED:
+            if subscription.status == STATUS_CANCELLED:
+                # Webhooks arrive out of order. An activation landing after the
+                # cancellation is the older news, and acting on it would put a
+                # customer who left back on a paid tier.
+                _log.warning(
+                    "an activation arrived for an arrangement already cancelled; ignored",
+                    processor=subscription.processor,
+                )
+                return False
             subscription.status = STATUS_ACTIVE
+            subscription.grace_until = None
             # Left alone once set: a re-activation after a hold is not the day
             # the customer started paying, and an invoice question asks for the
             # first one.
             subscription.activated_at = subscription.activated_at or now
         case BillingEventKind.SUBSCRIPTION_CANCELLED:
             _mark_ended(subscription, at=now)
-        case BillingEventKind.PAYMENT_SUCCEEDED | BillingEventKind.PAYMENT_FAILED:
-            # A charge does not change what the arrangement *is*. A failed one
-            # ends a subscription only when the processor says so, in its own
-            # event, and acting on it here would cancel a customer over a card
-            # that declined once.
-            return
+        case BillingEventKind.PAYMENT_SUCCEEDED:
+            # Money arrived: a grace period is over, and an arrangement that lapsed
+            # for want of it is live again — nobody ended it, it was only unpaid.
+            subscription.grace_until = None
+            if subscription.status != STATUS_LAPSED:
+                return False
+            subscription.status = STATUS_ACTIVE
+        case BillingEventKind.PAYMENT_FAILED:
+            # One card declining is not a reason to act: the processor retries,
+            # and says so in its own event when it gives up.
+            return False
+        case BillingEventKind.SUBSCRIPTION_HALTED:
+            # The processor has stopped retrying. The plan holds for the grace
+            # period, set once: a repeated halt must not move the end date out.
+            if subscription.status != STATUS_ACTIVE or subscription.grace_until is not None:
+                return False
+            subscription.grace_until = now + GRACE_PERIOD
+            return True
 
     await _move_plan(session, org_id=subscription.org_id, to_slug=_plan_after(subscription))
+    return False
+
+
+async def _tell_the_owners_payment_failed(
+    session: AsyncSession,
+    *,
+    subscription: BillingSubscription,
+    email: EmailSender | None,
+    app_base_url: str,
+    delivery_id: str,
+) -> None:
+    """Write to the owners that the plan ends on a date, unless they pay.
+
+    Never fails the webhook: the grace period is recorded either way, and a
+    delivery refused over a mail problem would be redelivered and start nothing.
+    """
+    if email is None or subscription.grace_until is None:
+        _log.warning("a payment-failed notice could not be sent: mail is not configured")
+        return
+    organization = await queries.find_organization(session, org_id=subscription.org_id)
+    plan = await usage_queries.find_plan(session, slug=subscription.plan_slug)
+    data = {
+        "organization": organization.name if organization else "your organization",
+        "plan": plan.name if plan else subscription.plan_slug,
+        "until": subscription.grace_until.strftime("%d %B %Y"),
+        "link": f"{app_base_url.rstrip('/')}/settings/billing",
+    }
+    for address in await queries.owner_addresses(session, org_id=subscription.org_id):
+        try:
+            await email.send(
+                to=address,
+                message=Message.PAYMENT_FAILED,
+                data=data,
+                # One notice per owner per halt, however often the processor
+                # redelivers the event.
+                idempotency_key=f"payment-failed:{delivery_id}:{address}",
+            )
+        except EmailError:
+            _log.exception("a payment-failed notice could not be sent")
 
 
 def _mark_ended(subscription: BillingSubscription, *, at: datetime) -> None:
@@ -478,11 +553,15 @@ async def _period(
 CHARGE_KINDS: Final = (
     BillingEventKind.PAYMENT_SUCCEEDED.value,
     BillingEventKind.PAYMENT_FAILED.value,
+    BillingEventKind.SUBSCRIPTION_HALTED.value,
 )
 
 _CHARGE_OUTCOMES: Final = {
     BillingEventKind.PAYMENT_SUCCEEDED.value: ChargeOutcome.PAID,
     BillingEventKind.PAYMENT_FAILED.value: ChargeOutcome.FAILED,
+    # The last of the retries failed; to a customer reading their history it is
+    # the charge that did not go through.
+    BillingEventKind.SUBSCRIPTION_HALTED.value: ChargeOutcome.FAILED,
 }
 
 # How far back one read goes. A mandate authorises twelve monthly cycles before
@@ -689,6 +768,19 @@ LIVE_SUBSCRIPTION_DETAIL: Final = (
 
 NOTHING_TO_CANCEL_DETAIL: Final = "This organization has no live subscription to cancel."
 
+OTHER_PROCESSOR_DETAIL: Final = (
+    "This subscription was not taken out through the processor this "
+    "deployment is configured with, so it cannot be cancelled here."
+)
+
+# An organization cannot be closed while something can still charge it and we
+# cannot stop it: closing would leave the debits running with no record to
+# refund from. Retrying is safe; a charge after closing is not.
+CHARGES_NOT_STOPPED_DETAIL: Final = (
+    "This organization still has a subscription and the payment provider could not be "
+    "reached to stop it, so the organization has not been closed. Try again in a moment."
+)
+
 
 # What a customer is told when the processor refuses or cannot be reached.
 #
@@ -795,14 +887,18 @@ async def begin_plan_change(
     if await usage_queries.find_plan(session, slug=request.plan_slug) is None:
         raise InvalidRequestError(PLAN_UNKNOWN_DETAIL)
 
-    live = await queries.latest_subscription(session, org_id=organization.id)
-    if live is not None and live.status == STATUS_ACTIVE:
+    # Two tabs take turns here: the second waits on the first's lock, then sees
+    # its pending row and supersedes it, so one checkout is ever live.
+    await queries.lock_organization(session, org_id=organization.id)
+    live = await queries.live_subscriptions(session, org_id=organization.id)
+    active = [subscription for subscription in live if subscription.status == STATUS_ACTIVE]
+    if active:
         # Two sentences for one refusal, because the remedies differ: the
         # customer who asked for the tier they are on has nothing to do, and the
         # one asking for another has one thing to do first.
         raise ConflictError(
             ALREADY_ON_PLAN_DETAIL
-            if live.plan_slug == request.plan_slug
+            if active[-1].plan_slug == request.plan_slug
             else LIVE_SUBSCRIPTION_DETAIL
         )
 
@@ -820,6 +916,12 @@ async def begin_plan_change(
     # take, an unreachable host, a rate limit — reached the unhandled-exception
     # handler and was answered 500. A customer read "nexovue is broken" when the
     # truth was "your provider said no", and the reason sat in the log.
+    # An earlier checkout never authorised, or an arrangement lapsed for failed
+    # payments, could still be authorised or resumed and debit beside the new one.
+    for superseded in live:
+        _require_processor(superseded, configured)
+        await _end_now(session, configured=configured, subscription=superseded)
+
     try:
         checkout = await configured.processor.begin_checkout(
             org_id=organization.id,
@@ -874,37 +976,98 @@ async def begin_plan_change(
 async def end_subscription(
     session: AsyncSession, *, configured: ConfiguredProcessor, organization: Organization
 ) -> None:
-    """Ask the processor to end this organization's arrangement.
+    """Ask the processor to end this organization's arrangements — every one that
+    could still take money, not only the newest.
 
-    **The tier does not move here either.** The processor decides when the
-    arrangement ends — at its own period boundary, not on a date this module
-    computes — and `SUBSCRIPTION_CANCELLED` is what drops the organization back
-    to the free tier. That is why there is no proration rule in this file: there
-    is no proration decision to implement.
+    **The tier does not move here for a live mandate.** The processor decides when
+    it ends — at its own period boundary, not on a date this module computes —
+    and `SUBSCRIPTION_CANCELLED` is what drops the organization back to the free
+    tier. A checkout never authorised, or one lapsed for failed payments, holds
+    no paid period, so it is ended now.
     """
-    subscription = await queries.latest_subscription(session, org_id=organization.id)
-    if subscription is None or subscription.status == STATUS_CANCELLED:
+    live = await queries.live_subscriptions(session, org_id=organization.id)
+    if not live:
         raise ConflictError(NOTHING_TO_CANCEL_DETAIL)
-    if subscription.processor != configured.name:
-        # Two processors are expected. Cancelling an arrangement through the
-        # wrong one would name a subscription the processor has never heard of,
-        # and its "not found" would be reported as a failed cancellation.
-        raise ConflictError(
-            "This subscription was not taken out through the processor this "
-            "deployment is configured with, so it cannot be cancelled here."
+    for subscription in live:
+        _require_processor(subscription, configured)
+    for subscription in live:
+        if subscription.status != STATUS_ACTIVE:
+            await _end_now(session, configured=configured, subscription=subscription)
+            continue
+        outcome = await _cancel(configured, subscription, immediately=False)
+        if outcome is CancellationOutcome.ALREADY_ENDED:
+            # No event is coming — the processor was asked and said it is already
+            # over. Waiting for one would leave the organization on a paid tier
+            # forever over a cancellation that happened where we were not listening.
+            _mark_ended(subscription, at=datetime.now(UTC))
+            await _move_plan(session, org_id=subscription.org_id, to_slug=_plan_after(subscription))
+
+
+async def stop_every_charge(
+    session: AsyncSession, *, configured: ConfiguredProcessor | None, org_id: uuid.UUID
+) -> None:
+    """For an organization that is closing: end every arrangement now, at the processor.
+
+    Called before anything is scrubbed, inside the same transaction. A processor
+    that cannot be reached — or none configured while an arrangement is live —
+    refuses the closing outright: a retry is safe, a debit taken after the
+    records are gone is not.
+    """
+    live = await queries.live_subscriptions(session, org_id=org_id)
+    if not live:
+        return
+    if configured is None:
+        _log.error("an organization with a live subscription cannot close: payments unconfigured")
+        raise DependencyUnavailableError(CHARGES_NOT_STOPPED_DETAIL)
+    for subscription in live:
+        _require_processor(subscription, configured)
+    for subscription in live:
+        await _end_now(
+            session,
+            configured=configured,
+            subscription=subscription,
+            refused_detail=CHARGES_NOT_STOPPED_DETAIL,
         )
+
+
+async def _end_now(
+    session: AsyncSession,
+    *,
+    configured: ConfiguredProcessor,
+    subscription: BillingSubscription,
+    refused_detail: str = CANCEL_UNAVAILABLE_DETAIL,
+) -> None:
+    """Cancel at the processor immediately, and record it ended here at once."""
+    await _cancel(configured, subscription, immediately=True, refused_detail=refused_detail)
+    was_active = subscription.status == STATUS_ACTIVE
+    _mark_ended(subscription, at=datetime.now(UTC))
+    if was_active:
+        await _move_plan(session, org_id=subscription.org_id, to_slug=_plan_after(subscription))
+
+
+async def _cancel(
+    configured: ConfiguredProcessor,
+    subscription: BillingSubscription,
+    *,
+    immediately: bool,
+    refused_detail: str = CANCEL_UNAVAILABLE_DETAIL,
+) -> CancellationOutcome:
     try:
-        outcome = await configured.processor.cancel(subscription_ref=subscription.subscription_ref)
+        return await configured.processor.cancel(
+            subscription_ref=subscription.subscription_ref, immediately=immediately
+        )
     except BillingError as refused:
         _log.warning(
             "a subscription could not be cancelled",
             processor=configured.name,
             reason=str(refused),
         )
-        raise DependencyUnavailableError(CANCEL_UNAVAILABLE_DETAIL) from refused
-    if outcome is CancellationOutcome.ALREADY_ENDED:
-        # No event is coming — the processor was asked and said it is already
-        # over. Waiting for one would leave the organization on a paid tier
-        # forever over a cancellation that happened where we were not listening.
-        _mark_ended(subscription, at=datetime.now(UTC))
-        await _move_plan(session, org_id=subscription.org_id, to_slug=_plan_after(subscription))
+        raise DependencyUnavailableError(refused_detail) from refused
+
+
+def _require_processor(subscription: BillingSubscription, configured: ConfiguredProcessor) -> None:
+    if subscription.processor != configured.name:
+        # Two processors are expected. Cancelling an arrangement through the
+        # wrong one would name a subscription the processor has never heard of,
+        # and its "not found" would be reported as a failed cancellation.
+        raise ConflictError(OTHER_PROCESSOR_DETAIL)

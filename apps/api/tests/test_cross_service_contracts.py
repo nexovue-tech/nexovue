@@ -403,6 +403,7 @@ def test_every_task_beat_and_the_api_add_is_one_a_worker_runs() -> None:
     from nexovue_platform.checks import task as check_tasks
 
     from nexovue_scheduler import beat
+    from nexovue_scheduler.billing import END_LAPSED_GRACE_TASK
     from nexovue_scheduler.jobs.expiry import SWEEP_EXPIRED_TASK
     from nexovue_scheduler.jobs.registry import registered
 
@@ -419,6 +420,7 @@ def test_every_task_beat_and_the_api_add_is_one_a_worker_runs() -> None:
         alert_tasks.EVALUATE_NEW_ERRORS_TASK,
         alert_tasks.SEND_TEST_TASK,
         SWEEP_EXPIRED_TASK,
+        END_LAPSED_GRACE_TASK,
         *beat.POLL_TASKS.values(),
     }
 

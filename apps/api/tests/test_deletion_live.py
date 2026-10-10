@@ -34,7 +34,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, cast
 from urllib.parse import urlsplit
 
 import clickhouse_connect
@@ -42,11 +42,12 @@ import pytest
 from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.asyncclient import AsyncClient
 from live import require_stack
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.queries import load_identity
+from nexovue_api.billing import BillingError, CancellationOutcome, ConfiguredProcessor
 from nexovue_api.checkfiles.service import object_key as check_file_key
 from nexovue_api.checkfiles.service import tenant_prefix as check_files_prefix
 from nexovue_api.data.clickhouse.base import TenantScopedPurger
@@ -76,6 +77,7 @@ from nexovue_api.data.postgres.models import (
     Notification,
     NotificationAttempt,
     NotificationChannel,
+    Organization,
     PlanGrant,
     ServiceLastSeen,
     SessionRecord,
@@ -87,7 +89,11 @@ from nexovue_api.data.postgres.models import (
     ViewAsTicketRecord,
     WebsitePayment,
 )
-from nexovue_api.errors.exceptions import ConflictError, NotFoundError
+from nexovue_api.errors.exceptions import (
+    ConflictError,
+    DependencyUnavailableError,
+    NotFoundError,
+)
 from nexovue_api.organizations import service
 from nexovue_api.organizations.tables import (
     DELETED_DIRECTLY,
@@ -793,6 +799,32 @@ def _purge_for(clickhouse: AsyncClient, tenant: Tenant) -> TenantPurge:
     return TenantPurge(TenantScopedPurger(clickhouse, str(tenant.org_id)))
 
 
+class _Processor:
+    """The fixture's arrangements were taken through a processor named "test";
+    this stands in for it and records every cancellation it is asked for."""
+
+    def __init__(self, *, reachable: bool = True) -> None:
+        self.reachable = reachable
+        self.ended_now: list[str] = []
+
+    async def cancel(
+        self, *, subscription_ref: str, immediately: bool = False
+    ) -> CancellationOutcome:
+        if not self.reachable:
+            raise BillingError("the processor is not answering")
+        if immediately:
+            self.ended_now.append(subscription_ref)
+        return CancellationOutcome.REQUESTED
+
+
+def _payments(processor: _Processor | None = None) -> ConfiguredProcessor:
+    return ConfiguredProcessor(
+        name="test",
+        processor=cast(Any, processor or _Processor()),
+        processor_currencies=frozenset(),
+    )
+
+
 async def _delete_and_erase(
     db: AsyncSession,
     clickhouse: AsyncClient,
@@ -802,7 +834,9 @@ async def _delete_and_erase(
     wait_seconds: float,
 ) -> service.ErasureOutcome:
     """The whole endpoint, both phases, as a caller would drive it."""
-    await service.request_deletion(db, org_id=tenant.org_id, actor_user_id=tenant.user_id)
+    await service.request_deletion(
+        db, org_id=tenant.org_id, actor_user_id=tenant.user_id, payments=_payments()
+    )
     await db.flush()
     return await service.erase(db, _purge_for(clickhouse, tenant), store, wait_seconds=wait_seconds)
 
@@ -946,7 +980,9 @@ async def test_the_request_alone_ends_every_session_and_closes_the_door(
     deleted, spared = two_tenants
     assert await load_identity(db, user_id=deleted.user_id, org_id=deleted.org_id) is not None
 
-    await service.request_deletion(db, org_id=deleted.org_id, actor_user_id=deleted.user_id)
+    await service.request_deletion(
+        db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments()
+    )
     await db.flush()
 
     assert await load_identity(db, user_id=deleted.user_id, org_id=deleted.org_id) is None
@@ -968,7 +1004,9 @@ async def test_the_tombstone_keeps_no_words_the_customer_wrote(
     )
     slug, name = original.one()
 
-    await service.request_deletion(db, org_id=deleted.org_id, actor_user_id=deleted.user_id)
+    await service.request_deletion(
+        db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments()
+    )
     await db.flush()
 
     scrubbed = await db.execute(
@@ -980,17 +1018,69 @@ async def test_the_tombstone_keeps_no_words_the_customer_wrote(
     assert slug not in new_slug and name not in new_name
 
 
+async def test_closing_an_organization_stops_every_charge_first(
+    db: AsyncSession, two_tenants: tuple[Tenant, Tenant]
+) -> None:
+    """Blocker 20. Closing deleted the subscription rows and never told the
+    processor, which kept debiting with no record left to refund from."""
+    deleted, spared = two_tenants
+    live = list(
+        await db.scalars(
+            select(BillingSubscription.subscription_ref).where(
+                BillingSubscription.org_id == deleted.org_id
+            )
+        )
+    )
+    processor = _Processor()
+
+    await service.request_deletion(
+        db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments(processor)
+    )
+
+    assert live and sorted(processor.ended_now) == sorted(live)
+    spared_live = await db.scalar(
+        select(func.count()).where(
+            BillingSubscription.org_id == spared.org_id, BillingSubscription.status == "active"
+        )
+    )
+    assert spared_live == ROWS_PER_TABLE, "another organization's subscriptions were touched"
+
+
+async def test_an_organization_whose_charges_cannot_be_stopped_is_not_closed(
+    db: AsyncSession, two_tenants: tuple[Tenant, Tenant]
+) -> None:
+    """A retry is safe; a debit after the records are gone is not."""
+    deleted, _ = two_tenants
+
+    with pytest.raises(DependencyUnavailableError):
+        await service.request_deletion(
+            db,
+            org_id=deleted.org_id,
+            actor_user_id=deleted.user_id,
+            payments=_payments(_Processor(reachable=False)),
+        )
+    with pytest.raises(DependencyUnavailableError):
+        await service.request_deletion(
+            db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=None
+        )
+
+    organization = await db.get(Organization, deleted.org_id)
+    assert organization is not None and organization.deleted_at is None
+
+
 async def test_a_second_deletion_request_is_refused(
     db: AsyncSession, two_tenants: tuple[Tenant, Tenant]
 ) -> None:
     """The first `deleted_at` is when the erasure became owed; nothing may move it."""
     deleted, _ = two_tenants
     accepted = await service.request_deletion(
-        db, org_id=deleted.org_id, actor_user_id=deleted.user_id
+        db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments()
     )
     await db.flush()
     with pytest.raises(ConflictError):
-        await service.request_deletion(db, org_id=deleted.org_id, actor_user_id=deleted.user_id)
+        await service.request_deletion(
+            db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments()
+        )
     assert accepted.organization_id == deleted.org_id
 
 
@@ -1025,7 +1115,9 @@ async def test_an_unfinished_erasure_stays_owed_and_a_finished_one_does_not(
     deleted, _ = two_tenants_with_telemetry
     assert deleted.org_id not in await service.erasures_still_owed(db)
 
-    await service.request_deletion(db, org_id=deleted.org_id, actor_user_id=deleted.user_id)
+    await service.request_deletion(
+        db, org_id=deleted.org_id, actor_user_id=deleted.user_id, payments=_payments()
+    )
     await db.flush()
     assert deleted.org_id in await service.erasures_still_owed(db)
 
