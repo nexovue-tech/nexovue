@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.llm_observability import queries
 from nexovue_api.llm_observability.schemas import LLMCallListResponse, LLMCallSummary
 from nexovue_api.window import receive_window
+
+# The groups one read returns. Grouped by span name, which the customer
+# controls: a name carrying an id makes every call its own group, and without a
+# cap the read grew until ClickHouse refused it at its row ceiling — an error
+# where a shortened list belongs. Found by the readiness review of 2026-10-10.
+MAX_LLM_CALLS: Final = 500
 
 
 async def list_llm_calls(
@@ -39,6 +45,7 @@ async def list_llm_calls(
         "model_attr": queries.GEN_AI_MODEL_ATTRIBUTE,
         "input_tokens_attr": queries.GEN_AI_INPUT_TOKENS_ATTRIBUTE,
         "output_tokens_attr": queries.GEN_AI_OUTPUT_TOKENS_ATTRIBUTE,
+        "limit": MAX_LLM_CALLS + 1,
     }
     if service_match:
         parameters["service_match"] = service_match
@@ -53,7 +60,8 @@ async def list_llm_calls(
     return LLMCallListResponse(
         window_start=from_time,
         window_end=to_time,
-        calls=[_to_summary(row) for row in rows],
+        calls=[_to_summary(row) for row in rows[:MAX_LLM_CALLS]],
+        truncated=len(rows) > MAX_LLM_CALLS,
     )
 
 

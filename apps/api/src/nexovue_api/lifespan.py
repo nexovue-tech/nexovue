@@ -37,7 +37,7 @@ from nexovue_api.health.checks import dependency_checks
 from nexovue_api.health.registry import CheckRegistry
 from nexovue_api.ratelimit.limiter import RateLimiter
 from nexovue_api.ratelimit.policy import FixedPlanLimits
-from nexovue_api.settings import Settings
+from nexovue_api.settings import DEFAULT_CLICKHOUSE_HTTP_PORT, ClickHouseDsn, Settings
 from nexovue_api.signup.first_run import seed_first_organization
 from nexovue_api.superadmin.seed import seed_super_admin
 
@@ -111,6 +111,8 @@ class Resources:
     session_factory: async_sessionmaker[AsyncSession]
     redis: Redis
     clickhouse: ClickHouseConnection
+    # Tenant erasure only; see Settings.clickhouse_writer_dsn.
+    clickhouse_writer: ClickHouseConnection
     sessions: SessionStore
     rate_limiter: RateLimiter
     # None when no object store is configured. Source map upload and
@@ -224,22 +226,25 @@ async def open_resources(settings: Settings) -> Resources:
         decode_responses=True,
     )
 
-    async def connect_clickhouse() -> AsyncClient:
-        return await clickhouse_connect.get_async_client(
-            host=settings.clickhouse_host,
-            port=settings.clickhouse_port,
-            username=settings.clickhouse_dsn.username or "",
-            password=settings.clickhouse_dsn.password or "",
-            database=settings.clickhouse_database,
-            secure=settings.clickhouse_secure,
-            connector_limit=settings.clickhouse_pool_size,
-            connector_limit_per_host=settings.clickhouse_pool_size,
-            settings={
-                "max_execution_time": settings.clickhouse_query_timeout_seconds,
-                "max_result_rows": settings.clickhouse_max_result_rows,
-                "result_overflow_mode": CLICKHOUSE_RESULT_OVERFLOW_MODE,
-            },
-        )
+    def connect_clickhouse(dsn: ClickHouseDsn) -> Callable[[], Awaitable[AsyncClient]]:
+        async def connect() -> AsyncClient:
+            return await clickhouse_connect.get_async_client(
+                host=dsn.host or "",
+                port=dsn.port or DEFAULT_CLICKHOUSE_HTTP_PORT,
+                username=dsn.username or "",
+                password=dsn.password or "",
+                database=(dsn.path or "/").lstrip("/"),
+                secure=settings.clickhouse_secure,
+                connector_limit=settings.clickhouse_pool_size,
+                connector_limit_per_host=settings.clickhouse_pool_size,
+                settings={
+                    "max_execution_time": settings.clickhouse_query_timeout_seconds,
+                    "max_result_rows": settings.clickhouse_max_result_rows,
+                    "result_overflow_mode": CLICKHOUSE_RESULT_OVERFLOW_MODE,
+                },
+            )
+
+        return connect
 
     return Resources(
         object_store=await _open_object_store(settings),
@@ -247,7 +252,8 @@ async def open_resources(settings: Settings) -> Resources:
         engine=engine,
         session_factory=session_factory,
         redis=redis,
-        clickhouse=ClickHouseConnection(connect_clickhouse),
+        clickhouse=ClickHouseConnection(connect_clickhouse(settings.clickhouse_dsn)),
+        clickhouse_writer=ClickHouseConnection(connect_clickhouse(settings.clickhouse_writer_dsn)),
         sessions=SessionStore(redis, ttl_seconds=settings.session_ttl_seconds),
         rate_limiter=RateLimiter(redis),
         probes=(
@@ -313,6 +319,7 @@ async def close_resources(resources: Resources) -> None:
     if resources.evaluations is not None:
         await resources.evaluations.close()
     await resources.clickhouse.close()
+    await resources.clickhouse_writer.close()
     await resources.redis.aclose()
     await resources.engine.dispose()
 

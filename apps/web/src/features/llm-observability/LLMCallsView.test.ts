@@ -57,6 +57,7 @@ const UNLABELED_CALL: LLMCallSummary = {
 const BASE: LLMCallsViewProps = {
   windowLabel: "the last hour",
   calls: [COMPLETE_CALL, UNLABELED_CALL],
+  truncated: false,
   isPending: false,
   isError: false,
   onRetry: () => {},
@@ -181,6 +182,18 @@ describe("searching by service or model", () => {
     act(() => clear?.click());
 
     expect(cleared).toBe(1);
+  });
+});
+
+describe("a list cut at the cap", () => {
+  it("says the busiest are shown rather than implying this is everything", async () => {
+    const text = await readable({ truncated: true });
+
+    expect(text).toContain("more model-call groups than this list holds");
+  });
+
+  it("says nothing about a cap the list did not reach", async () => {
+    expect(await readable()).not.toContain("than this list holds");
   });
 });
 

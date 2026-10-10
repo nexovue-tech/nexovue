@@ -11,7 +11,9 @@ trustworthy or worthless:
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -371,10 +373,10 @@ async def test_the_registry_forgets_a_project_no_one_is_watching() -> None:
     repository = _repository(TENANT_A, FakeTailStore([]))
 
     first = registry.subscribe(
-        repository, tenant_id=TENANT_A, project_id=PROJECT, filters=LogFilters()
+        repository, tenant_id=TENANT_A, project_id=PROJECT, filters=LogFilters(), person="p"
     )
     second = registry.subscribe(
-        repository, tenant_id=TENANT_A, project_id=PROJECT, filters=LogFilters()
+        repository, tenant_id=TENANT_A, project_id=PROJECT, filters=LogFilters(), person="p"
     )
     assert registry.live_feeds == 1
 
@@ -390,16 +392,94 @@ async def test_two_tenants_never_share_a_feed() -> None:
     store = FakeTailStore([])
 
     mine = registry.subscribe(
-        _repository(TENANT_A, store), tenant_id=TENANT_A, project_id=PROJECT, filters=LogFilters()
+        _repository(TENANT_A, store),
+        tenant_id=TENANT_A,
+        project_id=PROJECT,
+        filters=LogFilters(),
+        person="p",
     )
     theirs = registry.subscribe(
-        _repository(TENANT_B, store), tenant_id=TENANT_B, project_id=PROJECT, filters=LogFilters()
+        _repository(TENANT_B, store),
+        tenant_id=TENANT_B,
+        project_id=PROJECT,
+        filters=LogFilters(),
+        person="p",
     )
 
     assert registry.live_feeds == 2
     mine.close()
     theirs.close()
     assert registry.live_feeds == 0
+
+
+async def test_a_person_may_hold_only_so_many_tails() -> None:
+    """A tail is a ClickHouse read a second, and WebSockets pass under the rate
+    limiter: this is the only bound on how many one person can start."""
+    registry = tail.TailRegistry()
+    repository = _repository(TENANT_A, FakeTailStore([]))
+    held = [
+        registry.subscribe(
+            repository, tenant_id=TENANT_A, project_id=PROJECT, filters=LogFilters(), person="ravi"
+        )
+        for _ in range(tail.MAX_TAILS_PER_PERSON)
+    ]
+
+    with pytest.raises(tail.TailRefusedError, match="Close one"):
+        registry.subscribe(
+            repository, tenant_id=TENANT_A, project_id=PROJECT, filters=LogFilters(), person="ravi"
+        )
+
+    # A colleague is not held to Ravi's count, and closing one frees a slot.
+    registry.subscribe(
+        repository, tenant_id=TENANT_A, project_id=PROJECT, filters=LogFilters(), person="meera"
+    ).close()
+    held[0].close()
+    held[0].close()  # closing twice frees one slot, not two
+    held.append(
+        registry.subscribe(
+            repository, tenant_id=TENANT_A, project_id=PROJECT, filters=LogFilters(), person="ravi"
+        )
+    )
+    with pytest.raises(tail.TailRefusedError):
+        registry.subscribe(
+            repository, tenant_id=TENANT_A, project_id=PROJECT, filters=LogFilters(), person="ravi"
+        )
+    for viewer in held:
+        viewer.close()
+
+
+async def test_an_organization_may_hold_only_so_many_tails() -> None:
+    registry = tail.TailRegistry()
+    repository = _repository(TENANT_A, FakeTailStore([]))
+    held = [
+        registry.subscribe(
+            repository,
+            tenant_id=TENANT_A,
+            project_id=PROJECT,
+            filters=LogFilters(),
+            person=f"person-{n}",
+        )
+        for n in range(tail.MAX_TAILS_PER_ORGANIZATION)
+    ]
+
+    with pytest.raises(tail.TailRefusedError, match="organization"):
+        registry.subscribe(
+            repository,
+            tenant_id=TENANT_A,
+            project_id=PROJECT,
+            filters=LogFilters(),
+            person="someone-new",
+        )
+    # Another organization's people are not counted against this one.
+    registry.subscribe(
+        _repository(TENANT_B, FakeTailStore([])),
+        tenant_id=TENANT_B,
+        project_id=PROJECT,
+        filters=LogFilters(),
+        person="other",
+    ).close()
+    for viewer in held:
+        viewer.close()
 
 
 # -------------------------------------------------------------- a failed feed
@@ -422,3 +502,34 @@ async def test_a_store_that_keeps_failing_ends_the_tail_rather_than_hanging() ->
     with pytest.raises(tail.TailEndedError):
         await asyncio.wait_for(viewer.next_batch(), timeout=2)
     viewer.close()
+
+
+# ------------------------------------------------- whose project a tail may open
+
+
+class _Session:
+    async def __aenter__(self) -> _Session:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+
+async def test_a_tail_opens_only_on_a_project_the_caller_owns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without this, a made-up project id started a poll loop that read
+    ClickHouse every second, matching nothing, for as long as the socket lived."""
+    owned = uuid.uuid4()
+    org = uuid.uuid4()
+
+    async def find_project(_session: object, *, org_id: uuid.UUID, project_id: uuid.UUID) -> object:
+        return object() if (org_id, project_id) == (org, owned) else None
+
+    monkeypatch.setattr(tail, "find_project", find_project)
+    resources: Any = SimpleNamespace(session_factory=_Session)
+    identity: Any = SimpleNamespace(org_id=org)
+
+    assert await tail._refusal_for(resources, identity, str(owned)) is None
+    assert await tail._refusal_for(resources, identity, str(uuid.uuid4())) is not None
+    assert await tail._refusal_for(resources, identity, "not-a-uuid") is not None

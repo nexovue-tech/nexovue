@@ -67,6 +67,9 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-nexovue}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-nexovue_dev}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      # The read-only account (users.d/reader.xml). A development default only:
+      # both deployment files demand it.
+      CLICKHOUSE_READER_PASSWORD: ${CLICKHOUSE_READER_PASSWORD:-nexovue_reader_dev}
       # No MALLOC_CONF here, and that is the conclusion rather than an omission.
       #
       # The drift is real: 2.27 GiB resident against 1.24 GiB allocated after
@@ -88,6 +91,7 @@ services:
       # at 0, and it needs a controlled measurement rather than one sample.
     volumes:
       - clickhouse-data:/var/lib/clickhouse
+      - ../clickhouse/users.d/reader.xml:/etc/clickhouse-server/users.d/reader.xml:ro
       # One file, not the directory: config.d already holds the image's own
       # docker_related_config.xml, and mounting over it leaves ClickHouse
       # listening on loopback where no other container can reach it.

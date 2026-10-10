@@ -100,15 +100,16 @@ WHERE tenant_id = {{tenant_id:String}}
 GROUP BY service_name, span_name, model_name
 {_MODEL_MATCH_PLACEHOLDER}
 ORDER BY call_count DESC
+LIMIT {{limit:UInt32}}
 """
 
 
 def llm_calls_sql(*, service_match: bool, model_match: bool) -> str:
     """The statement, narrowed to what the caller asked for.
 
-    Both reach the statement rather than the answer — there is no cap here to
-    protect the way `metrics.MAX_METRICS` does, but narrowing after grouping
-    would still cost a second full scan for nothing a customer asked to pay for.
+    Both reach the statement rather than the answer: `LIMIT` cuts the list at
+    `service.MAX_LLM_CALLS`, so narrowing the rows that came back would answer
+    "the matches among the busiest five hundred" rather than the question.
     """
     return LLM_CALLS_SQL.replace(
         _SERVICE_MATCH_PLACEHOLDER, SERVICE_MATCH_CLAUSE if service_match else ""

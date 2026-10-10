@@ -186,7 +186,13 @@ class Settings(BaseSettings):
 
     # --- infrastructure, named identically in every service -----------------
     postgres_dsn: PostgresDsn
+    # The reader: every screen and the assistant read ClickHouse through it
+    # (deploy/clickhouse/users.d/reader.xml). It can only read, and the server
+    # bounds its memory and time whatever a query asks for.
     clickhouse_dsn: ClickHouseDsn
+    # The writer: tenant erasure alone (purge/). Separate so a read path can
+    # never hold a credential that deletes.
+    clickhouse_writer_dsn: ClickHouseDsn
     redis_url: RedisDsn
 
     # --- Postgres pool: sized here, never left to the library default -------

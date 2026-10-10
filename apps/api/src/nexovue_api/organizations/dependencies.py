@@ -38,7 +38,7 @@ async def get_tenant_purge(
     entry this request borrowed.
     """
     return TenantPurge(
-        TenantScopedPurger(await resources.clickhouse.client(), str(identity.org_id))
+        TenantScopedPurger(await resources.clickhouse_writer.client(), str(identity.org_id))
     )
 
 

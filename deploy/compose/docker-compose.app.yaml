@@ -102,6 +102,7 @@ services:
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:?set CLICKHOUSE_DB}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:?set CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_READER_PASSWORD: ${CLICKHOUSE_READER_PASSWORD:?set CLICKHOUSE_READER_PASSWORD}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "0"
 
   postgres:
@@ -217,7 +218,9 @@ services:
       start_period: 20s
     environment:
       <<: *control-plane-env
-      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # Reads as the read-only account; erasure alone holds the writer (docs/changes/clickhouse-protects-itself).
+      CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      CLICKHOUSE_WRITER_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
       # nexovue's cloud onboards customers after they pay (ADR-008, D10). A
       # self-hosted install uses the on-prem file, where signup stays open.
       SIGNUP_ENABLED: "${SIGNUP_ENABLED:-false}"
@@ -315,7 +318,8 @@ services:
       # The service alert rules read the telemetry store (F21, ADR-012). This worker
       # alone runs those sweeps. TODO(hosting): a read-only ClickHouse user; the
       # API's account is used until the deployment provisions one.
-      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # Reads only: the read-only account.
+      CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -335,7 +339,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          # What dev measured it needs: 256M OOM-killed its pool children at startup
+          # and the queue never drained (docker-compose.yaml, scheduler-light).
+          memory: 768M
 
   # F21. Delivers alerts — email, Slack, Teams, Discord, PagerDuty, webhooks —
   # from the outbox, and nothing else: a receiver that takes its full ten seconds
@@ -362,7 +368,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 384M
 
   # ---------- intelligence (Phase 2) ----------
   # Anomaly detection, cross-signal correlation and the LLM call that turns a

@@ -38,3 +38,6 @@ class LLMCallListResponse(BaseModel):
     window_start: IsoTimestamp
     window_end: IsoTimestamp
     calls: list[LLMCallSummary] = Field(default_factory=list)
+    # True when the project reported more groups than one read returns; the
+    # busiest are the ones shown.
+    truncated: bool = False

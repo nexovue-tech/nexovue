@@ -31,6 +31,8 @@ export interface LLMCallListResponse {
   window_start: string;
   window_end: string;
   calls: LLMCallSummary[];
+  /** True when the project reported more groups than one read returns. */
+  truncated: boolean;
 }
 
 export const llmCallsQueryKey = (projectId: string, timeWindow: TimeWindow, narrowing: string) =>

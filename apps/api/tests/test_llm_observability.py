@@ -323,3 +323,24 @@ async def test_a_model_filter_narrows_after_grouping() -> None:
 
     assert queries.MODEL_MATCH_CLAUSE in store.last_statement
     assert store.last_parameters["model_match"] == "claude"
+
+
+# ------------------------------------------------------------------------- cap
+
+
+async def test_more_groups_than_one_read_returns_are_cut_and_say_so() -> None:
+    """A span name carrying an id makes every call its own group; uncapped, the
+    read grew until ClickHouse refused it as an error instead of a short list."""
+    store = _store([_row("payment", f"chat {n}", "claude-fable-5-1") for n in range(501)])
+
+    calls = await _calls(store)
+
+    assert store.last_parameters["limit"] == service.MAX_LLM_CALLS + 1
+    assert len(calls.calls) == service.MAX_LLM_CALLS
+    assert calls.truncated
+
+
+async def test_a_list_within_the_cap_is_not_marked_truncated() -> None:
+    calls = await _calls(_store())
+
+    assert not calls.truncated

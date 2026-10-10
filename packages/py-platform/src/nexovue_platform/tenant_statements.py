@@ -32,11 +32,20 @@ _STRING_LITERALS: Final = re.compile(r"'(?:[^'\\]|\\.|'')*'")
 # defence; a caller would have to defeat both this and the client's own settings.
 MAX_EXECUTION_SECONDS: Final = 30
 MAX_RESULT_ROWS: Final = 500_000
+# Memory, too (blocker 14): with only time and rows bounded, one heavy read could
+# take the shared server to its ceiling, where every query fails — the workers'
+# inserts included. A GROUP BY spills to disk at half the cap before it is
+# refused. Sized from the development stack's 4 GiB server until the load test on
+# the hosting target replaces it.
+MAX_MEMORY_BYTES: Final = 1 << 30
+MAX_EXTERNAL_GROUP_BY_BYTES: Final = 1 << 29
 
 READ_SETTINGS: Final[dict[str, Any]] = {
     "max_execution_time": MAX_EXECUTION_SECONDS,
     "max_result_rows": MAX_RESULT_ROWS,
     "result_overflow_mode": "throw",
+    "max_memory_usage": MAX_MEMORY_BYTES,
+    "max_bytes_before_external_group_by": MAX_EXTERNAL_GROUP_BY_BYTES,
 }
 
 

@@ -1,0 +1,50 @@
+<!--
+  The reader: the account the API's screens and the scheduler's alert sweeps
+  read ClickHouse with (docs/changes/clickhouse-protects-itself).
+
+  Before it, every service connected as the account the server was created
+  with, holding every grant — DROP, FILE, URL, S3 — so tenant separation rested
+  on the code-level check alone and nothing outside the code bounded a read.
+
+  readonly = 2, not 1: every read sends its bounds as query settings
+  (READ_SETTINGS), which readonly = 1 refuses. What stops a read from raising
+  those bounds is the constraints below — enforced by the server, whatever the
+  code sends.
+
+  Each bounded setting has a minimum as well as a maximum, because 0 means
+  "unlimited" for both of them and passes a maximum alone.
+-->
+<clickhouse>
+  <profiles>
+    <reader>
+      <readonly>2</readonly>
+      <max_memory_usage>1073741824</max_memory_usage>
+      <max_bytes_before_external_group_by>536870912</max_bytes_before_external_group_by>
+      <max_execution_time>30</max_execution_time>
+      <constraints>
+        <max_memory_usage>
+          <min>1</min>
+          <max>1073741824</max>
+        </max_memory_usage>
+        <max_execution_time>
+          <min>1</min>
+          <max>30</max>
+        </max_execution_time>
+      </constraints>
+    </reader>
+  </profiles>
+
+  <users>
+    <nexovue_reader>
+      <password from_env="CLICKHOUSE_READER_PASSWORD"/>
+      <profile>reader</profile>
+      <quota>default</quota>
+      <networks>
+        <ip>::/0</ip>
+      </networks>
+      <grants>
+        <query>GRANT SELECT ON nexovue.*</query>
+      </grants>
+    </nexovue_reader>
+  </users>
+</clickhouse>

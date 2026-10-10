@@ -99,6 +99,7 @@ services:
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:?set CLICKHOUSE_DB}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:?set CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_READER_PASSWORD: ${CLICKHOUSE_READER_PASSWORD:?set CLICKHOUSE_READER_PASSWORD}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "0"
 
   postgres:
@@ -220,7 +221,9 @@ services:
     image: *image-base
     environment:
       <<: *control-plane-env
-      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # Reads as the read-only account; erasure alone holds the writer (docs/changes/clickhouse-protects-itself).
+      CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      CLICKHOUSE_WRITER_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
       # **The way in.** This install has nobody to invite its first person, so
       # the first organization and its owner are created at boot from these.
       # Demanded rather than passed through: an install that starts with no
@@ -294,7 +297,8 @@ services:
       # The service alert rules read the telemetry store (F21, ADR-012). This worker
       # alone runs those sweeps. TODO(hosting): a read-only ClickHouse user; the
       # API's account is used until the deployment provisions one.
-      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # Reads only: the read-only account.
+      CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
     depends_on:
       clickhouse:
         condition: service_healthy

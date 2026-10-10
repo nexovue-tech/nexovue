@@ -60,6 +60,7 @@ export function LLMCallsScreen() {
     <LLMCallsView
       windowLabel={windowPhrase}
       calls={calls.data?.calls ?? []}
+      truncated={calls.data?.truncated ?? false}
       isPending={calls.isPending}
       isError={calls.isError}
       error={calls.error}
@@ -128,6 +129,7 @@ function useDebounced(value: string, delayMs: number): string {
 export interface LLMCallsViewProps {
   windowLabel: string;
   calls: readonly LLMCallSummary[];
+  truncated: boolean;
   isPending: boolean;
   isError: boolean;
   error?: unknown;
@@ -144,6 +146,7 @@ export interface LLMCallsViewProps {
 export function LLMCallsView({
   windowLabel,
   calls,
+  truncated,
   isPending,
   isError,
   error,
@@ -197,7 +200,19 @@ export function LLMCallsView({
       ) : calls.length === 0 ? (
         <EmptyCalls narrowed={narrowed} onClearFilters={onClearFilters} />
       ) : (
-        <CallsTable calls={calls} />
+        <>
+          <CallsTable calls={calls} />
+          {/* The cap applies after the search, so a narrowed list that was still
+              cut was cut on what matched — "this project reports more" there would
+              blame the project for the search's own ceiling. */}
+          {truncated ? (
+            <p className="shrink-0 px-4 py-3 text-ink-dim text-xs">
+              {narrowed
+                ? "More model-call groups match this search than this list holds. The busiest are shown."
+                : "This project reports more model-call groups than this list holds. The busiest are shown."}
+            </p>
+          ) : null}
+        </>
       )}
     </div>
   );

@@ -210,7 +210,9 @@ services:
       POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
       # The API reads ClickHouse over HTTP but takes the same clickhouse:// DSN
       # shape the workers use, and derives the port from it.
-      CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
+      # Reads as the read-only account; erasure alone holds the writer (docs/changes/clickhouse-protects-itself).
+      CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_READER_DSN:-clickhouse://nexovue_reader:nexovue_reader_dev@clickhouse:8123/nexovue}
+      CLICKHOUSE_WRITER_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
       REDIS_URL: redis://redis:6379/0
       # Source map bytes. The generic S3 API only — SeaweedFS here,
       # AWS S3 in deployment. The dev credentials are the ones in
@@ -457,7 +459,8 @@ services:
       <<: *scheduler-env
       # The service alert rules read the telemetry store (F21, ADR-012). This worker
       # alone runs those sweeps, so it alone is handed the store.
-      CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
+      # Reads only: the read-only account.
+      CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_READER_DSN:-clickhouse://nexovue_reader:nexovue_reader_dev@clickhouse:8123/nexovue}
     depends_on:
       clickhouse:
         condition: service_healthy

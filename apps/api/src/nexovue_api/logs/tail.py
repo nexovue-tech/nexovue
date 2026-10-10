@@ -30,19 +30,23 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections import deque
+import uuid
+from collections import Counter, deque
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
 
-from nexovue_api.auth.dependencies import CurrentIdentity, TenantRepository
+from nexovue_api.auth.dependencies import CurrentIdentity, Identity, TenantRepository
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
+from nexovue_api.deps import get_resources
+from nexovue_api.lifespan import Resources
 from nexovue_api.logs.search import LogFilters, LogLine
+from nexovue_api.projects.queries import find_project
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +376,18 @@ class TailEndedError(RuntimeError):
 
 FeedKey = tuple[str, str]
 
+# How many tails one person, and one organization, may hold open in this API
+# process. A tail is a ClickHouse read a second for as long as it is open, and
+# WebSockets pass under the rate limiter, so this is the only bound on how many
+# a person can start (docs/changes/clickhouse-protects-itself). Per process, as
+# every in-process limit is: several API containers each allow this many.
+MAX_TAILS_PER_PERSON: Final = 5
+MAX_TAILS_PER_ORGANIZATION: Final = 20
+
+
+class TailRefusedError(RuntimeError):
+    """A tail that may not be opened, with the sentence the subscriber is shown."""
+
 
 class TailFeed:
     """One poll loop over one project, fanned out to everyone watching it."""
@@ -401,8 +417,18 @@ class TailFeed:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def attach(self, filters: LogFilters, capacity: int = VIEWER_BUFFER_CAPACITY) -> TailViewer:
-        viewer = TailViewer(filters, release=self._detach, capacity=capacity)
+    def attach(
+        self,
+        filters: LogFilters,
+        capacity: int = VIEWER_BUFFER_CAPACITY,
+        on_release: Callable[[], None] | None = None,
+    ) -> TailViewer:
+        def release(viewer: TailViewer) -> None:
+            self._detach(viewer)
+            if on_release is not None:
+                on_release()
+
+        viewer = TailViewer(filters, release=release, capacity=capacity)
         self._viewers.append(viewer)
         if self._task is None:
             self._task = asyncio.create_task(self._poll_until_idle())
@@ -474,6 +500,8 @@ class TailRegistry:
     """
 
     _feeds: dict[FeedKey, TailFeed] = field(default_factory=dict)
+    _held_by_person: Counter[str] = field(default_factory=Counter)
+    _held_by_organization: Counter[str] = field(default_factory=Counter)
 
     @property
     def live_feeds(self) -> int:
@@ -486,14 +514,32 @@ class TailRegistry:
         tenant_id: str,
         project_id: str,
         filters: LogFilters,
+        person: str,
         capacity: int = VIEWER_BUFFER_CAPACITY,
     ) -> TailViewer:
+        if self._held_by_person[person] >= MAX_TAILS_PER_PERSON:
+            raise TailRefusedError(
+                f"You already have {MAX_TAILS_PER_PERSON} live tails open. "
+                "Close one to open another."
+            )
+        if self._held_by_organization[tenant_id] >= MAX_TAILS_PER_ORGANIZATION:
+            raise TailRefusedError(
+                f"Your organization already has {MAX_TAILS_PER_ORGANIZATION} live tails open. "
+                "Close one to open another."
+            )
         key = (tenant_id, project_id)
         feed = self._feeds.get(key)
         if feed is None:
             feed = TailFeed(repository, project_id=project_id, on_idle=self._forget(key))
             self._feeds[key] = feed
-        return feed.attach(filters, capacity=capacity)
+        self._held_by_person[person] += 1
+        self._held_by_organization[tenant_id] += 1
+
+        def release_slot() -> None:
+            self._held_by_person[person] -= 1
+            self._held_by_organization[tenant_id] -= 1
+
+        return feed.attach(filters, capacity=capacity, on_release=release_slot)
 
     def _forget(self, key: FeedKey) -> Callable[[], None]:
         """What a feed calls once nobody is watching it any more."""
@@ -517,6 +563,7 @@ async def tail(
     websocket: WebSocket,
     identity: CurrentIdentity,
     repository: TenantRepository,
+    resources: Annotated[Resources, Depends(get_resources)],
     project_id: Annotated[str, Query(description="Project to tail")],
     q: Annotated[str | None, Query(description="Case-insensitive substring of the body")] = None,
     service: Annotated[str | None, Query(description="Exactly one service name")] = None,
@@ -528,18 +575,35 @@ async def tail(
     dependency chain every HTTP read uses; neither the query string nor any later
     message can name a tenant.
 
-    The project is not checked against Postgres here. That check needs a database
-    session, and a dependency taking one would hold a pooled connection for the
-    whole life of the tail; it also protects nothing, because the repository is
-    bound to the session's tenant and a project belonging to anyone else simply
-    matches no rows.
+    The project is checked against Postgres before the tail starts, with a session
+    opened and closed for that alone — a dependency would hold a pooled connection
+    for the whole life of the tail. The repository's tenant binding already made a
+    stranger's project match no rows; the check is what stops a made-up project
+    id from starting a poll loop that reads ClickHouse every second for nothing.
     """
+    refusal = await _refusal_for(resources, identity, project_id)
     filters = LogFilters(service_name=service, min_severity=min_severity, search=q)
-    viewer = registry.subscribe(
-        repository, tenant_id=str(identity.org_id), project_id=project_id, filters=filters
-    )
+    viewer = None
+    if refusal is None:
+        try:
+            viewer = registry.subscribe(
+                repository,
+                tenant_id=str(identity.org_id),
+                project_id=project_id,
+                filters=filters,
+                person=str(identity.user.id),
+            )
+        except TailRefusedError as refused:
+            refusal = str(refused)
 
     await websocket.accept()
+    if viewer is None:
+        # Accepted first so the reason reaches the screen: a socket refused at the
+        # handshake can say nothing but 403.
+        with contextlib.suppress(Exception):
+            await websocket.send_text(TailFailed(detail=refusal or "").model_dump_json())
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     try:
         await websocket.send_text(TailReady(project_id=project_id).model_dump_json())
         async with asyncio.TaskGroup() as connection:
@@ -551,6 +615,17 @@ async def tail(
         await _report_failure(websocket, ended.exceptions)
     finally:
         viewer.close()
+
+
+async def _refusal_for(resources: Resources, identity: Identity, project_id: str) -> str | None:
+    """Why this tail may not open, or None when it may."""
+    try:
+        project = uuid.UUID(project_id)
+    except ValueError:
+        return "That is not a project."
+    async with resources.session_factory() as session:
+        owned = await find_project(session, org_id=identity.org_id, project_id=project)
+    return None if owned is not None else "That is not a project."
 
 
 async def _obey_client(websocket: WebSocket, viewer: TailViewer) -> None:
