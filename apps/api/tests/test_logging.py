@@ -117,6 +117,15 @@ def test_a_heartbeat_token_never_reaches_a_log_line(log_format: str) -> None:
     assert token not in access and "/api/v1/heartbeat/" in access
 
 
+def test_a_support_view_ticket_never_reaches_a_log_line() -> None:
+    """Group 9, A6: the ticket is a credential for a support view, and it travels in
+    the query string, which the access line records."""
+    ticket = "tk_" + KNOWN_SECRET
+    access = redact_credentials(f'10.0.0.1:5 - "GET /api/v1/support/view-as?ticket={ticket}" 303')
+
+    assert ticket not in access and "/api/v1/support/view-as?ticket=" in access
+
+
 @pytest.mark.parametrize(
     ("header", "expected"),
     [

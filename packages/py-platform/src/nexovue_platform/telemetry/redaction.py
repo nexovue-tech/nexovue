@@ -35,6 +35,10 @@ _CREDENTIALS_IN_URL: Final = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:/@]+)
 # `/api/v1/heartbeat/<token>` — the path segment after `heartbeat/`, whatever follows it.
 _HEARTBEAT_TOKEN_IN_PATH: Final = re.compile(r"(/heartbeat/)[^\s/?#\"']+")
 
+# `/support/view-as?ticket=<ticket>` — a one-time credential for a support view,
+# in the query string the access line records.
+_TICKET_IN_QUERY: Final = re.compile(r"([?&]ticket=)[^\s&#\"']+")
+
 
 def is_secret_key(key: str) -> bool:
     """Whether a value logged under this key must never be written out."""
@@ -43,9 +47,10 @@ def is_secret_key(key: str) -> bool:
 
 
 def redact_credentials(text: str) -> str:
-    """Remove connection-string passwords and heartbeat tokens, keeping the rest."""
+    """Remove connection-string passwords, heartbeat tokens and support tickets."""
     without_passwords = _CREDENTIALS_IN_URL.sub(rf"\1:{PLACEHOLDER}@", text)
-    return _HEARTBEAT_TOKEN_IN_PATH.sub(rf"\1{PLACEHOLDER}", without_passwords)
+    without_tokens = _HEARTBEAT_TOKEN_IN_PATH.sub(rf"\1{PLACEHOLDER}", without_passwords)
+    return _TICKET_IN_QUERY.sub(rf"\1{PLACEHOLDER}", without_tokens)
 
 
 def redact_event(

@@ -172,6 +172,8 @@ def user(organization: Organization) -> User:
         name="Ada",
         password_hash=hash_password(PASSWORD),
         role="owner",
+        # What the column holds for every stored user; an unsaved one has no default yet.
+        failed_logins=0,
     )
     user.id = uuid.uuid4()
     return user

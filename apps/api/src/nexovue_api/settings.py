@@ -424,8 +424,8 @@ class Settings(BaseSettings):
     # the hosted service: customers there arrive through signup, and an
     # organization conjured at boot would belong to nobody.
     #
-    # **Read once, on the first run, and never again** — unlike the operator
-    # above, whose password this rewrites every boot. After the first boot the
+    # **Read once, on the first run, and never again** — as the operator's
+    # above is (group 9, A3). After the first boot the
     # account is the customer's: they change the password in the console, and a
     # restart that reset it to whatever is in a compose file would take their
     # account away from them. It is the convention a self-hoster expects

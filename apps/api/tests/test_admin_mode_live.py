@@ -182,6 +182,29 @@ async def test_a_wrong_password_takes_nothing(db: AsyncSession, sessions: Sessio
     assert stamped.admin_until is None
 
 
+async def test_with_two_factor_enrolled_the_password_alone_takes_nothing(
+    db: AsyncSession, sessions: SessionStore
+) -> None:
+    """Group 9, A3: the operator who enrolled a second factor proves it with a code.
+
+    Accepting the password as well left the strongest account on the platform
+    with a weaker way in than the one it chose.
+    """
+    operator = await _person(db, SUPER_ADMIN_ROLE)
+    operator.totp_secret = b"sealed"
+    operator.totp_confirmed_at = datetime.now(UTC)
+    await db.flush()
+    token, _ = await sessions.create(user_id=str(operator.id), org_id=str(operator.org_id))
+
+    with pytest.raises(PermissionDeniedError) as refused:
+        await _entered(_Audit(), sessions, operator, token, password=PASSWORD, code=None)
+
+    assert refused.value.detail == adminmode.CODE_REQUIRED
+    stamped = await sessions.peek(token)
+    assert stamped is not None
+    assert stamped.admin_until is None
+
+
 async def test_a_refused_attempt_is_written_down_before_the_refusal(
     db: AsyncSession, sessions: SessionStore
 ) -> None:

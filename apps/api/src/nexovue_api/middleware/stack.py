@@ -13,6 +13,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from nexovue_api.middleware.body_limit import RequestBodyLimitMiddleware
 from nexovue_api.middleware.correlation import CorrelationIdMiddleware
+from nexovue_api.middleware.cross_origin import CrossOriginMiddleware
 from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
 from nexovue_api.middleware.metrics import RequestMetricsMiddleware
 from nexovue_api.middleware.ratelimit import RateLimitMiddleware
@@ -29,6 +30,8 @@ def install_middleware(app: FastAPI, settings: Settings) -> None:
     # Outside the rate limiter, whose auth tier peeks at the body: every byte any
     # layer reads is counted.
     app.add_middleware(RequestBodyLimitMiddleware)
+    # Before anything reads the body or counts the request against a person.
+    app.add_middleware(CrossOriginMiddleware)
     app.add_middleware(RequestLogMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
     # Outside everything that can answer early — a 413, a 429 — so those count too.

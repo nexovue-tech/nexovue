@@ -39,11 +39,6 @@ EXEMPT: Final = {
     # Resolves an ingest key to its tenant. It is what *establishes* the tenant,
     # so it cannot be scoped by one.
     "find_live_key_by_prefix",
-    # Asks whether this project has already stored this delivery. Reached only
-    # after the signature proved the caller holds the project's secret, so the
-    # project id is established rather than claimed — and the organization is
-    # derived from that same secret moments earlier.
-    "delivery_already_recorded",
     # Signup uniqueness, both of them. An address and a key prefix are unique
     # across the whole system, not within a tenant, and scoping either would let
     # two organizations register the same one.

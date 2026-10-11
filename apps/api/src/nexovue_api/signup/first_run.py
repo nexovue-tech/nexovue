@@ -12,8 +12,8 @@ anything a request can reach. A self-hoster has nobody to invite them — they a
 the first person in the system — so the environment is the only way in that does
 not mean leaving signup open to the internet.
 
-**It runs once.** Unlike the operator's password, which is rewritten every boot
-so that rotation is a restart, this is read on the first run and never again.
+**It runs once**, as the operator's password does (group 9, A3): read on the
+first run and never again.
 After that the account is the customer's: they change the password in the
 console, and a restart that reset it to whatever is in a compose file would take
 their own account away from them. This is the convention a self-hoster expects —

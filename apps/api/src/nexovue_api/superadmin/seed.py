@@ -49,11 +49,14 @@ async def platform_organization(session: AsyncSession) -> Organization | None:
 
 
 async def seed_super_admin(session: AsyncSession, settings: Settings) -> User | None:
-    """Create or update the super admin. Idempotent; returns None when unset.
+    """Create the super admin, or hold an existing one to the platform. Idempotent;
+    returns None when unset.
 
-    Updating matters as much as creating: the environment is where the password
-    lives, so changing it there and restarting is how it is rotated. Nothing
-    here is logged but the address.
+    **The password is read once**, when the operator is made — as the first
+    owner's is (`docs/operations/first-accounts.md`). Rewriting it every boot
+    undid a password the operator changed in the console, and un-removed a
+    removed operator (group 9, A3). It is rotated in the console, or by a reset.
+    Nothing here is logged but the address.
     """
     email, password = settings.super_admin_email, settings.super_admin_password.get_secret_value()
     if not email or not password:
@@ -97,7 +100,7 @@ async def seed_super_admin(session: AsyncSession, settings: Settings) -> User | 
         _log.info("super admin seeded", email=address)
         return operator
 
-    _adopt(operator, organization_id=organization.id, password=password)
+    _adopt(operator, organization_id=organization.id)
     return operator
 
 
@@ -116,16 +119,13 @@ async def _free_slug(session: AsyncSession) -> str:
     raise RuntimeError("no free slug for the platform organization")
 
 
-def _adopt(operator: User, *, organization_id: uuid.UUID, password: str) -> None:
-    """Make an existing row match the environment.
+def _adopt(operator: User, *, organization_id: uuid.UUID) -> None:
+    """Hold an existing operator to the platform organization and role.
 
-    A password that has not changed is re-hashed to the same *verifier*, not the
-    same string — Argon2 salts every hash — so this cannot be compared. It is
-    written every boot, which is cheap and makes rotation one restart.
+    Not the password and not a removal: both are the operator's own, and the
+    environment is read for them only when the operator is made.
     """
     operator.org_id = organization_id
     operator.role = SUPER_ADMIN_ROLE
-    operator.password_hash = hash_password(password)
-    operator.removed_at = None
     if operator.email_verified_at is None:
         operator.email_verified_at = datetime.now(UTC)

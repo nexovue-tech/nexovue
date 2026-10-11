@@ -16,6 +16,14 @@ from nexovue_api.heartbeats.schemas import PingReceived
 router = APIRouter(prefix="/heartbeat", tags=["heartbeats"])
 
 
-@router.api_route("/{token}", methods=["GET", "POST"], summary="Report that a job ran")
+# Two routes rather than one `api_route` taking both methods: FastAPI derives an
+# operation id once per route, so one route publishes the same id twice — the
+# billing router's checkout return is split for the same reason.
+@router.post("/{token}", summary="Report that a job ran")
 async def receive_heartbeat(db: DbSession, token: str) -> PingReceived:
+    return await service.record_ping(db, token=token)
+
+
+@router.get("/{token}", summary="Report that a job ran, from a client that can only GET")
+async def receive_heartbeat_by_get(db: DbSession, token: str) -> PingReceived:
     return await service.record_ping(db, token=token)

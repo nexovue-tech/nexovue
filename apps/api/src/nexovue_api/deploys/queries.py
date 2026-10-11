@@ -60,18 +60,21 @@ async def live_webhook_secrets(
     return (await session.scalars(statement)).all()
 
 
-async def delivery_already_recorded(
-    session: AsyncSession, *, project_id: uuid.UUID, delivery_id: str
-) -> bool:
-    """Whether this exact delivery has been stored for this project before.
+async def recorded_delivery(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, delivery_id: str
+) -> DeployEvent | None:
+    """The deploy this exact delivery stored for this project, if one did.
 
-    The unique index is what actually enforces it; this is the check that turns
-    a would-be constraint violation into a clean, quiet answer.
+    The unique index is what actually enforces it; this is the read that answers
+    a repeat with the deploy it already made.
     """
-    statement = select(DeployEvent.id).where(
-        DeployEvent.project_id == project_id, DeployEvent.delivery_id == delivery_id
+    statement = select(DeployEvent).where(
+        DeployEvent.org_id == org_id,
+        DeployEvent.project_id == project_id,
+        DeployEvent.delivery_id == delivery_id,
     )
-    return await session.scalar(statement) is not None
+    found: DeployEvent | None = await session.scalar(statement)
+    return found
 
 
 def add_webhook_secret(session: AsyncSession, secret: ProjectWebhookSecret) -> None:

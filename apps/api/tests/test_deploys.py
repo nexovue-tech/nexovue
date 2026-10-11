@@ -31,7 +31,7 @@ import pytest
 
 from nexovue_api.deploys import queries, service, signatures
 from nexovue_api.deploys.schemas import DeployEventSummary
-from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, UnauthenticatedError
+from nexovue_api.errors.exceptions import InvalidRequestError, UnauthenticatedError
 
 ORG_ID = uuid.uuid4()
 OTHER_ORG_ID = uuid.uuid4()
@@ -209,24 +209,25 @@ class TestSignatureVerification:
         )
 
 
-async def test_a_replayed_delivery_is_refused(
+async def test_a_replayed_delivery_answers_with_the_deploy_already_stored(
     store: RecordingSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A correctly signed request stays valid forever, because the scheme has no
-    timestamp. The delivery id is the only thing that tells a captured request
-    apart from a genuine one, so a second arrival of the same id is refused
-    rather than stored twice."""
-    monkeypatch.setattr(queries, "delivery_already_recorded", _seen(True))
+    timestamp. The delivery id tells a captured request from a genuine one, so a
+    second arrival answers with the first deploy and stores nothing (group 9, A4).
+    The same answer serves an honest retry after a network failure."""
+    first = _stored_deploy("a-delivery-seen-before")
+    monkeypatch.setattr(queries, "recorded_delivery", _recorded(first))
 
-    with pytest.raises(ConflictError):
-        await service.record_from_webhook(
-            store,  # type: ignore[arg-type]
-            project_id=PROJECT_ID,
-            body=BODY,
-            signature=sign(BODY, LIVE_SECRET),
-            delivery_id="a-delivery-seen-before",
-        )
+    answered = await service.record_from_webhook(
+        store,  # type: ignore[arg-type]
+        project_id=PROJECT_ID,
+        body=BODY,
+        signature=sign(BODY, LIVE_SECRET),
+        delivery_id="a-delivery-seen-before",
+    )
 
+    assert answered.id == first.id
     assert _deploys(store) == [], "a replay must write nothing"
 
 
@@ -244,17 +245,18 @@ async def test_a_delivery_id_is_stored_so_the_next_replay_can_be_caught(
     assert _deploys(store)[0].delivery_id == "delivery-1"
 
 
-async def test_a_sender_without_a_delivery_id_still_works(store: RecordingSession) -> None:
-    """Not every CI system sends one. It gets no replay protection, which the
-    service says out loud rather than silently refusing the deploy."""
-    await service.record_from_webhook(
-        store,  # type: ignore[arg-type]
-        project_id=PROJECT_ID,
-        body=BODY,
-        signature=sign(BODY, LIVE_SECRET),
-    )
+async def test_a_sender_without_a_delivery_id_is_refused(store: RecordingSession) -> None:
+    """Without one, a captured request records a new deploy every time it is
+    sent. The billing webhook refuses the same way (group 9, A4)."""
+    with pytest.raises(InvalidRequestError):
+        await service.record_from_webhook(
+            store,  # type: ignore[arg-type]
+            project_id=PROJECT_ID,
+            body=BODY,
+            signature=sign(BODY, LIVE_SECRET),
+        )
 
-    assert _deploys(store)[0].delivery_id is None
+    assert _deploys(store) == []
 
 
 class TestMintedSecrets:
@@ -305,6 +307,17 @@ class RecordingSession:
             if getattr(instance, "id", None) is None:
                 instance.id = uuid.uuid4()
 
+    def begin_nested(self) -> Any:
+        return _Savepoint()
+
+
+class _Savepoint:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
 
 # The one secret the stubbed project accepts. Shared by the fixture and the
 # tests that sign with it, because a test signing with a different secret than
@@ -329,7 +342,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> RecordingSession:
         _keys_returning([StoredSecret(org_id=ORG_ID, secret=LIVE_SECRET)]),
     )
     # No delivery has been seen before, unless a test says otherwise.
-    monkeypatch.setattr(queries, "delivery_already_recorded", _seen(False))
+    monkeypatch.setattr(queries, "recorded_delivery", _recorded(None))
     return RecordingSession()
 
 
@@ -340,11 +353,29 @@ def _keys_returning(secrets_: list[Any]) -> Any:
     return _live_secrets
 
 
-def _seen(answer: bool) -> Any:
-    async def _already(session: Any, *, project_id: uuid.UUID, delivery_id: str) -> bool:
-        return answer
+def _recorded(event: Any) -> Any:
+    async def _found(
+        session: Any, *, org_id: uuid.UUID, project_id: uuid.UUID, delivery_id: str
+    ) -> Any:
+        return event
 
-    return _already
+    return _found
+
+
+def _stored_deploy(delivery_id: str) -> Any:
+    from nexovue_api.data.postgres.models import DeployEvent
+
+    return DeployEvent(
+        id=uuid.uuid4(),
+        org_id=ORG_ID,
+        project_id=PROJECT_ID,
+        version="1.4.2",
+        service_name="checkout",
+        deployed_at=datetime.now(UTC),
+        source="github",
+        event_metadata={},
+        delivery_id=delivery_id,
+    )
 
 
 def _deploys(store: RecordingSession) -> list[Any]:
@@ -363,6 +394,7 @@ async def test_a_correctly_signed_deploy_is_stored(store: RecordingSession) -> N
         project_id=PROJECT_ID,
         body=BODY,
         signature=sign(BODY, secret),
+        delivery_id=uuid.uuid4().hex,
     )
 
     assert summary.version == "1.4.2"
@@ -392,6 +424,7 @@ async def test_an_unsigned_or_wrongly_signed_deploy_writes_nothing(
             project_id=PROJECT_ID,
             body=BODY,
             signature=signature,
+            delivery_id=uuid.uuid4().hex,
         )
 
     assert store.added == [], f"{why} still reached the store"
@@ -409,6 +442,7 @@ async def test_a_body_altered_after_signing_writes_nothing(store: RecordingSessi
             project_id=PROJECT_ID,
             body=tampered,
             signature=header_value,
+            delivery_id=uuid.uuid4().hex,
         )
 
     assert store.added == []
@@ -427,6 +461,7 @@ async def test_another_projects_secret_cannot_sign_this_projects_deploy(
             project_id=PROJECT_ID,
             body=BODY,
             signature=sign(BODY, theirs),
+            delivery_id=uuid.uuid4().hex,
         )
 
     assert store.added == []
@@ -446,6 +481,7 @@ async def test_an_unknown_project_is_refused_in_the_same_words_as_a_bad_signatur
             project_id=uuid.uuid4(),
             body=BODY,
             signature=sign(BODY, secret),
+            delivery_id=uuid.uuid4().hex,
         )
 
     assert unknown_project.value.detail == service.REFUSED_DETAIL
@@ -465,6 +501,7 @@ async def test_a_signed_body_that_is_not_a_deploy_is_refused_after_the_signature
             project_id=PROJECT_ID,
             body=body,
             signature=sign(body, secret),
+            delivery_id=uuid.uuid4().hex,
         )
 
     assert _deploys(store) == []
@@ -479,6 +516,7 @@ async def test_a_deploy_without_a_time_is_stamped_on_arrival(store: RecordingSes
         project_id=PROJECT_ID,
         body=BODY,
         signature=sign(BODY, secret),
+        delivery_id=uuid.uuid4().hex,
     )
 
     assert summary.deployed_at.tzinfo is not None

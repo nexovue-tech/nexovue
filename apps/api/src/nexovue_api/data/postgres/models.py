@@ -253,6 +253,12 @@ class User(Base):
     # Removed from the organization. The row stays so history keeps the name;
     # the address is rewritten so it is free to sign up again (F26, BR5, BR6).
     removed_at: Mapped[OptionalTimestamp]
+    # Failed sign-ins in a row, and the lock they earned (`auth/lockout.py`,
+    # migration 0039). A full sign-in sets both back.
+    failed_logins: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    locked_until: Mapped[OptionalTimestamp]
     created_at: Mapped[CreatedAt]
 
     __table_args__ = (
@@ -780,6 +786,14 @@ class DeployEvent(Base):
     created_at: Mapped[CreatedAt]
 
     __table_args__ = (
+        # Migration 0007's, declared here so the model and the schema agree.
+        Index(
+            "uq_deploy_events_project_id_delivery_id",
+            "project_id",
+            "delivery_id",
+            unique=True,
+            postgresql_where=text("delivery_id IS NOT NULL"),
+        ),
         Index(
             "ix_deploy_events_org_id_project_id_deployed_at", "org_id", "project_id", "deployed_at"
         ),

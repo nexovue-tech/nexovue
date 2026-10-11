@@ -25,7 +25,7 @@ from typing import Any, Final
 import asyncpg
 
 from nexovue_scheduler.pollers.aws import RoleGrant, assume_customer_role, session_name_for
-from nexovue_scheduler.probes.addresses import may_connect_to
+from nexovue_scheduler.probes.addresses import REFUSAL_REASON, may_connect_to
 
 AUTH_RDS_IAM: Final = "rds_iam"
 AUTH_PASSWORD: Final = "password"
@@ -63,7 +63,32 @@ CONNECT_TIMEOUT_SECONDS: Final = 10
 
 
 class DatabaseAddressError(RuntimeError):
-    """The configured host resolves somewhere this poller may not go."""
+    """The configured host resolves somewhere this poller may not go.
+
+    Its text names the addresses, for our log; `customer_reason` is what the
+    customer reads instead (group 9, A5).
+    """
+
+
+# What the customer reads when the database could not be reached at all: a
+# network error's own text can carry the address we dialled.
+UNREACHABLE_REASON: Final = "The database could not be reached from nexovue."
+
+
+def customer_reason(failure: BaseException) -> str:
+    """The failure as the integration's customer-visible last error.
+
+    Never an address of ours: a refused host reads as the probes' refusal, and a
+    network failure as unreachable. What the customer's own database answered —
+    a missing permission, a wrong database name — is theirs to read and act on.
+    """
+    if isinstance(failure, DatabaseAddressError):
+        return REFUSAL_REASON
+    if isinstance(failure, asyncpg.PostgresError):
+        return str(failure)
+    if isinstance(failure, OSError | TimeoutError | asyncpg.InterfaceError):
+        return UNREACHABLE_REASON
+    return str(failure)
 
 
 class DatabaseTLSError(RuntimeError):

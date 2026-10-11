@@ -12,6 +12,7 @@ import os
 import socket
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Final
 from urllib.parse import urlsplit
 
@@ -133,8 +134,9 @@ async def test_seeding_twice_changes_nothing_a_caller_can_see(db: AsyncSession) 
     assert len(organizations) == 1
 
 
-async def test_a_password_changed_in_the_environment_is_changed_here(db: AsyncSession) -> None:
-    """Rotation is a restart, which is the reason this writes every boot."""
+async def test_the_environment_sets_the_password_once_and_never_again(db: AsyncSession) -> None:
+    """Group 9, A3. Rewriting it every boot undid a password the operator changed in
+    the console; it is set when the operator is made, as the first owner's is."""
     settings = _operator_settings()
     await seed_super_admin(db, settings)
 
@@ -145,8 +147,21 @@ async def test_a_password_changed_in_the_environment_is_changed_here(db: AsyncSe
     operator = await seed_super_admin(db, rotated)
 
     assert operator is not None
-    assert verify_password(operator.password_hash, "an entirely different password")
-    assert not verify_password(operator.password_hash, "a long operator password")
+    assert verify_password(operator.password_hash, "a long operator password")
+    assert not verify_password(operator.password_hash, "an entirely different password")
+
+
+async def test_a_removed_operator_stays_removed(db: AsyncSession) -> None:
+    settings = _operator_settings()
+    operator = await seed_super_admin(db, settings)
+    assert operator is not None
+    operator.removed_at = datetime.now(UTC)
+    await db.flush()
+
+    again = await seed_super_admin(db, settings)
+
+    assert again is not None
+    assert again.removed_at is not None
 
 
 def test_the_platform_role_grants_nothing_inside_an_organization() -> None:

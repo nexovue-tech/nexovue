@@ -16,6 +16,7 @@ nothing behind.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -29,7 +30,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from live import require_stack
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.data.postgres.models import AuditLogEntry, DeployEvent
@@ -132,6 +133,7 @@ async def test_a_signed_deploy_is_stored_under_the_projects_own_tenancy(
         project_id=tenant.project.id,
         body=body,
         signature=_sign(body, await _secret_for(db, tenant)),
+        delivery_id=uuid.uuid4().hex,
     )
 
     assert summary.version == VERSION
@@ -155,6 +157,7 @@ async def test_a_deploy_signed_with_another_projects_secret_is_refused(
             project_id=owner.project.id,
             body=body,
             signature=_sign(body, strangers_secret),
+            delivery_id=uuid.uuid4().hex,
         )
 
     assert await _stored_deploys(db, owner.organization.id) == []
@@ -165,7 +168,11 @@ async def test_an_unsigned_deploy_is_refused(db: AsyncSession) -> None:
 
     with pytest.raises(UnauthenticatedError):
         await service.record_from_webhook(
-            db, project_id=tenant.project.id, body=_body(), signature=None
+            db,
+            project_id=tenant.project.id,
+            body=_body(),
+            signature=None,
+            delivery_id=uuid.uuid4().hex,
         )
 
     assert await _stored_deploys(db, tenant.organization.id) == []
@@ -182,6 +189,7 @@ async def test_a_body_altered_after_signing_is_refused(db: AsyncSession) -> None
             project_id=tenant.project.id,
             body=body.replace(SERVICE.encode(), b"payments"),
             signature=signature,
+            delivery_id=uuid.uuid4().hex,
         )
 
     assert await _stored_deploys(db, tenant.organization.id) == []
@@ -199,6 +207,7 @@ async def test_a_deploy_aimed_at_a_project_that_does_not_exist_is_refused(
             project_id=uuid.uuid4(),
             body=body,
             signature=_sign(body, await _secret_for(db, tenant)),
+            delivery_id=uuid.uuid4().hex,
         )
 
 
@@ -211,6 +220,7 @@ async def test_another_organizations_deploys_cannot_be_listed(db: AsyncSession) 
         project_id=owner.project.id,
         body=body,
         signature=_sign(body, await _secret_for(db, owner)),
+        delivery_id=uuid.uuid4().hex,
     )
 
     with pytest.raises(NotFoundError):
@@ -251,6 +261,7 @@ async def test_storing_a_deploy_and_reading_a_secret_are_both_recorded(
         project_id=tenant.project.id,
         body=body,
         signature=_sign(body, await _secret_for(db, tenant)),
+        delivery_id=uuid.uuid4().hex,
     )
 
     actions = await _audit_actions(db, tenant.organization.id)
@@ -264,7 +275,11 @@ async def test_no_audit_entry_carries_the_secret(db: AsyncSession) -> None:
     secret = await _secret_for(db, tenant)
     body = _body()
     await service.record_from_webhook(
-        db, project_id=tenant.project.id, body=body, signature=_sign(body, secret)
+        db,
+        project_id=tenant.project.id,
+        body=body,
+        signature=_sign(body, secret),
+        delivery_id=uuid.uuid4().hex,
     )
     await db.flush()
 
@@ -400,3 +415,40 @@ async def test_another_organizations_deploys_never_precede_this_ones_errors(
     found = (await _history(db, quiet)).preceding(services=[SERVICE], at=NOON)
 
     assert found is None
+
+
+async def test_two_identical_deliveries_at_once_store_one_deploy_and_both_succeed() -> None:
+    """Both race past the read for a repeat; the unique index lets one in, and the
+    other answers with the winner's deploy rather than a 500 (group 9, A4)."""
+    engine = create_async_engine(ASYNC_DSN)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as setup:
+            tenant = await _new_tenant(setup)
+            secret = await _secret_for(setup, tenant)
+            await setup.commit()
+        body, delivery = _body(), uuid.uuid4().hex
+
+        async def deliver() -> uuid.UUID:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                summary = await service.record_from_webhook(
+                    session,
+                    project_id=tenant.project.id,
+                    body=body,
+                    signature=_sign(body, secret),
+                    delivery_id=delivery,
+                )
+                await session.commit()
+                return summary.id
+
+        first, second = await asyncio.gather(deliver(), deliver())
+
+        async with AsyncSession(engine) as check:
+            stored = await _stored_deploys(check, tenant.organization.id)
+        assert first == second
+        assert [event.id for event in stored] == [first]
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM organizations WHERE id = :id"), {"id": tenant.organization.id}
+            )
+        await engine.dispose()

@@ -136,7 +136,9 @@ def poll_postgres(
     try:
         _poll_postgres(settings, integration_id, org_id, project_id, config, external_id)
     except Exception as failure:
-        report_failure(settings, integration_id, str(failure))
+        # The customer reads a reason without our addresses; the raise keeps the
+        # whole text for our log.
+        report_failure(settings, integration_id, postgres_connect.customer_reason(failure))
         raise
     report_success(settings, integration_id)
 

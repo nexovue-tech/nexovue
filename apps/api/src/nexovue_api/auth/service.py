@@ -13,12 +13,13 @@ throughout, because a browser session is also a session in this module.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
-from nexovue_api.auth import second_factor
+from nexovue_api.auth import lockout, second_factor
 from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.auth.credentials import normalize_email, verify_password
 from nexovue_api.auth.encryption import CredentialBox
@@ -42,13 +43,30 @@ SECOND_FACTOR_NOT_ACCEPTED: Final = (
 
 
 async def authenticate(db: AsyncSession, *, email: str, password: str) -> tuple[User, Organization]:
-    """The user behind these credentials, or a 401 that reveals nothing."""
+    """The user behind these credentials, or a 401 that reveals nothing.
+
+    A locked account is refused with the same 401 whatever the password, and the
+    attempt is not counted (`lockout`). A right password with a second factor
+    still to come clears nothing: only a full sign-in does.
+    """
     found = await find_active_user_by_email(db, normalize_email(email))
     stored_hash = found[0].password_hash if found is not None else None
     # Always verify, even with no user: see `credentials.verify_password`.
-    if not verify_password(stored_hash, password) or found is None:
-        await _record_refusal(db, user=found[0] if found is not None else None)
+    verified = verify_password(stored_hash, password)
+    now = datetime.now(UTC)
+    if found is None:
+        await _record_refusal(db, user=None)
         raise UnauthenticatedError(INVALID_CREDENTIALS_DETAIL)
+    user = found[0]
+    if lockout.is_locked(user, now=now):
+        await _record_refusal(db, user=user)
+        raise UnauthenticatedError(INVALID_CREDENTIALS_DETAIL)
+    if not verified:
+        lockout.record_failure(user, now=now)
+        await _record_refusal(db, user=user)
+        raise UnauthenticatedError(INVALID_CREDENTIALS_DETAIL)
+    if not second_factor.is_enabled(user):
+        lockout.record_success(user)
     return found
 
 
@@ -87,12 +105,20 @@ async def authenticate_second_factor(
         raise UnauthenticatedError(SECOND_FACTOR_NOT_ACCEPTED)
 
     user, organization = found
+    now = datetime.now(UTC)
+    if lockout.is_locked(user, now=now):
+        await _record_refusal(db, user=user)
+        raise UnauthenticatedError(SECOND_FACTOR_NOT_ACCEPTED)
     if not await second_factor.verify(db, second_factors, box, user=user, code=code):
         await second_factors.record_failed_attempt(token=challenge_token)
+        # A wrong code is a failed sign-in too: the password alone must not be
+        # enough to keep guessing codes across fresh challenges.
+        lockout.record_failure(user, now=now)
         await _record_refusal(db, user=user)
         raise UnauthenticatedError(SECOND_FACTOR_NOT_ACCEPTED)
 
     await second_factors.close_challenge(token=challenge_token)
+    lockout.record_success(user)
     return user, organization
 
 

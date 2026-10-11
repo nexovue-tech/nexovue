@@ -22,6 +22,7 @@ from typing import Final
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
+from nexovue_api.auth import second_factor
 from nexovue_api.auth.credentials import verify_password
 from nexovue_api.auth.encryption import CredentialBox
 from nexovue_api.auth.second_factor import verify as verify_second_factor
@@ -36,6 +37,10 @@ ADMIN_MODE_MINUTES: Final = 30
 
 NOT_THE_OPERATOR: Final = "Only nexovue's operator can administer the platform."
 WRONG_CREDENTIAL: Final = "That password or code is not right."
+# The operator enrolled a second factor and offered only the password.
+CODE_REQUIRED: Final = (
+    "Two-factor sign-in is on for this account: enter a code from your authenticator."
+)
 SESSION_GONE: Final = "This session has expired. Sign in again."
 NEEDS_RE_AUTHENTICATION: Final = (
     "Confirm it is you before administering the platform: this session has not "
@@ -61,8 +66,8 @@ async def enter(
 ) -> datetime:
     """Re-authenticate and stamp the session. Returns when the stamp lapses.
 
-    A password *or* a second-factor code, because a person with 2FA enrolled
-    should be able to use it, and one without must still have a way in. Neither
+    A second-factor code when the operator has enrolled one — the password alone
+    is then refused (group 9, A3) — and otherwise the password. Neither
     is accepted from anyone but the operator: a member with the right password
     is refused here, so this endpoint cannot be used to discover the role.
     """
@@ -79,6 +84,8 @@ async def enter(
         # back, and somebody guessing at the platform gate is exactly what this
         # row exists to show.
         await db.commit()
+        if not code and second_factor.is_enabled(user):
+            raise PermissionDeniedError(CODE_REQUIRED)
         raise PermissionDeniedError(WRONG_CREDENTIAL)
 
     until = moment + timedelta(minutes=ADMIN_MODE_MINUTES)
@@ -118,6 +125,10 @@ async def _proved(
 ) -> bool:
     if code:
         return await verify_second_factor(db, factors, box, user=user, code=code)
+    if second_factor.is_enabled(user):
+        # Enrolled means the code is the proof; the password alone is the weaker
+        # way in the operator chose to close (group 9, A3).
+        return False
     if password:
         # Always runs the hasher, as signing in does, so a wrong password costs
         # what a right one costs.

@@ -306,7 +306,8 @@ services:
       # nexovue's own operator, seeded at boot from these two
       # (`docs/changes/super-admin-in-the-console/`). `:-` rather than `:?`: an
       # install with nobody to administer it seeds nobody, and this replica has
-      # to come up without them. Rotation is an edit and a restart.
+      # to come up without them. The password is read when the operator is made;
+      # after that it changes in the console (docs/operations/first-accounts.md).
       SUPER_ADMIN_EMAIL: "${SUPER_ADMIN_EMAIL:-}"
       SUPER_ADMIN_PASSWORD: "${SUPER_ADMIN_PASSWORD:-}"
       # The customer's own first account. Left empty here on purpose: this is the

@@ -28,8 +28,8 @@ seed one.
 Two accounts are created from the environment rather than through a screen, and
 an install uses one or the other: `FIRST_OWNER_*` for a self-hosted install's own
 owner, `SUPER_ADMIN_*` for nexovue's operator on the hosted service. Which to
-set, what gets created, and why the first is read once while the second is
-rewritten every boot: **[first-accounts.md](first-accounts.md)**.
+set, what gets created, and why both passwords are read only once:
+**[first-accounts.md](first-accounts.md)**.
 
 ## Not yet established
 

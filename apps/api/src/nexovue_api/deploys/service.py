@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 from typing import Final
 
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
@@ -40,7 +41,6 @@ from nexovue_api.deploys.schemas import (
     WebhookSecretsResponse,
 )
 from nexovue_api.errors.exceptions import (
-    ConflictError,
     InvalidRequestError,
     NotFoundError,
     UnauthenticatedError,
@@ -52,6 +52,13 @@ from nexovue_api.projects import service as projects
 REFUSED_DETAIL: Final = (
     f"The request was not signed by this project's deploy secret. "
     f"Send {signatures.SIGNATURE_HEADER}: sha256=<hex HMAC-SHA256 of the exact body>."
+)
+
+# Asked of every sender, as the billing webhook asks it: the id is the only
+# thing that tells a captured request from a genuine one.
+MISSING_DELIVERY_DETAIL: Final = (
+    f"Send {signatures.DELIVERY_HEADER} with an id unique to each delivery; "
+    "a retry of the same delivery carries the same id."
 )
 
 MALFORMED_BODY_DETAIL: Final = (
@@ -87,13 +94,17 @@ async def record_from_webhook(
     org_id = live[0].org_id
 
     # GitHub's signature carries no timestamp, so a captured delivery stays
-    # valid forever. Returning the deploy we already stored — rather than an
-    # error — means an honest retry after a network failure still succeeds,
-    # while a replay changes nothing.
-    if delivery_id and await queries.delivery_already_recorded(
-        session, project_id=project_id, delivery_id=delivery_id
-    ):
-        raise ConflictError("That delivery has already been recorded.")
+    # valid forever; the delivery id is what tells it from a genuine one, and a
+    # sender without one would record a new deploy every time it was replayed.
+    if not delivery_id:
+        raise InvalidRequestError(MISSING_DELIVERY_DETAIL)
+    # A repeat answers with the deploy already stored — an honest retry after a
+    # network failure succeeds, and a replay changes nothing.
+    already = await queries.recorded_delivery(
+        session, org_id=org_id, project_id=project_id, delivery_id=delivery_id
+    )
+    if already is not None:
+        return _summary(already)
 
     notification = _parse(body)
     event = DeployEvent(
@@ -106,10 +117,21 @@ async def record_from_webhook(
         event_metadata=notification.metadata,
         delivery_id=delivery_id,
     )
-    queries.add_deploy_event(session, event)
-    # Needed before the audit record and the response, both of which name the
-    # row by the id Postgres assigns.
-    await session.flush()
+    try:
+        # A savepoint, so two identical deliveries racing past the read above
+        # leave the loser's transaction usable: it answers as a repeat would.
+        async with session.begin_nested():
+            queries.add_deploy_event(session, event)
+            # Needed before the audit record and the response, both of which
+            # name the row by the id Postgres assigns.
+            await session.flush()
+    except IntegrityError:
+        winner = await queries.recorded_delivery(
+            session, org_id=org_id, project_id=project_id, delivery_id=delivery_id
+        )
+        if winner is None:
+            raise
+        return _summary(winner)
 
     audit.record_deploy_recorded(session, event=event)
     return _summary(event)

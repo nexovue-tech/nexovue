@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
+import asyncpg
 import boto3
 import certifi
 import pytest
@@ -34,10 +35,12 @@ from nexovue_scheduler.pollers.postgres_connect import (
     DatabaseAuthError,
     DatabaseTarget,
     DatabaseTLSError,
+    customer_reason,
     rds_auth_token,
     rds_tls_context,
     refuse_unreachable_host,
 )
+from nexovue_scheduler.probes.addresses import REFUSAL_REASON
 
 ACCOUNT_ID: Final = "123456789012"
 ROLE_ARN: Final = f"arn:aws:iam::{ACCOUNT_ID}:role/NexovueReadOnly"
@@ -360,3 +363,34 @@ async def test_connect_read_only_consults_the_boundary_before_connecting() -> No
             ca_bundle_path="/no/such/bundle.pem",
             private_allowed=False,
         )
+
+
+async def test_what_the_customer_sees_of_a_refusal_names_no_address() -> None:
+    """Group 9, A5. The integration's last error is shown to the customer, and the
+    address their name resolved to from inside our network is a fact about our
+    network. The full text stays in our log, through the raised exception."""
+    with pytest.raises(DatabaseAddressError) as refused:
+        await refuse_unreachable_host("10.0.0.1", 5432, private_allowed=False)
+
+    shown = customer_reason(refused.value)
+    assert "10.0.0.1" not in shown
+    assert shown == REFUSAL_REASON
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        OSError("[Errno 111] Connect call failed ('10.1.2.3', 5432)"),
+        TimeoutError("timed out connecting to 10.1.2.3"),
+        ConnectionRefusedError("10.1.2.3 refused"),
+    ],
+)
+def test_a_network_failure_is_reported_without_its_text(failure: Exception) -> None:
+    assert "10.1.2.3" not in customer_reason(failure)
+
+
+def test_the_database_s_own_refusal_is_the_customer_s_to_read() -> None:
+    """A missing permission is about their database, and they can act on it."""
+    failure = asyncpg.InsufficientPrivilegeError("permission denied for view pg_stat_statements")
+
+    assert customer_reason(failure) == "permission denied for view pg_stat_statements"

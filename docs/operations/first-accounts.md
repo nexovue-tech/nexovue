@@ -102,9 +102,11 @@ else: no projects, no telemetry, no bill. The role grants **nothing** inside any
 customer organization and everything on the platform surface — and only while
 the session has been re-authenticated in the last 30 minutes.
 
-**Unlike the account above, this password is rewritten on every start.** That is
-the rotation procedure: change the variable, restart. The environment is the
-truth for this account because it is nexovue's own, not a customer's.
+**Like the account above, this password is read once**, when the operator is
+created. Rewriting it on every start undid a password changed in the console and
+un-removed a removed operator (group 9, A3). Change it in the console, or reset
+it by email. With two-factor sign-in enrolled, admin mode takes a code, never the
+password alone.
 
 The same eight-character minimum applies, for the same reason: nothing stands
 between a compose file and the password hash, and this is the account that can
