@@ -63,6 +63,10 @@ is.
    copied at deploy time to whatever serves them — the edge proxy, as the on-prem compose's
    `web-assets-init` already does, or a CDN. The separate nginx image goes.
 
+   *Executed early for the edge, 2026-10-11* (`docs/changes/deployment-tells-the-truth/`): both
+   deployment files serve the console from the Caddy edge, and the web image now carries the built
+   files only (no nginx). Moving those files into `nexovue` stays with the images work.
+
 4. **The Go side starts as two binaries in one image.** Merging the receiver and worker into one binary
    with a role argument, Jaeger-style, is not required by this decision and is done only if it later
    buys something concrete.

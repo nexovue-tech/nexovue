@@ -1,4 +1,4 @@
-# TLS edge for the on-premise deployment.
+# The TLS edge of every deployed install: the hosted replica and on-premise.
 #
 # Caddy obtains and renews certificates on its own as long as it knows a
 # hostname and the host answers on 80 and 443.
@@ -63,9 +63,10 @@
 		# which would have to be reopened the day login grows a passkey.
 		Permissions-Policy "accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), magnetometer=(), microphone=(), midi=(), payment=(), screen-wake-lock=(), serial=(), usb=(), xr-spatial-tracking=()"
 
-		# Checked against apps/web, not assumed. The app loads no external
-		# origin at all — fonts are vendored into @nexovue/ui and bundled — so
-		# `default-src 'self'` covers images, fonts, styles and scripts.
+		# Checked against apps/web, not assumed. The app itself loads no external
+		# origin — fonts are vendored into @nexovue/ui and bundled — so
+		# `default-src 'self'` covers images, fonts, styles and scripts. The one
+		# exception is the payment checkout, below.
 		#
 		# script-src: the hash is the theme bootstrap in apps/web/index.html,
 		# which must run before first paint and so cannot be moved to a file.
@@ -74,14 +75,19 @@
 		# connect-src: the log tail is a same-origin WebSocket, and `'self'`
 		# is documented as not resolving to `wss:` in every browser, so the
 		# origin is spelled out.
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-l0ccwCCCCbd6qE6AXzKsNeUubznvX4TgnnF7fn9ilzs='; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://{$NEXOVUE_APP_HOST}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		#
+		# {$NEXOVUE_CHECKOUT_ORIGINS}: the payment processor's checkout, which loads
+		# its script, opens its frame and calls home from its own origins. Set on the
+		# hosted file, empty on a self-hosted install, which takes no payments.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-l0ccwCCCCbd6qE6AXzKsNeUubznvX4TgnnF7fn9ilzs=' {$NEXOVUE_CHECKOUT_ORIGINS}; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://{$NEXOVUE_APP_HOST} {$NEXOVUE_CHECKOUT_ORIGINS}; frame-src 'self' {$NEXOVUE_CHECKOUT_ORIGINS}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 
 		# `style-src 'self'` is the one directive above that was reasoned about
 		# rather than watched. React and uPlot position elements through the
 		# CSSOM, which CSP does not govern, so this should report nothing —
-		# but no browser has loaded the console under it. Load the app, watch
-		# the console for a style violation, and if none fires, drop
-		# 'unsafe-inline' above and delete this header.
+		# but no browser had loaded the console under it. Loaded on 2026-10-11:
+		# the console itself reports nothing, and Razorpay's checkout script
+		# injects inline styles into the page — so 'unsafe-inline' stays while
+		# the hosted console takes payments.
 		Content-Security-Policy-Report-Only "style-src 'self'"
 	}
 }
@@ -104,12 +110,43 @@
 {$NEXOVUE_APP_HOST} {
 	import console_headers
 
+	# The API's largest legitimate body is a source map: 64 MiB and its form
+	# fields. No more than that is ever forwarded; the API refuses a declared
+	# oversize before reading it and holds each route to its own, smaller cap
+	# (`middleware/body_limit.py`). `test_caddyfile_headers.py` fails if this
+	# falls below the API's largest.
 	handle /api/* {
-		reverse_proxy api:8000
+		request_body {
+			max_size 65MiB
+		}
+		# `dynamic a`, not `api:8000`: a static name is resolved to one address and
+		# kept, so every request would go to the first of several API replicas.
+		reverse_proxy {
+			dynamic a api 8000 {
+				refresh 5s
+			}
+		}
 	}
 
+	# The console is static files (ADR-019 point 3), copied into this volume at
+	# deploy time by `web-assets-init`. A hashed asset never changes under its name,
+	# so it is cached for a year — but only when it exists, so a 404 is never
+	# remembered.
+	handle /assets/* {
+		root * /srv/web
+		@present file
+		header @present Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	# Everything else is the page itself, whose path the console's router owns.
+	# `no-cache` makes a browser ask before reusing it: a remembered index.html
+	# names assets a deploy has removed, and the console renders blank.
 	handle {
-		reverse_proxy web:8080
+		root * /srv/web
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
 	}
 }
 
@@ -120,13 +157,21 @@
 	# here may rewrite a response body. The receiver also owns CORS for door 3
 	# — the edge must not answer a preflight on its behalf.
 	handle /v1/* {
-		reverse_proxy receiver:4318
+		reverse_proxy {
+			dynamic a receiver 4318 {
+				refresh 5s
+			}
+		}
 	}
 
 	# The browser door, on its own prefix so no route can resolve both a secret
 	# and a public key.
 	handle /browser/v1/* {
-		reverse_proxy receiver:4318
+		reverse_proxy {
+			dynamic a receiver 4318 {
+				refresh 5s
+			}
+		}
 	}
 
 	# Anything else on this name is a misconfigured exporter. Say so, rather

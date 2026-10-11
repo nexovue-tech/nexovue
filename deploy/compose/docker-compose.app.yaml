@@ -5,6 +5,11 @@
 # here rather than in deployment when something only worked because the source
 # tree was mounted.
 #
+# One way in: the Caddy edge, on the two names below, with TLS and the security
+# headers — the same Caddyfile the on-prem file uses. On a laptop the names are
+# `app.localhost` and `ingest.localhost`, which Caddy certifies from its own
+# local authority. Settings: `deploy/compose/.env.example`.
+#
 # It runs under its own project name, so its volumes never touch the dev data.
 #
 # Credentials are redeclared with the `:?` required form. The infrastructure
@@ -54,10 +59,9 @@ x-control-plane-env: &control-plane-env
   PROBE_LOCATIONS: ${PROBE_LOCATIONS:-local}
   PROBER_REGION: ${PROBER_REGION:-local}
   # Where a browser lands after following a verification link, a password
-  # reset or a payment. The app hostname, never the ingest one.
-  # Demanded rather than defaulted: there is no sensible guess for a
-  # deployment's own hostname, and a wrong one sends customers nowhere.
-  APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL}
+  # reset, a payment or an alert. The edge's app name, never the ingest one,
+  # and built from it so the two cannot disagree.
+  APP_BASE_URL: https://${NEXOVUE_APP_HOST:?set NEXOVUE_APP_HOST}
   # Third-party credentials, passed through rather than demanded.
   #
   # `:-` and not `:?` on purpose, unlike every variable above: an install
@@ -100,6 +104,7 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:?set CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
       CLICKHOUSE_READER_PASSWORD: ${CLICKHOUSE_READER_PASSWORD:?set CLICKHOUSE_READER_PASSWORD}
+      CLICKHOUSE_ERASER_PASSWORD: ${CLICKHOUSE_ERASER_PASSWORD:?set CLICKHOUSE_ERASER_PASSWORD}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "0"
 
   postgres:
@@ -108,6 +113,53 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+
+  # ---------- the edge ----------
+  # The only service with a published port.
+  proxy:
+    <<: *service-defaults
+    image: caddy:2.11.4-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      NEXOVUE_APP_HOST: ${NEXOVUE_APP_HOST:?set NEXOVUE_APP_HOST}
+      NEXOVUE_INGEST_HOST: ${NEXOVUE_INGEST_HOST:?set NEXOVUE_INGEST_HOST}
+      NEXOVUE_TLS_EMAIL: ${NEXOVUE_TLS_EMAIL:?set NEXOVUE_TLS_EMAIL}
+      # Where Razorpay's checkout loads its scripts, opens its frame and reports
+      # to; the console's content-security policy allows these and nothing else
+      # foreign. Read from a test checkout through this edge (2026-10-11), not
+      # from documentation, which lists none: checkout.js, its frame on api,
+      # a risk script from cdn and tracking calls to lumberjack.
+      NEXOVUE_CHECKOUT_ORIGINS: https://checkout.razorpay.com https://api.razorpay.com https://cdn.razorpay.com https://lumberjack.razorpay.com
+    volumes:
+      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      - web-assets:/srv/web:ro
+    depends_on:
+      api:
+        condition: service_started
+      receiver:
+        condition: service_started
+      web-assets-init:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # The console is files the edge serves (ADR-019 point 3); this copies them out
+  # of the image built from apps/web into the edge's volume, and exits.
+  web-assets-init:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    image: nexovue/web:${NEXOVUE_VERSION:-dev}
+    command: ["sh", "-c", "cp -r /srv/web/. /assets/"]
+    restart: on-failure
+    volumes:
+      - web-assets:/assets
 
   # ---------- data plane ----------
   receiver:
@@ -132,15 +184,16 @@ services:
       # worker was OOM-killed at 1017 MB RSS against a 1 GiB cap. ~85% of this
       # service's 512M, leaving the rest for stacks and everything off-heap.
       GOMEMLIMIT: 435MiB
-    ports:
-      - "4317:4317"
-      - "4318:4318"
+      # How many receivers share the traffic; each enforces its share of the
+      # ingest limit. One setting for both, so they cannot drift apart.
+      RECEIVER_INSTANCES: ${RECEIVER_INSTANCES:-1}
     depends_on:
       kafka:
         condition: service_healthy
       postgres:
         condition: service_healthy
     deploy:
+      replicas: ${RECEIVER_INSTANCES:-1}
       resources:
         limits:
           memory: 512M
@@ -218,8 +271,17 @@ services:
       CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS: ${CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS:-}
       # Reads as the read-only account; the API holds no ClickHouse credential that writes.
       CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
-      # nexovue's cloud onboards customers after they pay (ADR-008, D10). A
-      # self-hosted install uses the on-prem file, where signup stays open.
+      # What signup hands a customer to export to: the edge's ingest name.
+      OTLP_ENDPOINT: https://${NEXOVUE_INGEST_HOST:?set NEXOVUE_INGEST_HOST}
+      # The edge is the one hop in front of the API, so the caller is the last
+      # X-Forwarded-For entry. At 0 every customer is the edge's address and all
+      # of them share one login throttle (readiness blocker 16). A load balancer
+      # in front of the edge adds one.
+      TRUSTED_PROXY_COUNT: "1"
+      # How many API processes share the traffic; each enforces its share of the
+      # in-memory limits. One setting for both, so they cannot drift apart.
+      API_INSTANCES: ${API_INSTANCES:-1}
+      # nexovue's cloud onboards customers after they pay (ADR-008, D10).
       SIGNUP_ENABLED: "${SIGNUP_ENABLED:-false}"
       # The API's own public hostname (F36). The MCP server answers only on the
       # hosts it is told about; unset, it falls back to the console's host and
@@ -238,8 +300,6 @@ services:
       FIRST_ORGANIZATION_NAME: "${FIRST_ORGANIZATION_NAME:-}"
       FIRST_OWNER_EMAIL: "${FIRST_OWNER_EMAIL:-}"
       FIRST_OWNER_PASSWORD: "${FIRST_OWNER_PASSWORD:-}"
-    ports:
-      - "8000:8000"
     depends_on:
       seaweedfs:
         # Files a check sends, and the objects its sweep deletes, live here. A
@@ -251,27 +311,10 @@ services:
       clickhouse:
         condition: service_healthy
     deploy:
+      replicas: ${API_INSTANCES:-1}
       resources:
         limits:
           memory: 832M
-  web:
-    <<: *service-defaults
-    build:
-      context: ../..
-      dockerfile: apps/web/Dockerfile
-    image: nexovue/web:${NEXOVUE_VERSION:-dev}
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
-    ports:
-      - "8080:8080"
-    deploy:
-      resources:
-        limits:
-          memory: 128M
 
   # ---------- doors 2 and 4b ----------
   scheduler-beat:
@@ -304,14 +347,12 @@ services:
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
-      # The service alert rules read the telemetry store (F21, ADR-012). This worker
-      # alone runs those sweeps. TODO(hosting): a read-only ClickHouse user; the
-      # API's account is used until the deployment provisions one.
-      # Reads only: the read-only account.
+      # The service alert rules read the telemetry store (F21, ADR-012); this
+      # worker alone runs those sweeps, as the read-only account.
       CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
-      # The nightly erasure of deleted organizations (ADR-014) runs on this worker.
-      # Until group 6 provisions a user that can only delete, the admin account.
-      CLICKHOUSE_ERASER_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # The nightly erasure of deleted organizations (ADR-014) runs on this
+      # worker, as the account that can only read and delete (users.d/eraser.xml).
+      CLICKHOUSE_ERASER_DSN: clickhouse://nexovue_eraser:${CLICKHOUSE_ERASER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -419,3 +460,6 @@ services:
 
 volumes:
   ollama-models:
+  caddy-data:
+  caddy-config:
+  web-assets:

@@ -18,7 +18,12 @@ from typing import Annotated, Final, Literal
 from urllib.parse import urlsplit
 
 from nexovue_platform.checks.sealing import ConfiguredKeys
-from nexovue_platform.email.settings import EmailProvider, EmailSettings, email_settings
+from nexovue_platform.email.settings import (
+    EmailProvider,
+    EmailSettings,
+    email_settings,
+    refuse_console_mail_in_production,
+)
 from pydantic import (
     AnyUrl,
     Field,
@@ -26,6 +31,7 @@ from pydantic import (
     SecretStr,
     UrlConstraints,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -347,6 +353,11 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _mail_is_real_in_production(self) -> Settings:
+        refuse_console_mail_in_production(env=self.env, provider=self.email_provider)
+        return self
+
+    @model_validator(mode="after")
     def _keys_are_set_in_production(self) -> Settings:
         """A deployed install seals with both keys (readiness blocker 17).
 
@@ -375,14 +386,19 @@ class Settings(BaseSettings):
 
     @field_validator("payments_domestic_provider", "email_provider", mode="before")
     @classmethod
-    def _folded(cls, value: object) -> object:
-        """A provider name is matched however it was typed.
+    def _folded(cls, value: object, info: ValidationInfo) -> object:
+        """A provider name is matched however it was typed, and blank is unset.
 
         `model_config` already folds variable *names*; the values were still
         case-sensitive, so `PAYMENTS_DOMESTIC_PROVIDER=Razorpay` failed to start
-        with a validation error naming a literal rather than the typo.
+        with a validation error naming a literal rather than the typo. Both
+        deployment files pass `EMAIL_PROVIDER: ${EMAIL_PROVIDER:-}`, so an install
+        without mail hands over an empty string, which must mean the default.
         """
-        return value.strip().lower() if isinstance(value, str) else value
+        if not isinstance(value, str):
+            return value
+        folded = value.strip().lower()
+        return folded or cls.model_fields[str(info.field_name)].default
 
     # Where a verification or reset link points. It is the customer-facing app,
     # never this API: the link is clicked in a browser and lands on a screen that

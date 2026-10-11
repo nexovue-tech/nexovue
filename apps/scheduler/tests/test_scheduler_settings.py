@@ -136,3 +136,29 @@ def test_production_refuses_to_start_without_the_check_secret_key(
     _apply(monkeypatch, {"CHECK_SECRET_KEY": "qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4="})
     get_settings.cache_clear()
     assert get_settings().env == "production"
+
+
+def test_production_refuses_alert_mail_that_only_writes_to_the_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blocker 11: `console` would report every alert email delivered."""
+    _apply(
+        monkeypatch,
+        {
+            **COMPLETE_ENVIRONMENT,
+            "ENV": "production",
+            "CHECK_SECRET_KEY": "qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4=",
+            "EMAIL_PROVIDER": "console",
+        },
+    )
+
+    with pytest.raises(SettingsError) as refused:
+        get_settings()
+    assert "EMAIL_PROVIDER" in str(refused.value)
+
+
+def test_a_blank_provider_is_mail_left_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both deployment files pass `EMAIL_PROVIDER: ${EMAIL_PROVIDER:-}`."""
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "EMAIL_PROVIDER": ""})
+
+    assert get_settings().email is None

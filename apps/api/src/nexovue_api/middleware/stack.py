@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
+from nexovue_api.middleware.body_limit import RequestBodyLimitMiddleware
 from nexovue_api.middleware.correlation import CorrelationIdMiddleware
 from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
 from nexovue_api.middleware.ratelimit import RateLimitMiddleware
@@ -24,6 +25,9 @@ def install_middleware(app: FastAPI, settings: Settings) -> None:
         enabled=settings.rate_limit_enabled,
         trusted_proxy_count=settings.trusted_proxy_count,
     )
+    # Outside the rate limiter, whose auth tier peeks at the body: every byte any
+    # layer reads is counted.
+    app.add_middleware(RequestBodyLimitMiddleware)
     app.add_middleware(RequestLogMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
     app.add_middleware(ExceptionBoundaryMiddleware)

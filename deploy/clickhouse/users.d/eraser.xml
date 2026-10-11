@@ -1,0 +1,29 @@
+<!--
+  The eraser: the account the nightly erasure of deleted organizations connects
+  as (ADR-014, `nexovue_scheduler.erasure`), and the only one in nexovue that
+  can delete telemetry (docs/changes/deployment-tells-the-truth).
+
+  It counts what is left of each owed tenant (SELECT), deletes it
+  (ALTER DELETE), and watches its own mutations in system.mutations, which
+  this server version also requires a grant to read. Nothing else: no DROP, INSERT, FILE, URL or S3, which the
+  administrator account it replaces held.
+
+  Not readonly: a readonly account cannot run a mutation at all, nor send the
+  `mutations_sync` setting each statement carries.
+-->
+<clickhouse>
+  <users>
+    <nexovue_eraser>
+      <password from_env="CLICKHOUSE_ERASER_PASSWORD"/>
+      <profile>default</profile>
+      <quota>default</quota>
+      <networks>
+        <ip>::/0</ip>
+      </networks>
+      <grants>
+        <query>GRANT SELECT, ALTER DELETE ON nexovue.*</query>
+        <query>GRANT SELECT ON system.mutations</query>
+      </grants>
+    </nexovue_eraser>
+  </users>
+</clickhouse>

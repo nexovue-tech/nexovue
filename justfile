@@ -33,7 +33,7 @@ dev:
     just otel-demo up
 # Production replica: same infrastructure, services from built images
 dev-app:
-    docker compose -f {{compose}}/docker-compose.app.yaml up -d --wait --build
+    docker compose --env-file {{compose}}/.env.replica -f {{compose}}/docker-compose.app.yaml up -d --wait --build
 up:
     docker compose -f {{compose}}/docker-compose.yaml up -d --wait
     -./tools/otel-demo/otel-demo.sh up

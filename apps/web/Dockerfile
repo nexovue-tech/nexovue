@@ -1,4 +1,9 @@
-# Production image for the web app: a static build, served by nginx.
+# The console's built files, and nothing that serves them.
+#
+# The deployment's edge serves them (deploy/caddy/Caddyfile); `web-assets-init`
+# copies them out of this image into the edge's volume at deploy time, which is
+# why the final stage keeps a shell and `cp`. ADR-019 moves these files into the
+# `nexovue` image (group 8 of the readiness plan).
 FROM node:26.7.0-trixie-slim AS build
 RUN npm install --global corepack@latest && corepack enable
 WORKDIR /app
@@ -11,11 +16,10 @@ RUN --mount=type=cache,target=/pnpm-store \
 
 COPY packages/ui packages/ui
 COPY apps/web apps/web
+# The setup pages are documentation first; the build turns them into console
+# routes (apps/web/build/setup-docs-plugin.ts).
+COPY docs/product/setup docs/product/setup
 RUN pnpm --filter @nexovue/web build
 
-FROM nginx:1.29-alpine
-# The app is a single-page router, so every unknown path serves index.html and
-# TanStack Router decides what it is — including the 404.
-COPY deploy/nginx/web.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/apps/web/dist /usr/share/nginx/html
-EXPOSE 8080
+FROM busybox:1.37.0
+COPY --from=build /app/apps/web/dist /srv/web

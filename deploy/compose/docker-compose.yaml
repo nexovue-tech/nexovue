@@ -356,9 +356,9 @@ services:
     deploy:
       resources:
         limits:
-          # dev-environment.md budgets 0.1 GB for `web`. That fits the nginx
-          # image in docker-compose.app.yaml, but not a Vite dev server, and
-          # certainly not the `pnpm install` that precedes it.
+          # dev-environment.md budgets 0.1 GB for `web`. That fits static files,
+          # but not a Vite dev server, and certainly not the `pnpm install` that
+          # precedes it.
           memory: 1024M
 
   # ---------- doors 2 and 4b ----------
@@ -446,9 +446,9 @@ services:
       # alone runs those sweeps, so it alone is handed the store.
       # Reads only: the read-only account.
       CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_READER_DSN:-clickhouse://nexovue_reader:nexovue_reader_dev@clickhouse:8123/nexovue}
-      # The nightly erasure of deleted organizations (ADR-014) runs on this worker.
-      # Until group 6 provisions a user that can only delete, the admin account.
-      CLICKHOUSE_ERASER_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
+      # The nightly erasure of deleted organizations (ADR-014) runs on this
+      # worker, as the account that can only read and delete (users.d/eraser.xml).
+      CLICKHOUSE_ERASER_DSN: ${DEV_CLICKHOUSE_ERASER_DSN:-clickhouse://nexovue_eraser:nexovue_eraser_dev@clickhouse:8123/nexovue}
     depends_on:
       clickhouse:
         condition: service_healthy

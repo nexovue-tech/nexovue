@@ -41,6 +41,7 @@ _STATUS_PROBLEMS: Final[dict[int, problems.ProblemType]] = {
     int(HTTPStatus.NOT_FOUND): problems.NOT_FOUND,
     int(HTTPStatus.CONFLICT): problems.CONFLICT,
     int(HTTPStatus.TOO_MANY_REQUESTS): problems.RATE_LIMIT_EXCEEDED,
+    int(HTTPStatus.REQUEST_ENTITY_TOO_LARGE): problems.CONTENT_TOO_LARGE,
     int(HTTPStatus.SERVICE_UNAVAILABLE): problems.DEPENDENCY_UNAVAILABLE,
 }
 

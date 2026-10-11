@@ -12,7 +12,12 @@ from functools import lru_cache
 from typing import Annotated, Final, Literal
 
 from nexovue_platform.checks.sealing import ConfiguredKeys
-from nexovue_platform.email.settings import EmailProvider, EmailSettings, email_settings
+from nexovue_platform.email.settings import (
+    EmailProvider,
+    EmailSettings,
+    email_settings,
+    refuse_console_mail_in_production,
+)
 from pydantic import Field, PostgresDsn, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings import SettingsError as SettingsSourceError
@@ -152,6 +157,20 @@ class Settings(BaseSettings):
         if self.env == "production" and not self.check_secret_key:
             raise ValueError("CHECK_SECRET_KEY is not set; production opens secrets with it.")
         return self
+
+    @model_validator(mode="after")
+    def _mail_is_real_in_production(self) -> Settings:
+        refuse_console_mail_in_production(env=self.env, provider=self.email_provider)
+        return self
+
+    @field_validator("email_provider", mode="before")
+    @classmethod
+    def _provider_folded(cls, value: object) -> object:
+        """Matched however it was typed, and blank is unset: both deployment files
+        pass `EMAIL_PROVIDER: ${EMAIL_PROVIDER:-}`, the API reads it the same way."""
+        if not isinstance(value, str):
+            return value
+        return value.strip().lower() or cls.model_fields["email_provider"].default
 
     @field_validator("probe_locations", "dns_resolvers", mode="before")
     @classmethod

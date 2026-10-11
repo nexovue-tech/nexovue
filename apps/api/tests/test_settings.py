@@ -184,3 +184,39 @@ def test_development_starts_without_the_encryption_keys(monkeypatch: pytest.Monk
     _apply(monkeypatch, COMPLETE_ENVIRONMENT)
 
     assert get_settings().credential_keys.current == ""
+
+
+def _deployed(**extra: str) -> dict[str, str]:
+    return {
+        **COMPLETE_ENVIRONMENT,
+        "ENV": "production",
+        "OTLP_ENDPOINT": "https://ingest.nexovue.com",
+        **DEPLOYED_KEYS,
+        **extra,
+    }
+
+
+def test_production_refuses_mail_that_only_writes_to_the_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blocker 11. `console` reports every message sent, so verification, reset
+    and invoice mail would vanish with nothing going red."""
+    _apply(monkeypatch, _deployed(EMAIL_PROVIDER="console"))
+
+    with pytest.raises(SettingsError) as refused:
+        get_settings()
+    assert "EMAIL_PROVIDER" in str(refused.value)
+
+
+def test_production_starts_with_mail_left_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each route that sends mail refuses by variable name instead; an air-gapped
+    install has no provider to reach."""
+    _apply(monkeypatch, _deployed(EMAIL_PROVIDER="", EMAIL_API_KEY=""))
+
+    assert get_settings().email is None
+
+
+def test_development_sends_mail_to_the_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "EMAIL_PROVIDER": "console"})
+
+    assert get_settings().email is not None

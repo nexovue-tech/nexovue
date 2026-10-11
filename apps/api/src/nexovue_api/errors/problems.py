@@ -99,6 +99,11 @@ QUERY_TOO_LARGE: Final = register(
     "The query would read more data than the limit allows",
     HTTPStatus.BAD_REQUEST,
 )
+CONTENT_TOO_LARGE: Final = register(
+    "content-too-large",
+    "The request body is larger than this route accepts",
+    HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+)
 DEPENDENCY_UNAVAILABLE: Final = register(
     "dependency-unavailable",
     "A dependency this request needs is not available",

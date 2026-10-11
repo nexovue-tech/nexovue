@@ -50,12 +50,6 @@ x-control-plane-env: &control-plane-env
   LOG_LEVEL: info
   LOG_FORMAT: json
   POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-  # Caddy is the only hop in front of the API here, so the caller's address
-  # is the last entry X-Forwarded-For. Left at the default 0 the middleware
-  # correctly refuses to trust the header and falls back to the direct peer
-  # — which is Caddy, for everybody. Every user then shares one bucket, so
-  # ten failed logins a minute lock out the whole deployment.
-  TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
   # Object storage: AWS S3, or the SeaweedFS service above for an
   # air-gapped install. Generic S3 API only. Holds source map
   # bytes today and the cold tier when it is built. The bucket must exist —
@@ -71,10 +65,9 @@ x-control-plane-env: &control-plane-env
   PROBE_LOCATIONS: local
   PROBER_REGION: local
   # Where every emailed link lands — verification, password reset, and an
-  # alert's evidence (F21). Demanded, as in the production replica: there is no
-  # sensible guess for an install's own hostname. Missing until F21, which left
-  # an on-prem install unable to send a working link at all.
-  APP_BASE_URL: ${APP_BASE_URL:?set APP_BASE_URL}
+  # alert's evidence (F21). The edge's app name, and built from it so the two
+  # cannot disagree.
+  APP_BASE_URL: https://${NEXOVUE_APP_HOST:?set NEXOVUE_APP_HOST}
   # The mail provider, passed through rather than demanded, as in the replica:
   # an install without one still serves every screen, and each email path says
   # which variable is missing. An air-gapped install has no provider to reach.
@@ -101,6 +94,7 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:?set CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
       CLICKHOUSE_READER_PASSWORD: ${CLICKHOUSE_READER_PASSWORD:?set CLICKHOUSE_READER_PASSWORD}
+      CLICKHOUSE_ERASER_PASSWORD: ${CLICKHOUSE_ERASER_PASSWORD:?set CLICKHOUSE_ERASER_PASSWORD}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "0"
 
   postgres:
@@ -130,13 +124,14 @@ services:
       NEXOVUE_APP_HOST: ${NEXOVUE_APP_HOST:?set NEXOVUE_APP_HOST}
       NEXOVUE_INGEST_HOST: ${NEXOVUE_INGEST_HOST:?set NEXOVUE_INGEST_HOST}
       NEXOVUE_TLS_EMAIL: ${NEXOVUE_TLS_EMAIL:?set NEXOVUE_TLS_EMAIL}
+      # No payment processor: a self-hosted install takes no payments, so the
+      # console's content-security policy allows no checkout origin.
+      NEXOVUE_CHECKOUT_ORIGINS: ""
     volumes:
       - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
-      # The built web app, served directly. TODO(caddy): the Caddyfile needs a
-      #   file_server route for /* pointing here, with /api and the OTLP paths
-      #   proxied to api and receiver.
+      # The console's built files, which the edge serves itself (ADR-019 point 3).
       - web-assets:/srv/web:ro
     depends_on:
       api:
@@ -160,11 +155,16 @@ services:
     #   registry path above is decided. The anchor documents the base only.
     environment:
       <<: *data-plane-env
+      # How many receivers share the traffic; each enforces its share of the
+      # ingest limit. One setting for both, so they cannot drift apart.
+      RECEIVER_INSTANCES: ${RECEIVER_INSTANCES:-1}
     depends_on:
       kafka:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    deploy:
+      replicas: ${RECEIVER_INSTANCES:-1}
 
   # One image, deployed once, running every pipeline (`WORKER_PIPELINES` chooses).
   # Deploying it twice with two lists is how it splits — profiles ran alone from
@@ -222,6 +222,15 @@ services:
       CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS: ${CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS:-}
       # Reads as the read-only account; the API holds no ClickHouse credential that writes.
       CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # What signup hands a customer to export to: the edge's ingest name.
+      OTLP_ENDPOINT: https://${NEXOVUE_INGEST_HOST:?set NEXOVUE_INGEST_HOST}
+      # Caddy is the one hop in front of the API, so the caller is the last
+      # X-Forwarded-For entry. At 0 the direct peer — Caddy, for everybody — is
+      # every caller, and ten failed logins a minute lock out the whole install.
+      TRUSTED_PROXY_COUNT: "1"
+      # How many API processes share the traffic; each enforces its share of the
+      # in-memory limits. One setting for both, so they cannot drift apart.
+      API_INSTANCES: ${API_INSTANCES:-1}
       # **The way in.** This install has nobody to invite its first person, so
       # the first organization and its owner are created at boot from these.
       # Demanded rather than passed through: an install that starts with no
@@ -254,14 +263,16 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+    deploy:
+      replicas: ${API_INSTANCES:-1}
 
   # The web app is static files, so the proxy serves them directly rather than
   # running a container whose only job is to hand back bytes that never change
-  # between deploys. `web-assets` is populated at deploy time from the built
-  # image — TODO: wire that step once a registry exists (see the header).
+  # between deploys. This copies them out of the image into the proxy's volume
+  # at every deploy, and exits.
   web-assets-init:
     image: ${NEXOVUE_REGISTRY:?set NEXOVUE_REGISTRY}/web:${NEXOVUE_VERSION:?set NEXOVUE_VERSION}
-    command: ["sh", "-c", "cp -r /usr/share/nginx/html/. /assets/"]
+    command: ["sh", "-c", "cp -r /srv/web/. /assets/"]
     restart: on-failure
     volumes:
       - web-assets:/assets
@@ -284,14 +295,12 @@ services:
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
-      # The service alert rules read the telemetry store (F21, ADR-012). This worker
-      # alone runs those sweeps. TODO(hosting): a read-only ClickHouse user; the
-      # API's account is used until the deployment provisions one.
-      # Reads only: the read-only account.
+      # The service alert rules read the telemetry store (F21, ADR-012); this
+      # worker alone runs those sweeps, as the read-only account.
       CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
-      # The nightly erasure of deleted organizations (ADR-014) runs on this worker.
-      # Until group 6 provisions a user that can only delete, the admin account.
-      CLICKHOUSE_ERASER_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # The nightly erasure of deleted organizations (ADR-014) runs on this
+      # worker, as the account that can only read and delete (users.d/eraser.xml).
+      CLICKHOUSE_ERASER_DSN: clickhouse://nexovue_eraser:${CLICKHOUSE_ERASER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
     depends_on:
       clickhouse:
         condition: service_healthy

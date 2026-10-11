@@ -37,6 +37,21 @@ EMAIL_VARIABLES: Final = (
 )
 
 
+def refuse_console_mail_in_production(*, env: str, provider: str) -> None:
+    """Production may leave mail unconfigured, never pretend to send it.
+
+    `console` reports every message sent and writes it to a log nobody reads, so
+    verification, reset, invoice and alert mail would vanish with nothing going
+    red (readiness blocker 11). Unconfigured is honest: each sender refuses by
+    variable name. Raised as ValueError for the settings validator to name.
+    """
+    if env == "production" and provider == "console":
+        raise ValueError(
+            "EMAIL_PROVIDER is 'console', which writes mail to the log and sends none. "
+            "Set a real provider, or leave EMAIL_PROVIDER unset to run without mail."
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class EmailSettings:
     """A complete email configuration, which is all four values or none.

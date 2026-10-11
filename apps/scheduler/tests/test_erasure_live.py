@@ -34,6 +34,7 @@ from alert_fixtures import AlertTenant, drop_tenant, make_tenant
 from botocore.config import Config
 from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.client import Client
+from clickhouse_connect.driver.exceptions import DatabaseError
 from live import require_stack
 from nexovue_platform import erasure
 from sqlalchemy import text
@@ -47,6 +48,12 @@ from nexovue_scheduler.probes.files import ObjectStoreFiles
 
 CLICKHOUSE_DSN: Final = os.environ.get(
     "NEXOVUE_CLICKHOUSE_DSN", "clickhouse://nexovue:nexovue_dev@localhost:18123/nexovue"
+)
+# What the erasure itself connects as: the account that can only read and delete
+# (deploy/clickhouse/users.d/eraser.xml). The fixtures write as the administrator.
+ERASER_DSN: Final = os.environ.get(
+    "NEXOVUE_CLICKHOUSE_ERASER_DSN",
+    "clickhouse://nexovue_eraser:nexovue_eraser_dev@localhost:18123/nexovue",
 )
 POSTGRES_DSN: Final = os.environ.get(
     "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
@@ -92,16 +99,29 @@ class _S3Settings:
     s3_bucket: str = S3_BUCKET
 
 
-@pytest.fixture
-def clickhouse() -> Iterator[Client]:
-    parts = urlsplit(CLICKHOUSE_DSN)
-    client = clickhouse_connect.get_client(
+def _client(dsn: str) -> Client:
+    parts = urlsplit(dsn)
+    return clickhouse_connect.get_client(
         host=parts.hostname or "localhost",
         port=parts.port or 8123,
         username=parts.username or "",
         password=parts.password or "",
         database=parts.path.lstrip("/"),
     )
+
+
+@pytest.fixture
+def clickhouse() -> Iterator[Client]:
+    client = _client(CLICKHOUSE_DSN)
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def eraser() -> Iterator[Client]:
+    client = _client(ERASER_DSN)
     try:
         yield client
     finally:
@@ -166,8 +186,8 @@ async def three_tenants(
 class _RecordLandsLate(ErasureStore):
     """A record already on the broker, written after the last mutation finished."""
 
-    def __init__(self, clickhouse: Client, org_id: str) -> None:
-        super().__init__(clickhouse)
+    def __init__(self, eraser: Client, clickhouse: Client, org_id: str) -> None:
+        super().__init__(eraser)
         self._clickhouse = clickhouse
         self._org_id = org_id
 
@@ -180,6 +200,7 @@ class _RecordLandsLate(ErasureStore):
 async def test_one_run_erases_the_deleted_and_leaves_the_live_untouched(
     engine: AsyncEngine,
     clickhouse: Client,
+    eraser: Client,
     s3: Any,
     three_tenants: tuple[AlertTenant, AlertTenant, AlertTenant],
 ) -> None:
@@ -192,7 +213,7 @@ async def test_one_run_erases_the_deleted_and_leaves_the_live_untouched(
     pauses: list[float] = []
     night = await erase_owed(
         engine,
-        _RecordLandsLate(clickhouse, str(late.org_id)),
+        _RecordLandsLate(eraser, clickhouse, str(late.org_id)),
         ObjectStoreFiles(_S3Settings(), client=s3),  # type: ignore[arg-type]
         batch_size=1000,
         pause=pauses.append,
@@ -214,6 +235,19 @@ async def test_one_run_erases_the_deleted_and_leaves_the_live_untouched(
     # Organizations other suites delete meanwhile make a second group; each waits
     # out the first group's superseded parts.
     assert all(pause == OLD_PARTS_LIFETIME_SECONDS for pause in pauses)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "DROP TABLE spans",
+        "INSERT INTO spans (tenant_id) VALUES ('eraser-must-not-write')",
+        "SELECT * FROM url('http://example.com', CSV, 'a String')",
+    ],
+)
+def test_the_eraser_can_do_nothing_but_read_and_delete(eraser: Client, statement: str) -> None:
+    with pytest.raises(DatabaseError, match=r"ACCESS_DENIED|Not enough privileges"):
+        eraser.command(statement)
 
 
 async def test_an_erasure_owed_for_more_than_three_days_is_reported(
