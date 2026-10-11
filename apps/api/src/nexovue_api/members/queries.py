@@ -5,11 +5,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import Text, cast, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
-from nexovue_api.data.postgres.models import AuditLogEntry, User
+from nexovue_api.data.postgres.models import AuditLogEntry, SessionRecord, User
 
 
 async def members_of(session: AsyncSession, *, org_id: uuid.UUID) -> list[User]:
@@ -76,3 +76,40 @@ async def last_sign_ins(
     )
     rows = (await session.execute(statement)).tuples().all()
     return {user_id: at for user_id, at in rows if user_id is not None}
+
+
+async def owners(session: AsyncSession, *, org_id: uuid.UUID) -> list[User]:
+    """Every owner not removed, unlocked: for saying whether one may leave."""
+    statement = select(User).where(
+        User.org_id == org_id, User.role == "owner", User.removed_at.is_(None)
+    )
+    return list(await session.scalars(statement))
+
+
+async def entries_about(
+    session: AsyncSession, *, org_id: uuid.UUID, target: str, address: str
+) -> list[AuditLogEntry]:
+    """Every entry in this organization about one person, or quoting their address.
+
+    The address match is a substring over the detail's text and only narrows the
+    rows; the caller replaces exact values. `autoescape` because an address may
+    hold `_`, which LIKE would read as a wildcard.
+    """
+    statement = select(AuditLogEntry).where(
+        AuditLogEntry.org_id == org_id,
+        AuditLogEntry.detail.is_not(None),
+        or_(
+            AuditLogEntry.target == target,
+            cast(AuditLogEntry.detail, Text).contains(address, autoescape=True),
+        ),
+    )
+    return list(await session.scalars(statement))
+
+
+async def end_sessions_of(session: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID) -> None:
+    """Delete every session row of one person: each holds where they signed in from."""
+    await session.execute(
+        delete(SessionRecord).where(
+            SessionRecord.org_id == org_id, SessionRecord.user_id == user_id
+        )
+    )

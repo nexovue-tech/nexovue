@@ -191,8 +191,8 @@ async def test_changes_hides_sign_ins_and_nothing_else(db: AsyncSession) -> None
     assert hidden >= 5, f"the five seeded sign-ins should be what is left out, {hidden} were"
 
 
-async def test_a_removed_person_is_still_named(db: AsyncSession) -> None:
-    """BR6: removing someone never rewrites what they did."""
+async def test_a_removed_person_is_named_as_a_former_member(db: AsyncSession) -> None:
+    """BR6 (amended by the personal-data spec): what they did stays, under no name of theirs."""
     acme = await _tenant(db, "Acme")
     member, token = await members.invite(
         db, actor=acme.user, email=f"t-{uuid.uuid4()}@example.test", role="admin", now=_now()
@@ -205,7 +205,7 @@ async def test_a_removed_person_is_still_named(db: AsyncSession) -> None:
     await db.flush()
 
     by_priya = await read.read_page(db, org_id=acme.organization.id, actor_id=member.id)
-    assert by_priya.entries[0].actor.name == "Priya"
+    assert by_priya.entries[0].actor.name == members.FORMER_MEMBER_NAME
 
 
 async def test_another_organizations_history_never_appears(db: AsyncSession) -> None:

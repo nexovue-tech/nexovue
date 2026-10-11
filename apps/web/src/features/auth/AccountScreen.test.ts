@@ -14,7 +14,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { AccountScreen } from "./AccountScreen";
-import { parseLoginSearch, SIGNED_OUT_EVERYWHERE } from "./search";
+import { ACCOUNT_DELETED, parseLoginSearch, SIGNED_OUT_EVERYWHERE } from "./search";
 
 /**
  * The defects these guard, both of them about the two session behaviours being opposite:
@@ -33,6 +33,9 @@ const PASSWORD_PATH = "/api/v1/profile/password";
 const SIGN_OUT_PATH = "/api/v1/profile/sign-out-everywhere";
 const SESSIONS_PATH = "/api/v1/profile/sessions";
 const TWO_FACTOR_PATH = "/api/v1/profile/two-factor";
+const DELETION_PATH = "/api/v1/profile/deletion";
+const SOLE_OWNER =
+  "You are this organization's only owner. Make someone else an owner, or delete the organization.";
 
 /**
  * What the API answers for the session list, reduced exactly as it reduces it: a
@@ -91,7 +94,7 @@ const json = (body: unknown, status: number) =>
  * on screen: off, with a form that asks for the password, and on, with the form that
  * takes it away again.
  */
-function stubApi(options: { secondFactorEnabled?: boolean } = {}) {
+function stubApi(options: { secondFactorEnabled?: boolean; soleOwner?: boolean } = {}) {
   const posted: string[] = [];
   const deleted: string[] = [];
 
@@ -128,6 +131,18 @@ function stubApi(options: { secondFactorEnabled?: boolean } = {}) {
     if (url.pathname === PASSWORD_PATH || url.pathname === SIGN_OUT_PATH) {
       posted.push(url.pathname);
       return new Response(null, { status: 204 });
+    }
+    if (url.pathname === DELETION_PATH && init?.method === "POST") {
+      posted.push(url.pathname);
+      return new Response(null, { status: 204 });
+    }
+    if (url.pathname === DELETION_PATH) {
+      return json(
+        options.soleOwner
+          ? { allowed: false, refusal: SOLE_OWNER }
+          : { allowed: true, refusal: null },
+        200,
+      );
     }
     if (url.pathname.endsWith("/auth/me")) return json(IDENTITY, 200);
     throw new Error(`no stub for ${url.pathname}`);
@@ -331,6 +346,17 @@ describe("the signed-in devices list", () => {
 });
 
 describe("two-factor authentication", () => {
+  it("labels the password with what it will do: on when off, off when on", async () => {
+    stubApi();
+    const off = await mountProfile();
+    expect(off.container.textContent).toContain("Your password, to turn this on");
+    expect(off.container.textContent).not.toContain("to turn this off");
+
+    stubApi({ secondFactorEnabled: true });
+    const on = await mountProfile();
+    expect(on.container.textContent).toContain("Your password, to turn this off");
+  });
+
   it("asks for the current password before it will even offer a secret", async () => {
     const api = stubApi();
     const { container } = await mountProfile();
@@ -400,5 +426,87 @@ describe("two-factor authentication", () => {
     expect(container.textContent).toContain("Turn off two-factor authentication");
     expect(container.textContent).toContain("9 of your recovery codes are unused");
     expect(container.textContent).not.toContain("Set up two-factor authentication");
+  });
+});
+
+describe("your data", () => {
+  function deletionForm(container: HTMLElement): HTMLFormElement {
+    const heading = [...container.querySelectorAll("p")].find(
+      (candidate) => candidate.textContent === "This cannot be undone.",
+    );
+    const form = heading?.closest("form");
+    if (!form) throw new Error("the deletion form is not open");
+    return form;
+  }
+
+  function within(form: HTMLFormElement, name: string): HTMLInputElement {
+    const input = form.querySelector<HTMLInputElement>(`input[name="${name}"]`);
+    if (!input) throw new Error(`no ${name} field in the deletion form`);
+    return input;
+  }
+
+  function postedBody(api: ReturnType<typeof stubApi>): unknown {
+    const calls = api.fetch.mock.calls as unknown as Array<[URL, RequestInit]>;
+    const [, init] =
+      calls.find(([url, sent]) => url.pathname === DELETION_PATH && sent?.method === "POST") ?? [];
+    return JSON.parse(String(init?.body));
+  }
+
+  it("downloads the file from the API by a plain link", async () => {
+    stubApi();
+    const { container } = await mountProfile();
+
+    const link = [...container.querySelectorAll("a")].find((a) => a.textContent === "Download");
+    expect(link?.getAttribute("href")).toBe("/api/v1/profile/data.json");
+  });
+
+  it("says the organization the person leaves and that history keeps no name", async () => {
+    stubApi();
+    const { container } = await mountProfile();
+
+    expect(container.textContent).toContain("Removes you from Dev Co.");
+    expect(container.textContent).toContain("without your name or address");
+  });
+
+  it("deletes with the password and lands on sign-in saying so", async () => {
+    const api = stubApi();
+    const { container, router } = await mountProfile();
+
+    await click(buttonLabelled(container, "Delete account…"));
+    const form = deletionForm(container);
+    expect(buttonLabelled(container, "Delete my account").disabled).toBe(true);
+    await act(async () => typeInto(within(form, "current_password"), "nexovue-dev"));
+    await click(buttonLabelled(container, "Delete my account"));
+
+    expect(api.posted).toEqual([DELETION_PATH]);
+    expect(postedBody(api)).toEqual({ current_password: "nexovue-dev" });
+    expect(router.state.location.pathname).toBe("/login");
+    expect(router.state.location.search).toEqual({ notice: ACCOUNT_DELETED });
+  });
+
+  it("asks for the code too when two-factor is on", async () => {
+    const api = stubApi({ secondFactorEnabled: true });
+    const { container } = await mountProfile();
+
+    await click(buttonLabelled(container, "Delete account…"));
+    const form = deletionForm(container);
+    await act(async () => typeInto(within(form, "current_password"), "nexovue-dev"));
+    expect(buttonLabelled(container, "Delete my account").disabled).toBe(true);
+    await act(async () => typeInto(within(form, "code"), "123456"));
+    await click(buttonLabelled(container, "Delete my account"));
+
+    expect(postedBody(api)).toEqual({ current_password: "nexovue-dev", code: "123456" });
+  });
+
+  it("tells the last owner what to do instead, with no button that can only fail", async () => {
+    stubApi({ soleOwner: true });
+    const { container } = await mountProfile();
+
+    expect(container.textContent).toContain(SOLE_OWNER);
+    const link = [...container.querySelectorAll("a")].find(
+      (a) => a.textContent === "Go to Members",
+    );
+    expect(link?.getAttribute("href")).toBe("/settings/members");
+    expect(() => buttonLabelled(container, "Delete account…")).toThrow();
   });
 });

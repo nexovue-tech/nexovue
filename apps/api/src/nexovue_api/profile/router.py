@@ -25,14 +25,21 @@ same 404 as one that never existed.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from http import HTTPStatus
 from typing import Final
 
 from fastapi import APIRouter, Request, Response
 
+from nexovue_api.audit import service as audit
 from nexovue_api.auth import second_factor
 from nexovue_api.auth.cookies import clear_session_cookie, set_session_cookie
-from nexovue_api.auth.dependencies import CredentialEncryption, CurrentIdentity, SecondFactors
+from nexovue_api.auth.dependencies import (
+    CredentialEncryption,
+    CurrentIdentity,
+    OptionalCredentialEncryption,
+    SecondFactors,
+)
 from nexovue_api.auth.schemas import UserSummary
 from nexovue_api.auth.sessions import session_token_from_headers, token_fingerprint
 from nexovue_api.deps import (
@@ -42,9 +49,11 @@ from nexovue_api.deps import (
     OneTimeTokens,
     SessionStoreDep,
 )
-from nexovue_api.errors.exceptions import NotFoundError
-from nexovue_api.profile import service
+from nexovue_api.errors.exceptions import NotFoundError, PermissionDeniedError
+from nexovue_api.profile import personal_data, service
 from nexovue_api.profile.schemas import (
+    AccountDeletion,
+    AccountDeletionState,
     EmailChangeRequest,
     PasswordChange,
     ProfileUpdate,
@@ -60,6 +69,11 @@ from nexovue_api.profile.schemas import (
 # One refusal for a session id that is not the caller's and one that never
 # existed. See `end_session`.
 NO_SUCH_SESSION: Final = "There is no such session on this account."
+# The person's data as a file: addressed by its extension (`api.md`), and declared
+# above `/sessions/{session_id}` like every file route.
+PERSONAL_DATA_FILE_PATH: Final = "/data.json"
+# A support view reads as the person, but their data file is theirs to take.
+EXPORT_NOT_IN_SUPPORT_VIEW: Final = "Only the person can download their own data."
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -194,6 +208,30 @@ async def list_sessions(
     )
 
 
+@router.get(
+    PERSONAL_DATA_FILE_PATH,
+    response_class=Response,
+    summary="Download what nexovue holds about you",
+)
+async def export_personal_data(identity: CurrentIdentity, db: DbSession) -> Response:
+    """One JSON file, saved rather than shown. Audited: it holds where you signed in from.
+
+    `CurrentIdentity` already refuses an API token; a support view is refused here,
+    because reading as the person is not the person taking their file.
+    """
+    if identity.impersonation is not None:
+        raise PermissionDeniedError(EXPORT_NOT_IN_SUPPORT_VIEW)
+    exported = await personal_data.export(
+        db, user=identity.user, organization=identity.organization, now=datetime.now(UTC)
+    )
+    audit.record_personal_data_exported(db, user=identity.user)
+    return Response(
+        content=exported.model_dump_json(indent=2),
+        media_type="application/json",
+        headers={"content-disposition": 'attachment; filename="nexovue-your-data.json"'},
+    )
+
+
 @router.delete(
     "/sessions/{session_id}",
     status_code=HTTPStatus.NO_CONTENT,
@@ -324,3 +362,46 @@ async def disable_second_factor(
         user=identity.user,
         current_password=payload.current_password,
     )
+
+
+# ---- your data (docs/features/personal-data/spec.md) -------------------------
+
+
+@router.get("/deletion", summary="Whether you may delete your account")
+async def account_deletion_state(identity: CurrentIdentity, db: DbSession) -> AccountDeletionState:
+    """Read before the button is shown, so the last owner is told before typing a password."""
+    refusal = await personal_data.deletion_refusal(db, user=identity.user)
+    return AccountDeletionState(allowed=refusal is None, refusal=refusal)
+
+
+@router.post(
+    "/deletion",
+    status_code=HTTPStatus.NO_CONTENT,
+    summary="Delete your own account",
+)
+async def delete_account(
+    payload: AccountDeletion,
+    response: Response,
+    identity: CurrentIdentity,
+    db: DbSession,
+    second_factors: SecondFactors,
+    box: OptionalCredentialEncryption,
+    settings: AppSettings,
+) -> None:
+    """A POST to a named action rather than `DELETE /profile`: it carries the
+    password, and a body on DELETE has no defined meaning (RFC 9110 §9.3.5).
+
+    Every session ends with the account, this one included — its row is deleted in
+    this transaction — so the cookie is cleared.
+    """
+    await personal_data.delete_account(
+        db,
+        second_factors,
+        box,
+        user=identity.user,
+        organization=identity.organization,
+        current_password=payload.current_password,
+        code=payload.code,
+        now=datetime.now(UTC),
+    )
+    clear_session_cookie(response, settings)

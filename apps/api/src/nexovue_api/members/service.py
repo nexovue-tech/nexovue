@@ -6,9 +6,10 @@
   own role is at least that high, and an owner is made or unmade only by an owner.
 - *Always an owner.* No demotion or removal may leave the organization without an
   owner who can sign in; the owners are locked while that is decided.
-- *Removal keeps history.* The row stays — the audit log and "muted by" name it
-  — while its address is rewritten so the person can sign up again, and the
-  sessions epoch ends every session they hold on its next request.
+- *Removal keeps history, not the person.* The row stays — the audit log and
+  "muted by" name it — but as "Former member": the address is rewritten so the
+  person can sign up again, every audit entry names their id instead of their
+  address or name, and their sessions end (personal-data spec, BR2 and BR4).
 
 No HTTP here; the router commits before an email goes, so a link is never sent
 for a person who does not exist yet.
@@ -18,7 +19,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta
-from typing import Final
+from typing import Any, Final
 
 import structlog
 from nexovue_platform.email import EmailError, EmailSender, Message
@@ -26,7 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
-from nexovue_api.auth import set_password
+from nexovue_api.auth import recovery_codes, set_password
 from nexovue_api.auth.credentials import is_valid_email, normalize_email
 from nexovue_api.auth.permissions import Action, may
 from nexovue_api.data.postgres.models import Organization, User
@@ -61,6 +62,8 @@ ELSEWHERE: Final = (
 NOT_PENDING: Final = "This person has already joined; there is no invite to resend or withdraw."
 PENDING: Final = "This person has not joined yet. Withdraw the invite instead."
 ONLY_AN_OWNER_MAKES_OWNERS: Final = "Only an owner can make someone an owner, or change one."
+# What a person who left is called everywhere their row is still named.
+FORMER_MEMBER_NAME: Final = "Former member"
 
 
 async def list_members(db: AsyncSession, *, org_id: uuid.UUID, now: datetime) -> MemberListResponse:
@@ -178,16 +181,55 @@ async def remove(
     if member.role == "owner":
         await _refuse_leaving_no_owner(db, organization=organization, leaving=member)
 
-    address = member.email
+    await scrub(db, member=member, now=now)
+    audit.record_member_removed(db, member=member, actor_user_id=actor.id)
+
+
+async def scrub(db: AsyncSession, *, member: User, now: datetime) -> None:
+    """End a person's membership and take them out of everything that stays.
+
+    Shared by an admin's removal and a person deleting their own account, so
+    removal is never kinder to history than leaving (personal-data spec, BR4).
+    The row stays, because the audit log and "muted by" point at it.
+    """
+    address, name = member.email, member.name
+    target = audit.person_target(member.id)
+    # Every entry naming them now names their id; the entries themselves stay,
+    # as the organization's record of what happened.
+    for entry in await queries.entries_about(
+        db, org_id=member.org_id, target=target, address=address
+    ):
+        entry.detail = _without_person(
+            entry.detail or {},
+            address=address,
+            name=name if entry.target == target else None,
+            replacement=str(member.id),
+        )
+    await queries.end_sessions_of(db, org_id=member.org_id, user_id=member.id)
+
     member.removed_at = now
-    # The sessions epoch: every session this person holds is refused on its
-    # next request, in one write.
+    # The epoch as well as the rows: a session minted mid-request is refused too.
     member.sessions_valid_from = now
     # Frees the address (it is globally unique) so the person can sign up again
-    # or be invited back as someone new; `name` stays for history (FR11, BR6).
+    # or be invited back as someone new.
     member.email = f"removed+{member.id}@removed.invalid"
+    member.name = FORMER_MEMBER_NAME
+    member.timezone = None
+    member.password_hash = None
+    member.totp_secret = None
+    member.totp_confirmed_at = None
     set_password.clear(member)
-    audit.record_member_removed(db, member=member, actor_user_id=actor.id, email=address)
+    await recovery_codes.discard_all_for(db, user_id=member.id)
+
+
+def _without_person(
+    detail: dict[str, Any], *, address: str, name: str | None, replacement: str
+) -> dict[str, Any]:
+    """A new dict, so the JSONB column sees a change, with their values replaced."""
+    return {
+        key: replacement if value == address or (name and value == name) else value
+        for key, value in detail.items()
+    }
 
 
 async def mail_invitation(

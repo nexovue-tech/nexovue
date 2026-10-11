@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { PASSWORD_WAS_RESET, parseLoginSearch, parseTokenSearch } from "./search";
+import { ACCOUNT_DELETED, PASSWORD_WAS_RESET, parseLoginSearch, parseTokenSearch } from "./search";
 
 describe("parseTokenSearch", () => {
   it("takes the token a recovery link carries", () => {
@@ -18,10 +18,11 @@ describe("parseTokenSearch", () => {
 });
 
 describe("parseLoginSearch", () => {
-  it("recognises the one notice another screen may ask for", () => {
+  it("recognises the notices another screen may ask for", () => {
     expect(parseLoginSearch({ notice: PASSWORD_WAS_RESET })).toEqual({
       notice: PASSWORD_WAS_RESET,
     });
+    expect(parseLoginSearch({ notice: ACCOUNT_DELETED })).toEqual({ notice: ACCOUNT_DELETED });
   });
 
   it("drops anything else, so a pasted address cannot make the screen say arbitrary words", () => {

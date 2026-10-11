@@ -133,6 +133,12 @@ MEMBER_INVITE_WITHDRAWN: Final = "member.invite_withdrawn"
 MEMBER_JOINED: Final = "member.joined"
 MEMBER_ROLE_CHANGED: Final = "member.role_changed"
 MEMBER_REMOVED: Final = "member.removed"
+# Deleting your own account (personal-data spec): the same end as a removal, with
+# the person as its actor rather than an admin.
+MEMBER_LEFT: Final = "member.left"
+# A person downloaded what nexovue holds about them. Worth a trail because the
+# file holds where they signed in from.
+PERSONAL_DATA_EXPORTED: Final = "user.data_exported"
 ORGANIZATION_ONBOARDED: Final = "organization.onboarded"
 ORGANIZATION_PAYMENT_RECORDED: Final = "organization.payment_recorded"
 ORGANIZATION_OWNER_LINK_SENT: Final = "organization.owner_link_sent"
@@ -919,18 +925,43 @@ def record_member_role_changed(
     )
 
 
-def record_member_removed(
-    db: AsyncSession, *, member: User, actor_user_id: uuid.UUID, email: str
-) -> None:
-    """`email` is the address the person had: the row's is rewritten on removal."""
+def record_member_removed(db: AsyncSession, *, member: User, actor_user_id: uuid.UUID) -> None:
+    """No address: a removed person is named by their id from here on."""
     _add(
         db,
         org_id=member.org_id,
         actor_user_id=actor_user_id,
         action=MEMBER_REMOVED,
         target=_target(USER_TARGET, member.id),
-        detail={"email": email, "role": member.role},
+        detail={"role": member.role},
     )
+
+
+def record_member_left(db: AsyncSession, *, member: User) -> None:
+    """Written as the person who left: deleting their account is their own act."""
+    _add(
+        db,
+        org_id=member.org_id,
+        actor_user_id=member.id,
+        action=MEMBER_LEFT,
+        target=_target(USER_TARGET, member.id),
+        detail={"role": member.role},
+    )
+
+
+def record_personal_data_exported(db: AsyncSession, *, user: User) -> None:
+    _add(
+        db,
+        org_id=user.org_id,
+        actor_user_id=user.id,
+        action=PERSONAL_DATA_EXPORTED,
+        target=_target(USER_TARGET, user.id),
+    )
+
+
+def person_target(user_id: uuid.UUID) -> str:
+    """The target every entry about one person carries."""
+    return _target(USER_TARGET, user_id)
 
 
 # F31: what nexovue staff do. The actor is a label, never a customer's user.

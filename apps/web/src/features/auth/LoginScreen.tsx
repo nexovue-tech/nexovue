@@ -11,7 +11,7 @@ import { AuthScreenLayout, FormMessage, FormNotice } from "./AuthScreenLayout";
 import { login, needsSecondFactor, sessionQueryKey, submitSecondFactor } from "./api";
 import { describeFormProblem } from "./problem-fields";
 import type { LoginNotice, LoginSearch } from "./search";
-import { PASSWORD_WAS_RESET, SIGNED_OUT_EVERYWHERE } from "./search";
+import { ACCOUNT_DELETED, PASSWORD_WAS_RESET, SIGNED_OUT_EVERYWHERE } from "./search";
 
 /** Where someone lands when they did not arrive from somewhere specific. */
 const DEFAULT_DESTINATION = "/traces";
@@ -35,6 +35,7 @@ const NOTICE_MESSAGE: Record<LoginNotice, string> = {
     "Your password is changed. Every other session on this account has been signed out — sign in with the new password.",
   [SIGNED_OUT_EVERYWHERE]:
     "Every session on this account has been signed out, including this one. That is what you asked for, not a fault — sign in to start a fresh one.",
+  [ACCOUNT_DELETED]: "Your account was deleted.",
 };
 
 /**

@@ -39,7 +39,9 @@ export function describeEntry(entry: AuditEntry): string {
     case "member.role_changed":
       return `${who} changed ${whom}'s role from ${role(detail.before)} to ${role(detail.after)}`;
     case "member.removed":
-      return `${who} removed ${text(detail.email)} (${role(detail.role)})`;
+      return `${who} removed ${whom} (${role(detail.role)})`;
+    case "member.left":
+      return `${who} deleted their account (${role(detail.role)})`;
     case "session.created":
       return `${who} signed in`;
     case "session.ended":

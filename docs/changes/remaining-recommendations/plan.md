@@ -1,6 +1,6 @@
 # Plan: remaining-recommendations (readiness group 9)
 
-> **Status:** In progress — every task built but T21, which waits for its spec (T20)
+> **Status:** Built — every task; D6 (plan prices) is the founder's, later
 >
 > One document: the order of the work and its tasks. The founder approves this plan before any file is
 > edited.
@@ -145,7 +145,7 @@ slot leaves the console's reads admitted; a person exports their data and delete
 - [x] **T19** — `ratelimit/limiter.py` (the concurrency key gains the quota name) · proved by a
   `test_ratelimit_callers.py` case.
 - [x] **T20** — D2's spec and wireframe (`docs/features/personal-data/`), **approved before T21**.
-- [ ] **T21** — `profile/` (`GET /profile/export`, `DELETE /profile` — self-deletion), `members/service.py`
+- [x] **T21** — `profile/` (`GET /profile/data.json`, `DELETE /profile` — self-deletion), `members/service.py`
   (name and audit email replaced on removal), the profile screens · proved by
   `test_personal_data_live.py` (export contents; self-deletion; the last owner refused; the audit
   entry keeps the user id, not the email) and the screens' tests.
@@ -176,7 +176,7 @@ slot leaves the console's reads admitted; a person exports their data and delete
 - [x] Specification approval — `design.md`, 2026-10-11
 - [x] Design approval — `design.md`, 2026-10-11
 - [x] **Plan approval — before the first edited file** — 2026-10-11
-- [ ] D2 spec and wireframe approval (T20)
+- [x] D2 spec and wireframe approval (T20) — 2026-10-11
 - [x] Implementation — all but D2
 - [x] Tests — all but D2
 - [x] Review — all but D2
@@ -198,8 +198,7 @@ steps across every service. Each step is reported to the founder before the next
 
 ## Outcome
 
-Built 2026-10-11, every task but **T21** (personal-data export and self-deletion), whose spec
-(`docs/features/personal-data/spec.md`, T20) waits for the founder's approval. D6, plan prices, is the
+Built 2026-10-11, every task; T21 after its spec was approved the same day. D6, plan prices, is the
 founder's, later. Differences from the plan, each found by running the thing:
 
 - **A4** — a repeated deploy answers 201 with the stored deploy, not 200: it says "recorded" either way
@@ -230,6 +229,14 @@ founder's, later. Differences from the plan, each found by running the thing:
   it now runs inside the transaction, session-level so the autocommit blocks keep it.
 - **D3** — the five screens whose modules also exported a search parser stayed eager at first (564 kB);
   the parsers moved to `search.ts` files and the first download is 393 kB (was 1.34 MB).
+- **D2 (T21)** — deletion is `POST /profile/deletion`, not `DELETE /profile`: it carries the password,
+  and a body on DELETE has no defined meaning. A `GET` beside it tells the screen whether the person may
+  leave, so the last owner sees the way out before typing a password. The scrub also deletes the
+  person's session rows (they hold where they signed in from), their password hash, second factor and
+  recovery codes, and is shared by an admin's removal — which changed the team spec's BR6 ("history
+  keeps its names"). Proven on dev over HTTP: the sole owner refused (409), export downloaded,
+  a member deleted, signed out and unable to sign in, and the audit log holding their id but neither
+  name nor address. The structure tests moved the file to `/profile/data.json` (`api.md` addresses a file by its extension) and declared it above the session wildcard.
 - **Not in the plan, found on the way:** `deploy/clickhouse/backfill-trace-summaries.sh` defaulted to the
   dev password (a readiness item the design missed); it now has none.
 

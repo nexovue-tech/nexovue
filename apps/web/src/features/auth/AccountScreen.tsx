@@ -5,6 +5,7 @@ import {
   PasswordSection,
   SecondFactorSection,
   SignOutEverywhereSection,
+  YourDataSection,
 } from "./account-sections";
 
 /**
@@ -20,12 +21,13 @@ export function AccountScreen() {
   return (
     <SettingsLayout
       title="Account"
-      description="The password on this account, what stands in front of it, and what is currently signed in as you."
+      description="The password on this account, what stands in front of it, what is currently signed in as you, and your own data."
     >
       <PasswordSection />
       <SecondFactorSection />
       <ActiveSessionsSection />
       <SignOutEverywhereSection />
+      <YourDataSection />
     </SettingsLayout>
   );
 }

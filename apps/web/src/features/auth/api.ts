@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { apiClient } from "@/shared/api-client";
+import { API_BASE_PATH, apiClient } from "@/shared/api-client";
 import type { AuthenticatedUser, Organization, Session } from "@/shared/identity";
 import { sessionQueryKey } from "@/shared/identity";
 
@@ -329,6 +329,42 @@ export function useDisableSecondFactor() {
     mutationFn: (currentPassword: string) =>
       apiClient.post<void>("profile/two-factor/disable", { current_password: currentPassword }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: twoFactorQueryKey }),
+  });
+}
+
+/* ------------------------------------------------------------------ your data */
+
+/**
+ * A link rather than a fetch: the response is `Content-Disposition: attachment`, so the
+ * browser saves it itself, and the session cookie travels with a same-origin link.
+ */
+export const PERSONAL_DATA_FILE_URL = `${API_BASE_PATH}profile/data.json`;
+
+/** Whether this person may delete their account, and the API's sentence when not. */
+export interface AccountDeletionState {
+  allowed: boolean;
+  refusal: string | null;
+}
+
+export const accountDeletionQueryKey = ["profile", "deletion"] as const;
+
+export function useAccountDeletionState() {
+  return useQuery({
+    queryKey: accountDeletionQueryKey,
+    queryFn: () => apiClient.get<AccountDeletionState>("profile/deletion"),
+  });
+}
+
+export interface AccountDeletionProof {
+  current_password: string;
+  /** Only when two-factor is on; omitted rather than sent empty. */
+  code?: string;
+}
+
+export function useDeleteAccount() {
+  return useMutation({
+    mutationKey: ["profile", "deletion"],
+    mutationFn: (proof: AccountDeletionProof) => apiClient.post<void>("profile/deletion", proof),
   });
 }
 

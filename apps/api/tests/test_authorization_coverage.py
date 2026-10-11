@@ -117,6 +117,10 @@ EXEMPT: Final = {
     "begin_second_factor_enrolment",
     "confirm_second_factor",
     "disable_second_factor",
+    # Any role may leave, and it acts only on `identity.user`. Its gate is the
+    # current password and, with two-factor on, a code — stronger than a role,
+    # and the last owner is refused below it (personal-data spec).
+    "delete_account",
     # Unauthenticated by design: both are reached from an invite email by
     # someone who is not signed in yet. The link's token in the body is the whole
     # credential — 256 bits, stored only as a hash, single-use and expiring in

@@ -20,7 +20,7 @@ import nexovue_api
 # What a downloadable response may be addressed as. A suffix rather than
 # `?format=` because it is self-describing to a browser and to a person, and
 # cannot be accidentally omitted the way a query parameter can.
-FILE_EXTENSIONS: Final = (".csv",)
+FILE_EXTENSIONS: Final = (".csv", ".json")
 
 
 def _routers() -> list[tuple[str, object]]:

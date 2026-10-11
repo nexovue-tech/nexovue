@@ -35,11 +35,18 @@ export const PASSWORD_WAS_RESET = "password-reset";
  */
 export const SIGNED_OUT_EVERYWHERE = "signed-out-everywhere";
 
-export type LoginNotice = typeof PASSWORD_WAS_RESET | typeof SIGNED_OUT_EVERYWHERE;
+/** Deleting your account signs you out; the notice says that is why you are here. */
+export const ACCOUNT_DELETED = "account-deleted";
+
+export type LoginNotice =
+  | typeof PASSWORD_WAS_RESET
+  | typeof SIGNED_OUT_EVERYWHERE
+  | typeof ACCOUNT_DELETED;
 
 const RECOGNISED_NOTICES: ReadonlySet<string> = new Set<LoginNotice>([
   PASSWORD_WAS_RESET,
   SIGNED_OUT_EVERYWHERE,
+  ACCOUNT_DELETED,
 ]);
 
 export interface LoginSearch {

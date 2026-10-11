@@ -175,7 +175,7 @@ offerable, then the first offerable. Proved by a `test_billing.py` case (INR-onl
 
 **D2. Personal data — export and self-deletion.** Nothing lets a person export or delete their own
 data, and removing a member keeps their email in the audit log. ⚑ *Scope.* Recommended:
-- **Export:** `GET /profile/export` returns one JSON file of everything held about the person —
+- **Export:** `GET /profile/export` (built as `GET /profile/data.json`, `api.md`) returns one JSON file of everything held about the person —
   profile, sessions (client and network), their audit entries, tokens they made, invitations.
 - **Delete my account:** a person leaves the organization themselves: the member removal that exists,
   plus their name replaced by "Former member" and the email in their audit details replaced by their

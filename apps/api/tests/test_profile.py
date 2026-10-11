@@ -29,6 +29,7 @@ from fake_stores import FakeOneTimeTokenStore, use_fake_second_factors
 from fastapi import FastAPI
 from test_auth_recovery import RecordingSender
 
+from nexovue_api.apitokens.tokens import API_TOKEN_PREFIX, TOKENS_ARE_READ_ONLY
 from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.auth.credentials import hash_password, verify_password
 from nexovue_api.auth.sessions import SESSION_COOKIE_NAME, Session
@@ -586,6 +587,9 @@ async def test_the_link_carries_a_change_token_and_not_a_verification_one(
         ("POST", "/password", {"current_password": PASSWORD, "new_password": NEW_PASSWORD}),
         ("POST", "/email", {"current_password": PASSWORD, "new_email": NEW_ADDRESS}),
         ("POST", "/sign-out-everywhere", None),
+        ("GET", "/data.json", None),
+        ("GET", "/deletion", None),
+        ("POST", "/deletion", {"current_password": PASSWORD}),
     ],
 )
 async def test_every_profile_route_refuses_without_a_session(
@@ -616,7 +620,12 @@ def test_no_profile_route_can_name_another_user(app: FastAPI) -> None:
     existed. Listing the exception by name is the point — a second parameterized
     route added later fails here and has to make its own argument.
     """
-    from nexovue_api.profile.schemas import EmailChangeRequest, PasswordChange, ProfileUpdate
+    from nexovue_api.profile.schemas import (
+        AccountDeletion,
+        EmailChangeRequest,
+        PasswordChange,
+        ProfileUpdate,
+    )
 
     # Read from the OpenAPI document rather than `app.routes`: this FastAPI
     # keeps an included router lazy, so `app.routes` holds the router and not
@@ -633,5 +642,26 @@ def test_no_profile_route_can_name_another_user(app: FastAPI) -> None:
         set(ProfileUpdate.model_fields)
         | set(PasswordChange.model_fields)
         | set(EmailChangeRequest.model_fields)
+        | set(AccountDeletion.model_fields)
     )
     assert not {name for name in fields if "user" in name or name == "id"}, fields
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [("GET", "/data.json", None), ("POST", "/deletion", {"current_password": PASSWORD})],
+)
+async def test_your_data_refuses_an_api_token(
+    app: FastAPI, user: User, method: str, path: str, body: dict[str, str] | None
+) -> None:
+    """Personal-data AC5: downloading and deleting are a person's acts."""
+    async with _signed_in(app, user) as client:
+        response = await client.request(
+            method,
+            PROFILE + path,
+            json=body,
+            headers={"authorization": f"Bearer {API_TOKEN_PREFIX}{'a' * 40}"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == TOKENS_ARE_READ_ONLY

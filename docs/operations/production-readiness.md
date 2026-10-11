@@ -125,7 +125,7 @@ Grouped by area; each names the failure. Items that are a business choice are ma
 - ~~Credentials inside URLs are not masked — nothing scans `url.full`/`http.url` query strings (`mask/rules.go:24-37`).~~ Done 2026-10-11 ([remaining-recommendations](../changes/remaining-recommendations/status.md)): a default `url_credentials` family masks a URL's password and the conventions' signature parameters wherever a URL appears.
 - ~~CSV exports are open to formula injection: customer text starting `=`, `+`, `-`, `@` is written raw (`logs/search.py:341-359`, `traces/service.py:768`).~~ Done 2026-10-11 ([remaining-recommendations](../changes/remaining-recommendations/status.md)): a cell beginning `=`, `+`, `-`, `@`, tab or a line break is written with a leading `'`, in the API's exports and the console's.
 - ~~**Decision:** the seeded plans are still placeholders (`0005_plans_table.py:31-37`); the prices in `0015`/`0023` appear in no decision document.~~ The founder's, later (group 9, D6).
-- ~~No GDPR self-service: no personal data export, no person-level account deletion.~~ Specified 2026-10-11 ([personal-data](../features/personal-data/spec.md)); built once the spec is approved.
+- ~~No GDPR self-service: no personal data export, no person-level account deletion.~~ Built 2026-10-11 ([personal-data](../features/personal-data/spec.md)): download your data and delete your account from Settings → Account; an admin's removal scrubs the same way.
 - ~~No alembic migration uses `CREATE INDEX CONCURRENTLY` or a `lock_timeout` — harmless today, a write outage on the first index added to a grown table.~~ Done 2026-10-11 ([remaining-recommendations](../changes/remaining-recommendations/status.md)): every migration runs with `lock_timeout = 5s`; the concurrent-index rule is in `docs/engineering/database.md`.
 - ~~Billing downgrades `0020`, `0022`, `0026` drop billing data — mark them roll-forward only.~~ Done 2026-10-11 ([remaining-recommendations](../changes/remaining-recommendations/status.md)): each raises "roll forward only".
 
@@ -163,7 +163,7 @@ the work, before F37 is specified. Grouped so each package is one change record:
    step, the deployment-mode concept, the runnable on-prem install, a restore against a real target,
    and connecting a cloud monitor to what group 7 reports. **Deferred by the founder (2026-10-10)
    until groups 1-7 and 9 are done.**
-9. **The remaining recommendations** — everything above that no group carries (personal data export **Built on the development stack 2026-10-11** ([remaining-recommendations](../changes/remaining-recommendations/status.md)), except personal-data export and deletion (specified, awaiting approval) and the plan prices (the founder's, later). Still group 8's: three Kafka brokers, the SDK's release, and the platform items below.
+9. **The remaining recommendations** — everything above that no group carries **Built on the development stack 2026-10-11** ([remaining-recommendations](../changes/remaining-recommendations/status.md)), personal-data export and deletion included, except the plan prices (the founder's, later). Still group 8's: three Kafka brokers, the SDK's release, and the platform items below.
    and deletion, console code splitting, SDK sampling, and the rest of *Recommended*). The founder
    chose to fix these now, after group 7.
 

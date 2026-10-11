@@ -12,7 +12,9 @@ the same reasoning `auth.schemas.PasswordReset` already carries.
 
 from __future__ import annotations
 
-from typing import Annotated
+import uuid
+from datetime import datetime
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field
 
@@ -185,3 +187,100 @@ class SecondFactorRemoval(BaseModel):
     """
 
     current_password: CurrentPassword
+
+
+# ---- your data (docs/features/personal-data/spec.md) -------------------------
+
+
+class AccountDeletion(BaseModel):
+    """Delete your own account. The password, and a code when two-factor is on,
+    so a session somebody else is holding cannot do it."""
+
+    current_password: CurrentPassword
+    code: SecondFactorCode | None = None
+
+
+class AccountDeletionState(BaseModel):
+    """Whether this person may delete their account, and the sentence when not."""
+
+    allowed: bool
+    refusal: str | None
+
+
+class ExportedProfile(BaseModel):
+    id: uuid.UUID
+    email: str
+    name: str | None
+    role: str
+    timezone: str | None
+    email_verified_at: datetime | None
+    two_factor_enabled: bool
+    created_at: datetime
+
+
+class ExportedOrganization(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
+class ExportedInvitationReceived(BaseModel):
+    """Who brought this person in. An id: the inviter's name is theirs, not this person's."""
+
+    invited_by: uuid.UUID | None
+    invited_at: datetime | None
+
+
+class ExportedInvitationSent(BaseModel):
+    """An invite this person sent: the address they typed is their own act."""
+
+    id: uuid.UUID
+    email: str
+    role: str
+    invited_at: datetime | None
+
+
+class ExportedSession(BaseModel):
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    client: str | None
+    network: str | None
+
+
+class ExportedActivity(BaseModel):
+    at: datetime
+    action: str
+    target: str
+    detail: dict[str, Any] | None
+
+
+class ExportedApiToken(BaseModel):
+    """No prefix: it carries characters of the token itself."""
+
+    id: uuid.UUID
+    name: str
+    role: str
+    project_id: uuid.UUID | None
+    created_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None
+    last_used_at: datetime | None
+
+
+class PersonalDataExport(BaseModel):
+    """Everything nexovue holds about one person as a person (spec, BR1).
+
+    `activity` is newest first and bounded; `truncated` says it was cut, and
+    `oldest_activity_at` how far back it reaches.
+    """
+
+    exported_at: datetime
+    profile: ExportedProfile
+    organization: ExportedOrganization
+    invitation_received: ExportedInvitationReceived | None
+    sessions: list[ExportedSession]
+    activity: list[ExportedActivity]
+    truncated: bool
+    oldest_activity_at: datetime | None
+    api_tokens: list[ExportedApiToken]
+    invitations_sent: list[ExportedInvitationSent]

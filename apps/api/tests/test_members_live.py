@@ -406,7 +406,10 @@ async def test_removal_ends_every_session_with_a_reason(
 async def test_removal_keeps_the_work_and_frees_the_address(
     db: AsyncSession, acme: ProvisionedTenant
 ) -> None:
-    """AC6, AC12, FR11: the check stays; the address can sign up again; history names them."""
+    """AC6, AC12: the check stays; the address can sign up again; history names their id.
+
+    The name and address go too (personal-data spec, BR4); `test_personal_data_live.py`
+    proves no entry keeps either."""
     member = await _join(db, acme, "member")
     member.name = "Priya"
     address = member.email
@@ -427,7 +430,7 @@ async def test_removal_keeps_the_work_and_frees_the_address(
     await db.flush()
 
     assert await db.get(Check, check.id) is not None
-    assert member.email != address and member.name == "Priya"
+    assert member.email != address and member.name == service.FORMER_MEMBER_NAME
     again = await provision_tenant(
         db, organization_name="Priya's Own", email=address, password=PASSWORD
     )
@@ -440,7 +443,7 @@ async def test_removal_keeps_the_work_and_frees_the_address(
             )
         )
     ).one()
-    assert removed.detail == {"email": address, "role": "member"}
+    assert removed.detail == {"role": "member"}
 
 
 async def test_a_pending_invite_is_withdrawn_not_removed(

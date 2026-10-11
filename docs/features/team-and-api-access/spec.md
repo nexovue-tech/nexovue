@@ -253,8 +253,10 @@ and a read API has nobody to serve before that (D12).
 - **BR5 — Removal is immediate and complete.** A removed person's sessions end, their pending invites
   lapse, and they cannot sign in. What they made — checks, rules, channels, tokens — stays with the
   organization and keeps working.
-- **BR6 — History keeps its names.** Audit entries, incident mutes and "created by" labels keep naming a
-  removed person as who they were; removing someone never rewrites what they did.
+- **BR6 — History keeps what happened, not the person.** Audit entries, incident mutes and "created by"
+  labels stay, but a removed person is named "Former member" and every audit entry names their user id
+  instead of their address or name. *Amended 2026-10-11 by the personal-data spec (BR2, BR4); it said
+  history kept their name.*
 - **BR7 — The server decides.** The console hides what a role cannot do (US26.8), but every refusal is
   the API's; a hidden button is a courtesy, not a control.
 - **BR8 — A credential that writes never reads, and one that reads never writes.** Ingest keys and site
@@ -338,7 +340,7 @@ and a read API has nobody to serve before that (D12).
 - **FR10** — Removing the last owner, demoting it, or an owner leaving while the only owner, is refused
   (BR2). Ownership transfer promotes another member to owner; the previous owner may then step down.
 - **FR11** — A removed person's email address is free again: they can sign up anew, or be invited back,
-  as a new person (BR1, BR6 — their history keeps the old name).
+  as a new person (BR1, BR6 — their history names their id).
 - **FR12** — The *Organization owners* alert channel keeps meaning verified owners, resolved at send
   time; a second owner is included with no change to the channel.
 

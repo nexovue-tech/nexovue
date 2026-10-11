@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-In development — steps 2-5 built (all but T21), not committed; step 1 committed (e47280b)
+Built — steps 1-5 committed (e47280b, 4cd46f5); T21 (personal data) built, not committed
 
 ## Current task
 
-Awaiting the founder: the personal-data spec, and "commit" for steps 2-5.
+Awaiting the founder's "commit" for T21.
 
 ## Completed
 
@@ -15,7 +15,7 @@ Awaiting the founder: the personal-data spec, and "commit" for steps 2-5.
 
 ## Next action
 
-Founder approves `docs/features/personal-data/spec.md`; then T21. Commit steps 2-5 on the founder's word.
+Commit T21 on the founder's word.
 
 ## Open decisions
 
@@ -25,7 +25,7 @@ Decided 2026-10-11: every other ⚑ recommendation in `design.md`.
 
 ## Blocked
 
-T21 (personal data) waits for its spec's approval.
+Nothing.
 
 ## Risks
 
@@ -46,9 +46,11 @@ Step 1:
 Steps 2-5: see the plan's Outcome. `just check` exit 0 — Python 4355, web 1358, SDK 124, chunks under
 500 kB; E2E sign-in, services, synthetics 8 passed.
 
+T21: `docs/features/personal-data/status.md`.
+
 ## Specification impact
 
-D2 needs a short spec; A3 amends the super-admin spec.
+D2 has its spec (`docs/features/personal-data/`), which amends the team spec's BR6 and FR11; A3 amends the super-admin spec.
 
 ## Documentation impact
 

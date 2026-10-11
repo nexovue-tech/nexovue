@@ -15,14 +15,14 @@
  * either yet, so the address is shown and not offered as a field.
  */
 
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, type ReactNode, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { CopyButton } from "@/shared/components/CopyButton";
 import { DataTable } from "@/shared/components/DataTable";
 import { InlineFailure } from "@/shared/components/InlineFailure";
-import { SettingGroup } from "@/shared/components/SettingRow";
+import { SettingGroup, SettingRow } from "@/shared/components/SettingRow";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { TextField } from "@/shared/components/TextField";
 import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
@@ -32,18 +32,22 @@ import { clearSession } from "@/shared/session";
 
 import {
   PASSWORD_MIN_LENGTH,
+  PERSONAL_DATA_FILE_URL,
+  useAccountDeletionState,
   useActiveSessions,
   useBeginSecondFactorEnrolment,
   useChangeOwnPassword,
   useConfirmSecondFactor,
+  useDeleteAccount,
   useDisableSecondFactor,
   useEndSession,
   useRenameSelf,
   useSecondFactor,
+  useSession,
   useSignOutEverywhere,
 } from "./api";
 import { describeFormProblem } from "./problem-fields";
-import { SIGNED_OUT_EVERYWHERE } from "./search";
+import { ACCOUNT_DELETED, SIGNED_OUT_EVERYWHERE } from "./search";
 
 /* ------------------------------------------------------------------- the name */
 
@@ -320,7 +324,7 @@ export function SecondFactorSection() {
         <form onSubmit={turnOff} noValidate className="max-w-sm">
           {problem.message ? <FormProblem message={problem.message} /> : null}
           <TextField
-            label="Your password, to turn this on"
+            label="Your password, to turn this off"
             name="current_password"
             type="password"
             value={currentPassword}
@@ -386,7 +390,7 @@ export function SecondFactorSection() {
       <form onSubmit={startEnrolment} noValidate className="max-w-sm">
         {problem.message ? <FormProblem message={problem.message} /> : null}
         <TextField
-          label="Your password, to turn this off"
+          label="Your password, to turn this on"
           name="current_password"
           type="password"
           value={currentPassword}
@@ -569,6 +573,145 @@ export function SignOutEverywhereSection() {
         </Button>
       )}
     </Section>
+  );
+}
+
+/* ------------------------------------------------------------------ your data */
+
+const YOUR_DATA_BLURB =
+  "What nexovue holds about you as a person, and leaving for good. Your organization's telemetry is not yours to take or delete here.";
+
+/**
+ * Download and delete (docs/features/personal-data/spec.md).
+ *
+ * **The last owner is told before typing anything.** The API refuses them either way;
+ * asking first means the screen offers the way out — Members — instead of a password
+ * field that can only fail.
+ */
+export function YourDataSection() {
+  const navigate = useNavigate();
+  const session = useSession();
+  const deletion = useAccountDeletionState();
+  const secondFactor = useSecondFactor();
+  const remove = useDeleteAccount();
+  const [confirming, setConfirming] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [code, setCode] = useState("");
+
+  const organization = session.data?.organization.name ?? "this organization";
+  const needsCode = secondFactor.data?.enabled === true;
+  const problem = describeFormProblem(remove.error);
+
+  /** Every session ends with the account, so this one is already dead when it answers. */
+  function deleteAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    remove.mutate(
+      { current_password: currentPassword, ...(needsCode && code ? { code } : {}) },
+      {
+        onSuccess: async () => {
+          clearSession();
+          await navigate({ to: "/login", search: { notice: ACCOUNT_DELETED }, replace: true });
+        },
+      },
+    );
+  }
+
+  const refused = deletion.data !== undefined && !deletion.data.allowed;
+  const deleteControl =
+    deletion.data?.allowed && !confirming ? (
+      <Button variant="secondary" onClick={() => setConfirming(true)}>
+        Delete account…
+      </Button>
+    ) : null;
+
+  return (
+    <SettingGroup title="Your data" description={YOUR_DATA_BLURB}>
+      <SettingRow
+        label="Download your data"
+        description="Everything nexovue holds about you as a person: your profile, sessions, what you did, and the tokens you made."
+        control={
+          <a
+            href={PERSONAL_DATA_FILE_URL}
+            className="rounded-sm border border-line px-3 py-1.5 font-medium text-ink-dim text-sm transition-colors hover:border-line-strong hover:text-ink"
+          >
+            Download
+          </a>
+        }
+      />
+      <SettingRow
+        label="Delete your account"
+        description={`Removes you from ${organization}. What you did stays in the audit log, without your name or address.`}
+        control={deleteControl}
+      >
+        {/* Null unless there is something to say: an empty fragment would still draw
+            the row's gap. */}
+        {deletion.isError || refused || confirming ? (
+          <>
+            {deletion.isError ? (
+              <InlineFailure
+                title="Whether you can delete your account could not be checked"
+                error={deletion.error}
+                onRetry={() => void deletion.refetch()}
+              />
+            ) : null}
+
+            {refused ? (
+              <p role="status" className="max-w-2xl text-ink text-sm leading-relaxed">
+                {deletion.data?.refusal}{" "}
+                <Link to="/settings/members" className="underline underline-offset-4">
+                  Go to Members
+                </Link>
+              </p>
+            ) : null}
+
+            {confirming ? (
+              <form
+                onSubmit={deleteAccount}
+                noValidate
+                className="border-critical-solid border-l-2 bg-critical-subtle px-3 py-3"
+              >
+                <p className="mb-3 font-medium text-ink text-sm">This cannot be undone.</p>
+                {problem.message ? <FormProblem message={problem.message} /> : null}
+                <div className="flex max-w-sm flex-col gap-3">
+                  <TextField
+                    label="Your password"
+                    name="current_password"
+                    type="password"
+                    value={currentPassword}
+                    onChange={setCurrentPassword}
+                    autoComplete="current-password"
+                    error={problem.fieldErrors.current_password}
+                  />
+                  {needsCode ? (
+                    <TextField
+                      label="Code from your authenticator app, or a recovery code"
+                      name="code"
+                      value={code}
+                      onChange={setCode}
+                      autoComplete="one-time-code"
+                      error={problem.fieldErrors.code}
+                    />
+                  ) : null}
+                </div>
+                <div className="mt-4 flex items-center gap-2">
+                  <Button
+                    type="submit"
+                    pending={remove.isPending}
+                    pendingLabel="Deleting…"
+                    disabled={currentPassword.length === 0 || (needsCode && code.length === 0)}
+                  >
+                    Delete my account
+                  </Button>
+                  <Button variant="secondary" onClick={() => setConfirming(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            ) : null}
+          </>
+        ) : null}
+      </SettingRow>
+    </SettingGroup>
   );
 }
 
