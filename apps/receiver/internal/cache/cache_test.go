@@ -88,3 +88,51 @@ func TestAHitExpiresWithTheConfiguredTTL(t *testing.T) {
 		t.Error("a hit outlived its TTL; nothing would ever be re-read")
 	}
 }
+
+// Group 9, C1: when the control plane cannot answer, a row believed a moment ago
+// is better than refusing a customer's steady traffic — for a bounded while.
+func TestAnExpiredHitIsStaleForTheWindowAndNoLonger(t *testing.T) {
+	at := time.Unix(0, 0)
+	c := New[row](30*time.Second, 10, WithMaxStale[row](10*time.Minute))
+	c.UseClock(func() time.Time { return at })
+	c.Store("present", row{found: true})
+
+	at = at.Add(30*time.Second + 9*time.Minute)
+	if _, ok := c.Stale("present"); !ok {
+		t.Error("a hit inside the stale window was not offered")
+	}
+
+	at = at.Add(2 * time.Minute)
+	if _, ok := c.Stale("present"); ok {
+		t.Error("a hit past the stale window was still offered")
+	}
+}
+
+func TestAMissIsNeverStale(t *testing.T) {
+	at := time.Unix(0, 0)
+	c := New[row](30*time.Second, 10, WithMaxStale[row](10*time.Minute))
+	c.UseClock(func() time.Time { return at })
+	c.Store("missing", row{found: false})
+
+	at = at.Add(MissTTL + time.Second)
+	if _, ok := c.Stale("missing"); ok {
+		t.Error("a stale miss would refuse a key created since, for the whole window")
+	}
+}
+
+// Misses are attacker-chosen. Filling the cache with them must evict other
+// misses, never the customers' keys.
+func TestAFloodOfMissesLeavesTheHits(t *testing.T) {
+	c := New[row](30*time.Second, 10)
+	c.Store("customer", row{found: true})
+	for i := range 50 {
+		c.Store(string(rune('a'+i%26))+string(rune('A'+i/26)), row{found: false})
+	}
+
+	if _, ok := c.Lookup("customer"); !ok {
+		t.Fatal("a flood of invented keys evicted a customer's")
+	}
+	if c.Len() > 10 {
+		t.Fatalf("the cache holds %d, past its ceiling of 10", c.Len())
+	}
+}

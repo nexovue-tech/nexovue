@@ -148,12 +148,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_billing_webhook_deliveries_org_id_received_at",
-        table_name="billing_webhook_deliveries",
+    """Roll forward only (group 9, C6).
+
+    It drops billing_subscriptions and billing_webhook_deliveries — every
+    arrangement and every delivery.
+
+    Going back past this revision is a restore of the database, never a
+    downgrade — the records it would drop exist nowhere else.
+    """
+    raise RuntimeError(
+        "0020 is roll forward only: its downgrade would drop billing records. "
+        "Restore a backup instead."
     )
-    op.drop_table("billing_webhook_deliveries")
-    op.drop_index("ix_billing_subscriptions_org_id_status", table_name="billing_subscriptions")
-    op.drop_table("billing_subscriptions")
-    # Dropping a table does not drop the enum type it used.
-    BILLING_SUBSCRIPTION_STATUS.drop(op.get_bind(), checkfirst=False)

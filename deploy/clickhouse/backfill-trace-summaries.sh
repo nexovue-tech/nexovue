@@ -7,8 +7,11 @@
 # history that exists in `spans`. This is a deployment step for that migration,
 # not a convenience.
 #
-# Run it after `just migrate-ch`, against the running store:
-#   deploy/clickhouse/backfill-trace-summaries.sh
+# Run it after `just migrate-ch`, against the running store, naming the store's
+# credential and container — there is no default for the password, so a dev one
+# can never reach a deployed store (group 9):
+#   CLICKHOUSE_PASSWORD=nexovue_dev deploy/clickhouse/backfill-trace-summaries.sh
+#   CLICKHOUSE_CONTAINER=nexovue-replica-clickhouse-1 CLICKHOUSE_PASSWORD=... deploy/...
 #
 # It is safe to run twice, and safe to run while ingest is live. See RE-RUNNING
 # and OPEN TRACES below.
@@ -17,7 +20,7 @@ set -euo pipefail
 CONTAINER="${CLICKHOUSE_CONTAINER:-nexovue-clickhouse-1}"
 DATABASE="${CLICKHOUSE_DATABASE:-nexovue}"
 USERNAME="${CLICKHOUSE_USER:-nexovue}"
-PASSWORD="${CLICKHOUSE_PASSWORD:-nexovue_dev}"
+PASSWORD="${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD to the password of the store you are backfilling}"
 
 # How many spans one statement may aggregate. `trace_summaries` was introduced
 # because grouping a whole window by trace id is what exhausts this server:

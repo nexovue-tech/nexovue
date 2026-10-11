@@ -198,9 +198,11 @@ class Settings(BaseSettings):
     # Recycled below the usual one-hour idle cut of a proxy or a load balancer.
     postgres_pool_recycle_seconds: Annotated[int, Field(gt=0)] = 1800
 
-    # --- ClickHouse: pool size and the two guards on every query ------------
+    # --- ClickHouse: pool size and the row guard on every query --------------
+    # No time limit here: every read sends `READ_SETTINGS`' 30 s and the reader
+    # profile enforces it server-side. A 15 s setting here was overridden by it
+    # on every read (group 9, C4).
     clickhouse_pool_size: Annotated[int, Field(ge=1, le=100)] = 8
-    clickhouse_query_timeout_seconds: Annotated[int, Field(gt=0)] = 15
     clickhouse_max_result_rows: Annotated[int, Field(gt=0)] = 100_000
 
     # --- sessions -----------------------------------------------------------

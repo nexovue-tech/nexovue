@@ -78,6 +78,9 @@ class Counted:
     identity: Identity
     quota: Quota | None
     max_concurrent: int | None
+    # The tier the bucket belongs to. In-flight slots are counted per tier, so an
+    # organization's tokens and its people do not share one ceiling (group 9, D5).
+    pool: str
 
 
 class RateLimitMiddleware:
@@ -167,24 +170,27 @@ class RateLimitMiddleware:
     ) -> None:
         """Run the request, holding a concurrency slot in every bucket that caps them."""
         send = _with_limit_headers(send, decision)
-        held: list[Identity] = []
+        held: list[tuple[str, Identity]] = []
         try:
             for bucket in counted:
                 if bucket.max_concurrent is None:
                     continue
                 limit_scope, value = bucket.identity
                 granted = await limiter.acquire_slot(
-                    scope=limit_scope, identity=value, max_concurrent=bucket.max_concurrent
+                    pool=bucket.pool,
+                    scope=limit_scope,
+                    identity=value,
+                    max_concurrent=bucket.max_concurrent,
                 )
                 if not granted:
                     request = Request(scope, receive)
                     await self._reject(request, decision, send, detail=TOO_MANY_CONCURRENT_DETAIL)
                     return
-                held.append(bucket.identity)
+                held.append((bucket.pool, bucket.identity))
             await self._app(scope, receive, send)
         finally:
-            for limit_scope, value in held:
-                await limiter.release_slot(scope=limit_scope, identity=value)
+            for pool, (limit_scope, value) in held:
+                await limiter.release_slot(pool=pool, scope=limit_scope, identity=value)
 
     async def _signed_in(self, scope: Scope) -> Session | None:
         """The live session a request carries, or None — read without touching it.
@@ -281,6 +287,7 @@ def _per_person(tier: Tier, session: Session, multiplier: float) -> list[Counted
             identity=(SCOPE_SESSION, f"user:{session.user_id}"),
             quota=tier.quota.scaled(multiplier),
             max_concurrent=tier.max_concurrent,
+            pool=tier.quota.name,
         )
     ]
     if tier.org_quota is not None:
@@ -289,6 +296,7 @@ def _per_person(tier: Tier, session: Session, multiplier: float) -> list[Counted
                 identity=(SCOPE_ORGANIZATION, session.org_id),
                 quota=tier.org_quota.scaled(multiplier),
                 max_concurrent=tier.org_max_concurrent,
+                pool=tier.quota.name,
             )
         )
     return counted
@@ -306,6 +314,7 @@ def _per_token(tier: Tier, presented: str, owner: str | None, multiplier: float)
             identity=(SCOPE_TOKEN, f"tok:{token_fingerprint(presented)}"),
             quota=tier.quota.scaled(multiplier),
             max_concurrent=tier.max_concurrent,
+            pool=tier.quota.name,
         )
     ]
     if owner is not None and (tier.org_quota is not None or tier.org_max_concurrent is not None):
@@ -314,6 +323,7 @@ def _per_token(tier: Tier, presented: str, owner: str | None, multiplier: float)
                 identity=(SCOPE_ORGANIZATION, owner),
                 quota=None if tier.org_quota is None else tier.org_quota.scaled(multiplier),
                 max_concurrent=tier.org_max_concurrent,
+                pool=tier.quota.name,
             )
         )
     return counted
@@ -328,6 +338,7 @@ def _per_address(tier: Tier, identities: list[Identity], multiplier: float) -> l
             identity=identity,
             quota=quota,
             max_concurrent=tier.max_concurrent if index == 0 else None,
+            pool=tier.quota.name,
         )
         for index, identity in enumerate(identities)
     ]

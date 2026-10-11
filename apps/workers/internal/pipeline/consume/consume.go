@@ -87,6 +87,11 @@ type Processor[S any] interface {
 	Describe() []slog.Attr
 }
 
+// Resends decides which records of a batch are resends (group 9, C2).
+type Resends interface {
+	Skip(ctx context.Context, records []*kgo.Record) []bool
+}
+
 // Polled is one batch as it came off the broker.
 type Polled struct {
 	Records []*kgo.Record
@@ -143,6 +148,12 @@ type Settings struct {
 	// waits, so it must be memory work. The loop makes no call out of the
 	// process on its behalf.
 	OnRevoked func(disowned map[string][]int32)
+
+	// Resends, when set, names the records of a batch that are a sender's resend
+	// of content already consumed at another offset (`pipeline/resend`). They
+	// are acknowledged with the batch and never reach the stages. Nil skips
+	// nothing.
+	Resends Resends
 
 	// OnLost runs when the session is already gone — a fatal group error, where
 	// the partitions may have been someone else's for a while. The same release,
@@ -613,18 +624,35 @@ func (l *Loop[S]) reportFetchErrors(ctx context.Context, fetches kgo.Fetches) er
 // absorb hands one polled batch to the stages and holds its offsets until what
 // the batch produced has been stored.
 func (l *Loop[S]) absorb(ctx context.Context, stages Processor[S], records []*kgo.Record) error {
-	polled := Polled{Records: records, Positions: PositionsOf(records), At: l.now()}
+	every := PositionsOf(records)
+	kept := records
+	if l.settings.Resends != nil {
+		kept = withoutResends(records, l.settings.Resends.Skip(ctx, records))
+	}
+	polled := Polled{Records: kept, Positions: PositionsOf(kept), At: l.now()}
 
 	produced, err := stages.Absorb(ctx, polled)
 	if err != nil {
 		return err
 	}
+	// Every position, the skipped ones included: a resend is acknowledged with
+	// the batch it arrived in, or its offset would hold the partition back.
 	l.queue.Hold(Batch[S]{
-		Positions: polled.Positions,
+		Positions: every,
 		PolledAt:  polled.At,
 		Produced:  produced,
 	})
 	return nil
+}
+
+func withoutResends(records []*kgo.Record, skip []bool) []*kgo.Record {
+	kept := make([]*kgo.Record, 0, len(records))
+	for i, record := range records {
+		if !skip[i] {
+			kept = append(kept, record)
+		}
+	}
+	return kept
 }
 
 // drain writes everything still held and commits it, which is what makes a

@@ -18,7 +18,8 @@ import type { AlertRule, ChannelSummary, Incident } from "./api";
 import { ChannelDetailScreen } from "./ChannelDetailScreen";
 import { ChannelsScreen } from "./ChannelsScreen";
 import { IncidentScreen } from "./IncidentScreen";
-import { EditRuleScreen, NewRuleScreen, parseNewRuleSearch } from "./RuleEditor";
+import { EditRuleScreen, NewRuleScreen } from "./RuleEditor";
+import { parseNewRuleSearch } from "./search";
 
 /**
  * The alert screens mounted as the app mounts them, inside a `shell` layout route,

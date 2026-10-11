@@ -357,13 +357,24 @@ async def overview(
     copy here would be the one that tells a customer a limit nobody enforces.
     """
     subscription = await queries.latest_subscription(session, org_id=organization.id)
+    available = _offerable(
+        priced=await usage_queries.priced_currencies(
+            session, plan_slug=organization.plan, on_day=today
+        ),
+        configured=configured,
+        already_paying_in=subscription.currency if subscription else None,
+    )
     # What this organization is quoted in. A caller may ask for one — the screen
     # offers a switch — and otherwise it is the currency this organization's
-    # arrangements already use, or the default before it has had one.
+    # arrangements already use. Before it has had one, the default when this
+    # account can take it, else the first it can: quoting USD to an account that
+    # takes only INR sent the customer to the last button to be refused
+    # (group 9, D1).
+    default = usage_queries.DEFAULT_BILLING_CURRENCY
     quoted = (
         (currency or "").upper()
         or (subscription.currency if subscription else "")
-        or usage_queries.DEFAULT_BILLING_CURRENCY
+        or (default if default in available or not available else available[0])
     )
     price = await usage_queries.find_effective_price(
         session, plan_slug=organization.plan, currency=quoted, on_day=today
@@ -375,13 +386,7 @@ async def overview(
         period=await _period(session, org_id=organization.id, today=today, price=price),
         checkout=_checkout_requirements(configured),
         currency=quoted,
-        available_currencies=_offerable(
-            priced=await usage_queries.priced_currencies(
-                session, plan_slug=organization.plan, on_day=today
-            ),
-            configured=configured,
-            already_paying_in=subscription.currency if subscription else None,
-        ),
+        available_currencies=available,
         plans=await _plan_options(session, organization=organization, currency=quoted, today=today),
     )
 

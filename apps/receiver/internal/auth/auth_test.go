@@ -257,3 +257,44 @@ func TestScreenTrustsAnExpiredHitButNotAnExpiredMiss(t *testing.T) {
 		t.Errorf("Screen(expired miss) = %v, want VerdictUnseen", got)
 	}
 }
+
+// Group 9, C1: a Postgres outage refused every key within one TTL. A key seen
+// valid within the stale window keeps working while the lookup fails.
+func TestALookupFailureServesAKeySeenRecently(t *testing.T) {
+	keys := seededKeys(validKey)
+	auth := New(keys, Options{CacheTTL: time.Minute, CacheMaxEntries: 100, MaxStale: 10 * time.Minute})
+	at := time.Unix(0, 0)
+	auth.cache.UseClock(func() time.Time { return at })
+	if _, err := auth.Authenticate(context.Background(), validKey); err != nil {
+		t.Fatal(err)
+	}
+
+	keys.err = errors.New("dial tcp: connection refused")
+	at = at.Add(5 * time.Minute)
+	identity, err := auth.Authenticate(context.Background(), validKey)
+	if err != nil || identity.OrgID != orgID {
+		t.Fatalf("during the outage: %v, %+v — want the key it held", err, identity)
+	}
+
+	at = at.Add(10 * time.Minute)
+	if _, err := auth.Authenticate(context.Background(), validKey); err == nil {
+		t.Fatal("past the stale window the outage must answer as an outage")
+	}
+}
+
+func TestALookupFailureNeverServesAWrongSecret(t *testing.T) {
+	keys := seededKeys(validKey)
+	auth := New(keys, Options{CacheTTL: time.Minute, CacheMaxEntries: 100, MaxStale: 10 * time.Minute})
+	at := time.Unix(0, 0)
+	auth.cache.UseClock(func() time.Time { return at })
+	if _, err := auth.Authenticate(context.Background(), validKey); err != nil {
+		t.Fatal(err)
+	}
+	impostor := validKey[:LookupPrefixLength] + strings.Repeat("z", len(validKey)-LookupPrefixLength)
+
+	keys.err = errors.New("dial tcp: connection refused")
+	at = at.Add(5 * time.Minute)
+	if _, err := auth.Authenticate(context.Background(), impostor); !errors.Is(err, ErrUnknownKey) {
+		t.Fatalf("a stale row matched a key with another secret: %v", err)
+	}
+}

@@ -57,9 +57,10 @@ func NewSite(keys SiteKeyReader, opts Options) *SiteAuthenticator {
 		uses = noKeyUseRecorder{}
 	}
 	return &SiteAuthenticator{
-		keys:  keys,
-		cache: cache.New[SiteCredential](opts.CacheTTL, opts.CacheMaxEntries),
-		uses:  uses,
+		keys: keys,
+		cache: cache.New(
+			opts.CacheTTL, opts.CacheMaxEntries, cache.WithMaxStale[SiteCredential](opts.MaxStale)),
+		uses: uses,
 	}
 }
 
@@ -85,11 +86,19 @@ func (a *SiteAuthenticator) Authenticate(ctx context.Context, presented string) 
 		var err error
 		stored, err = a.keys.SiteCredentialFor(ctx, presented)
 		if err != nil {
-			return Identity{}, fmt.Errorf("looking up site key: %w", err)
+			// The secret door's rule: a key seen valid moments ago rides out a
+			// control-plane outage for the stale window (group 9, C1).
+			held, ok := a.cache.Stale(presented)
+			if !ok {
+				return Identity{}, fmt.Errorf("looking up site key: %w", err)
+			}
+			StaleServes.Inc()
+			stored, cached = held, true
+		} else {
+			// Misses cache too, so a bad key in a page cannot hammer Postgres — and
+			// a bad key in a page is a request per pageview, not per deploy.
+			a.cache.Store(presented, stored)
 		}
-		// Misses cache too, so a bad key in a page cannot hammer Postgres — and
-		// a bad key in a page is a request per pageview, not per deploy.
-		a.cache.Store(presented, stored)
 	}
 
 	if !stored.Found {

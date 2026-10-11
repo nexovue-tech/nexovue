@@ -87,6 +87,9 @@ func (i Identity) MayIngestBrowserTelemetry() bool { return i.Kind == KindPublic
 type Options struct {
 	CacheTTL        time.Duration
 	CacheMaxEntries int
+	// MaxStale is how long past its expiry a key seen valid keeps working while
+	// the control plane cannot answer (group 9, C1). Zero refuses at once.
+	MaxStale time.Duration
 
 	// UseRecorder is told when a key authenticated against a fresh read. Nil
 	// means uses are not recorded, which is what the tests that do not care use.
@@ -116,9 +119,10 @@ func New(keys KeyReader, opts Options) *Authenticator {
 		uses = noKeyUseRecorder{}
 	}
 	return &Authenticator{
-		keys:  keys,
-		cache: cache.New[Credential](opts.CacheTTL, opts.CacheMaxEntries),
-		uses:  uses,
+		keys: keys,
+		cache: cache.New(
+			opts.CacheTTL, opts.CacheMaxEntries, cache.WithMaxStale[Credential](opts.MaxStale)),
+		uses: uses,
 	}
 }
 
@@ -141,10 +145,19 @@ func (a *Authenticator) Authenticate(ctx context.Context, presented string) (Ide
 		var err error
 		stored, err = a.keys.CredentialFor(ctx, prefix)
 		if err != nil {
-			return Identity{}, fmt.Errorf("looking up ingest key: %w", err)
+			// The control plane is down. A key this process saw valid moments ago
+			// keeps working for the stale window, so a short Postgres outage is
+			// not an ingest outage; the hash below still has to match.
+			held, ok := a.cache.Stale(prefix)
+			if !ok {
+				return Identity{}, fmt.Errorf("looking up ingest key: %w", err)
+			}
+			StaleServes.Inc()
+			stored, cached = held, true
+		} else {
+			// Misses are cached too, so an invalid key cannot hammer Postgres.
+			a.cache.Store(prefix, stored)
 		}
-		// Misses are cached too, so an invalid key cannot hammer Postgres.
-		a.cache.Store(prefix, stored)
 	}
 
 	if !stored.Found {

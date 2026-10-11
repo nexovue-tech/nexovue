@@ -502,3 +502,47 @@ func TestPublishBatchReportsABrokerRefusal(t *testing.T) {
 		t.Fatalf("PublishBatch() = %v, want the broker failure: the request must not be acked", err)
 	}
 }
+
+// Group 9, C2: the digest is what lets the worker recognise a sender's resend,
+// so the same export must carry the same digest every time it is sent, and two
+// different traces must not.
+func TestTheSameExportCarriesTheSameDigestEachTimeItIsSent(t *testing.T) {
+	send := func() []string {
+		producer := &fakeProducer{}
+		err := ingest.NewPublisher(producer, testTopics, testBudget).PublishTraces(
+			context.Background(), identity(), time.Now(),
+			[]tracesplit.Group{namedGroup("aa", "checkout"), namedGroup("bb", "payment")},
+		)
+		if err != nil {
+			t.Fatalf("PublishTraces() = %v", err)
+		}
+		var digests []string
+		for _, record := range producer.records {
+			digests = append(digests, digestHeader(record))
+		}
+		return digests
+	}
+
+	first, again := send(), send()
+	if len(first) != 2 || first[0] == "" || first[0] == first[1] {
+		t.Fatalf("digests %q: want one per trace, all different", first)
+	}
+	if first[0] != again[0] || first[1] != again[1] {
+		t.Fatalf("a resend carried other digests: %q then %q", first, again)
+	}
+}
+
+func digestHeader(record *kgo.Record) string {
+	for _, header := range record.Headers {
+		if header.Key == ingest.PayloadDigestHeader {
+			return string(header.Value)
+		}
+	}
+	return ""
+}
+
+func namedGroup(traceID, span string) tracesplit.Group {
+	group := groupFor(traceID, "")
+	group.Request.ResourceSpans[0].ScopeSpans[0].Spans[0].Name = span
+	return group
+}

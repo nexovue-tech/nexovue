@@ -51,6 +51,12 @@ describe("the buffer as a file", () => {
     expect(sheet.split("\r\n")[1]).toContain('"GET /a, ""b"""');
   });
 
+  it("writes a body a spreadsheet would run as text, as the server export does", () => {
+    const sheet = bufferAsCsv(buffer([{ kind: "line", key: "a", line: line({ body: "=1+2" }) }]));
+
+    expect(sheet.split("\r\n")[1]).toContain(",'=1+2,");
+  });
+
   it("writes attributes as one column, matching the server export", () => {
     const sheet = bufferAsCsv(
       buffer([{ kind: "line", key: "a", line: line({ attributes: { provider: "stripe" } }) }]),

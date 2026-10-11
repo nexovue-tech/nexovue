@@ -42,6 +42,7 @@ from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.deps import DbSession
 from nexovue_api.errors.exceptions import InvalidRequestError
+from nexovue_api.exports.csv_cells import spreadsheet_safe
 from nexovue_api.logs.schemas import LogRecord
 from nexovue_api.projects.service import require_project, require_readable_project
 from nexovue_api.window import clamp_limit, receive_window, resolve_window
@@ -347,16 +348,18 @@ async def logs_as_csv(
                     # answer carries `2026-08-30T07:51:58.688Z`. One product, one
                     # timestamp.
                     to_iso_millis(line.observed_at),
-                    line.severity,
+                    spreadsheet_safe(line.severity),
                     line.severity_number,
-                    line.service_name,
-                    line.body,
+                    spreadsheet_safe(line.service_name),
+                    spreadsheet_safe(line.body),
                     line.trace_id,
                     line.span_id,
                     # One column rather than a column per key: log attributes are
                     # per-record, so a spread would be as wide as the union of every
                     # record in the file and empty almost everywhere.
-                    json.dumps(line.attributes, sort_keys=True) if line.attributes else "",
+                    spreadsheet_safe(json.dumps(line.attributes, sort_keys=True))
+                    if line.attributes
+                    else "",
                 ]
             )
         written += len(page.logs)

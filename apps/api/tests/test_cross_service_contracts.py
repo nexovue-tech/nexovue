@@ -148,6 +148,14 @@ def test_the_sensitive_query_parameters_are_the_same_list_in_both_languages() ->
 
     assert _QUOTED.findall(declaration.group("body")) == list(SENSITIVE_QUERY_PARAMETERS)
 
+    # The worker masks the same list in stored telemetry (group 9, B1).
+    go_source = (
+        REPOSITORY_ROOT / "apps" / "workers" / "internal" / "pipeline" / "mask" / "url.go"
+    ).read_text(encoding="utf-8")
+    go_list = re.search(r"SensitiveQueryParameters = \[\]string\{(?P<body>.*?)\}", go_source, re.S)
+    assert go_list, "no SensitiveQueryParameters in mask/url.go"
+    assert _QUOTED.findall(go_list.group("body")) == list(SENSITIVE_QUERY_PARAMETERS)
+
 
 # ------------------------------------------------------- API <-> the Go worker's config grammar
 

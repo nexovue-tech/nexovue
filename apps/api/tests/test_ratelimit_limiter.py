@@ -85,7 +85,7 @@ def test_one_callers_spending_is_not_anothers(clock: _Clock) -> None:
 
 def test_in_flight_slots_are_capped_shared_and_given_back() -> None:
     limits = LocalLimits(instances=2)
-    slot = {"scope": "organization", "identity": "acme"}
+    slot = {"pool": "telemetry", "scope": "organization", "identity": "acme"}
 
     assert [limits.acquire_slot(**slot, max_concurrent=8) for _ in range(5)] == [
         True,

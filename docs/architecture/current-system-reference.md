@@ -143,7 +143,7 @@ Parsed by `apps/receiver/internal/config/config.go`; a missing required variable
 
 - `RECEIVER_OTLP_HTTP_ADDR` (`:4318`), `RECEIVER_OTLP_GRPC_ADDR` (`:4317`), `RECEIVER_HEALTH_ADDR` (`:8081`)
 - `RECEIVER_MAX_BODY_BYTES` (4 MiB, wire/compressed cap), `RECEIVER_MAX_DECODED_BODY_BYTES` (16 MiB, decompressed cap)
-- `RECEIVER_API_KEY_CACHE_TTL` (30s, capped at 1 min), `RECEIVER_ALLOWANCE_CACHE_TTL` (30s, capped at 5 min)
+- `RECEIVER_API_KEY_CACHE_TTL` (30s, capped at 1 min), `RECEIVER_ALLOWANCE_CACHE_TTL` (30s, capped at 5 min); `RECEIVER_API_KEY_MAX_STALE` (10 min) — while the key lookup fails, a key seen valid within it keeps working, counted on `/metrics`; a full cache evicts unknown keys before known ones
 - `RECEIVER_RATE_LIMIT_PER_SECOND` (1000, per credential and per signal bucket — profiles have their own); `RECEIVER_INSTANCES` (1) divides it between replicas
 - `RECEIVER_PROFILE_SAMPLES_PER_SECOND` (20,000, per credential): profiles spend no allowance while in preview (F17, D1), so the profiles door also bounds samples, counted after conversion
 - `KAFKA_SPANS_TOPIC`/`KAFKA_LOGS_TOPIC`/`KAFKA_METRICS_TOPIC`/`KAFKA_PROFILES_TOPIC` (defaults `spans-raw`/`logs-raw`/`metrics-raw`/`profiles-raw`)
@@ -189,7 +189,7 @@ Two independent gates, run in order allowance → rate-limit.
 
 `apps/receiver/internal/ingest/ingest.go` builds one `nexovuev1.Envelope` per accepted export. A trace export is first split by `apps/receiver/internal/tracesplit` into one group per 16-byte trace id (preserving each span's original resource/scope message by pointer identity, never merging two byte-identical resources), because trace assembly downstream depends on every span of one trace landing on the same Kafka partition. Logs and metrics are **not** split — one envelope per export, because nothing downstream reassembles them.
 
-Partition key: trace id for spans, tenant (organization) id for logs and metrics. The Kafka producer uses a sticky key partitioner set explicitly (not left to the client library's default, since correctness of trace assembly depends on it), a bounded buffer, and a per-record delivery timeout. Publishing is synchronous: the HTTP/gRPC response is written only after Kafka has acknowledged the record, and on a partial batch failure only the unpublished subset is retried (bounded to three attempts) — never the whole batch, so a client retry can never cause an already-landed record to be republished.
+Partition key: trace id for spans, tenant (organization) id for logs and metrics. The Kafka producer uses a sticky key partitioner set explicitly (not left to the client library's default, since correctness of trace assembly depends on it), a bounded buffer, and a per-record delivery timeout. Publishing is synchronous: the HTTP/gRPC response is written only after Kafka has acknowledged the record, and on a partial batch failure only the unpublished subset is retried (bounded to three attempts) — never the whole batch. When even that retry gives up, the sender is told 503 and resends the whole export, so records that already landed are published again at new offsets; each record therefore carries a digest of its tenant, project, signal and payload (`nexovue-payload-digest`), the first offset to consume a digest claims it in `stored_payload_digests` (15 minutes), and a later record with a claimed digest is acknowledged and skipped by every pipeline and usage meter (`pipeline/resend`, group 9).
 
 ### 4.8 Health
 
@@ -331,6 +331,8 @@ A concrete request path: a query parameter naming a project is first proven — 
 ### 6.5 Authentication and sessions
 
 **Password hashing**: Argon2. Verification always runs the hasher, even for an unknown email (checked against a fixed dummy hash) — so an unknown-account lookup costs the same time as a wrong password, closing a timing-based account-enumeration channel.
+
+**Sign-in and cross-site requests** (group 9): five failed sign-ins in a row lock the account for a minute, doubling to fifteen, always temporary (`auth/lockout.py`, `users.failed_logins`/`locked_until`); a locked account answers exactly as a wrong password. An unsafe request carrying the session cookie from another site — `Sec-Fetch-Site`, or failing that `Origin` — is refused 403 (`middleware/cross_origin.py`); requests without the cookie (webhooks, heartbeats, API tokens, MCP) are untouched. The operator enters admin mode with a code once two-factor is enrolled.
 
 **Sessions**: stored in the Postgres `sessions` table, keyed by a SHA-256 hash of the token (the store never holds the plaintext, so a database dump alone is not a usable credential) and read on every authenticated request. The token itself is 256 bits of randomness, never stretched. Expiry is the row's `expires_at`; `last_seen_at` is rewritten at most once a minute. Cookie: `HttpOnly`, `SameSite=Lax`, `Secure` everywhere except local development, and deliberately carries **no `Domain` attribute** — a host-only cookie can never travel to a sibling subdomain such as the public ingestion hostname.
 

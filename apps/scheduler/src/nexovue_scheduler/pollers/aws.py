@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any, Final
 
 import boto3
+from botocore.config import Config
 
 # The shortest session AWS allows. A poll takes seconds, so credentials that
 # outlive it by an hour are a liability with no benefit.
@@ -65,6 +66,21 @@ class RoleGrant:
         return match.group(1)
 
 
+# Every AWS call this poller makes gives up well inside the task's 30 s soft
+# limit (group 9, C3): botocore's own 60 s outlived it, and a hung STS or
+# CloudWatch call then reported the time limit rather than its cause. The
+# check-file client's settings (`probes/files.py`).
+AWS_CLIENT_CONFIG: Final = Config(
+    connect_timeout=5, read_timeout=10, retries={"max_attempts": 2, "mode": "standard"}
+)
+
+
+def aws_client(service: str, *, region: str, session: boto3.session.Session | None = None) -> Any:
+    """A client for one AWS service, bounded by AWS_CLIENT_CONFIG."""
+    maker = session if session is not None else boto3
+    return maker.client(service, region_name=region, config=AWS_CLIENT_CONFIG)
+
+
 def session_name_for(integration_id: str) -> str:
     """What this poll is called in the customer's CloudTrail."""
     name = _SESSION_NAME_ALLOWED.sub("-", f"nexovue-{integration_id}")
@@ -83,7 +99,7 @@ def assume_customer_role(
     Returns a session rather than raw keys so callers cannot accidentally keep
     the credentials past the object that owns them.
     """
-    sts = sts_client if sts_client is not None else boto3.client("sts", region_name=region)
+    sts = sts_client if sts_client is not None else aws_client("sts", region=region)
     response = sts.assume_role(
         RoleArn=grant.role_arn,
         RoleSessionName=session_name,

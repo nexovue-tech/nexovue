@@ -17,7 +17,7 @@ from nexovue_platform.telemetry.logging import get_logger
 
 from nexovue_scheduler.jobs.registry import Retry, task
 from nexovue_scheduler.pollers import cloudwatch, integrations, postgres_connect, postgres_stats
-from nexovue_scheduler.pollers.aws import assume_customer_role, session_name_for
+from nexovue_scheduler.pollers.aws import assume_customer_role, aws_client, session_name_for
 from nexovue_scheduler.pollers.envelope import build_cloudwatch_envelope, build_postgres_envelope
 from nexovue_scheduler.pollers.health import report_failure, report_success
 from nexovue_scheduler.pollers.window import PollWindow
@@ -95,7 +95,7 @@ def _poll_cloudwatch(
         grant, session_name=session_name_for(integration_id), region=region
     )
     readings = cloudwatch.collect_rds_readings(
-        session.client("cloudwatch", region_name=region),
+        aws_client("cloudwatch", region=region, session=session),
         instance_identifiers=integrations.rds_instances_from(config),
         window=window,
     )

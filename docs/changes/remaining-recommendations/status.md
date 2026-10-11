@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-In development — Step 1 (security) built, not committed
+In development — steps 2-5 built (all but T21), not committed; step 1 committed (e47280b)
 
 ## Current task
 
-Step 1 (part A, security) built and checked; awaiting the founder's "commit".
+Awaiting the founder: the personal-data spec, and "commit" for steps 2-5.
 
 ## Completed
 
@@ -15,7 +15,7 @@ Step 1 (part A, security) built and checked; awaiting the founder's "commit".
 
 ## Next action
 
-Founder says "commit" for Step 1; then Step 2 (part B, data safety), T7.
+Founder approves `docs/features/personal-data/spec.md`; then T21. Commit steps 2-5 on the founder's word.
 
 ## Open decisions
 
@@ -25,7 +25,7 @@ Decided 2026-10-11: every other ⚑ recommendation in `design.md`.
 
 ## Blocked
 
-Nothing.
+T21 (personal data) waits for its spec's approval.
 
 ## Risks
 
@@ -42,6 +42,9 @@ Step 1:
   observable over HTTP from one machine: the per-address limit (10 a minute) answers 429 first; the
   lock is proven by its live suite against Postgres.
 - `just check`: exit 0 — Python 4334 passed, 3 skipped; web 1357; SDK 120.
+
+Steps 2-5: see the plan's Outcome. `just check` exit 0 — Python 4355, web 1358, SDK 124, chunks under
+500 kB; E2E sign-in, services, synthetics 8 passed.
 
 ## Specification impact
 

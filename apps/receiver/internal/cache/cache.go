@@ -54,17 +54,32 @@ type Cache[V Value] struct {
 	entries    map[string]entry[V]
 	ttl        time.Duration
 	maxEntries int
-	now        func() time.Time // replaced in tests; time.Now in production
+	// maxStale is how long past its expiry a hit may still be offered by Stale,
+	// for a caller whose lookup has just failed. Zero offers none.
+	maxStale time.Duration
+	now      func() time.Time // replaced in tests; time.Now in production
+}
+
+// Option adjusts a cache at construction.
+type Option[V Value] func(*Cache[V])
+
+// WithMaxStale lets Stale offer a hit up to d past its expiry (group 9, C1).
+func WithMaxStale[V Value](d time.Duration) Option[V] {
+	return func(c *Cache[V]) { c.maxStale = d }
 }
 
 // New returns an empty cache holding at most maxEntries for ttl each.
-func New[V Value](ttl time.Duration, maxEntries int) *Cache[V] {
-	return &Cache[V]{
+func New[V Value](ttl time.Duration, maxEntries int, options ...Option[V]) *Cache[V] {
+	c := &Cache[V]{
 		entries:    make(map[string]entry[V]),
 		ttl:        ttl,
 		maxEntries: maxEntries,
 		now:        time.Now,
 	}
+	for _, option := range options {
+		option(c)
+	}
+	return c
 }
 
 // Lookup returns a value still inside its lifetime, reporting whether there was
@@ -100,6 +115,25 @@ func (c *Cache[V]) Peek(key string) (value V, fresh, held bool) {
 		return value, false, false
 	}
 	return stored.value, now.Before(stored.expiresAt), true
+}
+
+// Stale returns a hit that has expired by no more than the cache's max-stale
+// window, for a caller whose lookup has just failed (group 9, C1).
+//
+// Only ever after a failed lookup, never instead of one: inside the window a
+// revoked key keeps working, so the window is how long an outage may extend
+// that. A miss is never stale — believing one would refuse a key created since.
+func (c *Cache[V]) Stale(key string) (V, bool) {
+	c.mu.RLock()
+	held, ok := c.entries[key]
+	now := c.now()
+	c.mu.RUnlock()
+
+	if !ok || !held.value.Exists() || now.Sub(held.expiresAt) > c.maxStale {
+		var absent V
+		return absent, false
+	}
+	return held.value, true
 }
 
 // Store keeps a value for as long as its kind of answer is believed.
@@ -139,14 +173,26 @@ func (c *Cache[V]) lifetime(value V) time.Duration {
 	return c.ttl
 }
 
-// makeRoom drops expired entries and, if that was not enough, everything.
-// Emptying the cache costs at most one lookup per live key — bounded, rare, and
-// far simpler to reason about than an eviction policy an attacker can steer.
+// makeRoom drops what is past use, then every miss, and only then everything.
+//
+// Misses are attacker-chosen — the prefix of an invented key — so a flood of
+// them must evict other misses and never a customer's hit (group 9, C1).
+// Emptying the whole cache, the last step, is left for a set of real hits larger
+// than the ceiling: bounded, rare, and simpler than an eviction policy an
+// attacker can steer.
 func (c *Cache[V]) makeRoom() {
 	now := c.now()
 	for key, held := range c.entries {
-		if !now.Before(held.expiresAt) {
+		expired := !now.Before(held.expiresAt)
+		if expired && (!held.value.Exists() || now.Sub(held.expiresAt) > c.maxStale) {
 			delete(c.entries, key)
+		}
+	}
+	if len(c.entries) >= c.maxEntries {
+		for key, held := range c.entries {
+			if !held.value.Exists() {
+				delete(c.entries, key)
+			}
 		}
 	}
 	if len(c.entries) >= c.maxEntries {

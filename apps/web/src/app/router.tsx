@@ -4,69 +4,197 @@ import {
   createRoute,
   createRouter,
   Link,
+  lazyRouteComponent,
   Outlet,
 } from "@tanstack/react-router";
-import { OnboardScreen } from "@/features/admin/OnboardScreen";
-import { OrganizationScreen } from "@/features/admin/OrganizationScreen";
-import { PlatformScreen } from "@/features/admin/PlatformScreen";
-import { AlertsScreen } from "@/features/alerts/AlertsScreen";
-import { ChannelDetailScreen } from "@/features/alerts/ChannelDetailScreen";
-import { ChannelsScreen } from "@/features/alerts/ChannelsScreen";
-import { IncidentScreen } from "@/features/alerts/IncidentScreen";
-import { EditRuleScreen, NewRuleScreen, parseNewRuleSearch } from "@/features/alerts/RuleEditor";
-import { ApiTokensScreen } from "@/features/apitokens/ApiTokensScreen";
-import { AuditScreen } from "@/features/audit/AuditScreen";
-import { AcceptInviteScreen } from "@/features/auth/AcceptInviteScreen";
-import { AccountScreen } from "@/features/auth/AccountScreen";
-import { ForgotPasswordScreen } from "@/features/auth/ForgotPasswordScreen";
-import { GeneralScreen } from "@/features/auth/GeneralScreen";
+import { parseNewRuleSearch } from "@/features/alerts/search";
 import { LoginScreen } from "@/features/auth/LoginScreen";
-import { ResetPasswordScreen } from "@/features/auth/ResetPasswordScreen";
-import { SignupScreen } from "@/features/auth/SignupScreen";
 import { parseLoginSearch, parseTokenSearch } from "@/features/auth/search";
-import { VerifyEmailScreen } from "@/features/auth/VerifyEmailScreen";
-import { BillingScreen } from "@/features/billing/BillingScreen";
-import { DocsScreen } from "@/features/docs/DocsScreen";
-import { ErrorsScreen } from "@/features/errors/ErrorsScreen";
 import { ERROR_FILTERS } from "@/features/errors/filters";
-import { FindingsScreen } from "@/features/findings/FindingsScreen";
 import { databaseFilters } from "@/features/infrastructure/databases/filters";
 import { infrastructureFilters } from "@/features/infrastructure/filters";
-import { InfrastructureScreen } from "@/features/infrastructure/InfrastructureScreen";
 import { llmCallFilters } from "@/features/llm-observability/filters";
-import { LLMCallsScreen } from "@/features/llm-observability/LLMCallsScreen";
-import { LogsScreen, scopedService } from "@/features/logs/LogsScreen";
+import { scopedService } from "@/features/logs/search";
 import { severityFilterById } from "@/features/logs/severity";
-import { MembersScreen } from "@/features/members/MembersScreen";
 import { metricFilters } from "@/features/metrics/filters";
-import { MetricsScreen } from "@/features/metrics/MetricsScreen";
-import { OnboardingScreen } from "@/features/onboarding/OnboardingScreen";
-import { OverviewScreen } from "@/features/overview/OverviewScreen";
-import { ProfilesScreen, parseProfilesSearch } from "@/features/profiles/ProfilesScreen";
-import { ProjectsScreen } from "@/features/projects/ProjectsScreen";
+import { parseProfilesSearch } from "@/features/profiles/search";
 import { rumFilters } from "@/features/rum/filters";
-import { RumScreen } from "@/features/rum/RumScreen";
-import { ServiceDetailScreen } from "@/features/servicedetail/ServiceDetailScreen";
 import { SERVICE_MAP_FILTERS } from "@/features/servicemap/filters";
-import { ServiceMapScreen } from "@/features/servicemap/ServiceMapScreen";
 import { parseServiceOrder, SERVICE_FILTERS } from "@/features/services/filters";
-import { ServicesScreen } from "@/features/services/ServicesScreen";
-import { ApiKeysScreen } from "@/features/settings/ApiKeysScreen";
-import { SupportAccessScreen } from "@/features/support/SupportAccessScreen";
-import { CheckDetailScreen, parseCheckSearch } from "@/features/synthetics/CheckDetailScreen";
 import { SYNTHETIC_FILTERS } from "@/features/synthetics/filters";
-import { ImportScreen } from "@/features/synthetics/ImportScreen";
-import { NewCheckScreen, parseNewCheckSearch } from "@/features/synthetics/NewCheckScreen";
-import { SyntheticsScreen } from "@/features/synthetics/SyntheticsScreen";
+import { parseCheckSearch, parseNewCheckSearch } from "@/features/synthetics/search";
 import { parseTraceFilters, toSearchParams } from "@/features/traces/filters";
-import { TraceListScreen } from "@/features/traces/TraceListScreen";
-import { TraceScreen } from "@/features/traces/TraceScreen";
-import { UsageScreen } from "@/features/usage/UsageScreen";
 import { ErrorScreen } from "@/shared/components/ErrorScreen";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { parseFilterValues } from "@/shared/filters";
 
 import { AppShell } from "./layout/AppShell";
+
+// Each screen is its own chunk, fetched when its route is first opened (group 9,
+// D3): eagerly, every route shipped in one 1.3 MB file. Sign-in and the error
+// screen stay in the first load; so do the screens whose module also exports
+// what a route needs before rendering, such as a search parser.
+const OnboardScreen = lazyRouteComponent(
+  () => import("@/features/admin/OnboardScreen"),
+  "OnboardScreen",
+);
+const OrganizationScreen = lazyRouteComponent(
+  () => import("@/features/admin/OrganizationScreen"),
+  "OrganizationScreen",
+);
+const PlatformScreen = lazyRouteComponent(
+  () => import("@/features/admin/PlatformScreen"),
+  "PlatformScreen",
+);
+const AlertsScreen = lazyRouteComponent(
+  () => import("@/features/alerts/AlertsScreen"),
+  "AlertsScreen",
+);
+const ChannelDetailScreen = lazyRouteComponent(
+  () => import("@/features/alerts/ChannelDetailScreen"),
+  "ChannelDetailScreen",
+);
+const ChannelsScreen = lazyRouteComponent(
+  () => import("@/features/alerts/ChannelsScreen"),
+  "ChannelsScreen",
+);
+const IncidentScreen = lazyRouteComponent(
+  () => import("@/features/alerts/IncidentScreen"),
+  "IncidentScreen",
+);
+const ApiTokensScreen = lazyRouteComponent(
+  () => import("@/features/apitokens/ApiTokensScreen"),
+  "ApiTokensScreen",
+);
+const LogsScreen = lazyRouteComponent(() => import("@/features/logs/LogsScreen"), "LogsScreen");
+const ProfilesScreen = lazyRouteComponent(
+  () => import("@/features/profiles/ProfilesScreen"),
+  "ProfilesScreen",
+);
+const CheckDetailScreen = lazyRouteComponent(
+  () => import("@/features/synthetics/CheckDetailScreen"),
+  "CheckDetailScreen",
+);
+const NewCheckScreen = lazyRouteComponent(
+  () => import("@/features/synthetics/NewCheckScreen"),
+  "NewCheckScreen",
+);
+const EditRuleScreen = lazyRouteComponent(
+  () => import("@/features/alerts/RuleEditor"),
+  "EditRuleScreen",
+);
+const NewRuleScreen = lazyRouteComponent(
+  () => import("@/features/alerts/RuleEditor"),
+  "NewRuleScreen",
+);
+const AuditScreen = lazyRouteComponent(() => import("@/features/audit/AuditScreen"), "AuditScreen");
+const AcceptInviteScreen = lazyRouteComponent(
+  () => import("@/features/auth/AcceptInviteScreen"),
+  "AcceptInviteScreen",
+);
+const AccountScreen = lazyRouteComponent(
+  () => import("@/features/auth/AccountScreen"),
+  "AccountScreen",
+);
+const ForgotPasswordScreen = lazyRouteComponent(
+  () => import("@/features/auth/ForgotPasswordScreen"),
+  "ForgotPasswordScreen",
+);
+const GeneralScreen = lazyRouteComponent(
+  () => import("@/features/auth/GeneralScreen"),
+  "GeneralScreen",
+);
+const ResetPasswordScreen = lazyRouteComponent(
+  () => import("@/features/auth/ResetPasswordScreen"),
+  "ResetPasswordScreen",
+);
+const SignupScreen = lazyRouteComponent(
+  () => import("@/features/auth/SignupScreen"),
+  "SignupScreen",
+);
+const VerifyEmailScreen = lazyRouteComponent(
+  () => import("@/features/auth/VerifyEmailScreen"),
+  "VerifyEmailScreen",
+);
+const BillingScreen = lazyRouteComponent(
+  () => import("@/features/billing/BillingScreen"),
+  "BillingScreen",
+);
+const DocsScreen = lazyRouteComponent(() => import("@/features/docs/DocsScreen"), "DocsScreen");
+const ErrorsScreen = lazyRouteComponent(
+  () => import("@/features/errors/ErrorsScreen"),
+  "ErrorsScreen",
+);
+const FindingsScreen = lazyRouteComponent(
+  () => import("@/features/findings/FindingsScreen"),
+  "FindingsScreen",
+);
+const InfrastructureScreen = lazyRouteComponent(
+  () => import("@/features/infrastructure/InfrastructureScreen"),
+  "InfrastructureScreen",
+);
+const LLMCallsScreen = lazyRouteComponent(
+  () => import("@/features/llm-observability/LLMCallsScreen"),
+  "LLMCallsScreen",
+);
+const MembersScreen = lazyRouteComponent(
+  () => import("@/features/members/MembersScreen"),
+  "MembersScreen",
+);
+const MetricsScreen = lazyRouteComponent(
+  () => import("@/features/metrics/MetricsScreen"),
+  "MetricsScreen",
+);
+const OnboardingScreen = lazyRouteComponent(
+  () => import("@/features/onboarding/OnboardingScreen"),
+  "OnboardingScreen",
+);
+const OverviewScreen = lazyRouteComponent(
+  () => import("@/features/overview/OverviewScreen"),
+  "OverviewScreen",
+);
+const ProjectsScreen = lazyRouteComponent(
+  () => import("@/features/projects/ProjectsScreen"),
+  "ProjectsScreen",
+);
+const RumScreen = lazyRouteComponent(() => import("@/features/rum/RumScreen"), "RumScreen");
+const ServiceDetailScreen = lazyRouteComponent(
+  () => import("@/features/servicedetail/ServiceDetailScreen"),
+  "ServiceDetailScreen",
+);
+const ServiceMapScreen = lazyRouteComponent(
+  () => import("@/features/servicemap/ServiceMapScreen"),
+  "ServiceMapScreen",
+);
+const ServicesScreen = lazyRouteComponent(
+  () => import("@/features/services/ServicesScreen"),
+  "ServicesScreen",
+);
+const ApiKeysScreen = lazyRouteComponent(
+  () => import("@/features/settings/ApiKeysScreen"),
+  "ApiKeysScreen",
+);
+const SupportAccessScreen = lazyRouteComponent(
+  () => import("@/features/support/SupportAccessScreen"),
+  "SupportAccessScreen",
+);
+const ImportScreen = lazyRouteComponent(
+  () => import("@/features/synthetics/ImportScreen"),
+  "ImportScreen",
+);
+const SyntheticsScreen = lazyRouteComponent(
+  () => import("@/features/synthetics/SyntheticsScreen"),
+  "SyntheticsScreen",
+);
+const TraceListScreen = lazyRouteComponent(
+  () => import("@/features/traces/TraceListScreen"),
+  "TraceListScreen",
+);
+const TraceScreen = lazyRouteComponent(
+  () => import("@/features/traces/TraceScreen"),
+  "TraceScreen",
+);
+const UsageScreen = lazyRouteComponent(() => import("@/features/usage/UsageScreen"), "UsageScreen");
 
 /**
  * Code-based routing, not file-based.

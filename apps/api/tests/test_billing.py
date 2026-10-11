@@ -1433,7 +1433,9 @@ class OverviewSession:
         ingested: tuple[int, int],
         frontier: tuple[datetime | None, int],
         services_committed: int | None = None,
+        priced: list[str] | None = None,
     ) -> None:
+        self._priced = priced if priced is not None else [_PRO_PRICE.currency]
         self.statements: list[Any] = []
         self.staged: list[Any] = []
         self._by_entity: dict[Any, Any] = {
@@ -1452,10 +1454,10 @@ class OverviewSession:
         self._rows = [_Rows(ingested), _Rows(frontier)]
 
     async def scalars(self, statement: Any) -> Any:
-        """Which currencies a tier is priced in. One, here: the suite states
-        figures in a single currency and a second would prove nothing."""
+        """Which currencies a tier is priced in. One unless a test names more: the
+        suite states figures in a single currency."""
         self.statements.append(statement)
-        return _Rows([_PRO_PRICE.currency])
+        return _Rows(self._priced)
 
     async def scalar(self, statement: Any) -> Any:
         self.statements.append(statement)
@@ -1493,6 +1495,7 @@ def _overview_session(
     services: int = 2,
     ingested: tuple[int, int] = (1_000_000, 250_000),
     services_committed: int | None = None,
+    priced: list[str] | None = None,
 ) -> OverviewSession:
     return OverviewSession(
         plan=_plan_row(plan_slug),
@@ -1502,6 +1505,7 @@ def _overview_session(
         ingested=ingested,
         frontier=(datetime(2026, 10, 1, tzinfo=UTC), 0),
         services_committed=services_committed,
+        priced=priced,
     )
 
 
@@ -1616,6 +1620,22 @@ class TestTheBillingScreen:
         )
 
         assert overview.currency == usage_queries.DEFAULT_BILLING_CURRENCY
+
+    async def test_an_account_that_takes_only_rupees_is_quoted_rupees(self) -> None:
+        """Group 9, D1. The default (USD) is a guess for an organization that has
+        never paid; offering it when the account takes only INR sent the customer
+        to the last button to be refused."""
+        session = _overview_session(subscription=None, priced=["INR", "USD"])
+
+        overview = await service.overview(
+            session,  # type: ignore[arg-type]
+            organization=_organization(),
+            today=TODAY,
+            configured=_configured(StubProcessor(), currencies=frozenset({"INR"})),
+        )
+
+        assert overview.currency == "INR"
+        assert overview.available_currencies == ["INR"]
 
     async def test_the_period_is_the_calendar_month_the_day_falls_in(self) -> None:
         """The bill covers a calendar month, not an anniversary."""

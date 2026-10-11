@@ -50,9 +50,12 @@ class FakeQueryResult:
 class FakeLogStore:
     """Serves rows to the one tenant that owns them, and records what was bound."""
 
-    def __init__(self, owner: str = TENANT_A, *, rows: int = 2) -> None:
+    def __init__(
+        self, owner: str = TENANT_A, *, rows: int = 2, body: str = "payment authorization failed"
+    ) -> None:
         self._owner = owner
         self._rows = rows
+        self._body = body
         self.last_sql = ""
         self.last_parameters: dict[str, Any] = {}
 
@@ -87,7 +90,7 @@ class FakeLogStore:
                     "demo-payments",
                     "ERROR",
                     17,
-                    "payment authorization failed",
+                    self._body,
                     b"aa" * 16,
                     b"bb11bb11bb11bb11",
                     '{"provider":"stripe-sandbox"}',
@@ -282,6 +285,21 @@ class TestTheExportedFile:
             to_time=WINDOW_END,
             filters=search.LogFilters(),
         )
+
+    async def test_a_body_a_spreadsheet_would_run_is_written_as_text(self) -> None:
+        """Group 9, B2: a log line is customer text, and `=HYPERLINK(...)` opened in a
+        spreadsheet runs. OWASP's rule: a leading `'` makes it text."""
+        formula = '=HYPERLINK("https://evil.example","open")'
+        sheet, _ = await search.logs_as_csv(
+            _repository(TENANT_A, FakeLogStore(body=formula)),
+            project_id=PROJECT,
+            from_time=WINDOW_START,
+            to_time=WINDOW_END,
+            filters=search.LogFilters(),
+        )
+
+        bodies = [row["body"] for row in csv.DictReader(io.StringIO(sheet))]
+        assert bodies == ["'" + formula] * 2
 
     async def test_the_header_names_the_columns_the_screen_shows(self) -> None:
         sheet, _ = await self._sheet(TENANT_A)

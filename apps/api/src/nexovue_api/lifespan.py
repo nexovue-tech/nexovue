@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from mcp.server import MCPServer
 from nexovue_platform.email import EMAIL_VARIABLES, EmailSender, build_email_sender
 from nexovue_platform.telemetry.logging import get_logger
+from nexovue_platform.tenant_statements import MAX_EXECUTION_SECONDS
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -237,7 +238,9 @@ async def open_resources(settings: Settings) -> Resources:
                 connector_limit=settings.clickhouse_pool_size,
                 connector_limit_per_host=settings.clickhouse_pool_size,
                 settings={
-                    "max_execution_time": settings.clickhouse_query_timeout_seconds,
+                    # The one read time limit (`tenant_statements`), for anything
+                    # not sent through a tenant read, which sends it itself.
+                    "max_execution_time": MAX_EXECUTION_SECONDS,
                     "max_result_rows": settings.clickhouse_max_result_rows,
                     "result_overflow_mode": CLICKHOUSE_RESULT_OVERFLOW_MODE,
                 },

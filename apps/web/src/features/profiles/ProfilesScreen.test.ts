@@ -18,7 +18,8 @@ import type { ProfiledService } from "@/shared/profiles/api";
 import { setSelectedProjectId } from "@/shared/selection";
 
 import type { ComparisonResponse, FlameGraphResponse, ProfileFilters } from "./api";
-import { ProfilesScreen, parseProfilesSearch } from "./ProfilesScreen";
+import { ProfilesScreen } from "./ProfilesScreen";
+import { parseProfilesSearch } from "./search";
 
 const PROJECT_ID = "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a0099";
 const mounted: Root[] = [];

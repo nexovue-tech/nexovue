@@ -26,6 +26,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/resend"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/storefailure"
 )
 
@@ -95,10 +96,12 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		Brokers:       cfg.KafkaBrokers,
 		Topic:         cfg.ProfileIngest.Topic,
 		ConsumerGroup: cfg.ProfileIngest.ConsumerGroup,
-		DLQTopic:      cfg.ProfileIngest.DLQTopic,
-		MaxMessages:   cfg.ProfileIngest.MaxMessages,
-		MaxBytes:      cfg.ProfileIngest.MaxBytes,
-		MaxDelay:      cfg.ProfileIngest.MaxDelay,
+		// A sender's resend is acknowledged and skipped (group 9, C2).
+		Resends:     resend.Over(pool, log),
+		DLQTopic:    cfg.ProfileIngest.DLQTopic,
+		MaxMessages: cfg.ProfileIngest.MaxMessages,
+		MaxBytes:    cfg.ProfileIngest.MaxBytes,
+		MaxDelay:    cfg.ProfileIngest.MaxDelay,
 		// A partition can arrive from another worker, whose watermark this
 		// process never read.
 		OnAssigned: guard.Invalidate,

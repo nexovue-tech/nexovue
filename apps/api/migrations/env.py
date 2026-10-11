@@ -42,9 +42,21 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+# A migration waiting on a lock behind a long transaction would hold its own
+# request at the head of the queue, and every write to that table would wait
+# behind it. This fails it instead; run it again when the table is quiet
+# (group 9, C6).
+LOCK_TIMEOUT = "5s"
+
+
 def do_run_migrations(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
+        # Inside Alembic's own transaction: a statement before it starts one
+        # Alembic does not commit, and every migration is silently rolled back.
+        # Session-level rather than LOCAL, so it outlives the autocommit blocks a
+        # few migrations open.
+        connection.exec_driver_sql(f"SET lock_timeout = '{LOCK_TIMEOUT}'")
         context.run_migrations()
 
 

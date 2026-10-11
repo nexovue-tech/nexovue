@@ -29,6 +29,7 @@ export const MASKING_RULE_NAMES = [
   "cookies",
   "card_numbers",
   "authorization_credentials",
+  "url_credentials",
 ] as const;
 
 export type MaskingRuleName = (typeof MASKING_RULE_NAMES)[number];

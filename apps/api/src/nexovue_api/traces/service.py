@@ -20,6 +20,7 @@ from typing import Any, Final
 from nexovue_api.data.clickhouse import values
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
+from nexovue_api.exports.csv_cells import spreadsheet_safe
 from nexovue_api.llm_observability.service import has_gen_ai_attribute
 from nexovue_api.traces import queries
 from nexovue_api.traces.cursor import TracePageCursor, decode_cursor
@@ -769,8 +770,8 @@ async def traces_as_csv(
                 [
                     trace.start_time.isoformat(),
                     trace.trace_id,
-                    trace.root_service,
-                    trace.root_name,
+                    spreadsheet_safe(trace.root_service),
+                    spreadsheet_safe(trace.root_name),
                     f"{trace.duration_ms:.3f}",
                     trace.span_count,
                     trace.error_count,

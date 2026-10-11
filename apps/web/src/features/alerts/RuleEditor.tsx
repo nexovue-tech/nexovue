@@ -48,18 +48,6 @@ import { ChannelForm } from "./ChannelForm";
  * already in place, so the shortest path is a name and a channel.
  */
 
-export interface NewRuleSearch {
-  /** Prefilled from a check's or a service's page — "Alert me about this" (FR24). */
-  check?: string;
-  service?: string;
-}
-
-export function parseNewRuleSearch(search: Record<string, unknown>): NewRuleSearch {
-  if (typeof search.check === "string" && search.check) return { check: search.check };
-  if (typeof search.service === "string" && search.service) return { service: search.service };
-  return {};
-}
-
 const SEVERITIES: readonly { id: Severity; label: string }[] = [
   { id: "critical", label: "Critical" },
   { id: "warning", label: "Warning" },

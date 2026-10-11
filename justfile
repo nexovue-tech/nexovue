@@ -76,7 +76,7 @@ logs service="":
 # ---------- quality ----------
 
 # Everything CI would run. The pre-commit gate.
-check: fmt-check lint test contracts-check
+check: fmt-check lint test contracts-check bundle-check
 
 fmt:
     #!/usr/bin/env bash
@@ -110,6 +110,11 @@ lint-web:
     pnpm -r --if-present run typecheck
 
 test: test-go test-py test-web
+
+# The console's chunks stay under 500 kB each (group 9, D3).
+bundle-check:
+    pnpm --filter @nexovue/web build > /dev/null
+    node apps/web/scripts/check-chunk-sizes.mjs
 
 test-go:
     #!/usr/bin/env bash
@@ -223,6 +228,12 @@ chaos:
     cd tools/chaos && go test -tags chaos -v -count=1 -timeout 20m ./...
 
 # ---------- contracts ----------
+
+# The dead-letter topics: `just dlq list -topic logs-dlq`, or
+# `just dlq replay -topic logs-dlq -from 12 -to 14` once the cause is fixed.
+# Runbook: docs/operations/dead-letters.md.
+dlq *args:
+    cd apps/workers && go run ./cmd/dlq {{args}}
 
 # Regenerate Go and Python bindings from the envelope proto
 contracts:

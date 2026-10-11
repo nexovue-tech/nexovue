@@ -40,6 +40,7 @@ MASKING_RULE_NAMES: Final = (
     "cookies",
     "card_numbers",
     "authorization_credentials",
+    "url_credentials",
 )
 
 # The two keys whose entries name a default family. `disable` switches one off,

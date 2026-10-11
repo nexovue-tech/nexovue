@@ -63,4 +63,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("billing_subscriptions", "services_committed")
+    """Roll forward only (group 9, C6).
+
+    It drops services_committed — the ceiling each customer chose.
+
+    Going back past this revision is a restore of the database, never a
+    downgrade — the records it would drop exist nowhere else.
+    """
+    raise RuntimeError(
+        "0022 is roll forward only: its downgrade would drop billing records. "
+        "Restore a backup instead."
+    )

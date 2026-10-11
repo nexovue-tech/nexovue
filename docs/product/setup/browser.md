@@ -118,6 +118,7 @@ nobody records.
 | `flushIntervalMs` | 10000 | How often a batch is sent |
 | `sessionIdleTimeoutMs` | 1800000 | 30 minutes of inactivity ends a session |
 | `sessionMaxDurationMs` | 14400000 | 4 hours ends a session whatever the activity |
+| `sampleRate` | `1` | The share of sessions, 0 to 1, whose page views and vitals are sent. Decided per session, so a kept session is whole; errors are always sent |
 
 **`route` is worth setting.** It is the only page attribute that reaches an
 indexed column, which is what lets you compare `/products/{id}` across every

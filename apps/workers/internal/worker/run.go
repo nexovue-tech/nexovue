@@ -32,6 +32,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/metricwriting"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/profilewriting"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/resend"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/traceassembly"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/usage"
@@ -122,6 +123,7 @@ func run(serviceName string) error {
 	metrics := prometheus.NewRegistry()
 	metrics.MustRegister(
 		registry.Collector(),
+		resend.Skipped,
 		selfmetrics.New(kadm.NewClient(kafka), metricSources(cfg)),
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -249,7 +251,8 @@ func startPipelines(
 
 	// Appended before the error is checked: a meter that started before a later
 	// one failed still has to be released.
-	meters, err := startUsageCounting(ctx, cfg, control, log, registry, liveness, failures, shutdown)
+	meters, err := startUsageCounting(
+		ctx, cfg, store, control, log, registry, liveness, failures, shutdown)
 	started = append(started, meters...)
 	if err != nil {
 		stop()
@@ -272,6 +275,7 @@ func startPipelines(
 func startUsageCounting(
 	ctx context.Context,
 	cfg config.Config,
+	store *chpool.Pool,
 	control *pgxpool.Pool,
 	log *slog.Logger,
 	registry *health.Registry,
@@ -293,7 +297,8 @@ func startUsageCounting(
 	var started []func()
 	for _, signal := range signals {
 		meter, err := usage.New(cfg, signal, log, usage.Options{
-			Store: usage.NewPostgresStore(control, signal.Topic(cfg)),
+			Store:   usage.NewPostgresStore(control, signal.Topic(cfg)),
+			Resends: resend.Over(store, log),
 		})
 		if err != nil {
 			return started, err

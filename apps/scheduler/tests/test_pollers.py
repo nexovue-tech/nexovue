@@ -528,3 +528,15 @@ def test_a_statement_row_keeps_its_call_count(snapshot: DatabaseSnapshot) -> Non
         calls=1284,
         mean_seconds=pytest.approx(0.3184),  # type: ignore[arg-type]
     )
+
+
+def test_an_aws_client_gives_up_inside_the_task_s_own_limit() -> None:
+    """Group 9, C3. botocore's own 60 s outlived the task's 30 s soft limit, so a hung
+    STS or CloudWatch call reported 'passed its soft time limit', never the cause."""
+    from nexovue_scheduler.pollers.aws import aws_client
+
+    for service in ("sts", "cloudwatch"):
+        config = aws_client(service, region="eu-west-1").meta.config
+        assert config.connect_timeout == 5
+        assert config.read_timeout == 10
+        assert config.retries["mode"] == "standard"

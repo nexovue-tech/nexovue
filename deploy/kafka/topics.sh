@@ -10,6 +10,17 @@ BOOTSTRAP="${KAFKA_BOOTSTRAP:-kafka:9092}"
 CONTAINER="${KAFKA_CONTAINER:-nexovue-kafka-1}"
 REPLICATION="${KAFKA_REPLICATION_FACTOR:-1}"
 
+# How many copies must hold a record before the producers' acks=all is answered.
+# One less than the copies, so one broker can be down and writes continue, while
+# an acknowledged record is never on a single disk. With one copy — a single
+# broker, as every compose file runs today — it can only be 1. Three brokers are
+# the hosting target's decision (readiness group 8).
+if [ "$REPLICATION" -gt 1 ]; then
+    MIN_IN_SYNC=$((REPLICATION - 1))
+else
+    MIN_IN_SYNC=1
+fi
+
 # spans-raw is keyed by trace_id and every partition is one assembler's whole
 # world, so its partition count is the assembler's maximum parallelism.
 # Changing it later re-shuffles trace ownership; pick generously now.
@@ -40,6 +51,7 @@ create_topic() {
         --replication-factor "$REPLICATION" \
         --config "retention.ms=$RETENTION_MS" \
         --config "max.message.bytes=$MAX_MESSAGE_BYTES" \
+        --config "min.insync.replicas=$MIN_IN_SYNC" \
         --config compression.type=zstd
     echo "topic ready: $name ($partitions partitions)"
 }

@@ -33,6 +33,9 @@ const (
 	// RuleAuthorizationCredentials masks the credential after a Bearer or Basic
 	// scheme wherever it appears in free text, including a log message body.
 	RuleAuthorizationCredentials = "authorization_credentials"
+	// RuleURLCredentials masks a password inside a URL and the values of the
+	// conventions' signature parameters, wherever a URL appears (`url.go`).
+	RuleURLCredentials = "url_credentials"
 )
 
 // DefaultRuleNames lists every rule that is on without configuration.
@@ -42,6 +45,7 @@ var DefaultRuleNames = []string{
 	RuleCookies,
 	RuleCardNumbers,
 	RuleAuthorizationCredentials,
+	RuleURLCredentials,
 }
 
 // credentialKeyMarkers are the key substrings the credential rule matches.
@@ -108,6 +112,7 @@ type Rules struct {
 	cookies                  family
 	cardNumbers              family
 	authorizationCredentials family
+	urlCredentials           family
 
 	// maskKeys are matched whole, maskKeyMarkers as substrings; both are
 	// lower-cased at build time so matching never allocates, and both carry
@@ -133,6 +138,7 @@ func Defaults() Rules {
 		cookies:                  blanking,
 		cardNumbers:              blanking,
 		authorizationCredentials: blanking,
+		urlCredentials:           blanking,
 	}
 }
 
@@ -224,6 +230,8 @@ func (r *Rules) setFamily(name string, change func(*family)) error {
 		change(&r.authorizationCredentials)
 	case RuleCardNumbers:
 		change(&r.cardNumbers)
+	case RuleURLCredentials:
+		change(&r.urlCredentials)
 	default:
 		return fmt.Errorf("masking_config: unknown rule %q; valid names are %s",
 			name, strings.Join(DefaultRuleNames, ", "))
@@ -258,7 +266,7 @@ func (r Rules) hashesAnything() bool {
 func (r Rules) families() []family {
 	return []family{
 		r.credentialKeys, r.authorizationHeader, r.cookies, r.cardNumbers,
-		r.authorizationCredentials,
+		r.authorizationCredentials, r.urlCredentials,
 	}
 }
 
@@ -283,7 +291,9 @@ func (r Rules) masksKey(key string) (action, bool) {
 
 // masksValues reports whether string values need scanning at all, which lets
 // the hot path skip every value when no value rule is on.
-func (r Rules) masksValues() bool { return r.cardNumbers.on || r.authorizationCredentials.on }
+func (r Rules) masksValues() bool {
+	return r.cardNumbers.on || r.authorizationCredentials.on || r.urlCredentials.on
+}
 
 // allows reports whether a value is one the project named as safe. The
 // allowlist beats every rule, which is the redaction processor's precedence and
@@ -314,7 +324,21 @@ func (r Rules) maskValue(value string) (string, bool) {
 		value, did = maskCardNumbers(value, r.replaceCardRun)
 		changed = changed || did
 	}
+	if r.urlCredentials.on {
+		var did bool
+		value, did = maskURLCredentials(value, r.replaceURLCredential)
+		changed = changed || did
+	}
 	return value, changed
+}
+
+// replaceURLCredential is what a URL's password or signature becomes; the
+// allowlist still wins.
+func (r Rules) replaceURLCredential(run string) (string, bool) {
+	if r.allows(run) {
+		return run, false
+	}
+	return r.replace(r.urlCredentials.action, run), true
 }
 
 // replaceCredential is what a matched authorization credential becomes. The

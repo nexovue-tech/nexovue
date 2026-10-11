@@ -17,11 +17,12 @@ import { parseFilterValues } from "@/shared/filters";
 import { identityFor } from "@/shared/identity.test-util";
 import { setSelectedProjectId } from "@/shared/selection";
 import type { CheckDefinition, CheckResultSummary, CheckRun } from "./api";
-import { CheckDetailScreen, parseCheckSearch } from "./CheckDetailScreen";
+import { CheckDetailScreen } from "./CheckDetailScreen";
 import type { RunEvidence } from "./check-model";
 import { SYNTHETIC_FILTERS } from "./filters";
-import { NewCheckScreen, parseNewCheckSearch } from "./NewCheckScreen";
+import { NewCheckScreen } from "./NewCheckScreen";
 import { SyntheticsScreen } from "./SyntheticsScreen";
+import { parseCheckSearch, parseNewCheckSearch } from "./search";
 
 /**
  * The synthetics screens mounted as the app mounts them: inside a layout route with the

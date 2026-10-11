@@ -22,10 +22,14 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 go -C apps/workers build -trimpath \
       -ldflags="-s -w -X main.gitSHA=${GIT_SHA}" \
       -o /out/worker ./cmd/worker
+# The dead-letter tool, beside the worker it inspects (docs/operations/dead-letters.md).
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go -C apps/workers build -trimpath -ldflags="-s -w" -o /out/dlq ./cmd/dlq
 
 # The worker reaches Kafka and ClickHouse; it faces nothing.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/worker /worker
+COPY --from=build /out/dlq /dlq
 EXPOSE 8081
 USER nonroot:nonroot
 ENTRYPOINT ["/worker"]

@@ -17,6 +17,7 @@ import { bufferLineCount, downloadBuffer } from "./log-export";
 import type { LiveBuffer, LogLine, LogRow, TailNarration } from "./log-feed";
 
 import { buildLogRows, describeLogs } from "./log-feed";
+import { scopedService } from "./search";
 import {
   emitterSaidSomethingElse,
   SEVERITY_FILTERS,
@@ -24,13 +25,6 @@ import {
   severityLabel,
   severityStyle,
 } from "./severity";
-
-/** A service named in the URL, or nothing. A blank string is not a filter. */
-export function scopedService(raw: unknown): string | undefined {
-  const named = typeof raw === "string" ? raw.trim() : "";
-  return named === "" ? undefined : named;
-}
-
 import type { LogTail, TailStatus } from "./use-log-tail";
 import { useLogTail } from "./use-log-tail";
 

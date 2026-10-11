@@ -26,6 +26,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/resend"
 )
 
 // AttributeMasker rewrites the attributes of a decoded OTLP metrics payload in
@@ -130,9 +131,11 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		Brokers:       cfg.KafkaBrokers,
 		Topic:         cfg.MetricIngest.Topic,
 		ConsumerGroup: cfg.MetricIngest.ConsumerGroup,
-		DLQTopic:      cfg.MetricIngest.DLQTopic,
-		MaxMessages:   cfg.MetricIngest.MaxMessages,
-		MaxDelay:      cfg.MetricIngest.MaxDelay,
+		// A sender's resend is acknowledged and skipped (group 9, C2).
+		Resends:     resend.Over(pool, log),
+		DLQTopic:    cfg.MetricIngest.DLQTopic,
+		MaxMessages: cfg.MetricIngest.MaxMessages,
+		MaxDelay:    cfg.MetricIngest.MaxDelay,
 		// A partition can arrive from another worker, whose watermark this
 		// process never read.
 		OnAssigned: guard.Invalidate,

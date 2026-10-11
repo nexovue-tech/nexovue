@@ -9,6 +9,7 @@ Operational truth is created only for verified procedures. Current tooling exist
 - [Backup and restore](backup-and-restore.md)
 - [Rollback](rollback.md)
 - [Key rotation](key-rotation.md) — replacing either encryption key without losing what it sealed
+- [Dead letters](dead-letters.md) — listing and replaying telemetry set aside as unprocessable.
 - [Disaster recovery](disaster-recovery.md)
 - [Incident response](incident-response.md)
 

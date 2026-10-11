@@ -26,9 +26,20 @@ export const BUFFER_COLUMNS = [
   "attributes",
 ] as const;
 
+/**
+ * A spreadsheet runs a cell beginning with one of these as a formula; a leading `'`
+ * makes it text. The server export applies the same rule (`exports/csv_cells.py`),
+ * so the two files open identically (OWASP CSV injection).
+ */
+const FORMULA_LEADS = ["=", "+", "-", "@", "\t", "\r", "\n"];
+
 /** A field that could be read as anything but text, quoted the way CSV requires. */
 function cell(value: unknown): string {
-  const text = value === null || value === undefined ? "" : String(value);
+  const raw = value === null || value === undefined ? "" : String(value);
+  const text =
+    typeof value === "string" && FORMULA_LEADS.some((lead) => raw.startsWith(lead))
+      ? `'${raw}`
+      : raw;
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 

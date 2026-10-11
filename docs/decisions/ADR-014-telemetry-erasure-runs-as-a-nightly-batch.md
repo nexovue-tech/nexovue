@@ -90,3 +90,9 @@ night.
   time a customer's deletion happened to pick.
 - Records already on the broker when an organization is deleted can land after a run; the next night
   finds them through `remaining()` and erases them again, as the purge's design already expects.
+- **Copies in Kafka are not erased; they age out.** The `*-raw` and `*-dlq` topics hold a deleted
+  organization's unmasked telemetry for at most their 7-day retention (`deploy/kafka/topics.sh`), and
+  backups never copy the broker (`deploy/backup/backup.sh` copies Postgres and ClickHouse only).
+  Masking stays in the worker rather than moving to the receiver to shorten that window — decided in
+  readiness group 9 (`docs/changes/remaining-recommendations/design.md`, B3); encrypting the broker's
+  disk is the hosting target's (group 8).

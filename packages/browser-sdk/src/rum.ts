@@ -11,6 +11,7 @@ import { toSpanJson } from "./otlp/spans";
 import { pageViewAttributes } from "./pagecontext";
 import { navigationStartedAt, whenPageLoaded } from "./pageview";
 import { errorRecord, webVitalRecord } from "./records";
+import { inSample } from "./sampling";
 import { createSession } from "./session";
 import { endpointsFor } from "./transport";
 import { reportWebVitals } from "./vitals";
@@ -54,11 +55,16 @@ export function startRum(config: ResolvedConfig): Collector {
 
   // Registered before the lifecycle listener, so web-vitals' own window-capture
   // visibilitychange handler runs before our document-target flush.
-  reportWebVitals((metric) => exporter.enqueueLog(webVitalRecord(metric, sessionId(), config)));
+  // Page views and vitals are sampled per session; errors never are (`sampling.ts`).
+  const sampled = () => inSample(sessionId(), config.sampleRate);
+  reportWebVitals((metric) => {
+    if (sampled()) exporter.enqueueLog(webVitalRecord(metric, sessionId(), config));
+  });
   const detachErrors = captureErrors((error) =>
     exporter.enqueueLog(errorRecord(error, sessionId(), config)),
   );
   const cancelPageView = whenPageLoaded((loadedAt) => {
+    if (!sampled()) return;
     const span = tracer.startSpan(PAGE_VIEW_SPAN_NAME, {
       startTime: navigationStartedAt(),
       attributes: pageViewAttributes(config, sessionId()),

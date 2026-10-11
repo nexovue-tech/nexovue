@@ -32,6 +32,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/consume"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/resend"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/vitals"
 )
 
@@ -151,9 +152,11 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		Brokers:       cfg.KafkaBrokers,
 		Topic:         cfg.Logs.Topic,
 		ConsumerGroup: cfg.Logs.ConsumerGroup,
-		DLQTopic:      cfg.Logs.DLQTopic,
-		MaxMessages:   cfg.Logs.MaxMessages,
-		MaxDelay:      cfg.Logs.MaxDelay,
+		// A sender's resend is acknowledged and skipped (group 9, C2).
+		Resends:     resend.Over(pool, log),
+		DLQTopic:    cfg.Logs.DLQTopic,
+		MaxMessages: cfg.Logs.MaxMessages,
+		MaxDelay:    cfg.Logs.MaxDelay,
 		// A partition can arrive from another worker, whose watermark this
 		// process never read. Re-reading before writing anything is what keeps
 		// the handover from writing a partition's rows twice.

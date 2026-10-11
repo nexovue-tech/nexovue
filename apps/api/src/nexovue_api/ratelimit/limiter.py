@@ -75,15 +75,17 @@ class RateLimiter:
             return await self._exact.consume(scope=scope, identity=identity, quota=quota)
         return self._local.consume(scope=scope, identity=identity, quota=quota)
 
-    async def acquire_slot(self, *, scope: str, identity: str, max_concurrent: int) -> bool:
-        """Claim one in-flight slot; False when this caller is already at the cap."""
+    async def acquire_slot(
+        self, *, pool: str, scope: str, identity: str, max_concurrent: int
+    ) -> bool:
+        """Claim one in-flight slot in `pool`; False when this caller is at the cap."""
         return self._local.acquire_slot(
-            scope=scope, identity=identity, max_concurrent=max_concurrent
+            pool=pool, scope=scope, identity=identity, max_concurrent=max_concurrent
         )
 
-    async def release_slot(self, *, scope: str, identity: str) -> None:
+    async def release_slot(self, *, pool: str, scope: str, identity: str) -> None:
         """Give back an in-flight slot claimed by `acquire_slot`."""
-        self._local.release_slot(scope=scope, identity=identity)
+        self._local.release_slot(pool=pool, scope=scope, identity=identity)
 
 
 class LocalLimits:
@@ -96,7 +98,9 @@ class LocalLimits:
         self._instances = instances
         self._clock = clock
         self._windows: OrderedDict[tuple[str, str, str], deque[float]] = OrderedDict()
-        self._in_flight: dict[tuple[str, str], int] = {}
+        # Keyed by tier as well as caller: an organization's tokens and its people
+        # each have their own ceiling, and neither can hold the other's (group 9, D5).
+        self._in_flight: dict[tuple[str, str, str], int] = {}
 
     def consume(self, *, scope: str, identity: str, quota: Quota) -> Decision:
         share = self._share(quota)
@@ -122,16 +126,16 @@ class LocalLimits:
             reset_seconds=share.window_seconds,
         )
 
-    def acquire_slot(self, *, scope: str, identity: str, max_concurrent: int) -> bool:
-        key = (scope, identity)
+    def acquire_slot(self, *, pool: str, scope: str, identity: str, max_concurrent: int) -> bool:
+        key = (pool, scope, identity)
         held = self._in_flight.get(key, 0)
         if held >= max(1, max_concurrent // self._instances):
             return False
         self._in_flight[key] = held + 1
         return True
 
-    def release_slot(self, *, scope: str, identity: str) -> None:
-        key = (scope, identity)
+    def release_slot(self, *, pool: str, scope: str, identity: str) -> None:
+        key = (pool, scope, identity)
         held = self._in_flight.get(key, 0) - 1
         if held > 0:
             self._in_flight[key] = held

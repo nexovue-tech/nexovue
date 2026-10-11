@@ -20,6 +20,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/derive"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/mask"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/resend"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/sample"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/serviceedges"
 )
@@ -181,9 +182,11 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		Brokers:       cfg.KafkaBrokers,
 		Topic:         cfg.Spans.Topic,
 		ConsumerGroup: cfg.Spans.ConsumerGroup,
-		DLQTopic:      cfg.Spans.DLQTopic,
-		MaxMessages:   cfg.Spans.MaxMessages,
-		MaxDelay:      cfg.Spans.MaxDelay,
+		// A sender's resend is acknowledged and skipped (group 9, C2).
+		Resends:     resend.Over(pool, log),
+		DLQTopic:    cfg.Spans.DLQTopic,
+		MaxMessages: cfg.Spans.MaxMessages,
+		MaxDelay:    cfg.Spans.MaxDelay,
 		// A partition can arrive from another worker, whose settlements this
 		// process never saw. Re-reading the durable state before counting
 		// anything is what keeps the handover from counting a minute twice.

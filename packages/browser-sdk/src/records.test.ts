@@ -31,6 +31,7 @@ function config(captureQueryAndFragment = false, route?: string): ResolvedConfig
     sessionIdleTimeoutMs: 1800000,
     sessionMaxDurationMs: 14400000,
     flushIntervalMs: 10000,
+    sampleRate: 1,
   };
 }
 

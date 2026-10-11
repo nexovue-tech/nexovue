@@ -66,5 +66,10 @@ EXCLUDED_TABLES: Final[dict[str, str]] = {
         "keyed by topic and partition, not by tenant. Same replay as "
         "span_written_offsets, for the log and metric pipelines (migration 000029)"
     ),
+    "stored_payload_digests": (
+        "a digest of each payload and the offset that consumed it, kept fifteen "
+        "minutes by its own TTL; no tenant column and nothing readable back "
+        "(migration 000033)"
+    ),
     "schema_migrations": "golang-migrate's own bookkeeping; holds no customer data",
 }

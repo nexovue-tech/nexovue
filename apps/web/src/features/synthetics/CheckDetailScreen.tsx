@@ -41,18 +41,7 @@ import { EvidenceView } from "./EvidenceView";
 import { KIND_DESCRIPTIONS } from "./NewCheckScreen";
 import { isOutcome, OUTCOME_WORDS, outcomeUrgency, STATE_WORDS, stateUrgency } from "./outcomes";
 import { PhaseBreakdownPanel } from "./PhaseBreakdownPanel";
-
-type CheckTab = "overview" | "edit";
-
-export function parseCheckSearch(search: Record<string, unknown>): {
-  tab?: CheckTab;
-  run?: string;
-} {
-  return {
-    ...(search.tab === "edit" ? { tab: "edit" as const } : {}),
-    ...(typeof search.run === "string" && search.run ? { run: search.run } : {}),
-  };
-}
+import type { CheckTab } from "./search";
 
 const URGENCY_TEXT = {
   critical: "font-medium text-critical-text",

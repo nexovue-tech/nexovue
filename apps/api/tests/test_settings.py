@@ -220,3 +220,9 @@ def test_development_sends_mail_to_the_log(monkeypatch: pytest.MonkeyPatch) -> N
     _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "EMAIL_PROVIDER": "console"})
 
     assert get_settings().email is not None
+
+
+def test_there_is_one_read_time_limit_and_it_is_the_one_every_read_sends() -> None:
+    """Group 9, C4: CLICKHOUSE_QUERY_TIMEOUT_SECONDS (15 s) was overridden by the 30 s
+    every tenant read sends, so the setting promised a bound nothing enforced."""
+    assert "clickhouse_query_timeout_seconds" not in Settings.model_fields

@@ -110,6 +110,10 @@ type Config struct {
 	// validated against a ceiling rather than merely required to be positive.
 	APIKeyCacheTTL        time.Duration `env:"RECEIVER_API_KEY_CACHE_TTL" envDefault:"30s"`
 	APIKeyCacheMaxEntries int           `env:"RECEIVER_API_KEY_CACHE_MAX_ENTRIES" envDefault:"10000"`
+	// APIKeyMaxStale is how long past its TTL a key seen valid keeps working
+	// while Postgres cannot answer — and so how long an outage extends a revoked
+	// key's window (group 9, C1). Zero refuses every key at the first failure.
+	APIKeyMaxStale time.Duration `env:"RECEIVER_API_KEY_MAX_STALE" envDefault:"10m"`
 
 	// AllowanceCacheTTL bounds how far past its included volume an organization
 	// can get before the door notices, and how long an upgrade takes to open the

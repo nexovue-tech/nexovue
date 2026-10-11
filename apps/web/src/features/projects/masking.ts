@@ -78,6 +78,7 @@ export const RULE_LABELS: Record<string, string> = {
   cookies: "Cookies",
   card_numbers: "Card numbers",
   authorization_credentials: "Authorization credentials",
+  url_credentials: "Passwords and signatures inside URLs",
 };
 
 export const TEXT_KEY_LABELS: Record<MaskingTextKey, { label: string; hint: string }> = {

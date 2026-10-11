@@ -32,6 +32,12 @@ export interface NexovueOptions {
   sessionIdleTimeoutMs?: number;
   sessionMaxDurationMs?: number;
   flushIntervalMs?: number;
+  /**
+   * The share of sessions, 0 to 1, whose page views and web vitals are sent.
+   * Decided per session, so a kept session is kept whole. Errors are always
+   * sent. Defaults to 1: everything, until you choose otherwise.
+   */
+  sampleRate?: number;
 }
 
 export interface ResolvedConfig {
@@ -44,6 +50,7 @@ export interface ResolvedConfig {
   sessionIdleTimeoutMs: number;
   sessionMaxDurationMs: number;
   flushIntervalMs: number;
+  sampleRate: number;
 }
 
 export interface Defaults {
@@ -107,6 +114,7 @@ export function resolveConfig(
     sessionIdleTimeoutMs: positiveOr(options.sessionIdleTimeoutMs, defaults.sessionIdleTimeoutMs),
     sessionMaxDurationMs: positiveOr(options.sessionMaxDurationMs, defaults.sessionMaxDurationMs),
     flushIntervalMs: positiveOr(options.flushIntervalMs, defaults.flushIntervalMs),
+    sampleRate: shareOr(options.sampleRate, 1),
   };
 }
 
@@ -138,6 +146,16 @@ function normalizeEndpoint(raw: string): string | undefined {
 /** The site's own host names the property, so service.name is never empty. */
 function defaultServiceName(): string {
   return globalThis.location?.hostname || "browser";
+}
+
+/** A share from 0 to 1; anything else is the fallback, said once in the console. */
+function shareOr(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1) {
+    return value;
+  }
+  reportOnce("sampleRate", "sampleRate must be a number from 0 to 1; sending every session.");
+  return fallback;
 }
 
 function positiveOr(value: number | undefined, fallback: number): number {

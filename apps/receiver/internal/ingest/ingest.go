@@ -10,6 +10,8 @@ package ingest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -268,7 +270,9 @@ func recordFor(
 	receivedAt time.Time,
 	batch Batch,
 ) (*kgo.Record, error) {
-	payload, err := proto.Marshal(batch.Request)
+	// Deterministic, so a resend of the same export marshals to the same bytes
+	// and so the same digest.
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(batch.Request)
 	if err != nil {
 		return nil, fmt.Errorf("encoding %s payload: %w", batch.Signal, err)
 	}
@@ -292,5 +296,28 @@ func recordFor(
 		return nil, fmt.Errorf("encoding envelope for %s: %w", batch.Signal, err)
 	}
 
-	return &kgo.Record{Topic: topic, Key: []byte(key), Value: envelope}, nil
+	return &kgo.Record{
+		Topic: topic,
+		Key:   []byte(key),
+		Value: envelope,
+		Headers: []kgo.RecordHeader{
+			{Key: PayloadDigestHeader, Value: []byte(payloadDigest(identity, batch.Signal, payload))},
+		},
+	}, nil
+}
+
+// PayloadDigestHeader carries a digest of the record's tenant, project, signal
+// and payload (group 9, C2). The same export sent again carries the same digest,
+// which is how the worker recognises a sender's resend and stores it once
+// (`apps/workers/internal/pipeline/resend`, which reads it under the same name).
+const PayloadDigestHeader = "nexovue-payload-digest"
+
+func payloadDigest(identity auth.Identity, signal nexovuev1.Signal, payload []byte) string {
+	sum := sha256.New()
+	for _, part := range []string{identity.OrgID, identity.ProjectID, signal.String()} {
+		sum.Write([]byte(part))
+		sum.Write([]byte{0})
+	}
+	sum.Write(payload)
+	return hex.EncodeToString(sum.Sum(nil))
 }

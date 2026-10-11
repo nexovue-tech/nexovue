@@ -122,6 +122,7 @@ func run() error {
 	credentialCache := auth.Options{
 		CacheTTL:        cfg.APIKeyCacheTTL,
 		CacheMaxEntries: cfg.APIKeyCacheMaxEntries,
+		MaxStale:        cfg.APIKeyMaxStale,
 	}
 
 	serverKeys := auth.New(keys, withRecorder(credentialCache, keyUses))
@@ -134,7 +135,7 @@ func run() error {
 	// What a monitor reads (ADR-021): the doors' totals, and Go's own memory,
 	// goroutines and file descriptors.
 	metrics := prometheus.NewRegistry()
-	metrics.MustRegister(traffic, collectors.NewGoCollector(),
+	metrics.MustRegister(traffic, auth.StaleServes, collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	adminHandler := health.WithMetrics(health.Handler(info, registry), metrics)
 	if cfg.Profiling {

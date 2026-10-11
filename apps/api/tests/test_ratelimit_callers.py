@@ -254,6 +254,33 @@ async def test_an_organizations_tokens_share_one_in_flight_ceiling() -> None:
     assert other.status_code == 200
 
 
+async def test_an_organizations_tokens_cannot_hold_its_people_s_reads() -> None:
+    """Group 9, D5. The in-flight key omitted the tier, so an organization's tokens
+    and its people shared one ceiling of 32: a script holding every slot left the
+    console's own screens refused."""
+    world = _World()
+    ceiling = TOKEN_TIER.org_max_concurrent
+    per_token = TOKEN_TIER.max_concurrent
+    assert ceiling is not None and per_token is not None
+    org_id = str(uuid.uuid4())
+    busy = [world.token(org_id) for _ in range(ceiling // per_token)]
+    person = world.person(org_id)
+
+    async def slow(credential: str) -> httpx.Response:
+        return await runner.get(SLOW_READ, headers={"Authorization": f"Bearer {credential}"})
+
+    async with _client(world) as runner:
+        held = [asyncio.create_task(slow(token)) for token in busy for _ in range(per_token)]
+        await asyncio.sleep(0.1)
+        console = asyncio.create_task(slow(person))
+        await asyncio.sleep(0.1)
+        world.released.set()
+        await asyncio.gather(*held)
+        answered = await console
+
+    assert answered.status_code == 200
+
+
 async def test_an_organizations_in_flight_slots_come_back() -> None:
     """A slot is released when its read finishes, so a ceiling once reached is not
     reached for ever: more reads in a row than the ceiling allows at once."""

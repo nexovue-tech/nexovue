@@ -25,6 +25,10 @@ type Options struct {
 	// meter with nowhere to write counts nothing.
 	Store Store
 
+	// Resends skips a sender's resend, as the writer of the same topic does
+	// (group 9, C2). Nil skips nothing.
+	Resends consume.Resends
+
 	// FlushInterval overrides DefaultFlushInterval. There is no environment
 	// variable for it, because this job has no configuration surface of its
 	// own yet — see the note on consumer groups in usage.go.
@@ -74,10 +78,12 @@ func New(cfg config.Config, signal Signal, log *slog.Logger, opts Options) (*Pip
 		Brokers:       cfg.KafkaBrokers,
 		Topic:         settings.name,
 		ConsumerGroup: settings.consumerGroup,
-		DLQTopic:      settings.dlqTopic,
-		MaxMessages:   settings.maxMessages,
-		MaxBytes:      settings.maxBytes,
-		MaxDelay:      settings.maxDelay,
+		// The writers' verdict on resends, so a resend is not billed either.
+		Resends:     opts.Resends,
+		DLQTopic:    settings.dlqTopic,
+		MaxMessages: settings.maxMessages,
+		MaxBytes:    settings.maxBytes,
+		MaxDelay:    settings.maxDelay,
 		// A partition can arrive from another worker, whose flushes this
 		// process never saw. Re-reading the durable watermark before counting
 		// anything is what keeps the handover from counting a batch twice.

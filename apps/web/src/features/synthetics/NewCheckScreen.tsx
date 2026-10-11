@@ -32,13 +32,6 @@ export const KIND_DESCRIPTIONS: Record<CheckType, { title: string; detail: strin
   dns: { title: "DNS", detail: "A name resolves, optionally to the answer you expect." },
 };
 
-export function parseNewCheckSearch(search: Record<string, unknown>): { kind?: CheckType } {
-  const kind = search.kind;
-  return typeof kind === "string" && (CHECK_TYPES as readonly string[]).includes(kind)
-    ? { kind: kind as CheckType }
-    : {};
-}
-
 /**
  * Choose a kind, then describe the check (design, *User experience → Create*). The
  * simplest check — "is this URL up" — is a URL and nothing else: an API check starts

@@ -51,12 +51,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Reversible, and it discards what it drops.
+    """Roll forward only (group 9, C6).
 
-    The amounts are only in these columns — nothing else records them, and the
-    derivation they replaced cannot reproduce a charge taken at a rate that has
-    since moved. Rolling back keeps every delivery row and loses what each one
-    cost.
+    It drops amount_minor_units and amount_currency — what every charge was.
+
+    Going back past this revision is a restore of the database, never a
+    downgrade — the records it would drop exist nowhere else.
     """
-    op.drop_column(_TABLE, "amount_currency")
-    op.drop_column(_TABLE, "amount_minor_units")
+    raise RuntimeError(
+        "0026 is roll forward only: its downgrade would drop billing records. "
+        "Restore a backup instead."
+    )

@@ -1,6 +1,6 @@
 # Plan: remaining-recommendations (readiness group 9)
 
-> **Status:** In progress — Step 1 built
+> **Status:** In progress — every task built but T21, which waits for its spec (T20)
 >
 > One document: the order of the work and its tasks. The founder approves this plan before any file is
 > edited.
@@ -94,13 +94,13 @@ a replayed deploy answers 200 with the first deploy; a refused poll shows no add
 *Judgeable:* a span whose `url.full` is `https://u:p@h/?X-Amz-Signature=abc` is stored with both masked;
 a log body `=HYPERLINK(...)` exports as `'=HYPERLINK(...)`.
 
-- [ ] **T7** — `pipeline/mask/` (`url_credentials` family: constant, `DefaultRuleNames`, `Rules`,
+- [x] **T7** — `pipeline/mask/` (`url_credentials` family: constant, `DefaultRuleNames`, `Rules`,
   `families()`, `setFamily`, `masksValues`, `maskValue`), API `projects/config.py` · proved by
   `url_test.go` (new) and `families_test.go`; `test_cross_service_contracts.py` gains the Go list.
-- [ ] **T8** — `exports/csv_cells.py` (new) called by `logs/search.py`, `traces/service.py`,
+- [x] **T8** — `exports/csv_cells.py` (new) called by `logs/search.py`, `traces/service.py`,
   `billing/service.py`; `features/logs/log-export.ts` · proved by a case in `test_log_search.py`,
   `test_traces.py`, `test_billing.py`, `log-export.test.ts`.
-- [ ] **T9** — `deploy/kafka/topics.sh` (`min.insync.replicas` = replication − 1 above 1); ADR-014
+- [x] **T9** — `deploy/kafka/topics.sh` (`min.insync.replicas` = replication − 1 above 1); ADR-014
   (the Kafka copies age out in 7 days and are never backed up) · proved by running it against dev.
 
 ### Step 3 — Part C, reliability
@@ -109,24 +109,24 @@ a log body `=HYPERLINK(...)` exports as `'=HYPERLINK(...)`.
 counts the stale serves; a resent export is stored once; `just dlq list` shows the parked records and
 `replay` brings one back.
 
-- [ ] **T10** — `cache/cache.go`, `auth/auth.go`, `auth/site.go`, `config/config.go` · stale hits on a
+- [x] **T10** — `cache/cache.go`, `auth/auth.go`, `auth/site.go`, `config/config.go` · stale hits on a
   lookup error up to `RECEIVER_API_KEY_MAX_STALE` (10 min); a separate ceiling for misses · proved by
   `cache_test.go` and `auth_test.go` (new cases: error → stale hit; error → no stale miss; a flood of
   misses leaves hits).
-- [ ] **T11** — `envelope.proto` (`payload_digest = 9`), receiver `ingest.go` (deterministic marshal,
+- [x] **T11** — `envelope.proto` (`payload_digest = 9`), receiver `ingest.go` (deterministic marshal,
   SHA-256 of tenant, project, signal, payload); ClickHouse `000033_stored_payload_digests` (TTL 15
   min); the worker skips a record whose digest is stored, writing digests after its insert is
   acknowledged · proved by a contracts roundtrip case, a receiver case (same export → same digest),
   and `resend_live_test.go` (an export sent twice is stored once, counted once). Fails open: an
   unreadable digest table stores the batch.
-- [ ] **T12** — `pollers/aws.py`, `pollers/tasks.py` · botocore `Config(5 s, 10 s, standard, 2)` ·
+- [x] **T12** — `pollers/aws.py`, `pollers/tasks.py` · botocore `Config(5 s, 10 s, standard, 2)` ·
   proved by a `test_pollers.py` case.
-- [ ] **T13** — `settings.py`, `lifespan.py` · `CLICKHOUSE_QUERY_TIMEOUT_SECONDS` deleted, 30 s stated
+- [x] **T13** — `settings.py`, `lifespan.py` · `CLICKHOUSE_QUERY_TIMEOUT_SECONDS` deleted, 30 s stated
   once · proved by `test_settings.py`.
-- [ ] **T14** — `apps/workers/cmd/dlq` (new) and `justfile` (`dlq list`, `dlq replay`);
+- [x] **T14** — `apps/workers/cmd/dlq` (new) and `justfile` (`dlq list`, `dlq replay`);
   `docs/operations/dead-letters.md` written from a replay run on dev · proved by `dlq_test.go`
   (header parsing, the replay record keeps key and bytes).
-- [ ] **T15** — `migrations/env.py` (`lock_timeout = '5s'`); `0020`, `0022`, `0026` downgrades raise
+- [x] **T15** — `migrations/env.py` (`lock_timeout = '5s'`); `0020`, `0022`, `0026` downgrades raise
   "roll forward only"; `docs/engineering/` the concurrent-index rule · proved by
   `test_migration_rules.py` (new): every revision parsed, the lock timeout set, the three refuse.
 
@@ -136,15 +136,15 @@ counts the stale serves; a resent export is stored once; `just dlq list` shows t
 screen still loads; `sampleRate: 0.5` keeps about half the sessions whole; a script holding every token
 slot leaves the console's reads admitted; a person exports their data and deletes their account.
 
-- [ ] **T16** — `billing/service.py` (`overview`: the first offerable currency) · proved by a
+- [x] **T16** — `billing/service.py` (`overview`: the first offerable currency) · proved by a
   `test_billing.py` case.
-- [ ] **T17** — `app/router.tsx` (`lazyRouteComponent` for every screen but the shell and sign-in);
+- [x] **T17** — `app/router.tsx` (`lazyRouteComponent` for every screen but the shell and sign-in);
   a bundle-size check in `just check` · proved by the check and the existing e2e sign-in.
-- [ ] **T18** — SDK `config.ts`, `rum.ts` (`sampleRate`, per session, errors always) · proved by
+- [x] **T18** — SDK `config.ts`, `rum.ts` (`sampleRate`, per session, errors always) · proved by
   `sampling.test.ts` (new).
-- [ ] **T19** — `ratelimit/limiter.py` (the concurrency key gains the quota name) · proved by a
+- [x] **T19** — `ratelimit/limiter.py` (the concurrency key gains the quota name) · proved by a
   `test_ratelimit_callers.py` case.
-- [ ] **T20** — D2's spec and wireframe (`docs/features/personal-data/`), **approved before T21**.
+- [x] **T20** — D2's spec and wireframe (`docs/features/personal-data/`), **approved before T21**.
 - [ ] **T21** — `profile/` (`GET /profile/export`, `DELETE /profile` — self-deletion), `members/service.py`
   (name and audit email replaced on removal), the profile screens · proved by
   `test_personal_data_live.py` (export contents; self-deletion; the last owner refused; the audit
@@ -152,7 +152,7 @@ slot leaves the console's reads admitted; a person exports their data and delete
 
 ### Step 5 — Documents
 
-- [ ] **T22** — the readiness document (each item done, decided or corrected; the six new findings),
+- [x] **T22** — the readiness document (each item done, decided or corrected; the six new findings),
   `current-system-reference.md` (§4.7's resend claim corrected; each part's behaviour), ADR-014, the
   super-admin spec (A3), this plan's Outcome and `status.md`.
 
@@ -177,9 +177,9 @@ slot leaves the console's reads admitted; a person exports their data and delete
 - [x] Design approval — `design.md`, 2026-10-11
 - [x] **Plan approval — before the first edited file** — 2026-10-11
 - [ ] D2 spec and wireframe approval (T20)
-- [ ] Implementation
-- [ ] Tests
-- [ ] Review
+- [x] Implementation — all but D2
+- [x] Tests — all but D2
+- [x] Review — all but D2
 - [ ] Design QA — D2's screens
 - [ ] Production-readiness assessment
 - [ ] Documentation and status update
@@ -198,4 +198,41 @@ steps across every service. Each step is reported to the founder before the next
 
 ## Outcome
 
-Filled in when the work completes.
+Built 2026-10-11, every task but **T21** (personal-data export and self-deletion), whose spec
+(`docs/features/personal-data/spec.md`, T20) waits for the founder's approval. D6, plan prices, is the
+founder's, later. Differences from the plan, each found by running the thing:
+
+- **A4** — a repeated deploy answers 201 with the stored deploy, not 200: it says "recorded" either way
+  and GitHub ignores the code. The repeat lookup names the organization (the tenancy structure test
+  refused it otherwise), which removed an exemption rather than renaming it.
+- **A6** — the heartbeat token was already redacted from every log line; only the duplicate operation id
+  and the support ticket needed fixing.
+- **B1** — the URL family uses the conventions' five signature parameters, the list the scheduler and
+  the SDK already share, so all three stay one list (`test_cross_service_contracts.py` now reads Go's).
+  `access_token`, `token` and `api_key` as query names were left out: adding them to one copy would break
+  the contract, and to all three would widen what the SDK and probes redact; a project can name them.
+  A cheap pre-check spares the patterns every string with no `://` and no `?`.
+- **B2** — the billing export holds no customer text (dates, amounts, our plan names), so only logs and
+  traces needed the rule.
+- **C2** — a Kafka **header**, not an envelope field: the worker reads it without decoding and the
+  contract package did not change. The digest is **claimed when consumed**, not when stored, because a
+  trace waits a minute in the sampling buffer and a resend comes within seconds; a claim names its
+  offset, so a replay of that same offset after a crash is still processed. The live run found three
+  defects the unit tests could not: ch-go sends a `[]string` parameter unquoted and mangles one passed
+  as text (digests are now validated hex, written as literals), a 5,000-record batch passed ClickHouse's
+  256 KB query limit (lookups are chunked by 1,000), and the claims were failing silently through the
+  default logger (they now warn through the pipeline's). `claims_storeprobe_test.go` holds both server
+  cases. Proven live: one export sent twice, stored once; real resends from the demo skipped too.
+- **C5** — the tool ships in the worker image as `/dlq`; reasons are cut to 200 characters, because a
+  store's refusal quotes the whole value it refused.
+- **C6** — the first `SET lock_timeout` ran before Alembic's transaction, which made Alembic commit
+  nothing: every migration was silently rolled back. The scratch-database migration suites caught it;
+  it now runs inside the transaction, session-level so the autocommit blocks keep it.
+- **D3** — the five screens whose modules also exported a search parser stayed eager at first (564 kB);
+  the parsers moved to `search.ts` files and the first download is 393 kB (was 1.34 MB).
+- **Not in the plan, found on the way:** `deploy/clickhouse/backfill-trace-summaries.sh` defaulted to the
+  dev password (a readiness item the design missed); it now has none.
+
+**Verified:** `just check` exit 0 — Python 4355 passed, 3 skipped; web 1358; SDK 124; every console chunk
+under 500 kB. E2E sign-in, services and synthetics: 8 passed. Live on dev: the cross-site refusal, the
+resend stored once, a dead letter listed and replayed, the store probes against ClickHouse.
