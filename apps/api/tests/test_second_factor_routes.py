@@ -24,6 +24,7 @@ import pytest
 from environment import TEST_ENVIRONMENT
 from fake_stores import FakeSecondFactorStore, use_fake_second_factors
 from fastapi import FastAPI
+from nexovue_platform.checks.sealing import ConfiguredKeys
 
 from nexovue_api.auth.clients import ClientDescription
 from nexovue_api.auth.credentials import hash_password
@@ -201,7 +202,7 @@ def app(db: FakeDb, store: FakeSessionStore, key: str) -> FastAPI:
     async def db_override() -> AsyncIterator[Any]:
         yield db
 
-    box = credential_box(key)
+    box = credential_box(ConfiguredKeys(key))
 
     built.dependency_overrides[get_app_settings] = lambda: settings
     built.dependency_overrides[get_db_session] = db_override
@@ -374,7 +375,7 @@ async def test_a_deployment_with_no_key_refuses_enrolment_rather_than_storing_pl
     app: FastAPI, user: User
 ) -> None:
     """503, and the account is untouched. The variable name stays out of the body."""
-    app.dependency_overrides[get_credential_box] = lambda: credential_box("")
+    app.dependency_overrides[get_credential_box] = lambda: credential_box(ConfiguredKeys(""))
 
     async with _client(app) as client:
         await _sign_in(client, user)

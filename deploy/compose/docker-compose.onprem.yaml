@@ -65,6 +65,9 @@ x-control-plane-env: &control-plane-env
   S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
   S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
   CHECK_SECRET_KEY: ${CHECK_SECRET_KEY:?set CHECK_SECRET_KEY}
+  # Keys that sealed before the current one, comma-separated; they only open.
+  # Set during a rotation and emptied after `keys reseal` (docs/operations/key-rotation.md).
+  CHECK_SECRET_PREVIOUS_KEYS: ${CHECK_SECRET_PREVIOUS_KEYS:-}
   PROBE_LOCATIONS: local
   PROBER_REGION: local
   # Where every emailed link lands — verification, password reset, and an
@@ -213,6 +216,10 @@ services:
     image: *image-base
     environment:
       <<: *control-plane-env
+      # Seals two-factor secrets (readiness blocker 17): without it nobody on
+      # this install can enable two-factor sign-in, and production refuses to start.
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?set CREDENTIAL_ENCRYPTION_KEY}
+      CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS: ${CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS:-}
       # Reads as the read-only account; the API holds no ClickHouse credential that writes.
       CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
       # **The way in.** This install has nobody to invite its first person, so

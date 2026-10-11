@@ -12,11 +12,12 @@ from typing import Final
 
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
+    ConfiguredKeys,
     SealedBox,
     SealError,
     check_secret_owner,
-    decode_key,
     decode_sealed,
+    keyring_from,
 )
 
 from nexovue_scheduler.probes.failures import ProberError
@@ -26,15 +27,15 @@ _WRONG_KEY: Final = "a check secret could not be opened with this prober's key"
 
 
 def open_secrets(
-    sealed: Mapping[str, str], *, project_id: str, configured_key: str
+    sealed: Mapping[str, str], *, project_id: str, keys: ConfiguredKeys
 ) -> dict[str, str]:
     """Every sealed value opened, or `ProberError` — a key problem is ours."""
     if not sealed:
         return {}
-    if not configured_key:
+    if not keys.current:
         raise ProberError(_NO_KEY)
     try:
-        box = SealedBox(decode_key(configured_key), purpose=CHECK_SECRET_PURPOSE)
+        box = SealedBox(keyring_from(keys.current, keys.previous), purpose=CHECK_SECRET_PURPOSE)
     except ValueError as unusable:
         raise ProberError(_NO_KEY) from unusable
     opened: dict[str, str] = {}

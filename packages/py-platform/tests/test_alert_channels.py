@@ -18,6 +18,7 @@ from nexovue_platform.alerts.channels import (
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
     NOTIFICATION_CHANNEL_PURPOSE,
+    Keyring,
     SealedBox,
     SealError,
     channel_secret_owner,
@@ -48,14 +49,14 @@ def test_a_generated_webhook_secret_is_32_random_bytes_in_the_standard_format() 
 
 def test_a_channel_secret_opens_only_for_its_own_channel() -> None:
     key = os.urandom(32)
-    box = SealedBox(key, purpose=NOTIFICATION_CHANNEL_PURPOSE)
+    box = SealedBox(Keyring(key), purpose=NOTIFICATION_CHANNEL_PURPOSE)
     sealed = box.seal(SLACK_URL, owner=channel_secret_owner("org-1", "channel-1"))
 
     assert box.open(sealed, owner=channel_secret_owner("org-1", "channel-1")) == SLACK_URL
     with pytest.raises(SealError):
         box.open(sealed, owner=channel_secret_owner("org-1", "channel-2"))
     with pytest.raises(SealError):
-        SealedBox(key, purpose=CHECK_SECRET_PURPOSE).open(
+        SealedBox(Keyring(key), purpose=CHECK_SECRET_PURPOSE).open(
             sealed, owner=channel_secret_owner("org-1", "channel-1")
         )
 

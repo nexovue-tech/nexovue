@@ -41,6 +41,6 @@ async def confirm_import(
         org_id=identity.org_id,
         actor_user_id=identity.user.id,
         request=request,
-        check_secret_key=settings.check_secret_key,
+        check_secret_keys=settings.check_secret_keys,
         available_locations=settings.probe_locations,
     )

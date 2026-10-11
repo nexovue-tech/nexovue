@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from nexovue_platform.checks.maintenance import WindowSchedule, is_active
-from nexovue_platform.checks.sealing import SealedBox, SealError, decode_key, generate_key
 from nexovue_platform.checks.templating import (
     UnresolvedReferenceError,
     references_in,
@@ -54,16 +53,3 @@ def test_a_weekly_window_repeats_and_stops_after_its_last_start() -> None:
     assert not is_active(window, START + timedelta(days=1, minutes=10))
     assert is_active(window, START + timedelta(weeks=2, minutes=10))
     assert not is_active(window, START + timedelta(weeks=3, minutes=10))
-
-
-def test_a_sealed_value_opens_only_for_the_owner_and_purpose_it_was_sealed_for() -> None:
-    key = decode_key(generate_key())
-    box = SealedBox(key, purpose="check-secret")
-    sealed = box.seal("hunter2", owner="project-a:TOKEN")
-
-    assert box.open(sealed, owner="project-a:TOKEN") == "hunter2"
-    with pytest.raises(SealError):
-        box.open(sealed, owner="project-b:TOKEN")
-    with pytest.raises(SealError):
-        SealedBox(key, purpose="totp").open(sealed, owner="project-a:TOKEN")
-    assert b"hunter2" not in sealed

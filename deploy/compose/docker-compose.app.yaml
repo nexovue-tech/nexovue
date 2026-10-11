@@ -46,6 +46,9 @@ x-control-plane-env: &control-plane-env
   # (ADR-010). Demanded: an install without it cannot run any check that
   # uses a secret, and would only find out at the first run.
   CHECK_SECRET_KEY: ${CHECK_SECRET_KEY:?set CHECK_SECRET_KEY}
+  # Keys that sealed before the current one, comma-separated; they only open.
+  # Set during a rotation and emptied after `keys reseal` (docs/operations/key-rotation.md).
+  CHECK_SECRET_PREVIOUS_KEYS: ${CHECK_SECRET_PREVIOUS_KEYS:-}
   # Run now dispatches to the probe workers through their broker (ADR-011).
   # Every probe location this deployment has, and the one this container is.
   PROBE_LOCATIONS: ${PROBE_LOCATIONS:-local}
@@ -209,6 +212,10 @@ services:
       start_period: 20s
     environment:
       <<: *control-plane-env
+      # Seals two-factor secrets (readiness blocker 17): without it nobody on
+      # this install can enable two-factor sign-in, and production refuses to start.
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?set CREDENTIAL_ENCRYPTION_KEY}
+      CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS: ${CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS:-}
       # Reads as the read-only account; the API holds no ClickHouse credential that writes.
       CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
       # nexovue's cloud onboards customers after they pay (ADR-008, D10). A

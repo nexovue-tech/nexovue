@@ -271,6 +271,17 @@ migrate-down-ch:
 seed:
     POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api python -m nexovue_api.seed
 
+# Key rotation (readiness blocker 8; docs/operations/key-rotation.md). Run inside
+# the API container, because the keys live in its environment and nowhere else.
+
+# How many sealed values each encryption key holds: current, previous, unreadable
+keys-status:
+    docker compose -f {{compose}}/docker-compose.yaml exec -T api uv run --package nexovue-api python -m nexovue_api.keys status
+
+# Re-seal every value under a previous key with the current one
+keys-reseal:
+    docker compose -f {{compose}}/docker-compose.yaml exec -T api uv run --package nexovue-api python -m nexovue_api.keys reseal
+
 # The ingest stop valve (P1-52). Three recipes rather than one variadic one:
 # `just` re-splits *ARGS on whitespace, so a quoted reason arrives as several
 # arguments — found by running it. Named parameters are quoted individually.

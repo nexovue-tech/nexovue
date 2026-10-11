@@ -67,6 +67,8 @@ select = [
 # It lives under the API package because it needs the models and the DSN, not
 # because it is part of the service.
 "apps/api/src/nexovue_api/suspend.py" = ["T201"]
+# The key rotation commands, for the same reason: read by the operator rotating.
+"apps/api/src/nexovue_api/keys.py" = ["T201"]
 
 [tool.mypy]
 python_version = "3.13"

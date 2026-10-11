@@ -23,9 +23,10 @@ import pytest
 from live import require_stack
 from nexovue_platform.checks.sealing import (
     NOTIFICATION_CHANNEL_PURPOSE,
+    ConfiguredKeys,
     SealedBox,
     channel_secret_owner,
-    decode_key,
+    keyring_from,
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -109,7 +110,7 @@ async def _create(
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
         request=CreateChannelRequest(**request),
-        secret_key=KEY,
+        secret_keys=ConfiguredKeys(KEY),
         email_configured=email_configured,
     )
 
@@ -135,7 +136,7 @@ async def test_a_slack_channel_keeps_its_url_sealed_and_shows_only_the_host(
         select(NotificationChannel).where(NotificationChannel.id == created.id)
     )
     assert stored is not None and stored.sealed_secret is not None
-    box = SealedBox(decode_key(KEY), purpose=NOTIFICATION_CHANNEL_PURPOSE)
+    box = SealedBox(keyring_from(KEY), purpose=NOTIFICATION_CHANNEL_PURPOSE)
     owner = channel_secret_owner(str(tenant.organization.id), str(created.id))
     assert box.open(stored.sealed_secret, owner=owner) == SLACK_URL
 
@@ -162,7 +163,7 @@ async def test_a_webhook_shows_its_signing_secret_once(
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
         channel_id=created.id,
-        secret_key=KEY,
+        secret_keys=ConfiguredKeys(KEY),
     )
     assert rotated.signing_secret != created.signing_secret
 
@@ -221,7 +222,7 @@ async def test_the_owners_channel_can_be_muted_but_not_deleted_or_reconfigured(
             actor_user_id=tenant.user.id,
             channel_id=owners.id,
             request=UpdateChannelRequest(config={"addresses": ["x@example.test"]}),
-            secret_key=KEY,
+            secret_keys=ConfiguredKeys(KEY),
         )
     until = datetime.now(UTC) + timedelta(hours=1)
     muted = await service.mute(
@@ -260,7 +261,7 @@ async def test_replacing_a_secret_moves_the_host_and_never_returns_the_old_one(
         request=UpdateChannelRequest(
             name="#ops-alerts", secret="https://discordapp.com/api/webhooks/2/new-t0ken"
         ),
-        secret_key=KEY,
+        secret_keys=ConfiguredKeys(KEY),
     )
     assert (updated.name, updated.destination) == ("#ops-alerts", "discordapp.com")
     assert "t0ken" not in updated.model_dump_json()
@@ -318,7 +319,7 @@ async def test_every_change_is_audited_and_no_audit_row_holds_a_secret(
         actor_user_id=tenant.user.id,
         channel_id=created.id,
         request=UpdateChannelRequest(secret=SLACK_URL + "2"),
-        secret_key=KEY,
+        secret_keys=ConfiguredKeys(KEY),
     )
     await service.mute(
         db,

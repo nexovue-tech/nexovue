@@ -372,7 +372,7 @@ Each follows the same internal layout: `router.py` (HTTP only, no SQL, no busine
 | `checks` | Synthetic check *definitions* (Postgres): typed configuration, project-aware validation including request-forgery target rules, confirmed state and state changes, heartbeat tokens |
 | `checkruns` | Run now: inserts a job for a probe worker into the Postgres `jobs` table, sends `NOTIFY`, and waits for its result in `job_results` (ADR-011) |
 | `checkimports` | Previewing and confirming checks from a cURL command, an OpenAPI description or a Postman collection; parsing only, no network |
-| `checksecrets` | Project secrets (sealed, write-only) and variables that checks use as `{{secret.NAME}}` and `{{name}}` (ADR-010) |
+| `checksecrets` | Project secrets (sealed, write-only) and variables that checks use as `{{secret.NAME}}` and `{{name}}` (ADR-010). Sealed values name the key that sealed them; `python -m nexovue_api.keys status\|reseal` moves them to the current key after a rotation (`docs/operations/key-rotation.md`) |
 | `checkfiles` | Files a check sends in a request: rows in Postgres, bytes in object storage under `synthetics/{org_id}/files/` |
 | `maintenance` | Maintenance windows during which a failing check changes no state |
 | `heartbeats` | `GET\|POST /heartbeat/{token}`: the unauthenticated URL a customer's job calls |

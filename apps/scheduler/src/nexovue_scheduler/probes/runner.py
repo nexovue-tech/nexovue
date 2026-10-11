@@ -36,6 +36,7 @@ from nexovue_platform.checks.evidence import (
     RunEvidence,
     StepEvidence,
 )
+from nexovue_platform.checks.sealing import ConfiguredKeys
 from nexovue_platform.checks.task import CheckDefinition
 from nexovue_platform.checks.templating import UnresolvedReferenceError, substitute
 from nexovue_platform.telemetry.logging import get_logger
@@ -65,7 +66,7 @@ class RunContext:
     started_at: datetime
     maintenance: bool
     private_allowed: bool
-    secret_key: str
+    secret_keys: ConfiguredKeys
     files: request_builder.FileSource
     dns_resolvers: tuple[str, ...] = ("1.1.1.1", "8.8.8.8")
 
@@ -105,7 +106,7 @@ def run(definition: CheckDefinition, context: RunContext) -> tuple[RunEvidence, 
         secrets = open_secrets(
             definition.sealed_secrets,
             project_id=definition.project_id,
-            configured_key=context.secret_key,
+            keys=context.secret_keys,
         )
         redactor = Redactor(secrets.values())
         _perform(config, definition, context, secrets, redactor, progress)

@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any, Final
 
 import pytest
-from environment import TEST_ENVIRONMENT
+from environment import DEPLOYED_KEYS, TEST_ENVIRONMENT
 from fastapi import FastAPI
 
 from nexovue_api.readsurface.router import READ_SPEC_PATH
@@ -145,6 +145,7 @@ def _app_in(env: str) -> FastAPI:
         # Not the developer's test key from `.env`: production refuses one, and
         # what is under test here is the console, not payments.
         "PAYMENTS_DOMESTIC_APP_ID": "",
+        **DEPLOYED_KEYS,
     }
     return create_app(Settings(**environment))  # type: ignore[arg-type]
 

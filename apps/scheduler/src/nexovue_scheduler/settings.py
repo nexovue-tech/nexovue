@@ -11,8 +11,9 @@ import sys
 from functools import lru_cache
 from typing import Annotated, Final, Literal
 
+from nexovue_platform.checks.sealing import ConfiguredKeys
 from nexovue_platform.email.settings import EmailProvider, EmailSettings, email_settings
-from pydantic import Field, PostgresDsn, ValidationError, field_validator
+from pydantic import Field, PostgresDsn, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic_settings import SettingsError as SettingsSourceError
 
@@ -69,6 +70,10 @@ class Settings(BaseSettings):
     # Opens check secrets immediately before a request uses them (ADR-010).
     # Empty means a check that uses a secret cannot run here, and says so.
     check_secret_key: str = ""
+    # Keys that sealed check and channel secrets before the current one,
+    # comma-separated; they only open. Kept until jobs queued before a rotation
+    # have drained and the API's re-seal has run (docs/operations/key-rotation.md).
+    check_secret_previous_keys: str = ""
 
     # The API's object store: the files checks send, read here, and every
     # upload a deleted organization left, erased here at night. All four or
@@ -140,6 +145,14 @@ class Settings(BaseSettings):
     # that is the worst blind spot there is — the checker failing silently.
     beat_heartbeat_seconds: Annotated[int, Field(gt=0)] = 60
 
+    @model_validator(mode="after")
+    def _check_key_is_set_in_production(self) -> Settings:
+        """A deployed prober opens check and channel secrets (readiness blocker 17);
+        without the key every check that uses one fails as our error."""
+        if self.env == "production" and not self.check_secret_key:
+            raise ValueError("CHECK_SECRET_KEY is not set; production opens secrets with it.")
+        return self
+
     @field_validator("probe_locations", "dns_resolvers", mode="before")
     @classmethod
     def _split_locations(cls, value: object) -> object:
@@ -165,6 +178,11 @@ class Settings(BaseSettings):
     # OpenTelemetry Demo storefront, which compose publishes on the Docker host,
     # and a Docker host is a private address by construction.
     allow_private_probe_targets: bool = False
+
+    @property
+    def check_secret_keys(self) -> ConfiguredKeys:
+        """Check and channel secrets' keyring, as configured. The API holds the same."""
+        return ConfiguredKeys(self.check_secret_key, self.check_secret_previous_keys)
 
     @property
     def email(self) -> EmailSettings | None:

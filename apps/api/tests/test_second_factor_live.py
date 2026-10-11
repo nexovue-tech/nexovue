@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 import pyotp
 import pytest
 from live import require_stack
+from nexovue_platform.checks.sealing import ConfiguredKeys
 from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -175,7 +176,7 @@ async def test_the_stored_secret_is_ciphertext_in_the_column(
     """Read back through SQL rather than through the ORM object we just wrote,
     so what is asserted is what the database holds."""
     user = (await _tenant(db)).user
-    box = credential_box(generate_key())
+    box = credential_box(ConfiguredKeys(generate_key()))
 
     offer = await second_factor.begin_enrolment(
         second_factors, box, user=user, current_password=PASSWORD
@@ -195,7 +196,7 @@ async def test_the_recovery_codes_in_the_table_are_argon2_and_not_the_codes(
     db: AsyncSession, second_factors: SecondFactorStore
 ) -> None:
     user = (await _tenant(db)).user
-    box = credential_box(generate_key())
+    box = credential_box(ConfiguredKeys(generate_key()))
     offer = await second_factor.begin_enrolment(
         second_factors, box, user=user, current_password=PASSWORD
     )
@@ -225,7 +226,7 @@ async def test_a_recovery_code_is_spent_against_the_real_table(
     db: AsyncSession, second_factors: SecondFactorStore
 ) -> None:
     user = (await _tenant(db)).user
-    box = credential_box(generate_key())
+    box = credential_box(ConfiguredKeys(generate_key()))
     offer = await second_factor.begin_enrolment(
         second_factors, box, user=user, current_password=PASSWORD
     )
@@ -246,7 +247,7 @@ async def test_turning_the_factor_off_leaves_no_code_behind(
     db: AsyncSession, second_factors: SecondFactorStore
 ) -> None:
     user = (await _tenant(db)).user
-    box = credential_box(generate_key())
+    box = credential_box(ConfiguredKeys(generate_key()))
     offer = await second_factor.begin_enrolment(
         second_factors, box, user=user, current_password=PASSWORD
     )

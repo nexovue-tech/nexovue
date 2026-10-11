@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 import pytest
 from live import require_stack
 from nexovue_platform.checks.config import ApiCheckConfig, BearerAuth, parse_config
+from nexovue_platform.checks.sealing import ConfiguredKeys
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -122,7 +123,7 @@ async def test_a_curl_import_is_previewed_without_saving_then_confirmed_with_its
             checks=[ImportedCheck(name=item.name, config=item.config)],
             secrets=[ImportedSecret(name=s.name, value=s.value) for s in plan.secrets],
         ),
-        check_secret_key=CHECK_SECRET_KEY,
+        check_secret_keys=ConfiguredKeys(CHECK_SECRET_KEY),
         available_locations=LOCATIONS,
     )
 
@@ -171,7 +172,7 @@ async def test_a_refused_check_is_named_by_its_position_in_the_import(db: AsyncS
                 project_id=tenant.project.id,
                 checks=[ImportedCheck(name=plan.items[0].name, config=plan.items[0].config)],
             ),
-            check_secret_key=CHECK_SECRET_KEY,
+            check_secret_keys=ConfiguredKeys(CHECK_SECRET_KEY),
             available_locations=LOCATIONS,
         )
 

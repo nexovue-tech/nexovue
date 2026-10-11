@@ -4,7 +4,7 @@
 
 Accepted 2026-09-17, with the F18 design. **Amended 2026-09-17** by the F18 plan's Q1 — see *Amendment*. **Second
 amendment accepted 2026-09-19** with the F21 design — see *Amendment — notification channel secrets*. Executed
-in F18.
+in F18. **Third amendment 2026-10-11** (readiness group 5) — see *Amendment — a keyring*.
 
 ## Context
 
@@ -88,3 +88,14 @@ rotation procedure without separating anything: both keys would sit in the same 
 **What does not change.** Write-only; never returned by a read; replaced, never read back; never logged. Rotation
 now re-seals channel secrets as well as check secrets, which the rotation procedure this ADR already requires must
 cover.
+
+## Amendment — a keyring (2026-10-11, readiness group 5)
+
+Each key was one key with no id, so replacing a leaked one made everything it sealed unreadable at
+once (readiness blocker 8). Every sealed value now names the key that sealed it: format 2, which is
+`[2][first 8 bytes of SHA-256(key)][nonce][ciphertext]`, with the key id in the associated data. A
+keyring holds the current key, which seals, and previous keys (`CHECK_SECRET_PREVIOUS_KEYS`,
+`CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS`), which only open. `python -m nexovue_api.keys status|reseal`
+counts and moves what each key holds. The procedure is `docs/operations/key-rotation.md`. Format 1 is
+not read: nexovue was pre-deployment, and the development stack held no sealed values (founder
+decision). Production refuses to start without either key.

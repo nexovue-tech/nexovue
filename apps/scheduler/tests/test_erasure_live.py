@@ -40,7 +40,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler.erasure import owed
-from nexovue_scheduler.erasure.run import erase_owed
+from nexovue_scheduler.erasure.run import OLD_PARTS_LIFETIME_SECONDS, erase_owed
 from nexovue_scheduler.erasure.store import ErasureStore
 from nexovue_scheduler.erasure.tables import EXCLUDED_TABLES, PURGED_TABLES, TENANT_COLUMN
 from nexovue_scheduler.probes.files import ObjectStoreFiles
@@ -131,15 +131,22 @@ async def three_tenants(
 ) -> AsyncIterator[tuple[AlertTenant, AlertTenant, AlertTenant]]:
     """Two deleted organizations and a live one, each with telemetry and files."""
     tenants = (await make_tenant(engine), await make_tenant(engine), await make_tenant(engine))
-    for tenant in tenants:
-        _write_telemetry(clickhouse, str(tenant.org_id))
-        _write_files(s3, str(tenant.org_id))
     async with engine.begin() as connection:
+        # The tenant fixture holds an enabled check, which the dev stack runs and
+        # whose results would land mid-run. A deletion removes checks with the
+        # request, and the live tenant's counts must not move, so none runs here.
+        await connection.execute(
+            text("DELETE FROM checks WHERE org_id = ANY(:orgs)"),
+            {"orgs": [tenant.org_id for tenant in tenants]},
+        )
         for tenant in tenants[:2]:
             await connection.execute(
                 text("UPDATE organizations SET deleted_at = now() WHERE id = :id"),
                 {"id": tenant.org_id},
             )
+    for tenant in tenants:
+        _write_telemetry(clickhouse, str(tenant.org_id))
+        _write_files(s3, str(tenant.org_id))
     try:
         yield tenants
     finally:
@@ -204,7 +211,9 @@ async def test_one_run_erases_the_deleted_and_leaves_the_live_untouched(
     assert _row_counts(clickhouse, str(live.org_id)) == live_rows
     assert _stored_keys(s3, str(live.org_id)) == live_files
     assert {table: _total_rows(clickhouse, table) for table in WATERMARKS} == watermarks
-    assert pauses == [], "one group needs no wait"
+    # Organizations other suites delete meanwhile make a second group; each waits
+    # out the first group's superseded parts.
+    assert all(pause == OLD_PARTS_LIFETIME_SECONDS for pause in pauses)
 
 
 async def test_an_erasure_owed_for_more_than_three_days_is_reported(

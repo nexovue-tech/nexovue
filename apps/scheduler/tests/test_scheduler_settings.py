@@ -22,6 +22,8 @@ KNOWN_VARIABLES = (
     "CLICKHOUSE_ERASER_DSN",
     "ERASURE_HOUR_UTC",
     "ERASURE_BATCH_SIZE",
+    "CHECK_SECRET_KEY",
+    "CHECK_SECRET_PREVIOUS_KEYS",
 )
 
 
@@ -120,3 +122,17 @@ def test_an_impossible_erasure_setting_is_named(
     with pytest.raises(SettingsError) as failure:
         get_settings()
     assert name in str(failure.value)
+
+
+def test_production_refuses_to_start_without_the_check_secret_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _apply(monkeypatch, {**COMPLETE_ENVIRONMENT, "ENV": "production"})
+
+    with pytest.raises(SettingsError) as refused:
+        get_settings()
+    assert "CHECK_SECRET_KEY" in str(refused.value)
+
+    _apply(monkeypatch, {"CHECK_SECRET_KEY": "qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4="})
+    get_settings.cache_clear()
+    assert get_settings().env == "production"

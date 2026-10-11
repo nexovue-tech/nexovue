@@ -35,7 +35,7 @@ from typing import Any, Final
 
 import httpx
 import pytest
-from environment import TEST_ENVIRONMENT
+from environment import DEPLOYED_KEYS, TEST_ENVIRONMENT
 from pydantic import ValidationError
 
 from nexovue_api.billing import (
@@ -688,6 +688,8 @@ class TestSettings:
             otlp_endpoint="https://ingest.example.test",
             payments_domestic_app_id=app_id,
             payments_domestic_secret_key=SECRET,
+            check_secret_key=DEPLOYED_KEYS["CHECK_SECRET_KEY"],
+            credential_encryption_key=DEPLOYED_KEYS["CREDENTIAL_ENCRYPTION_KEY"],
         )
 
     @pytest.mark.parametrize("key", ["rzp_test_abc123", "TEST_APP_ID"])

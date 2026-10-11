@@ -20,6 +20,7 @@ from live import require_stack
 from nexovue_platform.alerts.channels import new_webhook_secret
 from nexovue_platform.checks.sealing import (
     NOTIFICATION_CHANNEL_PURPOSE,
+    Keyring,
     SealedBox,
     channel_secret_owner,
 )
@@ -40,7 +41,7 @@ require_stack(
     remedy="Postgres is not reachable — run `just up`",
 )
 
-BOX = SealedBox(os.urandom(32), purpose=NOTIFICATION_CHANNEL_PURPOSE)
+BOX = SealedBox(Keyring(os.urandom(32)), purpose=NOTIFICATION_CHANNEL_PURPOSE)
 ORG = uuid.uuid4()
 MESSAGE = AlertMessage(
     kind="opened",

@@ -50,7 +50,7 @@ async def write_secret(
         project_id=project_id,
         name=name,
         value=request.value,
-        box=service.secret_box(settings.check_secret_key),
+        box=service.secret_box(settings.check_secret_keys),
         actor_user_id=identity.user.id,
     )
 

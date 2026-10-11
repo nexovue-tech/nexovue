@@ -14,7 +14,12 @@ from nexovue_platform.alerts.tasks import (
     SEND_TEST_TASK,
     SWEEP_DELIVERIES_TASK,
 )
-from nexovue_platform.checks.sealing import NOTIFICATION_CHANNEL_PURPOSE, SealedBox, decode_key
+from nexovue_platform.checks.sealing import (
+    NOTIFICATION_CHANNEL_PURPOSE,
+    ConfiguredKeys,
+    SealedBox,
+    keyring_from,
+)
 from nexovue_platform.email import build_email_sender
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -131,18 +136,23 @@ def _outbound_for_process() -> Outbound:
         configured = settings.email
         _outbound = Outbound(
             email_sender=build_email_sender(configured) if configured else None,
-            secret_box=_secret_box(settings.check_secret_key),
+            secret_box=_secret_box(settings.check_secret_keys),
             app_base_url=settings.app_base_url,
             private_allowed=settings.private_probe_targets_allowed,
         )
     return _outbound
 
 
-def _secret_box(configured_key: str) -> SealedBox | None:
-    if not configured_key:
+def _secret_box(keys: ConfiguredKeys) -> SealedBox | None:
+    if not keys.current:
         return None
     try:
-        return SealedBox(decode_key(configured_key), purpose=NOTIFICATION_CHANNEL_PURPOSE)
+        return SealedBox(
+            keyring_from(keys.current, keys.previous), purpose=NOTIFICATION_CHANNEL_PURPOSE
+        )
     except ValueError:
-        logger.error("CHECK_SECRET_KEY is not a usable key; channel secrets cannot be opened")
+        logger.error(
+            "CHECK_SECRET_KEY or CHECK_SECRET_PREVIOUS_KEYS is not a usable key; "
+            "channel secrets cannot be opened"
+        )
         return None

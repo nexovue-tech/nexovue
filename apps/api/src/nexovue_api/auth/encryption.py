@@ -10,7 +10,9 @@ secret has to survive in a recoverable form or the feature cannot exist.
 That leaves encryption as the only protection available, and this module is the
 whole of it. **It is not the envelope-encryption-with-a-KMS scheme the scheduler
 declined to invent** (`pollers/postgres_connect.py` says so in as many words):
-one key, held in the API's environment, applied to one kind of value. What it
+one current key, held in the API's environment, applied to one kind of value —
+with previous keys that only open, so a leaked key can be rotated out
+(`CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS`, docs/operations/key-rotation.md). What it
 buys is precise and worth stating so nobody expects more:
 
 * A Postgres dump, a backup file, a replica, or a read-only SQL injection yields
@@ -36,10 +38,15 @@ the key was absent is the one outcome this module exists to prevent.
 
 from __future__ import annotations
 
-import base64
 from typing import Final
 
-from nexovue_platform.checks.sealing import KEY_BYTES, SealedBox, SealError
+from nexovue_platform.checks.sealing import (
+    ConfiguredKeys,
+    Keyring,
+    SealedBox,
+    SealError,
+    keyring_from,
+)
 from nexovue_platform.checks.sealing import generate_key as _generate_key
 
 from nexovue_api.errors.exceptions import DependencyUnavailableError, InternalError
@@ -60,10 +67,8 @@ _KEY_MISCONFIGURED: Final = (
 class CredentialBox:
     """Seals and opens one kind of value, bound to the row that owns it."""
 
-    def __init__(self, key: bytes, *, purpose: str = TOTP_PURPOSE) -> None:
-        if len(key) != KEY_BYTES:
-            raise ValueError(f"{CREDENTIAL_ENCRYPTION_VARIABLE} must decode to {KEY_BYTES} bytes")
-        self._box = SealedBox(key, purpose=purpose)
+    def __init__(self, keyring: Keyring, *, purpose: str = TOTP_PURPOSE) -> None:
+        self._box = SealedBox(keyring, purpose=purpose)
 
     def seal(self, plaintext: str, *, owner_id: str) -> bytes:
         """Encrypt, authenticating the owner so the ciphertext cannot be moved."""
@@ -83,17 +88,17 @@ class CredentialBox:
             raise InternalError("A stored credential could not be decrypted.") from unreadable
 
 
-def credential_box(configured_key: str, *, purpose: str = TOTP_PURPOSE) -> CredentialBox:
+def credential_box(keys: ConfiguredKeys, *, purpose: str = TOTP_PURPOSE) -> CredentialBox:
     """The box for this deployment, or a 503 naming nothing about the key.
 
     The variable name goes to the operator through the log the error handler
     already writes; it is deliberately absent from the message, because the
     endpoints that reach this are reachable by anybody with an account.
     """
-    if not configured_key:
+    if not keys.current:
         raise DependencyUnavailableError(_KEY_MISCONFIGURED)
     try:
-        return CredentialBox(base64.urlsafe_b64decode(configured_key), purpose=purpose)
+        return CredentialBox(keyring_from(keys.current, keys.previous), purpose=purpose)
     except (ValueError, TypeError) as unusable:
         raise DependencyUnavailableError(_KEY_MISCONFIGURED) from unusable
 

@@ -11,6 +11,7 @@ import uuid
 from typing import Final
 
 import anyio.to_thread
+from nexovue_platform.checks.sealing import ConfiguredKeys
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
@@ -59,7 +60,7 @@ async def confirm(
     org_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     request: ImportConfirmRequest,
-    check_secret_key: str,
+    check_secret_keys: ConfiguredKeys,
     available_locations: list[str],
 ) -> ImportConfirmed:
     """Variables, then secrets, then checks — each check validated as a save is."""
@@ -68,7 +69,7 @@ async def confirm(
     existing_variables = await check_secrets.variable_values(
         session, org_id=org_id, project_id=project.id
     )
-    box = check_secrets.secret_box(check_secret_key) if request.secrets else None
+    box = check_secrets.secret_box(check_secret_keys) if request.secrets else None
     existing_secrets = (
         await check_secrets.opened_secrets(
             session,

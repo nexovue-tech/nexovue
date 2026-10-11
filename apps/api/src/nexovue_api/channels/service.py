@@ -34,9 +34,10 @@ from nexovue_platform.alerts.channels import (
 from nexovue_platform.alerts.quiet_hours import QuietHours
 from nexovue_platform.checks.sealing import (
     NOTIFICATION_CHANNEL_PURPOSE,
+    ConfiguredKeys,
     SealedBox,
     channel_secret_owner,
-    decode_key,
+    keyring_from,
 )
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -85,11 +86,13 @@ OWNERS_UNDELETABLE: Final = (
 OWNERS_FIXED: Final = "The organization owners channel has no settings to change; mute it instead."
 
 
-def channel_box(configured_key: str) -> SealedBox:
-    if not configured_key:
+def channel_box(keys: ConfiguredKeys) -> SealedBox:
+    if not keys.current:
         raise DependencyUnavailableError(_KEY_MISSING)
     try:
-        return SealedBox(decode_key(configured_key), purpose=NOTIFICATION_CHANNEL_PURPOSE)
+        return SealedBox(
+            keyring_from(keys.current, keys.previous), purpose=NOTIFICATION_CHANNEL_PURPOSE
+        )
     except ValueError as unusable:
         raise DependencyUnavailableError(_KEY_MISSING) from unusable
 
@@ -114,7 +117,7 @@ async def create(
     org_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     request: CreateChannelRequest,
-    secret_key: str,
+    secret_keys: ConfiguredKeys,
     email_configured: bool,
 ) -> CreatedChannel:
     if request.kind == "email" and not email_configured:
@@ -128,7 +131,7 @@ async def create(
     config = _validated_config(request.kind, request.config)
     secret = _validated_secret(request.kind, request.secret, required=True)
     signing_secret = new_webhook_secret() if request.kind == "webhook" else None
-    box = channel_box(secret_key) if (secret or signing_secret) else None
+    box = channel_box(secret_keys) if (secret or signing_secret) else None
 
     channel = NotificationChannel(
         org_id=org_id,
@@ -156,7 +159,7 @@ async def update(
     actor_user_id: uuid.UUID,
     channel_id: uuid.UUID,
     request: UpdateChannelRequest,
-    secret_key: str,
+    secret_keys: ConfiguredKeys,
 ) -> ChannelSummary:
     channel = await _require(session, org_id=org_id, channel_id=channel_id)
     if channel.kind == "owners" and (request.config is not None or request.secret is not None):
@@ -169,7 +172,7 @@ async def update(
         kept = {"host": channel.config["host"]} if "host" in channel.config else {}
         channel.config = _validated_config(channel.kind, request.config) | kept
     if secret is not None:
-        box = channel_box(secret_key)
+        box = channel_box(secret_keys)
         channel.sealed_secret = box.seal(
             secret, owner=channel_secret_owner(str(org_id), str(channel.id))
         )
@@ -188,7 +191,7 @@ async def rotate_signing_secret(
     org_id: uuid.UUID,
     actor_user_id: uuid.UUID,
     channel_id: uuid.UUID,
-    secret_key: str,
+    secret_keys: ConfiguredKeys,
 ) -> SigningSecret:
     """A new signing secret for a webhook, shown this once. The old one stops working
     at once: a receiver still verifying with it will refuse what we send next."""
@@ -196,7 +199,7 @@ async def rotate_signing_secret(
     if channel.kind != "webhook":
         raise InvalidRequestError("Only a webhook channel has a signing secret.")
     signing_secret = new_webhook_secret()
-    channel.sealed_secret = channel_box(secret_key).seal(
+    channel.sealed_secret = channel_box(secret_keys).seal(
         signing_secret, owner=channel_secret_owner(str(org_id), str(channel.id))
     )
     channel.updated_at = datetime.now(UTC)

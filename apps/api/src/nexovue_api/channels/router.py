@@ -39,7 +39,7 @@ async def create_channel(
         org_id=identity.org_id,
         actor_user_id=identity.user.id,
         request=request,
-        secret_key=settings.check_secret_key,
+        secret_keys=settings.check_secret_keys,
         email_configured=settings.email is not None,
     )
 
@@ -65,7 +65,7 @@ async def update_channel(
         actor_user_id=identity.user.id,
         channel_id=channel_id,
         request=request,
-        secret_key=settings.check_secret_key,
+        secret_keys=settings.check_secret_keys,
     )
 
 
@@ -78,7 +78,7 @@ async def rotate_signing_secret(
         org_id=identity.org_id,
         actor_user_id=identity.user.id,
         channel_id=channel_id,
-        secret_key=settings.check_secret_key,
+        secret_keys=settings.check_secret_keys,
     )
 
 

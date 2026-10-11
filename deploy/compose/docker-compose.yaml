@@ -215,11 +215,13 @@ services:
       S3_SECRET_ACCESS_KEY: nexovue_dev_secret
       # Seals check secrets (ADR-010). A dev constant, like the passwords above:
       # it protects nothing outside this machine. The scheduler holds the same.
-      CHECK_SECRET_KEY: qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4=
+      CHECK_SECRET_KEY: ${DEV_CHECK_SECRET_KEY:-qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4=}
+      CHECK_SECRET_PREVIOUS_KEYS: ${DEV_CHECK_SECRET_PREVIOUS_KEYS:-}
       # Seals second-factor secrets — customers' TOTP and staff's (F31). A dev
       # constant for the same reason; without it two-factor sign-in answers 503
       # in development, which is how customer TOTP went untried here until now.
-      CREDENTIAL_ENCRYPTION_KEY: 1tru1EuwOqD39XZm1z-sb2mrRHEFmbD_vreXaw2YZE8=
+      CREDENTIAL_ENCRYPTION_KEY: ${DEV_CREDENTIAL_ENCRYPTION_KEY:-1tru1EuwOqD39XZm1z-sb2mrRHEFmbD_vreXaw2YZE8=}
+      CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS: ${DEV_CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS:-}
       PROBE_LOCATIONS: local
       # Where a browser lands: the **app**, never this API. Verification links,
       # password resets and the return from a payment all point at a screen,
@@ -391,7 +393,8 @@ services:
       # `probes.addresses.may_connect_to`, which is where that line is drawn.
       ALLOW_PRIVATE_PROBE_TARGETS: "true"
       # The same key the API seals check secrets with, to open them at run time.
-      CHECK_SECRET_KEY: qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4=
+      CHECK_SECRET_KEY: ${DEV_CHECK_SECRET_KEY:-qPYHqC1y6hD0s6knf12GgLTcvJsKkPdzaDgvE8sAFA4=}
+      CHECK_SECRET_PREVIOUS_KEYS: ${DEV_CHECK_SECRET_PREVIOUS_KEYS:-}
       # This worker is the one probe location a dev stack has.
       PROBER_REGION: local
       PROBE_LOCATIONS: local

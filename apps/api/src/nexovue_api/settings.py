@@ -17,6 +17,7 @@ from functools import lru_cache
 from typing import Annotated, Final, Literal
 from urllib.parse import urlsplit
 
+from nexovue_platform.checks.sealing import ConfiguredKeys
 from nexovue_platform.email.settings import EmailProvider, EmailSettings, email_settings
 from pydantic import (
     AnyUrl,
@@ -211,6 +212,10 @@ class Settings(BaseSettings):
     # storing a secret in the clear. Generate one with
     # `auth.encryption.generate_key()`.
     credential_encryption_key: str = ""
+    # Keys that sealed TOTP secrets before the current one, comma-separated. They
+    # only open; `python -m nexovue_api.keys reseal` moves what they hold to the
+    # current key, after which they are removed (docs/operations/key-rotation.md).
+    credential_encryption_previous_keys: str = ""
 
     # --- synthetic checks ----------------------------------------------------
     # Seals check secrets (ADR-010). Its own key rather than the TOTP one, so a
@@ -218,6 +223,9 @@ class Settings(BaseSettings):
     # value to open what a request uses. Optional at boot for the same reason as
     # the key above: the routes that need it refuse with 503 instead.
     check_secret_key: str = ""
+    # As `credential_encryption_previous_keys`, for this key. The scheduler holds
+    # the same list, to open jobs queued before a rotation.
+    check_secret_previous_keys: str = ""
 
     # The probe locations a check can run from. The hosted service lists its
     # regions; a self-hosted install has one. Each is a scheduler worker
@@ -338,6 +346,25 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _keys_are_set_in_production(self) -> Settings:
+        """A deployed install seals with both keys (readiness blocker 17).
+
+        Optional elsewhere so development and tests start without them, the
+        routes answering 503. In production a missing key is a customer finding
+        out first — two-factor sign-in that cannot be enabled, a check secret
+        that cannot be saved — so the API refuses to start, naming it.
+        """
+        if self.env != "production":
+            return self
+        for variable, value in (
+            ("CREDENTIAL_ENCRYPTION_KEY", self.credential_encryption_key),
+            ("CHECK_SECRET_KEY", self.check_secret_key),
+        ):
+            if not value:
+                raise ValueError(f"{variable} is not set; production seals secrets with it.")
+        return self
+
     @field_validator("probe_locations", mode="before")
     @classmethod
     def _split_locations(cls, value: object) -> object:
@@ -403,6 +430,18 @@ class Settings(BaseSettings):
     # is the reason they are two settings rather than one.
     verify_email_ttl_seconds: int = 24 * 60 * 60
     reset_password_ttl_seconds: int = 60 * 60
+
+    @property
+    def check_secret_keys(self) -> ConfiguredKeys:
+        """Check and channel secrets' keyring, as configured."""
+        return ConfiguredKeys(self.check_secret_key, self.check_secret_previous_keys)
+
+    @property
+    def credential_keys(self) -> ConfiguredKeys:
+        """TOTP secrets' keyring, as configured."""
+        return ConfiguredKeys(
+            self.credential_encryption_key, self.credential_encryption_previous_keys
+        )
 
     @property
     def email(self) -> EmailSettings | None:

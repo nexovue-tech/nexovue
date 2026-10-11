@@ -133,7 +133,7 @@ def run_check(
         started_at=started,
         maintenance=run_now_request_id is None and _in_maintenance(check.maintenance, started),
         private_allowed=settings.private_probe_targets_allowed,
-        secret_key=settings.check_secret_key,
+        secret_keys=settings.check_secret_keys,
         files=_files_for_process(),
         dns_resolvers=tuple(settings.dns_resolvers),
     )

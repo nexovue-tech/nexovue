@@ -28,6 +28,7 @@ from typing import Any, Final, cast
 import pyotp
 import pytest
 from fake_stores import FakeSecondFactorStore
+from nexovue_platform.checks.sealing import ConfiguredKeys, Keyring
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.auth import recovery_codes, second_factor
@@ -54,7 +55,7 @@ PASSWORD: Final = "correct-horse-battery"
 
 
 def _box() -> CredentialBox:
-    return CredentialBox(os.urandom(32))
+    return CredentialBox(Keyring(os.urandom(32)))
 
 
 def _user() -> User:
@@ -173,18 +174,18 @@ def test_an_unconfigured_deployment_refuses_rather_than_storing_plaintext() -> N
     that must never happen is a secret written in the clear because no key was
     set."""
     with pytest.raises(DependencyUnavailableError):
-        credential_box("")
+        credential_box(ConfiguredKeys(""))
     with pytest.raises(DependencyUnavailableError):
-        credential_box("not-base64-at-all!!")
+        credential_box(ConfiguredKeys("not-base64-at-all!!"))
     with pytest.raises(DependencyUnavailableError):
-        credential_box(base64.urlsafe_b64encode(os.urandom(16)).decode())
+        credential_box(ConfiguredKeys(base64.urlsafe_b64encode(os.urandom(16)).decode()))
 
 
 def test_the_refusal_says_nothing_about_the_key() -> None:
     """The endpoints that reach it are open to anybody with an account, so the
     variable name goes to the operator's log and not onto the wire."""
     with pytest.raises(DependencyUnavailableError) as refused:
-        credential_box("")
+        credential_box(ConfiguredKeys(""))
     assert "CREDENTIAL_ENCRYPTION_KEY" not in str(refused.value.detail)
 
 
@@ -192,7 +193,7 @@ def test_a_generated_key_is_usable_as_configured() -> None:
     """The operator instruction in `settings.py` has to actually work: what
     `generate_key` writes into the environment must be what `credential_box`
     reads back out of it."""
-    box = credential_box(generate_key())
+    box = credential_box(ConfiguredKeys(generate_key()))
 
     assert box.open(box.seal("JBSWY3DPEHPK3PXP", owner_id="u"), owner_id="u") == "JBSWY3DPEHPK3PXP"
 
@@ -511,3 +512,16 @@ async def test_a_challenge_is_thrown_away_after_enough_wrong_codes() -> None:
         await store.record_failed_attempt(token=token)
 
     assert await store.read_challenge(token=token) is None
+
+
+def test_after_a_rotation_an_enrolment_sealed_under_the_old_key_still_opens() -> None:
+    """Blocker 8. The old key moves to CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS; what it
+    sealed still verifies a code, and what is sealed now uses the new key."""
+    old, new = generate_key(), generate_key()
+    before = credential_box(ConfiguredKeys(old)).seal("JBSWY3DPEHPK3PXP", owner_id="u")
+
+    rotated = credential_box(ConfiguredKeys(new, previous=old))
+
+    assert rotated.open(before, owner_id="u") == "JBSWY3DPEHPK3PXP"
+    with pytest.raises(InternalError):
+        credential_box(ConfiguredKeys(new)).open(before, owner_id="u")

@@ -298,7 +298,7 @@ def get_credential_box(settings: AppSettings) -> CredentialBox:
     needs to seal or open a secret cannot be allowed to forget to check, and an
     unconfigured deployment must refuse rather than store a secret in the clear.
     """
-    return credential_box(settings.credential_encryption_key)
+    return credential_box(settings.credential_keys)
 
 
 CredentialEncryption = Annotated[CredentialBox, Depends(get_credential_box)]
@@ -313,10 +313,10 @@ def get_optional_credential_box(settings: AppSettings) -> CredentialBox | None:
     whole endpoint would strand every such customer instead of leaving them the
     fallback that exists for exactly this.
     """
-    if not settings.credential_encryption_key:
+    if not settings.credential_keys.current:
         return None
     try:
-        return credential_box(settings.credential_encryption_key)
+        return credential_box(settings.credential_keys)
     except DependencyUnavailableError:
         # A key that will not decode is the same as no key at all here: the
         # refusal belongs to the enrolment paths, not to somebody signing in

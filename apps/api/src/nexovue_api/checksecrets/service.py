@@ -14,11 +14,12 @@ from datetime import UTC, datetime
 from nexovue_platform.checks.config import parse_config, requests_of, secret_names_of
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
+    ConfiguredKeys,
     SealedBox,
     SealError,
     check_secret_owner,
-    decode_key,
     encode_sealed,
+    keyring_from,
 )
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -62,12 +63,12 @@ async def _usage(
     return secrets, variables
 
 
-def secret_box(configured_key: str) -> SealedBox:
+def secret_box(keys: ConfiguredKeys) -> SealedBox:
     """The box check secrets are sealed with, or a 503 that names no variable."""
-    if not configured_key:
+    if not keys.current:
         raise DependencyUnavailableError(_KEY_MISSING)
     try:
-        return SealedBox(decode_key(configured_key), purpose=CHECK_SECRET_PURPOSE)
+        return SealedBox(keyring_from(keys.current, keys.previous), purpose=CHECK_SECRET_PURPOSE)
     except ValueError as unusable:
         raise DependencyUnavailableError(_KEY_MISSING) from unusable
 

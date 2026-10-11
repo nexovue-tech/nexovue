@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from environment import TEST_ENVIRONMENT
+from environment import DEPLOYED_KEYS, TEST_ENVIRONMENT
 from pydantic import ValidationError
 
 from nexovue_api.settings import (
@@ -17,8 +17,6 @@ COMPLETE_ENVIRONMENT = {
     "ENV": "development",
     "POSTGRES_DSN": "postgresql://nexovue:secret@localhost:5432/nexovue",
     "CLICKHOUSE_DSN": "clickhouse://nexovue_reader:secret@localhost:8123/nexovue",
-    # Erasure's own credential (docs/changes/clickhouse-protects-itself): required,
-    # so a deployment cannot quietly run every read as an account that can delete.
 }
 
 KNOWN_VARIABLES = (
@@ -33,6 +31,11 @@ KNOWN_VARIABLES = (
     # The developer's `.env` holds a test key, which production refuses.
     "PAYMENTS_DOMESTIC_APP_ID",
     "PAYMENTS_DOMESTIC_SECRET_KEY",
+    "OTLP_ENDPOINT",
+    "CHECK_SECRET_KEY",
+    "CHECK_SECRET_PREVIOUS_KEYS",
+    "CREDENTIAL_ENCRYPTION_KEY",
+    "CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS",
 )
 
 
@@ -151,4 +154,33 @@ def _settings(*, env: str, otlp_endpoint: str = DEFAULT_OTLP_ENDPOINT) -> Settin
         postgres_dsn=TEST_ENVIRONMENT["POSTGRES_DSN"],
         clickhouse_dsn=TEST_ENVIRONMENT["CLICKHOUSE_DSN"],
         otlp_endpoint=otlp_endpoint,
+        check_secret_key=DEPLOYED_KEYS["CHECK_SECRET_KEY"],
+        credential_encryption_key=DEPLOYED_KEYS["CREDENTIAL_ENCRYPTION_KEY"],
     )
+
+
+@pytest.mark.parametrize("missing", ["CHECK_SECRET_KEY", "CREDENTIAL_ENCRYPTION_KEY"])
+def test_production_refuses_to_start_without_either_encryption_key(
+    monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
+    """Blocker 17. Without the credential key, two-factor sign-in cannot be
+    enabled; without the check key, no check or channel secret can be saved."""
+    _apply(
+        monkeypatch,
+        {
+            **COMPLETE_ENVIRONMENT,
+            "ENV": "production",
+            "OTLP_ENDPOINT": "https://ingest.nexovue.com",
+            **{name: value for name, value in DEPLOYED_KEYS.items() if name != missing},
+        },
+    )
+
+    with pytest.raises(SettingsError) as refused:
+        get_settings()
+    assert missing in str(refused.value)
+
+
+def test_development_starts_without_the_encryption_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    _apply(monkeypatch, COMPLETE_ENVIRONMENT)
+
+    assert get_settings().credential_keys.current == ""

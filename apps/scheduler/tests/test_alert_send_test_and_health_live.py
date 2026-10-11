@@ -16,6 +16,7 @@ from alert_fixtures import AlertTenant, add_channel, future, postgres_reachable,
 from live import require_stack
 from nexovue_platform.checks.sealing import (
     NOTIFICATION_CHANNEL_PURPOSE,
+    Keyring,
     SealedBox,
     channel_secret_owner,
 )
@@ -34,7 +35,7 @@ require_stack(
     remedy="Postgres is not reachable — run `just up`",
 )
 
-BOX = SealedBox(os.urandom(32), purpose=NOTIFICATION_CHANNEL_PURPOSE)
+BOX = SealedBox(Keyring(os.urandom(32)), purpose=NOTIFICATION_CHANNEL_PURPOSE)
 BASE = "https://app.nexovue.test"
 
 

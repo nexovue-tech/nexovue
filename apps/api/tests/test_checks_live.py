@@ -19,6 +19,7 @@ import pytest
 from live import require_stack
 from nexovue_platform import erasure
 from nexovue_platform.checks.config import parse_config
+from nexovue_platform.checks.sealing import ConfiguredKeys
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -227,7 +228,7 @@ async def test_every_problem_is_named_before_anything_is_stored(db: AsyncSession
 
 async def test_a_defined_secret_and_variable_make_the_same_check_valid(db: AsyncSession) -> None:
     tenant = await _new_tenant(db)
-    box = check_secrets.secret_box(SECRET_KEY)
+    box = check_secrets.secret_box(ConfiguredKeys(SECRET_KEY))
     await check_secrets.write_secret(
         db,
         org_id=tenant.organization.id,
@@ -296,7 +297,7 @@ async def test_pausing_a_check_whose_secret_was_deleted_still_pauses_it(db: Asyn
         project_id=project,
         name="TOKEN",
         value="token-value",
-        box=check_secrets.secret_box(SECRET_KEY),
+        box=check_secrets.secret_box(ConfiguredKeys(SECRET_KEY)),
         actor_user_id=tenant.user.id,
     )
     created = await _create(
@@ -331,7 +332,7 @@ async def test_a_secret_is_stored_sealed_and_listed_without_its_value(db: AsyncS
         project_id=tenant.project.id,
         name="API_KEY",
         value=marker,
-        box=check_secrets.secret_box(SECRET_KEY),
+        box=check_secrets.secret_box(ConfiguredKeys(SECRET_KEY)),
         actor_user_id=tenant.user.id,
     )
     listed = await check_secrets.list_secrets(
@@ -354,7 +355,7 @@ async def test_no_secret_key_is_a_503_not_a_secret_stored_in_the_clear() -> None
     from nexovue_api.errors.exceptions import DependencyUnavailableError
 
     with pytest.raises(DependencyUnavailableError):
-        check_secrets.secret_box("")
+        check_secrets.secret_box(ConfiguredKeys(""))
 
 
 # --- heartbeats (FR16, AC14) ---------------------------------------------------------------
@@ -475,7 +476,7 @@ async def test_a_run_now_definition_carries_the_secret_sealed_never_in_the_clear
         project_id=tenant.project.id,
         name="TOKEN",
         value=marker,
-        box=check_secrets.secret_box(SECRET_KEY),
+        box=check_secrets.secret_box(ConfiguredKeys(SECRET_KEY)),
         actor_user_id=tenant.user.id,
     )
 
@@ -609,7 +610,7 @@ async def test_a_second_import_cannot_repoint_the_first_imports_variable(db: Asy
             org_id=tenant.organization.id,
             actor_user_id=tenant.user.id,
             request=body,
-            check_secret_key=SECRET_KEY,
+            check_secret_keys=ConfiguredKeys(SECRET_KEY),
             available_locations=LOCATIONS,
         )
 

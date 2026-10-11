@@ -8,10 +8,11 @@ from typing import Any
 
 from nexovue_platform.checks.sealing import (
     CHECK_SECRET_PURPOSE,
+    ConfiguredKeys,
     SealedBox,
     check_secret_owner,
-    decode_key,
     encode_sealed,
+    keyring_from,
 )
 from nexovue_platform.checks.task import CheckDefinition, FileReference
 
@@ -39,7 +40,7 @@ class MemoryFiles:
 
 
 def sealed(values: dict[str, str]) -> dict[str, str]:
-    box = SealedBox(decode_key(SECRET_KEY), purpose=CHECK_SECRET_PURPOSE)
+    box = SealedBox(keyring_from(SECRET_KEY), purpose=CHECK_SECRET_PURPOSE)
     return {
         name: encode_sealed(box.seal(value, owner=check_secret_owner(PROJECT_ID, name)))
         for name, value in values.items()
@@ -83,7 +84,7 @@ def context(files: MemoryFiles | None = None, *, secret_key: str = SECRET_KEY) -
         started_at=datetime.now(UTC),
         maintenance=False,
         private_allowed=True,
-        secret_key=secret_key,
+        secret_keys=ConfiguredKeys(secret_key),
         files=files or MemoryFiles(),
     )
 

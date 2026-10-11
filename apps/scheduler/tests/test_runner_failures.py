@@ -245,3 +245,20 @@ def test_evidence_too_large_to_publish_loses_bodies_and_says_so() -> None:
     assert small.outcome == "down"
     assert small.error is not None and small.error.startswith("expected status code")
     assert "too large" in small.error
+
+
+def test_a_secret_sealed_before_a_rotation_still_opens_on_the_prober() -> None:
+    """Blocker 8. A job queued before the rotation carries a value sealed under the
+    old key; the prober holds it in CHECK_SECRET_PREVIOUS_KEYS until those drain."""
+    from nexovue_platform.checks.sealing import ConfiguredKeys, generate_key
+    from probe_fixtures import PROJECT_ID, SECRET_KEY, sealed
+
+    from nexovue_scheduler.probes.secrets import open_secrets
+
+    opened = open_secrets(
+        sealed({"T": MARKER}),
+        project_id=PROJECT_ID,
+        keys=ConfiguredKeys(generate_key(), previous=SECRET_KEY),
+    )
+
+    assert opened == {"T": MARKER}
