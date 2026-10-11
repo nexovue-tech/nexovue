@@ -248,7 +248,7 @@ and 0075 — leaving nine. The other 100 records are adequately served by this i
 | 0048 | Valkey instead of Redis | 2026-08-26 | stands |  |
 | 0051 | Combine the control plane and Celery into one container | 2026-08-26 > **Reconstructed record.** This decision was made and reversed within a single working | **superseded** | Superseded by 0052 — reverted before it shipped |
 | 0052 | The full production container inventory | 2026-08-26 | stands |  |
-| 0053 | nexovue monitors nexovue, with an out-of-band escape hatch | 2026-08-26 | **deferred** | Deferred 2026-08-26 — revisit once the platform is in production |
+| 0053 | nexovue monitors nexovue, with an out-of-band escape hatch | 2026-08-26 | **deferred** | Deferred 2026-08-26 — revisit once the platform is in production. Rules 1 and 2 met by ADR-021 (2026-10-11); rule 3, nexovue's telemetry as its own organization, still deferred |
 | [ADR-020](ADR-020-postgres-carries-what-redis-held.md) | Redis removed; a Postgres `jobs` table replaces Celery; beat leads through a Postgres advisory lock; rate limits counted in process, the auth tier exactly in Postgres | 2026-10-10 | stands | Built in `docs/changes/redis-goes/`. Supersedes 0048 (Valkey), the Celery half of 0029, and 0083's Redis session index |
 
 ### Language, stack, scope, and sequencing

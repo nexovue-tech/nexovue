@@ -33,6 +33,10 @@ dependencies = [
     # F21: the service threshold and new-error rules read the telemetry store,
     # read-only and through a tenant-scoped reader (ADR-012). The API's client.
     "clickhouse-connect>=1.7",
+    # /metrics in the Prometheus text format, for whatever monitor reads it:
+    # the queue, beat and the loop's pulse (ADR-021).
+    # Pull, so it works when nexovue itself is down.
+    "prometheus-client>=0.26",
 ]
 
 [build-system]

@@ -30,6 +30,15 @@ x-service-defaults: &service-defaults
       max-size: "50m"
       max-file: "5"
 
+# The scheduler's own check (readiness blocker 7): its loop's pulse, not the
+# process — a beat whose loop has hung stays up while every check stops.
+x-scheduler-healthcheck: &scheduler-healthcheck
+  test: ["CMD", "python", "-m", "nexovue_scheduler", "health"]
+  interval: 15s
+  timeout: 5s
+  retries: 4
+  start_period: 30s
+
 include:
   - path: compose.infra.yaml
 
@@ -114,6 +123,13 @@ services:
   proxy:
     <<: *service-defaults
     image: caddy:2.11.4-alpine
+    # Caddy's admin API answers on loopback only, and the image has wget.
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
     ports:
       - "80:80"
       - "443:443"
@@ -150,6 +166,12 @@ services:
   receiver:
     <<: *service-defaults
     image: *image-base
+    healthcheck:
+      test: ["CMD", "/receiver", "-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     # TODO(images): compose cannot append to a YAML anchor, so each service
     #   needs its full "<registry>/nexovue/<name>:<tag>" written out once the
     #   registry path above is decided. The anchor documents the base only.
@@ -173,6 +195,12 @@ services:
   worker:
     <<: *service-defaults
     image: *image-base
+    healthcheck:
+      test: ["CMD", "/worker", "-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     environment:
       # Go's collector cannot see a cgroup limit, so without this the heap grows
       # until the kernel kills the process. ~85% of the limit below; the two are
@@ -214,6 +242,12 @@ services:
   api:
     <<: *service-defaults
     image: *image-base
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     environment:
       <<: *control-plane-env
       # Seals two-factor secrets (readiness blocker 17): without it nobody on
@@ -281,6 +315,7 @@ services:
     <<: *service-defaults
     image: *image-base
     command: python -m nexovue_scheduler beat
+    healthcheck: *scheduler-healthcheck
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
@@ -292,6 +327,7 @@ services:
     <<: *service-defaults
     image: *image-base
     command: python -m nexovue_scheduler worker --concurrency 8
+    healthcheck: *scheduler-healthcheck
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
@@ -319,6 +355,7 @@ services:
     <<: *service-defaults
     image: *image-base
     command: python -m nexovue_scheduler worker --queues deliveries --concurrency 4
+    healthcheck: *scheduler-healthcheck
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092

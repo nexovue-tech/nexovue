@@ -22,7 +22,7 @@ export interface LogRecord {
   error?: { name: string; message: string; stack?: string };
 }
 
-/** Where records go. Swapped for an OTLP transport to our own receiver later. */
+/** Where records go: the devtools console in development, `log-beacon.ts` in production. */
 export type LogSink = (record: LogRecord) => void;
 
 const SERVICE_NAME = "nexovue-web";
@@ -51,13 +51,13 @@ const consoleSink: LogSink = (record) => {
   console[CONSOLE_METHOD[record.severity]](line, record);
 };
 
-/** Production sink. Records are dropped until the receiver route exists (P1-39). */
+/** Until `main.tsx` installs the production sink; tests run without one. */
 const noopSink: LogSink = () => {};
 
 let sink: LogSink = import.meta.env.DEV ? consoleSink : noopSink;
 let minimumSeverity: Severity = import.meta.env.DEV ? "debug" : "info";
 
-/** Lets the app install the real transport once there is one to install. */
+/** Installs the production transport (`main.tsx`). */
 export function configureLogger(options: { sink?: LogSink; minimumSeverity?: Severity }): void {
   if (options.sink) sink = options.sink;
   if (options.minimumSeverity) minimumSeverity = options.minimumSeverity;

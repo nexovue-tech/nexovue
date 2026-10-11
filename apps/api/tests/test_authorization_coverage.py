@@ -54,6 +54,10 @@ EXEMPT: Final = {
     "receive_deploy",
     # Unauthenticated: it is how an account comes into existence.
     "sign_up",
+    # Unauthenticated: the console reporting its own errors, which a sign-in
+    # screen has too. It changes nothing — its whole effect is a log line — and
+    # it is bounded by the rate limit, the body cap and its schema's limits.
+    "record_client_logs",
     # Unauthenticated: they are how a session comes into existence and ends.
     "login",
     "logout",

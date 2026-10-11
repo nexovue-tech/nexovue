@@ -30,6 +30,7 @@ from nexovue_api.checkimports import router as check_imports_router
 from nexovue_api.checkruns import router as check_runs_router
 from nexovue_api.checks import router as checks_router
 from nexovue_api.checksecrets import router as check_secrets_router
+from nexovue_api.clientlogs import router as client_logs_router
 from nexovue_api.dbstats import router as dbstats_router
 from nexovue_api.deploys import router as deploys_router
 from nexovue_api.errorgroups import router as error_groups_router
@@ -111,6 +112,7 @@ def _install_routes(app: FastAPI) -> None:
 
     versioned = APIRouter(prefix=API_PREFIX)
     versioned.include_router(system_router.router)
+    versioned.include_router(client_logs_router.router)
     versioned.include_router(signup_router.router)
     versioned.include_router(auth_router.router)
     versioned.include_router(profile_router.router)

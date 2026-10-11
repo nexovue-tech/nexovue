@@ -35,6 +35,9 @@ class LeaderLock:
         self._lock_id = lock_id
         self._connection: asyncpg.Connection | None = None
         self.held = False
+        # Whether the last `keep` reached Postgres at all, leader or not — what
+        # a follower's readiness rests on, since it touches nothing else.
+        self.reached = False
 
     async def keep(self) -> bool:
         """Take the lock if it is free, or confirm it is still ours."""
@@ -52,8 +55,10 @@ class LeaderLock:
                         "SELECT pg_try_advisory_lock($1)", self._lock_id
                     )
                 )
+            self.reached = True
         except (OSError, asyncpg.PostgresError, asyncpg.InterfaceError):
             logger.warning("beat cannot reach Postgres to hold leadership")
+            self.reached = False
             await self._drop_connection()
         return self.held
 

@@ -3,13 +3,19 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./app/App";
 import { installGlobalHandlers } from "./shared/global-handlers";
-import { logger } from "./shared/logger";
+import { createBeaconSink } from "./shared/log-beacon";
+import { configureLogger, logger } from "./shared/logger";
 
 import "./index.css";
 
 const container = document.getElementById("root");
 if (!container) throw new Error("index.html is missing #root");
 
+// Production sends warnings and errors to the API's log; development keeps the
+// devtools console.
+if (!import.meta.env.DEV) {
+  configureLogger({ sink: createBeaconSink(), minimumSeverity: "warn" });
+}
 installGlobalHandlers();
 
 createRoot(container, {

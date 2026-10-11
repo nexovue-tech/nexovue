@@ -19,6 +19,9 @@ import (
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/chpool"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/buildinfo"
@@ -33,6 +36,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/traceassembly"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/usage"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/projectconfig"
+	"github.com/nexovue-tech/nexovue/apps/workers/internal/selfmetrics"
 )
 
 // Readiness check names; these are what a red /readyz names.
@@ -111,7 +115,18 @@ func run(serviceName string) error {
 		registry.Register(health.Check{Name: dependencyPostgres, Probe: control.Ping})
 	}
 
-	admin := health.Handler(info, liveness, registry)
+	// What a monitor reads (ADR-021): every readiness check as up or down, each
+	// consumer group's lag and the dead-letter depth from the broker, and Go's
+	// own memory and goroutines. The checks run per scrape, after the pipelines
+	// below have registered theirs.
+	metrics := prometheus.NewRegistry()
+	metrics.MustRegister(
+		registry.Collector(),
+		selfmetrics.New(kadm.NewClient(kafka), metricSources(cfg)),
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	admin := health.WithMetrics(health.Handler(info, liveness, registry), metrics)
 	if cfg.Profiling {
 		admin = health.WithProfiling(admin)
 	}
@@ -320,6 +335,33 @@ func reportMeterFailure(ctx context.Context, log *slog.Logger, name string, run 
 // runs. Deriving it from the pipeline selection rather than from its own
 // variable is what keeps the two from disagreeing — a worker that ingests a
 // signal and does not meter it would bill nothing for it.
+// metricSources is every consumer group this process runs — each selected write
+// pipeline's, and its usage meter's — with the dead-letter topic it parks to.
+func metricSources(cfg config.Config) []selfmetrics.Source {
+	writers := map[config.Pipeline]selfmetrics.Source{
+		config.PipelineTraceAssembly: {Group: cfg.Spans.ConsumerGroup, DeadLetterTopic: cfg.Spans.DLQTopic},
+		config.PipelineLogWriting:    {Group: cfg.Logs.ConsumerGroup, DeadLetterTopic: cfg.Logs.DLQTopic},
+		config.PipelineMetricIngest: {
+			Group: cfg.MetricIngest.ConsumerGroup, DeadLetterTopic: cfg.MetricIngest.DLQTopic,
+		},
+		config.PipelineProfileIngest: {
+			Group: cfg.ProfileIngest.ConsumerGroup, DeadLetterTopic: cfg.ProfileIngest.DLQTopic,
+		},
+	}
+	var sources []selfmetrics.Source
+	for _, pipeline := range config.AllPipelines {
+		if slices.Contains(cfg.Pipelines, pipeline) {
+			sources = append(sources, writers[pipeline])
+		}
+	}
+	for _, signal := range usageSignals(cfg.Pipelines) {
+		sources = append(sources, selfmetrics.Source{
+			Group: signal.ConsumerGroup(cfg), DeadLetterTopic: signal.DeadLetterTopic(cfg),
+		})
+	}
+	return sources
+}
+
 func usageSignals(pipelines []config.Pipeline) []usage.Signal {
 	metered := map[config.Pipeline]usage.Signal{
 		config.PipelineTraceAssembly: usage.Spans,

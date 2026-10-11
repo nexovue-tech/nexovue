@@ -370,6 +370,13 @@ services:
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
       python -m nexovue_scheduler beat
+    # The loop's pulse (readiness blocker 7), through the mounted virtualenv.
+    healthcheck:
+      test: ["CMD", "/workspace/.venv/bin/python", "-m", "nexovue_scheduler", "health"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
     working_dir: /workspace
     volumes:
       - ../..:/workspace
@@ -436,6 +443,13 @@ services:
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
       python -m nexovue_scheduler worker --concurrency 8
+    # The loop's pulse (readiness blocker 7), through the mounted virtualenv.
+    healthcheck:
+      test: ["CMD", "/workspace/.venv/bin/python", "-m", "nexovue_scheduler", "health"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
     working_dir: /workspace
     volumes:
       - ../..:/workspace
@@ -482,6 +496,13 @@ services:
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
       python -m nexovue_scheduler worker --queues deliveries --concurrency 4
+    # The loop's pulse (readiness blocker 7), through the mounted virtualenv.
+    healthcheck:
+      test: ["CMD", "/workspace/.venv/bin/python", "-m", "nexovue_scheduler", "health"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 60s
     working_dir: /workspace
     volumes:
       - ../..:/workspace

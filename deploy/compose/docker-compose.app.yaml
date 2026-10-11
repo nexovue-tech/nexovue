@@ -23,6 +23,15 @@ name: nexovue-app
 x-service-defaults: &service-defaults
   restart: unless-stopped
 
+# The scheduler's own check (readiness blocker 7): its loop's pulse, not the
+# process — a beat whose loop has hung stays up while every check stops.
+x-scheduler-healthcheck: &scheduler-healthcheck
+  test: ["CMD", "python", "-m", "nexovue_scheduler", "health"]
+  interval: 15s
+  timeout: 5s
+  retries: 4
+  start_period: 30s
+
 include:
   - path: compose.infra.yaml
 
@@ -119,6 +128,13 @@ services:
   proxy:
     <<: *service-defaults
     image: caddy:2.11.4-alpine
+    # Caddy's admin API answers on loopback only, and the image has wget.
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
     ports:
       - "80:80"
       - "443:443"
@@ -324,6 +340,7 @@ services:
       dockerfile: apps/scheduler/Dockerfile
     image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
     command: python -m nexovue_scheduler beat
+    healthcheck: *scheduler-healthcheck
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
@@ -344,6 +361,7 @@ services:
     <<: *service-defaults
     image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
     command: python -m nexovue_scheduler worker --concurrency 8
+    healthcheck: *scheduler-healthcheck
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
@@ -384,6 +402,7 @@ services:
     <<: *service-defaults
     image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
     command: python -m nexovue_scheduler worker --queues deliveries --concurrency 4
+    healthcheck: *scheduler-healthcheck
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092

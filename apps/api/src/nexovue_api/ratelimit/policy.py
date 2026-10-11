@@ -246,7 +246,7 @@ TELEMETRY_PATHS: Final = (
 
 # Probes must answer while the API is being hammered; that is the whole point
 # of them. They are also what an orchestrator uses to decide to restart us.
-EXEMPT_PATHS: Final = ("/healthz", "/readyz")
+EXEMPT_PATHS: Final = ("/healthz", "/readyz", "/metrics")
 
 
 def tier_for(path: str, *, presented: str | None = None) -> Tier | None:

@@ -30,14 +30,20 @@ from typing import Any, Final
 import asyncpg
 from nexovue_platform.jobs import NOTIFY_CHANNEL
 from nexovue_platform.telemetry.logging import get_logger
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from nexovue_scheduler import metrics
+from nexovue_scheduler.health import Pulse
 from nexovue_scheduler.jobs import child, queue, registry
 from nexovue_scheduler.jobs.queue import ClaimedJob
 
 logger = get_logger(__name__)
 
 POLL_SECONDS: Final = 1.0
+# With every slot busy the loop claims nothing, so it asks Postgres this often
+# anyway: readiness is a recent answer, and long jobs must not read as an outage.
+REACH_POSTGRES_SECONDS: Final = 10.0
 # How long a lost notification connection waits before it is tried again; the
 # poll carries every job meanwhile.
 RELISTEN_SECONDS: Final = 30.0
@@ -103,8 +109,11 @@ class Worker:
         queues: list[str],
         concurrency: int,
         task_modules: tuple[str, ...] = registry.TASK_MODULES,
+        pulse: Pulse | None = None,
     ) -> None:
         self._engine = engine
+        self._pulse = pulse or Pulse()
+        self._reach_postgres_at = 0.0
         self._listen_dsn = listen_dsn
         self._queues = queues
         # Unique per worker, not per process: the lease fence is this name, and two
@@ -128,6 +137,9 @@ class Worker:
                     await self._listen()
                 if self._idle:
                     await self._claim_into_idle_slots()
+                elif loop.time() >= self._reach_postgres_at:
+                    await self._reach_postgres()
+                self._pulse.beat()
                 self._wake.clear()
                 waiting = asyncio.ensure_future(self._wake.wait())
                 stopping = asyncio.ensure_future(stop.wait())
@@ -153,11 +165,22 @@ class Worker:
         except Exception:
             logger.exception("jobs could not be claimed; trying again")
             return
+        self._pulse.reached_postgres()
         for job in jobs:
             slot = self._idle.pop()
             running = asyncio.create_task(self._run(slot, job))
             self._running.add(running)
             running.add_done_callback(self._running.discard)
+
+    async def _reach_postgres(self) -> None:
+        self._reach_postgres_at = asyncio.get_running_loop().time() + REACH_POSTGRES_SECONDS
+        try:
+            async with self._engine.connect() as connection:
+                await connection.execute(text("SELECT 1"))
+        except Exception:
+            logger.warning("Postgres did not answer while every slot was busy")
+            return
+        self._pulse.reached_postgres()
 
     async def _run(self, slot: Slot, job: ClaimedJob) -> None:
         try:
@@ -179,6 +202,7 @@ class Worker:
                 await queue.retry_later(
                     self._engine, job, worker=self._name, countdown=countdown, error=reason
                 )
+                metrics.JOBS_ENDED.labels(outcome=metrics.RETRIED).inc()
                 return
             logger.error(
                 "a job asked to retry with no attempt left", task=job.task, attempts=job.attempts
@@ -188,6 +212,8 @@ class Worker:
                 "a job was killed at its hard time limit", task=job.task, reason=outcome[1]
             )
         await queue.finish(self._engine, job, worker=self._name)
+        ended = metrics.KILLED if kind == KILLED else metrics.FINISHED
+        metrics.JOBS_ENDED.labels(outcome=ended).inc()
 
     async def _listen(self) -> None:
         try:

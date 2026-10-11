@@ -157,6 +157,11 @@ type Traffic struct {
 	acceptedRequests atomic.Int64
 	refusedRequests  atomic.Int64
 
+	// The same counts since the process started, for a monitor (Collect): the
+	// summary takes its window's and starts again, a scrape must only see growth.
+	acceptedRequestsTotal atomic.Int64
+	refusedRequestsTotal  atomic.Int64
+
 	// Keys of both maps are fixed at construction, so concurrent writers only
 	// touch the counters, never the maps.
 	items   map[Unit]*itemCounts
@@ -165,14 +170,17 @@ type Traffic struct {
 
 // itemCounts is one signal's telemetry for the window.
 type itemCounts struct {
-	accepted atomic.Int64
-	refused  atomic.Int64
+	accepted      atomic.Int64
+	refused       atomic.Int64
+	acceptedTotal atomic.Int64
+	refusedTotal  atomic.Int64
 }
 
 // tally is one reason's count for the window, plus whether it has already been
 // logged in this one.
 type tally struct {
 	count  atomic.Int64
+	total  atomic.Int64
 	logged atomic.Bool
 }
 
@@ -198,8 +206,10 @@ func NewTraffic() *Traffic {
 // Accepted records an export the door published, in the unit that door counts.
 func (t *Traffic) Accepted(unit Unit, items int) {
 	t.acceptedRequests.Add(1)
+	t.acceptedRequestsTotal.Add(1)
 	if counted, known := t.items[unit]; known {
 		counted.accepted.Add(int64(items))
+		counted.acceptedTotal.Add(int64(items))
 	}
 }
 
@@ -207,8 +217,10 @@ func (t *Traffic) Accepted(unit Unit, items int) {
 // first of its reason in the current window and therefore worth a log line.
 func (t *Traffic) Refused(unit Unit, reason string, items int) bool {
 	t.refusedRequests.Add(1)
+	t.refusedRequestsTotal.Add(1)
 	if counted, known := t.items[unit]; known {
 		counted.refused.Add(int64(items))
+		counted.refusedTotal.Add(int64(items))
 	}
 	return t.note(reason)
 }
@@ -225,6 +237,7 @@ func (t *Traffic) note(reason string) bool {
 		return true
 	}
 	counted.count.Add(1)
+	counted.total.Add(1)
 	return !counted.logged.Swap(true)
 }
 

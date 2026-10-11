@@ -260,6 +260,12 @@ var AllSignals = []Signal{Spans, Logs, Metrics, Profiles}
 // keyed by it, so the caller that builds one needs the name.
 func (s Signal) Topic(cfg config.Config) string { return s.topic(cfg).name }
 
+// ConsumerGroup is the group this signal's meter reads its topic as.
+func (s Signal) ConsumerGroup(cfg config.Config) string { return s.topic(cfg).consumerGroup }
+
+// DeadLetterTopic is where this signal's meter parks what it cannot read.
+func (s Signal) DeadLetterTopic(cfg config.Config) string { return s.topic(cfg).dlqTopic }
+
 // meter decodes one message and returns who it belonged to and what it carried.
 // Every failure is a *consume.Rejection, so a caller reporting one always knows
 // which tenant's message it could not read.

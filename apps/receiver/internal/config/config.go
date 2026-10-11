@@ -8,6 +8,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/caarlos0/env/v11"
@@ -19,8 +20,19 @@ import (
 const ServiceName = "receiver"
 
 // DefaultHealthAddr is where the admin listener binds unless configured
-// otherwise. The self-check reads it too, so the two cannot drift apart.
+// otherwise.
 const DefaultHealthAddr = ":8081"
+
+// SelfCheckAddr is the address the `-health` self-check probes: the one the
+// listener was configured with. Read here rather than through Load, because the
+// self-check runs before the settings are loaded and must not need the rest of
+// them; probing the default instead reported a moved listener unhealthy forever.
+func SelfCheckAddr() string {
+	if addr := os.Getenv("RECEIVER_HEALTH_ADDR"); addr != "" {
+		return addr
+	}
+	return DefaultHealthAddr
+}
 
 // Deployment environments. ENV picks one; it is a log field and a guard against
 // a development value reaching production.

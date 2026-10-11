@@ -24,6 +24,7 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-018 — nexovue's operator is a user in the console, behind a step-up](ADR-018-the-operator-is-a-user-in-the-console.md)
 - [ADR-019 — nexovue ships as two images, and each role runs as its own container](ADR-019-two-images-each-role-its-own-container.md)
 - [ADR-020 — Postgres carries what Redis held, Redis goes, and object storage is optional](ADR-020-postgres-carries-what-redis-held.md)
+- [ADR-021 — nexovue reports its own health for an outside monitor to read](ADR-021-nexovue-reports-its-own-health-for-an-outside-monitor.md)
 
 ## Earlier decisions, 0001–0112
 

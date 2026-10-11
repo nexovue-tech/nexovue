@@ -19,7 +19,7 @@ _HTTP_SCOPE: Final = "http"
 MILLISECONDS_PER_SECOND: Final = 1000
 
 # Probes run every few seconds forever; logging them buries everything else.
-SILENT_PATHS: Final = ("/healthz", "/readyz")
+SILENT_PATHS: Final = ("/healthz", "/readyz", "/metrics")
 
 
 class RequestLogMiddleware:

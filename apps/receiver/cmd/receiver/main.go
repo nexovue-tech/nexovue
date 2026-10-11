@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/allowance"
@@ -37,7 +39,7 @@ func main() {
 	// `receiver -health` is the container healthcheck: distroless has no shell to
 	// run one with, so the binary checks itself. Uses the default port rather than
 	// config, because a config failure is already a hard exit.
-	health.RunSelfCheckIfAsked(os.Args, config.DefaultHealthAddr)
+	health.RunSelfCheckIfAsked(os.Args, config.SelfCheckAddr())
 
 	if err := run(); err != nil {
 		// Config failures happen before the logger exists, so stderr is the
@@ -129,7 +131,12 @@ func run() error {
 	browserDoor := shared
 	browserDoor.Gatekeeper = auth.NewSite(siteKeys, withRecorder(credentialCache, siteKeyUses))
 
-	adminHandler := health.Handler(info, registry)
+	// What a monitor reads (ADR-021): the doors' totals, and Go's own memory,
+	// goroutines and file descriptors.
+	metrics := prometheus.NewRegistry()
+	metrics.MustRegister(traffic, collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	adminHandler := health.WithMetrics(health.Handler(info, registry), metrics)
 	if cfg.Profiling {
 		adminHandler = health.WithProfiling(adminHandler)
 	}

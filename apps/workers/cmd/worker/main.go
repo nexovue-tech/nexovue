@@ -19,7 +19,7 @@ const serviceName = "worker"
 func main() {
 	// `worker -health` is the container healthcheck; the production image is
 	// distroless and has no shell to run one with.
-	health.RunSelfCheckIfAsked(os.Args, config.DefaultHealthAddr)
+	health.RunSelfCheckIfAsked(os.Args, config.SelfCheckAddr())
 
 	worker.Main(serviceName)
 }

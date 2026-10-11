@@ -22,7 +22,7 @@ import contextlib
 import hashlib
 import time
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Final
 
 from nexovue_platform.alerts.tasks import (
@@ -45,9 +45,11 @@ from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from nexovue_scheduler import metrics
 from nexovue_scheduler.billing import END_LAPSED_GRACE_TASK
 from nexovue_scheduler.checks import ScheduledCheck, load_enabled_checks
 from nexovue_scheduler.erasure import ERASE_OWED_TASK
+from nexovue_scheduler.health import Pulse
 from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.jobs.expiry import SWEEP_EXPIRED_TASK
 from nexovue_scheduler.leader import LeaderLock
@@ -149,10 +151,19 @@ def _unchanged(existing: Entry | None, interval_seconds: int, request: JobReques
 class Beat:
     """Schedules every entry while it holds the leader lock."""
 
-    def __init__(self, engine: AsyncEngine, leader: LeaderLock, settings: Settings) -> None:
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        leader: LeaderLock,
+        settings: Settings,
+        *,
+        pulse: Pulse | None = None,
+    ) -> None:
         self._engine = engine
         self._leader = leader
         self._settings = settings
+        self._pulse = pulse or Pulse()
+        self._measure_due_at = 0.0
         self._entries: dict[str, Entry] = {}
         self._refresh_due_at = 0.0
 
@@ -170,6 +181,7 @@ class Beat:
         try:
             while not stop.is_set():
                 pause = await self.tick()
+                self._pulse.beat()
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(stop.wait(), timeout=pause)
         finally:
@@ -185,20 +197,27 @@ class Beat:
         what it read.
         """
         was_leader = self._leader.held
-        if not await self._leader.keep():
+        leading = await self._leader.keep()
+        if self._leader.reached:
+            self._pulse.reached_postgres()
+        if not leading:
             if was_leader:
                 # Drop the entries so that winning it back rebuilds them from now
                 # rather than replaying whatever came due while we were not leading.
                 logger.warning("beat lost leadership")
                 self._entries = {}
+                metrics.forget_queues()
+            metrics.LEADING.set(0)
             return float(self._settings.beat_leader_poll_seconds)
 
         if not was_leader:
             logger.info("beat became leader")
             self._refresh_due_at = 0.0  # force an immediate load
 
+        metrics.LEADING.set(1)
         await self._refresh_if_due()
         await self._enqueue_due()
+        await self._measure_if_due()
         self._ticks += 1
         self._heartbeat_if_due()
         return TICK_SECONDS
@@ -212,11 +231,28 @@ class Beat:
             await queue.enqueue_all(self._engine, [entry.request for entry in due])
         except Exception:
             self._enqueue_failures += 1
+            metrics.ENQUEUE_FAILURES.inc()
             logger.exception("beat could not add due jobs; they stay due", jobs=len(due))
             return
         for entry in due:
             entry.due_at = now + entry.interval_seconds
         self._enqueued += len(due)
+        metrics.JOBS_ADDED.inc(len(due))
+
+    async def _measure_if_due(self) -> None:
+        """Read the queues for /metrics; the leader alone, since they are shared rows."""
+        now = self._monotonic()
+        if now < self._measure_due_at:
+            return
+        self._measure_due_at = now + metrics.MEASURE_SECONDS
+        try:
+            async with self._engine.connect() as connection:
+                readings = await metrics.read_queues(connection, now=datetime.now(UTC))
+        except Exception:
+            # A missed reading leaves the last one standing; the next tick tries again.
+            logger.warning("beat could not read the queues for its metrics")
+            return
+        metrics.publish(readings)
 
     def _heartbeat_if_due(self) -> None:
         """Say what the scheduler is holding, on a timer.

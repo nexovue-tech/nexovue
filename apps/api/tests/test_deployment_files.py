@@ -127,3 +127,40 @@ def test_the_erasure_connects_as_the_account_that_can_only_delete(file_name: str
         f"{file_name}: the erasure connects as {dsn.split('@')[0]!r}; it needs SELECT and "
         "ALTER DELETE, not the administrator's DROP, FILE, URL and S3."
     )
+
+
+# Runs once at deploy time and exits; nothing to watch.
+ONE_SHOT: Final = frozenset({"web-assets-init"})
+
+
+def _infrastructure() -> set[str]:
+    path = _repo() / "deploy" / "compose" / "compose.infra.yaml"
+    return set(yaml.safe_load(path.read_text(encoding="utf-8"))["services"])
+
+
+@pytest.mark.parametrize("file_name", DEPLOYED)
+def test_every_long_running_service_has_a_healthcheck(file_name: str) -> None:
+    """Readiness blocker 7: a process that runs is not a service that works. The
+    stores' checks live in the infrastructure module the file includes."""
+    unchecked = sorted(
+        name
+        for name, service in _services(file_name).items()
+        if "healthcheck" not in service
+        and "profiles" not in service
+        and name not in ONE_SHOT
+        and name not in _infrastructure()
+    )
+    assert not unchecked, f"{file_name}: no healthcheck on {unchecked}"
+
+
+HANDLE_BLOCK: Final = re.compile(r"^\thandle\s*(\S*)\s*\{(.*?)^\t\}", re.MULTILINE | re.DOTALL)
+
+
+def test_the_edge_sends_the_api_nothing_but_api_paths() -> None:
+    """`/metrics`, `/healthz` and `/readyz` sit at the API's root, internal by
+    design (ADR-021): a route to the API on any other matcher exposes them."""
+    caddyfile = (_repo() / "deploy" / "caddy" / "Caddyfile").read_text(encoding="utf-8")
+    to_api = [
+        matcher for matcher, body in HANDLE_BLOCK.findall(caddyfile) if "dynamic a api " in body
+    ]
+    assert to_api == ["/api/*"], to_api

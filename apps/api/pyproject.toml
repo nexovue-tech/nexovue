@@ -62,6 +62,10 @@ dependencies = [
     # refused on any alias; and validation of Swagger 2.0 and OpenAPI 3.0-3.2.
     "pyyaml>=6.0",
     "openapi-spec-validator>=0.9",
+    # /metrics in the Prometheus text format, for whatever monitor reads it:
+    # the API's requests (ADR-021).
+    # Pull, so it works when nexovue itself is down.
+    "prometheus-client>=0.26",
 ]
 
 [build-system]

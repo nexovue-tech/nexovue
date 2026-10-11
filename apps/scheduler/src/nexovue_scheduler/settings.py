@@ -150,6 +150,11 @@ class Settings(BaseSettings):
     # that is the worst blind spot there is — the checker failing silently.
     beat_heartbeat_seconds: Annotated[int, Field(gt=0)] = 60
 
+    # Where this process answers /healthz, /readyz and /metrics (`health.py`).
+    # Internal: no edge routes it. Every role uses the same port in its own
+    # container.
+    health_addr: str = ":8081"
+
     @model_validator(mode="after")
     def _check_key_is_set_in_production(self) -> Settings:
         """A deployed prober opens check and channel secrets (readiness blocker 17);

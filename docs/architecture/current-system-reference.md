@@ -268,7 +268,7 @@ Consumes `profiles-raw`, whose payload is `nexovue.v1.ProfileSamples` — the re
 
 ### 5.8 Health and self-observation
 
-`/healthz` reports whether each selected pipeline's consume loop is actually running (a stopped pipeline is treated as fatal — the process exits rather than continuing half-alive). `/readyz` additionally checks Kafka, ClickHouse, and (if configured) Postgres reachability. There is no metrics exporter; all self-observation is structured log lines, including a periodic "ingest heartbeat" reporting uncommitted-record counts, per-signal write counts, and buffered-trace/span counts.
+`/healthz` reports whether each selected pipeline's consume loop is actually running (a stopped pipeline is treated as fatal — the process exits rather than continuing half-alive). `/readyz` additionally checks Kafka, ClickHouse, and (if configured) Postgres reachability. `/metrics` (ADR-021) reports every readiness check as up or down, each consumer group's lag (the topics' end offsets minus its committed offsets, read from the broker by `kadm` on scrape — absent rather than zero when Kafka cannot answer), and each dead-letter topic's retained records; the receiver's admin listener reports export totals by outcome, signal and refusal reason. The structured-log "ingest heartbeat" (uncommitted records, per-signal write counts, buffered traces and spans) is unchanged.
 
 ### 5.9 Package map
 
@@ -398,6 +398,8 @@ The payment-processor integration is behind an abstract port with no vendor voca
 ### 7.1 Purpose
 
 A job-queue service running two kinds of measurement: synthetic checks (API and multistep API requests, TCP connections, DNS resolution, and heartbeats judged against their last call) and pollers (reading a customer's AWS CloudWatch RDS metrics or Postgres statistics). There is deliberately no result store for measurements — each task builds its own OTLP-shaped envelope and publishes it directly to Kafka, following the exact same internal envelope contract every other door uses.
+
+Every scheduler process — beat and each worker — answers `/healthz`, `/readyz` and `/metrics` on `SCHEDULER_HEALTH_ADDR` (`:8081`) from a thread that reads timestamps only (`health.py`): liveness fails when the loop has been silent for 30 s, readiness when it has not reached Postgres for 30 s (a worker with every slot busy asks Postgres every 10 s for exactly this). `python -m nexovue_scheduler health` is the compose healthcheck. Beat's leader reads the queues every 15 s for `/metrics`: jobs ready per queue and the oldest's wait, alerts waiting, erasures overdue (`metrics.py`).
 
 ### 7.2 Scheduling
 

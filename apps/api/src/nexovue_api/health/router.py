@@ -1,4 +1,4 @@
-"""The two probe endpoints.
+"""The two probe endpoints, and `/metrics` for a monitor to read (ADR-021).
 
 ``/healthz`` is liveness and touches nothing external. If it checked Postgres, a
 single bad second on the database would restart every replica of every service
@@ -17,6 +17,7 @@ from http import HTTPStatus
 from typing import Final
 
 from fastapi import APIRouter, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 
 from nexovue_api.health.registry import (
     STATUS_OK,
@@ -28,6 +29,7 @@ from nexovue_api.health.registry import (
 
 LIVENESS_PATH: Final = "/healthz"
 READINESS_PATH: Final = "/readyz"
+METRICS_PATH: Final = "/metrics"
 
 # Probe answers are a snapshot of right now; a cached one is worse than none.
 NO_STORE: Final = "no-store"
@@ -58,3 +60,13 @@ async def readiness(request: Request, response: Response) -> Report:
     if report.status != STATUS_OK:
         response.status_code = int(HTTPStatus.SERVICE_UNAVAILABLE)
     return report
+
+
+@router.get(METRICS_PATH, include_in_schema=False)
+async def metrics() -> Response:
+    """The Prometheus text format. Not under /api, so the edge never routes it."""
+    return Response(
+        generate_latest(REGISTRY),
+        media_type=CONTENT_TYPE_LATEST,
+        headers={"Cache-Control": NO_STORE},
+    )

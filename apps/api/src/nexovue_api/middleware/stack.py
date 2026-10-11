@@ -14,6 +14,7 @@ from starlette.middleware.cors import CORSMiddleware
 from nexovue_api.middleware.body_limit import RequestBodyLimitMiddleware
 from nexovue_api.middleware.correlation import CorrelationIdMiddleware
 from nexovue_api.middleware.errors import ExceptionBoundaryMiddleware
+from nexovue_api.middleware.metrics import RequestMetricsMiddleware
 from nexovue_api.middleware.ratelimit import RateLimitMiddleware
 from nexovue_api.middleware.request_log import RequestLogMiddleware
 from nexovue_api.settings import Settings
@@ -30,6 +31,8 @@ def install_middleware(app: FastAPI, settings: Settings) -> None:
     app.add_middleware(RequestBodyLimitMiddleware)
     app.add_middleware(RequestLogMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
+    # Outside everything that can answer early — a 413, a 429 — so those count too.
+    app.add_middleware(RequestMetricsMiddleware)
     app.add_middleware(ExceptionBoundaryMiddleware)
 
     if settings.cors_allowed_origins:

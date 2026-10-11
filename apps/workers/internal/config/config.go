@@ -9,6 +9,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/caarlos0/env/v11"
@@ -25,8 +26,19 @@ const (
 )
 
 // DefaultHealthAddr is where the admin listener binds unless configured
-// otherwise. The self-check reads it too, so the two cannot drift apart.
+// otherwise.
 const DefaultHealthAddr = ":8081"
+
+// SelfCheckAddr is the address the `-health` self-check probes: the one the
+// listener was configured with. Read here rather than through Load, because the
+// self-check runs before the settings are loaded and must not need the rest of
+// them; probing the default instead reported a moved listener unhealthy forever.
+func SelfCheckAddr() string {
+	if addr := os.Getenv("WORKERS_HEALTH_ADDR"); addr != "" {
+		return addr
+	}
+	return DefaultHealthAddr
+}
 
 // Config is a worker's complete settings surface, read from the environment
 // exactly once, at boot.
