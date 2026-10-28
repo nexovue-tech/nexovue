@@ -60,8 +60,12 @@ x-after-setup: &after-setup
   setup-pipeline:
     condition: service_completed_successfully
 
+# The stores' adjustments for this target are a second file listed with the include: Compose refuses
+# a service redefined by the file that includes it, except in its newest versions.
 include:
-  - path: compose.infra.yaml
+  - path:
+      - compose.infra.yaml
+      - compose.infra.hosted.yaml
 
 x-data-plane-env: &data-plane-env
   # What both Go services read. Each adds its own: the worker its ClickHouse
@@ -124,33 +128,6 @@ x-control-plane-env: &control-plane-env
   PAYMENTS_DOMESTIC_BASE_URL: ${PAYMENTS_DOMESTIC_BASE_URL:-}
 
 services:
-  # ---------- infrastructure: no published ports ----------
-  # The infrastructure module carries no restart policy, because development
-  # wants a crashed container to stay down and be looked at. These three are
-  # redeclared for the policy alone; the rest of their definition is inherited.
-  kafka:
-    <<: *service-defaults
-
-  seaweedfs:
-    <<: *service-defaults
-
-  clickhouse:
-    <<: *service-defaults
-    environment:
-      CLICKHOUSE_DB: ${CLICKHOUSE_DB:?set CLICKHOUSE_DB}
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:?set CLICKHOUSE_USER}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
-      CLICKHOUSE_READER_PASSWORD: ${CLICKHOUSE_READER_PASSWORD:?set CLICKHOUSE_READER_PASSWORD}
-      CLICKHOUSE_ERASER_PASSWORD: ${CLICKHOUSE_ERASER_PASSWORD:?set CLICKHOUSE_ERASER_PASSWORD}
-      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "0"
-
-  postgres:
-    <<: *service-defaults
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-
   # ---------- the setup step: runs to completion before anything else ----------
   # Postgres to the newest migration and the object store's bucket (nexovue_api.setup).
   setup:

@@ -61,6 +61,7 @@ jobs:
       # The development stack, prepared by the same setup step a deployment runs.
       - name: Start the stores and services
         run: |
+          docker compose version
           docker compose -f deploy/compose/docker-compose.yaml up -d --wait --build
           just topics
           just migrate

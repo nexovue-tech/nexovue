@@ -1,0 +1,33 @@
+# The stores in development: what compose.infra.yaml defines, plus what only a laptop wants.
+# Listed beside compose.infra.yaml in docker-compose.yaml's `include`, which is the one way to adjust
+# an included service that every Compose version with `include` accepts.
+
+services:
+  # ---------- infrastructure: developer conveniences only ----------
+  # Ports are published here and nowhere else — the deployment targets keep the
+  # data stores off the host entirely. The host side is a variable because these
+  # are the well-known ports and another project on the same laptop may already
+  # hold one; the container side never moves.
+  kafka:
+    ports:
+      - "${KAFKA_HOST_PORT:-19092}:29092"
+
+  clickhouse:
+    # Development only: superseded parts are dropped in 30 seconds rather than
+    # 480, because the gate's purge suites otherwise hold gigabytes of part
+    # metadata (docs/changes/clickhouse-system-logs/). Deployment targets keep
+    # ClickHouse's own answer — see the file for why.
+    volumes:
+      - ../clickhouse/config.d/dev-parts.xml:/etc/clickhouse-server/config.d/dev-parts.xml:ro
+    ports:
+      - "${CLICKHOUSE_HTTP_HOST_PORT:-18123}:8123"
+      - "${CLICKHOUSE_NATIVE_HOST_PORT:-19000}:9000"
+
+  postgres:
+    ports:
+      - "${POSTGRES_HOST_PORT:-15432}:5432"
+
+  seaweedfs:
+    ports:
+      - "${SEAWEEDFS_S3_HOST_PORT:-18333}:8333"
+      - "${SEAWEEDFS_MASTER_HOST_PORT:-19333}:9333"

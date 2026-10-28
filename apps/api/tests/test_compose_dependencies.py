@@ -57,6 +57,17 @@ def test_a_health_check_probes_the_port_its_dependants_call(service: str, port: 
     )
 
 
+def _included_service_names(file_name: str) -> set[str]:
+    """Every service the file's `include` entries define."""
+    document = yaml.safe_load((_compose_directory() / file_name).read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for entry in document.get("include") or []:
+        paths = entry["path"] if isinstance(entry, dict) else entry
+        for path in [paths] if isinstance(paths, str) else paths:
+            names.update(_services(path))
+    return names
+
+
 def _undeclared(file_name: str) -> dict[str, list[str]]:
     """Which services connect to another service they never declared a dependency on.
 
@@ -65,6 +76,9 @@ def _undeclared(file_name: str) -> dict[str, list[str]]:
     this module exists for.
     """
     services = _services(file_name)
+    # A service can be named that only an included file defines — the stores, since their
+    # adjustments moved beside compose.infra.yaml in each file's `include`.
+    known = set(services) | _included_service_names(file_name)
     missing: dict[str, list[str]] = {}
     for name, definition in services.items():
         environment = str(definition.get("environment") or {})
@@ -73,7 +87,7 @@ def _undeclared(file_name: str) -> dict[str, list[str]]:
         named = set(definition.get("depends_on") or {})
         undeclared = sorted(
             other
-            for other in services
+            for other in known
             if other != name and f"{other}:" in environment and other not in named
         )
         if undeclared:
