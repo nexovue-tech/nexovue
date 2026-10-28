@@ -29,12 +29,19 @@ _default:
 # papercut on the common path. Measured idle: 393 MiB across four containers
 # (scheduler-beat runs two replicas and elects a leader).
 # Dev stack: infrastructure + every service, hot reloading, probe workers included
-dev:
-    docker compose -f {{compose}}/docker-compose.yaml up -d --build --wait
+dev: stack
+    just otel-demo up
+
+# The stores first, then the setup step, then the services — a deployment's order. Started all at
+# once on empty volumes, the worker waits for topics and tables nobody has made yet and never turns
+# healthy (CI's first runs, 2026-10-28). CI runs this.
+# Start the stores, prepare them, then start every service and seed the dev tenant
+stack:
+    docker compose -f {{compose}}/docker-compose.yaml up -d --build --wait kafka clickhouse postgres seaweedfs
     just topics
     just migrate
+    docker compose -f {{compose}}/docker-compose.yaml up -d --build --wait
     just seed
-    just otel-demo up
 # Production replica: same infrastructure, services from built images
 dev-app:
     GIT_SHA=$(git rev-parse HEAD) docker compose --env-file {{compose}}/.env.replica -f {{compose}}/docker-compose.app.yaml up -d --wait --build
