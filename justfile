@@ -90,6 +90,26 @@ logs service="":
 repo-audit:
     uv run python tools/repo-audit/repo_audit.py
 
+# Known vulnerabilities in what production runs, nothing else (docs/changes/ready-to-deploy):
+# govulncheck reports a Go flaw only where our code reaches it; pip-audit reads the Python runtime
+# dependencies, not the dev tools; pnpm audit reads the console's and SDK's runtime packages, high
+# and critical only. CI runs it on every push, so a flaw in production code cannot pile up unseen.
+# Check production dependencies for known vulnerabilities
+audit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for m in apps/receiver apps/workers packages/contracts; do
+        echo "== go: $m"
+        (cd "$m" && go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...)
+    done
+    echo "== python: runtime dependencies"
+    requirements=$(mktemp)
+    trap 'rm -f "$requirements"' EXIT
+    uv export --frozen --no-dev --all-packages --no-emit-workspace --format requirements-txt -o "$requirements" >/dev/null
+    uvx pip-audit==2.10.1 --disable-pip --require-hashes -r "$requirements"
+    echo "== javascript: runtime packages"
+    pnpm audit --prod --audit-level high
+
 # ---------- quality ----------
 
 # Everything CI would run. The pre-commit gate.

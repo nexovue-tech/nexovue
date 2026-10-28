@@ -5,7 +5,7 @@
 # Built from the repository root: docker build -f deploy/images/nexovue.Dockerfile .
 
 # ---- the console ------------------------------------------------------------------------------
-FROM node:26.7.0-trixie-slim AS console
+FROM node:26.12.0-trixie-slim AS console
 RUN npm install --global corepack@latest && corepack enable
 WORKDIR /app
 

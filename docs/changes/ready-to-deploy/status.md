@@ -121,6 +121,28 @@ Step 1, 2026-10-28:
   node_modules is a volume). Before pushing each fix, `just check` passed locally — which is exactly
   why these were invisible there.
 
+- **T8, releases** — `v0.1.0-rc.1` built all four images and failed to publish: the `nexovue-*` digest
+  pattern also matched `nexovue-pipeline-*`, and GitHub stores attestations only for public or paid
+  repositories. `v0.1.0-rc.2` published both images for amd64 and arm64, labelled with the tagged
+  commit, run as non-root; `cosign verify` confirms each was signed by `release.yml` on a `v` tag. It was
+  also published while its commit's CI was still running — so a release now waits for that commit's CI
+  result and builds nothing unless it passed; `v0.1.0-rc.3` proved it (check 12:05-12:26, builds from
+  12:26).
+- **Dependency security batch, 2026-10-28** (founder, option B with an audit): 63 Dependabot alerts.
+  gRPC 1.83.2 (not 1.84: 1.84 answers an undecodable request INTERNAL before the receiver's handler can
+  answer INVALID_ARGUMENT — two receiver tests caught it); certifi, urllib3, aiohttp, PyJWT, Mako,
+  multidict, dnspython, opentelemetry-api; vite 8.3.5, vitest 4.1.12, undici, markdown-it,
+  source-map-js; the Go and Node base images. **`just audit`** (govulncheck reachability, pip-audit over
+  the runtime dependencies, `pnpm audit --prod`, high and above) now runs in CI, and on its first run
+  found what Dependabot did not: **Go 1.27.0 itself**, with twelve standard-library flaws reachable
+  from the receiver's HTTP server — the project now requires Go 1.27.3, and x/net 0.60.0.
+  golangci-lint 2.15.0 (2.13.1 cannot read Go 1.27.3's export data).
+- **Deferred to a follow-up change, none a security fix:** TypeScript 7, Vitest 5, jsonpath-rfc9535 2,
+  @types/node 26, Biome 2.6 (now formats Markdown and YAML — 220 files — and adds lint rules), gRPC 1.84
+  (needs the receiver to decode requests itself), the Go minors that need gRPC 1.84 (pgx, franz-go,
+  client_golang, otlp 1.11.1), and @tanstack/react-virtual 3.14.23, which renders no rows in jsdom
+  (pinned at 3.14.10 until it is understood).
+
 ## Specification impact
 
 None yet. The deployment mode will touch billing's specification.

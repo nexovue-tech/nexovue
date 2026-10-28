@@ -184,7 +184,7 @@ arm64; on an empty machine `docker compose up` with them prepares the stores and
   empty volumes.
 - [x] **T7** — `.github/workflows/ci.yml`: full history checkout, the toolchain, the stores from the
   repository's Compose file, `just check` · proved by a green run.
-- [ ] **T8** — `.github/workflows/release.yml`: on a version tag `vX.Y.Z` (or `vX.Y.Z-rc.N`), native
+- [x] **T8** — `.github/workflows/release.yml`: on a version tag `vX.Y.Z` (or `vX.Y.Z-rc.N`), native
   per-architecture builds pushed by digest and merged, provenance and SBOM, a cosign signature, tags
   `X.Y.Z`/`X.Y`/commit, and a GitHub release with generated notes · proved by the `v0.1.0-rc.1` release,
   pulled back and `cosign verify`'d. *Changed 2026-10-28 (founder, option B): versions are tagged by hand

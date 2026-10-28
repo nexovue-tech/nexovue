@@ -3,7 +3,7 @@
 # `/worker`, `/dlq`, `/setup` — since the image holds no shell.
 #
 # Built from the repository root: docker build -f deploy/images/nexovue-pipeline.Dockerfile .
-FROM golang:1.27.0-trixie AS build
+FROM golang:1.27.3-trixie AS build
 WORKDIR /src
 
 # go.work is a development convenience and is not copied: each module's replace directive
