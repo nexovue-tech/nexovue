@@ -3,7 +3,7 @@ name: explore
 description: >-
   Thinking through an idea that is not yet a requirement — brainstorming,
   weighing approaches, or working out what something should be before any
-  spec exists. Use when Raj says he is not sure yet, wants to think or talk
+  spec exists. Use when the founder is not sure yet, wants to think or talk
   something through, asks what a capability should look like, or has an idea
   without acceptance criteria. Also use when feature-work or change-work is
   already underway and hits a decision nobody has made. Not for a request
@@ -36,7 +36,7 @@ useful thing this step does.
   being negotiable, because arguing with something that exists is harder than arguing with a
   sentence.
 - **No spec, no design document, no workspace.** Those are the next step and they have gates.
-- **No invented requirement.** If the answer depends on something only Raj knows — who this is for,
+- **No invented requirement.** If the answer depends on something only the founder knows — who this is for,
   what it is worth, what is acceptable — that is a question, not an assumption to fill in.
 - **No single recommendation presented as the only option.** Exploration is where alternatives are
   still cheap.
@@ -45,7 +45,7 @@ useful thing this step does.
 
 State which is which, explicitly, every time:
 
-| Raj decides | You recommend |
+| The founder decides | You recommend |
 |---|---|
 | Who this is for, and whether it is worth building | Which technical approach, and the tradeoff |
 | Scope, priority, what is deliberately left out | What the code makes cheap or expensive |
@@ -56,7 +56,7 @@ settles a product question has made the decision for him.
 
 ## 4. Push back
 
-Raj asks for disagreement rather than agreement. Say plainly when an idea conflicts with a recorded
+The founder asks for disagreement rather than agreement. Say plainly when an idea conflicts with a recorded
 decision, duplicates something built, or costs more than it appears to. If he reaffirms after
 hearing it, that is the decision — implement it fully and stop relitigating.
 

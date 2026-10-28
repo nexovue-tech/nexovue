@@ -51,3 +51,6 @@ tools/otel-demo/upstream/
 # Compiled probe binaries. The source is worth keeping so an experiment is
 # reproducible; a 23 MB build artifact is not, and one reached main once.
 tools/rebalanceprobe/rebalanceprobe
+
+# A maintainer's personal agent rules (AGENTS.md, rule 1). Never committed.
+CLAUDE.local.md

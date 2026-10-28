@@ -69,8 +69,12 @@ Step 0, 2026-10-28:
   the stale pull request #1 closed with a comment.
 - **T0e** — `SECURITY.md`, `.github/CODEOWNERS`, `CONTRIBUTING.md`, issue forms and the pull-request
   template. GitHub's private vulnerability reporting is switched on at publication (T0g).
-- **T0f** — `just repo-audit`: "repository settings match"; `tools/repo-audit/test_repo_audit.py` 4 passed
-  (the applied settings pass; public, alerts off and an unreadable setting are each drift).
+- **T0f** — `just repo-audit`: "repository settings match", the organization's settings included;
+  `tools/repo-audit/test_repo_audit.py` 5 passed (the applied settings pass; public, alerts off, an
+  unreadable setting and members able to change visibility are each drift).
+- **T0b** — read back through the API: base permission read; members may create no repository and
+  may not change a repository's visibility; two-factor required, secure methods only, every member
+  enrolled (`Saro006` pending the move off SMS).
 
 ## Specification impact
 

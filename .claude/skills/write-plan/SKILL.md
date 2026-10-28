@@ -4,7 +4,7 @@ description: >-
   Writing the plan for an approved feature or change — ordered steps and, under
   each, tasks naming the files that change and the tests that prove them, read
   from the code — for the founder's approval before any file is edited. Use when
-  a design or change record is approved and implementation is next, when Raj asks
+  a design or change record is approved and implementation is next, when the founder asks
   what exactly will change, or when feature-work or change-work reaches the plan.
   Not for deciding what to build — that is the specification and design gates,
   already passed by the time this runs.

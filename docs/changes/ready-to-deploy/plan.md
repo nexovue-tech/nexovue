@@ -130,8 +130,8 @@ that would break a rule is refused.
 
 - [x] **T0a** — A deep history scan with **gitleaks** (entropy and rules, every commit) before the repository
   is ever public again; findings recorded in `status.md`, a real one rotated and removed from history.
-- [ ] **T0b** — Organization settings: two-factor required for members; members may not create public
-  repositories; base permission read; web commit sign-off required · proved by `just repo-audit`.
+- [x] **T0b** — Organization settings: two-factor required for members; members may not create public
+  repositories; base permission read; web commit sign-off required · proved by `just repo-audit`. *Done 2026-10-28 by the founder in the settings page, with two corrections found on the way: GitHub Free cannot limit members to private repositories, so members may create none (owners always can), and members may not change a repository's visibility. The two-factor requirement is deferred until a second member joins (founder's decision); organization web sign-off left off, since the repository requires it.*
 - [x] **T0c** — Repository settings: Actions limited to GitHub's own and verified creators plus an allowlist,
   pinned by commit hash; workflow token **read-only by default**; Actions may not approve pull requests;
   fork pull requests need approval to run; wiki and projects off; auto-delete merged branches; squash merge

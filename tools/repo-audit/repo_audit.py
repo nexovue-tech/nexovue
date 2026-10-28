@@ -48,8 +48,10 @@ def drift(expected: dict[str, Any], fetch: Fetch) -> list[str]:
 
 def github(token: str) -> Fetch:
     def fetch(path: str) -> tuple[int, Any]:
+        # '@' marks a path from the API's root, for the organization's own settings.
+        url = path[1:] if path.startswith("@") else f"/repos/{REPOSITORY}{path}"
         request = urllib.request.Request(
-            f"https://api.github.com/repos/{REPOSITORY}{path}",
+            f"https://api.github.com{url}",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",

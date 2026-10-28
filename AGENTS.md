@@ -5,24 +5,24 @@
 These rules take priority when they are more specific than the workflow in
 [`docs/engineering/workflow.md`](docs/engineering/workflow.md).
 
-1. **Never push without Raj's permission.** A commit is permitted when appropriate; pushing happens
-   only when Raj explicitly says "push" for that occasion. Never add an AI co-author trailer.
-2. **Use Raj's Git identity only.** Rely on the repository's existing Git configuration. Never pass
-   `-c user.name` or `-c user.email`.
-3. **Never use `gh` in this repository.** It is authenticated to an account without access to the
-   nexovue-tech organization. Use Git over SSH where appropriate; hand GitHub-specific work to Raj.
+1. **Never push, publish or change shared settings without the maintainer's approval.** Commit
+   only completed work. A maintainer may keep personal working rules in a git-ignored
+   `CLAUDE.local.md`; they add to these rules and never weaken them.
+2. **Use the repository's own Git configuration** for identity; never override it per command.
+3. **Never commit a credential.** Secrets come from the environment; `.gitleaksignore` holds only
+   reviewed non-secrets.
 4. **Code is current-state truth.** When code, tests, migrations, or deployment configuration
    disagree with documentation, say so and update the relevant document.
 5. **Fix root causes everywhere they exist.** Do not substitute a temporary patch or workaround.
-   If the root correction is large or changes scope, explain it and let Raj decide the scope.
+   If the root correction is large or changes scope, explain it and let the founder decide the scope.
 6. **Build to Code Complete standards.** Use intention-revealing names, focused routines, low
    coupling, named constants instead of magic values, and deliberate invalid-input handling.
 7. **Keep comments short.** Explain non-obvious *why* in a line or two. Rewrite code that needs a
    long explanatory comment.
 8. **Stop rather than guess about material uncertainty.** Finish independent work, then state the
-   missing requirement or decision and ask Raj. Never invent product behavior.
+   missing requirement or decision and ask the founder. Never invent product behavior.
 9. **Analyze a request before implementing it.** Check actual code and recorded decisions; raise
-   conflicts, missing decisions, and material alternatives before writing code. If Raj reaffirms the
+   conflicts, missing decisions, and material alternatives before writing code. If the founder reaffirms the
    direction after that, implement it fully.
 10. **Research before recommending a current approach.** For libraries, component patterns,
     configuration syntax, or a question about current best practice, search authoritative web
@@ -48,8 +48,8 @@ These rules take priority when they are more specific than the workflow in
 12. **A result is evidence only when it was observed.** Read test output and test counts; exit code
     zero alone is insufficient. Never claim a check, fact, or measurement without the evidence that
     was actually run or read. State unrun validation plainly.
-13. **Explain at Raj's level.** Lead with the outcome and consequence. Define unfamiliar production
-    terms on first use, retain technical precision, and do not soften real risks.
+13. **Explain plainly.** Lead with the outcome and consequence. Define unfamiliar production terms on
+    first use, retain technical precision, and do not soften real risks.
 14. **Nexovue is pre-deployment.** There are no customers, production/staging systems, or live data
     to preserve. Do not retain a wrong API, schema, migration, URL, or configuration merely for
     backward compatibility. Design for the intended end state now; flag decisions that will become
@@ -128,7 +128,7 @@ Three rules about the standards themselves:
 1. **Do not invent a convention silently.** If the standards do not cover the case, say so and
    propose what the convention should be, rather than establishing one by writing code.
 2. **Report a conflict rather than picking a side.** Two standards that disagree, or a standard that
-   disagrees with the code, is a decision for Raj and usually means one of them is stale.
+   disagrees with the code, is a decision for the founder and usually means one of them is stale.
 3. **Propose the update when a standard is insufficient.** A standard that no longer matches how the
    code works is worse than none, because it is trusted. Fixing it is part of the change that
    outgrew it.

@@ -37,6 +37,17 @@ APPLIED: dict[str, tuple[int, Any]] = {
     ),
     "/automated-security-fixes": (200, {"enabled": True, "paused": False}),
     "/vulnerability-alerts": (204, None),
+    "@/orgs/nexovue-tech": (
+        200,
+        {
+            "default_repository_permission": "read",
+            "members_can_create_repositories": False,
+            "members_can_create_public_repositories": False,
+            "members_can_create_private_repositories": False,
+            "members_can_change_repo_visibility": False,
+            "two_factor_requirement_enabled": True,
+        },
+    ),
 }
 
 
@@ -71,4 +82,16 @@ def test_an_unreadable_setting_is_drift_not_a_pass() -> None:
 
     assert drift(_expected(), answers.__getitem__) == [
         "/actions/permissions/workflow: the API answered 403"
+    ]
+
+
+def test_members_allowed_to_publish_a_repository_is_drift() -> None:
+    answers = dict(APPLIED)
+    answers["@/orgs/nexovue-tech"] = (
+        200,
+        {**APPLIED["@/orgs/nexovue-tech"][1], "members_can_change_repo_visibility": True},
+    )
+
+    assert drift(_expected(), answers.__getitem__) == [
+        "@/orgs/nexovue-tech members_can_change_repo_visibility: expected False, found True"
     ]

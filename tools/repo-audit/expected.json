@@ -1,5 +1,5 @@
 {
-  "_comment": "The GitHub settings nexovue is held to (docs/changes/ready-to-deploy, Step 0). Each key is an API path under /repos/nexovue-tech/nexovue; each value lists the fields that must match. Change this file in the same commit as the setting.",
+  "_comment": "The GitHub settings nexovue is held to (docs/changes/ready-to-deploy, Step 0). A key is an API path under /repos/nexovue-tech/nexovue, or under the API's root when it starts with '@'; each value lists the fields that must match. Change this file in the same commit as the setting.",
   "": {
     "private": true,
     "has_wiki": false,
@@ -27,5 +27,13 @@
   "/automated-security-fixes": {
     "enabled": true
   },
-  "/vulnerability-alerts": "enabled"
+  "/vulnerability-alerts": "enabled",
+  "@/orgs/nexovue-tech": {
+    "default_repository_permission": "read",
+    "members_can_create_repositories": false,
+    "members_can_create_public_repositories": false,
+    "members_can_create_private_repositories": false,
+    "members_can_change_repo_visibility": false,
+    "two_factor_requirement_enabled": true
+  }
 }
