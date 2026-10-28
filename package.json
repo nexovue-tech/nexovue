@@ -7,6 +7,6 @@
     "node": ">=26"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.10"
+    "@biomejs/biome": "^2.6.2"
   }
 }
