@@ -20,13 +20,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      # The whole history: `buf breaking` compares the contracts with main.
       # The runner ships toolkits nothing here uses; the stack, its images and the gate's data left
       # the disk 96% full (2026-10-28), so they go first.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
           df -h /
+      # The whole history: `buf breaking` compares the contracts with main.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
