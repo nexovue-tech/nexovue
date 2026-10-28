@@ -1,6 +1,6 @@
-# A release: push a tag `vX.Y.Z` (or `vX.Y.Z-rc.N`), and this builds both images (ADR-019) natively
-# for amd64 and arm64, publishes them to GHCR as one multi-architecture tag, signs and attests them,
-# and opens a GitHub release with generated notes (docs/changes/ready-to-deploy, T8). Versions are
+# A release: push a tag `vX.Y.Z` (or `vX.Y.Z-rc.N`), and this checks the tagged commit passed CI, then
+# builds both images (ADR-019) natively for amd64 and arm64, publishes them to GHCR as one
+# multi-architecture tag, signs and attests them, and opens a GitHub release with generated notes (docs/changes/ready-to-deploy, T8). Versions are
 # tagged by hand (founder, 2026-10-28). Actions are pinned by commit, as the repository requires.
 name: Release
 
@@ -18,8 +18,45 @@ env:
   REGISTRY: ghcr.io/nexovue-tech
 
 jobs:
+  # CI's own result for the tagged commit, before anything is built: a tag pushed beside its commit
+  # started both workflows at once, and v0.1.0-rc.2 was published while that commit's CI was still
+  # running (2026-10-28). Green: build. Still running: wait for it. Failed, or never run (a tag on a
+  # commit that is not on main): stop, and nothing is published.
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    permissions:
+      actions: read
+    steps:
+      - name: The tagged commit passed CI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for attempt in $(seq 1 140); do
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push" \
+              --jq '.workflow_runs | sort_by(.run_attempt) | last | [.status, .conclusion // "", .html_url] | @tsv')
+            if [ -z "$run" ]; then
+              echo "::error::No CI run exists for $GITHUB_SHA. Tag only a commit pushed to main, after its CI."
+              exit 1
+            fi
+            IFS=$'\t' read -r status conclusion url <<< "$run"
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" = "success" ]; then
+                echo "CI passed for $GITHUB_SHA: $url"
+                exit 0
+              fi
+              echo "::error::CI for $GITHUB_SHA ended '$conclusion': $url. Nothing is built."
+              exit 1
+            fi
+            echo "CI for $GITHUB_SHA is $status; waiting ($attempt)…"
+            sleep 30
+          done
+          echo "::error::CI for $GITHUB_SHA did not finish within 70 minutes."
+          exit 1
+
   build:
     name: build ${{ matrix.image }} (${{ matrix.arch }})
+    needs: check
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     permissions:
