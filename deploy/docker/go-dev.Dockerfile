@@ -2,7 +2,7 @@
 # this image carries only the toolchain and the reloader — one image, rebuilt
 # almost never, instead of a dev stage in each service's Dockerfile.
 # Production images are the two in deploy/images/.
-FROM golang:1.27.0-trixie
+FROM golang:1.27.2-trixie
 
 RUN go install github.com/air-verse/air@v1.67.4
 
