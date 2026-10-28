@@ -1,0 +1,45 @@
+# Dependency updates (docs/changes/ready-to-deploy, T0d). Weekly and grouped, so a week's updates
+# arrive as one pull request per ecosystem rather than one per library; security updates come as soon
+# as an advisory is published, outside this schedule. `cooldown` waits a few days after a release so a
+# broken or hijacked version is caught by others before it reaches us.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - /apps/receiver
+      - /apps/workers
+      - /packages/contracts
+      - /tools/*
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 5 }
+    groups:
+      go: { patterns: ["*"] }
+
+  - package-ecosystem: uv
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 5 }
+    groups:
+      python: { patterns: ["*"] }
+
+  - package-ecosystem: npm
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 5 }
+    groups:
+      javascript: { patterns: ["*"] }
+
+  - package-ecosystem: docker
+    directories:
+      - /apps/*
+      - /deploy/docker
+    schedule: { interval: weekly, day: monday }
+    groups:
+      images: { patterns: ["*"] }
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      actions: { patterns: ["*"] }

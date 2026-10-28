@@ -1,0 +1,40 @@
+# Findings gitleaks reports in this repository's history that were reviewed and are not secrets
+# (docs/changes/ready-to-deploy, T0a, 2026-10-28). Every one is a fixed test value, a dev-only key the
+# development compose file uses on purpose, a documentation example (AWS's AKIAEXAMPLE…), a fabricated
+# token the masking tests must catch, or a false positive in code. A new finding is not in this list and
+# fails the scan: review it, and add its fingerprint here only if it is not a secret.
+0e97d651be4b97a81a4fe0c0a8f493262d4a47eb:packages/browser-sdk/src/pagecontext.test.ts:generic-api-key:21
+0e97d651be4b97a81a4fe0c0a8f493262d4a47eb:packages/browser-sdk/src/records.test.ts:generic-api-key:25
+321970b3defb94d45d4b3fcf8474a1c2faa9d8cc:packages/browser-sdk/src/config.test.ts:generic-api-key:13
+321970b3defb94d45d4b3fcf8474a1c2faa9d8cc:packages/browser-sdk/src/exporter.test.ts:generic-api-key:12
+321970b3defb94d45d4b3fcf8474a1c2faa9d8cc:packages/browser-sdk/src/index.test.ts:generic-api-key:8
+321970b3defb94d45d4b3fcf8474a1c2faa9d8cc:packages/browser-sdk/src/session.test.ts:generic-api-key:8
+321970b3defb94d45d4b3fcf8474a1c2faa9d8cc:packages/browser-sdk/src/transport.test.ts:generic-api-key:8
+3b0c697e041680da04dac4337887ae093d8bab89:apps/web/src/features/auth/ResetPasswordScreen.test.ts:generic-api-key:31
+3b0c697e041680da04dac4337887ae093d8bab89:apps/web/src/features/auth/VerifyEmailScreen.test.ts:generic-api-key:29
+4bd1de0c086f6c88c41c714fe794a94a8d3d19a5:apps/workers/internal/pipeline/mask/bearer_test.go:generic-api-key:88
+56ef3be63c100958eb3da35c7db13ef097727133:tools/demo-app/internal/shop/shop.go:stripe-access-token:199
+75b5424800e064763086d0f5000486aeb4f7b91c:apps/api/tests/test_import_curl.py:curl-auth-header:173
+75b5424800e064763086d0f5000486aeb4f7b91c:apps/api/tests/test_import_curl.py:curl-auth-header:184
+75b5424800e064763086d0f5000486aeb4f7b91c:apps/api/tests/test_import_curl.py:curl-auth-header:46
+75b5424800e064763086d0f5000486aeb4f7b91c:apps/api/tests/test_import_curl.py:curl-auth-user:155
+75b5424800e064763086d0f5000486aeb4f7b91c:apps/scheduler/tests/probe_fixtures.py:generic-api-key:20
+75b5424800e064763086d0f5000486aeb4f7b91c:apps/web/src/features/synthetics/ImportScreen.test.ts:curl-auth-header:32
+75b5424800e064763086d0f5000486aeb4f7b91c:apps/web/src/features/synthetics/NewCheckScreen.test.ts:generic-api-key:154
+75b5424800e064763086d0f5000486aeb4f7b91c:deploy/compose/docker-compose.yaml:generic-api-key:202
+75b5424800e064763086d0f5000486aeb4f7b91c:deploy/compose/docker-compose.yaml:generic-api-key:355
+75b5424800e064763086d0f5000486aeb4f7b91c:tools/e2e/tests/synthetics.spec.ts:curl-auth-header:257
+89ff20f11b5a62b12e29fd2e91e7ba45ece247ff:apps/workers/internal/pipeline/mask/bearer_test.go:stripe-access-token:167
+8b3f07a0882499539e58065b32d50b1809534f07:apps/scheduler/tests/test_scheduler_settings.py:generic-api-key:150
+8d552915c77440f585f9da8f1d9c3ab9d11acbb0:apps/api/src/nexovue_api/auth/totp.py:generic-api-key:154
+91c70d8a64c97904ac0fdac31b258b90cc290b81:docs/decisions/ADR-004-agpl-with-a-permissive-browser-sdk.md:aws-access-token:83
+91c70d8a64c97904ac0fdac31b258b90cc290b81:docs/decisions/ADR-004-agpl-with-a-permissive-browser-sdk.md:stripe-access-token:84
+a02583d6e362141abec5a88771514a555e66d0bb:apps/web/src/features/alerts/ChannelsScreen.test.ts:generic-api-key:58
+a7aa8f3788f97846a7bd4faafba8bc3f448af6a8:apps/workers/internal/pipeline/mask/mask_test.go:generic-api-key:23
+a7aa8f3788f97846a7bd4faafba8bc3f448af6a8:apps/workers/internal/pipeline/mask/mask_test.go:generic-api-key:24
+bc61f44d5aef6b86cb2f1a6aa832d22632eef0a3:apps/scheduler/tests/test_pollers.py:aws-access-token:209
+c48b4e48f73aa337e7e7213094cc2dd8b645f150:deploy/compose/docker-compose.yaml:generic-api-key:275
+fa63162986e3c8c9d5c6cca873ed187f4111cffa:apps/api/tests/environment.py:generic-api-key:27
+fa63162986e3c8c9d5c6cca873ed187f4111cffa:apps/api/tests/environment.py:generic-api-key:28
+fa63162986e3c8c9d5c6cca873ed187f4111cffa:apps/scheduler/tests/test_scheduler_settings.py:generic-api-key:136
+fc4c1302176471ac58016872ee6160bffa581da8:tools/demo-app/internal/shop/shop.go:stripe-access-token:199

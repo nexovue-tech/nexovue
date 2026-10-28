@@ -73,6 +73,12 @@ fresh: down-hard
 logs service="":
     docker compose -f {{compose}}/docker-compose.yaml logs -f {{service}}
 
+# The GitHub repository's settings against tools/repo-audit/expected.json (docs/changes/ready-to-deploy,
+# Step 0). Needs GITHUB_PERSONAL_ACCESS_TOKEN; never prints it.
+# Check the repository's GitHub settings for drift
+repo-audit:
+    uv run python tools/repo-audit/repo_audit.py
+
 # ---------- quality ----------
 
 # Everything CI would run. The pre-commit gate.

@@ -1,0 +1,25 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations: { required: true }
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: Exact steps, the command or request, and the output.
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: From the console footer or `./nexovue status`.
+  - type: dropdown
+    id: install
+    attributes:
+      label: How nexovue is installed
+      options: [Hosted, Self-hosted (Compose), Kubernetes (Helm), Try-it-locally, Development stack]

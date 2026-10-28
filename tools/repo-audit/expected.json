@@ -1,0 +1,31 @@
+{
+  "_comment": "The GitHub settings nexovue is held to (docs/changes/ready-to-deploy, Step 0). Each key is an API path under /repos/nexovue-tech/nexovue; each value lists the fields that must match. Change this file in the same commit as the setting.",
+  "": {
+    "private": true,
+    "has_wiki": false,
+    "has_projects": false,
+    "delete_branch_on_merge": true,
+    "allow_merge_commit": false,
+    "allow_rebase_merge": false,
+    "allow_squash_merge": true,
+    "allow_update_branch": true,
+    "web_commit_signoff_required": true
+  },
+  "/actions/permissions": {
+    "enabled": true,
+    "allowed_actions": "selected",
+    "sha_pinning_required": true
+  },
+  "/actions/permissions/selected-actions": {
+    "github_owned_allowed": true,
+    "verified_allowed": true
+  },
+  "/actions/permissions/workflow": {
+    "default_workflow_permissions": "read",
+    "can_approve_pull_request_reviews": false
+  },
+  "/automated-security-fixes": {
+    "enabled": true
+  },
+  "/vulnerability-alerts": "enabled"
+}

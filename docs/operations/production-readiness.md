@@ -162,10 +162,15 @@ the work, before F37 is specified. Grouped so each package is one change record:
    [ADR-019](../decisions/ADR-019-two-images-each-role-its-own-container.md)), migrations as a deploy
    step, the deployment-mode concept, the runnable on-prem install, a restore against a real target,
    and connecting a cloud monitor to what group 7 reports. **Deferred by the founder (2026-10-10)
-   until groups 1-7 and 9 are done.**
-9. **The remaining recommendations** — everything above that no group carries **Built on the development stack 2026-10-11** ([remaining-recommendations](../changes/remaining-recommendations/status.md)), personal-data export and deletion included, except the plan prices (the founder's, later). Still group 8's: three Kafka brokers, the SDK's release, and the platform items below.
+   until groups 1-7 and 9 are done.** **Re-scoped 2026-10-11** ([ready-to-deploy](../changes/ready-to-deploy/change.md)): nothing is
+   hosted yet; everything is made ready — both ADR-006 paths, Terraform for AWS, Azure and Oracle,
+   public images from GitHub Actions, self-hosted and try-it-locally installs.
+9. **The remaining recommendations** — everything above that no group carries (personal data export
    and deletion, console code splitting, SDK sampling, and the rest of *Recommended*). The founder
-   chose to fix these now, after group 7.
+   chose to fix these now, after group 7. **Built on the development stack 2026-10-11**
+   ([remaining-recommendations](../changes/remaining-recommendations/status.md)), personal-data export
+   and deletion included, except the plan prices (the founder's, later). Still group 8's: three Kafka
+   brokers, the SDK's release, and the platform items below.
 
 **Founder decisions taken for this plan (2026-10-10):** one change record per group; every
 recommendation fixed in this round; a permanently failed payment gets a grace period and then drops to

@@ -1,0 +1,14 @@
+name: Feature request
+description: Something nexovue should do and does not.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what gets in the way. Not the solution yet.
+    validations: { required: true }
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would solve it
