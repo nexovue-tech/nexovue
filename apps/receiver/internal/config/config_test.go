@@ -79,7 +79,7 @@ func TestLoadAcceptsTheMinimumEnvironment(t *testing.T) {
 			"KAFKA_PROFILES_TOPIC": "profiles-raw",
 		}[variable]
 		if configured != want {
-			t.Errorf("%s = %q, want the topic deploy/kafka/topics.sh creates, %q",
+			t.Errorf("%s = %q, want the topic apps/workers/internal/setup/topics.go creates, %q",
 				variable, configured, want)
 		}
 	}

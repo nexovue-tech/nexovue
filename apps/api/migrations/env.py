@@ -48,12 +48,21 @@ def run_migrations_offline() -> None:
 # (group 9, C6).
 LOCK_TIMEOUT = "5s"
 
+# Held for the whole run so two installs starting together migrate one after the other: without
+# it the second creates the tables the first is creating, and fails (docs/changes/ready-to-deploy,
+# T2). Session-level, not per transaction, because a few migrations commit mid-run in autocommit
+# blocks; it ends with the connection, which NullPool closes when the run does.
+MIGRATION_LOCK = 0x6E65786F76756502  # "nexovue" and 2; ClickHouse's runner holds 1
+
 
 def do_run_migrations(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         # Inside Alembic's own transaction: a statement before it starts one
         # Alembic does not commit, and every migration is silently rolled back.
+        # The lock comes before lock_timeout, which would otherwise end the wait
+        # for it after five seconds.
+        connection.exec_driver_sql(f"SELECT pg_advisory_lock({MIGRATION_LOCK})")
         # Session-level rather than LOCAL, so it outlives the autocommit blocks a
         # few migrations open.
         connection.exec_driver_sql(f"SET lock_timeout = '{LOCK_TIMEOUT}'")

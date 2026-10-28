@@ -130,7 +130,8 @@ def test_the_erasure_connects_as_the_account_that_can_only_delete(file_name: str
 
 
 # Runs once at deploy time and exits; nothing to watch.
-ONE_SHOT: Final = frozenset({"web-assets-init"})
+# Jobs that run to completion and exit: the deploy step and the console copy.
+ONE_SHOT: Final = frozenset({"web-assets-init", "setup", "setup-pipeline"})
 
 
 def _infrastructure() -> set[str]:

@@ -109,7 +109,7 @@ Bindings are regenerated with `buf generate` from `packages/contracts/proto/`, p
 
 ### 3.2 Kafka topics
 
-Auto-creation is disabled on the broker; topics are created explicitly by `deploy/kafka/topics.sh`.
+Auto-creation is disabled on the broker; topics are created explicitly by the setup step (`/setup topics`, `apps/workers/internal/setup/topics.go`), with as many copies as there are brokers, up to three, and `min.insync.replicas` one fewer.
 
 | Topic | Partitions | Producer(s) | Consumer group(s) | Partition key |
 |---|---|---|---|---|
@@ -575,7 +575,7 @@ Signup creates an organization, an owner user, a first project, and a first API 
 | pnpm | 11.24.0 |
 | Docker Compose | v2+ |
 
-Also needed on the host: `just` (the task runner every command below goes through), the `golang-migrate` CLI, the `buf` CLI, `golangci-lint`.
+Also needed on the host: `just` (the task runner every command below goes through), the `buf` CLI, `golangci-lint`.
 
 ### 14.2 First run
 
@@ -610,7 +610,7 @@ Documented in full in the repository's `.env.example`, one file listing every va
 
 ### 14.5 Migrations
 
-Postgres via Alembic: `just migrate-pg`. ClickHouse via `golang-migrate`: `just migrate-ch` — its DSN must pass credentials as query parameters, not URL userinfo, because that driver ignores userinfo and silently authenticates as the default user otherwise. Rollback is always per-store (`just migrate-down-pg` / `just migrate-down-ch`); there is deliberately no combined rollback command, since "one step back in each store" is never a coherent single operation.
+Both through the setup step every deployment runs before its services (docs/changes/ready-to-deploy, Step 1). Postgres: `just migrate-pg` runs `nexovue_api.setup` — Alembic to head under a Postgres advisory lock, then the bucket if missing. ClickHouse: `just migrate-ch` runs `apps/workers/cmd/setup clickhouse` — the migrations on the native client, recorded in golang-migrate's `schema_migrations` format (so a database it migrated carries on), under a second Postgres advisory lock, since ClickHouse has none. Rollback is always per-store (`just migrate-down-pg` / `just migrate-down-ch`); there is deliberately no combined rollback command, since "one step back in each store" is never a coherent single operation.
 
 ### 14.6 Day-to-day
 
@@ -632,9 +632,9 @@ Outside the standard gate, because each needs Docker or takes real time: `just e
 
 ## 16. Deployment shape
 
-Three additional compose files beyond the local development one: a same-machine "production replica" stack (built from each service's actual production Dockerfile rather than a hot-reloading dev image) and an on-premise stack. **Both deployment files put one Caddy edge in front of everything** (`deploy/caddy/Caddyfile`), and nothing else publishes a port. It terminates TLS for two hostnames — `NEXOVUE_APP_HOST` for the console, `NEXOVUE_INGEST_HOST` for ingestion — deliberately different so a session cookie scoped to one can never reach the other. On the app name it serves the console's built files itself (copied from the web image into a volume by `web-assets-init`; `index.html` is sent `no-cache`, hashed assets a year and `immutable`), proxies `/api/*` to every API replica, caps request bodies at the API's largest, and sends the security headers and the content-security policy; the hosted file adds Razorpay's checkout origins to that policy through `NEXOVUE_CHECKOUT_ORIGINS`, the on-prem file none. Every public URL is built from the two names: the API's `OTLP_ENDPOINT` is `https://<ingest name>` and `APP_BASE_URL` `https://<app name>`. `API_INSTANCES` and `RECEIVER_INSTANCES` each set both a service's replica count and the share of the rate limits each copy enforces.
+Three additional compose files beyond the local development one: a same-machine "production replica" stack (built from the two production images rather than a hot-reloading dev image) and an on-premise stack. **Two images (ADR-019):** `nexovue` (`deploy/images/nexovue.Dockerfile` — the API, the scheduler and the console's files; the role is the command, `nexovue api`, `nexovue scheduler-beat`, `nexovue setup`, `nexovue web-assets <dir>`) and `nexovue-pipeline` (`/receiver`, `/worker`, `/dlq`, `/setup`). In the replica, `setup` and `setup-pipeline` run to completion before every other service starts. CI (`.github/workflows/ci.yml`) runs `just check` on every push; a `v*` tag runs `release.yml`, which builds both images natively for amd64 and arm64, publishes them to `ghcr.io/nexovue-tech`, signs and attests them. **Both deployment files put one Caddy edge in front of everything** (`deploy/caddy/Caddyfile`), and nothing else publishes a port. It terminates TLS for two hostnames — `NEXOVUE_APP_HOST` for the console, `NEXOVUE_INGEST_HOST` for ingestion — deliberately different so a session cookie scoped to one can never reach the other. On the app name it serves the console's built files itself (copied from the web image into a volume by `web-assets-init`; `index.html` is sent `no-cache`, hashed assets a year and `immutable`), proxies `/api/*` to every API replica, caps request bodies at the API's largest, and sends the security headers and the content-security policy; the hosted file adds Razorpay's checkout origins to that policy through `NEXOVUE_CHECKOUT_ORIGINS`, the on-prem file none. Every public URL is built from the two names: the API's `OTLP_ENDPOINT` is `https://<ingest name>` and `APP_BASE_URL` `https://<app name>`. `API_INSTANCES` and `RECEIVER_INSTANCES` each set both a service's replica count and the share of the rate limits each copy enforces.
 
-Every production Dockerfile is a multi-stage build; the Go services land on a minimal distroless base running as a non-root user, with no shell — which is why each Go binary has its own `-health` flag for a container healthcheck to invoke instead of `curl`/`wget`. `TRUSTED_PROXY_COUNT` must be set correctly for whatever reverse-proxy hop count actually sits in front of the API in a given deployment, or every caller behind that proxy collapses onto a single shared rate-limit bucket.
+Both image recipes are multi-stage builds; the Go services land on a minimal distroless base running as a non-root user, with no shell — which is why each Go binary has its own `-health` flag for a container healthcheck to invoke instead of `curl`/`wget`. `TRUSTED_PROXY_COUNT` must be set correctly for whatever reverse-proxy hop count actually sits in front of the API in a given deployment, or every caller behind that proxy collapses onto a single shared rate-limit bucket.
 
 ---
 

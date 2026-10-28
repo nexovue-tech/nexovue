@@ -1,0 +1,75 @@
+# The quality gate on GitHub: `just check`, the same command run before every commit, against the
+# development stack's real stores, so the live suites run rather than skip
+# (docs/changes/ready-to-deploy, T7). Actions are pinned by commit, as the repository requires.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      # The whole history: `buf breaking` compares the contracts with main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Make main available to buf breaking
+        run: git rev-parse --verify --quiet main >/dev/null || git branch main origin/main
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.12.6"
+          enable-cache: true
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.12.0"
+          cache: pnpm
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: "1.58.0"
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          version: "1.72.0"
+          setup_only: true
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.1
+          install-only: true
+
+      - name: Install dependencies
+        run: just setup
+
+      # The development stack, prepared by the same setup step a deployment runs.
+      - name: Start the stores and services
+        run: |
+          docker compose -f deploy/compose/docker-compose.yaml up -d --wait --build
+          just topics
+          just migrate
+          just seed
+
+      - name: just check
+        run: just check
+
+      - name: Memory the stack used
+        if: always()
+        run: docker stats --no-stream --format '{{.Name}}\t{{.MemUsage}}' || true
+
+      - name: Service logs on failure
+        if: failure()
+        run: docker compose -f deploy/compose/docker-compose.yaml logs --tail 200

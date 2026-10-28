@@ -28,6 +28,12 @@ type ClickHouseTarget struct {
 	Secure   bool
 }
 
+// ParseClickHouseDSN reads CLICKHOUSE_DSN's value the way Load does, for a command that needs
+// only the ClickHouse connection (cmd/setup).
+func ParseClickHouseDSN(dsn string) (ClickHouseTarget, error) {
+	return parseClickHouseDSN(clickHouseDSNVariable, dsn)
+}
+
 // parseClickHouseDSN turns clickhouse://user:password@host:9000/database into a
 // connection target, naming the environment variable on any failure.
 func parseClickHouseDSN(variable, dsn string) (ClickHouseTarget, error) {

@@ -14,9 +14,8 @@ Run on 2026-10-11 (`docs/changes/deployment-tells-the-truth/`):
    `deploy/compose/.env`**: Compose reads that file by itself for every file in the directory, and
    the dev stack would pick up the replica's values.
 2. Ports 80 and 443 must be free.
-3. Nothing creates the schema, the Kafka topics or the storage bucket yet (readiness blocker 5). Start
-   the stores (`kafka clickhouse postgres seaweedfs`), then run the alembic and ClickHouse migrations,
-   `deploy/kafka/topics.sh` with `KAFKA_CONTAINER` naming the replica's broker, and create `S3_BUCKET`.
+3. Nothing to prepare by hand: the `setup` and `setup-pipeline` services migrate Postgres and ClickHouse,
+   create the bucket and the Kafka topics, and exit before anything else starts (readiness blocker 5).
 4. `just dev-app`. The console is `https://app.localhost`, the ingest endpoint
    `https://ingest.localhost`. Only the proxy publishes ports.
 

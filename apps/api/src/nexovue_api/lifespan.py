@@ -286,9 +286,8 @@ def _open_email(settings: Settings) -> EmailSender | None:
 async def _open_object_store(settings: Settings) -> ObjectStore | None:
     """Build the object store client, or None when it is not configured.
 
-    The bucket is created only in development. Elsewhere it is provisioned with
-    the rest of the infrastructure, and an API that could create its own bucket
-    would need a permission it should not hold.
+    The API never creates the bucket: the deploy step does (`nexovue_api.setup`), and an API
+    that could create its own bucket would need a permission it should not hold.
     """
     configured = settings.object_store
     if configured is None:
@@ -296,8 +295,6 @@ async def _open_object_store(settings: Settings) -> ObjectStore | None:
         return None
 
     store = ObjectStore(configured)
-    if settings.is_development:
-        await store.ensure_bucket()
     logger.info("object store ready", bucket=configured.bucket)
     return store
 

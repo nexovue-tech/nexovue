@@ -1,0 +1,32 @@
+# What `docker build` may see from the repository (deploy/images/*.Dockerfile build from the root).
+# Without this every build sent local caches, test suites and the git-ignored .env to the builder,
+# and the nexovue image carried 37 MB of a mypy cache (docs/changes/ready-to-deploy, T4).
+
+# Secrets and local state — never sent, let alone copied.
+**/.env
+**/.env.*
+!**/.env.example
+.backups
+.claude
+CLAUDE.local.md
+.playwright-mcp
+
+# History, environments and caches the images rebuild themselves.
+.git
+**/node_modules
+**/.venv
+**/__pycache__
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/dist
+
+# Tests and development tools are not part of a release.
+apps/*/tests
+packages/*/tests
+tools
+**/*_test.go
+
+# Documents, except the setup pages the console build turns into routes.
+docs
+!docs/product/setup

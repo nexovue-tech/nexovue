@@ -39,7 +39,7 @@ type LogIngest struct {
 	MaxDelay    time.Duration `env:"WORKERS_LOGS_BATCH_MAX_DELAY" envDefault:"2s"`
 
 	// DLQTopic parks messages that cannot be decoded. The topic is created by
-	// deploy/kafka/topics.sh, which is also where its partition count lives.
+	// apps/workers/internal/setup/topics.go, which is also where its partition count lives.
 	DLQTopic string `env:"WORKERS_LOGS_DLQ_TOPIC" envDefault:"logs-dlq"`
 }
 

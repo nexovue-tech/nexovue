@@ -76,6 +76,32 @@ Step 0, 2026-10-28:
   may not change a repository's visibility; two-factor required, secure methods only, every member
   enrolled (`Saro006` pending the move off SMS).
 
+Step 1, 2026-10-28:
+- **T1** — `go test ./internal/setup` (unit: loading, up, rerun, dirty, down, topic plan per broker count);
+  `setup_storeprobe_test.go` against the dev ClickHouse: from empty, again, two down, two up. Against the
+  dev database golang-migrate built: "0 migration(s) applied, 33 known". A fresh database migrated by
+  the runner is **identical** to the dev one, table by table, engine by engine, column by column.
+- **T2** — `test_setup_live.py` 3 passed: from empty to head and again; the bucket created once; **two
+  setups started together** — red before the advisory lock (`duplicate key … alembic_version_pkc`),
+  green after, three runs in a row. Every migration suite re-run: 81 passed.
+- **T3** — `test_roles.py` 4 passed; `nexovue` prints its roles.
+- **T4** — both images built locally. The pipeline image carries the four binaries and the 66
+  migration files, runs as nonroot, and its worker embeds the commit — the old images set
+  `main.gitSHA`, a variable no package declares, so every image reported "unknown". A `.dockerignore`
+  now keeps the `.env`, caches and test suites out of every build (the image had held a 37 MB mypy
+  cache); `nexovue` is 615 MB (the API's and the scheduler's libraries together, as ADR-019 expected).
+  Roles run from the images: `web-assets` copied 102 files, `setup` and `/setup` against the dev stack.
+  `test_images_contract.py` 4 passed.
+- **T5** — `just migrate` and `just topics` run the new code; `topics.sh` and the `migrate` CLI gone.
+- **T6** — the replica, under a scratch project, **from empty volumes**: 33 ClickHouse migrations, 8 topics
+  created, Postgres to head, the bucket, 102 console files, then every service healthy and the console
+  200 through the edge; a second setup changed nothing. The ordering test fails with an API that does
+  not wait for setup (seen) and passes with it.
+- **Found on the way:** `test_pollers.py`'s AWS client test read the developer's own `~/.aws/config`,
+  which an `aws login` session (2026-10-26) broke; it now runs on an empty configuration.
+- `just check` exit 0: Python 4,412 passed, web 1,366, SDK 124; mypy over 638 files clean. `actionlint`
+  clean on both workflows.
+
 ## Specification impact
 
 None yet. The deployment mode will touch billing's specification.

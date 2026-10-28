@@ -68,6 +68,10 @@ dependencies = [
     "prometheus-client>=0.26",
 ]
 
+[project.scripts]
+# The `nexovue` image's entry point: the role is the command (ADR-019).
+nexovue = "nexovue_api.roles:main"
+
 [build-system]
 requires = ["uv_build>=0.12"]
 build-backend = "uv_build"

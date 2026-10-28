@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Shared settings for the backup and restore scripts. Sourced, never run.
 #
-# Container names rather than a compose file, for the same reason
-# deploy/kafka/topics.sh uses them: these run against whatever stack is up, and
-# a restore may well be run from a checkout that is not the one that deployed it.
+# Container names rather than a compose file: these run against whatever stack is up,
+# and a restore may well be run from a checkout that is not the one that deployed it.
 
 CLICKHOUSE_CONTAINER="${CLICKHOUSE_CONTAINER:-nexovue-clickhouse-1}"
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-nexovue-postgres-1}"

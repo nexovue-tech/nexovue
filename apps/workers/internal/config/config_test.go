@@ -188,7 +188,7 @@ func TestProfileIngestRunsByDefaultOnTheReceiversTopics(t *testing.T) {
 	if cfg.ProfileIngest.MaxBytes != 4<<20 {
 		t.Errorf("ProfileIngest.MaxBytes = %d, want 4 MiB", cfg.ProfileIngest.MaxBytes)
 	}
-	// Both must match the receiver's KAFKA_PROFILES_TOPIC default and deploy/kafka/topics.sh.
+	// Both must match the receiver's KAFKA_PROFILES_TOPIC default and apps/workers/internal/setup/topics.go.
 	if cfg.ProfileIngest.Topic != "profiles-raw" || cfg.ProfileIngest.DLQTopic != "profiles-dlq" {
 		t.Errorf("ProfileIngest topics = %q, %q, want profiles-raw and profiles-dlq",
 			cfg.ProfileIngest.Topic, cfg.ProfileIngest.DLQTopic)
@@ -206,7 +206,7 @@ func TestPipelineStageDefaultsMatchTheRecordedDecisions(t *testing.T) {
 	}
 
 	if cfg.Spans.DLQTopic != "spans-dlq" {
-		t.Errorf("Spans.DLQTopic = %q, want spans-dlq: it must match deploy/kafka/topics.sh",
+		t.Errorf("Spans.DLQTopic = %q, want spans-dlq: it must match apps/workers/internal/setup/topics.go",
 			cfg.Spans.DLQTopic)
 	}
 	// The window is P1-21's; 10s is what the p99 < 15s budget leaves.

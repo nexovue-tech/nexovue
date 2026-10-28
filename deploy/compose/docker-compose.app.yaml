@@ -32,6 +32,34 @@ x-scheduler-healthcheck: &scheduler-healthcheck
   retries: 4
   start_period: 30s
 
+# The two images (ADR-019), built here from the repository; a deployment pulls them by version
+# instead. The role is the command each service gives.
+x-nexovue-image: &nexovue-image
+  build:
+    context: ../..
+    dockerfile: deploy/images/nexovue.Dockerfile
+    args:
+      VERSION: ${NEXOVUE_VERSION:-dev}
+      REVISION: ${GIT_SHA:-unknown}
+  image: ${NEXOVUE_REGISTRY:-ghcr.io/nexovue-tech}/nexovue:${NEXOVUE_VERSION:-dev}
+
+x-pipeline-image: &pipeline-image
+  build:
+    context: ../..
+    dockerfile: deploy/images/nexovue-pipeline.Dockerfile
+    args:
+      VERSION: ${NEXOVUE_VERSION:-dev}
+      REVISION: ${GIT_SHA:-unknown}
+  image: ${NEXOVUE_REGISTRY:-ghcr.io/nexovue-tech}/nexovue-pipeline:${NEXOVUE_VERSION:-dev}
+
+# Every service waits for the setup step: a service started against an old schema or a missing
+# topic fails its first queries (readiness blocker 5).
+x-after-setup: &after-setup
+  setup:
+    condition: service_completed_successfully
+  setup-pipeline:
+    condition: service_completed_successfully
+
 include:
   - path: compose.infra.yaml
 
@@ -123,6 +151,42 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
 
+  # ---------- the setup step: runs to completion before anything else ----------
+  # Postgres to the newest migration and the object store's bucket (nexovue_api.setup).
+  setup:
+    <<: *nexovue-image
+    command: ["setup"]
+    restart: "no"
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      S3_ENDPOINT: http://seaweedfs:8333
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+
+  # ClickHouse to the newest migration and the Kafka topics (apps/workers/cmd/setup). Postgres
+  # holds the lock that keeps two of these apart.
+  setup-pipeline:
+    <<: *pipeline-image
+    command: ["/setup"]
+    restart: "no"
+    environment:
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
+      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
   # ---------- the edge ----------
   # The only service with a published port.
   proxy:
@@ -165,27 +229,21 @@ services:
         limits:
           memory: 256M
 
-  # The console is files the edge serves (ADR-019 point 3); this copies them out
-  # of the image built from apps/web into the edge's volume, and exits.
+  # The console is files the edge serves (ADR-019 point 3); this copies them out of the
+  # nexovue image into the edge's volume, replacing the last release's, and exits.
   web-assets-init:
-    build:
-      context: ../..
-      dockerfile: apps/web/Dockerfile
-    image: nexovue/web:${NEXOVUE_VERSION:-dev}
-    command: ["sh", "-c", "cp -r /srv/web/. /assets/"]
+    <<: *nexovue-image
+    command: ["web-assets", "/assets"]
+    # Root for this one copy: a new volume belongs to root, and nothing here faces anyone.
+    user: "0"
     restart: on-failure
     volumes:
       - web-assets:/assets
 
   # ---------- data plane ----------
   receiver:
-    <<: *service-defaults
-    build:
-      context: ../..
-      dockerfile: apps/receiver/Dockerfile
-      args:
-        GIT_SHA: ${GIT_SHA:-unknown}
-    image: nexovue/receiver:${NEXOVUE_VERSION:-dev}
+    <<: [*service-defaults, *pipeline-image]
+    command: ["/receiver"]
     healthcheck:
       test: ["CMD", "/receiver", "-health"]
       interval: 10s
@@ -204,6 +262,7 @@ services:
       # ingest limit. One setting for both, so they cannot drift apart.
       RECEIVER_INSTANCES: ${RECEIVER_INSTANCES:-1}
     depends_on:
+      <<: *after-setup
       kafka:
         condition: service_healthy
       postgres:
@@ -219,13 +278,8 @@ services:
   # 2026-09-19 to 2026-09-20 — and a split service would need a memory limit of
   # its own, and this one's reduced to match.
   worker:
-    <<: *service-defaults
-    build:
-      context: ../..
-      dockerfile: apps/workers/Dockerfile
-      args:
-        GIT_SHA: ${GIT_SHA:-unknown}
-    image: nexovue/worker:${NEXOVUE_VERSION:-dev}
+    <<: [*service-defaults, *pipeline-image]
+    command: ["/worker"]
     healthcheck:
       test: ["CMD", "/worker", "-health"]
       interval: 10s
@@ -253,6 +307,7 @@ services:
       # Masking and sampling rules come from Postgres the moment the worker starts;
       # without it every span is handled with the built-in defaults for the first
       # 30 seconds instead of the project's own rules.
+      <<: *after-setup
       postgres:
         condition: service_healthy
       kafka:
@@ -268,11 +323,8 @@ services:
 
 
   api:
-    <<: *service-defaults
-    build:
-      context: ../..
-      dockerfile: apps/api/Dockerfile
-    image: nexovue/api:${NEXOVUE_VERSION:-dev}
+    <<: [*service-defaults, *nexovue-image]
+    command: ["api"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
       interval: 10s
@@ -318,6 +370,7 @@ services:
       FIRST_OWNER_EMAIL: "${FIRST_OWNER_EMAIL:-}"
       FIRST_OWNER_PASSWORD: "${FIRST_OWNER_PASSWORD:-}"
     depends_on:
+      <<: *after-setup
       seaweedfs:
         # Files a check sends, and the objects its sweep deletes, live here. A
         # dependant that starts before the S3 gateway answers meets a refused
@@ -335,17 +388,14 @@ services:
 
   # ---------- doors 2 and 4b ----------
   scheduler-beat:
-    <<: *service-defaults
-    build:
-      context: ../..
-      dockerfile: apps/scheduler/Dockerfile
-    image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
-    command: python -m nexovue_scheduler beat
+    <<: [*service-defaults, *nexovue-image]
+    command: ["scheduler-beat"]
     healthcheck: *scheduler-healthcheck
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
     depends_on:
+      <<: *after-setup
       seaweedfs:
         # Files a check sends, and the objects its sweep deletes, live here. A
         # dependant that starts before the S3 gateway answers meets a refused
@@ -359,9 +409,8 @@ services:
           memory: 256M
 
   scheduler-light:
-    <<: *service-defaults
-    image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
-    command: python -m nexovue_scheduler worker --concurrency 8
+    <<: [*service-defaults, *nexovue-image]
+    command: ["scheduler-light"]
     healthcheck: *scheduler-healthcheck
     environment:
       <<: *control-plane-env
@@ -373,6 +422,7 @@ services:
       # worker, as the account that can only read and delete (users.d/eraser.xml).
       CLICKHOUSE_ERASER_DSN: clickhouse://nexovue_eraser:${CLICKHOUSE_ERASER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
     depends_on:
+      <<: *after-setup
       clickhouse:
         condition: service_healthy
       # Kafka carries every check result and Postgres holds this worker's job queue.
@@ -400,14 +450,14 @@ services:
   # holds one of these slots, never a probe's (plan Q1). `scheduler-light`
   # excludes this queue for the same reason.
   scheduler-deliveries:
-    <<: *service-defaults
-    image: nexovue/scheduler:${NEXOVUE_VERSION:-dev}
-    command: python -m nexovue_scheduler worker --queues deliveries --concurrency 4
+    <<: [*service-defaults, *nexovue-image]
+    command: ["scheduler-deliveries"]
     healthcheck: *scheduler-healthcheck
     environment:
       <<: *control-plane-env
       KAFKA_BROKERS: kafka:9092
     depends_on:
+      <<: *after-setup
       postgres:
         condition: service_healthy
       seaweedfs:
@@ -419,67 +469,7 @@ services:
         limits:
           memory: 384M
 
-  # ---------- intelligence (Phase 2) ----------
-  # Anomaly detection, cross-signal correlation and the LLM call that turns a
-  # detection into a plain-language finding. One service because these are
-  # sequential stages of one flow, at findings-per-hour volumes rather than
-  # spans-per-second — INSIGHT_PIPELINES splits them if that stops being true.
-  #
-  # TODO(phase-2): apps/insight does not exist yet. This describes the shape so
-  #   the deployment target is complete; it cannot build until F3/F6 land.
-  #
-  # Behind a profile because `just dev-app` builds what it starts: in the default
-  # set, the missing build context fails the whole recipe before anything runs.
-  insight:
-    profiles: ["insight"]
-    <<: *service-defaults
-    build:
-      context: ../..
-      dockerfile: apps/insight/Dockerfile
-    image: nexovue/insight:${NEXOVUE_VERSION:-dev}
-    environment:
-      <<: *control-plane-env
-      # apps/insight does not exist yet, so which of these it reads is undecided.
-      # Kept as it was until the service is written (F3, F6).
-      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
-      KAFKA_BROKERS: kafka:9092
-      INSIGHT_PIPELINES: ${INSIGHT_PIPELINES:-detect,correlate,summarise}
-      # Points at the self-hosted model by default; set this to a hosted
-      # provider and the ollama container below becomes unnecessary.
-      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434}
-    depends_on:
-      seaweedfs:
-        # Files a check sends, and the objects its sweep deletes, live here. A
-        # dependant that starts before the S3 gateway answers meets a refused
-        # connection on its first object.
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-
-  # Self-hosted inference, only needed while LLM_BASE_URL points here.
-  #
-  # NOTE: on macOS this is CPU-only — Docker has no Metal passthrough — so run
-  #   Ollama natively there and point LLM_BASE_URL at the host instead.
-  ollama:
-    # Same profile as insight: its only consumer, and nothing else dials it.
-    profiles: ["insight"]
-    <<: *service-defaults
-    image: ollama/ollama:0.12.11
-    volumes:
-      - ollama-models:/root/.ollama
-    deploy:
-      resources:
-        limits:
-          memory: ${OLLAMA_MEMORY:-8G}
-
 volumes:
-  ollama-models:
   caddy-data:
   caddy-config:
   web-assets:

@@ -126,7 +126,6 @@ DELIBERATELY_UNDECLARED: Final[dict[str, dict[str, dict[str, str]]]] = {
     "docker-compose.app.yaml": {
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
         "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
-        "insight": {"kafka": _INSIGHT, "ollama": _INSIGHT},
     },
     "docker-compose.onprem.yaml": {
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
@@ -189,3 +188,32 @@ def test_every_service_gated_on_health_is_listed_here() -> None:
 # probe it with their own client — `pg_isready`, an HTTP ping — so
 # there is no second port a dependant could be waiting on by mistake.
 _NO_SINGLE_PORT: Final[frozenset[str]] = frozenset({"kafka", "postgres", "clickhouse"})
+
+
+# The deploy step (docs/changes/ready-to-deploy, T6): what runs before every service, and what is
+# allowed to start without waiting for it — the stores the setup step itself needs, the setup
+# services themselves, and the edge, which only serves what web-assets-init copied.
+SETUP_SERVICES: Final = ("setup", "setup-pipeline")
+STARTS_BEFORE_SETUP: Final = frozenset({"proxy", "web-assets-init", *SETUP_SERVICES})
+DEPLOYED_FILES: Final = ("docker-compose.app.yaml",)
+
+
+@pytest.mark.parametrize("file_name", DEPLOYED_FILES)
+def test_no_service_starts_before_the_stores_are_prepared(file_name: str) -> None:
+    """A service started against an old schema or a missing topic fails its first queries
+    (readiness blocker 5); every one waits for both setup services to finish."""
+    infrastructure = set(_services(_INFRASTRUCTURE))
+    early: dict[str, list[str]] = {}
+    for name, definition in _services(file_name).items():
+        if name in infrastructure or name in STARTS_BEFORE_SETUP:
+            continue
+        depends = definition.get("depends_on") or {}
+        missing = [
+            setup
+            for setup in SETUP_SERVICES
+            if not isinstance(depends, dict)
+            or (depends.get(setup) or {}).get("condition") != "service_completed_successfully"
+        ]
+        if missing:
+            early[name] = missing
+    assert not early, f"{file_name}: these start before the setup step finishes: {early}"

@@ -71,5 +71,5 @@ EXCLUDED_TABLES: Final[dict[str, str]] = {
         "minutes by its own TTL; no tenant column and nothing readable back "
         "(migration 000033)"
     ),
-    "schema_migrations": "golang-migrate's own bookkeeping; holds no customer data",
+    "schema_migrations": "the ClickHouse migration ledger; holds no customer data",
 }

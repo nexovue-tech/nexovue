@@ -39,7 +39,7 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       # One record is one trace's envelope, so the broker has to accept what the
-      # receiver accepts (see deploy/kafka/topics.sh). The replica fetch size
+      # receiver accepts (see apps/workers/internal/setup/topics.go). The replica fetch size
       # must clear it too, or a follower cannot replicate a record the leader
       # took. Both default to 1 MiB, well under a legal trace.
       KAFKA_MESSAGE_MAX_BYTES: ${KAFKA_MAX_MESSAGE_BYTES:-16781312}

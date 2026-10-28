@@ -9,10 +9,14 @@ go_modules := "apps/receiver apps/workers packages/contracts tools/gateseed tool
 # Migration targets. Both default to the dev stack's published ports; override
 # either to point at another environment.
 postgres_dsn := env("POSTGRES_DSN", "postgresql+asyncpg://nexovue:nexovue_dev@localhost:" + env("POSTGRES_HOST_PORT", "15432") + "/nexovue")
-# golang-migrate's ClickHouse driver reads credentials from query parameters and
-# ignores URL userinfo — a DSN in the usual user:pass@host form authenticates as
-# `default` and fails with a confusing password error.
-clickhouse_migrate_dsn := env("CLICKHOUSE_MIGRATE_DSN", "clickhouse://localhost:" + env("CLICKHOUSE_NATIVE_HOST_PORT", "19000") + "?username=nexovue&password=nexovue_dev&database=nexovue&x-multi-statement=false")
+# The setup command (apps/workers/cmd/setup) speaks ClickHouse's native protocol; its migration lock
+# lives in Postgres, which it reaches with the plain postgres:// form.
+clickhouse_dsn := env("CLICKHOUSE_SETUP_DSN", "clickhouse://nexovue:nexovue_dev@localhost:" + env("CLICKHOUSE_NATIVE_HOST_PORT", "19000") + "/nexovue")
+postgres_plain_dsn := replace(postgres_dsn, "postgresql+asyncpg://", "postgres://")
+# The dev stack's object store, as the dev compose file gives it to the API (published on the host).
+s3_dev_env := "S3_ENDPOINT=http://localhost:" + env("SEAWEEDFS_S3_HOST_PORT", "18333") + " S3_BUCKET=nexovue-dev S3_ACCESS_KEY_ID=nexovue_dev_access S3_SECRET_ACCESS_KEY=nexovue_dev_secret"
+# The same command every deployment runs before its services (docs/changes/ready-to-deploy, T1).
+setup_go := "cd apps/workers && CLICKHOUSE_DSN=\"" + clickhouse_dsn + "\" POSTGRES_DSN=\"" + postgres_plain_dsn + "\" KAFKA_BROKERS=localhost:" + env("KAFKA_HOST_PORT", "19092") + " SETUP_MIGRATIONS_DIR=../../deploy/clickhouse/migrations go run ./cmd/setup"
 
 _default:
     @just --list --unsorted
@@ -33,7 +37,7 @@ dev:
     just otel-demo up
 # Production replica: same infrastructure, services from built images
 dev-app:
-    docker compose --env-file {{compose}}/.env.replica -f {{compose}}/docker-compose.app.yaml up -d --wait --build
+    GIT_SHA=$(git rev-parse HEAD) docker compose --env-file {{compose}}/.env.replica -f {{compose}}/docker-compose.app.yaml up -d --wait --build
 up:
     docker compose -f {{compose}}/docker-compose.yaml up -d --wait
     -./tools/otel-demo/otel-demo.sh up
@@ -259,16 +263,17 @@ contracts-check:
 # any `down-hard`.
 # Create the ingestion topics on the running broker
 topics:
-    ./deploy/kafka/topics.sh
+    {{setup_go}} topics
 
 # Apply all migrations: Postgres then ClickHouse
 migrate: migrate-pg migrate-ch
 
+# Postgres to the newest migration, and the object store's bucket: the deploy step's Python half.
 migrate-pg:
-    POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api alembic -c apps/api/alembic.ini upgrade head
+    POSTGRES_DSN="{{postgres_dsn}}" {{s3_dev_env}} uv run --package nexovue-api python -m nexovue_api.setup
 
 migrate-ch:
-    migrate -path deploy/clickhouse/migrations -database "{{clickhouse_migrate_dsn}}" up
+    {{setup_go}} clickhouse
 
 # Roll ONE store back one step, to prove that store's migrations are reversible.
 #
@@ -282,7 +287,7 @@ migrate-down-pg:
     POSTGRES_DSN="{{postgres_dsn}}" uv run --package nexovue-api alembic -c apps/api/alembic.ini downgrade -1
 
 migrate-down-ch:
-    migrate -path deploy/clickhouse/migrations -database "{{clickhouse_migrate_dsn}}" down 1
+    {{setup_go}} clickhouse-down 1
 
 # Create one org, one owner, a production project and a known dev API key
 seed:

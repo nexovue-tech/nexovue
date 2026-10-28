@@ -35,7 +35,7 @@ type MetricIngest struct {
 	MaxDelay    time.Duration `env:"WORKERS_METRICS_BATCH_MAX_DELAY" envDefault:"2s"`
 
 	// DLQTopic parks messages that cannot be processed. The topic is created by
-	// deploy/kafka/topics.sh, which is also where its partition count lives.
+	// apps/workers/internal/setup/topics.go, which is also where its partition count lives.
 	DLQTopic string `env:"WORKERS_METRICS_DLQ_TOPIC" envDefault:"metrics-dlq"`
 }
 

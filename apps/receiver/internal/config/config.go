@@ -157,7 +157,7 @@ const EnvelopeOverheadBytes = 4096
 
 // MaxRecordBytes is the largest record a legal request can produce, and so the
 // size every stage after the door must carry: the producer's batch cap here,
-// and max.message.bytes on the broker (deploy/kafka/topics.sh). A stage set
+// and max.message.bytes on the broker (apps/workers/internal/setup/topics.go). A stage set
 // below this refuses a trace nothing can make smaller, which the sender then
 // retries until it gives up — data loss dressed as backpressure.
 func (c Config) MaxRecordBytes() int64 {

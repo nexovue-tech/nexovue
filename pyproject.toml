@@ -69,6 +69,10 @@ select = [
 "apps/api/src/nexovue_api/suspend.py" = ["T201"]
 # The key rotation commands, for the same reason: read by the operator rotating.
 "apps/api/src/nexovue_api/keys.py" = ["T201"]
+# The deploy step's progress, read by whoever is watching an install or an upgrade run.
+"apps/api/src/nexovue_api/setup.py" = ["T201"]
+# The `nexovue` role command's usage and web-assets line, read by whoever starts a container.
+"apps/api/src/nexovue_api/roles.py" = ["T201"]
 
 [tool.mypy]
 python_version = "3.13"

@@ -530,10 +530,22 @@ def test_a_statement_row_keeps_its_call_count(snapshot: DatabaseSnapshot) -> Non
     )
 
 
-def test_an_aws_client_gives_up_inside_the_task_s_own_limit() -> None:
+def test_an_aws_client_gives_up_inside_the_task_s_own_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Group 9, C3. botocore's own 60 s outlived the task's 30 s soft limit, so a hung
-    STS or CloudWatch call reported 'passed its soft time limit', never the cause."""
+    STS or CloudWatch call reported 'passed its soft time limit', never the cause.
+
+    Built without the machine's own AWS configuration: a developer signed in with
+    `aws login` made this fail on a credential provider the test never asked for."""
     from nexovue_scheduler.pollers.aws import aws_client
+
+    empty = tmp_path / "aws"
+    empty.write_text("")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(empty))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(empty))
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
 
     for service in ("sts", "cloudwatch"):
         config = aws_client(service, region="eu-west-1").meta.config

@@ -24,7 +24,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/dlqtool"
 )
 
-// The dead-letter topics have one partition each (deploy/kafka/topics.sh).
+// The dead-letter topics have one partition each (apps/workers/internal/setup/topics.go).
 const partition = int32(0)
 
 func main() {

@@ -29,7 +29,7 @@ type SpanIngest struct {
 	MaxDelay    time.Duration `env:"WORKERS_SPANS_BATCH_MAX_DELAY" envDefault:"2s"`
 
 	// DLQTopic parks messages that cannot be decoded. The topic is created by
-	// deploy/kafka/topics.sh, which is also where its partition count lives.
+	// apps/workers/internal/setup/topics.go, which is also where its partition count lives.
 	DLQTopic string `env:"WORKERS_SPANS_DLQ_TOPIC" envDefault:"spans-dlq"`
 }
 

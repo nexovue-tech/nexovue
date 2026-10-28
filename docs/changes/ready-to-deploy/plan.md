@@ -159,34 +159,37 @@ that would break a rule is refused.
 *Judgeable:* a push turns CI green on GitHub; a tag `v0.1.0-rc.1` puts both images in GHCR for amd64 and
 arm64; on an empty machine `docker compose up` with them prepares the stores and starts.
 
-- [ ] **T1** — `apps/workers/internal/setup/{clickhouse,topics}.go` and `apps/workers/cmd/setup/main.go`:
-  ClickHouse migrations through golang-migrate's library (adds `golang-migrate/migrate/v4` and
-  `clickhouse-go/v2` to the workers module), topics through `kadm` with replication and
+- [x] **T1** — `apps/workers/internal/setup/{migrations,clickhouse,lock,topics}.go` and `apps/workers/cmd/setup/main.go`:
+  ClickHouse migrations through a runner of our own on `ch-go` *(founder, 2026-10-28: golang-migrate's
+  ClickHouse driver is still clickhouse-go v1.4.3, a 2021 client; the runner keeps its `schema_migrations`
+  format, and adds the cross-process lock golang-migrate never had, in Postgres)*, topics through `kadm` with replication and
   `min.insync.replicas` derived from the brokers that answer · proved by `topics_test.go` (the topic plan per
   broker count) and `setup_storeprobe_test.go` (against the dev ClickHouse and Kafka: a second run changes
   nothing).
-- [ ] **T2** — `apps/api/src/nexovue_api/setup.py` (`python -m nexovue_api.setup`): Alembic `upgrade head`
+- [x] **T2** — `apps/api/src/nexovue_api/setup.py` (`python -m nexovue_api.setup`): Alembic `upgrade head`
   under a Postgres advisory lock, then the bucket if missing · proved by `test_setup_live.py` (fresh
   database migrated; a second run a no-op; the bucket created once).
-- [ ] **T3** — `apps/api/src/nexovue_api/roles.py` and the `nexovue` console script: `api`,
+- [x] **T3** — `apps/api/src/nexovue_api/roles.py` and the `nexovue` console script: `api`,
   `scheduler-beat|light|deliveries`, `setup`, `web-assets <dir>` → the exact process each runs · proved by
   `test_roles.py`.
-- [ ] **T4** — `deploy/images/nexovue.Dockerfile` (API and scheduler in one environment, the console built
+- [x] **T4** — `deploy/images/nexovue.Dockerfile` (API and scheduler in one environment, the console built
   into `/srv/web`, OCI labels) and `deploy/images/nexovue-pipeline.Dockerfile` (`/receiver`, `/worker`,
   `/dlq`, `/setup`); the five per-service Dockerfiles deleted · proved by
   `test_images_contract.py` (two Dockerfiles, every role in both images, labels present) and a build.
-- [ ] **T5** — `justfile`: `migrate-ch` and `topics` run the setup code; `topics.sh` deleted; the `migrate`
+- [x] **T5** — `justfile`: `migrate-ch` and `topics` run the setup code; `topics.sh` deleted; the `migrate`
   CLI no longer needed · proved by `just fresh` on the dev stack.
-- [ ] **T6** — `deploy/compose/docker-compose.app.yaml`: the two images, a `setup` service that every
+- [x] **T6** — `deploy/compose/docker-compose.app.yaml`: the two images, a `setup` service that every
   service waits on (`service_completed_successfully`), `web-assets-init` from `nexovue` · proved by
   `test_compose_dependencies.py` (extended: nothing starts before setup) and the replica brought up from
   empty volumes.
 - [ ] **T7** — `.github/workflows/ci.yml`: full history checkout, the toolchain, the stores from the
   repository's Compose file, `just check` · proved by a green run.
-- [ ] **T8** — `.github/workflows/release.yml`, `release-please-config.json`,
-  `.release-please-manifest.json`, `.github/dependabot.yml`: native per-architecture builds merged by
-  digest, provenance and SBOM, cosign, tags `X.Y.Z`/`X.Y`/commit; actions pinned by hash · proved by the
-  `v0.1.0-rc.1` release, pulled back and `cosign verify`'d.
+- [ ] **T8** — `.github/workflows/release.yml`: on a version tag `vX.Y.Z` (or `vX.Y.Z-rc.N`), native
+  per-architecture builds pushed by digest and merged, provenance and SBOM, a cosign signature, tags
+  `X.Y.Z`/`X.Y`/commit, and a GitHub release with generated notes · proved by the `v0.1.0-rc.1` release,
+  pulled back and `cosign verify`'d. *Changed 2026-10-28 (founder, option B): versions are tagged by hand
+  rather than by release-please — it reads only Conventional-Commit titles, which this repository does
+  not use, and it needs Actions allowed to open pull requests, which Step 0 switched off.*
 
 ### Step 2 — The deployment mode
 

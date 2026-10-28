@@ -34,7 +34,7 @@ const (
 	// pays for its tolerance in commit lag the way this pipeline does.
 	FutureSkew = Bucket
 
-	// PastSkew is the broker's own retention (deploy/kafka/topics.sh). Nothing
+	// PastSkew is the broker's own retention (apps/workers/internal/setup/topics.go). Nothing
 	// legitimately delivered can be older than the buffer it was replayed from,
 	// and a replayed outage must still reach its real minutes — so the floor
 	// must not cut into the window a replay can come from.
