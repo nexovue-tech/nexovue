@@ -154,6 +154,21 @@ services:
           # service was split into, put back together.
           memory: 1536M
 
+  # Fills the Python environment the services share, once, before any of them starts. Started
+  # together on an empty volume, five `uv run`s installed the same packages into it at once and
+  # one met another's half-written files (CI, 2026-10-28). Afterwards each `uv run` finds nothing
+  # to install. After a dependency changes: `docker compose up python-deps`, then restart.
+  python-deps:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/python-dev.Dockerfile
+    command: uv sync --all-packages --frozen
+    working_dir: /workspace
+    restart: "no"
+    volumes:
+      - ../..:/workspace
+      - python-venv:/workspace/.venv
+
   api:
     build:
       context: ../..
@@ -289,6 +304,8 @@ services:
       retries: 12
       start_period: 60s
     depends_on:
+      python-deps:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       clickhouse:
@@ -392,6 +409,8 @@ services:
       # Where an alert's link lands: the app, built from the same port as `web`.
       APP_BASE_URL: http://localhost:${WEB_HOST_PORT:-15173}
     depends_on:
+      python-deps:
+        condition: service_completed_successfully
       seaweedfs:
         # Files a check sends, and the objects its sweep deletes, live here. A
         # dependant that starts before the S3 gateway answers meets a refused
@@ -443,6 +462,8 @@ services:
       # worker, as the account that can only read and delete (users.d/eraser.xml).
       CLICKHOUSE_ERASER_DSN: ${DEV_CLICKHOUSE_ERASER_DSN:-clickhouse://nexovue_eraser:nexovue_eraser_dev@clickhouse:8123/nexovue}
     depends_on:
+      python-deps:
+        condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
       seaweedfs:
@@ -506,6 +527,8 @@ services:
       EMAIL_FROM_ADDRESS: ${NEXOVUE_ALERT_EMAIL_FROM_ADDRESS:-}
       EMAIL_REPLY_TO: ${NEXOVUE_ALERT_EMAIL_REPLY_TO:-}
     depends_on:
+      python-deps:
+        condition: service_completed_successfully
       # The outbox and the job queue are both in Postgres.
       postgres:
         condition: service_healthy
@@ -565,6 +588,8 @@ services:
       CLICKHOUSE_DSN: ${DEV_CLICKHOUSE_HTTP_DSN:-clickhouse://nexovue:nexovue_dev@clickhouse:8123/nexovue}
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434}
     depends_on:
+      python-deps:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       clickhouse:
