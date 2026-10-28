@@ -102,6 +102,25 @@ Step 1, 2026-10-28:
 - `just check` exit 0: Python 4,412 passed, web 1,366, SDK 124; mypy over 638 files clean. `actionlint`
   clean on both workflows.
 
+- **T7, CI on GitHub** — green on the eighth run (`40674598770`, 21 min): Go 40 packages, Python 4,413
+  passed, web 1,366, SDK 124, lint, types, contracts and bundle sizes. The seven runs before it each
+  found something only a fresh Linux machine shows, all fixed at the cause, none a product bug:
+  `setup-just` pulled in an action outside the allowed list (just installed through uv); Compose v2.38
+  refuses an included service redefined by its includer (each file's adjustments now sit in a file
+  listed with the include — a self-hosted install on older Docker would have hit it too); the stack
+  started its services before the setup step (`just stack` runs stores, setup, services — CI and
+  `just dev` alike); git refused the bind-mounted tree as "dubious ownership" (the dev Go image trusts
+  it); `host.docker.internal` exists on Linux Docker only when asked (mapped for the probe, delivery and
+  insight services); five `uv run`s installed into one empty shared environment at once
+  (`python-deps` fills it first); suites chose "the busiest project", which is the demo shop only on a
+  laptop (each now chooses the project holding its readings; gateseed also sends
+  `http.server.request.duration`); the dev SeaweedFS sized its volume count from free disk (fixed at
+  200); a trace window bounded by the clock hour missed traces seeded at minute two (it follows the
+  data); the runner's disk was 96% full (CI frees unused toolkits first); the web container's
+  root-owned `pnpm install` into the shared tree locked the host's tests out (each package's
+  node_modules is a volume). Before pushing each fix, `just check` passed locally — which is exactly
+  why these were invisible there.
+
 ## Specification impact
 
 None yet. The deployment mode will touch billing's specification.

@@ -182,7 +182,7 @@ arm64; on an empty machine `docker compose up` with them prepares the stores and
   service waits on (`service_completed_successfully`), `web-assets-init` from `nexovue` · proved by
   `test_compose_dependencies.py` (extended: nothing starts before setup) and the replica brought up from
   empty volumes.
-- [ ] **T7** — `.github/workflows/ci.yml`: full history checkout, the toolchain, the stores from the
+- [x] **T7** — `.github/workflows/ci.yml`: full history checkout, the toolchain, the stores from the
   repository's Compose file, `just check` · proved by a green run.
 - [ ] **T8** — `.github/workflows/release.yml`: on a version tag `vX.Y.Z` (or `vX.Y.Z-rc.N`), native
   per-architecture builds pushed by digest and merged, provenance and SBOM, a cosign signature, tags
