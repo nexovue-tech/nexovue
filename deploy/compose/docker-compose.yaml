@@ -327,11 +327,21 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/web-dev.Dockerfile
-    command: pnpm --filter @nexovue/web dev --host 0.0.0.0 --port 5173
+    # Install first, into the volumes below, rather than trusting pnpm's own check, which looks only
+    # at the root node_modules and leaves a fresh package volume empty. Quick when nothing changed.
+    command: >-
+      sh -c "pnpm install --frozen-lockfile && pnpm --filter @nexovue/web dev --host 0.0.0.0 --port 5173"
     working_dir: /workspace
     volumes:
       - ../..:/workspace
       - web-node-modules:/workspace/node_modules
+      # Each workspace package's own node_modules too: the container's `pnpm install` writes them
+      # as root, and in the shared tree a Linux host's user then cannot write there — CI's web
+      # tests failed EACCES on apps/web/node_modules (2026-10-28). Docker Desktop hides it.
+      - web-app-node-modules:/workspace/apps/web/node_modules
+      - web-ui-node-modules:/workspace/packages/ui/node_modules
+      - web-sdk-node-modules:/workspace/packages/browser-sdk/node_modules
+      - web-e2e-node-modules:/workspace/tools/e2e/node_modules
     environment:
       # Vite runs inside this container, so the proxy target has to be the
       # compose service name. The code's default is localhost:18000, which is
@@ -620,3 +630,7 @@ volumes:
   go-cache:
   python-venv:
   web-node-modules:
+  web-app-node-modules:
+  web-ui-node-modules:
+  web-sdk-node-modules:
+  web-e2e-node-modules:
