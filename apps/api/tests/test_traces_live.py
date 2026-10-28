@@ -57,7 +57,7 @@ TENANT_THAT_NEVER_EXISTED: Final = "00000000-0000-0000-0000-000000000000"
 # grouping a week of a busy project once needed 1.8 GiB and was killed.
 WIDEST_WINDOW: Final = timedelta(days=7)
 
-ONE_HOUR: Final = timedelta(hours=1)
+WINDOW_MARGIN: Final = timedelta(minutes=10)
 
 PAGE: Final = 25
 
@@ -141,8 +141,13 @@ async def busiest(clickhouse: AsyncClient) -> BusiestProject:
     # several services — and the busiest hour of a load test has one service and
     # no failures in it. This is also the smallest of the three by some way,
     # which is what lets the whole suite run without exhausting the server.
+    #
+    # Bounded by that hour's first and last span, with a margin, rather than by the clock: the
+    # summary test looks five minutes inside each edge, and traces sent at 10:02 lie outside
+    # 10:05..10:55 — CI's seeded traces did exactly that (2026-10-28). Never wider than the hour
+    # plus its margins, so the suite's memory cost is what it was.
     hour = await clickhouse.query(
-        "SELECT toStartOfHour(timestamp) AS window FROM spans "
+        "SELECT toStartOfHour(timestamp) AS window, min(timestamp), max(timestamp) FROM spans "
         "WHERE tenant_id = {tenant_id:String} AND project_id = {project_id:String} "
         "GROUP BY window HAVING countIf(status_code = 'ERROR') > 0 "
         "ORDER BY countIf(status_code = 'ERROR') DESC LIMIT 1",
@@ -152,13 +157,13 @@ async def busiest(clickhouse: AsyncClient) -> BusiestProject:
         "no hour of the busiest project holds a failed span — the status filter "
         "below would prove nothing. Run the load generator against a failing service."
     )
-    busiest_hour = hour.result_rows[0][0]
+    _, first_span, last_span = hour.result_rows[0]
 
     return BusiestProject(
         tenant_id=str(tenant_id),
         project_id=str(project_id),
-        window_start=busiest_hour,
-        window_end=busiest_hour + ONE_HOUR,
+        window_start=first_span - WINDOW_MARGIN,
+        window_end=last_span + WINDOW_MARGIN,
         widest_start=newest - WIDEST_WINDOW,
         widest_end=newest + timedelta(seconds=1),
     )
