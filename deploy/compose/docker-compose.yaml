@@ -414,6 +414,10 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/python-dev.Dockerfile
+    # The development host by name: Docker Desktop provides host.docker.internal on its own, plain
+    # Docker on Linux (CI's runner) only when asked. Probes, deliveries and the model reach it here.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
@@ -467,6 +471,10 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/python-dev.Dockerfile
+    # The development host by name: Docker Desktop provides host.docker.internal on its own, plain
+    # Docker on Linux (CI's runner) only when asked. Probes, deliveries and the model reach it here.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: >-
       uv run --package nexovue-scheduler
       watchmedo auto-restart --directory apps/scheduler/src --pattern '*.py' --recursive --
@@ -537,6 +545,10 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/python-dev.Dockerfile
+    # The development host by name: Docker Desktop provides host.docker.internal on its own, plain
+    # Docker on Linux (CI's runner) only when asked. Probes, deliveries and the model reach it here.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: >-
       uv run --package nexovue-insight
       watchmedo auto-restart --directory apps/insight/src --pattern '*.py' --recursive --
