@@ -130,7 +130,9 @@ async def _actions(db: AsyncSession, org_id: uuid.UUID) -> list[str]:
     rows = await db.scalars(
         select(AuditLogEntry.action)
         .where(AuditLogEntry.org_id == org_id)
-        .order_by(AuditLogEntry.at)
+        # `at` is the transaction's start, shared by every entry it writes; the
+        # time-ordered id breaks the tie, as the audit screen's (at, id) order does.
+        .order_by(AuditLogEntry.at, AuditLogEntry.id)
     )
     return [row for row in rows if row.startswith("member.")]
 

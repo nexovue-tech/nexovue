@@ -390,3 +390,40 @@ func TestDatabaseReadingsCarryWhatTheScreensGroupBy(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsAlsoSendTheHTTPDurationInSeconds(t *testing.T) {
+	encoded, err := json.Marshal(Metrics(settings(t), time.Now()))
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	var walked struct {
+		ResourceMetrics []struct {
+			ScopeMetrics []struct {
+				Metrics []struct {
+					Name      string `json:"name"`
+					Unit      string `json:"unit"`
+					Histogram struct {
+						DataPoints []histogramPoint `json:"dataPoints"`
+					} `json:"histogram"`
+				} `json:"metrics"`
+			} `json:"scopeMetrics"`
+		} `json:"resourceMetrics"`
+	}
+	if err := json.Unmarshal(encoded, &walked); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	metrics := walked.ResourceMetrics[0].ScopeMetrics[0].Metrics
+	if len(metrics) != 2 {
+		t.Fatalf("got %d metrics, want the seeded one and the HTTP duration", len(metrics))
+	}
+	millis, seconds := metrics[0].Histogram.DataPoints[0], metrics[1].Histogram.DataPoints[0]
+	if metrics[1].Name != httpServerDuration || metrics[1].Unit != "s" {
+		t.Fatalf("second metric is %s in %s", metrics[1].Name, metrics[1].Unit)
+	}
+	if seconds.ExplicitBounds[0] != BOUNDS[0]/millisecondsPerSecond {
+		t.Fatalf("first bound %v s, want %v", seconds.ExplicitBounds[0], BOUNDS[0]/millisecondsPerSecond)
+	}
+	if seconds.Count != millis.Count {
+		t.Fatalf("counts differ: %v and %v", seconds.Count, millis.Count)
+	}
+}

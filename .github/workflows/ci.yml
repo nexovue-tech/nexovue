@@ -67,9 +67,11 @@ jobs:
       - name: just check
         run: just check
 
-      - name: Memory the stack used
+      - name: Memory and disk the stack used
         if: always()
-        run: docker stats --no-stream --format '{{.Name}}\t{{.MemUsage}}' || true
+        run: |
+          docker stats --no-stream --format '{{.Name}}\t{{.MemUsage}}' || true
+          df -h / || true
 
       - name: Service logs on failure
         if: failure()

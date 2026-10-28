@@ -166,20 +166,57 @@ func Metrics(cfg Config, at time.Time) map[string]any {
 		}
 	}
 
-	metric := map[string]any{
-		"name": cfg.MetricName,
-		"unit": "ms",
+	metric := cumulativeHistogram(cfg.MetricName, "ms", points)
+	// The same observations under the HTTP convention's own name, in its unit, because that name is
+	// what the latency heatmap looks for (metrics/queries.py, DURATION_METRIC_NAMES) — without it the
+	// gate needs the demo shop's traffic for that suite.
+	duration := cumulativeHistogram(httpServerDuration, "s", inSeconds(points))
+	scope := map[string]any{"metrics": []any{metric, duration}}
+	return map[string]any{"resourceMetrics": []any{map[string]any{
+		keyResource:    resource(cfg.ServiceName),
+		"scopeMetrics": []any{scope},
+	}}}
+}
+
+// httpServerDuration is OpenTelemetry's HTTP server duration metric, recorded in seconds.
+const httpServerDuration = "http.server.request.duration"
+
+// millisecondsPerSecond converts the ladder BOUNDS (milliseconds) to the convention's seconds.
+const millisecondsPerSecond = 1000.0
+
+func cumulativeHistogram(name, unit string, points []any) map[string]any {
+	return map[string]any{
+		"name": name,
+		"unit": unit,
 		"histogram": map[string]any{
 			// AGGREGATION_TEMPORALITY_CUMULATIVE.
 			"aggregationTemporality": 2,
 			"dataPoints":             points,
 		},
 	}
-	scope := map[string]any{"metrics": []any{metric}}
-	return map[string]any{"resourceMetrics": []any{map[string]any{
-		keyResource:    resource(cfg.ServiceName),
-		"scopeMetrics": []any{scope},
-	}}}
+}
+
+// inSeconds copies millisecond points with their bounds and sums in seconds; counts are unchanged.
+func inSeconds(points []any) []any {
+	converted := make([]any, 0, len(points))
+	for _, raw := range points {
+		point, _ := raw.(map[string]any)
+		copied := make(map[string]any, len(point))
+		for key, value := range point {
+			copied[key] = value
+		}
+		bounds, _ := point["explicitBounds"].([]float64)
+		seconds := make([]float64, len(bounds))
+		for i, bound := range bounds {
+			seconds[i] = bound / millisecondsPerSecond
+		}
+		copied["explicitBounds"] = seconds
+		if sum, ok := point["sum"].(float64); ok {
+			copied["sum"] = sum / millisecondsPerSecond
+		}
+		converted = append(converted, copied)
+	}
+	return converted
 }
 
 // GenAISpans builds one OTLP/JSON export of three model-call spans, each its

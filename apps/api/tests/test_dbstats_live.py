@@ -88,21 +88,29 @@ async def client() -> AsyncIterator[AsyncClient]:
 
 @pytest.fixture
 async def tenant_with_metrics(client: AsyncClient) -> tuple[str, str]:
-    """A tenant that has *some* gauge readings, so emptiness means one thing.
+    """The tenant with the most *database* readings, so emptiness means one thing.
 
-    Raw client on purpose: asking "who has data" is a question no tenant-scoped
-    query can ask, and it is setup rather than a claim about the API.
+    Database readings, not any gauge: the busiest project by every gauge is the demo
+    shop on a developer's machine, which has these too, and on CI's fresh machine
+    whichever project sent most — which may have none (CI, 2026-10-28). Raw client on
+    purpose: asking "who has data" is a question no tenant-scoped query can ask, and
+    it is setup rather than a claim about the API.
     """
     result = await client.query(
         """
         SELECT tenant_id, project_id, count() AS readings
         FROM metrics_gauge
         WHERE timestamp >= %(since)s
+          AND metric_name IN (%(duration)s, %(connections)s)
         GROUP BY tenant_id, project_id
         ORDER BY readings DESC
         LIMIT 1
         """,
-        parameters={"since": _since()},
+        parameters={
+            "since": _since(),
+            "duration": queries.METRIC_OPERATION_DURATION,
+            "connections": queries.METRIC_CONNECTION_COUNT,
+        },
     )
     if not result.result_rows:
         # No gauge data at all: the endpoints are still asserted against a real

@@ -27,7 +27,20 @@ services:
     ports:
       - "${POSTGRES_HOST_PORT:-15432}:5432"
 
+  # How many volumes the dev store may hold, fixed rather than worked out from free disk. Every
+  # bucket takes seven, and on CI's runner the free-disk answer left room for four buckets, so the
+  # live suites' fifth upload failed "Not enough data nodes found" (2026-10-28). A volume uses disk
+  # only as it fills, so a generous count costs a laptop nothing. A self-hosted install is sized
+  # on purpose (docs/self-hosting/sizing.md).
   seaweedfs:
+    command:
+      - server
+      - -s3
+      - -dir=/data
+      - -ip.bind=0.0.0.0
+      - -s3.config=/etc/seaweedfs/s3.json
+      - -master.volumeSizeLimitMB=256
+      - -volume.max=200
     ports:
       - "${SEAWEEDFS_S3_HOST_PORT:-18333}:8333"
       - "${SEAWEEDFS_MASTER_HOST_PORT:-19333}:9333"

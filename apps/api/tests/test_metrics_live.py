@@ -76,16 +76,23 @@ async def clickhouse() -> AsyncIterator[AsyncClient]:
 
 @pytest_asyncio.fixture
 async def reporting(clickhouse: AsyncClient) -> tuple[str, str]:
-    """The tenant and project with the most metric points, found with a raw read.
+    """The tenant and project with the most server-duration points, found with a raw read.
 
+    Server durations rather than any histogram, because the heatmap reads only those
+    (`queries.DURATION_METRIC_NAMES`): on a fresh machine the project with the most
+    histogram points need not send one (CI, 2026-10-28). The gate seeds them
+    (tools/gateseed), and the demo shop sends them on a developer's machine.
     Asking "who has metrics" needs an unscoped query, which the repository
     rightly refuses, so it is fixture setup rather than a claim about the API.
     """
     result = await clickhouse.query(
         "SELECT tenant_id, project_id, count() AS points FROM metrics_histogram "
-        "WHERE timestamp >= %(since)s GROUP BY tenant_id, project_id "
-        "ORDER BY points DESC LIMIT 1",
-        parameters={"since": datetime.now(UTC) - LOOKBACK},
+        "WHERE timestamp >= %(since)s AND metric_name IN %(names)s "
+        "GROUP BY tenant_id, project_id ORDER BY points DESC LIMIT 1",
+        parameters={
+            "since": datetime.now(UTC) - LOOKBACK,
+            "names": list(queries.DURATION_METRIC_NAMES),
+        },
     )
     assert result.result_rows, (
         "no histogram points in ClickHouse for the last two days. This suite asserts "
