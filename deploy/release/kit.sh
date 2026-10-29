@@ -2,7 +2,7 @@
 # Builds a release's install kit, and optionally its offline bundles (design.md §6; ready-to-deploy,
 # T15). release.yml runs it; so can anyone, to see what a customer unpacks.
 #
-#   deploy/release/kit.sh <version> <out-dir>                 nexovue-<version>.tar.gz
+#   deploy/release/kit.sh <version> <out-dir>                 nexovue-<version>.tar.gz and install.sh
 #   deploy/release/kit.sh <version> <out-dir> amd64 arm64     … and nexovue-<version>-offline-<arch>.tar
 #
 # The kit is everything a host needs except the images: the `nexovue` script, the Compose files,
@@ -39,6 +39,10 @@ printf '%s\n' "$version" > "$kit/VERSION"
 
 tar -C "$staging" -czf "$out/$name.tar.gz" "$name"
 echo "kit: $out/$name.tar.gz"
+
+# The one-line install (deploy/install.sh), told which release it belongs to.
+sed "s/@NEXOVUE_VERSION@/$version/" "$root/deploy/install.sh" > "$out/install.sh"
+echo "install script: $out/install.sh"
 
 # Every image the install can run: each layout and the monitoring profile, at this version.
 settings="$staging/images.env"

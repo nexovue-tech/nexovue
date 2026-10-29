@@ -219,6 +219,27 @@ Step 1, 2026-10-28:
   Linux, a real hostname, a release, or a decision at the first deployment — none by more code here.
   Blockers 2 and 5 of the earlier review are marked fixed by this change.
 
+- **Going public (T0h), 2026-10-29** — the lawyer approved `CLA.md` without change; it is in force and
+  CLA Assistant is linked (its webhook on the repository fires on every pull request; the gist matches
+  `CLA.md` word for word). `CONTRIBUTING.md` names the CLA and the browser SDK's DCO sign-off;
+  `README.md` is written for visitors. `docs/operations/production-readiness.md` left the repository
+  (its earlier versions stay in the history). The founder made the repository and both image packages
+  public; both images pull with no login (HTTP 200 on `0.1.0-rc.3`). CLA Assistant lists only public
+  repositories, which is why it was linked after the switch.
+- **Protections (T0g), 2026-10-29** — rulesets read back from GitHub: `main` refuses deletion and force
+  pushes, keeps history linear, takes changes only through pull requests (squash, no approvals — one
+  maintainer) with CI's `check` green and up to date, no bypass; `v*` and `sdk-v*` tags cannot be moved
+  or deleted and only admins create them. Secret scanning with push protection, CodeQL (default setup)
+  and private vulnerability reporting are on.
+
+- **The one-line install and a publishable SDK, 2026-10-29** — `deploy/install.sh`, attached to every
+  release with its version written in: downloads that release's kit over HTTPS, checks it against the
+  release's `SHA256SUMS`, then runs `nexovue install`, or `upgrade` where nexovue is installed.
+  `test_get_script.py` (4, against a stand-in `curl`): this release's URLs only, upgrade on an installed
+  server, a tampered kit never run, the repository's own copy refusing. The browser SDK is no longer
+  `private`, names this repository (npm's trusted publishing requires it), and `npm publish --dry-run`
+  passes.
+
 ## Specification impact
 
 The deployment mode touches billing's specification: a self-hosted install has no billing at all. F37's

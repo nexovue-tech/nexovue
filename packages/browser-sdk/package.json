@@ -1,10 +1,18 @@
 {
   "name": "@nexovue/browser-sdk",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Real user monitoring for the nexovue browser door: web vitals, JS errors, page views and sessions.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nexovue-tech/nexovue.git",
+    "directory": "packages/browser-sdk"
+  },
+  "homepage": "https://github.com/nexovue-tech/nexovue/tree/main/packages/browser-sdk",
+  "publishConfig": {
+    "access": "public"
+  },
   "sideEffects": false,
   "files": [
     "dist",

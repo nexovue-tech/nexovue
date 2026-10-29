@@ -36,8 +36,23 @@ the other.
 
 ## Install
 
-Download the kit for the version you want (`nexovue-X.Y.Z.tar.gz`), unpack it, and run the installer as
-root:
+The newest release, from GitHub over HTTPS:
+
+```bash
+curl -fsSLO https://github.com/nexovue-tech/nexovue/releases/latest/download/install.sh
+less install.sh            # read what it does before running it as root
+sudo bash install.sh
+```
+
+`install.sh` downloads that release's kit, checks it against the release's `SHA256SUMS`, and runs
+`nexovue install`; on a server where nexovue is already installed, it runs `nexovue upgrade` instead.
+For a particular version, take `install.sh` from that version's release page instead of `latest`.
+
+`curl … | sudo bash` works too, but runs code as root that nobody has read; many security teams forbid
+it. Piped that way there is no terminal for questions, so set the answers in the environment (below).
+
+Or by hand: download the kit for the version you want (`nexovue-X.Y.Z.tar.gz`), unpack it, and run the
+installer as root:
 
 ```bash
 tar -xzf nexovue-X.Y.Z.tar.gz

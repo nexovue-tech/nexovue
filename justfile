@@ -137,7 +137,7 @@ lint: lint-go lint-py lint-web lint-deploy
 # The install script, the backup scripts and the monitor's rules (docs/changes/ready-to-deploy,
 # T14, T24). Run from pinned images, so a laptop and CI check with the same versions.
 lint-deploy:
-    docker run --rm -v "$PWD:/src:ro" -w /src koalaman/shellcheck:v0.11.0 -x -S warning deploy/nexovue deploy/backup/backup.sh deploy/backup/restore-postgres.sh deploy/backup/restore-clickhouse.sh deploy/backup/verify.sh
+    docker run --rm -v "$PWD:/src:ro" -w /src koalaman/shellcheck:v0.11.0 -x -S warning deploy/nexovue deploy/install.sh deploy/backup/backup.sh deploy/backup/restore-postgres.sh deploy/backup/restore-clickhouse.sh deploy/backup/verify.sh
     docker run --rm -v "$PWD/deploy/monitoring:/m:ro" -w /m --entrypoint promtool prom/prometheus:v3.15.1 check rules rules/nexovue.yml
     docker run --rm -v "$PWD/deploy/monitoring:/m:ro" -w /m/tests --entrypoint promtool prom/prometheus:v3.15.1 test rules nexovue_test.yml
     docker run --rm -v "$PWD/deploy/monitoring:/m:ro" --entrypoint amtool prom/alertmanager:v0.34.1 check-config /m/alertmanager.yml

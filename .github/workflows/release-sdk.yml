@@ -3,8 +3,9 @@
 # variable SDK_PUBLISH is `true` — publishes it to npm (docs/changes/ready-to-deploy, T32).
 #
 # Published through npm's trusted publishing: npm trusts this workflow's OIDC identity, so no npm
-# token exists to leak, and the package carries provenance. Turned on with going-public: the
-# package stops being `private`, npmjs.com names this workflow as its trusted publisher, and the
+# token exists to leak, and the package carries provenance (needs package.json's repository.url to
+# name this repository). The repository is public and the package no longer `private`
+# (2026-10-29); it publishes once npmjs.com names this workflow as its trusted publisher and the
 # variable is set. Until then every run stops after the dry run.
 name: Release SDK
 
@@ -44,7 +45,7 @@ jobs:
       - name: Test, build and measure
         run: pnpm test
       - name: What would be published
-        run: npm pack --dry-run
+        run: npm publish --dry-run
       - name: Publish
         if: ${{ vars.SDK_PUBLISH == 'true' }}
         run: npm publish --access public

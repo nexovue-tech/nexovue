@@ -144,12 +144,12 @@ that would break a rule is refused.
 - [x] **T0f** — `tools/repo-audit` and `just repo-audit`: reads every setting above through the API with the
   founder's token and fails on any drift, so the settings are checked like code · proved by its own test
   against recorded API answers.
-- [ ] **T0h** — **`going-public`, folded into this step (founder, 2026-10-28, Question 3 (c)):** the
+- [x] **T0h** — **`going-public`, folded into this step (founder, 2026-10-28, Question 3 (c)):** the
   contributor terms (the CLA recommended 2026-10-11: Apache-ICLA-based, through CLA Assistant, the browser
   SDK on DCO — text approved by the founder before it is switched on); the founder's call on what in `docs/`
   stays public; a README written for visitors; then the founder switches the repository to public — after
   T0a is clean · proved by T0a's report and the repository's visibility.
-- [ ] **T0g** — *After T0h publishes.* A ruleset on `main` (no deletion, no force push, linear history,
+- [x] **T0g** — *After T0h publishes.* A ruleset on `main` (no deletion, no force push, linear history,
   changes through pull requests, the CI checks of T7 required, no bypass), a ruleset on `v*` tags (only the
   release workflow creates them), and — public or paid — secret scanning with push protection and CodeQL.
   Required checks are switched on after T7 makes CI exist.
