@@ -1,9 +1,8 @@
 # nexovue Individual Contributor License Agreement
 
-**Draft for review — not yet in force.** Adapted from the structure of the Apache Software Foundation's
-Individual Contributor License Agreement v2.2. It must be reviewed by an Indian IP lawyer before it is
-switched on (docs/changes/ready-to-deploy, T0h). This file is the text contributors will accept through
-CLA Assistant.
+**In force from 2026-10-29**, reviewed by an Indian IP lawyer and approved without change. Adapted from
+the structure of the Apache Software Foundation's Individual Contributor License Agreement v2.2. This is
+the text contributors accept through CLA Assistant, which asks for it on a first pull request.
 
 Thank you for contributing to nexovue. This agreement makes clear the rights you grant in your
 contributions. It is a **licence, not an assignment**: you keep the copyright in everything you write.

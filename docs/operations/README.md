@@ -6,6 +6,9 @@ not yet. The customer's own guide to running nexovue is [`docs/self-hosting/`](.
 - [Deployment](deployment.md) — the install layouts and the `nexovue` command
 - [The first deployment](first-deploy.md) — from buying a server to watched and backed up
 - [Releasing](release.md) — tagging a version, and what the release publishes
+
+The production-readiness review — the list of nexovue's open weaknesses — is kept private and is not
+in this repository.
 - [The first accounts](first-accounts.md) — who exists before anyone can sign in, on a self-hosted install and on ours
 - [Monitoring](monitoring.md)
 - [Alerting](alerting.md)

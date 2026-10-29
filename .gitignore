@@ -54,3 +54,7 @@ tools/rebalanceprobe/rebalanceprobe
 
 # A maintainer's personal agent rules (AGENTS.md, rule 1). Never committed.
 CLAUDE.local.md
+
+# The production-readiness review: our open weaknesses, kept private (founder, 2026-10-29).
+# Tracked until then, so its earlier versions remain in the history.
+docs/operations/production-readiness.md

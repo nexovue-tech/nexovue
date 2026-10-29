@@ -163,7 +163,7 @@ Live, in the running stack (compose dev, OpenTelemetry Demo), 2026-09-19:
 ## Production readiness
 
 Assessed as one change, 2026-09-19 — recorded in
-[`docs/operations/production-readiness.md`](../../operations/production-readiness.md). **F21 adds no blocker of
+`docs/operations/production-readiness.md`. **F21 adds no blocker of
 its own; the platform remains NOT READY.** F21 depends on three existing blockers: email delivery (the default
 rule emails owners), the check secret key (channel secrets are sealed with it), and migrations as a deploy step
 (0028 and 0029 before the scheduler starts). Recommended: a read-only ClickHouse user for the scheduler;

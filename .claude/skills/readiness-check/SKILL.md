@@ -13,7 +13,7 @@ description: >-
 The checklist lives in
 [`docs/quality/production-readiness.md`](../../../docs/quality/production-readiness.md). The verified
 current gap list lives in
-[`docs/operations/production-readiness.md`](../../../docs/operations/production-readiness.md).
+`docs/operations/production-readiness.md`.
 **Read both.** This skill is how to evaluate them and where to write the answer.
 
 Nexovue has not passed this gate. Assume nothing on the list is done until it is observed.

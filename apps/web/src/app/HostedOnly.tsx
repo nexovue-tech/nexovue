@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { PropsWithChildren, ReactNode } from "react";
 
 import { useSystemInfo } from "@/shared/deployment";
 
@@ -9,7 +9,7 @@ import { useSystemInfo } from "@/shared/deployment";
  *
  * Nothing until the answer is in, so neither a billing screen nor a 404 flashes first.
  */
-export function HostedOnly({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
+export function HostedOnly({ children, fallback }: PropsWithChildren<{ fallback: ReactNode }>) {
   const info = useSystemInfo();
   if (info.isPending) return null;
   return info.data?.deployment === "hosted" ? children : fallback;

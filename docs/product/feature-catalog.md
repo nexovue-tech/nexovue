@@ -185,7 +185,7 @@ here, it is Track 3's own first bullet wearing a feature number.
 - Terraform, with Ansible for Linux servers and Helm for Kubernetes ([ADR-006](../decisions/ADR-006-terraform-with-two-delivery-paths.md))
 - The preparations for moving between clouds ([ADR-007](../decisions/ADR-007-migrating-between-clouds.md)) and regions ([ADR-009](../decisions/ADR-009-regions-are-cells.md))
 - **A trial run on Oracle Cloud.** Always Free is 2 OCPUs / 12 GB since June 2026 — a trial and staging environment, not one for a paying customer
-- The blockers in [`../operations/production-readiness.md`](../operations/production-readiness.md) —
+- The blockers in `../operations/production-readiness.md` —
   **twenty-two open**, from a full review of every built feature on 2026-10-10: the ten still open
   from 2026-09-21 plus twelve new ones. That document's *Fix order* is the plan for this track, and
   the blockers are fixed before F37 is specified. Blockers **9 and 10 are F37**, so this bullet and

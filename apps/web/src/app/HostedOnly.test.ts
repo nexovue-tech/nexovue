@@ -51,7 +51,7 @@ async function render() {
       createElement(
         QueryClientProvider,
         { client },
-        createElement(HostedOnly, { fallback: "No screen at this address", children: "Billing" }),
+        createElement(HostedOnly, { fallback: "No screen at this address" }, "Billing"),
       ),
     ),
   );
