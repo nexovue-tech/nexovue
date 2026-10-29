@@ -1,6 +1,6 @@
 {
   "name": "@nexovue/browser-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Real user monitoring for the nexovue browser door: web vitals, JS errors, page views and sessions.",
   "license": "Apache-2.0",

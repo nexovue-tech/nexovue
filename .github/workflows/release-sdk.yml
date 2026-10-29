@@ -1,12 +1,14 @@
 # The browser SDK's release: push a tag `sdk-vX.Y.Z` matching packages/browser-sdk/package.json, and
 # this tests and builds it, shows exactly what would be published, and — once the repository
-# variable SDK_PUBLISH is `true` — publishes it to npm (docs/changes/ready-to-deploy, T32).
+# variable SDK_PUBLISH is `true` — **stages** it on npm (docs/changes/ready-to-deploy, T32;
+# docs/operations/release.md).
 #
-# Published through npm's trusted publishing: npm trusts this workflow's OIDC identity, so no npm
-# token exists to leak, and the package carries provenance (needs package.json's repository.url to
-# name this repository). The repository is public and the package no longer `private`
-# (2026-10-29); it publishes once npmjs.com names this workflow as its trusted publisher and the
-# variable is set. Until then every run stops after the dry run.
+# Staged, never published directly (founder, 2026-10-30): npm trusts this workflow's OIDC identity
+# only to stage a version, which goes live when a maintainer approves it on npmjs.com with their
+# second factor. A stolen workflow, or a poisoned dependency running inside it, can stage at most;
+# nothing it stages reaches a customer's page unapproved. No npm token exists; the version carries
+# provenance (package.json's repository.url names this repository, as npm requires).
+
 name: Release SDK
 
 on:
@@ -36,6 +38,12 @@ jobs:
         with:
           node-version: "26.12.0"
           registry-url: "https://registry.npmjs.org"
+      # `npm stage` arrived in npm 11.15.0; Node 26.12.0 ships 11.20.0.
+      - name: npm can stage
+        run: |
+          version=$(npm --version)
+          [ "$(printf '%s\n' 11.15.0 "$version" | sort -V | head -n 1)" = 11.15.0 ] \
+            || { echo "::error::npm $version cannot stage; 11.15.0 or newer is needed"; exit 1; }
       - name: The tag names the package's version
         run: |
           declared=$(node -p "require('./package.json').version")
@@ -44,8 +52,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Test, build and measure
         run: pnpm test
-      - name: What would be published
-        run: npm publish --dry-run
-      - name: Publish
+      - name: What would be staged
+        run: npm stage publish --dry-run
+      - name: Stage for approval
         if: ${{ vars.SDK_PUBLISH == 'true' }}
-        run: npm publish --access public
+        run: npm stage publish --access public --provenance
+      - name: Approve it on npm
+        if: ${{ vars.SDK_PUBLISH == 'true' }}
+        run: |
+          echo "::notice::Staged ${GITHUB_REF_NAME#sdk-v}. It goes live when a maintainer approves it at https://www.npmjs.com/package/@nexovue/browser-sdk (or: npm stage list, then npm stage approve <id>)."
