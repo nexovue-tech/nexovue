@@ -2,9 +2,11 @@
 
 ## Status
 
-Accepted 2026-10-10 — explicit founder decision. Not yet executed: built with the images-and-CI work
-(production-readiness blocker 2, group 8 of the Phase 1 Track 3 fix order). Until then the five
-per-service images below remain what the compose files build.
+Accepted 2026-10-10 — explicit founder decision. **Executed 2026-10-28**
+([ready-to-deploy](../changes/ready-to-deploy/status.md), Steps 1 and 3): `deploy/images/nexovue.Dockerfile`
+and `nexovue-pipeline.Dockerfile` are the only image recipes; every install layout
+(`deploy/compose/nexovue.yaml` and its overlays) runs each role from them by version; releases publish
+both, multi-architecture and signed. The five per-service images below are gone.
 
 ## Context
 

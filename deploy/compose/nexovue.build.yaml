@@ -1,0 +1,37 @@
+# The production replica (`just dev-app`): the two images built from this checkout instead of
+# pulled. Overlays nexovue.yaml and nexovue.hosted.yaml; its job is to fail here rather than in a
+# deployment when something only worked because the source tree was mounted.
+
+x-nexovue-build: &nexovue-build
+  context: ../..
+  dockerfile: deploy/images/nexovue.Dockerfile
+  args:
+    VERSION: ${NEXOVUE_VERSION:-dev}
+    REVISION: ${GIT_SHA:-unknown}
+
+x-pipeline-build: &pipeline-build
+  context: ../..
+  dockerfile: deploy/images/nexovue-pipeline.Dockerfile
+  args:
+    VERSION: ${NEXOVUE_VERSION:-dev}
+    REVISION: ${GIT_SHA:-unknown}
+
+services:
+  setup:
+    build: *nexovue-build
+  web-assets-init:
+    build: *nexovue-build
+  api:
+    build: *nexovue-build
+  scheduler-beat:
+    build: *nexovue-build
+  scheduler-light:
+    build: *nexovue-build
+  scheduler-deliveries:
+    build: *nexovue-build
+  setup-pipeline:
+    build: *pipeline-build
+  receiver:
+    build: *pipeline-build
+  worker:
+    build: *pipeline-build

@@ -50,7 +50,7 @@ func (f *fakeUsage) UsageFor(_ context.Context, _ string, month Month, on time.T
 }
 
 func newChecker(usage Reader) *Checker {
-	return New(usage, Options{CacheTTL: time.Minute, CacheMaxEntries: 100})
+	return New(usage, Options{CacheTTL: time.Minute, CacheMaxEntries: 100, EnforceBudget: true})
 }
 
 // checkAt asks one door's verdict over a fresh checker.
@@ -645,5 +645,30 @@ func TestAShareOfZeroOrOneHundredIsHonoured(t *testing.T) {
 	}
 	if !checkAt(t, spentByTheBrowser, serverDoor).Refused() {
 		t.Error("the server door was admitted after the browser spent the whole plan")
+	}
+}
+
+// A customer's own install holds nobody to a plan (ready-to-deploy, Step 2): volume past
+// the allowance is admitted, while a deleted organization and a closed stop valve are not.
+func TestASelfHostedInstallHasNoMonthlyAllowance(t *testing.T) {
+	selfHosted := func(usage Usage) Verdict {
+		t.Helper()
+		verdict, err := New(&fakeUsage{usage: usage}, Options{CacheTTL: time.Minute, CacheMaxEntries: 100}).
+			Check(context.Background(), "org-1", serverDoor)
+		if err != nil {
+			t.Fatalf("Check() = %v", err)
+		}
+		return verdict
+	}
+
+	spent := Usage{IncludedBytes: freeIncluded, Enforced: true, IngestedBytes: freeIncluded * 10, Found: true}
+	if verdict := selfHosted(spent); verdict.Refused() {
+		t.Errorf("self-hosted refused volume past a plan it does not have: %v", verdict.Cause)
+	}
+	if verdict := selfHosted(Usage{Found: true, IngestSuspended: true}); verdict.Cause != IngestSuspended {
+		t.Errorf("the stop valve did not hold on a self-hosted install: %v", verdict.Cause)
+	}
+	if verdict := selfHosted(Usage{Found: true, Deleted: true}); verdict.Cause != OrganizationGone {
+		t.Errorf("a deleted organization was admitted: %v", verdict.Cause)
 	}
 }

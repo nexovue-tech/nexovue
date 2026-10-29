@@ -1,0 +1,51 @@
+# nexovue's own service: nexovue.yaml with billing, the operator console and support access
+# (nexovue_platform.deployment). Settings only — `-f` appends lists, so nothing here adds one.
+#
+#   docker compose -f nexovue.yaml -f nexovue.hosted.yaml --env-file … up -d --wait
+
+x-hosted: &hosted
+  NEXOVUE_DEPLOYMENT: hosted
+
+x-hosted-control-plane: &hosted-control-plane
+  NEXOVUE_DEPLOYMENT: hosted
+  # Third-party credentials, passed through rather than demanded: `Settings.domestic_payments`
+  # reads an unset or blank value as "not configured", so the screens still serve and only the
+  # routes that need a credential refuse — by variable name.
+  PAYMENTS_DOMESTIC_PROVIDER: ${PAYMENTS_DOMESTIC_PROVIDER:-razorpay}
+  PAYMENTS_DOMESTIC_APP_ID: ${PAYMENTS_DOMESTIC_APP_ID:-}
+  PAYMENTS_DOMESTIC_SECRET_KEY: ${PAYMENTS_DOMESTIC_SECRET_KEY:-}
+  PAYMENTS_DOMESTIC_WEBHOOK_SECRET: ${PAYMENTS_DOMESTIC_WEBHOOK_SECRET:-}
+  PAYMENTS_DOMESTIC_CURRENCIES: ${PAYMENTS_DOMESTIC_CURRENCIES:-}
+  PAYMENTS_DOMESTIC_BASE_URL: ${PAYMENTS_DOMESTIC_BASE_URL:-}
+
+services:
+  proxy:
+    environment:
+      # Where Razorpay's checkout loads its scripts, opens its frame and reports to; the console's
+      # content-security policy allows these and nothing else foreign. Read from a test checkout
+      # through this edge (2026-10-11), not from documentation, which lists none.
+      NEXOVUE_CHECKOUT_ORIGINS: https://checkout.razorpay.com https://api.razorpay.com https://cdn.razorpay.com https://lumberjack.razorpay.com
+
+  receiver:
+    environment: *hosted
+
+  worker:
+    environment: *hosted
+
+  api:
+    environment:
+      <<: *hosted-control-plane
+      # nexovue's own operator, seeded at boot (`docs/changes/super-admin-in-the-console/`). `:-`:
+      # an install with nobody to administer it seeds nobody. The password is read when the
+      # operator is made; after that it changes in the console.
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-}
+
+  scheduler-beat:
+    environment: *hosted-control-plane
+
+  scheduler-light:
+    environment: *hosted-control-plane
+
+  scheduler-deliveries:
+    environment: *hosted-control-plane

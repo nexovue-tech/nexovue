@@ -42,9 +42,11 @@ stack:
     just migrate
     docker compose -f {{compose}}/docker-compose.yaml up -d --build --wait
     just seed
-# Production replica: same infrastructure, services from built images
+# The hosted layout from images built here, under its own project so its volumes never touch the
+# dev data. Settings: deploy/compose/.env.replica (from .env.example).
+# Production replica: the hosted install, from images built from this checkout
 dev-app:
-    GIT_SHA=$(git rev-parse HEAD) docker compose --env-file {{compose}}/.env.replica -f {{compose}}/docker-compose.app.yaml up -d --wait --build
+    GIT_SHA=$(git rev-parse HEAD) docker compose -p nexovue-app --env-file {{compose}}/.env.replica -f {{compose}}/nexovue.yaml -f {{compose}}/nexovue.hosted.yaml -f {{compose}}/nexovue.build.yaml up -d --wait --build
 up:
     docker compose -f {{compose}}/docker-compose.yaml up -d --wait
     -./tools/otel-demo/otel-demo.sh up
@@ -130,7 +132,15 @@ fmt-check:
     uv run ruff format --check .
     pnpm exec biome format .
 
-lint: lint-go lint-py lint-web
+lint: lint-go lint-py lint-web lint-deploy
+
+# The install script, the backup scripts and the monitor's rules (docs/changes/ready-to-deploy,
+# T14, T24). Run from pinned images, so a laptop and CI check with the same versions.
+lint-deploy:
+    docker run --rm -v "$PWD:/src:ro" -w /src koalaman/shellcheck:v0.11.0 -x -S warning deploy/nexovue deploy/backup/backup.sh deploy/backup/restore-postgres.sh deploy/backup/restore-clickhouse.sh deploy/backup/verify.sh
+    docker run --rm -v "$PWD/deploy/monitoring:/m:ro" -w /m --entrypoint promtool prom/prometheus:v3.15.1 check rules rules/nexovue.yml
+    docker run --rm -v "$PWD/deploy/monitoring:/m:ro" -w /m/tests --entrypoint promtool prom/prometheus:v3.15.1 test rules nexovue_test.yml
+    docker run --rm -v "$PWD/deploy/monitoring:/m:ro" --entrypoint amtool prom/alertmanager:v0.34.1 check-config /m/alertmanager.yml
 
 lint-go:
     #!/usr/bin/env bash

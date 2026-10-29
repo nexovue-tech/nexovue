@@ -5,11 +5,10 @@ through a screen, because in both cases there is nobody yet who could use a
 screen to create them. They are mirror images of each other, and an install uses
 **one or the other, never both**.
 
-> **Status.** The mechanism is built and tested. The on-premise Compose target it
-> is written for still declares itself a skeleton
-> (`docs/operations/production-readiness.md`), so nothing here has been run
-> against a real self-hosted install yet. Treat the procedure as correct and
-> unrehearsed.
+> **Status.** Built, tested, and rehearsed on 2026-10-28: `nexovue quickstart` created the first
+> owner from `FIRST_OWNER_*` and that owner signed in. `nexovue install` asks for the email and
+> generates the password if none is given ([install](../self-hosting/install.md)). Not yet run on a
+> real server.
 
 ---
 

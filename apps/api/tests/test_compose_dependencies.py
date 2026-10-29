@@ -33,8 +33,25 @@ def _compose_directory() -> Path:
     return Path(nexovue_api.__file__).parents[4] / "deploy" / "compose"
 
 
+class _ComposeLoader(yaml.SafeLoader):
+    """Reads Compose's own merge tags (`!override`, `!reset`) as the plain value they carry."""
+
+
+def _untagged(loader: yaml.SafeLoader, node: yaml.Node) -> Any:
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node)
+    return loader.construct_scalar(node)  # type: ignore[arg-type]
+
+
+for _tag in ("!override", "!reset"):
+    _ComposeLoader.add_constructor(_tag, _untagged)
+
+
 def _services(file_name: str) -> dict[str, Any]:
-    document = yaml.safe_load((_compose_directory() / file_name).read_text(encoding="utf-8"))
+    text = (_compose_directory() / file_name).read_text(encoding="utf-8")
+    document = yaml.load(text, Loader=_ComposeLoader)
     return dict(document.get("services") or {})
 
 
@@ -59,7 +76,8 @@ def test_a_health_check_probes_the_port_its_dependants_call(service: str, port: 
 
 def _included_service_names(file_name: str) -> set[str]:
     """Every service the file's `include` entries define."""
-    document = yaml.safe_load((_compose_directory() / file_name).read_text(encoding="utf-8"))
+    text = (_compose_directory() / file_name).read_text(encoding="utf-8")
+    document = yaml.load(text, Loader=_ComposeLoader)
     names: set[str] = set()
     for entry in document.get("include") or []:
         paths = entry["path"] if isinstance(entry, dict) else entry
@@ -103,7 +121,7 @@ def test_a_dependant_of_a_gated_store_waits_for_it(store: str, file_name: str) -
     """Fixing one health check fixes nothing where the dependency was never declared.
 
     The first version of this module asked only "is every gated service listed here?"
-    and passed while `docker-compose.app.yaml` — the production replica, whose whole
+    and passed while the hosted compose file — the production replica, whose whole
     job is to fail here rather than in deployment — started the API with no
     `seaweedfs` gate at all. The rule that catches that runs the other way: a service
     whose environment names one of these stores has to wait for it.
@@ -125,7 +143,6 @@ _BEAT_KAFKA = (
     "beat never produces; the shared scheduler settings require KAFKA_BROKERS, "
     "so the variable stays although beat does not use it"
 )
-_INSIGHT = "apps/insight does not exist yet; its dependencies are decided when it is written"
 _DELIVERIES_KAFKA = (
     "the alert deliveries worker (F21) never produces; the shared scheduler settings "
     "require KAFKA_BROKERS, so the variable stays although it does not use it"
@@ -137,14 +154,9 @@ DELIBERATELY_UNDECLARED: Final[dict[str, dict[str, dict[str, str]]]] = {
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
         "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
     },
-    "docker-compose.app.yaml": {
+    "nexovue.yaml": {
         "scheduler-beat": {"kafka": _BEAT_KAFKA},
         "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
-    },
-    "docker-compose.onprem.yaml": {
-        "scheduler-beat": {"kafka": _BEAT_KAFKA},
-        "scheduler-deliveries": {"kafka": _DELIVERIES_KAFKA},
-        "insight": {"ollama": _INSIGHT},
     },
     "compose.infra.yaml": {},
 }
@@ -206,10 +218,13 @@ _NO_SINGLE_PORT: Final[frozenset[str]] = frozenset({"kafka", "postgres", "clickh
 
 # The deploy step (docs/changes/ready-to-deploy, T6): what runs before every service, and what is
 # allowed to start without waiting for it — the stores the setup step itself needs, the setup
-# services themselves, and the edge, which only serves what web-assets-init copied.
+# services themselves, the edge, which only serves what web-assets-init copied, and the monitor,
+# which must be watching when the setup step is the thing that fails.
 SETUP_SERVICES: Final = ("setup", "setup-pipeline")
-STARTS_BEFORE_SETUP: Final = frozenset({"proxy", "web-assets-init", *SETUP_SERVICES})
-DEPLOYED_FILES: Final = ("docker-compose.app.yaml",)
+STARTS_BEFORE_SETUP: Final = frozenset(
+    {"proxy", "web-assets-init", "prometheus", "alertmanager", *SETUP_SERVICES}
+)
+DEPLOYED_FILES: Final = ("nexovue.yaml",)
 
 
 @pytest.mark.parametrize("file_name", DEPLOYED_FILES)

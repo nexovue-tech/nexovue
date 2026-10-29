@@ -98,14 +98,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     install_middleware(app, settings)
     install_error_handlers(app)
-    _install_routes(app)
+    _install_routes(app, hosted=settings.is_hosted)
     # Mounted after the routers: a mount matches every path beneath it, and the
     # API's own routes must be tried first.
     app.mount(assistant_server.MCP_PATH, assistant_app)
     return app
 
 
-def _install_routes(app: FastAPI) -> None:
+def _install_routes(app: FastAPI, *, hosted: bool) -> None:
     # Probes sit at the root: they are operational, not product API, and an
     # orchestrator manifest should not move when the API version does.
     app.include_router(health_router.router)
@@ -120,8 +120,12 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(members_router.router)
     versioned.include_router(members_router.invitation_router)
     versioned.include_router(audit_router.router)
-    versioned.include_router(admin_router.router)
-    versioned.include_router(support_router.router)
+    # The hosted service only: nobody at nexovue administers or views a customer's own
+    # install, and it charges nobody (nexovue_platform.deployment).
+    if hosted:
+        versioned.include_router(admin_router.router)
+        versioned.include_router(support_router.router)
+        versioned.include_router(billing_router.router)
     versioned.include_router(projects_router.router)
     versioned.include_router(apikeys_router.router)
     versioned.include_router(apikeys_router.site_key_router)
@@ -138,7 +142,6 @@ def _install_routes(app: FastAPI) -> None:
     versioned.include_router(channel_tests_router.router)
     versioned.include_router(heartbeats_router.router)
     versioned.include_router(deploys_router.router)
-    versioned.include_router(billing_router.router)
     versioned.include_router(integrations_router.router)
     versioned.include_router(services_router.router)
     versioned.include_router(service_map_router.router)

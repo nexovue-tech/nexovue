@@ -150,8 +150,12 @@ describe("ResetPasswordScreen with a token", () => {
     const { container } = await mountResetPassword(TOKEN);
     await submitNewPassword(container, NEW_PASSWORD);
 
-    expect(fetch).toHaveBeenCalledTimes(1);
-    const [url, init] = fetch.mock.calls[0] as unknown as [URL, RequestInit];
+    // Only the reset posts; the sign-in screen it lands on asks its own questions.
+    const posts = (fetch.mock.calls as unknown as [URL, RequestInit][]).filter(
+      ([, init]) => init?.method === "POST",
+    );
+    expect(posts).toHaveLength(1);
+    const [url, init] = posts[0];
     expect(url.pathname).toBe("/api/v1/auth/password-reset/confirm");
     expect(JSON.parse(String(init.body))).toEqual({ token: TOKEN, password: NEW_PASSWORD });
   });

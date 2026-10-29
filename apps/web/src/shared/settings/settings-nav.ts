@@ -29,6 +29,11 @@ export interface SettingsItem {
    */
   requires?: Action;
   /**
+   * Only on nexovue's hosted service (`shared/deployment.ts`): a customer's own install has
+   * no billing and no nexovue staff to grant support access to.
+   */
+  hostedOnly?: true;
+  /**
    * What somebody might type looking for it, in the words they would use rather
    * than the ones on the tab. "Sessions" and "two-factor" both live under
    * Account, and nobody looking for either would guess that.
@@ -97,6 +102,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
         path: "/settings/support",
         title: "Support access",
         requires: "grant_support",
+        hostedOnly: true,
         keywords: ["support", "help", "view as", "impersonate", "access", "nexovue"],
       },
       {
@@ -122,6 +128,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       {
         path: "/settings/billing",
         title: "Billing",
+        hostedOnly: true,
         keywords: ["plan", "payment", "card", "invoice", "charge", "subscription", "cancel"],
       },
       {

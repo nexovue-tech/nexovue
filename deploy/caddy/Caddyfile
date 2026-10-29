@@ -1,7 +1,8 @@
-# The TLS edge of every deployed install: the hosted replica and on-premise.
+# The edge of every install (deploy/compose/nexovue.yaml): self-hosted, hosted and the quickstart.
 #
 # Caddy obtains and renews certificates on its own as long as it knows a
-# hostname and the host answers on 80 and 443.
+# hostname and the host answers on 80 and 443. The quickstart sets
+# NEXOVUE_SITE_SCHEME=http and names localhost ports, and is served without TLS.
 {
 	email {$NEXOVUE_TLS_EMAIL}
 }
@@ -107,7 +108,7 @@
 # one.
 # ---------------------------------------------------------------------------
 
-{$NEXOVUE_APP_HOST} {
+{$NEXOVUE_SITE_SCHEME:https}://{$NEXOVUE_APP_HOST} {
 	import console_headers
 
 	# The API's largest legitimate body is a source map: 64 MiB and its form
@@ -150,7 +151,7 @@
 	}
 }
 
-{$NEXOVUE_INGEST_HOST} {
+{$NEXOVUE_SITE_SCHEME:https}://{$NEXOVUE_INGEST_HOST} {
 	import edge_headers
 
 	# OTLP: the receiver speaks the protocol's own error semantics, so nothing

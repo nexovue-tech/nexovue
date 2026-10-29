@@ -1,0 +1,75 @@
+# The stores on every real install (nexovue.yaml): what compose.infra.yaml defines, plus restarts,
+# log rotation, credentials that must be set and sizes an operator chooses. Listed beside it in
+# nexovue.yaml's `include`: Compose refuses a service redefined by the file that includes it.
+#
+# Sizes default to the smallest server docs/self-hosting/sizing.md supports (16 GB); the quickstart
+# writes smaller ones, a larger server larger ones.
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+services:
+  kafka:
+    <<: *service-defaults
+    environment:
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xmx1g -Xms1g}
+      # Generated once per install and never changed: KRaft writes it into the metadata log.
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:?set KAFKA_CLUSTER_ID}
+    deploy:
+      resources:
+        limits:
+          memory: ${KAFKA_MEMORY:-2048M}
+
+  clickhouse:
+    <<: *service-defaults
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:?set CLICKHOUSE_DB}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:?set CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_READER_PASSWORD: ${CLICKHOUSE_READER_PASSWORD:?set CLICKHOUSE_READER_PASSWORD}
+      CLICKHOUSE_ERASER_PASSWORD: ${CLICKHOUSE_ERASER_PASSWORD:?set CLICKHOUSE_ERASER_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "0"
+      # About 80% of the limit below: one setting in two places, as a Go service's GOMEMLIMIT is.
+      CLICKHOUSE_MAX_SERVER_MEMORY: ${CLICKHOUSE_MAX_SERVER_MEMORY:-5153960755}
+    volumes:
+      # Replaces memory.xml's fixed 4 GiB, mounted at the same path.
+      - ../clickhouse/config.d/memory.deploy.xml:/etc/clickhouse-server/config.d/memory.xml:ro
+    deploy:
+      resources:
+        limits:
+          memory: ${CLICKHOUSE_MEMORY:-6144M}
+
+  postgres:
+    <<: *service-defaults
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          memory: ${POSTGRES_MEMORY:-1024M}
+
+  # The bundled object store. Its one identity is written from the install's own S3 keys at every
+  # start, so no install shares the repository's development keys (deploy/seaweedfs/s3.json). An
+  # install that points S3_ENDPOINT at its own S3 leaves this running and unused.
+  seaweedfs:
+    <<: *service-defaults
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        umask 077
+        printf '{"identities":[{"name":"nexovue","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","List","Tagging","Write"]}]}' \
+          "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY" > /tmp/s3.json
+        exec weed server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.config=/tmp/s3.json \
+          -master.volumeSizeLimitMB=256 -volume.max=$${SEAWEEDFS_VOLUME_MAX}
+    environment:
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+      # Each volume holds up to 256 MB, so this caps the bundled store: 400 is 100 GB.
+      SEAWEEDFS_VOLUME_MAX: ${SEAWEEDFS_VOLUME_MAX:-400}

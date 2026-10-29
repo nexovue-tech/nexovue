@@ -3,10 +3,15 @@
 #
 # Container names rather than a compose file: these run against whatever stack is up,
 # and a restore may well be run from a checkout that is not the one that deployed it.
+#
+# NEXOVUE_PROJECT is the Compose project: `nexovue` for the dev stack and a self-hosted install,
+# `nexovue-app` for the replica. `deploy/nexovue backup` sets it and every credential below from the
+# install's settings file; the defaults are the dev stack's and nothing else's.
 
-CLICKHOUSE_CONTAINER="${CLICKHOUSE_CONTAINER:-nexovue-clickhouse-1}"
-POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-nexovue-postgres-1}"
-KAFKA_CONTAINER="${KAFKA_CONTAINER:-nexovue-kafka-1}"
+NEXOVUE_PROJECT="${NEXOVUE_PROJECT:-nexovue}"
+CLICKHOUSE_CONTAINER="${CLICKHOUSE_CONTAINER:-$NEXOVUE_PROJECT-clickhouse-1}"
+POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-$NEXOVUE_PROJECT-postgres-1}"
+KAFKA_CONTAINER="${KAFKA_CONTAINER:-$NEXOVUE_PROJECT-kafka-1}"
 
 CLICKHOUSE_DB="${CLICKHOUSE_DB:-nexovue}"
 CLICKHOUSE_USER="${CLICKHOUSE_USER:-nexovue}"
@@ -87,3 +92,16 @@ require_container() {
 }
 
 die() { echo "$*" >&2; exit 1; }
+
+# sha256sum on Linux, shasum on a Mac; the same SHA256SUMS format either way.
+sha256_write() {
+    if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi
+}
+
+sha256_check() {
+    if command -v sha256sum >/dev/null; then
+        sha256sum --check --ignore-missing "$@"
+    else
+        shasum -a 256 --check --ignore-missing "$@"
+    fi
+}

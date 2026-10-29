@@ -1,0 +1,6 @@
+<clickhouse>
+    <!-- memory.xml on an install (compose.infra.deploy.yaml): the same absolute cap, sized by the
+         operator with the container. CLICKHOUSE_MAX_SERVER_MEMORY is bytes, about 80% of
+         CLICKHOUSE_MEMORY; memory.xml says why the gap between the two must stay. -->
+    <max_server_memory_usage from_env="CLICKHOUSE_MAX_SERVER_MEMORY"/>
+</clickhouse>

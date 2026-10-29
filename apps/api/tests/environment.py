@@ -19,6 +19,9 @@ TEST_ENVIRONMENT: Final[dict[str, str]] = {
     "LOG_LEVEL": "warn",
     "POSTGRES_DSN": "postgresql://nexovue:secret@localhost:5432/nexovue",
     "CLICKHOUSE_DSN": "clickhouse://nexovue_reader:secret@localhost:8123/nexovue",
+    # The suites exercise the hosted product — billing, the operator console; the
+    # self-hosted install is test_deployment_mode.py's.
+    "NEXOVUE_DEPLOYMENT": "hosted",
 }
 
 # What a deployed install must hold (readiness blocker 17): a suite that builds

@@ -393,3 +393,5 @@ export function acceptInvitation(input: { token: string; name: string; password:
 export function signupStatus() {
   return apiClient.get<{ enabled: boolean }>("system/signup");
 }
+
+export const signupStatusQueryKey = ["system", "signup"] as const;

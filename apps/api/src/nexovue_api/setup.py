@@ -3,6 +3,9 @@
 `python -m nexovue_api.setup` — every deployment runs it first, as `nexovue setup`; running it again
 changes nothing. ClickHouse and the Kafka topics are the pipeline image's half (`/setup`).
 
+`nexovue setup schema` prints the newest Postgres migration this image carries and touches nothing:
+`nexovue rollback` compares two versions' answers to tell whether an upgrade changed the schema.
+
 The bucket is created here, by a step that runs once with the operator's credentials, rather
 than by the API, which should not hold the permission to create one. Where the infrastructure
 already made the bucket — a cloud install — finding it is all this does.
@@ -18,6 +21,7 @@ from typing import Final
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 from nexovue_api.data.objectstore.store import ObjectStore
 from nexovue_api.settings import ObjectStoreSettings
@@ -38,6 +42,11 @@ def migrate_postgres() -> None:
     command.upgrade(Config(str(ALEMBIC_INI)), "head")
 
 
+def postgres_schema() -> str:
+    """The newest migration this image carries — one head, which `test_migrations` holds."""
+    return " ".join(sorted(ScriptDirectory.from_config(Config(str(ALEMBIC_INI))).get_heads()))
+
+
 def object_store_settings() -> ObjectStoreSettings | None:
     """The store from the environment, or None when the install has none configured."""
     present = [name for name in OBJECT_STORE_VARIABLES if os.environ.get(name)]
@@ -55,7 +64,13 @@ def object_store_settings() -> ObjectStoreSettings | None:
     )
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    arguments = sys.argv[1:] if argv is None else argv
+    if arguments == ["schema"]:
+        print(f"postgres {postgres_schema()}")
+        return 0
+    if arguments:
+        raise SystemExit("usage: nexovue setup [schema]")
     migrate_postgres()
     print("postgres: at the newest migration")
 

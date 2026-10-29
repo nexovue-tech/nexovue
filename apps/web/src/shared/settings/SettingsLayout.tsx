@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
-
+import { useIsHosted } from "@/shared/deployment";
 import { useSession } from "@/shared/identity";
 import { useNothingLive } from "@/shared/refresh";
 
@@ -92,6 +92,7 @@ function SettingsNav() {
   const [open, setOpen] = useState(false);
   const needle = typed.trim().toLowerCase();
   const permissions = useSession().data?.user.permissions;
+  const hosted = useIsHosted();
 
   const groups = useMemo(
     () =>
@@ -100,12 +101,13 @@ function SettingsNav() {
         items: group.items.filter(
           (item) =>
             (item.requires === undefined || permissions?.includes(item.requires) === true) &&
+            (item.hostedOnly === undefined || hosted) &&
             (needle === "" ||
               item.title.toLowerCase().includes(needle) ||
               item.keywords.some((word) => word.includes(needle))),
         ),
       })).filter((group) => group.items.length > 0),
-    [needle, permissions],
+    [needle, permissions, hosted],
   );
 
   return (

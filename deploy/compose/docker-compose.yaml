@@ -48,6 +48,8 @@ services:
       # for stacks and everything outside the heap.
       GOMEMLIMIT: 650MiB
       ENV: development
+      # The development stack is the hosted product: billing, the operator console.
+      NEXOVUE_DEPLOYMENT: hosted
       LOG_LEVEL: debug
       LOG_FORMAT: console
       KAFKA_BROKERS: kafka:9092
@@ -102,6 +104,8 @@ services:
       # leaving the rest for stacks and everything outside the heap.
       GOMEMLIMIT: 1300MiB
       ENV: development
+      # The development stack is the hosted product: billing, the operator console.
+      NEXOVUE_DEPLOYMENT: hosted
       LOG_LEVEL: debug
       LOG_FORMAT: console
       KAFKA_BROKERS: kafka:9092
@@ -188,6 +192,8 @@ services:
     # Variable names come from apps/api/src/nexovue_api/settings.py.
     environment: &api-env
       ENV: development
+      # The development stack is the hosted product: billing, the operator console.
+      NEXOVUE_DEPLOYMENT: hosted
       LOG_LEVEL: debug
       LOG_FORMAT: console
       POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
@@ -385,6 +391,8 @@ services:
       - python-venv:/workspace/.venv
     environment: &scheduler-env
       ENV: development
+      # The development stack is the hosted product: billing, the operator console.
+      NEXOVUE_DEPLOYMENT: hosted
       LOG_LEVEL: debug
       LOG_FORMAT: console
       POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}
@@ -592,6 +600,8 @@ services:
       - python-venv:/workspace/.venv
     environment:
       ENV: development
+      # The development stack is the hosted product: billing, the operator console.
+      NEXOVUE_DEPLOYMENT: hosted
       LOG_LEVEL: debug
       LOG_FORMAT: console
       POSTGRES_DSN: ${DEV_POSTGRES_DSN_ASYNC:-postgresql+asyncpg://nexovue:nexovue_dev@postgres:5432/nexovue}

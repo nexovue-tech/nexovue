@@ -1,0 +1,44 @@
+# Try nexovue on a laptop (`nexovue quickstart`): nexovue.yaml over plain http on localhost — the
+# console on :8080, OTLP/HTTP on :4318 — with no certificate to trust. Not for production: one
+# Kafka broker, no backups, no TLS, and `nexovue quickstart` says so when it starts.
+#
+# ENV is development because that is what the settings mean by a laptop served over plain http:
+# session cookies without `Secure`, and a localhost OTLP address the API would refuse elsewhere.
+
+x-laptop: &laptop
+  ENV: development
+
+x-laptop-control-plane: &laptop-control-plane
+  ENV: development
+  APP_BASE_URL: http://localhost:8080
+
+services:
+  proxy:
+    # Replaces 80 and 443; `!override` because `-f` would otherwise append to the list.
+    ports: !override
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:4318:4318"
+    environment:
+      NEXOVUE_SITE_SCHEME: http
+      NEXOVUE_APP_HOST: localhost:8080
+      NEXOVUE_INGEST_HOST: localhost:4318
+
+  receiver:
+    environment: *laptop
+
+  worker:
+    environment: *laptop
+
+  api:
+    environment:
+      <<: *laptop-control-plane
+      OTLP_ENDPOINT: http://localhost:4318
+
+  scheduler-beat:
+    environment: *laptop-control-plane
+
+  scheduler-light:
+    environment: *laptop-control-plane
+
+  scheduler-deliveries:
+    environment: *laptop-control-plane

@@ -32,12 +32,18 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function answer(enabled: boolean) {
+function answer(enabled: boolean, deployment: "hosted" | "self-hosted" = "hosted") {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: URL) => {
       if (url.pathname.endsWith("/system/signup")) {
         return new Response(JSON.stringify({ enabled }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.pathname.endsWith("/system/info")) {
+        return new Response(JSON.stringify({ deployment }), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
@@ -81,6 +87,15 @@ describe("the signup screen", () => {
     const container = await mount();
 
     expect(container.textContent).toContain("nexovue cloud is set up for you");
+    expect(container.querySelector("form")).toBeNull();
+  });
+
+  it("sends nobody to buy a plan on a customer's own install", async () => {
+    answer(false, "self-hosted");
+    const container = await mount();
+
+    expect(container.textContent).toContain("Accounts here are by invitation");
+    expect(container.textContent).not.toContain("nexovue.com");
     expect(container.querySelector("form")).toBeNull();
   });
 

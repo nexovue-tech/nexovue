@@ -1,0 +1,127 @@
+# nexovue's alerts (docs/operations/monitoring.md). The thresholds are that page's first guesses,
+# to be set again from production traffic. Proved by nexovue_test.yml under `promtool test rules`.
+groups:
+  - name: nexovue
+    rules:
+      # A stopped service cannot report its own trouble; its scrape failing is the signal.
+      - alert: NexovueServiceDown
+        expr: up == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.job }} at {{ $labels.instance }} is not answering /metrics"
+
+      # A stopped container drops out of DNS, and so out of discovery: no `up == 0` is ever written,
+      # and the rule above stays quiet (found by the monitoring rehearsal, 2026-10-28).
+      - alert: NexovueServiceMissing
+        expr: |
+          absent(up{job="receiver"}) or absent(up{job="worker"}) or absent(up{job="api"})
+          or absent(up{job="scheduler-beat"}) or absent(up{job="scheduler-light"})
+          or absent(up{job="scheduler-deliveries"})
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "no {{ $labels.job }} is running to be scraped"
+
+      - alert: NexovuePipelineCheckFailing
+        expr: nexovue_worker_check_up == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "worker check {{ $labels.check }} is failing"
+
+      - alert: NexovueWorkerCannotReadOffsets
+        expr: nexovue_worker_kafka_admin_up == 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "the worker cannot read Kafka offsets, so consumer lag is not reported"
+
+      - alert: NexovueSpansFallingBehind
+        expr: max by (group) (nexovue_worker_consumer_lag_records{topic="spans-raw"}) > 50000
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "consumer group {{ $labels.group }} is {{ $value }} spans behind"
+
+      - alert: NexovueLagRising
+        expr: |
+          max by (group, topic) (deriv(nexovue_worker_consumer_lag_records[10m])) > 0
+          and max by (group, topic) (nexovue_worker_consumer_lag_records) > 10000
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $labels.group }} on {{ $labels.topic }} has been falling behind for 10 minutes"
+
+      - alert: NexovueDeadLetters
+        expr: increase(nexovue_worker_dead_letter_records[10m]) > 0
+        labels: {severity: ticket}
+        annotations:
+          summary: "records were parked on {{ $labels.topic }} (docs/operations/dead-letters.md)"
+
+      - alert: NexovueReceiverRefusing
+        expr: |
+          sum(rate(nexovue_receiver_requests_total{outcome="refused"}[10m]))
+            / sum(rate(nexovue_receiver_requests_total[10m])) > 0.05
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "the receiver refuses {{ $value | humanizePercentage }} of export requests"
+
+      - alert: NexovueReceiverKafkaUnavailable
+        expr: increase(nexovue_receiver_events_total{reason="unavailable"}[5m]) > 0
+        labels: {severity: page}
+        annotations:
+          summary: "Kafka refused the receiver; customers' telemetry is being turned away"
+
+      - alert: NexovueSchedulerLoopSilent
+        expr: nexovue_scheduler_loop_silent_seconds > 30
+        for: 1m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.job }}'s loop has been silent for {{ $value }}s"
+
+      - alert: NexovueNoBeatLeading
+        expr: sum(nexovue_scheduler_beat_leading) != 1
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value }} beats lead; exactly one must, or no check is scheduled"
+
+      - alert: NexovueJobsWaiting
+        expr: max by (queue) (nexovue_scheduler_oldest_ready_job_seconds) > 120
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "jobs on {{ $labels.queue }} have waited {{ $value }}s for a worker"
+
+      - alert: NexovueAlertsUndelivered
+        expr: max(nexovue_scheduler_oldest_alert_waiting_seconds) > 300
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "a customer's alert has waited {{ $value }}s to be delivered"
+
+      - alert: NexovueErasuresOverdue
+        expr: max(nexovue_scheduler_erasures_overdue) > 0
+        for: 1h
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $value }} deleted organizations are past their three days"
+
+      - alert: NexovueApiErrors
+        expr: |
+          sum(rate(nexovue_api_requests_total{status="5xx"}[10m]))
+            / sum(rate(nexovue_api_requests_total[10m])) > 0.01
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of API requests fail"
+
+      - alert: NexovueApiSlow
+        expr: |
+          histogram_quantile(0.95, sum by (group, le) (rate(nexovue_api_request_seconds_bucket[10m]))) > 5
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "the API's {{ $labels.group }} requests take {{ $value }}s at the 95th percentile"

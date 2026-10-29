@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import { useIsHosted } from "@/shared/deployment";
 import { formatDecimalBytes } from "@/shared/format/bytes";
 import { formatCount } from "@/shared/format/number";
 import { useProjects } from "@/shared/projects";
@@ -34,7 +35,7 @@ import {
   NO_COST_REASON,
   NO_PRICE_LABEL,
   NOTHING_IS_CAPPED,
-  OWN_PERIOD_NOTE,
+  ownPeriodNote,
   STILL_COUNTING,
   UNION_CAPTION,
 } from "./usage-format";
@@ -80,6 +81,7 @@ export function UsageScreen() {
   const range = usageRange(rangeDays);
 
   const usage = useUsage(range);
+  const hosted = useIsHosted();
   const projects = useProjects();
   const projectNames = new Map((projects.data ?? []).map((project) => [project.id, project.name]));
 
@@ -94,6 +96,7 @@ export function UsageScreen() {
         error={usage.error}
         onRetry={() => void usage.refetch()}
         projectNames={projectNames}
+        hosted={hosted}
       />
     </SettingsLayout>
   );
@@ -108,6 +111,8 @@ interface UsageViewProps {
   error?: unknown;
   onRetry: () => void;
   projectNames: ReadonlyMap<string, string>;
+  /** nexovue's hosted service, which bills; a customer's own install does not. */
+  hosted: boolean;
 }
 
 /** Everything the screen shows, with no query client and no clock behind it. */
@@ -120,6 +125,7 @@ export function UsageView({
   error,
   onRetry,
   projectNames,
+  hosted,
 }: UsageViewProps) {
   return (
     <div className="flex min-h-0 flex-col">
@@ -127,8 +133,8 @@ export function UsageView({
           they stay with the numbers and not in the layout's heading. */}
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
         <div>
-          <p className="text-ink-dim text-sm">{describeScope(range.label)}</p>
-          <p className="mt-0.5 text-ink-dim text-xs">{OWN_PERIOD_NOTE}</p>
+          <p className="text-ink-dim text-sm">{describeScope(range.label, hosted)}</p>
+          <p className="mt-0.5 text-ink-dim text-xs">{ownPeriodNote(hosted)}</p>
         </div>
         <RangeToggle days={range.days} onRangeChange={onRangeChange} />
       </div>
@@ -139,8 +145,12 @@ export function UsageView({
         <InlineFailure title="Usage could not be loaded" error={error} onRetry={onRetry} />
       ) : (
         <>
-          <Summary usage={usage} />
-          <CardinalityNotices warnings={usage.cardinality} projectNames={projectNames} />
+          <Summary usage={usage} hosted={hosted} />
+          <CardinalityNotices
+            warnings={usage.cardinality}
+            projectNames={projectNames}
+            hosted={hosted}
+          />
           {usage.days.length === 0 ? (
             <EmptyState
               title="Nothing metered in this range"
@@ -189,11 +199,15 @@ function RangeToggle({
  * The four things a customer came for — what this month costs, how many services, at
  * what rate, on what plan — and the volume behind them.
  *
+ * **On a customer's own install there is no bill** (`shared/deployment.ts`): the summary
+ * keeps the services, how long data is kept, and the volume, and drops the cost, the rate,
+ * the plan's name and its allowance.
+ *
  * The multiplication is done by the API and read here, never recomputed: the quantity
  * it uses is the month's, and the range in the table below is a different number.
  * Everything the figure does not cover is written next to it.
  */
-function Summary({ usage }: { usage: UsageResponse }) {
+function Summary({ usage, hosted }: { usage: UsageResponse; hosted: boolean }) {
   const unsettledDays = unsettledDayCount(usage.days);
   const allowance = describeAllowance(usage.period);
 
@@ -203,15 +217,17 @@ function Summary({ usage }: { usage: UsageResponse }) {
           figure counts, and at a quarter of this pane those sentences wrapped every
           four words into a column twelve lines deep. */}
       <dl className="grid gap-x-10 gap-y-5 sm:grid-cols-2">
-        <div>
-          <Term>{formatPeriod(usage.period)}</Term>
-          <dd>
-            <Cost period={usage.period} planName={usage.plan.name} />
-          </dd>
-        </div>
+        {hosted ? (
+          <div>
+            <Term>{formatPeriod(usage.period)}</Term>
+            <dd>
+              <Cost period={usage.period} planName={usage.plan.name} />
+            </dd>
+          </div>
+        ) : null}
 
         <div>
-          <Term>Billable services</Term>
+          <Term>{hosted ? "Billable services" : "Services"}</Term>
           {/* The term names the figure, so it is not a bare number to a screen reader. */}
           <dd>
             <p className="font-semibold font-serif text-2xl text-ink tracking-tight">
@@ -221,18 +237,20 @@ function Summary({ usage }: { usage: UsageResponse }) {
           </dd>
         </div>
 
-        <div>
-          <Term>Rate</Term>
-          <dd>
-            <Rate price={usage.price} planName={usage.plan.name} />
-          </dd>
-        </div>
+        {hosted ? (
+          <div>
+            <Term>Rate</Term>
+            <dd>
+              <Rate price={usage.price} planName={usage.plan.name} />
+            </dd>
+          </div>
+        ) : null}
 
         <div>
-          <Term>Plan</Term>
+          <Term>{hosted ? "Plan" : "Retention"}</Term>
           <dd>
-            <p className="text-base text-ink">{usage.plan.name}</p>
-            <p className="mt-1 text-ink-dim text-sm">
+            {hosted ? <p className="text-base text-ink">{usage.plan.name}</p> : null}
+            <p className={hosted ? "mt-1 text-ink-dim text-sm" : "text-base text-ink"}>
               {formatCount(usage.plan.raw_retention_days)} days of traces and logs ·{" "}
               {formatCount(usage.plan.derived_retention_days)} days of metrics
             </p>
@@ -246,13 +264,17 @@ function Summary({ usage }: { usage: UsageResponse }) {
         <Ingested term="Metric points" value={formatCount(usage.totals.metric_points)} />
         <Ingested
           term="Profile samples"
-          value={`${formatCount(usage.totals.profile_samples)} · not billed in preview`}
+          value={
+            hosted
+              ? `${formatCount(usage.totals.profile_samples)} · not billed in preview`
+              : formatCount(usage.totals.profile_samples)
+          }
         />
         <Ingested term="Bytes" value={formatDecimalBytes(usage.totals.bytes_ingested)} />
-        {allowance ? <Ingested term="Included volume" value={allowance} /> : null}
+        {hosted && allowance ? <Ingested term="Included volume" value={allowance} /> : null}
       </dl>
 
-      {isAllowanceSpent(usage.period) ? (
+      {hosted && isAllowanceSpent(usage.period) ? (
         <p className="mt-3 border-warning-solid border-l-2 py-0.5 pl-3 text-sm text-warning-text">
           {describeAllowanceSpent(usage.period)}
         </p>
@@ -329,9 +351,11 @@ function StillMetering() {
 function CardinalityNotices({
   warnings,
   projectNames,
+  hosted,
 }: {
   warnings: readonly CardinalityWarning[];
   projectNames: ReadonlyMap<string, string>;
+  hosted: boolean;
 }) {
   if (warnings.length === 0) return null;
 
@@ -349,13 +373,13 @@ function CardinalityNotices({
             </p>
             {warning.families.map((family) => (
               <p key={`${family.stem}:${family.kind}`} className="mt-1 text-warning-text">
-                {describeFamily(family)}{" "}
+                {describeFamily(family, hosted)}{" "}
                 <span className="font-mono text-2xs">{family.examples.join(", ")}</span>
               </p>
             ))}
             {warning.families.length > 0 ? (
               <p className="max-w-3xl mt-1 text-ink-dim leading-relaxed">
-                {CARDINALITY_REMEDY} {NOTHING_IS_CAPPED}
+                {CARDINALITY_REMEDY} {hosted ? NOTHING_IS_CAPPED : null}
               </p>
             ) : null}
           </li>

@@ -45,3 +45,7 @@ def test_the_console_replaces_whatever_the_edge_served_before(tmp_path: Path) ->
 
     assert copied == 2
     assert sorted(p.name for p in served.rglob("*") if p.is_file()) == ["app-2.js", "index.html"]
+
+
+def test_the_backup_role_runs_the_backup_command() -> None:
+    assert roles.command_for("backup", ["list"]) == ["python", "-m", "nexovue_api.backups", "list"]

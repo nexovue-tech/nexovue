@@ -255,6 +255,10 @@ type Options struct {
 	// take effect. Both want it short.
 	CacheTTL        time.Duration
 	CacheMaxEntries int
+	// EnforceBudget is the hosted service's monthly allowance. A customer's own install has
+	// none — the disk is theirs — so it refuses only a deleted organization and a closed
+	// stop valve (nexovue_platform.deployment; ready-to-deploy, Step 2).
+	EnforceBudget bool
 }
 
 // Cause names why the door must turn ingest away. One cause rather than a
@@ -299,17 +303,19 @@ func (v Verdict) Refused() bool { return v.Cause != Admitted }
 
 // Checker answers the gate from a short-lived copy of the control plane.
 type Checker struct {
-	usage Reader
-	cache *cache.Cache[Usage]
-	now   func() time.Time // replaced in tests; time.Now in production
+	usage         Reader
+	cache         *cache.Cache[Usage]
+	enforceBudget bool
+	now           func() time.Time // replaced in tests; time.Now in production
 }
 
 // New builds a checker over a usage reader.
 func New(usage Reader, opts Options) *Checker {
 	return &Checker{
-		usage: usage,
-		cache: cache.New[Usage](opts.CacheTTL, opts.CacheMaxEntries),
-		now:   time.Now,
+		usage:         usage,
+		cache:         cache.New[Usage](opts.CacheTTL, opts.CacheMaxEntries),
+		enforceBudget: opts.EnforceBudget,
+		now:           time.Now,
 	}
 }
 
@@ -372,6 +378,9 @@ func (c *Checker) Check(ctx context.Context, orgID string, door nexovuev1.Door) 
 		return Verdict{Cause: IngestSuspended}, nil
 	}
 
+	if !c.enforceBudget {
+		return Verdict{}, nil
+	}
 	budget := held.budgetFor(door)
 	if held.spent(budget) {
 		return Verdict{Cause: AllowanceSpent, Budget: budget, ResetsOn: month.ResetsOn()}, nil

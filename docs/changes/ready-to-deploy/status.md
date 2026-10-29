@@ -2,11 +2,12 @@
 
 ## Lifecycle status
 
-In development — plan approved 2026-10-28; Step 0 started
+In review — Steps 0-3, 5, 6, 7 and 11 built and rehearsed on the founder's Mac; Steps 4, 8, 9, 10 deferred
+(founder, 2026-10-28). Uncommitted: the founder asked for every step's code before one commit.
 
 ## Current task
 
-Step 0 — the repository run like production; T0a, the deep history scan.
+The self-review and the full gate, before asking to commit.
 
 ## Completed
 
@@ -33,12 +34,22 @@ Step 0 — the repository run like production; T0a, the deep history scan.
 
 ## Next action
 
-Finish Step 0 (T0a-T0f), then Step 1.
+The founder reviews and commits. Then the rehearsals only a Linux machine can give — install, offline,
+upgrade and rollback between two releases, the two-machine restore — on a Lima VM or the first server,
+and the first `v*` release to carry the kit.
 
 ## Open decisions
 
-None. Plan Question 3 answered 2026-10-28: Free and private now (T0b-T0f), protection rulesets (T0g)
-when `going-public` publishes.
+1. **Rollback across a schema change** (`docs/operations/rollback.md`). Built conservatively: any change
+   in either store's newest migration makes `rollback` a restore of the pre-upgrade backup, losing what
+   came after. The alternative is marking migrations additive so the old version runs on — work in every
+   migration from then on. Recommended: keep the conservative rule until a customer needs more.
+2. **The Linux rehearsals** (readiness A1, A3): no Lima and no CI job (founder, 2026-10-29) — a friend
+   of the founder installs from the kit on a Linux server and reports back. Needs the first release
+   carrying the kit, and read access to the images while the repository and its packages are private.
+
+Plan Question 3 answered 2026-10-28: Free and private now (T0b-T0f), protection rulesets (T0g) when
+`going-public` publishes.
 
 ## Blocked
 
@@ -46,8 +57,15 @@ Nothing.
 
 ## Risks
 
-- **The repository was public until 2026-10-28** with no `going-public` work done. A pattern scan found
-  no real secret; the deep scan (T0a) is still owed before it is ever published again.
+- **The repository was public until 2026-10-28** with no `going-public` work done. The deep scan (T0a)
+  found no live secret.
+- **Never run on Linux.** Everything in Steps 3 and 5 ran on Docker Desktop on a Mac (bash 3.2, BSD tools).
+  The script is written for both and `shellcheck` passes, but GNU-only paths (`mv -T`, `sha256sum`, systemd
+  units) have run only in the tests' stand-in or not at all.
+- **Offline bundle size.** About 1.5 GB per architecture by estimate, against GitHub's 2 GiB per file; the
+  release refuses a file over 1.9 GB rather than failing at upload. Not measured until the first release.
+- **One broker by default.** A broker failure refuses telemetry until it returns (nothing accepted is
+  lost); three brokers must be chosen at install.
 
 See `change.md`, *Risks and rollback*.
 
@@ -143,13 +161,76 @@ Step 1, 2026-10-28:
   client_golang, otlp 1.11.1), and @tanstack/react-virtual 3.14.23, which renders no rows in jsdom
   (pinned at 3.14.10 until it is understood).
 
+- **Step 2, the deployment mode** — `NEXOVUE_DEPLOYMENT` (`nexovue_platform.deployment`; self-hosted unless
+  set). Self-hosted: billing, the operator console and support access are not mounted; a payment-processor
+  key refuses to start; the scheduler schedules no payment-grace sweep; the receiver enforces no monthly
+  allowance but still refuses a deleted organization and a closed stop valve; the console hides Billing
+  and Support access and shows the usage screen without cost, rate, plan or allowance. Proved by
+  `test_deployment_mode.py` (6), `test_beat_schedule.py`, `TestASelfHostedInstallHasNoMonthlyAllowance`,
+  the usage view's self-hosted test and `settings-nav.test.ts`; `/system/info` names the mode on the dev
+  stack. **Differences from the design:** support access is hosted-only too (it exists for nexovue's
+  staff, who have no access to a customer's install); the hosted service does not *require* a processor
+  key in production, because the replica runs as production with none and the routes already refuse by
+  variable name; the console learns the mode from `/system/info`, not the sign-in identity, because it is
+  a fact about the install. `just check` exit 0: Python 4,424, web 1,368, SDK 124.
+
+- **Steps 3, 5, 6, 7, 11** — built 2026-10-28; what changed from the plan is the plan's *Outcome*.
+  Proved by: `test_compose_contract.py` (34 — every layout rendered by Compose itself: only the edge
+  publishes, every service restarts and is health-checked, images by version, the mode per layout, no
+  development key anywhere, the overlays add no lists), `test_install_script.py` (17, against a stand-in
+  Docker), `test_backup_retention.py` (4), `test_backups_live.py` (4, real S3), `test_setup_schema.py`,
+  `cmd/setup/main_test.go`, `promtool test rules` (8 cases) and `shellcheck` in `just lint-deploy`.
+  **Rehearsed on the Mac**, from images built from this checkout:
+  - *Quickstart* — healthy in 23 s; the owner signed in; an ingest key made; a span sent to `:4318`
+    through the edge read back as a trace; `/system/info` said `self-hosted`, billing answered 404.
+  - *Three brokers (Step 6)* — replication 3, `min.insync.replicas` 2 on every topic. 75 s of load with
+    `kafka-2` stopped for 28 s: 2,627 accepted, 0 refused, 2,627 records in Kafka, the worker accounted
+    for every one (351 kept, 2,276 sampled out), every partition back to three in-sync replicas.
+  - *Backup and restore (Step 5)* — shipped off the host (the dev stack's SeaweedFS standing in), the
+    install and its local backups deleted, a fresh start with the saved settings, restored from the
+    off-host copy: `verify.sh` passed, 351 spans and 2 keys back, the bucket object byte for byte, the
+    owner signed in — 72 s in all (`disaster-recovery.md`).
+  - *Monitor (Step 7)* — six jobs up; the worker stopped; `NexovueServiceMissing` fired at two minutes and
+    reached Alertmanager.
+  **Defects the rehearsals found, each fixed with a test seen red first:** the masking secret generated
+  URL-safe, which the worker refuses (3 of 6 runs red); a backup whose upload failed reported success
+  (bash 3.2 does not stop inside `$(…)`); a Mac's `tar` wrote `._` entries before `SHA256SUMS`; the
+  restore dropped the telemetry database and then connected into it; a stopped service never raised
+  `up == 0`; `install` would carry on with an empty answer, and leave half-written settings.
+  The self-review added one more: a snapshot's file names, read back from the off-host bucket on a
+  restore, are refused unless plain (`../x` would land outside the snapshot).
+  **Gate, 2026-10-28:** `just check` — formatting, ruff, mypy, golangci-lint, biome, `lint-deploy`
+  (shellcheck, promtool, amtool) and the Go tests clean; Python 4,499 passed (3 skipped), web 1,368,
+  SDK 124; contracts and bundle checks pass. The first run failed one test — the monitor starting before
+  the setup step — which is deliberate (it must watch a failing setup) and now recorded in
+  `test_compose_dependencies.py`.
+
+- **Design QA, 2026-10-29** — the self-hosted console against design §4, on a running quickstart.
+  The settings menu, the usage figures, billing and support routes in the API: as designed. **Three
+  mismatches, fixed and seen fixed in the console:** the usage screen's sentences still spoke of a bill
+  (`describeScope`, `ownPeriodNote`, `describeFamily`; `UsageView.test.ts` red with the old sentence,
+  green with the fix); `/settings/billing` and `/settings/support` opened their screens, which failed
+  to load, instead of the console's "No screen at this address" (`app/HostedOnly.tsx`,
+  `HostedOnly.test.ts`); and a closed self-hosted install's sign-in offered "Start sending traces",
+  leading to "Choose a plan at nexovue.com" — now "Ask whoever runs nexovue for your organization to
+  invite you" (`LoginScreen.test.ts`, `SignupScreen.test.ts`). Console: biome, `tsc` and 1,374 tests.
+- **Production-readiness assessment, 2026-10-29** — **NOT READY** for a first rollout, seven blockers
+  (A1-A7), written into `docs/operations/production-readiness.md`. Every one is closed by a run on
+  Linux, a real hostname, a release, or a decision at the first deployment — none by more code here.
+  Blockers 2 and 5 of the earlier review are marked fixed by this change.
+
 ## Specification impact
 
-None yet. The deployment mode will touch billing's specification.
+The deployment mode touches billing's specification: a self-hosted install has no billing at all. F37's
+catalog entry is now "built, not yet on a server".
 
 ## Documentation impact
 
-Listed in `change.md`. ADR-006 is to record the three-cloud amendment.
+New: `docs/self-hosting/{install,upgrade,backup,sizing}.md`, `docs/operations/{first-deploy,release}.md`.
+Rewritten: `deployment.md`, `rollback.md`, `backup-and-restore.md`, `disaster-recovery.md`. Updated:
+`monitoring.md`, `first-accounts.md`, `production-readiness.md` (rows and blockers 9, 10),
+`operations/README.md`, `current-system-reference.md` §16, the F37 catalog entry, ADR-006 (amended),
+ADR-019 (executed).
 
 ## Last updated
 

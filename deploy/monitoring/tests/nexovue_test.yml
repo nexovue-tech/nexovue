@@ -1,0 +1,144 @@
+# `promtool test rules deploy/monitoring/tests/nexovue_test.yml` (just lint-deploy): each alert
+# fires on the failure it names and stays quiet on a healthy install.
+rule_files:
+  - ../rules/nexovue.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: a stopped service is reported by its missing scrape
+    interval: 1m
+    input_series:
+      - series: 'up{job="worker", instance="10.0.0.5:8081"}'
+        values: "1 0 0 0 0"
+      - series: 'up{job="api", instance="10.0.0.6:8000"}'
+        values: "1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: NexovueServiceDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: NexovueServiceDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: worker, instance: "10.0.0.5:8081"}
+            exp_annotations:
+              summary: "worker at 10.0.0.5:8081 is not answering /metrics"
+
+  - name: two leading beats, or none, page; one does not
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_beat_leading{job="scheduler-beat", instance="a"}'
+        values: "1 1 1 1 1 1"
+      - series: 'nexovue_scheduler_beat_leading{job="scheduler-beat", instance="b"}'
+        values: "0 0 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: NexovueNoBeatLeading
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: NexovueNoBeatLeading
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "2 beats lead; exactly one must, or no check is scheduled"
+
+  - name: a parked record raises a ticket
+    interval: 1m
+    input_series:
+      - series: 'nexovue_worker_dead_letter_records{topic="spans-dlq"}'
+        values: "0 0 0 1 1"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: NexovueDeadLetters
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: NexovueDeadLetters
+        exp_alerts:
+          - exp_labels: {severity: ticket, topic: spans-dlq}
+            exp_annotations:
+              summary: "records were parked on spans-dlq (docs/operations/dead-letters.md)"
+
+  - name: the receiver refusing more than one export in twenty
+    interval: 1m
+    input_series:
+      - series: 'nexovue_receiver_requests_total{outcome="accepted"}'
+        values: "0+90x30"
+      - series: 'nexovue_receiver_requests_total{outcome="refused"}'
+        values: "0+10x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: NexovueReceiverRefusing
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "the receiver refuses 10% of export requests"
+
+  - name: spans far behind for ten minutes
+    interval: 1m
+    input_series:
+      - series: 'nexovue_worker_consumer_lag_records{group="spans", topic="spans-raw"}'
+        values: "2000 60000x20"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NexovueSpansFallingBehind
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: NexovueSpansFallingBehind
+        exp_alerts:
+          - exp_labels: {severity: page, group: spans}
+            exp_annotations:
+              summary: "consumer group spans is 60000 spans behind"
+
+  - name: API failures above one in a hundred
+    interval: 1m
+    input_series:
+      - series: 'nexovue_api_requests_total{group="traces", status="2xx"}'
+        values: "0+95x30"
+      - series: 'nexovue_api_requests_total{group="traces", status="5xx"}'
+        values: "0+5x30"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: NexovueApiErrors
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "5% of API requests fail"
+
+  - name: an alert waiting five minutes to go out pages
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_oldest_alert_waiting_seconds{job="scheduler-beat"}'
+        values: "0 400x12"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NexovueAlertsUndelivered
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "a customer's alert has waited 400s to be delivered"
+
+  - name: a service with no container at all is missed, not merely down
+    interval: 1m
+    input_series:
+      - series: 'up{job="receiver", instance="a"}'
+        values: "1x5"
+      - series: 'up{job="api", instance="b"}'
+        values: "1x5"
+      - series: 'up{job="scheduler-beat", instance="c"}'
+        values: "1x5"
+      - series: 'up{job="scheduler-light", instance="d"}'
+        values: "1x5"
+      - series: 'up{job="scheduler-deliveries", instance="e"}'
+        values: "1x5"
+      - series: 'up{job="worker", instance="f"}'
+        values: "1 stale"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: NexovueServiceMissing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: NexovueServiceMissing
+        exp_alerts:
+          - exp_labels: {severity: page, job: worker}
+            exp_annotations:
+              summary: "no worker is running to be scraped"

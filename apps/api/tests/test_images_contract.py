@@ -21,7 +21,7 @@ IMAGES: Final = ROOT / "deploy" / "images"
 NEXOVUE: Final = "nexovue"
 PIPELINE: Final = "nexovue-pipeline"
 PIPELINE_BINARIES: Final = ("/receiver", "/worker", "/dlq", "/setup")
-DEPLOYED_FILES: Final = ("docker-compose.app.yaml",)
+DEPLOYED_FILES: Final = ("nexovue.yaml",)
 
 
 def _services(file_name: str) -> dict[str, Any]:

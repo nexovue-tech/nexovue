@@ -41,6 +41,7 @@ from nexovue_platform.checks.task import (
     probe_queue,
     time_limits_for,
 )
+from nexovue_platform.deployment import HOSTED
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -392,9 +393,11 @@ class Beat:
                 SHARED_QUEUE,
             ),
             EXPIRY_SWEEP_ENTRY: (SWEEP_EXPIRED_TASK, EXPIRY_SWEEP_SECONDS, SHARED_QUEUE),
-            GRACE_SWEEP_ENTRY: (END_LAPSED_GRACE_TASK, GRACE_SWEEP_SECONDS, SHARED_QUEUE),
             ERASURE_ENTRY: (ERASE_OWED_TASK, ERASURE_SECONDS, SHARED_QUEUE),
         }
+        # A customer's own install charges nobody, so no payment has a grace period to end.
+        if self._settings.nexovue_deployment == HOSTED:
+            wanted[GRACE_SWEEP_ENTRY] = (END_LAPSED_GRACE_TASK, GRACE_SWEEP_SECONDS, SHARED_QUEUE)
         # A sweep fits in a minute; the night's erasure does not.
         limits = {ERASURE_ENTRY: (ERASURE_SOFT_TIME_LIMIT_SECONDS, ERASURE_TIME_LIMIT_SECONDS)}
         entries: dict[str, Entry] = {}

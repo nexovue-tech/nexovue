@@ -73,6 +73,8 @@ select = [
 "apps/api/src/nexovue_api/setup.py" = ["T201"]
 # The `nexovue` role command's usage and web-assets line, read by whoever starts a container.
 "apps/api/src/nexovue_api/roles.py" = ["T201"]
+# `nexovue backup`'s progress, read by whoever runs or schedules a backup; stdout carries the tar.
+"apps/api/src/nexovue_api/backups.py" = ["T201"]
 
 [tool.mypy]
 python_version = "3.13"

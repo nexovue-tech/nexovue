@@ -4,10 +4,11 @@ import { type FormEvent, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { TextField } from "@/shared/components/TextField";
+import { useSystemInfo } from "@/shared/deployment";
 import { rememberFirstSetup } from "@/shared/session";
 
 import { AuthScreenLayout, FormMessage } from "./AuthScreenLayout";
-import { PASSWORD_MIN_LENGTH, signup, signupStatus } from "./api";
+import { PASSWORD_MIN_LENGTH, signup, signupStatus, signupStatusQueryKey } from "./api";
 import { describeFormProblem } from "./problem-fields";
 
 /**
@@ -17,10 +18,29 @@ import { describeFormProblem } from "./problem-fields";
 export function SignupScreen() {
   // Asked, not assumed (F31, D10): nexovue's cloud sets its customers up after they
   // pay, and says so here rather than offering a form the API will refuse.
-  const status = useQuery({ queryKey: ["system", "signup"], queryFn: signupStatus });
-  // Nothing until the answer is in, so a closed signup never flashes a form first.
+  const status = useQuery({ queryKey: signupStatusQueryKey, queryFn: signupStatus });
+  const install = useSystemInfo();
+  // Nothing until the answers are in, so a closed signup never flashes a form first.
   // A failed answer shows the form: the API refuses a closed signup regardless.
-  if (status.isPending) return null;
+  if (status.isPending || install.isPending) return null;
+  // A customer's own install has no plan to buy: its people arrive by invitation.
+  if (status.data?.enabled === false && install.data?.deployment !== "hosted") {
+    return (
+      <AuthScreenLayout
+        title="Accounts here are by invitation"
+        intro="Ask whoever runs nexovue for your organization to invite you. The invitation's link lets you choose your password."
+        footer={
+          <p>
+            Already have an account?{" "}
+            <Link to="/login" className="text-brand-text hover:underline">
+              Sign in
+            </Link>
+            .
+          </p>
+        }
+      />
+    );
+  }
   if (status.data?.enabled === false) {
     return (
       <AuthScreenLayout

@@ -31,7 +31,7 @@ snapshot="$(cd "$snapshot" && pwd)"
 require_container "$POSTGRES_CONTAINER"
 
 echo "verifying the artifact before touching the store"
-( cd "$snapshot" && shasum -a 256 --check --ignore-missing SHA256SUMS ) \
+( cd "$snapshot" && sha256_check SHA256SUMS ) \
     || die "checksum mismatch — this snapshot is corrupt, do not restore it"
 
 # One transaction, so a failure leaves the control plane as it was rather than

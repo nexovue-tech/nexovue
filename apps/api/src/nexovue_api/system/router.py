@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Final
 
 from fastapi import APIRouter
+from nexovue_platform.deployment import Deployment
 from pydantic import BaseModel
 
 from nexovue_api.buildinfo import BuildInfo, build_info
@@ -45,9 +46,16 @@ class IngestEndpoint(BaseModel):
 KEY_HEADER: Final = "x-nexovue-key"
 
 
-@router.get("/info", summary="Which build is serving this request")
-async def system_info() -> BuildInfo:
-    return build_info()
+class SystemInfo(BuildInfo):
+    """The build, and which kind of install it is — the console hides billing on a
+    customer's own install (nexovue_platform.deployment)."""
+
+    deployment: Deployment
+
+
+@router.get("/info", summary="Which build is serving this request, and what kind of install")
+async def system_info(settings: AppSettings) -> SystemInfo:
+    return SystemInfo(**build_info().model_dump(), deployment=settings.nexovue_deployment)
 
 
 @router.get("/ingest", summary="Where to send telemetry")

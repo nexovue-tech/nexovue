@@ -191,18 +191,26 @@ arm64; on an empty machine `docker compose up` with them prepares the stores and
   rather than by release-please — it reads only Conventional-Commit titles, which this repository does
   not use, and it needs Actions allowed to open pull requests, which Step 0 switched off.*
 
+*Scope changed 2026-10-28 (founder): **built now — 2, 3, 5, 6, 7 and 11**, which any customer needs and
+which can be rehearsed on a laptop. **Deferred until a customer needs them — 4 (Azure storage), 8
+(Ansible), 9 (Helm), 10 (Terraform):** code written today for a cloud nobody has chosen cannot be proven
+without an account and drifts as the providers change; the first customer's cloud and size say which one
+to write, in days. Until then a server created by hand in any cloud's console and `./nexovue install`
+(Step 3) is the deployment. Their sections stay below as the design for that day. Step and task numbers
+are kept, so references stay valid.*
+
 ### Step 2 — The deployment mode
 
 *Judgeable:* the same image started as self-hosted shows no Billing, takes telemetry past any allowance and
 refuses Razorpay settings; started as hosted, it behaves as today.
 
-- [ ] **T9** — `settings.py` (API and scheduler): `NEXOVUE_DEPLOYMENT` (`self-hosted` default), payments
+- [x] **T9** — `settings.py` (API and scheduler): `NEXOVUE_DEPLOYMENT` (`self-hosted` default), payments
   refused when self-hosted, required in hosted production · proved by `test_settings.py`.
-- [ ] **T10** — `main.py`: billing and the operator console mounted only when hosted; `/system/info` names
+- [x] **T10** — `main.py`: billing and the operator console mounted only when hosted; `/system/info` names
   the mode · proved by `test_deployment_mode.py` (routes absent, 404; info answers the mode).
-- [ ] **T11** — `apps/receiver/internal/config/config.go`, `cmd/receiver/main.go`, `internal/otlp/gates.go`:
+- [x] **T11** — `apps/receiver/internal/config/config.go`, `cmd/receiver/main.go`, `internal/otlp/gates.go`:
   self-hosted skips the budget but keeps the suspension valve · proved by `gates_test.go`.
-- [ ] **T12** — `apps/web/src/shared/settings/settings-nav.ts`, the usage screen: Billing hidden and the plan
+- [x] **T12** — `apps/web/src/shared/settings/settings-nav.ts`, the usage screen: Billing hidden and the plan
   omitted when self-hosted · proved by `settings-nav.test.ts` and the usage screen's tests.
 
 ### Step 3 — Try it locally, and the self-hosted install
@@ -211,50 +219,39 @@ refuses Razorpay settings; started as hosted, it behaves as today.
 Lima VM, `./nexovue install` from published images, then from the offline bundle with the network cut, then
 `upgrade` and `rollback`.
 
-- [ ] **T13** — `deploy/compose/nexovue.yaml` (the self-hosted file, replacing `docker-compose.onprem.yaml`,
+- [x] **T13** — `deploy/compose/nexovue.yaml` (the self-hosted file, replacing `docker-compose.onprem.yaml`,
   every `TODO` answered, per-image names), `nexovue.hosted.yaml` (the hosted overlay, replacing
   `docker-compose.app.yaml`), `nexovue.quickstart.yaml`; `insight` and `ollama` removed · proved by
   `test_compose_contract.py` (both stacks render; no service without a healthcheck; only the edge publishes
   ports; images by version).
-- [ ] **T14** — `deploy/nexovue` (bash): `quickstart`, `install [--offline]`, `upgrade`, `rollback` (refused
+- [x] **T14** — `deploy/nexovue` (bash): `quickstart`, `install [--offline]`, `upgrade`, `rollback` (refused
   past a non-additive migration), `status`; preflight checks; secrets generated · proved by
   `test_install_script.py` (the script against a stub `docker` on `PATH`) and `shellcheck` in CI.
-- [ ] **T15** — `release.yml`: the install kit and the two offline bundles (OCI archives, `SHA256SUMS`,
+- [x] **T15** — `release.yml`: the install kit and the two offline bundles (OCI archives, `SHA256SUMS`,
   cosign `sign-blob`) attached to the release · proved by the rehearsal.
-- [ ] **T16** — `docs/self-hosting/{install,upgrade,backup,sizing}.md` for a customer's IT team · proved by
+- [x] **T16** — `docs/self-hosting/{install,upgrade,backup,sizing}.md` for a customer's IT team · proved by
   the rehearsal following the text literally.
-
-### Step 4 — One object-store interface, S3 and Azure
-
-*Judgeable:* the live suites pass with the store pointed at SeaweedFS and at Azurite, Microsoft's Azure
-storage emulator.
-
-- [ ] **T17** — `packages/py-platform/src/nexovue_platform/objectstore/{__init__,s3,azure}.py`: `put`, `get`,
-  `delete`, `delete_prefix`, `ensure_bucket`; S3 with Oracle's checksum settings, Azure through
-  `azure-storage-blob`; `OBJECT_STORE=s3|azure` · proved by `test_objectstore_live.py` run against both.
-- [ ] **T18** — the API's `data/objectstore/` and the scheduler's `probes/files.py` move onto it; their
-  boto3 clients deleted · proved by the existing source-map, check-file and erasure suites.
 
 ### Step 5 — Backups off the host, and a restore on a fresh machine
 
 *Judgeable:* a backup taken on one Lima VM appears in the bucket; restored on a second fresh VM, the console
 shows the same data and `backup-verify` passes.
 
-- [ ] **T19** — `deploy/backup/common.sh`: the project name and credentials from the install's `.env`, not
+- [x] **T19** — `deploy/backup/common.sh`: the project name and credentials from the install's `.env`, not
   dev defaults · proved by a backup of the replica (`nexovue-app`).
-- [ ] **T20** — `deploy/backup/ship.sh` and `nexovue backup-ship` (in the image, using T17): upload,
+- [x] **T20** — `deploy/backup/ship.sh` and `nexovue backup-ship` (in the image, using T17): upload,
   checksum check, prune to 7 daily and 4 weekly · proved by `test_backup_retention.py` (which snapshots are
   kept) and the rehearsal.
-- [ ] **T21** — `deploy/systemd/nexovue-backup.{service,timer}` (installed by T14 and Ansible); a CronJob
+- [x] **T21** — `deploy/systemd/nexovue-backup.{service,timer}` (installed by T14 and Ansible); a CronJob
   in the chart · proved by the rehearsal.
-- [ ] **T22** — the restore rehearsal, recorded in `docs/operations/disaster-recovery.md` with the version,
+- [x] **T22** — the restore rehearsal, recorded in `docs/operations/disaster-recovery.md` with the version,
   the date and the time taken (objective: back within 4 hours).
 
 ### Step 6 — Three Kafka brokers
 
 *Judgeable:* three brokers under load, one stopped, every acknowledged record stored.
 
-- [ ] **T23** — `deploy/compose/nexovue.kafka3.yaml` (three KRaft nodes, controller and broker each),
+- [x] **T23** — `deploy/compose/nexovue.kafka3.yaml` (three KRaft nodes, controller and broker each),
   `setup` deriving replication 3 / `min.insync.replicas` 2 · proved by `topics_test.go` (T1) and a chaos
   run recorded in `status.md`.
 
@@ -262,7 +259,7 @@ shows the same data and `backup-verify` passes.
 
 *Judgeable:* the `monitoring` profile shows every target up, and an alert fires when a worker is stopped.
 
-- [ ] **T24** — `deploy/monitoring/{prometheus.yml,rules/*.yml,rules/*_test.yml,uptime.md}` and the
+- [x] **T24** — `deploy/monitoring/{prometheus.yml,rules/*.yml,rules/*_test.yml,uptime.md}` and the
   `monitoring` Compose profile · proved by `promtool check rules` and `promtool test rules` in CI.
 
 ### Step 8 — Path A: Ansible on Linux servers
@@ -270,20 +267,31 @@ shows the same data and `backup-verify` passes.
 *Judgeable:* the playbook installs nexovue on one fresh Lima VM, then spread over three by role; upgrade,
 rollback and a host restart all leave it working.
 
-- [ ] **T25** — `deploy/ansible/{site.yml,upgrade.yml,rollback.yml,roles/{docker,nexovue,backup}}`,
+- [ ] ~~deferred~~ **T25** — `deploy/ansible/{site.yml,upgrade.yml,rollback.yml,roles/{docker,nexovue,backup}}`,
   inventory groups `edge`, `app`, `kafka`, `clickhouse`, `postgres`, rendering T13's files per host ·
   proved by `ansible-lint` in CI and the rehearsal.
+
+### Step 4 — One object-store interface, S3 and Azure
+
+*Judgeable:* the live suites pass with the store pointed at SeaweedFS and at Azurite, Microsoft's Azure
+storage emulator.
+
+- [ ] ~~deferred~~ **T17** — `packages/py-platform/src/nexovue_platform/objectstore/{__init__,s3,azure}.py`: `put`, `get`,
+  `delete`, `delete_prefix`, `ensure_bucket`; S3 with Oracle's checksum settings, Azure through
+  `azure-storage-blob`; `OBJECT_STORE=s3|azure` · proved by `test_objectstore_live.py` run against both.
+- [ ] ~~deferred~~ **T18** — the API's `data/objectstore/` and the scheduler's `probes/files.py` move onto it; their
+  boto3 clients deleted · proved by the existing source-map, check-file and erasure suites.
 
 ### Step 9 — Path B: the Helm chart
 
 *Judgeable:* on a three-node kind cluster, `helm install` with the three operators gives a working console;
 upgrade, rollback, and a node removed.
 
-- [ ] **T26** — `deploy/helm/nexovue/` (Helm 4, chart v2): one Deployment per role, `setup` as a
+- [ ] ~~deferred~~ **T26** — `deploy/helm/nexovue/` (Helm 4, chart v2): one Deployment per role, `setup` as a
   pre-install/pre-upgrade hook Job, the Caddy edge, stores `operator|external` (Strimzi, Altinity,
   CloudNativePG resources; external endpoints) · proved by `ct lint`, `helm unittest`, `kubeconform` in CI,
   and the rehearsal.
-- [ ] **T27** — `release.yml`: the chart pushed to `oci://ghcr.io/nexovue-tech/charts` with the product
+- [ ] ~~deferred~~ **T27** — `release.yml`: the chart pushed to `oci://ghcr.io/nexovue-tech/charts` with the product
   version · proved by the release.
 
 ### Step 10 — Infrastructure for AWS, Azure and Oracle
@@ -291,23 +299,23 @@ upgrade, rollback, and a node removed.
 *Judgeable:* `just infra-check` passes for all three clouds; `status.md` lists, per cloud, what is proven
 and what waits for an account.
 
-- [ ] **T28** — `infra/aws/` (VPC, security groups, EC2 or EKS, ALB/NLB, Route 53, S3, state bucket)
+- [ ] ~~deferred~~ **T28** — `infra/aws/` (VPC, security groups, EC2 or EKS, ALB/NLB, Route 53, S3, state bucket)
   · proved by `tofu validate`, `tofu test` with mocked providers, `tflint`, `checkov`.
-- [ ] **T29** — `infra/azure/` (VNet, NSGs, VMs or AKS, load balancer, DNS zone, Blob storage) · same checks.
-- [ ] **T30** — `infra/oci/` (VCN, security lists, compute or OKE, load balancer, DNS, Object Storage with its
+- [ ] ~~deferred~~ **T29** — `infra/azure/` (VNet, NSGs, VMs or AKS, load balancer, DNS zone, Blob storage) · same checks.
+- [ ] ~~deferred~~ **T30** — `infra/oci/` (VCN, security lists, compute or OKE, load balancer, DNS, Object Storage with its
   S3-compatible keys) · same checks.
-- [ ] **T31** — `justfile` `infra-check` and its CI job.
+- [ ] ~~deferred~~ **T31** — `justfile` `infra-check` and its CI job.
 
 ### Step 11 — The SDK release, the runbooks and the records
 
 *Judgeable:* the documents read true against what was rehearsed.
 
-- [ ] **T32** — `release.yml`: the SDK on `sdk-vX.Y.Z` through npm trusted publishing, enabled by a
+- [x] **T32** — `release.yml`: the SDK on `sdk-vX.Y.Z` through npm trusted publishing, enabled by a
   repository variable once `going-public` is done · proved by a dry run (`npm publish --dry-run`).
-- [ ] **T33** — `docs/operations/{first-deploy,release}.md`; `deployment.md`, `rollback.md`,
+- [x] **T33** — `docs/operations/{first-deploy,release}.md`; `deployment.md`, `rollback.md`,
   `backup-and-restore.md`, `monitoring.md`, `production-readiness.md`, `current-system-reference.md`
   updated.
-- [ ] **T34** — ADR-006 amended (three clouds, OpenTofu, cloud-init with Ansible), ADR-019 marked executed,
+- [x] **T34** — ADR-006 amended (three clouds, OpenTofu, cloud-init with Ansible), ADR-019 marked executed,
   ADR-022 (stores on Kubernetes); this plan's Outcome and `status.md`.
 
 ## New risks
@@ -335,12 +343,12 @@ and what waits for an account.
 - [x] Specification approval — `change.md`, 2026-10-11
 - [x] Design approval — `design.md`, 2026-10-11
 - [x] **Plan approval — before the first edited file** — 2026-10-28, Step 0 included
-- [ ] Implementation
-- [ ] Tests
-- [ ] Review
-- [ ] Design QA — the self-hosted Billing removal against the design
-- [ ] Production-readiness assessment
-- [ ] Documentation and status update
+- [x] Implementation
+- [x] Tests
+- [x] Review
+- [x] Design QA — the self-hosted Billing removal against the design
+- [x] Production-readiness assessment — NOT READY, blockers A1-A7
+- [x] Documentation and status update
 
 ## Validation plan
 
@@ -359,4 +367,42 @@ begins by running `tofu plan` against the real account.
 
 ## Outcome
 
-Filled in when the work completes.
+Built 2026-10-28: Steps 0-3, 5, 6, 7 and 11. Steps 4, 8, 9 and 10 deferred by the founder until a customer
+chooses a cloud (scope note above). What changed from the plan, and why:
+
+- **Compose files (T13).** `nexovue.yaml` is the self-hosted install *and* the base every layout overlays
+  (`nexovue.hosted.yaml`, `nexovue.quickstart.yaml`, `nexovue.kafka3.yaml`, and `nexovue.build.yaml` for
+  the replica), where the plan had separate files. One definition of every service; overlays change
+  settings only, which `test_compose_contract.py` holds. The stores' install settings moved into one
+  `compose.infra.deploy.yaml` (the onprem and hosted variants are deleted). `docker-compose.app.yaml` and
+  `docker-compose.onprem.yaml` are deleted, with `insight` and `ollama`.
+- **The bundled object store** writes its one identity from the install's own S3 keys at start; every
+  deployed install used to share the repository's development keys (`deploy/seaweedfs/s3.json`). Not in
+  the plan; found reading the files.
+- **ClickHouse's memory cap** became a setting (`memory.deploy.xml`, `CLICKHOUSE_MAX_SERVER_MEMORY`); the
+  fixed 4 GiB could not follow a server's size.
+- **The quickstart** runs `ENV=development` on plain http at `localhost:8080`/`4318` — the only
+  environment whose cookies and OTLP address work without TLS — through the same edge with
+  `NEXOVUE_SITE_SCHEME=http`.
+- **Rollback (T14)** is decided by comparing the schema each version's images carry (`nexovue setup
+  schema`, `/setup schema`): same schema, swap back; changed, restore the pre-upgrade backup. The plan
+  said "refused past a non-additive migration"; nothing records which migrations are additive, so this
+  is the conservative form. **A decision for the founder** (`status.md`).
+- **The install keeps its state in `/opt/nexovue`** with each version's kit in `releases/`, so an upgrade
+  runs from the new kit and a rollback still has the old one's Compose files.
+- **Offline bundles (T15)** are `docker save | gzip` per architecture of every image the install runs,
+  not OCI archives through skopeo: one file `docker load` reads with nothing else installed. Each file
+  and the kit are signed with `cosign sign-blob`.
+- **Backups (T19-T22)** ship through `nexovue backup` in the `nexovue` image (`nexovue_api.backups`, boto3)
+  rather than through T17's interface, which was deferred with Step 4. The restore drill ran on the Mac,
+  not two Lima VMs.
+- **The monitor (T24)** gained `NexovueServiceMissing`: the rehearsal showed a stopped container leaves
+  discovery and `up == 0` never fires.
+- **The SDK release (T32)** is its own workflow, `release-sdk.yml`, on `sdk-v*` tags; the plan put it in
+  `release.yml`, where every job would need a condition. Its proof is `npm pack --dry-run` — `npm publish
+  --dry-run` refuses a package still marked `private`, which it stays until going public.
+- **ADR-022** (stores on Kubernetes) is not written: it belongs to Path B, deferred.
+
+**Not done, and owed before the first customer:** `nexovue install` on a fresh Linux machine, the offline
+bundle with the network cut, an upgrade and rollback between two released versions, and the restore
+drill across two machines — Lima or a real server. And the first release carrying the kit.

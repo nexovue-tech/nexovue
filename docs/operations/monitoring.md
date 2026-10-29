@@ -1,7 +1,7 @@
 # Monitoring
 
-How nexovue reports its own health (ADR-021). **Nothing watches these yet**: which monitor reads them is
-chosen with the hosting target (readiness group 8). Until then they answer the question by hand.
+How nexovue reports its own health (ADR-021), and the monitor that is ready to read it: Prometheus with
+nexovue's alert rules (`deploy/monitoring/`), run beside an install by `NEXOVUE_MONITORING=yes`.
 
 ## Current verified behavior
 
@@ -84,9 +84,27 @@ docker exec nexovue-scheduler-beat-1 /workspace/.venv/bin/python -c \
 curl -s localhost:18000/metrics | grep ^nexovue_
 ```
 
+## The monitor
+
+`deploy/monitoring/`, in every install kit (docs/changes/ready-to-deploy, T24):
+
+- `prometheus.yml` scrapes every service above by DNS, so each replica of the API and the receiver is
+  its own target;
+- `rules/nexovue.yml` — 16 alerts on the thresholds in the tables above, plus **a service that is
+  missing altogether**: a stopped container leaves DNS, so it is never `up == 0`, only absent;
+- `tests/nexovue_test.yml` — `promtool test rules`, run by `just lint-deploy` in `just check`;
+- `alertmanager.yml` — routes to nowhere until a receiver is named.
+
+Neither publishes a port; read them with `docker compose exec prometheus wget -qO- …` or an SSH tunnel.
+
+Rehearsed 2026-10-28 on the quickstart: all six jobs up; the worker stopped, `NexovueServiceMissing`
+fired after two minutes and reached Alertmanager. The first version of the rules had only
+`NexovueServiceDown`, which stayed silent through that — the reason the missing-service rule exists.
+
 ## Not yet established
 
-- No monitor reads these endpoints, so nothing pages anyone (group 8).
+- No receiver is configured, so nothing pages anyone until the first deployment names one
+  ([first-deploy](first-deploy.md) step 7).
 - The thresholds above are first guesses, to be set from production traffic.
 - No dashboards, SLOs or log-retention policy for nexovue itself.
 - nexovue's telemetry is not sent into a nexovue organization (decision 0053 rule 3, still deferred).

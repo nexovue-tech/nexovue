@@ -104,6 +104,7 @@ func run() error {
 			allowance.Options{
 				CacheTTL:        cfg.AllowanceCacheTTL,
 				CacheMaxEntries: cfg.AllowanceCacheMaxEntries,
+				EnforceBudget:   cfg.Deployment == config.DeploymentHosted,
 			}),
 		Publisher: ingest.NewPublisher(dependencies.kafka, ingest.Topics{
 			Spans:    cfg.SpansTopic,

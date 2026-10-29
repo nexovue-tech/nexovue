@@ -12,6 +12,7 @@ from functools import lru_cache
 from typing import Annotated, Final, Literal
 
 from nexovue_platform.checks.sealing import ConfiguredKeys
+from nexovue_platform.deployment import DEFAULT_DEPLOYMENT, Deployment
 from nexovue_platform.email.settings import (
     EmailProvider,
     EmailSettings,
@@ -41,6 +42,9 @@ class Settings(BaseSettings):
     env: Environment
     log_level: LogLevel = "info"
     log_format: LogFormat = "json"
+    # Hosted, or a customer's own install (nexovue_platform.deployment); only the
+    # hosted service has payments whose grace period a sweep ends.
+    nexovue_deployment: Deployment = DEFAULT_DEPLOYMENT
 
     # --- infrastructure, named identically in every service -----------------
     postgres_dsn: PostgresDsn

@@ -32,8 +32,7 @@ import nexovue_api
 
 DEPLOYMENTS: Final = (
     "docker-compose.yaml",
-    "docker-compose.app.yaml",
-    "docker-compose.onprem.yaml",
+    "nexovue.yaml",
 )
 
 # The share of the container the heap may claim. The rest is stacks, the runtime's

@@ -28,6 +28,7 @@ import { ErrorScreen } from "@/shared/components/ErrorScreen";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { parseFilterValues } from "@/shared/filters";
 
+import { HostedOnly } from "./HostedOnly";
 import { AppShell } from "./layout/AppShell";
 
 // Each screen is its own chunk, fetched when its route is first opened (group 9,
@@ -489,7 +490,11 @@ const settingsAuditRoute = createRoute({
 const settingsSupportRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/support",
-  component: SupportAccessScreen,
+  component: () => (
+    <HostedOnly fallback={<NotFound />}>
+      <SupportAccessScreen />
+    </HostedOnly>
+  ),
 });
 
 const settingsChannelsRoute = createRoute({
@@ -513,7 +518,11 @@ const settingsProjectsRoute = createRoute({
 const settingsBillingRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/settings/billing",
-  component: BillingScreen,
+  component: () => (
+    <HostedOnly fallback={<NotFound />}>
+      <BillingScreen />
+    </HostedOnly>
+  ),
 });
 
 /**

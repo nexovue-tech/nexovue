@@ -72,10 +72,18 @@ const json = (body: unknown, status: number) =>
     },
   });
 
-function stubApi(options: { secondFactor?: boolean; codeAccepted?: boolean } = {}) {
+function stubApi(
+  options: { secondFactor?: boolean; codeAccepted?: boolean; selfHostedAndClosed?: boolean } = {},
+) {
   const posted: string[] = [];
 
   const fetchMock = vi.fn(async (url: URL) => {
+    if (options.selfHostedAndClosed && url.pathname.endsWith("/system/signup")) {
+      return json({ enabled: false }, 200);
+    }
+    if (options.selfHostedAndClosed && url.pathname.endsWith("/system/info")) {
+      return json({ deployment: "self-hosted" }, 200);
+    }
     if (url.pathname === LOGIN_PATH) {
       posted.push(url.pathname);
       return json(options.secondFactor ? CHALLENGE : IDENTITY, 200);
@@ -174,6 +182,22 @@ async function submitCode(container: HTMLElement, code: string) {
 }
 
 describe("signing in without a second factor", () => {
+  it("offers signup where there may be one to offer", async () => {
+    stubApi();
+    const { container } = await mountLogin();
+
+    expect(container.querySelector('a[href="/signup"]')).not.toBeNull();
+  });
+
+  it("sends a person without an account to whoever runs a closed self-hosted install", async () => {
+    stubApi({ selfHostedAndClosed: true });
+    const { container } = await mountLogin();
+    await settle();
+
+    expect(container.querySelector('a[href="/signup"]')).toBeNull();
+    expect(container.textContent).toContain("Ask whoever runs nexovue for your organization");
+  });
+
   it("lands inside on the one answer that carries a session", async () => {
     stubApi();
     const { container, router } = await mountLogin();

@@ -1,8 +1,11 @@
 # Operations index
 
-Operational truth is created only for verified procedures. Current tooling exists for local Compose, migrations, backup, restore, and verification; the on-premise deployment remains a non-runnable skeleton.
+Operational truth is created only for verified procedures. Each page says what was rehearsed and what is
+not yet. The customer's own guide to running nexovue is [`docs/self-hosting/`](../self-hosting/install.md).
 
-- [Deployment](deployment.md)
+- [Deployment](deployment.md) — the install layouts and the `nexovue` command
+- [The first deployment](first-deploy.md) — from buying a server to watched and backed up
+- [Releasing](release.md) — tagging a version, and what the release publishes
 - [The first accounts](first-accounts.md) — who exists before anyone can sign in, on a self-hosted install and on ours
 - [Monitoring](monitoring.md)
 - [Alerting](alerting.md)
@@ -13,4 +16,5 @@ Operational truth is created only for verified procedures. Current tooling exist
 - [Disaster recovery](disaster-recovery.md)
 - [Incident response](incident-response.md)
 
-Before first production deployment, add approved runbooks for deployment, rollback, backups and restore drills, monitoring/alerting, and incident response.
+Before the first production deployment: the install, offline and upgrade rehearsals on a Linux machine
+(`docs/changes/ready-to-deploy/status.md`), and an approved incident-response runbook.

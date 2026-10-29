@@ -1,14 +1,22 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 
 import { Button } from "@/shared/components/Button";
 import { TextField } from "@/shared/components/TextField";
+import { useSystemInfo } from "@/shared/deployment";
 import { OPERATOR_ROLE } from "@/shared/identity";
 import { takeReturnTo } from "@/shared/session";
 
 import { AuthScreenLayout, FormMessage, FormNotice } from "./AuthScreenLayout";
-import { login, needsSecondFactor, sessionQueryKey, submitSecondFactor } from "./api";
+import {
+  login,
+  needsSecondFactor,
+  sessionQueryKey,
+  signupStatus,
+  signupStatusQueryKey,
+  submitSecondFactor,
+} from "./api";
 import { describeFormProblem } from "./problem-fields";
 import type { LoginNotice, LoginSearch } from "./search";
 import { ACCOUNT_DELETED, PASSWORD_WAS_RESET, SIGNED_OUT_EVERYWHERE } from "./search";
@@ -109,13 +117,7 @@ export function LoginScreen({ notice }: LoginSearch) {
       intro="Your telemetry is waiting where you left it."
       footer={
         <div className="flex flex-col gap-2">
-          <p>
-            No account yet?{" "}
-            <Link to="/signup" className="text-brand-text hover:underline">
-              Start sending traces
-            </Link>
-            .
-          </p>
+          <NoAccountYet />
           <p>
             <Link to="/forgot-password" className="text-brand-text hover:underline">
               Forgotten your password?
@@ -234,5 +236,27 @@ function SecondFactorStep({
         </div>
       </form>
     </AuthScreenLayout>
+  );
+}
+
+/**
+ * Where a person without an account goes. On a customer's own install with signup closed — the
+ * default — there is no page to send them to, only the person who runs it (found by the design
+ * check, 2026-10-29). Until both answers are in, the link: the API refuses a closed signup anyway.
+ */
+function NoAccountYet() {
+  const status = useQuery({ queryKey: signupStatusQueryKey, queryFn: signupStatus });
+  const install = useSystemInfo();
+  if (status.data?.enabled === false && install.data?.deployment === "self-hosted") {
+    return <p>No account yet? Ask whoever runs nexovue for your organization to invite you.</p>;
+  }
+  return (
+    <p>
+      No account yet?{" "}
+      <Link to="/signup" className="text-brand-text hover:underline">
+        Start sending traces
+      </Link>
+      .
+    </p>
   );
 }

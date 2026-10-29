@@ -42,12 +42,21 @@ const (
 	EnvProduction  = "production"
 )
 
+// The two kinds of install (nexovue_platform.deployment).
+const (
+	DeploymentHosted     = "hosted"
+	DeploymentSelfHosted = "self-hosted"
+)
+
 // Config is the receiver's complete settings surface. Every field is read from
 // the environment exactly once, at boot.
 type Config struct {
-	Env       string `env:"ENV,required,notEmpty"`
-	LogLevel  string `env:"LOG_LEVEL" envDefault:"info"`
-	LogFormat string `env:"LOG_FORMAT" envDefault:"json"`
+	Env string `env:"ENV,required,notEmpty"`
+	// Hosted, or a customer's own install (nexovue_platform.deployment): only the hosted
+	// service holds an organization to its plan's monthly allowance.
+	Deployment string `env:"NEXOVUE_DEPLOYMENT" envDefault:"self-hosted"`
+	LogLevel   string `env:"LOG_LEVEL" envDefault:"info"`
+	LogFormat  string `env:"LOG_FORMAT" envDefault:"json"`
 
 	// The two OTLP transports listen on the ports the protocol reserves for
 	// them. Declared here so the port a receiver listens on is configuration,
@@ -203,6 +212,7 @@ func Load() (Config, error) {
 func (c Config) validate() error {
 	return errors.Join(
 		oneOf("ENV", c.Env, EnvDevelopment, EnvStaging, EnvProduction),
+		oneOf("NEXOVUE_DEPLOYMENT", c.Deployment, DeploymentHosted, DeploymentSelfHosted),
 		oneOf("LOG_LEVEL", c.LogLevel, logging.Levels()...),
 		oneOf("LOG_FORMAT", c.LogFormat, logging.Formats()...),
 		listeningAddress("RECEIVER_OTLP_HTTP_ADDR", c.OTLPHTTPAddr),

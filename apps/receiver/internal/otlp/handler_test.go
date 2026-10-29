@@ -262,7 +262,7 @@ var testCredentialCache = auth.Options{CacheTTL: time.Minute, CacheMaxEntries: 1
 
 // Same reasoning for the plan gate's cache: long enough that no test races the
 // TTL, small enough that nothing about eviction happens by accident.
-var testAllowanceCache = allowance.Options{CacheTTL: time.Minute, CacheMaxEntries: 100}
+var testAllowanceCache = allowance.Options{CacheTTL: time.Minute, CacheMaxEntries: 100, EnforceBudget: true}
 
 // The two doors differ by their gatekeeper and by nothing else, which is what
 // the wiring under test claims. Building them from one shared value here is how

@@ -121,6 +121,7 @@ interface Overrides {
   isError?: boolean;
   error?: unknown;
   projectNames?: ReadonlyMap<string, string>;
+  hosted?: boolean;
 }
 
 function render(overrides: Overrides = {}): HTMLElement {
@@ -140,6 +141,7 @@ function render(overrides: Overrides = {}): HTMLElement {
         isError: false,
         onRetry: () => {},
         projectNames: NAMES,
+        hosted: true,
         ...overrides,
       }),
     ),
@@ -418,5 +420,21 @@ describe("UsageView", () => {
       ["30 days", "true"],
       ["90 days", "false"],
     ]);
+  });
+});
+
+describe("UsageView on a customer's own install", () => {
+  it("keeps the services, how long data is kept and the volume, and drops the bill", () => {
+    const container = render({ hosted: false });
+    const rendered = readable(container);
+
+    expect(summaryValue(container, "Services")).toMatch(/^4(?!\d)/);
+    expect(summaryValue(container, "Retention")).toContain("days of traces and logs");
+    expect(rendered).toContain("Spans");
+    for (const billing of ["Billable services", "Rate", "Plan", "Included volume", "not billed"]) {
+      expect(rendered).not.toContain(billing);
+    }
+    // Found by the design check (2026-10-29): the sentences above the numbers still spoke of one.
+    expect(rendered.toLowerCase()).not.toMatch(/\bbill/);
   });
 });

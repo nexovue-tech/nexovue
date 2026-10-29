@@ -1,0 +1,12 @@
+# Where alerts go. Out of the box: nowhere but Alertmanager's own page (port 9093 inside the
+# install), so the rules can be watched firing. Connect a receiver — email, Slack, PagerDuty, a
+# webhook — by replacing `nowhere` (https://prometheus.io/docs/alerting/latest/configuration/).
+route:
+  receiver: nowhere
+  group_by: [alertname, job]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: nowhere

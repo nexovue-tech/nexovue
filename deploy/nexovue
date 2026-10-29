@@ -1,0 +1,700 @@
+#!/usr/bin/env bash
+# nexovue on one server, or on a laptop to try it (docs/self-hosting/install.md).
+#
+#   nexovue quickstart [up|down|remove]   try it here: http://localhost:8080, not for production
+#   nexovue install [--offline] [--settings FILE]
+#                                         install on this server, from this kit's version
+#   nexovue upgrade [--offline]           run from the NEW version's kit: back up, then move to it
+#   nexovue rollback [--restore]          back to the version before the last upgrade
+#   nexovue status                        versions, services and their health, the last backup
+#   nexovue backup                        snapshot the stores and the bucket; ship it off the host
+#   nexovue backups                       the snapshots here, and those off the host
+#   nexovue restore <snapshot> [--yes]    put a snapshot back on this install
+#   nexovue stop                          stop every service; the data stays
+#
+# An install lives in NEXOVUE_HOME (/opt/nexovue):
+#   nexovue.env          every setting and secret, readable by root only — keep a copy elsewhere
+#   releases/<version>/  each version's kit; `current` links the running one
+#   backups/<snapshot>/  local snapshots (deploy/backup/backup.sh), shipped off the host if
+#                        BACKUP_S3_BUCKET is set
+#
+# Answers come from the environment when set (NEXOVUE_APP_HOST, NEXOVUE_INGEST_HOST,
+# NEXOVUE_TLS_EMAIL, FIRST_OWNER_EMAIL, FIRST_OWNER_PASSWORD, FIRST_ORGANIZATION_NAME), otherwise
+# from prompts; with no terminal a missing answer is an error naming the variable.
+set -euo pipefail
+# Runs on a Mac's bash 3.2 too (the quickstart), where `set -e` does not reach inside "$(…)": every
+# step of a function called that way checks its own failure. Without that, a backup whose upload
+# failed reported itself complete (found by the restore rehearsal, 2026-10-28).
+# A Mac's tar writes `._` metadata entries ahead of each file, which a snapshot's stream must not hold.
+export COPYFILE_DISABLE=1
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=deploy/backup/common.sh
+source "$here/backup/common.sh"
+
+# Compose 2.24 is the first with `!override`, which the quickstart's ports need.
+MIN_COMPOSE=2.24.0
+MIN_DOCKER=24.0.0
+GIB=$((1024 * 1024 * 1024))
+
+say() { printf '%s\n' "$*"; }
+step() { printf '\n==> %s\n' "$*"; }
+
+usage() {
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2
+}
+
+# ---------- the kit ----------
+
+# The version this kit installs: the release writes VERSION; a checkout names one in the environment.
+kit_version() {
+    if [ -n "${NEXOVUE_VERSION:-}" ]; then
+        printf '%s' "$NEXOVUE_VERSION"
+    elif [ -f "$here/VERSION" ]; then
+        tr -d '[:space:]' < "$here/VERSION"
+    else
+        die "no VERSION in $here: run a release's kit, or set NEXOVUE_VERSION"
+    fi
+}
+
+# ---------- settings ----------
+
+# Values are written single-quoted, which Compose reads literally: a password may hold `#`, `$` or
+# a space. A single quote or a line break cannot be written that way and is refused.
+setting() {
+    local file="$1" key="$2" line
+    line=$(grep -E "^${key}=" "$file" 2>/dev/null | tail -n 1) || true
+    line="${line#*=}"
+    line="${line#\'}"
+    printf '%s' "${line%\'}"
+}
+
+set_setting() {
+    local file="$1" key="$2" value="$3" temporary
+    case "$value" in *"'"* | *$'\n'*) die "$key may not contain a single quote or a line break" ;; esac
+    temporary=$(mktemp "$file.XXXXXX")
+    grep -vE "^${key}=" "$file" > "$temporary" 2>/dev/null || true
+    printf "%s='%s'\n" "$key" "$value" >> "$temporary"
+    chmod 600 "$temporary"
+    mv "$temporary" "$file"
+}
+
+random_hex() { od -An -tx1 -N"$1" /dev/urandom | tr -d ' \n'; }
+# Standard base64: the worker's masking secret (apps/workers/internal/config).
+random_base64() { head -c 32 /dev/urandom | base64 | tr -d '\n'; }
+# base64url with padding: nexovue_platform.checks.sealing.generate_key's format.
+random_key() { head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n'; }
+# KRaft's cluster id: a 16-byte UUID, base64url without padding.
+random_cluster_id() { head -c 16 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'; }
+
+# The answer from the environment, a prompt, or a default; never silently empty.
+ask() {
+    local variable="$1" question="$2" default="${3:-}" answer="${!1:-}"
+    if [ -z "$answer" ] && [ -t 0 ]; then
+        read -r -p "$question${default:+ [$default]}: " answer
+    fi
+    answer="${answer:-$default}"
+    [ -n "$answer" ] || die "$variable is required ($question). Set it, or run this in a terminal."
+    printf '%s' "$answer"
+}
+
+# Choices made once, when the install is created: the broker count sizes every topic then.
+write_choices() {
+    local file="$1"
+    case "${NEXOVUE_KAFKA_BROKERS:-1}" in
+        1 | 3) set_setting "$file" NEXOVUE_KAFKA_BROKERS "${NEXOVUE_KAFKA_BROKERS:-1}" ;;
+        *) die "NEXOVUE_KAFKA_BROKERS is 1 or 3 (docs/self-hosting/sizing.md)." ;;
+    esac
+    set_setting "$file" NEXOVUE_MONITORING "${NEXOVUE_MONITORING:-no}"
+}
+
+write_secrets() {
+    local file="$1"
+    set_setting "$file" POSTGRES_DB nexovue
+    set_setting "$file" POSTGRES_USER nexovue
+    set_setting "$file" POSTGRES_PASSWORD "$(random_hex 24)"
+    set_setting "$file" CLICKHOUSE_DB nexovue
+    set_setting "$file" CLICKHOUSE_USER nexovue
+    set_setting "$file" CLICKHOUSE_PASSWORD "$(random_hex 24)"
+    set_setting "$file" CLICKHOUSE_READER_PASSWORD "$(random_hex 24)"
+    set_setting "$file" CLICKHOUSE_ERASER_PASSWORD "$(random_hex 24)"
+    set_setting "$file" KAFKA_CLUSTER_ID "$(random_cluster_id)"
+    set_setting "$file" WORKERS_MASKING_HASH_SECRET "$(random_base64)"
+    set_setting "$file" CHECK_SECRET_KEY "$(random_key)"
+    set_setting "$file" CREDENTIAL_ENCRYPTION_KEY "$(random_key)"
+    set_setting "$file" S3_BUCKET nexovue
+    set_setting "$file" S3_ACCESS_KEY_ID "$(random_hex 10)"
+    set_setting "$file" S3_SECRET_ACCESS_KEY "$(random_hex 20)"
+}
+
+# ---------- docker ----------
+
+version_at_least() {
+    [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n 1)" = "$2" ]
+}
+
+preflight() {
+    local memory_floor_gib="$1"
+    shift
+    command -v docker >/dev/null || die "Docker is not installed: https://docs.docker.com/engine/install/"
+    docker info >/dev/null 2>&1 || die "Docker is installed but not answering; is the daemon running, and may this user use it?"
+
+    local docker_version compose_version memory
+    docker_version=$(docker version --format '{{.Server.Version}}')
+    version_at_least "$docker_version" "$MIN_DOCKER" || die "Docker $docker_version is too old; $MIN_DOCKER or newer is needed."
+    compose_version=$(docker compose version --short 2>/dev/null) || die "the Docker Compose plugin is not installed."
+    version_at_least "${compose_version#v}" "$MIN_COMPOSE" || die "Docker Compose $compose_version is too old; $MIN_COMPOSE or newer is needed."
+
+    # What Docker may use, which on a Mac is its virtual machine's memory, not the laptop's.
+    memory=$(docker info --format '{{.MemTotal}}')
+    if [ "$memory" -lt $((memory_floor_gib * GIB)) ]; then
+        die "Docker has $((memory / GIB)) GiB of memory; at least $memory_floor_gib GiB is needed (docs/self-hosting/sizing.md)."
+    fi
+
+    # NEXOVUE_SKIP_PORT_CHECK=1 when something in front deliberately holds them, and in the tests.
+    local port
+    [ "${NEXOVUE_SKIP_PORT_CHECK:-0}" = 1 ] && return 0
+    for port in "$@"; do
+        if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+            die "port $port is already in use on this machine; nexovue needs it."
+        fi
+    done
+}
+
+disk_check() {
+    local directory="$1" floor_gib="$2" free_kib
+    [ -d "$directory" ] || return 0
+    free_kib=$(df -Pk "$directory" | awk 'NR == 2 { print $4 }')
+    if [ "$free_kib" -lt $((floor_gib * 1024 * 1024)) ]; then
+        die "$directory has $((free_kib / 1024 / 1024)) GiB free; at least $floor_gib GiB is needed (docs/self-hosting/sizing.md)."
+    fi
+}
+
+docker_arch() {
+    case "$(docker info --format '{{.Architecture}}')" in
+        x86_64 | amd64) echo amd64 ;;
+        aarch64 | arm64) echo arm64 ;;
+        *) die "this machine's architecture is not one nexovue is built for (amd64, arm64)." ;;
+    esac
+}
+
+# The offline bundle's images, checked against its SHA256SUMS before Docker reads a byte.
+load_offline_images() {
+    local kit="$1" archive
+    archive="$kit/images/nexovue-images-$(docker_arch).tar.gz"
+    [ -f "$archive" ] || die "no images for $(docker_arch) in $kit/images: this is not that architecture's offline bundle."
+    step "checking the offline bundle"
+    ( cd "$kit" && sha256_check SHA256SUMS ) || die "the offline bundle is corrupt; download it again."
+    step "loading the images"
+    docker load --input "$archive"
+}
+
+# ---------- one install ----------
+
+NEXOVUE_HOME="${NEXOVUE_HOME:-/opt/nexovue}"
+settings_file="$NEXOVUE_HOME/nexovue.env"
+release_dir() { printf '%s/releases/%s' "$NEXOVUE_HOME" "$1"; }
+
+# The Compose files this install runs: nexovue.yaml and the overlays its settings name.
+compose_in() {
+    local kit="$1" settings="$2" project="$3"
+    shift 3
+    local files=(-f "$kit/compose/nexovue.yaml") overlay
+    case "$(setting "$settings" NEXOVUE_LAYOUT)" in
+        quickstart) files+=(-f "$kit/compose/nexovue.quickstart.yaml") ;;
+        hosted) files+=(-f "$kit/compose/nexovue.hosted.yaml") ;;
+    esac
+    if [ "$(setting "$settings" NEXOVUE_KAFKA_BROKERS)" = 3 ]; then
+        files+=(-f "$kit/compose/nexovue.kafka3.yaml")
+    fi
+    # The install's own changes, as Compose files of its own, applied last.
+    for overlay in $(setting "$settings" NEXOVUE_EXTRA_COMPOSE); do
+        files+=(-f "$overlay")
+    done
+    if [ "$(setting "$settings" NEXOVUE_MONITORING)" = yes ]; then
+        files+=(--profile monitoring)
+    fi
+    docker compose --project-name "$project" --env-file "$settings" "${files[@]}" "$@"
+}
+
+# The Compose project: `nexovue` unless the settings name another, so two installs can share a host.
+project_of() {
+    local named
+    named=$(setting "$1" NEXOVUE_PROJECT)
+    printf '%s' "${named:-nexovue}"
+}
+
+compose() { compose_in "$NEXOVUE_HOME/current" "$settings_file" "$(project_of "$settings_file")" "$@"; }
+
+require_installed() {
+    [ -f "$settings_file" ] || die "nexovue is not installed in $NEXOVUE_HOME (NEXOVUE_HOME); run: nexovue install"
+}
+
+# Copies this kit into the install, without the images an offline bundle carries.
+take_release() {
+    local version="$1" target
+    target=$(release_dir "$version")
+    [ "$here" = "$target" ] && return 0
+    mkdir -p "$target"
+    tar -C "$here" --exclude ./images --exclude ./SHA256SUMS --exclude ./SHA256SUMS.sig -cf - . | tar -C "$target" -xf -
+    printf '%s\n' "$version" > "$target/VERSION"
+}
+
+point_current_at() {
+    ln -sfn "releases/$1" "$NEXOVUE_HOME/current.new"
+    mv -fT "$NEXOVUE_HOME/current.new" "$NEXOVUE_HOME/current" 2>/dev/null \
+        || { rm -f "$NEXOVUE_HOME/current"; mv "$NEXOVUE_HOME/current.new" "$NEXOVUE_HOME/current"; }
+}
+
+# The schema a version's images carry: the newest Postgres and ClickHouse migrations. Read from the
+# images, with no network, so it needs nothing but the images themselves.
+schema_of() {
+    local version="$1" registry
+    registry=$(setting "$settings_file" NEXOVUE_REGISTRY)
+    registry="${registry:-ghcr.io/nexovue-tech}"
+    docker run --rm --network none "$registry/nexovue:$version" setup schema \
+        || die "could not read the schema nexovue $version carries."
+    docker run --rm --network none "$registry/nexovue-pipeline:$version" /setup schema \
+        || die "could not read the schema nexovue-pipeline $version carries."
+}
+
+start() {
+    local timeout="${NEXOVUE_START_TIMEOUT:-900}"
+    step "starting nexovue (the setup step first; up to $((timeout / 60)) minutes on a first start)"
+    if ! compose up --detach --wait --wait-timeout "$timeout" --remove-orphans; then
+        compose ps --all
+        die "nexovue did not become healthy. 'nexovue status' shows which service; its logs: docker compose logs <service>."
+    fi
+}
+
+install_backup_timer() {
+    if [ ! -d /run/systemd/system ] || [ ! -w /etc/systemd/system ]; then
+        say "No systemd here: schedule '$NEXOVUE_HOME/current/nexovue backup' daily yourself (docs/self-hosting/backup.md)."
+        return 0
+    fi
+    local unit
+    for unit in nexovue-backup.service nexovue-backup.timer; do
+        sed "s|@NEXOVUE_HOME@|$NEXOVUE_HOME|g" "$here/systemd/$unit" > "/etc/systemd/system/$unit"
+    done
+    systemctl daemon-reload
+    systemctl enable --now nexovue-backup.timer >/dev/null
+    say "Backups: daily at 02:30, by the nexovue-backup.timer systemd unit."
+}
+
+cmd_install() {
+    local offline=no settings_from=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --offline) offline=yes ;;
+            --settings) settings_from="${2:?--settings takes a file}"; shift ;;
+            *) usage ;;
+        esac
+        shift
+    done
+    local version generated_password=""
+    version=$(kit_version)
+
+    step "checking this machine"
+    if [ -f "$settings_file" ]; then
+        preflight 12   # installed already: the ports are its own
+    else
+        preflight 12 80 443
+    fi
+    disk_check "$(docker info --format '{{.DockerRootDir}}')" 40
+
+    mkdir -p "$NEXOVUE_HOME/backups"
+    chmod 700 "$NEXOVUE_HOME"
+    if [ -f "$settings_file" ]; then
+        say "Settings exist in $settings_file; keeping them."
+    elif [ -n "$settings_from" ]; then
+        # A machine replacing another: the same secrets open what the backup sealed.
+        install -m 600 "$settings_from" "$settings_file"
+        say "Settings taken from $settings_from."
+    else
+        step "settings"
+        # Each answer into a variable first: a failure inside "$(…)" passed as an argument would
+        # stop only that subshell, and the install would carry on with an empty value.
+        local app_host ingest_host tls_email organization owner
+        app_host=$(ask NEXOVUE_APP_HOST "The console's address, e.g. nexovue.example.com")
+        ingest_host=$(ask NEXOVUE_INGEST_HOST 'Where applications send telemetry, e.g. ingest.nexovue.example.com')
+        tls_email=$(ask NEXOVUE_TLS_EMAIL 'An email address for certificate notices')
+        organization=$(ask FIRST_ORGANIZATION_NAME "Your organization's name" 'My organization')
+        owner=$(ask FIRST_OWNER_EMAIL 'The email you will sign in with')
+        # Written whole, then moved into place: a refusal halfway leaves no settings a re-run would trust.
+        local draft="$settings_file.draft"
+        : > "$draft"
+        chmod 600 "$draft"
+        # `hosted` only on nexovue's own service (docs/operations/first-deploy.md).
+        case "${NEXOVUE_LAYOUT:-self-hosted}" in
+            self-hosted | hosted) set_setting "$draft" NEXOVUE_LAYOUT "${NEXOVUE_LAYOUT:-self-hosted}" ;;
+            *) die "NEXOVUE_LAYOUT is self-hosted or hosted." ;;
+        esac
+        set_setting "$draft" NEXOVUE_APP_HOST "$app_host"
+        set_setting "$draft" NEXOVUE_INGEST_HOST "$ingest_host"
+        set_setting "$draft" NEXOVUE_TLS_EMAIL "$tls_email"
+        set_setting "$draft" FIRST_ORGANIZATION_NAME "$organization"
+        set_setting "$draft" FIRST_OWNER_EMAIL "$owner"
+        if [ -z "${FIRST_OWNER_PASSWORD:-}" ]; then
+            generated_password=$(random_hex 12)
+            FIRST_OWNER_PASSWORD="$generated_password"
+        fi
+        [ "${#FIRST_OWNER_PASSWORD}" -ge 12 ] || die "FIRST_OWNER_PASSWORD must be at least 12 characters."
+        set_setting "$draft" FIRST_OWNER_PASSWORD "$FIRST_OWNER_PASSWORD"
+        write_choices "$draft"
+        write_secrets "$draft"
+        mv "$draft" "$settings_file"
+    fi
+    set_setting "$settings_file" NEXOVUE_VERSION "$version"
+
+    take_release "$version"
+    point_current_at "$version"
+    if [ "$offline" = yes ]; then
+        load_offline_images "$here"
+        set_setting "$settings_file" NEXOVUE_PULL_POLICY never
+    else
+        step "pulling nexovue $version"
+        compose pull --quiet
+    fi
+    start
+    install_backup_timer
+
+    local app
+    app=$(setting "$settings_file" NEXOVUE_APP_HOST)
+    say ""
+    say "nexovue $version is running."
+    say "  Console:      https://$app"
+    say "  Telemetry:    https://$(setting "$settings_file" NEXOVUE_INGEST_HOST) (OTLP/HTTP)"
+    say "  Sign in as:   $(setting "$settings_file" FIRST_OWNER_EMAIL)"
+    if [ -n "$generated_password" ]; then
+        say "  Password:     $generated_password   (shown once; change it after signing in)"
+    fi
+    say "  Settings:     $settings_file — every secret is in it; keep a copy somewhere safe."
+    if [ -z "$(setting "$settings_file" BACKUP_S3_BUCKET)" ]; then
+        say "  Backups stay on this disk until BACKUP_S3_* is set (docs/self-hosting/backup.md)."
+    fi
+}
+
+cmd_upgrade() {
+    local offline=no
+    [ "${1:-}" = --offline ] && offline=yes
+    require_installed
+    local current target snapshot schema_now schema_next
+    current=$(setting "$settings_file" NEXOVUE_VERSION)
+    target=$(kit_version)
+    [ "$current" != "$target" ] || die "nexovue is already at $target."
+
+    step "checking this machine"
+    preflight 12
+    if [ "$offline" = yes ]; then
+        load_offline_images "$here"
+        set_setting "$settings_file" NEXOVUE_PULL_POLICY never
+    fi
+    take_release "$target"
+    if [ "$offline" = no ]; then
+        step "pulling nexovue $target"
+        compose_in "$(release_dir "$target")" "$settings_file" "$(project_of "$settings_file")" pull --quiet
+    fi
+
+    schema_now=$(schema_of "$current")
+    schema_next=$(schema_of "$target")
+
+    step "a backup before anything changes"
+    snapshot=$(take_backup)
+
+    set_setting "$settings_file" NEXOVUE_PREVIOUS_VERSION "$current"
+    set_setting "$settings_file" NEXOVUE_PRE_UPGRADE_SNAPSHOT "$snapshot"
+    if [ "$schema_now" = "$schema_next" ]; then
+        set_setting "$settings_file" NEXOVUE_ROLLBACK_SCHEMA same
+    else
+        set_setting "$settings_file" NEXOVUE_ROLLBACK_SCHEMA changed
+    fi
+    set_setting "$settings_file" NEXOVUE_VERSION "$target"
+    point_current_at "$target"
+    start
+    say ""
+    say "nexovue is at $target (was $current). The backup taken first: $snapshot"
+    if [ "$schema_now" != "$schema_next" ]; then
+        say "This upgrade changed the database schema, so going back means restoring that backup: nexovue rollback --restore"
+    fi
+}
+
+cmd_rollback() {
+    local restore=no
+    [ "${1:-}" = --restore ] && restore=yes
+    require_installed
+    local current previous schema snapshot
+    current=$(setting "$settings_file" NEXOVUE_VERSION)
+    previous=$(setting "$settings_file" NEXOVUE_PREVIOUS_VERSION)
+    schema=$(setting "$settings_file" NEXOVUE_ROLLBACK_SCHEMA)
+    snapshot=$(setting "$settings_file" NEXOVUE_PRE_UPGRADE_SNAPSHOT)
+    [ -n "$previous" ] || die "there is no earlier version to go back to."
+    [ -d "$(release_dir "$previous")" ] || die "the kit for $previous is gone from $(release_dir "$previous")."
+
+    if [ "$schema" = changed ] && [ "$restore" = no ]; then
+        cat >&2 <<EOF
+nexovue $current changed the database schema, and $previous may not run against it.
+Going back means restoring the backup taken before the upgrade ($snapshot): everything
+recorded since then is lost.
+
+  nexovue rollback --restore
+EOF
+        exit 1
+    fi
+
+    set_setting "$settings_file" NEXOVUE_VERSION "$previous"
+    set_setting "$settings_file" NEXOVUE_PREVIOUS_VERSION ""
+    point_current_at "$previous"
+    if [ "$restore" = yes ]; then
+        [ -n "$snapshot" ] || die "no backup was recorded before the upgrade."
+        restore_snapshot "$snapshot" "${NEXOVUE_ASSUME_YES:-no}"
+    else
+        start
+    fi
+    say "nexovue is back at $previous."
+}
+
+cmd_status() {
+    require_installed
+    say "version:   $(setting "$settings_file" NEXOVUE_VERSION)"
+    local previous newest
+    previous=$(setting "$settings_file" NEXOVUE_PREVIOUS_VERSION)
+    [ -z "$previous" ] || say "previous:  $previous ($(setting "$settings_file" NEXOVUE_ROLLBACK_SCHEMA) schema)"
+    newest=$(local_snapshots | tail -n 1)
+    say "backup:    ${newest:-none yet}"
+    say ""
+    compose ps --all --format 'table {{.Service}}\t{{.State}}\t{{.Health}}\t{{.Status}}'
+}
+
+# ---------- backups ----------
+
+export_store_credentials() {
+    local key
+    for key in POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD CLICKHOUSE_DB CLICKHOUSE_USER CLICKHOUSE_PASSWORD \
+        BACKUP_S3_ENDPOINT BACKUP_S3_REGION BACKUP_S3_BUCKET BACKUP_S3_ACCESS_KEY_ID BACKUP_S3_SECRET_ACCESS_KEY \
+        BACKUP_S3_PREFIX; do
+        export "$key=$(setting "$settings_file" "$key")"
+    done
+    NEXOVUE_PROJECT=$(project_of "$settings_file")
+    CLICKHOUSE_CONTAINER="$NEXOVUE_PROJECT-clickhouse-1"
+    POSTGRES_CONTAINER="$NEXOVUE_PROJECT-postgres-1"
+    KAFKA_CONTAINER="$NEXOVUE_PROJECT-kafka-1"
+    export NEXOVUE_PROJECT CLICKHOUSE_CONTAINER POSTGRES_CONTAINER KAFKA_CONTAINER
+    export NEXOVUE_BACKUP_DIR="$NEXOVUE_HOME/backups"
+}
+
+local_snapshots() {
+    find "$NEXOVUE_HOME/backups" -mindepth 1 -maxdepth 1 -type d -name '20*Z' -exec basename {} \; 2>/dev/null | sort
+}
+
+# The bundled object store is backed up with the stores; an install's own S3 keeps its own copies.
+bundled_bucket() {
+    [ -z "$(setting "$settings_file" S3_ENDPOINT)" ]
+}
+
+# Prints the snapshot's name on stdout; everything else goes to stderr.
+take_backup() {
+    export_store_credentials
+    local before name snapshot
+    before=$(local_snapshots | tail -n 1)
+    "$NEXOVUE_HOME/current/backup/backup.sh" >&2 || die "the backup failed; nothing was shipped."
+    name=$(local_snapshots | tail -n 1)
+    [ -n "$name" ] && [ "$name" != "$before" ] || die "backup.sh wrote no snapshot."
+    snapshot="$NEXOVUE_BACKUP_DIR/$name"
+
+    local files=(manifest.txt postgres.dump clickhouse.zip)
+    if bundled_bucket; then
+        echo "bucket: exporting" >&2
+        compose run --rm --no-deps -T api backup bucket-export > "$snapshot/bucket.tar" \
+            || die "the bucket could not be exported; the snapshot $name is incomplete."
+        files+=(bucket.tar)
+    fi
+    ( cd "$snapshot" && sha256_write "${files[@]}" > SHA256SUMS ) || die "could not checksum $name."
+
+    local keep=7
+    if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
+        echo "shipping $name off the host" >&2
+        tar -C "$snapshot" -cf - SHA256SUMS "${files[@]}" \
+            | compose run --rm --no-deps -T \
+                -e BACKUP_S3_ENDPOINT -e BACKUP_S3_REGION -e BACKUP_S3_BUCKET \
+                -e BACKUP_S3_ACCESS_KEY_ID -e BACKUP_S3_SECRET_ACCESS_KEY -e BACKUP_S3_PREFIX \
+                api backup ship "$name" >&2 \
+            || die "$name could not be shipped off the host; it is only in $snapshot."
+        keep=2
+    else
+        echo "warning: BACKUP_S3_BUCKET is not set, so this backup is on the disk it protects" >&2
+    fi
+    # Off the host, retention is 7 daily and 4 weekly (nexovue_api.backups); here, the newest few.
+    local_snapshots | awk -v keep="$keep" '{ names[NR] = $0 } END { for (i = 1; i <= NR - keep; i++) print names[i] }' \
+        | while read -r old; do rm -rf "${NEXOVUE_BACKUP_DIR:?}/$old"; done
+    printf '%s\n' "$name"
+}
+
+cmd_backup() {
+    require_installed
+    local name
+    name=$(take_backup)
+    say "backup complete: $name"
+}
+
+cmd_backups() {
+    require_installed
+    export_store_credentials
+    say "On this server ($NEXOVUE_BACKUP_DIR):"
+    local_snapshots | sed 's/^/  /'
+    if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
+        say "Off the server (s3://$BACKUP_S3_BUCKET/${BACKUP_S3_PREFIX:-nexovue-backups}):"
+        compose run --rm --no-deps -T \
+            -e BACKUP_S3_ENDPOINT -e BACKUP_S3_REGION -e BACKUP_S3_BUCKET \
+            -e BACKUP_S3_ACCESS_KEY_ID -e BACKUP_S3_SECRET_ACCESS_KEY -e BACKUP_S3_PREFIX \
+            api backup list | sed 's/^/  /'
+    else
+        say "Off the server: none — BACKUP_S3_BUCKET is not set."
+    fi
+}
+
+restore_snapshot() {
+    local name="$1" assume_yes="$2"
+    export_store_credentials
+    local snapshot="$NEXOVUE_BACKUP_DIR/$name"
+    if [ ! -d "$snapshot" ]; then
+        [ -n "${BACKUP_S3_BUCKET:-}" ] || die "no snapshot $name in $NEXOVUE_BACKUP_DIR, and no off-host store to fetch it from."
+        step "fetching $name from the off-host store"
+        mkdir -p "$snapshot"
+        if ! compose run --rm --no-deps -T \
+            -e BACKUP_S3_ENDPOINT -e BACKUP_S3_REGION -e BACKUP_S3_BUCKET \
+            -e BACKUP_S3_ACCESS_KEY_ID -e BACKUP_S3_SECRET_ACCESS_KEY -e BACKUP_S3_PREFIX \
+            api backup fetch "$name" | tar -C "$snapshot" -xf -; then
+            rm -rf "$snapshot"
+            die "could not fetch $name."
+        fi
+    fi
+    ( cd "$snapshot" && sha256_check SHA256SUMS ) || die "snapshot $name is corrupt; do not restore it."
+
+    if [ "$assume_yes" != yes ]; then
+        local app answer
+        app=$(setting "$settings_file" NEXOVUE_APP_HOST)
+        say "This replaces everything on this install with snapshot $name."
+        read -r -p "Type the console's address ($app) to go on: " answer
+        [ "$answer" = "$app" ] || die "nothing was changed."
+    fi
+
+    step "stopping every service but the stores"
+    compose stop proxy receiver worker api scheduler-beat scheduler-light scheduler-deliveries
+    compose up --detach --wait postgres clickhouse kafka seaweedfs
+
+    step "restoring"
+    # Not through `ch`, which connects into the database being replaced.
+    local statement
+    for statement in "DROP DATABASE IF EXISTS $CLICKHOUSE_DB SYNC" "CREATE DATABASE $CLICKHOUSE_DB"; do
+        docker exec "$CLICKHOUSE_CONTAINER" clickhouse-client --user "$CLICKHOUSE_USER" \
+            --password "$CLICKHOUSE_PASSWORD" --query "$statement"
+    done
+    "$NEXOVUE_HOME/current/backup/restore-postgres.sh" "$name"
+    "$NEXOVUE_HOME/current/backup/restore-clickhouse.sh" "$name"
+    if [ -f "$snapshot/bucket.tar" ]; then
+        compose run --rm --no-deps setup >&2
+        compose run --rm --no-deps -T api backup bucket-import < "$snapshot/bucket.tar"
+    fi
+    # Checked before anything can write: a new span would make a table disagree with the manifest.
+    "$NEXOVUE_HOME/current/backup/verify.sh" "$name"
+    start
+}
+
+cmd_restore() {
+    require_installed
+    local name="${1:?nexovue restore <snapshot> [--yes]}" assume_yes=no
+    [ "${2:-}" = --yes ] && assume_yes=yes
+    restore_snapshot "$name" "$assume_yes"
+    say "restored $name."
+}
+
+# ---------- try it here ----------
+
+cmd_quickstart() {
+    local action="${1:-up}" home="${NEXOVUE_QUICKSTART_HOME:-$HOME/.nexovue/quickstart}"
+    local settings="$home/nexovue.env" project=nexovue-quickstart
+    case "$action" in
+        down)
+            [ -f "$settings" ] && compose_in "$here" "$settings" "$project" down
+            return 0 ;;
+        remove)
+            [ -f "$settings" ] || return 0
+            compose_in "$here" "$settings" "$project" down --volumes
+            rm -rf "$home"
+            say "The quickstart and its data are gone."
+            return 0 ;;
+        up) ;;
+        *) usage ;;
+    esac
+
+    if [ -f "$settings" ]; then
+        preflight 7   # started before: the ports may be its own
+    else
+        preflight 7 8080 4318
+    fi
+    local first=no
+    if [ ! -f "$settings" ]; then
+        first=yes
+        mkdir -p "$home"
+        : > "$settings.draft"
+        chmod 600 "$settings.draft"
+        set_setting "$settings.draft" NEXOVUE_LAYOUT quickstart
+        set_setting "$settings.draft" NEXOVUE_PROJECT "$project"
+        set_setting "$settings.draft" NEXOVUE_APP_HOST localhost:8080
+        set_setting "$settings.draft" NEXOVUE_INGEST_HOST localhost:4318
+        set_setting "$settings.draft" NEXOVUE_TLS_EMAIL "${FIRST_OWNER_EMAIL:-owner@example.com}"
+        set_setting "$settings.draft" FIRST_ORGANIZATION_NAME "${FIRST_ORGANIZATION_NAME:-My organization}"
+        set_setting "$settings.draft" FIRST_OWNER_EMAIL "${FIRST_OWNER_EMAIL:-owner@example.com}"
+        set_setting "$settings.draft" FIRST_OWNER_PASSWORD "${FIRST_OWNER_PASSWORD:-$(random_hex 12)}"
+        write_choices "$settings.draft"
+        write_secrets "$settings.draft"
+        # A laptop's share (docs/self-hosting/sizing.md): about 8 GB of ceilings, far less in use.
+        set_setting "$settings.draft" CLICKHOUSE_MEMORY 2560M
+        set_setting "$settings.draft" CLICKHOUSE_MAX_SERVER_MEMORY 2147483648
+        set_setting "$settings.draft" KAFKA_MEMORY 1024M
+        set_setting "$settings.draft" KAFKA_HEAP_OPTS "-Xmx512m -Xms256m"
+        set_setting "$settings.draft" POSTGRES_MEMORY 512M
+        set_setting "$settings.draft" WORKER_MEMORY 768M
+        set_setting "$settings.draft" WORKER_GOMEMLIMIT 650MiB
+        set_setting "$settings.draft" SEAWEEDFS_VOLUME_MAX 40
+        mv "$settings.draft" "$settings"
+    fi
+    set_setting "$settings" NEXOVUE_VERSION "$(kit_version)"
+    [ -z "${NEXOVUE_PULL_POLICY:-}" ] || set_setting "$settings" NEXOVUE_PULL_POLICY "$NEXOVUE_PULL_POLICY"
+
+    say "nexovue quickstart — for trying nexovue, NOT for production: one Kafka broker, no backups, no TLS."
+    step "starting (a few minutes the first time)"
+    compose_in "$here" "$settings" "$project" up --detach --wait --wait-timeout 900 \
+        || die "the quickstart did not become healthy; see: docker compose -p $project logs"
+    say ""
+    say "nexovue is running."
+    say "  Console:     http://localhost:8080"
+    say "  Telemetry:   http://localhost:4318 (OTLP/HTTP; the console's setup pages show how)"
+    say "  Sign in as:  $(setting "$settings" FIRST_OWNER_EMAIL)"
+    if [ "$first" = yes ]; then
+        say "  Password:    $(setting "$settings" FIRST_OWNER_PASSWORD)   (shown once)"
+    else
+        say "  Password:    FIRST_OWNER_PASSWORD in $settings"
+    fi
+    say "  Stop it:     $0 quickstart down      Delete it: $0 quickstart remove"
+}
+
+main() {
+    local command="${1:-}"
+    [ $# -gt 0 ] && shift
+    case "$command" in
+        quickstart) cmd_quickstart "$@" ;;
+        install) cmd_install "$@" ;;
+        upgrade) cmd_upgrade "$@" ;;
+        rollback) cmd_rollback "$@" ;;
+        status) cmd_status ;;
+        backup) cmd_backup ;;
+        backups) cmd_backups ;;
+        restore) cmd_restore "$@" ;;
+        stop) require_installed; compose stop ;;
+        *) usage ;;
+    esac
+}
+
+main "$@"

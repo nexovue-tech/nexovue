@@ -1,0 +1,17 @@
+# One backup of a nexovue install: both stores and the bucket, shipped off the host when
+# BACKUP_S3_BUCKET is set (docs/self-hosting/backup.md). Installed by `nexovue install`, which
+# writes the install's directory in place of @NEXOVUE_HOME@.
+[Unit]
+Description=nexovue backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=@NEXOVUE_HOME@/current/nexovue backup
+Environment=NEXOVUE_HOME=@NEXOVUE_HOME@
+# A backup of a large install runs for a while; one that hangs still ends.
+TimeoutStartSec=4h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

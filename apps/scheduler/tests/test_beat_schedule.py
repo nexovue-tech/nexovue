@@ -24,6 +24,7 @@ from nexovue_scheduler.beat import (
     ERASURE_SOFT_TIME_LIMIT_SECONDS,
     EXPIRY_SWEEP_ENTRY,
     FILE_SWEEP_ENTRY,
+    GRACE_SWEEP_ENTRY,
     HEARTBEAT_SWEEP_ENTRY,
     Beat,
     _start_offset,
@@ -77,15 +78,25 @@ def _check(
     )
 
 
-def _scheduler() -> Beat:
+def _scheduler(deployment: str = "hosted") -> Beat:
     """Beat with only what building entries reads; nothing here touches a store."""
-    settings = cast(Settings, SimpleSettings(probe_locations=["mumbai", "hyderabad", "elsewhere"]))
+    settings = cast(
+        Settings,
+        SimpleSettings(probe_locations=["mumbai", "hyderabad", "elsewhere"], deployment=deployment),
+    )
     return Beat(cast(AsyncEngine, None), cast(LeaderLock, None), settings)
 
 
 class SimpleSettings:
-    def __init__(self, probe_locations: list[str]) -> None:
+    def __init__(self, probe_locations: list[str], deployment: str) -> None:
         self.probe_locations = probe_locations
+        self.nexovue_deployment = deployment
+
+
+def test_only_the_hosted_service_ends_payment_grace_periods() -> None:
+    """A customer's own install charges nobody (nexovue_platform.deployment)."""
+    assert GRACE_SWEEP_ENTRY in _scheduler("hosted")._sweep_entries()
+    assert GRACE_SWEEP_ENTRY not in _scheduler("self-hosted")._sweep_entries()
 
 
 def test_a_check_is_scheduled_once_per_location_on_that_locations_queue() -> None:

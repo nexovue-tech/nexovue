@@ -18,6 +18,7 @@ from typing import Annotated, Final, Literal
 from urllib.parse import urlsplit
 
 from nexovue_platform.checks.sealing import ConfiguredKeys
+from nexovue_platform.deployment import DEFAULT_DEPLOYMENT, HOSTED, Deployment
 from nexovue_platform.email.settings import (
     EmailProvider,
     EmailSettings,
@@ -183,6 +184,9 @@ class Settings(BaseSettings):
     env: Environment
     log_level: LogLevel = "info"
     log_format: LogFormat = "json"
+    # Hosted, or a customer's own install (nexovue_platform.deployment): billing, the
+    # payment processor and the operator console exist only on the hosted service.
+    nexovue_deployment: Deployment = DEFAULT_DEPLOYMENT
 
     # --- infrastructure, named identically in every service -----------------
     postgres_dsn: PostgresDsn
@@ -327,6 +331,21 @@ class Settings(BaseSettings):
                 f"OTLP_ENDPOINT is {self.otlp_endpoint!r}, which no customer can reach. "
                 f"Signup hands this to every new account and the onboarding screen prints "
                 f"it. Set it to the receiver's public address in {self.env}."
+            )
+        return self
+
+    @property
+    def is_hosted(self) -> bool:
+        return self.nexovue_deployment == HOSTED
+
+    @model_validator(mode="after")
+    def _no_payments_when_self_hosted(self) -> Settings:
+        """A self-hosted install charges nobody; a processor key there is a misconfiguration
+        that would otherwise sit unnoticed until someone found a checkout page."""
+        if not self.is_hosted and self.payments_domestic_app_id:
+            raise ValueError(
+                "PAYMENTS_DOMESTIC_APP_ID is set on a self-hosted install, which takes no "
+                "payments. Remove it, or set NEXOVUE_DEPLOYMENT=hosted on nexovue's own service."
             )
         return self
 

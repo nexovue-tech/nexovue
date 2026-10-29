@@ -26,6 +26,7 @@ ROLES: Final[dict[str, list[str]]] = {
     ],
     "scheduler-health": ["python", "-m", "nexovue_scheduler", "health"],
     "setup": ["python", "-m", "nexovue_api.setup"],
+    "backup": ["python", "-m", "nexovue_api.backups"],
 }
 
 USAGE: Final = (

@@ -104,7 +104,7 @@ echo "manifest: measuring"
     fi
 } > "$snapshot/manifest.txt"
 
-( cd "$snapshot" && shasum -a 256 postgres.dump clickhouse.zip manifest.txt > SHA256SUMS )
+( cd "$snapshot" && sha256_write postgres.dump clickhouse.zip manifest.txt > SHA256SUMS )
 
 echo
 echo "backup complete: $snapshot"

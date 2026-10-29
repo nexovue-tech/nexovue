@@ -5,6 +5,7 @@
 //	setup clickhouse         the schema only
 //	setup topics             the topics only
 //	setup clickhouse-down N  revert the newest N migrations (development only)
+//	setup schema             print the newest migration this image carries, touching nothing
 //
 // Reads CLICKHOUSE_DSN (native protocol), POSTGRES_DSN (for the migration lock), KAFKA_BROKERS and
 // SETUP_MIGRATIONS_DIR; the topic sizes may be changed with KAFKA_SPAN_PARTITIONS,
@@ -63,6 +64,13 @@ func run(args []string) error {
 		return migrateClickHouse(ctx)
 	case "topics":
 		return ensureTopics(ctx)
+	case "schema":
+		newest, err := newestMigration()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("clickhouse %d\n", newest)
+		return nil
 	case "clickhouse-down":
 		steps := 1
 		if len(args) > 1 {
@@ -74,7 +82,7 @@ func run(args []string) error {
 		}
 		return revertClickHouse(ctx, steps)
 	default:
-		return fmt.Errorf("unknown command %q: use clickhouse, topics or clickhouse-down", command)
+		return fmt.Errorf("unknown command %q: use clickhouse, topics, schema or clickhouse-down", command)
 	}
 }
 
@@ -87,6 +95,18 @@ func migrateClickHouse(ctx context.Context) error {
 		fmt.Printf("clickhouse: %d migration(s) applied, %d known\n", applied, len(migrations))
 		return nil
 	})
+}
+
+// newestMigration is what `nexovue rollback` compares between two versions' images.
+func newestMigration() (int64, error) {
+	migrations, err := setup.Load(os.DirFS(envOr("SETUP_MIGRATIONS_DIR", defaultMigrationsDir)))
+	if err != nil {
+		return 0, err
+	}
+	if len(migrations) == 0 {
+		return setup.NoVersion, nil
+	}
+	return migrations[len(migrations)-1].Version, nil
 }
 
 func revertClickHouse(ctx context.Context, steps int) error {

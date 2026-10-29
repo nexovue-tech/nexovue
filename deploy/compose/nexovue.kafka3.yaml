@@ -1,0 +1,102 @@
+# Three Kafka brokers instead of one (design.md §9): KRaft, each node both controller and broker.
+# Topics get three replicas and accept a write once two hold it, so any one broker can be lost with
+# nothing acknowledged lost. `nexovue install` adds this file when NEXOVUE_KAFKA_BROKERS=3.
+#
+# Chosen when the install is made. The setup step sizes a topic when it creates it, so an install
+# that started with one broker keeps one-replica topics until they are reassigned by hand
+# (docs/self-hosting/sizing.md).
+#
+# On one server the three share its disk and power: this protects against a broker crashing or a
+# disk filling, not against the server going. Spread across hosts, that is Path A's job.
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+x-three-brokers: &three-brokers
+  KAFKA_BROKERS: kafka:9092,kafka-2:9092,kafka-3:9092
+
+x-quorum: &quorum
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093,2@kafka-2:9093,3@kafka-3:9093
+  # Kafka's own topics — consumer offsets, transactions — replicated as the data is.
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+  KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 3
+  KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 2
+  KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xmx1g -Xms1g}
+  CLUSTER_ID: ${KAFKA_CLUSTER_ID:?set KAFKA_CLUSTER_ID}
+
+services:
+  kafka:
+    environment: *quorum
+
+  kafka-2:
+    <<: *service-defaults
+    extends:
+      file: compose.infra.yaml
+      service: kafka
+    hostname: kafka-2
+    environment:
+      <<: *quorum
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_LISTENERS: CONTROLLER://:9093,INTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-2:9092
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "kafka-2:9092"]
+    deploy:
+      resources:
+        limits:
+          memory: ${KAFKA_MEMORY:-2048M}
+
+  kafka-3:
+    <<: *service-defaults
+    extends:
+      file: compose.infra.yaml
+      service: kafka
+    hostname: kafka-3
+    environment:
+      <<: *quorum
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_LISTENERS: CONTROLLER://:9093,INTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-3:9092
+    volumes:
+      - kafka-3-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "kafka-3:9092"]
+    deploy:
+      resources:
+        limits:
+          memory: ${KAFKA_MEMORY:-2048M}
+
+  # The setup step sizes topics by the brokers it can see, so it waits for all three.
+  setup-pipeline:
+    environment: *three-brokers
+    depends_on:
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
+        condition: service_healthy
+
+  receiver:
+    environment: *three-brokers
+  worker:
+    environment: *three-brokers
+  scheduler-beat:
+    environment: *three-brokers
+  scheduler-light:
+    environment: *three-brokers
+  scheduler-deliveries:
+    environment: *three-brokers
+
+volumes:
+  kafka-2-data:
+  kafka-3-data:

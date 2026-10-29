@@ -22,6 +22,7 @@ import {
   formatPeriodCost,
   formatRate,
   isAllowanceSpent,
+  ownPeriodNote,
 } from "./usage-format";
 
 const PRICE: PlanPrice = {
@@ -130,9 +131,17 @@ describe("describeCounting", () => {
 
 describe("the sentences", () => {
   it("says the bill is the organization's, not the selected project's", () => {
-    expect(describeScope("30 days")).toBe(
+    expect(describeScope("30 days", true)).toBe(
       "Every project in this organization over the last 30 days — the bill is the organization's, not one project's.",
     );
+  });
+
+  it("speaks of no bill on a customer's own install", () => {
+    expect(describeScope("30 days", false)).toBe(
+      "Every project in this organization over the last 30 days.",
+    );
+    expect(ownPeriodNote(false)).not.toContain("bill");
+    expect(ownPeriodNote(true)).toContain("a bill is measured in whole days");
   });
 });
 
@@ -283,13 +292,14 @@ describe("the cardinality warning", () => {
   });
 
   it("names the shape it found and what it costs", () => {
-    expect(describeFamily(FAMILY)).toContain("checkout");
-    expect(describeFamily(FAMILY)).toContain("a Kubernetes pod suffix");
-    expect(describeFamily(FAMILY)).toContain("billed as its own service");
+    expect(describeFamily(FAMILY, true)).toContain("checkout");
+    expect(describeFamily(FAMILY, true)).toContain("a Kubernetes pod suffix");
+    expect(describeFamily(FAMILY, true)).toContain("billed as its own service");
+    expect(describeFamily(FAMILY, false)).toContain("counted as its own service");
   });
 
   it("falls back to a neutral word for a shape it does not recognise", () => {
-    expect(describeFamily({ ...FAMILY, kind: "something-new" })).toContain("an identifier");
+    expect(describeFamily({ ...FAMILY, kind: "something-new" }, true)).toContain("an identifier");
   });
 
   it("tells the customer where the identifier belongs instead", () => {

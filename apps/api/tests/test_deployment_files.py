@@ -1,4 +1,4 @@
-"""What a deployed install must have, read from both deployment files (readiness group 6).
+"""What a deployed install must have, read from the install file (readiness group 6).
 
 Each case is a way a deployed install was found broken on 2026-10-10 that no
 running test could catch, because nothing runs these files: the API exiting at
@@ -21,7 +21,9 @@ import yaml
 
 import nexovue_api
 
-DEPLOYED: Final = ("docker-compose.app.yaml", "docker-compose.onprem.yaml")
+# Every install is nexovue.yaml, with an overlay for the hosted service or the quickstart
+# (test_compose_contract.py renders each); what every one must have is in this file.
+DEPLOYED: Final = ("nexovue.yaml",)
 
 # The edge's upstreams and the port each service listens on inside its container.
 LISTENS_ON: Final[dict[str, int]] = {"api": 8000, "receiver": 4318}
@@ -82,7 +84,7 @@ def test_links_point_at_the_edge_s_app_name(file_name: str, service: str) -> Non
 @pytest.mark.parametrize("file_name", DEPLOYED)
 def test_the_api_trusts_the_edge_as_its_one_proxy(file_name: str) -> None:
     count = _environment(file_name, "api").get("TRUSTED_PROXY_COUNT")
-    assert count == "1", (
+    assert count == "${TRUSTED_PROXY_COUNT:-1}", (
         f"{file_name}: TRUSTED_PROXY_COUNT is {count!r}. Behind the edge, 0 makes every "
         "customer the proxy's address, so all of them share one login throttle."
     )
@@ -114,10 +116,10 @@ def test_every_edge_upstream_is_a_service_on_its_port(file_name: str) -> None:
 
 
 def test_the_hosted_edge_allows_checkout_and_self_hosted_does_not() -> None:
-    hosted = _environment("docker-compose.app.yaml", "proxy").get("NEXOVUE_CHECKOUT_ORIGINS", "")
-    onprem = _environment("docker-compose.onprem.yaml", "proxy").get("NEXOVUE_CHECKOUT_ORIGINS", "")
+    hosted = _environment("nexovue.hosted.yaml", "proxy").get("NEXOVUE_CHECKOUT_ORIGINS", "")
+    self_hosted = _environment("nexovue.yaml", "proxy").get("NEXOVUE_CHECKOUT_ORIGINS", "")
     assert "razorpay.com" in hosted, "the hosted console takes payments through Razorpay"
-    assert onprem == "", "a self-hosted install loads no payment script"
+    assert self_hosted == "", "a self-hosted install loads no payment script"
 
 
 @pytest.mark.parametrize("file_name", [*DEPLOYED, "docker-compose.yaml"])

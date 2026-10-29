@@ -20,6 +20,43 @@ since that day. Twelve new blockers were found (12-23) — in what the deploymen
 ingest, in the shared stores, in billing and in deletion. Two rows of the previous assessment were
 wrong (health checks, restore evidence) and are corrected below.
 
+## Assessment of ready-to-deploy, 2026-10-29
+
+Scope: **one change** — whether the first production rollout, a customer's self-hosted install or
+nexovue's hosted service, can rest on what `ready-to-deploy` built. Evidence is the gate, the
+contract tests, and four rehearsals on the founder's Mac ([ready-to-deploy](../changes/ready-to-deploy/status.md)); nothing was run on Linux or on a real
+hostname. **Verdict: NOT READY.** The change is safe to commit — nothing is deployed for it to break —
+but a first rollout would be the first run of the steps below.
+
+**Blockers for the first rollout:**
+
+- **A1. `nexovue install` has never run on Linux.** Its GNU-only steps — `mv -T` swapping the
+  `current` link, the systemd backup timer, `sha256sum`, the disk check against Docker's data
+  directory — have run only against a stand-in or not at all, so the first customer's install is the
+  first execution. Closed by: the install rehearsal on a Lima VM or a server.
+- **A2. Certificates on a real name have never been issued.** The edge now builds its site address
+  from `NEXOVUE_SITE_SCHEME`; `caddy adapt` accepts it and the quickstart served plain http, but no
+  ACME certificate has been obtained through it. A failure leaves the console unreachable. Closed by:
+  the first deployment's step 5, on a real name.
+- **A3. No upgrade has run between two releases.** The first customer upgrade would be the first
+  `nexovue upgrade`, and its rollback the first rollback; both are proved only against a stand-in
+  Docker. Closed by: tagging two candidates and upgrading, then rolling back, on Linux.
+- **A4. The release has never built a kit or an offline bundle.** The `kit` job has not run, the
+  bundle's size against GitHub's 2 GiB is an estimate, and an offline customer has nothing to download
+  until it runs. Closed by: the next `v*` tag.
+- **A5. The restore drill ran on one machine with a few hundred rows.** It proves the procedure, not
+  the 4-hour objective, and not a restore onto a second host. Closed by: the two-machine drill at a
+  measured size (`disaster-recovery.md`).
+- **A6. Nobody is paged.** The monitor fires (rehearsed), and Alertmanager routes to nowhere. A hosted
+  outage at night reaches nobody. Closed by: a receiver at the first deployment (`first-deploy.md` 7).
+- **A7. Email is unverified** (blocker 11): without a verified sending domain, invitations — the only
+  way a self-hosted install's teammates arrive — and password resets do not leave.
+
+**Recommended:** a load test that sets the sizing guide's numbers from measurement; a security review
+of the new surface (the install script's handling of secrets, `nexovue backup`'s two sets of S3 keys);
+a smoke check that `install` and `upgrade` run after starting (sign in, send one span, read it back) —
+the rehearsal did this by hand; an incident-response runbook beyond seven lines.
+
 ## Checklist, item by item
 
 `✓ verified` · `✗ missing` · `? unknown` — each with what was read or run.
@@ -28,20 +65,20 @@ wrong (health checks, restore evidence) and are corrected below.
 |---|---|---|
 | Hosting target | ✗ | `docs/operations/deployment.md`: "no approved production hosting target" |
 | Configuration / secrets | ✗ | `${VAR:?}` demands in the app and on-prem compose; no external secrets manager. Fixed 2026-10-11 ([deployment-tells-the-truth](../changes/deployment-tells-the-truth/status.md)): both files derive `OTLP_ENDPOINT` and `APP_BASE_URL` from the edge's two names, set `TRUSTED_PROXY_COUNT=1` and require both encryption keys — blockers 4, 16, 17 |
-| Migrations as a deploy step | ✗ | No alembic or ClickHouse migrate call in any compose file or Dockerfile — only `justfile:248-254`. 35 alembic + 32 ClickHouse migrations. `topics.sh` is not run by any target either, and broker auto-create is off (`compose.infra.yaml:40`) |
-| Capacity | ? | Laptop limits (`TODO(sizing)`, `docker-compose.onprem.yaml:88`); no load test, no target. `scheduler-light` at 256M in the hosted file is a limit dev already measured OOM-killing it (`docker-compose.yaml:476-481`) — blocker 22 |
+| Migrations as a deploy step | ✓ | Fixed 2026-10-28 ([ready-to-deploy](../changes/ready-to-deploy/status.md)): `setup` (Postgres, the bucket) and `setup-pipeline` (ClickHouse, the topics) run before every service in every layout; nothing starts until both exit 0 |
+| Capacity | ? | Sized 2026-10-28 ([ready-to-deploy](../changes/ready-to-deploy/status.md)): every ceiling a setting with a documented 16 GB minimum (`docs/self-hosting/sizing.md`); three brokers optional. Still no load test and no traffic target |
 | Health checks | ✓ (dev) | Fixed 2026-10-11 ([we-can-see-ourselves](../changes/we-can-see-ourselves/status.md)): every long-running service in both deployment files has a healthcheck; the three scheduler services answer on `SCHEDULER_HEALTH_ADDR`, liveness meaning their loop is moving. A frozen beat went unhealthy in 75 s on the dev stack. Before: no scheduler service was checked |
-| Logging / monitoring / alerting | ✗ | Reporting fixed 2026-10-11 ([we-can-see-ourselves](../changes/we-can-see-ourselves/status.md)): `/metrics` on every service (consumer lag, dead-letter depth, queue waits, request totals; ADR-021), the console's errors in the API's log, `monitoring.md` written. **Still missing: anything that reads them** — the monitor and its paging are group 8 |
-| Backup and restore evidence | ✗ | **Corrected:** two full local restore cycles *were* run on 2026-09-04 (`84832a3`) — this row said none had been. That drill predates about twenty migrations and has not been repeated; never against a deployed target; no schedule, off-host copy, RPO or RTO |
-| Rollback | ✗ | `rollback.md` is a stub; never rehearsed. Most ClickHouse `.down.sql` files drop tables or columns (`000001`-`000007`, `000032`, and seven column drops), and `000024`'s down would double-count endpoint stats against the current worker — so a ClickHouse rollback means *restore the backup and roll the images back together*, never `migrate down` |
+| Logging / monitoring / alerting | ? | Reporting fixed 2026-10-11 ([we-can-see-ourselves](../changes/we-can-see-ourselves/status.md)). **A monitor ready 2026-10-28** ([ready-to-deploy](../changes/ready-to-deploy/status.md)): Prometheus and 16 tested alert rules in every install, seen firing on a stopped worker. Still nobody paged: no receiver until the first deployment |
+| Backup and restore evidence | ? | 2026-10-28 ([ready-to-deploy](../changes/ready-to-deploy/status.md)): daily backups shipped off the host with retention; a restore from the off-host copy onto an emptied install passed `verify.sh` in 72 s (`disaster-recovery.md`). Still owed: the drill across two Linux machines at a size that measures the 4-hour objective |
+| Rollback | ? | 2026-10-28 ([ready-to-deploy](../changes/ready-to-deploy/status.md)): `nexovue rollback` swaps back when the schema did not change and otherwise restores the backup taken before the upgrade (`rollback.md`); proved against a stand-in Docker, not yet rehearsed between two releases |
 | TLS / public endpoints | ✓ (replica) | Fixed 2026-10-11 ([deployment-tells-the-truth](../changes/deployment-tells-the-truth/status.md)): one Caddy edge on both files serves the console's files, the API and ingest over TLS on two names, and nothing else publishes a port. Run on the replica with `app.localhost`/`ingest.localhost`; never against a real hostname |
 | Security review | ✗ | This review is the first since the 2026-09-15 secret scan and licence audit (both clean) |
-| Release process | ✗ | No `.github/` or other CI; no registry (`TODO(registry)`); no version file or changelog; the only tag is `backup-trailers-20260915` |
+| Release process | ✓ | CI on every push; `v*` tags build, sign and publish both images, the install kit and the offline bundles once that commit's CI passed (`release.md`); SDK releases ready behind `SDK_PUBLISH` |
 | Smoke tests | ✗ | Twelve e2e specs, local only; nothing runs after a deploy |
 | Operational ownership | ✗ | One person; `incident-response.md` is seven lines; no on-call path |
 | Invite-only access | ✓ | `SIGNUP_ENABLED` defaults closed in both deployment files (`app:223`, `onprem:248`). The stale comment at `docker-compose.app.yaml:221-222` was removed 2026-10-11 |
 | Email in production | ? | Fixed 2026-10-11 ([deployment-tells-the-truth](../changes/deployment-tells-the-truth/status.md)): production refuses `console` in the API and the scheduler, and a blank `EMAIL_PROVIDER` (which both files pass when unset) means unconfigured rather than failing to start. Still open: no bounce handling; whether a Resend domain exists is not checked (group 8) |
-| Self-hosted mode | ✗ | No deployment-mode concept anywhere in `apps/` or `packages/` |
+| Self-hosted mode | ✓ | Fixed 2026-10-28 ([ready-to-deploy](../changes/ready-to-deploy/status.md)): `NEXOVUE_DEPLOYMENT`, self-hosted by default — no billing, operator console or support access, no monthly allowance |
 | On-prem compose | ✗ | "SKELETON, NOT YET RUNNABLE"; twelve `TODO`s; never run |
 | Secret keys and rotation | ✓ (dev) | Fixed 2026-10-11 ([keys-can-be-rotated](../changes/keys-can-be-rotated/status.md)): a keyring per key and a re-seal command. Before: `CHECK_SECRET_KEY` (check and channel secrets) and `CREDENTIAL_ENCRYPTION_KEY` (TOTP) each seal with one key and no key id (`probes/secrets.py:36-47`, `auth/encryption.py`) — rotating either loses everything it sealed |
 
@@ -53,15 +90,15 @@ Numbers 1-11 keep the numbers other documents already cite.
 ### Still open from 2026-09-21
 
 1. **No hosting target.** *(H)* There is nothing to deploy to, and no item above can be verified until there is.
-2. **Images are built on a laptop.** *(H, S)* With no CI, registry or tag, nobody can say which commit is running, and a bad deploy has no known-good image to return to. A self-hosted operator has nothing to pull.
+2. **Fixed 2026-10-28** ([ready-to-deploy](../changes/ready-to-deploy/status.md)): CI on every push; a `v*` tag builds both images for amd64 and arm64 once that commit's CI passed, and publishes them signed (`v0.1.0-rc.2`, `rc.3`, verified with cosign). ~~**Images are built on a laptop.** *(H, S)* With no CI, registry or tag, nobody can say which commit is running, and a bad deploy has no known-good image to return to. A self-hosted operator has nothing to pull.~~
 3. ~~**Signup is public.**~~ **Cleared 2026-09-21** (`docs/changes/signup-closed-by-default/`); re-verified 2026-10-10.
 4. **Fixed on the replica 2026-10-11** ([deployment-tells-the-truth](../changes/deployment-tells-the-truth/status.md)): the API's `OTLP_ENDPOINT` is `https://<NEXOVUE_INGEST_HOST>` in both files, and a span exported to `https://ingest.localhost` on the replica was read back through the console's API. ~~**No ingest hostname with TLS — and the API cannot start on any deployed target.** *(H, S)* The settings validator refuses the localhost `OTLP_ENDPOINT` default (`settings.py:313-320`, reproduced), and **neither deployment file passes `OTLP_ENDPOINT` to the container at all**, so the API exits at boot whatever the operator sets.~~
-5. **Migrations and Kafka topics are not part of a deploy.** *(H, S)* A new image against an old schema starts services whose queries fail; a fresh install's receiver has no topics to publish to and answers 503 to every export.
+5. **Fixed 2026-10-28** ([ready-to-deploy](../changes/ready-to-deploy/status.md)): `setup` and `setup-pipeline` run before every service in every layout; the quickstart started from empty volumes with them. ~~**Migrations and Kafka topics are not part of a deploy.** *(H, S)* A new image against an old schema starts services whose queries fail; a fresh install's receiver has no topics to publish to and answers 503 to every export.~~
 6. **No restore has been performed against anything but a laptop, and the one drill is stale.** *(H, S)* A lost volume takes every customer's accounts and telemetry with it, with no rehearsed way back — the 2026-09-04 drill predates about twenty migrations.
 7. **Reporting built on the development stack 2026-10-11** ([we-can-see-ourselves](../changes/we-can-see-ourselves/status.md)): every service reports its health and `/metrics` for an outside monitor (ADR-021); the scheduler's three services are health-checked. **Still open until group 8 connects a monitor** — the reporting exists, nothing reads it yet. ~~**Nothing tells us nexovue is down.** *(H, S)* A dead receiver drops customers' telemetry and the first signal is a customer's message. The scheduler is worse: none of its three services has a liveness probe, so a dead beat silently stops every customer's checks and a dead delivery worker leaves every alert in the outbox.~~
 8. **Fixed on the development stack 2026-10-11** ([keys-can-be-rotated](../changes/keys-can-be-rotated/status.md)): every sealed value names its key; current and previous keys; `just keys-status`/`keys-reseal`; rotated and reversed on dev with sign-in, Run now and a webhook test passing at every step ([key-rotation](key-rotation.md)). ~~**Neither encryption key can be rotated.** *(H, S)* `CHECK_SECRET_KEY` seals check *and* notification-channel secrets; `CREDENTIAL_ENCRYPTION_KEY` seals TOTP secrets. Each is one key with no key id, so a leaked key cannot be replaced without making every check, Slack/PagerDuty/webhook channel and 2FA enrolment unreadable at once.~~
-9. **Self-hosted installs believe they are hosted.** *(S)* They show a Razorpay billing screen and cap ingestion on the operator's own disk.
-10. **The on-prem compose has never run — and its console could not answer.** *(S)* Beyond the twelve `TODO`s, the Caddyfile routes the console to `web:8080` and the on-prem file declares no `web` service (only `web-assets-init`; its own `TODO(caddy)` at `:138`), so every console request would answer 502.
+9. **Fixed 2026-10-28** ([ready-to-deploy](../changes/ready-to-deploy/status.md)): the deployment mode. ~~**Self-hosted installs believe they are hosted.** *(S)* They show a Razorpay billing screen and cap ingestion on the operator's own disk.~~
+10. **Fixed 2026-10-28** (same record): `nexovue.yaml` replaced it, every `TODO` answered, and ran as the quickstart with a span sent and read back. ~~**The on-prem compose has never run — and its console could not answer.** *(S)* Beyond the twelve `TODO`s, the Caddyfile routes the console to `web:8080` and the on-prem file declares no `web` service (only `web-assets-init`; its own `TODO(caddy)` at `:138`), so every console request would answer 502.~~
 11. **Half fixed 2026-10-11** ([deployment-tells-the-truth](../changes/deployment-tells-the-truth/status.md)): production refuses `console` in both services. **Still open: email delivery is unverified** — no provider domain has been verified, which needs the hosting decision (group 8). ~~Nothing refuses `console` outside development; with it, no one can verify an address, reset a password, or receive an alert.~~
 
 ### New on 2026-10-10
@@ -164,7 +201,10 @@ the work, before F37 is specified. Grouped so each package is one change record:
    and connecting a cloud monitor to what group 7 reports. **Deferred by the founder (2026-10-10)
    until groups 1-7 and 9 are done.** **Re-scoped 2026-10-11** ([ready-to-deploy](../changes/ready-to-deploy/change.md)): nothing is
    hosted yet; everything is made ready — both ADR-006 paths, Terraform for AWS, Azure and Oracle,
-   public images from GitHub Actions, self-hosted and try-it-locally installs.
+   public images from GitHub Actions, self-hosted and try-it-locally installs. **Built 2026-10-28**
+   except what waits for a customer's cloud (Azure storage, Ansible, Helm, infrastructure code —
+   founder, 2026-10-28): images, releases, the deployment mode, the install and quickstart, backups
+   off the host, three brokers and the monitor.
 9. **The remaining recommendations** — everything above that no group carries (personal data export
    and deletion, console code splitting, SDK sampling, and the rest of *Recommended*). The founder
    chose to fix these now, after group 7. **Built on the development stack 2026-10-11**

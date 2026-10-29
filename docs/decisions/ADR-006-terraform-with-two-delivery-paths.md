@@ -61,6 +61,19 @@ region means for customers.
 S3 API and standard Postgres, ClickHouse and Kafka — but a second provider's module is written when a
 switch is actually made, not in advance.
 
+## Amendment, 2026-10-28
+
+Founder decisions in `docs/changes/ready-to-deploy/`:
+
+- **Three clouds — AWS, Azure and Oracle** — rather than one written now; **OpenTofu** rather than
+  Terraform (the same providers, MPL-licensed, state encryption); **cloud-init bootstraps and Ansible
+  deploys** on Path A.
+- **None of the three, nor Ansible or Helm, is written yet.** Nothing is hosted, and infrastructure code
+  that cannot be applied cannot be proven and drifts as providers change. The first customer's cloud and
+  size decide which one is written, in days. Until then the deployment is a server created by hand in that
+  cloud's console and the self-hosted install (`./nexovue install`), which is ADR-006's own observation
+  that Path A is mostly F37.
+
 ## Rejected
 
 - **Choose one path now.** The budget that decides it does not exist yet. Choosing Kubernetes early

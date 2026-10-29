@@ -1,0 +1,11 @@
+# Daily, at a quiet hour. Persistent: a backup missed while the server was off runs when it is back.
+[Unit]
+Description=Daily nexovue backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

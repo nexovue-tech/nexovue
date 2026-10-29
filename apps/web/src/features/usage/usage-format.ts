@@ -200,21 +200,25 @@ export function describeServiceChange(warning: CardinalityWarning): string {
  * Named rather than implied: the customer can only act on this if they are told
  * which names, and what to move the identifier into.
  */
-export function describeFamily(family: ServiceNameFamily): string {
+export function describeFamily(family: ServiceNameFamily, hosted: boolean): string {
   const shape = FAMILY_KINDS[family.kind] ?? "an identifier";
-  return `${formatCount(family.members)} names differ from “${family.stem}” only by ${shape}, and each is billed as its own service.`;
+  const cost = hosted ? "billed" : "counted";
+  return `${formatCount(family.members)} names differ from “${family.stem}” only by ${shape}, and each is ${cost} as its own service.`;
 }
 
 export const CARDINALITY_REMEDY =
   "service.name must be the same for every instance of a horizontally scaled service; what tells instances apart belongs in service.instance.id.";
 
+/** Hosted only: a customer's own install has no bill to hold down. */
 export const NOTHING_IS_CAPPED =
   "Nothing is dropped on account of this. Telemetry we discarded to hold a bill down is telemetry missing from your next incident.";
 
 /* ------------------------------------------------------------------ the sentences */
 
-export function describeScope(rangeLabel: string): string {
-  return `Every project in this organization over the last ${rangeLabel} — the bill is the organization's, not one project's.`;
+/** A customer's own install has no bill, so it is told the scope without one. */
+export function describeScope(rangeLabel: string, hosted: boolean): string {
+  const scope = `Every project in this organization over the last ${rangeLabel}`;
+  return hosted ? `${scope} — the bill is the organization's, not one project's.` : `${scope}.`;
 }
 
 /**
@@ -226,8 +230,10 @@ export function describeScope(rangeLabel: string): string {
  * period nobody picks. So the period is this screen's own, and it says so rather than
  * leaving somebody to notice that the top bar stopped applying.
  */
-export const OWN_PERIOD_NOTE =
-  "This screen keeps its own period: a bill is measured in whole days the meter has counted, not in the window at the top of the screen.";
+export function ownPeriodNote(hosted: boolean): string {
+  const measured = hosted ? "a bill is measured in whole days" : "usage is measured in whole days";
+  return `This screen keeps its own period: ${measured} the meter has counted, not in the window at the top of the screen.`;
+}
 
 /** The union, said in words, because the daily column beside it invites adding up. */
 export const UNION_CAPTION =

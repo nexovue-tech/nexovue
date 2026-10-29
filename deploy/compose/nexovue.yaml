@@ -1,0 +1,456 @@
+# nexovue on one server: the self-hosted install, and the base every other layout overlays.
+#
+#   self-hosted   docker compose -f nexovue.yaml --env-file ../config/nexovue.env up -d --wait
+#   hosted        … -f nexovue.yaml -f nexovue.hosted.yaml …      (nexovue's own service)
+#   quickstart    … -f nexovue.yaml -f nexovue.quickstart.yaml …  (a laptop, plain http)
+#   replica       … -f nexovue.yaml -f nexovue.hosted.yaml -f nexovue.build.yaml …  (`just dev-app`)
+#
+# `deploy/nexovue` writes the settings file and runs these; docs/self-hosting/install.md is the
+# guide. The overlays change settings only, never a list, because `-f` appends lists: a port or a
+# volume added in one would survive into the others.
+#
+# What every layout shares:
+#   - services from the two images by version (ADR-019), never from a build context;
+#   - the setup step first: no service starts against an old schema or a missing topic;
+#   - restart: unless-stopped and log rotation on everything, so a reboot restores the stack and a
+#     chatty service cannot fill the disk;
+#   - one edge (Caddy); no other container publishes a port.
+#
+# Caddy over Traefik at the edge because it needs no access to the Docker socket — a proxy that can
+# drive the daemon is a poor thing to expose — and the service list here is fixed, so label-based
+# discovery buys nothing.
+
+name: ${COMPOSE_PROJECT_NAME:-nexovue}
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+
+# The scheduler's own check (readiness blocker 7): its loop's pulse, not the process — a beat whose
+# loop has hung stays up while every check stops.
+x-scheduler-healthcheck: &scheduler-healthcheck
+  test: ["CMD", "python", "-m", "nexovue_scheduler", "health"]
+  interval: 15s
+  timeout: 5s
+  retries: 4
+  start_period: 30s
+
+# The two images. `never` after an offline install has loaded them (`nexovue install --offline`).
+x-nexovue-image: &nexovue-image
+  image: ${NEXOVUE_REGISTRY:-ghcr.io/nexovue-tech}/nexovue:${NEXOVUE_VERSION:?set NEXOVUE_VERSION}
+  pull_policy: ${NEXOVUE_PULL_POLICY:-missing}
+
+x-pipeline-image: &pipeline-image
+  image: ${NEXOVUE_REGISTRY:-ghcr.io/nexovue-tech}/nexovue-pipeline:${NEXOVUE_VERSION:?set NEXOVUE_VERSION}
+  pull_policy: ${NEXOVUE_PULL_POLICY:-missing}
+
+# Every service waits for the setup step: a service started against an old schema or a missing
+# topic fails its first queries (readiness blocker 5).
+x-after-setup: &after-setup
+  setup:
+    condition: service_completed_successfully
+  setup-pipeline:
+    condition: service_completed_successfully
+
+include:
+  - path:
+      - compose.infra.yaml
+      - compose.infra.deploy.yaml
+
+# The object store: the bundled SeaweedFS unless S3_ENDPOINT names the install's own S3-compatible
+# store. Generic S3 API only.
+x-object-store-env: &object-store-env
+  S3_ENDPOINT: ${S3_ENDPOINT:-http://seaweedfs:8333}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY}
+
+x-data-plane-env: &data-plane-env
+  # What both Go services read. Each adds its own: the worker its ClickHouse address. Merge keys
+  # cannot remove a variable, so nothing either service ignores belongs here.
+  ENV: production
+  # A customer's own install unless an overlay says otherwise (nexovue_platform.deployment).
+  NEXOVUE_DEPLOYMENT: self-hosted
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+  POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+
+x-control-plane-env: &control-plane-env
+  # What the API and the scheduler both read. The API adds ClickHouse, the scheduler adds Kafka;
+  # neither reads the other's, so neither is here.
+  ENV: production
+  NEXOVUE_DEPLOYMENT: self-hosted
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  <<: *object-store-env
+  # Seals check secrets in the API and opens them in the probe workers (ADR-010). Demanded: an
+  # install without it cannot run any check that uses a secret, and would only find out at the
+  # first run.
+  CHECK_SECRET_KEY: ${CHECK_SECRET_KEY:?set CHECK_SECRET_KEY}
+  # Keys that sealed before the current one, comma-separated; they only open. Set during a
+  # rotation and emptied after `keys reseal` (docs/operations/key-rotation.md).
+  CHECK_SECRET_PREVIOUS_KEYS: ${CHECK_SECRET_PREVIOUS_KEYS:-}
+  # Run now dispatches to the probe workers through their broker (ADR-011). Every probe location
+  # this install has, and the one this container is.
+  PROBE_LOCATIONS: ${PROBE_LOCATIONS:-local}
+  PROBER_REGION: ${PROBER_REGION:-local}
+  # Where every emailed link lands — verification, password reset, an alert's evidence. The edge's
+  # app name, and built from it so the two cannot disagree.
+  APP_BASE_URL: https://${NEXOVUE_APP_HOST:?set NEXOVUE_APP_HOST}
+  # The mail provider, passed through rather than demanded: an install without one still serves
+  # every screen, and each email path says which variable is missing. An air-gapped install has no
+  # provider to reach.
+  EMAIL_PROVIDER: ${EMAIL_PROVIDER:-}
+  EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+  EMAIL_SENDING_DOMAIN: ${EMAIL_SENDING_DOMAIN:-}
+  EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-}
+  EMAIL_REPLY_TO: ${EMAIL_REPLY_TO:-}
+
+services:
+  # ---------- the setup step: runs to completion before anything else ----------
+  # Postgres to the newest migration and the object store's bucket (nexovue_api.setup).
+  setup:
+    <<: *nexovue-image
+    command: ["setup"]
+    restart: "no"
+    environment:
+      POSTGRES_DSN: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      <<: *object-store-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+
+  # ClickHouse to the newest migration and the Kafka topics (apps/workers/cmd/setup). Postgres
+  # holds the lock that keeps two of these apart.
+  setup-pipeline:
+    <<: *pipeline-image
+    command: ["/setup"]
+    restart: "no"
+    environment:
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
+      POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # ---------- the edge ----------
+  # The only service with a published port.
+  proxy:
+    <<: *service-defaults
+    image: caddy:2.11.4-alpine
+    # Caddy's admin API answers on loopback only, and the image has wget.
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Two names, not one: a session cookie scoped to a parent domain reaches every child, so one
+      # name would deliver it on every browser-door beacon. Caddy obtains a certificate for each.
+      NEXOVUE_APP_HOST: ${NEXOVUE_APP_HOST:?set NEXOVUE_APP_HOST}
+      NEXOVUE_INGEST_HOST: ${NEXOVUE_INGEST_HOST:?set NEXOVUE_INGEST_HOST}
+      # Where the certificate authority writes about expiring certificates.
+      NEXOVUE_TLS_EMAIL: ${NEXOVUE_TLS_EMAIL:?set NEXOVUE_TLS_EMAIL}
+      # No payment processor: a self-hosted install takes no payments, so the console's
+      # content-security policy allows no checkout origin. The hosted overlay sets it.
+      NEXOVUE_CHECKOUT_ORIGINS: ""
+    volumes:
+      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      # The console's built files, which the edge serves itself (ADR-019 point 3).
+      - web-assets:/srv/web:ro
+    depends_on:
+      api:
+        condition: service_started
+      receiver:
+        condition: service_started
+      web-assets-init:
+        condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # The console is files the edge serves (ADR-019 point 3); this copies them out of the nexovue
+  # image into the edge's volume, replacing the last release's, and exits.
+  web-assets-init:
+    <<: *nexovue-image
+    command: ["web-assets", "/assets"]
+    # Root for this one copy: a new volume belongs to root, and nothing here faces anyone.
+    user: "0"
+    restart: on-failure
+    volumes:
+      - web-assets:/assets
+
+  # ---------- data plane ----------
+  receiver:
+    <<: [*service-defaults, *pipeline-image]
+    command: ["/receiver"]
+    healthcheck:
+      test: ["CMD", "/receiver", "-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    environment:
+      <<: *data-plane-env
+      # Go's collector cannot see a cgroup limit, so without this the heap grows until the kernel
+      # kills the process. ~85% of this service's 512M.
+      GOMEMLIMIT: 435MiB
+      # How many receivers share the traffic; each enforces its share of the ingest limit. One
+      # setting for both, so they cannot drift apart.
+      RECEIVER_INSTANCES: ${RECEIVER_INSTANCES:-1}
+    depends_on:
+      <<: *after-setup
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    deploy:
+      replicas: ${RECEIVER_INSTANCES:-1}
+      resources:
+        limits:
+          memory: 512M
+
+  # One image, deployed once, running every pipeline (`WORKER_PIPELINES` chooses). Deploying it
+  # twice with two lists is how it splits, and a split service would need a memory limit of its
+  # own (`docs/changes/one-worker-again/`).
+  worker:
+    <<: [*service-defaults, *pipeline-image]
+    command: ["/worker"]
+    healthcheck:
+      test: ["CMD", "/worker", "-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    environment:
+      # Roughly 85% of WORKER_MEMORY: the two are one setting in two places, and raising the limit
+      # without raising this leaves the extra memory unusable.
+      GOMEMLIMIT: ${WORKER_GOMEMLIMIT:-1088MiB}
+      <<: *data-plane-env
+      CLICKHOUSE_DSN: clickhouse://${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}@clickhouse:9000/${CLICKHOUSE_DB}
+      # Every pipeline, in one process (founder, 2026-09-20). They share one memory cap: a profile
+      # flood that exhausts it stops spans with it.
+      WORKER_PIPELINES: all
+      # Required rather than optional: the worker treats an absent secret as "hashing rules
+      # unavailable" and boots anyway, so a missing value would disable pseudonymisation without
+      # anything going red.
+      WORKERS_MASKING_HASH_SECRET: ${WORKERS_MASKING_HASH_SECRET:?set WORKERS_MASKING_HASH_SECRET}
+    depends_on:
+      # Masking and sampling rules come from Postgres the moment the worker starts; without it
+      # every span is handled with the built-in defaults for the first 30 seconds.
+      <<: *after-setup
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEMORY:-1280M}
+
+  # ---------- control plane ----------
+  api:
+    <<: [*service-defaults, *nexovue-image]
+    command: ["api"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    environment:
+      <<: *control-plane-env
+      # Seals two-factor secrets (readiness blocker 17): without it nobody on this install can
+      # enable two-factor sign-in, and production refuses to start.
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?set CREDENTIAL_ENCRYPTION_KEY}
+      CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS: ${CREDENTIAL_ENCRYPTION_PREVIOUS_KEYS:-}
+      # Reads as the read-only account; the API holds no ClickHouse credential that writes.
+      CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # What the console hands a customer to export to: the edge's ingest name.
+      OTLP_ENDPOINT: https://${NEXOVUE_INGEST_HOST:?set NEXOVUE_INGEST_HOST}
+      # The edge is the one hop in front of the API, so the caller is the last X-Forwarded-For
+      # entry. At 0 every caller is the edge's address and all of them share one login throttle
+      # (readiness blocker 16). A load balancer in front of the edge adds one.
+      TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
+      # How many API processes share the traffic; each enforces its share of the in-memory limits.
+      API_INSTANCES: ${API_INSTANCES:-1}
+      # The API's own public hostname (F36). The MCP server answers only on the hosts it is told
+      # about; unset, it falls back to the console's host.
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-}
+      # **The way in.** A self-hosted install has nobody to invite its first person, so the first
+      # organization and its owner are created at boot from these. `nexovue install` always writes
+      # them; they are not demanded here only because the hosted service, which overlays this file,
+      # has customers arrive through signup instead. Read once: change the password in the console
+      # afterwards (docs/operations/first-accounts.md).
+      FIRST_ORGANIZATION_NAME: ${FIRST_ORGANIZATION_NAME:-}
+      FIRST_OWNER_EMAIL: ${FIRST_OWNER_EMAIL:-}
+      FIRST_OWNER_PASSWORD: ${FIRST_OWNER_PASSWORD:-}
+      # **Closed.** The owner above is this install's way in; left open, a stranger who finds the
+      # page creates an organization inside somebody else's install. Teammates arrive by
+      # invitation. Overridable for an install that wants to be a small multi-tenant service.
+      SIGNUP_ENABLED: ${SIGNUP_ENABLED:-false}
+    depends_on:
+      <<: *after-setup
+      seaweedfs:
+        # Files a check sends, and source maps, live here. A dependant that starts before the S3
+        # gateway answers meets a refused connection on its first object.
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    deploy:
+      replicas: ${API_INSTANCES:-1}
+      resources:
+        limits:
+          memory: 832M
+
+  scheduler-beat:
+    <<: [*service-defaults, *nexovue-image]
+    command: ["scheduler-beat"]
+    healthcheck: *scheduler-healthcheck
+    environment:
+      <<: *control-plane-env
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+    depends_on:
+      <<: *after-setup
+      seaweedfs:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  scheduler-light:
+    <<: [*service-defaults, *nexovue-image]
+    command: ["scheduler-light"]
+    healthcheck: *scheduler-healthcheck
+    environment:
+      <<: *control-plane-env
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+      # The service alert rules read the telemetry store (F21, ADR-012); this worker alone runs
+      # those sweeps, as the read-only account.
+      CLICKHOUSE_DSN: clickhouse://nexovue_reader:${CLICKHOUSE_READER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # The nightly erasure of deleted organizations (ADR-014), as the account that can only read
+      # and delete (users.d/eraser.xml).
+      CLICKHOUSE_ERASER_DSN: clickhouse://nexovue_eraser:${CLICKHOUSE_ERASER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+    depends_on:
+      <<: *after-setup
+      clickhouse:
+        condition: service_healthy
+      # Kafka carries every check result and Postgres holds this worker's job queue. Starting
+      # before either loses the first results after three delivery attempts.
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+      scheduler-beat:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          # What dev measured it needs: 256M OOM-killed its child processes at startup.
+          memory: 768M
+
+  # F21. Delivers alerts — email, Slack, Teams, Discord, PagerDuty, webhooks — from the outbox,
+  # and nothing else: a receiver that takes its full ten seconds holds one of these slots, never a
+  # probe's. `scheduler-light` excludes this queue for the same reason.
+  scheduler-deliveries:
+    <<: [*service-defaults, *nexovue-image]
+    command: ["scheduler-deliveries"]
+    healthcheck: *scheduler-healthcheck
+    environment:
+      <<: *control-plane-env
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-kafka:9092}
+    depends_on:
+      <<: *after-setup
+      postgres:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+      scheduler-beat:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  # ---------- the monitor, ready to connect (design.md §10) ----------
+  # Opt-in: `--profile monitoring`. Scrapes every service's /metrics and evaluates the alerts in
+  # deploy/monitoring/rules; Alertmanager sends them nowhere until deploy/monitoring/alertmanager.yml
+  # names a receiver. Neither publishes a port: `docker compose exec prometheus` or an SSH tunnel.
+  prometheus:
+    <<: *service-defaults
+    profiles: ["monitoring"]
+    image: prom/prometheus:v3.15.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:9090/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+
+  alertmanager:
+    <<: *service-defaults
+    profiles: ["monitoring"]
+    image: prom/alertmanager:v0.34.1
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    volumes:
+      - ../monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:9093/-/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+volumes:
+  caddy-data:
+  caddy-config:
+  web-assets:
+  prometheus-data:
+  alertmanager-data:

@@ -29,7 +29,7 @@ snapshot="$(cd "$snapshot" && pwd)"
 require_container "$CLICKHOUSE_CONTAINER"
 
 echo "verifying the artifact before touching the store"
-( cd "$snapshot" && shasum -a 256 --check --ignore-missing SHA256SUMS ) \
+( cd "$snapshot" && sha256_check SHA256SUMS ) \
     || die "checksum mismatch — this snapshot is corrupt, do not restore it"
 
 # Refuse to restore over anything. Restoring onto a populated store is how you

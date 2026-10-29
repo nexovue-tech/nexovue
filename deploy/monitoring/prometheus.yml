@@ -1,0 +1,49 @@
+# Every /metrics nexovue serves (docs/operations/monitoring.md), scraped inside the install's own
+# network: the `monitoring` profile of nexovue.yaml runs this beside the services. A hosted monitor
+# reads the same targets and the same rules (rules/nexovue.yml).
+#
+# DNS service discovery rather than fixed targets: the API and the receiver run as several replicas
+# behind one name, and each must be scraped on its own.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: receiver
+    dns_sd_configs:
+      - names: [receiver]
+        type: A
+        port: 8081
+  - job_name: worker
+    dns_sd_configs:
+      - names: [worker]
+        type: A
+        port: 8081
+  - job_name: api
+    dns_sd_configs:
+      - names: [api]
+        type: A
+        port: 8000
+  - job_name: scheduler-beat
+    dns_sd_configs:
+      - names: [scheduler-beat]
+        type: A
+        port: 8081
+  - job_name: scheduler-light
+    dns_sd_configs:
+      - names: [scheduler-light]
+        type: A
+        port: 8081
+  - job_name: scheduler-deliveries
+    dns_sd_configs:
+      - names: [scheduler-deliveries]
+        type: A
+        port: 8081

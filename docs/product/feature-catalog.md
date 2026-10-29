@@ -97,7 +97,7 @@
 | **F34** | Metrics explorer | ✅ Yes | 🔲 | 0 | Catalogue with name/shape/readable filters, histograms, duration heatmaps. *Added 2026-09-14 — it shipped without a catalogue entry* |
 | **F35** | Setup documentation (public) | ✅ Yes | 🔲 | 0 | Fifteen pages served unauthenticated at `/docs`, compiled from `docs/product/setup/`. *Added 2026-09-14* |
 | **F36** | Customer read API | ✅ Yes | ✅ | **1** | **Built 2026-09-20** as Stage 2 of [Team, API and admin access](../features/team-and-api-access/spec.md): organization-owned read tokens (`nvt_live_`, scoped, expiring, revocable, shown once); a documented read surface over `/api/v1` held to a checked-in list; per-token rate limits and daily usage; a hosted read-only **MCP server** at `/api/mcp` for AI assistants; customer documentation at [setup/api.md](setup/api.md) — see [status](../features/team-and-api-access/status.md) |
-| **F37** | Self-hosted install & operation | 🟡 Skeleton | 🔲 | **1** | **The only Phase 1 feature still unbuilt and unspecified**, and the whole of Track 1 is now behind it. `docker-compose.onprem.yaml` and the operations docs exist and are marked, correctly, as unverified. No images, no registry, no release, no runbook. **Two pieces landed 2026-09-21**: the first owner is seeded from `FIRST_OWNER_EMAIL` so an install has a way in without leaving signup open (`docs/changes/seeded-from-the-environment/`), and signup is closed unless a target opens it (`docs/changes/signup-closed-by-default/`). Both are correct and **unrehearsed** — the compose target has still never run. It also owns readiness blockers 9 and 10: there is no deployment-mode concept anywhere in the code, so a self-hosted install shows a Razorpay billing screen and caps ingestion on the operator's own disk. **Licence decided and declared 2026-09-15: AGPL-3.0, browser SDK Apache-2.0; transitive licence audit and git-history secret scan both clean.** Delivered as the deployment track of Phase 1 ([ADR-006](../decisions/ADR-006-terraform-with-two-delivery-paths.md)). *Added 2026-09-14* |
+| **F37** | Self-hosted install & operation | 🟢 Built, not yet on a server | 🔲 | **1** | **Built 2026-10-28** ([ready-to-deploy](../changes/ready-to-deploy/status.md)): `nexovue quickstart`, `install [--offline]`, `upgrade`, `rollback`, `backup`, `restore`; the install kit and offline bundles on every release; `docs/self-hosting/`. Rehearsed on a Mac; the Linux-server rehearsals are still owed. Before: **The only Phase 1 feature still unbuilt and unspecified**, and the whole of Track 1 is now behind it. `docker-compose.onprem.yaml` and the operations docs exist and are marked, correctly, as unverified. No images, no registry, no release, no runbook. **Two pieces landed 2026-09-21**: the first owner is seeded from `FIRST_OWNER_EMAIL` so an install has a way in without leaving signup open (`docs/changes/seeded-from-the-environment/`), and signup is closed unless a target opens it (`docs/changes/signup-closed-by-default/`). Both are correct and **unrehearsed** — the compose target has still never run. It also owns readiness blockers 9 and 10: there is no deployment-mode concept anywhere in the code, so a self-hosted install shows a Razorpay billing screen and caps ingestion on the operator's own disk. **Licence decided and declared 2026-09-15: AGPL-3.0, browser SDK Apache-2.0; transitive licence audit and git-history secret scan both clean.** Delivered as the deployment track of Phase 1 ([ADR-006](../decisions/ADR-006-terraform-with-two-delivery-paths.md)). *Added 2026-09-14* |
 
 **Named capabilities inside features (so they aren't lost):** BubbleUp-style attribute/outlier
 analysis → F20 + F2 evidence · service ownership metadata → F8/F9 · telemetry-value transparency
@@ -456,7 +456,13 @@ does not depend on F26.
 elsewhere, not our data elsewhere — different decisions about who sees what without a login, and no
 shared code. **Added 2026-09-14.**
 
-### F37 — Self-hosted Install & Operation 🟡 SKELETON — TO SPECIFY
+### F37 — Self-hosted Install & Operation 🟢 BUILT — NOT YET RUN ON A SERVER
+
+**Built 2026-10-28** as group 8 of the readiness review
+([ready-to-deploy](../changes/ready-to-deploy/status.md)), without a separate specification — the
+founder's direction was "ready to configure and run, no development work when a customer comes". What
+follows is the entry as it stood before, kept for the stories it names; the operator's guide is
+[`docs/self-hosting/`](../self-hosting/install.md).
 
 nexovue is **both SaaS and self-hosted**, which makes installing and running it a customer-facing
 surface with its own users — an operator, not a developer — and its own stories: *as an operator I
