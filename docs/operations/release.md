@@ -38,14 +38,25 @@ and the same for `nexovue-pipeline`; `cosign verify-blob` for the kit ([install]
 ## The browser SDK
 
 A separate tag, `sdk-vX.Y.Z`, matching `packages/browser-sdk/package.json`, runs
-`.github/workflows/release-sdk.yml`: tests, builds, measures the bundle and shows what npm would receive.
-It **publishes only when the repository variable `SDK_PUBLISH` is `true`**, through npm's trusted
-publishing — no npm token exists, and the package carries provenance. The repository is public and the
-package publishable (2026-10-29). What remains is the founder's, once, on npmjs.com: the `nexovue`
-organization (so `@nexovue/…` is ours), then `@nexovue/browser-sdk`'s trusted publisher — repository
-`nexovue-tech/nexovue`, workflow `release-sdk.yml` — and the variable set. npm's documentation does not
-say whether a trusted publisher can be named before the package's first version exists; if npmjs.com
-offers no settings page for it yet, that first version is published once by hand, then never again.
+`.github/workflows/release-sdk.yml`: it tests, builds and measures the SDK, then **stages** the version on
+npm through trusted publishing — no npm token exists, and the version carries provenance. **A staged
+version is not published.** It goes live when the founder approves it, with his second factor:
+
+- on npmjs.com, the package's page lists it for approval; or
+- `npm stage list @nexovue/browser-sdk`, then `npm stage approve <stage-id>`.
+
+Why staged (founder, 2026-10-30): the SDK runs inside customers' web pages. A stolen workflow or a
+poisoned dependency in it can stage a version but never publish one; only a person can. npm's trusted
+publisher for `@nexovue/browser-sdk` allows staging only — `npm publish` from the workflow is refused.
+
+Set up 2026-10-29/30: the `nexovue` organization on npm; `0.1.0` published by hand (the one version
+without provenance — npm offers a package's settings only once it exists); the trusted publisher
+`nexovue-tech/nexovue`, `release-sdk.yml`, stage only; publishing access requiring two-factor
+authentication with no bypass tokens. Staging starts once the repository variable `SDK_PUBLISH` is
+`true`.
+
+A new version: raise `version` in `package.json` in a pull request, merge it, then tag `sdk-vX.Y.Z` on
+the merge commit. npm never takes the same version twice.
 
 ## Not yet established
 

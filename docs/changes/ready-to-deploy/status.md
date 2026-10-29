@@ -240,6 +240,12 @@ Step 1, 2026-10-28:
   `private`, names this repository (npm's trusted publishing requires it), and `npm publish --dry-run`
   passes.
 
+- **The browser SDK on npm, 2026-10-29/30** — the `nexovue` organization created; `0.1.0` published by
+  hand by the founder (npm needed the package to exist before its settings page did); trusted publisher
+  `nexovue-tech/nexovue` / `release-sdk.yml`, **stage only** (founder, on the recommendation): the
+  workflow now runs `npm stage publish`, and a version goes live only when the founder approves it with
+  his second factor. `release.md` says how. The first version from GitHub is `0.1.1`.
+
 ## Specification impact
 
 The deployment mode touches billing's specification: a self-hosted install has no billing at all. F37's
