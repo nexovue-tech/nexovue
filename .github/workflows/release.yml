@@ -217,10 +217,10 @@ jobs:
       - name: Sign
         working-directory: dist
         run: |
-          for file in *.tar *.tar.gz; do
+          for file in *.tar *.tar.gz install.sh; do
             cosign sign-blob --yes --bundle "$file.sigstore.json" "$file"
           done
-          sha256sum -- *.tar *.tar.gz > SHA256SUMS
+          sha256sum -- *.tar *.tar.gz install.sh > SHA256SUMS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kit

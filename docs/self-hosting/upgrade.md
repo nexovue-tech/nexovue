@@ -2,7 +2,15 @@
 
 ## Upgrade
 
-An upgrade runs from the **new** version's kit, which carries that version's Compose files:
+The newest release, in one step — the same `install.sh` as a first install, which sees nexovue is
+already there:
+
+```bash
+curl -fsSLO https://github.com/nexovue-tech/nexovue/releases/latest/download/install.sh
+sudo bash install.sh
+```
+
+Or by hand: an upgrade runs from the **new** version's kit, which carries that version's Compose files:
 
 ```bash
 tar -xzf nexovue-X.Y.Z.tar.gz

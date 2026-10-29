@@ -28,10 +28,17 @@ telemetry to `http://localhost:4318`. The quickstart is for trying nexovue, not 
 
 ## Run it yourself
 
-One Linux server with Docker and two DNS names: `sudo ./nexovue install`. It generates every secret,
-prepares the databases, obtains certificates and schedules daily backups. Upgrades, rollbacks, backups
-off the server and installs with no internet access are each one command. The guide, written for the
-team that runs the server: **[docs/self-hosting](docs/self-hosting/install.md)**.
+One Linux server with Docker and two DNS names:
+
+```bash
+curl -fsSLO https://github.com/nexovue-tech/nexovue/releases/latest/download/install.sh
+sudo bash install.sh
+```
+
+It generates every secret, prepares the databases, obtains certificates and schedules daily backups.
+Upgrades, rollbacks, backups off the server and installs with no internet access are each one command.
+The guide, written for the team that runs the server:
+**[docs/self-hosting](docs/self-hosting/install.md)**.
 
 ## Licence
 
