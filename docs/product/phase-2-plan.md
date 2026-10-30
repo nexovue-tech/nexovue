@@ -1,7 +1,7 @@
 # Phase 2 plan: the incident chain
 
-> **Status:** Awaiting the founder's approval. Each feature still goes through its own specification, design
-> and plan gates. Nothing here is built.
+> **Status:** Approved by the founder, 2026-10-30. Each feature still goes through its own specification,
+> design and plan gates. Nothing here is built.
 
 ## Decided by the founder, 2026-10-30
 
@@ -43,7 +43,8 @@ waits for AI: it goes out when detection fires, and the explanation joins it lat
 - A service getting slower, failing more, or losing traffic, against its own daily and weekly normal.
 - *Done when:* new services and low traffic stay quiet and say why; an outage cannot teach a false normal; findings
   update in place and close themselves; users can give false-alarm feedback, set sensitivity and mute; the
-  injected faults below are caught.
+  injected faults below are caught, except those that move none of its signals, which are recorded as gaps
+  (founder, 2026-10-30; F6 spec, D3).
 
 ### Stage 2: Explain (F28, F3)
 

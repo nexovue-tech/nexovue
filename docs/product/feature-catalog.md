@@ -198,7 +198,7 @@ our own deployments pull authenticated.
 ### Phase 2 and later
 
 Phase 2 is the incident chain the vision is built on, to production level and released as a whole: see
-[`phase-2-plan.md`](phase-2-plan.md) (founder, 2026-10-30, awaiting approval of the plan). It holds anomaly
+[`phase-2-plan.md`](phase-2-plan.md) (approved by the founder, 2026-10-30). It holds anomaly
 detection, findings with something behind them, the insight engine, the release-comparison screen, cases, the
 chatbot and the suggested fix, then SLOs and the dashboard builder. The AWS role flow and data archival moved to
 Later (founder, 2026-10-30). Everything marked *Later* in §4 has no phase and is not scheduled.
@@ -258,8 +258,8 @@ The proactive finding-generation surface rules: cross-signal correlation present
 ### F5 — AI Solution 🔲 TO SPECIFY
 Suggested fix with explanation on finding detail; optional draft-PR flow via GitHub connector; human-in-the-loop gating (never auto-applies without explicit action).
 
-### F6 — Anomaly Detection (user-facing surface) 🔲 TO SPECIFY
-What the user sees/controls: sensitivity settings, muting, per-endpoint baselines visibility, feedback ("this was a false alarm" → tunes system).
+### F6 — Anomaly Detection (user-facing surface) ✅ SPECIFIED
+What the user sees/controls: sensitivity settings, muting, per-endpoint baselines visibility, feedback ("this was a false alarm" → tunes system). Specification approved 2026-10-30: [`anomaly-detection/spec.md`](../features/anomaly-detection/spec.md).
 
 ### F7 — Owner Status Page 🔲 TO SPECIFY
 Plain-language health view for P3: overall badge, per-area status, human sentence for current issues, "your developer has been notified," update timestamps. Zero jargon. Shareable/inviteable.
