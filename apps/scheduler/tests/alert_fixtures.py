@@ -53,7 +53,7 @@ class AlertTenant:
     org_id: uuid.UUID
     project_id: uuid.UUID
     owner_email: str
-    check_id: uuid.UUID
+    check_id: uuid.UUID | None
     owners_channel_id: uuid.UUID
     default_rule_id: uuid.UUID
 
@@ -84,8 +84,13 @@ async def drop_tenant(engine: AsyncEngine, tenant: AlertTenant) -> None:
         )
 
 
-async def make_tenant(engine: AsyncEngine, *, verified: bool = True) -> AlertTenant:
-    org_id, project_id, check_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+async def make_tenant(
+    engine: AsyncEngine, *, verified: bool = True, with_check: bool = True
+) -> AlertTenant:
+    """`with_check=False` for a test whose counts must not move: the dev stack runs any enabled
+    check, and keeps running it until the beat refreshes even after it is deleted."""
+    org_id, project_id = uuid.uuid4(), uuid.uuid4()
+    check_id = uuid.uuid4() if with_check else None
     email = f"owner-{org_id.hex[:12]}@example.test"
     async with engine.begin() as connection:
         await connection.execute(
@@ -109,21 +114,23 @@ async def make_tenant(engine: AsyncEngine, *, verified: bool = True) -> AlertTen
             ),
             {"id": project_id, "org_id": org_id},
         )
-        await connection.execute(
-            text(
-                """
-                INSERT INTO checks (id, org_id, project_id, name, type, config, interval_seconds)
-                VALUES (:id, :org_id, :project_id, 'Checkout API', 'tcp',
-                        CAST(:config AS jsonb), 60)
-                """
-            ),
-            {
-                "id": check_id,
-                "org_id": org_id,
-                "project_id": project_id,
-                "config": '{"type": "tcp", "host": "example.test", "port": 443}',
-            },
-        )
+        if check_id is not None:
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO checks
+                        (id, org_id, project_id, name, type, config, interval_seconds)
+                    VALUES (:id, :org_id, :project_id, 'Checkout API', 'tcp',
+                            CAST(:config AS jsonb), 60)
+                    """
+                ),
+                {
+                    "id": check_id,
+                    "org_id": org_id,
+                    "project_id": project_id,
+                    "config": '{"type": "tcp", "host": "example.test", "port": 443}',
+                },
+            )
         owners = await add_channel(connection, org_id, kind="owners", name="Organization owners")
         rule = await add_rule(
             connection,

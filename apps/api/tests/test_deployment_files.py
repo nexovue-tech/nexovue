@@ -120,7 +120,7 @@ def test_the_hosted_edge_allows_checkout_and_self_hosted_does_not() -> None:
     hosted = _environment("nexovue.hosted.yaml", "proxy").get("NEXOVUE_CHECKOUT_ORIGINS", "")
     self_hosted = _environment("nexovue.yaml", "proxy").get("NEXOVUE_CHECKOUT_ORIGINS", "")
     hosts = {urlsplit(origin).hostname for origin in hosted.split()}
-    assert "checkout.razorpay.com" in hosts, "the hosted console takes payments through Razorpay"
+    assert {"checkout.razorpay.com"} <= hosts, "the hosted console takes payments through Razorpay"
     assert self_hosted == "", "a self-hosted install loads no payment script"
 
 

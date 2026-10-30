@@ -29,6 +29,11 @@ masking rule (ADR-004 recorded it), and the Standard Webhooks example secret use
   ingest key in `sessionStorage` so onboarding survives a refresh; a script injected into the console could
   already mint keys through the signed-in session, so reading this one adds nothing.
 
+**The erasure test on CI.** `make_tenant` committed an enabled check that the fixture deleted only
+afterwards; the beat carries a check's definition and keeps running it until its next refresh (30 s), so
+a run's gauges and evidence log landed in the "live" tenant mid-test. With the gap widened past the
+refresh it failed 4 of 7; with the erasure's tenants made without a check (`with_check=False`), 0 of 5.
+
 **#12 Python — `jsonpath-rfc9535` 2.0.2.** 2.0 dropped the `setup_function_extensions` hook, so the
 override that removes `match()` and `search()` (backtracking regular expressions a customer could type)
 silently removed nothing. `test_check_config.py` caught it; the environment now removes them from

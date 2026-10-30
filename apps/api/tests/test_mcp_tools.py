@@ -165,7 +165,7 @@ def test_transport_security_names_the_api_host_not_localhost() -> None:
     assert {"api.nexovue.com", "api.nexovue.com:*", "app.nexovue.com"} <= set(
         security.allowed_hosts
     )
-    assert "https://api.nexovue.com" in set(security.allowed_origins)
+    assert {"https://api.nexovue.com"} <= set(security.allowed_origins)
 
 
 def test_development_answers_on_localhost_with_neither_url_set() -> None:
