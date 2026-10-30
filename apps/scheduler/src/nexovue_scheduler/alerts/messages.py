@@ -13,6 +13,7 @@ Discord with a colour, Teams as a card, PagerDuty as an event (FR17).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
@@ -20,6 +21,13 @@ from typing import Final
 from nexovue_platform.alerts.model import SEVERITY_RANK
 
 from nexovue_scheduler.alerts.outbox import Notice
+
+# A subject's name can come from telemetry, which anyone with a public browser key can
+# send. Long enough for any real name; short enough that one cannot bury the message.
+NAME_LIMIT: Final = 200
+# C0 and C1 controls and the Unicode line and paragraph separators: anything that could
+# start a line the message did not write.
+_CONTROLS: Final = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
 
 _STATE_WORDS: Final = {
     "down": "is down",
@@ -60,7 +68,8 @@ def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
     """The words for one notification about one incident."""
     base = app_base_url.rstrip("/")
     said = _said(notice)
-    label = notice.subject_label
+    label = one_line(notice.subject_label)
+    rule_name = one_line(notice.rule_name)
     new_error = notice.condition_kind == "new_error_group"
 
     if notice.kind == "resolved":
@@ -105,7 +114,7 @@ def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
     if notice.resolved_at is not None and not new_error:
         lasted = describe_duration(notice.opened_at, notice.resolved_at)
         lines.append(f"Open for: {lasted}." if notice.kind == "closed" else f"Lasted: {lasted}.")
-    lines.append(f"Rule: {notice.rule_name}.")
+    lines.append(f"Rule: {rule_name}.")
 
     return AlertMessage(
         kind=notice.kind,
@@ -113,7 +122,7 @@ def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
         summary=summary,
         details=tuple(lines),
         link=f"{base}/alerts/incidents/{notice.incident_id}",
-        rule_name=notice.rule_name,
+        rule_name=rule_name,
         manage_link=f"{base}/alerts/rules/{notice.rule_id}" if notice.rule_id else None,
     )
 
@@ -214,7 +223,7 @@ def compose_batch(notices: tuple[Notice, ...], *, app_base_url: str) -> AlertMes
         summary = f"[resolved] {len(notices)} incidents recovered"
     else:
         summary = f"[{worst.severity}] {len(notices)} alerts"
-    rules = {notice.rule_name for notice in notices}
+    rules = {message.rule_name for message in messages}
     ordered = sorted(
         messages,
         key=lambda message: (message.kind == "resolved", -SEVERITY_RANK.get(message.severity, 0)),
@@ -228,6 +237,13 @@ def compose_batch(notices: tuple[Notice, ...], *, app_base_url: str) -> AlertMes
         rule_name=rules.pop() if len(rules) == 1 else f"{len(rules)} rules",
         manage_link=None,
     )
+
+
+def one_line(name: str) -> str:
+    """A name as one line of at most `NAME_LIMIT` characters, so it can only ever be
+    words inside the message, never a line of its own."""
+    flat = _CONTROLS.sub(" ", name).strip()
+    return flat if len(flat) <= NAME_LIMIT else flat[: NAME_LIMIT - 1] + "…"
 
 
 def describe_duration(start: datetime, end: datetime) -> str:
