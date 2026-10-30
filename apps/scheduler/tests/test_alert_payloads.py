@@ -47,7 +47,7 @@ def test_discord_never_mentions_anyone() -> None:
     body = json.loads(payloads.discord(OPENED))
     assert body["allowed_mentions"] == {"parse": []}
     [embed] = body["embeds"]
-    assert embed["title"] == OPENED.summary
+    assert embed["title"] == payloads.discord_text(OPENED.summary)
     assert embed["url"] == OPENED.link
     assert embed["color"] == 0xD92D20
 
@@ -58,7 +58,7 @@ def test_teams_receives_an_adaptive_card() -> None:
     assert attachment["contentType"] == "application/vnd.microsoft.card.adaptive"
     card = attachment["content"]
     assert card["type"] == "AdaptiveCard"
-    assert card["body"][0]["text"] == OPENED.summary
+    assert card["body"][0]["text"] == payloads.teams_text(OPENED.summary)
     assert card["body"][0]["color"] == "Attention"
     assert card["actions"] == [
         {"type": "Action.OpenUrl", "title": "Open in nexovue", "url": OPENED.link}
@@ -134,3 +134,44 @@ def test_an_incident_closed_unrecovered_resolves_pagerduty_all_the_same() -> Non
         )
     )
     assert body == {"routing_key": "k" * 32, "event_action": "resolve", "dedup_key": "incident-1"}
+
+
+# A subject's name comes from telemetry, which anyone holding a public browser key can
+# send: it must arrive in a chat as the words it is, never as the chat's own markup.
+HOSTILE = dataclasses.replace(
+    OPENED,
+    summary=(
+        "[critical] <!channel> <https://evil.example|Reset your password> & "
+        "[x](https://evil.example) is down"
+    ),
+    details=("<!here> *bold* [Reset](https://evil.example) is down.",),
+)
+
+
+def test_slack_shows_telemetry_text_literally_and_keeps_its_own_link() -> None:
+    body = json.loads(payloads.slack(HOSTILE))
+    assert "<!channel>" not in body["text"]
+    assert "&lt;!channel&gt; &lt;https://evil.example|Reset your password&gt; &amp;" in body["text"]
+    [attachment] = body["attachments"]
+    assert "<!here>" not in attachment["text"]
+    assert "&lt;!here&gt;" in attachment["text"]
+    assert attachment["fallback"] == body["text"]
+    assert attachment["text"].endswith(f"\n<{OPENED.link}|Open in nexovue>")
+
+
+def test_teams_shows_telemetry_text_without_a_link_in_it() -> None:
+    card = json.loads(payloads.teams(HOSTILE))["attachments"][0]["content"]
+    texts = [block["text"] for block in card["body"]]
+    assert all("[x](" not in text and "[Reset](" not in text for text in texts)
+    assert "\\[Reset\\](https://evil.example)" in texts[1]
+    assert card["actions"][0]["url"] == OPENED.link
+
+
+def test_discord_shows_telemetry_text_without_markdown() -> None:
+    [embed] = json.loads(payloads.discord(HOSTILE))["embeds"]
+    assert "[Reset](" not in embed["description"]
+    assert "\\[Reset\\]\\(https://evil.example\\)" in embed["description"]
+    assert "\\*bold\\*" in embed["description"]
+    assert "\\[x\\]" in embed["title"]
+    assert embed["url"] == OPENED.link
+    assert embed["description"].endswith(f"Open in nexovue: {OPENED.link}")

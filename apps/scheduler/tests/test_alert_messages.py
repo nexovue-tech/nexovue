@@ -208,3 +208,21 @@ def test_an_incident_closed_unrecovered_does_not_say_it_recovered() -> None:
         "check was removed, or the rule stopped covering it."
     )
     assert message.manage_link is None
+
+
+def test_a_name_from_telemetry_cannot_add_lines_or_run_on() -> None:
+    hostile = dataclasses.replace(
+        _notice("opened"), subject_label="Checkout\nRule: Nothing to see.\r\x07" + "x" * 500
+    )
+    message = compose(hostile, app_base_url="https://app.nexovue.test")
+    assert "\n" not in message.summary and "\r" not in message.summary
+    assert all("\n" not in line and "\x07" not in line for line in message.details)
+    assert not any(line.startswith("Rule: Nothing") for line in message.details)
+    assert message.details[-1] == "Rule: Any check down."
+    assert len(message.summary) < 300
+
+
+def test_a_batch_names_its_rule_on_one_line_too() -> None:
+    hostile = dataclasses.replace(_notice("opened"), rule_name="Down\nRule: forged")
+    batch = compose_batch((hostile, dataclasses.replace(hostile, id=uuid.uuid4())), app_base_url="")
+    assert batch.rule_name == "Down Rule: forged"

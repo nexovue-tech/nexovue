@@ -8,6 +8,8 @@ message does not already carry, so BR9 holds here because it holds there.
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -27,26 +29,52 @@ PAGERDUTY_SUMMARY_LIMIT: Final = 1024
 PAGERDUTY_SOURCE: Final = "nexovue"
 
 
+def slack_text(text: str) -> str:
+    """Slack's three control characters, `&` first so its own entities stay intact.
+    Slack decodes only these, so a name shows as written and can never become a
+    mention or a link (api.slack.com/docs/formatting, *Escaping text*)."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def teams_text(text: str) -> str:
+    """Brackets escaped, so `[words](url)` in a name is never a link. Only brackets:
+    Teams mobile shows other escapes as stray backslashes. Unverified against
+    Microsoft's documentation; taken from Review Board's tested change (r/13892)."""
+    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+_DISCORD_MARKDOWN: Final = re.compile(r"([\\*_~`|>\[\]()#-])")
+
+
+def discord_text(text: str) -> str:
+    """Discord's markdown characters escaped. An embed renders `[words](url)` as a
+    disguised link, which a name must never become. Unverified against Discord's
+    documentation, which does not cover embed escaping."""
+    return _DISCORD_MARKDOWN.sub(r"\\\1", text)
+
+
 def colour(message: AlertMessage) -> str:
     if message.kind == "resolved":
         return _GREEN
     return _RED if message.severity == "critical" else _AMBER
 
 
-def _lines_with_link(message: AlertMessage) -> str:
-    return "\n".join((*message.details, f"Open in nexovue: {message.link}"))
+def _lines_with_link(message: AlertMessage, escape: Callable[[str], str]) -> str:
+    return "\n".join((*map(escape, message.details), f"Open in nexovue: {message.link}"))
 
 
 def slack(message: AlertMessage) -> bytes:
     """An incoming-webhook message: the summary as text, so a notification preview
     reads well, and the detail in a coloured attachment."""
+    summary = slack_text(message.summary)
     body = {
-        "text": message.summary,
+        "text": summary,
         "attachments": [
             {
                 "color": colour(message),
-                "fallback": message.summary,
-                "text": "\n".join(message.details) + f"\n<{message.link}|Open in nexovue>",
+                "fallback": summary,
+                "text": "\n".join(map(slack_text, message.details))
+                + f"\n<{message.link}|Open in nexovue>",
             }
         ],
     }
@@ -57,8 +85,8 @@ def discord(message: AlertMessage) -> bytes:
     body = {
         "embeds": [
             {
-                "title": message.summary[:256],
-                "description": _lines_with_link(message)[:4096],
+                "title": discord_text(message.summary)[:256],
+                "description": _lines_with_link(message, discord_text)[:4096],
                 "url": message.link,
                 "color": int(colour(message).removeprefix("#"), 16),
             }
@@ -79,13 +107,16 @@ def teams(message: AlertMessage) -> bytes:
         "body": [
             {
                 "type": "TextBlock",
-                "text": message.summary,
+                "text": teams_text(message.summary),
                 "weight": "Bolder",
                 "size": "Medium",
                 "wrap": True,
                 "color": accent,
             },
-            *({"type": "TextBlock", "text": line, "wrap": True} for line in message.details),
+            *(
+                {"type": "TextBlock", "text": teams_text(line), "wrap": True}
+                for line in message.details
+            ),
         ],
         "actions": [{"type": "Action.OpenUrl", "title": "Open in nexovue", "url": message.link}],
     }
