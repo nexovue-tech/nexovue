@@ -11,6 +11,20 @@ fixed a formula that the reviews showed to be unsound. This revision states the 
 the user, as acceptance criteria. The exact statistics move to the design, where they must be simulated
 against the false-alarm budget before approval (FR9).
 
+**Amended 2026-10-30** after five independent reviews of the design, with the founder's decisions D11 to
+D14. The changes are:
+
+- FR23 and AC34: who may change detection;
+- the finding page in scope (FR31, AC38 to AC40);
+- a service that stops entirely (FR32, AC41);
+- learning counted in days (FR4, FR6, AC13, AC14);
+- the traffic floor set per sensitivity (*Product values*);
+- the feed's healthy state (FR25, AC42);
+- calibrating the method on the demo (FR9).
+
+Then D15 and D16, after the harsher simulation: measure the demo before the design is approved, and give
+quiet services 20 minutes.
+
 ## Words used here
 
 - **Signal**: one thing measured about a service. There are three:
@@ -101,8 +115,10 @@ scientist** who wants to choose algorithms or see model parameters. Sensitivity 
   recorded as the requirements for what replaces it (FR27).
 - **Explanation, probable cause and AI wording**: F28 and F3, Stage 2. A finding says *what* changed,
   never *why*. The plan's "stated cause" score in the test bed is Stage 2's.
-- **The feed screen**, its ordering, filters and live updates: F1. The detail page: F2. This feature
-  produces the findings both show.
+- **The feed screen**, its ordering, filters and live updates: F1. This feature produces the findings it
+  shows.
+- **The finding page beyond version 1.** Traces, logs, deploys and the AI cause belong to F2 and Stage 2.
+  Version 1, the detector's own evidence, is in scope (FR31, D12).
 - **Cases**: Stage 3, which grows a finding into a case.
 - **Other signals**: logs, customer metrics, CPU, memory, browser vitals, dependency edges. Synthetic
   checks already alert through F18 and F21, and 0013's absolute rules exist as F21's threshold
@@ -174,8 +190,12 @@ scientist** who wants to choose algorithms or see model parameters. Sensitivity 
 ### The normal
 
 - **FR4**: A signal's normal comes from the service's past at the same time of day. It pools enough
-  neighbouring minutes that one past value never decides it. A signal whose pool, after BR3's exclusions,
-  holds too few values to judge is *learning*.
+  neighbouring minutes that one past value never decides it.
+  - Enough history is counted in **distinct past days**, not in values: at least 3 days of the matching
+    kind remain after BR3's exclusions.
+  - If the weekly pattern loses its days to exclusions, the signal falls back to the daily pattern for that
+    minute, rather than stopping.
+  - With fewer than 3 days, the signal is *learning*.
 - **FR5**: Days are matched by pattern.
   - Until a service has 3 weeks of history, weekdays are compared only with weekdays, and weekends only
     with weekends.
@@ -183,7 +203,8 @@ scientist** who wants to choose algorithms or see model parameters. Sensitivity 
   - At most the last 4 weeks are used. That fits every plan's rollup retention: Free keeps 30 days
     (`apps/api/migrations/versions/0005_plans_table.py`).
 - **FR6**: *Losing traffic* is judged only once the weekly pattern exists (3 weeks). *Slower* and *failing
-  more* can be judged from 3 days of history.
+  more* can be judged from 3 days of history. Before then, minutes when traffic was clearly far below its
+  daily normal still stay out of the baseline (BR3), even though no finding opens for them.
 - **FR7**: Time of day and day of week are taken in the **project's time zone** (FR24). A daylight-saving
   change therefore never shifts the normal.
 - **FR8**: The current value and the normal are measured the same way: the same window length and the
@@ -197,7 +218,9 @@ scientist** who wants to choose algorithms or see model parameters. Sensitivity 
 
   The design states the statistical test and its parameters. Before the design is approved, it must show
   by simulation that a service following its own normal produces no more false findings than the budget
-  (*Product values*).
+  (*Product values*). The simulation includes per-endpoint tests, drifting failure rates, failures in
+  multi-minute bursts, and latency with a slow tail. Before the cut-offs are frozen, the method is checked
+  against the demo's measured variability (D14).
 - **FR10**: **Failing more is judged on counts.** An increase counts only with at least the minimum number
   of failures, and only if that many failures is unlikely at the service's normal rate. Two failures in
   four requests is not a 50% failure. A service whose normal failure rate is zero is not alarmed by a
@@ -237,10 +260,11 @@ statistical parameters behind FR9 are the design's.
 | Critical | *slower* ≥ 4× normal; *failing more* ≥ 20% of requests; *losing traffic* ≤ 10% of normal |
 | Requests needed to judge *slower* | 200 in the window. Fewer gives an unreliable p95: ±30% at 20 requests |
 | Requests needed to judge *failing more* | 20 in the window |
-| Expected requests needed to judge *losing traffic* | 20 in the window |
+| Expected requests needed to judge *losing traffic* | The least traffic at which the sensitivity's minimum drop can be seen at all: about 20 (low), 47 (normal) and 150 (high) in the window. Below it, *losing traffic* reads *too little traffic* |
 | Adoption of a lasting change | 7 days |
 | False-alarm budget | 1 false finding per service per week, over a run: false findings ÷ (services × weeks) |
 | Time to a finding, beyond critical | 12 minutes at normal sensitivity |
+| Time to catch a fault past the minimum, at normal sensitivity | 12 minutes for a service at 200 requests a minute or more; 20 minutes below that, where too few failures arrive to be sure sooner (D16) |
 
 ### Findings
 
@@ -271,23 +295,50 @@ statistical parameters behind FR9 are the design's.
 - **FR21**: **This is the new normal** closes an open finding.
   - Its signals' baselines move to the new level and keep their daily and weekly shape, so judging
     continues with no learning gap.
-  - The same thing happens by itself after the adoption time if nobody acts. The message then says so:
+  - The same thing happens by itself after the adoption time if nobody acts, except for a service that has
+    stopped entirely (FR32). The message then says so:
     "Checkout's new normal is 1.6× slower. Adopted after 7 days."
   - Both are written to the audit log.
 - **FR22**: **Mute** a service until a time no more than 30 days ahead (BR9).
-- **FR23**: Sensitivity, mute and new normal need an admin, as alert rules do ("changes are an admin's",
-  `apps/api/src/nexovue_api/alerts/router.py`). Acknowledge and false alarm are open to any member who
-  can see the finding.
+- **FR23**: Sensitivity, mute and new normal need an admin. So does creating, changing, muting or deleting an
+  *anomaly finding* alert rule, the default one included. Otherwise anyone refused a mute could silence
+  detection through its rule. Acknowledge and false alarm are open to every role that may operate alerts.
+  A read-only viewer may do neither.
+  - *Corrected 2026-10-30:* revision 2 said "as alert rules do". It does not hold: today every working
+    member may change and mute alert rules (`apps/api/src/nexovue_api/auth/permissions.py`, `OPERATE_ALERTS`),
+    and the router's "changes are an admin's" comment is stale (D11).
 - **FR24**: Each project has a **time zone** (an IANA name). It defaults to the creating user's
   `users.timezone`, or UTC when that is empty. An admin can change it. A change re-reads history in the new
   zone and starts no learning period.
+
+### The finding page
+
+- **FR31**: Each finding has a page of its own (version 1):
+  - each signal's readings drawn against its normal band;
+  - the normal, current and worst values, and the comparison used;
+  - the evidence endpoint and the linked incidents;
+  - its feedback;
+  - the actions FR19 to FR22 allow the viewer.
+
+  F2 later widens it with traces, logs, deploys and the AI cause. A closed finding stays readable after its
+  readings have expired, showing its stored values without the chart (D12).
+
+### A service that stops
+
+- **FR32**: A service whose traffic stops entirely opens a critical *losing traffic* finding, like any other
+  drop. If it stays silent for 24 hours, the finding closes as **service gone**, with one message saying so.
+  It is never adopted as a new normal. When it sends again, it is judged against its old normal. A renamed
+  service is therefore one finding closed as gone, while the new name is *learning* (D13).
 
 ### States, measurement and notification
 
 - **FR25**: Every service shows its detection state: *learning* (until a date), *judged*, *too little
   traffic* (per signal), *data delayed*, *muted*, or *detection not running*. When detection's last pass is
   older than 3 minutes, the project shows *detection not running*, and F1's healthy state must not say
-  "all systems normal".
+  "all systems normal". The feed says what is true instead:
+  - while every service is learning: "Learning your services' normal. Judging starts on 3 Nov";
+  - while some are: "All judged services are normal. 2 are still learning";
+  - while data is delayed or detection is not running: which of the two, and since when.
 - **FR26**: The product counts, per project and per service, findings opened, false-alarm marks, and the
   false-finding rate against the budget, readable through the API.
 - **FR27**: The test bed records every fault that is a gap (AC36), with the flag, and the service and
@@ -336,7 +387,7 @@ statistical parameters behind FR9 are the design's.
 | A finding is wrong | The finding | False alarm (FR20) | n/a |
 | A mute ends while the problem continues | Nothing is sent, as in F21. The finding shows in the feed as muted until it closes | Read the feed | Yes (BR9) |
 | An admin changes the time zone | Normal bands shift to the new local clock. No learning period | n/a | n/a |
-| A service is renamed | The new name is *learning*. The old one stops, which F21's *went silent* condition can report | Wait | Yes |
+| A service is renamed or retired | The old name's finding closes as *service gone* after 24 hours (FR32). The new name is *learning* | Wait | Yes |
 | A plan downgrades to Free | History beyond 30 days goes. Four weeks still fit | n/a | n/a |
 | AI is off or failing | The same finding, without explanation | n/a | Yes (BR1) |
 
@@ -379,10 +430,10 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
 **Baselines**
 
 - **AC13**: A service with the same 6-hour outage on two of three Tuesdays must, on the fourth Tuesday,
-  produce a finding for the same values. The stored baseline for those hours must equal the one computed
-  without the outage minutes (BR3).
-- **AC14**: A service with under 3 days of history must open nothing, whatever its values, and show
-  *learning* with its start date (BR4).
+  produce a finding for the same values, falling back to the daily pattern for those hours (FR4). The
+  baseline used must equal the one computed without the outage minutes (BR3).
+- **AC14**: A service with under 3 distinct days of history must open nothing, whatever its values, and
+  show *learning* with its start date (BR4, FR4).
 - **AC15**: After "new normal" on a *slower* finding, the same latency must open nothing. Judging must
   continue at once, and the baseline must keep its daily shape at the new level (FR21).
 - **AC16**: A service that stays 1.6× slower for 7 days with nobody acting must:
@@ -438,7 +489,8 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
   - change no sensitivity (FR20, BR8).
 - **AC33**: Acknowledging a finding must record who and when, and leave it open (FR19).
 - **AC34**: A member who is not an admin must be refused sensitivity, mute and new-normal changes. They
-  must be allowed to acknowledge and to mark a false alarm (FR23).
+  must also be refused creating, changing, muting or deleting an *anomaly finding* rule. They must be
+  allowed to acknowledge and to mark a false alarm. A viewer must be refused all of these (FR23).
 - **AC35**: A project created by a user with no time zone must get UTC. Changing it must start no
   learning period (FR24).
 
@@ -450,11 +502,25 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
   the same period of the reference run.
   - A flag that moves none of them is a gap (FR27).
   - Every other flag must be injected at least 5 times. Each injection is scored as caught or not, by
-    time to catch, and by service and signal. It must be caught on at least 4 of the 5, within *time to a
-    finding*.
+    time to catch, and by service and signal. It must be caught on at least 4 of the 5, within *time to
+    catch* for that service's traffic (D16).
 - **AC37**: A no-fault run of at least 2 weeks must stay within the *false-alarm budget*. This criterion
   waits on the test server (`phase-2-plan.md`, Open 2). Two weeks of zero false findings on one service
   bounds its rate only loosely, so the budget is measured across all services.
+
+**The finding page, a stopped service, and the feed**
+
+- **AC38**: A finding's page must show each signal's readings against its normal band, its normal, current
+  and worst values, and its comparison sentence (FR31).
+- **AC39**: A viewer must see the page with no actions. A member must see *Acknowledge* and *False alarm*
+  but not *New normal* (FR23, FR31).
+- **AC40**: A closed finding whose readings have expired must still show its stored values, with a note
+  that the chart is no longer available (FR31).
+- **AC41**: A service whose traffic stops entirely must open a critical finding within *time to a finding*.
+  After 24 hours of silence, the finding must close as *service gone* with one message, and must never be
+  adopted (FR32).
+- **AC42**: A new project whose every service is learning must not say "all systems normal". It must say
+  that it is learning, and when judging starts (FR25).
 
 ## Dependencies and constraints
 
@@ -564,7 +630,31 @@ Proposed by the agent, 2026-10-30, and approved by the founder with this specifi
 - **D10: One finding per service, listing every signal that moved (BR2).** One outage on three signals is
   one message, not three.
 
+By the founder, 2026-10-30, after the design reviews, as the agent recommended:
+
+- **D11: Admin only** for sensitivity, mute, new normal and every *anomaly finding* rule. Acknowledge and
+  false alarm are for every role that operates alerts (FR23).
+- **D12: The finding page, version 1, is built in this feature**, with its own acceptance criteria. F2
+  widens it later (FR31).
+- **D13: A service that stops entirely** opens a critical finding, and closes as *service gone* after 24
+  hours of silence, never adopted (FR32).
+- **D14: The method is calibrated on real variability.** The design switches to the sturdier tests the
+  statistics review proposed, and simulates them under harsher traffic. The plan's first step then measures
+  the demo's real variability, as a gate before the method's cut-offs are frozen (FR9).
+
+By the founder, 2026-10-30, after the harsher simulation:
+
+- **D15: Measure before the design is approved, not after.** The harsher simulation broke the budget:
+  1.65 false findings per service per week at normal sensitivity. The cause was short failure bursts, and
+  their rate in that model was a guess. So the demo's real failure bursts and variability are measured
+  over at least 3 days first. Whether short bursts are reported or treated as noise is then decided from
+  that measurement. This moves D14's measurement ahead of the design gate.
+- **D16: Quiet services get longer.** A service under 200 requests a minute has *time to catch* of 20
+  minutes, not 12, for a fault past the minimum (*Product values*, AC36). Below that volume, too few
+  failures arrive to tell a real fault from noise sooner without breaking the budget.
+
 ## Open decisions
 
-None in this specification. The statistical method and its parameters are the design's, and must be shown
-by simulation to meet the false-alarm budget (FR9).
+None in this specification. The statistical method and its parameters are the design's. They must be
+shown by simulation to meet the false-alarm budget, and calibrated on the demo's measured variability
+before they are frozen (FR9, D14).
