@@ -15,10 +15,12 @@ _BACKTRACKING_FUNCTIONS: Final = ("match", "search")
 
 
 class _Environment(JSONPathEnvironment):
-    def setup_function_extensions(self) -> None:
-        super().setup_function_extensions()
+    # jsonpath-rfc9535 2.0 builds `functions` per instance and dropped the
+    # `setup_function_extensions` hook; overriding that hook now removes nothing.
+    def __init__(self) -> None:
+        super().__init__()
         for name in _BACKTRACKING_FUNCTIONS:
-            del self.function_extensions[name]
+            del self.functions[name]
 
 
 _ENVIRONMENT: Final = _Environment()

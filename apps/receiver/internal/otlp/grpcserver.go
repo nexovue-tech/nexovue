@@ -65,6 +65,9 @@ func NewGRPCServer(addr string, opts Options, screen Screener) *GRPCServer {
 		// admission.go; this hook is experimental in grpc-go, and the tests in
 		// grpc_test.go fail the build if it changes underneath us.
 		grpc.InTapHandle(opts.Admission.tap(opts, screen, served)),
+		// A payload that cannot be decoded reaches the handler, which answers INVALID_ARGUMENT
+		// (grpccodec.go); grpc-go's own codec would answer INTERNAL first.
+		grpc.ForceServerCodecV2(newExportCodec()),
 		// Stated rather than inherited: grpc-go's own default is 4 MiB, and it
 		// applies the limit to the message both on the wire and again after
 		// decompression. The decoded cap is therefore the one to use — it is

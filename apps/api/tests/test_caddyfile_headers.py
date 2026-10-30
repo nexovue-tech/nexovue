@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -24,8 +25,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CADDYFILE = REPO_ROOT / "deploy" / "caddy" / "Caddyfile"
 WEB_INDEX_HTML = REPO_ROOT / "apps" / "web" / "index.html"
 
-# `<script>` with no `src` attribute — the only kind a CSP hash can cover.
-INLINE_SCRIPT = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.DOTALL)
 CSP_DIRECTIVE = re.compile(r'^\s*Content-Security-Policy\s+"([^"]+)"', re.MULTILINE)
 SCRIPT_SRC_HASHES = re.compile(r"'(sha256-[A-Za-z0-9+/=]+)'")
 
@@ -40,8 +39,33 @@ def _csp() -> str:
     return match.group(1)
 
 
+class _InlineScripts(HTMLParser):
+    """Each `<script>` with no `src` — the only kind a CSP hash can cover — read as a browser
+    reads it, not by a pattern that misses `</script >` or `<SCRIPT>`."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.bodies: list[str] = []
+        self._open: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "script" and not any(name == "src" for name, _ in attrs):
+            self._open = []
+
+    def handle_data(self, data: str) -> None:
+        if self._open is not None:
+            self._open.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "script" and self._open is not None:
+            self.bodies.append("".join(self._open))
+            self._open = None
+
+
 def _inline_script_hashes() -> set[str]:
-    bodies = INLINE_SCRIPT.findall(WEB_INDEX_HTML.read_text(encoding="utf-8"))
+    parser = _InlineScripts()
+    parser.feed(WEB_INDEX_HTML.read_text(encoding="utf-8"))
+    bodies = parser.bodies
     return {
         "sha256-" + base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode()
         for body in bodies

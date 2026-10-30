@@ -163,10 +163,11 @@ func registerExporters(server *grpc.Server, opts Options) {
 // replaced. Everything that names the service still comes from the generated
 // descriptor, so regenerating the proto cannot leave this behind.
 //
-// The handler translates the one thing the generated one passes straight
-// through: grpc-go answers a payload it cannot decode with INTERNAL, which says
-// the fault is ours and leaves an SDK nothing to act on, where OTLP's answer for
-// a payload the server cannot read is INVALID_ARGUMENT, and it is not retryable.
+// The handler answers the one thing the generated one leaves to grpc-go: a
+// payload it cannot decode. grpc-go says INTERNAL, which puts the fault on us and
+// leaves an SDK nothing to act on; OTLP's answer for a payload the server cannot
+// read is INVALID_ARGUMENT, and it is not retryable. The decode goes through
+// exportCodec, so grpc-go never sees the failure (grpccodec.go).
 func serviceDesc[Request proto.Message](
 	generated grpc.ServiceDesc,
 	opts Options,
@@ -180,7 +181,12 @@ func serviceDesc[Request proto.Message](
 		interceptor grpc.UnaryServerInterceptor,
 	) (any, error) {
 		request := door.newRequest()
-		if err := decode(request); err != nil {
+		decoding := exportDecoding{into: request}
+		err := decode(&decoding)
+		if err == nil {
+			err = decoding.err
+		}
+		if err != nil {
 			// Our own wording, not grpc-go's, which quotes our internals back.
 			refused := refuse(code.Code_INVALID_ARGUMENT, door.malformedMessage).because(err)
 			stamped := withCaller(withStart(ctx, time.Now()), callerOfRPC(ctx))

@@ -150,15 +150,13 @@ async def three_tenants(
     engine: AsyncEngine, clickhouse: Client, s3: Any
 ) -> AsyncIterator[tuple[AlertTenant, AlertTenant, AlertTenant]]:
     """Two deleted organizations and a live one, each with telemetry and files."""
-    tenants = (await make_tenant(engine), await make_tenant(engine), await make_tenant(engine))
+    # No checks: the dev stack would run one, and its results would land in the live tenant mid-run.
+    tenants = (
+        await make_tenant(engine, with_check=False),
+        await make_tenant(engine, with_check=False),
+        await make_tenant(engine, with_check=False),
+    )
     async with engine.begin() as connection:
-        # The tenant fixture holds an enabled check, which the dev stack runs and
-        # whose results would land mid-run. A deletion removes checks with the
-        # request, and the live tenant's counts must not move, so none runs here.
-        await connection.execute(
-            text("DELETE FROM checks WHERE org_id = ANY(:orgs)"),
-            {"orgs": [tenant.org_id for tenant in tenants]},
-        )
         for tenant in tenants[:2]:
             await connection.execute(
                 text("UPDATE organizations SET deleted_at = now() WHERE id = :id"),

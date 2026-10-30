@@ -30,7 +30,7 @@ const URGENCY_RULE = {
  */
 export function EvidenceView({ evidence }: { evidence: RunEvidence }) {
   const failedAt = evidence.steps.findIndex((step) => !step.passed);
-  const [selectedStep, setSelectedStep] = useState(failedAt >= 0 ? failedAt : 0);
+  const [selectedStep, setSelectedStep] = useState(Math.max(failedAt, 0));
   const step = evidence.steps[selectedStep];
 
   return (

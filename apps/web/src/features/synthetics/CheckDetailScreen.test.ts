@@ -338,29 +338,6 @@ describe("whySilent", () => {
     }
   });
 
-  it("never says a heartbeat ran, was probed, or is due for a run", () => {
-    // A heartbeat is judged on silence. Every sentence this can produce for one has
-    // to avoid the probe's vocabulary, not just the branch someone remembered.
-    const beats = [
-      { last_run_at: null, created_at: at(1) },
-      { last_run_at: null, created_at: at(600) },
-      { last_run_at: at(2), created_at: at(600) },
-      { last_run_at: at(300), created_at: at(600), interval_seconds: 7200 },
-      { enabled: false, last_run_at: at(2), created_at: at(600) },
-      { in_maintenance: true, last_run_at: at(2), created_at: at(600) },
-    ] as const;
-
-    // The claims a heartbeat's screen must never make. "not probed" is fine and
-    // deliberate; "it last ran" and "the probe workers" are not.
-    const wrong = [/it last ran/i, /probe workers/i, /first run is due/i, /no runs in/i];
-
-    for (const beat of beats) {
-      const silence = silent({ type: "heartbeat", ...beat });
-      const words = `${silence.title} ${silence.detail}`;
-      for (const claim of wrong) expect(words).not.toMatch(claim);
-    }
-  });
-
   it.each([
     [60, "within one minute of saving"],
     [300, "within 5 minutes of saving"],

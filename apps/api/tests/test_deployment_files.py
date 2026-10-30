@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 import pytest
 import yaml
@@ -118,7 +119,8 @@ def test_every_edge_upstream_is_a_service_on_its_port(file_name: str) -> None:
 def test_the_hosted_edge_allows_checkout_and_self_hosted_does_not() -> None:
     hosted = _environment("nexovue.hosted.yaml", "proxy").get("NEXOVUE_CHECKOUT_ORIGINS", "")
     self_hosted = _environment("nexovue.yaml", "proxy").get("NEXOVUE_CHECKOUT_ORIGINS", "")
-    assert "razorpay.com" in hosted, "the hosted console takes payments through Razorpay"
+    hosts = {urlsplit(origin).hostname for origin in hosted.split()}
+    assert {"checkout.razorpay.com"} <= hosts, "the hosted console takes payments through Razorpay"
     assert self_hosted == "", "a self-hosted install loads no payment script"
 
 

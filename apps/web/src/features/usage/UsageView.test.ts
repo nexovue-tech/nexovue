@@ -103,8 +103,8 @@ beforeAll(() => {
   // jsdom does no layout, so the scroll container measures zero tall and the
   // virtualizer correctly renders nothing into a viewport that does not exist.
   for (const [property, size] of [
-    ["offsetHeight", VIEWPORT_HEIGHT],
-    ["offsetWidth", VIEWPORT_WIDTH],
+    ["clientHeight", VIEWPORT_HEIGHT],
+    ["clientWidth", VIEWPORT_WIDTH],
   ] as const) {
     Object.defineProperty(HTMLElement.prototype, property, { configurable: true, value: size });
   }

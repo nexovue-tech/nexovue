@@ -161,11 +161,11 @@ def test_transport_security_names_the_api_host_not_localhost() -> None:
     security = allowed_hosts(settings)
 
     assert security.enable_dns_rebinding_protection
-    assert "api.nexovue.com" in security.allowed_hosts
-    assert "api.nexovue.com:*" in security.allowed_hosts
-    assert "https://api.nexovue.com" in security.allowed_origins
     # The console's host is kept too: one deployment may serve both from one name.
-    assert "app.nexovue.com" in security.allowed_hosts
+    assert {"api.nexovue.com", "api.nexovue.com:*", "app.nexovue.com"} <= set(
+        security.allowed_hosts
+    )
+    assert {"https://api.nexovue.com"} <= set(security.allowed_origins)
 
 
 def test_development_answers_on_localhost_with_neither_url_set() -> None:
