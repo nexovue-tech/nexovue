@@ -282,7 +282,9 @@ LIMIT {{limit:UInt32}}
 TRACE_PAGE_VALUES_SQL: Final = """
 SELECT
     trace_id,
-    toUnixTimestamp64Nano(min(start_time)) AS start_time_nanos,
+    -- The trace's own start, not the key's: the worker fixes `start_time` at a
+    -- row's first write so a revision merges into it (migration 000034).
+    toUnixTimestamp64Nano(min(trace_start)) AS start_time_nanos,
     max(duration_ms) AS duration_ms,
     max(span_count) AS span_count,
     max(error_count) AS error_count,
@@ -567,5 +569,8 @@ WHERE tenant_id = {{tenant_id:String}}
   -- the earliest arrival the lookup recorded for it.
   AND received_at >= {{received_from:DateTime64(9)}}
 ORDER BY timestamp, span_id
+-- A replay whose watermark write was lost stores a span again, and nothing in
+-- the sort key collapses the copy (`ingeststate/state.go`): one row per span.
+LIMIT 1 BY span_id
 LIMIT {{limit:UInt32}}
 """

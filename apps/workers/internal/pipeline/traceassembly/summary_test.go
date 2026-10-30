@@ -197,6 +197,30 @@ func TestALateSpanReEmitsTheWholeTraceNotADelta(t *testing.T) {
 	}
 }
 
+// A root ends last, so it is exported after its children — often after the trace
+// was first written. The revision has to land on the row already written: under a
+// new key it never merges, and the first row stays listed as a trace of its own.
+func TestARootArrivingAfterAWriteRevisesTheSameRow(t *testing.T) {
+	accumulator := newSummaries(testRetention, testMaxTraces)
+
+	accumulator.Observe(summaryStart, summarySpan("trace-1", at(time.Millisecond), named("cart", "AddItem"), lasting(5)))
+	first := drainOne(t, accumulator, summaryStart)
+
+	late := summaryStart.Add(2 * time.Second)
+	accumulator.Observe(late, summarySpan("trace-1", rootSpan, named("frontend", "checkout"), lasting(20)))
+	second := drainOne(t, accumulator, late)
+
+	if !second.StartTime.Equal(first.StartTime) {
+		t.Errorf("the revision moved the row's key from %v to %v", first.StartTime, second.StartTime)
+	}
+	if !second.TraceStart.Equal(summaryStart) {
+		t.Errorf("TraceStart = %v, want the root's start %v", second.TraceStart, summaryStart)
+	}
+	if second.RootService != "frontend" || second.SpanCount != 2 || second.DurationMS != 20 {
+		t.Errorf("revision = %s/%d spans/%vms, want frontend/2/20", second.RootService, second.SpanCount, second.DurationMS)
+	}
+}
+
 // A trace that has not changed must not be written again: the drain runs on
 // every poll, and re-writing every held trace would be an insert per poll of
 // everything in memory.
@@ -222,6 +246,35 @@ func TestATraceIsForgottenOnceTheSamplerHasForgottenIt(t *testing.T) {
 	accumulator.Drain(summaryStart.Add(testRetention))
 	if held := accumulator.Stats().OpenTraces; held != 0 {
 		t.Errorf("OpenTraces = %d after the retention ran out, want 0", held)
+	}
+}
+
+// A trace still arriving is still held. Forgetting it a retention after its first
+// span split every trace longer than that: the next span began a summary of its
+// own, and the list showed both.
+func TestATraceStillArrivingIsNotForgotten(t *testing.T) {
+	accumulator := newSummaries(testRetention, testMaxTraces)
+	accumulator.Observe(summaryStart, summarySpan("trace-1", rootSpan))
+	accumulator.Drain(summaryStart)
+
+	busy := summaryStart.Add(testRetention * 3 / 4)
+	accumulator.Observe(busy, summarySpan("trace-1", at(time.Second)))
+	first := drainOne(t, accumulator, busy)
+
+	// The worker drains on every poll, so one falls between the two spans.
+	accumulator.Drain(summaryStart.Add(testRetention + time.Second))
+
+	late := summaryStart.Add(testRetention * 3 / 2)
+	accumulator.Observe(late, summarySpan("trace-1", at(2*time.Second)))
+	second := drainOne(t, accumulator, late)
+
+	if second.SpanCount != 3 || !second.StartTime.Equal(first.StartTime) {
+		t.Errorf("revision = %d spans at %v, want 3 at %v", second.SpanCount, second.StartTime, first.StartTime)
+	}
+
+	accumulator.Drain(late.Add(testRetention))
+	if held := accumulator.Stats().OpenTraces; held != 0 {
+		t.Errorf("OpenTraces = %d a retention after the last span, want 0", held)
 	}
 }
 
@@ -328,10 +381,10 @@ func TestTheEndpointSetIsCappedAndSaysSo(t *testing.T) {
 }
 
 // summaryColumns is every column of `trace_summaries` this writer fills, in the
-// order `000028_trace_summaries.up.sql` declares them. A column added to that
-// table which the writer must fill belongs here too.
+// order the table declares them (`000028`, and `trace_start` from `000034`). A
+// column added to that table which the writer must fill belongs here too.
 var summaryColumns = []string{
-	"tenant_id", "project_id", "start_time", "trace_id", "received_at", "retention_days",
+	"tenant_id", "project_id", "start_time", "trace_start", "trace_id", "received_at", "retention_days",
 	"duration_ms", "span_count", "error_count", "worst_severity",
 	"root_service", "root_name", "span_services", "span_endpoints",
 }

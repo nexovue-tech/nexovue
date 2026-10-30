@@ -950,6 +950,23 @@ async def test_one_trace_named_twice_by_the_page_is_one_row_on_the_screen() -> N
     assert [trace.trace_id for trace in page.traces] == [TRACE_A]
 
 
+@pytest.mark.parametrize(
+    "filters",
+    [TraceFilters(status=queries.STATUS_OK), TraceFilters(max_duration_ms=100.0)],
+    ids=["healthy", "duration ceiling"],
+)
+async def test_a_filter_a_merge_can_undo_is_judged_on_the_whole_trace(
+    filters: TraceFilters,
+) -> None:
+    """The page statement judges rows. A trace being revised has an earlier row
+    beside the newer one until a background merge: before its error, or before
+    it ran long. That row passes "healthy" or a ceiling the whole trace fails —
+    the fake's merged trace failed and took 412.7 ms."""
+    page = await _page(_repository(TENANT_A), filters=filters)
+
+    assert page.traces == []
+
+
 async def test_the_cursor_names_a_position_in_the_ordered_read() -> None:
     """Not a position in the response: a trace can drop out between the two
     reads, and a keyset built from what survived would skip everything between."""

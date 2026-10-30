@@ -67,7 +67,11 @@ type SummaryStats struct {
 type traceSummary struct {
 	retentionDays uint16
 	earliestStart time.Time
-	latestEnd     time.Time
+	// keyStart is the `start_time` of the row's sort key, fixed when the row is
+	// first written. A root ends last and so often arrives after that; were the
+	// key to follow it, the revision would land on a second row that never merges.
+	keyStart  time.Time
+	latestEnd time.Time
 	// receivedAt is our own clock, and the earliest we saw any span of this
 	// trace: the summary must not outlive the spans it points at, and both
 	// tables partition and expire on this.
@@ -88,9 +92,20 @@ type traceSummary struct {
 
 	// dirty is set by every span and cleared by the drain that writes the row,
 	// so a trace that has not changed is not written again.
-	dirty     bool
+	dirty bool
+	// forgetAt is a retention after the trace's last write, not its first: a
+	// trace still arriving is still held, or every trace longer than the
+	// retention would be split into a second row by its next span.
 	forgetAt  time.Time
 	everWrote bool
+}
+
+// expiry is one entry of the forgetting queue. A trace written again gets a new
+// entry; the one it leaves behind no longer matches its `forgetAt` and is
+// skipped, which keeps the queue in expiry order without searching it.
+type expiry struct {
+	key summaryKey
+	at  time.Time
 }
 
 // rootRank orders candidate root spans. Comparable, so it is one `less` call.
@@ -111,6 +126,7 @@ type summaryRow struct {
 	TenantID      string
 	ProjectID     string
 	StartTime     time.Time
+	TraceStart    time.Time
 	TraceID       []byte
 	ReceivedAt    time.Time
 	RetentionDays uint16
@@ -132,16 +148,17 @@ type summaryRow struct {
 // stored. That is a different choice from the counters and the edge rollup
 // beside it, and a deliberate one: those are metrics and this is an index.
 type summaries struct {
-	// retention is how long a trace's state is kept after its row is written,
-	// so a span arriving late enough to take the sampler's fast path is folded
-	// into the row that already exists instead of starting a second one. It is
-	// the sampler's own DecisionTTL for exactly that reason: past it the buffer
-	// has forgotten the trace too and judges the late span as a new one.
+	// retention is how long a trace's state is kept after its row was last
+	// written, so a span arriving late enough to take the sampler's fast path is
+	// folded into the row that already exists instead of starting a second one.
+	// It is the sampler's own DecisionTTL, counted from the last write rather
+	// than the first: holding a trace longer than the sampler does costs memory
+	// the cap bounds, where forgetting one still arriving splits its row.
 	retention time.Duration
 	maxTraces int
 
 	open  map[summaryKey]*traceSummary
-	order queue[summaryKey]
+	order queue[expiry]
 	// dirty is how many held traces have changed since the last drain, so a
 	// poll that released nothing costs a queue peek rather than a map scan.
 	dirty int
@@ -165,9 +182,8 @@ func (s *summaries) Observe(now time.Time, row spanRow) {
 	}
 	trace, held := s.open[key]
 	if !held {
-		trace = newTraceSummary(now.Add(s.retention), row)
+		trace = newTraceSummary(row)
 		s.open[key] = trace
-		s.order.push(key)
 	}
 	if !trace.dirty {
 		trace.dirty = true
@@ -176,10 +192,9 @@ func (s *summaries) Observe(now time.Time, row spanRow) {
 	trace.observe(row, &s.stats)
 }
 
-// newTraceSummary starts a trace's state. `forgetAt` is fixed here and never
-// refreshed, which is what keeps the eviction queue in expiry order — the same
-// property `sample.openTrace.closesAt` relies on.
-func newTraceSummary(forgetAt time.Time, row spanRow) *traceSummary {
+// newTraceSummary starts a trace's state. It is queued for forgetting by the
+// drain that first writes it, so the queue holds only traces already written.
+func newTraceSummary(row spanRow) *traceSummary {
 	return &traceSummary{
 		retentionDays: row.RetentionDays,
 		earliestStart: row.Timestamp,
@@ -187,7 +202,6 @@ func newTraceSummary(forgetAt time.Time, row spanRow) *traceSummary {
 		rootRank:      rootRank{hasParent: true, start: row.Timestamp.Add(time.Nanosecond)},
 		services:      make(map[string]struct{}),
 		endpoints:     make(map[string]struct{}),
-		forgetAt:      forgetAt,
 	}
 }
 
@@ -284,6 +298,8 @@ func (s *summaries) Drain(now time.Time) []summaryRow {
 				s.stats.Revised++
 			}
 			trace.everWrote = true
+			trace.forgetAt = now.Add(s.retention)
+			s.order.push(expiry{key: key, at: trace.forgetAt})
 		}
 	}
 	s.retire(now)
@@ -318,10 +334,14 @@ func (s *summaries) DrainAll() []summaryRow {
 }
 
 func (t *traceSummary) row(key summaryKey) summaryRow {
+	if t.keyStart.IsZero() {
+		t.keyStart = t.earliestStart
+	}
 	return summaryRow{
 		TenantID:      key.tenantID,
 		ProjectID:     key.projectID,
-		StartTime:     t.earliestStart,
+		StartTime:     t.keyStart,
+		TraceStart:    t.earliestStart,
 		TraceID:       []byte(key.traceID),
 		ReceivedAt:    t.receivedAt,
 		RetentionDays: t.retentionDays,
@@ -349,20 +369,19 @@ func (t *traceSummary) durationMS() float64 {
 // forgetExpired drops the traces no late span can still reach.
 func (s *summaries) forgetExpired(now time.Time) {
 	for {
-		key, ok := s.order.peek()
+		entry, ok := s.order.peek()
 		if !ok {
 			return
 		}
-		trace, held := s.open[key]
-		if !held {
+		if !s.current(entry) {
 			s.order.pop()
 			continue
 		}
-		if now.Before(trace.forgetAt) {
+		if now.Before(entry.at) {
 			return
 		}
 		s.order.pop()
-		delete(s.open, key)
+		delete(s.open, entry.key)
 	}
 }
 
@@ -372,16 +391,23 @@ func (s *summaries) forgetExpired(now time.Time) {
 // buffer can release at once — which its own MaxTraces and MaxSpans limit.
 func (s *summaries) evictOverflow() {
 	for len(s.open) > s.maxTraces {
-		key, ok := s.order.pop()
+		entry, ok := s.order.pop()
 		if !ok {
 			return
 		}
-		if _, held := s.open[key]; !held {
+		if !s.current(entry) {
 			continue
 		}
-		delete(s.open, key)
+		delete(s.open, entry.key)
 		s.stats.Evicted++
 	}
+}
+
+// current reports whether an entry is its trace's latest, rather than one left
+// behind by a later write or by a trace already forgotten.
+func (s *summaries) current(entry expiry) bool {
+	trace, held := s.open[entry.key]
+	return held && trace.forgetAt.Equal(entry.at)
 }
 
 // Stats returns the running totals plus what is held right now.

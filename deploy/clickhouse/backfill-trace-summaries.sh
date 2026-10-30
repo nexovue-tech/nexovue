@@ -61,7 +61,8 @@ clickhouse() {
 # disagree the trace list shows two truths side by side, because a backfilled
 # row and a live row for one trace merge into each other.
 #
-#   start_time      min(timestamp)      earliestStart
+#   start_time      min(timestamp)      keyStart, which a backfilled row never revises
+#   trace_start     min(timestamp)      earliestStart, filled by the column's DEFAULT
 #   received_at     min(received_at)    receivedAt — our clock, and the partition
 #   duration_ms     latest end minus earliest start, never the root's own span
 #   worst_severity  ERROR 2, OK 1, anything else 0, worst wins

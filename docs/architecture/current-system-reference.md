@@ -240,7 +240,7 @@ Consumes `spans-raw`. Per batch: decode the envelope → **mask in place** (alwa
 
 **Pre-sampling counters and rollups**, written regardless of the sampling verdict: three per-minute `metrics_sum` series (span count, error count, duration sum), the `endpoint_stats_1m` rollup (request/error counts and latency quantiles per service+endpoint+minute), and `service_edges_1m` (the caller→callee dependency graph). These three write paths are the reason the platform's rate/error/latency dashboards and service map are accurate even though most healthy traces are never actually stored.
 
-**Trace summaries**: a per-trace snapshot (`trace_summaries`) is written *after* the sampling verdict, unlike the three rollups above — it indexes only traces that were actually stored, since it exists so the trace list can page without scanning raw spans.
+**Trace summaries**: a per-trace snapshot (`trace_summaries`) is written *after* the sampling verdict, unlike the three rollups above — it indexes only traces that were actually stored, since it exists so the trace list can page without scanning raw spans. Its sort key's `start_time` is fixed at the row's first write, so a revision (a root arriving after its children) merges into the same row; the true start is the `trace_start` column (migration `000034`). The worker holds a trace until the sampler's `DecisionTTL` after its *last* write, so a trace still arriving stays one row. A span replayed after a crash, once the trace is forgotten, still writes a second row; the list can then show that trace twice, and opening it shows each span once (`docs/changes/trace-list-split-traces`).
 
 ### 5.4 log-writing pipeline
 

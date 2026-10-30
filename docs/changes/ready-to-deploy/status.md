@@ -40,10 +40,9 @@ and the first `v*` release to carry the kit.
 
 ## Open decisions
 
-1. **Rollback across a schema change** (`docs/operations/rollback.md`). Built conservatively: any change
-   in either store's newest migration makes `rollback` a restore of the pre-upgrade backup, losing what
-   came after. The alternative is marking migrations additive so the old version runs on — work in every
-   migration from then on. Recommended: keep the conservative rule until a customer needs more.
+1. **Rollback across a schema change**: decided by the founder, 2026-10-30. The conservative rule is kept:
+   any change in either store's newest migration makes `rollback` a restore of the pre-upgrade backup.
+   Marking migrations additive waits until a customer needs it.
 2. **The Linux rehearsals** (readiness A1, A3): no Lima and no CI job (founder, 2026-10-29) — a friend
    of the founder installs from the kit on a Linux server and reports back. Needs the first release
    carrying the kit, and read access to the images while the repository and its packages are private.
