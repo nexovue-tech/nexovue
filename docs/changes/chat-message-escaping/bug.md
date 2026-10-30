@@ -72,6 +72,13 @@ The first four were seen failing before the fix (*Reproduction*), and pass after
 which compared the Discord and Teams summary with the raw summary, now compare it with the escaped
 form. `[critical]` is sent as `\[critical\]`, and still displays as `[critical]`.
 
+CI's first run found a third existing test of the same kind, which the offline run here had not reached.
+`apps/scheduler/tests/test_alert_senders_live.py` checked for the raw summary in the body sent to Slack,
+Teams and Discord. For Teams and Discord it failed, as it should once the markup is escaped. It now looks
+for each channel's escaped form among the body's decoded strings. Checked offline against the three
+real payloads: the old check fails for Teams and Discord, and the new one passes all three. The live
+suite itself still needs the stack, and runs in CI.
+
 ## Fix plan and validation
 
 - **`messages.py`:** a new `one_line()` turns C0 and C1 control characters, and U+2028 and U+2029,
