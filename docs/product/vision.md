@@ -122,15 +122,14 @@ Special cases:
 
 ## 4. Platform Features (Raj's feature list)
 
-> **None of the six is built, and together they are Phase 2.** They are the chain this product is
-> differentiated by, and the honest position on 2026-09-14 is that Phase 0 built everything
-> *underneath* them. Catalogue entries: F6, F21, F22, F4, F3, F5 — status in
+> **Five of the six are not built; alerts are (F21, 2026-09-19). Together they are Phase 2:**
+> [`phase-2-plan.md`](phase-2-plan.md). Phase 0 built everything *underneath* them. Catalogue entries: F6, F21, F22, F4, F3, F5 — status in
 > [`feature-catalog.md`](feature-catalog.md) §4.
 
 | # | Feature | Catalogue | Notes |
 |---|---------|---|-------|
 | 1 | **Anomaly detection** | F6 | Automatic detection of unusual patterns in metrics/traces — no manual threshold setup. This is the trigger for everything below. |
-| 2 | **Alerts & notifications — multiple connectors** | F21 | Teams, WhatsApp, Slack, email, SMS, webhooks, etc. Smart grouping to avoid alert fatigue. |
+| 2 | **Alerts & notifications — multiple connectors** | F21 | Email, Slack, Teams, Discord, PagerDuty and webhooks. WhatsApp and SMS were dropped (F21, D6). Flap guard and burst cap against alert fatigue. |
 | 3 | **Case management** | F22 | When an error/issue happens → automatically create a case/incident. Case dashboard with lifecycle (open → investigating → resolved). Connectors: GitHub Issues, Jira, etc. — push cases to the tools teams already use. |
 | 4 | **AI chatbot (with RAG)** | F4 | Chat with your system: "why was checkout slow yesterday?" RAG over the customer's own telemetry, past incidents, and docs — answers grounded in *their* data, not generic. |
 | 5 | **AI insights** | F3 | Proactive plain-language findings: "Latency on /checkout jumped 4x at 14:32, correlated with deploy a41f2c9 and DB connection errors." Cross-signal correlation (metric → trace → log). |
@@ -140,7 +139,7 @@ Special cases:
 
 Anomaly detection → AI insight (what + why) → Case created automatically → Alert sent via connectors → AI solution suggested → Developer chats with AI bot for more detail → Case closed, learned for future RAG.
 
-This pipeline IS the product's differentiation — competitors have pieces, not the chain.
+This pipeline is what the product sells. **"Competitors have pieces, not the chain" no longer holds as written:** by 2026 several vendors describe root cause through to a fix pull request, and the selling reason is now the chain on the customer's own server ([`phase-2-plan.md`](phase-2-plan.md), which says how far that is unique). An alert does not wait for the AI step.
 
 ---
 

@@ -65,7 +65,7 @@
 | **F2** | Finding detail | 🔴 No | 🔲 | 2 | Needs the engine first |
 | **F3** | AI insights | 🔴 No | 🔲 | 2 | The differentiator; nothing built |
 | **F4** | AI chatbot (RAG) | 🔴 No | 🔲 | 2 | Compose reserves an `insight` service and Ollama; the package does not exist |
-| **F5** | AI solution | 🔴 No | 🔲 | Later | After F3 earns trust |
+| **F5** | AI solution | 🔴 No | 🔲 | 2 | The chain's last link: after F3 earns trust |
 | **F6** | Anomaly detection | 🔴 No | 🔲 | 2 | Feeds F1 and F21; worth little before alerts exist |
 | **F7** | Owner status page | 🔴 No | 🔲 | Later | The P3 persona has no surface yet |
 | **F8** | Service overview | ✅ Yes | 🔲 | 0 | Services list, ranking, trends, service detail |
@@ -75,21 +75,21 @@
 | **F12** | Logs screen | ✅ Yes | 🔲 | 0 | Search, facets, live tail with pause, CSV export (stored and on-screen) |
 | **F13** | Infrastructure | ✅ Yes | 🔲 | 0 | Hosts and containers; carbon panel not built |
 | **F14** | Database monitoring | ✅ Yes | 🔲 | 0 | Ships as a view inside Infrastructure, not a screen of its own |
-| **F15** | RUM / Core Web Vitals | ✅ Yes | 🔲 | 0 | Screens built; **the browser SDK is unpublishable** (decision D6) |
+| **F15** | RUM / Core Web Vitals | ✅ Yes | 🔲 | 0 | Screens built; the browser SDK is published on npm (`@nexovue/browser-sdk`, 0.1.2) |
 | **F16** | Session replay | 🔴 No | 🔲 | Later | Neither built nor scoped |
 | **F17** | Continuous profiling | ✅ Preview | ✅ | **1** | **Built 2026-09-19 as a preview** to the approved [spec](../features/profiling/spec.md) — see [status](../features/profiling/status.md); storage restated per busy core (D6) and met at ~73 MB a day. Before it: moved into Phase 1 Track 1, 2026-09-19, by founder decision. The OTel profiles signal entered public alpha in March 2026; its OTLP format is still *Development* (sent to `/v1development/profiles`) and will change, so the design must confine that format to the intake. Nothing collects profiles today |
 | **F18** | Synthetic checks | ✅ Yes | ✅ | **1** | **Built 2026-09-17** to the approved [spec](../features/synthetic-checks/spec.md): API, multistep API, heartbeat, TCP and DNS checks created, edited, paused and deleted in the console; any method, bodies, files, auth from write-only secrets; assertions; import from cURL, OpenAPI and Postman; Run now; confirmation from another location; up/degraded/down/misconfigured state with a timeline; maintenance windows; per-run evidence. **Browser checks removed** (D13). Committed 2026-09-18 (`75b5424`) — see [status](../features/synthetic-checks/status.md) |
-| **F19** | SLO tracking | 🔴 No | 🔲 | Later | |
-| **F20** | Dashboards | 🟡 Partly | 🔶 | Later | The composed Overview is built and holds `/`; the **builder** is not |
+| **F19** | SLO tracking | 🔴 No | 🔲 | 2 | After the chain ([plan](phase-2-plan.md)) |
+| **F20** | Dashboards | 🟡 Partly | 🔶 | 2 | The composed Overview is built and holds `/`; the **builder** is not. After the chain ([plan](phase-2-plan.md)) |
 | **F21** | Alerts & notification connectors | ✅ Yes | ✅ | **1** | **Built 2026-09-19** to the approved [spec](../features/alerts/spec.md) — see [status](../features/alerts/status.md). Before it: The largest gap in the product. Notification adapters and a scheduler exist to build on. **A live competitor already bundles detection + AI root-cause + code-fix suggestions** (Better Stack's AI SRE, confirmed 2026-09-14) — the gap on "tell me what broke and act on it" is wider than scoped in August |
 | **F22** | Case management | 🔴 No | 🔲 | 2 | Depends on findings existing |
 | **F23** | Onboarding | ✅ Yes | 🔲 | 0 | Signup → two env vars → first-span celebration; auto-created defaults not built |
-| **F24** | Integration settings | 🟡 Partly | 🔲 | 2 | Keys, site keys, deploy webhooks, cloud and DB pollers, integration health all built; AWS role flow is not |
+| **F24** | Integration settings | 🟡 Partly | 🔲 | Later | Keys, site keys, deploy webhooks, cloud and DB pollers, integration health all built; AWS role flow is not |
 | **F25** | Usage & cost view | ✅ Yes | 🔶 | 0 | Usage, allowance, projected cost, billing, charge history. **A real specification exists since 2026-09-21** and awaits approval — 14 business rules, 15 acceptance criteria, six gaps marked. Writing it found a hole nothing was holding: the allowance rule is implemented in Python and in Go and neither checked the other ([AC25.15](../features/usage-billing/spec.md)) |
 | **F26** | RBAC / user management | ✅ Yes | ✅ | **1** | **Built 2026-09-19** as Stage 1 of [Team, API and admin access](../features/team-and-api-access/spec.md) (with F31 and F36): invite by email, accept, four roles on every route and screen, remove, transfer ownership, audit log screen — see [status](../features/team-and-api-access/status.md) |
-| **F27** | Data controls | 🟡 Partly | 🔲 | 2 | Masking, plan retention, tenant purge and CSV export built; archival tiers and a GDPR surface are not |
+| **F27** | Data controls | 🟡 Partly | 🔲 | Later | Masking, plan retention, tenant purge and CSV export built; archival tiers and a GDPR surface are not |
 | **F28** | Deployment / release tracking | 🟡 Partly | 🔲 | 2 | Deploy webhooks, chart markers and error-to-deploy linkage built; the release-comparison screen is not |
-| **F29** | LLM / AI-app observability | 🔴 No | 🔲 | Later | `gen_ai.*` attributes already land and are queryable; no screen, no metric contract |
+| **F29** | LLM / AI-app observability | ✅ Yes | ✅ | 1 | Built to its [spec](../features/llm-observability/spec.md); see [status](../features/llm-observability/status.md) |
 | **F30** | Public status page | 🔴 No | 🔲 | Later | |
 | **F31** | Admin console (internal) | ✅ Yes | ✅ | **1** | **Built 2026-09-20** as Stage 3 of [Team, API and admin access](../features/team-and-api-access/spec.md): one super-admin user seeded from the environment signs in on the ordinary sign-in page and opens the platform area with a 30-minute step-up ([ADR-018](../decisions/ADR-018-the-operator-is-a-user-in-the-console.md), which supersedes ADR-016's separate app the same day); onboard a paying customer after the website payment ([ADR-008](../decisions/ADR-008-the-website-takes-the-first-payment.md)); hosted signup closed by a switch; suspend and resume ingest; comp a plan until a date; read-only, audited *view as* inside the owner's grant — see [status](../features/team-and-api-access/status.md) |
 | **F32** | Account, organization & project access | ✅ Yes | 🔲 | 0 | Signup, verification, recovery, profile, TOTP second factor, active sessions, sign-out-everywhere |
@@ -197,9 +197,11 @@ our own deployments pull authenticated.
 
 ### Phase 2 and later
 
-Phase 2 is the insight layer the vision is built on — anomaly detection, the insight engine, findings
-with something behind them, cases, and the chatbot — plus the release-comparison screen, the AWS role
-flow and data archival. Everything marked *Later* in §4 has no phase and is not scheduled.
+Phase 2 is the incident chain the vision is built on, to production level and released as a whole: see
+[`phase-2-plan.md`](phase-2-plan.md) (founder, 2026-10-30, awaiting approval of the plan). It holds anomaly
+detection, findings with something behind them, the insight engine, the release-comparison screen, cases, the
+chatbot and the suggested fix, then SLOs and the dashboard builder. The AWS role flow and data archival moved to
+Later (founder, 2026-10-30). Everything marked *Later* in §4 has no phase and is not scheduled.
 
 ---
 
