@@ -92,6 +92,12 @@ logs service="":
 repo-audit:
     uv run python tools/repo-audit/repo_audit.py
 
+# F6 spec D15: how bursty the demo's failures really are, from the dev stack's rollup. Run after
+# `just dev` has run for at least 3 days; writes detection-measure.json.
+# Measure the dev stack's failure bursts and variability
+detection-measure *args:
+    uv run python tools/detection-measure/measure.py {{args}}
+
 # Known vulnerabilities in what production runs, nothing else (docs/changes/ready-to-deploy):
 # govulncheck reports a Go flaw only where our code reaches it; pip-audit reads the Python runtime
 # dependencies, not the dev tools; pnpm audit reads the console's and SDK's runtime packages, high
