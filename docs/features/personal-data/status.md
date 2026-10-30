@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-Built — not committed
+Built and committed (305269c)
 
 ## Current task
 
-None. Awaiting the founder's "commit".
+None.
 
 ## Completed
 
