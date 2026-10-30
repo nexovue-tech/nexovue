@@ -140,7 +140,7 @@ Promoted typed columns are preferred over JSON attribute lookups on anything fil
 - **AC4:** **[amended 2026-09-13 — eleven dimensions, not twelve.** `web_vitals.country` is a
   promoted column with no producer: `BreakdownDimension`'s docstring records that there is no GeoIP
   anywhere in the system, so it can be neither shown nor deliberately hidden for a design reason.
-  Dropping the column or adding GeoIP is a schema decision tracked outside this feature.**]
+  Dropping the column or adding GeoIP is a schema decision tracked outside this feature.]**
   Each of `device_class`, `navigation_type`, `span_kind`, `rpc_system`,
   `rpc_method`, `rpc_status`, `deployment_version`, `links`, `events`, `timestamp_source` and
   `server_peer_kind` must be visible or filterable on a named screen, or listed in that screen's

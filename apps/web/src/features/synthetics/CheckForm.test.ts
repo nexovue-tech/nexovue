@@ -50,6 +50,7 @@ async function mountForm(kind: CheckType, extra: Handlers = {}) {
     }),
     ...extra,
   });
+  // biome-ignore lint/correctness/noComponentHookFactories: made once per mount, never during a render; the harness takes a route component, which has no props to carry this test's values.
   const Form = () =>
     createElement(CheckForm, {
       projectId: PROJECT_ID,

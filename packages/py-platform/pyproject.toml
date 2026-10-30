@@ -13,7 +13,7 @@ dependencies = [
     "cryptography>=44",
     # RFC 9535 JSONPath, strictly — the author's own recommendation over
     # python-jsonpath when nothing beyond the RFC is wanted (MIT, 1.0.0).
-    "jsonpath-rfc9535>=1.0",
+    "jsonpath-rfc9535>=2.0.2",
     # Customer-typed patterns in assertions. RE2 matches in linear time, so no
     # pattern can hold a worker with catastrophic backtracking (BSD).
     "google-re2>=1.1",

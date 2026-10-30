@@ -167,7 +167,12 @@ describe("a webhook's settings", () => {
     });
     const { container } = await mountAt("/settings/channels/ch-hook");
 
-    await waitFor(() => readable(container).includes("https://hooks.example.test/old"), "the URL");
+    await waitFor(
+      () =>
+        container.querySelector<HTMLInputElement>('input[name="channel-url"]')?.value ===
+        "https://hooks.example.test/old",
+      "the URL",
+    );
     await typeInto(field(container, "channel-url"), "https://hooks.example.test/new");
     await click(button(container, "Save"));
 

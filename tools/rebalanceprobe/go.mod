@@ -9,24 +9,21 @@ replace github.com/nexovue-tech/nexovue/packages/contracts => ../../packages/con
 require (
 	github.com/google/uuid v1.6.0
 	github.com/nexovue-tech/nexovue/packages/contracts v0.0.0-00010101000000-000000000000
-	github.com/twmb/franz-go v1.22.0
-	go.opentelemetry.io/proto/otlp v1.11.0
-	golang.org/x/sync v0.23.0
+	github.com/twmb/franz-go v1.22.2
+	go.opentelemetry.io/proto/otlp v1.11.1
+	golang.org/x/sync v0.24.0
 	google.golang.org/protobuf v1.36.12
 )
 
 require (
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
-	github.com/klauspost/compress v1.20.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.30 // indirect
-	github.com/twmb/franz-go/pkg/kmsg v1.14.0 // indirect
-	go.opentelemetry.io/otel/metric v1.45.0 // indirect
-	go.opentelemetry.io/otel/sdk v1.45.0 // indirect
-	go.opentelemetry.io/otel/trace v1.45.0 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 // indirect
+	github.com/klauspost/compress v1.20.3 // indirect
+	github.com/pierrec/lz4/v4 v4.1.33 // indirect
+	github.com/twmb/franz-go/pkg/kmsg v1.15.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260803160001-6ac0973c030d // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260825221802-da73d73af1c5 // indirect
-	google.golang.org/grpc v1.83.2 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
+	google.golang.org/grpc v1.84.0 // indirect
 )

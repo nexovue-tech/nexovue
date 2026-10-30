@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 from nexovue_platform.checks.config import (
@@ -222,7 +223,8 @@ def test_servers_are_listed_with_their_variables_filled_and_the_first_is_used() 
 def test_the_chosen_server_is_used_when_it_is_one_the_description_names() -> None:
     plan = openapi.preview(OPENAPI_3_2, server_url="https://staging.orders.example.com/v1")
 
-    assert _items(plan)["GET /public/status"].url.startswith("https://staging.orders.example.com")
+    chosen = urlsplit(_items(plan)["GET /public/status"].url)
+    assert (chosen.scheme, chosen.hostname) == ("https", "staging.orders.example.com")
 
 
 def test_a_documented_example_fills_a_path_parameter_through_a_local_reference() -> None:

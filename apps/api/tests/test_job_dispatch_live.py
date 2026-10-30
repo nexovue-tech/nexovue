@@ -123,14 +123,23 @@ async def test_run_now_adds_a_job_on_its_locations_queue_that_expires_unclaimed(
 async def test_a_send_test_adds_a_job_on_the_deliveries_queue(
     factory: async_sessionmaker[AsyncSession], organizations: list[str]
 ) -> None:
+    """Read inside a transaction never committed: the stack's own deliveries worker serves this
+    queue and took the job before the test could see it, failing CI on main (2026-10-29)."""
     org_id = organizations[0]
+    engine = factory.kw["bind"]
 
-    await JobsChannelTester(factory).dispatch(
-        org_id=org_id, channel_id=str(uuid.uuid4()), request_id=str(uuid.uuid4())
-    )
+    async with engine.connect() as connection:
+        unseen = await connection.begin()
+        private = async_sessionmaker(
+            bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint"
+        )
+        await JobsChannelTester(private).dispatch(
+            org_id=org_id, channel_id=str(uuid.uuid4()), request_id=str(uuid.uuid4())
+        )
 
-    [job] = await _queued(factory, org_id)
-    assert (job.task, job.queue) == (SEND_TEST_TASK, DELIVERIES_QUEUE)
+        [job] = await _queued(private, org_id)
+        assert (job.task, job.queue) == (SEND_TEST_TASK, DELIVERIES_QUEUE)
+        await unseen.rollback()
 
 
 async def test_a_job_somebody_waits_on_wakes_the_workers(

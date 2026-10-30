@@ -3,6 +3,7 @@ import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  type ErrorComponentProps,
   Link,
   lazyRouteComponent,
   Outlet,
@@ -716,7 +717,8 @@ const routeTree = rootRoute.addChildren([
   forgotPasswordRoute,
 ]);
 
-function RouteError({ error, reset }: { error: Error; reset: () => void }) {
+// A route can throw anything, not only an Error; ErrorScreen describes whatever arrives.
+function RouteError({ error, reset }: ErrorComponentProps) {
   return (
     <ErrorScreen error={error} correlationId={crypto.randomUUID()} onRetry={reset} scope="route" />
   );

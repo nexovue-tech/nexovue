@@ -1049,15 +1049,15 @@ wheels = [
 
 [[package]]
 name = "jsonpath-rfc9535"
-version = "1.0.0"
+version = "2.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "iregexp-check" },
     { name = "regex" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ad/62/42b1ee140903ced74b213590235915e41c5e6f8de029fd43b54aad081b1b/jsonpath_rfc9535-1.0.0.tar.gz", hash = "sha256:5312cbccb921d39af69ef3fef299a075c872259fa897f2126999a1c3bcb73d04", size = 27235, upload-time = "2025-11-30T09:09:31.705Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1d/0c/4a274cfb022464458be05a5029388a85c10536de2524ee49b3b01806d4ad/jsonpath_rfc9535-2.0.2.tar.gz", hash = "sha256:07e5ba16067905b5e8c0ff3a49184908f6e90f8cde473638f9f387b4f24d4e00", size = 146809, upload-time = "2026-10-10T10:40:48.334Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/8c/1d201eeabbc1922c74fa0ad2cdef561c393198d0610ab28ad606929d863f/jsonpath_rfc9535-1.0.0-py3-none-any.whl", hash = "sha256:713efa817d9c94e6b1372d52f00f5c9959bef2ab0fdf334de262dcf74166a2b1", size = 36493, upload-time = "2025-11-30T09:09:30.298Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/fa/3d124fe4cc1f48190555df4288e83a004977bd4adaa333b40abad479587a/jsonpath_rfc9535-2.0.2-py3-none-any.whl", hash = "sha256:a8fd8054619bef2cac7ad04fc3a686ad8a3c552aa9a40f246bd7acef75ac779c", size = 32330, upload-time = "2026-10-10T10:40:46.922Z" },
 ]
 
 [[package]]
@@ -1641,7 +1641,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=44" },
     { name = "google-re2", specifier = ">=1.1" },
     { name = "httpx", specifier = ">=0.28" },
-    { name = "jsonpath-rfc9535", specifier = ">=1.0" },
+    { name = "jsonpath-rfc9535", specifier = ">=2.0.2" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "structlog", specifier = ">=24.4" },
 ]

@@ -19,7 +19,7 @@ from nexovue_scheduler.probes.failures import MisconfiguredError
 def closed_port() -> Iterator[int]:
     """A port that was open a moment ago and is not now."""
     holder = socket.socket()
-    holder.bind(("0.0.0.0", 0))
+    holder.bind((private_address(), 0))
     port = int(holder.getsockname()[1])
     holder.close()
     yield port
