@@ -27,6 +27,7 @@ type summaryBlock struct {
 	tenantID      *proto.ColLowCardinality[string]
 	projectID     *proto.ColLowCardinality[string]
 	startTime     proto.ColDateTime64
+	traceStart    aggregateDateTime64
 	traceID       proto.ColFixedStr
 	receivedAt    proto.ColDateTime64
 	retentionDays proto.ColUInt16
@@ -55,12 +56,14 @@ func newSummaryBlock() *summaryBlock {
 	// The columns carry their own precision; without it ch-go cannot encode a
 	// time and the server would be told the wrong type.
 	block.startTime.WithPrecision(proto.PrecisionNano)
+	block.traceStart.WithPrecision(proto.PrecisionNano)
 	block.receivedAt.WithPrecision(proto.PrecisionNano)
 
 	block.columns = proto.Input{
 		{Name: "tenant_id", Data: block.tenantID},
 		{Name: "project_id", Data: block.projectID},
 		{Name: "start_time", Data: &block.startTime},
+		{Name: "trace_start", Data: &block.traceStart},
 		{Name: "trace_id", Data: &block.traceID},
 		{Name: "received_at", Data: &block.receivedAt},
 		{Name: "retention_days", Data: &block.retentionDays},
@@ -80,6 +83,7 @@ func (b *summaryBlock) append(row summaryRow) {
 	b.tenantID.Append(row.TenantID)
 	b.projectID.Append(row.ProjectID)
 	b.startTime.Append(row.StartTime)
+	b.traceStart.Append(row.TraceStart)
 	b.traceID.Append(row.TraceID)
 	b.receivedAt.Append(row.ReceivedAt)
 	b.retentionDays.Append(row.RetentionDays)
@@ -99,6 +103,16 @@ func (b *summaryBlock) reset() { b.columns.Reset() }
 
 // statement is the INSERT this block's columns belong to.
 func (b *summaryBlock) statement() string { return b.columns.Into(summariesTable) }
+
+// aggregateDateTime64 is the column for `SimpleAggregateFunction(min,
+// DateTime64(9))`. ch-go infers a DateTime64's precision from the server's type
+// and cannot read it through that wrapper — it parses "min" as the precision and
+// refuses the insert. The precision is set here instead, to the table's 9.
+type aggregateDateTime64 struct {
+	proto.ColDateTime64
+}
+
+func (c *aggregateDateTime64) Infer(proto.ColumnType) error { return nil }
 
 // summaryWriter inserts blocks of trace summaries into ClickHouse.
 type summaryWriter struct {

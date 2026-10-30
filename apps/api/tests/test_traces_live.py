@@ -285,7 +285,9 @@ async def test_a_service_filter_returns_traces_that_contain_that_service(
     # window can end outside it, which is exactly where the newest page sits.
     for trace in page.traces:
         answer = await clickhouse.query(
-            "SELECT countIf(service_name = {service_name:String}) AS matching, count() AS spans "
+            # Distinct spans, not rows: a replay can store one twice (`ingeststate/state.go`).
+            "SELECT countIf(service_name = {service_name:String}) AS matching, "
+            "uniqExact(span_id) AS spans "
             "FROM spans WHERE tenant_id = {tenant_id:String} "
             "AND project_id = {project_id:String} AND trace_id = {trace_id:String}",
             parameters={
@@ -553,7 +555,8 @@ async def test_the_summary_row_says_what_the_spans_of_that_trace_say(
 
     for trace in page.traces:
         answer = await clickhouse.query(
-            "SELECT count() AS spans, countIf(status_code = 'ERROR') AS errors, "
+            "SELECT uniqExact(span_id) AS spans, "
+            "  uniqExactIf(span_id, status_code = 'ERROR') AS errors, "
             "  toUnixTimestamp64Nano(min(timestamp)) AS start_nanos, "
             "  toFloat64(max(toUnixTimestamp64Nano(timestamp) "
             "    + toInt64(duration_ms * 1000000)) - min(toUnixTimestamp64Nano(timestamp))) "

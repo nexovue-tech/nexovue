@@ -247,8 +247,26 @@ async def _list_from_summaries(
     )
     merged = await _merged_summaries(repository, project_id=project_id, positions=positions)
 
-    traces = [_to_merged_summary(merged[trace_id]) for trace_id in _ids_in_order(positions, merged)]
+    traces = [
+        _to_merged_summary(merged[trace_id])
+        for trace_id in _ids_in_order(positions, merged)
+        if _whole_trace_passes(merged[trace_id], filters)
+    ]
     return TraceListResponse(traces=traces, next_cursor=_next_cursor(positions, limit))
+
+
+def _whole_trace_passes(row: dict[str, Any], filters: TraceFilters) -> bool:
+    """The two filters a merge can undo, judged again on the merged trace.
+
+    The page statement judges rows, and a trace being revised keeps its earlier
+    row beside the newer one until a background merge. That row can pass
+    "healthy" before its error arrived, or a ceiling before the trace ran long.
+    Every other summary filter only gains matches as rows merge, so the row's
+    answer stands. The cursor still comes from the ordered read.
+    """
+    if filters.status == queries.STATUS_OK and int(row["worst_severity"]) >= queries.SEVERITY_ERROR:
+        return False
+    return filters.max_duration_ms is None or float(row["duration_ms"]) <= filters.max_duration_ms
 
 
 def _ids_in_order(positions: list[dict[str, Any]], merged: dict[str, dict[str, Any]]) -> list[str]:
