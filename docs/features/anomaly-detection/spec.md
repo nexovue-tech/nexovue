@@ -235,7 +235,11 @@ scientist** who wants to choose algorithms or see model parameters. Sensitivity 
   extreme, never opens a finding by itself. A finding opens only when the sensitivity's sustain time of
   minutes has been unusual.
 - **FR13**: A finding **closes** once all of its signals have been normal for the recovery time. A
-  deviation that returns before then continues the same finding.
+  deviation that returns before then continues the same finding. A finding none of whose signals can be
+  judged for 6 hours in a row closes as **could no longer be judged**, with one message. Its minutes stay
+  out of the normal (D20).
+  - A signal with no judgeable minute for 6 hours stops holding its finding open. The finding closes when
+    each of its signals has either recovered or gone unjudged that long.
 - **FR14**: A finding's severity is **warning**, or **critical** at the critical size (*Product values*).
   It can rise while the finding is open, and never falls.
 - **FR15**: **Many services at once is one problem.** When most of a project's services lose traffic in
@@ -403,6 +407,8 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
   must produce no finding over a simulated week. The test runs at its busiest and quietest hours.
 - **AC2**: A single minute of any size (100% failures, or 10× slower), with normal minutes around it, must
   open no finding at any sensitivity (FR12).
+  - A spike right after a natural small burst is not "with normal minutes around it". The two together
+    can open a finding. The simulation saw this once in 1,196 spikes (D21).
 - **AC3**: A business service whose weekend traffic is 15% of its weekday traffic must produce no finding
   on day 10 (a Saturday) or day 17. It must show *learning* for *losing traffic* until day 21 (FR5, FR6).
 - **AC4**: A window with 4 requests and 2 failures on a service whose normal failure rate is 1% must open
@@ -505,6 +511,12 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
   - Every other flag must be injected at least 5 times. Each injection is scored as caught or not, by
     time to catch, and by service and signal. It must be caught on at least 4 of the 5, within *time to
     catch* for that service's traffic (D16).
+  - For a service whose own history is bursty (D18), a failure increase no larger, and no longer, than its
+    usual bursts is not required to be caught. The false-alarm budget comes first (D21).
+  - A fault counts here only when it is clearly past the minimum: its first full window exceeds the
+    normal-sensitivity minimum change by at least a tenth of that minimum. For example, traffic at 45% of
+    normal or less, where the minimum is 50%. A fault exactly at the minimum is a coin toss by
+    construction (D19).
 - **AC37**: A no-fault run of at least 2 weeks must stay within the *false-alarm budget*. This criterion
   waits on the test server (`phase-2-plan.md`, Open 2). Two weeks of zero false findings on one service
   bounds its rate only loosely, so the budget is measured across all services.
@@ -664,6 +676,32 @@ By the founder, 2026-10-31:
   - The demo's real bursts are measured during the plan's demo run, which tunes the cut-offs (D14).
   - The cost is accepted: a fault that looks exactly like a service's usual bursts, no higher and no
     longer, is not reported.
+
+By the founder, 2026-10-31, after the simulation of D17:
+
+- **D18: Burst tolerance is per service.** A service tolerates its usual bursts only when its own history
+  shows them often: at least one a week on average (amended by D21; first decided as about one a day). A calm service keeps the plain test and full sensitivity. The
+  simulation showed tolerance for every service costing too much: a +5-point failure on a bursty service
+  was caught in time only 56% of the time.
+- **D19: AC36 scores only faults clearly past the minimum** (AC36). The 58% for traffic down to exactly
+  50% measured the scoring rule, not the detector.
+- **D20: A finding that can no longer be judged closes after 6 hours** (FR13), so it cannot stay open for
+  days.
+
+By the founder, 2026-10-31, after the simulation of D18 to D20:
+
+- **D21: The false-alarm budget comes first.**
+  - **The trade-off.** Under the harshest burst rate simulated, 8-minute bursts at 1 in 500 minutes, no
+    setting meets both the budget and AC36 for a +5-point failure. Meeting AC36 cost 1.64 false findings
+    per service per week.
+  - **What is accepted.** On very bursty services, a small failure increase within the service's usual
+    burst envelope is caught later or not at all (AC36).
+  - **The bursty threshold.** Burst tolerance starts at one burst a week, not one a day. At one a day,
+    almost no service qualified, and false findings reached 2.1.
+  - **AC2's edge case.** A spike right after a natural small burst is recorded as a known case, not
+    closed with more rules.
+  - **Settled by the demo.** The demo run (D14) measures real burst rates. Whether real services come near
+    the harshest case is settled there.
 
 ## Open decisions
 

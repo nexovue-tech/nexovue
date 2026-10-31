@@ -85,6 +85,7 @@ plugins = ["pydantic.mypy"]
 exclude = [
     "packages/contracts/gen/",   # generated code is not ours to type
     "tools/otel-demo/upstream/", # P1-62 pins a clone of the OTel Demo; upstream code, not ours
+    "tools/detection-sim/",      # its own uv project (numpy, scipy), typed by its own strict mypy
 ]
 # tests/helpers holds `live`, the shared "fail rather than skip" guard.
 mypy_path = ["packages/contracts/gen/python", "tests/helpers"]  # ...but it must still resolve
