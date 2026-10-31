@@ -14,7 +14,6 @@ None.
 - The browser guide gives the real npm and jsDelivr install.
 - The README separates today's release from what is being built.
 - `.nvmrc` matches CI and the images at 26.12.0.
-- The flaky services test reads a settled window.
 - `docs/self-hosting/docker.md`: the images, and Compose commands run against the published 0.1.0 kit (11 healthy
   containers, console 200, down and up again).
 
@@ -32,6 +31,8 @@ Nothing.
 
 ## Risks
 
+- `test_one_service_counts_exactly_as_its_row_in_the_ranking` can still flap under live traffic. See the change
+  record for the fix that was tried and why it was reverted.
 - The jsDelivr line pins SDK 0.1.2 and needs updating with each SDK release.
 - `test_a_real_public_name_resolving_privately_is_refused_at_connect` needs live DNS within 5 seconds, and failed
   once on a slow resolver during this work. It passed when re-run, and is unchanged here.
