@@ -17,14 +17,17 @@ from typing import Any, Final
 from urllib.parse import urlsplit
 
 import pytest
-from alert_fixtures import AlertTenant, drop_tenant, make_tenant
+from alert_fixtures import AlertTenant, add_rule, anomaly_rule, drop_tenant, make_tenant
 from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.client import Client
 from live import require_stack
+from nexovue_platform.alerts.model import service_subject
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from nexovue_scheduler.alerts import incidents
+from nexovue_scheduler.alerts.rules import Rule
 from nexovue_scheduler.detection import baselines, project_job
 from nexovue_scheduler.detection.coordinator import project_requests
 from nexovue_scheduler.detection.method import BUCKET_COUNT, RECOVERY_MINUTES
@@ -408,7 +411,7 @@ async def test_a_job_killed_before_its_commit_leaves_one_finding_once_rerun(
     before = [m for m in minutes if m < opening]
     await _judge_through(engine, store, project, before)
 
-    async def killed(*_: object) -> None:
+    async def killed(*_: object, **__: object) -> None:
         raise RuntimeError("killed between the readings and the commit")
 
     monkeypatch.setattr(project_job, "_record_run", killed)
@@ -755,3 +758,92 @@ async def _bound(engine: AsyncEngine, tenant: AlertTenant) -> Any:
         binding = await bind_project(connection, tenant.project_id)
     assert binding is not None
     return binding
+
+
+# ------------------------------------------------- notifications and links (Step 4)
+
+
+async def _threshold_incident(engine: AsyncEngine, tenant: AlertTenant, at: datetime) -> Any:
+    """An error-rate incident open on the service before detection sees anything."""
+    condition = {"kind": "service_error_rate", "threshold_percent": 5}
+    async with engine.begin() as connection:
+        rule_id = await add_rule(
+            connection,
+            tenant.org_id,
+            tenant.project_id,
+            name="Checkout errors",
+            condition=condition,
+            channel_ids=[],
+        )
+        rule = Rule(
+            id=rule_id,
+            org_id=tenant.org_id,
+            project_id=tenant.project_id,
+            name="Checkout errors",
+            condition_kind="service_error_rate",
+            condition=condition,
+            muted_until=None,
+            channel_ids=(),
+        )
+        await incidents.fire(
+            connection,
+            rule,
+            incidents.Subject(key=service_subject(SERVICE), label=SERVICE),
+            severity="critical",
+            at=at,
+            detail={},
+        )
+        await add_rule(
+            connection,
+            tenant.org_id,
+            tenant.project_id,
+            name="Critical problems",
+            condition=anomaly_rule("critical"),
+            channel_ids=[tenant.owners_channel_id],
+        )
+    return rule
+
+
+async def test_a_finding_opening_beside_a_threshold_incident_is_linked_and_told_once(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """AC20, AC22, from the job: one finding linked to the one threshold incident, and
+    the owners told it opened and that it closed, by the *Critical problems* rule."""
+    _seed_four_weeks(administrator, project)
+    await _baselines(engine, store, project)
+    await _threshold_incident(engine, project, ONSET)
+    minutes = _rise(administrator, project, minutes=8, slower_by=PAST_CRITICAL)
+
+    outcomes = await _judge_through(engine, store, project, minutes)
+
+    (finding,) = await _findings(engine, project)
+    assert (finding.severity, finding.closed_reason) == ("critical", "recovered")
+    async with engine.connect() as connection:
+        links = list(
+            await connection.execute(
+                text(
+                    "SELECT finding_incidents.finding_id, incidents.subject_key "
+                    "FROM finding_incidents JOIN incidents "
+                    "ON incidents.id = finding_incidents.incident_id "
+                    "WHERE finding_incidents.org_id = :org_id"
+                ),
+                {"org_id": project.org_id},
+            )
+        )
+        told = list(
+            await connection.execute(
+                text(
+                    "SELECT kind, channel_id FROM notifications "
+                    "WHERE org_id = :org_id AND finding_id = :finding_id ORDER BY created_at"
+                ),
+                {"org_id": project.org_id, "finding_id": finding.id},
+            )
+        )
+    assert [(link.finding_id, link.subject_key) for link in links] == [
+        (finding.id, service_subject(SERVICE))
+    ]
+    assert [(row.kind, row.channel_id) for row in told] == [
+        ("opened", project.owners_channel_id),
+        ("resolved", project.owners_channel_id),
+    ]
+    assert sum(outcome.notified for outcome in outcomes) == 2

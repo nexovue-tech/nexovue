@@ -72,9 +72,13 @@ NotificationKind = Literal[
 # Kinds whose subject is a project, so the row names neither an incident nor a finding.
 PROJECT_NOTIFICATION_KINDS: Final = ("stopped", "running_again")
 
+# Kinds that end their subject: PagerDuty resolves the alert on either.
+ENDING_KINDS: Final = frozenset({"resolved", "closed"})
+
 # `delivering` is claimed under a lease; a worker that dies leaves it to be
 # reclaimed when the lease ends (ADR-013). `dropped` is a decision not to send —
-# a muted channel — recorded so the delivery log still shows it.
+# a muted channel, or a PagerDuty resolve withheld while the alert still carries
+# another open subject (D35) — recorded so the delivery log still shows it.
 NOTIFICATION_STATES: Final = ("pending", "delivering", "delivered", "failed", "dropped")
 
 ATTEMPT_OUTCOMES: Final = ("delivered", "retrying", "failed")
@@ -217,6 +221,12 @@ class AnomalyFindingCondition(_ServiceCondition):
     def admits(self, severity: str) -> bool:
         return SEVERITY_RANK[severity] >= SEVERITY_RANK[self.minimum_severity]
 
+
+# The second default rule every project is created with (F6 FR29): critical findings
+# to the organization's owners. A rule has one condition kind, so the first default
+# cannot carry it; warnings stay in the feed until a rule asks for them.
+CRITICAL_PROBLEMS_RULE_NAME: Final = "Critical problems"
+CRITICAL_PROBLEMS_CONDITION: Final = AnomalyFindingCondition(minimum_severity="critical")
 
 # How long a service may have been quiet and still be one that "sent some" (FR5).
 SILENCE_LOOKBACK_HOURS: Final = 24

@@ -65,19 +65,20 @@ def test_teams_receives_an_adaptive_card() -> None:
     ]
 
 
-def test_pagerduty_triggers_with_the_incident_as_its_dedup_key() -> None:
+def test_pagerduty_triggers_with_the_subject_as_its_dedup_key() -> None:
     """AC20."""
     body = json.loads(
         payloads.pagerduty(
             OPENED,
             routing_key="k" * 32,
-            dedup_key="incident-1",
+            dedup_key="incident:1",
             subject="Checkout API",
             app_base_url="https://app.nexovue.test",
         )
     )
     assert body["event_action"] == "trigger"
-    assert body["dedup_key"] == "incident-1"
+    assert body["dedup_key"] == "incident:1"
+    assert "note" not in body["payload"]["custom_details"]
     assert body["payload"]["severity"] == "critical"
     assert body["payload"]["summary"] == OPENED.summary
     assert body["payload"]["source"] == "nexovue"
@@ -89,36 +90,78 @@ def test_pagerduty_resolves_the_same_key_and_says_nothing_else() -> None:
         payloads.pagerduty(
             RESOLVED,
             routing_key="k" * 32,
-            dedup_key="incident-1",
+            dedup_key="incident:1",
             subject="Checkout API",
             app_base_url="https://app.nexovue.test",
         )
     )
-    assert body == {"routing_key": "k" * 32, "event_action": "resolve", "dedup_key": "incident-1"}
+    assert body == {"routing_key": "k" * 32, "event_action": "resolve", "dedup_key": "incident:1"}
 
 
-def test_the_webhook_body_is_versioned_and_says_what_happened() -> None:
+def test_the_webhook_body_is_version_2_and_names_its_subject() -> None:
+    """ADR-022: `data.subject` names an incident or a finding, and `type` leads with
+    which (docs/product/setup/alerts/webhooks.md)."""
     opened_at = datetime(2026, 9, 19, 14, 3, tzinfo=UTC)
     body = json.loads(
         payloads.webhook(
             RESOLVED,
-            incident_id="incident-1",
+            subject_kind="incident",
+            subject_id="incident-1",
             subject="Checkout API",
             opened_at=opened_at,
             resolved_at=opened_at + timedelta(minutes=12),
             sent_at=opened_at + timedelta(minutes=12),
         )
     )
-    assert body["version"] == 1
+    assert body["version"] == 2
     assert body["type"] == "incident.resolved"
-    assert body["data"]["incident"] == {
+    assert body["data"]["subject"] == {
+        "kind": "incident",
         "id": "incident-1",
-        "subject": "Checkout API",
+        "label": "Checkout API",
         "severity": "critical",
         "opened_at": "2026-09-19T14:03:00+00:00",
         "resolved_at": "2026-09-19T14:15:00+00:00",
     }
+    assert "incident" not in body["data"]
+    assert body["data"]["rule"] == {"name": "Any check down"}
     assert body["data"]["link"] == OPENED.link
+
+
+def test_a_finding_s_webhook_is_a_finding_event() -> None:
+    joined = dataclasses.replace(OPENED, kind="joined", rule_name="")
+    body = json.loads(
+        payloads.webhook(
+            joined,
+            subject_kind="finding",
+            subject_id="finding-1",
+            subject="checkout",
+            opened_at=datetime(2026, 9, 19, 14, 3, tzinfo=UTC),
+            resolved_at=None,
+            sent_at=datetime(2026, 9, 19, 14, 9, tzinfo=UTC),
+        )
+    )
+    assert body["type"] == "finding.joined"
+    assert body["data"]["subject"]["kind"] == "finding"
+    # A finding told outside any rule, as adoption is, names none.
+    assert body["data"]["rule"] is None
+
+
+def test_a_finding_noted_on_a_linked_incident_adds_to_its_alert_and_says_why() -> None:
+    """D29, AC45: a trigger with the open alert's key is added to that alert's log;
+    PagerDuty opens no second incident."""
+    body = json.loads(
+        payloads.pagerduty(
+            OPENED,
+            routing_key="k" * 32,
+            dedup_key="incident:1",
+            subject="checkout",
+            app_base_url="https://app.nexovue.test",
+            noted=True,
+        )
+    )
+    assert (body["event_action"], body["dedup_key"]) == ("trigger", "incident:1")
+    assert body["payload"]["custom_details"]["note"] == payloads.PAGERDUTY_NOTE
 
 
 def test_an_incident_closed_unrecovered_resolves_pagerduty_all_the_same() -> None:
@@ -128,12 +171,12 @@ def test_an_incident_closed_unrecovered_resolves_pagerduty_all_the_same() -> Non
         payloads.pagerduty(
             closed,
             routing_key="k" * 32,
-            dedup_key="incident-1",
+            dedup_key="incident:1",
             subject="Checkout API",
             app_base_url="https://app.nexovue.test",
         )
     )
-    assert body == {"routing_key": "k" * 32, "event_action": "resolve", "dedup_key": "incident-1"}
+    assert body == {"routing_key": "k" * 32, "event_action": "resolve", "dedup_key": "incident:1"}
 
 
 # A subject's name comes from telemetry, which anyone holding a public browser key can

@@ -180,6 +180,42 @@ Recorded as each plan step lands. It says where the built code differs from the 
     "Detection is not running" when it is not.
   - **The parity fixture** now holds failing, traffic and endpoint-burst windows, 3.3 MB. Turning endpoint
     tolerance off fails 11 of its windows.
+- **Step 4, 2026-11-01:**
+  - **The outbox's subject** is an incident, a finding, or the project itself, for *detection stopped*. The
+    in-order rule, that *resolved* never overtakes *opened*, holds for each kind.
+  - **PagerDuty's `dedup_key`** is `incident:<id>` or `finding:<id>`.
+  - **Webhook version 2:** `type` is `<kind>.<event>`, and the subject sits under `data.subject`. *Send
+    test* sends `test.opened`, with subject kind `test`; before, it posed as an incident.
+  - **Migration 0042, `findings.flapping`:** the flap guard must remember across runs which finding is
+    flapping. A project finding has no service state to hold that, and the outbox has no row when no rule
+    has a channel. F21 keeps the same fact on the incident.
+  - **Migration 0043** widens `notifications.sequence` to `integer`. Each stop takes the next number, and
+    `smallint` would run out after 32,767 stops.
+  - **The incident side of `finding_incidents`** is written in `alerts/incidents.py`, not `sweeps.py`,
+    because both sweeps open incidents through `incidents.fire`. The project job also links each open
+    finding to its service's open incidents on every run, which covers either order and a race.
+  - **Closing goes to every channel told** at opening, escalation or joining, even if the rule changed
+    since. A service muted or snoozed mid-finding still sends its closing message to PagerDuty and
+    webhooks, so no page stays open.
+  - **Delivery reads the rule's name** at send time. A notification row doesn't record its rule, so a
+    rule deleted since sends no "Rule:" line.
+  - **The rule editor's *anomaly finding* kind** is built here, not in T5.6, because every new project
+    carries *Critical problems* and the console must show it. Members see it read-only. Findings are never
+    repeated, so the editor offers no repeat.
+  - **The founder's answers:** *detection stopped* is critical (D33), a project whose detection never ran
+    is reported (D34), D29 works in both orders (D35), and a muted finding's adoption sends nothing (D36).
+  - **When detection is expected (D34):** migration 0044 adds `detection_project_runs.expected_since`.
+    The stop sweep sets it the first time it sees a project with traffic in the last day or an open finding,
+    and clears it after a quiet day. A stop counts from the later of the last completed run and
+    `expected_since`. A healthy new project gets its first job in that same sweep, so it is never reported,
+    and a project returning after a quiet day is not reported before it has had its chance. The status API
+    uses the same clock, so its *not running* and the email agree.
+  - **One page per problem (D35):** each PagerDuty notification records the `dedup_key` it was sent under
+    (0044). The key is fixed when a finding or incident first reaches that channel, and a linked finding and
+    incident share the alert of whichever was sent first. Only the last of the linked records to close sends
+    *resolve*. An earlier close sends nothing, and the delivery log records why. PagerDuty's Events API v2
+    drops an acknowledge or resolve on a resolved alert, and a later trigger would page again, so the alert
+    must stay open until the problem has ended.
 
 ## Words used here
 

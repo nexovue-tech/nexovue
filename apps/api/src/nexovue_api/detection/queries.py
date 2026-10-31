@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import Final
 
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
@@ -18,38 +18,20 @@ from nexovue_api.data.postgres.models import (
     DetectionState,
     Finding,
     ServiceDetectionSettings,
-    ServiceLastSeen,
 )
 
 # How many findings one service timeline returns, oldest first.
 MARKER_PAGE: Final = 200
 
 
-async def last_completed_run(
+async def project_run(
     session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
-) -> datetime | None:
-    statement = select(DetectionProjectRun.last_completed_at).where(
+) -> DetectionProjectRun | None:
+    statement = select(DetectionProjectRun).where(
         DetectionProjectRun.org_id == org_id, DetectionProjectRun.project_id == project_id
     )
-    completed: datetime | None = await session.scalar(statement)
-    return completed
-
-
-async def is_judged_by_scheduler(
-    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, seen_since: datetime
-) -> bool:
-    """Whether the coordinator queues this project's job each minute: it had traffic
-    since `seen_since`, or has a finding open (scheduler `detection/projects.py`)."""
-    traffic = exists().where(
-        ServiceLastSeen.org_id == org_id,
-        ServiceLastSeen.project_id == project_id,
-        ServiceLastSeen.last_seen_at >= seen_since,
-    )
-    open_finding = exists().where(
-        Finding.org_id == org_id, Finding.project_id == project_id, Finding.state == "open"
-    )
-    judged: bool = await session.scalar(select(or_(traffic, open_finding))) or False
-    return judged
+    run: DetectionProjectRun | None = await session.scalar(statement)
+    return run
 
 
 async def service_states(

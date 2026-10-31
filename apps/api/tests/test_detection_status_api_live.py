@@ -163,15 +163,17 @@ async def _detection(
     tenant: ProvisionedTenant,
     *,
     services: dict[str, dict[str, Any]],
-    last_run: datetime,
+    last_run: datetime | None,
     seen: datetime | None = None,
     project_id: uuid.UUID | None = None,
     judged: dict[str, datetime] | None = None,
+    expected_minutes_ago: float | None = 60,
 ) -> None:
     """A project the scheduler has judged: its services, its run, and its traffic.
 
     Each service's last judged minute is 4 minutes back, the normal lag, unless
-    `judged` names another.
+    `judged` names another. `expected_minutes_ago` is when the stop sweep began
+    expecting the project to be judged; None when detection does not work on it.
     """
     on_time = _ago(minutes=4).replace(second=0, microsecond=0)
     org_id, project = tenant.organization.id, project_id or tenant.project.id
@@ -193,7 +195,16 @@ async def _detection(
                 last_seen_at=seen or _ago(seconds=10),
             )
         )
-    db.add(DetectionProjectRun(org_id=org_id, project_id=project, last_completed_at=last_run))
+    db.add(
+        DetectionProjectRun(
+            org_id=org_id,
+            project_id=project,
+            last_completed_at=last_run,
+            expected_since=None
+            if expected_minutes_ago is None
+            else _ago(minutes=expected_minutes_ago),
+        )
+    )
     await db.flush()
 
 
@@ -265,6 +276,7 @@ async def test_a_quiet_project_the_scheduler_does_not_queue_is_not_called_stoppe
         services={"checkout": _slower("normal")},
         last_run=_ago(days=2),
         seen=_ago(days=2),
+        expected_minutes_ago=None,
     )
 
     body = (await _get(db, _callers(acme).person, _status_path(acme.project.id))).json()
@@ -289,6 +301,54 @@ async def test_an_open_finding_keeps_a_quiet_project_queued_so_an_old_run_is_not
 
     assert body["state"] == "not_running"
     assert body["open_findings"] == 1
+
+
+async def _sending(db: AsyncSession, tenant: ProvisionedTenant) -> None:
+    """Traffic seconds ago from a service detection has not judged yet."""
+    db.add(
+        ServiceLastSeen(
+            org_id=tenant.organization.id,
+            project_id=tenant.project.id,
+            service_name="checkout",
+            last_seen_at=_ago(seconds=10),
+        )
+    )
+    await db.flush()
+
+
+async def test_a_project_with_traffic_whose_detection_never_ran_is_not_running(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """D34: expected to be judged for 5 minutes and never judged. When it last ran
+    is unknown, so no time is given."""
+    await _detection(db, acme, services={}, last_run=None, expected_minutes_ago=5)
+    await _sending(db, acme)
+
+    body = (await _get(db, _callers(acme).person, _status_path(acme.project.id))).json()
+
+    assert body["state"] == "not_running"
+    assert body["not_running_since"] is None
+
+
+@pytest.mark.parametrize("last_run", [None, "two days ago"])
+async def test_a_project_just_starting_to_send_is_given_its_chance_before_not_running(
+    db: AsyncSession, acme: ProvisionedTenant, last_run: str | None
+) -> None:
+    """AC43: a new project, or one sending again after a quiet spell, has been
+    expected for a minute and not yet judged. That is detection on time."""
+    await _detection(
+        db,
+        acme,
+        services={},
+        last_run=None if last_run is None else _ago(days=2),
+        expected_minutes_ago=1,
+    )
+    await _sending(db, acme)
+
+    body = (await _get(db, _callers(acme).person, _status_path(acme.project.id))).json()
+
+    assert body["state"] != "not_running"
+    assert body["not_running_since"] is None
 
 
 # ------------------------------------------------------------- data delayed (BR5)

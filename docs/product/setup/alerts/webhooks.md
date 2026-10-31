@@ -48,34 +48,67 @@ timestamp more than five minutes from your clock to refuse a replayed request.
 
 ```json
 {
-  "version": 1,
-  "type": "incident.opened",
+  "version": 2,
+  "type": "finding.opened",
   "timestamp": "2026-09-19T14:03:30+00:00",
   "data": {
-    "incident": {
+    "subject": {
+      "kind": "finding",
       "id": "01a0b65b-…",
-      "subject": "Checkout API",
+      "label": "checkout",
       "severity": "critical",
-      "opened_at": "2026-09-19T14:03:00+00:00",
+      "opened_at": "2026-09-19T14:02:00+00:00",
       "resolved_at": null
     },
-    "rule": { "name": "Any check down" },
-    "summary": "[critical] Checkout API is down",
-    "details": ["Checkout API is down.", "Why: expected status code less than 400, got 503."],
-    "link": "https://app.nexovue.com/alerts/incidents/01a0b65b-…"
+    "rule": { "name": "Critical problems" },
+    "summary": "[critical] checkout is 4× slower than normal since 14:02 UTC",
+    "details": [
+      "checkout is 4× slower than normal since 14:02 UTC.",
+      "Slower: 1,200 ms at worst, against 300 ms normally (Fridays around 14:00, last 3 weeks).",
+      "Started: 2026-09-19 14:02 UTC.",
+      "Rule: Critical problems."
+    ],
+    "link": "https://app.nexovue.com/findings/01a0b65b-…"
   }
 }
 ```
 
-`type` is one of `incident.opened`, `incident.escalated` (it got worse),
+`type` is the subject's kind, a dot, and what happened. `data.subject.kind` is the
+same kind, and `data.subject.id` is the same for everything about one subject — key
+your own record on the pair.
+
+**An incident** is what an alert rule opens about a check or a service: a check down,
+an error rate or latency over its threshold, a service gone silent, a new error.
+Its events are `incident.opened`, `incident.escalated` (it got worse),
 `incident.repeated` (still open, if the rule repeats), `incident.flapping`,
 `incident.resolved` (it recovered) and `incident.closed` (it had not recovered, but
 nothing watches it any more — its rule or check was removed, or the rule stopped
-covering it; close your own record too). `data.incident.id` is the same for everything about one
-incident — key your own record on it.
+covering it; close your own record too).
+
+**A finding** is what anomaly detection opens when a service, or a whole project,
+stops behaving as it normally does. Its events are `finding.opened`,
+`finding.escalated` (it became critical), `finding.joined` (another signal or
+endpoint joined it), `finding.flapping` (findings on this service keep opening;
+nothing more is sent about it until it has stayed normal for 30 minutes) and
+`finding.resolved` (it closed; `details` says how — recovered, marked a false alarm,
+a new normal, or the service gone).
+
+The *Send test* button sends `test.opened`, with `data.subject.kind` `test`.
+
+`data.rule` is the rule that routed the message, or `null` when none did.
+
+### Treat names as untrusted text
+
+`data.subject.label`, `summary` and `details` can contain a service or endpoint
+name, and those names come from the telemetry your applications send — which
+anyone holding one of your browser keys can send too. Treat them as untrusted
+text: escape them before showing them in HTML or chat markup, and never follow a
+link or run a command found in them. nexovue flattens each name to one line of
+at most 200 characters before it is used. The other fields are written by nexovue.
 
 `version` changes only when a field changes meaning or goes away. New fields may
-appear in version 1; ignore the ones you do not read.
+appear in version 2; ignore the ones you do not read. Version 1 put the incident
+under `data.incident` and had no findings; nothing sends it any more.
 
 ## Answering
 

@@ -4,9 +4,13 @@ Two facts decide it, both written by the scheduler:
 
 - **Whether detection runs** is the project job's last completed run
   (`detection_project_runs`), never `last_judged_minute`, which trails the clock
-  by at least 3 minutes by design (design 2.1, item 2). It is judged only for a
-  project the coordinator queues each minute: one with traffic in the last 24
-  hours or a finding open. A quiet project's old run is not a stopped detector.
+  by at least 3 minutes by design (design 2.1, item 2). It is judged only while
+  the scheduler expects the project judged (`expected_since`, kept by its stop
+  sweep): one with traffic in the last 24 hours or a finding open. A quiet
+  project's old run is not a stopped detector. The 3 minutes count from the later
+  of the last run and `expected_since`, the same clock as the owners' 15-minute
+  email (D24, D34): a project never judged is *not running* once it has had its
+  chance, and one that has just started sending is not.
 - **Each signal's phase** is `detection_state.signals`, keyed by signal, whose
   `verdict` and `learning_until` the project job writes after each run.
 
@@ -40,9 +44,6 @@ from nexovue_api.findings.schemas import SignalName
 
 # Older than this, the project's job is not running (FR25, AC26).
 NOT_RUNNING_AFTER: Final = timedelta(minutes=3)
-# The coordinator's `ACTIVE_FOR` (scheduler `detection/projects.py`): a project
-# with traffic this recent, or a finding open, is queued every minute.
-JUDGED_WHILE_SEEN_WITHIN: Final = timedelta(hours=24)
 # A judged minute trails now by the 3-minute settling lag; 3 more is a stalled pipeline.
 DELAYED_AFTER: Final = timedelta(minutes=6)
 # The normal settling lag: data counts as delayed from when its newest minute settled.
@@ -61,15 +62,13 @@ _PAST_LEARNING: Final = frozenset({"judged", "too_little_traffic"})
 
 @dataclass(frozen=True, slots=True)
 class _Running:
-    """Whether the project's job runs, since when it has not, and whether its last
-    run is fresh: only a fresh run can tell delayed data from a stopped job."""
+    """Whether the project's job runs, since when it has not (None when it never
+    ran), and whether its last run is fresh: only a fresh run can tell delayed data
+    from a stopped job."""
 
+    running: bool
     stopped_since: datetime | None
     fresh: bool
-
-    @property
-    def running(self) -> bool:
-        return self.stopped_since is None
 
     def delayed(self, judged: datetime | None, now: datetime) -> bool:
         """Whether judging stands at a minute the pipeline should long have passed."""
@@ -249,12 +248,10 @@ def _snoozed(settings: ServiceDetectionSettings | None) -> datetime | None:
 async def _running(
     session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, now: datetime
 ) -> _Running:
-    completed = await queries.last_completed_run(session, org_id=org_id, project_id=project_id)
-    if completed is None:
-        return _Running(stopped_since=None, fresh=False)
-    if now - completed <= NOT_RUNNING_AFTER:
-        return _Running(stopped_since=None, fresh=True)
-    expected = await queries.is_judged_by_scheduler(
-        session, org_id=org_id, project_id=project_id, seen_since=now - JUDGED_WHILE_SEEN_WITHIN
-    )
-    return _Running(stopped_since=completed if expected else None, fresh=False)
+    run = await queries.project_run(session, org_id=org_id, project_id=project_id)
+    completed = None if run is None else run.last_completed_at
+    expected = None if run is None else run.expected_since
+    fresh = completed is not None and now - completed <= NOT_RUNNING_AFTER
+    if expected is None or fresh or now - expected <= NOT_RUNNING_AFTER:
+        return _Running(running=True, stopped_since=None, fresh=fresh)
+    return _Running(running=False, stopped_since=completed, fresh=False)

@@ -9,6 +9,11 @@ with many projects cannot hold the others back (design 2.1, M5). At most
 A minute that is not settled queues nothing: a project's freshness is its last
 completed run (C17), so a stalled pipeline shows as detection falling behind,
 never as a quiet minute.
+
+Each sweep also tells the owners of every project whose detection has not run
+for 15 minutes of being expected to, or never has (D24, D34) — first, and
+whatever the pipeline says, since a sweep that cannot settle a minute is one of
+the ways detection stops.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Final
 
+from nexovue_platform.alerts.tasks import DELIVER_TASK, DELIVERIES_QUEUE
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -26,6 +32,7 @@ from nexovue_scheduler.detection import (
     DETECTION_QUEUE,
     JUDGE_PROJECT_TASK,
     SWEEP_DETECTION_TASK,
+    notify,
     settle,
 )
 from nexovue_scheduler.detection.project_job import (
@@ -36,7 +43,7 @@ from nexovue_scheduler.detection.project_job import (
 from nexovue_scheduler.detection.projects import ActiveProject, active_projects, fair_order
 from nexovue_scheduler.jobs.queue import enqueue_all
 from nexovue_scheduler.jobs.registry import SoftTimeLimit, task
-from nexovue_scheduler.process_engine import with_engine
+from nexovue_scheduler.process_engine import enqueue, with_engine
 from nexovue_scheduler.settings import get_settings
 
 logger = get_logger(__name__)
@@ -77,8 +84,14 @@ async def queue_project_jobs(engine: AsyncEngine, settled: datetime, *, now: dat
     return len(projects)
 
 
+async def report_stopped(engine: AsyncEngine, *, now: datetime) -> int:
+    async with engine.begin() as connection:
+        return await notify.report_stopped(connection, now=now)
+
+
 @task(SWEEP_DETECTION_TASK)
 def sweep() -> None:
+    _report_stopped()
     settled = _settled()
     if settled is None:
         return
@@ -86,6 +99,20 @@ def sweep() -> None:
     logger.info(
         "detection project jobs queued", settled_minute=settled.isoformat(), projects=queued
     )
+
+
+def _report_stopped() -> None:
+    """D24. Its own failure must not stop the judging that follows."""
+    try:
+        written = with_engine(lambda engine: report_stopped(engine, now=datetime.now(UTC)))
+    except (SoftTimeLimit, KeyboardInterrupt):
+        raise
+    except Exception:
+        logger.exception("could not tell owners whose detection stopped; trying next minute")
+        return
+    if written:
+        logger.warning("owners told that detection stopped", notifications=written)
+        enqueue(JobRequest(task=DELIVER_TASK, queue=DELIVERIES_QUEUE))
 
 
 def _settled() -> datetime | None:

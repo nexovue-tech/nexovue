@@ -1,4 +1,6 @@
-"""Alert rules and incidents (F21). Reads for any member; changes are an admin's."""
+"""Alert rules and incidents (F21). Reads for anyone signed in; changes for every role
+that operates alerts, except that an *anomaly finding* rule is an admin's, which
+the service checks (F6 FR23, D11)."""
 
 from __future__ import annotations
 
@@ -39,7 +41,11 @@ async def create_rule(
     identity: MayOperateAlerts, db: DbSession, request: WriteRuleRequest
 ) -> RuleSummary:
     return await service.create_rule(
-        db, org_id=identity.org_id, actor_user_id=identity.user.id, request=request
+        db,
+        org_id=identity.org_id,
+        actor_user_id=identity.user.id,
+        actor_role=identity.user.role,
+        request=request,
     )
 
 
@@ -53,7 +59,12 @@ async def update_rule(
     identity: MayOperateAlerts, db: DbSession, rule_id: uuid.UUID, request: UpdateRuleRequest
 ) -> RuleSummary:
     return await service.update_rule(
-        db, org_id=identity.org_id, actor_user_id=identity.user.id, rule_id=rule_id, request=request
+        db,
+        org_id=identity.org_id,
+        actor_user_id=identity.user.id,
+        actor_role=identity.user.role,
+        rule_id=rule_id,
+        request=request,
     )
 
 
@@ -65,6 +76,7 @@ async def mute_rule(
         db,
         org_id=identity.org_id,
         actor_user_id=identity.user.id,
+        actor_role=identity.user.role,
         rule_id=rule_id,
         until=request.until,
     )
@@ -75,7 +87,11 @@ async def mute_rule(
 )
 async def delete_rule(identity: MayOperateAlerts, db: DbSession, rule_id: uuid.UUID) -> None:
     await service.delete_rule(
-        db, org_id=identity.org_id, actor_user_id=identity.user.id, rule_id=rule_id
+        db,
+        org_id=identity.org_id,
+        actor_user_id=identity.user.id,
+        actor_role=identity.user.role,
+        rule_id=rule_id,
     )
 
 

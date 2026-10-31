@@ -17,6 +17,8 @@ import {
   ALERTABLE_STATES,
   CONDITION_NAMES,
   DEFAULT_SEVERITY,
+  DETECTION_KINDS,
+  describeCondition,
   emptyRuleDraft,
   fieldProblems,
   formatUntil,
@@ -51,6 +53,12 @@ import { ChannelForm } from "./ChannelForm";
 const SEVERITIES: readonly { id: Severity; label: string }[] = [
   { id: "critical", label: "Critical" },
   { id: "warning", label: "Warning" },
+];
+
+// An anomaly rule's severity is a floor: the finding's own is the detector's (FR28).
+const MINIMUM_SEVERITIES: readonly { id: Severity; label: string }[] = [
+  { id: "warning", label: "Warning or critical" },
+  { id: "critical", label: "Critical only" },
 ];
 
 const RENOTIFY: readonly { id: string; label: string }[] = [
@@ -104,6 +112,7 @@ function EditRuleScreenBody() {
   useNothingLive();
   const { ruleId } = useParams({ from: "/shell/alerts/rules/$ruleId" });
   const rule = useAlertRule(ruleId);
+  const canConfigureDetection = useCan("configure_detection");
 
   return (
     <RuleEditorPage title={rule.data?.name ?? "Alert rule"}>
@@ -115,6 +124,8 @@ function EditRuleScreenBody() {
           error={rule.error}
           onRetry={() => void rule.refetch()}
         />
+      ) : DETECTION_KINDS.includes(rule.data.condition.kind) && !canConfigureDetection ? (
+        <ReadOnlyRule rule={rule.data} />
       ) : (
         <>
           <RuleControls rule={rule.data} />
@@ -142,6 +153,21 @@ function RuleEditorPage({ title, children }: { title: string; children: React.Re
       </header>
       {children}
     </div>
+  );
+}
+
+/** An anomaly rule to someone who may not change detection (FR23, D11): what it does,
+ *  and who can change it — never a form the API would refuse. */
+function ReadOnlyRule({ rule }: { rule: AlertRule }) {
+  return (
+    <section aria-label="This rule" className="flex max-w-2xl flex-col gap-2 text-ink text-sm">
+      <p>{describeCondition(rule)}.</p>
+      <p className="text-ink-dim">
+        To {rule.channels.map((channel) => channel.name).join(", ") || "nobody"}.
+        {isMuted(rule.muted_until) ? ` Muted until ${formatUntil(rule.muted_until)}.` : null}
+      </p>
+      <p className="text-ink-dim">Only an owner or an admin can change this rule.</p>
+    </section>
   );
 }
 
@@ -356,14 +382,21 @@ function RuleForm({
 
         <fieldset className="flex flex-col gap-3">
           <legend className="font-medium font-serif text-base text-ink">Noise</legend>
-          <SelectField
-            stacked
-            label="Repeat"
-            value={draft.renotify}
-            options={RENOTIFY}
-            optionLabel={(option) => option.label}
-            onChange={(renotify) => update({ renotify })}
-          />
+          {draft.kind === "anomaly_finding" ? (
+            <p className="text-ink-dim text-sm leading-relaxed">
+              A finding is sent when it opens, turns critical, gains a signal and closes — never
+              repeated.
+            </p>
+          ) : (
+            <SelectField
+              stacked
+              label="Repeat"
+              value={draft.renotify}
+              options={RENOTIFY}
+              optionLabel={(option) => option.label}
+              onChange={(renotify) => update({ renotify })}
+            />
+          )}
           <label className="flex items-center gap-2 text-ink text-sm">
             <input
               type="checkbox"
@@ -465,6 +498,10 @@ function Watch({
   const checks = useCheckChoices(projectId);
   const services = useServiceReadings(projectId);
   const threshold = draft.kind === "service_error_rate" || draft.kind === "service_latency_p95";
+  // Detection's kind is an owner's or an admin's (D11): nobody else is offered it.
+  const canConfigureDetection = useCan("configure_detection");
+  const kinds = KINDS.filter((kind) => canConfigureDetection || !DETECTION_KINDS.includes(kind.id));
+  const anomaly = draft.kind === "anomaly_finding";
 
   return (
     <>
@@ -481,7 +518,7 @@ function Watch({
             stacked
             label="When"
             value={draft.kind}
-            options={KINDS}
+            options={kinds}
             optionLabel={(option) => option.label}
             onChange={(kind) => update(withKind(draft, kind as ConditionKind))}
           />
@@ -554,12 +591,19 @@ function Watch({
           <>
             <SelectField
               stacked
-              label="Severity"
+              label={anomaly ? "Send findings that are" : "Severity"}
               value={draft.severity}
-              options={SEVERITIES}
+              options={anomaly ? MINIMUM_SEVERITIES : SEVERITIES}
               optionLabel={(option) => option.label}
               onChange={(severity) => update({ severity: severity as Severity })}
             />
+            {anomaly ? (
+              <p className="text-ink-dim text-sm leading-relaxed">
+                Detection decides how bad a finding is, from how far the service moved from its own
+                normal. Warnings always appear in the findings feed; this rule decides which are
+                also sent.
+              </p>
+            ) : null}
             {threshold ? (
               <>
                 <NumberField

@@ -6,6 +6,7 @@ project, and the one writer of `detection_readings` (ADR-023).
 `method` decides whether a window is unusual; `baselines` builds each hour's
 normal; `lifecycle` decides what each judged minute does to a finding;
 `project_job` judges one project's settled minutes and keeps its findings;
+`notify` decides who is told about a finding, and about detection stopping;
 `coordinator` hands out the project jobs each minute.
 """
 

@@ -3,6 +3,11 @@
 A rule is validated with the same models the scheduler evaluates it with
 (`nexovue_platform.alerts.model`), so a rule saved here is a rule the scheduler
 understands. Incidents are written only by the scheduler; here they are read.
+
+**An *anomaly finding* rule is an admin's** (F6 FR23, D11, security M4). The
+routes admit every working member (`MayOperateAlerts`), so each change here also
+asks `CONFIGURE_DETECTION` when the rule is, or would become, of that kind:
+otherwise a member refused a mute could silence detection through its rule.
 """
 
 from __future__ import annotations
@@ -37,17 +42,21 @@ from nexovue_api.alerts.schemas import (
     WriteRuleRequest,
 )
 from nexovue_api.audit import service as audit
+from nexovue_api.auth.permissions import Action, may
+from nexovue_api.auth.policy import refusal
 from nexovue_api.data.postgres.models import AlertRule, Incident, NotificationChannel
 from nexovue_api.errors.exceptions import (
     ConflictError,
     InvalidRequestError,
     NotFoundError,
+    PermissionDeniedError,
 )
 from nexovue_api.projects import service as projects
 
 MAX_RULES_PER_PROJECT: Final = 100
 RECENT_INCIDENT_DAYS: Final = 30
 CANNOT_SAVE: Final = "This rule cannot be saved. Each problem is named with its field."
+ANOMALY_FINDING: Final = "anomaly_finding"
 NOT_FOUND: Final = "No such rule."
 
 
@@ -66,8 +75,14 @@ async def get_rule(session: AsyncSession, *, org_id: uuid.UUID, rule_id: uuid.UU
 
 
 async def create_rule(
-    session: AsyncSession, *, org_id: uuid.UUID, actor_user_id: uuid.UUID, request: WriteRuleRequest
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    actor_role: str,
+    request: WriteRuleRequest,
 ) -> RuleSummary:
+    _require_detection_role(actor_role, request.condition.get("kind"))
     await projects.require_project(session, org_id=org_id, project_id=request.project_id)
     existing = await queries.rules_in_project(session, org_id=org_id, project_id=request.project_id)
     if len(existing) >= MAX_RULES_PER_PROJECT:
@@ -102,10 +117,16 @@ async def update_rule(
     *,
     org_id: uuid.UUID,
     actor_user_id: uuid.UUID,
+    actor_role: str,
     rule_id: uuid.UUID,
     request: UpdateRuleRequest,
 ) -> RuleSummary:
     rule = await _require(session, org_id=org_id, rule_id=rule_id)
+    _require_detection_role(
+        actor_role,
+        rule.condition_kind,
+        None if request.condition is None else request.condition.get("kind"),
+    )
     if request.condition is not None:
         condition = await _validated_condition(
             session,
@@ -145,12 +166,14 @@ async def mute_rule(
     *,
     org_id: uuid.UUID,
     actor_user_id: uuid.UUID,
+    actor_role: str,
     rule_id: uuid.UUID,
     until: datetime | None,
 ) -> RuleSummary:
     """Muted until `until`, ending by itself; None unmutes (FR14). What fires during
     a mute is recorded and never sent, even after (BR5)."""
     rule = await _require(session, org_id=org_id, rule_id=rule_id)
+    _require_detection_role(actor_role, rule.condition_kind)
     if until is not None and until <= datetime.now(UTC):
         raise InvalidRequestError(
             "A mute must end in the future.",
@@ -164,10 +187,16 @@ async def mute_rule(
 
 
 async def delete_rule(
-    session: AsyncSession, *, org_id: uuid.UUID, actor_user_id: uuid.UUID, rule_id: uuid.UUID
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    actor_role: str,
+    rule_id: uuid.UUID,
 ) -> None:
     """Gone for good, the default rule included: nothing recreates it (FR8, AC22)."""
     rule = await _require(session, org_id=org_id, rule_id=rule_id)
+    _require_detection_role(actor_role, rule.condition_kind)
     audit.record_alert_rule_deleted(session, rule=rule, actor_user_id=actor_user_id)
     await queries.close_open_incidents(
         session, org_id=org_id, rule_id=rule_id, at=datetime.now(UTC)
@@ -315,6 +344,13 @@ async def coverage_of_service(
 
 async def evaluation_status(reader: EvaluationReader) -> EvaluationStatus:
     return await reader.status()
+
+
+def _require_detection_role(role: str, *kinds: object) -> None:
+    """Refuse anyone without `CONFIGURE_DETECTION` a change that touches an *anomaly
+    finding* rule: the kind the rule has, or the kind it is asked to take."""
+    if ANOMALY_FINDING in kinds and not may(role, Action.CONFIGURE_DETECTION):
+        raise PermissionDeniedError(refusal(Action.CONFIGURE_DETECTION))
 
 
 async def _require(session: AsyncSession, *, org_id: uuid.UUID, rule_id: uuid.UUID) -> AlertRule:

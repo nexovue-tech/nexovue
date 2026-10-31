@@ -18,7 +18,18 @@ Discord, every row due at once goes as one message — which is what makes a sha
 outage one message (FR13), a quiet-hours digest one message (FR15), and a burst
 past ten a minute one summary (FR12). Warnings wait out quiet hours; criticals
 never do (BR4). PagerDuty and webhooks are read by machines that key on each
-incident, so they get one event per notification and are not shaped.
+subject, so they get one event per notification and are not shaped.
+
+**A notification has one subject** (ADR-022): an incident, a finding, or — for
+detection stopping and running again (D24) — the project itself. The claim reads
+each through one `Subject`, so everything after it treats them alike.
+
+**One problem is one PagerDuty alert, whichever fires first** (D29, D35). A
+finding and an incident linked on one service share the alert of whichever
+reached the channel first; the other's triggers are notes on it. Each row's key
+is fixed at its subject's first claim there and kept, and the alert is resolved
+only by the last of them to end: PagerDuty drops events for a resolved alert and
+opens a new one on the next trigger, so an early resolve would page again.
 
 **These statements read across organizations on purpose.** Delivery serves every
 tenant from one queue; each row carries its own `org_id`, and every write back
@@ -34,6 +45,7 @@ from datetime import datetime, timedelta
 from typing import Any, Final, Literal
 
 from nexovue_platform.alerts.channels import READ_BY_PEOPLE
+from nexovue_platform.alerts.model import ENDING_KINDS
 from nexovue_platform.alerts.quiet_hours import parse_quiet_hours, quiet_until
 from pydantic import ValidationError
 from sqlalchemy import text
@@ -51,6 +63,16 @@ LONGEST_RETRY_SECONDS: Final = 600
 LONGEST_RETRY_AFTER_SECONDS: Final = 3600
 
 MUTED_CHANNEL_REASON: Final = "the channel was muted"
+ALERT_STILL_OPEN_REASON: Final = (
+    "not sent: the PagerDuty alert stays open for a linked problem that is still open"
+)
+
+# The channel whose alerts one problem shares (D35). A webhook keys on each subject.
+PAGERDUTY: Final = "pagerduty"
+
+# A finding's notices are routed by rules of this kind; a project's are detection's own.
+ANOMALY_FINDING: Final = "anomaly_finding"
+DETECTION: Final = "detection"
 
 # FR12: at most this many messages a minute to one channel; the rest wait and go
 # together as one.
@@ -65,16 +87,19 @@ _DUE: Final = """
     OR (notifications.state = 'delivering' AND notifications.lease_until < :now)
 """
 
-# A notification waits while an earlier one of the same incident on the same
+# A notification waits while an earlier one of the same subject on the same
 # channel waits on a retry, so *resolved* never overtakes *opened*. Rows only held
 # by quiet hours or the burst cap (never attempted) do not block: a critical must
-# not wait for a held warning.
+# not wait for a held warning. A project's own notices name neither subject, so
+# the project and both nulls make their subject.
 _IN_ORDER: Final = """
     NOT EXISTS (
         SELECT 1 FROM notifications AS earlier
         WHERE earlier.org_id = notifications.org_id
           AND earlier.channel_id = notifications.channel_id
-          AND earlier.incident_id = notifications.incident_id
+          AND earlier.project_id = notifications.project_id
+          AND earlier.incident_id IS NOT DISTINCT FROM notifications.incident_id
+          AND earlier.finding_id IS NOT DISTINCT FROM notifications.finding_id
           AND earlier.created_at < notifications.created_at
           AND earlier.attempts > 0
           AND earlier.state IN ('pending', 'delivering')
@@ -157,16 +182,142 @@ _TAKE: Final = text(
     WHERE org_id = :org_id AND id = ANY(CAST(:ids AS uuid[]))
     """
 )
-_TAKEN: Final = text(
+# A subject's own PagerDuty key: the kind leads, so a finding and an incident never
+# share one by accident.
+_OWN_KEY: Final = """
+    CASE WHEN notifications.incident_id IS NOT NULL
+             THEN 'incident:' || CAST(notifications.incident_id AS text)
+         WHEN notifications.finding_id IS NOT NULL
+             THEN 'finding:' || CAST(notifications.finding_id AS text)
+         ELSE 'project:' || CAST(notifications.project_id AS text)
+    END
+"""
+
+
+def _open_for_another(key: str) -> str:
+    """Whether the alert `key` names on this row's channel still carries a subject
+    other than this row's that has not ended."""
+    return f"""
+    EXISTS (
+        SELECT 1 FROM notifications AS member
+        LEFT JOIN incidents
+            ON incidents.id = member.incident_id AND incidents.org_id = member.org_id
+        LEFT JOIN findings
+            ON findings.id = member.finding_id AND findings.org_id = member.org_id
+        WHERE member.org_id = notifications.org_id
+          AND member.channel_id = notifications.channel_id
+          AND member.dedup_key = {key}
+          AND NOT (member.incident_id IS NOT DISTINCT FROM notifications.incident_id
+                   AND member.finding_id IS NOT DISTINCT FROM notifications.finding_id)
+          AND ((member.incident_id IS NOT NULL AND incidents.resolved_at IS NULL)
+               OR findings.state = 'open')
+    )
     """
+
+
+_ENDING: Final = ", ".join(f"'{kind}'" for kind in sorted(ENDING_KINDS))
+# Fixed once per subject and channel: the key its earlier rows went under; else, for
+# news rather than an ending, the alert of a linked subject that is still open
+# there (either order, D35); else its own. Linked through a finding, two incidents
+# share the first one's alert too, because the finding's rows carry that key.
+_PIN_KEY: Final = text(
+    f"""
+    UPDATE notifications SET dedup_key = coalesce(
+        (
+            SELECT earlier.dedup_key FROM notifications AS earlier
+            WHERE earlier.org_id = notifications.org_id
+              AND earlier.channel_id = notifications.channel_id
+              AND (earlier.incident_id = notifications.incident_id
+                   OR earlier.finding_id = notifications.finding_id)
+              AND earlier.dedup_key IS NOT NULL
+            LIMIT 1
+        ),
+        (
+            SELECT host.dedup_key
+            FROM finding_incidents AS link
+            JOIN notifications AS host
+                ON host.org_id = link.org_id
+               AND host.channel_id = notifications.channel_id
+               AND ((link.finding_id = notifications.finding_id
+                     AND host.incident_id = link.incident_id)
+                    OR (link.incident_id = notifications.incident_id
+                        AND host.finding_id = link.finding_id))
+            WHERE notifications.kind NOT IN ({_ENDING})
+              AND link.org_id = notifications.org_id
+              AND (link.finding_id = notifications.finding_id
+                   OR link.incident_id = notifications.incident_id)
+              AND host.dedup_key IS NOT NULL
+              AND {_open_for_another("host.dedup_key")}
+            ORDER BY host.created_at, host.id
+            LIMIT 1
+        ),
+        {_OWN_KEY}
+    )
+    WHERE org_id = :org_id AND id = ANY(CAST(:ids AS uuid[])) AND dedup_key IS NULL
+    """
+)
+# An ending sent while the alert still carries another open subject would resolve
+# that subject's alert too; the last of them to end resolves it instead.
+_WITHHOLD_ENDING: Final = text(
+    f"""
+    UPDATE notifications
+    SET state = 'dropped', outcome_reason = :reason, lease_until = NULL
+    WHERE org_id = :org_id AND id = ANY(CAST(:ids AS uuid[]))
+      AND kind IN ({_ENDING})
+      AND {_open_for_another("notifications.dedup_key")}
+    RETURNING id
+    """
+)
+_TAKEN: Final = text(
+    f"""
     SELECT notifications.id, notifications.project_id, notifications.incident_id,
-           notifications.kind, notifications.severity, notifications.created_at,
-           notifications.attempts,
+           notifications.finding_id, notifications.kind, notifications.severity,
+           notifications.created_at, notifications.attempts,
            incidents.rule_id, incidents.rule_name, incidents.condition_kind,
            incidents.subject_key, incidents.subject_label, incidents.opened_at,
-           incidents.resolved_at, incidents.detail
+           incidents.resolved_at, incidents.detail,
+           findings.scope, findings.service_name, findings.title, findings.signals,
+           findings.started_at, findings.closed_at, findings.closed_reason,
+           projects.name AS project_name,
+           finding_rule.id AS finding_rule_id, finding_rule.name AS finding_rule_name,
+           coalesce(notifications.dedup_key, {_OWN_KEY}) AS pagerduty_key,
+           {_OWN_KEY} AS own_key,
+           adopted.shifts AS adopted_shifts
     FROM notifications
-    JOIN incidents ON incidents.id = notifications.incident_id
+    JOIN projects
+        ON projects.id = notifications.project_id AND projects.org_id = notifications.org_id
+    LEFT JOIN incidents
+        ON incidents.id = notifications.incident_id AND incidents.org_id = notifications.org_id
+    LEFT JOIN findings
+        ON findings.id = notifications.finding_id AND findings.org_id = notifications.org_id
+    -- A finding's rows name no rule: one rule of its kind that sends to this channel
+    -- names the message, while one exists.
+    LEFT JOIN LATERAL (
+        SELECT alert_rules.id, alert_rules.name
+        FROM alert_rules
+        JOIN alert_rule_channels
+            ON alert_rule_channels.rule_id = alert_rules.id
+           AND alert_rule_channels.org_id = alert_rules.org_id
+        WHERE notifications.finding_id IS NOT NULL
+          AND notifications.kind <> 'adopted'
+          AND alert_rules.org_id = notifications.org_id
+          AND alert_rules.project_id = notifications.project_id
+          AND alert_rules.condition_kind = 'anomaly_finding'
+          AND alert_rule_channels.channel_id = notifications.channel_id
+        ORDER BY alert_rules.name, alert_rules.id
+        LIMIT 1
+    ) AS finding_rule ON true
+    LEFT JOIN LATERAL (
+        SELECT jsonb_agg(jsonb_build_object('signal', shifts.signal, 'ratio', shifts.ratio)
+                         ORDER BY shifts.signal) AS shifts
+        FROM baseline_shifts AS shifts
+        WHERE notifications.kind = 'adopted'
+          AND shifts.org_id = notifications.org_id
+          AND shifts.project_id = notifications.project_id
+          AND shifts.service_name = findings.service_name
+          AND shifts.reason = 'adopted'
+          AND shifts.from_minute >= findings.started_at
+    ) AS adopted ON true
     WHERE notifications.org_id = :org_id AND notifications.id = ANY(CAST(:ids AS uuid[]))
     ORDER BY notifications.created_at
     """
@@ -233,26 +384,47 @@ class Channel:
     sealed_secret: bytes | None
 
 
+SubjectKind = Literal["incident", "finding", "project"]
+
+
+@dataclass(frozen=True, slots=True)
+class Subject:
+    """What a notification is about, whichever kind it is (ADR-022)."""
+
+    kind: SubjectKind
+    # The incident's, the finding's, or the project's own id.
+    id: uuid.UUID
+    # Identity for people and machines: the incident's subject key, the finding's
+    # service, or the project.
+    key: str
+    # Words for people: a check, a service or a project. Telemetry text for a
+    # service, so it is escaped by every channel that shows it.
+    label: str
+    opened_at: datetime
+    closed_at: datetime | None
+    rule_id: uuid.UUID | None
+    rule_name: str | None
+    condition_kind: str
+    detail: dict[str, Any]
+
+
 @dataclass(frozen=True, slots=True)
 class Notice:
-    """One notification in a batch, with the incident it is about."""
+    """One notification in a batch, with the subject it is about."""
 
     id: uuid.UUID
     project_id: uuid.UUID
-    incident_id: uuid.UUID
     kind: str
     severity: str
     created_at: datetime
     # Attempts already made, before the one in hand.
     attempts: int
-    rule_id: uuid.UUID | None
-    rule_name: str
-    condition_kind: str
-    subject_key: str
-    subject_label: str
-    opened_at: datetime
-    resolved_at: datetime | None
-    detail: dict[str, Any]
+    subject: Subject
+    # The PagerDuty alert this notice goes to: its subject's own, or, for a
+    # PagerDuty channel, a linked subject's that reached it first (D29, D35).
+    pagerduty_key: str
+    # It goes to a linked subject's alert, as a note there rather than a page.
+    noted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +515,12 @@ async def claim(
             _TAKE,
             {"org_id": row.org_id, "ids": ids, "batch_id": batch_id, "lease_until": lease_until},
         )
+        if row.kind == PAGERDUTY:
+            withheld = await _one_alert_per_problem(connection, row.org_id, ids)
+            claimed.dropped += len(withheld)
+            ids = [taken for taken in ids if taken not in withheld]
+            if not ids:
+                continue
         notices = await connection.execute(_TAKEN, {"org_id": row.org_id, "ids": ids})
         claimed.batches.append(
             Batch(
@@ -360,6 +538,19 @@ async def claim(
             )
         )
     return claimed
+
+
+async def _one_alert_per_problem(
+    connection: AsyncConnection, org_id: uuid.UUID, ids: list[uuid.UUID]
+) -> set[uuid.UUID]:
+    """Fix each taken row's PagerDuty key, and withhold an ending whose alert still
+    carries another open subject (D35). Returns the withheld rows."""
+    keys = {"org_id": org_id, "ids": ids}
+    await connection.execute(_PIN_KEY, keys)
+    withheld = await connection.execute(
+        _WITHHOLD_ENDING, keys | {"reason": ALERT_STILL_OPEN_REASON}
+    )
+    return {row.id for row in withheld}
 
 
 async def _shape(connection: AsyncConnection, row: Any, *, now: datetime) -> None:
@@ -449,17 +640,60 @@ def _notice(row: Any) -> Notice:
     return Notice(
         id=row.id,
         project_id=row.project_id,
-        incident_id=row.incident_id,
         kind=row.kind,
         severity=row.severity,
         created_at=row.created_at,
         attempts=row.attempts,
-        rule_id=row.rule_id,
-        rule_name=row.rule_name,
-        condition_kind=row.condition_kind,
-        subject_key=row.subject_key,
-        subject_label=row.subject_label,
-        opened_at=row.opened_at,
-        resolved_at=row.resolved_at,
-        detail=row.detail,
+        subject=_subject(row),
+        pagerduty_key=row.pagerduty_key,
+        noted=row.pagerduty_key != row.own_key,
+    )
+
+
+def _subject(row: Any) -> Subject:
+    if row.incident_id is not None:
+        return Subject(
+            kind="incident",
+            id=row.incident_id,
+            key=row.subject_key,
+            label=row.subject_label,
+            opened_at=row.opened_at,
+            closed_at=row.resolved_at,
+            rule_id=row.rule_id,
+            rule_name=row.rule_name,
+            condition_kind=row.condition_kind,
+            detail=row.detail,
+        )
+    if row.finding_id is not None:
+        return Subject(
+            kind="finding",
+            id=row.finding_id,
+            key=f"service:{row.service_name}" if row.service_name is not None else "project",
+            label=row.service_name if row.service_name is not None else row.project_name,
+            opened_at=row.started_at,
+            closed_at=row.closed_at,
+            rule_id=row.finding_rule_id,
+            rule_name=row.finding_rule_name,
+            condition_kind=ANOMALY_FINDING,
+            detail={
+                "scope": row.scope,
+                "title": row.title,
+                "signals": row.signals,
+                "closed_reason": row.closed_reason,
+                "project": row.project_name,
+                "adopted_shifts": row.adopted_shifts or [],
+            },
+        )
+    # Detection stopping and running again: the project is the subject (D24).
+    return Subject(
+        kind="project",
+        id=row.project_id,
+        key="project",
+        label=row.project_name,
+        opened_at=row.created_at,
+        closed_at=None,
+        rule_id=None,
+        rule_name=None,
+        condition_kind=DETECTION,
+        detail={},
     )

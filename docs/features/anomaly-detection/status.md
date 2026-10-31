@@ -86,6 +86,18 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
     contract changed.
 
   Its demo checks wait, like Step 2c's, on images built off this network.
+- **Step 4**, notifications, was built on 2026-11-01:
+  - the outbox's second subject, webhook version 2, finding messages, the flap guard, mute and snooze;
+  - the *Critical problems* default rule, and `CONFIGURE_DETECTION` checked on every alerts route;
+  - `finding_incidents`; *detection stopped* and *running again*, including a project that never ran (D34);
+  - one PagerDuty page per problem in either order (D35);
+  - the rule editor's *anomaly finding* kind, brought forward from T5.6;
+  - migrations 0042 to 0044.
+
+  Its checks:
+  - ruff passes, and mypy reports no issues in 697 files;
+  - the Python suites give 9,053 passed, with the same 85 environment-only failures as Step 3;
+  - the web gives 1,433, plus 124 in the browser SDK; Biome, typecheck and bundle sizes pass.
 - **A stop's limit:** at high sensitivity a stop needs about 2.2 expected requests a minute, not 2
   (spec, FR32, *Limit*; AC41).
 - **The dev stores run in this environment**, through a local compose override for the sandbox's open-file
@@ -101,11 +113,20 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
 
 ## Next action
 
-Step 4, notifications. Step 1, the demo run on the founder's Mac, can run at any time alongside.
+Step 5, the user's controls and the finding page. Step 1, the demo run on the founder's Mac, can run at any time alongside.
 
 ## Open decisions
 
 None.
+
+## Decisions made without asking
+
+The founder asked for the feature to be finished without stopping, with each recommended decision listed
+here for review (2026-11-01).
+
+- **An early resolve sends nothing to PagerDuty.** When one of a linked finding and incident closes while
+  the other is open, no note is posted. PagerDuty's documentation doesn't say how a later trigger changes an
+  open alert, and a wrong guess could re-page or close it.
 
 ## Blocked
 

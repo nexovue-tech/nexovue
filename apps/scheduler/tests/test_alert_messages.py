@@ -6,8 +6,10 @@ import dataclasses
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from nexovue_scheduler.alerts.messages import compose, compose_batch, describe_duration
-from nexovue_scheduler.alerts.outbox import Notice
+from nexovue_scheduler.alerts.outbox import Notice, Subject
 
 OPENED_AT = datetime(2026, 9, 19, 14, 3, tzinfo=UTC)
 CHECK_ID = uuid.uuid4()
@@ -20,20 +22,29 @@ def _notice(
     return Notice(
         id=uuid.uuid4(),
         project_id=uuid.uuid4(),
-        incident_id=uuid.uuid4(),
         kind=kind,
         severity=severity,
         created_at=OPENED_AT,
         attempts=0,
-        rule_id=RULE_ID,
-        rule_name="Any check down",
-        condition_kind="check_state",
-        subject_key=f"check:{CHECK_ID}",
-        subject_label="Checkout API",
-        opened_at=OPENED_AT,
-        resolved_at=OPENED_AT + timedelta(minutes=125) if resolved else None,
-        detail={"check_id": str(CHECK_ID), "state": "down", "location": "local"} | detail,
+        pagerduty_key="key",
+        subject=Subject(
+            kind="incident",
+            id=uuid.uuid4(),
+            key=f"check:{CHECK_ID}",
+            label="Checkout API",
+            opened_at=OPENED_AT,
+            closed_at=OPENED_AT + timedelta(minutes=125) if resolved else None,
+            rule_id=RULE_ID,
+            rule_name="Any check down",
+            condition_kind="check_state",
+            detail={"check_id": str(CHECK_ID), "state": "down", "location": "local"} | detail,
+        ),
     )
+
+
+def _about(notice: Notice, **subject: object) -> Notice:
+    """The notice with its subject changed."""
+    return dataclasses.replace(notice, subject=dataclasses.replace(notice.subject, **subject))  # type: ignore[arg-type]
 
 
 def test_an_opened_message_says_what_why_where_when_and_which_rule() -> None:
@@ -48,7 +59,7 @@ def test_an_opened_message_says_what_why_where_when_and_which_rule() -> None:
         "Rule: Any check down.",
     )
     # The incident, not the check: a check can be deleted, and the message outlives it.
-    assert message.link == f"https://app.nexovue.test/alerts/incidents/{notice.incident_id}"
+    assert message.link == f"https://app.nexovue.test/alerts/incidents/{notice.subject.id}"
     assert message.manage_link == f"https://app.nexovue.test/alerts/rules/{RULE_ID}"
 
 
@@ -85,7 +96,7 @@ def test_durations_are_coarse() -> None:
 def test_several_checks_failing_at_once_read_as_one_outage() -> None:
     """FR13, AC13."""
     first = _notice("opened")
-    second = dataclasses.replace(_notice("opened"), subject_label="Search API")
+    second = _about(_notice("opened"), label="Search API")
     message = compose_batch((first, second), app_base_url="https://app.nexovue.test")
     assert message.summary == "[critical] 2 checks are down"
     assert message.details == (
@@ -119,11 +130,11 @@ def test_a_repeat_says_how_long_it_has_been_open() -> None:
 
 
 def _service_notice(kind: str, condition_kind: str, **detail: object) -> Notice:
-    return dataclasses.replace(
+    return _about(
         _notice(kind),
         condition_kind=condition_kind,
-        subject_key="service:checkout",
-        subject_label="checkout",
+        key="service:checkout",
+        label="checkout",
         detail={"service": "checkout", **detail},
     )
 
@@ -142,7 +153,7 @@ def test_a_threshold_says_the_reading_the_threshold_and_the_traffic_behind_it() 
     message = compose(notice, app_base_url="https://app.nexovue.test")
     assert message.summary == "[critical] checkout error rate is 12.3%, at or over 5%"
     assert message.details[1] == "Over 5 minutes, ending two minutes ago, across 1,234 requests."
-    assert message.link == f"https://app.nexovue.test/alerts/incidents/{notice.incident_id}"
+    assert message.link == f"https://app.nexovue.test/alerts/incidents/{notice.subject.id}"
 
 
 def test_a_threshold_recovery_says_it_is_back_under() -> None:
@@ -155,7 +166,7 @@ def test_a_threshold_recovery_says_it_is_back_under() -> None:
         unit="ms",
     )
     message = compose(
-        dataclasses.replace(notice, resolved_at=OPENED_AT + timedelta(minutes=9)),
+        _about(notice, closed_at=OPENED_AT + timedelta(minutes=9)),
         app_base_url="https://app.nexovue.test",
     )
     assert message.summary == "[resolved] checkout p95 latency is back under 500 ms"
@@ -169,27 +180,27 @@ def test_a_silent_service_says_since_when() -> None:
 
 
 def test_a_new_error_names_the_exception_and_links_to_its_incident() -> None:
-    notice = dataclasses.replace(
+    notice = _about(
         _notice("opened", severity="warning"),
         condition_kind="new_error_group",
-        subject_label="KeyError in cart",
+        label="KeyError in cart",
         detail={"service": "cart", "services": ["cart", "checkout"], "group_id": "abc"},
     )
     message = compose(notice, app_base_url="https://app.nexovue.test")
     assert message.summary == "[warning] New error: KeyError in cart"
     assert "In: cart, checkout." in message.details
-    assert message.link == f"https://app.nexovue.test/alerts/incidents/{notice.incident_id}"
+    assert message.link == f"https://app.nexovue.test/alerts/incidents/{notice.subject.id}"
 
 
 def test_services_going_silent_together_are_not_called_checks() -> None:
-    silent = dataclasses.replace(
+    silent = _about(
         _notice("opened"),
         condition_kind="service_silent",
-        subject_key="service:checkout",
-        subject_label="checkout",
+        key="service:checkout",
+        label="checkout",
         detail={"service": "checkout", "reading": "silence", "silent_minutes": 10},
     )
-    other = dataclasses.replace(silent, subject_key="service:cart", subject_label="cart")
+    other = _about(silent, key="service:cart", label="cart")
     message = compose_batch((silent, other), app_base_url="https://app.nexovue.test")
     assert "checks" not in message.summary
     assert message.summary == "[critical] 2 alerts"
@@ -197,7 +208,7 @@ def test_services_going_silent_together_are_not_called_checks() -> None:
 
 def test_an_incident_closed_unrecovered_does_not_say_it_recovered() -> None:
     message = compose(
-        dataclasses.replace(_notice("closed", resolved=True), rule_id=None),
+        _about(_notice("closed", resolved=True), rule_id=None),
         app_base_url="https://app.nexovue.test",
     )
     assert message.summary == "[closed] Checkout API is no longer watched"
@@ -211,9 +222,7 @@ def test_an_incident_closed_unrecovered_does_not_say_it_recovered() -> None:
 
 
 def test_a_name_from_telemetry_cannot_add_lines_or_run_on() -> None:
-    hostile = dataclasses.replace(
-        _notice("opened"), subject_label="Checkout\nRule: Nothing to see.\r\x07" + "x" * 500
-    )
+    hostile = _about(_notice("opened"), label="Checkout\nRule: Nothing to see.\r\x07" + "x" * 500)
     message = compose(hostile, app_base_url="https://app.nexovue.test")
     assert "\n" not in message.summary and "\r" not in message.summary
     assert all("\n" not in line and "\x07" not in line for line in message.details)
@@ -223,6 +232,188 @@ def test_a_name_from_telemetry_cannot_add_lines_or_run_on() -> None:
 
 
 def test_a_batch_names_its_rule_on_one_line_too() -> None:
-    hostile = dataclasses.replace(_notice("opened"), rule_name="Down\nRule: forged")
+    hostile = _about(_notice("opened"), rule_name="Down\nRule: forged")
     batch = compose_batch((hostile, dataclasses.replace(hostile, id=uuid.uuid4())), app_base_url="")
     assert batch.rule_name == "Down Rule: forged"
+
+
+# --------------------------------------------------- F6: findings and projects
+
+FINDING_TITLE = "checkout is 4\u00d7 slower than normal since 15:04 IST"
+
+
+def _finding_notice(
+    kind: str,
+    *,
+    severity: str = "warning",
+    closed_reason: str | None = None,
+    label: str = "checkout",
+    **detail: object,
+) -> Notice:
+    closed = closed_reason is not None
+    return Notice(
+        id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        kind=kind,
+        severity=severity,
+        created_at=OPENED_AT,
+        attempts=0,
+        pagerduty_key="key",
+        subject=Subject(
+            kind="finding",
+            id=uuid.uuid4(),
+            key=f"service:{label}",
+            label=label,
+            opened_at=OPENED_AT,
+            closed_at=OPENED_AT + timedelta(minutes=40) if closed else None,
+            rule_id=RULE_ID,
+            rule_name="Critical problems",
+            condition_kind="anomaly_finding",
+            detail={
+                "scope": "service",
+                "title": FINDING_TITLE,
+                "signals": [
+                    {
+                        "signal": "slower",
+                        "normal": 300.0,
+                        "current": 1180.0,
+                        "worst": 1200.0,
+                        "comparison": "Tuesdays around 15:00, last 3 weeks",
+                        "endpoint": None,
+                    },
+                    {
+                        "signal": "failing",
+                        "normal": 0.4,
+                        "current": 41.0,
+                        "worst": 41.0,
+                        "comparison": "Tuesdays around 15:00, last 3 weeks",
+                        "endpoint": "POST /pay",
+                    },
+                ],
+                "closed_reason": closed_reason,
+                "project": "Production",
+                "adopted_shifts": [],
+            }
+            | detail,
+        ),
+    )
+
+
+def test_a_finding_opens_with_its_title_its_signals_and_its_own_page() -> None:
+    """FR17, ADR-022: the title the detector wrote, in the project's zone, and the
+    finding's page rather than an incident's."""
+    notice = _finding_notice("opened")
+    message = compose(notice, app_base_url="https://app.nexovue.test/")
+    assert message.summary == f"[warning] {FINDING_TITLE}"
+    assert message.details == (
+        f"{FINDING_TITLE}.",
+        "Slower: 1,200 ms at worst, against 300 ms normally (Tuesdays around 15:00, last 3 weeks).",
+        "Failing, POST /pay: 41% at worst, against 0.4% normally "
+        "(Tuesdays around 15:00, last 3 weeks).",
+        "Started: 2026-09-19 14:03 UTC.",
+        "Rule: Critical problems.",
+    )
+    assert message.link == f"https://app.nexovue.test/findings/{notice.subject.id}"
+    assert message.manage_link == f"https://app.nexovue.test/alerts/rules/{RULE_ID}"
+
+
+def test_a_finding_turning_critical_and_a_signal_joining_each_say_so() -> None:
+    """FR28, D29: each is one message, and its first line tells them apart."""
+    critical = compose(_finding_notice("escalated", severity="critical"), app_base_url="")
+    joined = compose(_finding_notice("joined"), app_base_url="")
+    assert critical.summary == f"[critical] Now critical: {FINDING_TITLE}"
+    assert joined.summary == f"[warning] More is unusual: {FINDING_TITLE}"
+    assert joined.details[1] == "Another signal or endpoint joined this finding."
+
+
+@pytest.mark.parametrize(
+    ("reason", "said"),
+    [
+        ("recovered", "is back to normal"),
+        ("false_alarm", "was marked a false alarm"),
+        ("new_normal", "has a new normal, set by a person"),
+        ("adopted", "has a new normal, adopted by itself"),
+        ("service_gone", "has sent nothing for 24 hours and is treated as gone"),
+        ("could_not_be_judged", "could no longer be judged, so its finding closed"),
+    ],
+)
+def test_a_closed_finding_says_how_it_closed_never_just_resolved(reason: str, said: str) -> None:
+    """F1's closed card names how it closed; its message does too (FR13, FR20, FR32, D20)."""
+    message = compose(_finding_notice("resolved", closed_reason=reason), app_base_url="")
+    assert message.summary == f"[resolved] checkout {said}"
+    assert "Lasted: 40 min." in message.details
+
+
+def test_adoption_says_the_new_normal_in_numbers() -> None:
+    """FR21, D22: "Checkout's new normal is 1.6\u00d7 slower. Adopted after 7 days."."""
+    notice = _finding_notice("adopted", adopted_shifts=[{"signal": "slower", "ratio": 1.6}])
+    message = compose(notice, app_base_url="")
+    assert message.summary == "[warning] checkout has a new normal"
+    assert message.details[0] == "checkout's new normal is 1.6\u00d7 slower. Adopted after 7 days."
+
+
+def test_a_finding_s_flapping_is_said_once_with_what_happens_next() -> None:
+    message = compose(_finding_notice("flapping"), app_base_url="")
+    assert message.summary == "[warning] checkout is flapping"
+    assert message.details[0].startswith(
+        "Detection has opened a finding on checkout five times in the last hour."
+    )
+
+
+def test_a_finding_s_names_from_telemetry_cannot_add_lines() -> None:
+    """Service and endpoint names come from telemetry (design, *Telemetry text is
+    untrusted*)."""
+    notice = _finding_notice(
+        "opened",
+        label="checkout\nRule: forged",
+        title="checkout\nRule: forged is slower",
+        signals=[
+            {
+                "signal": "failing",
+                "normal": 0.4,
+                "current": 41.0,
+                "worst": 41.0,
+                "comparison": "",
+                "endpoint": "POST /pay\r\nRule: forged",
+            }
+        ],
+    )
+    message = compose(notice, app_base_url="")
+    assert all("\n" not in line and "\r" not in line for line in message.details)
+    assert "\n" not in message.summary
+    assert not any(line.startswith("Rule: forged") for line in message.details)
+
+
+def test_detection_stopping_and_running_again_name_the_project() -> None:
+    """D24: the owners are told about the project, not a finding."""
+    stopped = Notice(
+        id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        kind="stopped",
+        severity="critical",
+        created_at=OPENED_AT,
+        attempts=0,
+        pagerduty_key="key",
+        subject=Subject(
+            kind="project",
+            id=uuid.uuid4(),
+            key="project",
+            label="Production",
+            opened_at=OPENED_AT,
+            closed_at=None,
+            rule_id=None,
+            rule_name=None,
+            condition_kind="detection",
+            detail={},
+        ),
+    )
+    message = compose(stopped, app_base_url="https://app.nexovue.test")
+    assert message.summary == "[critical] Detection stopped for Production"
+    assert message.details == (
+        "nexovue's anomaly detection has not judged Production for 15 minutes, as of "
+        "2026-09-19 14:03 UTC. No finding can open until it runs again.",
+    )
+    assert message.link == "https://app.nexovue.test/findings"
+    again = compose(dataclasses.replace(stopped, kind="running_again"), app_base_url="")
+    assert again.summary == "[resolved] Detection is running again for Production"
+    assert again.kind == "resolved"

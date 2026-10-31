@@ -451,11 +451,12 @@ async def test_creating_a_project_records_who_created_it(
         request=ProjectCreateRequest(name="EU"),
     )
 
-    entry, default_rule = db.entries
+    entry, *default_rules = db.entries
     assert entry.action == audit.PROJECT_CREATED
-    # F21: every project starts with the default alert rule, recorded in the same name.
-    assert default_rule.action == audit.ALERT_RULE_CREATED
-    assert default_rule.actor_user_id == acme.user.id
+    # F21, F6 FR29: every project starts with two default alert rules, recorded in the
+    # same name.
+    assert [rule.action for rule in default_rules] == [audit.ALERT_RULE_CREATED] * 2
+    assert {rule.actor_user_id for rule in default_rules} == {acme.user.id}
     assert entry.org_id == acme.organization.id
     assert entry.actor_user_id == acme.user.id
     assert entry.target == f"{audit.PROJECT_TARGET}:{created.id}"

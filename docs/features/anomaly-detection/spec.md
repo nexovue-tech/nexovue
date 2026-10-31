@@ -390,7 +390,8 @@ statistical parameters behind FR9 are the design's.
     endpoint joins it (D29), and one when it closes. Nothing is sent for other updates, except F21's single
     *flapping* message after a fifth opening within an hour.
   - A finding linked to an incident that already reached the same PagerDuty channel adds a note to that
-    PagerDuty incident instead of opening a second one (D29).
+    PagerDuty incident instead of opening a second one (D29). The same holds when the finding was sent
+    first and the incident second (D35).
   - It uses F21's channels, outbox, burst cap and quiet hours.
   - The finding's severity is the detector's, not the rule's. This amends F21's BR10 for this condition
     kind.
@@ -584,11 +585,12 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
 - **AC42**: A new project whose every service is learning must not say "all systems normal". It must say
   that it is learning, and when judging starts (FR25).
 - **AC43**: With detection stopped for 15 minutes, the owners must be emailed once, and once more when it
-  runs again. A healthy project, judged on time, must never show *detection not running* (FR25, D24).
+  runs again. This must hold for a project with traffic whose detection has never run (D34). A healthy project, judged on time, must never show *detection not running* (FR25, D24).
 - **AC44**: A finding never adopts when it is critical or a rise in failures. Adoption of any other finding
   must email the owners, even with no matching rule (FR21, D22).
 - **AC45**: A new signal joining an open finding must send one message. A finding linked to an incident already
-  sent to the same PagerDuty channel must not open a second PagerDuty incident (FR28, D29).
+  sent to the same PagerDuty channel must not open a second PagerDuty incident, whichever of the two was
+  sent first (FR28, D29, D35).
 - **AC46**: An endpoint failing at the critical share of its own requests must make its finding critical
   (D27).
 
@@ -786,6 +788,16 @@ engineer, security, QA and a startup advisor):
   - Deferred: the normal bands on service charts, per-service sensitivity, and the services-list column.
   - The cost target is 200 projects and 2,000 services on the 16 GB install (NFR2, AC29).
   - Stage 1 ships on its own, ahead of the rest of Phase 2 (`phase-2-plan.md`).
+- **D33: *Detection stopped* is critical** (founder, 2026-11-01). It reaches the owners in quiet hours,
+  because no finding can open while detection is stopped.
+- **D34: A project whose detection has never run is reported too** (founder, 2026-11-01). Once it has
+  traffic, and detection has had its chance to judge it, a project with no completed run counts as
+  stopped. A fresh install that cannot judge anything is caught on day one.
+- **D35: One problem pages once, whichever fires first** (founder, 2026-11-01). D29's PagerDuty note works
+  in both orders: a threshold incident linked to a finding already sent to the same PagerDuty channel is a
+  note on that page too.
+- **D36: A muted finding's adoption sends nothing.** BR9 governs D22: "always" means even with no matching
+  rule, never despite a mute (AC44).
 
 ## Open decisions
 

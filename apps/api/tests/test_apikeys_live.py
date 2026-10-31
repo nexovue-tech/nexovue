@@ -580,6 +580,7 @@ async def test_an_organization_cannot_revoke_another_organizations_key(db: Async
         audit.API_KEY_CREATED,
         audit.NOTIFICATION_CHANNEL_CREATED,
         audit.ALERT_RULE_CREATED,
+        audit.ALERT_RULE_CREATED,
     ]
 
 

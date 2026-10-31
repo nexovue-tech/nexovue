@@ -325,7 +325,7 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
 3. A webhook gets a version-2 `finding.opened`.
 4. A PagerDuty test key gets one incident, with a note when a threshold incident is linked.
 
-- [ ] **T4.1** — The outbox's second subject.
+- [x] **T4.1** — The outbox's second subject.
   - `alerts/outbox.py`: `Subject`, `_TAKEN`, `_IN_ORDER`, and `Notice` with its subject's kind and id.
   - `delivery.py`: the prefixed `dedup_key`.
   - `messages.py`: the finding titles, joined messages and links.
@@ -333,7 +333,7 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
     finding (D29).
   - Proved by `test_alert_outbox_live.py`, `test_alert_payloads.py`, `test_alert_messages.py` and
     `test_alert_senders_live.py`.
-- [ ] **T4.2** — `detection/notify.py` (new):
+- [x] **T4.2** — `detection/notify.py` (new):
   - each rule's rows;
   - closing messages to the channels told at opening or escalation;
   - joined signals;
@@ -342,15 +342,15 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
   - adoption mail to the owners (D22).
 
   Proved by `test_detection_notify_live.py` (AC19, AC22, AC31, AC44, AC45).
-- [ ] **T4.3** — `api/alerts/defaults.py`: *Critical problems*. Proved by `test_alert_defaults_live.py`, with
+- [x] **T4.3** — `api/alerts/defaults.py`: *Critical problems*. Proved by `test_alert_defaults_live.py`, with
   two rules.
-- [ ] **T4.4** — `CONFIGURE_DETECTION`, the alerts service's check on every route (security M4), and the five
+- [x] **T4.4** — `CONFIGURE_DETECTION`, the alerts service's check on every route (security M4), and the five
   copies of the action list (C14). Proved by `test_policy.py`, `test_authorization_coverage.py` and
   `test_alerts_live.py`: a member refused on create, on a change to or from the kind, on enable, on channels,
   on mute and on delete.
-- [ ] **T4.5** — `alerts/sweeps.py` and `project_job.py` write `finding_incidents`. Proved by
+- [x] **T4.5** — `alerts/sweeps.py` and `project_job.py` write `finding_incidents`. Proved by
   `test_detection_links_live.py` (AC20).
-- [ ] **T4.6** — `detection/notify.py`: *detection stopped* and *detection running again* to the owners
+- [x] **T4.6** — `detection/notify.py`: *detection stopped* and *detection running again* to the owners
   (D24). Proved by `test_detection_stopped_live.py` (AC43).
 
 ### Step 5 — The user's controls and the finding page
@@ -392,7 +392,8 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
 - [ ] **T5.6** — Settings and the rule editor.
   - `features/projects/ProjectSettings.tsx`: a hidden *Detection* section (C10), with sensitivity, the time
     zone and the false-alarm counts.
-  - `features/alerts/RuleEditor.tsx` and `alert-words.ts`: the *anomaly finding* condition, admin only.
+  - `features/alerts/RuleEditor.tsx` and `alert-words.ts`: the *anomaly finding* condition, admin only. *Built in Step 4,
+    because every new project carries* Critical problems.
   - Proved by `DetectionSection.test.ts` (new) and `RuleEditor.test.ts`.
 
 ### Step 6 — Safe under nexovue's own failures, and under a hostile tenant

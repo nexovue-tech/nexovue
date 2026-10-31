@@ -188,10 +188,12 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "website_payments": 1,
     "plan_grants": 1,
     "support_access_grants": 1,
-    "audit_log": 4,
+    # Signup's audit rows: one more for F6's second default rule.
+    "audit_log": 5,
     "notification_channels": 1 + ROWS_PER_TABLE,
-    "alert_rules": 1 + ROWS_PER_TABLE,
-    "alert_rule_channels": 1 + ROWS_PER_TABLE,
+    # Signup's two default rules (F21 FR8, F6 FR29), and the fixture's.
+    "alert_rules": 2 + ROWS_PER_TABLE,
+    "alert_rule_channels": 2 + ROWS_PER_TABLE,
     "alert_evaluations": ROWS_PER_TABLE,
     "incidents": ROWS_PER_TABLE,
     # One per incident and one per finding, and the project's *detection stopped* (D24).

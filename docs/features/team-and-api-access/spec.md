@@ -301,6 +301,7 @@ and a read API has nobody to serve before that (D12).
   | Alert channels, their secrets and Send test | ✓ | ✓ | ✗ | ✗ |
   | Check secrets and variables | ✓ | ✓ | ✗ | ✗ |
   | Projects, sampling and masking configuration | ✓ | ✓ | ✗ | ✗ |
+  | Anomaly detection: sensitivity, mutes, new normals, *anomaly finding* alert rules (F6 FR23) | ✓ | ✓ | ✗ | ✗ |
   | Ingest keys, site keys, deploy webhook secrets, integrations | ✓ | ✓ | ✗ | ✗ |
   | API tokens (Stage 2) | ✓ | ✓ | ✗ | ✗ |
   | Invite, change roles, remove — up to their own role (BR3) | ✓ | ✓ | ✗ | ✗ |

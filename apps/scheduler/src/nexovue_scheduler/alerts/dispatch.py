@@ -47,11 +47,19 @@ class Outgoing:
     message: AlertMessage
     # The webhook's `webhook-id`: the same on every retry of one delivery (FR4).
     message_id: str
-    # PagerDuty's `dedup_key`: the incident, so its whole life is one alert (AC20).
+    # PagerDuty's `dedup_key`: `incident:<id>` or `finding:<id>`, so a subject's whole
+    # life is one alert (AC20, ADR-022); for a subject noted on a linked one's alert,
+    # that one's key (D29, D35).
     dedup_key: str
+    # The subject's kind and id, which a webhook receiver keys its record on.
+    subject_kind: str
+    subject_id: str
+    # The subject's name for people: telemetry text when it is a service.
     subject: str
     opened_at: datetime
     resolved_at: datetime | None
+    # D29, D35: this trigger adds to an alert a linked finding or incident opened.
+    noted: bool = False
 
 
 async def send(
@@ -91,6 +99,7 @@ async def send(
             dedup_key=outgoing.dedup_key,
             subject=outgoing.subject,
             app_base_url=outbound.app_base_url,
+            noted=outgoing.noted,
         )
         endpoint = PAGERDUTY_ENDPOINTS.get(region, PAGERDUTY_ENDPOINTS["us"])
         return http.post(endpoint, body, private_allowed=private, secret=secret)
@@ -98,7 +107,8 @@ async def send(
         url = str(channel.config.get("url", ""))
         body = payloads.webhook(
             message,
-            incident_id=outgoing.dedup_key,
+            subject_kind=outgoing.subject_kind,
+            subject_id=outgoing.subject_id,
             subject=outgoing.subject,
             opened_at=outgoing.opened_at,
             resolved_at=outgoing.resolved_at,

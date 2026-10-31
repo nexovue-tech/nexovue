@@ -17,9 +17,12 @@ A run, all inside one Postgres transaction that holds the project's lock:
 5. **The project** (FR15): whether most of its services stopped sending together,
    which is one project finding rather than one per service.
 6. **The commit**: each service's state by compare-and-set, its one finding
-   opened, raised, joined or closed (`lifecycle.py`), the project's finding, and
-   the project's completed run, which is what "detection not running" is
-   measured from (C17).
+   opened, raised, joined or closed (`lifecycle.py`), the project's finding, the
+   notifications each of those writes (`notify.py`), each open finding's links to
+   the threshold and *went silent* incidents on its service (BR2, AC20), and the
+   project's completed run, which is what "detection not running" is measured
+   from (C17). A run that ends a stop the owners were told of tells them it runs
+   again (D24).
 
 The service's state also records what its normal must leave out that no other
 table holds (BR3): its snoozed minutes (D25) and, before 3 weeks, the minutes
@@ -36,12 +39,16 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
+from nexovue_platform.alerts.model import service_subject
+from nexovue_platform.alerts.tasks import DELIVER_TASK, DELIVERIES_QUEUE
 from nexovue_platform.detection import FindingSignal, finding_signal
+from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from nexovue_scheduler.detection import JUDGE_PROJECT_TASK
+from nexovue_scheduler.alerts.incidents import SERVICE_KINDS
+from nexovue_scheduler.detection import JUDGE_PROJECT_TASK, notify
 from nexovue_scheduler.detection.baselines import (
     EXCLUDED_KEY,
     FAILING,
@@ -57,6 +64,7 @@ from nexovue_scheduler.detection.baselines import (
     traffic_from_json,
 )
 from nexovue_scheduler.detection.lifecycle import (
+    Change,
     Context,
     KeyRecord,
     MinuteJudged,
@@ -190,13 +198,36 @@ _CLOSE: Final = text(
     WHERE org_id = :org_id AND id = :id
     """
 )
+# Whether the owners were told this project's detection stopped (D24), held until
+# the commit so the stop sweep cannot tell them again in between.
+_STOP_REPORTED: Final = text(
+    """
+    SELECT stopped_reported_at FROM detection_project_runs
+    WHERE org_id = :org_id AND project_id = :project_id
+    FOR UPDATE
+    """
+)
 # When the run ended, not when its transaction began: freshness (C17).
 _COMPLETED: Final = text(
     """
     INSERT INTO detection_project_runs (org_id, project_id, last_completed_at)
     VALUES (:org_id, :project_id, clock_timestamp())
     ON CONFLICT (org_id, project_id) DO UPDATE
-    SET last_completed_at = EXCLUDED.last_completed_at
+    SET last_completed_at = EXCLUDED.last_completed_at, stopped_reported_at = NULL
+    """
+)
+# BR2, AC20: an open finding is linked to every open threshold or *went silent*
+# incident on its service. Each run, so an incident that opened while this job was
+# deciding is linked by the next run if its own sweep could not see the finding.
+_LINK_INCIDENTS: Final = text(
+    """
+    INSERT INTO finding_incidents (org_id, finding_id, incident_id)
+    SELECT :org_id, :finding_id, incidents.id
+    FROM incidents
+    WHERE incidents.org_id = :org_id AND incidents.project_id = :project_id
+      AND incidents.subject_key = :subject_key AND incidents.resolved_at IS NULL
+      AND incidents.condition_kind = ANY(CAST(:kinds AS text[]))
+    ON CONFLICT DO NOTHING
     """
 )
 
@@ -222,6 +253,7 @@ class Outcome:
     minutes_judged: int = 0
     opened: int = 0
     closed: int = 0
+    notified: int = 0
     baselines_missing: bool = False
 
 
@@ -305,7 +337,7 @@ async def judge_project(
         plan = {service: minutes for service, minutes in plan.items() if minutes}
         judged_minutes = [m for minutes in plan.values() for m in minutes]
         if not judged_minutes:
-            await _record_run(connection, binding)
+            outcome.notified += await _record_run(connection, binding, now=now)
             return outcome
         normals = await _normals(connection, binding, min(judged_minutes), max(judged_minutes))
         judged = {
@@ -324,7 +356,7 @@ async def judge_project(
         }
         muted, snoozed = await _muted_and_snoozed(connection, binding, now)
         project = await _keep_project_finding(
-            connection, binding, states, judged, signal_states, zone=zone, outcome=outcome
+            connection, binding, states, judged, signal_states, zone=zone, now=now, outcome=outcome
         )
         for service, runs in judged.items():
             state = states[service]
@@ -337,13 +369,14 @@ async def judge_project(
                 project,
                 zone=zone,
                 muted=service in muted,
+                now=now,
                 outcome=outcome,
             )
             stored = _record_exclusions(stored, runs, snoozed=service in snoozed, now=now)
             await _advance(connection, binding, state, runs[-1].at, stored)
             outcome.minutes_judged += len(runs)
         outcome.services = len(judged)
-        await _record_run(connection, binding)
+        outcome.notified += await _record_run(connection, binding, now=now)
     return outcome
 
 
@@ -528,6 +561,7 @@ async def _keep_project_finding(
     signal_states: Mapping[str, Mapping[str, Mapping[str, Any]]],
     *,
     zone: ZoneInfo,
+    now: datetime,
     outcome: Outcome,
 ) -> ProjectContext:
     """Open, keep or close the project's one finding from each service's latest
@@ -573,6 +607,14 @@ async def _keep_project_finding(
             )
         ).scalar_one()
         outcome.opened += 1
+        outcome.notified += await notify.finding_opened(
+            connection,
+            finding_id,
+            org_id=key["org_id"],
+            severity="critical",
+            services=sorted(decision.involved),
+            at=now,
+        )
     elif decision.close is not None and row is not None:
         await connection.execute(
             _CLOSE,
@@ -585,6 +627,9 @@ async def _keep_project_finding(
             },
         )
         outcome.closed += 1
+        outcome.notified += await notify.finding_closed(
+            connection, row.id, org_id=key["org_id"], severity="critical", at=now
+        )
         return ProjectContext(pending=decision.pending)
     elif row is not None:
         await connection.execute(
@@ -651,6 +696,7 @@ async def _keep_finding(
     *,
     zone: ZoneInfo,
     muted: bool,
+    now: datetime,
     outcome: Outcome,
 ) -> dict[str, Any]:
     """Open, raise, join or close the service's one finding over these minutes, in
@@ -686,6 +732,14 @@ async def _keep_finding(
             finding.muted = muted
             finding_id = await _open(connection, key, service, finding, zone)
             outcome.opened += 1
+            outcome.notified += await notify.finding_opened(
+                connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
+            )
+        else:
+            assert finding_id is not None, "a finding the lifecycle kept open has a row"
+            outcome.notified += await _notify_change(
+                connection, key, finding_id, finding, change, now=now
+            )
         if change.closed is not None:
             assert finding_id is not None, "only an open finding closes"
             await connection.execute(
@@ -699,9 +753,16 @@ async def _keep_finding(
                 },
             )
             outcome.closed += 1
+            outcome.notified += await notify.finding_closed(
+                connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
+            )
             finding, finding_id = None, None
         if change.joined:
             traffic.pop("pending_since", None)
+    if finding_id is not None:
+        # Before the commit, so a note on the incident's PagerDuty alert (D29) can
+        # use the link as soon as the opening is delivered.
+        await _link_incidents(connection, key, finding_id)
     if finding is not None and finding_id is not None and finding.dirty:
         await connection.execute(
             _UPDATE,
@@ -726,6 +787,48 @@ async def _keep_finding(
             ],
         }
     return stored
+
+
+async def _notify_change(
+    connection: AsyncConnection,
+    key: Mapping[str, Any],
+    finding_id: uuid.UUID,
+    finding: OpenFinding,
+    change: Change,
+    *,
+    now: datetime,
+) -> int:
+    """What a minute did to an open finding, said once each (FR28, D29)."""
+    written = 0
+    if change.raised:
+        written += await notify.finding_escalated(
+            connection, finding_id, org_id=key["org_id"], at=now
+        )
+    if change.joined:
+        written += await notify.finding_joined(
+            connection,
+            finding_id,
+            org_id=key["org_id"],
+            severity=finding.severity,
+            keys=len(finding.keys),
+            at=now,
+        )
+    return written
+
+
+async def _link_incidents(
+    connection: AsyncConnection, key: Mapping[str, Any], finding_id: uuid.UUID
+) -> None:
+    await connection.execute(
+        _LINK_INCIDENTS,
+        {
+            "org_id": key["org_id"],
+            "project_id": key["project_id"],
+            "finding_id": finding_id,
+            "subject_key": service_subject(key["service_name"]),
+            "kinds": sorted(SERVICE_KINDS),
+        },
+    )
 
 
 async def _open(
@@ -916,8 +1019,19 @@ async def _advance(
         )
 
 
-async def _record_run(connection: AsyncConnection, binding: ProjectBinding) -> None:
-    await connection.execute(_COMPLETED, _project_key(binding))
+async def _record_run(
+    connection: AsyncConnection, binding: ProjectBinding, *, now: datetime
+) -> int:
+    """The run completed. Returns the notifications written: one *running again* to
+    the owners if they had been told it stopped (D24)."""
+    key = _project_key(binding)
+    reported = (await connection.execute(_STOP_REPORTED, key)).scalar_one_or_none()
+    await connection.execute(_COMPLETED, key)
+    if reported is None:
+        return 0
+    return await notify.running_again(
+        connection, org_id=key["org_id"], project_id=key["project_id"], at=now
+    )
 
 
 def _reading(service: str, each: Judged, width: int) -> Reading:
@@ -986,6 +1100,9 @@ def judge(*, project_id: str, settled_minute: str) -> None:
         minutes=outcome.minutes_judged,
         opened=outcome.opened,
         closed=outcome.closed,
+        notified=outcome.notified,
     )
     if outcome.baselines_missing and outcome.org_id is not None:
         enqueue(compute_request(project, uuid.UUID(outcome.org_id)))
+    if outcome.notified:
+        enqueue(JobRequest(task=DELIVER_TASK, queue=DELIVERIES_QUEUE))

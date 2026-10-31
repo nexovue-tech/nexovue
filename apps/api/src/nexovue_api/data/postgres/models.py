@@ -1422,7 +1422,8 @@ class Notification(Base):
         UuidType, ForeignKey("notification_channels.id", ondelete="CASCADE"), nullable=False
     )
     kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
-    sequence: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("0"))
+    # Counts each repeat, joined signal or detection stop: a project's stops never end.
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     severity: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
     state: Mapped[str] = mapped_column(
         String(SHORT_LABEL_LENGTH), nullable=False, server_default=text("'pending'")
@@ -1434,6 +1435,9 @@ class Notification(Base):
     outcome_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[CreatedAt]
     delivered_at: Mapped[OptionalTimestamp]
+    # The PagerDuty alert this row went to, fixed at its subject's first claim on the
+    # channel, so a finding and a linked incident share one alert (D29, D35).
+    dedup_key: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("incident_id", "channel_id", "kind", "sequence"),
@@ -1524,6 +1528,8 @@ class Finding(Base):
     )
     closed_reason: Mapped[str | None] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=True)
     muted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # Opened a fifth time within an hour: said once as flapping, then not again (C7).
+    flapping: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     # SET NULL: deleting an organization deletes its users before its projects.
     acknowledged_by: Mapped[uuid.UUID | None] = mapped_column(
         UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -1648,7 +1654,8 @@ class DetectionState(Base):
 
 
 class DetectionProjectRun(Base):
-    """When a project's detection job last completed: its freshness (design 2.1, item 2).
+    """When a project's detection job last completed, and since when it has been
+    expected to: its freshness (design 2.1, item 2; D34).
 
     Apart from `projects` because it is written every minute for every project.
     """
@@ -1661,7 +1668,11 @@ class DetectionProjectRun(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
     )
-    last_completed_at: Mapped[RequiredTimestamp]
+    # None until the project's first run completes.
+    last_completed_at: Mapped[OptionalTimestamp]
+    # When the stop sweep began expecting the project judged, in its current spell of
+    # traffic or open finding; None while detection does not work on it (D34).
+    expected_since: Mapped[OptionalTimestamp]
     # Set when the owners are told detection stopped; cleared when told it runs again (D24).
     stopped_reported_at: Mapped[OptionalTimestamp]
 

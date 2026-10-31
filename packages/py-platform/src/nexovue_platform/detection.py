@@ -34,6 +34,10 @@ Signal = Literal["traffic", "failing", "slower"]
 # after 7 days open (FR21).
 SHIFT_REASONS: Final = ("new_normal", "adopted")
 
+# A finding nobody acted on becomes its service's new normal after this long, unless
+# D22 says it never may (FR21, *Product values*).
+ADOPTION_AFTER_DAYS: Final = 7
+
 # Per project (FR18). Per-service sensitivity is deferred (D32).
 SENSITIVITIES: Final = ("low", "normal", "high")
 DEFAULT_SENSITIVITY: Final = "normal"

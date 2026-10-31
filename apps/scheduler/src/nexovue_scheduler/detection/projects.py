@@ -22,22 +22,52 @@ ACTIVE_FOR: Final = timedelta(hours=24)
 
 # Across every organization on purpose: the coordinator hands each a job. The usage
 # meter's `service_last_seen` says who sent anything, read from Postgres rather
-# than scanning every tenant's rollup. Live projects of live organizations only.
-_ACTIVE_PROJECTS: Final = text(
-    """
+# than scanning every tenant's rollup. Live projects of live organizations only;
+# `:org_id` narrows it to one organization's, or is null.
+_ACTIVE: Final = """
     SELECT live.org_id, live.project_id
     FROM project_retention AS live
-    WHERE EXISTS (
-        SELECT 1 FROM service_last_seen AS seen
-        WHERE seen.org_id = live.org_id AND seen.project_id = live.project_id
-          AND seen.last_seen_at >= :since
+    WHERE (CAST(:org_id AS uuid) IS NULL OR live.org_id = CAST(:org_id AS uuid))
+      AND (
+          EXISTS (
+              SELECT 1 FROM service_last_seen AS seen
+              WHERE seen.org_id = live.org_id AND seen.project_id = live.project_id
+                AND seen.last_seen_at >= :since
+          )
+          OR EXISTS (
+              SELECT 1 FROM findings
+              WHERE findings.org_id = live.org_id AND findings.project_id = live.project_id
+                AND findings.state = 'open'
+          )
+      )
+"""
+_ACTIVE_PROJECTS: Final = text(_ACTIVE + " ORDER BY live.org_id, live.project_id")
+# D34: the clock a stop is measured by starts when a project becomes active, so one
+# that never ran, or sends again after a quiet day, is given its chance first. Only
+# rows that change are written, so the sweep does not lock every project's run.
+_NO_LONGER_EXPECTED: Final = text(
+    f"""
+    UPDATE detection_project_runs AS runs SET expected_since = NULL
+    WHERE runs.expected_since IS NOT NULL
+      AND (CAST(:org_id AS uuid) IS NULL OR runs.org_id = CAST(:org_id AS uuid))
+      AND NOT EXISTS (
+          SELECT 1 FROM ({_ACTIVE}) AS active
+          WHERE active.org_id = runs.org_id AND active.project_id = runs.project_id
+      )
+    """
+)
+_NEWLY_EXPECTED: Final = text(
+    f"""
+    INSERT INTO detection_project_runs (org_id, project_id, expected_since)
+    SELECT active.org_id, active.project_id, :now
+    FROM ({_ACTIVE}) AS active
+    WHERE NOT EXISTS (
+        SELECT 1 FROM detection_project_runs AS runs
+        WHERE runs.org_id = active.org_id AND runs.project_id = active.project_id
+          AND runs.expected_since IS NOT NULL
     )
-    OR EXISTS (
-        SELECT 1 FROM findings
-        WHERE findings.org_id = live.org_id AND findings.project_id = live.project_id
-          AND findings.state = 'open'
-    )
-    ORDER BY live.org_id, live.project_id
+    ON CONFLICT (org_id, project_id) DO UPDATE SET expected_since = EXCLUDED.expected_since
+    WHERE detection_project_runs.expected_since IS NULL
     """
 )
 
@@ -67,8 +97,19 @@ class ProjectSettings:
 
 
 async def active_projects(connection: AsyncConnection, *, now: datetime) -> list[ActiveProject]:
-    rows = await connection.execute(_ACTIVE_PROJECTS, {"since": now - ACTIVE_FOR})
+    rows = await connection.execute(_ACTIVE_PROJECTS, {"since": now - ACTIVE_FOR, "org_id": None})
     return [ActiveProject(row.org_id, row.project_id) for row in rows]
+
+
+async def keep_expected(
+    connection: AsyncConnection, *, now: datetime, org_id: uuid.UUID | None = None
+) -> None:
+    """Record since when each project detection works on has been expected to be
+    judged, and forget it for those it no longer works on — every organization's,
+    or one's. The stop sweep's clock (D24, D34) and the API's *not running* read it."""
+    keys = {"since": now - ACTIVE_FOR, "org_id": org_id, "now": now}
+    await connection.execute(_NO_LONGER_EXPECTED, keys)
+    await connection.execute(_NEWLY_EXPECTED, keys)
 
 
 def fair_order(projects: list[ActiveProject]) -> list[ActiveProject]:
