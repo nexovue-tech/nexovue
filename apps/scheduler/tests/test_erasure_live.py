@@ -63,11 +63,24 @@ S3_BUCKET: Final = "nexovue-test-erasure"
 
 ROWS_PER_TABLE: Final = 3
 FILES_PER_PREFIX: Final = 2
-WATERMARKS: Final = ("span_ingest_offsets", "span_written_offsets", "ingest_written_offsets")
+WATERMARKS: Final = (
+    "span_ingest_offsets",
+    "span_written_offsets",
+    "ingest_written_offsets",
+    "span_derived_progress",
+)
 
-# The three rollups partition and expire on `minute`; everything else on
-# `received_at`. Both are now, so retention cannot remove a row mid-run.
-_MINUTE_KEYED_TABLES: Final = frozenset({"endpoint_stats_1m", "service_edges_1m", "web_vitals_1m"})
+# The rollups and the readings partition and expire on `minute`; everything else
+# on `received_at`. Both are now, so retention cannot remove a row mid-run.
+_MINUTE_KEYED_TABLES: Final = frozenset(
+    {
+        "endpoint_stats_1m",
+        "service_edges_1m",
+        "web_vitals_1m",
+        "service_stats_1m",
+        "detection_readings",
+    }
+)
 
 
 def _reachable(url: str, default_port: int) -> bool:

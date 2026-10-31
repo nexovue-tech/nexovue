@@ -114,6 +114,32 @@ OWED_TENANTS_TYPE: Final = "OwedTenants"
 OWED_TENANTS_MAKER: Final = ("erasure.owed", "take_owed")
 
 
+@dataclass(frozen=True, slots=True)
+class TenantlessRead:
+    """One table that holds no tenant's data, readable without the tenant binding
+    by one named module alone, and the reason it may be."""
+
+    table: str
+    module: str
+    reason: str
+
+
+# Per table and per module, never per table alone: a second module reading the
+# same table unbound is a new decision, and has to be made here by name.
+TENANTLESS_READS: Final = (
+    TenantlessRead(
+        table="span_derived_progress",
+        module="detection.settle",
+        reason=(
+            "keyed by topic and partition, with no tenant column: how far the worker "
+            "has counted each partition. Settling a minute needs every partition at "
+            "once, so no tenant predicate could apply (design, 'When a minute is "
+            "settled')"
+        ),
+    ),
+)
+
+
 def _telemetry_tables() -> frozenset[str]:
     """Every table and view the ClickHouse migrations create."""
     names = {
@@ -134,6 +160,11 @@ _READS_A_TELEMETRY_TABLE: Final = re.compile(
     r"\b(?:FROM|JOIN|ALTER\s+TABLE)\s+(" + "|".join(sorted(TELEMETRY_TABLES)) + r")\b",
     re.IGNORECASE,
 )
+
+
+def _tables_named(text: str) -> frozenset[str]:
+    """Every telemetry table a statement reads, joins or alters."""
+    return frozenset(name.lower() for name in _READS_A_TELEMETRY_TABLE.findall(text))
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,12 +396,26 @@ def test_the_scheduler_source_this_check_walks_is_the_one_that_ships() -> None:
     assert _telemetry_sql(SCHEDULER_MODULES), "no scheduler telemetry SQL found"
 
 
+def _reads_only_its_tenantless_tables(
+    sql: SqlLiteral, exemptions: tuple[TenantlessRead, ...] = TENANTLESS_READS
+) -> bool:
+    """Whether every table a statement names is exempt for the module it is in.
+
+    All of them, so a join from an exempt table to a tenant's table still needs
+    the binding.
+    """
+    allowed = {read.table for read in exemptions if read.module == sql.module}
+    named = _tables_named(sql.text)
+    return bool(named) and named <= allowed
+
+
 def test_no_scheduler_statement_reading_a_telemetry_table_omits_the_tenant_binding() -> None:
     unscoped = [
         str(sql)
         for sql in _telemetry_sql(SCHEDULER_MODULES)
         if TENANT_BINDING not in sql.text
         and not (sql.module == MANY_TENANT_MODULE and OWED_TENANTS_BINDING in sql.text)
+        and not _reads_only_its_tenantless_tables(sql)
     ]
     assert not unscoped, (
         f"these scheduler statements read a telemetry table without {TENANT_BINDING}: {unscoped}"
@@ -435,4 +480,28 @@ def test_nothing_in_the_scheduler_outside_its_chokepoint_holds_the_raw_driver() 
                 offenders.append(f"{module}:{line} references {name}")
     assert not offenders, (
         f"the raw ClickHouse client escaped the scheduler's chokepoint: {offenders}"
+    )
+
+
+def test_every_tenantless_read_names_a_real_table_and_gives_its_reason() -> None:
+    """A renamed table must break the exemption rather than leave it guarding nothing."""
+    for read in TENANTLESS_READS:
+        assert read.table in TELEMETRY_TABLES, f"{read.table} is not created by any migration"
+        assert read.reason.strip(), f"{read.table} is exempt without a recorded reason"
+
+
+def test_a_tenantless_read_is_allowed_in_its_own_module_only() -> None:
+    """The exemption is tied to the module that settles a minute (design 2.1, m6)."""
+    progress = "SELECT partition_key, counted_through FROM span_derived_progress"
+    joined = progress + " JOIN spans USING (partition_key)"
+
+    def statement(module: str, text: str) -> SqlLiteral:
+        return SqlLiteral(module=module, line=1, text=text, interpolations=())
+
+    assert _reads_only_its_tenantless_tables(statement("detection.settle", progress))
+    assert not _reads_only_its_tenantless_tables(statement("alerts.sweeps", progress)), (
+        "another module read the progress table without the tenant binding"
+    )
+    assert not _reads_only_its_tenantless_tables(statement("detection.settle", joined)), (
+        "a join from the exempt table to a tenant's table escaped the binding"
     )

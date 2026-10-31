@@ -153,7 +153,7 @@ for Postgres, and each tenancy-test exemption.
 `span_derived_progress` shows one row per partition, advancing each minute and holding still when the
 worker stops.
 
-- [ ] **T2a.1** — The per-service rollup.
+- [x] **T2a.1** — The per-service rollup.
   - `derive/services.go` (new): `ServiceStat`, with its request and error counts and 64 fixed log-spaced
     latency buckets, plus the cap of 2,000 service names per organization.
   - `endpoints.go` `observeEndpoint` feeds it. `counters.go` gains the map in `Counters`, `NewCounters`,
@@ -163,12 +163,12 @@ worker stops.
     - a revoked partition's share leaves;
     - the drain is byte-reproducible;
     - the cap.
-- [ ] **T2a.2** — The writer and the received-at thread.
+- [x] **T2a.2** — The writer and the received-at thread.
   - `derive/servicewriter.go` (new, modelled on `endpointwriter.go`) inserts with a dedup token.
   - `traceassembly/stages.go` and `pipeline.go` carry each partition's last counted `received_at` (C3).
   - Proved by `derive/servicewriter_test.go`, and by
     `traceassembly/settlement_test.go`'s `TestTheSettlementCarriesEachPartitionsLastReceivedAt` (new).
-- [ ] **T2a.3** — `ingeststate/progress.go` (new) writes `span_derived_progress` beside `ingest.Complete`, for
+- [x] **T2a.3** — `ingeststate/progress.go` (new) writes `span_derived_progress` beside `ingest.Complete`, for
   the settlement's partitions only (C1).
   - A refusal holds the whole settlement (C22). The hold lasts at most 30 minutes (design 2.1, item 1).
   - `traceassembly/refusal.go` `stepOverRefusal` returns the refusal.
@@ -178,7 +178,7 @@ worker stops.
     - a revoked partition is not written;
     - a replay never moves progress backwards.
   - Also by `progress_storeprobe_test.go`, run on your Mac with `go test -tags storeprobe`.
-- [ ] **T2a.4** — `deploy/clickhouse/migrations/000035_detection.up.sql` and `.down.sql`, with each table's
+- [x] **T2a.4** — `deploy/clickhouse/migrations/000035_detection.up.sql` and `.down.sql`, with each table's
   reasoning in the header:
   - `service_stats_1m`, with a dedup window and a TTL of the lesser of the derived retention and 35 days;
   - `detection_readings`, `ORDER BY (tenant_id, project_id, service_name, minute)` with a version column;

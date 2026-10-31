@@ -33,7 +33,7 @@ list wins. The sections are corrected in place too.
    - *Limits.* Each hold lasts at most 30 minutes. After that, the minute is judged, a `detection_events` row
      is written and the operator is alerted. A refused derived insert holds every partition in that settlement,
      because one insert covers them all. `stepOverRefusal` reports the refusal to the caller, not just a log
-     line. That hold is limited to 30 minutes in the same way.
+     line. That hold lasts at most 15 minutes, the longest a missing minute can sit inside a window.
 2. **"Detection not running" is measured against the job, not the clock** (QA B1). A project is *not running*
    when its last completed project job is more than 3 minutes old. Freshness is never measured from the
    `last_judged_minute`, which is always at least 3 minutes behind by design.
@@ -98,6 +98,26 @@ list wins. The sections are corrected in place too.
 - **`closed_reason`** also has *could no longer be judged* (D20).
 - **Burst height and length** are the maximum over 28 days, as the simulation chose, capped below critical
   (D26). They are not "a high quantile".
+
+## As built
+
+Recorded as each plan step lands. It says where the built code differs from the text above.
+
+- **Step 2a, 2026-11-01:**
+  - **Three migrations, not one:** 000035 is `service_stats_1m`, 000036 is `detection_readings` and 000037 is
+    `span_derived_progress`. The convention is one statement per file.
+  - **The latency buckets** are `AggregateFunction(sumForEach, Array(UInt32))`, filled with
+    `arrayReduce('sumForEachState', …)`. ClickHouse 26.3 refuses the simpler forms.
+  - **`detection_readings`** keeps a baseline for each signal, and its per-endpoint failures as a `Map`.
+  - **Progress does not go through `WriteGuard` (C1).** It is written only for the settlement's own partitions.
+    It never moves backwards, and a revoked partition's hold is forgotten.
+  - **What KeeperMap can't stop.** It has no compare-and-set, so a stalled worker that has lost a partition
+    can still write a stale mark. That is accepted, because the scheduler compares every partition with
+    Kafka's high watermark.
+  - **A refused derived insert holds that settlement's partitions for at most 15 minutes,** counted from the
+    refusal (`MaxProgressHold`). Any of the four settlement inserts counts.
+  - **The 2,000-service cap is applied per drain on one worker.** With several workers, or a minute reopened
+    by late spans, an organization can pass it for that minute.
 
 ## Words used here
 

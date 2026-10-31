@@ -9,7 +9,7 @@
 # `schema_migrations` row that records which migrations produced it, so running
 # `just migrate-ch` first does not help and makes the restore fail.
 #
-# The three KeeperMap watermark tables are recreated EMPTY, never with their
+# The KeeperMap watermark tables (KEEPERMAP_TABLES) are recreated EMPTY, never with their
 # rows. A watermark ahead of the broker it names silently skips every
 # record below it, and no later flush moves a watermark backwards.
 set -euo pipefail

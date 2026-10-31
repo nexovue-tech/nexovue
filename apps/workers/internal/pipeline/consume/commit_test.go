@@ -132,3 +132,21 @@ func TestNothingHeldIsNoCommitLag(t *testing.T) {
 		t.Errorf("Lag() = %s for an unstamped batch, want 0", lag)
 	}
 }
+
+// What the batches produced is read for the same prefix Reached reports, so a
+// pipeline recording more than the offsets cannot run past them.
+func TestReachedOutputCoversTheSamePrefixAsReached(t *testing.T) {
+	var queue Queue[bool]
+	queue.Hold(held(0, true, 10, 11))
+	queue.Hold(held(0, true, 12))
+	queue.Hold(held(0, false, 13))
+	queue.Hold(held(0, true, 14))
+
+	if produced := queue.ReachedOutput(isStored); len(produced) != 2 {
+		t.Errorf("ReachedOutput reported %d batches, want the 2 before the first unstored one",
+			len(produced))
+	}
+	if queue.Records() != 5 {
+		t.Errorf("Records() = %d after ReachedOutput, want every batch still held", queue.Records())
+	}
+}

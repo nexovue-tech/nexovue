@@ -74,16 +74,18 @@ func (p *Pipeline) parkSpan(ctx context.Context, row spanRow, refusal error) err
 	return nil
 }
 
-// stepOverRefusal turns a derived insert's outcome into what it costs: nil when
-// it was stored or refused, the error when it is worth retrying.
+// stepOverRefusal turns a derived insert's outcome into what it costs: whether
+// the store refused the rows, and the error when it is worth retrying.
 //
 // A derived row is a sum or an index over spans, not a customer's own record.
 // Refused, it is counted and stepped over so the settlement still completes and
 // the offsets can move — a refusal there costs a chart one point, where ending
-// the pipeline cost every signal for every tenant.
-func (p *Pipeline) stepOverRefusal(ctx context.Context, what string, rows int, err error) error {
+// the pipeline cost every signal for every tenant. The refusal is reported to
+// the caller as well, because the minutes it covered now have a hole, and the
+// settlement's progress is held so detection does not judge it (C22).
+func (p *Pipeline) stepOverRefusal(ctx context.Context, what string, rows int, err error) (bool, error) {
 	if err == nil || !consume.IsPermanent(err) {
-		return err
+		return false, err
 	}
 	p.derivedRowsRefused += uint64(max(rows, 0)) //nolint:gosec // clamped to non-negative
 	p.log.ErrorContext(ctx, "the store refused derived rows; counted and stepped over",
@@ -91,5 +93,5 @@ func (p *Pipeline) stepOverRefusal(ctx context.Context, what string, rows int, e
 		slog.Int("rows", rows),
 		slog.String("error", err.Error()),
 	)
-	return nil
+	return true, nil
 }

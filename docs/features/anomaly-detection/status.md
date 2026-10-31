@@ -36,6 +36,19 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
 - The founder decided D22 to D32. Stage 1 now ships on its own (`phase-2-plan.md`).
 - The spec, design (revision 2.1) and plan (revision 2) are updated to match.
 
+**The build**
+
+- **Step 2a**, the worker's per-service rollup, progress record and three ClickHouse migrations, was built on
+  2026-11-01. Its checks:
+  - 27 worker packages pass, and `just lint-go` reports 0 issues;
+  - the erasure and tenancy structure tests pass (23);
+  - `test_erasure_live.py` passes (6), against the dev stores;
+  - the progress store-probe and the migrations probe pass against the dev ClickHouse;
+  - `ruff` passes, and mypy reports no issues in 651 files.
+- **The dev stores run in this environment**, through a local compose override for the sandbox's open-file
+  limit. The application images cannot be built here, because the network blocks `ghcr.io` blobs. So an
+  end-to-end check on the stack needs the worker run from source, or your Mac.
+
 **The evidence**
 
 - `tools/detection-sim/` is a standalone uv project, numpy and scipy, with its own strict mypy. The root

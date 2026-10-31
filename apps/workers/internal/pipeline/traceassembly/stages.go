@@ -175,6 +175,9 @@ type absorbed struct {
 	latestEdgeMinute time.Time
 	spans            int
 	skew             skewReport
+	// receivedAt is when the receiver took this message, which the settlement
+	// that counts it records with its progress (C3).
+	receivedAt time.Time
 }
 
 // skewReport is what was seen of client clocks too far out to bucket on. It
@@ -250,7 +253,7 @@ func (s *stages) absorbMessage(now time.Time, message []byte, run handling) (abs
 	receivedAt := consume.ReceivedAt(payload.envelope, now)
 	rawDays, derivedDays := s.retention.Retention(payload.envelope.GetProjectId())
 
-	var result absorbed
+	result := absorbed{receivedAt: receivedAt}
 	for _, row := range payload.rows() {
 		row.ReceivedAt = receivedAt
 		row.RetentionDays, row.DerivedRetentionDays = rawDays, derivedDays
