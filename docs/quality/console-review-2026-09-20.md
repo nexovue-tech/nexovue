@@ -32,7 +32,7 @@ preference rather than a defect it is marked *(taste)*.
 
 ### D1. Findings says "All systems normal" while four checks are down (HIGH)
 
-**Fixed.** The headline is derived from the evidence the screen holds (`features/findings/headline.ts`), names failing checks, and says a check is down only when a probe reported it down — a check that has not run is a gap in what we can see, not a failure.
+**Fixed, then fixed further.** The headline is derived from the evidence the screen holds (`features/findings/headline.ts`), names failing checks, and says a check is down only when a probe reported it down — a check that has not run is a gap in what we can see, not a failure. It still said "All systems normal" during an error spike, so it no longer speaks for the whole system ([record](../changes/findings-false-all-clear/bug.md)).
 
 `apps/web/src/features/findings/api.ts:60` — `useFindings` returns an empty feed by construction
 (no engine exists yet), so `FindingsScreen` always takes the healthy branch. The evidence line

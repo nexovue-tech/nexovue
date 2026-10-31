@@ -63,10 +63,18 @@ const readable = (overrides: Partial<FindingsViewProps> = {}) =>
   (render(overrides).textContent ?? "").replace(/\s+/g, " ").trim();
 
 describe("AC18: healthy and failed-to-load must never look alike", () => {
-  it("says all systems normal only when the feed was actually read", () => {
+  it("reports what it checked when the feed was actually read", () => {
     const text = readable();
 
-    expect(text).toContain("All systems normal");
+    expect(text).toContain("All 3 synthetic checks are passing");
+  });
+
+  it("never claims overall health, even with errors on screen beside it", () => {
+    // Nothing assesses the system yet, so nothing on this screen may say it is fine.
+    const text = readable({ totals: { ...TOTALS, error_count: 8100, error_rate: 0.9 } });
+
+    expect(text).not.toContain("All systems normal");
+    expect(text).toContain("90");
   });
 
   it("never claims health when the feed could not be read", () => {
@@ -74,7 +82,7 @@ describe("AC18: healthy and failed-to-load must never look alike", () => {
     // system is fine when the truth is that we cannot see it.
     const text = readable({ isError: true, error: new Error("boom") });
 
-    expect(text).not.toContain("All systems normal");
+    expect(text).not.toContain("synthetic checks are passing");
     expect(text).toContain("could not be loaded");
     expect(text).toContain("not the same as nothing being wrong");
   });
@@ -87,7 +95,7 @@ describe("AC18: healthy and failed-to-load must never look alike", () => {
     const failed = readable({ isError: true, error: new Error("boom") });
 
     for (const reassurance of [
-      "All systems normal",
+      "synthetic checks are passing",
       "services reporting",
       "checks passing",
       "8,400",
@@ -95,7 +103,7 @@ describe("AC18: healthy and failed-to-load must never look alike", () => {
     ]) {
       expect(failed).not.toContain(reassurance);
     }
-    expect(readable()).toContain("All systems normal");
+    expect(readable()).toContain("synthetic checks are passing");
   });
 
   it("waits with a skeleton rather than a spinner or a blank page", () => {
@@ -103,12 +111,12 @@ describe("AC18: healthy and failed-to-load must never look alike", () => {
     const container = render({ isPending: true });
 
     expect(container.querySelector('[aria-label="Loading findings"]')).not.toBeNull();
-    expect(container.textContent).not.toContain("All systems normal");
+    expect(container.textContent).not.toContain("synthetic checks are passing");
   });
 });
 
 describe("the healthy state carries the evidence for its own claim", () => {
-  it("shows the RED summary, because 'normal' with no numbers is unconfirmable", () => {
+  it("shows the RED summary, which is the content while nothing assesses it", () => {
     const text = readable();
 
     expect(text).toContain("8,400");
@@ -122,13 +130,13 @@ describe("the healthy state carries the evidence for its own claim", () => {
     expect(text).toContain("2 of 3");
   });
 
-  it("stops saying everything is normal once a check is down (D1)", () => {
+  it("names the checks that are down (D1)", () => {
     // The evidence and the headline are read from the same numbers now, so the
     // screen cannot contradict itself the way it did on a project whose four
     // checks were all failing.
     const text = readable({ checks: { total: 4, passing: 0, down: 4 } });
 
-    expect(text).not.toContain("All systems normal");
+    expect(text).not.toContain("synthetic checks are passing");
     expect(text).toContain("4 checks are down");
     expect(text).toContain("0 of 4");
   });
@@ -138,7 +146,6 @@ describe("the healthy state carries the evidence for its own claim", () => {
     const text = readable({ totals: undefined, checks: undefined });
 
     expect(text).toContain("Nothing has reported to this project yet");
-    expect(text).not.toContain("All systems normal");
     expect(text).not.toContain("8,400");
   });
 });
@@ -150,7 +157,7 @@ describe("the feed leads when there is anything in it", () => {
     const text = readable({ findings: [FINDING] });
 
     expect(text).toContain("Checkout is 4× slower than normal since 15:04");
-    expect(text).not.toContain("All systems normal");
+    expect(text).not.toContain("synthetic checks are passing");
   });
 
   it("reads as a sentence with the entity beneath it", () => {
