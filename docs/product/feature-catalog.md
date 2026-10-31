@@ -228,7 +228,7 @@ The default screen after login. A reverse-chronological, priority-weighted feed 
 - AC1.4: New findings appear in the feed within 30 seconds of the finding being created, without manual refresh (live update path).
 - AC1.5: Feed orders by: active before resolved, then severity, then recency. Ordering is deterministic and documented.
 - AC1.6: Filters (service, severity, status) combine and persist per user across sessions.
-- AC1.7: Empty/healthy state shows: "all systems normal" statement + count of services reporting + synthetic checks passing + last-finding timestamp. It never shows a blank page or spinner-forever.
+- AC1.7: Empty/healthy state shows: "all systems normal" statement + count of services reporting + synthetic checks passing + last-finding timestamp. It never shows a blank page or spinner-forever. The statement needs the engine: until one assesses the system, the screen reports only what the checks said ([record](../changes/findings-false-all-clear/bug.md)).
 - AC1.8: Clicking a finding opens F2 Finding Detail. Acknowledge/resolve actions available on the card and reflected in F22 Case management.
 - AC1.9: A finding whose root incident continues does NOT duplicate — it updates (duration, impact) on the same card (grouping/dedup requirement on the insight engine).
 - AC1.10: Feed is fully usable on mobile-width screens (the paged-at-2am scenario).
