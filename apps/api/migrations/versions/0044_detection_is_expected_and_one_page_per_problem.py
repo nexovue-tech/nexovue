@@ -22,10 +22,8 @@ F6 (`docs/features/anomaly-detection/`), plan Step 4, after D34 and D35.
 
 **Affected store and schema.** Postgres: `detection_project_runs.expected_since`
 (new, nullable), `detection_project_runs.last_completed_at` (now nullable),
-`notifications.dedup_key` (new, nullable). It has no index of its own: a claim reads
-it within one channel, through `ix_notifications_channel_id_state`. A concurrent
-index here would deadlock two setups started together, which wait for the
-migration lock inside a transaction (`migrations/env.py`).
+`notifications.dedup_key` (new, nullable). Its index is built concurrently in a
+migration of its own, 0045.
 
 **Compatibility and backfill.** None needed. Existing runs get `expected_since`
 from the first stop sweep after the upgrade, which starts their clock then. Rows

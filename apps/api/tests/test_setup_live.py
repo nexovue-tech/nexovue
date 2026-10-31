@@ -15,6 +15,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +33,9 @@ POSTGRES_DSN: Final = os.environ.get(
 S3_ENDPOINT: Final = os.environ.get("NEXOVUE_TEST_S3_ENDPOINT", "http://localhost:18333")
 S3_KEY: Final = os.environ.get("NEXOVUE_TEST_S3_KEY", "nexovue_dev_access")
 S3_SECRET: Final = os.environ.get("NEXOVUE_TEST_S3_SECRET", "nexovue_dev_secret")
+# migrations/env.py's MIGRATION_LOCK; env.py runs Alembic when imported, so it is repeated here.
+MIGRATION_LOCK: Final = 0x6E65786F76756502
+SETUP_WAIT_SAMPLED_SECONDS: Final = 4.0
 
 
 def _reachable(url: str) -> bool:
@@ -88,7 +92,7 @@ def _s3() -> Any:
     )
 
 
-def _setup(dsn: str, bucket: str | None = None) -> subprocess.CompletedProcess[str]:
+def _environment(dsn: str, bucket: str | None = None) -> dict[str, str]:
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -101,9 +105,13 @@ def _setup(dsn: str, bucket: str | None = None) -> subprocess.CompletedProcess[s
             "S3_ACCESS_KEY_ID": S3_KEY,
             "S3_SECRET_ACCESS_KEY": S3_SECRET,
         }
+    return environment
+
+
+def _setup(dsn: str, bucket: str | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "nexovue_api.setup"],
-        env=environment,
+        env=_environment(dsn, bucket),
         capture_output=True,
         text=True,
         check=False,
@@ -143,12 +151,71 @@ def test_an_empty_database_reaches_the_newest_migration_and_a_rerun_changes_noth
 
 
 def test_two_setups_started_together_both_succeed(scratch_dsn: str) -> None:
-    """Without a lock, the second creates tables the first is creating, and fails."""
+    """Without a lock, the second creates tables the first is creating, and fails. With 0045's
+    concurrent index in the run, a second that waits inside a statement deadlocks the first."""
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: _setup(scratch_dsn), range(2)))
 
     for result in results:
         assert result.returncode == 0, result.stderr
+    assert asyncio.run(_revision(scratch_dsn)) == _head()
+
+
+async def _waiting_setup_samples(dsn: str, holder_pid: int) -> list[asyncpg.Record]:
+    """pg_stat_activity of the setup's session, sampled while it waits for the lock."""
+    observer = await asyncpg.connect(dsn)
+    try:
+        samples: list[asyncpg.Record] = []
+        deadline = time.monotonic() + SETUP_WAIT_SAMPLED_SECONDS
+        while time.monotonic() < deadline:
+            samples += await observer.fetch(
+                "SELECT state, wait_event_type, wait_event FROM pg_stat_activity "
+                "WHERE datname = current_database() AND pid NOT IN ($1, pg_backend_pid())",
+                holder_pid,
+            )
+            await asyncio.sleep(0.05)
+        return samples
+    finally:
+        await observer.close()
+
+
+async def _hold_the_migration_lock(dsn: str) -> asyncpg.Connection:
+    holder: asyncpg.Connection = await asyncpg.connect(dsn)
+    await holder.execute(f"SELECT pg_advisory_lock({MIGRATION_LOCK})")
+    return holder
+
+
+def test_a_setup_waiting_for_the_migration_lock_holds_no_transaction_or_statement(
+    scratch_dsn: str,
+) -> None:
+    """CREATE INDEX CONCURRENTLY waits for every session holding a snapshot, so a waiter blocked
+    in a statement, or idle in a transaction, would deadlock the setup it waits for."""
+    loop = asyncio.new_event_loop()
+    holder = loop.run_until_complete(_hold_the_migration_lock(scratch_dsn))
+    setup = subprocess.Popen(
+        [sys.executable, "-m", "nexovue_api.setup"],
+        env=_environment(scratch_dsn),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        samples = loop.run_until_complete(
+            _waiting_setup_samples(scratch_dsn, holder.get_server_pid())
+        )
+    finally:
+        loop.run_until_complete(holder.close())
+        loop.close()
+    _, stderr = setup.communicate(timeout=120)
+
+    assert samples, "the setup never connected while the lock was held"
+    blocked = [
+        dict(sample)
+        for sample in samples
+        if sample["wait_event_type"] == "Lock" or str(sample["state"]).startswith("idle in")
+    ]
+    assert blocked == []
+    assert setup.returncode == 0, stderr
     assert asyncio.run(_revision(scratch_dsn)) == _head()
 
 

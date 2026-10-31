@@ -127,6 +127,13 @@ here for review (2026-11-01).
 - **An early resolve sends nothing to PagerDuty.** When one of a linked finding and incident closes while
   the other is open, no note is posted. PagerDuty's documentation doesn't say how a later trigger changes an
   open alert, and a wrong guess could re-page or close it.
+- **The migration lock is fixed, so concurrent indexes work.** `database.md` requires `CREATE INDEX
+  CONCURRENTLY` on a table with rows, but the migration runner's lock deadlocks two setups started together on
+  such an index. No migration had needed one before. The runner is fixed at the root, and 0045 indexes the
+  PagerDuty alert key. The rejected alternatives were no index, which would scan a channel's whole history,
+  and a plain index, which would break the standard.
+- **Step 7's *detection stalled* alert is the heartbeat** for a scheduler whose minute sweep never runs. The
+  owners' email can't report that case, because the email is sent by the sweep itself.
 
 ## Blocked
 

@@ -392,8 +392,8 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
 - [ ] **T5.6** — Settings and the rule editor.
   - `features/projects/ProjectSettings.tsx`: a hidden *Detection* section (C10), with sensitivity, the time
     zone and the false-alarm counts.
-  - `features/alerts/RuleEditor.tsx` and `alert-words.ts`: the *anomaly finding* condition, admin only. *Built in Step 4,
-    because every new project carries* Critical problems.
+  - `features/alerts/RuleEditor.tsx` and `alert-words.ts`: the *anomaly finding* condition, admin only.
+    *Built in Step 4, because every new project carries* Critical problems.
   - Proved by `DetectionSection.test.ts` (new) and `RuleEditor.test.ts`.
 
 ### Step 6 — Safe under nexovue's own failures, and under a hostile tenant

@@ -1465,6 +1465,12 @@ class Notification(Base):
             postgresql_where=text("state IN ('pending', 'delivering')"),
         ),
         Index("ix_notifications_channel_id_state", "channel_id", "state"),
+        Index(
+            "ix_notifications_channel_id_dedup_key",
+            "channel_id",
+            "dedup_key",
+            postgresql_where=text("dedup_key IS NOT NULL"),
+        ),
         Index("ix_notifications_batch_id", "batch_id"),
     )
 
