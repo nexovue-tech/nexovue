@@ -1,7 +1,7 @@
 # Plan: Anomaly detection (F6)
 
-> **Status:** Awaiting approval, revision 2 (2026-11-01). It answers six persona reviews, and takes in D22
-> to D32.
+> **Status:** Approved by the founder, 2026-11-01, as revision 2, with corrections C1 to C26 · In progress.
+> The founder asked for the whole plan to be built without stopping at each step.
 >
 > **One document: the order of the work and its tasks.** Steps say what ships and in what order. Tasks under
 > each step name the file that changes and the test that proves it, read from the code. **The founder approves
@@ -467,7 +467,7 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
 
 - [x] Specification approval: 2026-10-30, amended through D32
 - [x] Design approval: 2026-10-31, revision 2, with revision 2.1's changes
-- [ ] **Plan approval — before the first edited file**
+- [x] **Plan approval:** 2026-11-01, revision 2
 - [ ] Implementation
 - [ ] Tests
 - [ ] Review

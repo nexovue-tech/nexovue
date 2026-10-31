@@ -2,12 +2,11 @@
 
 ## Lifecycle status
 
-Approved: specification (amended through D32) and design (revision 2, with revision 2.1's changes). `plan.md`
-revision 2 awaiting the founder's approval.
+In development. Specification (through D32), design (revision 2.1) and plan (revision 2) approved.
 
 ## Current task
 
-The plan gate.
+Building the plan, step by step, without stopping (the founder, 2026-11-01).
 
 ## Completed
 
