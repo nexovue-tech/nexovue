@@ -175,3 +175,47 @@ export function useCheckCounts(
     }),
   });
 }
+
+/** What detection is doing for a project, decided by the API, never inferred here. */
+export type DetectionState =
+  | "learning"
+  | "judging"
+  | "data_delayed"
+  | "not_running"
+  | "no_services";
+
+export interface DetectionStatus {
+  state: DetectionState;
+  services_total: number;
+  services_learning: number;
+  services_judged: number;
+  services_delayed: number;
+  services_muted: number;
+  /** A day on the project's calendar (`2026-11-03`), or null when nothing is learning. */
+  earliest_judging_date: string | null;
+  not_running_since: string | null;
+  delayed_since: string | null;
+  open_findings: number;
+}
+
+/**
+ * Whether detection is judging this project, for the line above the checks
+ * (`headline.ts`).
+ *
+ * Not gated behind the summary like the checks read: `/projects` is outside the
+ * telemetry tier, so it takes none of that tier's in-flight slots and can go at once.
+ * A failed read stays the query's error, and the screen shows its error state for it:
+ * a missing status must never leave a healthy line standing.
+ */
+export function useDetectionStatus(projectId: string | undefined, refresh: TimeWindow) {
+  return useQuery({
+    ...liveOptions(refresh),
+    queryKey: ["findings", "detection", projectId ?? ""] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<DetectionStatus>(
+        `projects/${encodeURIComponent(projectId ?? "")}/detection/status`,
+        { signal },
+      ),
+  });
+}

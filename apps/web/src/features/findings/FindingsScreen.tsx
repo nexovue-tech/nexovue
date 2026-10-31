@@ -10,9 +10,9 @@ import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
 import { useLiveWindow, useSelection } from "@/shared/selection";
 
-import type { CheckCounts, ClosedReason, Finding, ProjectTotals } from "./api";
-import { useCheckCounts, useFindings, useProjectSummary } from "./api";
-import { headlineFor } from "./headline";
+import type { CheckCounts, ClosedReason, DetectionStatus, Finding, ProjectTotals } from "./api";
+import { useCheckCounts, useDetectionStatus, useFindings, useProjectSummary } from "./api";
+import { detectionHeadlineFor, headlineFor } from "./headline";
 import { orderFindings } from "./ordering";
 
 /**
@@ -26,6 +26,10 @@ import { orderFindings } from "./ordering";
  * and "we could not read the feed" must never look alike, because conflating them tells a
  * customer their system is healthy when the truth is that we cannot see it. The two
  * states share no copy, no icon and no layout, and a test asserts they differ.
+ *
+ * Detection's own line leads the feed (`headline.ts`), and a failed read of it is the
+ * screen's error state like any other: a status we could not read must not leave the
+ * checks' line standing alone as if nothing had been asked.
  *
  * Muted findings stay out of the feed. A quiet link under it opens them instead, because
  * the feed has no filters and inventing one for a single toggle would be a second
@@ -41,6 +45,7 @@ export function FindingsScreen() {
   // The checks read waits for the summary: four telemetry reads may be in flight and
   // the fifth is refused rather than queued.
   const checks = useCheckCounts(projectId, timeWindow, summary.data !== undefined);
+  const detection = useDetectionStatus(projectId, timeWindow);
 
   return (
     <FindingsView
@@ -48,15 +53,17 @@ export function FindingsScreen() {
       mutedCount={feed.data?.muted_count ?? 0}
       showingMuted={showingMuted}
       onToggleMuted={() => setShowingMuted((showing) => !showing)}
-      isPending={feed.isPending || summary.isPending}
-      isError={feed.isError || summary.isError}
-      error={feed.error ?? summary.error}
+      isPending={feed.isPending || summary.isPending || detection.isPending}
+      isError={feed.isError || summary.isError || detection.isError}
+      error={feed.error ?? summary.error ?? detection.error}
       onRetry={() => {
         void feed.refetch();
         void summary.refetch();
+        void detection.refetch();
       }}
       totals={summary.data}
       checks={checks.data}
+      detection={detection.data}
     />
   );
 }
@@ -74,6 +81,9 @@ export interface FindingsViewProps {
   onRetry: () => void;
   totals?: ProjectTotals;
   checks?: CheckCounts;
+  detection?: DetectionStatus;
+  /** The IANA zone times are read on: the browser's until the project names its own. */
+  zone?: string;
 }
 
 export function FindingsView({
@@ -87,8 +97,11 @@ export function FindingsView({
   onRetry,
   totals,
   checks,
+  detection,
+  zone,
 }: FindingsViewProps) {
   const ordered = orderFindings(findings);
+  const detectionLine = detectionHeadlineFor(detection, { zone });
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
@@ -123,6 +136,20 @@ export function FindingsView({
         </div>
       ) : (
         <>
+          {/* Above everything in the feed, findings included: "detection is not
+              running" matters most when the list looks quiet, and still matters when
+              it does not. The muted list says nothing about the system, so not there. */}
+          {detectionLine && !showingMuted ? (
+            <section className="shrink-0 border-line border-t px-4 py-4">
+              <h2
+                className={`font-medium font-serif text-lg tracking-tight ${
+                  detectionLine.wrong ? "text-critical-text" : "text-ink"
+                }`}
+              >
+                {detectionLine.title}
+              </h2>
+            </section>
+          ) : null}
           {ordered.length > 0 ? (
             <ul className="shrink-0 border-line border-t">
               {ordered.map((found) => (

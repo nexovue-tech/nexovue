@@ -254,8 +254,9 @@ scientist** who wants to choose algorithms or see model parameters. Sensitivity 
   - *Slower* and *failing more* are judged only when enough requests actually arrived (*Product values*).
     Below that, the signal reads *too little traffic*, and an open finding is neither closed nor extended.
 - **FR12**: **The wait before opening is counted in minutes of evidence.** One unusual minute, however
-  extreme, never opens a finding by itself. A finding opens only when the sensitivity's sustain time of
-  minutes has been unusual.
+  extreme, never opens a finding by itself. A finding opens only when at least 80% of the sensitivity's
+  sustain window has been unusual: 4 of 5 minutes at normal, 8 of 10 at low, and 3 of 3 at high. One
+  ordinary minute inside a real slowdown therefore does not restart the wait (founder, 2026-11-01).
 - **FR13**: A finding **closes** once all of its signals have been normal for the recovery time. A
   deviation that returns before then continues the same finding. A finding none of whose signals can be
   judged for 6 hours in a row closes as **could no longer be judged**, with one message. Its minutes stay
@@ -364,6 +365,10 @@ statistical parameters behind FR9 are the design's.
   It is never adopted as a new normal. When it sends again, it is judged against its old normal. A renamed
   service is therefore one finding closed as gone, while the new name is *learning* (D13). A stop is judged
   from day 3, at any expected traffic, so a small service's outage at night is caught (D30).
+  - *Limit:* an empty window is told apart from chance only when its normal expects about 6.5 requests in
+    the window, or more when the service's traffic varies. That is about 0.7 a minute at low, 1.3 at
+    normal and 2.2 at high, whose window is shortest. Below it, no test can tell a stop from a quiet
+    spell.
 
 ### States, measurement and notification
 
@@ -460,8 +465,9 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
 
 **Catching what it should**
 
-- **AC8**: A service whose p95 rises past the normal-sensitivity *slower* minimum for *sustain* must open
-  exactly one finding. For one minute less than *sustain*, it must open none.
+- **AC8**: A service whose p95 rises past the normal-sensitivity *slower* minimum for 80% of the sustain
+  window (4 of 5 minutes) must open exactly one finding. For one minute less (3 of 5), it must open none.
+  The same holds at low (8 of 10) and high (3 of 3) (FR12).
 - **AC9**: A service whose traffic falls from its normal to 5% of normal must open a critical *losing
   traffic* finding within *time to a finding* (FR11, NFR1).
 - **AC10**: A service with 3 weeks of history at its normal Monday 09:00 traffic must open nothing. The
@@ -572,7 +578,8 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
 - **AC40**: A closed finding whose readings have expired must still show its stored values, with a note
   that the chart is no longer available (FR31).
 - **AC41**: A service whose traffic stops entirely must open a critical finding within *time to a finding*.
-  This must hold on a service expecting only 2 requests a minute, and from day 3. After 24 hours of silence,
+  This must hold on a service expecting only 2 requests a minute at low and normal sensitivity, and
+  from day 3; at high it needs about 2.2 a minute (FR32, *Limit*). After 24 hours of silence,
   the finding must close as *service gone* with one message, and must never be adopted (FR32, D30).
 - **AC42**: A new project whose every service is learning must not say "all systems normal". It must say
   that it is learning, and when judging starts (FR25).

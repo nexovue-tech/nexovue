@@ -37,7 +37,7 @@ from nexovue_platform.tenant_statements import (
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from nexovue_scheduler.detection.method import BUCKET_COUNT, Minute
+from nexovue_scheduler.detection.method import BUCKET_COUNT, EndpointCounts, Minute
 from nexovue_scheduler.settings import get_settings
 
 logger = get_logger(__name__)
@@ -153,6 +153,80 @@ WHERE tenant_id = {{tenant_id:String}}
   AND minute < {{to_minute:DateTime}}
 GROUP BY service_name, minute
 """
+# Each endpoint's counted minutes in [from, to), from the same inbound spans as the
+# service's (FR2). An endpoint is named by its span: a SERVER and a CONSUMER span of
+# one name are counted together.
+ENDPOINT_WINDOW_SQL: Final = """
+SELECT service_name, span_name, toUnixTimestamp(minute) AS minute_epoch,
+       sum(request_count) AS requests, sum(error_count) AS errors
+FROM endpoint_stats_1m
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND minute >= {from_minute:DateTime}
+  AND minute < {to_minute:DateTime}
+GROUP BY service_name, span_name, minute
+"""
+ENDPOINT_MINUTES_SQL: Final = """
+SELECT service_name, span_name, toUnixTimestamp(minute) AS minute_epoch,
+       sum(request_count) AS requests, sum(error_count) AS errors
+FROM endpoint_stats_1m
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND service_name IN {services:Array(String)}
+  AND minute >= {from_minute:DateTime}
+  AND minute < {to_minute:DateTime}
+GROUP BY service_name, span_name, minute
+"""
+# Requests and failures only, over the 28 days a burst profile reads (D17).
+SERVICE_COUNTS_SQL: Final = """
+SELECT service_name, toUnixTimestamp(minute) AS minute_epoch,
+       sum(request_count) AS requests, sum(error_count) AS errors
+FROM service_stats_1m
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND service_name IN {services:Array(String)}
+  AND minute >= {from_minute:DateTime}
+  AND minute < {to_minute:DateTime}
+GROUP BY service_name, minute
+"""
+# The failing normal each minute was judged by, from its newest reading: with the
+# minute's counts it says again whether the window passed the base test (D17).
+FAILING_NORMALS_SQL: Final = """
+SELECT service_name, minute_epoch, latest.1 AS rate, latest.2 AS wander
+FROM (
+    SELECT
+        service_name,
+        toUnixTimestamp(minute) AS minute_epoch,
+        argMax(tuple(failing_median, failing_spread, window_minutes), version) AS latest
+    FROM detection_readings
+    WHERE tenant_id = {tenant_id:String}
+      AND project_id = {project_id:String}
+      AND service_name IN {services:Array(String)}
+      AND minute >= {from_minute:DateTime}
+      AND minute < {to_minute:DateTime}
+    GROUP BY service_name, minute
+)
+WHERE latest.3 = {window_minutes:UInt8} AND latest.1 IS NOT NULL AND latest.2 IS NOT NULL
+"""
+# Each judged minute's per-endpoint window counts, from its newest reading: the
+# heights an endpoint's own burst profile is taken from (D18 per endpoint).
+ENDPOINT_WINDOWS_SQL: Final = """
+SELECT service_name, minute_epoch, latest.1 AS endpoints
+FROM (
+    SELECT
+        service_name,
+        toUnixTimestamp(minute) AS minute_epoch,
+        argMax(tuple(endpoint_failures, window_minutes), version) AS latest
+    FROM detection_readings
+    WHERE tenant_id = {tenant_id:String}
+      AND project_id = {project_id:String}
+      AND service_name IN {services:Array(String)}
+      AND minute >= {from_minute:DateTime}
+      AND minute < {to_minute:DateTime}
+    GROUP BY service_name, minute
+)
+WHERE latest.2 = {window_minutes:UInt8}
+"""
 # When each service was first counted since `since`: where its history starts.
 FIRST_SEEN_SQL: Final = """
 SELECT service_name, toUnixTimestamp(min(minute)) AS first_epoch
@@ -247,6 +321,85 @@ class ProjectDetection:
         )
         return _by_service(rows)
 
+    def endpoint_minutes(
+        self, services: Sequence[str] | None, *, start: datetime, end: datetime
+    ) -> dict[str, dict[datetime, dict[str, EndpointCounts]]]:
+        """Each endpoint's counted minutes in [start, end), by service and minute:
+        every service's when `services` is None, else only the named ones'."""
+        window = {"from_minute": start, "to_minute": end}
+        if services is None:
+            rows = self._query(ENDPOINT_WINDOW_SQL, window)
+        elif not services:
+            return {}
+        else:
+            rows = self._query(ENDPOINT_MINUTES_SQL, {**window, "services": list(services)})
+        found: dict[str, dict[datetime, dict[str, EndpointCounts]]] = {}
+        for service, endpoint, epoch, requests, errors in rows:
+            minute = datetime.fromtimestamp(int(epoch), UTC)
+            minutes = found.setdefault(str(service), {}).setdefault(minute, {})
+            minutes[str(endpoint)] = (int(requests), int(errors))
+        return found
+
+    def service_counts(
+        self, services: Sequence[str], *, start: datetime, end: datetime
+    ) -> dict[str, dict[datetime, EndpointCounts]]:
+        """The named services' requests and failures for each counted minute."""
+        if not services:
+            return {}
+        rows = self._query(
+            SERVICE_COUNTS_SQL,
+            {"services": list(services), "from_minute": start, "to_minute": end},
+        )
+        found: dict[str, dict[datetime, EndpointCounts]] = {}
+        for service, epoch, requests, errors in rows:
+            minute = datetime.fromtimestamp(int(epoch), UTC)
+            found.setdefault(str(service), {})[minute] = (int(requests), int(errors))
+        return found
+
+    def failing_normals(
+        self, services: Sequence[str], *, start: datetime, end: datetime, window_minutes: int
+    ) -> dict[str, dict[datetime, tuple[float, float]]]:
+        """The normal rate and wander each minute of `window_minutes` was judged by."""
+        if not services:
+            return {}
+        rows = self._query(
+            FAILING_NORMALS_SQL,
+            {
+                "services": list(services),
+                "from_minute": start,
+                "to_minute": end,
+                "window_minutes": window_minutes,
+            },
+        )
+        found: dict[str, dict[datetime, tuple[float, float]]] = {}
+        for service, epoch, rate, wander in rows:
+            minute = datetime.fromtimestamp(int(epoch), UTC)
+            found.setdefault(str(service), {})[minute] = (float(rate), float(wander))
+        return found
+
+    def endpoint_windows(
+        self, services: Sequence[str], *, start: datetime, end: datetime, window_minutes: int
+    ) -> dict[str, dict[datetime, dict[str, EndpointCounts]]]:
+        """Each judged minute's endpoint window counts, over the request floor."""
+        if not services:
+            return {}
+        rows = self._query(
+            ENDPOINT_WINDOWS_SQL,
+            {
+                "services": list(services),
+                "from_minute": start,
+                "to_minute": end,
+                "window_minutes": window_minutes,
+            },
+        )
+        found: dict[str, dict[datetime, dict[str, EndpointCounts]]] = {}
+        for service, epoch, endpoints in rows:
+            minute = datetime.fromtimestamp(int(epoch), UTC)
+            found.setdefault(str(service), {})[minute] = {
+                str(name): _endpoint_counts(counts) for name, counts in endpoints.items()
+            }
+        return found
+
     def first_seen(self, *, since: datetime) -> dict[str, datetime]:
         """Each service counted since `since`, and its first counted minute."""
         rows = self._query(FIRST_SEEN_SQL, {"since": since})
@@ -298,6 +451,14 @@ def _by_service(rows: Sequence[tuple[Any, ...]]) -> dict[str, dict[datetime, Min
         minute = datetime.fromtimestamp(int(epoch), UTC)
         found.setdefault(str(service), {})[minute] = Minute(int(requests), int(errors), counts)
     return found
+
+
+def _endpoint_counts(counts: Any) -> EndpointCounts:
+    """The driver returns a named tuple as a dict, or as a tuple in a nested one."""
+    if isinstance(counts, dict):
+        return int(counts["requests"]), int(counts["failures"])
+    requests, failures = counts
+    return int(requests), int(failures)
 
 
 def _values(latest: Sequence[Any]) -> list[Any]:

@@ -9,16 +9,21 @@ A run, all inside one Postgres transaction that holds the project's lock:
    2 minutes per run; more than 10 behind, it restarts at the settled minute and
    judges nothing older. A service seen for the first time gets its state row now
    (C24) and starts at the settled minute.
-3. **Judging**, against the hourly baseline (`baselines.py`). A missing baseline
-   judges nothing for that minute and asks for one.
+3. **Judging** all three signals and each endpoint, against the hourly baseline
+   (`baselines.py`). A missing baseline judges nothing for that minute and asks
+   for one.
 4. **Readings** are frozen in ClickHouse before the commit. A crash after them
    judges the minutes again, and the newer reading wins (`store.READINGS_SQL`).
-5. **The commit**: each service's `last_judged_minute` by compare-and-set, its
-   finding opened, raised or closed, and the project's completed run, which is
-   what "detection not running" is measured from (C17).
+5. **The project** (FR15): whether most of its services stopped sending together,
+   which is one project finding rather than one per service.
+6. **The commit**: each service's state by compare-and-set, its one finding
+   opened, raised, joined or closed (`lifecycle.py`), the project's finding, and
+   the project's completed run, which is what "detection not running" is
+   measured from (C17).
 
-*Slower* only (plan T2c.3). Notifications, the 6-hour close and the project
-finding come in Steps 3 and 4.
+The service's state also records what its normal must leave out that no other
+table holds (BR3): its snoozed minutes (D25) and, before 3 weeks, the minutes
+the traffic shadow test found far below normal (FR6).
 """
 
 from __future__ import annotations
@@ -26,7 +31,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from zoneinfo import ZoneInfo
@@ -38,19 +43,45 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from nexovue_scheduler.detection import JUDGE_PROJECT_TASK
 from nexovue_scheduler.detection.baselines import (
+    EXCLUDED_KEY,
+    FAILING,
+    HISTORY,
+    SHADOW,
     SLOWER,
-    baseline_from_json,
+    SNOOZED,
+    TRAFFIC,
     compute_request,
+    failing_from_json,
+    merge_ranges,
+    slower_from_json,
+    traffic_from_json,
+)
+from nexovue_scheduler.detection.lifecycle import (
+    Context,
+    KeyRecord,
+    MinuteJudged,
+    Normal,
+    OpenFinding,
+    TrafficSnapshot,
+    endpoint_key,
+    project_rule,
+    project_title,
+    step,
+    title,
+    traffic_waits,
+    weight,
 )
 from nexovue_scheduler.detection.method import (
-    JUDGED,
-    RECOVERY_MINUTES,
+    FailingBaseline,
+    FailingJudgement,
     Minute,
     Sensitivity,
     SlowerBaseline,
-    SlowerJudgement,
+    TrafficBaseline,
     Window,
+    judge_failing,
     judge_slower,
+    judge_traffic,
 )
 from nexovue_scheduler.detection.projects import project_settings, try_lock
 from nexovue_scheduler.detection.store import (
@@ -74,24 +105,15 @@ RESTART_AFTER: Final = timedelta(minutes=10)
 PROJECT_SOFT_LIMIT_SECONDS: Final = 20
 PROJECT_HARD_LIMIT_SECONDS: Final = 30
 _LOCK_PURPOSE: Final = "judging"
-
-# The two signals Step 3 adds are written as not judged until then.
-NOT_JUDGED_YET: Final = "not_judged"
 NO_MODE: Final = "none"
-
-_WEEKDAY_NAMES: Final = (
-    "Mondays",
-    "Tuesdays",
-    "Wednesdays",
-    "Thursdays",
-    "Fridays",
-    "Saturdays",
-    "Sundays",
-)
-_WEEKEND_FROM: Final = 5
-_TENS: Final = 10.0
-# The sign in "4 times slower" as a title writes it, escaped so it cannot pass for an x.
-TIMES_SIGN: Final = "\u00d7"
+# Under `detection_state.signals`: the open finding's keys and counts, and the last
+# minute the service had requests (FR32).
+FINDING_KEY: Final = "finding"
+LAST_REQUEST_KEY: Final = "last_request_minute"
+# Under the failing signal's state: each endpoint's runs above the base test.
+ENDPOINTS_KEY: Final = "endpoints"
+# What the project finding's one entry compares with.
+PROJECT_COMPARISON: Final = "Each service against its own normal"
 
 _STATES: Final = text(
     """
@@ -108,15 +130,15 @@ _FIRST_SIGHT: Final = text(
 )
 _BASELINES: Final = text(
     """
-    SELECT service_name, minute, baseline FROM detection_baselines
-    WHERE org_id = :org_id AND project_id = :project_id AND signal = :signal
+    SELECT service_name, signal, minute, baseline FROM detection_baselines
+    WHERE org_id = :org_id AND project_id = :project_id
       AND minute >= :first AND minute <= :last
     """
 )
-_MUTED: Final = text(
+_SERVICE_SETTINGS: Final = text(
     """
-    SELECT service_name FROM service_detection_settings
-    WHERE org_id = :org_id AND project_id = :project_id AND muted_until > :now
+    SELECT service_name, muted_until, snoozed_until FROM service_detection_settings
+    WHERE org_id = :org_id AND project_id = :project_id
     """
 )
 # The compare-and-set: moved only from where this job found it (design).
@@ -130,9 +152,17 @@ _ADVANCE: Final = text(
 )
 _OPEN_FINDING: Final = text(
     """
-    SELECT id, severity, signals, started_at FROM findings
+    SELECT id, severity, muted, signals, started_at FROM findings
     WHERE org_id = :org_id AND project_id = :project_id AND scope = 'service'
       AND service_name = :service_name AND state = 'open'
+    FOR UPDATE
+    """
+)
+_OPEN_PROJECT_FINDING: Final = text(
+    """
+    SELECT id, signals, started_at FROM findings
+    WHERE org_id = :org_id AND project_id = :project_id AND scope = 'project'
+      AND state = 'open'
     FOR UPDATE
     """
 )
@@ -140,7 +170,7 @@ _OPEN: Final = text(
     """
     INSERT INTO findings
         (org_id, project_id, scope, service_name, severity, muted, title, signals, started_at)
-    VALUES (:org_id, :project_id, 'service', :service_name, :severity, :muted, :title,
+    VALUES (:org_id, :project_id, :scope, :service_name, :severity, :muted, :title,
             CAST(:signals AS jsonb), :started_at)
     RETURNING id
     """
@@ -155,7 +185,7 @@ _UPDATE: Final = text(
 _CLOSE: Final = text(
     """
     UPDATE findings
-    SET state = 'closed', closed_reason = 'recovered', closed_at = :closed_at,
+    SET state = 'closed', closed_reason = :reason, closed_at = :closed_at,
         signals = CAST(:signals AS jsonb), updated_at = now()
     WHERE org_id = :org_id AND id = :id
     """
@@ -196,10 +226,37 @@ class Outcome:
 
 
 @dataclass(frozen=True, slots=True)
+class Normals:
+    """One service-minute's three baselines, any of them missing."""
+
+    slower: SlowerBaseline | None = None
+    failing: FailingBaseline | None = None
+    traffic: TrafficBaseline | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Judged:
-    minute: datetime
-    slower: SlowerJudgement
-    baseline: SlowerBaseline | None
+    """One judged minute of one service, and the normals it was judged by."""
+
+    minute: MinuteJudged
+    normals: Normals
+    # The window's requests per endpoint over the floor, for its reading.
+    endpoint_counts: dict[str, tuple[int, int]]
+    shadow: bool
+    # Each endpoint's run and excursions after this minute.
+    endpoint_runs: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    @property
+    def at(self) -> datetime:
+        return self.minute.minute
+
+    @property
+    def missing(self) -> bool:
+        return "no_baseline" in (
+            self.minute.slower.verdict,
+            self.minute.failing.verdict,
+            self.minute.traffic.verdict,
+        )
 
 
 def minutes_to_judge(last_judged: datetime | None, settled: datetime) -> list[datetime]:
@@ -227,7 +284,8 @@ async def judge_project(
             return Outcome(skipped="the project is gone")
         outcome = Outcome(org_id=binding.org_id)
         settings = await project_settings(connection, binding)
-        width = settings.sensitivity.window_minutes
+        sensitivity, zone = settings.sensitivity, settings.zone
+        width = sensitivity.window_minutes
         states = await _states(connection, binding)
         plan = {
             state.service_name: minutes_to_judge(state.last_judged_minute, settled)
@@ -235,8 +293,10 @@ async def judge_project(
         }
         earliest = min((m for minutes in plan.values() for m in minutes), default=settled)
         detection = store.for_project(binding)
-        counted = detection.window_minutes(
-            start=min(earliest, settled) - (width - 1) * MINUTE, end=settled + MINUTE
+        start, end = min(earliest, settled) - (width - 1) * MINUTE, settled + MINUTE
+        counted = _with_endpoints(
+            detection.window_minutes(start=start, end=end),
+            detection.endpoint_minutes(None, start=start, end=end),
         )
         for service in sorted(set(counted) - set(states)):
             await connection.execute(_FIRST_SIGHT, _service_key(binding, service))
@@ -247,49 +307,124 @@ async def judge_project(
         if not judged_minutes:
             await _record_run(connection, binding)
             return outcome
-        baselines = await _baselines(connection, binding, min(judged_minutes), max(judged_minutes))
-        judged: dict[str, list[Judged]] = {}
-        for service, minutes in sorted(plan.items()):
-            history = counted.get(service, {})
-            judged[service] = [
-                _judge(history, baselines.get((service, minute)), minute, settings.sensitivity)
-                for minute in minutes
-            ]
-        outcome.baselines_missing = any(
-            each.slower.verdict == "no_baseline" for runs in judged.values() for each in runs
-        )
+        normals = await _normals(connection, binding, min(judged_minutes), max(judged_minutes))
+        judged = {
+            service: _judge_service(
+                counted.get(service, {}), normals, service, minutes, states[service], sensitivity
+            )
+            for service, minutes in sorted(plan.items())
+        }
+        outcome.baselines_missing = any(each.missing for runs in judged.values() for each in runs)
         detection.write(
-            [
-                _reading(service, each, width)
-                for service, runs in sorted(judged.items())
-                for each in runs
-            ]
+            [_reading(service, each, width) for service, runs in judged.items() for each in runs]
         )
-        muted = await _muted(connection, binding, now)
-        for service, runs in sorted(judged.items()):
+        signal_states = {
+            service: _signal_states(states[service].signals, runs)
+            for service, runs in judged.items()
+        }
+        muted, snoozed = await _muted_and_snoozed(connection, binding, now)
+        project = await _keep_project_finding(
+            connection, binding, states, judged, signal_states, zone=zone, outcome=outcome
+        )
+        for service, runs in judged.items():
             state = states[service]
-            signals = await _keep_finding(
+            stored = await _keep_finding(
                 connection,
                 binding,
                 state,
                 runs,
-                zone=settings.zone,
-                width=width,
+                signal_states[service],
+                project,
+                zone=zone,
                 muted=service in muted,
                 outcome=outcome,
             )
-            await _advance(connection, binding, state, runs[-1].minute, signals)
+            stored = _record_exclusions(stored, runs, snoozed=service in snoozed, now=now)
+            await _advance(connection, binding, state, runs[-1].at, stored)
             outcome.minutes_judged += len(runs)
         outcome.services = len(judged)
         await _record_run(connection, binding)
     return outcome
 
 
+# ------------------------------------------------------------------- judging
+
+
+def _judge_service(
+    history: Mapping[datetime, Minute],
+    normals: Mapping[tuple[str, datetime], Normals],
+    service: str,
+    minutes: Sequence[datetime],
+    state: ServiceState,
+    sensitivity: Sensitivity,
+) -> list[Judged]:
+    run = int(state.signals.get(FAILING, {}).get("above_run", 0))
+    endpoint_runs = endpoint_records(state.signals)
+    found = []
+    for minute in minutes:
+        each = _judge(
+            history,
+            normals.get((service, minute), Normals()),
+            minute,
+            sensitivity,
+            run,
+            {name: int(record["run"]) for name, record in endpoint_runs.items()},
+        )
+        run = run + 1 if each.minute.failing.above else 0
+        endpoint_runs = advance_endpoint_runs(endpoint_runs, each.minute.failing, minute)
+        found.append(replace(each, endpoint_runs=endpoint_runs))
+    return found
+
+
+def endpoint_records(stored: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Each endpoint's current run above the base test, and its finished excursions."""
+    return {
+        name: {"run": int(record.get("run", 0)), "runs": list(record.get("runs", []))}
+        for name, record in stored.get(FAILING, {}).get(ENDPOINTS_KEY, {}).items()
+    }
+
+
+def advance_endpoint_runs(
+    records: Mapping[str, Mapping[str, Any]], failing: FailingJudgement, minute: datetime
+) -> dict[str, dict[str, Any]]:
+    """One minute of each endpoint's record (D18 per endpoint). A run ends when its
+    endpoint's window no longer passes the base test, or is not judged; it is then
+    kept as its first and last minutes, which the baseline job profiles."""
+    above = {each.name for each in failing.endpoints if each.above}
+    found: dict[str, dict[str, Any]] = {}
+    for name in sorted(set(records) | above):
+        record = records.get(name, {"run": 0, "runs": []})
+        run, runs = int(record["run"]), list(record["runs"])
+        if name in above:
+            run += 1
+        elif run:
+            runs.append([_iso(minute - run * MINUTE), _iso(minute - MINUTE)])
+            run = 0
+        found[name] = {"run": run, "runs": runs}
+    return found
+
+
+def _forget_old_runs(
+    records: Mapping[str, Mapping[str, Any]], now: datetime
+) -> dict[str, dict[str, Any]]:
+    """Excursions no 28-day profile reaches any more are dropped, and with them an
+    endpoint that has nothing left to say."""
+    horizon = now - HISTORY
+    found = {}
+    for name, record in records.items():
+        runs = [run for run in record["runs"] if datetime.fromisoformat(run[1]) >= horizon]
+        if record["run"] or runs:
+            found[name] = {"run": record["run"], "runs": runs}
+    return found
+
+
 def _judge(
     history: Mapping[datetime, Minute],
-    baseline: SlowerBaseline | None,
+    normals: Normals,
     minute: datetime,
     sensitivity: Sensitivity,
+    run_before: int,
+    endpoint_runs: Mapping[str, int],
 ) -> Judged:
     width = sensitivity.window_minutes
     window = Window(
@@ -297,10 +432,213 @@ def _judge(
             history.get(minute - back * MINUTE, Minute.empty()) for back in range(width - 1, -1, -1)
         )
     )
-    return Judged(minute, judge_slower(window, baseline, sensitivity), baseline)
+    failing = judge_failing(
+        window, normals.failing, sensitivity, run_before=run_before, endpoint_runs=endpoint_runs
+    )
+    traffic = judge_traffic(window, normals.traffic, sensitivity)
+    slower = judge_slower(window, normals.slower, sensitivity)
+    return Judged(
+        minute=MinuteJudged(
+            minute=minute,
+            width=width,
+            requests=window.minutes[-1].requests,
+            traffic=traffic,
+            failing=failing,
+            slower=slower,
+            traffic_normal=_normal_of(normals.traffic),
+            failing_normal=_normal_of(normals.failing),
+            slower_normal=_normal_of(normals.slower),
+            slower_normal_ms=None if normals.slower is None else normals.slower.normal_p95_ms,
+        ),
+        normals=normals,
+        endpoint_counts={e.name: (e.requests, e.failures) for e in failing.endpoints if e.judged},
+        shadow=traffic.shadow,
+    )
+
+
+def _normal_of(
+    baseline: SlowerBaseline | FailingBaseline | TrafficBaseline | None,
+) -> Normal | None:
+    if baseline is None or baseline.mode == "learning":
+        return None
+    return Normal(baseline.mode, baseline.days)
+
+
+def _signal_states(stored: Mapping[str, Any], runs: Sequence[Judged]) -> dict[str, dict[str, Any]]:
+    """Each signal's phase after these minutes: what the API shows (FR25), its count of
+    clear minutes, and for traffic when its run of unusual minutes began (FR15)."""
+    found = {signal: dict(stored.get(signal, {})) for signal in (TRAFFIC, FAILING, SLOWER)}
+    for each in runs:
+        judged = each.minute
+        for signal, status in (
+            (TRAFFIC, judged.status(TRAFFIC)),
+            (FAILING, judged.status(FAILING)),
+            (SLOWER, judged.status(SLOWER)),
+        ):
+            phase = found[signal]
+            clear = int(phase.get("clear_minutes", 0))
+            if status == "clear":
+                clear += 1
+            elif status in ("unusual", "held"):
+                clear = 0
+            phase["clear_minutes"] = clear
+        traffic = found[TRAFFIC]
+        if judged.traffic.verdict == "unusual":
+            traffic.setdefault("unusual_since", judged.onset(TRAFFIC).isoformat())
+        else:
+            traffic.pop("unusual_since", None)
+        found[FAILING]["above_run"] = (
+            int(found[FAILING].get("above_run", 0)) + 1 if judged.failing.above else 0
+        )
+    endpoints = _forget_old_runs(runs[-1].endpoint_runs, runs[-1].at)
+    if endpoints:
+        found[FAILING][ENDPOINTS_KEY] = endpoints
+    else:
+        found[FAILING].pop(ENDPOINTS_KEY, None)
+    last = runs[-1]
+    for signal, verdict, baseline in (
+        (TRAFFIC, last.minute.traffic.verdict, last.normals.traffic),
+        (FAILING, last.minute.failing.verdict, last.normals.failing),
+        (SLOWER, last.minute.slower.verdict, last.normals.slower),
+    ):
+        until = None if baseline is None else baseline.learning_until
+        found[signal].update(
+            verdict=verdict, learning_until=None if until is None else until.isoformat()
+        )
+    return found
 
 
 # ------------------------------------------------------------------ findings
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectContext:
+    """What the project's finding says to each service this run (FR15)."""
+
+    absorbed: frozenset[str] = frozenset()
+    pending: int = 0
+    finding_id: uuid.UUID | None = None
+
+
+async def _keep_project_finding(
+    connection: AsyncConnection,
+    binding: ProjectBinding,
+    states: Mapping[str, ServiceState],
+    judged: Mapping[str, Sequence[Judged]],
+    signal_states: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    *,
+    zone: ZoneInfo,
+    outcome: Outcome,
+) -> ProjectContext:
+    """Open, keep or close the project's one finding from each service's latest
+    traffic (FR15), and say which services its traffic holds."""
+    key = _project_key(binding)
+    row = (await connection.execute(_OPEN_PROJECT_FINDING, key)).one_or_none()
+    finding_id = None if row is None else row.id
+    involved = (
+        None
+        if row is None
+        else frozenset(
+            name
+            for name, state in states.items()
+            if state.signals.get(TRAFFIC, {}).get("project_finding") == str(row.id)
+        )
+    )
+    minute = max(runs[-1].at for runs in judged.values())
+    snapshots = {
+        service: _snapshot(runs[-1], states[service], signal_states[service])
+        for service, runs in judged.items()
+    }
+    decision = project_rule(snapshots, involved=involved, minute=minute)
+    members = [snapshots[name] for name in decision.involved if name in snapshots]
+    signal = _project_signal(members, None if row is None else row.signals)
+    if decision.open:
+        started = min(
+            datetime.fromisoformat(signal_states[name][TRAFFIC]["unusual_since"])
+            for name in decision.involved
+        )
+        finding_id = (
+            await connection.execute(
+                _OPEN,
+                {
+                    **key,
+                    "scope": "project",
+                    "service_name": None,
+                    "severity": "critical",
+                    "muted": False,
+                    "title": project_title(len(decision.involved), decision.judged, started, zone),
+                    "signals": json.dumps([signal]),
+                    "started_at": started,
+                },
+            )
+        ).scalar_one()
+        outcome.opened += 1
+    elif decision.close is not None and row is not None:
+        await connection.execute(
+            _CLOSE,
+            {
+                "org_id": key["org_id"],
+                "id": row.id,
+                "reason": decision.close,
+                "closed_at": max(minute, row.started_at),
+                "signals": json.dumps([signal]),
+            },
+        )
+        outcome.closed += 1
+        return ProjectContext(pending=decision.pending)
+    elif row is not None:
+        await connection.execute(
+            _UPDATE,
+            {
+                "org_id": key["org_id"],
+                "id": row.id,
+                "severity": "critical",
+                "title": project_title(
+                    len(decision.involved), decision.judged, row.started_at, zone
+                ),
+                "signals": json.dumps([signal]),
+            },
+        )
+    if finding_id is None:
+        return ProjectContext(pending=decision.pending)
+    return ProjectContext(
+        absorbed=decision.involved, pending=decision.pending, finding_id=finding_id
+    )
+
+
+def _snapshot(
+    last: Judged, state: ServiceState, phases: Mapping[str, Mapping[str, Any]]
+) -> TrafficSnapshot:
+    traffic = last.minute.traffic
+    since = phases[TRAFFIC].get("unusual_since")
+    own = state.signals.get(FINDING_KEY, {}).get("keys", [])
+    width = last.minute.width
+    return TrafficSnapshot(
+        judged=traffic.judged,
+        unusual=traffic.verdict == "unusual",
+        unusual_since=None if since is None else datetime.fromisoformat(since),
+        clear_minutes=int(phases[TRAFFIC].get("clear_minutes", 0)),
+        in_own_finding=any(entry[0] == TRAFFIC for entry in own),
+        last_request=_last_request(state.signals, [last]),
+        expected_rpm=None if traffic.expected is None else traffic.expected / width,
+        current_rpm=traffic.window_requests / width,
+    )
+
+
+def _project_signal(
+    members: Sequence[TrafficSnapshot], stored: Sequence[Mapping[str, Any]] | None
+) -> FindingSignal:
+    """The project finding's *losing traffic* entry: its services' requests a minute."""
+    normal = sum(each.expected_rpm or 0.0 for each in members) if members else None
+    current = sum(each.current_rpm or 0.0 for each in members) if members else None
+    worst = current
+    if stored:
+        before = stored[0].get("worst")
+        if before is not None and (worst is None or before < worst):
+            worst = before
+    return finding_signal(
+        "traffic", normal=normal, current=current, worst=worst, comparison=PROJECT_COMPARISON
+    )
 
 
 async def _keep_finding(
@@ -308,214 +646,191 @@ async def _keep_finding(
     binding: ProjectBinding,
     state: ServiceState,
     runs: Sequence[Judged],
+    phases: dict[str, dict[str, Any]],
+    project: ProjectContext,
     *,
     zone: ZoneInfo,
-    width: int,
     muted: bool,
     outcome: Outcome,
 ) -> dict[str, Any]:
-    """Open, raise or close the service's one finding over these minutes, in order,
-    and return the service's signal state to store (FR12 to FR14)."""
-    slower_state = dict(state.signals.get(SLOWER, {}))
-    clear = int(slower_state.get("clear_minutes", 0))
-    key = _service_key(binding, state.service_name)
+    """Open, raise, join or close the service's one finding over these minutes, in
+    order, and return the service's state to store (FR12 to FR14, FR32, D20)."""
+    service = state.service_name
+    key = _service_key(binding, service)
     row = (await connection.execute(_OPEN_FINDING, key)).one_or_none()
-    finding = None if row is None else _OpenFinding.from_row(row)
+    finding_id = None if row is None else row.id
+    finding = None if row is None else _restore(row, state.signals.get(FINDING_KEY, {}))
+    traffic = phases[TRAFFIC]
+    absorbed = service in project.absorbed
+    if project.finding_id is not None and absorbed:
+        traffic["project_finding"] = str(project.finding_id)
+    else:
+        traffic.pop("project_finding", None)
+    last_request = _last_request(state.signals, [])
     for each in runs:
-        verdict = each.slower.verdict
-        if verdict == "unusual":
-            clear = 0
-            if finding is None:
-                finding = await _open(
-                    connection, binding, state.service_name, each, zone, width, muted
-                )
-                outcome.opened += 1
-            else:
-                await _raise(connection, binding, state.service_name, finding, each, zone)
-        elif finding is not None and verdict in JUDGED:
-            finding.current = each.slower.window_p95_ms
-            finding.dirty = True
-            clear = clear + 1 if verdict == "normal" else 0
-            if clear >= RECOVERY_MINUTES:
-                await connection.execute(
-                    _CLOSE,
-                    {
-                        "org_id": key["org_id"],
-                        "id": finding.id,
-                        "closed_at": each.minute,
-                        "signals": json.dumps([finding.signal()]),
-                    },
-                )
-                outcome.closed += 1
-                finding, clear = None, 0
-        # Too little traffic, learning or no baseline pause the count (FR11, FR13).
-    if finding is not None and finding.dirty:
-        await _store(connection, binding, state.service_name, finding, zone)
-    last = runs[-1]
-    learning = last.baseline.learning_until if last.baseline is not None else None
-    slower_state.update(
-        verdict=last.slower.verdict,
-        clear_minutes=clear,
-        learning_until=None if learning is None else learning.isoformat(),
-    )
-    return {**state.signals, SLOWER: slower_state}
-
-
-@dataclass(slots=True)
-class _OpenFinding:
-    id: uuid.UUID
-    severity: str
-    started_at: datetime
-    normal: float | None
-    current: float | None
-    worst: float | None
-    comparison: str
-    dirty: bool = False
-
-    @classmethod
-    def from_row(cls, row: Any) -> _OpenFinding:
-        stored: dict[str, Any] = next(
-            (each for each in row.signals or [] if each.get("signal") == SLOWER), {}
+        judged = each.minute
+        if judged.requests > 0:
+            last_request = judged.minute
+        waits = False
+        holds_traffic = finding is not None and "traffic" in finding.keys
+        if judged.traffic.verdict == "unusual" and not absorbed and not holds_traffic:
+            since = datetime.fromisoformat(traffic.setdefault("pending_since", _iso(judged.minute)))
+            waits = traffic_waits(since, judged.minute, project.pending)
+        else:
+            traffic.pop("pending_since", None)
+        context = Context(traffic_absorbed=absorbed, traffic_waits=waits, last_request=last_request)
+        finding, change = step(finding, judged, context, zone=zone)
+        if finding is None:
+            continue
+        if change.opened:
+            finding.muted = muted
+            finding_id = await _open(connection, key, service, finding, zone)
+            outcome.opened += 1
+        if change.closed is not None:
+            assert finding_id is not None, "only an open finding closes"
+            await connection.execute(
+                _CLOSE,
+                {
+                    "org_id": key["org_id"],
+                    "id": finding_id,
+                    "reason": change.closed,
+                    "closed_at": max(judged.minute, finding.started_at),
+                    "signals": json.dumps(finding.signals()),
+                },
+            )
+            outcome.closed += 1
+            finding, finding_id = None, None
+        if change.joined:
+            traffic.pop("pending_since", None)
+    if finding is not None and finding_id is not None and finding.dirty:
+        await connection.execute(
+            _UPDATE,
+            {
+                "org_id": key["org_id"],
+                "id": finding_id,
+                "severity": finding.severity,
+                "title": title(service, finding, zone),
+                "signals": json.dumps(finding.signals()),
+            },
         )
-        return cls(
-            id=row.id,
-            severity=row.severity,
-            started_at=row.started_at,
-            normal=stored.get("normal"),
-            current=stored.get("current"),
-            worst=stored.get("worst"),
-            comparison=stored.get("comparison", ""),
-        )
-
-    @property
-    def worst_ratio(self) -> float:
-        if not self.worst or not self.normal:
-            return 0.0
-        return self.worst / self.normal
-
-    def signal(self) -> FindingSignal:
-        return finding_signal(
-            SLOWER,
-            normal=self.normal,
-            current=self.current,
-            worst=self.worst,
-            comparison=self.comparison,
-        )
+    stored: dict[str, Any] = {**state.signals, **phases}
+    stored[LAST_REQUEST_KEY] = None if last_request is None else _iso(last_request)
+    if finding is None or finding_id is None:
+        stored.pop(FINDING_KEY, None)
+    else:
+        stored[FINDING_KEY] = {
+            "id": str(finding_id),
+            "keys": [
+                [name, finding.keys[name].clear, finding.keys[name].unjudged]
+                for name in finding.ordered()
+            ],
+        }
+    return stored
 
 
 async def _open(
     connection: AsyncConnection,
-    binding: ProjectBinding,
+    key: Mapping[str, Any],
     service: str,
-    each: Judged,
+    finding: OpenFinding,
     zone: ZoneInfo,
-    width: int,
-    muted: bool,
-) -> _OpenFinding:
-    """A new finding, dated from its unusual window's first minute."""
-    assert each.baseline is not None, "an unusual window was judged against a baseline"
-    severity = "critical" if each.slower.critical else "warning"
-    started_at = each.minute - (width - 1 - each.slower.calm_minutes) * MINUTE
-    p95 = each.slower.window_p95_ms
-    signal = finding_signal(
-        SLOWER,
-        normal=each.baseline.normal_p95_ms,
-        current=p95,
-        worst=p95,
-        comparison=comparison(each.baseline, each.minute, zone),
-    )
-    finding_id = (
+) -> uuid.UUID:
+    finding_id: uuid.UUID = (
         await connection.execute(
             _OPEN,
             {
-                **_service_key(binding, service),
-                "severity": severity,
-                "muted": muted,
-                "title": slower_title(service, each.slower.ratio or 0.0, started_at, zone),
-                "signals": json.dumps([signal]),
-                "started_at": started_at,
+                **key,
+                "scope": "service",
+                "severity": finding.severity,
+                "muted": finding.muted,
+                "title": title(service, finding, zone),
+                "signals": json.dumps(finding.signals()),
+                "started_at": finding.started_at,
             },
         )
     ).scalar_one()
-    return _OpenFinding(
-        id=finding_id,
-        severity=severity,
-        started_at=started_at,
-        normal=signal["normal"],
-        current=signal["current"],
-        worst=signal["worst"],
-        comparison=signal["comparison"],
+    finding.dirty = False
+    return finding_id
+
+
+def _restore(row: Any, tracked: Mapping[str, Any]) -> OpenFinding:
+    """An open finding from its row and the counts its service's state keeps. A row
+    whose keys the state does not hold (closed and reopened elsewhere) is read by
+    signal: its first *failing* entry is the service's, the rest its endpoints'."""
+    entries: list[Mapping[str, Any]] = list(row.signals or [])
+    counts = tracked.get("keys", []) if tracked.get("id") == str(row.id) else []
+    if len(counts) == len(entries):
+        names = [str(entry[0]) for entry in counts]
+    else:
+        names, counts, seen_failing = [], [], False
+        for entry in entries:
+            signal = entry.get("signal")
+            if signal == "failing" and seen_failing and entry.get("endpoint"):
+                names.append(endpoint_key(entry["endpoint"]))
+            else:
+                names.append(str(signal))
+                seen_failing = seen_failing or signal == "failing"
+    keys = {}
+    for position, (name, entry) in enumerate(zip(names, entries, strict=True)):
+        clear, unjudged = (int(counts[position][1]), int(counts[position][2])) if counts else (0, 0)
+        normal, worst = entry.get("normal"), entry.get("worst")
+        keys[name] = KeyRecord(
+            normal=normal,
+            current=entry.get("current"),
+            worst=worst,
+            comparison=entry.get("comparison", ""),
+            endpoint=entry.get("endpoint"),
+            clear=clear,
+            unjudged=unjudged,
+            weight=weight(name, normal, worst),
+        )
+    return OpenFinding(
+        severity=row.severity, started_at=row.started_at, keys=keys, muted=bool(row.muted)
     )
 
 
-async def _raise(
-    connection: AsyncConnection,
-    binding: ProjectBinding,
-    service: str,
-    finding: _OpenFinding,
-    each: Judged,
-    zone: ZoneInfo,
-) -> None:
-    """An unusual minute on an open finding: severity only rises (FR14), and the
-    worst value, its normal and the title follow the worst window (FR17)."""
-    finding.current = each.slower.window_p95_ms
-    finding.dirty = True
-    if each.slower.critical:
-        finding.severity = "critical"
-    ratio = each.slower.ratio or 0.0
-    if ratio > finding.worst_ratio and each.baseline is not None:
-        finding.worst = each.slower.window_p95_ms
-        finding.normal = each.baseline.normal_p95_ms
-        finding.comparison = comparison(each.baseline, each.minute, zone)
+def _last_request(stored: Mapping[str, Any], runs: Sequence[Judged]) -> datetime | None:
+    found = stored.get(LAST_REQUEST_KEY)
+    last = None if found is None else datetime.fromisoformat(found)
+    for each in runs:
+        if each.minute.requests > 0:
+            last = each.at
+    return last
 
 
-async def _store(
-    connection: AsyncConnection,
-    binding: ProjectBinding,
-    service: str,
-    finding: _OpenFinding,
-    zone: ZoneInfo,
-) -> None:
-    await connection.execute(
-        _UPDATE,
-        {
-            "org_id": uuid.UUID(binding.org_id),
-            "id": finding.id,
-            "severity": finding.severity,
-            "title": slower_title(service, finding.worst_ratio, finding.started_at, zone),
-            "signals": json.dumps([finding.signal()]),
-        },
-    )
-
-
-def slower_title(service: str, ratio: float, since: datetime, zone: ZoneInfo) -> str:
-    """FR17: subject, what changed, magnitude, since when, in the project's zone."""
-    return f"{service} is {times(ratio)} slower than normal since {local_clock(since, zone)}"
-
-
-def times(ratio: float) -> str:
-    """1.6, 4 and 12, each with the sign: one decimal below ten, none from ten."""
-    if ratio >= _TENS:
-        return f"{ratio:.0f}{TIMES_SIGN}"
-    return f"{ratio:.1f}".removesuffix(".0") + TIMES_SIGN
-
-
-def local_clock(moment: datetime, zone: ZoneInfo) -> str:
-    """15:04 IST: the time in the project's zone, with the zone's abbreviation."""
-    return moment.astimezone(zone).strftime("%H:%M %Z")
-
-
-def comparison(baseline: SlowerBaseline, minute: datetime, zone: ZoneInfo) -> str:
-    """What the minute was compared with: "Tuesdays around 15:00, last 3 weeks"."""
-    local = minute.astimezone(zone)
-    clock = local.strftime("%H:%M")
-    if baseline.mode == "weekly":
-        return f"{_WEEKDAY_NAMES[local.weekday()]} around {clock}, last {baseline.days} weeks"
-    kind = "weekend days" if local.weekday() >= _WEEKEND_FROM else "weekdays"
-    return f"{kind.capitalize()} around {clock}, last {baseline.days} {kind}"
+def _record_exclusions(
+    stored: dict[str, Any], runs: Sequence[Judged], *, snoozed: bool, now: datetime
+) -> dict[str, Any]:
+    """Add this run's snoozed and shadowed minutes to what the normal leaves out, and
+    forget what no pool reaches any more (BR3, FR6, D25)."""
+    recorded = {
+        reason: [
+            (datetime.fromisoformat(first), datetime.fromisoformat(last)) for first, last in spans
+        ]
+        for reason, spans in stored.get(EXCLUDED_KEY, {}).items()
+    }
+    for each in runs:
+        if snoozed:
+            recorded.setdefault(SNOOZED, []).append((each.at, each.at))
+        if each.shadow:
+            lead = (each.minute.width - 1) * MINUTE
+            recorded.setdefault(SHADOW, []).append((each.at - lead, each.at))
+    horizon = now - HISTORY
+    kept = {
+        reason: [[_iso(a), _iso(b)] for a, b in merge_ranges(spans) if b >= horizon]
+        for reason, spans in recorded.items()
+    }
+    kept = {reason: spans for reason, spans in kept.items() if spans}
+    if kept:
+        return {**stored, EXCLUDED_KEY: kept}
+    return {key: value for key, value in stored.items() if key != EXCLUDED_KEY}
 
 
 # ------------------------------------------------------------------- stores
+
+
+def _iso(moment: datetime) -> str:
+    return moment.astimezone(UTC).isoformat()
 
 
 def _service_key(binding: ProjectBinding, service: str) -> dict[str, Any]:
@@ -530,6 +845,19 @@ def _project_key(binding: ProjectBinding) -> dict[str, Any]:
     return {"org_id": uuid.UUID(binding.org_id), "project_id": uuid.UUID(binding.project_id)}
 
 
+def _with_endpoints(
+    minutes: Mapping[str, Mapping[datetime, Minute]],
+    endpoints: Mapping[str, Mapping[datetime, Mapping[str, tuple[int, int]]]],
+) -> dict[str, dict[datetime, Minute]]:
+    return {
+        service: {
+            minute: replace(each, endpoints=dict(endpoints.get(service, {}).get(minute, {})))
+            for minute, each in counted.items()
+        }
+        for service, counted in minutes.items()
+    }
+
+
 async def _states(connection: AsyncConnection, binding: ProjectBinding) -> dict[str, ServiceState]:
     rows = await connection.execute(_STATES, _project_key(binding))
     return {
@@ -538,21 +866,32 @@ async def _states(connection: AsyncConnection, binding: ProjectBinding) -> dict[
     }
 
 
-async def _baselines(
+async def _normals(
     connection: AsyncConnection, binding: ProjectBinding, first: datetime, last: datetime
-) -> dict[tuple[str, datetime], SlowerBaseline]:
+) -> dict[tuple[str, datetime], Normals]:
     rows = await connection.execute(
-        _BASELINES, {**_project_key(binding), "signal": SLOWER, "first": first, "last": last}
+        _BASELINES, {**_project_key(binding), "first": first, "last": last}
     )
-    return {
-        (row.service_name, row.minute.astimezone(UTC)): baseline_from_json(row.baseline)
-        for row in rows
-    }
+    found: dict[tuple[str, datetime], Normals] = {}
+    for row in rows:
+        at = (row.service_name, row.minute.astimezone(UTC))
+        known = found.get(at, Normals())
+        if row.signal == SLOWER:
+            found[at] = replace(known, slower=slower_from_json(row.baseline))
+        elif row.signal == FAILING:
+            found[at] = replace(known, failing=failing_from_json(row.baseline))
+        elif row.signal == TRAFFIC:
+            found[at] = replace(known, traffic=traffic_from_json(row.baseline))
+    return found
 
 
-async def _muted(connection: AsyncConnection, binding: ProjectBinding, now: datetime) -> set[str]:
-    rows = await connection.execute(_MUTED, {**_project_key(binding), "now": now})
-    return {row.service_name for row in rows}
+async def _muted_and_snoozed(
+    connection: AsyncConnection, binding: ProjectBinding, now: datetime
+) -> tuple[set[str], set[str]]:
+    rows = list(await connection.execute(_SERVICE_SETTINGS, _project_key(binding)))
+    muted = {row.service_name for row in rows if row.muted_until and row.muted_until > now}
+    snoozed = {row.service_name for row in rows if row.snoozed_until and row.snoozed_until > now}
+    return muted, snoozed
 
 
 async def _advance(
@@ -582,34 +921,40 @@ async def _record_run(connection: AsyncConnection, binding: ProjectBinding) -> N
 
 
 def _reading(service: str, each: Judged, width: int) -> Reading:
-    slower, baseline = each.slower, each.baseline
-    window_errors = 0  # *failing more* fills this in Step 3
+    judged, normals = each.minute, each.normals
+    slower, failing, traffic = judged.slower, judged.failing, judged.traffic
+    slower_normal, failing_normal, traffic_normal = normals.slower, normals.failing, normals.traffic
+    profile = None if failing_normal is None else failing_normal.profile
+    height = None if profile is None else profile.height(failing.window_requests)
+    judged_failing = failing_normal is not None and failing_normal.mode != "learning"
     return Reading(
         service_name=service,
-        minute=each.minute,
+        minute=judged.minute,
         window_minutes=width,
-        window_requests=slower.window_requests,
-        window_errors=window_errors,
+        window_requests=failing.window_requests,
+        window_errors=failing.window_failures,
         window_p95_ms=slower.window_p95_ms,
         window_above_threshold=slower.above_threshold,
-        endpoint_failures={},
-        traffic_mode=NO_MODE,
-        traffic_days=0,
-        traffic_median=None,
-        traffic_spread=None,
-        traffic_verdict=NOT_JUDGED_YET,
-        failing_mode=NO_MODE,
-        failing_days=0,
-        failing_median=None,
-        failing_spread=None,
-        failing_burst_height=None,
-        failing_burst_minutes=0,
-        failing_verdict=NOT_JUDGED_YET,
-        slower_mode=NO_MODE if baseline is None else baseline.mode,
-        slower_days=0 if baseline is None else baseline.days,
-        slower_median=None if baseline is None else baseline.normal_p95_ms,
-        slower_spread=None if baseline is None else baseline.wander,
-        slower_threshold_ms=None if baseline is None else baseline.threshold_ms,
+        endpoint_failures=each.endpoint_counts,
+        traffic_mode=NO_MODE if traffic_normal is None else traffic_normal.mode,
+        traffic_days=0 if traffic_normal is None else traffic_normal.days,
+        traffic_median=None if traffic_normal is None else traffic_normal.median,
+        traffic_spread=None if traffic_normal is None else traffic_normal.spread,
+        traffic_verdict=traffic.verdict,
+        failing_mode=NO_MODE if failing_normal is None else failing_normal.mode,
+        failing_days=0 if failing_normal is None else failing_normal.days,
+        # The rate and wander the minute was judged by: the burst profile rebuilds
+        # whether this window passed the base test from them (D17).
+        failing_median=failing.normal_rate if judged_failing else None,
+        failing_spread=failing.wander if judged_failing else None,
+        failing_burst_height=None if height is None or height == float("-inf") else height,
+        failing_burst_minutes=0 if profile is None else profile.minutes,
+        failing_verdict=failing.verdict,
+        slower_mode=NO_MODE if slower_normal is None else slower_normal.mode,
+        slower_days=0 if slower_normal is None else slower_normal.days,
+        slower_median=None if slower_normal is None else slower_normal.normal_p95_ms,
+        slower_spread=None if slower_normal is None else slower_normal.wander,
+        slower_threshold_ms=None if slower_normal is None else slower_normal.threshold_ms,
         slower_verdict=slower.verdict,
     )
 

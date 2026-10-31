@@ -42,6 +42,7 @@ THE_SURFACE: Final = {
     "nexovue_api/projects/router.py:list_projects": "GET /projects",
     "nexovue_api/services/router.py:list_services": "GET /services",
     "nexovue_api/services/router.py:get_service": "GET /services/{service}",
+    "nexovue_api/detection/router.py:service_detection": "GET /services/{service}/detection",
     "nexovue_api/traces/router.py:list_traces": "GET /traces",
     "nexovue_api/traces/router.py:get_trace": "GET /traces/{trace_id}",
     "nexovue_api/logs/search.py:search": "GET /logs/search",
@@ -54,6 +55,9 @@ THE_SURFACE: Final = {
     "nexovue_api/findings/router.py:list_findings": "GET /findings",
     "nexovue_api/findings/router.py:finding_stats": "GET /findings/stats",
     "nexovue_api/findings/router.py:get_finding": "GET /findings/{finding_id}",
+    "nexovue_api/detection/router.py:detection_status": (
+        "GET /projects/{project_id}/detection/status"
+    ),
     "nexovue_api/checks/router.py:list_checks": "GET /checks",
     "nexovue_api/checks/router.py:get_check": "GET /checks/{check_id}",
     "nexovue_api/synthetics/router.py:list_check_results": "GET /synthetics/checks",

@@ -1,9 +1,11 @@
-"""The hourly baseline (design, "The normal"; plan T2c.3).
+"""The hourly baseline (design, "The normal"; plan T2c.3, T3.2).
 
 **Parity**: from a quiet service's minute history alone, the pools the simulation
 judged by (`fixtures/detection_parity.json`) are built again, at every window
-length. **Modes**: which days a minute is compared with, and learning counted in
-distinct days.
+length, for all three signals. **Modes**: which days a minute is compared with,
+and learning counted in distinct days. **Kept out** (BR3): findings, an admin's
+false alarm, snoozes, refused minutes and the burst profile. **Acceptance**: AC1,
+AC13, AC14 and AC17.
 """
 
 from __future__ import annotations
@@ -15,17 +17,38 @@ from typing import Any, Final
 from zoneinfo import ZoneInfo
 
 import pytest
+from detection_series import daily, series, span
+from detection_series import minute as series_minute
+from detection_series import window as series_window
 
 from nexovue_scheduler.detection.baselines import (
-    baseline_from_json,
-    baseline_json,
+    Baselines,
+    Exclusions,
+    FindingSpan,
+    endpoint_profiles,
+    exclusions,
+    failing_from_json,
+    failing_json,
+    failing_profile,
     history_spans,
     horizon,
     learning_until,
     select_pool,
-    slower_baselines,
+    service_baselines,
+    slower_from_json,
+    slower_json,
+    traffic_from_json,
+    traffic_json,
 )
-from nexovue_scheduler.detection.method import BUCKET_COUNT, Minute
+from nexovue_scheduler.detection.method import (
+    BUCKET_COUNT,
+    SENSITIVITIES,
+    Minute,
+    Window,
+    judge_failing,
+    judge_slower,
+    judge_traffic,
+)
 
 PARITY: Final = json.loads(
     (Path(__file__).parent / "fixtures" / "detection_parity.json").read_text(encoding="utf-8")
@@ -43,13 +66,29 @@ def _at(minute: int) -> datetime:
 
 
 def _history(rows: list[list[Any]]) -> dict[datetime, Minute]:
+    """[minute, requests, errors, sparse buckets, [endpoint, requests, errors, …]]."""
     history = {}
-    for minute, requests, errors, sparse in rows:
+    for minute, requests, errors, sparse, endpoints in rows:
         buckets = [0] * BUCKET_COUNT
         for index in range(0, len(sparse), 2):
             buckets[sparse[index]] = sparse[index + 1]
-        history[_at(minute)] = Minute(requests, errors, tuple(buckets))
+        counts = {
+            f"ep{endpoints[i]}": (endpoints[i + 1], endpoints[i + 2])
+            for i in range(0, len(endpoints), 3)
+        }
+        history[_at(minute)] = Minute(requests, errors, tuple(buckets), counts)
     return history
+
+
+def _built(
+    history: dict[datetime, Minute],
+    minutes: list[datetime],
+    *,
+    first_seen: datetime,
+    width: int,
+    zone: ZoneInfo = UTC_ZONE,
+) -> dict[datetime, Baselines]:
+    return service_baselines(history, minutes, zone=zone, first_seen=first_seen, width=width)
 
 
 def _parity_cases() -> list[Any]:
@@ -64,12 +103,10 @@ def _parity_cases() -> list[Any]:
 def test_the_pools_are_the_simulation_s(case: dict[str, Any], width: int) -> None:
     minutes = [_at(minute) for minute in case["minutes"]]
 
-    built = slower_baselines(
-        _history(case["history"]), minutes, zone=UTC_ZONE, first_seen=EPOCH, width=width
-    )
+    built = _built(_history(case["history"]), minutes, first_seen=EPOCH, width=width)
 
     for minute, expected in zip(minutes, case["expected"][str(width)], strict=True):
-        baseline = built[minute]
+        baseline = built[minute].slower
         assert baseline.mode == expected["mode"]
         assert baseline.days == expected["days"]
         assert baseline.pool_requests == expected["pool_requests"]
@@ -77,6 +114,20 @@ def test_the_pools_are_the_simulation_s(case: dict[str, Any], width: int) -> Non
         assert baseline.share_above == pytest.approx(expected["share_above"], rel=1e-12)
         assert baseline.wander == pytest.approx(expected["wander"], rel=1e-9, abs=1e-15)
         assert baseline.normal_p95_ms == pytest.approx(expected["normal_p95_ms"], rel=1e-12)
+        failing, failing_expected = built[minute].failing, expected["failing"]
+        assert failing.mode == expected["mode"]
+        assert failing.pool_requests == failing_expected["pool_requests"]
+        assert failing.pool_failures == failing_expected["pool_failures"]
+        assert failing.wander == pytest.approx(failing_expected["wander"], rel=1e-9, abs=1e-15)
+        assert set(failing.endpoints) == set(failing_expected["endpoints"])
+        for name, (requests, failures, wander) in failing_expected["endpoints"].items():
+            normal = failing.endpoints[name]
+            assert (normal.pool_requests, normal.pool_failures) == (requests, failures)
+            assert normal.wander == pytest.approx(wander, rel=1e-9, abs=1e-15)
+        traffic = built[minute].traffic
+        assert traffic.mode == expected["mode"]
+        assert traffic.median == pytest.approx(expected["traffic"]["median"], rel=1e-12)
+        assert traffic.spread == pytest.approx(expected["traffic"]["spread"], rel=1e-12)
 
 
 def test_the_parity_cases_cover_both_modes_and_cut_pools_at_midnight() -> None:
@@ -181,24 +232,21 @@ def test_a_learning_minute_reads_no_history() -> None:
     pools = [select_pool(WEDNESDAY_NOON, UTC_ZONE, first_seen)]
 
     assert history_spans(pools, 5) == {}
-    built = slower_baselines({}, [WEDNESDAY_NOON], zone=UTC_ZONE, first_seen=first_seen, width=5)[
-        WEDNESDAY_NOON
-    ]
-    assert built.mode == "learning"
-    # Wednesday, Thursday and Friday are behind the Monday after.
-    assert built.learning_until == date(2026, 11, 9)
+    built = _built({}, [WEDNESDAY_NOON], first_seen=first_seen, width=5)[WEDNESDAY_NOON]
+    # Wednesday, Thursday and Friday are behind the Monday after; traffic waits for
+    # 3 weeks as well (FR6).
+    for baseline in (built.slower, built.failing, built.traffic):
+        assert baseline.mode == "learning"
+    assert built.slower.learning_until == built.failing.learning_until == date(2026, 11, 9)
+    assert built.traffic.learning_until == date(2026, 11, 25)
 
 
 def test_no_traffic_in_the_pool_is_a_normal_with_no_requests() -> None:
     """A service that existed but was quiet at this hour: its days count, and it has
     nothing to judge by, which the method reads as too little traffic."""
-    built = slower_baselines(
-        {},
-        [WEDNESDAY_NOON],
-        zone=UTC_ZONE,
-        first_seen=WEDNESDAY_NOON - timedelta(days=30),
-        width=5,
-    )[WEDNESDAY_NOON]
+    built = _built({}, [WEDNESDAY_NOON], first_seen=WEDNESDAY_NOON - timedelta(days=30), width=5)[
+        WEDNESDAY_NOON
+    ].slower
 
     assert built.mode == "weekly"
     assert built.pool_requests == 0
@@ -206,11 +254,20 @@ def test_no_traffic_in_the_pool_is_a_normal_with_no_requests() -> None:
 
 
 def test_a_stored_baseline_reads_back_as_written() -> None:
-    first_seen = WEDNESDAY_NOON - timedelta(days=1)
-    for baseline in slower_baselines(
-        {}, [WEDNESDAY_NOON], zone=UTC_ZONE, first_seen=first_seen, width=3
-    ).values():
-        assert baseline_from_json(json.loads(json.dumps(baseline_json(baseline)))) == baseline
+    (case, *_) = PARITY["baselines"]
+    minutes = [_at(minute) for minute in case["minutes"]]
+    for first_seen in (minutes[0] - timedelta(days=1), EPOCH):
+        for built in _built(
+            _history(case["history"]), minutes, first_seen=first_seen, width=3
+        ).values():
+            assert slower_from_json(_round_trip(slower_json(built.slower))) == built.slower
+            assert failing_from_json(_round_trip(failing_json(built.failing))) == built.failing
+            assert traffic_from_json(_round_trip(traffic_json(built.traffic))) == built.traffic
+
+
+def _round_trip(stored: dict[str, Any]) -> dict[str, Any]:
+    loaded: dict[str, Any] = json.loads(json.dumps(stored))
+    return loaded
 
 
 def test_a_run_covers_the_minutes_being_judged_and_two_hours_ahead() -> None:
@@ -219,3 +276,288 @@ def test_a_run_covers_the_minutes_being_judged_and_two_hours_ahead() -> None:
     assert minutes[0] == datetime(2026, 11, 4, 11, 45, tzinfo=UTC)
     assert minutes[-1] == datetime(2026, 11, 4, 13, 59, tzinfo=UTC)
     assert len(set(minutes)) == len(minutes)
+
+
+# ---------------------------------------------------------------- kept out
+
+NORMAL: Final = SENSITIVITIES["normal"]
+TUESDAY: Final = datetime(2026, 10, 6, tzinfo=UTC)
+
+
+def _range(first: datetime, hours: float) -> tuple[datetime, datetime]:
+    return first, first + timedelta(hours=hours) - timedelta(minutes=1)
+
+
+def _finding(
+    first: datetime,
+    hours: float,
+    *,
+    service: str | None = "checkout",
+    false_alarm: bool = False,
+    by_admin: bool = False,
+) -> FindingSpan:
+    start, last = _range(first, hours)
+    return FindingSpan(service, start, last, false_alarm, by_admin)
+
+
+def test_a_finding_s_minutes_are_kept_out_unless_an_admin_said_they_were_normal() -> None:
+    """BR3, D28: a member's false alarm leaves the minutes out; an admin's returns them."""
+    noon = TUESDAY + timedelta(hours=12)
+    member = exclusions("checkout", [_finding(noon, 1, false_alarm=True)], recorded={}, refused=[])
+    admin = exclusions(
+        "checkout", [_finding(noon, 1, false_alarm=True, by_admin=True)], recorded={}, refused=[]
+    )
+
+    assert member.normal.kept_out(noon + timedelta(minutes=30))
+    assert not admin.normal.kept_out(noon + timedelta(minutes=30))
+    # A false alarm's minutes never shape the burst profile, whoever marked it (D26).
+    assert member.profile.kept_out(noon) and admin.profile.kept_out(noon)
+
+
+def test_snoozed_refused_and_another_service_s_minutes() -> None:
+    """D25: snoozed minutes stay out. A refused minute is *data delayed* for every
+    service. A project finding (FR15) keeps every service's minutes out; another
+    service's own finding keeps none of this one's."""
+    noon = TUESDAY + timedelta(hours=12)
+    kept = exclusions(
+        "checkout",
+        [
+            _finding(noon, 1, service="payments"),
+            _finding(noon + timedelta(hours=3), 1, service=None),
+        ],
+        recorded={"snoozed": [_range(noon + timedelta(hours=6), 2)]},
+        refused=[noon + timedelta(hours=9)],
+    )
+
+    assert not kept.normal.kept_out(noon + timedelta(minutes=10))
+    assert kept.normal.kept_out(noon + timedelta(hours=3, minutes=10))
+    assert kept.normal.kept_out(noon + timedelta(hours=7))
+    assert kept.normal.kept_out(noon + timedelta(hours=9))
+    assert not kept.normal.kept_out(noon + timedelta(hours=9, minutes=1))
+
+
+def test_a_short_finding_stays_in_the_burst_profile_and_a_long_one_does_not() -> None:
+    """The simulation's profile keeps a finding of 30 minutes or less, one of the
+    service's own bursts, so a bursty service learns its bursts (D17)."""
+    noon = TUESDAY + timedelta(hours=12)
+    kept = exclusions(
+        "checkout",
+        [_finding(noon, 0.25), _finding(noon + timedelta(hours=2), 2)],
+        recorded={},
+        refused=[],
+    )
+
+    assert kept.normal.kept_out(noon) and not kept.profile.kept_out(noon)
+    assert kept.profile.kept_out(noon + timedelta(hours=3))
+
+
+def test_a_burst_profile_leaves_out_what_it_must_not_learn_from() -> None:
+    """D26: the same bursty history, once with its bursts inside a false alarm or a
+    snooze: those excursions never widen the tolerance."""
+    width = NORMAL.window_minutes
+    day_start = TUESDAY + timedelta(days=28)
+    first = day_start - timedelta(days=28)
+    counts: dict[datetime, tuple[int, int]] = {}
+    normals: dict[datetime, tuple[float, float]] = {}
+    bursts = [first + timedelta(days=day, hours=10) for day in range(0, 28, 3)]
+    for at in span(first - timedelta(minutes=width), day_start - timedelta(minutes=1)):
+        counts[at] = (100, 1)
+        normals[at] = (0.01, 0.0)
+    for burst in bursts:
+        for at in span(burst, burst + timedelta(minutes=7)):
+            counts[at] = (100, 12)
+
+    learned = failing_profile(
+        counts, normals, day_start=day_start, width=width, kept_out=Exclusions()
+    )
+    kept_out = Exclusions([(burst, burst + timedelta(minutes=12)) for burst in bursts])
+    without = failing_profile(counts, normals, day_start=day_start, width=width, kept_out=kept_out)
+
+    assert learned.bursty and learned.excursions == len(bursts)
+    assert learned.minutes >= 8
+    assert without.excursions == 0 and not without.bursty
+    assert max(without.heights.values()) < max(learned.heights.values())
+
+
+def test_learning_counts_the_days_that_remain_after_exclusions() -> None:
+    """AC14, FR4: three weekdays of history, Friday, Monday and Tuesday, two of them
+    inside findings at this hour, leave one: learning again."""
+    noon = WEDNESDAY_NOON
+    first_seen = noon - timedelta(days=5)
+    kept_out = Exclusions([_range(noon - timedelta(days=day, hours=2), 4) for day in (1, 2)])
+
+    assert select_pool(noon, UTC_ZONE, first_seen).mode == "daily"
+    assert select_pool(noon, UTC_ZONE, first_seen, kept_out).mode == "learning"
+
+
+# --------------------------------------------------------------- acceptance
+
+UTC_RATE: Final = daily(UTC_ZONE, peak=300)
+
+
+def _judged(
+    history: dict[datetime, Minute], baselines: dict[datetime, Baselines]
+) -> dict[datetime, dict[str, str]]:
+    found = {}
+    for at, normal in baselines.items():
+        window = Window(tuple(series_window(history, at, NORMAL.window_minutes)))
+        verdicts: dict[str, str] = {
+            "traffic": judge_traffic(window, normal.traffic, NORMAL).verdict,
+            "failing": judge_failing(window, normal.failing, NORMAL).verdict,
+            "slower": judge_slower(window, normal.slower, NORMAL).verdict,
+        }
+        found[at] = verdicts
+    return found
+
+
+def _unusual(judged: dict[datetime, dict[str, str]]) -> list[tuple[datetime, str]]:
+    return [
+        (at, s) for at, verdicts in judged.items() for s, v in verdicts.items() if v == "unusual"
+    ]
+
+
+def test_a_steady_service_opens_nothing_over_a_week_at_its_busiest_and_quietest() -> None:
+    """AC1: a four-week daily and weekly pattern with ordinary noise, judged every
+    minute of its busiest and its quietest hour for a week."""
+    first_seen = TUESDAY - timedelta(days=28)
+    history = series(first_seen, 35 * 1440, daily(UTC_ZONE, peak=300, weekend=0.5), seed=23)
+    verdicts: set[str] = set()
+    for day in range(7):
+        start = TUESDAY + timedelta(days=day)
+        minutes = [
+            *span(start + timedelta(hours=13, minutes=30), start + timedelta(hours=14, minutes=29)),
+            *span(start + timedelta(hours=1), start + timedelta(hours=1, minutes=59)),
+        ]
+        judged = _judged(
+            history,
+            service_baselines(
+                history, minutes, zone=UTC_ZONE, first_seen=first_seen, width=NORMAL.window_minutes
+            ),
+        )
+        assert _unusual(judged) == [], f"day {day}"
+        verdicts |= {v for each in judged.values() for v in each.values()}
+    # Judged, not merely quiet: every signal read normal somewhere.
+    assert "normal" in verdicts
+
+
+@pytest.mark.parametrize("shift_minutes", [0, 60])
+def test_a_repeated_outage_falls_back_to_the_daily_pattern_and_is_still_caught(
+    shift_minutes: int,
+) -> None:
+    """AC13, FR4, BR3: the same 6-hour outage on two of three Tuesdays, both inside
+    findings. On the fourth Tuesday the weekly days at those hours are gone, so the
+    normal falls back to the daily pattern; it equals the normal built without the
+    outage minutes; and the outage, an hour later or not, is caught."""
+    first_seen = TUESDAY - timedelta(days=22)
+    clean = series(first_seen, 29 * 1440, daily(UTC_ZONE, peak=300), seed=29)
+    history = dict(clean)
+    outages = [TUESDAY - timedelta(days=days) + timedelta(hours=10) for days in (7, 14)]
+    for start in outages:
+        for at in span(start, start + timedelta(hours=6) - timedelta(minutes=1)):
+            history[at] = series_minute(3)
+    kept_out = Exclusions(
+        [
+            (start - timedelta(minutes=4), start + timedelta(hours=6, minutes=10))
+            for start in outages
+        ]
+    )
+    today = TUESDAY + timedelta(hours=10, minutes=shift_minutes)
+    for at in span(today, today + timedelta(hours=6)):
+        history[at] = series_minute(3)
+    minutes = [
+        TUESDAY + timedelta(hours=9, minutes=30),
+        *span(today + timedelta(minutes=4), today + timedelta(minutes=12)),
+        TUESDAY + timedelta(hours=13),
+    ]
+
+    def built(source: dict[datetime, Minute]) -> dict[datetime, Baselines]:
+        return service_baselines(
+            source,
+            minutes,
+            zone=UTC_ZONE,
+            first_seen=first_seen,
+            width=NORMAL.window_minutes,
+            kept_out=kept_out,
+        )
+
+    with_outages, without = built(history), built(clean)
+    assert with_outages == without, "the outage minutes changed the normal"
+    assert with_outages[TUESDAY + timedelta(hours=13)].traffic.mode == "daily"
+    assert with_outages[TUESDAY + timedelta(hours=9, minutes=30)].traffic.mode == "weekly"
+    caught = [at for at, s in _unusual(_judged(history, with_outages)) if s == "traffic"]
+    assert caught and caught[0] - today <= timedelta(minutes=9)
+
+
+def test_the_normal_follows_local_time_through_a_clock_change() -> None:
+    """AC17, FR7: a New York service whose traffic follows the local clock, judged for
+    three weeks after the clocks went back on 1 November 2026, opens nothing."""
+    zone = NEW_YORK
+    first_seen = datetime(2026, 10, 1, tzinfo=zone).astimezone(UTC)
+    change = datetime(2026, 11, 1, tzinfo=zone).astimezone(UTC)
+    rate = daily(zone, peak=300, weekend=0.5)
+    history = series(first_seen, (change - first_seen) // timedelta(minutes=1) + 22 * 1440, rate)
+    for day in range(1, 22, 2):
+        local = datetime.combine(
+            (change + timedelta(days=day)).astimezone(zone).date(), datetime.min.time()
+        )
+        minutes = [
+            (local + timedelta(hours=hour, minutes=m)).replace(tzinfo=zone).astimezone(UTC)
+            for hour in (9, 14)
+            for m in range(0, 30, 3)
+        ]
+        judged = _judged(
+            history,
+            service_baselines(
+                history, minutes, zone=zone, first_seen=first_seen, width=NORMAL.window_minutes
+            ),
+        )
+        assert _unusual(judged) == [], f"{day} days after the change"
+
+
+def test_the_fall_back_hour_pools_both_of_its_utc_minutes() -> None:
+    """FR7: 01:30 on 1 November 2026 happened twice in New York; a week later, 01:30
+    is compared with both."""
+    week_later = datetime(2026, 11, 8, 1, 30, tzinfo=NEW_YORK).astimezone(UTC)
+
+    pool = select_pool(week_later, NEW_YORK, week_later - timedelta(days=60))
+
+    (fall_back,) = [day for day in pool.days if day.offset == 7]
+    assert [c.astimezone(NEW_YORK).strftime("%H:%M %Z") for c in fall_back.centres] == [
+        "01:30 EDT",
+        "01:30 EST",
+    ]
+    assert len(fall_back.level_ranges) == 2
+    assert all(len(day.centres) == 1 for day in pool.days if day.offset != 7)
+
+
+def test_an_endpoint_s_profile_comes_from_its_recorded_excursions_and_its_windows() -> None:
+    """D18 per endpoint, D26: heights from its window counts, excursions from what the
+    project job recorded, each cut where minutes are kept out, and one inside a false
+    alarm dropped."""
+    width = NORMAL.window_minutes
+    day_start = TUESDAY + timedelta(days=28)
+    first = day_start - timedelta(days=28)
+    windows = {
+        at: {"POST /pay": (100, 1 if at.minute else 30)}
+        for at in span(first, day_start - timedelta(minutes=1))
+    }
+    bursts = [first + timedelta(days=day, hours=10) for day in range(0, 28, 3)]
+    runs = {"POST /pay": [(b, b + timedelta(minutes=7)) for b in bursts]}
+    false_alarm = Exclusions([(bursts[0], bursts[0] + timedelta(minutes=20))])
+    split = Exclusions([(bursts[1] + timedelta(minutes=3), bursts[1] + timedelta(minutes=3))])
+
+    learned = endpoint_profiles(
+        windows, runs, day_start=day_start, width=width, kept_out=Exclusions(), days=28.0
+    )["POST /pay"]
+    without = endpoint_profiles(
+        windows, runs, day_start=day_start, width=width, kept_out=false_alarm, days=28.0
+    )["POST /pay"]
+    cut = endpoint_profiles(
+        windows, runs, day_start=day_start, width=width, kept_out=split, days=28.0
+    )["POST /pay"]
+
+    assert learned.bursty and learned.excursions == len(bursts)
+    assert learned.minutes == 8 + width - 1
+    assert learned.height(100) == pytest.approx(0.3)
+    assert without.excursions == len(bursts) - 1
+    assert cut.excursions == len(bursts) + 1

@@ -153,8 +153,33 @@ Recorded as each plan step lands. It says where the built code differs from the 
     (`tests/fixtures/detection_parity.json`).
   - **`/findings` is on the API's telemetry rate tier,** because its trend reads ClickHouse.
   - **AC8 versus the 80% rule:** a finding can open after 4 of 5 slow minutes at normal sensitivity, as the
-    simulation assumed, where AC8 says 5 of 5. This waits on the founder, and two strict expected-failure
-    tests mark it.
+    simulation assumed, where AC8 said 5 of 5. The founder chose 4 of 5 (2026-11-01). AC8 and FR12 now
+    say so, and the tests assert it.
+
+- **Step 3, 2026-11-01:**
+  - **Traffic's spread** is the level pool's MAD on the square-root scale, with Poisson's floor of 1. The
+    dispersion pool is not used for traffic.
+  - **Endpoints are judged for *failing more* only** (FR3), keyed by `span_name`. *Slower* names no
+    endpoint.
+  - **Endpoints get D18's switch too.** Readings keep no per-endpoint normal, so the project job records each
+    endpoint's excursions in the service's state as it judges them, and forgets them after 28 days. History
+    judged before this was built carries none, and learning days give no heights.
+  - **Kept-out minutes** (false alarms, snoozes, outages) are stored as ranges in
+    `detection_state.signals["excluded"]`. The burst profile is cut at them, so they never widen tolerance.
+  - **The project finding (FR15)** counts each service's clear traffic in judged minutes in a row
+    (`clear_minutes`). It closes as recovered once fewer than half its services are still unusual for the
+    recovery time. It closes as *service gone* once none of its services has sent anything for 24 hours.
+  - **A stop's limit:** an empty window is told apart from chance only from about 6.5 expected requests in
+    the window (spec, FR32, *Limit*). At high sensitivity, with its 3-minute window, that is about 2.2 a
+    minute.
+  - **"Data delayed" needs no new column.** The API derives it when the judged minute is more than 6
+    minutes behind; up to 3 minutes is ordinary settling.
+  - **Times name the project's zone.** `shared/format/zoned.ts` prints the abbreviation, or the zone's full
+    name where the abbreviation is ambiguous, as with IST.
+  - **A job that has stopped** reads "Detection has not run since 14:02" when its last run is known, and
+    "Detection is not running" when it is not.
+  - **The parity fixture** now holds failing, traffic and endpoint-burst windows, 3.3 MB. Turning endpoint
+    tolerance off fails 11 of its windows.
 
 ## Words used here
 

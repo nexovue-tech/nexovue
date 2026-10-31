@@ -1,4 +1,4 @@
-"""One project's judging against real Postgres and ClickHouse (plan T2c.3).
+"""One project's judging against real Postgres and ClickHouse (plan T2c.3, T3.3).
 
 History is written straight into `service_stats_1m` with the store's own account,
 the hourly baseline job builds the normal from it, and the project job is run
@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -22,11 +22,12 @@ from clickhouse_cleanup import delete_after_run
 from clickhouse_connect.driver.client import Client
 from live import require_stack
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from nexovue_scheduler.detection import baselines, project_job
 from nexovue_scheduler.detection.coordinator import project_requests
-from nexovue_scheduler.detection.method import BUCKET_COUNT
+from nexovue_scheduler.detection.method import BUCKET_COUNT, RECOVERY_MINUTES
 from nexovue_scheduler.detection.project_job import (
     Outcome,
     ServiceState,
@@ -57,6 +58,7 @@ POSTGRES_DSN: Final = os.environ.get(
     "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
 )
 ROLLUP: Final = "service_stats_1m"
+ENDPOINT_ROLLUP: Final = "endpoint_stats_1m"
 SERVICE: Final = "checkout"
 MINUTE: Final = timedelta(minutes=1)
 # Normal sensitivity, the default: a 5-minute window, so 5 minutes of sustain.
@@ -111,6 +113,7 @@ def administrator() -> Iterator[Client]:
 async def project(engine: AsyncEngine) -> AsyncIterator[AlertTenant]:
     made = await make_tenant(engine, with_check=False)
     delete_after_run(ROLLUP, str(made.org_id))
+    delete_after_run(ENDPOINT_ROLLUP, str(made.org_id))
     delete_after_run(READINGS_TABLE, str(made.org_id))
     try:
         yield made
@@ -121,11 +124,41 @@ async def project(engine: AsyncEngine) -> AsyncIterator[AlertTenant]:
 # ------------------------------------------------------------------ seeding
 
 
-def _buckets(slower_by: int) -> list[int]:
+def _buckets(slower_by: int, requests: int = REQUESTS) -> list[int]:
     buckets = [0] * BUCKET_COUNT
     for offset, percent in enumerate(SHAPE):
-        buckets[FIRST_BUCKET + offset + slower_by] += REQUESTS * percent // 100
+        buckets[FIRST_BUCKET + offset + slower_by] += requests * percent // 100
+    buckets[FIRST_BUCKET + 4 + slower_by] += requests - sum(buckets)
     return buckets
+
+
+def _seed_endpoints(
+    client: Client,
+    tenant: AlertTenant,
+    service: str,
+    endpoints: Mapping[datetime, Mapping[str, tuple[int, int]]],
+) -> None:
+    rows = [
+        f"('{tenant.org_id}','{tenant.project_id}','{service}','SERVER','{name}',"
+        f"{int(minute.timestamp())},{requests},{errors})"
+        for minute, counts in endpoints.items()
+        for name, (requests, errors) in counts.items()
+    ]
+    for start in range(0, len(rows), _INSERT_BATCH):
+        client.command(
+            f"""
+            INSERT INTO {ENDPOINT_ROLLUP}
+                (tenant_id, project_id, service_name, span_kind, span_name, minute,
+                 request_count, error_count)
+            SELECT tenant_id, project_id, service_name, span_kind, span_name,
+                   toDateTime(epoch), requests, errors
+            FROM values(
+                'tenant_id String, project_id String, service_name String, span_kind String,
+                 span_name String, epoch UInt32, requests UInt64, errors UInt64',
+                {",".join(rows[start : start + _INSERT_BATCH])}
+            )
+            """
+        )
 
 
 def _seed(
@@ -135,15 +168,24 @@ def _seed(
     *,
     service: str = SERVICE,
     slower_by: dict[datetime, int] | None = None,
+    requests: int = REQUESTS,
+    errors: int = 0,
+    endpoints: Mapping[datetime, Mapping[str, tuple[int, int]]] | None = None,
 ) -> None:
-    """Rows as the worker writes them: the buckets folded into their aggregate state."""
+    """Rows as the worker writes them: the buckets folded into their aggregate state,
+    and each endpoint's counts in its own rollup."""
     rows = []
     for minute in minutes:
-        buckets = _buckets((slower_by or {}).get(minute, 0))
+        buckets = _buckets((slower_by or {}).get(minute, 0), requests)
+        failures = errors
+        if endpoints is not None and minute in endpoints:
+            failures = sum(e for _, e in endpoints[minute].values())
         rows.append(
             f"('{tenant.org_id}','{tenant.project_id}','{service}',"
-            f"{int(minute.timestamp())},{sum(buckets)},0,{buckets})"
+            f"{int(minute.timestamp())},{sum(buckets)},{failures},{buckets})"
         )
+    if endpoints is not None:
+        _seed_endpoints(client, tenant, service, endpoints)
     for start in range(0, len(rows), _INSERT_BATCH):
         client.command(
             f"""
@@ -165,24 +207,39 @@ def _span(first: datetime, last: datetime) -> list[datetime]:
     return [first + step * MINUTE for step in range((last - first) // MINUTE + 1)]
 
 
-def _seed_four_weeks(client: Client, tenant: AlertTenant, *, service: str = SERVICE) -> None:
+def _seed_four_weeks(
+    client: Client,
+    tenant: AlertTenant,
+    *,
+    service: str = SERVICE,
+    errors: int = 0,
+    endpoints: Mapping[str, tuple[int, int]] | None = None,
+    until: timedelta = timedelta(minutes=240),
+) -> None:
     """A service first seen 29 days ago, with normal traffic around noon on the four
-    same weekdays its weekly pool reads."""
+    same weekdays its weekly pool reads; and its endpoints, when given."""
     _seed(client, tenant, [ONSET - timedelta(days=29)], service=service)
     for weeks in range(1, 5):
         day = ONSET - timedelta(days=7 * weeks)
+        minutes = _span(day - timedelta(minutes=200), day + until)
         _seed(
             client,
             tenant,
-            _span(day - timedelta(minutes=200), day + timedelta(minutes=240)),
+            minutes,
             service=service,
+            errors=errors,
+            endpoints=None if endpoints is None else dict.fromkeys(minutes, endpoints),
         )
 
 
-async def _baselines(engine: AsyncEngine, store: DetectionStore, tenant: AlertTenant) -> None:
-    written = await baselines.compute_project(
-        engine, store, tenant.project_id, now=ONSET - timedelta(minutes=5)
-    )
+async def _baselines(
+    engine: AsyncEngine,
+    store: DetectionStore,
+    tenant: AlertTenant,
+    *,
+    now: datetime = ONSET - timedelta(minutes=5),
+) -> None:
+    written = await baselines.compute_project(engine, store, tenant.project_id, now=now)
     assert written is not None and written >= 1
 
 
@@ -266,7 +323,9 @@ async def test_a_sustained_slowdown_opens_exactly_one_finding_and_closes_it(
     assert signal["comparison"].endswith(", last 4 weeks")
     state = await _state(engine, project)
     assert state.last_judged_minute == minutes[-1]
-    assert state.signals["slower"]["clear_minutes"] == 0
+    # A closed finding leaves no keys to count; the signal's own clear run continues.
+    assert "finding" not in state.signals
+    assert state.signals["slower"]["clear_minutes"] >= RECOVERY_MINUTES
     readings = store.for_project(await _bound(engine, project)).readings(
         start=minutes[0], end=minutes[-1] + MINUTE
     )
@@ -278,9 +337,8 @@ async def test_a_sustained_slowdown_opens_exactly_one_finding_and_closes_it(
 async def test_a_rise_too_short_to_pass_the_80_percent_rule_opens_nothing(
     engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
 ) -> None:
-    """AC8's second half, as far as the approved method holds it: 3 slow minutes of
-    a 5-minute window. (4 of 5 opens under the design's 80% rule; see
-    test_detection_method.py's expected failure.)"""
+    """AC8's second half, under the 80% rule the founder kept: 3 slow minutes of a
+    5-minute window, one short of the 4 that open (test_detection_method.py)."""
     _seed_four_weeks(administrator, project)
     await _baselines(engine, store, project)
     minutes = _rise(administrator, project, minutes=SUSTAIN - 2, slower_by=PAST_THE_MINIMUM)
@@ -463,6 +521,233 @@ async def test_a_project_with_recent_traffic_is_handed_a_job(
     assert request.queue == "detection"
     assert request.org_id == str(project.org_id)
     assert request.kwargs["settled_minute"] == ONSET.isoformat()
+
+
+# ------------------------------------------------------------ Step 3 (T3.3)
+
+ENDPOINTS: Final = {
+    "GET /cart": (60, 0),
+    "POST /pay": (20, 0),
+    "GET /item": (15, 1),
+    "GET /": (5, 0),
+}
+
+
+async def test_two_hours_on_two_signals_and_three_endpoints_are_one_finding(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """AC18, BR2: slower and failing more, with three endpoints failing, for two hours:
+    one finding, whose worst values and title follow the deviation, closing once
+    every key has recovered."""
+    _seed_four_weeks(administrator, project, endpoints=ENDPOINTS, until=timedelta(minutes=150))
+    await _baselines(engine, store, project)
+    deviation = timedelta(hours=2)
+    failing = {"GET /cart": (60, 12), "POST /pay": (20, 15), "GET /item": (15, 12), "GET /": (5, 0)}
+    span = _span(ONSET - timedelta(minutes=30), ONSET + deviation + timedelta(minutes=30))
+    _seed(
+        administrator,
+        project,
+        span,
+        slower_by={m: 3 for m in span if ONSET <= m < ONSET + deviation},
+        endpoints={m: failing if ONSET <= m < ONSET + deviation else ENDPOINTS for m in span},
+    )
+    minutes = _span(ONSET - timedelta(minutes=10), ONSET + deviation + timedelta(minutes=20))
+
+    outcomes = []
+    for minute in minutes:
+        if minute == ONSET + timedelta(minutes=100):
+            await _baselines(engine, store, project, now=minute)
+        outcomes.append(
+            await judge_project(engine, store, project.project_id, settled=minute, now=minute)
+        )
+
+    assert sum(o.opened for o in outcomes) == 1
+    assert sum(o.closed for o in outcomes) == 1
+    (finding,) = await _findings(engine, project)
+    assert finding.closed_reason == "recovered"
+    assert finding.closed_at >= ONSET + deviation
+    assert finding.started_at <= ONSET + timedelta(minutes=1)
+    assert finding.title.startswith(f"{SERVICE} is failing ")
+    assert finding.title.endswith(", and is slower")
+    signals = {(s["signal"], s["endpoint"]) for s in finding.signals}
+    assert ("slower", None) in signals
+    endpoints = {endpoint for signal, endpoint in signals if signal == "failing"}
+    assert {"POST /pay", "GET /item"} <= endpoints
+    assert finding.signals[0]["signal"] == "failing"
+
+
+async def test_nine_of_eleven_services_stopping_is_one_project_finding(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """AC21, FR15: one project finding, critical, and no finding for any service."""
+    services = [f"svc-{index:02}" for index in range(11)]
+    for service in services:
+        _seed_four_weeks(administrator, project, service=service)
+        stops = service < services[9]
+        today = _span(
+            ONSET - timedelta(minutes=30),
+            ONSET + (-timedelta(minutes=1) if stops else timedelta(minutes=30)),
+        )
+        _seed(administrator, project, today, service=service)
+    await _baselines(engine, store, project)
+    minutes = _span(ONSET - timedelta(minutes=5), ONSET + timedelta(minutes=15))
+
+    outcomes = await _judge_through(engine, store, project, minutes)
+
+    (finding,) = await _findings(engine, project)
+    assert finding.scope == "project" and finding.service_name is None
+    assert finding.severity == "critical" and finding.state == "open"
+    assert finding.title == (
+        f"Traffic stopped arriving from 9 of 11 services at {ONSET:%H:%M} UTC. "
+        "Check your collector or network"
+    )
+    assert sum(o.opened for o in outcomes) == 1
+    opened_at = next(m for m, o in zip(minutes, outcomes, strict=True) if o.opened)
+    assert opened_at - ONSET <= TIME_TO_A_FINDING
+
+
+async def test_a_lower_sensitivity_closes_a_finding_its_minimum_no_longer_holds(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """AC30, FR18: about 1.7 times slower opens a finding at normal. Changed to low,
+    whose minimum is 2 times, it closes after *recovery* with the rise unchanged, and
+    the same rise opens nothing more."""
+    _seed_four_weeks(administrator, project)
+    await _baselines(engine, store, project)
+    span = _span(ONSET - timedelta(minutes=30), ONSET + timedelta(minutes=60))
+    _seed(administrator, project, span, slower_by={m: 3 for m in span if m >= ONSET})
+    at_normal = _span(ONSET - timedelta(minutes=5), ONSET + timedelta(minutes=10))
+    opened = await _judge_through(engine, store, project, at_normal)
+    assert sum(o.opened for o in opened) == 1
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE projects SET detection_sensitivity = 'low' WHERE id = :id"),
+            {"id": project.project_id},
+        )
+    switched = ONSET + timedelta(minutes=11)
+    await _baselines(engine, store, project, now=switched)
+
+    at_low = await _judge_through(
+        engine, store, project, _span(switched, ONSET + timedelta(minutes=45))
+    )
+
+    assert sum(o.closed for o in at_low) == 1
+    assert sum(o.opened for o in at_low) == 0
+    (finding,) = await _findings(engine, project)
+    assert finding.closed_reason == "recovered"
+    assert finding.closed_at - switched <= timedelta(minutes=RECOVERY_MINUTES + 1)
+
+
+def _last_thursday_noon() -> datetime:
+    """A recent Thursday: three weekdays of history before it make it day 3 (D30)."""
+    day = ONSET - timedelta(days=1)
+    while day.weekday() != 3:
+        day -= timedelta(days=1)
+    return day
+
+
+async def test_a_small_service_that_stops_on_day_three_is_critical_then_gone(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """AC41, FR32, D30: 2 requests a minute, history since Monday, stops at noon on
+    Thursday: a critical finding within *time to a finding*. A day of silence later it
+    closes as *service gone*."""
+    onset = _last_thursday_noon()
+    monday = onset.replace(hour=0) - timedelta(days=3)
+    _seed(administrator, project, _span(monday, onset - MINUTE), requests=2)
+    await _baselines(engine, store, project, now=onset - timedelta(minutes=5))
+    minutes = _span(onset - timedelta(minutes=5), onset + timedelta(minutes=12))
+
+    outcomes = await _judge_through(engine, store, project, minutes)
+
+    opened_at = next(m for m, o in zip(minutes, outcomes, strict=True) if o.opened)
+    assert opened_at - onset <= TIME_TO_A_FINDING
+    (finding,) = await _findings(engine, project)
+    assert finding.severity == "critical" and finding.state == "open"
+    assert finding.signals[0]["signal"] == "traffic"
+    assert finding.title == f"{SERVICE} stopped receiving requests at {onset:%H:%M} UTC"
+    a_day_later = onset + timedelta(days=1, minutes=1)
+
+    gone = await _judge_through(engine, store, project, [a_day_later])
+
+    assert gone[0].closed == 1
+    (finding,) = await _findings(engine, project)
+    assert finding.closed_reason == "service_gone"
+
+
+async def test_a_finding_that_cannot_be_judged_for_six_hours_closes_as_such(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """D20: a critical slowdown opens a finding; its service is then judged against no
+    normal at all, and 6 hours later the finding closes as *could no longer be
+    judged*, not as recovered."""
+    _seed_four_weeks(administrator, project)
+    await _baselines(engine, store, project)
+    _seed(
+        administrator,
+        project,
+        _span(ONSET - timedelta(minutes=30), ONSET + timedelta(minutes=10)),
+        slower_by={ONSET + step * MINUTE: PAST_CRITICAL for step in range(11)},
+    )
+    opened = await _judge_through(
+        engine, store, project, _span(ONSET, ONSET + timedelta(minutes=10))
+    )
+    assert sum(o.opened for o in opened) == 1
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM detection_baselines WHERE org_id = :org_id"),
+            {"org_id": project.org_id},
+        )
+    last = ONSET + timedelta(minutes=10)
+    closed_at = None
+    # Two minutes a run, as a job catching up judges them.
+    while closed_at is None and last < ONSET + timedelta(hours=7):
+        last += 2 * MINUTE
+        outcome = await judge_project(engine, store, project.project_id, settled=last, now=last)
+        if outcome.closed:
+            closed_at = last
+
+    (finding,) = await _findings(engine, project)
+    assert finding.closed_reason == "could_not_be_judged"
+    assert closed_at is not None
+    assert timedelta(hours=6) <= closed_at - ONSET <= timedelta(hours=6, minutes=15)
+
+
+@pytest.mark.parametrize("scope", ["service", "project"])
+async def test_a_second_open_finding_for_one_scope_is_refused_whichever_job_commits(
+    project: AlertTenant, scope: str
+) -> None:
+    """The partial unique indexes: two jobs that both believe none is open race to
+    insert; the second waits for the first, then is refused."""
+    first_engine = create_async_engine(POSTGRES_DSN.replace("://", "+asyncpg://", 1))
+    second_engine = create_async_engine(POSTGRES_DSN.replace("://", "+asyncpg://", 1))
+    row = {
+        "org_id": project.org_id,
+        "project_id": project.project_id,
+        "scope": scope,
+        "service_name": SERVICE if scope == "service" else None,
+        "severity": "warning",
+        "muted": False,
+        "title": "a race",
+        "signals": "[]",
+        "started_at": ONSET,
+    }
+    try:
+        async with first_engine.connect() as first, second_engine.connect() as second:
+            await first.begin()
+            await second.begin()
+            await first.execute(project_job._OPEN, row)
+            racing = asyncio.create_task(second.execute(project_job._OPEN, row))
+            await asyncio.sleep(0.2)
+            assert not racing.done(), "the second insert waits on the first's transaction"
+            await first.commit()
+            with pytest.raises(IntegrityError, match="uq_findings_project_id"):
+                await racing
+            await second.rollback()
+        assert len(await _findings(first_engine, project)) == 1
+    finally:
+        await first_engine.dispose()
+        await second_engine.dispose()
 
 
 async def _bound(engine: AsyncEngine, tenant: AlertTenant) -> Any:

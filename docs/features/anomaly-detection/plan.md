@@ -289,17 +289,17 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
 2. Stopping one service's traffic opens a critical *losing traffic* finding.
 3. A new, unseeded project says it is learning, and when judging starts.
 
-- [ ] **T3.1** — `detection/method.py`:
+- [x] **T3.1** — `detection/method.py`:
   - *failing more*, with the per-endpoint test, D18's switch and the burst profile capped below critical (D26);
   - an endpoint critical at its own share (D27);
   - *losing traffic*, with its floors, and a stop judged at any traffic (D30).
 
   Proved by `test_detection_method.py` (AC3, AC4, AC7, AC9 to AC12, AC41's small-service case, AC46), plus
   parity.
-- [ ] **T3.2** — `detection/baselines.py`: modes, learning in distinct days, the fallback, the pools, the burst
+- [x] **T3.2** — `detection/baselines.py`: modes, learning in distinct days, the fallback, the pools, the burst
   profile without false-alarm or snoozed minutes, exclusions, and the time zone. Proved by
   `test_detection_baselines.py` (AC1, AC13, AC14, AC17).
-- [ ] **T3.3** — `detection/project_job.py`:
+- [x] **T3.3** — `detection/project_job.py`:
   - closing that is normal, or below the current sensitivity's minimum (AC30), with its pauses;
   - the 6-hour close, including the mixed case of one signal recovered and one unjudged;
   - severity that only rises, and one finding per service;
@@ -307,14 +307,14 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
   - *service gone*.
 
   Proved by `test_detection_lifecycle.py` (AC18, AC21, AC30, AC41, D20, and the unique indexes under a race).
-- [ ] **T3.4** — API: `GET /projects/{id}/detection/status` (with the muted count) and
+- [x] **T3.4** — API: `GET /projects/{id}/detection/status` (with the muted count) and
   `GET /services/{name}/detection`, both scope-checked. Proved by `test_detection_status_api_live.py`:
   - AC26, a stopped job;
   - **a healthy project must never show *not running***;
   - AC42.
-- [ ] **T3.5** — Web `headline.ts`: the detection lines above the checks' lines (C18), and the error state.
+- [x] **T3.5** — Web `headline.ts`: the detection lines above the checks' lines (C18), and the error state.
   Proved by `headline.test.ts`.
-- [ ] **T3.6** — `shared/format/zoned.ts` (new), which names the zone in full where its abbreviation is
+- [x] **T3.6** — `shared/format/zoned.ts` (new), which names the zone in full where its abbreviation is
   ambiguous, as with IST. Proved by `zoned.test.ts`, including a clock change.
 
 ### Step 4 — Notifications

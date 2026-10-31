@@ -5,7 +5,7 @@ import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { ClosedReason, Finding, ProjectTotals } from "./api";
+import type { ClosedReason, DetectionStatus, Finding, ProjectTotals } from "./api";
 import type { FindingsViewProps } from "./FindingsScreen";
 import { FindingsView } from "./FindingsScreen";
 
@@ -285,5 +285,70 @@ describe("muted findings stay out of the feed", () => {
     expect(readable({ isError: true, error: new Error("boom"), mutedCount: 2 })).not.toContain(
       "Muted",
     );
+  });
+});
+
+describe("detection's line leads the feed (C18)", () => {
+  const JUDGING: DetectionStatus = {
+    state: "judging",
+    services_total: 3,
+    services_learning: 0,
+    services_judged: 3,
+    services_delayed: 0,
+    services_muted: 0,
+    earliest_judging_date: null,
+    not_running_since: null,
+    delayed_since: null,
+    open_findings: 0,
+  };
+  const NOT_RUNNING: DetectionStatus = {
+    ...JUDGING,
+    state: "not_running",
+    not_running_since: "2026-10-31T14:02:00Z",
+  };
+
+  it("sits above the checks' line, which stays", () => {
+    const text = readable({ detection: JUDGING, zone: "UTC" });
+
+    const detection = text.indexOf("All judged services are normal");
+    const checksLine = text.indexOf("All 3 synthetic checks are passing");
+    expect(detection).toBeGreaterThanOrEqual(0);
+    expect(checksLine).toBeGreaterThan(detection);
+    expect(text).not.toContain("All systems normal");
+  });
+
+  it("says it is learning, not that anything is normal, on a new project (AC42)", () => {
+    const text = readable({
+      detection: {
+        ...JUDGING,
+        state: "learning",
+        services_learning: 3,
+        services_judged: 0,
+        earliest_judging_date: "2026-11-03",
+      },
+    });
+
+    expect(text).toContain("Learning your services' normal. Judging starts on 3 Nov");
+    expect(text).not.toMatch(/all judged services are normal|all systems normal/i);
+  });
+
+  it("says detection is not running, with its clock named, even over findings (AC26)", () => {
+    const text = readable({ detection: NOT_RUNNING, zone: "UTC", findings: [FINDING] });
+
+    expect(text).toContain("Detection has not run since");
+    expect(text).toContain("14:02 UTC");
+    expect(text).not.toContain("services are normal");
+  });
+
+  it("shows the error state, never a healthy line, when a read failed", () => {
+    // The screen folds a failed status read into `isError` (`FindingsScreen.tsx`).
+    const text = readable({ detection: JUDGING, isError: true, error: new Error("boom") });
+
+    expect(text).toContain("could not be loaded");
+    expect(text).not.toMatch(/normal/i);
+  });
+
+  it("leaves the line out of the muted list, which says nothing about the system", () => {
+    expect(readable({ detection: NOT_RUNNING, showingMuted: true })).not.toContain("Detection");
   });
 });

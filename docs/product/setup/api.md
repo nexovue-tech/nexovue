@@ -52,6 +52,7 @@ and reach only the documented read API.**
 | `GET /projects` | The projects this token may read, with the ids the rest take |
 | `GET /services` | Every service in a window, worst first |
 | `GET /services/{name}` | One service's health in a window |
+| `GET /services/{name}/detection` | One service's detection state, each signal's phase, and its findings in a window (at most 200) |
 | `GET /traces` | Traces matching filters, newest first (paged) |
 | `GET /traces/{trace_id}` | One trace and its spans |
 | `GET /logs/search` | Log records matching a phrase (paged) |
@@ -64,6 +65,7 @@ and reach only the documented read API.**
 | `GET /findings` | Detected problems: open, then acknowledged, then closed; at most 200, muted ones apart |
 | `GET /findings/stats` | Findings opened and marked false alarms over the last 7 days (`days` up to 90), per service-week |
 | `GET /findings/{finding_id}` | One finding, its signals, and its trend while its readings last (35 days) |
+| `GET /projects/{project_id}/detection/status` | Whether detection is running, how many services are learning or judged, when judging starts, and the open findings |
 | `GET /checks` | Synthetic checks and their confirmed state |
 | `GET /checks/{check_id}` | One check |
 | `GET /synthetics/checks` | Check results in a window |

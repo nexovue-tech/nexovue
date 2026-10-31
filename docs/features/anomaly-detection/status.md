@@ -68,7 +68,26 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
 
   Not yet seen: the jobs running inside a real `scheduler-light` worker on the demo, because the application
   images cannot be built here.
-- **Open for the founder:** AC8 against the 80% rule (`design.md`, *As built*, Step 2c).
+- **AC8:** the founder chose the 80% rule, 4 of 5 minutes at normal (2026-11-01). AC8 and FR12 are amended.
+- **Step 3**, every signal and the states that make silence honest, was built on 2026-11-01:
+  - *failing more* with per-endpoint tests and D18's switch for services and endpoints; *losing traffic*,
+    with a stop judged at any traffic (D30);
+  - the lifecycle: closing, the 6-hour close, rising severity, the project finding, *service gone*;
+  - the detection status API, the headline's detection lines, and times in the project's zone.
+
+  Its checks:
+  - every detection suite passes, unit and live (4,382), with no expected failures left;
+  - the Python suites give 8,981 passed. The 85 that fail or error all need the running application's
+    telemetry (`gate-seed`, the load generator) or internet DNS, which this environment lacks; none is a
+    file this step touches;
+  - the web gives 1,429, plus 124 in the browser SDK; typecheck, Biome and the bundle sizes pass;
+  - all Go packages pass, and `golangci-lint` reports 0 issues;
+  - ruff passes, and mypy reports no issues in 690 files. `buf lint` could not reach its server; no
+    contract changed.
+
+  Its demo checks wait, like Step 2c's, on images built off this network.
+- **A stop's limit:** at high sensitivity a stop needs about 2.2 expected requests a minute, not 2
+  (spec, FR32, *Limit*; AC41).
 - **The dev stores run in this environment**, through a local compose override for the sandbox's open-file
   limit. The application images cannot be built here, because the network blocks `ghcr.io` blobs. So an
   end-to-end check on the stack needs the worker run from source, or your Mac.
@@ -82,8 +101,7 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
 
 ## Next action
 
-The founder approves `plan.md` revision 2, including corrections C1 to C26, or changes it. Then Step 1 (the
-demo run on the founder's Mac) and Step 2a start.
+Step 4, notifications. Step 1, the demo run on the founder's Mac, can run at any time alongside.
 
 ## Open decisions
 
@@ -106,8 +124,8 @@ AC37, the two-week no-fault run, waits on the test server's price (`phase-2-plan
 ## Validation
 
 - Simulation runs are recorded with their seeds in `tools/detection-sim/RESULTS.md`.
-- `ruff` and the tool's own strict mypy pass. The root mypy passes (650 files).
-- No product code exists yet.
+- `ruff` and the tool's own strict mypy pass.
+- Each built step's checks are recorded under *The build*, above.
 
 ## Specification impact
 
@@ -122,4 +140,4 @@ AC37, the two-week no-fault run, waits on the test server's price (`phase-2-plan
 
 ## Last updated
 
-2026-10-31
+2026-11-01

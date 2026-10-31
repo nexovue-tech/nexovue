@@ -8,8 +8,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { TimeWindow } from "@/shared/selection";
 
-import type { FindingsResponse } from "./api";
-import { useFindings } from "./api";
+import type { DetectionStatus, FindingsResponse } from "./api";
+import { useDetectionStatus, useFindings } from "./api";
 
 /**
  * The feed's read: what it asks `GET /findings` for, and that a failed read stays a
@@ -147,6 +147,75 @@ describe("useFindings", () => {
     );
 
     const seen = mount(false);
+
+    await vi.waitFor(() => expect(seen.current?.isError).toBe(true));
+    expect(seen.current?.data).toBeUndefined();
+  });
+});
+
+type SeenStatus = { current?: ReturnType<typeof useDetectionStatus> };
+
+function StatusProbe({ seen }: { seen: SeenStatus }) {
+  seen.current = useDetectionStatus(PROJECT_ID, WINDOW);
+  return null;
+}
+
+function mountStatus() {
+  const seen: SeenStatus = {};
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  mounted.push(root);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  act(() =>
+    root.render(
+      createElement(QueryClientProvider, { client }, createElement(StatusProbe, { seen })),
+    ),
+  );
+  return seen;
+}
+
+describe("useDetectionStatus", () => {
+  it("reads the project's detection status", async () => {
+    const STATUS: DetectionStatus = {
+      state: "learning",
+      services_total: 2,
+      services_learning: 2,
+      services_judged: 0,
+      services_delayed: 0,
+      services_muted: 0,
+      earliest_judging_date: "2026-11-03",
+      not_running_since: null,
+      delayed_since: null,
+      open_findings: 0,
+    };
+    const fetch = stubFetch(
+      () =>
+        new Response(JSON.stringify(STATUS), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    const seen = mountStatus();
+
+    await vi.waitFor(() => expect(seen.current?.isSuccess).toBe(true));
+    expect(fetch.mock.calls[0]?.[0].pathname).toBe(
+      `/api/v1/projects/${PROJECT_ID}/detection/status`,
+    );
+    expect(seen.current?.data).toEqual(STATUS);
+  });
+
+  it("stays a failure when the read fails, so the screen cannot show a healthy line", async () => {
+    stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({ type: "about:blank", title: "Internal Server Error", status: 500 }),
+          { status: 500, headers: { "content-type": "application/problem+json" } },
+        ),
+    );
+
+    const seen = mountStatus();
 
     await vi.waitFor(() => expect(seen.current?.isError).toBe(true));
     expect(seen.current?.data).toBeUndefined();
