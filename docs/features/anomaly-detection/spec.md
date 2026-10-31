@@ -23,7 +23,8 @@ D14. The changes are:
 - calibrating the method on the demo (FR9).
 
 Then D15 and D16, after the harsher simulation: measure the demo before the design is approved, and give
-quiet services 20 minutes.
+quiet services 20 minutes. On 2026-10-31, D17 replaced D15: the method adapts to each service's
+burstiness, and the measurement moves to the plan's demo run.
 
 ## Words used here
 
@@ -219,8 +220,8 @@ scientist** who wants to choose algorithms or see model parameters. Sensitivity 
   The design states the statistical test and its parameters. Before the design is approved, it must show
   by simulation that a service following its own normal produces no more false findings than the budget
   (*Product values*). The simulation includes per-endpoint tests, drifting failure rates, failures in
-  multi-minute bursts, and latency with a slow tail. Before the cut-offs are frozen, the method is checked
-  against the demo's measured variability (D14).
+  multi-minute bursts at a range of rates (D17), and latency with a slow tail. Before the cut-offs are
+  frozen, the method is checked against the demo's measured variability (D14).
 - **FR10**: **Failing more is judged on counts.** An increase counts only with at least the minimum number
   of failures, and only if that many failures is unlikely at the service's normal rate. Two failures in
   four requests is not a 50% failure. A service whose normal failure rate is zero is not alarmed by a
@@ -644,14 +645,25 @@ By the founder, 2026-10-30, after the design reviews, as the agent recommended:
 
 By the founder, 2026-10-30, after the harsher simulation:
 
-- **D15: Measure before the design is approved, not after.** The harsher simulation broke the budget:
-  1.65 false findings per service per week at normal sensitivity. The cause was short failure bursts, and
-  their rate in that model was a guess. So the demo's real failure bursts and variability are measured
-  over at least 3 days first. Whether short bursts are reported or treated as noise is then decided from
-  that measurement. This moves D14's measurement ahead of the design gate.
+- **D15: Measure before the design is approved, not after.** *Superseded by D17 on 2026-10-31.* The
+  harsher simulation broke the budget: 1.65 false findings per service per week at normal sensitivity.
+  The cause was short failure bursts, at a rate that was a guess. D15 asked for the demo's real bursts to
+  be measured over at least 3 days before the design.
 - **D16: Quiet services get longer.** A service under 200 requests a minute has *time to catch* of 20
   minutes, not 12, for a fault past the minimum (*Product values*, AC36). Below that volume, too few
   failures arrive to tell a real fault from noise sooner without breaking the budget.
+
+By the founder, 2026-10-31:
+
+- **D17: The method adapts to each service's own burstiness, instead of waiting on a measurement.** This
+  supersedes D15.
+  - *Failing more* learns, from each service's history, how high and how long its ordinary failure bursts
+    run. A fault opens a finding when it is higher than those bursts, or lasts longer than them.
+  - The design must show by simulation that the budget holds across a range of burst rates, from none to
+    the harsh guess. One value is not enough.
+  - The demo's real bursts are measured during the plan's demo run, which tunes the cut-offs (D14).
+  - The cost is accepted: a fault that looks exactly like a service's usual bursts, no higher and no
+    longer, is not reported.
 
 ## Open decisions
 
