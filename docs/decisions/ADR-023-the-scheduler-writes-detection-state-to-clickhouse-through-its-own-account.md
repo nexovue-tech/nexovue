@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed, with the F6 design ([`design.md`](../features/anomaly-detection/design.md), revision 2,
-2026-10-31). Accepted only together with that design.
+Accepted 2026-10-31, with the F6 design ([`design.md`](../features/anomaly-detection/design.md),
+revision 2).
 
 ## Context
 

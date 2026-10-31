@@ -11,6 +11,9 @@ fixed a formula that the reviews showed to be unsound. This revision states the 
 the user, as acceptance criteria. The exact statistics move to the design, where they must be simulated
 against the false-alarm budget before approval (FR9).
 
+**Amended 2026-10-31** with the approved design: FR28, FR29 and AC19 (the design's *Specification
+impact*).
+
 **Amended 2026-10-30** after five independent reviews of the design, with the founder's decisions D11 to
 D14. The changes are:
 
@@ -351,12 +354,15 @@ statistical parameters behind FR9 are the design's.
 - **FR28**: F21 gains a condition kind, **anomaly finding**, which selects all services or a list, and a
   minimum severity.
   - A matching finding sends one message when it opens, one when it turns critical, and one when it
-    closes. Nothing is sent for updates in between.
+    closes. Nothing is sent for updates in between, except F21's single *flapping* message after a fifth
+    opening within an hour (amended with the approved design).
   - It uses F21's channels, outbox, burst cap and quiet hours.
   - The finding's severity is the detector's, not the rule's. This amends F21's BR10 for this condition
     kind.
-- **FR29**: Each new project's default rule (today: checks going down, emailed to the owners) also covers
-  **critical** findings. Warnings appear in the feed only, until a rule asks for them.
+- **FR29**: Each new project gets a **second default rule**, *Critical problems*. It sends critical findings
+  to the owners. A rule has one condition kind, so the existing default rule for checks going down cannot
+  carry it. Warnings appear in the feed only, until a rule asks for them (amended with the approved
+  design).
 - **FR30**: Each service screen shows each signal's normal band behind its chart, its detection state, and
   its findings on the timeline.
 
@@ -457,7 +463,8 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
   - one message when AC18's finding opens;
   - one when it turns critical;
   - one when it closes;
-  - and nothing else (FR28).
+  - and nothing else, apart from F21's flapping message if the finding opens a fifth time within an hour
+    (FR28).
 - **AC20**: A threshold rule and detection that both fire on the same service must produce one finding
   linked to one threshold incident, not two findings (BR2).
 - **AC21**: Traffic stopping from 9 of 11 services in the same minute must open one project finding, not 9

@@ -55,7 +55,7 @@ waits for AI: it goes out when detection fires, and the explanation joins it lat
 
 ### Stage 3: Track (F22)
 
-- A finding opens a case by growing the existing incident, not by adding a second record.
+- A finding opens a case by growing the finding itself, not by adding a second record (F6 D1, ADR-022).
 - *Done when:* lifecycle and timeline work; GitHub Issues and Jira create and stay in sync; on-call stays with
   PagerDuty (never built here).
 

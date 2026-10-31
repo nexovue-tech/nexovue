@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-Approved (specification, amended through D21). Design revision 2 awaiting the founder's approval.
+Approved: specification (amended through D21) and design (revision 2, 2026-10-31). The plan is next.
 
 ## Current task
 
-The design gate.
+The plan gate.
 
 ## Completed
 
@@ -37,8 +37,8 @@ The design gate.
 
 ## Next action
 
-The founder approves `design.md`, with ADR-022 and ADR-023, or changes it. Then write `plan.md` with
-`/write-plan`.
+Write `plan.md` with `/write-plan`: ordered steps, files and tests read from the code. Step 1 is the
+demo run and the cost measurement (D14, AC29), as the design says.
 
 ## Open decisions
 

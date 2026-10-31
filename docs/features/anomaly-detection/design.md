@@ -2,17 +2,18 @@
 
 ## Status
 
-**Awaiting approval, revision 2**, 2026-10-31, against the approved [`spec.md`](spec.md) as amended through
-D21.
+**Approved** by the founder, 2026-10-31, as revision 2, against [`spec.md`](spec.md) as amended through
+D21. Its *Specification impact* is applied: this feature's FR28, FR29 and AC19, F21's BR10, F1's AC1.8,
+and `phase-2-plan.md`'s Stage 3.
 
 Revision 1, of 2026-10-30, was reviewed by five independent agents: statistics, architecture, operations,
 security and tenancy, and product and QA. They found it not ready. Every finding they made about the code
 was checked against the source before this revision. Each section below says which finding it answers,
 under **Review**.
 
-This revision proposes [ADR-022](../../decisions/ADR-022-a-finding-is-the-one-record-of-a-detected-problem.md)
+With it, the founder accepted [ADR-022](../../decisions/ADR-022-a-finding-is-the-one-record-of-a-detected-problem.md)
 and [ADR-023](../../decisions/ADR-023-the-scheduler-writes-detection-state-to-clickhouse-through-its-own-account.md).
-They are accepted with this design or not at all.
+Both are accepted with this design.
 
 ## Words used here
 
