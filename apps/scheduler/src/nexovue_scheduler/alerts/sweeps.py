@@ -43,7 +43,8 @@ _watermarks: KafkaWatermarks | None = None
 
 class KafkaWatermarks:
     """The newest offset in each partition, asked of Kafka directly. Joins no group
-    and commits nothing: it only reads the partitions' high watermarks."""
+    and commits nothing: it only reads the partitions' high watermarks and the
+    topic's metadata."""
 
     def __init__(self, brokers: list[str]) -> None:
         self._consumer = Consumer(
@@ -59,6 +60,22 @@ class KafkaWatermarks:
             TopicPartition(topic, partition), timeout=KAFKA_TIMEOUT_SECONDS, cached=False
         )
         return int(high) - 1
+
+    def partition_count(self, topic: str) -> int:
+        """How many partitions the topic has, from the cluster's metadata (C4).
+
+        Asked of Kafka, not of stored rows: a partition no worker has written for
+        must still count."""
+        metadata = self._consumer.list_topics(topic, timeout=KAFKA_TIMEOUT_SECONDS)
+        found = metadata.topics.get(topic)
+        if found is None or found.error is not None or not found.partitions:
+            reason = found.error if found is not None else "absent from the metadata"
+            raise KafkaMetadataError(f"topic {topic!r} has no partitions: {reason}")
+        return len(found.partitions)
+
+
+class KafkaMetadataError(RuntimeError):
+    """Kafka could not say how many partitions a topic has."""
 
 
 @task(EVALUATE_THRESHOLDS_TASK)

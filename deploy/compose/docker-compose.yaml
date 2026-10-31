@@ -479,6 +479,9 @@ services:
       # The nightly erasure of deleted organizations (ADR-014) runs on this
       # worker, as the account that can only read and delete (users.d/eraser.xml).
       CLICKHOUSE_ERASER_DSN: ${DEV_CLICKHOUSE_ERASER_DSN:-clickhouse://nexovue_eraser:nexovue_eraser_dev@clickhouse:8123/nexovue}
+      # Anomaly detection freezes each judged minute here (ADR-023), as the account
+      # that can only insert into detection_readings (users.d/detection-writer.xml).
+      CLICKHOUSE_DETECTION_WRITER_DSN: ${DEV_CLICKHOUSE_DETECTION_WRITER_DSN:-clickhouse://nexovue_detection_writer:nexovue_detection_writer_dev@clickhouse:8123/nexovue}
     depends_on:
       python-deps:
         condition: service_completed_successfully

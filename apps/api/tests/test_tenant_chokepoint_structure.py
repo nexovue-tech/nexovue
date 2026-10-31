@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from nexovue_platform.tenant_statements import PROJECT_BINDING, binds_project
+
 from nexovue_api.data.clickhouse.base import TENANT_BINDING
 
 _REPOSITORY_ROOT: Final = Path(__file__).resolve().parents[3]
@@ -102,8 +104,25 @@ API_MODULES: Final = _api_modules()
 SCHEDULER_SOURCE: Final = _REPOSITORY_ROOT / "apps" / "scheduler" / "src" / "nexovue_scheduler"
 SCHEDULER_MODULES: Final = _modules_under(SCHEDULER_SOURCE)
 # ADR-014: the nightly erasure's store is the second, and the only client in
-# nexovue that can delete telemetry.
-SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset({"alerts.telemetry", "erasure.store"})
+# nexovue that can delete telemetry. F6: `detection.store` is detection's reads
+# bound to one project and the one writer of `detection_readings` (ADR-023), and
+# `detection.settle` reads the pipeline's own progress, which belongs to no tenant.
+SCHEDULER_MODULES_ALLOWED_THE_RAW_CLIENT: Final = frozenset(
+    {"alerts.telemetry", "erasure.store", "detection.settle", "detection.store"}
+)
+
+# F6, AC28: detection judges one project at a time, so its statements bind the
+# project as well as the tenant.
+PROJECT_BOUND_PACKAGE: Final = "detection"
+
+# ADR-023: the one module that may write telemetry. Every other module in either
+# service reads, or (the erasure) deletes.
+TELEMETRY_WRITER_MODULE: Final = "detection.store"
+# clickhouse_connect's ways to insert. A list's `insert` is caught too: the
+# scheduler has none, and a false alarm here is cheaper than a missed write.
+_INSERT_METHODS: Final = frozenset(
+    {"insert", "insert_df", "insert_arrow", "insert_df_arrow", "raw_insert"}
+)
 
 # ADR-014's deliberate exception to one tenant per statement: erasing every
 # deleted organization at once. Allowed in this module alone, binding a list that
@@ -158,6 +177,13 @@ TELEMETRY_TABLES: Final = _telemetry_tables()
 # exists to watch statements**. Found while building the purge path (C6).
 _READS_A_TELEMETRY_TABLE: Final = re.compile(
     r"\b(?:FROM|JOIN|ALTER\s+TABLE)\s+(" + "|".join(sorted(TELEMETRY_TABLES)) + r")\b",
+    re.IGNORECASE,
+)
+
+
+# ADR-023: a statement that writes rather than reads.
+_WRITES_A_TELEMETRY_TABLE: Final = re.compile(
+    r"\bINSERT\s+INTO\s+(?:TABLE\s+)?(" + "|".join(sorted(TELEMETRY_TABLES)) + r")\b",
     re.IGNORECASE,
 )
 
@@ -505,3 +531,70 @@ def test_a_tenantless_read_is_allowed_in_its_own_module_only() -> None:
     assert not _reads_only_its_tenantless_tables(statement("detection.settle", joined)), (
         "a join from the exempt table to a tenant's table escaped the binding"
     )
+
+
+# ------------------------------------------------------- detection (F6, ADR-023)
+
+
+def _in_project_bound_package(module: str) -> bool:
+    return module == PROJECT_BOUND_PACKAGE or module.startswith(f"{PROJECT_BOUND_PACKAGE}.")
+
+
+def test_no_detection_statement_reading_a_telemetry_table_omits_the_project_binding() -> None:
+    """A detection statement bound to the tenant alone would judge a project on its
+    siblings' telemetry."""
+    unbound = [
+        str(sql)
+        for sql in _telemetry_sql(SCHEDULER_MODULES)
+        if _in_project_bound_package(sql.module)
+        and not binds_project(sql.text)
+        and not _reads_only_its_tenantless_tables(sql)
+    ]
+    assert not unbound, (
+        f"these detection statements read a telemetry table without "
+        f"`project_id = {PROJECT_BINDING}`: {unbound}"
+    )
+
+
+def test_no_statement_writes_a_telemetry_table_outside_the_detection_writer() -> None:
+    writes = [
+        f"{module}:{node.lineno}"
+        for module in SCHEDULER_MODULES + API_MODULES
+        if module.dotted_name != TELEMETRY_WRITER_MODULE
+        for node in ast.walk(module.tree)
+        if isinstance(node, ast.Constant | ast.JoinedStr)
+        and id(node) not in _docstrings(module.tree)
+        and _WRITES_A_TELEMETRY_TABLE.search(_static_text(node))
+    ]
+    assert not writes, f"telemetry is written outside {TELEMETRY_WRITER_MODULE}: {writes}"
+
+
+def _insert_calls(module: SourceModule) -> list[str]:
+    return [
+        f"{module}:{node.lineno} calls .{node.func.attr}("
+        for node in ast.walk(module.tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in _INSERT_METHODS
+    ]
+
+
+def test_only_the_detection_writer_calls_the_driver_s_insert() -> None:
+    """Every scheduler module, and every API module that holds the raw driver. The
+    rest of the API cannot reach a client, and its `queries.insert` is Postgres."""
+    candidates = [
+        module for module in SCHEDULER_MODULES if module.dotted_name != TELEMETRY_WRITER_MODULE
+    ] + [module for module in API_MODULES if module.dotted_name in MODULES_ALLOWED_THE_RAW_CLIENT]
+    calls = [call for module in candidates for call in _insert_calls(module)]
+    assert not calls, f"an insert outside {TELEMETRY_WRITER_MODULE}: {calls}"
+
+
+def test_the_detection_writer_is_where_the_rules_say_it_is() -> None:
+    """A renamed module must break these rules rather than leave them guarding nothing."""
+    names = {module.dotted_name for module in SCHEDULER_MODULES}
+    assert TELEMETRY_WRITER_MODULE in names
+    assert any(_in_project_bound_package(name) for name in names)
+    writer = next(
+        module for module in SCHEDULER_MODULES if module.dotted_name == TELEMETRY_WRITER_MODULE
+    )
+    assert _insert_calls(writer), f"{TELEMETRY_WRITER_MODULE} no longer inserts; move this rule"

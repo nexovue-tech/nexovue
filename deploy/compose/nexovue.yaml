@@ -359,6 +359,9 @@ services:
       # The nightly erasure of deleted organizations (ADR-014), as the account that can only read
       # and delete (users.d/eraser.xml).
       CLICKHOUSE_ERASER_DSN: clickhouse://nexovue_eraser:${CLICKHOUSE_ERASER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
+      # Anomaly detection freezes each judged minute (ADR-023), as the account that can only
+      # insert into detection_readings (users.d/detection-writer.xml). This worker alone (D32).
+      CLICKHOUSE_DETECTION_WRITER_DSN: clickhouse://nexovue_detection_writer:${CLICKHOUSE_DETECTION_WRITER_PASSWORD}@clickhouse:8123/${CLICKHOUSE_DB}
     depends_on:
       <<: *after-setup
       clickhouse:

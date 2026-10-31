@@ -48,6 +48,7 @@ SETTINGS: Final = {
     "CLICKHOUSE_PASSWORD": "clickhouse-secret",
     "CLICKHOUSE_READER_PASSWORD": "reader-secret",
     "CLICKHOUSE_ERASER_PASSWORD": "eraser-secret",
+    "CLICKHOUSE_DETECTION_WRITER_PASSWORD": "detection-writer-secret",
     "KAFKA_CLUSTER_ID": "fo8KHCs9Tl-KmwwdLj9KWw",
     "WORKERS_MASKING_HASH_SECRET": "masking-secret",
     "CHECK_SECRET_KEY": "check-key",
@@ -64,11 +65,20 @@ SETTINGS: Final = {
 def _render(
     layout: str, tmp_path: Path, *, profiles: tuple[str, ...] = (), **extra: str
 ) -> dict[str, Any]:
+    rendered = _compose_config(layout, tmp_path, SETTINGS | extra, profiles)
+    assert rendered.returncode == 0, f"{layout} does not render:\n{rendered.stderr}"
+    services: dict[str, Any] = json.loads(rendered.stdout)["services"]
+    return services
+
+
+def _compose_config(
+    layout: str, tmp_path: Path, values: dict[str, str], profiles: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[str]:
     settings = tmp_path / f"{layout}.env"
-    settings.write_text("".join(f"{k}={v}\n" for k, v in (SETTINGS | extra).items()))
+    settings.write_text("".join(f"{k}={v}\n" for k, v in values.items()))
     files = [argument for name in LAYOUTS[layout] for argument in ("-f", str(COMPOSE / name))]
     chosen = [argument for profile in profiles for argument in ("--profile", profile)]
-    rendered = subprocess.run(
+    return subprocess.run(
         [
             "docker",
             "compose",
@@ -85,9 +95,6 @@ def _render(
         check=False,
         timeout=60,
     )
-    assert rendered.returncode == 0, f"{layout} does not render:\n{rendered.stderr}"
-    services: dict[str, Any] = json.loads(rendered.stdout)["services"]
-    return services
 
 
 @pytest.fixture(params=sorted(LAYOUTS))
@@ -231,3 +238,36 @@ def test_the_monitor_runs_only_when_asked_for(tmp_path: Path) -> None:
     services = _render("self-hosted", tmp_path, profiles=("monitoring",))
 
     assert {"prometheus", "alertmanager"} <= set(services)
+
+
+WRITER_ACCOUNT_FILE: Final = "/etc/clickhouse-server/users.d/detection-writer.xml"
+
+
+def test_the_detection_writer_is_provisioned_and_handed_to_one_worker(
+    layout: str, tmp_path: Path
+) -> None:
+    """ADR-023, D32: the account exists in the store, and only `scheduler-light` holds it."""
+    services = _render(layout, tmp_path, profiles=("monitoring",))
+
+    clickhouse = services["clickhouse"]
+    assert clickhouse["environment"]["CLICKHOUSE_DETECTION_WRITER_PASSWORD"] == (
+        "detection-writer-secret"
+    )
+    assert WRITER_ACCOUNT_FILE in {volume["target"] for volume in clickhouse["volumes"]}
+    holders = {
+        name: service["environment"]["CLICKHOUSE_DETECTION_WRITER_DSN"]
+        for name, service in services.items()
+        if "CLICKHOUSE_DETECTION_WRITER_DSN" in (service.get("environment") or {})
+    }
+    assert set(holders) == {"scheduler-light"}, f"{layout}: {sorted(holders)} hold the writer"
+    assert "//nexovue_detection_writer:detection-writer-secret@" in holders["scheduler-light"]
+
+
+def test_an_install_without_the_writer_password_refuses_to_start(tmp_path: Path) -> None:
+    """`${…:?}`: an empty password would start the account with none (design 2.1, m5)."""
+    values = {k: v for k, v in SETTINGS.items() if k != "CLICKHOUSE_DETECTION_WRITER_PASSWORD"}
+
+    rendered = _compose_config("self-hosted", tmp_path, values)
+
+    assert rendered.returncode != 0
+    assert "set CLICKHOUSE_DETECTION_WRITER_PASSWORD" in rendered.stderr

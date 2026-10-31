@@ -199,13 +199,13 @@ worker stops.
 *Judgeable:* on the dev stack, the scheduler's log names the settled minute each minute. With the worker
 stopped, the log says *behind*. One test reading row appears in `detection_readings` for a seeded project.
 
-- [ ] **T2b.1** — `nexovue_scheduler/detection/settle.py` (new): the settled minute, from
+- [x] **T2b.1** — `nexovue_scheduler/detection/settle.py` (new): the settled minute, from
   `span_derived_progress`, the Kafka high watermarks (`alerts/sweeps.py:44-60`) and a new `list_topics` read
   (C4), with the 2-minute allowance. Proved by `test_detection_settle.py`:
   - an idle partition is caught up;
   - unread data with old progress is behind;
   - a missing partition is behind.
-- [ ] **T2b.2** — The project-bound store, and its tenancy rules (ADR-023).
+- [x] **T2b.2** — The project-bound store, and its tenancy rules (ADR-023).
   - `detection/store.py` (new): project-bound reads with both predicates and lowered per-call limits, plus the
     writer, which is bound by `for_project` and takes `org_id` from the `projects` row.
   - `tenant_statements.py`: the override can only lower limits, and the `project_id` rule.
@@ -216,7 +216,7 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
     - `packages/py-platform/tests/test_tenant_statements.py` (new): an override that raises a limit is refused;
     - `test_detection_store_live.py`: written as A and read as B, nothing is found. The same service name in
       two tenants survives `OPTIMIZE … FINAL`. The API's account is refused an insert.
-- [ ] **T2b.3** — The `nexovue_detection_writer` account.
+- [x] **T2b.3** — The `nexovue_detection_writer` account.
   - `deploy/clickhouse/users.d/detection-writer.xml`: its own profile with read-only settings, a write
     quota, the internal network, and `INSERT ON nexovue.detection_readings` only.
   - It is wired in the eraser's places, with `${…:?}` in the deploy compose.

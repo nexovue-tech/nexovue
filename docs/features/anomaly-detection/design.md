@@ -118,6 +118,20 @@ Recorded as each plan step lands. It says where the built code differs from the 
     refusal (`MaxProgressHold`). Any of the four settlement inserts counts.
   - **The 2,000-service cap is applied per drain on one worker.** With several workers, or a minute reopened
     by late spans, an organization can pass it for that minute.
+- **Step 2b, 2026-11-01:**
+  - **A partition that has never held a record is caught up,** though it has no progress row. Otherwise a
+    quiet install with one unused partition would never settle a minute. A partition holding records with no
+    row is still behind.
+  - **Progress is read before Kafka,** and "now" in the same statement as the progress. A record landing in
+    between is then seen as unread, never as caught up.
+  - **The writer's quota counts inserts and bytes, not rows.** ClickHouse 26.3 has no written-rows quota
+    (`system.quota_limits`). It allows 60,000 inserts and 1 GiB written an hour, an estimate until T8.2.
+  - **The writer's networks** are the private ranges and loopback, which cover the compose network and
+    Docker's host-side gateway.
+  - **`add_missing_secrets` adds only ClickHouse account passwords.** They are read from the environment at
+    each start, so one added later works. Any other secret is fixed into a store, a key or the Kafka log at
+    install, and a fresh value would lock that data away, so a missing one is left for Compose's `${…:?}`
+    to name. It runs on upgrade, and on an install or quickstart that reuses existing settings.
 
 ## Words used here
 

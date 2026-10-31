@@ -45,6 +45,16 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
   - `test_erasure_live.py` passes (6), against the dev stores;
   - the progress store-probe and the migrations probe pass against the dev ClickHouse;
   - `ruff` passes, and mypy reports no issues in 651 files.
+- **Step 2b**, the settled minute, the project-bound store and the writer account, was built on 2026-11-01.
+  Its checks:
+  - 163 new or changed tests pass, the live ones included;
+  - red-then-green for the lowered-limits override, three planted structure violations, and the upgrade
+    secret;
+  - across the repo, ruff passes, mypy reports no issues in 662 files, and the offline Python suites give
+    3,869 passed and 1 skipped.
+
+  The plan's 2b demo check, "the scheduler's log names the settled minute", needs T2c.3's coordinator. It is
+  proved there.
 - **The dev stores run in this environment**, through a local compose override for the sandbox's open-file
   limit. The application images cannot be built here, because the network blocks `ghcr.io` blobs. So an
   end-to-end check on the stack needs the worker run from source, or your Mac.
