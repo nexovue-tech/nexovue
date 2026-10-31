@@ -16,7 +16,10 @@ from typing import Final
 
 # Detection's jobs have a queue of their own, taken by `scheduler-light` beside
 # `light` and capped there, so judging never holds every probe's slot (C23, D32).
-DETECTION_QUEUE: Final = "detection"
+# It and the baseline job are named in the platform, because the API queues that
+# job when a person moves a normal.
+from nexovue_platform.detection import COMPUTE_BASELINES_TASK, DETECTION_QUEUE
+
 # At most this many detection jobs at once in one worker, of its eight slots.
 DETECTION_CONCURRENCY: Final = 2
 
@@ -25,4 +28,12 @@ DETECTION_CONCURRENCY: Final = 2
 SWEEP_DETECTION_TASK: Final = "nexovue_scheduler.detection.sweep"
 JUDGE_PROJECT_TASK: Final = "nexovue_scheduler.detection.judge_project"
 SWEEP_BASELINES_TASK: Final = "nexovue_scheduler.detection.sweep_baselines"
-COMPUTE_BASELINES_TASK: Final = "nexovue_scheduler.detection.compute_baselines"
+
+__all__ = [
+    "COMPUTE_BASELINES_TASK",
+    "DETECTION_CONCURRENCY",
+    "DETECTION_QUEUE",
+    "JUDGE_PROJECT_TASK",
+    "SWEEP_BASELINES_TASK",
+    "SWEEP_DETECTION_TASK",
+]

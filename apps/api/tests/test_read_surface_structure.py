@@ -58,6 +58,7 @@ THE_SURFACE: Final = {
     "nexovue_api/detection/router.py:detection_status": (
         "GET /projects/{project_id}/detection/status"
     ),
+    "nexovue_api/detection/router.py:detection_settings": "GET /projects/{project_id}/detection",
     "nexovue_api/checks/router.py:list_checks": "GET /checks",
     "nexovue_api/checks/router.py:get_check": "GET /checks/{check_id}",
     "nexovue_api/synthetics/router.py:list_check_results": "GET /synthetics/checks",

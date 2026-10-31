@@ -1557,6 +1557,10 @@ class Finding(Base):
     signals: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'")
     )
+    # A project finding's services, which its page lists after it closes (0046).
+    services: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     started_at: Mapped[RequiredTimestamp]
     closed_at: Mapped[OptionalTimestamp]
     updated_at: Mapped[CreatedAt]

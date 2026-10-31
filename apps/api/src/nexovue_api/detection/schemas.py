@@ -1,4 +1,6 @@
-"""Detection status shapes (F6, FR25): a project's headline and one service's state."""
+"""Detection shapes (F6): a project's headline and one service's state (FR25), and the
+user's controls over them: snooze and mute (FR22), sensitivity and time zone (FR18,
+FR24)."""
 
 from __future__ import annotations
 
@@ -6,8 +8,9 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel, Field
 
+from nexovue_api.data.postgres.models import TIMEZONE_NAME_LENGTH
 from nexovue_api.findings.schemas import FindingSeverity, SignalName
 
 ProjectDetectionState = Literal["learning", "judging", "data_delayed", "not_running", "no_services"]
@@ -69,3 +72,37 @@ class ServiceDetection(BaseModel):
     findings: list[FindingMarker]
     # F36, AC20: a capped list says when the cap bit.
     truncated: bool = False
+
+
+class QuietServiceRequest(BaseModel):
+    """Snooze or mute a service until a time, or end it now with `until` null."""
+
+    project_id: uuid.UUID
+    # Aware, so "until 18:00" never means a different instant on another machine.
+    until: AwareDatetime | None
+
+
+class ServiceControls(BaseModel):
+    """What is quietening a service now, if anything."""
+
+    muted_until: datetime | None
+    snoozed_until: datetime | None
+
+
+Sensitivity = Literal["low", "normal", "high"]
+
+
+class DetectionSettings(BaseModel):
+    """A project's detection settings: its sensitivity and the IANA zone its normal is
+    read in (FR18, FR24)."""
+
+    sensitivity: Sensitivity
+    timezone: str
+
+
+class DetectionSettingsWrite(BaseModel):
+    """Both, replaced together, as the settings form saves them."""
+
+    sensitivity: Sensitivity
+    # Bounded here and judged by `profile.timezones`, as a person's own zone is.
+    timezone: str = Field(max_length=TIMEZONE_NAME_LENGTH)

@@ -32,6 +32,7 @@ from nexovue_scheduler.detection.lifecycle import (
     Normal,
     OpenFinding,
     TrafficSnapshot,
+    advance_holds,
     percent,
     project_rule,
     project_title,
@@ -604,3 +605,67 @@ def test_each_endpoint_s_excursions_are_recorded_as_judged_and_forgotten_after_2
     }
     assert project_job._forget_old_runs(records, ONSET + timedelta(days=28)) == records
     assert project_job._forget_old_runs(records, ONSET + timedelta(days=30)) == {}
+
+
+# ---------------------------------------------------------- false alarm (FR20)
+
+
+def _held_run(
+    holds: dict[str, int], minutes: Sequence[MinuteJudged]
+) -> tuple[OpenFinding | None, dict[str, int], list[Change]]:
+    """Minutes judged as the project job judges them while a false alarm holds keys."""
+    finding: OpenFinding | None = None
+    changes = []
+    for judged in minutes:
+        finding, change = step(finding, judged, Context(held=frozenset(holds)), zone=UTC_ZONE)
+        changes.append(change)
+        holds = advance_holds(holds, judged)
+    return finding, holds, changes
+
+
+def test_a_false_alarm_s_signal_reopens_nothing_until_it_reads_normal_for_recovery() -> None:
+    """FR20, AC32: on an open finding marked a false alarm, the same signal cannot open a
+    finding again until it has been normal for *recovery*."""
+    unusual = [_at(at, slower=_slower("unusual", p95=300)) for at in _minutes(ONSET, 30)]
+    finding, holds, changes = _held_run({"slower": 0}, unusual)
+
+    assert finding is None and not any(change.opened for change in changes)
+    assert holds == {"slower": 0}
+
+    clear_from = ONSET + 30 * MINUTE
+    clear = [_at(at) for at in _minutes(clear_from, RECOVERY_MINUTES - 1)]
+    _, holds, _ = _held_run(holds, clear)
+    assert holds == {"slower": RECOVERY_MINUTES - 1}, "still held, one minute short"
+
+    _, holds, _ = _held_run(holds, [_at(clear_from + (RECOVERY_MINUTES - 1) * MINUTE)])
+    assert holds == {}
+    again = clear_from + RECOVERY_MINUTES * MINUTE
+    finding, _, changes = _held_run(holds, [_at(again, slower=_slower("unusual", p95=300))])
+    assert changes[0].opened and finding is not None
+
+
+def test_an_unusual_minute_restarts_the_hold_and_an_unjudged_one_pauses_it() -> None:
+    holds = {"slower": 0}
+    minutes = [
+        *(_at(at) for at in _minutes(ONSET, 6)),
+        _at(ONSET + 6 * MINUTE, slower=_slower("learning")),
+        _at(ONSET + 7 * MINUTE),
+    ]
+    _, holds, _ = _held_run(holds, minutes)
+    assert holds == {"slower": 7}
+
+    _, holds, _ = _held_run(holds, [_at(ONSET + 8 * MINUTE, slower=_slower("unusual", p95=300))])
+    assert holds == {"slower": 0}
+
+
+def test_a_held_signal_leaves_the_others_free_to_open_a_finding() -> None:
+    """FR20 holds *the same* signals: another one moving is a new problem."""
+    both = [
+        _at(at, slower=_slower("unusual", p95=300), failing=_failing("unusual", failures=60))
+        for at in _minutes(ONSET, 3)
+    ]
+
+    finding, _, changes = _held_run({"slower": 0}, both)
+
+    assert changes[0].opened and finding is not None
+    assert list(finding.keys) == ["failing"]

@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Final
 
-from nexovue_platform import erasure
+from nexovue_platform import detection, erasure
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
@@ -126,6 +126,16 @@ PROJECT_DELETED: Final = "project.deleted"
 # what leaves the customer's process, and it is the only edit here whose blast
 # radius is other people's secrets.
 PROJECT_MASKING_RULE_DISABLED: Final = "project.masking_rule_disabled"
+# F6. A person's word on a finding changes what detection judges from then on, and
+# a mute or snooze decides whether anyone is woken (FR19 to FR22). Each records
+# its reason, and adoption is recorded by the scheduler as the system (FR21).
+FINDING_ACKNOWLEDGED: Final = "finding.acknowledged"
+FINDING_FALSE_ALARM: Final = "finding.false_alarm"
+FINDING_NEW_NORMAL: Final = "finding.new_normal"
+FINDING_ADOPTED: Final = detection.ADOPTED_AUDIT_ACTION
+SERVICE_SNOOZED: Final = "service.snoozed"
+SERVICE_MUTED: Final = "service.muted"
+PROJECT_DETECTION_CHANGED: Final = "project.detection_changed"
 
 MEMBER_INVITED: Final = "member.invited"
 MEMBER_INVITE_RESENT: Final = "member.invite_resent"
@@ -167,6 +177,7 @@ INTEGRATION_TARGET: Final = "integration"
 WEBHOOK_SECRET_TARGET: Final = "webhook_secret"
 DEPLOY_TARGET: Final = "deploy"
 PROJECT_TARGET: Final = "project"
+FINDING_TARGET: Final = detection.FINDING_AUDIT_TARGET
 
 # A refused sign-in against an address matching no account. The address is not
 # recorded: it belongs to somebody who is not our customer, so storing it would
@@ -844,6 +855,99 @@ def record_masking_rule_disabled(
         actor_user_id=actor_user_id,
         action=PROJECT_MASKING_RULE_DISABLED,
         target=masking_rule_target(project_id, rule),
+    )
+
+
+def record_finding_acknowledged(
+    db: AsyncSession, *, org_id: uuid.UUID, finding_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
+    """Somebody said they are handling it (FR19)."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=FINDING_ACKNOWLEDGED,
+        target=_target(FINDING_TARGET, finding_id),
+    )
+
+
+def record_finding_false_alarm(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    reason: str | None,
+    returns_minutes: bool,
+) -> None:
+    """Somebody said it was never a problem, and why (FR20). Whether it returned the
+    finding's minutes to the normal is recorded, because only an admin's does (D28)."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=FINDING_FALSE_ALARM,
+        target=_target(FINDING_TARGET, finding_id),
+        detail={"reason": reason, "returns_minutes": returns_minutes},
+    )
+
+
+def record_finding_new_normal(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    shifts: list[dict[str, Any]],
+) -> None:
+    """Somebody moved a service's normal to where it now is, and by how much (FR21)."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=FINDING_NEW_NORMAL,
+        target=_target(FINDING_TARGET, finding_id),
+        detail={"shifts": shifts},
+    )
+
+
+def record_service_quietened(
+    db: AsyncSession,
+    *,
+    action: str,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    service_name: str,
+    until: datetime | None,
+    actor_user_id: uuid.UUID,
+) -> None:
+    """A service muted (BR9) or snoozed (D25) until a time, or ended early when `until`
+    is None. The target is the project: a service has no row of its own to name."""
+    _add(
+        db,
+        org_id=org_id,
+        actor_user_id=actor_user_id,
+        action=action,
+        target=_target(PROJECT_TARGET, project_id),
+        detail={"service": service_name, "until": None if until is None else until.isoformat()},
+    )
+
+
+def record_detection_changed(
+    db: AsyncSession,
+    *,
+    project: Project,
+    actor_user_id: uuid.UUID,
+    changes: dict[str, dict[str, str]],
+) -> None:
+    """A project's sensitivity or time zone, before and after (FR18, FR24)."""
+    _add(
+        db,
+        org_id=project.org_id,
+        actor_user_id=actor_user_id,
+        action=PROJECT_DETECTION_CHANGED,
+        target=_target(PROJECT_TARGET, project.id),
+        detail=changes,
     )
 
 

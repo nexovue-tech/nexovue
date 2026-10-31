@@ -29,6 +29,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Final
 
+from nexovue_platform.detection import DEFAULT_SENSITIVITY, DEFAULT_TIMEZONE
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,7 +37,7 @@ from nexovue_api.alerts import defaults as alert_defaults
 from nexovue_api.alerts import queries as alert_queries
 from nexovue_api.audit import service as audit
 from nexovue_api.auth.dependencies import Reader
-from nexovue_api.data.postgres.models import DEFAULT_RETENTION_DAYS, Project
+from nexovue_api.data.postgres.models import DEFAULT_RETENTION_DAYS, Project, User
 from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError, NotFoundError
 from nexovue_api.projects import config, queries
 from nexovue_api.projects.schemas import (
@@ -102,7 +103,7 @@ async def create(
     session: AsyncSession,
     *,
     org_id: uuid.UUID,
-    actor_user_id: uuid.UUID,
+    actor: User,
     request: ProjectCreateRequest,
 ) -> ProjectDetail:
     """A new environment, with the two configuration documents left empty.
@@ -110,11 +111,14 @@ async def create(
     Empty means the shipped defaults apply, which is the state most projects
     should stay in: masking is irreversible, so the rules that are on by default
     are only the ones that can never be legitimately needed to debug.
+
+    Its days are its creator's local days (FR24, C15), UTC when they have no zone.
     """
+    actor_user_id = actor.id
     slug = await _slug_for(session, org_id=org_id, requested=request.slug, name=request.name)
     # Written rather than left to the column defaults: a flush does not read a
     # server default back, so a row that relied on them would answer this request
-    # with three nulls. The values are the same constants the defaults are built
+    # with nulls. The values are the same constants the defaults are built
     # from, so there is one definition of each and not two.
     project = Project(
         org_id=org_id,
@@ -123,6 +127,8 @@ async def create(
         retention_days=DEFAULT_RETENTION_DAYS,
         sampling_config={},
         masking_config={},
+        timezone=actor.timezone or DEFAULT_TIMEZONE,
+        detection_sensitivity=DEFAULT_SENSITIVITY,
     )
     session.add(project)
     await _flush(session)

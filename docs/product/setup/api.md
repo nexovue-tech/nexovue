@@ -64,8 +64,9 @@ and reach only the documented read API.**
 | `GET /alerts/incidents/{incident_id}` | One incident and who was told |
 | `GET /findings` | Detected problems: open, then acknowledged, then closed; at most 200, muted ones apart |
 | `GET /findings/stats` | Findings opened and marked false alarms over the last 7 days (`days` up to 90), per service-week |
-| `GET /findings/{finding_id}` | One finding, its signals, and its trend while its readings last (35 days) |
+| `GET /findings/{finding_id}` | One finding, its signals, each signal's readings against its normal band while they last (35 days), its linked incidents, and a project finding's services |
 | `GET /projects/{project_id}/detection/status` | Whether detection is running, how many services are learning or judged, when judging starts, and the open findings |
+| `GET /projects/{project_id}/detection` | The project's detection sensitivity and the time zone its normal is read in |
 | `GET /checks` | Synthetic checks and their confirmed state |
 | `GET /checks/{check_id}` | One check |
 | `GET /synthetics/checks` | Check results in a window |
@@ -76,9 +77,12 @@ and reach only the documented read API.**
 Most take `project_id` as a query parameter, and a window as `from` and `to`
 (ISO-8601). Leaving the window out reads the last hour.
 
-A finding read with a token leaves out two fields the console shows a signed-in
-person: who acknowledged it (`acknowledged_by`) and the reason given for a false
-alarm (`feedback_reason`).
+A finding read with a token leaves out what the console shows only a signed-in
+person: who acknowledged it (`acknowledged_by`, `acknowledged_by_name`), the reason
+given for a false alarm (`feedback_reason`), and what *This is the new normal* would
+make its normal (`new_normal`). Acknowledging a finding, calling it a false alarm,
+setting a new normal, snoozing or muting a service, and changing the sensitivity
+are a person's, in the console; a token can do none of them.
 
 **Machine-readable.** The same list is published as OpenAPI 3.1 at
 `GET /api/v1/openapi.read.json` — no credential needed to fetch it — so you can

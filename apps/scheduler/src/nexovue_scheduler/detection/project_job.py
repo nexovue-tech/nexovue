@@ -27,13 +27,21 @@ A run, all inside one Postgres transaction that holds the project's lock:
 The service's state also records what its normal must leave out that no other
 table holds (BR3): its snoozed minutes (D25) and, before 3 weeks, the minutes
 the traffic shadow test found far below normal (FR6).
+
+**What people said** (FR20, FR21). A finding a person closed as a false alarm
+holds its signals: they open nothing until each reads normal for *recovery*, and
+while a member's hold lasts its minutes stay out of the normal too (D28). A new
+normal moves the normal by a `baseline_shifts` row; a normal built before the
+shift is never judged by, so the minute waits for the rebuilt one (AC15). A
+finding open a week with the same signals, nobody having answered, is adopted the
+same way, unless D22 forbids it, and the owners are told (AC16, AC44).
 """
 
 from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
@@ -41,7 +49,15 @@ from zoneinfo import ZoneInfo
 
 from nexovue_platform.alerts.model import service_subject
 from nexovue_platform.alerts.tasks import DELIVER_TASK, DELIVERIES_QUEUE
-from nexovue_platform.detection import FindingSignal, finding_signal
+from nexovue_platform.detection import (
+    ADOPTED_AUDIT_ACTION,
+    ADOPTION_AFTER_DAYS,
+    FINDING_AUDIT_TARGET,
+    FindingSignal,
+    compute_baselines_request,
+    finding_signal,
+    shift_ratio,
+)
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
@@ -57,7 +73,6 @@ from nexovue_scheduler.detection.baselines import (
     SLOWER,
     SNOOZED,
     TRAFFIC,
-    compute_request,
     failing_from_json,
     merge_ranges,
     slower_from_json,
@@ -71,7 +86,10 @@ from nexovue_scheduler.detection.lifecycle import (
     Normal,
     OpenFinding,
     TrafficSnapshot,
+    adoptable,
+    advance_holds,
     endpoint_key,
+    key_signal,
     project_rule,
     project_title,
     step,
@@ -95,6 +113,7 @@ from nexovue_scheduler.detection.projects import project_settings, try_lock
 from nexovue_scheduler.detection.store import (
     DetectionStore,
     ProjectBinding,
+    ProjectDetection,
     Reading,
     bind_project,
     store_for_process,
@@ -122,6 +141,15 @@ LAST_REQUEST_KEY: Final = "last_request_minute"
 ENDPOINTS_KEY: Final = "endpoints"
 # What the project finding's one entry compares with.
 PROJECT_COMPARISON: Final = "Each service against its own normal"
+# Under `detection_state.signals`: the keys a false alarm holds, each with its clear
+# minutes (FR20), and whether the hold's minutes stay out of the normal (D28).
+HELD_KEY: Final = "held"
+HELD_OUT_KEY: Final = "held_out"
+# Why minutes under a member's hold are kept out, beside snoozed and shadowed ones.
+HELD_OUT: Final = "held"
+# Under the open finding's record: when its keys last changed (AC16's "the same signals").
+SINCE_KEY: Final = "since"
+ADOPTION_AFTER: Final = timedelta(days=ADOPTION_AFTER_DAYS)
 
 _STATES: Final = text(
     """
@@ -136,11 +164,44 @@ _FIRST_SIGHT: Final = text(
     ON CONFLICT (org_id, project_id, service_name) DO NOTHING
     """
 )
+# A normal built before its signal's latest shift is never judged by: it is the old
+# level, and would reopen what a person just accepted (FR21, AC15). The minute
+# waits for the rebuilt normal, which the job then asks for.
 _BASELINES: Final = text(
     """
-    SELECT service_name, signal, minute, baseline FROM detection_baselines
-    WHERE org_id = :org_id AND project_id = :project_id
-      AND minute >= :first AND minute <= :last
+    SELECT baseline.service_name, baseline.signal, baseline.minute, baseline.baseline
+    FROM detection_baselines AS baseline
+    WHERE baseline.org_id = :org_id AND baseline.project_id = :project_id
+      AND baseline.minute >= :first AND baseline.minute <= :last
+      AND NOT EXISTS (
+          SELECT 1 FROM baseline_shifts AS shift
+          WHERE shift.org_id = baseline.org_id AND shift.project_id = baseline.project_id
+            AND shift.service_name = baseline.service_name AND shift.signal = baseline.signal
+            AND shift.created_at > baseline.computed_at
+      )
+    """
+)
+# The findings this project's state still names that a person has closed as a false
+# alarm since the last run, and whether it was an admin's (D28).
+_FALSE_ALARMS: Final = text(
+    """
+    SELECT id, false_alarm_returns_minutes FROM findings
+    WHERE org_id = :org_id AND project_id = :project_id AND id = ANY(CAST(:ids AS uuid[]))
+      AND state = 'closed' AND closed_reason = 'false_alarm'
+    """
+)
+_ADOPTED_SHIFT: Final = text(
+    """
+    INSERT INTO baseline_shifts
+        (org_id, project_id, service_name, signal, from_minute, ratio, reason)
+    VALUES (:org_id, :project_id, :service_name, :signal, :from_minute, :ratio, 'adopted')
+    """
+)
+# The system acted, so no person is named (FR21), as the erasure's own record does.
+_AUDIT_ADOPTED: Final = text(
+    """
+    INSERT INTO audit_log (org_id, actor_user_id, action, target, detail)
+    VALUES (:org_id, NULL, :action, :target, CAST(:detail AS jsonb))
     """
 )
 _SERVICE_SETTINGS: Final = text(
@@ -177,16 +238,18 @@ _OPEN_PROJECT_FINDING: Final = text(
 _OPEN: Final = text(
     """
     INSERT INTO findings
-        (org_id, project_id, scope, service_name, severity, muted, title, signals, started_at)
+        (org_id, project_id, scope, service_name, severity, muted, title, signals, services,
+         started_at)
     VALUES (:org_id, :project_id, :scope, :service_name, :severity, :muted, :title,
-            CAST(:signals AS jsonb), :started_at)
+            CAST(:signals AS jsonb), CAST(:services AS jsonb), :started_at)
     RETURNING id
     """
 )
 _UPDATE: Final = text(
     """
     UPDATE findings
-    SET severity = :severity, title = :title, signals = CAST(:signals AS jsonb), updated_at = now()
+    SET severity = :severity, title = :title, signals = CAST(:signals AS jsonb),
+        services = CAST(:services AS jsonb), updated_at = now()
     WHERE org_id = :org_id AND id = :id
     """
 )
@@ -355,24 +418,29 @@ async def judge_project(
             for service, runs in judged.items()
         }
         muted, snoozed = await _muted_and_snoozed(connection, binding, now)
+        false_alarms = await _false_alarms(connection, binding, states.values())
         project = await _keep_project_finding(
             connection, binding, states, judged, signal_states, zone=zone, now=now, outcome=outcome
         )
         for service, runs in judged.items():
             state = states[service]
-            stored = await _keep_finding(
+            stored, held_out = await _keep_finding(
                 connection,
+                detection,
                 binding,
                 state,
                 runs,
                 signal_states[service],
                 project,
+                false_alarms,
                 zone=zone,
                 muted=service in muted,
                 now=now,
                 outcome=outcome,
             )
-            stored = _record_exclusions(stored, runs, snoozed=service in snoozed, now=now)
+            stored = _record_exclusions(
+                stored, runs, snoozed=service in snoozed, held_out=held_out, now=now
+            )
             await _advance(connection, binding, state, runs[-1].at, stored)
             outcome.minutes_judged += len(runs)
         outcome.services = len(judged)
@@ -602,6 +670,7 @@ async def _keep_project_finding(
                     "muted": False,
                     "title": project_title(len(decision.involved), decision.judged, started, zone),
                     "signals": json.dumps([signal]),
+                    "services": json.dumps(sorted(decision.involved)),
                     "started_at": started,
                 },
             )
@@ -642,6 +711,7 @@ async def _keep_project_finding(
                     len(decision.involved), decision.judged, row.started_at, zone
                 ),
                 "signals": json.dumps([signal]),
+                "services": json.dumps(sorted(decision.involved)),
             },
         )
     if finding_id is None:
@@ -688,24 +758,31 @@ def _project_signal(
 
 async def _keep_finding(
     connection: AsyncConnection,
+    detection: ProjectDetection,
     binding: ProjectBinding,
     state: ServiceState,
     runs: Sequence[Judged],
     phases: dict[str, dict[str, Any]],
     project: ProjectContext,
+    false_alarms: Mapping[str, bool],
     *,
     zone: ZoneInfo,
     muted: bool,
     now: datetime,
     outcome: Outcome,
-) -> dict[str, Any]:
-    """Open, raise, join or close the service's one finding over these minutes, in
-    order, and return the service's state to store (FR12 to FR14, FR32, D20)."""
+) -> tuple[dict[str, Any], list[datetime]]:
+    """Open, raise, join, adopt or close the service's one finding over these minutes,
+    in order. Returns the service's state to store, and the minutes a member's false
+    alarm keeps out of the normal (FR12 to FR14, FR20, FR21, FR32, D20, D28)."""
     service = state.service_name
     key = _service_key(binding, service)
     row = (await connection.execute(_OPEN_FINDING, key)).one_or_none()
     finding_id = None if row is None else row.id
-    finding = None if row is None else _restore(row, state.signals.get(FINDING_KEY, {}))
+    tracked = state.signals.get(FINDING_KEY, {})
+    finding = None if row is None else _restore(row, tracked)
+    since = None if row is None or finding is None else _since(tracked, row.id, finding)
+    holds, keep_out = _holds(state, row is None, project, false_alarms)
+    kept_out: list[datetime] = []
     traffic = phases[TRAFFIC]
     absorbed = service in project.absorbed
     if project.finding_id is not None and absorbed:
@@ -720,17 +797,28 @@ async def _keep_finding(
         waits = False
         holds_traffic = finding is not None and "traffic" in finding.keys
         if judged.traffic.verdict == "unusual" and not absorbed and not holds_traffic:
-            since = datetime.fromisoformat(traffic.setdefault("pending_since", _iso(judged.minute)))
-            waits = traffic_waits(since, judged.minute, project.pending)
+            since_pending = traffic.setdefault("pending_since", _iso(judged.minute))
+            waits = traffic_waits(
+                datetime.fromisoformat(since_pending), judged.minute, project.pending
+            )
         else:
             traffic.pop("pending_since", None)
-        context = Context(traffic_absorbed=absorbed, traffic_waits=waits, last_request=last_request)
+        context = Context(
+            traffic_absorbed=absorbed,
+            traffic_waits=waits,
+            last_request=last_request,
+            held=frozenset(holds),
+        )
+        if keep_out and holds:
+            kept_out.append(judged.minute)
         finding, change = step(finding, judged, context, zone=zone)
+        holds = advance_holds(holds, judged)
         if finding is None:
             continue
         if change.opened:
             finding.muted = muted
             finding_id = await _open(connection, key, service, finding, zone)
+            since = finding.started_at
             outcome.opened += 1
             outcome.notified += await notify.finding_opened(
                 connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
@@ -740,6 +828,8 @@ async def _keep_finding(
             outcome.notified += await _notify_change(
                 connection, key, finding_id, finding, change, now=now
             )
+        if change.joined:
+            since = judged.minute
         if change.closed is not None:
             assert finding_id is not None, "only an open finding closes"
             await connection.execute(
@@ -759,6 +849,23 @@ async def _keep_finding(
             finding, finding_id = None, None
         if change.joined:
             traffic.pop("pending_since", None)
+    if (
+        finding is not None
+        and finding_id is not None
+        and since is not None
+        and await _adopt(
+            connection,
+            detection,
+            key,
+            finding_id,
+            finding,
+            since=since,
+            minute=runs[-1].at,
+            now=now,
+            outcome=outcome,
+        )
+    ):
+        finding, finding_id = None, None
     if finding_id is not None:
         # Before the commit, so a note on the incident's PagerDuty alert (D29) can
         # use the link as soon as the opening is delivered.
@@ -772,6 +879,7 @@ async def _keep_finding(
                 "severity": finding.severity,
                 "title": title(service, finding, zone),
                 "signals": json.dumps(finding.signals()),
+                "services": "[]",
             },
         )
     stored: dict[str, Any] = {**state.signals, **phases}
@@ -785,8 +893,100 @@ async def _keep_finding(
                 [name, finding.keys[name].clear, finding.keys[name].unjudged]
                 for name in finding.ordered()
             ],
+            SINCE_KEY: _iso(since or finding.started_at),
         }
-    return stored
+    if holds:
+        stored[HELD_KEY], stored[HELD_OUT_KEY] = holds, keep_out
+    else:
+        stored.pop(HELD_KEY, None)
+        stored.pop(HELD_OUT_KEY, None)
+    return stored, kept_out
+
+
+def _since(tracked: Mapping[str, Any], finding_id: uuid.UUID, finding: OpenFinding) -> datetime:
+    """When the open finding's keys last changed: recorded by this job, or its start
+    for a finding recorded before that was (AC16)."""
+    recorded = tracked.get(SINCE_KEY) if tracked.get("id") == str(finding_id) else None
+    return finding.started_at if recorded is None else datetime.fromisoformat(recorded)
+
+
+def _holds(
+    state: ServiceState,
+    finding_gone: bool,
+    project: ProjectContext,
+    false_alarms: Mapping[str, bool],
+) -> tuple[dict[str, int], bool]:
+    """The keys a false alarm holds (FR20), and whether their minutes stay out of the
+    normal: they do for a member's, whose word cannot widen it (D28). A finding this
+    job still tracked, and a person has closed as a false alarm since, starts a hold
+    on its keys; a project finding's starts one on each of its services' traffic."""
+    holds = {str(name): int(clear) for name, clear in state.signals.get(HELD_KEY, {}).items()}
+    keep_out = bool(state.signals.get(HELD_OUT_KEY, False))
+    tracked = state.signals.get(FINDING_KEY, {})
+    returns = false_alarms.get(str(tracked.get("id"))) if finding_gone else None
+    if returns is not None:
+        holds.update({str(entry[0]): 0 for entry in tracked.get("keys", [])})
+        keep_out = keep_out or not returns
+    held_project = state.signals.get(TRAFFIC, {}).get("project_finding")
+    returns = None if held_project is None else false_alarms.get(held_project)
+    if returns is not None and held_project != str(project.finding_id):
+        holds[TRAFFIC] = 0
+        keep_out = keep_out or not returns
+    return holds, keep_out
+
+
+async def _adopt(
+    connection: AsyncConnection,
+    detection: ProjectDetection,
+    key: Mapping[str, Any],
+    finding_id: uuid.UUID,
+    finding: OpenFinding,
+    *,
+    since: datetime,
+    minute: datetime,
+    now: datetime,
+    outcome: Outcome,
+) -> bool:
+    """FR21, AC16: a finding open a week with the same signals, nobody having answered,
+    becomes its service's normal, unless D22 or FR32 says it never may. Its ratio is
+    taken from its readings, and it waits until enough of them say what the level is.
+    The owners are told (D22), unless it is muted (D36); the system is the actor."""
+    if not adoptable(finding, since=since, minute=minute, after=ADOPTION_AFTER):
+        return False
+    started = finding.started_at.replace(second=0, microsecond=0)
+    readings = detection.shift_readings(key["service_name"], start=started, end=minute + MINUTE)
+    signals = list(dict.fromkeys(key_signal(name) for name in finding.ordered()))
+    ratios = {signal: shift_ratio(signal, readings) for signal in signals}
+    if any(ratio is None for ratio in ratios.values()):
+        return False
+    shifts = [{"signal": signal, "ratio": ratio} for signal, ratio in ratios.items()]
+    for shift in shifts:
+        await connection.execute(_ADOPTED_SHIFT, {**key, **shift, "from_minute": started})
+    await connection.execute(
+        _CLOSE,
+        {
+            "org_id": key["org_id"],
+            "id": finding_id,
+            "reason": "adopted",
+            "closed_at": max(minute, finding.started_at),
+            "signals": json.dumps(finding.signals()),
+        },
+    )
+    await connection.execute(
+        _AUDIT_ADOPTED,
+        {
+            "org_id": key["org_id"],
+            "action": ADOPTED_AUDIT_ACTION,
+            "target": f"{FINDING_AUDIT_TARGET}:{finding_id}",
+            "detail": json.dumps({"shifts": shifts}),
+        },
+    )
+    outcome.closed += 1
+    outcome.notified += await notify.finding_adopted(
+        connection, finding_id, org_id=key["org_id"], severity=finding.severity, at=now
+    )
+    # The rebuilt normal is asked for by the next run, which finds this one stale.
+    return True
 
 
 async def _notify_change(
@@ -848,6 +1048,7 @@ async def _open(
                 "muted": finding.muted,
                 "title": title(service, finding, zone),
                 "signals": json.dumps(finding.signals()),
+                "services": "[]",
                 "started_at": finding.started_at,
             },
         )
@@ -902,10 +1103,15 @@ def _last_request(stored: Mapping[str, Any], runs: Sequence[Judged]) -> datetime
 
 
 def _record_exclusions(
-    stored: dict[str, Any], runs: Sequence[Judged], *, snoozed: bool, now: datetime
+    stored: dict[str, Any],
+    runs: Sequence[Judged],
+    *,
+    snoozed: bool,
+    now: datetime,
+    held_out: Sequence[datetime] = (),
 ) -> dict[str, Any]:
-    """Add this run's snoozed and shadowed minutes to what the normal leaves out, and
-    forget what no pool reaches any more (BR3, FR6, D25)."""
+    """Add this run's snoozed, shadowed and member-held minutes to what the normal
+    leaves out, and forget what no pool reaches any more (BR3, FR6, D25, D28)."""
     recorded = {
         reason: [
             (datetime.fromisoformat(first), datetime.fromisoformat(last)) for first, last in spans
@@ -918,6 +1124,8 @@ def _record_exclusions(
         if each.shadow:
             lead = (each.minute.width - 1) * MINUTE
             recorded.setdefault(SHADOW, []).append((each.at - lead, each.at))
+    for at in held_out:
+        recorded.setdefault(HELD_OUT, []).append((at, at))
     horizon = now - HISTORY
     kept = {
         reason: [[_iso(a), _iso(b)] for a, b in merge_ranges(spans) if b >= horizon]
@@ -986,6 +1194,22 @@ async def _normals(
         elif row.signal == TRAFFIC:
             found[at] = replace(known, traffic=traffic_from_json(row.baseline))
     return found
+
+
+async def _false_alarms(
+    connection: AsyncConnection, binding: ProjectBinding, states: Iterable[ServiceState]
+) -> dict[str, bool]:
+    """Of the findings the services' states still name, those a person closed as a
+    false alarm, each with whether it returned its minutes to the normal."""
+    named = set()
+    for each in states:
+        tracked = each.signals.get(FINDING_KEY, {}).get("id")
+        held_project = each.signals.get(TRAFFIC, {}).get("project_finding")
+        named |= {found for found in (tracked, held_project) if found is not None}
+    if not named:
+        return {}
+    rows = await connection.execute(_FALSE_ALARMS, {**_project_key(binding), "ids": sorted(named)})
+    return {str(row.id): bool(row.false_alarm_returns_minutes) for row in rows}
 
 
 async def _muted_and_snoozed(
@@ -1103,6 +1327,6 @@ def judge(*, project_id: str, settled_minute: str) -> None:
         notified=outcome.notified,
     )
     if outcome.baselines_missing and outcome.org_id is not None:
-        enqueue(compute_request(project, uuid.UUID(outcome.org_id)))
+        enqueue(compute_baselines_request(project, uuid.UUID(outcome.org_id)))
     if outcome.notified:
         enqueue(JobRequest(task=DELIVER_TASK, queue=DELIVERIES_QUEUE))

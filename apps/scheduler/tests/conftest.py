@@ -4,6 +4,7 @@ from collections.abc import Iterator
 
 import pytest
 from alert_fixtures import engine, tenant  # noqa: F401  shared by the alert suites
+from detection_history import administrator, project, store  # noqa: F401  the detection suites
 from recording_site import RecordingSite, serve_recording_site
 
 

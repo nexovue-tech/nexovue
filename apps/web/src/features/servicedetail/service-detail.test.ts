@@ -1,16 +1,18 @@
 import { describe, expect, it } from "vitest";
-
+import type { FindingMarker } from "@/shared/detection/api";
 import type { ServiceEdge } from "@/shared/service-peers";
 import { collapseAddressPeers } from "@/shared/service-peers";
-
 import type { EndpointHealth, ErrorGroupSummary, ServiceHealth } from "./api";
+
 import {
   dependencyKey,
   describeEndpoints,
+  describeFindingsInWindow,
   describeService,
   describeServiceErrors,
   describeSilence,
   detailState,
+  findingSpans,
   neighboursOf,
 } from "./service-detail";
 
@@ -242,5 +244,51 @@ describe("describeSilence", () => {
     expect(sentence).toContain("demo-storefront");
     expect(sentence).toContain("not the same as it not existing");
     expect(sentence).toContain("Widen the time range");
+  });
+});
+
+describe("findings on the timeline (F6, design *The service screen*)", () => {
+  const window = { from: "2026-11-04T12:00:00Z", to: "2026-11-04T13:00:00Z" };
+  const marker = (overrides: Partial<FindingMarker>): FindingMarker => ({
+    id: "f-1",
+    started_at: "2026-11-04T12:10:00Z",
+    closed_at: "2026-11-04T12:20:00Z",
+    severity: "warning",
+    ...overrides,
+  });
+  const seconds = (iso: string) => Date.parse(iso) / 1000;
+
+  it("shades each finding across the minutes it was open", () => {
+    expect(findingSpans([marker({})], window)).toEqual([
+      { from: seconds("2026-11-04T12:10:00Z"), to: seconds("2026-11-04T12:20:00Z") },
+    ]);
+  });
+
+  it("runs an open finding to the window's end, and cuts one that began before it", () => {
+    const spans = findingSpans(
+      [marker({ started_at: "2026-11-04T11:00:00Z", closed_at: null })],
+      window,
+    );
+
+    expect(spans).toEqual([{ from: seconds(window.from), to: seconds(window.to) }]);
+  });
+
+  it("draws nothing for a finding wholly outside the window", () => {
+    expect(
+      findingSpans(
+        [marker({ started_at: "2026-11-04T10:00:00Z", closed_at: "2026-11-04T11:00:00Z" })],
+        window,
+      ),
+    ).toEqual([]);
+  });
+
+  it("says how many findings the window holds, and that the cap bit", () => {
+    expect(describeFindingsInWindow([], false)).toBe("No finding in this window.");
+    expect(describeFindingsInWindow([marker({}), marker({ id: "f-2" })], false)).toBe(
+      "2 findings in this window, shaded on the charts.",
+    );
+    expect(describeFindingsInWindow([marker({})], true)).toBe(
+      "1 finding in this window, shaded on the charts. Only the first 200 are shown.",
+    );
   });
 });

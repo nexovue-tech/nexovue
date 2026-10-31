@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { InlineFailure } from "@/shared/components/InlineFailure";
@@ -10,8 +11,9 @@ import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
 import { useLiveWindow, useSelection } from "@/shared/selection";
 
-import type { CheckCounts, ClosedReason, DetectionStatus, Finding, ProjectTotals } from "./api";
+import type { CheckCounts, DetectionStatus, Finding, ProjectTotals } from "./api";
 import { useCheckCounts, useDetectionStatus, useFindings, useProjectSummary } from "./api";
+import { CLOSED_AS } from "./finding-words";
 import { detectionHeadlineFor, headlineFor } from "./headline";
 import { orderFindings } from "./ordering";
 
@@ -276,21 +278,18 @@ function MutedLink({
   );
 }
 
-/**
- * How a closed finding closed, in the reader's words.
- *
- * Never "Resolved": a finding that closed because the service went quiet, or because
- * nobody answered for a week, was not fixed, and saying so would be a claim we cannot
- * support.
- */
-const CLOSED_AS: Record<ClosedReason, string> = {
-  recovered: "Recovered",
-  false_alarm: "Closed as a false alarm",
-  new_normal: "Accepted as the new normal",
-  adopted: "Accepted as the new normal after 7 days with no answer",
-  service_gone: "Service stopped sending",
-  could_not_be_judged: "Closed: too quiet to judge for 6 hours",
-};
+/** The card's sentence, which opens the finding's own page (D12). */
+function FindingLink({ finding }: { finding: Finding }) {
+  return (
+    <Link
+      to="/findings/$findingId"
+      params={{ findingId: finding.id }}
+      className="underline-offset-2 hover:underline"
+    >
+      {finding.title}
+    </Link>
+  );
+}
 
 /** What a card is about. A project finding has no single service: it spans several. */
 function subjectOf(finding: Finding): string {
@@ -310,7 +309,9 @@ function FindingRow({ finding }: { finding: Finding }) {
   if (finding.state === "closed") {
     return (
       <div className="border-line-subtle border-b px-4 py-2 text-sm">
-        <p className="truncate text-ink-dim">{finding.title}</p>
+        <p className="truncate text-ink-dim">
+          <FindingLink finding={finding} />
+        </p>
         <p className="mt-0.5 text-2xs text-ink-dim">
           {finding.closed_reason ? CLOSED_AS[finding.closed_reason] : "Closed"}
           {" · "}
@@ -337,7 +338,9 @@ function FindingRow({ finding }: { finding: Finding }) {
 
       <div className="min-w-0 flex-1">
         {/* The title is the product: a sentence, not a metric expression. */}
-        <h3 className="text-ink text-sm">{finding.title}</h3>
+        <h3 className="text-ink text-sm">
+          <FindingLink finding={finding} />
+        </h3>
         <p className="mt-0.5 font-mono text-2xs text-ink-dim">{subject}</p>
       </div>
 

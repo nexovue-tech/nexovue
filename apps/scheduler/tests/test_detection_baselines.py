@@ -11,6 +11,8 @@ AC13, AC14 and AC17.
 from __future__ import annotations
 
 import json
+import math
+import random
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
@@ -25,6 +27,7 @@ from nexovue_scheduler.detection.baselines import (
     Baselines,
     Exclusions,
     FindingSpan,
+    Shift,
     endpoint_profiles,
     exclusions,
     failing_from_json,
@@ -42,6 +45,7 @@ from nexovue_scheduler.detection.baselines import (
 )
 from nexovue_scheduler.detection.method import (
     BUCKET_COUNT,
+    LOG_EDGES,
     SENSITIVITIES,
     Minute,
     Window,
@@ -561,3 +565,116 @@ def test_an_endpoint_s_profile_comes_from_its_recorded_excursions_and_its_window
     assert learned.height(100) == pytest.approx(0.3)
     assert without.excursions == len(bursts) - 1
     assert cut.excursions == len(bursts) + 1
+
+
+# ------------------------------------------------------------- level shifts (FR21)
+
+# A level change of a whole number of buckets is exact on the bucket grid.
+_SLOWER_BUCKETS: Final = 6
+_SLOWER_RATIO: Final = math.exp(_SLOWER_BUCKETS * LOG_EDGES[1])
+# The moment the service's level changed, and the hour judged after it.
+_CHANGED: Final = TUESDAY + timedelta(hours=9)
+_JUDGED: Final = list(
+    span(TUESDAY + timedelta(hours=13), TUESDAY + timedelta(hours=13, minutes=30))
+)
+
+
+def _changed_history(
+    *, slower_by: int = 0, traffic: float = 1.0, failing: float = 0.01, since: datetime = _CHANGED
+) -> tuple[datetime, dict[datetime, Minute]]:
+    """Four weeks of a steady daily pattern, then a new level from `since` onwards."""
+    first_seen = TUESDAY - timedelta(days=28)
+    rate = daily(UTC_ZONE, peak=300)
+    history = series(first_seen, 29 * 1440, rate, seed=31)
+    rng = random.Random(37)
+    for at in span(since, TUESDAY + timedelta(days=1)):
+        requests = max(1, round(rate(at) * traffic + rng.gauss(0, 1)))
+        history[at] = series_minute(requests, round(requests * failing), slower_by=slower_by)
+    return first_seen, history
+
+
+def _with_shifts(
+    history: dict[datetime, Minute], first_seen: datetime, shifts: list[Shift]
+) -> dict[datetime, Baselines]:
+    return service_baselines(
+        history,
+        _JUDGED,
+        zone=UTC_ZONE,
+        first_seen=first_seen,
+        width=NORMAL.window_minutes,
+        shifts=shifts,
+    )
+
+
+@pytest.mark.parametrize(
+    ("signal", "level", "ratio"),
+    [
+        ("slower", {"slower_by": _SLOWER_BUCKETS}, _SLOWER_RATIO),
+        ("traffic", {"traffic": 0.4}, 0.4),
+        ("failing", {"failing": 0.06}, 6.0),
+    ],
+)
+def test_a_new_normal_judges_the_new_level_as_normal_at_once(
+    signal: str, level: dict[str, Any], ratio: float
+) -> None:
+    """AC15, FR21: without the shift the new level is unusual; with it, the same
+    minutes read normal straight away, with no learning gap."""
+    first_seen, history = _changed_history(**level)
+
+    before = _judged(history, _with_shifts(history, first_seen, []))
+    after = _judged(history, _with_shifts(history, first_seen, [Shift(signal, ratio, _CHANGED)]))
+
+    assert any(verdicts[signal] == "unusual" for verdicts in before.values())
+    assert [at for at, s in _unusual(after) if s == signal] == []
+    assert {verdicts[signal] for verdicts in after.values()} & {"normal", "elevated"}
+
+
+def test_a_new_normal_keeps_the_daily_shape_at_the_new_level() -> None:
+    """AC15: every minute's normal moves by the same ratio, so the quiet hours stay
+    quieter than the busy ones."""
+    first_seen, history = _changed_history(traffic=0.4)
+    quiet, busy = TUESDAY + timedelta(hours=3), TUESDAY + timedelta(hours=14)
+
+    def normals(shifts: list[Shift]) -> list[float]:
+        built = service_baselines(
+            history,
+            [quiet, busy],
+            zone=UTC_ZONE,
+            first_seen=first_seen,
+            width=NORMAL.window_minutes,
+            shifts=shifts,
+        )
+        return [built[at].traffic.expected for at in (quiet, busy)]
+
+    unshifted = normals([])
+    shifted = normals([Shift("traffic", 0.4, quiet - timedelta(hours=1))])
+    assert shifted[0] == pytest.approx(0.4 * unshifted[0], rel=0.05)
+    assert shifted[1] == pytest.approx(0.4 * unshifted[1], rel=0.05)
+
+
+def test_a_day_already_at_the_new_level_is_not_moved_again() -> None:
+    """Ten days on, the pool's latest week is at the new level by itself: only the days
+    before the change are moved, so the normal is the new level and not the ratio
+    applied twice."""
+    since = TUESDAY - timedelta(days=10)
+    first_seen, history = _changed_history(slower_by=_SLOWER_BUCKETS, since=since)
+    # The new level, as history alone would have it, had it always been so.
+    _, always = _changed_history(slower_by=_SLOWER_BUCKETS, since=first_seen)
+
+    shifted = _with_shifts(history, first_seen, [Shift("slower", _SLOWER_RATIO, since)])
+    plain = _with_shifts(always, first_seen, [])
+
+    for at in _JUDGED:
+        assert shifted[at].slower.normal_p95_ms == pytest.approx(
+            plain[at].slower.normal_p95_ms, rel=0.15
+        )
+        # Moved twice, L would sit six buckets higher; noise moves it at most one.
+        assert abs(shifted[at].slower.threshold_index - plain[at].slower.threshold_index) <= 1
+
+
+def test_a_shift_after_the_minute_judged_moves_nothing() -> None:
+    first_seen, history = _changed_history()
+
+    assert _with_shifts(
+        history, first_seen, [Shift("slower", 3.0, _JUDGED[-1] + timedelta(hours=1))]
+    ) == (_with_shifts(history, first_seen, []))

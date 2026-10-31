@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import bisect
 import json
+import math
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -42,18 +43,16 @@ from itertools import batched
 from typing import Any, Final
 from zoneinfo import ZoneInfo
 
-from nexovue_platform.jobs import JobRequest
+from nexovue_platform.detection import compute_baselines_request
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from nexovue_scheduler.detection import (
-    COMPUTE_BASELINES_TASK,
-    DETECTION_QUEUE,
-    SWEEP_BASELINES_TASK,
-)
+from nexovue_scheduler.detection import COMPUTE_BASELINES_TASK, SWEEP_BASELINES_TASK
 from nexovue_scheduler.detection.method import (
+    ANSCOMBE_SHIFT,
     BUCKET_COUNT,
+    LOG_EDGES,
     BurstProfile,
     EndpointCounts,
     EndpointNormal,
@@ -120,9 +119,6 @@ SLOWER: Final = "slower"
 FAILING: Final = "failing"
 TRAFFIC: Final = "traffic"
 _LOCK_PURPOSE: Final = "baselines"
-# Pure Python over up to two hours of minutes for every service of a project.
-BASELINE_SOFT_LIMIT_SECONDS: Final = 300
-BASELINE_HARD_LIMIT_SECONDS: Final = 330
 
 _EMPTY: Final = Minute.empty()
 
@@ -165,6 +161,15 @@ _RECORDED: Final = text(
     """
     SELECT service_name, signals -> 'excluded' AS excluded FROM detection_state
     WHERE org_id = :org_id AND project_id = :project_id AND signals ? 'excluded'
+    """
+)
+# The shifts that can still move a pool: one older than the pools' reach moves no day
+# any pool reads (FR21).
+_SHIFTS: Final = text(
+    """
+    SELECT service_name, signal, ratio, from_minute FROM baseline_shifts
+    WHERE org_id = :org_id AND project_id = :project_id AND from_minute >= :since
+    ORDER BY from_minute
     """
 )
 # Install-wide on purpose: a refused minute is delayed for every project (design,
@@ -217,6 +222,16 @@ class Exclusions:
 
 
 NO_EXCLUSIONS: Final = Exclusions()
+
+
+@dataclass(frozen=True, slots=True)
+class Shift:
+    """FR21: from `from_minute` on, one signal's normal is `ratio` times what its history
+    before that minute says (`baseline_shifts`, a new normal or an adoption)."""
+
+    signal: str
+    ratio: float
+    from_minute: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -567,13 +582,16 @@ def service_baselines(
     kept_out: Exclusions = NO_EXCLUSIONS,
     profiles: Mapping[date, BurstProfile] | None = None,
     endpoint_profiles: Mapping[date, Mapping[str, BurstProfile]] | None = None,
+    shifts: Sequence[Shift] = (),
 ) -> dict[datetime, Baselines]:
     """Each signal's normal at each minute, for windows of `width` minutes.
 
     `history` holds the service's counted minutes over `history_spans`, with their
     endpoints' counts; a minute it lacks had no requests. `profiles` holds the
     burst profile for each local day of `minutes`, and `endpoint_profiles` each
-    endpoint's."""
+    endpoint's. `shifts` move a signal's normal to a new level (FR21): each pool day
+    before a shift is read at the new level, so the shape is kept and judging goes
+    on at once (AC15); a day after it is already there."""
     pools = {minute: select_pool(minute, zone, first_seen, kept_out) for minute in minutes}
 
     def usable(stamp: datetime) -> bool:
@@ -598,10 +616,10 @@ def service_baselines(
                 ),
             )
             continue
-        failing = _failing(pool, blocks, width)
+        failing = _failing(pool, blocks, width, _day_ratios(shifts, FAILING, minute))
         endpoint_day = {} if endpoint_profiles is None else endpoint_profiles.get(local_date, {})
         found[minute] = Baselines(
-            slower=_slower(pool, blocks, width),
+            slower=_slower(pool, blocks, width, _day_ratios(shifts, SLOWER, minute)),
             failing=replace(
                 failing,
                 profile=None if profiles is None else profiles.get(local_date),
@@ -610,22 +628,64 @@ def service_baselines(
                     for name, normal in failing.endpoints.items()
                 },
             ),
-            traffic=_traffic(pool, blocks, width, minute, zone, first_seen),
+            traffic=_traffic(
+                pool, blocks, width, minute, zone, first_seen, _day_ratios(shifts, TRAFFIC, minute)
+            ),
         )
     return found
 
 
-def _slower(pool: Pool, blocks: Mapping[int, _Block], width: int) -> SlowerBaseline:
+DayRatio = Callable[[PoolDay], float]
+
+
+def _day_ratios(shifts: Sequence[Shift], signal: str, minute: datetime) -> DayRatio:
+    """How far each pool day's readings move to stand at the level `minute` is judged
+    at: every shift of the signal made after the day and by `minute`, compounded."""
+    own = [shift for shift in shifts if shift.signal == signal and shift.from_minute <= minute]
+
+    def ratio(day: PoolDay) -> float:
+        found = 1.0
+        for shift in own:
+            if day.centre < shift.from_minute:
+                found *= shift.ratio
+        return found
+
+    return ratio
+
+
+def _buckets_moved(ratio: float) -> int:
+    """A latency ratio as whole buckets on the log grid: *slower* moves by the ratio on
+    the log scale (design, *Level shifts*)."""
+    return 0 if ratio == 1.0 else round(math.log(ratio) / LOG_EDGES[1])
+
+
+def _moved(buckets: Sequence[int], by: int) -> list[int]:
+    """Each count `by` buckets along, folding at the ends as a duration outside the
+    range does (`method.LOG_EDGES`)."""
+    if by == 0:
+        return list(buckets)
+    moved = [0] * BUCKET_COUNT
+    for index, count in enumerate(buckets):
+        moved[min(max(index + by, 0), BUCKET_COUNT - 1)] += count
+    return moved
+
+
+def _slower(
+    pool: Pool, blocks: Mapping[int, _Block], width: int, ratios: DayRatio
+) -> SlowerBaseline:
+    moved = {day.offset: _buckets_moved(ratios(day)) for day in pool.days}
     level = [0] * BUCKET_COUNT
     for day in pool.days:
         for first, last in day.level_ranges:
-            part = blocks[day.offset].level(first, last)
+            part = _moved(blocks[day.offset].level(first, last), moved[day.offset])
             level = [a + b for a, b in zip(level, part, strict=True)]
     threshold, share = threshold_share(level)
     moments = [0, 0, 0, 0, 0]
     for day in pool.days:
+        # Above L after moving up k buckets is above L - k before.
+        below = min(max(threshold - moved[day.offset], 0), BUCKET_COUNT)
         for first, last in day.dispersion_ranges:
-            spread = blocks[day.offset].dispersion(first, last, threshold)
+            spread = blocks[day.offset].dispersion(first, last, below)
             moments = [a + b for a, b in zip(moments, spread, strict=True)]
     return SlowerBaseline(
         mode=pool.mode,
@@ -639,26 +699,39 @@ def _slower(pool: Pool, blocks: Mapping[int, _Block], width: int) -> SlowerBasel
     )
 
 
+def _unmoved(_: PoolDay) -> float:
+    return 1.0
+
+
 def _pooled(
-    pool: Pool, blocks: Mapping[int, _Block], counts: Callable[[_Block], _Counts]
+    pool: Pool,
+    blocks: Mapping[int, _Block],
+    counts: Callable[[_Block], _Counts],
+    ratios: DayRatio = _unmoved,
 ) -> tuple[int, int, float]:
-    """A series' level pool sums and its wander from the dispersion pool."""
+    """A series' level pool sums and its wander from the dispersion pool. A day moved
+    by a shift has its failures multiplied, never past its requests."""
     requests = failures = 0
-    moments = [0, 0, 0, 0, 0]
+    moments = [0.0, 0.0, 0.0, 0.0, 0.0]
     for day in pool.days:
         block = blocks[day.offset]
         series = counts(block)
+        ratio = ratios(day)
         for first, last in day.level_ranges:
             n, e, *_ = series.moments(block.index(first), block.index(last) + 1)
-            requests, failures = requests + n, failures + e
+            requests += n
+            failures += e if ratio == 1.0 else min(round(e * ratio), n)
         for first, last in day.dispersion_ranges:
-            part = series.moments(block.index(first), block.index(last) + 1)
+            n, e, nn, ee, ne = series.moments(block.index(first), block.index(last) + 1)
+            part = (n, e * ratio, nn, ee * ratio * ratio, ne * ratio)
             moments = [a + b for a, b in zip(moments, part, strict=True)]
-    return requests, failures, moment_wander(*(float(value) for value in moments))
+    return requests, failures, moment_wander(*moments)
 
 
-def _failing(pool: Pool, blocks: Mapping[int, _Block], width: int) -> FailingBaseline:
-    requests, failures, wander = _pooled(pool, blocks, lambda block: block.failing)
+def _failing(
+    pool: Pool, blocks: Mapping[int, _Block], width: int, ratios: DayRatio
+) -> FailingBaseline:
+    requests, failures, wander = _pooled(pool, blocks, lambda block: block.failing, ratios)
     names = sorted({name for day in pool.days for name in blocks[day.offset].endpoint_names})
     endpoints = {}
     for name in names:
@@ -687,9 +760,10 @@ def _traffic(
     minute: datetime,
     zone: ZoneInfo,
     first_seen: datetime,
+    ratios: DayRatio = _unmoved,
 ) -> TrafficBaseline:
     values = [
-        value
+        _moved_traffic(value, ratios(day))
         for day in pool.days
         for first, last in day.level_ranges
         for value in blocks[day.offset].traffic_values(max(first, first_seen), last)
@@ -707,6 +781,14 @@ def _traffic(
         stops_only=stops_only,
         learning_until=judged_from if stops_only else None,
     )
+
+
+def _moved_traffic(value: float, ratio: float) -> float:
+    """A window's count on the square-root scale, at `ratio` times its level: its
+    spread then grows by the ratio's square root, as Poisson's does (design)."""
+    if ratio == 1.0:
+        return value
+    return traffic_value(max((value / 2) ** 2 - ANSCOMBE_SHIFT, 0.0) * ratio)
 
 
 # ------------------------------------------------------------ burst profile
@@ -972,6 +1054,7 @@ async def compute_project(
         )
         days = sorted({minute.astimezone(zone).date() for minute in minutes})
         endpoint_runs = await recorded_endpoint_runs(connection, binding)
+        shifts = await project_shifts(connection, binding, now=now)
         rows: list[dict[str, Any]] = []
         for batch in batched(sorted(first_seen), SERVICE_BATCH, strict=False):
             pools = {
@@ -995,6 +1078,7 @@ async def compute_project(
                     kept_out=kept[service].normal,
                     profiles=profiles.get(service, {}),
                     endpoint_profiles=endpoint_day_profiles.get(service, {}),
+                    shifts=shifts.get(service, ()),
                 )
                 rows.extend(
                     {
@@ -1052,6 +1136,19 @@ async def project_exclusions(
         service: exclusions(service, findings, recorded=recorded.get(service, {}), refused=refused)
         for service in services
     }
+
+
+async def project_shifts(
+    connection: AsyncConnection, binding: ProjectBinding, *, now: datetime
+) -> dict[str, list[Shift]]:
+    """Each service's shifts that can still move a pool day (FR21)."""
+    key = {"org_id": uuid.UUID(binding.org_id), "project_id": uuid.UUID(binding.project_id)}
+    found: dict[str, list[Shift]] = {}
+    for row in await connection.execute(_SHIFTS, {**key, "since": now - HISTORY - DAY}):
+        found.setdefault(row.service_name, []).append(
+            Shift(row.signal, float(row.ratio), row.from_minute.astimezone(UTC))
+        )
+    return found
 
 
 async def recorded_endpoint_runs(
@@ -1161,20 +1258,6 @@ def _read_profiles(
     return found, endpoints
 
 
-def compute_request(project_id: uuid.UUID, org_id: uuid.UUID) -> JobRequest:
-    """One project's baseline job. A second queued while one runs finds the project
-    locked and does nothing."""
-    return JobRequest(
-        task=COMPUTE_BASELINES_TASK,
-        queue=DETECTION_QUEUE,
-        kwargs={"project_id": str(project_id)},
-        org_id=str(org_id),
-        expires_seconds=int(KEPT.total_seconds()),
-        soft_limit_seconds=BASELINE_SOFT_LIMIT_SECONDS,
-        hard_limit_seconds=BASELINE_HARD_LIMIT_SECONDS,
-    )
-
-
 @task(COMPUTE_BASELINES_TASK)
 def compute_baselines(*, project_id: str) -> None:
     store = store_for_process()
@@ -1196,7 +1279,7 @@ def sweep_baselines() -> None:
         async with engine.connect() as connection:
             projects = fair_order(await active_projects(connection, now=datetime.now(UTC)))
         await enqueue_all(
-            engine, [compute_request(each.project_id, each.org_id) for each in projects]
+            engine, [compute_baselines_request(each.project_id, each.org_id) for each in projects]
         )
         return len(projects)
 

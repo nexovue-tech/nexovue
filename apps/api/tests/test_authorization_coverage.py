@@ -163,6 +163,16 @@ POLICY_OF: Final = {
     "nexovue_api/alerts/router.py:update_rule": "MayOperateAlerts",
     "nexovue_api/alerts/router.py:mute_rule": "MayOperateAlerts",
     "nexovue_api/alerts/router.py:delete_rule": "MayOperateAlerts",
+    # F6 (FR19, FR20, D25): acknowledging, calling a false alarm and snoozing are
+    # every working role's, as operating alerts is. A viewer may do none of them.
+    "nexovue_api/findings/router.py:acknowledge_finding": "MayOperateAlerts",
+    "nexovue_api/findings/router.py:mark_false_alarm": "MayOperateAlerts",
+    "nexovue_api/detection/router.py:snooze_service": "MayOperateAlerts",
+    # F6 (FR23, D11): what decides whether detection is heard at all, and what it
+    # judges by, is an admin's.
+    "nexovue_api/findings/router.py:accept_new_normal": "MayConfigureDetection",
+    "nexovue_api/detection/router.py:mute_service": "MayConfigureDetection",
+    "nexovue_api/detection/router.py:change_detection_settings": "MayConfigureDetection",
     "nexovue_api/maintenance/router.py:create_window": "MayOperateAlerts",
     "nexovue_api/maintenance/router.py:update_window": "MayOperateAlerts",
     "nexovue_api/maintenance/router.py:delete_window": "MayOperateAlerts",

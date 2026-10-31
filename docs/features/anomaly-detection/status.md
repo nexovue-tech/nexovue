@@ -98,6 +98,17 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
   - ruff passes, and mypy reports no issues in 697 files;
   - the Python suites give 9,053 passed, with the same 85 environment-only failures as Step 3;
   - the web gives 1,433, plus 124 in the browser SDK; Biome, typecheck and bundle sizes pass.
+- **Step 5**, the user's controls and the finding page, was built on 2026-11-01:
+  - acknowledge, false alarm, new normal, snooze, mute and detection settings, each role-gated and audited;
+  - the false-alarm hold, shifts and adoption in the scheduler;
+  - the finding page, the service screen's badge and markers, the settings section, and the signup zone.
+
+  Its checks:
+  - ruff passes, and mypy reports no issues in 702 files;
+  - the Python suites give 9,159 passed. Besides the 85 environment-only failures,
+    `test_profiles_live.py`'s TTL test fails here: ClickHouse removed an expired row inside the test's
+    3-second wait. The test is timing-sensitive, and no profile code changed;
+  - the web gives 1,474, plus 124 in the browser SDK; Biome, typecheck and bundle sizes pass.
 - **A stop's limit:** at high sensitivity a stop needs about 2.2 expected requests a minute, not 2
   (spec, FR32, *Limit*; AC41).
 - **The dev stores run in this environment**, through a local compose override for the sandbox's open-file
@@ -113,7 +124,7 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
 
 ## Next action
 
-Step 5, the user's controls and the finding page. Step 1, the demo run on the founder's Mac, can run at any time alongside.
+Step 6, safety under nexovue's own failures and a hostile tenant. Step 1, the demo run on the founder's Mac, can run at any time alongside.
 
 ## Open decisions
 
@@ -127,9 +138,12 @@ here for review (2026-11-01).
 - **An early resolve sends nothing to PagerDuty.** When one of a linked finding and incident closes while
   the other is open, no note is posted. PagerDuty's documentation doesn't say how a later trigger changes an
   open alert, and a wrong guess could re-page or close it.
+- **Step 5's own choices** are listed in `design.md`, *As built*, Step 5. They include the new-normal
+  threshold of 15 readings, refusing a partial new normal, a false alarm on a recovered finding sending
+  nothing, and the snooze and mute ranges.
 - **The migration lock is fixed, so concurrent indexes work.** `database.md` requires `CREATE INDEX
   CONCURRENTLY` on a table with rows, but the migration runner's lock deadlocks two setups started together on
-  such an index. No migration had needed one before. The runner is fixed at the root, and 0045 indexes the
+  such an index. No migration had needed one before. Both runners, Postgres's and ClickHouse's, are fixed at the root, and 0045 indexes the
   PagerDuty alert key. The rejected alternatives were no index, which would scan a channel's whole history,
   and a plain index, which would break the standard.
 - **Step 7's *detection stalled* alert is the heartbeat** for a scheduler whose minute sweep never runs. The

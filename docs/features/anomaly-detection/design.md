@@ -216,6 +216,35 @@ Recorded as each plan step lands. It says where the built code differs from the 
     *resolve*. An earlier close sends nothing, and the delivery log records why. PagerDuty's Events API v2
     drops an acknowledge or resolve on a resolved alert, and a later trigger would page again, so the alert
     must stay open until the problem has ended.
+- **Step 5, 2026-11-01:**
+  - **Migration 0046, `findings.services`:** a closed project finding must still name its services.
+  - **`MayConfigureDetection`** gates every detection setting, mute and new normal. A change to a finding
+    that moved meanwhile is a `409`, and each change writes an audit row with its reason.
+  - **Closing from the API** writes one *resolved* message, through a statement shared with the scheduler
+    (`nexovue_platform.detection`). A new normal, an admin's false alarm or a settings change queues an
+    immediate rebuild of the normal. The baseline job's request, with its 330-second limit, is defined once
+    in the platform.
+  - **A false alarm** holds its signals until they read normal for 10 minutes. A member's hold keeps its
+    minutes out of the normal too (D28).
+  - **Shifts** are applied per past day in the hourly baseline job, keeping the daily shape and never
+    shifting a day twice. A normal built before a shift is never judged by.
+  - **A new normal** needs 15 readings with a value, three windows at normal sensitivity, and a ratio for
+    every signal of the finding. Moving only some would reopen it at once. It starts from the minute the
+    finding started. Endpoint normals don't move, and a project finding has none, so its new normal is a
+    `422`.
+  - **Adoption** emails the owners and sends *resolved* to every other channel told, so a PagerDuty alert
+    closes. *The same signals for 7 days* counts from the last signal or endpoint to join.
+  - **A false alarm on a recovered finding** changes its closed reason, keeps its close time and sends
+    nothing. Acknowledging twice is a `409`.
+  - **Snooze and mute** need a service detection has seen, or the answer is a `404`. A snooze is 30 minutes
+    to 4 hours, and a mute 1 hour to 30 days. The audit target is the project, naming the service.
+  - **Limits:** a false-alarm reason is at most 1,000 characters, and the finding page reads at most 24
+    hours of readings.
+  - **Signup** sends the browser's zone. A bad one falls back to UTC rather than refusing the signup.
+  - **The web:** `DetectionBadge` lives in `shared/detection/`, because two features use it and a feature
+    may not import another. The finding page draws the reading, the normal and the band's edge as lines.
+    `TrendChart` gains shaded spans and series with gaps, and a fix for a redraw that never fired, which
+    left late deploy markers undrawn.
 
 ## Words used here
 

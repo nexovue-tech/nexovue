@@ -9,9 +9,11 @@ import { DurationHeatmap } from "@/shared/components/DurationHeatmap";
 import { EmptyState } from "@/shared/components/EmptyState";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
+import type { ChartSpan } from "@/shared/components/TrendChart";
 import { CHART_HEIGHT, TrendChart } from "@/shared/components/TrendChart";
 import type { DeployMarker } from "@/shared/deploy-markers";
 import { deployMarkers } from "@/shared/deploy-markers";
+import { useDetectionSettings, useServiceDetection } from "@/shared/detection/api";
 import { formatDuration } from "@/shared/format/duration";
 import { formatErrors } from "@/shared/format/health";
 import { formatCount, formatPercent } from "@/shared/format/number";
@@ -43,6 +45,7 @@ import {
   useServiceTrend,
 } from "./api";
 
+import { DetectionStrip } from "./DetectionStrip";
 import type { Dependency, DetailState } from "./service-detail";
 import {
   dependencyKey,
@@ -51,6 +54,7 @@ import {
   describeServiceErrors,
   describeSilence,
   detailState,
+  findingSpans,
   neighboursOf,
 } from "./service-detail";
 
@@ -115,6 +119,14 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
     [deploys.data, serviceName, timeWindow.from, timeWindow.to],
   );
 
+  // The findings in this window, shaded on the charts (design, *The service screen*).
+  const detection = useServiceDetection(projectId, serviceName, timeWindow);
+  const settings = useDetectionSettings(projectId);
+  const spans = useMemo(
+    () => findingSpans(detection.data?.findings ?? [], timeWindow),
+    [detection.data, timeWindow],
+  );
+
   const points = trend.data?.points ?? [];
   const endpointRows = endpoints.data?.endpoints ?? [];
   const row = aggregate.data;
@@ -130,6 +142,17 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
   return (
     <ServiceDetailView
       alerts={<ServiceAlerts projectId={projectId} serviceName={serviceName} />}
+      detection={
+        projectId === undefined ? null : (
+          <DetectionStrip
+            projectId={projectId}
+            serviceName={serviceName}
+            detection={detection.data}
+            failed={detection.isError}
+            zone={settings.data?.timezone}
+          />
+        )
+      }
       profiling={
         <ServiceProfiling projectId={projectId} serviceName={serviceName} timeWindow={timeWindow} />
       }
@@ -145,6 +168,7 @@ export function ServiceDetailScreen({ serviceName }: { serviceName: string }) {
       row={row}
       points={points}
       markers={markers}
+      spans={spans}
       endpoints={endpointRows}
       heatmap={heatmap.data}
       dependencies={{
@@ -193,6 +217,8 @@ export interface ServiceDetailViewProps {
   points: readonly TrendPoint[];
   /** The deploys of this service inside this window, as rules on the charts. */
   markers: readonly DeployMarker[];
+  /** The findings open inside this window, shaded on the charts (F6). */
+  spans?: readonly ChartSpan[];
   endpoints: readonly EndpointHealth[];
   /** Absent for a customer whose SDK sends no OTLP histogram, which is most. */
   heatmap?: DurationHeatmapResponse;
@@ -200,6 +226,8 @@ export interface ServiceDetailViewProps {
   errors: PanelSource<ErrorGroupSummary>;
   /** The rules that watch this service and any open incident (F21, FR24). */
   alerts?: ReactNode;
+  /** Its detection state, its snooze and mute, and its findings (F6, FR25). */
+  detection?: ReactNode;
   /** Whether the service is profiled, beside its alerts (F17, FR11). */
   profiling?: ReactNode;
 }
@@ -214,11 +242,13 @@ export function ServiceDetailView({
   row,
   points,
   markers,
+  spans = [],
   endpoints,
   heatmap,
   dependencies,
   errors,
   alerts,
+  detection,
   profiling,
 }: ServiceDetailViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -266,6 +296,7 @@ export function ServiceDetailView({
     <div className="flex h-full min-h-0 flex-col">
       <ServiceHeader serviceName={serviceName} windowLabel={windowLabel} state={state} row={row} />
       {alerts ? <div className="px-4">{alerts}</div> : null}
+      {detection ? <div className="px-4">{detection}</div> : null}
       {profiling ? <div className="px-4">{profiling}</div> : null}
 
       {state === "pending" ? (
@@ -295,6 +326,7 @@ export function ServiceDetailView({
               serviceName={serviceName}
               bucketCount={points.length}
               markers={markers}
+              spans={spans}
             />
 
             <HeatmapSection serviceName={serviceName} heatmap={heatmap} />
@@ -472,11 +504,13 @@ function TrendSection({
   serviceName,
   bucketCount,
   markers,
+  spans,
 }: {
   plots: readonly TrendPlot[];
   serviceName: string;
   bucketCount: number;
   markers: readonly DeployMarker[];
+  spans: readonly ChartSpan[];
 }) {
   return (
     <>
@@ -485,7 +519,7 @@ function TrendSection({
         caption={
           bucketCount === 0
             ? "No buckets in this window — the rollup has nothing for this service yet."
-            : `Request rate, failure share and duration across ${bucketCount} ${bucketCount === 1 ? "bucket" : "buckets"}. Three charts, because three units — and three lines on the last, because the shape of a distribution is p50, p95 and p99 together.${markers.length > 0 ? ` Dashed rules are deploys of ${serviceName}.` : ""}`
+            : `Request rate, failure share and duration across ${bucketCount} ${bucketCount === 1 ? "bucket" : "buckets"}. Three charts, because three units — and three lines on the last, because the shape of a distribution is p50, p95 and p99 together.${markers.length > 0 ? ` Dashed rules are deploys of ${serviceName}.` : ""}${spans.length > 0 ? " Shaded stretches are findings." : ""}`
         }
       />
       {bucketCount > 0 ? (
@@ -495,6 +529,7 @@ function TrendSection({
               key={plot.metric}
               plot={plot}
               markers={markers}
+              spans={spans}
               description={describePlot(plot, serviceName, bucketCount)}
             />
           ))}
@@ -507,10 +542,12 @@ function TrendSection({
 function TrendPanel({
   plot,
   markers,
+  spans,
   description,
 }: {
   plot: TrendPlot;
   markers: readonly DeployMarker[];
+  spans: readonly ChartSpan[];
   description: string;
 }) {
   return (
@@ -527,6 +564,7 @@ function TrendPanel({
           seriesToken={plot.seriesToken}
           data={plot.data}
           markers={markers}
+          spans={spans}
           formatValue={AXIS_FORMAT[plot.metric]}
           description={description}
         />

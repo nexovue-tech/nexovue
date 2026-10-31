@@ -9,17 +9,32 @@ fails rather than skips when the stack is down; see tests/helpers/live.
 from __future__ import annotations
 
 import asyncio
-import os
 import socket
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from urllib.parse import urlsplit
 
 import pytest
-from alert_fixtures import AlertTenant, add_rule, anomaly_rule, drop_tenant, make_tenant
-from clickhouse_cleanup import delete_after_run
+from alert_fixtures import AlertTenant, add_rule, anomaly_rule
 from clickhouse_connect.driver.client import Client
+from detection_history import (
+    CLICKHOUSE_DSN,
+    MINUTE,
+    ONSET,
+    PAST_CRITICAL,
+    PAST_THE_MINIMUM,
+    POSTGRES_DSN,
+    SERVICE,
+    SUSTAIN,
+    TIME_TO_A_FINDING,
+)
+from detection_history import baselines_for as _baselines
+from detection_history import findings as _findings
+from detection_history import judge_through as _judge_through
+from detection_history import seed as _seed
+from detection_history import seed_four_weeks as _seed_four_weeks
+from detection_history import span as _span
+from detection_history import state as _state
 from live import require_stack
 from nexovue_platform.alerts.model import service_subject
 from sqlalchemy import text
@@ -28,56 +43,19 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from nexovue_scheduler.alerts import incidents
 from nexovue_scheduler.alerts.rules import Rule
-from nexovue_scheduler.detection import baselines, project_job
+from nexovue_scheduler.detection import project_job
 from nexovue_scheduler.detection.coordinator import project_requests
-from nexovue_scheduler.detection.method import BUCKET_COUNT, RECOVERY_MINUTES
+from nexovue_scheduler.detection.method import RECOVERY_MINUTES
 from nexovue_scheduler.detection.project_job import (
-    Outcome,
     ServiceState,
     StaleJudgementError,
     judge_project,
 )
 from nexovue_scheduler.detection.projects import ActiveProject, active_projects
 from nexovue_scheduler.detection.store import (
-    READINGS_TABLE,
     DetectionStore,
     bind_project,
-    client_at,
-    connect,
 )
-
-CLICKHOUSE_DSN: Final = os.environ.get(
-    "NEXOVUE_CLICKHOUSE_DSN", "clickhouse://nexovue:nexovue_dev@localhost:18123/nexovue"
-)
-READER_DSN: Final = os.environ.get(
-    "NEXOVUE_CLICKHOUSE_READER_DSN",
-    "clickhouse://nexovue_reader:nexovue_reader_dev@localhost:18123/nexovue",
-)
-WRITER_DSN: Final = os.environ.get(
-    "NEXOVUE_CLICKHOUSE_DETECTION_WRITER_DSN",
-    "clickhouse://nexovue_detection_writer:nexovue_detection_writer_dev@localhost:18123/nexovue",
-)
-POSTGRES_DSN: Final = os.environ.get(
-    "NEXOVUE_POSTGRES_DSN", "postgresql://nexovue:nexovue_dev@localhost:15432/nexovue"
-)
-ROLLUP: Final = "service_stats_1m"
-ENDPOINT_ROLLUP: Final = "endpoint_stats_1m"
-SERVICE: Final = "checkout"
-MINUTE: Final = timedelta(minutes=1)
-# Normal sensitivity, the default: a 5-minute window, so 5 minutes of sustain.
-SUSTAIN: Final = 5
-# Time to a finding beyond critical, at normal sensitivity (spec, *Product values*).
-TIME_TO_A_FINDING: Final = timedelta(minutes=12)
-# The minute the trouble starts: noon today, far from any midnight a pool stops at.
-ONSET: Final = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)
-# A steady latency shape over 11 buckets, in percent, at 100 requests a minute.
-SHAPE: Final = (1, 3, 8, 15, 22, 20, 14, 9, 5, 2, 1)
-FIRST_BUCKET: Final = 20
-REQUESTS: Final = 100
-# Buckets are about 1.19x wide: 5 is about 2.4x slower, 10 about 5.6x, past critical.
-PAST_THE_MINIMUM: Final = 5
-PAST_CRITICAL: Final = 10
-_INSERT_BATCH: Final = 400
 
 
 def _reachable(url: str, default_port: int) -> bool:
@@ -96,193 +74,6 @@ require_stack(
     suite="apps/scheduler/tests/test_detection_project_job_live.py",
     remedy="ClickHouse or Postgres is not reachable — run `just up`",
 )
-
-
-@pytest.fixture
-def store() -> DetectionStore:
-    return connect(READER_DSN, WRITER_DSN)
-
-
-@pytest.fixture
-def administrator() -> Iterator[Client]:
-    client = client_at(CLICKHOUSE_DSN)
-    try:
-        yield client
-    finally:
-        client.close()
-
-
-@pytest.fixture
-async def project(engine: AsyncEngine) -> AsyncIterator[AlertTenant]:
-    made = await make_tenant(engine, with_check=False)
-    delete_after_run(ROLLUP, str(made.org_id))
-    delete_after_run(ENDPOINT_ROLLUP, str(made.org_id))
-    delete_after_run(READINGS_TABLE, str(made.org_id))
-    try:
-        yield made
-    finally:
-        await drop_tenant(engine, made)
-
-
-# ------------------------------------------------------------------ seeding
-
-
-def _buckets(slower_by: int, requests: int = REQUESTS) -> list[int]:
-    buckets = [0] * BUCKET_COUNT
-    for offset, percent in enumerate(SHAPE):
-        buckets[FIRST_BUCKET + offset + slower_by] += requests * percent // 100
-    buckets[FIRST_BUCKET + 4 + slower_by] += requests - sum(buckets)
-    return buckets
-
-
-def _seed_endpoints(
-    client: Client,
-    tenant: AlertTenant,
-    service: str,
-    endpoints: Mapping[datetime, Mapping[str, tuple[int, int]]],
-) -> None:
-    rows = [
-        f"('{tenant.org_id}','{tenant.project_id}','{service}','SERVER','{name}',"
-        f"{int(minute.timestamp())},{requests},{errors})"
-        for minute, counts in endpoints.items()
-        for name, (requests, errors) in counts.items()
-    ]
-    for start in range(0, len(rows), _INSERT_BATCH):
-        client.command(
-            f"""
-            INSERT INTO {ENDPOINT_ROLLUP}
-                (tenant_id, project_id, service_name, span_kind, span_name, minute,
-                 request_count, error_count)
-            SELECT tenant_id, project_id, service_name, span_kind, span_name,
-                   toDateTime(epoch), requests, errors
-            FROM values(
-                'tenant_id String, project_id String, service_name String, span_kind String,
-                 span_name String, epoch UInt32, requests UInt64, errors UInt64',
-                {",".join(rows[start : start + _INSERT_BATCH])}
-            )
-            """
-        )
-
-
-def _seed(
-    client: Client,
-    tenant: AlertTenant,
-    minutes: Sequence[datetime],
-    *,
-    service: str = SERVICE,
-    slower_by: dict[datetime, int] | None = None,
-    requests: int = REQUESTS,
-    errors: int = 0,
-    endpoints: Mapping[datetime, Mapping[str, tuple[int, int]]] | None = None,
-) -> None:
-    """Rows as the worker writes them: the buckets folded into their aggregate state,
-    and each endpoint's counts in its own rollup."""
-    rows = []
-    for minute in minutes:
-        buckets = _buckets((slower_by or {}).get(minute, 0), requests)
-        failures = errors
-        if endpoints is not None and minute in endpoints:
-            failures = sum(e for _, e in endpoints[minute].values())
-        rows.append(
-            f"('{tenant.org_id}','{tenant.project_id}','{service}',"
-            f"{int(minute.timestamp())},{sum(buckets)},{failures},{buckets})"
-        )
-    if endpoints is not None:
-        _seed_endpoints(client, tenant, service, endpoints)
-    for start in range(0, len(rows), _INSERT_BATCH):
-        client.command(
-            f"""
-            INSERT INTO {ROLLUP}
-                (tenant_id, project_id, service_name, minute, request_count, error_count,
-                 latency_buckets)
-            SELECT tenant_id, project_id, service_name, toDateTime(epoch), requests, errors,
-                   arrayReduce('sumForEachState', [buckets])
-            FROM values(
-                'tenant_id String, project_id String, service_name String, epoch UInt32,
-                 requests UInt64, errors UInt64, buckets Array(UInt32)',
-                {",".join(rows[start : start + _INSERT_BATCH])}
-            )
-            """
-        )
-
-
-def _span(first: datetime, last: datetime) -> list[datetime]:
-    return [first + step * MINUTE for step in range((last - first) // MINUTE + 1)]
-
-
-def _seed_four_weeks(
-    client: Client,
-    tenant: AlertTenant,
-    *,
-    service: str = SERVICE,
-    errors: int = 0,
-    endpoints: Mapping[str, tuple[int, int]] | None = None,
-    until: timedelta = timedelta(minutes=240),
-) -> None:
-    """A service first seen 29 days ago, with normal traffic around noon on the four
-    same weekdays its weekly pool reads; and its endpoints, when given."""
-    _seed(client, tenant, [ONSET - timedelta(days=29)], service=service)
-    for weeks in range(1, 5):
-        day = ONSET - timedelta(days=7 * weeks)
-        minutes = _span(day - timedelta(minutes=200), day + until)
-        _seed(
-            client,
-            tenant,
-            minutes,
-            service=service,
-            errors=errors,
-            endpoints=None if endpoints is None else dict.fromkeys(minutes, endpoints),
-        )
-
-
-async def _baselines(
-    engine: AsyncEngine,
-    store: DetectionStore,
-    tenant: AlertTenant,
-    *,
-    now: datetime = ONSET - timedelta(minutes=5),
-) -> None:
-    written = await baselines.compute_project(engine, store, tenant.project_id, now=now)
-    assert written is not None and written >= 1
-
-
-async def _judge_through(
-    engine: AsyncEngine,
-    store: DetectionStore,
-    tenant: AlertTenant,
-    minutes: Sequence[datetime],
-) -> list[Outcome]:
-    """The coordinator's minutes, one settled minute after another."""
-    return [
-        await judge_project(engine, store, tenant.project_id, settled=minute, now=minute)
-        for minute in minutes
-    ]
-
-
-async def _findings(engine: AsyncEngine, tenant: AlertTenant) -> list[Any]:
-    async with engine.connect() as connection:
-        return list(
-            await connection.execute(
-                text(
-                    "SELECT * FROM findings WHERE org_id = :org_id AND project_id = :project_id "
-                    "ORDER BY started_at"
-                ),
-                {"org_id": tenant.org_id, "project_id": tenant.project_id},
-            )
-        )
-
-
-async def _state(engine: AsyncEngine, tenant: AlertTenant, service: str = SERVICE) -> Any:
-    async with engine.connect() as connection:
-        return (
-            await connection.execute(
-                text(
-                    "SELECT * FROM detection_state WHERE org_id = :org_id "
-                    "AND project_id = :project_id AND service_name = :service"
-                ),
-                {"org_id": tenant.org_id, "project_id": tenant.project_id, "service": service},
-            )
-        ).one()
 
 
 def _rise(client: Client, tenant: AlertTenant, *, minutes: int, slower_by: int) -> list[datetime]:
@@ -604,6 +395,8 @@ async def test_nine_of_eleven_services_stopping_is_one_project_finding(
         f"Traffic stopped arriving from 9 of 11 services at {ONSET:%H:%M} UTC. "
         "Check your collector or network"
     )
+    # Its page lists them, and still does once it closes (migration 0046).
+    assert finding.services == services[:9]
     assert sum(o.opened for o in outcomes) == 1
     opened_at = next(m for m, o in zip(minutes, outcomes, strict=True) if o.opened)
     assert opened_at - ONSET <= TIME_TO_A_FINDING
@@ -732,6 +525,7 @@ async def test_a_second_open_finding_for_one_scope_is_refused_whichever_job_comm
         "severity": "warning",
         "muted": False,
         "title": "a race",
+        "services": "[]",
         "signals": "[]",
         "started_at": ONSET,
     }

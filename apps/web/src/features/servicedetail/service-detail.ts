@@ -6,6 +6,8 @@
  * reader can land in are testable without a browser.
  */
 
+import type { ChartSpan } from "@/shared/components/TrendChart";
+import type { FindingMarker } from "@/shared/detection/api";
 import { formatCount, formatPercent } from "@/shared/format/number";
 import { formatRatePerMinute } from "@/shared/format/rate";
 import type { ServiceEdge } from "@/shared/service-peers";
@@ -121,4 +123,37 @@ export function describeServiceErrors(groups: readonly ErrorGroupSummary[]): str
 /** Why a screen with a name on it is showing nothing, and what to do about it. */
 export function describeSilence(serviceName: string, windowLabel: string): string {
   return `Nothing named “${serviceName}” has reported in ${windowLabel}. That is not the same as it not existing — this view is built from what arrived in the selected period, so a service that has stopped exporting, or was renamed, disappears from it rather than turning red. Widen the time range, or check that the service is still sending.`;
+}
+
+const MS_PER_SECOND = 1000;
+/** The API's cap on one service's findings in a range (`detection/queries.py`). */
+const MARKER_PAGE = 200;
+
+/**
+ * Each finding as the stretch of the window it was open in: an open one runs to the
+ * window's end, and one that began before the window starts at its edge, since the
+ * chart draws nothing outside it. One wholly outside draws nothing.
+ */
+export function findingSpans(
+  markers: readonly FindingMarker[],
+  window: { from: string; to: string },
+): ChartSpan[] {
+  const from = Date.parse(window.from);
+  const to = Date.parse(window.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return [];
+  return markers.flatMap((marker) => {
+    const start = Math.max(Date.parse(marker.started_at), from);
+    const end = Math.min(marker.closed_at ? Date.parse(marker.closed_at) : to, to);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
+    return [{ from: start / MS_PER_SECOND, to: end / MS_PER_SECOND }];
+  });
+}
+
+export function describeFindingsInWindow(
+  markers: readonly FindingMarker[],
+  truncated: boolean,
+): string {
+  if (markers.length === 0) return "No finding in this window.";
+  const counted = `${formatCount(markers.length)} ${markers.length === 1 ? "finding" : "findings"} in this window, shaded on the charts.`;
+  return truncated ? `${counted} Only the first ${MARKER_PAGE} are shown.` : counted;
 }

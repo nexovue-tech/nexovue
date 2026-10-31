@@ -1,5 +1,12 @@
 // @vitest-environment jsdom
 
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
@@ -75,49 +82,64 @@ const BASE: FindingsViewProps = {
   checks: { total: 3, passing: 3, down: 0 },
 };
 
-function render(overrides: Partial<FindingsViewProps> = {}): HTMLElement {
+/** Inside a router, as the app mounts it: each card links to its finding's page. */
+async function render(overrides: Partial<FindingsViewProps> = {}): Promise<HTMLElement> {
+  const rootRoute = createRootRoute({
+    component: () => createElement(FindingsView, { ...BASE, ...overrides }),
+  });
+  const page = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/findings/$findingId",
+    component: () => null,
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([page]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  await router.load();
+
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   mounted.push(root);
-  act(() => root.render(createElement(FindingsView, { ...BASE, ...overrides })));
+  await act(async () => root.render(createElement(RouterProvider, { router })));
   return container;
 }
 
-const readable = (overrides: Partial<FindingsViewProps> = {}) =>
-  (render(overrides).textContent ?? "").replace(/\s+/g, " ").trim();
+const readable = async (overrides: Partial<FindingsViewProps> = {}) =>
+  ((await render(overrides)).textContent ?? "").replace(/\s+/g, " ").trim();
 
 describe("AC18: healthy and failed-to-load must never look alike", () => {
-  it("reports what it checked when the feed was actually read", () => {
-    const text = readable();
+  it("reports what it checked when the feed was actually read", async () => {
+    const text = await readable();
 
     expect(text).toContain("All 3 synthetic checks are passing");
   });
 
-  it("never claims overall health, even with errors on screen beside it", () => {
+  it("never claims overall health, even with errors on screen beside it", async () => {
     // Nothing assesses the system yet, so nothing on this screen may say it is fine.
-    const text = readable({ totals: { ...TOTALS, error_count: 8100, error_rate: 0.9 } });
+    const text = await readable({ totals: { ...TOTALS, error_count: 8100, error_rate: 0.9 } });
 
     expect(text).not.toContain("All systems normal");
     expect(text).toContain("90");
   });
 
-  it("never claims health when the feed could not be read", () => {
+  it("never claims health when the feed could not be read", async () => {
     // The single most dangerous failure on this screen: telling a customer their
     // system is fine when the truth is that we cannot see it.
-    const text = readable({ isError: true, error: new Error("boom") });
+    const text = await readable({ isError: true, error: new Error("boom") });
 
     expect(text).not.toContain("synthetic checks are passing");
     expect(text).toContain("could not be loaded");
     expect(text).toContain("not the same as nothing being wrong");
   });
 
-  it("carries none of the healthy state's reassurance when the read failed", () => {
+  it("carries none of the healthy state's reassurance when the read failed", async () => {
     // Checked phrase by phrase rather than as one string, so an edit that puts any
     // single piece of the healthy state back into the error state fails here. The
     // summary counts too: traffic numbers beside a failure still read as "we can
     // see your system", and we cannot.
-    const failed = readable({ isError: true, error: new Error("boom") });
+    const failed = await readable({ isError: true, error: new Error("boom") });
 
     for (const reassurance of [
       "synthetic checks are passing",
@@ -128,12 +150,12 @@ describe("AC18: healthy and failed-to-load must never look alike", () => {
     ]) {
       expect(failed).not.toContain(reassurance);
     }
-    expect(readable()).toContain("synthetic checks are passing");
+    expect(await readable()).toContain("synthetic checks are passing");
   });
 
-  it("waits with a skeleton rather than a spinner or a blank page", () => {
+  it("waits with a skeleton rather than a spinner or a blank page", async () => {
     // F1 AC1.7 forbids both by name.
-    const container = render({ isPending: true });
+    const container = await render({ isPending: true });
 
     expect(container.querySelector('[aria-label="Loading findings"]')).not.toBeNull();
     expect(container.textContent).not.toContain("synthetic checks are passing");
@@ -141,34 +163,34 @@ describe("AC18: healthy and failed-to-load must never look alike", () => {
 });
 
 describe("the healthy state carries the evidence for its own claim", () => {
-  it("shows the RED summary, which is the content while nothing assesses it", () => {
-    const text = readable();
+  it("shows the RED summary, which is the content while nothing assesses it", async () => {
+    const text = await readable();
 
     expect(text).toContain("8,400");
     expect(text).toContain("210ms");
     expect(text).toContain("11 services reporting");
   });
 
-  it("names how many synthetic checks are passing", () => {
-    const text = readable({ checks: { total: 3, passing: 2, down: 0 } });
+  it("names how many synthetic checks are passing", async () => {
+    const text = await readable({ checks: { total: 3, passing: 2, down: 0 } });
 
     expect(text).toContain("2 of 3");
   });
 
-  it("names the checks that are down (D1)", () => {
+  it("names the checks that are down (D1)", async () => {
     // The evidence and the headline are read from the same numbers now, so the
     // screen cannot contradict itself the way it did on a project whose four
     // checks were all failing.
-    const text = readable({ checks: { total: 4, passing: 0, down: 4 } });
+    const text = await readable({ checks: { total: 4, passing: 0, down: 4 } });
 
     expect(text).not.toContain("synthetic checks are passing");
     expect(text).toContain("4 checks are down");
     expect(text).toContain("0 of 4");
   });
 
-  it("does not invent a summary when nothing has reported", () => {
+  it("does not invent a summary when nothing has reported", async () => {
     // A screen of zeroes is what an outage looks like.
-    const text = readable({ totals: undefined, checks: undefined });
+    const text = await readable({ totals: undefined, checks: undefined });
 
     expect(text).toContain("Nothing has reported to this project yet");
     expect(text).not.toContain("8,400");
@@ -176,42 +198,44 @@ describe("the healthy state carries the evidence for its own claim", () => {
 });
 
 describe("the feed leads when there is anything in it", () => {
-  it("drops the summary once a finding exists", () => {
+  it("drops the summary once a finding exists", async () => {
     // When findings exist they lead and the summary drops away; when they do not,
     // the summary is the content.
-    const text = readable({ findings: [FINDING] });
+    const text = await readable({ findings: [FINDING] });
 
     expect(text).toContain("Checkout is 4× slower than normal since 15:04");
     expect(text).not.toContain("synthetic checks are passing");
   });
 
-  it("reads as a sentence with the service beneath it", () => {
-    const text = readable({ findings: [FINDING] });
+  it("reads as a sentence with the service beneath it", async () => {
+    const text = await readable({ findings: [FINDING] });
 
     expect(text).toContain("checkout-api");
   });
 
-  it("names the project when the finding spans several services", () => {
-    const text = readable({
+  it("names the project when the finding spans several services", async () => {
+    const text = await readable({
       findings: [{ ...FINDING, scope: "project", service_name: null }],
     });
 
     expect(text).toContain("This project");
   });
 
-  it("offers no probable cause until Stage 2 can name one", () => {
-    expect(readable({ findings: [FINDING] })).not.toContain("Probably");
+  it("offers no probable cause until Stage 2 can name one", async () => {
+    expect(await readable({ findings: [FINDING] })).not.toContain("Probably");
   });
 
-  it("gives a closed finding one quiet line with no trend to read", () => {
-    const container = render({ findings: [closed("recovered")] });
+  it("gives a closed finding one quiet line with no trend to read", async () => {
+    const container = await render({ findings: [closed("recovered")] });
 
     expect(container.textContent).toContain("Recovered");
     expect(container.querySelector('svg[role="img"]')).toBeNull();
   });
 
-  it("puts anything still wrong above anything already closed", () => {
-    const container = render({ findings: [closed("recovered"), { ...FINDING, id: "broken" }] });
+  it("puts anything still wrong above anything already closed", async () => {
+    const container = await render({
+      findings: [closed("recovered"), { ...FINDING, id: "broken" }],
+    });
 
     const rows = [...container.querySelectorAll("li")].map((row) => row.textContent ?? "");
     expect(rows[0]).not.toContain("Recovered");
@@ -232,16 +256,16 @@ describe("a closed finding names how it closed", () => {
   };
 
   for (const [reason, words] of Object.entries(WORDS) as [ClosedReason, string][]) {
-    it(`says "${words}" for ${reason}, never "Resolved"`, () => {
-      const text = readable({ findings: [closed(reason)] });
+    it(`says "${words}" for ${reason}, never "Resolved"`, async () => {
+      const text = await readable({ findings: [closed(reason)] });
 
       expect(text).toContain(words);
       expect(text).not.toMatch(/resolved/i);
     });
   }
 
-  it("still says it closed when the reason is missing", () => {
-    const text = readable({ findings: [closed(null)] });
+  it("still says it closed when the reason is missing", async () => {
+    const text = await readable({ findings: [closed(null)] });
 
     expect(text).toContain("Closed");
     expect(text).not.toMatch(/resolved/i);
@@ -249,9 +273,9 @@ describe("a closed finding names how it closed", () => {
 });
 
 describe("muted findings stay out of the feed", () => {
-  it("offers a quiet link to them when there are any", () => {
+  it("offers a quiet link to them when there are any", async () => {
     const onToggleMuted = vi.fn();
-    const container = render({ findings: [FINDING], mutedCount: 2, onToggleMuted });
+    const container = await render({ findings: [FINDING], mutedCount: 2, onToggleMuted });
 
     const link = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Muted (2)",
@@ -261,30 +285,30 @@ describe("muted findings stay out of the feed", () => {
     expect(onToggleMuted).toHaveBeenCalledOnce();
   });
 
-  it("offers the link under the summary too, so an empty feed does not hide them", () => {
-    const text = readable({ mutedCount: 1 });
+  it("offers the link under the summary too, so an empty feed does not hide them", async () => {
+    const text = await readable({ mutedCount: 1 });
 
     expect(text).toContain("All 3 synthetic checks are passing");
     expect(text).toContain("Muted (1)");
   });
 
-  it("shows no link when nothing is muted", () => {
-    expect(readable({ findings: [FINDING] })).not.toContain("Muted");
+  it("shows no link when nothing is muted", async () => {
+    expect(await readable({ findings: [FINDING] })).not.toContain("Muted");
   });
 
-  it("does not show the summary when the muted list is empty", () => {
+  it("does not show the summary when the muted list is empty", async () => {
     // An empty muted list says nothing about the system's health.
-    const text = readable({ showingMuted: true });
+    const text = await readable({ showingMuted: true });
 
     expect(text).toContain("No finding is muted");
     expect(text).toContain("Back to the feed");
     expect(text).not.toContain("synthetic checks are passing");
   });
 
-  it("offers no link when the feed could not be read", () => {
-    expect(readable({ isError: true, error: new Error("boom"), mutedCount: 2 })).not.toContain(
-      "Muted",
-    );
+  it("offers no link when the feed could not be read", async () => {
+    expect(
+      await readable({ isError: true, error: new Error("boom"), mutedCount: 2 }),
+    ).not.toContain("Muted");
   });
 });
 
@@ -307,8 +331,8 @@ describe("detection's line leads the feed (C18)", () => {
     not_running_since: "2026-10-31T14:02:00Z",
   };
 
-  it("sits above the checks' line, which stays", () => {
-    const text = readable({ detection: JUDGING, zone: "UTC" });
+  it("sits above the checks' line, which stays", async () => {
+    const text = await readable({ detection: JUDGING, zone: "UTC" });
 
     const detection = text.indexOf("All judged services are normal");
     const checksLine = text.indexOf("All 3 synthetic checks are passing");
@@ -317,8 +341,8 @@ describe("detection's line leads the feed (C18)", () => {
     expect(text).not.toContain("All systems normal");
   });
 
-  it("says it is learning, not that anything is normal, on a new project (AC42)", () => {
-    const text = readable({
+  it("says it is learning, not that anything is normal, on a new project (AC42)", async () => {
+    const text = await readable({
       detection: {
         ...JUDGING,
         state: "learning",
@@ -332,23 +356,34 @@ describe("detection's line leads the feed (C18)", () => {
     expect(text).not.toMatch(/all judged services are normal|all systems normal/i);
   });
 
-  it("says detection is not running, with its clock named, even over findings (AC26)", () => {
-    const text = readable({ detection: NOT_RUNNING, zone: "UTC", findings: [FINDING] });
+  it("says detection is not running, with its clock named, even over findings (AC26)", async () => {
+    const text = await readable({ detection: NOT_RUNNING, zone: "UTC", findings: [FINDING] });
 
     expect(text).toContain("Detection has not run since");
     expect(text).toContain("14:02 UTC");
     expect(text).not.toContain("services are normal");
   });
 
-  it("shows the error state, never a healthy line, when a read failed", () => {
+  it("shows the error state, never a healthy line, when a read failed", async () => {
     // The screen folds a failed status read into `isError` (`FindingsScreen.tsx`).
-    const text = readable({ detection: JUDGING, isError: true, error: new Error("boom") });
+    const text = await readable({ detection: JUDGING, isError: true, error: new Error("boom") });
 
     expect(text).toContain("could not be loaded");
     expect(text).not.toMatch(/normal/i);
   });
 
-  it("leaves the line out of the muted list, which says nothing about the system", () => {
-    expect(readable({ detection: NOT_RUNNING, showingMuted: true })).not.toContain("Detection");
+  it("leaves the line out of the muted list, which says nothing about the system", async () => {
+    expect(await readable({ detection: NOT_RUNNING, showingMuted: true })).not.toContain(
+      "Detection",
+    );
+  });
+});
+
+describe("D12: a finding opens its own page", () => {
+  it("links each card, open or closed, to its finding", async () => {
+    const container = await render({ findings: [FINDING, closed("recovered", "f2")] });
+
+    expect(container.querySelector('a[href="/findings/f1"]')?.textContent).toBe(FINDING.title);
+    expect(container.querySelector('a[href="/findings/f2"]')?.textContent).toBe(FINDING.title);
   });
 });

@@ -106,3 +106,46 @@ describe("the signup screen", () => {
     expect(container.querySelector("form")).not.toBeNull();
   });
 });
+
+describe("the account's time zone (F6, D23)", () => {
+  it("sends the browser's zone with the signup, so the first project's days are local", async () => {
+    const sent: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        const reply = (body: unknown) =>
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        if (url.pathname.endsWith("/system/signup")) return reply({ enabled: true });
+        if (url.pathname.endsWith("/system/info")) return reply({ deployment: "hosted" });
+        if (url.pathname.endsWith("/signup") && init?.method === "POST") {
+          sent.push(JSON.parse(String(init.body)));
+          return new Response("{}", { status: 503 });
+        }
+        throw new Error(`no stub for ${url.pathname}`);
+      }),
+    );
+    const container = await mount();
+    const form = container.querySelector("form");
+    if (!form) throw new Error("no form");
+    const fill = (name: string, value: string) => {
+      const input = form.querySelector<HTMLInputElement>(`input[name="${name}"]`);
+      if (!input) throw new Error(`no ${name} field`);
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+
+    await act(async () => {
+      fill("organization_name", "Acme");
+      fill("email", "owner@acme.test");
+      fill("password", "correct horse battery staple");
+    });
+    await act(async () => form.requestSubmit());
+
+    expect(sent).toEqual([
+      expect.objectContaining({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
+    ]);
+  });
+});

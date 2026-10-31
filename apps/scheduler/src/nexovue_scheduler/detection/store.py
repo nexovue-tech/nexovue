@@ -25,6 +25,7 @@ from urllib.parse import unquote, urlsplit
 
 import clickhouse_connect
 from clickhouse_connect.driver.client import Client
+from nexovue_platform.detection import SHIFT_COLUMNS, SHIFT_READINGS
 from nexovue_platform.telemetry.logging import get_logger
 from nexovue_platform.tenant_statements import (
     READ_SETTINGS,
@@ -123,6 +124,30 @@ WHERE tenant_id = {{tenant_id:String}}
   AND minute < {{to_minute:DateTime}}
 GROUP BY service_name, minute
 ORDER BY service_name, minute
+"""
+
+# The columns a shift's ratio is read from (`nexovue_platform.detection.shift_ratio`,
+# FR21), each by its name, and how many of a service's newest readings it takes.
+_SHIFT_COLUMNS: Final = ", ".join(SHIFT_COLUMNS)
+_SHIFT_FIELDS: Final = ", ".join(
+    f"latest.{index + 1} AS {column}" for index, column in enumerate(SHIFT_COLUMNS)
+)
+_SHIFT_LIMIT: Final = SHIFT_READINGS
+# One service's newest readings in [from, to), newest first.
+SHIFT_READINGS_SQL: Final = f"""
+SELECT {_SHIFT_FIELDS}
+FROM (
+    SELECT minute, argMax(tuple({_SHIFT_COLUMNS}), version) AS latest
+    FROM detection_readings
+    WHERE tenant_id = {{tenant_id:String}}
+      AND project_id = {{project_id:String}}
+      AND service_name = {{service:String}}
+      AND minute >= {{from_minute:DateTime}}
+      AND minute < {{to_minute:DateTime}}
+    GROUP BY minute
+)
+ORDER BY minute DESC
+LIMIT {_SHIFT_LIMIT}
 """
 
 # Each service's minutes in [from, to): what a window, or a pool, is built from.
@@ -300,6 +325,15 @@ class ProjectDetection:
             )
             for service_name, minute_epoch, latest in rows
         ]
+
+    def shift_readings(
+        self, service: str, *, start: datetime, end: datetime
+    ) -> list[dict[str, Any]]:
+        """One service's last `SHIFT_READINGS` readings in [start, end), newest first."""
+        rows = self._query(
+            SHIFT_READINGS_SQL, {"service": service, "from_minute": start, "to_minute": end}
+        )
+        return [dict(zip(SHIFT_COLUMNS, row, strict=True)) for row in rows]
 
     def window_minutes(
         self, *, start: datetime, end: datetime

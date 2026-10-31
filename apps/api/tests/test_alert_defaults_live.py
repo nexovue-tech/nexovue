@@ -161,7 +161,7 @@ async def test_a_new_project_gets_its_own_default_rules_to_the_same_owners(
     created = await projects.create(
         db,
         org_id=tenant.organization.id,
-        actor_user_id=tenant.user.id,
+        actor=tenant.user,
         request=ProjectCreateRequest(name="Staging"),
     )
 
@@ -183,7 +183,7 @@ async def test_a_deleted_default_rule_is_not_recreated(
     await projects.create(
         db,
         org_id=tenant.organization.id,
-        actor_user_id=tenant.user.id,
+        actor=tenant.user,
         request=ProjectCreateRequest(name="Another"),
     )
     assert await _rules(db, tenant.project.id) == []
@@ -197,7 +197,7 @@ async def test_deleting_a_project_takes_its_rules_and_closes_its_incidents(
     staging = await projects.create(
         db,
         org_id=tenant.organization.id,
-        actor_user_id=tenant.user.id,
+        actor=tenant.user,
         request=ProjectCreateRequest(name="Staging"),
     )
     rule, _ = await _rules(db, staging.id)

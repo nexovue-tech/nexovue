@@ -65,7 +65,16 @@ export type SeriesToken = 1 | 2 | 3 | 4 | 5 | 6;
  * would each fill their own chart and look identical; on one scale, a p99
  * pulling away from a p95 is visible, and that is the reading.
  */
-export type PlotRows = [xSeconds: number[], ...series: number[][]];
+export type PlotRows = [xSeconds: number[], ...series: (number | null)[][]];
+
+/** A stretch of the x axis to shade, in uPlot's seconds: a finding's open minutes. */
+export interface ChartSpan {
+  from: number;
+  to: number;
+}
+
+/** Faint enough to read the series through, strong enough to see on both themes. */
+const SPAN_ALPHA = 0.14;
 
 export interface TrendChartProps {
   /**
@@ -77,6 +86,8 @@ export interface TrendChartProps {
   data: PlotRows;
   /** Vertical rules across the plot — the deploys inside this window (IA3). */
   markers?: readonly DeployMarker[];
+  /** Shaded stretches under the series — the findings open inside this window (F6). */
+  spans?: readonly ChartSpan[];
   /** How a y value is written on the axis — the metric's own unit, not a raw number. */
   formatValue: (value: number) => string;
   /** Read by assistive technology in place of the canvas. */
@@ -108,6 +119,7 @@ function TrendCanvas({
   seriesToken,
   data,
   markers = [],
+  spans = [],
   formatValue,
   description,
   onSelectRange,
@@ -117,20 +129,17 @@ function TrendCanvas({
   const probeRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
   const labels = useMemo(() => (Array.isArray(label) ? label : [label as string]), [label]);
-  const latest = useRef({ labels, data, formatValue, markers, onSelectRange });
+  const latest = useRef({ labels, data, formatValue, markers, spans, onSelectRange });
   // uPlot's options cannot change in place, so becoming draggable rebuilds the chart.
   const selectable = onSelectRange !== undefined;
 
-  useEffect(() => {
-    latest.current = { labels, data, formatValue, markers, onSelectRange };
-  }, [labels, data, formatValue, markers, onSelectRange]);
-
-  // Markers are read through the ref rather than closed over, so a deploy
-  // arriving after the chart was built is drawn on the next frame instead of
+  // Markers and spans are read through the ref rather than closed over, so a deploy
+  // or a finding arriving after the chart was built is drawn by a redraw instead of
   // remounting the whole plot and losing the cursor.
   useEffect(() => {
+    latest.current = { labels, data, formatValue, markers, spans, onSelectRange };
     chartRef.current?.redraw();
-  }, []);
+  }, [labels, data, formatValue, markers, spans, onSelectRange]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -144,6 +153,7 @@ function TrendCanvas({
         (value) => latest.current.formatValue(value),
         latest.current.labels,
         () => latest.current.markers,
+        () => latest.current.spans,
         selectable ? (from, to) => latest.current.onSelectRange?.(from, to) : undefined,
         showPoints,
       ),
@@ -239,6 +249,29 @@ function drawDeploys(chart: uPlot, markers: readonly DeployMarker[], palette: Ch
   context.restore();
 }
 
+/**
+ * One shaded band per span, across the plotting area's height, under everything: the
+ * stretch a finding was open in is context for the line, as a deploy is.
+ */
+function drawSpans(chart: uPlot, spans: readonly ChartSpan[], palette: ChartPalette): void {
+  if (spans.length === 0) return;
+  const context = chart.ctx;
+
+  context.save();
+  context.beginPath();
+  context.rect(chart.bbox.left, chart.bbox.top, chart.bbox.width, chart.bbox.height);
+  context.clip();
+  context.fillStyle = palette.axis;
+  context.globalAlpha = SPAN_ALPHA;
+  for (const span of spans) {
+    const left = chart.valToPos(span.from, "x", true);
+    const right = chart.valToPos(span.to, "x", true);
+    // A span of one minute is still drawn: a finding that short is still a finding.
+    context.fillRect(left, chart.bbox.top, Math.max(right - left, 1), chart.bbox.height);
+  }
+  context.restore();
+}
+
 /** A drag across the plot, as a range; a click without a drag is not a selection. */
 function selectRange(
   chart: uPlot,
@@ -258,6 +291,7 @@ function chartOptions(
   formatValue: (value: number) => string,
   labels: readonly string[],
   markers: () => readonly DeployMarker[],
+  spans: () => readonly ChartSpan[],
   onSelectRange?: (fromSeconds: number, toSeconds: number) => void,
   showPoints = false,
 ): uPlot.Options {
@@ -266,7 +300,12 @@ function chartOptions(
     hooks: {
       // Drawn under the series, not over it: a deploy is context for the line,
       // and a rule painted on top of the reading obscures the thing it explains.
-      drawClear: [(chart) => drawDeploys(chart, markers(), palette)],
+      drawClear: [
+        (chart) => {
+          drawSpans(chart, spans(), palette);
+          drawDeploys(chart, markers(), palette);
+        },
+      ],
       setSelect: onSelectRange ? [(chart) => selectRange(chart, onSelectRange)] : [],
     },
     height: CHART_HEIGHT,

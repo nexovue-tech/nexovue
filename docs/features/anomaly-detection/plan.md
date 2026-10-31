@@ -361,7 +361,7 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
 3. Confirm a member's false alarm leaves the normal unchanged.
 4. Change the sensitivity and time zone in settings.
 
-- [ ] **T5.1** — API routes:
+- [x] **T5.1** — API routes:
   - `POST /findings/{id}/acknowledge`, `/false-alarm` (admin or member, per D28) and `/new-normal`;
   - `POST /services/{name}/snooze`, and `PUT /services/{name}/mute`;
   - `GET` and `PUT /projects/{id}/detection`.
@@ -371,25 +371,25 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
     - `test_findings_actions_live.py` (AC30 to AC35);
     - `test_authorization_coverage.py`;
     - `test_personal_data_live.py`: the reasons are in the export.
-- [ ] **T5.2** — `project_job.py` and `baselines.py`:
+- [x] **T5.2** — `project_job.py` and `baselines.py`:
   - the false-alarm hold;
   - new normal and adoption, with the ratio taken from the readings since the finding opened, and refused
     until there are enough;
   - D22's limits, with the audit as the system actor.
 
   Proved by `test_detection_shifts_live.py` (AC15, AC16, AC44).
-- [ ] **T5.3** — `features/findings/FindingScreen.tsx` (new), at `/findings/$findingId`.
+- [x] **T5.3** — `features/findings/FindingScreen.tsx` (new), at `/findings/$findingId`.
   - It goes in `app/router.tsx` and `app/routes/route-manifest.ts`.
   - It uses inline confirmation and `DetectionBadge` (C11). It draws its own band from its readings.
   - Proved by `FindingScreen.test.ts`, which covers every state, a viewer and a member (AC38 to AC40), and by
     `route-manifest.test.ts`.
-- [ ] **T5.4** — `features/servicedetail/`: the badge, mute, snooze and the finding markers. The bands are
+- [x] **T5.4** — `features/servicedetail/`: the badge, mute, snooze and the finding markers. The bands are
   deferred (D32). Proved by `service-detail.test.ts`.
-- [ ] **T5.5** — The default time zone.
+- [x] **T5.5** — The default time zone.
   - `signup/service.py` and the web signup record the browser's zone (D23).
   - `projects/service.py` uses the actor's zone.
   - Proved by `test_signup.py`, and by `test_projects_live.py` (AC35), each seen failing first.
-- [ ] **T5.6** — Settings and the rule editor.
+- [x] **T5.6** — Settings and the rule editor.
   - `features/projects/ProjectSettings.tsx`: a hidden *Detection* section (C10), with sensitivity, the time
     zone and the false-alarm counts.
   - `features/alerts/RuleEditor.tsx` and `alert-words.ts`: the *anomaly finding* condition, admin only.

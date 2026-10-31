@@ -71,7 +71,7 @@ PROFILE_MIN_WINDOWS: Final = 60
 # *Losing traffic*: the share of its normal that is critical, the Anscombe shift,
 # the MAD's scale to a standard deviation, and the spread's floor (Poisson's).
 CRITICAL_TRAFFIC: Final = 0.10
-_ANSCOMBE_SHIFT: Final = 0.375
+ANSCOMBE_SHIFT: Final = 0.375
 _MAD_SCALE: Final = 1.4826
 _SPREAD_FLOOR: Final = 1.0
 # A traffic window reads normal, for closing, above this many spreads (the simulation's).
@@ -723,7 +723,7 @@ class TrafficBaseline:
         """The window's expected count, back from the square-root scale."""
         if self.median is None:
             return 0.0
-        return max((self.median / 2) ** 2 - _ANSCOMBE_SHIFT, 0.0)
+        return max((self.median / 2) ** 2 - ANSCOMBE_SHIFT, 0.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -798,7 +798,7 @@ def judge_traffic(
 
 
 def _anscombe(count: float) -> float:
-    return 2 * math.sqrt(count + _ANSCOMBE_SHIFT)
+    return 2 * math.sqrt(count + ANSCOMBE_SHIFT)
 
 
 def traffic_spread(values: Sequence[float]) -> tuple[float | None, float]:
@@ -812,7 +812,7 @@ def traffic_spread(values: Sequence[float]) -> tuple[float | None, float]:
     return middle, max(_MAD_SCALE * _sorted_median(deviations), _SPREAD_FLOOR)
 
 
-def traffic_value(window_requests: int) -> float:
+def traffic_value(window_requests: float) -> float:
     """A pool's value for one window: its count on the square-root scale."""
     return _anscombe(window_requests)
 

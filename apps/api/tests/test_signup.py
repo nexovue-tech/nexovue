@@ -146,15 +146,11 @@ class _RecordingSessionStore:
         return "token", Session(user_id=user_id, org_id=org_id, created_at=datetime.now(UTC))
 
 
-async def test_the_tenant_is_committed_before_its_session_is_minted(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """P1-71 follow-on: the session store is not in the request's transaction.
-
-    A session written before the rows it names are committed names rows its
-    foreign key cannot find, and signup fails on a brand-new account. Order is
-    the fix, so order is what this pins.
-    """
+async def _sign_up(
+    monkeypatch: pytest.MonkeyPatch, body: dict[str, object]
+) -> tuple[object, _OrderLog, dict[str, object]]:
+    """POST /signup with provisioning replaced, returning the response, what the route
+    did in order, and what it asked provisioning for."""
     import uuid
     from collections.abc import AsyncIterator
     from typing import Any
@@ -177,6 +173,7 @@ async def test_the_tenant_is_committed_before_its_session_is_minted(
     from nexovue_api.signup import service
 
     log = _OrderLog()
+    asked: dict[str, object] = {}
     # Signup is closed unless a deployment opens it, so a suite that drives the
     # public endpoint says so — the same sentence `docker-compose.yaml` says for
     # development (`docs/changes/signup-closed-by-default/`).
@@ -195,8 +192,9 @@ async def test_the_tenant_is_committed_before_its_session_is_minted(
     project = Project(org_id=organization.id, slug="default", name="Default")
     project.id = uuid.uuid4()
 
-    async def provision(_db: Any, **_kwargs: Any) -> service.ProvisionedTenant:
+    async def provision(_db: Any, **kwargs: Any) -> service.ProvisionedTenant:
         log.events.append("provision")
+        asked.update(kwargs)
         return service.ProvisionedTenant(
             organization=organization,
             user=user,
@@ -215,7 +213,7 @@ async def test_the_tenant_is_committed_before_its_session_is_minted(
     # drives it needs that store too.
     use_fake_second_factors(app)
     # No mail provider: signup logs and carries on, which is its documented
-    # behaviour and keeps this test about ordering.
+    # behaviour and keeps these tests about the route.
     app.dependency_overrides[get_optional_email_sender] = lambda: None
     app.dependency_overrides[get_one_time_tokens] = lambda: None
 
@@ -225,17 +223,52 @@ async def test_the_tenant_is_committed_before_its_session_is_minted(
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post(
-            f"{API_PREFIX}/signup",
-            json={
-                "organization_name": "Acme Inc",
-                "email": "owner@acme.test",
-                "password": "correct-horse-battery",
-            },
-        )
+        response = await client.post(f"{API_PREFIX}/signup", json=body)
+    return response, log, asked
 
-    assert response.status_code == 201, response.text
+
+_SIGNUP: dict[str, object] = {
+    "organization_name": "Acme Inc",
+    "email": "owner@acme.test",
+    "password": "correct-horse-battery",
+}
+
+
+async def test_the_tenant_is_committed_before_its_session_is_minted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P1-71 follow-on: the session store is not in the request's transaction.
+
+    A session written before the rows it names are committed names rows its
+    foreign key cannot find, and signup fails on a brand-new account. Order is
+    the fix, so order is what this pins.
+    """
+    response, log, _ = await _sign_up(monkeypatch, _SIGNUP)
+
+    assert response.status_code == 201, response.text  # type: ignore[attr-defined]
     assert "commit" in log.events, "signup never committed the tenant it created"
     assert log.events.index("commit") < log.events.index("session"), (
         f"the session was minted before the tenant was durable: {log.events}"
     )
+
+
+async def test_signup_records_the_browser_s_time_zone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """D23, FR24: the zone the browser reports becomes the owner's, and so the first
+    project's, so its days are local and not UTC."""
+    response, _, asked = await _sign_up(monkeypatch, {**_SIGNUP, "timezone": "Asia/Kolkata"})
+
+    assert response.status_code == 201, response.text  # type: ignore[attr-defined]
+    assert asked["timezone"] == "Asia/Kolkata"
+
+
+@pytest.mark.parametrize("reported", ["Mars/Olympus_Mons", "../../etc/passwd", "", None])
+async def test_a_zone_the_browser_reports_wrongly_signs_up_in_utc(
+    monkeypatch: pytest.MonkeyPatch, reported: str | None
+) -> None:
+    """A browser's zone is a hint, not something a person typed: one this system does
+    not know signs up with none, so the project falls back to UTC (FR24), rather than
+    refusing a new customer over it."""
+    response, _, asked = await _sign_up(monkeypatch, {**_SIGNUP, "timezone": reported})
+
+    assert response.status_code == 201, response.text  # type: ignore[attr-defined]
+    assert asked["timezone"] is None

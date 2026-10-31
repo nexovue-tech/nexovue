@@ -31,3 +31,35 @@ describe("people who left", () => {
     );
   });
 });
+
+describe("what people said about detection (F6)", () => {
+  it("quotes a false alarm's reason", () => {
+    expect(
+      describeEntry(
+        entry("finding.false_alarm", { reason: "our load test", returns_minutes: false }, "Asha"),
+      ),
+    ).toBe("Asha marked a finding a false alarm: “our load test”");
+  });
+
+  it("names the service a snooze or a mute was for", () => {
+    expect(
+      describeEntry(
+        entry("service.snoozed", { service: "checkout", until: "2026-10-11T11:00:00Z" }, "Asha"),
+      ),
+    ).toBe("Asha snoozed checkout");
+    expect(describeEntry(entry("service.muted", { service: "checkout", until: null }, "Raj"))).toBe(
+      "Raj unmuted checkout",
+    );
+  });
+
+  it("says nexovue adopted a new normal by itself", () => {
+    const adopted: AuditEntry = {
+      ...entry("finding.adopted", { shifts: [{ signal: "slower", ratio: 1.6 }] }, ""),
+      actor: { kind: "system", id: null, name: null },
+    };
+
+    expect(describeEntry(adopted)).toBe(
+      "nexovue made a finding's level the new normal after 7 days",
+    );
+  });
+});

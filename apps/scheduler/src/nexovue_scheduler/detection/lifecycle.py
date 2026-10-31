@@ -13,7 +13,8 @@ normal, or no longer past the current sensitivity's minimum change (AC30).
 Minutes it cannot be judged pause that count without resetting it (FR11). The
 finding closes when every key has recovered or has gone 6 hours unjudged; if any
 went unjudged it closes as *could no longer be judged* (D20). Severity only rises
-(FR14). A service silent for 24 hours closes as *service gone* (FR32).
+(FR14). A service silent for 24 hours closes as *service gone* (FR32). A key a
+person called a false alarm opens nothing until it reads normal again (FR20).
 """
 
 from __future__ import annotations
@@ -267,6 +268,40 @@ class Context:
     traffic_waits: bool = False
     # The last minute this service had requests, for *service gone*.
     last_request: datetime | None = None
+    # Keys a false alarm holds (FR20): they open and join nothing yet.
+    held: frozenset[str] = frozenset()
+
+
+def advance_holds(holds: Mapping[str, int], judged: MinuteJudged) -> dict[str, int]:
+    """FR20: a false alarm's keys open and join nothing until each has read normal for
+    the recovery time. Counted as a finding's keys are: an unusual or elevated minute
+    starts the count again, one that cannot be judged pauses it. Returns the holds
+    still in force, each with its count of clear minutes."""
+    kept = {}
+    for key, clear in holds.items():
+        status = judged.status(key)
+        if status == "clear":
+            clear += 1
+        elif status in ("unusual", "held"):
+            clear = 0
+        if clear < RECOVERY_MINUTES:
+            kept[key] = clear
+    return kept
+
+
+def adoptable(finding: OpenFinding, *, since: datetime, minute: datetime, after: timedelta) -> bool:
+    """FR21, D22: whether an open finding has been open, with the same signals, long
+    enough for its level to become the normal. Never one that is critical, never a
+    rise in failures, whether the service's or an endpoint's, and never a service
+    that has stopped (FR32): those stay findings until someone acts or they end."""
+    if finding.severity == "critical":
+        return False
+    if any(key_signal(key) == FAILING for key in finding.keys):
+        return False
+    traffic = finding.keys.get(TRAFFIC)
+    if traffic is not None and not traffic.current:
+        return False
+    return minute - finding.started_at >= after and minute - since >= after
 
 
 def step(
@@ -281,7 +316,8 @@ def step(
     keys = [
         key
         for key in judged.unusual_keys()
-        if key != TRAFFIC or not (context.traffic_absorbed or context.traffic_waits)
+        if key not in context.held
+        and (key != TRAFFIC or not (context.traffic_absorbed or context.traffic_waits))
     ]
     if finding is None:
         if not keys:

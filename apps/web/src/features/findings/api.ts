@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
 import type { TimeWindow } from "@/shared/selection";
@@ -61,6 +61,74 @@ export interface Finding {
   signals: FindingSignal[];
   /** A rollup behind the entity, drawn with the same sparkline as everywhere else. */
   trend: number[];
+}
+
+/** One judged minute of one signal, in the signal's unit. */
+export interface SignalPoint {
+  at: string;
+  /** Null when the minute had nothing to measure; drawn as a gap, never as zero. */
+  value: number | null;
+  normal: number | null;
+  /**
+   * Where the sensitivity's minimum change lies: above the normal for slower and
+   * failing more, below it for losing traffic. Between it and the normal is the band.
+   */
+  edge: number | null;
+}
+
+/** One signal's readings against its normal band, oldest first (AC38). */
+export interface SignalSeries {
+  signal: FindingSignalKind;
+  unit: FindingSignal["unit"];
+  points: SignalPoint[];
+}
+
+/** A threshold or *went silent* incident on the same service (BR2). */
+export interface LinkedIncident {
+  id: string;
+  rule_name: string;
+  condition_kind: string;
+  opened_at: string;
+  resolved_at: string | null;
+}
+
+/** What *This is the new normal* would make one signal's normal (FR21). */
+export interface ProposedShift {
+  signal: FindingSignalKind;
+  unit: FindingSignal["unit"];
+  ratio: number;
+  normal_before: number | null;
+  normal_after: number | null;
+}
+
+/** Whether the level is known well enough to become the normal yet. */
+export interface NewNormalPreview {
+  available: boolean;
+  readings: number;
+  needed: number;
+  signals: ProposedShift[];
+}
+
+/** One finding as its page reads it (FR31). */
+export interface FindingDetail extends Finding {
+  /** Empty once the readings have expired, and always for a project finding (AC40). */
+  series: SignalSeries[];
+  incidents: LinkedIncident[];
+  /** A project finding's services; empty for a service's. */
+  services: string[];
+  /** A signed-in person's alone: an API token never reads these. */
+  acknowledged_by?: string | null;
+  acknowledged_by_name?: string | null;
+  feedback_reason?: string | null;
+  /** Null when closed, or a project's finding, which has no normal of its own. */
+  new_normal?: NewNormalPreview | null;
+}
+
+/** What an action did: the finding as it now is, and who hears it close. */
+export interface FindingChanged {
+  finding: FindingDetail;
+  /** The channels its *resolved* message goes to; empty when nothing is sent. */
+  resolved_to: string[];
 }
 
 export interface FindingsResponse {
@@ -217,5 +285,46 @@ export function useDetectionStatus(projectId: string | undefined, refresh: TimeW
         `projects/${encodeURIComponent(projectId ?? "")}/detection/status`,
         { signal },
       ),
+  });
+}
+
+export const findingQueryKey = (findingId: string) => ["findings", "one", findingId] as const;
+
+/** One finding and its page. */
+export function useFinding(findingId: string) {
+  return useQuery({
+    queryKey: findingQueryKey(findingId),
+    queryFn: ({ signal }) =>
+      apiClient.get<FindingDetail>(`findings/${encodeURIComponent(findingId)}`, { signal }),
+  });
+}
+
+export type FindingAction = "acknowledge" | "false-alarm" | "new-normal";
+
+export interface FindingActionInput {
+  action: FindingAction;
+  /** A false alarm's reason, the person's to give or not. */
+  reason?: string;
+}
+
+/**
+ * Acknowledge, false alarm or new normal (FR19 to FR21). Each answers with the finding
+ * as it now is, which replaces the page's copy; the feed and the detection status read
+ * again, since the finding may have closed.
+ */
+export function useFindingAction(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "action", findingId],
+    mutationFn: ({ action, reason }: FindingActionInput) =>
+      apiClient.post<FindingChanged>(
+        `findings/${encodeURIComponent(findingId)}/${action}`,
+        action === "false-alarm" ? { reason: reason?.trim() ? reason.trim() : null } : undefined,
+      ),
+    onSuccess: (changed) => {
+      queryClient.setQueryData(findingQueryKey(findingId), changed.finding);
+      void queryClient.invalidateQueries({ queryKey: ["findings", "feed"] });
+      void queryClient.invalidateQueries({ queryKey: ["findings", "detection"] });
+    },
   });
 }

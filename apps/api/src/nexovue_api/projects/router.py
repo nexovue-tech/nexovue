@@ -51,9 +51,7 @@ async def list_projects(reader: CurrentReader, db: DbSession) -> ProjectListResp
 async def create_project(
     request: ProjectCreateRequest, identity: MayConfigureProjects, db: DbSession
 ) -> ProjectDetail:
-    return await service.create(
-        db, org_id=identity.org_id, actor_user_id=identity.user.id, request=request
-    )
+    return await service.create(db, org_id=identity.org_id, actor=identity.user, request=request)
 
 
 @router.get("/{project_id}", summary="One project, with its configuration")

@@ -48,7 +48,13 @@ ASYNC_DSN: Final = POSTGRES_DSN.replace("postgresql://", "postgresql+asyncpg://"
 CLICKHOUSE_DSN: Final = os.environ.get(
     "NEXOVUE_CLICKHOUSE_DSN", "clickhouse://nexovue:nexovue_dev@localhost:18123/nexovue"
 )
-MEMBER_ONLY_FIELDS: Final = {"acknowledged_by", "feedback_reason"}
+# What names a person, quotes them, or prepares an action only a person can take.
+MEMBER_ONLY_FIELDS: Final = {
+    "acknowledged_by",
+    "acknowledged_by_name",
+    "feedback_reason",
+    "new_normal",
+}
 SLOWER: Final[dict[str, Any]] = {
     "signal": "slower",
     "normal": 110.0,

@@ -1,4 +1,6 @@
-"""Detection's state for a project's headline and for one service (F6, FR25).
+"""Detection's state for a project's headline and for one service (F6, FR25), and
+the user's controls: a service's snooze and mute (FR22), a project's sensitivity
+and time zone (FR18, FR24).
 
 Two facts decide it, both written by the scheduler:
 
@@ -28,19 +30,29 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Final, get_args
 
+from nexovue_platform.detection import MAX_MUTE, MAX_SNOOZE
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nexovue_api.data.postgres.models import DetectionState, ServiceDetectionSettings
+from nexovue_api.audit import service as audit
+from nexovue_api.data.postgres.models import DetectionState, Project, ServiceDetectionSettings, User
 from nexovue_api.detection import queries
 from nexovue_api.detection.schemas import (
+    DetectionSettings,
+    DetectionSettingsWrite,
     FindingMarker,
     ProjectDetectionState,
     ProjectDetectionStatus,
+    ServiceControls,
     ServiceDetection,
     ServiceDetectionState,
     SignalStatus,
 )
+from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
+from nexovue_api.findings import queries as findings_queries
 from nexovue_api.findings.schemas import SignalName
+from nexovue_api.profile.timezones import stored_timezone
+from nexovue_api.projects import queries as projects_queries
+from nexovue_api.projects.service import NO_SUCH_PROJECT, require_project
 
 # Older than this, the project's job is not running (FR25, AC26).
 NOT_RUNNING_AFTER: Final = timedelta(minutes=3)
@@ -58,6 +70,12 @@ _LEARNING: Final = "learning"
 _TOO_LITTLE_TRAFFIC: Final = "too_little_traffic"
 _NO_BASELINE: Final = "no_baseline"
 _PAST_LEARNING: Final = frozenset({"judged", "too_little_traffic"})
+
+NO_SUCH_SERVICE: Final = "Detection has not seen a service by that name in this project."
+NOT_AHEAD: Final = "Choose a time still to come, or end it now."
+SNOOZE_TOO_LONG: Final = "A snooze lasts at most 4 hours. An admin can mute the service for longer."
+MUTE_TOO_LONG: Final = "A mute lasts at most 30 days."
+ZONE_NEEDED: Final = "Choose the time zone this project's days follow, such as Asia/Kolkata."
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +186,146 @@ async def service_detection(
         ],
         truncated=len(rows) > queries.MARKER_PAGE,
     )
+
+
+# ------------------------------------------------------------------- controls
+
+
+async def snooze_service(
+    session: AsyncSession,
+    *,
+    actor: User,
+    project_id: uuid.UUID,
+    service_name: str,
+    until: datetime | None,
+    now: datetime,
+) -> ServiceControls:
+    """D25: nothing is sent for the service, and its minutes stay out of the normal,
+    for at most 4 hours. `until` None ends the snooze now."""
+    return await _quieten(
+        session,
+        actor=actor,
+        project_id=project_id,
+        service_name=service_name,
+        until=until,
+        longest=MAX_SNOOZE,
+        too_long=SNOOZE_TOO_LONG,
+        columns=("snoozed_until", "snoozed_by"),
+        action=audit.SERVICE_SNOOZED,
+        now=now,
+    )
+
+
+async def mute_service(
+    session: AsyncSession,
+    *,
+    actor: User,
+    project_id: uuid.UUID,
+    service_name: str,
+    until: datetime | None,
+    now: datetime,
+) -> ServiceControls:
+    """BR9: nothing is sent for the service, during the mute or after it, for at most
+    30 days. Its findings are still recorded, marked muted. `until` None ends it now."""
+    return await _quieten(
+        session,
+        actor=actor,
+        project_id=project_id,
+        service_name=service_name,
+        until=until,
+        longest=MAX_MUTE,
+        too_long=MUTE_TOO_LONG,
+        columns=("muted_until", "muted_by"),
+        action=audit.SERVICE_MUTED,
+        now=now,
+    )
+
+
+async def _quieten(
+    session: AsyncSession,
+    *,
+    actor: User,
+    project_id: uuid.UUID,
+    service_name: str,
+    until: datetime | None,
+    longest: timedelta,
+    too_long: str,
+    columns: tuple[str, str],
+    action: str,
+    now: datetime,
+) -> ServiceControls:
+    project = await require_project(session, org_id=actor.org_id, project_id=project_id)
+    if not await queries.service_known(
+        session, org_id=actor.org_id, project_id=project.id, service_name=service_name
+    ):
+        raise NotFoundError(NO_SUCH_SERVICE)
+    if until is not None and until <= now:
+        raise InvalidRequestError(NOT_AHEAD)
+    if until is not None and until - now > longest:
+        raise InvalidRequestError(too_long)
+    until_column, by_column = columns
+    settings = await queries.quieten(
+        session,
+        org_id=actor.org_id,
+        project_id=project.id,
+        service_name=service_name,
+        values={until_column: until, by_column: None if until is None else actor.id},
+    )
+    audit.record_service_quietened(
+        session,
+        action=action,
+        org_id=actor.org_id,
+        project_id=project.id,
+        service_name=service_name,
+        until=until,
+        actor_user_id=actor.id,
+    )
+    return ServiceControls(
+        muted_until=_still_ahead(settings.muted_until, now),
+        snoozed_until=_still_ahead(settings.snoozed_until, now),
+    )
+
+
+def project_settings(project: Project) -> DetectionSettings:
+    return DetectionSettings(sensitivity=project.detection_sensitivity, timezone=project.timezone)
+
+
+async def change_project_settings(
+    session: AsyncSession,
+    *,
+    actor: User,
+    project_id: uuid.UUID,
+    request: DetectionSettingsWrite,
+) -> DetectionSettings:
+    """FR18, FR24: from the next judged minute. The normal is rebuilt now for the new
+    window or the new local clock, from the same history, so no learning starts over
+    (AC35); an open finding is judged under the new sensitivity and may close (AC30)."""
+    timezone = stored_timezone(request.timezone)
+    if timezone is None:
+        raise InvalidRequestError(ZONE_NEEDED)
+    project = await projects_queries.lock_project(
+        session, org_id=actor.org_id, project_id=project_id
+    )
+    if project is None:
+        raise NotFoundError(NO_SUCH_PROJECT)
+    changes = {
+        name: {"from": before, "to": after}
+        for name, before, after in (
+            ("sensitivity", project.detection_sensitivity, request.sensitivity),
+            ("timezone", project.timezone, timezone),
+        )
+        if before != after
+    }
+    if changes:
+        project.detection_sensitivity, project.timezone = request.sensitivity, timezone
+        audit.record_detection_changed(
+            session, project=project, actor_user_id=actor.id, changes=changes
+        )
+        await findings_queries.queue_baselines(
+            session, org_id=project.org_id, project_id=project.id
+        )
+        await session.flush()
+    return project_settings(project)
 
 
 # -------------------------------------------------------------- pure mapping

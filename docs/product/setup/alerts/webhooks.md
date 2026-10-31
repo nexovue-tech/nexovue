@@ -91,7 +91,8 @@ stops behaving as it normally does. Its events are `finding.opened`,
 endpoint joined it), `finding.flapping` (findings on this service keep opening;
 nothing more is sent about it until it has stayed normal for 30 minutes) and
 `finding.resolved` (it closed; `details` says how — recovered, marked a false alarm,
-a new normal, or the service gone).
+a new normal set by a person or adopted after 7 days with no answer, or the service
+gone). A channel hears `finding.resolved` only for a finding it was told about.
 
 The *Send test* button sends `test.opened`, with `data.subject.kind` `test`.
 

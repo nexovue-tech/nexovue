@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Final
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.data.postgres.models import (
@@ -114,3 +115,36 @@ async def service_findings(
         .limit(limit)
     )
     return list(await session.scalars(statement))
+
+
+async def service_known(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, service_name: str
+) -> bool:
+    """Whether detection has seen the service: it has a state row from its first minute."""
+    return (
+        await service_state(
+            session, org_id=org_id, project_id=project_id, service_name=service_name
+        )
+        is not None
+    )
+
+
+async def quieten(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    service_name: str,
+    values: dict[str, object],
+) -> ServiceDetectionSettings:
+    """Set a service's mute or snooze, creating its settings row on first use. An upsert
+    on the row's key, `org_id` first, so two people at once cannot collide."""
+    statement = (
+        insert(ServiceDetectionSettings)
+        .values(org_id=org_id, project_id=project_id, service_name=service_name, **values)
+        .on_conflict_do_update(index_elements=["org_id", "project_id", "service_name"], set_=values)
+        .returning(ServiceDetectionSettings)
+        .execution_options(populate_existing=True)
+    )
+    found: ServiceDetectionSettings = (await session.scalars(statement)).one()
+    return found

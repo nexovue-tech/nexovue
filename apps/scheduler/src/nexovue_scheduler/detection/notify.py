@@ -37,8 +37,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Final, Literal
 
-from nexovue_platform.alerts.channels import READ_BY_PEOPLE
 from nexovue_platform.alerts.model import AnomalyFindingCondition, parse_condition
+from nexovue_platform.detection import (
+    FINDING_TOLD_KINDS,
+    RESOLVE_FINDING_SQL,
+    resolve_parameters,
+)
 from nexovue_platform.telemetry.logging import get_logger
 from pydantic import ValidationError
 from sqlalchemy import text
@@ -60,7 +64,8 @@ STOPPED_SEVERITY: Final = "critical"
 ADOPTED_SEVERITY: Final = "warning"
 
 Told = Literal["opened", "escalated", "joined", "flapping"]
-_TOLD_KINDS: Final = ["opened", "escalated", "joined", "flapping"]
+_TOLD_KINDS: Final = list(FINDING_TOLD_KINDS)
+_RESOLVE: Final = text(RESOLVE_FINDING_SQL)
 
 _FINDING: Final = text(
     """
@@ -265,24 +270,29 @@ async def finding_closed(
     anything about it (AC22). A muted, snoozed or flapping finding tells only the
     machines that hold an alert for it, so they can close it (F21 D8)."""
     finding = await _read(connection, finding_id, org_id=org_id, at=at)
-    told = await _told(connection, finding)
-    if finding.muted or finding.flapping or finding.quiet_now:
-        told = {channel: kind for channel, kind in told.items() if kind not in READ_BY_PEOPLE}
-    return await _write(connection, finding, list(told), kind="resolved", severity=severity, at=at)
+    return await _resolve(connection, finding, severity=severity, at=at)
 
 
 async def finding_adopted(
-    connection: AsyncConnection, finding_id: uuid.UUID, *, org_id: uuid.UUID, at: datetime
+    connection: AsyncConnection,
+    finding_id: uuid.UUID,
+    *,
+    org_id: uuid.UUID,
+    severity: str = ADOPTED_SEVERITY,
+    at: datetime,
 ) -> int:
-    """D22: adoption emails the owners whatever the rules say. A muted finding is the
-    exception: BR9 says nothing is sent for it, ever."""
+    """D22: adoption emails the owners whatever the rules say, and is the one message
+    they get about it (AC16). Every other channel told of the finding hears it close,
+    so a PagerDuty alert it opened is resolved. A muted finding tells the owners
+    nothing: BR9 says nothing is sent for it, ever (D36)."""
     finding = await _read(connection, finding_id, org_id=org_id, at=at)
     if finding.muted:
-        return 0
+        return await _resolve(connection, finding, severity=severity, at=at)
     owners = await _owners_channel(connection, org_id)
-    return await _write(
+    written = await _write(
         connection, finding, [owners], kind="adopted", severity=ADOPTED_SEVERITY, at=at
     )
+    return written + await _resolve(connection, finding, severity=severity, at=at, skip=[owners])
 
 
 async def report_stopped(
@@ -361,6 +371,29 @@ async def _while_open(
         at=at,
         sequence=sequence,
     )
+
+
+async def _resolve(
+    connection: AsyncConnection,
+    finding: _Finding,
+    *,
+    severity: str,
+    at: datetime,
+    skip: Iterable[uuid.UUID] = (),
+) -> int:
+    quiet = finding.muted or finding.flapping or finding.quiet_now
+    written = await connection.execute(
+        _RESOLVE,
+        resolve_parameters(
+            org_id=finding.org_id,
+            finding_id=finding.id,
+            severity=severity,
+            at=at,
+            quiet=quiet,
+            skip=list(skip),
+        ),
+    )
+    return len(written.fetchall())
 
 
 async def _flap_guard(
