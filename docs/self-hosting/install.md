@@ -16,6 +16,8 @@ After a few minutes the console is at **http://localhost:8080**. The command pri
 generated password to sign in with; the password is shown once. Applications send telemetry to
 **http://localhost:4318** (OTLP over HTTP), and the console's setup pages show how for each language.
 
+To see the images and run them with `docker compose` yourself, see [Docker and Compose](docker.md).
+
 The quickstart is **not for production**: one Kafka broker, no backups, no TLS, and nothing reachable
 from another machine. `./nexovue quickstart down` stops it; `./nexovue quickstart remove` deletes it
 and everything it recorded.
