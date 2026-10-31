@@ -27,7 +27,19 @@ from nexovue_platform.alerts.model import (
     EVALUATION_PHASES,
     NOTIFICATION_KINDS,
     NOTIFICATION_STATES,
+    PROJECT_NOTIFICATION_KINDS,
     SEVERITIES,
+)
+from nexovue_platform.detection import (
+    CLOSED_REASONS,
+    DEFAULT_SENSITIVITY,
+    DEFAULT_TIMEZONE,
+    FINDING_SCOPES,
+    FINDING_STATES,
+    INTAKE_REFUSAL_REASONS,
+    SENSITIVITIES,
+    SHIFT_REASONS,
+    SIGNALS,
 )
 from sqlalchemy import (
     BigInteger,
@@ -118,6 +130,9 @@ TIMEZONE_NAME_LENGTH: Final = 64
 # truncates to this before writing, so an absurd name is stored as a service
 # rather than failing the flush that carried it.
 SERVICE_NAME_LENGTH: Final = 255
+
+# A receiver's hostname, which names it in `intake_refusals`; DNS allows 253.
+RECEIVER_ID_LENGTH: Final = 255
 
 # ISO 4217.
 CURRENCY_CODE_LENGTH: Final = 3
@@ -361,12 +376,23 @@ class Project(Base):
     masking_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # The IANA zone detection reads local minutes in, and finding titles name (FR24).
+    timezone: Mapped[str] = mapped_column(
+        String(TIMEZONE_NAME_LENGTH), nullable=False, server_default=DEFAULT_TIMEZONE
+    )
+    detection_sensitivity: Mapped[str] = mapped_column(
+        String(SHORT_LABEL_LENGTH), nullable=False, server_default=DEFAULT_SENSITIVITY
+    )
     created_at: Mapped[CreatedAt]
     deleted_at: Mapped[OptionalTimestamp]
 
     __table_args__ = (
         UniqueConstraint("org_id", "slug", name="uq_projects_org_id_slug"),
         Index("ix_projects_org_id", "org_id"),
+        CheckConstraint(
+            f"detection_sensitivity IN ({_quoted(SENSITIVITIES)})",
+            name="detection_sensitivity_is_known",
+        ),
     )
 
 
@@ -1371,7 +1397,11 @@ class Incident(Base):
 
 
 class Notification(Base):
-    """A decision to tell one channel about one incident: the outbox (ADR-013)."""
+    """A decision to tell one channel about one subject: the outbox (ADR-013).
+
+    The subject is an incident, a finding (ADR-022), or for the project kinds —
+    detection stopped and running again (D24) — the project alone.
+    """
 
     __tablename__ = "notifications"
 
@@ -1382,8 +1412,11 @@ class Notification(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
-    incident_id: Mapped[uuid.UUID] = mapped_column(
-        UuidType, ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("incidents.id", ondelete="CASCADE"), nullable=True
+    )
+    finding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("findings.id", ondelete="CASCADE"), nullable=True
     )
     channel_id: Mapped[uuid.UUID] = mapped_column(
         UuidType, ForeignKey("notification_channels.id", ondelete="CASCADE"), nullable=False
@@ -1404,6 +1437,21 @@ class Notification(Base):
 
     __table_args__ = (
         UniqueConstraint("incident_id", "channel_id", "kind", "sequence"),
+        UniqueConstraint("finding_id", "channel_id", "kind", "sequence"),
+        Index(
+            "uq_notifications_project_id_channel_id_kind_sequence_project",
+            "project_id",
+            "channel_id",
+            "kind",
+            "sequence",
+            unique=True,
+            postgresql_where=text("incident_id IS NULL AND finding_id IS NULL"),
+        ),
+        CheckConstraint(
+            "num_nonnulls(incident_id, finding_id) = "
+            f"CASE WHEN kind IN ({_quoted(PROJECT_NOTIFICATION_KINDS)}) THEN 0 ELSE 1 END",
+            name="names_one_subject",
+        ),
         CheckConstraint(f"kind IN ({_quoted(NOTIFICATION_KINDS)})", name="kind_is_known"),
         CheckConstraint(f"state IN ({_quoted(NOTIFICATION_STATES)})", name="state_is_known"),
         CheckConstraint(f"severity IN ({_quoted(SEVERITIES)})", name="severity_is_known"),
@@ -1444,6 +1492,295 @@ class NotificationAttempt(Base):
         Index("ix_notification_attempts_batch_id", "batch_id"),
         Index("ix_notification_attempts_attempted_at", "attempted_at"),
     )
+
+
+# ----------------------------------------------------------- anomaly detection
+# F6. The vocabulary is `nexovue_platform.detection`, shared with the scheduler
+# that judges services and writes these rows (ADR-022, ADR-023).
+
+
+class Finding(Base):
+    """One detected problem with one service, or with a project (ADR-022).
+
+    At most one open per service and one per project, held by two partial unique
+    indexes because Postgres treats nulls as distinct.
+    """
+
+    __tablename__ = "findings"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    scope: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    service_name: Mapped[str | None] = mapped_column(String(SERVICE_NAME_LENGTH), nullable=True)
+    # The highest reached; it only rises (FR14).
+    severity: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(SHORT_LABEL_LENGTH), nullable=False, server_default=text("'open'")
+    )
+    closed_reason: Mapped[str | None] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=True)
+    muted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # SET NULL: deleting an organization deletes its users before its projects.
+    acknowledged_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    acknowledged_at: Mapped[OptionalTimestamp]
+    # Dated apart from the person, so the mark still counts (FR26) after they go.
+    false_alarm_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    false_alarm_at: Mapped[OptionalTimestamp]
+    # Only an admin's mark returns the finding's minutes to the normal (D28).
+    false_alarm_returns_minutes: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    feedback_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    # Each signal's normal, current and worst values and the comparison (AC40), as a
+    # list with the leading signal first.
+    signals: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'")
+    )
+    started_at: Mapped[RequiredTimestamp]
+    closed_at: Mapped[OptionalTimestamp]
+    updated_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        CheckConstraint(f"scope IN ({_quoted(FINDING_SCOPES)})", name="scope_is_known"),
+        CheckConstraint(f"severity IN ({_quoted(SEVERITIES)})", name="severity_is_known"),
+        CheckConstraint(f"state IN ({_quoted(FINDING_STATES)})", name="state_is_known"),
+        CheckConstraint(
+            f"closed_reason IS NULL OR closed_reason IN ({_quoted(CLOSED_REASONS)})",
+            name="closed_reason_is_known",
+        ),
+        CheckConstraint(
+            "(scope = 'service') = (service_name IS NOT NULL)", name="service_matches_scope"
+        ),
+        CheckConstraint("(state = 'open') = (closed_reason IS NULL)", name="closed_says_how"),
+        CheckConstraint("(state = 'open') = (closed_at IS NULL)", name="closed_says_when"),
+        CheckConstraint(
+            "closed_at IS NULL OR closed_at >= started_at", name="closes_after_it_starts"
+        ),
+        CheckConstraint(
+            "acknowledged_by IS NULL OR acknowledged_at IS NOT NULL",
+            name="acknowledgement_is_dated",
+        ),
+        CheckConstraint(
+            "false_alarm_at IS NOT NULL "
+            "OR (false_alarm_by IS NULL AND NOT false_alarm_returns_minutes)",
+            name="false_alarm_is_dated",
+        ),
+        Index(
+            "uq_findings_project_id_service_name_open",
+            "project_id",
+            "service_name",
+            unique=True,
+            postgresql_where=text("scope = 'service' AND state = 'open'"),
+        ),
+        Index(
+            "uq_findings_project_id_open",
+            "project_id",
+            unique=True,
+            postgresql_where=text("scope = 'project' AND state = 'open'"),
+        ),
+        Index(
+            "ix_findings_org_id_project_id_state_started_at",
+            "org_id",
+            "project_id",
+            "state",
+            text("started_at DESC"),
+        ),
+        Index(
+            "ix_findings_project_id_service_name_started_at",
+            "project_id",
+            "service_name",
+            "started_at",
+        ),
+    )
+
+
+class FindingIncident(Base):
+    """A finding linked to a threshold or *went silent* incident on its service (BR2)."""
+
+    __tablename__ = "finding_incidents"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    finding_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("findings.id", ondelete="CASCADE"), primary_key=True
+    )
+    incident_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("incidents.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    __table_args__ = (Index("ix_finding_incidents_incident_id", "incident_id"),)
+
+
+# `org_id` leads the key of every table below that is upserted, so no conflict
+# can reach another tenant's row (design, *Findings and their state*).
+
+
+class DetectionState(Base):
+    """Where one service's judging stands. Created when the service is first seen
+    (C24); `last_judged_minute` moves by compare-and-set."""
+
+    __tablename__ = "detection_state"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    service_name: Mapped[str] = mapped_column(String(SERVICE_NAME_LENGTH), primary_key=True)
+    # Null until the service's first minute is judged.
+    last_judged_minute: Mapped[OptionalTimestamp]
+    # Each signal's phase, clear-minute count, false-alarm hold and learning date.
+    signals: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    created_at: Mapped[CreatedAt]
+
+
+class DetectionProjectRun(Base):
+    """When a project's detection job last completed: its freshness (design 2.1, item 2).
+
+    Apart from `projects` because it is written every minute for every project.
+    """
+
+    __tablename__ = "detection_project_runs"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    last_completed_at: Mapped[RequiredTimestamp]
+    # Set when the owners are told detection stopped; cleared when told it runs again (D24).
+    stopped_reported_at: Mapped[OptionalTimestamp]
+
+
+class DetectionBaseline(Base):
+    """The normal one service's signal is judged by at one minute, from the hourly job.
+
+    The minute is absolute, so the two UTC minutes of a fall-back hour each have one.
+    """
+
+    __tablename__ = "detection_baselines"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    service_name: Mapped[str] = mapped_column(String(SERVICE_NAME_LENGTH), primary_key=True)
+    signal: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), primary_key=True)
+    minute: Mapped[datetime] = mapped_column(TimestampTz, primary_key=True)
+    # The mode, days, median, spread, burst profile and L.
+    baseline: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    computed_at: Mapped[CreatedAt]
+
+    __table_args__ = (CheckConstraint(f"signal IN ({_quoted(SIGNALS)})", name="signal_is_known"),)
+
+
+class BaselineShift(Base):
+    """A signal's normal moved by a ratio from a minute: new normal or adoption (FR21)."""
+
+    __tablename__ = "baseline_shifts"
+
+    id: Mapped[UuidPrimaryKey]
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    service_name: Mapped[str] = mapped_column(String(SERVICE_NAME_LENGTH), nullable=False)
+    signal: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    from_minute: Mapped[RequiredTimestamp]
+    ratio: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    created_at: Mapped[CreatedAt]
+
+    __table_args__ = (
+        CheckConstraint(f"signal IN ({_quoted(SIGNALS)})", name="signal_is_known"),
+        CheckConstraint(f"reason IN ({_quoted(SHIFT_REASONS)})", name="reason_is_known"),
+        CheckConstraint("ratio > 0", name="ratio_is_positive"),
+        Index(
+            "ix_baseline_shifts_project_id_service_name_signal_from_minute",
+            "project_id",
+            "service_name",
+            "signal",
+            "from_minute",
+        ),
+    )
+
+
+class ServiceDetectionSettings(Base):
+    """A service's mute (admins, BR9) and snooze (members, D25). Per-service
+    sensitivity is deferred (D32)."""
+
+    __tablename__ = "service_detection_settings"
+
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    service_name: Mapped[str] = mapped_column(String(SERVICE_NAME_LENGTH), primary_key=True)
+    muted_until: Mapped[OptionalTimestamp]
+    muted_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    snoozed_until: Mapped[OptionalTimestamp]
+    snoozed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class IntakeRefusal(Base):
+    """Telemetry a receiver refused in one minute for lack of a store (C5).
+
+    Install-wide, with no `org_id`: a broker failure refuses every tenant alike,
+    and the detection sweep asks only whether a minute is complete.
+    """
+
+    __tablename__ = "intake_refusals"
+
+    minute: Mapped[datetime] = mapped_column(TimestampTz, primary_key=True)
+    receiver_id: Mapped[str] = mapped_column(String(RECEIVER_ID_LENGTH), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(f"reason IN ({_quoted(INTAKE_REFUSAL_REASONS)})", name="reason_is_known"),
+        CheckConstraint("count > 0", name="count_is_positive"),
+    )
+
+
+class DetectionEvent(Base):
+    """What detection did on its own that an operator must see, such as a held
+    minute judged after 30 minutes (design 2.1, item 1). Install-wide, with no
+    `org_id`: it describes nexovue's pipeline, not a tenant's data."""
+
+    __tablename__ = "detection_events"
+
+    id: Mapped[UuidPrimaryKey]
+    at: Mapped[CreatedAt]
+    kind: Mapped[str] = mapped_column(String(SHORT_LABEL_LENGTH), nullable=False)
+    detail: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+
+    __table_args__ = (Index("ix_detection_events_at", "at"),)
 
 
 class ServiceLastSeen(Base):

@@ -5,26 +5,45 @@ import type { TimeWindow } from "@/shared/selection";
 import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 /**
- * The feed's shape, and the reads its healthy state is made of.
+ * The feed, and the reads its healthy state is made of.
  *
- * **Nothing produces findings.** The specification is explicit that it covers the
- * Findings *screen* and not the engine behind it, and the wireframe is explicit about
- * the consequence: until that engine exists, the healthy state is the entire screen.
- * `useFindings` therefore asks nothing and answers with an empty feed — deliberately,
- * and named so, rather than pointing at an endpoint that does not exist and rendering a
- * failed load to every customer.
- *
- * The feed itself is built and tested because its structure, ordering and actions are
- * committed (OD1, resolved 2026-09-13). Only the card's *contents* are provisional, so
- * that a drawing does not quietly become the specification for an engine nobody has
- * designed yet.
+ * The feed is `GET /findings`: one row per detected problem, written by the detection
+ * engine (ADR-022). The checks and the RED summary beneath it stay as they were, because
+ * an empty feed is still not proof of health (`headline.ts`).
  */
 
 export type FindingSeverity = "critical" | "warning";
-export type FindingState = "active" | "acknowledged" | "resolved";
+/** Acknowledged is still open in every way that matters: somebody saw it, nobody fixed it. */
+export type FindingState = "open" | "acknowledged" | "closed";
+/** How a closed finding closed. Null while it is open, and the card names it once closed. */
+export type ClosedReason =
+  | "recovered"
+  | "false_alarm"
+  | "new_normal"
+  | "adopted"
+  | "service_gone"
+  | "could_not_be_judged";
+export type FindingScope = "service" | "project";
+export type FindingSignalKind = "slower" | "failing" | "traffic";
+
+/** One signal behind a finding, with the normal it was judged against. */
+export interface FindingSignal {
+  signal: FindingSignalKind;
+  /** Null when there is no reading, never 0: a missing number and a real zero differ. */
+  normal: number | null;
+  current: number | null;
+  worst: number | null;
+  unit: "ms" | "%" | "rpm";
+  comparison: string;
+  endpoint: string | null;
+}
 
 export interface Finding {
   id: string;
+  project_id: string;
+  /** A project finding has no service: it spans several. */
+  scope: FindingScope;
+  service_name: string | null;
   /**
    * **The title is the product.** A finding is a sentence: subject, what changed, how
    * much, since when. F1 AC1.3 forbids raw metric names and percentile jargon here, and
@@ -34,31 +53,44 @@ export interface Finding {
   title: string;
   severity: FindingSeverity;
   state: FindingState;
-  /** The entity the sentence is about: "checkout-api · POST /checkout". */
-  subject: string;
-  /** Scale, in the engine's own words: "~12% of checkout requests affected". */
-  impact: string;
-  /** Provisional, and the first thing an engine is likely to overrule. */
-  probable_cause: string;
+  closed_reason: ClosedReason | null;
+  muted: boolean;
   started_at: string;
-  resolved_at: string | null;
+  closed_at: string | null;
+  acknowledged_at: string | null;
+  signals: FindingSignal[];
   /** A rollup behind the entity, drawn with the same sparkline as everywhere else. */
   trend: number[];
 }
 
 export interface FindingsResponse {
   findings: Finding[];
+  /** How many findings the feed is leaving out because somebody muted them. */
+  muted_count: number;
 }
 
 /**
- * The feed. Empty until an insight engine exists.
+ * The feed: every finding, open and closed, muted or not as asked.
  *
- * Not a query against a missing endpoint: a 404 on every load would render the error
- * state, and the error state is the one thing on this screen that must never be shown
- * when it is not true.
+ * It asks for `state=all` and sends no time window, because the feed's question is
+ * "what needs me, and what stopped being wrong", not "what happened between two
+ * instants": an open finding from before the window still needs somebody. The window is
+ * taken only for its refresh, so the feed stays as live as the summary beneath it.
+ *
+ * A failed read is the query's error, never an empty feed: an empty feed would read as
+ * "nothing is wrong", and the error state exists so that it never does (AC18).
  */
-export function useFindings(_projectId: string | undefined, _timeWindow: TimeWindow) {
-  return { findings: [] as Finding[], isPending: false, isError: false };
+export function useFindings(projectId: string | undefined, muted: boolean, refresh: TimeWindow) {
+  return useQuery({
+    ...liveOptions(refresh),
+    queryKey: ["findings", "feed", projectId ?? "", muted] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<FindingsResponse>("findings", {
+        searchParams: { project_id: projectId, state: "all", muted },
+        signal,
+      }),
+  });
 }
 
 export interface ProjectTotals {

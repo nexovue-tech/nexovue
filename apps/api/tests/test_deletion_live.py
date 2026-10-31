@@ -41,6 +41,7 @@ from nexovue_api.data.postgres.models import (
     AlertRule,
     AlertRuleChannel,
     ApiToken,
+    BaselineShift,
     BillingSubscription,
     BillingWebhookDelivery,
     Check,
@@ -50,8 +51,13 @@ from nexovue_api.data.postgres.models import (
     CheckStateChange,
     CheckVariable,
     DeployEvent,
+    DetectionBaseline,
+    DetectionProjectRun,
+    DetectionState,
     ErrorGroupSeen,
     ErrorGroupWatermark,
+    Finding,
+    FindingIncident,
     Incident,
     Integration,
     Job,
@@ -63,6 +69,7 @@ from nexovue_api.data.postgres.models import (
     NotificationChannel,
     Organization,
     PlanGrant,
+    ServiceDetectionSettings,
     ServiceLastSeen,
     SessionRecord,
     SiteKey,
@@ -148,6 +155,13 @@ _COUNT_BY_ORG: Final[tuple[str, ...]] = (
     "service_last_seen",
     "error_groups_seen",
     "error_group_watermarks",
+    "findings",
+    "finding_incidents",
+    "detection_state",
+    "detection_project_runs",
+    "detection_baselines",
+    "baseline_shifts",
+    "service_detection_settings",
     "sessions",
     "view_as_tickets",
     "jobs",
@@ -180,8 +194,18 @@ FIXTURE_ROWS: Final[dict[str, int]] = {
     "alert_rule_channels": 1 + ROWS_PER_TABLE,
     "alert_evaluations": ROWS_PER_TABLE,
     "incidents": ROWS_PER_TABLE,
-    "notifications": ROWS_PER_TABLE,
+    # One per incident and one per finding, and the project's *detection stopped* (D24).
+    "notifications": 2 * ROWS_PER_TABLE + 1,
     "notification_attempts": ROWS_PER_TABLE,
+    # F6: a finding linked to each incident, and detection's per-service rows; one
+    # project, so one run.
+    "findings": ROWS_PER_TABLE,
+    "finding_incidents": ROWS_PER_TABLE,
+    "detection_state": ROWS_PER_TABLE,
+    "detection_project_runs": 1,
+    "detection_baselines": ROWS_PER_TABLE,
+    "baseline_shifts": ROWS_PER_TABLE,
+    "service_detection_settings": ROWS_PER_TABLE,
     "service_last_seen": ROWS_PER_TABLE,
     "error_groups_seen": ROWS_PER_TABLE,
     "error_group_watermarks": 1,
@@ -452,6 +476,7 @@ async def _write_postgres_rows(db: AsyncSession, tenant: Tenant) -> None:
 
     for index in range(ROWS_PER_TABLE):
         await _write_alert_rows(db, tenant, index, now)
+    await _write_detection_project_rows(db, tenant, now)
     db.add_all(
         [
             *(
@@ -608,6 +633,110 @@ async def _write_alert_rows(db: AsyncSession, tenant: Tenant, index: int, now: d
             ),
             NotificationAttempt(
                 org_id=tenant.org_id, channel_id=channel_id, batch_id=batch_id, outcome="delivered"
+            ),
+        ]
+    )
+    await db.flush()
+    await _write_detection_rows(db, tenant, index, now, incident_id, channel_id)
+
+
+async def _write_detection_rows(
+    db: AsyncSession,
+    tenant: Tenant,
+    index: int,
+    now: datetime,
+    incident_id: uuid.UUID,
+    channel_id: uuid.UUID,
+) -> None:
+    """One of everything F6 keeps per service: a finding acknowledged by the tenant's
+    person, linked to the incident and told to the channel, and the service's state,
+    normal, shift and settings."""
+    finding_id, service = uuid.uuid4(), f"checkout-{index}"
+    db.add(
+        Finding(
+            id=finding_id,
+            org_id=tenant.org_id,
+            project_id=tenant.project_id,
+            scope="service",
+            service_name=service,
+            severity="critical",
+            acknowledged_by=tenant.user_id,
+            acknowledged_at=now,
+            title=f"{service} is 4x slower than normal",
+            started_at=now,
+        )
+    )
+    await db.flush()
+    db.add_all(
+        [
+            FindingIncident(org_id=tenant.org_id, finding_id=finding_id, incident_id=incident_id),
+            Notification(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                finding_id=finding_id,
+                channel_id=channel_id,
+                kind="opened",
+                severity="critical",
+            ),
+            DetectionState(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                service_name=service,
+                last_judged_minute=now,
+            ),
+            DetectionBaseline(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                service_name=service,
+                signal="slower",
+                minute=now,
+                baseline={"mode": "weekly"},
+            ),
+            BaselineShift(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                service_name=service,
+                signal="slower",
+                from_minute=now,
+                ratio=1.6,
+                reason="new_normal",
+            ),
+            ServiceDetectionSettings(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                service_name=service,
+                muted_until=now + timedelta(days=1),
+                muted_by=tenant.user_id,
+            ),
+        ]
+    )
+    await db.flush()
+
+
+async def _write_detection_project_rows(db: AsyncSession, tenant: Tenant, now: datetime) -> None:
+    """The project's last detection run, and the owners told it stopped (D24): a
+    notification whose subject is the project alone."""
+    owners = (
+        await db.execute(
+            select(NotificationChannel.id).where(
+                NotificationChannel.org_id == tenant.org_id, NotificationChannel.kind == "owners"
+            )
+        )
+    ).scalar_one()
+    db.add_all(
+        [
+            DetectionProjectRun(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                last_completed_at=now,
+                stopped_reported_at=now,
+            ),
+            Notification(
+                org_id=tenant.org_id,
+                project_id=tenant.project_id,
+                channel_id=owners,
+                kind="stopped",
+                severity="critical",
             ),
         ]
     )

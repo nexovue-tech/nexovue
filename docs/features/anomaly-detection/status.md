@@ -55,6 +55,20 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
 
   The plan's 2b demo check, "the scheduler's log names the settled minute", needs T2c.3's coordinator. It is
   proved there.
+- **Step 2c**, one signal end to end, was built on 2026-11-01:
+  - migration 0041, and the *slower* method with its parity to the simulation;
+  - the baseline, project and coordinator jobs;
+  - the findings read API, the web feed, and the `detection-seed` tool.
+
+  Its checks:
+  - the live suites pass (78), and a seeded slowdown opens one finding and closes it as recovered;
+  - the offline Python suites give 4,619 passed and 2 expected failures (AC8, below);
+  - the web gives 1,399, and all 27 worker packages pass;
+  - ruff passes, and mypy reports no issues in 681 files.
+
+  Not yet seen: the jobs running inside a real `scheduler-light` worker on the demo, because the application
+  images cannot be built here.
+- **Open for the founder:** AC8 against the 80% rule (`design.md`, *As built*, Step 2c).
 - **The dev stores run in this environment**, through a local compose override for the sandbox's open-file
   limit. The application images cannot be built here, because the network blocks `ghcr.io` blobs. So an
   end-to-end check on the stack needs the worker run from source, or your Mac.

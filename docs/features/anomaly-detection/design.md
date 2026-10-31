@@ -133,6 +133,29 @@ Recorded as each plan step lands. It says where the built code differs from the 
     install, and a fresh value would lock that data away, so a missing one is left for Compose's `${…:?}`
     to name. It runs on upgrade, and on an install or quickstart that reuses existing settings.
 
+- **Step 2c, 2026-11-01:**
+  - **The queue (C23 corrected).** `detection` joins the worker's default queues (`__main__.py`), so
+    `scheduler-light` takes it with no `--queues` flag. The plan's `--queues light,detection` would have
+    dropped the per-region probe queues (`light.<region>`).
+  - **The cap of 2 detection jobs** is set in the worker (`jobs/worker.py`, `QUEUE_CAPS`), not by a Postgres
+    semaphore. It applies per worker process.
+  - **Fair order:** the coordinator hands each project the settled minute. It orders projects one per
+    organization in turn.
+  - **Freshness** is `detection_project_runs.last_completed_at`. `stopped_reported_at` sends D24's notices
+    once each.
+  - **`findings.signals`** is a list, leading signal first, as defined by `FindingSignal` in
+    `nexovue_platform.detection`.
+  - **`detection_baselines`** is keyed by the absolute minute.
+  - **Upsert keys** begin with `org_id`.
+  - **The beta-binomial tail** uses an exact sum with `math.lgamma`. scipy's deep tail was measured wrong
+    (6.9e-13, where the exact value is 6.06e-32). At the cut-off it never changes a verdict.
+  - **The shipped method matches the simulation** on all 624 frozen windows
+    (`tests/fixtures/detection_parity.json`).
+  - **`/findings` is on the API's telemetry rate tier,** because its trend reads ClickHouse.
+  - **AC8 versus the 80% rule:** a finding can open after 4 of 5 slow minutes at normal sensitivity, as the
+    simulation assumed, where AC8 says 5 of 5. This waits on the founder, and two strict expected-failure
+    tests mark it.
+
 ## Words used here
 
 - **Pool:** the past readings that a minute is compared with, such as the same weekday at about the same

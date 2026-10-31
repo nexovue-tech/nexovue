@@ -19,7 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler.beat import (
     ATTEMPT_PRUNE_ENTRY,
+    BASELINE_SWEEP_ENTRY,
     DELIVERY_SWEEP_ENTRY,
+    DETECTION_SWEEP_ENTRY,
     ERASURE_ENTRY,
     ERASURE_SOFT_TIME_LIMIT_SECONDS,
     EXPIRY_SWEEP_ENTRY,
@@ -162,6 +164,23 @@ def test_the_alert_sweeps_are_scheduled_on_their_own_queues() -> None:
     assert delivery.request.queue == "deliveries"
     assert delivery.interval_seconds == 15
     assert entries[ATTEMPT_PRUNE_ENTRY].request.queue == "light"
+
+
+def test_detection_is_swept_every_minute_and_its_normal_hourly_on_its_own_queue() -> None:
+    """F6 (C23): judging and the hourly baseline run on the `detection` queue, which
+    `scheduler-light` takes with a cap, so they never hold every probe's slot."""
+    entries = _scheduler()._sweep_entries()
+
+    judging = entries[DETECTION_SWEEP_ENTRY]
+    normal = entries[BASELINE_SWEEP_ENTRY]
+    assert judging.request.task == "nexovue_scheduler.detection.sweep"
+    assert judging.request.queue == "detection"
+    assert judging.interval_seconds == 60
+    assert normal.request.task == "nexovue_scheduler.detection.sweep_baselines"
+    assert normal.request.queue == "detection"
+    assert normal.interval_seconds == 3600
+    # A sweep not started before the next is due is dropped, not queued behind it.
+    assert judging.request.expires_seconds == 60
 
 
 def test_the_nightly_erasure_is_asked_hourly_with_hours_to_run() -> None:

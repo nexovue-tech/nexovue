@@ -75,14 +75,25 @@ REMOVED_BY_CASCADE: Final[dict[str, str]] = {
     "source_maps": "projects",
     "usage_daily": "projects",
     "usage_daily_services": "projects",
-    # F21. A rule's channels and evaluations go with the rule; incidents and their
-    # notifications with the project; the delivery log with its channel.
+    # F21. A rule's channels and evaluations go with the rule; incidents with the
+    # project; the delivery log with its channel. Notifications go with the project:
+    # their subject is an incident, a finding or the project itself (F6, D24), so
+    # `incident_id` may be null and cannot be the parent.
     "alert_rules": "projects",
     "alert_rule_channels": "alert_rules",
     "alert_evaluations": "alert_rules",
     "incidents": "projects",
-    "notifications": "incidents",
+    "notifications": "projects",
     "notification_attempts": "notification_channels",
+    # F6. Findings and everything detection keeps per service go with the project;
+    # a finding's links to incidents go with the finding.
+    "findings": "projects",
+    "finding_incidents": "findings",
+    "detection_state": "projects",
+    "detection_project_runs": "projects",
+    "detection_baselines": "projects",
+    "baseline_shifts": "projects",
+    "service_detection_settings": "projects",
     "service_last_seen": "projects",
     "error_groups_seen": "projects",
     "error_group_watermarks": "projects",
@@ -126,5 +137,15 @@ EXCLUDED_TABLES: Final[dict[str, str]] = {
     "rate_limit_windows": (
         "the auth tier's counters, keyed by a fingerprint of an address or IP and gone "
         "within the hour; nothing in a row names a tenant"
+    ),
+    "intake_refusals": (
+        "the receiver's refusals for lack of a store, per minute and receiver (F6, C5). A "
+        "broker failure refuses every tenant alike, so nothing in a row names one; pruned "
+        "by the expiry sweep"
+    ),
+    "detection_events": (
+        "what detection did on its own that nexovue's operator must see, such as a held "
+        "minute judged after 30 minutes (F6). It describes the pipeline, not a tenant; "
+        "pruned by the expiry sweep"
     ),
 }

@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
@@ -8,7 +10,7 @@ import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
 import { useLiveWindow, useSelection } from "@/shared/selection";
 
-import type { CheckCounts, Finding, ProjectTotals } from "./api";
+import type { CheckCounts, ClosedReason, Finding, ProjectTotals } from "./api";
 import { useCheckCounts, useFindings, useProjectSummary } from "./api";
 import { headlineFor } from "./headline";
 import { orderFindings } from "./ordering";
@@ -16,25 +18,25 @@ import { orderFindings } from "./ordering";
 /**
  * The feed of things that need you, written as sentences.
  *
- * **The healthy state is the one that matters**, and today it is the whole screen: no
- * engine produces findings yet, which is exactly why Overview holds `/` and this does
- * not. F1 AC1.7 forbids a blank page and a spinner here by name — when nothing is wrong,
- * silence has to read as information rather than as a page that failed.
+ * **The healthy state is the one that matters.** F1 AC1.7 forbids a blank page and a
+ * spinner here by name — when nothing is wrong, silence has to read as information
+ * rather than as a page that failed.
  *
  * **AC18 is the single most dangerous requirement on this screen.** A quiet feed
  * and "we could not read the feed" must never look alike, because conflating them tells a
  * customer their system is healthy when the truth is that we cannot see it. The two
  * states share no copy, no icon and no layout, and a test asserts they differ.
  *
- * The feed's structure, ordering and actions are committed (OD1). The card's *contents*
- * are provisional and marked so, to keep a drawing from becoming the specification for an
- * insight engine nobody has designed.
+ * Muted findings stay out of the feed. A quiet link under it opens them instead, because
+ * the feed has no filters and inventing one for a single toggle would be a second
+ * control to learn.
  */
 export function FindingsScreen() {
   const { projectId } = useSelection();
   const timeWindow = useLiveWindow();
+  const [showingMuted, setShowingMuted] = useState(false);
 
-  const feed = useFindings(projectId, timeWindow);
+  const feed = useFindings(projectId, showingMuted, timeWindow);
   const summary = useProjectSummary(projectId, timeWindow);
   // The checks read waits for the summary: four telemetry reads may be in flight and
   // the fifth is refused rather than queued.
@@ -42,11 +44,17 @@ export function FindingsScreen() {
 
   return (
     <FindingsView
-      findings={feed.findings}
+      findings={feed.data?.findings ?? []}
+      mutedCount={feed.data?.muted_count ?? 0}
+      showingMuted={showingMuted}
+      onToggleMuted={() => setShowingMuted((showing) => !showing)}
       isPending={feed.isPending || summary.isPending}
       isError={feed.isError || summary.isError}
-      error={summary.error}
-      onRetry={() => void summary.refetch()}
+      error={feed.error ?? summary.error}
+      onRetry={() => {
+        void feed.refetch();
+        void summary.refetch();
+      }}
       totals={summary.data}
       checks={checks.data}
     />
@@ -55,6 +63,11 @@ export function FindingsScreen() {
 
 export interface FindingsViewProps {
   findings: readonly Finding[];
+  /** How many findings are muted, and so left out of the feed. */
+  mutedCount: number;
+  /** True when the list holds the muted findings instead of the feed. */
+  showingMuted: boolean;
+  onToggleMuted: () => void;
   isPending: boolean;
   isError: boolean;
   error?: unknown;
@@ -65,6 +78,9 @@ export interface FindingsViewProps {
 
 export function FindingsView({
   findings,
+  mutedCount,
+  showingMuted,
+  onToggleMuted,
   isPending,
   isError,
   error,
@@ -105,16 +121,26 @@ export function FindingsView({
             tell you either way.
           </p>
         </div>
-      ) : ordered.length === 0 ? (
-        <SummaryState totals={totals} checks={checks} />
       ) : (
-        <ul className="shrink-0 border-line border-t">
-          {ordered.map((found) => (
-            <li key={found.id}>
-              <FindingRow finding={found} />
-            </li>
-          ))}
-        </ul>
+        <>
+          {ordered.length > 0 ? (
+            <ul className="shrink-0 border-line border-t">
+              {ordered.map((found) => (
+                <li key={found.id}>
+                  <FindingRow finding={found} />
+                </li>
+              ))}
+            </ul>
+          ) : showingMuted ? (
+            // Not the summary: an empty muted list says nothing about the system.
+            <p className="shrink-0 border-line border-t px-4 py-6 text-ink-dim text-sm">
+              No finding is muted.
+            </p>
+          ) : (
+            <SummaryState totals={totals} checks={checks} />
+          )}
+          <MutedLink count={mutedCount} showing={showingMuted} onToggle={onToggleMuted} />
+        </>
       )}
     </div>
   );
@@ -194,26 +220,82 @@ function Reading({
 }
 
 /**
+ * The way to the muted findings, and back.
+ *
+ * Quiet on purpose: a muted finding is one somebody already decided to stop hearing
+ * about, so it earns a link under the feed, not a place in it.
+ */
+function MutedLink({
+  count,
+  showing,
+  onToggle,
+}: {
+  count: number;
+  showing: boolean;
+  onToggle: () => void;
+}) {
+  if (!showing && count === 0) return null;
+
+  return (
+    <div className="shrink-0 px-4 py-3">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="text-brand-text text-xs underline-offset-2 hover:underline"
+      >
+        {showing ? "Back to the feed" : `Muted (${formatCount(count)})`}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * How a closed finding closed, in the reader's words.
+ *
+ * Never "Resolved": a finding that closed because the service went quiet, or because
+ * nobody answered for a week, was not fixed, and saying so would be a claim we cannot
+ * support.
+ */
+const CLOSED_AS: Record<ClosedReason, string> = {
+  recovered: "Recovered",
+  false_alarm: "Closed as a false alarm",
+  new_normal: "Accepted as the new normal",
+  adopted: "Accepted as the new normal after 7 days with no answer",
+  service_gone: "Service stopped sending",
+  could_not_be_judged: "Closed: too quiet to judge for 6 hours",
+};
+
+/** What a card is about. A project finding has no single service: it spans several. */
+function subjectOf(finding: Finding): string {
+  return finding.service_name ?? "This project";
+}
+
+/**
  * One finding.
  *
- * **The card's contents are provisional** — impact, probable cause and their wording
- * belong to an engine that does not exist. What is committed is the shape: a sentence
- * leading, the entity under it, the evidence inline, and the two actions on the right.
+ * What is committed is the shape: a sentence leading, the entity under it, the evidence
+ * inline. *Probable cause* stays off the card until Stage 2 can name one, and the v1
+ * engine reports no impact figure, so neither has a line here.
  *
- * A resolved finding is one quiet line: no sparkline, no actions, nothing to do.
+ * A closed finding is one quiet line naming how it closed: no sparkline, nothing to do.
  */
 function FindingRow({ finding }: { finding: Finding }) {
-  if (finding.state === "resolved") {
+  if (finding.state === "closed") {
     return (
-      <div className="flex items-baseline gap-3 border-line-subtle border-b px-4 py-2 text-sm">
-        <span className="font-mono text-2xs text-ink-dim uppercase tracking-caps">Resolved</span>
-        <span className="min-w-0 flex-1 truncate text-ink-dim">{finding.title}</span>
-        <span className="shrink-0 font-mono text-2xs text-ink-dim">
-          {finding.resolved_at ? formatRelativeTime(finding.resolved_at) : UNKNOWN}
-        </span>
+      <div className="border-line-subtle border-b px-4 py-2 text-sm">
+        <p className="truncate text-ink-dim">{finding.title}</p>
+        <p className="mt-0.5 text-2xs text-ink-dim">
+          {finding.closed_reason ? CLOSED_AS[finding.closed_reason] : "Closed"}
+          {" · "}
+          <span className="font-mono">
+            {finding.closed_at ? formatRelativeTime(finding.closed_at) : UNKNOWN}
+          </span>
+        </p>
       </div>
     );
   }
+
+  const subject = subjectOf(finding);
 
   return (
     <article className="flex gap-3 border-line-subtle border-b px-4 py-3">
@@ -229,11 +311,7 @@ function FindingRow({ finding }: { finding: Finding }) {
       <div className="min-w-0 flex-1">
         {/* The title is the product: a sentence, not a metric expression. */}
         <h3 className="text-ink text-sm">{finding.title}</h3>
-        <p className="mt-0.5 font-mono text-2xs text-ink-dim">{finding.subject}</p>
-        {finding.impact ? <p className="mt-1 text-ink-dim text-xs">{finding.impact}</p> : null}
-        {finding.probable_cause ? (
-          <p className="mt-1 text-ink-dim text-xs">Probably: {finding.probable_cause}</p>
-        ) : null}
+        <p className="mt-0.5 font-mono text-2xs text-ink-dim">{subject}</p>
       </div>
 
       <div className="flex shrink-0 items-start gap-3">
@@ -241,7 +319,7 @@ function FindingRow({ finding }: { finding: Finding }) {
           points={finding.trend}
           max={Math.max(...finding.trend, 1)}
           tone={finding.severity === "critical" ? "critical" : "series"}
-          label={`How ${finding.subject} has been trending.`}
+          label={`How ${subject} has been trending.`}
         />
         <span className="font-mono text-2xs text-ink-dim">
           {finding.state === "acknowledged" ? "Acked" : formatRelativeTime(finding.started_at)}

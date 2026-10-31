@@ -37,6 +37,9 @@ from nexovue_platform.tenant_statements import (
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from nexovue_scheduler.detection.method import BUCKET_COUNT, Minute
+from nexovue_scheduler.settings import get_settings
+
 logger = get_logger(__name__)
 
 READINGS_TABLE: Final = "detection_readings"
@@ -122,6 +125,44 @@ GROUP BY service_name, minute
 ORDER BY service_name, minute
 """
 
+# Each service's minutes in [from, to): what a window, or a pool, is built from.
+# `sumForEachMerge` returns the 64 bucket counts summed over every row of a minute.
+_MINUTE_COLUMNS: Final = """
+    service_name,
+    toUnixTimestamp(minute) AS minute_epoch,
+    sum(request_count) AS requests,
+    sum(error_count) AS errors,
+    sumForEachMerge(latency_buckets) AS buckets
+"""
+WINDOW_MINUTES_SQL: Final = f"""
+SELECT {_MINUTE_COLUMNS}
+FROM service_stats_1m
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND minute >= {{from_minute:DateTime}}
+  AND minute < {{to_minute:DateTime}}
+GROUP BY service_name, minute
+"""
+SERVICE_MINUTES_SQL: Final = f"""
+SELECT {_MINUTE_COLUMNS}
+FROM service_stats_1m
+WHERE tenant_id = {{tenant_id:String}}
+  AND project_id = {{project_id:String}}
+  AND service_name IN {{services:Array(String)}}
+  AND minute >= {{from_minute:DateTime}}
+  AND minute < {{to_minute:DateTime}}
+GROUP BY service_name, minute
+"""
+# When each service was first counted since `since`: where its history starts.
+FIRST_SEEN_SQL: Final = """
+SELECT service_name, toUnixTimestamp(min(minute)) AS first_epoch
+FROM service_stats_1m
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND minute >= {since:DateTime}
+GROUP BY service_name
+"""
+
 # The organization comes from the project's own row, never from the caller, and
 # with it the derived retention the readings expire at (design 2.1, m6).
 _PROJECT_BINDING: Final = text(
@@ -186,6 +227,31 @@ class ProjectDetection:
             for service_name, minute_epoch, latest in rows
         ]
 
+    def window_minutes(
+        self, *, start: datetime, end: datetime
+    ) -> dict[str, dict[datetime, Minute]]:
+        """Every service's counted minutes in [start, end). A minute with no row had
+        no inbound requests."""
+        rows = self._query(WINDOW_MINUTES_SQL, {"from_minute": start, "to_minute": end})
+        return _by_service(rows)
+
+    def service_minutes(
+        self, services: Sequence[str], *, start: datetime, end: datetime
+    ) -> dict[str, dict[datetime, Minute]]:
+        """The named services' counted minutes in [start, end)."""
+        if not services:
+            return {}
+        rows = self._query(
+            SERVICE_MINUTES_SQL,
+            {"services": list(services), "from_minute": start, "to_minute": end},
+        )
+        return _by_service(rows)
+
+    def first_seen(self, *, since: datetime) -> dict[str, datetime]:
+        """Each service counted since `since`, and its first counted minute."""
+        rows = self._query(FIRST_SEEN_SQL, {"since": since})
+        return {str(service): datetime.fromtimestamp(int(epoch), UTC) for service, epoch in rows}
+
     def write(self, readings: Sequence[Reading]) -> None:
         """Freeze these readings under this project. A minute written again wins
         by a higher version (migration 000036)."""
@@ -220,6 +286,20 @@ class ProjectDetection:
         return [tuple(row) for row in result.result_rows]
 
 
+def _by_service(rows: Sequence[tuple[Any, ...]]) -> dict[str, dict[datetime, Minute]]:
+    found: dict[str, dict[datetime, Minute]] = {}
+    for service, epoch, requests, errors, buckets in rows:
+        counts = tuple(int(count) for count in buckets)
+        if len(counts) != BUCKET_COUNT:
+            # An empty state merges to an empty array; anything else is a schema change.
+            if counts:
+                raise ValueError(f"a minute of {service} has {len(counts)} latency buckets")
+            counts = (0,) * BUCKET_COUNT
+        minute = datetime.fromtimestamp(int(epoch), UTC)
+        found.setdefault(str(service), {})[minute] = Minute(int(requests), int(errors), counts)
+    return found
+
+
 def _values(latest: Sequence[Any]) -> list[Any]:
     """A reading's values in `Reading`'s types. The driver returns the named
     tuple of each endpoint's counts as a dict."""
@@ -249,6 +329,21 @@ def client_at(dsn: str, *, settings: dict[str, Any] | None = None) -> Client:
 
 def connect(reader_dsn: str, writer_dsn: str) -> DetectionStore:
     return DetectionStore(client_at(reader_dsn, settings=READ_SETTINGS), client_at(writer_dsn))
+
+
+_process_store: DetectionStore | None = None
+
+
+def store_for_process() -> DetectionStore | None:
+    """This worker child's store, opened on first use from its settings; None, with
+    an ERROR, where the deployment has not given the scheduler both accounts."""
+    global _process_store
+    if _process_store is None:
+        settings = get_settings()
+        _process_store = open_store(
+            settings.clickhouse_dsn, settings.clickhouse_detection_writer_dsn
+        )
+    return _process_store
 
 
 def open_store(reader_dsn: str, writer_dsn: str) -> DetectionStore | None:

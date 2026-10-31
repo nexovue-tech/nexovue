@@ -9,6 +9,12 @@ hard limit, or one that died, is replaced before its slot takes another job.
 beat's work and every retry; the notification only shortens the wait for a
 person who pressed Run now or Send test.
 
+**Some queues are capped.** A worker never runs more than `QUEUE_CAPS` allows
+from a capped queue at once, whatever slots are free: `scheduler-light` takes the
+`detection` queue beside its probes, and detection may hold at most two of its
+eight slots (D32). The cap is per worker, which is per container; it is the
+container's slots it protects.
+
 **Stopping is orderly.** On SIGTERM it claims nothing more and waits for what it
 is running. A job still running when the process is killed outright keeps its
 lease until the lease lapses, and is then claimed again by another worker if it
@@ -22,6 +28,7 @@ import multiprocessing
 import os
 import socket
 import uuid
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing.connection import Connection
 from multiprocessing.context import SpawnProcess
@@ -34,6 +41,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler import metrics
+from nexovue_scheduler.detection import DETECTION_CONCURRENCY, DETECTION_QUEUE
 from nexovue_scheduler.health import Pulse
 from nexovue_scheduler.jobs import child, queue, registry
 from nexovue_scheduler.jobs.queue import ClaimedJob
@@ -48,6 +56,8 @@ REACH_POSTGRES_SECONDS: Final = 10.0
 # poll carries every job meanwhile.
 RELISTEN_SECONDS: Final = 30.0
 KILLED: Final = "killed"
+# The most jobs a worker runs at once from each capped queue.
+QUEUE_CAPS: Final[Mapping[str, int]] = {DETECTION_QUEUE: DETECTION_CONCURRENCY}
 
 _SPAWN = multiprocessing.get_context("spawn")
 
@@ -110,12 +120,16 @@ class Worker:
         concurrency: int,
         task_modules: tuple[str, ...] = registry.TASK_MODULES,
         pulse: Pulse | None = None,
+        caps: Mapping[str, int] = QUEUE_CAPS,
     ) -> None:
         self._engine = engine
         self._pulse = pulse or Pulse()
         self._reach_postgres_at = 0.0
         self._listen_dsn = listen_dsn
         self._queues = queues
+        self._caps = {queue_name: cap for queue_name, cap in caps.items() if queue_name in queues}
+        self._uncapped = [queue_name for queue_name in queues if queue_name not in self._caps]
+        self._running_from = dict.fromkeys(self._caps, 0)
         # Unique per worker, not per process: the lease fence is this name, and two
         # workers sharing one would finish each other's jobs.
         self._name = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
@@ -158,19 +172,32 @@ class Worker:
                 await self._listener.close()
 
     async def _claim_into_idle_slots(self) -> None:
-        try:
-            jobs = await queue.claim(
-                self._engine, queues=self._queues, worker=self._name, limit=len(self._idle)
-            )
-        except Exception:
-            logger.exception("jobs could not be claimed; trying again")
-            return
-        self._pulse.reached_postgres()
-        for job in jobs:
-            slot = self._idle.pop()
-            running = asyncio.create_task(self._run(slot, job))
-            self._running.add(running)
-            running.add_done_callback(self._running.discard)
+        # Capped queues first: each takes no more than its room, so it cannot
+        # crowd out the rest, and the rest cannot starve it.
+        lanes = [
+            ([queue_name], cap - self._running_from[queue_name])
+            for queue_name, cap in self._caps.items()
+        ]
+        if self._uncapped:
+            lanes.append((self._uncapped, len(self._idle)))
+        for lane, room in lanes:
+            limit = min(room, len(self._idle))
+            if limit <= 0:
+                continue
+            try:
+                jobs = await queue.claim(self._engine, queues=lane, worker=self._name, limit=limit)
+            except Exception:
+                logger.exception("jobs could not be claimed; trying again")
+                return
+            self._pulse.reached_postgres()
+            capped = lane[0] if lane[0] in self._caps else None
+            for job in jobs:
+                slot = self._idle.pop()
+                if capped is not None:
+                    self._running_from[capped] += 1
+                running = asyncio.create_task(self._run(slot, job, capped))
+                self._running.add(running)
+                running.add_done_callback(self._running.discard)
 
     async def _reach_postgres(self) -> None:
         self._reach_postgres_at = asyncio.get_running_loop().time() + REACH_POSTGRES_SECONDS
@@ -182,7 +209,7 @@ class Worker:
             return
         self._pulse.reached_postgres()
 
-    async def _run(self, slot: Slot, job: ClaimedJob) -> None:
+    async def _run(self, slot: Slot, job: ClaimedJob, capped: str | None) -> None:
         try:
             outcome = await slot.run(job)
             await self._record(job, outcome)
@@ -191,6 +218,8 @@ class Worker:
             # left; nothing here is worth stopping the worker for.
             logger.exception("a job's outcome could not be recorded", task=job.task)
         finally:
+            if capped is not None:
+                self._running_from[capped] -= 1
             self._idle.append(slot)
             self._wake.set()
 

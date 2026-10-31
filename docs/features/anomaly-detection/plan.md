@@ -234,7 +234,7 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
    14:02", in the browser's zone until Step 3.
 3. Turn it off. The finding closes as *recovered*.
 
-- [ ] **T2c.1** — The Postgres migration and the new condition kind.
+- [x] **T2c.1** — The Postgres migration and the new condition kind.
   - `apps/api/migrations/versions/0041_anomaly_detection.py`: all eight tables, each with `org_id`
     (`intake_refusals` and `detection_events` are install-wide, with exemptions); `projects.timezone` with
     the default `'UTC'`; `detection_sensitivity`; `notifications.finding_id`; and the widened CHECKs.
@@ -247,9 +247,9 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
     - `test_alert_vocabulary.py`, seen failing on the new kind first;
     - `packages/py-platform/tests/test_alert_model.py`;
     - `test_deletion_live.py`.
-- [ ] **T2c.2** — `detection/method.py` (new), *slower* only, ported from `tools/detection-sim`. Proved by
+- [x] **T2c.2** — `detection/method.py` (new), *slower* only, ported from `tools/detection-sim`. Proved by
   `test_detection_method.py` (AC2, AC5, AC6, AC8), and by a parity test against the simulation's function.
-- [ ] **T2c.3** — The jobs.
+- [x] **T2c.3** — The jobs.
   - `detection/baselines.py` (new) is the hourly baseline job.
   - `detection/project_job.py` (new) creates a service's `detection_state` row when it first sees the service,
     judges it, writes the readings, then commits state (compare-and-set) and findings in one transaction. It
@@ -262,20 +262,20 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
     - the compare-and-set test, two jobs at once;
     - `test_beat_schedule.py`;
     - `test_compose_contract.py`.
-- [ ] **T2c.4** — `tools/detection-seed/` (new), behind a `just detection-seed` recipe. It writes 4 weeks of
+- [x] **T2c.4** — `tools/detection-seed/` (new), behind a `just detection-seed` recipe. It writes 4 weeks of
   `service_stats_1m` straight into the dev ClickHouse for the demo's services, refusing any host but
   localhost.
   - Writing directly is needed because the receiver accepts spans only up to 7 days old
     (`clocktrust.PastSkew`), so `tools/gateseed` cannot reach back 4 weeks.
   - Proved by the seeded service leaving *learning* at once, and by the localhost refusal test.
-- [ ] **T2c.5** — `apps/api/src/nexovue_api/findings/` (new): `GET /findings`, `/findings/stats` (declared
+- [x] **T2c.5** — `apps/api/src/nexovue_api/findings/` (new): `GET /findings`, `/findings/stats` (declared
   first) and `/findings/{id}`.
   - Every route is scope-checked. A read token's view leaves out `acknowledged_by` and `feedback_reason`.
   - Proved by:
     - `test_findings_api_live.py`;
     - `test_read_surface_structure.py`, with `docs/product/setup/api.md`;
     - `test_postgres_tenancy_structure.py`.
-- [ ] **T2c.6** — `apps/web/src/features/findings/`.
+- [x] **T2c.6** — `apps/web/src/features/findings/`.
   - `api.ts` reads `GET /findings`. The `TimeWindow` argument, `trend`, `subject` and `impact` map to the API's
     fields.
   - `FindingState` is `open | acknowledged | closed`, with `closed_reason`. `ordering.ts` follows.

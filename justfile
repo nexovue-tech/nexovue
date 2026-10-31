@@ -98,6 +98,12 @@ repo-audit:
 detection-measure *args:
     uv run python tools/detection-measure/measure.py {{args}}
 
+# F6 plan T2c.4: 4 weeks of synthetic per-service history for a dev project, written straight into
+# the dev ClickHouse (the receiver takes spans only 7 days back), ending where the live data begins.
+# Seed a dev project's 4 weeks of detection history
+detection-seed *args:
+    uv run python tools/detection-seed/seed.py {{args}}
+
 # Known vulnerabilities in what production runs, nothing else (docs/changes/ready-to-deploy):
 # govulncheck reports a Go flaw only where our code reaches it; pip-audit reads the Python runtime
 # dependencies, not the dev tools; pnpm audit reads the console's and SDK's runtime packages, high

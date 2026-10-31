@@ -8,9 +8,11 @@ import pytest
 from nexovue_platform.alerts.model import (
     DEFAULT_RULE_CONDITION,
     SEVERITY_RANK,
+    AnomalyFindingCondition,
     CheckStateCondition,
     check_subject,
     parse_check_condition,
+    parse_condition,
 )
 from pydantic import ValidationError
 
@@ -71,3 +73,32 @@ def test_critical_outranks_warning() -> None:
 def test_a_check_subject_names_the_check() -> None:
     check_id = uuid.uuid4()
     assert check_subject(check_id) == f"check:{check_id}"
+
+
+def test_an_anomaly_finding_rule_parses_by_its_kind() -> None:
+    condition = parse_condition({"kind": "anomaly_finding", "minimum_severity": "critical"})
+    assert condition == AnomalyFindingCondition(minimum_severity="critical")
+
+
+def test_an_anomaly_finding_rule_with_no_services_named_covers_every_service() -> None:
+    condition = AnomalyFindingCondition(minimum_severity="warning")
+    assert condition.covers("checkout")
+
+
+def test_an_anomaly_finding_rule_naming_services_covers_only_those() -> None:
+    condition = AnomalyFindingCondition(services=["checkout"], minimum_severity="warning")
+    assert condition.covers("checkout")
+    assert not condition.covers("payments")
+
+
+def test_an_anomaly_finding_rule_admits_its_minimum_severity_and_above() -> None:
+    """FR28: the severity is the finding's; the rule only chooses which it sends."""
+    critical_only = AnomalyFindingCondition(minimum_severity="critical")
+    assert critical_only.admits("critical")
+    assert not critical_only.admits("warning")
+    assert AnomalyFindingCondition(minimum_severity="warning").admits("critical")
+
+
+def test_an_anomaly_finding_rule_must_name_its_minimum_severity() -> None:
+    with pytest.raises(ValidationError):
+        parse_condition({"kind": "anomaly_finding"})

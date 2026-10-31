@@ -3,9 +3,9 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { Finding, ProjectTotals } from "./api";
+import type { ClosedReason, Finding, ProjectTotals } from "./api";
 import type { FindingsViewProps } from "./FindingsScreen";
 import { FindingsView } from "./FindingsScreen";
 
@@ -30,19 +30,44 @@ const TOTALS: ProjectTotals = {
 
 const FINDING: Finding = {
   id: "f1",
+  project_id: "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a00aa",
+  scope: "service",
+  service_name: "checkout-api",
   title: "Checkout is 4× slower than normal since 15:04",
   severity: "critical",
-  state: "active",
-  subject: "checkout-api · POST /checkout",
-  impact: "~12% of checkout requests affected",
-  probable_cause: "payment-gateway calls went from 340 ms to 3.9 s",
+  state: "open",
+  closed_reason: null,
+  muted: false,
   started_at: "2026-09-13T15:04:00Z",
-  resolved_at: null,
+  closed_at: null,
+  acknowledged_at: null,
+  signals: [
+    {
+      signal: "slower",
+      normal: 340,
+      current: 1_360,
+      worst: 3_900,
+      unit: "ms",
+      comparison: "4× slower than normal",
+      endpoint: "POST /checkout",
+    },
+  ],
   trend: [1, 2, 3, 5, 7, 8, 7],
 };
 
+const closed = (reason: ClosedReason | null, id = "closed"): Finding => ({
+  ...FINDING,
+  id,
+  state: "closed",
+  closed_reason: reason,
+  closed_at: "2026-09-13T16:00:00Z",
+});
+
 const BASE: FindingsViewProps = {
   findings: [],
+  mutedCount: 0,
+  showingMuted: false,
+  onToggleMuted: () => {},
   isPending: false,
   isError: false,
   onRetry: () => {},
@@ -160,33 +185,105 @@ describe("the feed leads when there is anything in it", () => {
     expect(text).not.toContain("synthetic checks are passing");
   });
 
-  it("reads as a sentence with the entity beneath it", () => {
+  it("reads as a sentence with the service beneath it", () => {
     const text = readable({ findings: [FINDING] });
 
-    expect(text).toContain("checkout-api · POST /checkout");
-    expect(text).toContain("~12% of checkout requests affected");
-    expect(text).toContain("Probably: payment-gateway calls went from 340 ms to 3.9 s");
+    expect(text).toContain("checkout-api");
   });
 
-  it("gives a resolved finding one quiet line with no trend to read", () => {
-    const container = render({
-      findings: [{ ...FINDING, state: "resolved", resolved_at: "2026-09-13T16:00:00Z" }],
+  it("names the project when the finding spans several services", () => {
+    const text = readable({
+      findings: [{ ...FINDING, scope: "project", service_name: null }],
     });
 
-    expect(container.textContent).toContain("Resolved");
+    expect(text).toContain("This project");
+  });
+
+  it("offers no probable cause until Stage 2 can name one", () => {
+    expect(readable({ findings: [FINDING] })).not.toContain("Probably");
+  });
+
+  it("gives a closed finding one quiet line with no trend to read", () => {
+    const container = render({ findings: [closed("recovered")] });
+
+    expect(container.textContent).toContain("Recovered");
     expect(container.querySelector('svg[role="img"]')).toBeNull();
   });
 
-  it("puts anything still wrong above anything already fixed", () => {
-    const container = render({
-      findings: [
-        { ...FINDING, id: "fixed", state: "resolved", resolved_at: "2026-09-13T17:00:00Z" },
-        { ...FINDING, id: "broken" },
-      ],
-    });
+  it("puts anything still wrong above anything already closed", () => {
+    const container = render({ findings: [closed("recovered"), { ...FINDING, id: "broken" }] });
 
     const rows = [...container.querySelectorAll("li")].map((row) => row.textContent ?? "");
-    expect(rows[0]).not.toContain("Resolved");
-    expect(rows[1]).toContain("Resolved");
+    expect(rows[0]).not.toContain("Recovered");
+    expect(rows[1]).toContain("Recovered");
+  });
+});
+
+describe("a closed finding names how it closed", () => {
+  // A finding that closed because its service went quiet, or because nobody answered,
+  // was not fixed. "Resolved" would say it was.
+  const WORDS: Record<ClosedReason, string> = {
+    recovered: "Recovered",
+    false_alarm: "Closed as a false alarm",
+    new_normal: "Accepted as the new normal",
+    adopted: "Accepted as the new normal after 7 days with no answer",
+    service_gone: "Service stopped sending",
+    could_not_be_judged: "Closed: too quiet to judge for 6 hours",
+  };
+
+  for (const [reason, words] of Object.entries(WORDS) as [ClosedReason, string][]) {
+    it(`says "${words}" for ${reason}, never "Resolved"`, () => {
+      const text = readable({ findings: [closed(reason)] });
+
+      expect(text).toContain(words);
+      expect(text).not.toMatch(/resolved/i);
+    });
+  }
+
+  it("still says it closed when the reason is missing", () => {
+    const text = readable({ findings: [closed(null)] });
+
+    expect(text).toContain("Closed");
+    expect(text).not.toMatch(/resolved/i);
+  });
+});
+
+describe("muted findings stay out of the feed", () => {
+  it("offers a quiet link to them when there are any", () => {
+    const onToggleMuted = vi.fn();
+    const container = render({ findings: [FINDING], mutedCount: 2, onToggleMuted });
+
+    const link = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Muted (2)",
+    );
+    expect(link).toBeDefined();
+    act(() => link?.click());
+    expect(onToggleMuted).toHaveBeenCalledOnce();
+  });
+
+  it("offers the link under the summary too, so an empty feed does not hide them", () => {
+    const text = readable({ mutedCount: 1 });
+
+    expect(text).toContain("All 3 synthetic checks are passing");
+    expect(text).toContain("Muted (1)");
+  });
+
+  it("shows no link when nothing is muted", () => {
+    expect(readable({ findings: [FINDING] })).not.toContain("Muted");
+  });
+
+  it("does not show the summary when the muted list is empty", () => {
+    // An empty muted list says nothing about the system's health.
+    const text = readable({ showingMuted: true });
+
+    expect(text).toContain("No finding is muted");
+    expect(text).toContain("Back to the feed");
+    expect(text).not.toContain("synthetic checks are passing");
+  });
+
+  it("offers no link when the feed could not be read", () => {
+    expect(readable({ isError: true, error: new Error("boom"), mutedCount: 2 })).not.toContain(
+      "Muted",
+    );
   });
 });

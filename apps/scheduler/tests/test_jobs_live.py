@@ -105,6 +105,8 @@ async def _work_until(
     *,
     workers: int = 1,
     concurrency: int = 1,
+    queues: list[str] | None = None,
+    caps: dict[str, int] | None = None,
 ) -> None:
     """Run workers on `lane` until `done()` holds, or fail when patience runs out."""
     stop = asyncio.Event()
@@ -113,9 +115,10 @@ async def _work_until(
             Worker(
                 engine,
                 listen_dsn=DSN,
-                queues=[lane],
+                queues=queues or [lane],
                 concurrency=concurrency,
                 task_modules=MODULES,
+                caps=caps or {},
             ).run(stop)
         )
         for _ in range(workers)
@@ -325,3 +328,59 @@ async def test_a_job_somebody_waits_on_wakes_the_worker(
     finally:
         stop.set()
         await running
+
+
+def _most_at_once(lines: list[str], marker_prefix: str) -> int:
+    running = most = 0
+    for line in lines:
+        kind, marker = line.split(" ", 1)
+        if not marker.startswith(marker_prefix):
+            continue
+        running += 1 if kind == "start" else -1
+        most = max(most, running)
+    return most
+
+
+async def test_a_capped_queue_never_holds_more_than_its_slots(
+    engine: AsyncEngine, lane: str, tmp_path: Path
+) -> None:
+    """C23, D32: `scheduler-light` takes detection beside its probes, and detection
+    holds at most its cap of the slots while the rest stay free for the others."""
+    others = f"{lane}.others"
+    notes = tmp_path / "notes"
+    try:
+        for number in range(4):
+            await _add(
+                engine,
+                JobRequest(
+                    task=job_fixtures.SPAN,
+                    queue=lane,
+                    kwargs={"path": str(notes), "marker": f"capped {number}", "pause": 0.6},
+                ),
+            )
+        for number in range(4):
+            await _add(
+                engine,
+                JobRequest(
+                    task=job_fixtures.SPAN,
+                    queue=others,
+                    kwargs={"path": str(notes), "marker": f"other {number}", "pause": 0.6},
+                ),
+            )
+
+        await _work_until(
+            engine,
+            lane,
+            lambda: sum(line.startswith("end") for line in _lines(notes)) >= 8,
+            concurrency=4,
+            queues=[lane, others],
+            caps={lane: 1},
+        )
+
+        lines = _lines(notes)
+        assert _most_at_once(lines, "capped") == 1
+        # The slots the cap leaves are the others', and they used them.
+        assert _most_at_once(lines, "other") >= 2
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(text("DELETE FROM jobs WHERE queue = :q"), {"q": others})

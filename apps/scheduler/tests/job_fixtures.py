@@ -17,6 +17,7 @@ NOTE: str = "jobs-test.note"
 SLEEP: str = "jobs-test.sleep"
 BLOCK: str = "jobs-test.block"
 RETRY: str = "jobs-test.retry"
+SPAN: str = "jobs-test.span"
 
 
 def _write(path: str, line: str) -> None:
@@ -57,3 +58,11 @@ def retry(*, path: str, succeed_on: int) -> None:
     _write(path, f"attempt {attempt()} at {time.monotonic()}")
     if attempt() < succeed_on:
         raise Retry(countdown=1, reason="not yet")
+
+
+@task(SPAN)
+def span(*, path: str, marker: str, pause: float) -> None:
+    """Notes when it starts and ends, so a test can count how many ran at once."""
+    _write(path, f"start {marker}")
+    time.sleep(pause)
+    _write(path, f"end {marker}")

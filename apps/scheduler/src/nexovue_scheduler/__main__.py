@@ -8,9 +8,11 @@ Either role answers /healthz, /readyz and /metrics on SCHEDULER_HEALTH_ADDR
 (`health.py`); `health` is what the compose healthcheck runs, because the image
 has no curl.
 
-A worker with no `--queues` takes `light` and its own location's `light.<region>`
-— everything but `deliveries`, which has a worker of its own so a slow receiver
-holds a delivery slot and never a probe's.
+A worker with no `--queues` takes `light`, its own location's `light.<region>`
+and `detection` — everything but `deliveries`, which has a worker of its own so a
+slow receiver holds a delivery slot and never a probe's. That worker is
+`scheduler-light`; it runs at most two detection jobs at once (`jobs/worker.py`).
+`--queues` replaces the list, so naming `light` alone drops the region's probes.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from nexovue_scheduler import health, metrics
 from nexovue_scheduler.beat import Beat
+from nexovue_scheduler.detection import DETECTION_QUEUE
 from nexovue_scheduler.jobs.worker import Worker
 from nexovue_scheduler.leader import LeaderLock
 from nexovue_scheduler.settings import SERVICE_NAME, Settings, get_settings
@@ -46,7 +49,9 @@ def main(arguments: list[str] | None = None) -> None:
     roles.add_parser("health")
     worker = roles.add_parser("worker")
     worker.add_argument(
-        "--queues", default="", help="comma-separated; default light and light.<region>"
+        "--queues",
+        default="",
+        help="comma-separated; default light, light.<region> and detection",
     )
     worker.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     chosen = parser.parse_args(arguments)
@@ -66,11 +71,17 @@ def main(arguments: list[str] | None = None) -> None:
     if chosen.role == "beat":
         asyncio.run(_beat(settings, pulse))
     else:
-        queues = [name for name in chosen.queues.split(",") if name] or [
-            SHARED_QUEUE,
-            probe_queue(settings.prober_region),
-        ]
+        queues = worker_queues(chosen.queues, region=settings.prober_region)
         asyncio.run(_worker(settings, queues, chosen.concurrency, pulse))
+
+
+def worker_queues(named: str, *, region: str) -> list[str]:
+    """The queues a worker claims from: those named, or the default."""
+    return [name for name in named.split(",") if name] or [
+        SHARED_QUEUE,
+        probe_queue(region),
+        DETECTION_QUEUE,
+    ]
 
 
 def _alive(address: str) -> bool:
