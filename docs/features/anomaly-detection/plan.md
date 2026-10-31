@@ -1,6 +1,7 @@
 # Plan: Anomaly detection (F6)
 
-> **Status:** Awaiting approval
+> **Status:** Awaiting approval, revision 2 (2026-11-01). It answers six persona reviews, and takes in D22
+> to D32.
 >
 > **One document: the order of the work and its tasks.** Steps say what ships and in what order. Tasks under
 > each step name the file that changes and the test that proves it, read from the code. **The founder approves
@@ -35,7 +36,7 @@ task, and is listed here so it can be reviewed in one place.
 | C1 | `WriteGuard` refuses writes for a lost partition | It checks offsets only, never ownership (`ingeststate/writeguard.go:100-109`). Handover safety comes from `release`, `queue.Forget` and Kafka's commit fencing (`consume/commit.go:118-140`, `traceassembly/pipeline.go:215-245`) | Progress is written only for partitions in the current settlement's positions (T2.3) |
 | C2 | Progress advances after the rollup is acknowledged | A **refused** derived insert is counted and stepped over, and settlement completes anyway (`traceassembly/refusal.go:80-95`) | A refusal holds that partition's progress, so the minute reads *data delayed* (T2.3) |
 | C3 | The worker knows the `received_at` of its last counted record | It is computed per message (`traceassembly/stages.go:250`) and kept nowhere. It is not in `absorbed`, `spanStorage` or `consume.Position` | It is carried through the stage into the settlement's positions (T2.2) |
-| C4 | The partition count comes from Kafka metadata | Nothing reads metadata. The silence sweep takes its partitions from stored rows (`alerts/silence.py:47-52`) | The scheduler gains a `list_topics` read beside `KafkaWatermarks` (`alerts/sweeps.py:193-210`) (T2.6) |
+| C4 | The partition count comes from Kafka metadata | Nothing reads metadata. The silence sweep takes its partitions from stored rows (`alerts/silence.py:47-52`) | The scheduler gains a `list_topics` read beside `KafkaWatermarks` (`alerts/sweeps.py:44-60`) (T2b.1) |
 | C5 | The receiver can record "refused for lack of a store" | `reason="unavailable"` mixes Kafka down with a control-plane authentication failure (`otlp/traffic.go:295-312`, `gates.go:110`). Postgres itself may be the store that is down | A distinct `broker_unavailable` reason, recorded only at the three Kafka-publish refusals (`otlp/signals.go:173,253,266`), through a buffered writer like `auth/lastused.go` (T6.1) |
 | C6 | One Postgres migration, additive | Making `notifications.incident_id` nullable changes a column (`models.py:1385`). `anomaly_finding` widens two existing CHECKs (`alert_rules`, `incidents`). `test_alert_vocabulary.py` is pinned to migration 0028 | The migration changes columns and checks on purpose; nexovue is pre-deployment. The vocabulary test follows the latest migration (T2.4, T4.1) |
 | C7 | The flap guard is per project and service | F21's guard is keyed per `(rule_id, subject_key)` (`alerts/incidents.py:64-86`) | Findings get their own guard, keyed per project and service, with F21's constants (T4.3) |
@@ -48,8 +49,16 @@ task, and is listed here so it can be reviewed in one place.
 | C14 | `CONFIGURE_DETECTION` is in the migration | Actions are Python only (`auth/permissions.py:16-66`). Five places copy the list: `test_policy.py:22-37`, web `identity.ts:13-27`, `identity.test-util.ts`, `MembersScreen.test.ts:67-87`, and the FR1 table in `team-and-api-access/spec.md` | All five change together (T4.5) |
 | C15 | The default time zone is the creating user's | `signup/service.py:114` builds the user with no time zone, and `projects/service.py:99` loads no user | Signup gives UTC. `projects.create` reads the actor's zone (T5.5) |
 | C16 | `span_derived_progress` is exempt from the tenant-structure test | The test has no exemption mechanism (`test_tenant_chokepoint_structure.py`) | A named, reasoned allowlist is added to that test (T2.7) |
-| C17 | Detection's freshness reuses `alert_evaluation_status` | `record_evaluation` sets `finished_at` even on a skip (`jobs/results.py:98-105`), and the API's Alerts screen reads that table (`alerts/evaluation.py:10,36`) | Detection has its own status, held in each service's `last_judged_minute`. `alert_evaluation_status` is untouched (T2.6) |
+| C17 | Detection's freshness reuses `alert_evaluation_status` | `record_evaluation` sets `finished_at` even on a skip (`jobs/results.py:25-28, 61`), and the API's Alerts screen reads that table (`alerts/evaluation.py:10,36`) | Detection's freshness is each project job's last completed run (design 2.1, item 2). `alert_evaluation_status` is untouched (T2c.3) |
 | C18 | The headline replaces "All systems normal" | #22 already removed it. `headline.ts` reports only what the checks said | The detection status adds its own lines above the checks' lines (T3.5) |
+| C19 | Postgres migration 0040 | `0040_a_plan_can_have_a_minimum.py` exists (from #21) | The migration is **0041** |
+| C20 | One step can carry both migrations | `test_erasure_inventory.py:80` and `test_deletion_live.py:946` read the migrations, so they fail as soon as a table exists that the inventories don't list | Each table's inventory entries go in the **same task** as its migration |
+| C21 | `test_alert_vocabulary.py` is re-pinned to the new migration | It reads seven constants that exist only in `0028_alerts.py` (`:20-46`) | It is restructured to read each constant from the latest migration that defines it, in the same task as `anomaly_finding` (T2c.1) |
+| C22 | A refusal holds one partition (C2) | `insertEndpoints` and `insertCounters` send one batch for every partition (`pipeline.go:550-574`) | A refusal holds every partition in that settlement. `stepOverRefusal` returns the refusal to its caller (T2a.3) |
+| C23 | `scheduler-detection` is a new role | `scheduler-deliveries` is only `worker --queues deliveries` (`roles.py:19-30`), and D32 removed the new container | `scheduler-light`'s command gains `--queues light,detection`, with a cap on concurrent detection jobs. `roles.py` is unchanged |
+| C24 | New tables need only migrations | `projects.timezone NOT NULL` has no default for existing rows. Compare-and-set needs a `detection_state` row. `intake_refusals`, `detection_events` and `baseline_shifts` grow without limit | A server default of `'UTC'`. The row is created when a service is first seen. A prune joins the existing expiry sweep (`EXPIRY_SWEEP_ENTRY`) |
+| C25 | `write_secrets` can be called on upgrade | It generates every password at once (`deploy/nexovue:116-121`) | A new `add_missing_secrets` adds only keys that are absent (T2b.3) |
+| C26 | The architecture docs need only `current-system-reference.md` | `security-and-tenancy.md`, `system.md`, `database.md` and `observability.md` describe the parts this changes. AGENTS.md's "the ingest path does not write Postgres except workers' usage metering" is already untrue (`receiver/auth/lastused.go`) | All five docs are updated, and AGENTS.md's invariant is corrected (T8.5) |
 
 ### What exists and is reused
 
@@ -81,8 +90,8 @@ As [`spec.md`](spec.md) (through D21) and [`design.md`](design.md) (revision 2),
 | Area | What changes |
 |---|---|
 | Files | Workers: `derive/`, `traceassembly/`, `ingeststate/`. Receiver: `otlp/`, plus a refusal writer. Scheduler: a new `detection/` package; `alerts/` outbox, delivery, payloads, messages, incidents and sweeps; `beat.py`, `metrics.py`, `erasure/`. API: a new `findings/` module; `alerts/`, `projects/`, `services/`, `auth/`, `organizations/`, `audit/`. Web: `features/findings/`, `servicedetail/`, `services/`, `projects/`, `alerts/`, `shared/`. Deploy: `users.d/`, compose, `deploy/nexovue`, backup and monitoring |
-| Services | The worker (trace pipeline), the receiver, the scheduler (a new `scheduler-detection` role) and the API |
-| Schema / migrations | **ClickHouse 000035:** `service_stats_1m`, `detection_readings`, `span_derived_progress`. **Postgres 0040:** the eight tables, the two `projects` columns, `notifications.finding_id`, the widened CHECKs |
+| Services | The worker (trace pipeline), the receiver, the scheduler (`scheduler-light` takes the `detection` queue; no new container, D32) and the API |
+| Schema / migrations | **ClickHouse 000035:** `service_stats_1m`, `detection_readings`, `span_derived_progress`. **Postgres 0041:** the eight tables, the two `projects` columns, `notifications.finding_id`, the widened CHECKs |
 | UI | The feed, the finding page (new), the service screen, the services list, the settings section and the rule editor |
 | Tests | New unit, live and store-probe tests in each step. Changed: tenant chokepoint, authorization coverage, read surface, alert vocabulary, deletion inventory, erasure inventory, compose contract, policy |
 
@@ -116,350 +125,348 @@ What is genuinely new:
 
 ## Steps and tasks
 
-Ordered so the first step ships something you can see (ADR-0019): one signal, end to end, on the demo, then
-widen. Each step is one commit, made after its checks pass. Nothing is pushed until the feature is done.
+Ordered so the first step ships something you can see (ADR-0019). Each step is built whole, then its checks
+run once, and then it is committed as one group. Test files named `test_detection_*` and `test_findings_*`
+are all new. Nothing is pushed until the feature is done.
+
+**Every task that creates a table also adds its inventory entries** (C20): erasure for ClickHouse, deletion
+for Postgres, and each tenancy-test exemption.
 
 ### Step 1 — Measure the demo's real variability, alongside the build
 
-*Judgeable:* `detection-measure.json` from your Mac, and a table of real burst rates set against the
-simulation's sweep.
-
-This step needs no code, and nothing else waits on it. It runs while Steps 2 to 4 are built.
+*Judgeable:* `detection-measure.json` from your Mac, and the simulation rerun at the real burst rate.
 
 - [ ] **T1.1** — You run `caffeinate -dimsu just dev` for at least 3 days, then `just detection-measure`.
-  Proved by the JSON, which I read into `tools/detection-sim/RESULTS.md`, *Measured*.
+  Proved by the JSON, read into `tools/detection-sim/RESULTS.md`, *Measured*.
 - [ ] **T1.2** — `tools/detection-sim/detect_sim.py`: a `--from-measure` option that runs the sweep at the
-  measured burst rate. Proved by a `RESULTS.md` row at the real rate, and the budget checked against it (D14).
-- [ ] **T1.3** — `justfile`: a `detection-sim-check` recipe running the tool's own strict mypy, added to
-  `lint-py`. Proved by `just lint-py` failing on a type error planted in the tool, then passing once it is
-  removed.
+  measured rate. It also reports false findings **by severity**, and at **40 services per project** (on-call
+  review).
+  - Proved by a `RESULTS.md` row.
+  - **The gate (D14):** if the real rate breaks the budget, work stops after the step in progress, and the
+    result comes to you.
+- [ ] **T1.3** — `justfile`: a `detection-sim-check` recipe running the tool's strict mypy, added to `lint-py`.
+  Proved by `just lint-py` failing on a type error planted in the tool, then passing once it is removed.
 
-### Step 2 — One signal, end to end: a slowdown on the demo becomes a finding in the feed
+### Step 2a — The worker counts every service and records how far it has written
 
-*Judgeable:*
-1. With `just dev` running, turn on the demo's `imageSlowLoad` flag.
-2. Within *time to catch*, the feed shows "*frontend* is N× slower than normal since 14:02 IST". That holds
-   once the service has 3 days of history; before that, it says *learning*.
-3. Turn the flag off, and the finding closes as *recovered*.
+*Judgeable:* on the dev stack, `SELECT … FROM service_stats_1m` shows one row per service per minute.
+`span_derived_progress` shows one row per partition, advancing each minute and holding still when the
+worker stops.
 
-- [ ] **T2.1** — `apps/workers/internal/pipeline/derive/services.go` (new): a `ServiceStat` per service per
-  minute, with its request count, error count and 64 fixed log-spaced latency buckets.
+- [ ] **T2a.1** — The per-service rollup.
+  - `derive/services.go` (new): `ServiceStat`, with its request and error counts and 64 fixed log-spaced
+    latency buckets, plus the cap of 2,000 service names per organization.
   - `endpoints.go` `observeEndpoint` feeds it. `counters.go` gains the map in `Counters`, `NewCounters`,
-    `drain`, `Disown` and `Derived`.
-  - Proved by `services_test.go`:
-    - the buckets count every span;
+    `drain`, `Disown`, `Derived` and `Empty()`.
+  - Proved by `derive/services_test.go`:
+    - every span is counted;
     - a revoked partition's share leaves;
-    - the drain is byte-reproducible, as in `counters_order_test.go`.
-- [ ] **T2.2** — `derive/servicewriter.go` (new, modelled on `endpointwriter.go`): it inserts into
-  `service_stats_1m` with a dedup token. `traceassembly/stages.go` and `pipeline.go` carry each partition's
-  last counted `received_at` into the settlement (C3).
-  - Proved by `servicewriter_test.go`, which checks the token is stable for the same rows.
-  - Also by `TestTheSettlementCarriesEachPartitionsLastReceivedAt`.
-- [ ] **T2.3** — `ingeststate/progress.go` (new): it writes `span_derived_progress`.
-  - The write happens after the derived inserts are acknowledged, beside `ingest.Complete`
-    (`pipeline.go:572`).
-  - It covers only the partitions in the settlement's positions (C1).
-  - A stepped-over refusal holds that partition (C2).
-  - Proved by `progress_test.go`:
-    - a refused insert does not advance progress;
+    - the drain is byte-reproducible;
+    - the cap.
+- [ ] **T2a.2** — The writer and the received-at thread.
+  - `derive/servicewriter.go` (new, modelled on `endpointwriter.go`) inserts with a dedup token.
+  - `traceassembly/stages.go` and `pipeline.go` carry each partition's last counted `received_at` (C3).
+  - Proved by `derive/servicewriter_test.go`, and by
+    `traceassembly/settlement_test.go`'s `TestTheSettlementCarriesEachPartitionsLastReceivedAt` (new).
+- [ ] **T2a.3** — `ingeststate/progress.go` (new) writes `span_derived_progress` beside `ingest.Complete`, for
+  the settlement's partitions only (C1).
+  - A refusal holds the whole settlement (C22). The hold lasts at most 30 minutes (design 2.1, item 1).
+  - `traceassembly/refusal.go` `stepOverRefusal` returns the refusal.
+  - Proved by `ingeststate/progress_test.go`:
+    - a refusal holds the settlement;
+    - the 30-minute bound;
     - a revoked partition is not written;
-    - a replay below `CountFrom` does not move it backwards.
-  - Also by `progress_storeprobe_test.go` (the `storeprobe` tag) against ClickHouse.
-- [ ] **T2.4** — The migrations.
-  - `deploy/clickhouse/migrations/000035_detection.up.sql` and `.down.sql`:
-    - `service_stats_1m`, with a dedup window as in 000021, and a TTL of the lesser of the derived retention
-      and 35 days;
-    - `detection_readings`, a `ReplacingMergeTree` with a version column;
-    - `span_derived_progress`, in KeeperMap.
+    - a replay never moves progress backwards.
+  - Also by `progress_storeprobe_test.go`, run on your Mac with `go test -tags storeprobe`.
+- [ ] **T2a.4** — `deploy/clickhouse/migrations/000035_detection.up.sql` and `.down.sql`, with each table's
+  reasoning in the header:
+  - `service_stats_1m`, with a dedup window and a TTL of the lesser of the derived retention and 35 days;
+  - `detection_readings`, `ORDER BY (tenant_id, project_id, service_name, minute)` with a version column;
+  - `span_derived_progress`.
 
-    Each table's reasoning is in the file's header, per `docs/templates/migration.md`.
-  - `apps/api/migrations/versions/0040_anomaly_detection.py`:
-    - `findings`, `finding_incidents`, `detection_state`, `detection_baselines`, `baseline_shifts`,
-      `service_detection_settings`, `intake_refusals` and `detection_events`, each with `org_id` NOT NULL;
-    - `projects.timezone` and `detection_sensitivity`;
-    - `notifications.finding_id`, its check and its unique keys;
-    - the widened `condition_is_known` CHECKs.
-  - Proved by:
-    - `setup/migrations_test.go` `TestTheRepositorysOwnMigrationsLoad`;
-    - `cmd/setup/main_test.go`'s newest-version assertion, updated;
-    - `test_migration_rules.py`, and `test_anomaly_detection_migration_live.py` (new), in the pattern of `test_alerts_migration_live.py`;
-    - `test_alert_vocabulary.py`, re-pinned to 0040.
-- [ ] **T2.5** — The `nexovue_detection_writer` account (ADR-023).
-  - `deploy/clickhouse/users.d/detection-writer.xml` grants `INSERT ON nexovue.detection_readings` only.
-  - It is wired in the eleven places the eraser is:
-    - `compose.infra.yaml`, `compose.infra.deploy.yaml`, `nexovue.yaml` and `docker-compose.yaml`;
-    - both `.env.example` files;
-    - `deploy/nexovue` `write_secrets`, and `cmd_upgrade` writing missing secrets (C9);
-    - `deploy/release/kit.sh`;
-    - the scheduler's `settings.py`;
-    - `current-system-reference.md`.
-  - Proved by `test_compose_contract.py`, `test_deployment_files.py`, `test_install_script.py` and
-    `test_scheduler_settings.py`.
-  - Also by a new `test_install_script.py` case: an upgrade from a secrets file without the password adds it.
-- [ ] **T2.6** — The scheduler's settling and job structure.
-  - `nexovue_scheduler/detection/settle.py` (new): the settled minute, from `span_derived_progress`, the Kafka
-    high watermarks and `list_topics` (C4), and the 2-minute allowance.
-  - `detection/coordinator.py` (new), the `sweep:detection` entry in `beat.py`: it queues one project job per
-    active project on the new `detection` queue.
-  - `__main__.py` and `apps/api/src/nexovue_api/roles.py` gain a `scheduler-detection` role. The compose files
-    gain its container.
-  - Proved by:
-    - `test_detection_settle.py`: an idle partition is caught up, an unread partition with old progress is
-      behind, and a missing partition is behind;
-    - `test_beat_schedule.py`: the entry sits on its own queue;
-    - `test_compose_contract.py`.
-- [ ] **T2.7** — `detection/store.py` (new): project-bound reads through `tenant_statements`, with both
-  predicates, per-call limits of 5 s and 256 MiB, and the writer bound by `for_project` (ADR-023).
-  `tenant_statements.py` gains the per-call override and the `project_id` rule.
-  `test_tenant_chokepoint_structure.py` gains:
-  - the `project_id` rule for `detection.*`;
-  - `INSERT INTO` and `.insert(` allowed only in `detection.store`;
-  - a reasoned allowlist entry for `span_derived_progress` (C16).
+  The same task updates:
+  - `scheduler/erasure/tables.py` (`DERIVED_TABLES` and `EXCLUDED_TABLES`);
+  - `deploy/backup/common.sh` and `verify.sh`;
+  - the chokepoint test's reasoned exemption for `span_derived_progress`, tied to `detection.settle`.
 
   Proved by:
-  - the structure test, with three planted violations seen failing first, then removed;
-  - `test_detection_store_live.py`: written as project A and read as project B, the row is never found;
-  - the API's account refused an insert.
-- [ ] **T2.8** — `detection/method.py` (new), *slower* only: the count above L, beta-binomial, leave-one-out,
-  the 80% rule, the minimum change and the 200-request floor. It is ported from `tools/detection-sim` and
-  pure, with no I/O.
-  - Proved by `test_detection_method.py`, synthetic series for AC2, AC5, AC6 and AC8.
-  - Also by a parity test: the same series give the same verdicts as the simulation's function, so the
-    shipped code is the simulated method.
-- [ ] **T2.9** — `detection/baselines.py` (new, the hourly baseline job): level and dispersion pools from
-  `service_stats_1m`, written to `detection_baselines`.
-  - `detection/project_job.py` (new) judges each service. It writes `detection_readings` and then, in one
-    Postgres transaction, `detection_state` (compare-and-set) and `findings`.
-  - Proved by:
-    - `test_detection_project_job_live.py` covering AC8, AC12 (slower), AC14 and AC25 (a killed leader);
-    - the compare-and-set test: two jobs at once judge each minute exactly once.
-- [ ] **T2.10** — `apps/api/src/nexovue_api/findings/` (new: `router.py`, `service.py`, `queries.py`,
-  `schemas.py`): `GET /findings`, `GET /findings/{id}`, and `GET /findings/stats` declared before `/{id}`, all
-  on the read surface.
-  - Proved by:
-    - `test_findings_api_live.py`, which includes the scope check, as `get_incident`;
-    - `test_read_surface_structure.py` `THE_SURFACE`, plus `docs/product/setup/api.md`;
-    - `test_postgres_tenancy_structure.py`.
-- [ ] **T2.11** — `apps/web/src/features/findings/`:
-  - `api.ts`'s `useFindings` reads `GET /findings`;
-  - `FindingState` becomes `open | acknowledged | closed`, with `closed_reason`. `ordering.ts` and its tests
-    follow;
-  - the card shows how a finding closed, never "Resolved";
-  - `probable_cause` is hidden until Stage 2.
+  - `setup/migrations_test.go`;
+  - `test_erasure_inventory.py`;
+  - `test_tenant_chokepoint_structure.py`, with the exemption planted wrong first, then corrected.
 
-  Proved by `FindingsView.test.ts`, `ordering.test.ts`, and `api.test.ts` (new).
-- [ ] **T2.12** — `design.md` and `docs/architecture/current-system-reference.md`: C1 to C4, C6, C16 and C17
-  are written into the design, and the new tables, role and flow into the reference. Proved by the review in
-  Step 8.
+### Step 2b — The scheduler knows which minute is settled, and can write a reading safely
+
+*Judgeable:* on the dev stack, the scheduler's log names the settled minute each minute. With the worker
+stopped, the log says *behind*. One test reading row appears in `detection_readings` for a seeded project.
+
+- [ ] **T2b.1** — `nexovue_scheduler/detection/settle.py` (new): the settled minute, from
+  `span_derived_progress`, the Kafka high watermarks (`alerts/sweeps.py:44-60`) and a new `list_topics` read
+  (C4), with the 2-minute allowance. Proved by `test_detection_settle.py`:
+  - an idle partition is caught up;
+  - unread data with old progress is behind;
+  - a missing partition is behind.
+- [ ] **T2b.2** — The project-bound store, and its tenancy rules (ADR-023).
+  - `detection/store.py` (new): project-bound reads with both predicates and lowered per-call limits, plus the
+    writer, which is bound by `for_project` and takes `org_id` from the `projects` row.
+  - `tenant_statements.py`: the override can only lower limits, and the `project_id` rule.
+  - `test_tenant_chokepoint_structure.py`: the `project_id` rule for `detection.*`, and `INSERT INTO` and
+    `.insert(` allowed only in `detection.store`.
+  - Proved by:
+    - the structure test, with three planted violations seen failing first;
+    - `packages/py-platform/tests/test_tenant_statements.py` (new): an override that raises a limit is refused;
+    - `test_detection_store_live.py`: written as A and read as B, nothing is found. The same service name in
+      two tenants survives `OPTIMIZE … FINAL`. The API's account is refused an insert.
+- [ ] **T2b.3** — The `nexovue_detection_writer` account.
+  - `deploy/clickhouse/users.d/detection-writer.xml`: its own profile with read-only settings, a write
+    quota, the internal network, and `INSERT ON nexovue.detection_readings` only.
+  - It is wired in the eraser's places, with `${…:?}` in the deploy compose.
+  - The DSN is given to `scheduler-light` only (D32).
+  - `deploy/nexovue` gains `add_missing_secrets`, called by `cmd_upgrade` (C25).
+  - Proved by `test_compose_contract.py`, `test_deployment_files.py` and `test_scheduler_settings.py`.
+  - Also by `test_install_script.py`: an upgrade adds the missing key and leaves every existing one
+    unchanged. This case is new, and is seen failing first.
+
+### Step 2c — One signal, end to end: a slowdown on the demo becomes a finding in the feed
+
+*Judgeable:*
+1. Seed 4 weeks of demo history with `just detection-seed`, so it can be judged on day one.
+2. Turn on `imageSlowLoad`. Within *time to catch*, the feed shows "*frontend* is N× slower than normal since
+   14:02", in the browser's zone until Step 3.
+3. Turn it off. The finding closes as *recovered*.
+
+- [ ] **T2c.1** — The Postgres migration and the new condition kind.
+  - `apps/api/migrations/versions/0041_anomaly_detection.py`: all eight tables, each with `org_id`
+    (`intake_refusals` and `detection_events` are install-wide, with exemptions); `projects.timezone` with
+    the default `'UTC'`; `detection_sensitivity`; `notifications.finding_id`; and the widened CHECKs.
+  - `py-platform/alerts/model.py` gains `anomaly_finding`, in this same task (C21).
+  - `test_alert_vocabulary.py` is restructured (C21). `organizations/tables.py` moves `notifications` under
+    `projects` and adds the tables, with fixture rows.
+  - Proved by:
+    - `test_migration_rules.py`;
+    - `test_anomaly_detection_migration_live.py` (new);
+    - `test_alert_vocabulary.py`, seen failing on the new kind first;
+    - `packages/py-platform/tests/test_alert_model.py`;
+    - `test_deletion_live.py`.
+- [ ] **T2c.2** — `detection/method.py` (new), *slower* only, ported from `tools/detection-sim`. Proved by
+  `test_detection_method.py` (AC2, AC5, AC6, AC8), and by a parity test against the simulation's function.
+- [ ] **T2c.3** — The jobs.
+  - `detection/baselines.py` (new) is the hourly baseline job.
+  - `detection/project_job.py` (new) creates a service's `detection_state` row when it first sees the service,
+    judges it, writes the readings, then commits state (compare-and-set) and findings in one transaction. It
+    records its own completed run, for freshness (C17).
+  - `detection/coordinator.py` (new) is the `sweep:detection` entry in `beat.py`, on the `detection` queue.
+    `scheduler-light`'s command gains `--queues light,detection`, with at most 2 detection jobs at once,
+    shared fairly between organizations (C23).
+  - Proved by:
+    - `test_detection_project_job_live.py`: AC8, AC12 (slower), AC14 and AC25, with a killed job;
+    - the compare-and-set test, two jobs at once;
+    - `test_beat_schedule.py`;
+    - `test_compose_contract.py`.
+- [ ] **T2c.4** — `tools/detection-seed/` (new), behind a `just detection-seed` recipe. It writes 4 weeks of
+  `service_stats_1m` straight into the dev ClickHouse for the demo's services, refusing any host but
+  localhost.
+  - Writing directly is needed because the receiver accepts spans only up to 7 days old
+    (`clocktrust.PastSkew`), so `tools/gateseed` cannot reach back 4 weeks.
+  - Proved by the seeded service leaving *learning* at once, and by the localhost refusal test.
+- [ ] **T2c.5** — `apps/api/src/nexovue_api/findings/` (new): `GET /findings`, `/findings/stats` (declared
+  first) and `/findings/{id}`.
+  - Every route is scope-checked. A read token's view leaves out `acknowledged_by` and `feedback_reason`.
+  - Proved by:
+    - `test_findings_api_live.py`;
+    - `test_read_surface_structure.py`, with `docs/product/setup/api.md`;
+    - `test_postgres_tenancy_structure.py`.
+- [ ] **T2c.6** — `apps/web/src/features/findings/`.
+  - `api.ts` reads `GET /findings`. The `TimeWindow` argument, `trend`, `subject` and `impact` map to the API's
+    fields.
+  - `FindingState` is `open | acknowledged | closed`, with `closed_reason`. `ordering.ts` follows.
+  - The card names how a finding closed, and *probable cause* is hidden.
+  - Proved by `FindingsView.test.ts`, `ordering.test.ts` and `api.test.ts` (new).
 
 ### Step 3 — Every signal, and the states that make silence honest
 
-*Judgeable:* on the demo:
-1. `paymentFailure` opens a *failing more* finding that names `POST /pay`.
-2. Stopping the load generator's traffic to one service opens *losing traffic*.
-3. A new project's feed says it is learning, and when judging starts.
+*Judgeable:* on the demo, with seeded history:
+1. `paymentFailure` opens *failing more*, naming the payment endpoint (its real span name, checked first).
+2. Stopping one service's traffic opens a critical *losing traffic* finding.
+3. A new, unseeded project says it is learning, and when judging starts.
 
-- [ ] **T3.1** — `detection/method.py`: *failing more* gets the beta-binomial test, the minimum change, the
-  per-endpoint test with α ÷ m, and the D18 switch with its burst profile. *Losing traffic* gets the Anscombe
-  test and the expected-count floor per sensitivity.
-  - Proved by `test_detection_method.py` covering AC3, AC4, AC7, AC9, AC10, AC11 and AC12.
-  - The parity test is extended to these signals.
-- [ ] **T3.2** — `detection/baselines.py`:
-  - the weekly and daily modes, learning counted in distinct days, and the daily fallback;
-  - the ±180-minute dispersion pool and the 28-day burst profile;
-  - the exclusions, the shadow traffic test, and the project time zone, including the fall-back hour.
+- [ ] **T3.1** — `detection/method.py`:
+  - *failing more*, with the per-endpoint test, D18's switch and the burst profile capped below critical (D26);
+  - an endpoint critical at its own share (D27);
+  - *losing traffic*, with its floors, and a stop judged at any traffic (D30).
 
-  Proved by `test_detection_baselines.py` covering AC1, AC13, AC14 and AC17, and AC35's time-zone change.
+  Proved by `test_detection_method.py` (AC3, AC4, AC7, AC9 to AC12, AC41's small-service case, AC46), plus
+  parity.
+- [ ] **T3.2** — `detection/baselines.py`: modes, learning in distinct days, the fallback, the pools, the burst
+  profile without false-alarm or snoozed minutes, exclusions, and the time zone. Proved by
+  `test_detection_baselines.py` (AC1, AC13, AC14, AC17).
 - [ ] **T3.3** — `detection/project_job.py`:
-  - closing on *normal* (FR13), with pauses for low traffic and delayed data;
-  - the 6-hour unjudgeable close (D20);
-  - severity that only rises;
-  - one finding per service listing every signal (BR2);
-  - the project finding with its 3-minute wait (FR15);
-  - *service gone* (FR32).
+  - closing that is normal, or below the current sensitivity's minimum (AC30), with its pauses;
+  - the 6-hour close, including the mixed case of one signal recovered and one unjudged;
+  - severity that only rises, and one finding per service;
+  - the project finding, with its organization vote;
+  - *service gone*.
 
-  Proved by `test_detection_lifecycle.py` covering AC18, AC21 and AC41, the D20 close, and the unique indexes
-  under a race.
-- [ ] **T3.4** — API: `GET /projects/{id}/detection/status` and `GET /services/{name}/detection`, for states,
-  bands and markers. Proved by `test_detection_status_api_live.py` covering AC26 and AC42.
-- [ ] **T3.5** — Web `features/findings/headline.ts`: the detection status lines (C18). Each takes the line
-  above the checks' lines:
-  - all learning;
-  - some learning;
-  - data delayed;
-  - detection not running;
-  - all judged services normal.
-
-  A failed status read shows the error state. Proved by `headline.test.ts` covering AC26 and AC42.
-- [ ] **T3.6** — `shared/format/zoned.ts` (new), which formats an instant in a named IANA zone with the zone's
-  short name (C13). Finding titles and times use it. Proved by `zoned.test.ts`, including both sides of a
-  clock change.
+  Proved by `test_detection_lifecycle.py` (AC18, AC21, AC30, AC41, D20, and the unique indexes under a race).
+- [ ] **T3.4** — API: `GET /projects/{id}/detection/status` (with the muted count) and
+  `GET /services/{name}/detection`, both scope-checked. Proved by `test_detection_status_api_live.py`:
+  - AC26, a stopped job;
+  - **a healthy project must never show *not running***;
+  - AC42.
+- [ ] **T3.5** — Web `headline.ts`: the detection lines above the checks' lines (C18), and the error state.
+  Proved by `headline.test.ts`.
+- [ ] **T3.6** — `shared/format/zoned.ts` (new), which names the zone in full where its abbreviation is
+  ambiguous, as with IST. Proved by `zoned.test.ts`, including a clock change.
 
 ### Step 4 — Notifications
 
 *Judgeable:*
-1. A critical finding emails the owners through *Critical problems* on a new project.
-2. A Slack test channel receives *opened*, *critical* and *resolved* for one finding, with the names
-   escaped.
-3. A webhook receives a version-2 `finding.opened`.
+1. A critical finding emails the owners on a new project.
+2. A Slack test channel gets *opened*, *joined* (a new signal), *critical* and *resolved*.
+3. A webhook gets a version-2 `finding.opened`.
+4. A PagerDuty test key gets one incident, with a note when a threshold incident is linked.
 
-- [ ] **T4.1** — `py-platform/alerts/model.py`: the `anomaly_finding` condition, with services and a minimum
-  severity, in `parse_condition`. The migration's CHECKs come from T2.4. Proved by `packages/py-platform/tests/test_alert_model.py`
-  and `test_alert_vocabulary.py`.
-- [ ] **T4.2** — `alerts/outbox.py`:
-  - `Subject`, with `_TAKEN` reading incidents or findings and `_IN_ORDER` matching on the subject's kind and
-    id;
-  - `Notice` gains `subject_kind` and `subject_id`.
+- [ ] **T4.1** — The outbox's second subject.
+  - `alerts/outbox.py`: `Subject`, `_TAKEN`, `_IN_ORDER`, and `Notice` with its subject's kind and id.
+  - `delivery.py`: the prefixed `dedup_key`.
+  - `messages.py`: the finding titles, joined messages and links.
+  - `payloads.py`: webhook version 2 (its fields documented as untrusted), and the PagerDuty note for a linked
+    finding (D29).
+  - Proved by `test_alert_outbox_live.py`, `test_alert_payloads.py`, `test_alert_messages.py` and
+    `test_alert_senders_live.py`.
+- [ ] **T4.2** — `detection/notify.py` (new):
+  - each rule's rows;
+  - closing messages to the channels told at opening or escalation;
+  - joined signals;
+  - findings' own flap guard (C7);
+  - mute and snooze;
+  - adoption mail to the owners (D22).
 
-  `delivery.py` gives a `dedup_key` of `incident:<id>` or `finding:<id>`. `messages.py` links to
-  `/findings/{id}` and gains the finding titles. `payloads.py` moves the webhook to version 2.
-  - Proved by:
-    - `test_alert_outbox_live.py`: a finding row is claimed and delivered, and order holds for each subject;
-    - `test_alert_payloads.py`: version 2, and both events;
-    - `test_alert_messages.py`: the finding wording, escaped;
-    - `test_alert_senders_live.py`.
-- [ ] **T4.3** — `detection/notify.py` (new). Inside the job's transaction, it writes the `notifications`
-  rows for each matching *anomaly finding* rule:
-  - a closing message goes only to the channels told at opening;
-  - findings get their own flap guard (C7);
-  - mute follows BR9 and D8.
-
-  Proved by `test_detection_notify_live.py` covering AC19, AC22 and AC31, and a five-openings flap.
-- [ ] **T4.4** — `api/alerts/defaults.py` `provision_project` adds the second default rule, *Critical
-  problems*. Proved by `test_alert_defaults_live.py`, whose `len(rules) == 1` becomes 2, and by AC22.
-- [ ] **T4.5** — The `CONFIGURE_DETECTION` action.
-  - `auth/permissions.py` adds the action, and `auth/policy.py` adds `MayConfigureDetection`.
-  - `alerts/service.py` refuses `anomaly_finding` rules without the action. The router passes the identity's
-    role.
-  - The action is copied in all five places (C14).
-  - Proved by:
-    - `test_policy.py`;
-    - `test_authorization_coverage.py`, with the service check listed in its `SECRET_READS`-style table of
-      checks made in the service;
-    - `test_alerts_live.py`: a member is refused an anomaly rule (AC34).
-- [ ] **T4.6** — `alerts/sweeps.py` (thresholds and silence) and `detection/project_job.py` link incidents
-  and findings in `finding_incidents`. Proved by `test_detection_links_live.py` covering AC20.
-- [ ] **T4.7** — `organizations/tables.py`: `notifications` moves under `projects`, and the new tables join
-  `REMOVED_BY_CASCADE` with fixture rows. Proved by `test_deletion_live.py`.
+  Proved by `test_detection_notify_live.py` (AC19, AC22, AC31, AC44, AC45).
+- [ ] **T4.3** — `api/alerts/defaults.py`: *Critical problems*. Proved by `test_alert_defaults_live.py`, with
+  two rules.
+- [ ] **T4.4** — `CONFIGURE_DETECTION`, the alerts service's check on every route (security M4), and the five
+  copies of the action list (C14). Proved by `test_policy.py`, `test_authorization_coverage.py` and
+  `test_alerts_live.py`: a member refused on create, on a change to or from the kind, on enable, on channels,
+  on mute and on delete.
+- [ ] **T4.5** — `alerts/sweeps.py` and `project_job.py` write `finding_incidents`. Proved by
+  `test_detection_links_live.py` (AC20).
+- [ ] **T4.6** — `detection/notify.py`: *detection stopped* and *detection running again* to the owners
+  (D24). Proved by `test_detection_stopped_live.py` (AC43).
 
 ### Step 5 — The user's controls and the finding page
 
 *Judgeable:* on the demo:
-1. Open a finding, acknowledge it, then mark it a false alarm. It closes with one *resolved* message, and does
-   not reopen inside *recovery*.
-2. As a member, the *New normal* button is absent.
-3. In settings, change the sensitivity and time zone.
+1. Open a finding, acknowledge it, and snooze it as a member.
+2. Mark it a false alarm as an admin, and see it close.
+3. Confirm a member's false alarm leaves the normal unchanged.
+4. Change the sensitivity and time zone in settings.
 
-- [ ] **T5.1** — API: the remaining routes from the design:
-  - `POST /findings/{id}/acknowledge`, `/false-alarm` and `/new-normal`;
-  - `PUT /services/{name}/detection`;
+- [ ] **T5.1** — API routes:
+  - `POST /findings/{id}/acknowledge`, `/false-alarm` (admin or member, per D28) and `/new-normal`;
+  - `POST /services/{name}/snooze`, and `PUT /services/{name}/mute`;
   - `GET` and `PUT /projects/{id}/detection`.
 
-  Each mutating route has a role gate, a `409` on a stale finding, and an audit record with its reason.
+  Each mutating route has its role gate, a `409` on a stale finding, and an audit record with its reason.
   - Proved by:
-    - `test_findings_actions_live.py` covering AC30, AC32, AC33, AC34 and AC35;
+    - `test_findings_actions_live.py` (AC30 to AC35);
     - `test_authorization_coverage.py`;
-    - `test_personal_data_live.py`: the reasons appear in the export.
-- [ ] **T5.2** — `detection/project_job.py` and `baselines.py`:
+    - `test_personal_data_live.py`: the reasons are in the export.
+- [ ] **T5.2** — `project_job.py` and `baselines.py`:
   - the false-alarm hold;
-  - new normal and adoption, through `baseline_shifts`, with the ratio defined for each signal;
-  - adoption's audit, with the system actor, as in `erasure/owed.py`.
+  - new normal and adoption, with the ratio taken from the readings since the finding opened, and refused
+    until there are enough;
+  - D22's limits, with the audit as the system actor.
 
-  Proved by `test_detection_shifts_live.py` covering AC15 and AC16.
-- [ ] **T5.3** — `shared/components/TrendChart.tsx`: an optional band, as a lower and upper series filled
-  behind the line, drawn only for ranges of 24 hours or less (C12). Proved by `TrendChart.test.ts` (new): a
-  band is drawn, and above 24 hours it is hidden, with a note.
-- [ ] **T5.4** — The finding page, `features/findings/FindingScreen.tsx` (new), at `/findings/$findingId`
-  in `app/router.tsx`. It has every state in the design, inline confirmation and `DetectionBadge` (C11).
-  - Proved by `FindingScreen.test.ts`:
-    - loading, not found, partial, closed, muted, the project finding;
-    - action failed with a `409`;
-    - success;
-    - a viewer and a member each seeing the right actions (AC38, AC39, AC40).
-  - Also by `route-manifest.test.ts`, with the new route listed.
-- [ ] **T5.5** — `features/servicedetail/` gets the badge, the controls and the bands, with markers through
-  `deploy-markers`'s pattern. `features/services/ServicesScreen.tsx` gets the *Detection* column.
-  `projects/service.py` creates projects with the actor's zone, and signup with UTC (C15). Proved by
-  `service-detail.test.ts`, `ServicesView.test.ts` and `test_projects_live.py`.
-- [ ] **T5.6** — `features/projects/ProjectSettings.tsx`: the *Detection* section, hidden without the action
-  (C10), with validation, unsaved changes, success and the time-zone warning.
-  `features/alerts/RuleEditor.tsx` and `alert-words.ts` get the *anomaly finding* condition, behind the
-  action. Proved by `DetectionSection.test.ts` (new) and `RuleEditor.test.ts`.
+  Proved by `test_detection_shifts_live.py` (AC15, AC16, AC44).
+- [ ] **T5.3** — `features/findings/FindingScreen.tsx` (new), at `/findings/$findingId`.
+  - It goes in `app/router.tsx` and `app/routes/route-manifest.ts`.
+  - It uses inline confirmation and `DetectionBadge` (C11). It draws its own band from its readings.
+  - Proved by `FindingScreen.test.ts`, which covers every state, a viewer and a member (AC38 to AC40), and by
+    `route-manifest.test.ts`.
+- [ ] **T5.4** — `features/servicedetail/`: the badge, mute, snooze and the finding markers. The bands are
+  deferred (D32). Proved by `service-detail.test.ts`.
+- [ ] **T5.5** — The default time zone.
+  - `signup/service.py` and the web signup record the browser's zone (D23).
+  - `projects/service.py` uses the actor's zone.
+  - Proved by `test_signup.py`, and by `test_projects_live.py` (AC35), each seen failing first.
+- [ ] **T5.6** — Settings and the rule editor.
+  - `features/projects/ProjectSettings.tsx`: a hidden *Detection* section (C10), with sensitivity, the time
+    zone and the false-alarm counts.
+  - `features/alerts/RuleEditor.tsx` and `alert-words.ts`: the *anomaly finding* condition, admin only.
+  - Proved by `DetectionSection.test.ts` (new) and `RuleEditor.test.ts`.
 
-### Step 6 — Safe under nexovue's own failures
+### Step 6 — Safe under nexovue's own failures, and under a hostile tenant
 
-*Judgeable:*
-1. With the demo running, stop the worker for 10 minutes. Every service reads *data delayed*, and no finding
-   opens.
+*Judgeable:* on the demo:
+1. Stop the worker for 10 minutes. Every service reads *data delayed*, and no finding opens.
 2. Stop Kafka for a minute: the same.
-3. Restart the scheduler: no duplicate messages.
+3. Cancel requests from a script: nothing is unsettled.
+4. Restart the scheduler: no duplicates.
 
-- [ ] **T6.1** — `apps/receiver/internal/otlp/`: a `broker_unavailable` reason at the three publish refusals
-  (C5). `internal/intake/refusals.go` (new) is a buffered once-a-minute upsert into `intake_refusals`, as in
-  `auth/lastused.go`. Proved by `refusals_test.go`, and by `traffic_test.go` for the reason split.
-- [ ] **T6.2** — `detection/settle.py` and `project_job.py`: a refusal minute is unsettled. The install-wide
-  guard writes `detection_events`. Proved by `test_detection_settle.py`, and by
-  `test_detection_failure_live.py` covering AC23, AC24 and AC25, and the guard.
-- [ ] **T6.3** — `scheduler/erasure/tables.py`: `service_stats_1m` and `detection_readings` join
-  `DERIVED_TABLES`, and `span_derived_progress` joins `EXCLUDED_TABLES`. `deploy/backup/common.sh` and
-  `verify.sh` list `span_derived_progress`. Proved by `test_erasure_inventory.py`, `test_erasure_live.py`, and
-  `just backup-verify` on the dev stack.
+- [ ] **T6.1** — `apps/receiver/internal/otlp/`: a `broker_unavailable` reason, recorded only for broker-level
+  failures on a live context, at least 5 a minute (design 2.1, item 1). `internal/intake/refusals.go` (new),
+  modelled on `auth/lastused.go`. Proved by:
+  - `refusals_test.go`;
+  - `traffic_test.go`: a cancelled request or a per-record error is not recorded.
+- [ ] **T6.2** — `detection/settle.py` and `project_job.py`: refusal minutes; the install-wide guard, with
+  organization votes, a pipeline signal, the 30-minute bound and the operator alert. Proved by
+  `test_detection_settle.py` and `test_detection_failure_live.py` (AC23 to AC25, the guard, the bound, and one
+  organization with many projects not tripping it).
+- [ ] **T6.3** — The prune of `intake_refusals`, `detection_events` and `baseline_shifts`, and findings purged
+  at the derived retention (C24, security m4). Proved by `test_detection_prune_live.py` (new).
 
 ### Step 7 — Operations
 
-*Judgeable:* the Prometheus alert *detection stalled* fires in its test, and the runbook walks a stuck
-partition.
+*Judgeable:* *detection stalled* fires in its test, and the runbook walks a stuck partition on the dev stack.
 
-- [ ] **T7.1** — `scheduler/metrics.py`: install-wide gauges (C8):
-  - the settled-minute age;
-  - the number of projects behind, and the oldest lag;
-  - failed and overrun jobs;
-  - intake events;
-  - rows read.
+- [ ] **T7.1** — `scheduler/metrics.py`: install-wide gauges (C8). `deploy/monitoring/rules/nexovue.yml`: the
+  two alerts. Proved by `deploy/monitoring/tests/nexovue_test.yml` (run by `just lint-deploy` on your Mac)
+  and `test_scheduler_metrics_live.py`.
+- [ ] **T7.2** — `docs/operations/detection.md` (new), in `dead-letters.md`'s form. Proved by walking it once
+  on the dev stack, recorded in `status.md`.
 
-  `deploy/monitoring/rules/nexovue.yml` adds *detection stalled* and *detection failing*. Proved by
-  `deploy/monitoring/tests/nexovue_test.yml`, quiet and firing, and `test_scheduler_metrics_live.py`.
-- [ ] **T7.2** — `docs/operations/detection.md` (new), in `dead-letters.md`'s form. Proved by walking it once on
-  the dev stack, recorded in `status.md`.
+### Step 8 — The test bed, the cost, the docs and the gate
 
-### Step 8 — The test bed, the cost measurement, and the gate
+*Judgeable:* the AC36 table for each fault flag, the AC29 measurement against its target, and a green
+`just check`.
 
-*Judgeable:* the AC36 table per fault flag, the AC29 measurement, and a green `just check`.
-
-- [ ] **T8.1** — `tools/fault-bed/` (new). It drives the demo's flagd flags in turn (AC36), with a reference
-  run and 5 injections of each flag. It injects *traffic to 50%* at 40% (D19, D21) and scores each injection
-  from `findings`. Proved by its own tests on a recorded run, and by the AC36 table in `status.md`.
-- [ ] **T8.2** — AC29 and NFR5: a detection pass measured at named counts of projects and services on the dev
-  stack, using `tools/gateseed` for volume. Pass time, rows read, memory and storage go into `status.md`. If the
-  numbers are over, the design's fallbacks are reopened with you.
-- [ ] **T8.3** — AC37, the two-week no-fault run, **waits on the test server's price** (`phase-2-plan.md`,
-  Open 2). It is recorded as blocked, not skipped.
-- [ ] **T8.4** — `/review-diff`, `just check` with its counts read, and the live, chaos and store-probe suites
-  this feature adds. Every finding is fixed, or recorded in `status.md`.
+- [ ] **T8.1** — `tools/fault-bed/` (new). It drives the demo's flags with a reference run and 5 injections
+  each, injecting traffic at 40% (D19). Its 3-week warm-up is the seeded history from T2c.4 plus 1 week of
+  live demo traffic. Proved by its tests on a recorded run, and by the AC36 table in `status.md`.
+- [ ] **T8.2** — AC29: 200 projects and 2,000 services, with history from `tools/detection-seed` and live load from `tools/gateseed`, with the container's memory
+  and the storage recorded. If the target is missed, the design's fallbacks come back to you.
+- [ ] **T8.3** — AC37 **waits on the test server's price**. It is recorded as blocked.
+- [ ] **T8.4** — AC27 (AI off): no AI code exists in Stage 1, so a test asserts that `detection.*` imports no
+  AI module. Proved by `test_detection_has_no_ai.py` (new).
+- [ ] **T8.5** — Docs (C26):
+  - `current-system-reference.md`, `security-and-tenancy.md`, `system.md`, `database.md` and
+    `observability.md`;
+  - AGENTS.md's ingest-writes invariant;
+  - `design.md`, with corrections C1 to C26 written in.
+- [ ] **T8.6** — `/review-diff`, `just check` with counts read, and the live, store-probe and chaos suites the
+  feature adds, run on your Mac or in CI, with their commands recorded. Every finding is fixed or recorded.
 
 ## New risks
 
-- **The rollup grows by one row per service-minute** (T2.1), on the hottest path in the system. The store-probe
-  test checks correctness. Its cost on the worker is measured in T8.2.
-- **The webhook schema moves to version 2** (T4.2). Any customer integration built on version 1 would break, so
-  the change log has to say so. There are no customers yet.
-- **A new role and container, `scheduler-detection`** (T2.6), raise the install's memory. That is measured in
-  T8.2 against the 16 GB sizing.
-- **`cmd_upgrade` writing missing secrets** (C9) changes what an upgrade does to a live install's secrets
-  file. Its test proves that it only adds, and never rewrites.
+- **The rollup gains one row per service-minute** on the hottest path. The worker's CPU is measured in T8.2.
+- **Webhook version 2** breaks any version-1 integration. There are no customers yet, and the change log will
+  say so.
+- **`scheduler-light` now holds the writer's DSN** beside its other secrets (D32). That is accepted for memory,
+  and revisited if T8.2 shows probes starved.
+- **Seeded history** (T2c.4) is synthetic. A demo pass on it says only that the path works, not that detection
+  is accurate. Accuracy comes from T8.1 and T1.2.
 
 ## Questions
 
 | # | Question | Blocking | Where the answer will live |
 |---|---|---|---|
-| 1 | Corrections C1 to C18: approve as written? | Yes, with this plan | `design.md`, as T2.12 and each task writes them in |
-| 2 | Step 1 runs on your Mac while Steps 2 to 4 are built. Can it start now? | No. Assumed yes | `status.md` |
-| 3 | Gated settings are **hidden**, following the repo, not shown disabled as the design said (C10) | No. Assumed hidden | `design.md` |
+| 1 | Corrections C1 to C26: approve as written? | Yes, with this plan | `design.md` (T8.5) |
+| 2 | Step 1 runs on your Mac alongside the build. Can it start now? | No. Assumed yes | `status.md` |
 
 ## Gates
 
-- [x] Specification approval: 2026-10-30, amended through D21
-- [x] Design approval: 2026-10-31, revision 2
+- [x] Specification approval: 2026-10-30, amended through D32
+- [x] Design approval: 2026-10-31, revision 2, with revision 2.1's changes
 - [ ] **Plan approval — before the first edited file**
 - [ ] Implementation
 - [ ] Tests
@@ -470,19 +477,29 @@ partition.
 
 ## Validation plan
 
-- **Every step:**
-  - the step's own tests, each regression test seen failing before it passes;
-  - `just lint` and the affected suites, with counts read;
-  - one commit per step.
-- **Live suites** need `just dev`, which this cloud environment cannot run, because it has no Docker. They run
-  on your Mac or in CI. A step whose live tests have not been seen passing is not called done.
-- **Step 8:** `just check` in full, the store-probe and chaos suites this feature touches, the AC36 table, and
-  the AC29 measurement.
+- **Each step is built whole, then its checks run once** (your rule), then it is committed.
+- **Real red-then-green** is seen in these places:
+  - T1.3, the planted type error;
+  - T2a.3, the refusal hold;
+  - T2a.4 and T2b.2, the planted structure violations;
+  - T2b.3, the upgrade key;
+  - T2c.1, the vocabulary test;
+  - T4.3, two rules;
+  - T4.4, member refusals;
+  - T5.5, the time zone.
+
+  For new pure modules, the first red is an import error, which proves nothing. Their evidence is the parity
+  test and the acceptance-criteria cases instead.
+- **Live, store-probe and chaos suites need Docker,** so they run on your Mac or in CI. Until one has been seen
+  passing there, it is recorded in `status.md` as unverified, and its step is not called done.
+- **Step 8:** `just check` in full, the AC36 table and the AC29 measurement.
 
 ## Rollout and rollback
 
-nexovue is pre-deployment. The real risk is the one ADR-0019 names: building all eight steps before the first
-one is judged. Step 2 is therefore a thin path you can see on the demo before anything else is widened.
+nexovue is pre-deployment. Stage 1 ships on its own once Step 8 is done (D32, `phase-2-plan.md`).
+
+The real risk is ADR-0019's: building everything before anything is judged. Steps 2a, 2b and 2c are each
+judgeable on the dev stack within a day of being built.
 
 The migrations follow `docs/operations/rollback.md`: a rollback across a schema change uses the restore path.
 

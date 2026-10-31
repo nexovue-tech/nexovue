@@ -15,6 +15,90 @@ With it, the founder accepted [ADR-022](../../decisions/ADR-022-a-finding-is-the
 and [ADR-023](../../decisions/ADR-023-the-scheduler-writes-detection-state-to-clickhouse-through-its-own-account.md).
 Both are accepted with this design.
 
+## Revision 2.1, 2026-11-01
+
+Six persona reviews read the spec, this design and the plan: a solo developer, an on-call lead, the
+implementing engineer, security, QA and a startup advisor. The founder's decisions D22 to D32, and eight
+defects the reviews found, change this design as follows. Where a section below disagrees with this list, this
+list wins. The sections are corrected in place too.
+
+**Defects fixed**
+
+1. **Nobody outside nexovue can switch detection off** (security B1).
+   - *Recording refusals.* The receiver records a refusal minute only for a broker-level failure while the
+     request's context is still live. It never records a cancelled request or a per-record error, and it
+     needs at least 5 such refusals in the minute.
+   - *The install-wide guard.* It counts **organizations**, not projects, and needs at least 5 of them. A
+     pipeline signal must agree with it: the receiver's accepted count falling in the same minutes.
+   - *Limits.* Each hold lasts at most 30 minutes. After that, the minute is judged, a `detection_events` row
+     is written and the operator is alerted. A refused derived insert holds every partition in that settlement,
+     because one insert covers them all. `stepOverRefusal` reports the refusal to the caller, not just a log
+     line. That hold is limited to 30 minutes in the same way.
+2. **"Detection not running" is measured against the job, not the clock** (QA B1). A project is *not running*
+   when its last completed project job is more than 3 minutes old. Freshness is never measured from the
+   `last_judged_minute`, which is always at least 3 minutes behind by design.
+3. **A new signal or endpoint joining an open finding sends one message** (on-call B1, D29). A finding linked to
+   an incident that already went to the same PagerDuty channel adds a note to that incident through the Events
+   API, never a second trigger.
+4. **A stop is judged at any expected traffic, from day 3** (solo developer B1, D30). A drop to zero for the
+   whole sustain window opens a critical finding, whatever the floor.
+5. **Readings are keyed by tenant** (security M1). `detection_readings` is `ORDER BY (tenant_id, project_id,
+   service_name, minute)`. A test writes the same service name in two tenants, runs `OPTIMIZE … FINAL`, and
+   keeps both rows.
+6. **A member's false alarm cannot widen the normal** (security M3, D28). It closes and counts the finding.
+   Only an admin's mark returns its minutes to history. False-alarm minutes never enter the burst profile
+   (D26).
+7. **The anomaly-rule check covers every route** (security M4): a change to or from the kind, enabled, channels,
+   mute and delete. Each has its own refusal test.
+8. **Smaller security fixes:**
+   - **The writer account** has its own profile with read-only settings, a quota on rows and bytes written,
+     and the internal network only. Its password uses `${…:?}` in the deploy compose, and an upgrade adds only
+     the keys that are missing (security M2, m5).
+   - **Caps per organization.** One organization has at most 2,000 service names in `service_stats_1m`, and
+     past that cap the rest are not counted, with a *too many services* state. Detection jobs share the queue
+     fairly between organizations, and at most 2 run at once (security M5).
+   - **Endpoint names in titles** come only from endpoints already in the normal pool. A read token's view of
+     a finding leaves out `acknowledged_by` and `feedback_reason`. Every read route checks the token's scope
+     (security m1, m2).
+   - **Install-wide tables.** `intake_refusals` and `detection_events` carry no `org_id`, each with a reasoned
+     exemption in the new scheduler structure test (security m3).
+   - **Findings keep their telemetry text** only as long as the derived retention. After that they are purged
+     (security m4).
+   - **Small hardening** (security m6):
+     - the per-call override can only lower the limits;
+     - the project job reads `org_id` from the `projects` row;
+     - the progress table's exemption applies to `detection.settle` only.
+
+**Founder decisions**
+
+- **D22:** a critical finding, or a rise in failures, is never adopted. Adoption emails the owners directly,
+  outside any rule.
+- **D23:** signup records the browser's zone on the user.
+- **D24:** a 15-minute *detection stopped* email goes to the owners channel, then one when detection runs
+  again. Both are kinds in the existing outbox, with a project subject.
+- **D25:** members can snooze a service for up to 4 hours (`POST /services/{name}/snooze`). Snoozed minutes
+  stay out of the normal.
+- **D26:** burst tolerance never applies to a window at or above critical.
+- **D27:** an endpoint at the critical share of its own requests makes its finding critical.
+- **D31:** health-check exclusion and per-signal switches are deferred.
+- **D32 trims version 1:**
+  - **No new container.** `scheduler-light` also takes the `detection` queue, at most 2 jobs at once of its 8
+    slots. The writer's DSN is given to that container. That costs the least-privilege separation the
+    security review preferred (M2); the gain is 0.4 to 0.8 GB of memory on the 16 GB install. It is revisited
+    if the measurement in Plan Step 8 shows probes starved.
+  - **Deferred:** the normal bands on the service charts, so `TrendChart` is unchanged; per-service
+    sensitivity; and the services-list column.
+  - **The cost target:** 200 projects and 2,000 services (NFR2, AC29).
+
+**Other corrections**
+
+- **Closing.** A signal is clear when, for *recovery*, its window is either normal or no longer passes the
+  current sensitivity's minimum change (AC30).
+- **Closing messages** go to the channels told at opening **or at escalation** (AC22).
+- **`closed_reason`** also has *could no longer be judged* (D20).
+- **Burst height and length** are the maximum over 28 days, as the simulation chose, capped below critical
+  (D26). They are not "a high quantile".
+
 ## Words used here
 
 - **Pool:** the past readings that a minute is compared with, such as the same weekday at about the same
@@ -80,11 +164,12 @@ What exists, verified in code:
   - A member sees *Acknowledge* and *False alarm*.
   - An admin sees all four.
 - **On a service's screen:**
-  - the charts draw the normal band behind the p95 line and the failure-share line;
+  - ~~the charts draw the normal band~~ *deferred to after version 1 (D32)*;
   - findings appear as markers on the timeline;
   - a badge gives the detection state;
-  - admins get sensitivity and mute beside the badge.
-- **The services list** gains a *Detection* column, so every service's state can be seen at once (UR3).
+  - mute (admins) and snooze (members) sit beside the badge. Per-service sensitivity is deferred (D32).
+- ~~**The services list** gains a *Detection* column~~ *deferred to after version 1 (D32)*. Each service's state
+  is on its own screen (UR3).
 - **An admin's settings** are in *Settings → Projects*, in a new *Detection* section of
   `ProjectSettings.tsx`: sensitivity, the time zone, and the false-alarm counts.
 - **All new screens** work at phone width (F1 AC1.10).
@@ -117,8 +202,7 @@ What exists, verified in code:
   - *action failed*: if the finding changed meanwhile (`409`), it says so and reloads;
   - *success*: "Closed as false alarm. Resolved message sent to #ops".
 - **The service screen:**
-  - **The band** is drawn for ranges of 24 hours or less, where a chart bucket is 5 minutes or less. Each
-    bucket shows the median normal and its band. Beyond 24 hours the band is hidden, with a note.
+  - ~~**The band**~~ *deferred to after version 1 (D32). The finding page draws its own band from its readings.*
   - **States:**
     - *Learning*, with a date for each signal;
     - *Too little traffic* for one signal;
@@ -136,6 +220,9 @@ What exists, verified in code:
 ## Proposed design
 
 ### Where it runs (ADR-012) — *Review: operations 5, 6, 8; security 6; architecture 6*
+
+*Revision 2.1:* there is no new container. `scheduler-light` takes the `detection` queue, at most 2 jobs at once
+(D32).
 
 The design splits the work into three kinds of job, each on a `detection` queue of its own so check probes
 are never starved:
@@ -261,8 +348,8 @@ one-sided tail of 4 spreads, at every sensitivity. Sensitivity changes the windo
   - **Plus the minimum change:** +2 points and at least 5 failures at normal sensitivity, with at least 20
     requests in the window.
   - **And the service's own burstiness.** From the dispersion pool, the baseline job takes:
-    - a **burst height**, a high quantile of the pool's window failure rates;
-    - a **burst length**, a high quantile of how long the pool's own excursions above the base test lasted.
+    - a **burst height**, the highest window failure rate in 28 days, capped below critical (D26);
+    - a **burst length**, the longest excursion above the base test in 28 days.
 
     The window is unusual only if it is **higher** than the burst height, **or** has been above the base
     test for **longer** than the burst length. A naturally bursty service then tolerates its usual bursts.
@@ -347,7 +434,7 @@ Other details:
   - `org_id` (not null), `project_id`;
   - `scope` (service or project) and `service_name`;
   - `severity` and `state`;
-  - `closed_reason`: recovered, false alarm, new normal, adopted or service gone;
+  - `closed_reason`: recovered, false alarm, new normal, adopted, service gone or could no longer be judged;
   - `muted`;
   - `acknowledged_by` and `acknowledged_at`;
   - `feedback_reason`;
@@ -512,7 +599,7 @@ deliver (subject-aware) ─► channels
 | A project job overruns its budget | It stops where it is. The next run continues, catching up at most 2 minutes. Other projects are unaffected |
 | Two project jobs overlap | The advisory lock and the compare-and-set mean one judges and the other finds nothing to do (AC25) |
 | A crash between the readings write and the Postgres commit | The minute is judged again. `argMax` counts the rewritten row once. Postgres moves once |
-| ClickHouse is slow or down | The job fails, writing nothing. Its services' `last_judged_minute` ages, so they show *detection not running* after 3 minutes (AC26) |
+| ClickHouse is slow or down | The job fails, writing nothing. Its last completed run ages, so the project shows *detection not running* after 3 minutes (AC26). After 15 minutes the owners are emailed (D24) |
 | The scheduler is down for more than 10 minutes | Judging restarts at the latest settled minute. Nothing old is sent |
 
 ## Security, tenancy, and privacy — *Review: security 1, 2, 3, 5, 8, 12*
@@ -667,7 +754,7 @@ What earlier runs established, and this design keeps:
 
 - **FR28, AC19:** findings also send F21's single *flapping* message after five openings in an hour. To be
   amended on approval.
-- **FR29:** built as a *second* default rule, *Critical problems*. To be amended: "a second default rule".
+- **FR29:** built as a *second* default rule, *Critical problems*. Amended.
 - **F21 is amended on approval:**
   - BR10, for *anomaly finding*;
   - its incidents are not used for findings;
@@ -677,7 +764,7 @@ What earlier runs established, and this design keeps:
   - AC1.8, as the spec says;
   - a closed card names how it closed;
   - muted findings are reached through a link, not a filter.
-- **`phase-2-plan.md`, Stage 3,** reads "grows the existing incident". To be amended to "grows the finding"
+- **`phase-2-plan.md`, Stage 3,** amended from "grows the existing incident" to "grows the finding"
   (D1, ADR-022).
 - **Design-level values, chosen here, and tuned in the demo run (D14):**
   - k = 4, so α is about 3.2 × 10⁻⁵;

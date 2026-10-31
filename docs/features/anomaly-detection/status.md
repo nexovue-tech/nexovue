@@ -2,7 +2,8 @@
 
 ## Lifecycle status
 
-Approved: specification (amended through D21) and design (revision 2, 2026-10-31). `plan.md` written, awaiting the founder's approval.
+Approved: specification (amended through D32) and design (revision 2, with revision 2.1's changes). `plan.md`
+revision 2 awaiting the founder's approval.
 
 ## Current task
 
@@ -28,6 +29,14 @@ The plan gate.
 - Design revision 2 answers every review finding. Each section names the finding it answers. It proposes
   ADR-022 and ADR-023.
 
+**The persona reviews, 2026-11-01**
+
+- Six read-only reviews read the spec, design and plan: a solo developer, an on-call lead, the implementing
+  engineer, security, QA and a startup advisor. They found 8 defects, including a blocker that let outsiders
+  switch detection off, plus about 20 smaller fixes.
+- The founder decided D22 to D32. Stage 1 now ships on its own (`phase-2-plan.md`).
+- The spec, design (revision 2.1) and plan (revision 2) are updated to match.
+
 **The evidence**
 
 - `tools/detection-sim/` is a standalone uv project, numpy and scipy, with its own strict mypy. The root
@@ -37,8 +46,8 @@ The plan gate.
 
 ## Next action
 
-The founder approves `plan.md`, including its design corrections C1 to C18, or changes it. Then Step 1 (the
-demo run on the founder's Mac) and Step 2 (the thin path) start.
+The founder approves `plan.md` revision 2, including corrections C1 to C26, or changes it. Then Step 1 (the
+demo run on the founder's Mac) and Step 2a start.
 
 ## Open decisions
 

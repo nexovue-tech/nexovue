@@ -6,8 +6,11 @@
 ## Decided by the founder, 2026-10-30
 
 - **Scope.** Phase 2 is the chain in [`vision.md`](vision.md) §4, built completely, to production level.
-- **Timing.** There is no release date. Every link is specified and designed before feature code is written, and
-  the chain is released as a whole. Building still proves one path at a time (`ADR-0019`).
+- **Timing.** There is no release date. Building proves one path at a time (`ADR-0019`).
+  - *Changed 2026-11-01:* **Stage 1, detection with its findings and alerts, ships on its own**, ahead of the
+    rest of the chain (F6 spec, D32). Detection and alerts already work with AI off, so Stage 1 can be judged
+    by real installs before Stages 2 to 6 are built.
+  - Each later stage is still specified and designed before its code is written.
 - **Selling reason.** "It finds the problem, explains it and suggests the fix, all on your own server, so your
   data stays with you." See *Risks*: this is not unique.
 - **Where AI runs for a self-hosted install.** The customer chooses: their own AI account, or a model on their

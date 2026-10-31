@@ -3,7 +3,23 @@
 ## Status
 
 **Approved** by the founder, 2026-10-30, as revision 2, including D5 to D10. Stage 1 of
-[`phase-2-plan.md`](../../product/phase-2-plan.md). No design and no code exist for it.
+[`phase-2-plan.md`](../../product/phase-2-plan.md). The design is approved (revision 2), and no code exists
+yet. Amended through D32: the latest amendments come first below.
+
+**Amended 2026-11-01** after six persona reviews of the spec, design and plan, with the founder's decisions
+D22 to D32:
+
+- adoption limits (FR21);
+- the signup time zone (FR24);
+- telling the owners when detection stops (FR25);
+- member snooze (FR22, FR23);
+- burst tolerance capped below critical;
+- endpoint criticals;
+- the member false-alarm rule (BR3, FR20);
+- a new signal joining a finding notifies (FR28, AC19);
+- a stop caught at any traffic (FR6, FR32);
+- deferrals (UR3, UR4, FR18, FR30);
+- AC29's scale.
 
 **Revision 2, 2026-10-30.** Rewritten after four independent reviews (on-call, statistics, architecture,
 product and QA), and with the founder's answers to nine decisions (*Decisions taken*). The first draft
@@ -141,8 +157,9 @@ scientist** who wants to choose algorithms or see model parameters. Sensitivity 
 - **UR2**: The finding says what normal is and how far off the service is, in plain words: "Checkout is 4×
   slower than normal since 15:04 (usually about 80 ms on a Tuesday afternoon, now 330 ms)."
 - **UR3**: A developer can see, for every service, whether nexovue is judging it, and if not, why and until
-  when.
-- **UR4**: A developer can see a service's normal band on its charts and when it left it.
+  when. In version 1 this is on each service's screen. A column on the services list is deferred (D32).
+- **UR4**: A developer can see a service's normal band on its charts and when it left it. *Deferred to after
+  version 1 (D32): the finding page states the normal and draws its band.*
 - **UR5**: A developer can acknowledge a finding, so the team sees someone is on it.
 - **UR6**: A developer can mark a finding "false alarm", with an optional reason.
 - **UR7**: A developer can say "this is the new normal" after an intended change.
@@ -159,7 +176,8 @@ scientist** who wants to choose algorithms or see model parameters. Sensitivity 
   create a second record for it. A threshold or *went silent* incident on the same service is linked to
   the finding, not merged into it.
 - **BR3: An outage cannot teach a false normal.** Minutes inside a finding never enter the baseline,
-  with one exception: a finding marked false alarm, whose minutes the user has said were normal (FR20).
+  with one exception: a finding an admin marked false alarm, whose minutes the admin has said were normal
+  (FR20, D28). Snoozed minutes also stay out (FR22).
   The baseline moves to a new level on purpose only through "new normal" or adoption (FR21).
 - **BR4: Not judged is said, never guessed.** A signal without enough history or traffic is not judged.
   The product says which reason applies and when judging can start. It never shows such a signal, or a
@@ -207,7 +225,8 @@ scientist** who wants to choose algorithms or see model parameters. Sensitivity 
   - At most the last 4 weeks are used. That fits every plan's rollup retention: Free keeps 30 days
     (`apps/api/migrations/versions/0005_plans_table.py`).
 - **FR6**: *Losing traffic* is judged only once the weekly pattern exists (3 weeks). *Slower* and *failing
-  more* can be judged from 3 days of history. Before then, minutes when traffic was clearly far below its
+  more* can be judged from 3 days of history. A fall to zero is the exception: it is judged from day 3, at
+  any expected traffic (FR32, D30). Before then, minutes when traffic was clearly far below its
   daily normal still stay out of the baseline (BR3), even though no finding opens for them.
 - **FR7**: Time of day and day of week are taken in the **project's time zone** (FR24). A daylight-saving
   change therefore never shifts the normal.
@@ -285,17 +304,20 @@ statistical parameters behind FR9 are the design's.
   - its links to any threshold or *went silent* incident on the same service;
   - feedback.
 - **FR17**: The title follows F1's AC1.3: subject, then what changed, then magnitude, then since when. It
-  uses no metric names, IDs or the term p95. With several signals, the worst one leads: "Checkout is
-  failing 6× more than normal since 14:10, and is slower."
+  uses no metric names, IDs or the term p95. A failure rate is given as two rates, never a multiple. With
+  several signals, the worst one leads: "Checkout is failing 3.2% of requests, against 0.4% normally, since
+  14:10 IST, and is slower."
 
 ### The user's controls
 
-- **FR18**: **Sensitivity**: low, normal or high, per project, with a per-service override. A change
-  applies from the next judged minute. An open finding is judged on the new level from then on, and can
+- **FR18**: **Sensitivity**: low, normal or high, per project. A per-service override is deferred to after
+  version 1 (D32). A change applies from the next judged minute. An open finding is judged on the new level from then on, and can
   close under it.
 - **FR19**: **Acknowledge** marks an open finding as being handled, by whom and when (F1 AC1.8). It does
   not close it. Findings close themselves (FR13), or by false alarm, new normal or adoption.
-- **FR20**: **False alarm** closes the finding, with an optional reason, and counts it.
+- **FR20**: **False alarm** closes the finding, with an optional reason, and counts it. Its minutes return
+  to normal history (below) only when an admin marks it. A member's mark closes and counts the finding,
+  but leaves its minutes out, so a member cannot widen the normal (D28).
   - On an open finding, the same signals cannot reopen a finding until they have been normal for the
     recovery time.
   - Its minutes are treated as normal history. The user has said they were normal.
@@ -303,12 +325,15 @@ statistical parameters behind FR9 are the design's.
 - **FR21**: **This is the new normal** closes an open finding.
   - Its signals' baselines move to the new level and keep their daily and weekly shape, so judging
     continues with no learning gap.
-  - The same thing happens by itself after the adoption time if nobody acts, except for a service that has
-    stopped entirely (FR32). The message then says so:
+  - The same thing happens by itself after the adoption time if nobody acts. The exceptions are a service that
+    has stopped entirely (FR32), a critical finding, and any rise in failures. These are never adopted
+    (D22). Adoption always emails the owners, whatever the rules, and its message says so:
     "Checkout's new normal is 1.6× slower. Adopted after 7 days."
   - Both are written to the audit log.
-- **FR22**: **Mute** a service until a time no more than 30 days ahead (BR9).
-- **FR23**: Sensitivity, mute and new normal need an admin. So does creating, changing, muting or deleting an
+- **FR22**: **Mute** a service until a time no more than 30 days ahead (BR9). **Snooze** a service for at
+  most 4 hours: nothing is sent, and the snoozed minutes stay out of the normal (D25).
+- **FR23**: Sensitivity, mute and new normal need an admin. Snooze is open to every role that may operate
+  alerts (D25). So does creating, changing, muting or deleting an
   *anomaly finding* alert rule, the default one included. Otherwise anyone refused a mute could silence
   detection through its rule. Acknowledge and false alarm are open to every role that may operate alerts.
   A read-only viewer may do neither.
@@ -316,7 +341,8 @@ statistical parameters behind FR9 are the design's.
     member may change and mute alert rules (`apps/api/src/nexovue_api/auth/permissions.py`, `OPERATE_ALERTS`),
     and the router's "changes are an admin's" comment is stale (D11).
 - **FR24**: Each project has a **time zone** (an IANA name). It defaults to the creating user's
-  `users.timezone`, or UTC when that is empty. An admin can change it. A change re-reads history in the new
+  `users.timezone`. A user's zone is taken from the browser at signup (D23). UTC applies only when neither is
+  known. An admin can change it. A change re-reads history in the new
   zone and starts no learning period.
 
 ### The finding page
@@ -336,11 +362,13 @@ statistical parameters behind FR9 are the design's.
 - **FR32**: A service whose traffic stops entirely opens a critical *losing traffic* finding, like any other
   drop. If it stays silent for 24 hours, the finding closes as **service gone**, with one message saying so.
   It is never adopted as a new normal. When it sends again, it is judged against its old normal. A renamed
-  service is therefore one finding closed as gone, while the new name is *learning* (D13).
+  service is therefore one finding closed as gone, while the new name is *learning* (D13). A stop is judged
+  from day 3, at any expected traffic, so a small service's outage at night is caught (D30).
 
 ### States, measurement and notification
 
-- **FR25**: Every service shows its detection state: *learning* (until a date), *judged*, *too little
+- **FR25**: When detection has not judged a project for 15 minutes, its owners are emailed once, and once
+  more when it runs again (D24). Every service shows its detection state: *learning* (until a date), *judged*, *too little
   traffic* (per signal), *data delayed*, *muted*, or *detection not running*. When detection's last pass is
   older than 3 minutes, the project shows *detection not running*, and F1's healthy state must not say
   "all systems normal". The feed says what is true instead:
@@ -353,9 +381,11 @@ statistical parameters behind FR9 are the design's.
   signal it was expected to move. This list is the gap record 0013 asks for.
 - **FR28**: F21 gains a condition kind, **anomaly finding**, which selects all services or a list, and a
   minimum severity.
-  - A matching finding sends one message when it opens, one when it turns critical, and one when it
-    closes. Nothing is sent for updates in between, except F21's single *flapping* message after a fifth
-    opening within an hour (amended with the approved design).
+  - A matching finding sends one message when it opens, one when it turns critical, one when a new signal or
+    endpoint joins it (D29), and one when it closes. Nothing is sent for other updates, except F21's single
+    *flapping* message after a fifth opening within an hour.
+  - A finding linked to an incident that already reached the same PagerDuty channel adds a note to that
+    PagerDuty incident instead of opening a second one (D29).
   - It uses F21's channels, outbox, burst cap and quiet hours.
   - The finding's severity is the detector's, not the rule's. This amends F21's BR10 for this condition
     kind.
@@ -363,16 +393,17 @@ statistical parameters behind FR9 are the design's.
   to the owners. A rule has one condition kind, so the existing default rule for checks going down cannot
   carry it. Warnings appear in the feed only, until a rule asks for them (amended with the approved
   design).
-- **FR30**: Each service screen shows each signal's normal band behind its chart, its detection state, and
-  its findings on the timeline.
+- **FR30**: Each service screen shows its detection state and its findings on the timeline. The normal band
+  behind its charts is deferred to after version 1 (D32).
 
 ## Non-functional requirements
 
 - **NFR1: Time to a finding.** For a deviation beyond critical, the finding must exist within the
   *time to a finding* value of the fault's start. That time covers settling, the window filling and the
   sustain time.
-- **NFR2: The minute pass keeps up.** One detection pass must finish inside the scheduler's 60 s cycle,
-  with margin, at the project and service counts the design names and measures. A pass that overruns is
+- **NFR2: The minute pass keeps up.** At 200 projects and 2,000 judged services on the 16 GB install, every
+  service must be judged within 90 s of its minute settling. That leaves 30 s of margin in each minute's
+  work, inside the scheduler's container ceiling (D32). A pass that overruns is
   skipped and recorded (`apps/scheduler/src/nexovue_scheduler/sweeps.py`). It is never queued behind
   itself.
 - **NFR3: Restart-safe.** A scheduler restart or change of leader must never duplicate a finding or a
@@ -462,6 +493,7 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
 - **AC19**: An *anomaly finding* rule on a Slack channel must send:
   - one message when AC18's finding opens;
   - one when it turns critical;
+  - one when a new signal or endpoint joins it;
   - one when it closes;
   - and nothing else, apart from F21's flapping message if the finding opens a fifth time within an hour
     (FR28).
@@ -469,8 +501,9 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
   linked to one threshold incident, not two findings (BR2).
 - **AC21**: Traffic stopping from 9 of 11 services in the same minute must open one project finding, not 9
   (FR15).
-- **AC22**: A new project with no rules set up must email its owners once for a critical finding, and send
-  nothing for a warning (FR29).
+- **AC22**: A new project with no rules set up must email its owners one *opened* message and one *resolved*
+  message for a critical finding. It must send nothing for a warning. A warning that later turns critical
+  sends its critical message and then its *resolved* message (FR29).
 
 **Safe under failure**
 
@@ -486,14 +519,15 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
 - **AC27**: With AI disabled, AC8's finding must open, notify and close identically (BR1).
 - **AC28**: Project A's traffic must never appear in project B's baselines, findings or counts. The
   tenancy structure tests must pass for every new query and table (BR6).
-- **AC29**: One detection pass at the design's named scale must finish within its margin of the 60 s
-  cycle. The run must be recorded with the rows read (NFR2, NFR5).
+- **AC29**: At 200 projects and 2,000 judged services, every service must be judged within 90 s of its minute
+  settling, inside the container's ceiling. The run must be recorded with the rows read, the memory used and
+  the storage used (NFR2, NFR5).
 
 **Controls**
 
 - **AC30**: Changing a service from normal to low sensitivity must stop AC8's rise from opening a finding,
-  from the next judged minute. A finding already open must close under low if it no longer qualifies
-  (FR18).
+  from the next judged minute. A finding already open must close under low, after *recovery*, once its window
+  no longer passes low's minimum change (FR18).
 - **AC31**: A muted service with AC8's deviation must record a muted finding. It must send nothing during
   the mute or after it ends, and show the finding under *muted* (BR9).
 - **AC32**: Marking an open finding "false alarm" must:
@@ -503,8 +537,9 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
   - change no sensitivity (FR20, BR8).
 - **AC33**: Acknowledging a finding must record who and when, and leave it open (FR19).
 - **AC34**: A member who is not an admin must be refused sensitivity, mute and new-normal changes. They
-  must also be refused creating, changing, muting or deleting an *anomaly finding* rule. They must be
-  allowed to acknowledge and to mark a false alarm. A viewer must be refused all of these (FR23).
+  must also be refused creating, changing, muting or deleting an *anomaly finding* rule, and changing a rule
+  to or from that kind. They must be allowed to acknowledge, snooze and mark a false alarm; their false alarm
+  must leave the minutes out of the normal. A viewer must be refused all of these (FR20, FR22, FR23).
 - **AC35**: A project created by a user with no time zone must get UTC. Changing it must start no
   learning period (FR24).
 
@@ -537,10 +572,18 @@ bed. *Sustain*, *recovery*, *critical* and the other values are those in *Produc
 - **AC40**: A closed finding whose readings have expired must still show its stored values, with a note
   that the chart is no longer available (FR31).
 - **AC41**: A service whose traffic stops entirely must open a critical finding within *time to a finding*.
-  After 24 hours of silence, the finding must close as *service gone* with one message, and must never be
-  adopted (FR32).
+  This must hold on a service expecting only 2 requests a minute, and from day 3. After 24 hours of silence,
+  the finding must close as *service gone* with one message, and must never be adopted (FR32, D30).
 - **AC42**: A new project whose every service is learning must not say "all systems normal". It must say
   that it is learning, and when judging starts (FR25).
+- **AC43**: With detection stopped for 15 minutes, the owners must be emailed once, and once more when it
+  runs again. A healthy project, judged on time, must never show *detection not running* (FR25, D24).
+- **AC44**: A finding never adopts when it is critical or a rise in failures. Adoption of any other finding
+  must email the owners, even with no matching rule (FR21, D22).
+- **AC45**: A new signal joining an open finding must send one message. A finding linked to an incident already
+  sent to the same PagerDuty channel must not open a second PagerDuty incident (FR28, D29).
+- **AC46**: An endpoint failing at the critical share of its own requests must make its finding critical
+  (D27).
 
 ## Dependencies and constraints
 
@@ -709,6 +752,33 @@ By the founder, 2026-10-31, after the simulation of D18 to D20:
     closed with more rules.
   - **Settled by the demo.** The demo run (D14) measures real burst rates. Whether real services come near
     the harshest case is settled there.
+
+By the founder, 2026-11-01, after six persona reviews (a solo developer, an on-call lead, the implementing
+engineer, security, QA and a startup advisor):
+
+- **D22: Some findings are never adopted.** A critical finding, or any rise in failures, is never adopted.
+  Adoption always emails the owners.
+- **D23: A user's time zone comes from the browser at signup,** so a project's default is local, not UTC.
+- **D24: The owners are told when detection stops.** One email after 15 minutes, and one when it runs again.
+- **D25: Members can snooze a service for up to 4 hours.** It is the on-call lever at 3 a.m. Mute stays
+  admin only.
+- **D26: Burst tolerance never applies at or above critical.** False-alarm minutes stay out of the burst
+  profile, so feedback cannot widen it.
+- **D27: An endpoint failing at the critical share of its own requests is critical,** whatever its share of
+  the service.
+- **D28: A member's false alarm closes and counts a finding,** but only an admin's returns its minutes to the
+  normal. This upholds D11.
+- **D29: A new signal or endpoint joining an open finding notifies.** A finding linked to an incident already
+  sent to the same PagerDuty channel adds a note there, not a second page.
+- **D30: A stop is caught at any traffic, from day 3.** This closes the gap where a small service's outage at
+  night was never judged.
+- **D31: Deferred to after version 1:** health-check exclusion, and switching single signals or endpoints
+  off. These are known gaps.
+- **D32: Version 1 is smaller and named.**
+  - Detection runs in the existing scheduler container, not a new one.
+  - Deferred: the normal bands on service charts, per-service sensitivity, and the services-list column.
+  - The cost target is 200 projects and 2,000 services on the 16 GB install (NFR2, AC29).
+  - Stage 1 ships on its own, ahead of the rest of Phase 2 (`phase-2-plan.md`).
 
 ## Open decisions
 
