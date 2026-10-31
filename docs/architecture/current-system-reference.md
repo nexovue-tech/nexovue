@@ -571,7 +571,7 @@ Signup creates an organization, an owner user, a first project, and a first API 
 | Go | 1.27.0 |
 | Python | 3.13 |
 | uv | 0.12.6 |
-| Node | 26.7.0 |
+| Node | 26.12.0 |
 | pnpm | 11.24.0 |
 | Docker Compose | v2+ |
 

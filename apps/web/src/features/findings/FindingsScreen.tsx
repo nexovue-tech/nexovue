@@ -21,7 +21,7 @@ import { orderFindings } from "./ordering";
  * not. F1 AC1.7 forbids a blank page and a spinner here by name — when nothing is wrong,
  * silence has to read as information rather than as a page that failed.
  *
- * **AC18 is the single most dangerous requirement on this screen.** "All systems normal"
+ * **AC18 is the single most dangerous requirement on this screen.** A quiet feed
  * and "we could not read the feed" must never look alike, because conflating them tells a
  * customer their system is healthy when the truth is that we cannot see it. The two
  * states share no copy, no icon and no layout, and a test asserts they differ.
@@ -127,10 +127,9 @@ export function FindingsView({
  * which was the assumption behind the defect — an empty feed was taken for a
  * healthy system, and the headline said so over evidence that disagreed.
  *
- * A page that says only "all systems normal" gives a reader no way to confirm it, which
- * is how a reassuring screen becomes one nobody trusts. The numbers are the evidence for
- * the sentence above them — and, since the review, the sentence is *derived* from them
- * (`headline.ts`) rather than asserted over the top of them.
+ * The sentence reports only what the checks said (`headline.ts`), and it never speaks for
+ * the whole system. The numbers beneath it are there to be read, because nothing else
+ * reads them yet.
  */
 function SummaryState({ totals, checks }: { totals?: ProjectTotals; checks?: CheckCounts }) {
   const headline = headlineFor(totals, checks);
@@ -159,7 +158,7 @@ function SummaryState({ totals, checks }: { totals?: ProjectTotals; checks?: Che
         )}
       </p>
 
-      {/* The evidence. Overview's own summary, carried here so "normal" is checkable. */}
+      {/* Overview's own summary. Nothing assesses these yet, so the reader has to. */}
       {totals ? (
         <dl className="mt-5 flex flex-wrap gap-x-8 gap-y-2 border-line-subtle border-t pt-4">
           <Reading term="Requests/min" value={formatRatePerMinute(totals.requests_per_minute)} />

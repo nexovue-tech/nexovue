@@ -1,8 +1,11 @@
 # nexovue
 
-nexovue is an insight-first observability platform. Send it OpenTelemetry traces, logs, metrics and
-profiles, and browser telemetry from your users' pages, and it tells you what changed and why — not only
-what the graphs show.
+nexovue is an open-source observability platform. Send it OpenTelemetry traces, logs, metrics and
+profiles, and browser telemetry from your users' pages, and read every signal in one place.
+
+Next, it will tell you what changed and why, not only what the graphs show. Detection, plain-language
+findings, cases and suggested fixes are being built now: see the
+[Phase 2 plan](docs/product/phase-2-plan.md). They are not in today's release.
 
 - **Signals:** traces, logs, metrics, continuous profiles, errors, a service map, LLM calls.
 - **Surfaces:** real user monitoring, synthetic checks, infrastructure and database health.
@@ -25,6 +28,10 @@ tar -xzf nexovue-X.Y.Z.tar.gz && cd nexovue-X.Y.Z
 
 The console opens at `http://localhost:8080` with an account made for you, and applications send
 telemetry to `http://localhost:4318`. The quickstart is for trying nexovue, not for production.
+
+nexovue ships as two public images, `ghcr.io/nexovue-tech/nexovue` and
+`ghcr.io/nexovue-tech/nexovue-pipeline`, run together with their databases by Compose:
+**[Docker and Compose](docs/self-hosting/docker.md)**.
 
 ## Run it yourself
 

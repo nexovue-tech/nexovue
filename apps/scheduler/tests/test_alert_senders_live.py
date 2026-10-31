@@ -28,6 +28,7 @@ from recording_site import RecordedRequest, RecordingSite, Reply
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from nexovue_scheduler.alerts import payloads
 from nexovue_scheduler.alerts.delivery import deliver_due
 from nexovue_scheduler.alerts.dispatch import Outbound, Outgoing, send
 from nexovue_scheduler.alerts.messages import AlertMessage
@@ -60,6 +61,17 @@ OUTGOING = Outgoing(
     opened_at=datetime(2026, 9, 19, 14, 3, tzinfo=UTC),
     resolved_at=None,
 )
+
+
+def _strings(value: object) -> list[str]:
+    """Every string inside a decoded JSON body, wherever the channel put it."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _strings(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _strings(item)]
+    return []
 
 
 def _outbound(*, private_allowed: bool = True) -> Outbound:
@@ -95,7 +107,11 @@ async def test_a_chat_webhook_receives_its_format_at_its_secret_url(
     assert request.method == "POST"
     assert request.path == f"/{kind}/T000/B000/secret-part"
     assert request.headers["content-type"] == "application/json"
-    assert MESSAGE.summary in request.body.decode()
+    # Each chat escapes its own markup, so the summary arrives in that channel's form.
+    shown = {"slack": payloads.slack_text, "teams": payloads.teams_text}.get(
+        kind, payloads.discord_text
+    )(MESSAGE.summary)
+    assert any(shown in value for value in _strings(json.loads(request.body)))
 
 
 async def test_a_webhook_is_signed_so_that_an_independent_check_verifies_it(

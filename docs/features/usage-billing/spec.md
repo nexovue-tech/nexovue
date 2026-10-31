@@ -136,6 +136,8 @@ the current screens states this, and a viewer's experience of them has not been 
 - **FR25.3** — `GET /billing` returns the plan, its price row, the subscription, and the month's
   usage: services monitored, services billed, bytes, the included allowance, the browser sub-cap,
   and whether the allowance is enforced.
+- **FR25.3a** — A plan's `min_committed_services`, when set, is the fewest services it can be bought for.
+  Checkout refuses fewer, and the billing screen says so. Scale's is 10 (founder decision, 2026-10-31).
 - **FR25.4** — Services **billed** is `min(services monitored, ceiling)` where the ceiling is the
   plan's `max_billed_services` if set, else the committed count, else nothing.
 - **FR25.5** — The month's cost is services billed × the rate in the effective price row, or `null`

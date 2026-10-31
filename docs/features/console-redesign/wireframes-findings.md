@@ -58,7 +58,7 @@ nothing is wrong, silence must read as information rather than as a broken page.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  All systems normal                                                      │
+│  All 3 synthetic checks are passing                                      │
 │                                                                          │
 │  11 services reporting · 3 synthetic checks passing                      │
 │  Last finding resolved 2 hours ago                                       │
@@ -68,8 +68,11 @@ nothing is wrong, silence must read as information rather than as a broken page.
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
+The headline reports only what the checks said. "All systems normal" waits for an engine that can
+assess the system (`docs/changes/findings-false-all-clear/bug.md`).
+
 This is where Option 2 from the OD2 discussion survives: the healthy Findings screen carries the RED
-summary, because a page that says only "all systems normal" gives a reader no way to confirm it. When
+summary, because a page with only a sentence gives a reader no way to confirm it. When
 findings exist they lead and the summary drops away; when they do not, the summary is the content.
 
 **Until the engine exists, this healthy state is the entire screen** — which is precisely why

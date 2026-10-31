@@ -992,6 +992,8 @@ class PlanPrice(Base):
     price_per_service_minor_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
     # NULL is uncapped, which is not the same statement as a cap of zero.
     max_billed_services: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The fewest services this plan can be bought for. NULL is no minimum.
+    min_committed_services: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # The volume allowance, in ingested bytes per billed service per
     # calendar month. NULL is "no allowance recorded", not an allowance of zero.
     included_bytes_per_service: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

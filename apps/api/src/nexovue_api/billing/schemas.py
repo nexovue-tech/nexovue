@@ -111,6 +111,7 @@ class PlanOption(BaseModel):
     price_per_service_minor_units: int
     included_bytes_per_service: int | None = None
     max_billed_services: int | None = None
+    min_committed_services: int | None = None
     raw_retention_days: int
     derived_retention_days: int
 

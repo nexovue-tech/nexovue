@@ -77,6 +77,8 @@ export interface PlanOption {
   price_per_service_minor_units: number;
   included_bytes_per_service: number | null;
   max_billed_services: number | null;
+  /** The fewest services this plan can be bought for. Null is no minimum. */
+  min_committed_services: number | null;
   raw_retention_days: number;
   derived_retention_days: number;
 }

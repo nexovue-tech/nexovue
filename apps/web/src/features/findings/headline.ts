@@ -3,19 +3,15 @@ import type { CheckCounts, ProjectTotals } from "./api";
 /**
  * What the screen is allowed to say when the feed is empty.
  *
- * An empty feed is not evidence of health. No engine writes findings yet
- * (`api.ts`), so "All systems normal" was printed on every project — including
- * one whose own evidence line, two rows below it, read "0 of 4 synthetic checks
- * passing" (`docs/quality/console-review-2026-09-20.md`, D1).
+ * An empty feed is not evidence of health, because no engine writes findings yet
+ * (`api.ts`). So the headline never speaks for the whole system. It reports what a
+ * probe actually said about the checks, and a check that has not run is a gap in what
+ * we can see, not a failure.
  *
- * So the headline is derived from the readings the screen already holds, and it
- * claims nothing beyond them. It says a check is down only when a probe
- * actually reported it down: a check that has not run in this window is a gap in
- * what we can see, not a failure, and the two must not be written the same way.
- *
- * Errors are deliberately not a headline. A nonzero error rate is normal for
- * most services and is already on screen as a reading; promoting it here would
- * make the screen cry wolf, which costs more than the silence it replaces.
+ * Errors are deliberately not a headline. A nonzero error rate is normal for most
+ * services, and deciding when it is not is the engine's job. They stay on screen as a
+ * reading, and F1 AC1.7's "all systems normal" waits for that engine
+ * (`docs/changes/findings-false-all-clear/bug.md`).
  */
 
 export interface Headline {
@@ -32,5 +28,21 @@ export function headlineFor(totals?: ProjectTotals, checks?: CheckCounts): Headl
     const what = checks.down === 1 ? "A check is" : `${checks.down} checks are`;
     return { title: `${what} down`, wrong: true };
   }
-  return { title: "All systems normal", wrong: false };
+  if (checks === undefined || checks.total === 0) {
+    return { title: "Here is what this project reported", wrong: false };
+  }
+  if (checks.passing === checks.total) {
+    const title =
+      checks.total === 1
+        ? "The synthetic check is passing"
+        : `All ${checks.total} synthetic checks are passing`;
+    return { title, wrong: false };
+  }
+  if (checks.passing === 0) {
+    return { title: "No synthetic check has run in this window", wrong: false };
+  }
+  return {
+    title: `${checks.passing} of ${checks.total} synthetic checks are passing, and the rest have not run`,
+    wrong: false,
+  };
 }

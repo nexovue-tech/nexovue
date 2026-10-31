@@ -436,6 +436,7 @@ async def _plan_options(
             price_per_service_minor_units=price.price_per_service_minor_units,
             included_bytes_per_service=price.included_bytes_per_service,
             max_billed_services=price.max_billed_services,
+            min_committed_services=price.min_committed_services,
             raw_retention_days=plan.raw_retention_days,
             derived_retention_days=plan.derived_retention_days,
         )
@@ -855,6 +856,9 @@ async def commitment_for(
         raise InvalidRequestError(UNPRICED_PLAN_DETAIL)
     if price.price_per_service_minor_units <= 0:
         raise InvalidRequestError(FREE_PLAN_DETAIL)
+    minimum = price.min_committed_services
+    if minimum is not None and services_committed < minimum:
+        raise InvalidRequestError(f"This plan needs at least {minimum} services.")
     # The picker already hides what the account cannot take; this is the same
     # refusal at the door, for a tab that was open before the restriction or a
     # caller that never saw a picker. Refused here rather than at the processor:

@@ -228,7 +228,7 @@ The default screen after login. A reverse-chronological, priority-weighted feed 
 - AC1.4: New findings appear in the feed within 30 seconds of the finding being created, without manual refresh (live update path).
 - AC1.5: Feed orders by: active before resolved, then severity, then recency. Ordering is deterministic and documented.
 - AC1.6: Filters (service, severity, status) combine and persist per user across sessions.
-- AC1.7: Empty/healthy state shows: "all systems normal" statement + count of services reporting + synthetic checks passing + last-finding timestamp. It never shows a blank page or spinner-forever.
+- AC1.7: Empty/healthy state shows: "all systems normal" statement + count of services reporting + synthetic checks passing + last-finding timestamp. It never shows a blank page or spinner-forever. The statement needs the engine: until one assesses the system, the screen reports only what the checks said ([record](../changes/findings-false-all-clear/bug.md)).
 - AC1.8: Clicking a finding opens F2 Finding Detail. Acknowledge/resolve actions available on the card and reflected in F22 Case management. *Amended by F6 (2026-10-31):* a finding closes itself. A person acknowledges it, or marks it a false alarm or the new normal. A closed card names how it closed. Muted findings are reached through a link under the feed, not a filter. The first version of the detail page is built in F6 (D12).
 - AC1.9: A finding whose root incident continues does NOT duplicate — it updates (duration, impact) on the same card (grouping/dedup requirement on the insight engine).
 - AC1.10: Feed is fully usable on mobile-width screens (the paged-at-2am scenario).
@@ -464,7 +464,8 @@ shared code. **Added 2026-09-14.**
 ([ready-to-deploy](../changes/ready-to-deploy/status.md)), without a separate specification — the
 founder's direction was "ready to configure and run, no development work when a customer comes". What
 follows is the entry as it stood before, kept for the stories it names; the operator's guide is
-[`docs/self-hosting/`](../self-hosting/install.md).
+[`docs/self-hosting/`](../self-hosting/install.md), and the published images and how to run them with
+Compose are in [Docker and Compose](../self-hosting/docker.md).
 
 nexovue is **both SaaS and self-hosted**, which makes installing and running it a customer-facing
 surface with its own users — an operator, not a developer — and its own stories: *as an operator I
