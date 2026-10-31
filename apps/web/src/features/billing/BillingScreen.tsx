@@ -28,6 +28,8 @@ import {
   chargeOutcome,
   chargeTerms,
   checkoutAvailability,
+  commitmentError,
+  commitmentForPlan,
   describeAllowance,
   describeCancellation,
   describeCost,
@@ -223,6 +225,9 @@ function PlanTerms({ plan }: { plan: PlanOption }) {
           : `${formatDecimalBytes(plan.included_bytes_per_service)} a month for every service`}
         {" · "}
         {plan.raw_retention_days} days raw
+        {plan.min_committed_services === null
+          ? null
+          : ` · from ${plan.min_committed_services} services`}
       </span>
     </>
   );
@@ -378,7 +383,10 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
                 <button
                   type="button"
                   className="w-full rounded border border-line px-4 py-3 text-left hover:border-line-strong"
-                  onClick={() => setChosen(plan)}
+                  onClick={() => {
+                    setChosen(plan);
+                    setCommitted(String(commitmentForPlan(Number(committed), plan)));
+                  }}
                 >
                   <PlanTerms plan={plan} />
                 </button>
@@ -396,8 +404,7 @@ function Upgrade({ overview, currency }: { overview: BillingOverview; currency: 
   }
 
   const count = Number(committed);
-  const countError =
-    !Number.isInteger(count) || count < 1 ? "A whole number of services, one or more." : undefined;
+  const countError = commitmentError(count, chosen);
   const fields = overview.checkout?.required_contact_fields ?? [];
   const incomplete = fields.some((field) => !(contact[field] ?? "").trim());
 

@@ -16,6 +16,8 @@ import {
   chargeOutcome,
   chargeTerms,
   checkoutAvailability,
+  commitmentError,
+  commitmentForPlan,
   describeAllowance,
   describeCancellation,
   describeCost,
@@ -215,6 +217,27 @@ describe("the arrangement", () => {
   });
 });
 
+describe("how many services a plan can be bought for", () => {
+  const plan = (min: number | null) => ({ min_committed_services: min }) as PlanOption;
+
+  it("asks for one or more on a plan with no minimum", () => {
+    expect(commitmentError(0, plan(null))).toBe("A whole number of services, one or more.");
+    expect(commitmentError(1.5, plan(null))).toBe("A whole number of services, one or more.");
+    expect(commitmentError(1, plan(null))).toBeUndefined();
+  });
+
+  it("says the plan's minimum, and accepts it", () => {
+    expect(commitmentError(9, plan(10))).toBe("This plan starts at 10 services.");
+    expect(commitmentError(10, plan(10))).toBeUndefined();
+  });
+
+  it("starts the field at the minimum when the current number is below it", () => {
+    expect(commitmentForPlan(3, plan(10))).toBe(10);
+    expect(commitmentForPlan(12, plan(10))).toBe(12);
+    expect(commitmentForPlan(3, plan(null))).toBe(3);
+  });
+});
+
 describe("what a month costs at a commitment", () => {
   const pro: PlanOption = {
     slug: "pro",
@@ -223,6 +246,7 @@ describe("what a month costs at a commitment", () => {
     price_per_service_minor_units: 39_900,
     included_bytes_per_service: 10 * 1024 ** 3,
     max_billed_services: null,
+    min_committed_services: null,
     raw_retention_days: 30,
     derived_retention_days: 395,
   };

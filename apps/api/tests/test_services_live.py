@@ -18,7 +18,7 @@ import os
 import socket
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Final
 from urllib.parse import urlsplit
 
@@ -43,6 +43,7 @@ TENANT_THAT_NEVER_EXISTED: Final = "00000000-0000-0000-0000-000000000000"
 
 # The rollup buckets by minute, so the window has to include the last bucket.
 LAST_BUCKET_SLACK: Final = timedelta(minutes=1)
+SETTLE_TIME: Final = timedelta(minutes=5)
 
 
 def _reachable(dsn: str) -> bool:
@@ -75,6 +76,11 @@ class BusiestProject:
     project_id: str
     window_start: datetime
     window_end: datetime
+
+
+def _settled_before() -> datetime:
+    """Rollups older than this have stopped changing, including late spans."""
+    return datetime.now(UTC).replace(tzinfo=None, second=0, microsecond=0) - SETTLE_TIME
 
 
 @pytest_asyncio.fixture
@@ -111,7 +117,9 @@ async def busiest(clickhouse: AsyncClient) -> BusiestProject:
         tenant_id=str(tenant_id),
         project_id=str(project_id),
         window_start=first_minute,
-        window_end=last_minute + LAST_BUCKET_SLACK,
+        # Stopped short of the minutes still being written. Under live traffic a newest
+        # bucket grows between two reads, and the two would disagree by a request or so.
+        window_end=min(last_minute + LAST_BUCKET_SLACK, _settled_before()),
     )
 
 

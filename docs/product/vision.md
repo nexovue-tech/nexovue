@@ -160,7 +160,10 @@ an edit to an existing one, so a past invoice can always be recomputed from what
 |---|---|---|---|
 | free | $0.00 | 2 GiB | **3 services** |
 | pro | $6.00 | 10 GiB | uncapped |
-| scale | $5.00 | 25 GiB | uncapped |
+| scale | $5.00 | 25 GiB | uncapped, from 10 services |
+
+Scale starts at 10 services (`plan_prices.min_committed_services`, founder decision 2026-10-31): without
+a minimum its lower rate and larger allowance beat Pro at every size, leaving no reason to choose Pro.
 
 Enterprise deliberately has no row: a tier priced by agreement has no list price, and the usage
 screen shows no cost for it, which is the truth.

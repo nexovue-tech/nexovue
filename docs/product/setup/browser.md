@@ -67,6 +67,10 @@ Some specifics that catch people out:
 
 ## 2. Install the SDK
 
+```bash
+npm install @nexovue/browser-sdk
+```
+
 ```js
 import { init } from "@nexovue/browser-sdk";
 
@@ -81,7 +85,7 @@ init({
 Or as a script tag, which exposes a global called `nexovue`:
 
 ```html
-<script src="/nexovue-rum.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@nexovue/browser-sdk@0.1.2/dist/nexovue-rum.min.js"></script>
 <script>
   nexovue.init({
     siteKey: "nvp_live_xxxxxxxxxxxxxxxxxxxxxx",
@@ -98,12 +102,6 @@ server door, so no route can resolve both a secret and a public key.
 Call `init` once, as early in the page as you can. Earlier means the page-load
 span covers more of the load, and an error thrown before `init` runs is an error
 nobody records.
-
-> **The SDK is not on npm or a CDN yet.** Write to us and we will send you the
-> built file — `nexovue-rum.min.js`, which defines the global `nexovue` — to
-> host alongside your own scripts. Everything below describes that file; the
-> `npm install` and `<script src>` lines are what they will become once it is
-> published.
 
 ### Options
 

@@ -290,6 +290,19 @@ export function initialCommitment(overview: BillingOverview): number {
   return overview.subscription?.services_committed ?? 1;
 }
 
+/** What is wrong with this count for this plan, if anything. */
+export function commitmentError(count: number, plan: PlanOption): string | undefined {
+  if (!Number.isInteger(count) || count < 1) return "A whole number of services, one or more.";
+  const minimum = plan.min_committed_services;
+  if (minimum !== null && count < minimum) return `This plan starts at ${minimum} services.`;
+  return undefined;
+}
+
+/** The number to start from once a plan is chosen, raised to what the plan allows. */
+export function commitmentForPlan(current: number, plan: PlanOption): number {
+  return Math.max(current, plan.min_committed_services ?? 1);
+}
+
 /** The label a contact field is asked for under, keyed by the API's own names. */
 export const CONTACT_FIELD_LABELS: Record<string, { label: string; autoComplete: string }> = {
   name: { label: "Full name", autoComplete: "name" },

@@ -963,6 +963,35 @@ TODAY: Final = date(2026, 9, 8)
 class TestTheCommitment:
     """The customer's ceiling, in money, from the row the usage screen already reads."""
 
+    async def test_a_plan_with_a_minimum_refuses_fewer_services(self) -> None:
+        """Scale's lower rate is for larger systems. Without a minimum it beats Pro on
+        every term at every size, so nobody would have a reason to choose Pro."""
+        scale = PlanPrice(
+            plan_slug="scale",
+            effective_from=date(2026, 9, 1),
+            currency="USD",
+            price_per_service_minor_units=500,
+            min_committed_services=10,
+        )
+
+        with pytest.raises(InvalidRequestError, match="at least 10 services"):
+            await service.commitment_for(
+                CapturingSession(answers=[scale]),  # type: ignore[arg-type]
+                plan_slug="scale",
+                currency="USD",
+                services_committed=9,
+                on_day=TODAY,
+            )
+
+        commitment = await service.commitment_for(
+            CapturingSession(answers=[scale]),  # type: ignore[arg-type]
+            plan_slug="scale",
+            currency="USD",
+            services_committed=10,
+            on_day=TODAY,
+        )
+        assert commitment.services == 10
+
     async def test_the_commitment_carries_the_rate_and_the_count_separately(self) -> None:
         """Not a multiplied total. One processor wants a ceiling for the whole
         mandate; another wants a per-unit plan and a quantity, and prints

@@ -464,7 +464,8 @@ shared code. **Added 2026-09-14.**
 ([ready-to-deploy](../changes/ready-to-deploy/status.md)), without a separate specification — the
 founder's direction was "ready to configure and run, no development work when a customer comes". What
 follows is the entry as it stood before, kept for the stories it names; the operator's guide is
-[`docs/self-hosting/`](../self-hosting/install.md).
+[`docs/self-hosting/`](../self-hosting/install.md), and the published images and how to run them with
+Compose are in [Docker and Compose](../self-hosting/docker.md).
 
 nexovue is **both SaaS and self-hosted**, which makes installing and running it a customer-facing
 surface with its own users — an operator, not a developer — and its own stories: *as an operator I
