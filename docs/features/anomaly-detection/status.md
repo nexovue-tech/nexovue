@@ -2,7 +2,7 @@
 
 ## Lifecycle status
 
-Approved: specification (amended through D21) and design (revision 2, 2026-10-31). The plan is next.
+Approved: specification (amended through D21) and design (revision 2, 2026-10-31). `plan.md` written, awaiting the founder's approval.
 
 ## Current task
 
@@ -37,8 +37,8 @@ The plan gate.
 
 ## Next action
 
-Write `plan.md` with `/write-plan`: ordered steps, files and tests read from the code. Step 1 is the
-demo run and the cost measurement (D14, AC29), as the design says.
+The founder approves `plan.md`, including its design corrections C1 to C18, or changes it. Then Step 1 (the
+demo run on the founder's Mac) and Step 2 (the thin path) start.
 
 ## Open decisions
 
