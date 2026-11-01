@@ -1435,6 +1435,25 @@ def judge(
     intake_guarded: Sequence[Sequence[str]] = (),
 ) -> None:
     """One project's minutes up to the settled minute the coordinator read."""
+    try:
+        _judge_project_job(project_id, settled_minute, intake_fell, intake_guarded)
+    except Exception:
+        # The worker's own failure line names only the task, and no metric may
+        # name a project (C8): this is how an operator finds which one failed.
+        logger.error(
+            "detection could not judge a project",
+            project_id=project_id,
+            settled_minute=settled_minute,
+        )
+        raise
+
+
+def _judge_project_job(
+    project_id: str,
+    settled_minute: str,
+    intake_fell: Sequence[Sequence[str]],
+    intake_guarded: Sequence[Sequence[str]],
+) -> None:
     store = store_for_process()
     if store is None:
         return

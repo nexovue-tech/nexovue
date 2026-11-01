@@ -46,10 +46,10 @@ from detection_history import seed_four_weeks as _seed_four_weeks
 from detection_history import span as _span
 from detection_history import state as _state
 from live import require_stack
-from prometheus_client import REGISTRY
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from nexovue_scheduler import metrics
 from nexovue_scheduler.alerts.sweeps import KafkaWatermarks
 from nexovue_scheduler.detection import holds, project_job
 from nexovue_scheduler.detection.baselines import project_exclusions
@@ -102,7 +102,6 @@ DELAYED_AFTER: Final = timedelta(minutes=6)
 # Each sweep reads "now" this long after the minute it settles.
 SETTLING_DELAY: Final = MINUTE + EXPORT_ALLOWANCE + timedelta(seconds=30)
 RECEIVER: Final = f"failure-live-{uuid.uuid4().hex[:8]}"
-EVENTS_METRIC: Final = "nexovue_scheduler_detection_intake_events_total"
 
 
 # ------------------------------------------------------------------ fixtures
@@ -255,8 +254,11 @@ async def _events(engine: AsyncEngine, kind: str) -> list[Any]:
         )
 
 
-def _events_counted(kind: str) -> float:
-    return REGISTRY.get_sample_value(EVENTS_METRIC, {"kind": kind}) or 0.0
+async def _events_counted(engine: AsyncEngine, kind: str) -> int:
+    """What beat's leader reports for the operator's alert."""
+    async with engine.connect() as connection:
+        readings = await metrics.read_queues(connection, now=datetime.now(UTC))
+    return readings.detection_events_recent[kind]
 
 
 async def _refuse(engine: AsyncEngine, minutes: Sequence[datetime]) -> None:
@@ -356,11 +358,11 @@ async def test_a_hold_lasts_at_most_thirty_minutes_and_its_release_is_told_once(
     engine: AsyncEngine, clean: None
 ) -> None:
     """Design 2.1, item 1: nothing can hold detection for long. After 30 minutes the
-    minutes are judged, one `detection_events` row is written, and the operator's
-    counter rises once."""
+    minutes are judged, and one `detection_events` row is written, which beat
+    reports to the operator."""
     refused = _span(STOP, STOP + timedelta(minutes=40))
     await _refuse(engine, refused)
-    counted = _events_counted(holds.HOLD_EXPIRED)
+    counted = await _events_counted(engine, holds.HOLD_EXPIRED)
 
     released_at = None
     for minute in _span(STOP + timedelta(minutes=20), STOP + timedelta(minutes=35)):
@@ -377,7 +379,7 @@ async def test_a_hold_lasts_at_most_thirty_minutes_and_its_release_is_told_once(
     (event,) = await _events(engine, holds.HOLD_EXPIRED)
     assert event.detail["from"] == STOP.isoformat()
     assert event.detail["reason"] == "refused"
-    assert _events_counted(holds.HOLD_EXPIRED) == counted + 1
+    assert await _events_counted(engine, holds.HOLD_EXPIRED) == counted + 1
 
 
 # --------------------------------------------------- the install-wide guard
@@ -417,7 +419,7 @@ async def test_five_organizations_losing_traffic_as_the_intake_falls_open_nothin
     """The cause is upstream of all of them: no finding, every project held (data
     delayed) while it lasts, one event for the operator, then judging resumes."""
     projects = [await _organization(engine, tenants) for _ in range(5)]
-    counted = _events_counted(holds.GUARD_ENGAGED)
+    counted = await _events_counted(engine, holds.GUARD_ENGAGED)
 
     decisions, opened = await _organizations_lose_traffic(engine, store, administrator, projects)
 
@@ -427,7 +429,7 @@ async def test_five_organizations_losing_traffic_as_the_intake_falls_open_nothin
     assert event.detail["organizations"] >= 5
     assert datetime.fromisoformat(event.detail["from"]) <= STOP
     assert datetime.fromisoformat(event.detail["through"]) == _outage()[-1]
-    assert _events_counted(holds.GUARD_ENGAGED) == counted + 1
+    assert await _events_counted(engine, holds.GUARD_ENGAGED) == counted + 1
     assert decisions[-1].minute == STOP + timedelta(minutes=30), "judging resumed"
     for project in projects:
         assert (await _state(engine, project)).last_judged_minute == decisions[-1].minute

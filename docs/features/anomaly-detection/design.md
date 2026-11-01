@@ -272,6 +272,21 @@ Recorded as each plan step lands. It says where the built code differs from the 
     cancelling no longer pages. A new `NexovueReceiverDependencyUnavailable` pages when over half the exports
     are refused as `unavailable` for 5 minutes, the control plane being down. `NexovueDetectionHeldByIntake`
     pages on a guard or a hold reaching its limit.
+- **Step 7, 2026-11-01:**
+  - **The sweep records itself** in a one-row table, `detection_sweep` (migration 0049): when it ran, and
+    the newest minute it handed out. The design's "the coordinator records its own finish" had not been
+    built. A worker's metric would reset on restart, and processes that never ran the sweep would read 0.
+  - **Three install-wide gauges**, published by beat's leader with no project label: the settled minute's
+    age (+Inf with no record), projects behind, and the oldest lag. "Behind" is the API's *not running*
+    rule, no completed run for 3 minutes, now one constant in `nexovue_platform.detection`.
+  - **Two paging alerts:** `NexovueDetectionStalled`, the settled minute over 10 minutes old, which fires
+    when the sweep itself stops; and `NexovueProjectDetectionFailing`, any project behind for 2 minutes.
+  - **Two Step 6 defects, fixed:**
+    - *Held by intake* could never fire: the sweep runs in a worker's child process, so its counter never
+      reached the scraped `/metrics`. It is now a leader gauge, `detection_events_recent{kind}`, read from
+      `detection_events`.
+    - A failing project job never named its project. Each failure now logs `project_id` (C8).
+  - **`docs/operations/detection.md`** is the runbook, walked on the dev stack (`status.md`).
 
 ## Words used here
 

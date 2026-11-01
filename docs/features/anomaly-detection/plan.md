@@ -420,10 +420,10 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
 
 *Judgeable:* *detection stalled* fires in its test, and the runbook walks a stuck partition on the dev stack.
 
-- [ ] **T7.1** — `scheduler/metrics.py`: install-wide gauges (C8). `deploy/monitoring/rules/nexovue.yml`: the
+- [x] **T7.1** — `scheduler/metrics.py`: install-wide gauges (C8). `deploy/monitoring/rules/nexovue.yml`: the
   two alerts. Proved by `deploy/monitoring/tests/nexovue_test.yml` (run by `just lint-deploy` on your Mac)
   and `test_scheduler_metrics_live.py`.
-- [ ] **T7.2** — `docs/operations/detection.md` (new), in `dead-letters.md`'s form. Proved by walking it once
+- [x] **T7.2** — `docs/operations/detection.md` (new), in `dead-letters.md`'s form. Proved by walking it once
   on the dev stack, recorded in `status.md`.
 
 ### Step 8 — The test bed, the cost, the docs and the gate

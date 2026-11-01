@@ -87,12 +87,32 @@ groups:
           summary: "the receiver refuses {{ $value | humanizePercentage }} of export requests because a dependency is down"
 
       # F6, design 2.1 item 1: detection held every project because nexovue's own
-      # intake failed, or released such a hold at its 30-minute limit.
+      # intake failed, or released such a hold at its 30-minute limit. Beat's leader counts
+      # each kind's `detection_events` rows of the last 15 minutes.
       - alert: NexovueDetectionHeldByIntake
-        expr: sum by (kind) (increase(nexovue_scheduler_detection_intake_events_total[15m])) > 0
+        expr: max by (kind) (nexovue_scheduler_detection_events_recent) > 0
         labels: {severity: page}
         annotations:
-          summary: "detection recorded {{ $labels.kind }}: nexovue's own intake failed for every project (detection_events)"
+          summary: "detection recorded {{ $labels.kind }}: nexovue's own intake failed for every project (docs/operations/detection.md)"
+
+      # F6, the operator's heartbeat for detection: no minute settled for 10 minutes, so nothing
+      # newer is judged. It fires when the minute sweep itself stops, which the owners' email cannot
+      # report because the sweep sends it. +Inf until a sweep has settled any minute.
+      - alert: NexovueDetectionStalled
+        expr: max(nexovue_scheduler_detection_settled_minute_age_seconds) > 600
+        for: 1m
+        labels: {severity: page}
+        annotations:
+          summary: "the newest minute detection settled is {{ $value | humanizeDuration }} old; nothing newer is judged (docs/operations/detection.md)"
+
+      # F6, C8: projects whose detection job has completed no run for 3 minutes, the API's *not
+      # running*. Install-wide, so no label names a project; the scheduler's log does.
+      - alert: NexovueProjectDetectionFailing
+        expr: max(nexovue_scheduler_detection_projects_behind) > 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "detection has completed no run in over 3 minutes for {{ $value }} projects; their owners are emailed at 15 (docs/operations/detection.md)"
 
       - alert: NexovueSchedulerLoopSilent
         expr: nexovue_scheduler_loop_silent_seconds > 30

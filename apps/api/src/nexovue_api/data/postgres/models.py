@@ -1813,6 +1813,21 @@ class DetectionEvent(Base):
     __table_args__ = (Index("ix_detection_events_at", "at"),)
 
 
+class DetectionSweep(Base):
+    """When the detection sweep last ran, and the newest minute it has handed to
+    the project jobs: what *detection stalled* reads (F6, T7.1). One row at most,
+    install-wide, with no `org_id`: it describes nexovue's pipeline."""
+
+    __tablename__ = "detection_sweep"
+
+    one_row: Mapped[bool] = mapped_column(Boolean, primary_key=True, server_default=text("true"))
+    swept_at: Mapped[RequiredTimestamp]
+    # None until a sweep has settled a minute; never moves backwards.
+    settled_minute: Mapped[OptionalTimestamp]
+
+    __table_args__ = (CheckConstraint("one_row", name="holds_one_row"),)
+
+
 class ServiceLastSeen(Base):
     """When a service last sent anything (F21, *service went silent*). Written by the
     Go usage meter with `GREATEST`, so a late or replayed flush never moves it back."""

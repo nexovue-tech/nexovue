@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Final, get_args
 
-from nexovue_platform.detection import MAX_MUTE, MAX_SNOOZE
+from nexovue_platform.detection import MAX_MUTE, MAX_SNOOZE, NOT_RUNNING_AFTER
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
@@ -54,8 +54,6 @@ from nexovue_api.profile.timezones import stored_timezone
 from nexovue_api.projects import queries as projects_queries
 from nexovue_api.projects.service import NO_SUCH_PROJECT, require_project
 
-# Older than this, the project's job is not running (FR25, AC26).
-NOT_RUNNING_AFTER: Final = timedelta(minutes=3)
 # A judged minute trails now by the 3-minute settling lag; 3 more is a stalled pipeline.
 DELAYED_AFTER: Final = timedelta(minutes=6)
 # The normal settling lag: data counts as delayed from when its newest minute settled.

@@ -16,6 +16,7 @@ in this repository.
 - [Rollback](rollback.md)
 - [Key rotation](key-rotation.md) — replacing either encryption key without losing what it sealed
 - [Dead letters](dead-letters.md) — listing and replaying telemetry set aside as unprocessable.
+- [Detection](detection.md) — when anomaly detection stalls, fails for a project, or is held by nexovue's own intake
 - [Disaster recovery](disaster-recovery.md)
 - [Incident response](incident-response.md)
 

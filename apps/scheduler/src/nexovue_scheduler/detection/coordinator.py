@@ -17,6 +17,11 @@ Each sweep also tells the owners of every project whose detection has not run
 for 15 minutes of being expected to, or never has (D24, D34) — first, and
 whatever the pipeline says, since a sweep that cannot settle a minute is one of
 the ways detection stops.
+
+Last, it records itself in `detection_sweep`: when it ran, and the newest minute
+it handed out. Beat reads that minute's age for *detection stalled* (plan T7.1),
+the operator's alarm for the case the owners' email cannot report: this sweep
+no longer running.
 """
 
 from __future__ import annotations
@@ -28,7 +33,8 @@ from typing import Final
 from nexovue_platform.alerts.tasks import DELIVER_TASK, DELIVERIES_QUEUE
 from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from nexovue_scheduler.alerts.sweeps import KafkaWatermarks
 from nexovue_scheduler.detection import (
@@ -61,6 +67,18 @@ PROJECT_JOB_EXPIRES_SECONDS: Final = 60
 FAIR_STEP_SECONDS: Final = 0.001
 
 NO_PROGRESS_STORE: Final = "CLICKHOUSE_DSN is not set for the scheduler; no minute can be settled"
+
+# One row, install-wide. The minute never moves backwards: a hold can hand out an
+# older one, and the age read is of the newest minute judged.
+_RECORD_SWEEP: Final = text(
+    """
+    INSERT INTO detection_sweep (swept_at, settled_minute)
+    VALUES (clock_timestamp(), CAST(:settled AS timestamptz))
+    ON CONFLICT (one_row) DO UPDATE
+    SET swept_at = EXCLUDED.swept_at,
+        settled_minute = GREATEST(detection_sweep.settled_minute, EXCLUDED.settled_minute)
+    """
+)
 
 _progress: settle.PipelineProgress | None = None
 _watermarks: KafkaWatermarks | None = None
@@ -99,17 +117,34 @@ async def report_stopped(engine: AsyncEngine, *, now: datetime) -> int:
         return await notify.report_stopped(connection, now=now)
 
 
+async def record_sweep(connection: AsyncConnection, settled: datetime | None) -> None:
+    """The sweep ran, handing out `settled`, or nothing when no minute settled."""
+    await connection.execute(_RECORD_SWEEP, {"settled": settled})
+
+
+async def _record(engine: AsyncEngine, settled: datetime | None) -> None:
+    async with engine.begin() as connection:
+        await record_sweep(connection, settled)
+
+
 @task(SWEEP_DETECTION_TASK)
 def sweep() -> None:
     _report_stopped()
+    settled = _hand_out()
+    with_engine(lambda engine: _record(engine, settled))
+
+
+def _hand_out() -> datetime | None:
+    """Queue each project's job up to the settled minute, and return that minute;
+    None when no minute could be settled."""
     found = _settled()
     if found is None:
-        return
+        return None
     intake = _intake(found.now)
     decision = with_engine(lambda engine: holds.decide(engine, found, intake))
     settled = decision.minute
     if settled is None:
-        return
+        return None
     if decision.holding:
         logger.warning(
             "nexovue's intake failed; holding every project's minutes",
@@ -125,6 +160,7 @@ def sweep() -> None:
     logger.info(
         "detection project jobs queued", settled_minute=settled.isoformat(), projects=queued
     )
+    return settled
 
 
 def _report_stopped() -> None:

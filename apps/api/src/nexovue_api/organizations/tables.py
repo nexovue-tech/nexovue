@@ -148,4 +148,8 @@ EXCLUDED_TABLES: Final[dict[str, str]] = {
         "minute judged after 30 minutes (F6). It describes the pipeline, not a tenant; "
         "pruned by the expiry sweep"
     ),
+    "detection_sweep": (
+        "when the detection sweep last ran and the newest minute it settled (F6, T7.1): "
+        "one row about nexovue's pipeline, naming no tenant"
+    ),
 }

@@ -24,7 +24,6 @@ from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from nexovue_scheduler import metrics
 from nexovue_scheduler.detection import settle
 from nexovue_scheduler.detection.project_job import IntakeTrouble
 from nexovue_scheduler.detection.settle import Hold, Intake, Settled, Span
@@ -34,9 +33,6 @@ logger = get_logger(__name__)
 GUARD_ENGAGED: Final = settle.GUARD_EVENT
 HOLD_EXPIRED: Final = settle.EXPIRED_EVENT
 EVENT_KINDS: Final = (GUARD_ENGAGED, HOLD_EXPIRED)
-# Exported at zero from the start, so a monitor sees the first event as an increase.
-for _kind in EVENT_KINDS:
-    metrics.DETECTION_INTAKE_EVENTS.labels(_kind)
 
 _REFUSED: Final = text("SELECT DISTINCT minute FROM intake_refusals WHERE minute >= :since")
 # One vote per organization, however many of its projects lost traffic.
@@ -165,6 +161,4 @@ async def _first_seen(
     written = await connection.execute(
         _FIRST_SEEN, {"kind": kind, "first": first, "detail": json.dumps(detail)}
     )
-    if written.rowcount:
-        metrics.DETECTION_INTAKE_EVENTS.labels(kind).inc()
     return bool(written.rowcount)

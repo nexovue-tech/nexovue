@@ -4,7 +4,7 @@
     worker [--queues a,b] [--concurrency N]
     health                                 exit 0 if this container's process is alive
 
-Either role answers /healthz, /readyz and /metrics on SCHEDULER_HEALTH_ADDR
+Either role answers /healthz, /readyz and /metrics on HEALTH_ADDR
 (`health.py`); `health` is what the compose healthcheck runs, because the image
 has no curl.
 

@@ -124,6 +124,28 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
 
   Unproved here: the plan's demo checks, and the receiver's writer inside a real receiver with a real
   Kafka.
+- **Step 7**, operations, was built on 2026-11-01: the sweep's own record (migration 0049), three
+  install-wide gauges, the *detection stalled* and *project detection failing* alerts, and the runbook
+  `docs/operations/detection.md`. It fixed two Step 6 defects: *held by intake* could never fire, and a
+  failing job didn't name its project.
+  - **The runbook walk** ran on the dev stack, with the receiver, worker, beat and `scheduler-light` run
+    from source, a Prometheus loading the repo's rules, and steady span traffic:
+    1. a stopped trace worker fired *stalled*, and restarting it resolved it;
+    2. a sweep that never ran, with every process healthy, fired both alerts;
+    3. one failing project (a wrong writer password) fired *project failing* alone; the log named the
+       project, and the owners' *stopped* and *running again* notices were queued;
+    4. a simulated 35-minute broker refusal wrote one `hold_expired` row, and *held by intake* fired and
+       resolved.
+
+    Not walked: a real `intake_guard` (it needs 5 organizations; the live test covers it), a single stuck
+    partition, the two receiver alerts, and a deployed install.
+  - **Its checks:**
+    - ruff passes, and mypy reports no issues in 716 files;
+    - promtool passes, with 20 rules;
+    - all 42 Go packages pass;
+    - the web gives 1,474, plus 124 in the browser SDK;
+    - the Python suites give 9,246 passed. The 75 that fail all need gateseed's data or internet DNS. The
+      walk's one service now makes two `test_services_live.py` tests fail rather than error.
 - **A stop's limit:** at high sensitivity a stop needs about 2.2 expected requests a minute, not 2
   (spec, FR32, *Limit*; AC41).
 - **The dev stores run in this environment**, through a local compose override for the sandbox's open-file
@@ -139,7 +161,7 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
 
 ## Next action
 
-Step 7, operations: the metrics, alerts and runbook. Step 1, the demo run on the founder's Mac, can run at any time alongside.
+Step 8: the cost measurement (T8.2), the docs (T8.5) and the gate (T8.6). Step 1, the demo run on the founder's Mac, can run at any time alongside.
 
 ## Open decisions
 
@@ -170,6 +192,8 @@ here for review (2026-11-01).
 - **A control plane that is down still pages.** Step 6 narrowed the Kafka alert to Kafka's own failures,
   so a sender cancelling no longer pages. A new alert pages when over half the exports are refused for a
   dependency other than Kafka, so a control-plane outage is not left to a ticket.
+- **The sweep records itself in a table, not only a metric:** a worker's metric resets on restart, and
+  *stalled* must fire when the sweep stops. Both Step 7 alerts page, like D33's email.
 - **Step 7's *detection stalled* alert is the heartbeat** for a scheduler whose minute sweep never runs. The
   owners' email can't report that case, because the email is sent by the sweep itself.
 

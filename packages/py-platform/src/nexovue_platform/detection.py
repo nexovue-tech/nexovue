@@ -56,6 +56,11 @@ DEFAULT_TIMEZONE: Final = "UTC"
 # Why the receiver refused a minute's telemetry for lack of a store (C5).
 INTAKE_REFUSAL_REASONS: Final = ("broker_unavailable",)
 
+# A project detection is expected to judge is *not running* once its job has not
+# completed for this long (design 2.1, item 2; FR25, AC26). The API's status and
+# the scheduler's install-wide count of projects behind read it alike.
+NOT_RUNNING_AFTER: Final = timedelta(minutes=3)
+
 # Detection's queue and its baseline job, named here so the API can ask for a
 # service's normal to be rebuilt the moment a person moves it, without importing
 # scheduler code (as Run now does, ADR-011).
