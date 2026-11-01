@@ -110,7 +110,7 @@ def test_a_reading_without_a_time_zone_is_refused() -> None:
     naive = _reading(datetime(2026, 11, 1, 12, 0))  # noqa: DTZ001  the refusal under test
 
     with pytest.raises(ValueError, match="timezone-aware"):
-        _detection().write([naive])
+        _detection().write([naive], version=1)
 
 
 def test_readings_are_an_async_insert_the_job_waits_for() -> None:
@@ -121,7 +121,7 @@ def test_readings_are_an_async_insert_the_job_waits_for() -> None:
     reader: Any = _ClientThatMustNotBeReached()
     detection = ProjectDetection(reader, writer, BINDING)  # type: ignore[arg-type]
 
-    detection.write([_reading(datetime(2026, 11, 1, 12, 0, tzinfo=UTC))])
+    detection.write([_reading(datetime(2026, 11, 1, 12, 0, tzinfo=UTC))], version=1)
 
     assert writer.settings == [{"async_insert": 1, "wait_for_async_insert": 1}]
 
@@ -140,7 +140,7 @@ def test_minute_counts_hold_only_the_minutes_counted() -> None:
 
 
 def test_writing_nothing_does_not_reach_the_store() -> None:
-    _detection().write([])
+    _detection().write([], version=1)
 
 
 @pytest.mark.parametrize(

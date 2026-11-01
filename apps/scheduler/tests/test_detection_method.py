@@ -370,6 +370,33 @@ def test_a_single_minute_of_any_size_opens_nothing(level: str) -> None:
 
 
 @pytest.mark.parametrize("level", sorted(SENSITIVITIES))
+def test_a_single_minute_failing_every_request_opens_nothing(level: str) -> None:
+    """AC2, *failing more*: one minute in which every request fails, the service's and
+    its endpoint's, with normal minutes around it, is unusual in no window at any
+    sensitivity, so it opens no finding (FR12)."""
+    sensitivity = SENSITIVITIES[level]
+    width = sensitivity.window_minutes
+    per_minute = 100
+    calm = series_minute(per_minute, 1, endpoints={"POST /pay": (40, 0)})
+    total_failure = series_minute(per_minute, per_minute, endpoints={"POST /pay": (40, 40)})
+    minutes = [*[calm] * 20, total_failure, *[calm] * 20]
+    baseline = _failing(
+        0.01,
+        per_minute * width,
+        endpoints={"POST /pay": (40 * width, 0.0)},
+        sensitivity=sensitivity,
+    )
+
+    judged = [
+        judge_failing(Window(tuple(minutes[end - width : end])), baseline, sensitivity)
+        for end in range(width, len(minutes) + 1)
+    ]
+
+    assert {each.verdict for each in judged} <= {"normal", "elevated"}
+    assert not any(e.verdict == "unusual" for each in judged for e in each.endpoints)
+
+
+@pytest.mark.parametrize("level", sorted(SENSITIVITIES))
 def test_too_few_requests_read_too_little_traffic_however_slow(level: str) -> None:
     """AC5: below the requests needed to judge *slower*, nothing is judged."""
     sensitivity = SENSITIVITIES[level]

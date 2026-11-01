@@ -13,7 +13,6 @@ Discord with a colour, Teams as a card, PagerDuty as an event (FR17).
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
@@ -21,15 +20,8 @@ from typing import Any, Final
 from nexovue_platform.alerts.model import SEVERITY_RANK
 from nexovue_platform.detection import ADOPTION_AFTER_DAYS
 
-from nexovue_scheduler.alerts.outbox import Notice, Subject
+from nexovue_scheduler.alerts.outbox import Notice, Subject, one_line
 from nexovue_scheduler.detection.lifecycle import times
-
-# A subject's name can come from telemetry, which anyone with a public browser key can
-# send. Long enough for any real name; short enough that one cannot bury the message.
-NAME_LIMIT: Final = 200
-# C0 and C1 controls and the Unicode line and paragraph separators: anything that could
-# start a line the message did not write.
-_CONTROLS: Final = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
 
 _STATE_WORDS: Final = {
     "down": "is down",
@@ -80,7 +72,7 @@ def _compose_incident(notice: Notice, *, app_base_url: str) -> AlertMessage:
     base = app_base_url.rstrip("/")
     subject = notice.subject
     said = _said(subject)
-    label = one_line(subject.label)
+    label = subject.label
     rule_name = one_line(subject.rule_name or "")
     new_error = subject.condition_kind == "new_error_group"
 
@@ -282,12 +274,13 @@ _PROJECT_NOTICE_WORDS: Final = {
 
 def _compose_finding(notice: Notice, *, app_base_url: str) -> AlertMessage:
     """A finding's words (FR17): its title, which already names the project's zone, and
-    one line for each signal. Service and endpoint names are telemetry text: each goes
-    through `one_line` here and the channel's escaping after."""
+    one line for each signal. Service and endpoint names are telemetry text: each is
+    one line, the subject's from `Subject` and the rest through `one_line` here, and
+    the channel escapes them after."""
     base = app_base_url.rstrip("/")
     subject = notice.subject
     detail = subject.detail
-    label = one_line(subject.label)
+    label = subject.label
     title = one_line(str(detail.get("title") or label))
     rule_name = one_line(subject.rule_name or "")
     reason = str(detail.get("closed_reason") or "recovered")
@@ -372,7 +365,7 @@ def _adopted_sentence(label: str, shifts: list[dict[str, Any]]) -> str:
 def _compose_project(notice: Notice, *, app_base_url: str) -> AlertMessage:
     """Detection stopping or running again for a whole project (D24)."""
     base = app_base_url.rstrip("/")
-    project = one_line(notice.subject.label)
+    project = notice.subject.label
     headline, sentence = _PROJECT_NOTICE_WORDS[notice.kind]
     words = {"project": project, "at": _moment(notice.created_at)}
     summary = headline.format(**words)
@@ -386,13 +379,6 @@ def _compose_project(notice: Notice, *, app_base_url: str) -> AlertMessage:
         rule_name="",
         manage_link=None,
     )
-
-
-def one_line(name: str) -> str:
-    """A name as one line of at most `NAME_LIMIT` characters, so it can only ever be
-    words inside the message, never a line of its own."""
-    flat = _CONTROLS.sub(" ", name).strip()
-    return flat if len(flat) <= NAME_LIMIT else flat[: NAME_LIMIT - 1] + "…"
 
 
 def describe_duration(start: datetime, end: datetime) -> str:

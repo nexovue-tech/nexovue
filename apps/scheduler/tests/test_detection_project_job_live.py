@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from urllib.parse import urlsplit
 
 import pytest
-from alert_fixtures import AlertTenant, add_rule, anomaly_rule
+from alert_fixtures import AlertTenant, add_channel, add_rule, anomaly_rule
 from clickhouse_connect.driver.client import Client
 from detection_history import (
     CLICKHOUSE_DSN,
@@ -33,6 +34,7 @@ from detection_history import baselines_for as _baselines
 from detection_history import findings as _findings
 from detection_history import judge_through as _judge_through
 from detection_history import seed as _seed
+from detection_history import seed_endpoint_latency as _seed_endpoint_latency
 from detection_history import seed_four_weeks as _seed_four_weeks
 from detection_history import span as _span
 from detection_history import state as _state
@@ -59,6 +61,7 @@ from nexovue_scheduler.detection.store import (
     DetectionStore,
     bind_project,
 )
+from nexovue_scheduler.jobs.registry import SoftTimeLimit
 
 
 def _reachable(url: str, default_port: int) -> bool:
@@ -113,8 +116,22 @@ async def test_a_sustained_slowdown_opens_exactly_one_finding_and_closes_it(
     assert finding.title.endswith(f"slower than normal since {ONSET:%H:%M} UTC")
     (signal,) = finding.signals
     assert signal["signal"] == "slower"
-    assert set(signal) == {"signal", "normal", "current", "worst", "comparison", "endpoint"}
+    assert set(signal) == {
+        "signal",
+        "normal",
+        "band_low",
+        "band_high",
+        "current",
+        "worst",
+        "comparison",
+        "endpoint",
+        "endpoint_current",
+        "endpoint_last_week",
+    }
     assert signal["worst"] > 2 * signal["normal"]
+    # FR16: the normal's band, from the normal to normal sensitivity's minimum change.
+    assert signal["band_low"] == signal["normal"]
+    assert signal["band_high"] == pytest.approx(1.5 * signal["normal"])
     weekday = f"{ONSET:%A}s"
     assert signal["comparison"].startswith(f"{weekday} around 12:0")
     assert signal["comparison"].endswith(", last 4 weeks")
@@ -189,13 +206,15 @@ async def test_a_job_killed_before_its_commit_leaves_one_finding_once_rerun(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """AC25: the run that would open the finding dies after freezing its readings
-    and before its commit. Nothing it decided survives; the next run decides again,
-    and there is one finding and one reading per minute."""
+    and before its service's commit. Nothing it decided survives; the next run decides
+    again, and there is one finding, opening at the same minute and with the same start
+    as an uninterrupted run's, and one reading per minute."""
     _seed_four_weeks(administrator, project)
     await _baselines(engine, store, project)
     minutes = _rise(administrator, project, minutes=SUSTAIN, slower_by=PAST_THE_MINIMUM)
     probe = await _judge_through(engine, store, project, minutes)
     opening = next(m for m, o in zip(minutes, probe, strict=True) if o.opened)
+    (uninterrupted,) = await _findings(engine, project)
     # Start again from nothing, with the same readings already frozen once.
     async with engine.begin() as connection:
         for table in ("findings", "detection_state"):
@@ -208,7 +227,7 @@ async def test_a_job_killed_before_its_commit_leaves_one_finding_once_rerun(
     async def killed(*_: object, **__: object) -> None:
         raise RuntimeError("killed between the readings and the commit")
 
-    monkeypatch.setattr(project_job, "_record_run", killed)
+    monkeypatch.setattr(project_job, "_advance", killed)
     with pytest.raises(RuntimeError, match="killed"):
         await judge_project(engine, store, project.project_id, settled=opening, now=opening)
     assert await _findings(engine, project) == []
@@ -218,7 +237,9 @@ async def test_a_job_killed_before_its_commit_leaves_one_finding_once_rerun(
     rerun = await _judge_through(engine, store, project, [m for m in minutes if m >= opening])
 
     assert rerun[0].opened == 1
-    assert len(await _findings(engine, project)) == 1
+    (finding,) = await _findings(engine, project)
+    assert finding.started_at == uninterrupted.started_at
+    assert finding.closed_at == uninterrupted.closed_at
     readings = store.for_project(await _bound(engine, project)).readings(
         start=opening, end=opening + MINUTE
     )
@@ -445,12 +466,19 @@ def _last_thursday_noon() -> datetime:
     return day
 
 
+@pytest.mark.parametrize("sensitivity", ["low", "normal"])
 async def test_a_small_service_that_stops_on_day_three_is_critical_then_gone(
-    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+    engine: AsyncEngine,
+    store: DetectionStore,
+    administrator: Client,
+    project: AlertTenant,
+    sensitivity: str,
 ) -> None:
     """AC41, FR32, D30: 2 requests a minute, history since Monday, stops at noon on
-    Thursday: a critical finding within *time to a finding*. A day of silence later it
-    closes as *service gone*."""
+    Thursday: a critical finding within *time to a finding*, at low sensitivity as at
+    normal. A day of silence later it closes as *service gone*, said once."""
+    await _set_sensitivity(engine, project, sensitivity)
+    slack = await _slack_rule(engine, project)
     onset = _last_thursday_noon()
     monday = onset.replace(hour=0) - timedelta(days=3)
     _seed(administrator, project, _span(monday, onset - MINUTE), requests=2)
@@ -472,6 +500,7 @@ async def test_a_small_service_that_stops_on_day_three_is_critical_then_gone(
     assert gone[0].closed == 1
     (finding,) = await _findings(engine, project)
     assert finding.closed_reason == "service_gone"
+    assert await _told(engine, project, slack) == ["opened", "resolved"]
 
 
 async def test_a_finding_that_cannot_be_judged_for_six_hours_closes_as_such(
@@ -722,3 +751,324 @@ async def test_each_run_records_the_judged_window_s_requests_for_no_incoming_req
     await judge_project(engine, store, project.project_id, settled=quiet, now=quiet)
 
     assert (await _state(engine, project)).signals[TRAFFIC][WINDOW_REQUESTS_KEY] == 0
+
+
+# ------------------------------------------- reading versions (design, *Readings*)
+
+
+async def test_a_re_judged_minute_wins_over_a_crashed_run_from_a_clock_ahead(
+    engine: AsyncEngine,
+    store: DetectionStore,
+    administrator: Client,
+    project: AlertTenant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run on a host whose clock is a day ahead freezes its reading and dies before
+    its commit. Spans land late for the minute, and the re-run judges it again: the
+    reading read back must be the re-run's, whatever either host's clock said."""
+    window = _span(ONSET - timedelta(minutes=10), ONSET)
+    _seed(administrator, project, window)
+
+    async def killed(*_: object, **__: object) -> None:
+        raise RuntimeError("killed between the readings and the commit")
+
+    real_time_ns = time.time_ns
+    monkeypatch.setattr(time, "time_ns", lambda: real_time_ns() + 86_400 * 10**9)
+    monkeypatch.setattr(project_job, "_advance", killed)
+    with pytest.raises(RuntimeError, match="killed"):
+        await judge_project(engine, store, project.project_id, settled=ONSET, now=ONSET)
+    monkeypatch.undo()
+    _seed(administrator, project, [ONSET])
+
+    await judge_project(engine, store, project.project_id, settled=ONSET, now=ONSET)
+
+    (reading,) = store.for_project(await _bound(engine, project)).readings(
+        start=ONSET, end=ONSET + MINUTE
+    )
+    assert reading.window_requests == (SUSTAIN + 1) * REQUESTS
+
+
+# --------------------------------------------- the evidence endpoint (FR3, *slower*)
+
+
+async def test_a_slower_finding_names_the_endpoint_whose_p95_rose_most_since_last_week(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """FR3: *slower* names the endpoint whose p95 rose most in milliseconds against the
+    same window last week, with both values, as evidence. A fast endpoint that rose
+    five times, and one too rarely called to have a p95, are not it."""
+    _seed_four_weeks(administrator, project)
+    await _baselines(engine, store, project)
+    minutes = _rise(administrator, project, minutes=SUSTAIN, slower_by=PAST_THE_MINIMUM)
+    judged_span = _span(minutes[0] - SUSTAIN * MINUTE, minutes[-1])
+    week = timedelta(days=7)
+    last_week = {"GET /cart": (50, 50.0), "POST /pay": (30, 100.0), "GET /fast": (40, 1.0)}
+    today = {"GET /cart": (50, 60.0), "POST /pay": (30, 400.0), "GET /fast": (40, 5.0)}
+    _seed_endpoint_latency(
+        administrator, project, SERVICE, [m - week for m in judged_span], last_week
+    )
+    _seed_endpoint_latency(administrator, project, SERVICE, judged_span, today)
+    _seed_endpoint_latency(administrator, project, SERVICE, judged_span, {"GET /rare": (2, 5000.0)})
+
+    await _judge_through(engine, store, project, minutes)
+
+    (finding,) = await _findings(engine, project)
+    (signal,) = finding.signals
+    assert signal["signal"] == "slower"
+    assert signal["endpoint"] == "POST /pay"
+    assert signal["endpoint_current"] == pytest.approx(400.0)
+    assert signal["endpoint_last_week"] == pytest.approx(100.0)
+
+
+# ------------------------------------ an overrunning run (design, *Failure handling*)
+
+
+def _limit_after(monkeypatch: pytest.MonkeyPatch, advances: int) -> None:
+    """The soft limit arrives as the run commits its next service after `advances`, one
+    service to a commit, as it would deep inside a project too big for its budget."""
+    advance = project_job._advance
+    done = 0
+
+    async def advance_until_the_limit(*args: Any, **kwargs: Any) -> None:
+        nonlocal done
+        if done == advances:
+            raise SoftTimeLimit
+        done += 1
+        await advance(*args, **kwargs)
+
+    monkeypatch.setattr(project_job, "SERVICES_PER_COMMIT", 1)
+    monkeypatch.setattr(project_job, "_advance", advance_until_the_limit)
+
+
+async def test_a_run_stopped_by_its_limit_keeps_what_it_finished_and_the_next_continues(
+    engine: AsyncEngine,
+    store: DetectionStore,
+    administrator: Client,
+    project: AlertTenant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A project whose run passes its soft limit commits the services it finished; the
+    next run judges only the rest, so a project always over budget still moves."""
+    services = ["svc-a", "svc-b", "svc-c"]
+    for service in services:
+        _seed(administrator, project, _span(ONSET - timedelta(minutes=10), ONSET), service=service)
+    _limit_after(monkeypatch, advances=1)
+
+    with pytest.raises(SoftTimeLimit):
+        await judge_project(engine, store, project.project_id, settled=ONSET, now=ONSET)
+    monkeypatch.undo()
+    judged = [(await _state(engine, project, name)).last_judged_minute for name in services]
+    assert judged.count(ONSET) == 1 and judged.count(None) == 2
+
+    outcome = await judge_project(engine, store, project.project_id, settled=ONSET, now=ONSET)
+
+    assert outcome.services == 2
+    for service in services:
+        assert (await _state(engine, project, service)).last_judged_minute == ONSET
+
+
+async def test_a_project_finding_survives_runs_stopped_by_their_limit(
+    engine: AsyncEngine,
+    store: DetectionStore,
+    administrator: Client,
+    project: AlertTenant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC21 with every run stopped halfway through its services and continued: the run
+    that continues decides the project's finding on every service, those already
+    judged included, so it is opened once and not closed by the half it sees."""
+    services = [f"svc-{index:02}" for index in range(11)]
+    for service in services:
+        _seed_four_weeks(administrator, project, service=service)
+        stops = service < services[9]
+        today = _span(
+            ONSET - timedelta(minutes=30),
+            ONSET + (-timedelta(minutes=1) if stops else timedelta(minutes=30)),
+        )
+        _seed(administrator, project, today, service=service)
+    await _baselines(engine, store, project)
+    for minute in _span(ONSET - timedelta(minutes=5), ONSET + timedelta(minutes=15)):
+        _limit_after(monkeypatch, advances=5)
+        with pytest.raises(SoftTimeLimit):
+            await judge_project(engine, store, project.project_id, settled=minute, now=minute)
+        monkeypatch.undo()
+        await judge_project(engine, store, project.project_id, settled=minute, now=minute)
+
+    (finding,) = await _findings(engine, project)
+    assert finding.scope == "project" and finding.state == "open"
+    assert finding.services == services[:9]
+
+
+# ------------------------------- what the job tells a channel (AC5, AC19, AC31)
+
+
+async def _slack_rule(engine: AsyncEngine, tenant: AlertTenant) -> Any:
+    """A Slack channel told of every finding, warnings included."""
+    async with engine.begin() as connection:
+        slack = await add_channel(connection, tenant.org_id, kind="slack", name="Slack")
+        await add_rule(
+            connection,
+            tenant.org_id,
+            tenant.project_id,
+            name="Findings",
+            condition=anomaly_rule("warning"),
+            channel_ids=[slack],
+        )
+    return slack
+
+
+async def _told(engine: AsyncEngine, tenant: AlertTenant, channel: Any) -> list[str]:
+    """What the channel was told, in the order the job wrote it."""
+    async with engine.connect() as connection:
+        rows = await connection.execute(
+            text(
+                "SELECT kind FROM notifications WHERE org_id = :org_id AND channel_id = :channel "
+                "ORDER BY created_at, id"
+            ),
+            {"org_id": tenant.org_id, "channel": channel},
+        )
+        return [row.kind for row in rows]
+
+
+async def _set_sensitivity(engine: AsyncEngine, tenant: AlertTenant, level: str) -> None:
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE projects SET detection_sensitivity = :level WHERE id = :id"),
+            {"level": level, "id": tenant.project_id},
+        )
+
+
+async def test_a_gap_too_quiet_to_judge_slower_keeps_the_finding_open_and_silent(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """AC5, FR11: a slower finding, then 20 minutes with too few requests to judge
+    *slower*, then slow again. The gap reads *too little traffic*, the finding stays
+    open through it, and nothing is said after the opening: no *raised*, no *joined*."""
+    usual, too_few = 45, 35
+    _seed_four_weeks(administrator, project, requests=usual)
+    await _baselines(engine, store, project)
+    slack = await _slack_rule(engine, project)
+    gap_from, gap_to = ONSET + timedelta(minutes=10), ONSET + timedelta(minutes=30)
+    today = _span(ONSET - timedelta(minutes=30), ONSET + timedelta(minutes=40))
+    slow = {minute: PAST_THE_MINIMUM for minute in today if minute >= ONSET}
+    quiet = [minute for minute in today if gap_from <= minute < gap_to]
+    _seed(
+        administrator,
+        project,
+        [minute for minute in today if minute not in quiet],
+        slower_by=slow,
+        requests=usual,
+    )
+    _seed(administrator, project, quiet, slower_by=slow, requests=too_few)
+    minutes = _span(ONSET - timedelta(minutes=5), ONSET + timedelta(minutes=40))
+
+    await _judge_through(engine, store, project, minutes)
+
+    (finding,) = await _findings(engine, project)
+    assert finding.state == "open"
+    readings = store.for_project(await _bound(engine, project)).readings(
+        start=gap_from + SUSTAIN * MINUTE, end=gap_to
+    )
+    assert {reading.slower_verdict for reading in readings} == {"too_little_traffic"}
+    assert await _told(engine, project, slack) == ["opened"]
+
+
+async def test_a_two_hour_deviation_tells_slack_opened_joined_escalated_resolved_in_turn(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """AC19 through the job, on AC18's two hours: slower at first, then failing more on
+    the service and an endpoint, then slower past critical, then over. Slack hears
+    *opened*, then each join, then *escalated*, then *resolved*, and nothing else."""
+    _seed_four_weeks(administrator, project, endpoints=ENDPOINTS, until=timedelta(minutes=150))
+    await _baselines(engine, store, project)
+    slack = await _slack_rule(engine, project)
+    deviation = timedelta(hours=2)
+    joins, critical = ONSET + timedelta(minutes=20), ONSET + timedelta(minutes=60)
+    failing = {"GET /cart": (60, 0), "POST /pay": (20, 3), "GET /item": (15, 1), "GET /": (5, 0)}
+    span = _span(ONSET - timedelta(minutes=30), ONSET + deviation + timedelta(minutes=30))
+    during = [minute for minute in span if ONSET <= minute < ONSET + deviation]
+    _seed(
+        administrator,
+        project,
+        span,
+        slower_by={minute: PAST_CRITICAL if minute >= critical else 3 for minute in during},
+        endpoints={
+            minute: failing if joins <= minute < ONSET + deviation else ENDPOINTS for minute in span
+        },
+    )
+    minutes = _span(ONSET - timedelta(minutes=10), ONSET + deviation + timedelta(minutes=20))
+
+    for minute in minutes:
+        if minute == ONSET + timedelta(minutes=100):
+            await _baselines(engine, store, project, now=minute)
+        await judge_project(engine, store, project.project_id, settled=minute, now=minute)
+
+    (finding,) = await _findings(engine, project)
+    assert (finding.severity, finding.closed_reason) == ("critical", "recovered")
+    told = await _told(engine, project, slack)
+    assert told[0] == "opened"
+    assert told[-2:] == ["escalated", "resolved"]
+    assert told[1:-2] and set(told[1:-2]) == {"joined"}
+
+
+async def test_a_muted_service_s_rise_is_one_muted_finding_that_tells_nobody(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """AC31, BR9: AC8's rise on a muted service records one finding marked muted, and
+    nothing is sent while the mute lasts, nor once it has ended with the finding open."""
+    _seed_four_weeks(administrator, project)
+    await _baselines(engine, store, project)
+    slack = await _slack_rule(engine, project)
+    mute_ends = ONSET + timedelta(minutes=8)
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO service_detection_settings "
+                "(org_id, project_id, service_name, muted_until) "
+                "VALUES (:org_id, :project_id, :service, :until)"
+            ),
+            {
+                "org_id": project.org_id,
+                "project_id": project.project_id,
+                "service": SERVICE,
+                "until": mute_ends,
+            },
+        )
+    minutes = _rise(administrator, project, minutes=SUSTAIN, slower_by=PAST_THE_MINIMUM)
+
+    outcomes = await _judge_through(engine, store, project, minutes)
+
+    (finding,) = await _findings(engine, project)
+    assert finding.muted is True
+    assert finding.state == "closed" and finding.closed_at > mute_ends
+    assert sum(outcome.notified for outcome in outcomes) == 0
+    assert await _told(engine, project, slack) == []
+
+
+async def test_after_a_time_zone_change_and_a_rebuild_services_are_judged_not_learning(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """AC35, FR24: a project moved from UTC to another zone keeps its history. Once the
+    normal is rebuilt in the new zone, every signal is judged against it, weekly or
+    daily, and none starts learning again."""
+    _seed_four_weeks(administrator, project)
+    _seed(administrator, project, _span(ONSET - timedelta(minutes=30), ONSET))
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE projects SET timezone = 'Asia/Kolkata' WHERE id = :id"),
+            {"id": project.project_id},
+        )
+    await _baselines(engine, store, project)
+
+    await _judge_through(engine, store, project, _span(ONSET - timedelta(minutes=5), ONSET))
+
+    signals = (await _state(engine, project)).signals
+    assert {signals[signal]["verdict"] for signal in ("slower", "failing", "traffic")} <= {
+        "normal",
+        "elevated",
+    }
+    (reading,) = store.for_project(await _bound(engine, project)).readings(
+        start=ONSET, end=ONSET + MINUTE
+    )
+    modes = {reading.slower_mode, reading.failing_mode, reading.traffic_mode}
+    assert modes <= {"weekly", "daily"}

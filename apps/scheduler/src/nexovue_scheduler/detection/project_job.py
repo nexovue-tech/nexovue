@@ -1,10 +1,11 @@
 """One project's judging: each service's settled minutes, its readings and its
 findings (design, "Where it runs", "Findings and their state", "Failure handling").
 
-A run, all inside one Postgres transaction that holds the project's lock:
+A run, holding the project's lock throughout:
 
-1. **The lock.** A second job for the same project finds it held and does
-   nothing; the lock ends with the transaction, a killed job's included.
+1. **The lock.** Held by the job's connection across its transactions. A second
+   job for the same project finds it held and does nothing; the lock ends with
+   the run, or with the connection of a killed job.
 2. **Which minutes.** Each service resumes after its `last_judged_minute`, at most
    2 minutes per run; more than 10 behind, it restarts at the settled minute and
    judges nothing older. A service seen for the first time gets its state row now
@@ -16,14 +17,20 @@ A run, all inside one Postgres transaction that holds the project's lock:
    for one.
 4. **Readings** are frozen in ClickHouse before the commit. A crash after them
    judges the minutes again, and the newer reading wins (`store.READINGS_SQL`).
-5. **The project** (FR15): whether most of its services stopped sending together,
-   which is one project finding rather than one per service.
-6. **The commit**: each service's state by compare-and-set, its one finding
-   opened, raised, joined or closed (`lifecycle.py`), the project's finding, the
-   notifications each of those writes (`notify.py`), each open finding's links to
-   the threshold and *went silent* incidents on its service (BR2, AC20), and the
-   project's completed run, which is what "detection not running" is measured
-   from (C17). A run that ends a stop the owners were told of tells them it runs
+5. **The project** (FR15), committed first: whether most of its services stopped
+   sending together, which is one project finding rather than one per service.
+   It is decided on every judged service, those a stopped run already finished
+   included, from the traffic their state holds.
+6. **The services**, committed a batch at a time, those furthest behind first:
+   each service's state by compare-and-set, its one finding opened, raised,
+   joined or closed (`lifecycle.py`), the notifications each of those writes
+   (`notify.py`), and each open finding's links to the threshold and *went
+   silent* incidents on its service (BR2, AC20). Each decision commits with its
+   finding's row lock and its outbox rows (ADR-013). A run its time limit stops
+   keeps what it committed, and the next run continues from there (design,
+   *Failure handling*).
+7. **The completed run**, which is what "detection not running" is measured from
+   (C17). A run that ends a stop the owners were told of tells them it runs
    again (D24).
 
 The service's state also records what its normal must leave out that no other
@@ -69,6 +76,7 @@ from nexovue_platform.detection import (
     FindingSignal,
     compute_baselines_request,
     finding_signal,
+    normal_band,
     shift_ratio,
 )
 from nexovue_platform.jobs import JobRequest
@@ -112,6 +120,8 @@ from nexovue_scheduler.detection.lifecycle import (
     weight,
 )
 from nexovue_scheduler.detection.method import (
+    ENDPOINT_REQUESTS_TO_JUDGE,
+    JUDGED,
     FailingBaseline,
     FailingJudgement,
     Minute,
@@ -123,14 +133,16 @@ from nexovue_scheduler.detection.method import (
     judge_slower,
     judge_traffic,
 )
-from nexovue_scheduler.detection.projects import project_settings, try_lock
+from nexovue_scheduler.detection.projects import project_settings, session_lock
 from nexovue_scheduler.detection.settle import Span
 from nexovue_scheduler.detection.store import (
     DetectionStore,
+    EndpointLatency,
     ProjectBinding,
     ProjectDetection,
     Reading,
     bind_project,
+    reading_version,
     store_for_process,
 )
 from nexovue_scheduler.jobs.registry import task
@@ -146,12 +158,18 @@ RESTART_AFTER: Final = timedelta(minutes=10)
 # A project job's budget (design): it stops where it is, and the next run continues.
 PROJECT_SOFT_LIMIT_SECONDS: Final = 20
 PROJECT_HARD_LIMIT_SECONDS: Final = 30
+# Services decided and committed together: few enough that a run stopped by its limit
+# loses little, enough that 500 services are not 500 commits.
+SERVICES_PER_COMMIT: Final = 25
 _LOCK_PURPOSE: Final = "judging"
 NO_MODE: Final = "none"
 # Under `detection_state.signals`: the open finding's keys and counts, and the last
 # minute the service had requests (FR32).
 FINDING_KEY: Final = "finding"
 LAST_REQUEST_KEY: Final = "last_request_minute"
+# Under the traffic signal's state: what the last judged window's normal expected, so a
+# later run can count a service it has nothing more to judge in the project's finding.
+WINDOW_EXPECTED_KEY: Final = "window_expected"
 # Under the failing signal's state: each endpoint's runs above the base test.
 ENDPOINTS_KEY: Final = "endpoints"
 # What the project finding's one entry compares with.
@@ -399,7 +417,8 @@ def busiest(loads: Iterable[ServiceLoad], cap: int) -> tuple[list[str], list[str
 
 
 class StaleJudgementError(RuntimeError):
-    """A service's state moved under this job: another judged it. Nothing commits."""
+    """A service's state moved under this job: another judged it. Its batch's commit is
+    refused, and the run ends there."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -477,9 +496,27 @@ async def judge_project(
     trouble: IntakeTrouble = NO_TROUBLE,
 ) -> Outcome:
     """Judge one project's services up to the settled minute."""
-    async with engine.connect() as connection, connection.begin():
-        if not await try_lock(connection, _LOCK_PURPOSE, project_id):
+    async with (
+        engine.connect() as connection,
+        session_lock(connection, _LOCK_PURPOSE, project_id) as held,
+    ):
+        if not held:
             return Outcome(skipped="another job is judging this project")
+        return await _judge_locked(
+            connection, store, project_id, settled=settled, now=now, trouble=trouble
+        )
+
+
+async def _judge_locked(
+    connection: AsyncConnection,
+    store: DetectionStore,
+    project_id: uuid.UUID,
+    *,
+    settled: datetime,
+    now: datetime,
+    trouble: IntakeTrouble,
+) -> Outcome:
+    async with connection.begin():
         binding = await bind_project(connection, project_id)
         if binding is None:
             return Outcome(skipped="the project is gone")
@@ -516,69 +553,126 @@ async def judge_project(
         )
         await _mark_too_many(connection, binding, over, since=settled)
         outcome.over_cap = len(over)
+        # Judged up to the settled minute already, by a run its time limit stopped.
+        caught_up = [
+            service
+            for service in judging
+            if service not in plan and states[service].last_judged_minute is not None
+        ]
         plan = {service: plan[service] for service in judging if service in plan}
         if not plan:
             outcome.notified += await _record_run(connection, binding, now=now, judged=False)
             return outcome
-        judged = {
-            service: _judge_service(
-                counted.get(service, {}), normals, service, minutes, states[service], sensitivity
-            )
-            for service, minutes in sorted(plan.items())
-        }
-        outcome.baselines_missing = any(each.missing for runs in judged.values() for each in runs)
-        detection.write(
-            [_reading(service, each, width) for service, runs in judged.items() for each in runs]
+        version = await reading_version(connection)
+    judged = {
+        service: _judge_service(
+            counted.get(service, {}), normals, service, minutes, states[service], sensitivity
         )
-        signal_states = {
-            service: _signal_states(states[service].signals, runs)
+        for service, minutes in sorted(plan.items())
+    }
+    outcome.baselines_missing = any(each.missing for runs in judged.values() for each in runs)
+    detection.write(
+        [_reading(service, each, width) for service, runs in judged.items() for each in runs],
+        version=version,
+    )
+    signal_states = {
+        service: _signal_states(states[service].signals, runs) for service, runs in judged.items()
+    }
+    phases = {
+        **{service: _stored_phases(states[service]) for service in caught_up},
+        **signal_states,
+    }
+    snapshots = {
+        **{service: _stored_snapshot(states[service], width) for service in caught_up},
+        **{
+            service: _snapshot(runs[-1], states[service], signal_states[service])
             for service, runs in judged.items()
-        }
-        muted, snoozed = await _muted_and_snoozed(connection, binding, now)
-        false_alarms = await _false_alarms(connection, binding, states.values())
+        },
+    }
+    latest = max(
+        [runs[-1].at for runs in judged.values()]
+        + [minute for service in caught_up if (minute := states[service].last_judged_minute)]
+    )
+    async with connection.begin():
         project = await _keep_project_finding(
             connection,
             binding,
             states,
-            judged,
-            signal_states,
+            snapshots,
+            phases,
             trouble,
+            minute=latest,
+            width=width,
             zone=zone,
             now=now,
             outcome=outcome,
         )
-        for service, runs in judged.items():
-            state = states[service]
-            stored, held_out = await _keep_finding(
+    behind_first = sorted(judged, key=lambda service: (judged[service][0].at, service))
+    for first in range(0, len(behind_first), SERVICES_PER_COMMIT):
+        batch = behind_first[first : first + SERVICES_PER_COMMIT]
+        async with connection.begin():
+            await _keep_services(
                 connection,
                 detection,
                 binding,
-                state,
-                runs,
-                signal_states[service],
+                {service: judged[service] for service in batch},
+                states,
+                signal_states,
                 project,
-                false_alarms,
                 trouble,
                 zone=zone,
-                muted=service in muted,
                 now=now,
                 outcome=outcome,
             )
-            stored = _record_exclusions(
-                stored, runs, snoozed=service in snoozed, held_out=held_out, now=now
-            )
-            stored.pop(TOO_MANY_SERVICES_KEY, None)
-            await _advance(connection, binding, state, runs[-1].at, stored)
-            outcome.minutes_judged += len(runs)
-        outcome.services = len(judged)
+        outcome.minutes_judged += sum(len(judged[service]) for service in batch)
+        outcome.services += len(batch)
+    async with connection.begin():
         outcome.notified += await _record_run(
-            connection,
-            binding,
-            now=now,
-            judged=True,
-            traffic_lost_since=_losing_since(signal_states),
+            connection, binding, now=now, judged=True, traffic_lost_since=_losing_since(phases)
         )
     return outcome
+
+
+async def _keep_services(
+    connection: AsyncConnection,
+    detection: ProjectDetection,
+    binding: ProjectBinding,
+    judged: Mapping[str, Sequence[Judged]],
+    states: Mapping[str, ServiceState],
+    signal_states: Mapping[str, dict[str, dict[str, Any]]],
+    project: ProjectContext,
+    trouble: IntakeTrouble,
+    *,
+    zone: ZoneInfo,
+    now: datetime,
+    outcome: Outcome,
+) -> None:
+    """One batch of services' findings and states, read and decided in the transaction
+    that commits them."""
+    muted, snoozed = await _muted_and_snoozed(connection, binding, now)
+    false_alarms = await _false_alarms(connection, binding, [states[name] for name in judged])
+    for service, runs in judged.items():
+        state = states[service]
+        stored, held_out = await _keep_finding(
+            connection,
+            detection,
+            binding,
+            state,
+            runs,
+            signal_states[service],
+            project,
+            false_alarms,
+            trouble,
+            zone=zone,
+            muted=service in muted,
+            now=now,
+            outcome=outcome,
+        )
+        stored = _record_exclusions(
+            stored, runs, snoozed=service in snoozed, held_out=held_out, now=now
+        )
+        stored.pop(TOO_MANY_SERVICES_KEY, None)
+        await _advance(connection, binding, state, runs[-1].at, stored)
 
 
 def _losing_since(signal_states: Mapping[str, Mapping[str, Mapping[str, Any]]]) -> datetime | None:
@@ -741,6 +835,7 @@ def _signal_states(stored: Mapping[str, Any], runs: Sequence[Judged]) -> dict[st
         found[FAILING].pop(ENDPOINTS_KEY, None)
     last = runs[-1]
     found[TRAFFIC][WINDOW_REQUESTS_KEY] = last.minute.traffic.window_requests
+    found[TRAFFIC][WINDOW_EXPECTED_KEY] = last.minute.traffic.expected
     for signal, verdict, baseline in (
         (TRAFFIC, last.minute.traffic.verdict, last.normals.traffic),
         (FAILING, last.minute.failing.verdict, last.normals.failing),
@@ -769,10 +864,12 @@ async def _keep_project_finding(
     connection: AsyncConnection,
     binding: ProjectBinding,
     states: Mapping[str, ServiceState],
-    judged: Mapping[str, Sequence[Judged]],
-    signal_states: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    snapshots: Mapping[str, TrafficSnapshot],
+    phases: Mapping[str, Mapping[str, Mapping[str, Any]]],
     trouble: IntakeTrouble,
     *,
+    minute: datetime,
+    width: int,
     zone: ZoneInfo,
     now: datetime,
     outcome: Outcome,
@@ -792,11 +889,6 @@ async def _keep_project_finding(
             if state.signals.get(TRAFFIC, {}).get("project_finding") == str(row.id)
         )
     )
-    minute = max(runs[-1].at for runs in judged.values())
-    snapshots = {
-        service: _snapshot(runs[-1], states[service], signal_states[service])
-        for service, runs in judged.items()
-    }
     if involved is None:
         snapshots = {
             service: _kept_out(snapshot, states[service], trouble, minute)
@@ -804,10 +896,10 @@ async def _keep_project_finding(
         }
     decision = project_rule(snapshots, involved=involved, minute=minute)
     members = [snapshots[name] for name in decision.involved if name in snapshots]
-    signal = _project_signal(members, None if row is None else row.signals)
+    signal = _project_signal(members, None if row is None else row.signals, width)
     if decision.open:
         started = min(
-            datetime.fromisoformat(signal_states[name][TRAFFIC]["unusual_since"])
+            datetime.fromisoformat(phases[name][TRAFFIC]["unusual_since"])
             for name in decision.involved
         )
         finding_id = (
@@ -891,6 +983,30 @@ def _snapshot(
     )
 
 
+def _stored_phases(state: ServiceState) -> dict[str, dict[str, Any]]:
+    """Each signal's phase as a caught-up service's state holds it."""
+    return {signal: dict(state.signals.get(signal, {})) for signal in (TRAFFIC, FAILING, SLOWER)}
+
+
+def _stored_snapshot(state: ServiceState, width: int) -> TrafficSnapshot:
+    """A caught-up service's traffic at its last judged minute, from its state: what
+    `_snapshot` took from that minute when it was judged."""
+    traffic = state.signals.get(TRAFFIC, {})
+    since = traffic.get("unusual_since")
+    expected = traffic.get(WINDOW_EXPECTED_KEY)
+    own = state.signals.get(FINDING_KEY, {}).get("keys", [])
+    return TrafficSnapshot(
+        judged=traffic.get("verdict") in JUDGED,
+        unusual=traffic.get("verdict") == "unusual",
+        unusual_since=None if since is None else datetime.fromisoformat(since),
+        clear_minutes=int(traffic.get("clear_minutes", 0)),
+        in_own_finding=any(entry[0] == TRAFFIC for entry in own),
+        last_request=_last_request(state.signals, []),
+        expected_rpm=None if expected is None else float(expected) / width,
+        current_rpm=int(traffic.get(WINDOW_REQUESTS_KEY, 0)) / width,
+    )
+
+
 def _kept_out(
     snapshot: TrafficSnapshot, state: ServiceState, trouble: IntakeTrouble, minute: datetime
 ) -> TrafficSnapshot:
@@ -906,7 +1022,7 @@ def _kept_out(
 
 
 def _project_signal(
-    members: Sequence[TrafficSnapshot], stored: Sequence[Mapping[str, Any]] | None
+    members: Sequence[TrafficSnapshot], stored: Sequence[Mapping[str, Any]] | None, width: int
 ) -> FindingSignal:
     """The project finding's *losing traffic* entry: its services' requests a minute."""
     normal = sum(each.expected_rpm or 0.0 for each in members) if members else None
@@ -917,7 +1033,12 @@ def _project_signal(
         if before is not None and (worst is None or before < worst):
             worst = before
     return finding_signal(
-        "traffic", normal=normal, current=current, worst=worst, comparison=PROJECT_COMPARISON
+        "traffic",
+        normal=normal,
+        band=normal_band("traffic", normal, width),
+        current=current,
+        worst=worst,
+        comparison=PROJECT_COMPARISON,
     )
 
 
@@ -983,6 +1104,8 @@ async def _keep_finding(
         holds = advance_holds(holds, judged)
         if finding is None:
             continue
+        if SLOWER in change.worsened:
+            _name_slower_evidence(detection, service, finding.keys[SLOWER], judged)
         if change.opened:
             finding.muted = muted
             finding_id = await _open(connection, key, service, finding, zone)
@@ -1069,6 +1192,42 @@ async def _keep_finding(
         stored.pop(HELD_KEY, None)
         stored.pop(HELD_OUT_KEY, None)
     return stored, kept_out
+
+
+def _name_slower_evidence(
+    detection: ProjectDetection, service: str, record: KeyRecord, judged: MinuteJudged
+) -> None:
+    """FR3: *slower*'s evidence endpoint, read for the window that is now its worst."""
+    end = judged.minute + MINUTE
+    latency = detection.endpoint_latency(service, start=end - judged.width * MINUTE, end=end)
+    found = slower_evidence(latency)
+    record.endpoint, record.endpoint_current, record.endpoint_last_week = found or (
+        None,
+        None,
+        None,
+    )
+
+
+def slower_evidence(
+    latency: Mapping[str, EndpointLatency],
+) -> tuple[str, float, float] | None:
+    """The endpoint whose p95 rose most, in milliseconds, against the same window a week
+    before, with both p95s: evidence only, never a judgement (FR3). Milliseconds rather
+    than a ratio, so a fast endpoint that doubles does not outrank the one people wait
+    on. Each window needs the endpoint request floor, or its p95 says nothing."""
+    rises = [
+        (now - before, name, now, before)
+        for name, each in latency.items()
+        if each.requests >= ENDPOINT_REQUESTS_TO_JUDGE
+        and each.week_requests >= ENDPOINT_REQUESTS_TO_JUDGE
+        and (now := each.p95_ms) is not None
+        and (before := each.week_p95_ms) is not None
+        and now > before
+    ]
+    if not rises:
+        return None
+    _, name, now, before = min(rises, key=lambda rise: (-rise[0], rise[1]))
+    return name, now, before
 
 
 def _since(tracked: Mapping[str, Any], finding_id: uuid.UUID, finding: OpenFinding) -> datetime:
@@ -1246,6 +1405,7 @@ def _restore(row: Any, tracked: Mapping[str, Any]) -> OpenFinding:
     for position, (name, entry) in enumerate(zip(names, entries, strict=True)):
         clear, unjudged = (int(counts[position][1]), int(counts[position][2])) if counts else (0, 0)
         normal, worst = entry.get("normal"), entry.get("worst")
+        low, high = entry.get("band_low"), entry.get("band_high")
         keys[name] = KeyRecord(
             normal=normal,
             current=entry.get("current"),
@@ -1255,6 +1415,9 @@ def _restore(row: Any, tracked: Mapping[str, Any]) -> OpenFinding:
             clear=clear,
             unjudged=unjudged,
             weight=weight(name, normal, worst),
+            band=None if low is None or high is None else (low, high),
+            endpoint_current=entry.get("endpoint_current"),
+            endpoint_last_week=entry.get("endpoint_last_week"),
         )
     return OpenFinding(
         severity=row.severity, started_at=row.started_at, keys=keys, muted=bool(row.muted)

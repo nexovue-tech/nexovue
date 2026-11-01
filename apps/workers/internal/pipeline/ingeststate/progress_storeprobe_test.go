@@ -84,7 +84,7 @@ func TestProgressRoundTripsThroughKeeperMap(t *testing.T) {
 	if err := restarted.Refresh(ctx); err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
-	if _, err := restarted.Record(ctx, later.ReceivedAt, ingeststate.Marks{partition: first}, false); err != nil {
+	if _, err := restarted.Record(ctx, later.ReceivedAt, ingeststate.Marks{partition: first}, nil); err != nil {
 		t.Fatalf("record the replay: %v", err)
 	}
 	if again, _ := store.Load(ctx); again[partition] != later.CountedThrough {

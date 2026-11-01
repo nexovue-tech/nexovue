@@ -129,6 +129,40 @@ def seed_endpoints(
         )
 
 
+def seed_endpoint_latency(
+    client: Client,
+    tenant: AlertTenant,
+    service: str,
+    minutes: Sequence[datetime],
+    endpoints: Mapping[str, tuple[int, float]],
+) -> None:
+    """Each endpoint's requests a minute, every one taking the given milliseconds, as
+    the worker folds durations into `latency_quantiles` (`derive/endpointwriter.go`)."""
+    rows = [
+        f"('{tenant.org_id}','{tenant.project_id}','{service}','SERVER','{name}',"
+        f"{int(minute.timestamp())},{requests},{milliseconds})"
+        for minute in minutes
+        for name, (requests, milliseconds) in endpoints.items()
+    ]
+    for start in range(0, len(rows), INSERT_BATCH):
+        client.command(
+            f"""
+            INSERT INTO {ENDPOINT_ROLLUP}
+                (tenant_id, project_id, service_name, span_kind, span_name, minute,
+                 request_count, error_count, latency_quantiles)
+            SELECT tenant_id, project_id, service_name, span_kind, span_name,
+                   toDateTime(epoch), requests, 0,
+                   arrayReduce('quantilesState(0.5, 0.95, 0.99)',
+                               arrayMap(i -> milliseconds, range(requests)))
+            FROM values(
+                'tenant_id String, project_id String, service_name String, span_kind String,
+                 span_name String, epoch UInt32, requests UInt64, milliseconds Float64',
+                {",".join(rows[start : start + INSERT_BATCH])}
+            )
+            """
+        )
+
+
 def seed(
     client: Client,
     tenant: AlertTenant,
@@ -183,10 +217,11 @@ def seed_four_weeks(
     errors: int = 0,
     endpoints: Mapping[str, tuple[int, int]] | None = None,
     until: timedelta = timedelta(minutes=240),
+    requests: int = REQUESTS,
 ) -> None:
     """A service first seen 29 days ago, with normal traffic around noon on the four
     same weekdays its weekly pool reads; and its endpoints, when given."""
-    seed(client, tenant, [ONSET - timedelta(days=29)], service=service)
+    seed(client, tenant, [ONSET - timedelta(days=29)], service=service, requests=requests)
     for weeks in range(1, 5):
         day = ONSET - timedelta(days=7 * weeks)
         minutes = span(day - timedelta(minutes=200), day + until)
@@ -195,6 +230,7 @@ def seed_four_weeks(
             tenant,
             minutes,
             service=service,
+            requests=requests,
             errors=errors,
             endpoints=None if endpoints is None else dict.fromkeys(minutes, endpoints),
         )

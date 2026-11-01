@@ -17,13 +17,20 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
-from alert_fixtures import AlertTenant
+from alert_fixtures import AlertTenant, postgres_reachable
+from live import require_stack
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler import metrics
 from nexovue_scheduler.detection import coordinator, holds
 from nexovue_scheduler.erasure import owed
+
+require_stack(
+    reachable=postgres_reachable(),
+    suite="apps/scheduler/tests/test_scheduler_metrics_live.py",
+    remedy="Postgres is not reachable — run `just up`",
+)
 
 WAITED = timedelta(minutes=10)
 # The database's clock and this one's are not the same clock.

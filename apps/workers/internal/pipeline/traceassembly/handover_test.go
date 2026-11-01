@@ -204,12 +204,13 @@ func TestAHandoverDropsTheProgressHoldOfThePartitionThatLeft(t *testing.T) {
 	kept := ingeststate.Partition{Topic: pipeline.topic, ID: spansKept}
 
 	if _, err := pipeline.progress.Record(t.Context(), invariantStart,
-		ingeststate.Marks{moved: {CountedThrough: 100}, kept: {CountedThrough: 200}}, true); err != nil {
+		ingeststate.Marks{moved: {CountedThrough: 100}, kept: {CountedThrough: 200}},
+		[]ingeststate.Partition{moved, kept}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 	pipeline.release(map[string][]int32{pipeline.topic: {spansMoved}})
 	if _, err := pipeline.progress.Record(t.Context(),
-		invariantStart.Add(ingeststate.MaxProgressHold+time.Second), nil, false); err != nil {
+		invariantStart.Add(ingeststate.MaxProgressHold+time.Second), nil, nil); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 

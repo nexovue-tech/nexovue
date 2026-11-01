@@ -125,6 +125,24 @@ MINIMUM_CHANGES: Final[Mapping[int, MinimumChange]] = {
     3: MinimumChange(slower_ratio=1.25, failing_points=1.0, traffic_ratio=0.70),
 }
 
+
+def normal_band(
+    signal: Signal, normal: float | None, window_minutes: int
+) -> tuple[float, float] | None:
+    """A normal's band (FR16), in the signal's unit: from the normal to where the
+    sensitivity that judged it puts its minimum change, which its window names. Above
+    the normal for *slower* and *failing more*, below it for *losing traffic*, since
+    each is judged one way only. None without a normal or for an unknown window."""
+    change = MINIMUM_CHANGES.get(window_minutes)
+    if change is None or normal is None:
+        return None
+    if signal == "slower":
+        return normal, normal * change.slower_ratio
+    if signal == "failing":
+        return normal, normal + change.failing_points
+    return normal * change.traffic_ratio, normal
+
+
 # ----------------------------------------------------------- moving a normal
 
 # FR21: a shift's ratio is the median, over the last readings of the finding, of
@@ -239,12 +257,19 @@ class FindingSignal(TypedDict):
 
     signal: Signal
     normal: float | None
+    # The normal's band (FR16, `normal_band`): its lower and upper edge.
+    band_low: float | None
+    band_high: float | None
     current: float | None
     worst: float | None
     # What it was compared with: "Tuesdays around 15:00, last 3 weeks".
     comparison: str
     # The evidence endpoint (FR3), when one is named.
     endpoint: str | None
+    # For *slower*: the evidence endpoint's p95 in the worst window, and in the same
+    # window a week before. Evidence only, never a judgement (FR3).
+    endpoint_current: float | None
+    endpoint_last_week: float | None
 
 
 def finding_signal(
@@ -254,7 +279,10 @@ def finding_signal(
     current: float | None,
     worst: float | None,
     comparison: str,
+    band: tuple[float, float] | None = None,
     endpoint: str | None = None,
+    endpoint_current: float | None = None,
+    endpoint_last_week: float | None = None,
 ) -> FindingSignal:
     """A `findings.signals` entry, every key present."""
     if signal not in SIGNALS:
@@ -262,10 +290,14 @@ def finding_signal(
     return FindingSignal(
         signal=signal,
         normal=normal,
+        band_low=None if band is None else band[0],
+        band_high=None if band is None else band[1],
         current=current,
         worst=worst,
         comparison=comparison,
         endpoint=endpoint,
+        endpoint_current=endpoint_current,
+        endpoint_last_week=endpoint_last_week,
     )
 
 

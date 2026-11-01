@@ -524,8 +524,8 @@ async def test_a_run_killed_in_the_sustain_wait_sends_one_message_per_channel(
     clean: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """AC25, NFR3: each run dies before its commit, the one in the sustain wait and
-    the one that would open included, and another runs in its place. One finding,
+    """AC25, NFR3: each run dies before its service's commit, the one in the sustain
+    wait and the one that would open included, and another runs in its place. One finding,
     and one *opened* on the channel."""
     tenant = await _organization(engine, tenants)
     async with engine.begin() as connection:
@@ -543,7 +543,7 @@ async def test_a_run_killed_in_the_sustain_wait_sends_one_message_per_channel(
     for minute in _span(STOP - timedelta(minutes=5), STOP + timedelta(minutes=15)):
         # Every run is killed once, the sustain wait's and the opening's included,
         # then another runs in its place.
-        monkeypatch.setattr(project_job, "_record_run", _killed)
+        monkeypatch.setattr(project_job, "_advance", _killed)
         with pytest.raises(RuntimeError, match="killed"):
             await _sweep(engine, store, [tenant], minute, intake=None)
         monkeypatch.undo()
@@ -563,7 +563,7 @@ async def test_a_run_killed_in_the_sustain_wait_sends_one_message_per_channel(
     assert [(row.channel_id, row.sent) for row in told] == [(tenant.owners_channel_id, 1)]
 
 
-async def _killed(*_: object, **__: object) -> int:
+async def _killed(*_: object, **__: object) -> None:
     raise RuntimeError("killed between the readings and the commit")
 
 

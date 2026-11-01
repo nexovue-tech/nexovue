@@ -117,3 +117,30 @@ func TestAPartitionOutsideTheSettlementGetsNoMark(t *testing.T) {
 		t.Errorf("marks = %+v, want only the settled partition", marks)
 	}
 }
+
+// A refusal holds every partition with a batch still held, not only the settled
+// prefix's: the drained minute's rows can come from a batch that still waits on
+// edges, and its partition must not move past the hole once it reaches.
+func TestARefusalNamesEveryPartitionWithAHeldBatch(t *testing.T) {
+	stages := stagesFor(t, 100)
+	var queue consume.Queue[spanStorage]
+	holdBatch(t, &queue, stages, arrival{partition: 2, offset: 7})
+	holdBatch(t, &queue, stages, arrival{partition: 1, offset: 3})
+	settledFirstOnly := func(produced spanStorage) bool {
+		_, first := produced.receivedAt[ingeststate.Partition{Topic: spansPartition.Topic, ID: 2}]
+		return first
+	}
+
+	held := partitionsOf(queue.Reached(everyBatch))
+
+	if prefix := partitionsOf(queue.Reached(settledFirstOnly)); len(prefix) != 1 {
+		t.Fatalf("the settled prefix names %v, want only partition 2", prefix)
+	}
+	want := []ingeststate.Partition{
+		{Topic: spansPartition.Topic, ID: 1},
+		{Topic: spansPartition.Topic, ID: 2},
+	}
+	if len(held) != len(want) || held[0] != want[0] || held[1] != want[1] {
+		t.Errorf("a refusal holds %v, want %v", held, want)
+	}
+}

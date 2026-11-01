@@ -111,14 +111,25 @@ class Slot:
 
     def start(self) -> None:
         ours, theirs = _CHILDREN.Pipe()
-        process = _CHILDREN.Process(target=child.serve, args=(theirs, self._modules), daemon=True)
-        process.start()
-        theirs.close()
+        try:
+            process = _CHILDREN.Process(
+                target=child.serve, args=(theirs, self._modules), daemon=True
+            )
+            process.start()
+        except BaseException:
+            ours.close()
+            raise
+        finally:
+            theirs.close()
         self._process, self._pipe = process, ours
 
     async def run(self, job: ClaimedJob) -> tuple[Any, ...]:
         """Run one job in the child; kill and replace the child at the hard limit, and
-        replace it after the job when it has grown past its memory limit."""
+        replace it after the job when it has grown past its memory limit. A slot left
+        with no child by a failed replacement builds one first; if that fails too, the
+        job is not run and its lease lapses."""
+        if self._pipe is None:
+            self.start()
         assert self._pipe is not None
         self._pipe.send((job.task, job.kwargs, job.soft_limit_seconds, job.attempts))
         finished = await asyncio.to_thread(self._pipe.poll, job.hard_limit_seconds)
@@ -144,7 +155,7 @@ class Slot:
             limit_mib=self._memory_limit // 2**20,
         )
         self.stop()
-        self.start()
+        self._start_again()
 
     def stop(self) -> None:
         if self._pipe is not None:
@@ -170,7 +181,17 @@ class Slot:
             self._process.join()
         if self._pipe is not None:
             self._pipe.close()
-        self.start()
+        self._start_again()
+
+    def _start_again(self) -> None:
+        """Start a child in the old one's place. The old one is already gone, so a start
+        that fails leaves the slot empty rather than holding its closed pipe, and the
+        job just run still reports its outcome; `run` builds the child before the next."""
+        self._process, self._pipe = None, None
+        try:
+            self.start()
+        except Exception:
+            logger.exception("a worker child could not be started; its slot tries again")
 
 
 class Worker:

@@ -90,7 +90,7 @@ func run() error {
 
 	// The minutes the broker refused exports in, which detection holds rather than
 	// judges as a customer's traffic falling (C5).
-	refusals := intake.NewRecorder(intake.NewPostgresRefusals(dependencies.postgres), receiverID())
+	refusals := intake.NewRecorder(intake.NewPostgresRefusals(dependencies.postgres), receiverID(), log)
 
 	// One set of collaborators for both transports and both doors: the gates
 	// behind them are the same code, and a second Options would be a second

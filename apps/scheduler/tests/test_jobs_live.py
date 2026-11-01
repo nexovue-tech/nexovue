@@ -18,6 +18,7 @@ import signal
 import socket
 import uuid
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
@@ -31,8 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from structlog.testing import capture_logs
 
 from nexovue_scheduler import metrics
-from nexovue_scheduler.jobs import queue, worker
-from nexovue_scheduler.jobs.queue import enqueue
+from nexovue_scheduler.jobs import child, queue, worker
+from nexovue_scheduler.jobs.queue import ClaimedJob, enqueue
 from nexovue_scheduler.jobs.worker import Worker
 
 DSN: Final = os.environ.get(
@@ -461,3 +462,52 @@ async def test_a_child_that_grew_past_its_limit_is_replaced_after_its_job(
 
     assert kept[0] == kept[1]
     assert replaced[0] != replaced[1]
+
+
+def _claimed(task: str, **kwargs: object) -> ClaimedJob:
+    return ClaimedJob(
+        id=uuid.uuid4(),
+        task=task,
+        kwargs=dict(kwargs),
+        attempts=1,
+        max_attempts=1,
+        soft_limit_seconds=10,
+        hard_limit_seconds=15,
+    )
+
+
+@pytest.mark.parametrize("replaced_by", ["memory", "hard limit"])
+async def test_a_slot_whose_new_child_fails_to_start_rebuilds_before_its_next_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replaced_by: str
+) -> None:
+    """A child that cannot be started in its slot's place, after a job grew past the
+    memory limit or was killed at its hard limit, leaves no closed pipe behind: the
+    job's outcome is still reported, and the slot builds a child before its next job."""
+    notes = tmp_path / "notes"
+    slot = worker.Slot(MODULES, memory_limit=0 if replaced_by == "memory" else 2**40)
+    started = worker.Slot.start
+    failures = [OSError("the forkserver could not fork")]
+
+    def start_unless_failing(self: worker.Slot) -> None:
+        if failures:
+            raise failures.pop()
+        started(self)
+
+    monkeypatch.setattr(worker.Slot, "start", start_unless_failing)
+    try:
+        if replaced_by == "memory":
+            first = await slot.run(_claimed(job_fixtures.WHO, path=str(notes)))
+            assert first == (child.DONE,)
+        else:
+            stuck = _claimed(job_fixtures.BLOCK, path=str(notes), seconds=30)
+            first = await slot.run(replace(stuck, soft_limit_seconds=1, hard_limit_seconds=1))
+            assert first[0] == worker.KILLED
+
+        second = await slot.run(_claimed(job_fixtures.WHO, path=str(notes)))
+
+        assert second == (child.DONE,)
+        assert len([line for line in _lines(notes) if line.startswith("pid")]) == (
+            2 if replaced_by == "memory" else 1
+        )
+    finally:
+        slot.stop()

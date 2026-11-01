@@ -153,7 +153,7 @@ async def test_written_as_one_project_nothing_is_found_as_another(
         delete_after_run(READINGS_TABLE, a.org_id)
         minute = _minute()
 
-        store.for_project(a).write([_reading(minute)])
+        store.for_project(a).write([_reading(minute)], version=1)
 
         window = {"start": minute - timedelta(minutes=1), "end": minute + timedelta(minutes=1)}
         same_tenant_other_project = replace(a, project_id=b.project_id)
@@ -174,7 +174,7 @@ def test_the_same_service_in_two_tenants_keeps_both_readings_through_a_merge(
     tenants = [str(uuid.uuid4()), str(uuid.uuid4())]
     minute = _minute()
     for tenant in tenants:
-        store.for_project(_binding(tenant, project)).write([_reading(minute)])
+        store.for_project(_binding(tenant, project)).write([_reading(minute)], version=1)
 
     administrator.command(f"OPTIMIZE TABLE {READINGS_TABLE} FINAL")
 
@@ -194,10 +194,10 @@ def test_a_minute_written_again_is_read_once_as_its_newest_version(
 ) -> None:
     detection = store.for_project(_binding(str(uuid.uuid4()), str(uuid.uuid4())))
     minute = _minute()
-    detection.write([_reading(minute)])
+    detection.write([_reading(minute)], version=1)
 
     # The newest version has no p95: it must not be filled in from the older one.
-    detection.write([_reading(minute, window_p95_ms=None, slower_verdict="learning")])
+    detection.write([_reading(minute, window_p95_ms=None, slower_verdict="learning")], version=2)
 
     readings = detection.readings(start=minute, end=minute + timedelta(minutes=1))
     assert len(readings) == 1

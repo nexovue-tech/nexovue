@@ -5,6 +5,8 @@ on it while it works (design, "Where it runs").
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
@@ -82,6 +84,10 @@ _SETTINGS: Final = text(
 # job's included. Keyed by purpose and project: the judging and the hourly
 # baseline of one project may run together, two of either may not.
 _TRY_LOCK: Final = text("SELECT pg_try_advisory_xact_lock(hashtextextended(:key, 0))")
+# The same key held by the session, for a job that commits as it goes; it ends when
+# released or when the connection does, a killed job's included.
+_TRY_SESSION_LOCK: Final = text("SELECT pg_try_advisory_lock(hashtextextended(:key, 0))")
+_UNLOCK_SESSION: Final = text("SELECT pg_advisory_unlock(hashtextextended(:key, 0))")
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,5 +146,35 @@ async def project_settings(connection: AsyncConnection, binding: ProjectBinding)
 
 async def try_lock(connection: AsyncConnection, purpose: str, project_id: uuid.UUID) -> bool:
     """Whether this transaction now holds the project's lock for `purpose`."""
-    held = await connection.scalar(_TRY_LOCK, {"key": f"detection:{purpose}:{project_id}"})
+    held = await connection.scalar(_TRY_LOCK, {"key": _lock_key(purpose, project_id)})
     return bool(held)
+
+
+@asynccontextmanager
+async def session_lock(
+    connection: AsyncConnection, purpose: str, project_id: uuid.UUID
+) -> AsyncIterator[bool]:
+    """Whether this connection holds the project's lock for `purpose`, across every
+    transaction inside the block, with none open when it yields. Released however the
+    block ends; a connection that cannot release it is closed, which releases it too,
+    so a pooled connection never carries the lock into another job."""
+    key = {"key": _lock_key(purpose, project_id)}
+    held = bool(await connection.scalar(_TRY_SESSION_LOCK, key))
+    await connection.commit()
+    if not held:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        try:
+            await connection.rollback()
+            await connection.scalar(_UNLOCK_SESSION, key)
+            await connection.commit()
+        except BaseException:
+            await connection.invalidate()
+            raise
+
+
+def _lock_key(purpose: str, project_id: uuid.UUID) -> str:
+    return f"detection:{purpose}:{project_id}"

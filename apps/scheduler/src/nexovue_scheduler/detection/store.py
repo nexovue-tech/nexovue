@@ -15,7 +15,7 @@ in this module alone.
 
 from __future__ import annotations
 
-import time
+import math
 import uuid
 from array import array
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -259,6 +259,26 @@ FROM (
 )
 WHERE latest.2 = {window_minutes:UInt8}
 """
+# FR3's *slower* evidence: each endpoint's requests and p95 in one window and in the
+# same window a week earlier. The quantile levels are the column's own (000008).
+ENDPOINT_LATENCY_SQL: Final = """
+SELECT span_name,
+       sumIf(request_count, minute >= {from_minute:DateTime}) AS requests,
+       (quantilesMergeIf(0.5, 0.95, 0.99)(
+           latency_quantiles, minute >= {from_minute:DateTime}))[2] AS p95,
+       sumIf(request_count, minute < {week_to:DateTime}) AS week_requests,
+       (quantilesMergeIf(0.5, 0.95, 0.99)(
+           latency_quantiles, minute < {week_to:DateTime}))[2] AS week_p95
+FROM endpoint_stats_1m
+WHERE tenant_id = {tenant_id:String}
+  AND project_id = {project_id:String}
+  AND service_name = {service:String}
+  AND ((minute >= {from_minute:DateTime} AND minute < {to_minute:DateTime})
+       OR (minute >= {week_from:DateTime} AND minute < {week_to:DateTime}))
+GROUP BY span_name
+"""
+_WEEK: Final = timedelta(days=7)
+
 # When each service was first counted since `since`: where its history starts.
 FIRST_SEEN_SQL: Final = """
 SELECT service_name, toUnixTimestamp(min(minute)) AS first_epoch
@@ -277,6 +297,20 @@ _PROJECT_BINDING: Final = text(
     WHERE project_id = :project_id
     """
 )
+
+
+# A reading's version: Postgres's clock in microseconds, one clock however many hosts run
+# jobs. A re-run after a crash reads it later than the crashed run did, so its reading
+# wins `argMax` even where the crashed run's host clock was ahead (design, *Readings*).
+_READING_VERSION: Final = text(
+    "SELECT CAST(floor(extract(epoch FROM clock_timestamp()) * 1000000) AS bigint)"
+)
+
+
+async def reading_version(connection: AsyncConnection) -> int:
+    """The version the readings written next carry, from Postgres's clock."""
+    version = await connection.scalar(_READING_VERSION)
+    return int(version)
 
 
 @dataclass(frozen=True, slots=True)
@@ -448,20 +482,45 @@ class ProjectDetection:
             }
         return found
 
+    def endpoint_latency(
+        self, service: str, *, start: datetime, end: datetime
+    ) -> dict[str, EndpointLatency]:
+        """Each of the service's endpoints in [start, end) and the same window a week
+        earlier: its requests and p95 in each, None where it had no latency."""
+        rows = self._query(
+            ENDPOINT_LATENCY_SQL,
+            {
+                "service": service,
+                "from_minute": start,
+                "to_minute": end,
+                "week_from": start - _WEEK,
+                "week_to": end - _WEEK,
+            },
+        )
+        return {
+            str(name): EndpointLatency(
+                requests=int(requests),
+                p95_ms=_finite(p95),
+                week_requests=int(week_requests),
+                week_p95_ms=_finite(week_p95),
+            )
+            for name, requests, p95, week_requests, week_p95 in rows
+        }
+
     def first_seen(self, *, since: datetime) -> dict[str, datetime]:
         """Each service counted since `since`, and its first counted minute."""
         rows = self._query(FIRST_SEEN_SQL, {"since": since})
         return {str(service): datetime.fromtimestamp(int(epoch), UTC) for service, epoch in rows}
 
-    def write(self, readings: Sequence[Reading]) -> None:
-        """Freeze these readings under this project. A minute written again wins
-        by a higher version (migration 000036)."""
+    def write(self, readings: Sequence[Reading], *, version: int) -> None:
+        """Freeze these readings under this project at `version`, from
+        `reading_version`. A minute written again wins by a higher version
+        (migration 000036)."""
         if not readings:
             return
         for reading in readings:
             if reading.minute.utcoffset() is None:
                 raise ValueError(f"a reading's minute must be timezone-aware: {reading.minute}")
-        version = time.time_ns()
         bound = (
             self._binding.org_id,
             self._binding.project_id,
@@ -498,6 +557,22 @@ class ProjectDetection:
             "tenant_id": self._binding.org_id,
             "project_id": self._binding.project_id,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class EndpointLatency:
+    """One endpoint's requests and p95 in a window and in the same window a week before."""
+
+    requests: int
+    p95_ms: float | None
+    week_requests: int
+    week_p95_ms: float | None
+
+
+def _finite(value: Any) -> float | None:
+    """A merged quantile of no values is NaN: no latency, not a number."""
+    found = float(value)
+    return None if math.isnan(found) else found
 
 
 class MinuteCounts(Mapping[datetime, EndpointCounts]):

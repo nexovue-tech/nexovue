@@ -51,12 +51,13 @@ type ProgressStore interface {
 // Progress records how far each partition is counted, after the settlement's
 // derived inserts were acknowledged.
 //
-// A settlement whose derived insert the store refused is held: its rows were
-// stepped over (traceassembly/refusal.go), so the minutes they belonged to have
-// a hole, and progress past them would let detection judge that hole as a drop
-// in traffic. One insert covers every partition in the settlement, so every one
-// of them is held (C22). A hold ends MaxProgressHold after it began, refused or
-// not since, and the partition's newest mark is then written.
+// A derived insert the store refused holds every partition the caller names:
+// its rows were stepped over (traceassembly/refusal.go), so the minutes they
+// belonged to have a hole, and progress past them would let detection judge that
+// hole as a drop in traffic (C22). A named partition is held whether or not this
+// settlement carries a mark for it: the refused rows can come from batches that
+// reach the settled prefix only later. A hold ends MaxProgressHold after it
+// began, refused or not since, and the partition's newest mark is then written.
 //
 // It is not safe for concurrent use, except Invalidate, which the rebalance
 // callback calls while the pipeline goroutine is inside its poll.
@@ -73,10 +74,19 @@ type Progress struct {
 }
 
 // hold is one partition's progress held back since a refusal, and the newest
-// mark it reached in the meantime.
+// mark it reached in the meantime, if it reached any.
 type hold struct {
 	since  time.Time
 	newest Mark
+	marked bool
+}
+
+// reach folds a settled mark into the hold.
+func (h hold) reach(mark Mark) hold {
+	if !h.marked {
+		return hold{since: h.since, newest: mark, marked: true}
+	}
+	return hold{since: h.since, newest: newer(h.newest, mark), marked: true}
 }
 
 // Recorded is what one call wrote and held.
@@ -145,10 +155,16 @@ func (p *Progress) Forget(partitions []Partition) {
 // called on every settle, with no marks when nothing moved, so a hold on a
 // partition that has gone quiet still ends.
 //
-// refused says whether the store refused any derived insert of this
-// settlement. Nothing changes in memory unless the write succeeds, so the call
-// can be retried.
-func (p *Progress) Record(ctx context.Context, now time.Time, marks Marks, refused bool) (Recorded, error) {
+// refused names the partitions to hold because the store refused derived rows
+// of this settlement that may carry their records; nil when it refused none.
+// Nothing changes in memory unless the write succeeds, so the call can be
+// retried.
+func (p *Progress) Record(
+	ctx context.Context,
+	now time.Time,
+	marks Marks,
+	refused []Partition,
+) (Recorded, error) {
 	due, held, released := p.plan(now, marks, refused)
 	if err := p.store.Save(ctx, due); err != nil {
 		return Recorded{}, err
@@ -164,23 +180,27 @@ func (p *Progress) Record(ctx context.Context, now time.Time, marks Marks, refus
 }
 
 // plan works out what to write and what stays held, without changing anything.
-func (p *Progress) plan(now time.Time, marks Marks, refused bool) (Marks, map[Partition]hold, []Partition) {
+func (p *Progress) plan(
+	now time.Time,
+	marks Marks,
+	refused []Partition,
+) (Marks, map[Partition]hold, []Partition) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	held := maps.Clone(p.held)
+	for _, partition := range refused {
+		if _, holding := held[partition]; !holding {
+			held[partition] = hold{since: now}
+		}
+	}
 	due := make(Marks, len(marks))
 	for partition, mark := range marks {
-		current, holding := held[partition]
-		switch {
-		case holding:
-			current.newest = newer(current.newest, mark)
-			held[partition] = current
-		case refused:
-			held[partition] = hold{since: now, newest: mark}
-		default:
-			due[partition] = mark
+		if current, holding := held[partition]; holding {
+			held[partition] = current.reach(mark)
+			continue
 		}
+		due[partition] = mark
 	}
 
 	var released []Partition
@@ -188,7 +208,9 @@ func (p *Progress) plan(now time.Time, marks Marks, refused bool) (Marks, map[Pa
 		if now.Sub(current.since) < p.maxHold {
 			continue
 		}
-		due[partition] = current.newest
+		if current.marked {
+			due[partition] = current.newest
+		}
 		delete(held, partition)
 		released = append(released, partition)
 	}

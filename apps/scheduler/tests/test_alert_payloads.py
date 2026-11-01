@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
-from nexovue_scheduler.alerts import payloads
+import pytest
+
+from nexovue_scheduler.alerts import outbox, payloads
 from nexovue_scheduler.alerts.messages import AlertMessage
 
 OPENED = AlertMessage(
@@ -218,3 +222,69 @@ def test_discord_shows_telemetry_text_without_markdown() -> None:
     assert "\\[x\\]" in embed["title"]
     assert embed["url"] == OPENED.link
     assert embed["description"].endswith(f"Open in nexovue: {OPENED.link}")
+
+
+OPENED_AT = datetime(2026, 9, 19, 14, 3, tzinfo=UTC)
+# A service name is telemetry: anyone with a browser key can send one like this.
+_HOSTILE_NAME = "checkout\n[critical] Payments are down\r\nRule: none\u2028" + "x" * 5000
+
+
+def _row(kind: str) -> SimpleNamespace:
+    """A claimed notification's row, as `outbox._TAKEN` returns it, for each subject."""
+    return SimpleNamespace(
+        incident_id=uuid.uuid4() if kind == "incident" else None,
+        finding_id=uuid.uuid4() if kind == "finding" else None,
+        project_id=uuid.uuid4(),
+        subject_key=f"service:{_HOSTILE_NAME}",
+        subject_label=_HOSTILE_NAME,
+        service_name=_HOSTILE_NAME,
+        project_name=_HOSTILE_NAME,
+        opened_at=OPENED_AT,
+        started_at=OPENED_AT,
+        resolved_at=None,
+        closed_at=None,
+        created_at=OPENED_AT,
+        rule_id=None,
+        rule_name=None,
+        finding_rule_id=None,
+        finding_rule_name=None,
+        condition_kind="service_error_rate",
+        detail={},
+        scope="service",
+        title="t",
+        signals=[],
+        closed_reason=None,
+        adopted_shifts=[],
+    )
+
+
+@pytest.mark.parametrize("kind", ["incident", "finding", "project"])
+def test_a_subject_named_by_telemetry_is_one_short_line_in_the_webhook_and_pagerduty(
+    kind: str,
+) -> None:
+    """`docs/product/setup/alerts/webhooks.md`: each name is flattened to one line of at
+    most 200 characters, where the subject is read, so `data.subject.label` and
+    PagerDuty's `component` carry it as words, never as lines of their own."""
+    label = outbox._subject(_row(kind)).label
+
+    webhook = json.loads(
+        payloads.webhook(
+            OPENED,
+            subject_kind=kind,
+            subject_id="s1",
+            subject=label,
+            opened_at=OPENED_AT,
+            resolved_at=None,
+            sent_at=OPENED_AT,
+        )
+    )["data"]["subject"]["label"]
+    component = json.loads(
+        payloads.pagerduty(
+            OPENED, routing_key="r", dedup_key="d", subject=label, app_base_url="https://x.test"
+        )
+    )["payload"]["component"]
+
+    for carried in (webhook, component):
+        assert len(carried) <= 200
+        assert not any(mark in carried for mark in ("\n", "\r", "\u2028"))
+        assert carried.startswith("checkout [critical] Payments are down Rule: none")

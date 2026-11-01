@@ -15,6 +15,8 @@ package intake
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -52,21 +54,28 @@ type Recorder struct {
 	writer     Writer
 	receiverID string
 	flushEvery time.Duration
+	log        *slog.Logger
 
 	mu sync.Mutex
 	// minutes holds at most keptUnwritten's worth of entries: older ones are
 	// dropped at each flush, and the clock is the only key.
 	minutes map[time.Time]int
+	// failing are the minutes whose write has failed and been logged, so a
+	// control plane that stays down is one line per minute, not one per flush.
+	// Only the flush goroutine touches it.
+	failing map[time.Time]bool
 }
 
 // NewRecorder returns a recorder that writes nothing until Run is called.
 // receiverID names this receiver in the table's key.
-func NewRecorder(writer Writer, receiverID string) *Recorder {
+func NewRecorder(writer Writer, receiverID string, log *slog.Logger) *Recorder {
 	return &Recorder{
 		writer:     writer,
 		receiverID: receiverID,
 		flushEvery: flushInterval,
+		log:        log,
 		minutes:    make(map[time.Time]int),
+		failing:    make(map[time.Time]bool),
 	}
 }
 
@@ -101,12 +110,31 @@ func (r *Recorder) flush(ctx context.Context, now time.Time) {
 	current := now.UTC().Truncate(time.Minute)
 	for minute, count := range r.finished(current) {
 		if count < MinRefusalsPerMinute || current.Sub(minute) > keptUnwritten {
+			delete(r.failing, minute)
 			continue
 		}
 		if err := r.write(ctx, minute, count); err != nil {
+			r.reportFailure(ctx, minute, err)
 			r.keep(minute, count)
+			continue
 		}
+		delete(r.failing, minute)
 	}
+}
+
+// reportFailure logs a minute's first failed write. Detection cannot hold a
+// minute it never hears of, so a silent failure would let nexovue's own outage
+// read as every customer's traffic falling.
+func (r *Recorder) reportFailure(ctx context.Context, minute time.Time, err error) {
+	if r.failing[minute] {
+		return
+	}
+	r.failing[minute] = true
+	r.log.ErrorContext(ctx, "could not record a minute of refused exports; retrying until it is too old to hold",
+		slog.Time("minute", minute),
+		slog.Duration("retried_for", keptUnwritten),
+		slog.Any("error", fmt.Errorf("record the refusals of %s: %w", minute.Format(time.RFC3339), err)),
+	)
 }
 
 // finished takes the minutes before `current` out of the count.

@@ -8,9 +8,11 @@
 package traceassembly
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"maps"
+	"slices"
 	"time"
 
 	"github.com/ClickHouse/ch-go/chpool"
@@ -670,7 +672,28 @@ func (p *Pipeline) settleDerived(
 	}); err != nil {
 		return err
 	}
-	return p.recordProgress(ctx, now, progressMarks(settlement, received), refused)
+	var holding []ingeststate.Partition
+	if refused {
+		holding = partitionsOf(p.loop.Reached(everyBatch))
+	}
+	return p.recordProgress(ctx, now, progressMarks(settlement, received), holding)
+}
+
+// everyBatch reaches every batch the loop holds.
+func everyBatch(spanStorage) bool { return true }
+
+// partitionsOf names the partitions of the given offsets, in order.
+//
+// After a refusal it is given every batch still held, not only the settled
+// prefix: a drain writes each closed minute, and the batches carrying a minute's
+// records can still be waiting on edges, so the refused rows may belong to any
+// partition this worker has not yet committed.
+func partitionsOf(positions []consume.Position) []ingeststate.Partition {
+	partitions := slices.Collect(maps.Keys(ingeststate.RangesOf(positions)))
+	slices.SortFunc(partitions, func(a, b ingeststate.Partition) int {
+		return cmp.Or(cmp.Compare(a.Topic, b.Topic), cmp.Compare(a.ID, b.ID))
+	})
+	return partitions
 }
 
 // insertDerived writes one drain's derived rows, and reports whether the store
@@ -699,13 +722,13 @@ func (p *Pipeline) insertDerived(
 	return anyRefused, nil
 }
 
-// recordProgress writes how far each settled partition is counted, holding it
-// after a refusal (ingeststate.Progress), and says when a hold ran out.
+// recordProgress writes how far each settled partition is counted, holding the
+// refused partitions (ingeststate.Progress), and says when a hold ran out.
 func (p *Pipeline) recordProgress(
 	ctx context.Context,
 	now time.Time,
 	marks ingeststate.Marks,
-	refused bool,
+	refused []ingeststate.Partition,
 ) error {
 	if err := p.loop.Retry(ctx, "read derived progress", p.progress.Refresh); err != nil {
 		return err
@@ -757,9 +780,8 @@ func (p *Pipeline) Drain(ctx context.Context, now time.Time) error {
 	}
 	// Everything held is drained here, so every held offset is both counted
 	// through and written through.
-	everything := func(spanStorage) bool { return true }
-	reached := ingeststate.RangesOf(p.loop.Reached(everything))
-	received := receivedThrough(p.loop.ReachedOutput(everything))
+	reached := ingeststate.RangesOf(p.loop.Reached(everyBatch))
+	received := receivedThrough(p.loop.ReachedOutput(everyBatch))
 	written := p.ingest.Writing(reached)
 	return p.settleDerived(ctx, now, written, reached, received,
 		p.stages.counters.DrainAll(), p.stages.edges.DrainAll())

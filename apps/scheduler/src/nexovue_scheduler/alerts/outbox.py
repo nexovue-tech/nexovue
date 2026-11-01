@@ -39,6 +39,7 @@ names it.
 from __future__ import annotations
 
 import random
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -386,10 +387,26 @@ class Channel:
 
 SubjectKind = Literal["incident", "finding", "project"]
 
+# A subject's name can come from telemetry, which anyone with a public browser key can
+# send. Long enough for any real name; short enough that one cannot bury the message.
+NAME_LIMIT: Final = 200
+# C0 and C1 controls and the Unicode line and paragraph separators: anything that could
+# start a line the message did not write.
+_CONTROLS: Final = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+
+
+def one_line(name: str) -> str:
+    """A name as one line of at most `NAME_LIMIT` characters, so it can only ever be
+    words inside a message, never a line of its own."""
+    flat = _CONTROLS.sub(" ", name).strip()
+    return flat if len(flat) <= NAME_LIMIT else flat[: NAME_LIMIT - 1] + "…"
+
 
 @dataclass(frozen=True, slots=True)
 class Subject:
-    """What a notification is about, whichever kind it is (ADR-022)."""
+    """What a notification is about, whichever kind it is (ADR-022). Its label is
+    flattened here, once, so every message and every machine payload carries it as
+    one short line (`docs/product/setup/alerts/webhooks.md`)."""
 
     kind: SubjectKind
     # The incident's, the finding's, or the project's own id.
@@ -406,6 +423,9 @@ class Subject:
     rule_name: str | None
     condition_kind: str
     detail: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "label", one_line(self.label))
 
 
 @dataclass(frozen=True, slots=True)

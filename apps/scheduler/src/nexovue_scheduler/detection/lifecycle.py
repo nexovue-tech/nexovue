@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 from typing import Final, Literal
 from zoneinfo import ZoneInfo
 
-from nexovue_platform.detection import FindingSignal, Signal, finding_signal
+from nexovue_platform.detection import FindingSignal, Signal, finding_signal, normal_band
 
 from nexovue_scheduler.detection.method import (
     CRITICAL_FAILING,
@@ -212,6 +212,11 @@ class KeyRecord:
     unjudged: int = 0
     # How far the worst window went towards critical: which key leads the title.
     weight: float = 0.0
+    # The normal's band, from the sensitivity that judged the worst window (FR16).
+    band: tuple[float, float] | None = None
+    # *Slower*'s evidence endpoint's p95 then and the same window a week before (FR3).
+    endpoint_current: float | None = None
+    endpoint_last_week: float | None = None
 
 
 @dataclass(slots=True)
@@ -238,10 +243,13 @@ class OpenFinding:
             finding_signal(
                 key_signal(key),
                 normal=record.normal,
+                band=record.band,
                 current=record.current,
                 worst=record.worst,
                 comparison=record.comparison,
                 endpoint=record.endpoint,
+                endpoint_current=record.endpoint_current,
+                endpoint_last_week=record.endpoint_last_week,
             )
             for key, record in ((key, self.keys[key]) for key in self.ordered())
         ]
@@ -255,6 +263,8 @@ class Change:
     joined: tuple[str, ...] = ()
     raised: bool = False
     closed: ClosedReason | None = None
+    # Keys whose worst window this minute is, new keys included: where evidence is read.
+    worsened: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,18 +332,20 @@ def step(
     if finding is None:
         if not keys:
             return None, Change()
-        return _open(judged, keys, zone), Change(opened=True)
+        return _open(judged, keys, zone), Change(opened=True, worsened=tuple(keys))
     silent_since = context.last_request or finding.started_at
     if judged.requests == 0 and judged.minute - silent_since >= GONE_AFTER:
         return finding, Change(closed="service_gone")
     joined = tuple(key for key in keys if key not in finding.keys)
     raised = False
+    worsened = list(joined)
     for key in keys:
         record = finding.keys.get(key)
         if record is None:
             finding.keys[key] = _record(judged, key, zone)
         else:
-            _worsen(record, judged, key, zone)
+            if _worsen(record, judged, key, zone):
+                worsened.append(key)
             record.clear = record.unjudged = 0
         if judged.critical(key) and finding.severity != "critical":
             finding.severity, raised = "critical", True
@@ -352,7 +364,9 @@ def step(
             # Unusual but kept out of the finding (absorbed, or waiting): not clear.
             record.clear = record.unjudged = 0
     finding.dirty = True
-    return finding, Change(joined=joined, raised=raised, closed=_closing(finding))
+    return finding, Change(
+        joined=joined, raised=raised, closed=_closing(finding), worsened=tuple(worsened)
+    )
 
 
 def _closing(finding: OpenFinding) -> ClosedReason | None:
@@ -388,19 +402,23 @@ def _record(judged: MinuteJudged, key: str, zone: ZoneInfo) -> KeyRecord:
         comparison=_comparison_of(normal_of, judged.minute, zone),
         endpoint=_endpoint_of(judged, key),
         weight=weight(key, normal, current),
+        band=normal_band(key_signal(key), normal, judged.width),
     )
 
 
-def _worsen(record: KeyRecord, judged: MinuteJudged, key: str, zone: ZoneInfo) -> None:
-    """An unusual minute: the worst value, its normal and its comparison follow the
-    worst window (FR17)."""
+def _worsen(record: KeyRecord, judged: MinuteJudged, key: str, zone: ZoneInfo) -> bool:
+    """An unusual minute: the worst value, its normal, band and comparison follow the
+    worst window (FR17). Returns whether this minute is the new worst."""
     normal, current, normal_of = _values(judged, key)
     record.current = current
     reached = weight(key, normal, current)
-    if reached > record.weight:
-        record.weight, record.worst, record.normal = reached, current, normal
-        record.comparison = _comparison_of(normal_of, judged.minute, zone)
-        record.endpoint = _endpoint_of(judged, key)
+    if reached <= record.weight:
+        return False
+    record.weight, record.worst, record.normal = reached, current, normal
+    record.band = normal_band(key_signal(key), normal, judged.width)
+    record.comparison = _comparison_of(normal_of, judged.minute, zone)
+    record.endpoint = _endpoint_of(judged, key)
+    return True
 
 
 def _follow(record: KeyRecord, judged: MinuteJudged, key: str) -> None:
@@ -444,7 +462,8 @@ def weight(key: str, normal: float | None, current: float | None) -> float:
 
 
 def _endpoint_of(judged: MinuteJudged, key: str) -> str | None:
-    """FR3's evidence endpoint for *failing more*; an endpoint key names itself."""
+    """FR3's evidence endpoint for *failing more*; an endpoint key names itself. The
+    project job reads *slower*'s from the store, which this module never touches."""
     if key == FAILING:
         return judged.failing.evidence_endpoint
     return key_endpoint(key)
