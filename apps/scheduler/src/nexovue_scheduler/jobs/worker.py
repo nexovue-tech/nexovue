@@ -5,6 +5,12 @@ prefork pool, so `scheduler-light` still runs eight probes at once and
 `scheduler-deliveries` four. A child is reused job after job; one killed at its
 hard limit, or one that died, is replaced before its slot takes another job.
 
+**Children share their imports and are bounded in memory** (AC29). Each is forked
+from a forkserver that imported every task module once (`preload`), so eight
+children do not hold eight copies. A child keeps the memory its biggest job grew
+into, so one past `MAX_CHILD_PRIVATE_BYTES` after a job is replaced before its slot
+takes the next, as Celery's `worker_max_memory_per_child` does.
+
 **It polls every second and wakes early on `NOTIFY`.** The poll is what picks up
 beat's work and every retry; the notification only shortens the wait for a
 person who pressed Run now or Send test.
@@ -31,7 +37,8 @@ import uuid
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing.connection import Connection
-from multiprocessing.context import SpawnProcess
+from multiprocessing.context import ForkServerProcess
+from pathlib import Path
 from typing import Any, Final
 
 import asyncpg
@@ -63,39 +70,81 @@ DIED: Final = "died"
 REAP_SECONDS: Final = 5.0
 # The most jobs a worker runs at once from each capped queue.
 QUEUE_CAPS: Final[Mapping[str, int]] = {DETECTION_QUEUE: DETECTION_CONCURRENCY}
+# A child's own memory, beyond the pages it shares, past which it is replaced after a job.
+# A fresh child holds a few MiB of its own; the worst job measured, a project's hourly
+# baseline, leaves about 30 MiB (T8.2). Eight at this limit fit `scheduler-light`.
+MAX_CHILD_PRIVATE_BYTES: Final = 64 * 2**20
+# The lines of /proc/<pid>/smaps_rollup that count pages no other process maps.
+_PRIVATE_LINES: Final = ("Private_Clean:", "Private_Dirty:")
 
-_SPAWN = multiprocessing.get_context("spawn")
+# Not `fork`: a child must share no socket, thread or event loop with this process. The
+# forkserver is a fresh process that has only imported the task modules.
+_CHILDREN = multiprocessing.get_context("forkserver")
+_CHILDREN.set_forkserver_preload(["nexovue_scheduler.jobs.preload"])
+
+
+def private_bytes(pid: int) -> int | None:
+    """The memory only this process maps, which is what it adds to its container's; None
+    where Linux's `smaps_rollup` cannot be read."""
+    try:
+        rollup = Path(f"/proc/{pid}/smaps_rollup").read_text(encoding="ascii")
+    except OSError:
+        return None
+    lines = rollup.splitlines()
+    return sum(int(line.split()[1]) * 1024 for line in lines if line.startswith(_PRIVATE_LINES))
 
 
 class Slot:
     """One child process and the pipe to it."""
 
-    def __init__(self, modules: tuple[str, ...] = registry.TASK_MODULES) -> None:
+    def __init__(
+        self,
+        modules: tuple[str, ...] = registry.TASK_MODULES,
+        *,
+        memory_limit: int = MAX_CHILD_PRIVATE_BYTES,
+    ) -> None:
         self._modules = modules
-        self._process: SpawnProcess | None = None
+        self._memory_limit = memory_limit
+        self._process: ForkServerProcess | None = None
         self._pipe: Connection | None = None
         self.start()
 
     def start(self) -> None:
-        ours, theirs = _SPAWN.Pipe()
-        process = _SPAWN.Process(target=child.serve, args=(theirs, self._modules), daemon=True)
+        ours, theirs = _CHILDREN.Pipe()
+        process = _CHILDREN.Process(target=child.serve, args=(theirs, self._modules), daemon=True)
         process.start()
         theirs.close()
         self._process, self._pipe = process, ours
 
     async def run(self, job: ClaimedJob) -> tuple[Any, ...]:
-        """Run one job in the child; kill and replace the child at the hard limit."""
+        """Run one job in the child; kill and replace the child at the hard limit, and
+        replace it after the job when it has grown past its memory limit."""
         assert self._pipe is not None
         self._pipe.send((job.task, job.kwargs, job.soft_limit_seconds, job.attempts))
         finished = await asyncio.to_thread(self._pipe.poll, job.hard_limit_seconds)
         if finished:
             try:
                 outcome: tuple[Any, ...] = self._pipe.recv()
-                return outcome
             except (EOFError, OSError):
                 return (DIED, self._reap())
+            await asyncio.to_thread(self._renew_if_grown, job.task)
+            return outcome
         self._replace()
         return (KILLED, f"killed at its hard time limit of {job.hard_limit_seconds}s")
+
+    def _renew_if_grown(self, task: str) -> None:
+        assert self._process is not None and self._process.pid is not None
+        held = private_bytes(self._process.pid)
+        if held is None or held <= self._memory_limit:
+            return
+        logger.info(
+            "a worker child is replaced: it grew past its memory limit",
+            task=task,
+            private_mib=held // 2**20,
+            limit_mib=self._memory_limit // 2**20,
+        )
+        self.stop()
+        self.start()
 
     def stop(self) -> None:
         if self._pipe is not None:
@@ -104,6 +153,7 @@ class Slot:
             self._process.join(timeout=5)
             if self._process.is_alive():
                 self._process.kill()
+                self._process.join()
 
     def _reap(self) -> int | None:
         """Replace a child that died, returning its exit code: minus the signal
@@ -134,6 +184,7 @@ class Worker:
         task_modules: tuple[str, ...] = registry.TASK_MODULES,
         pulse: Pulse | None = None,
         caps: Mapping[str, int] = QUEUE_CAPS,
+        child_memory_limit: int = MAX_CHILD_PRIVATE_BYTES,
     ) -> None:
         self._engine = engine
         self._pulse = pulse or Pulse()
@@ -146,7 +197,9 @@ class Worker:
         # Unique per worker, not per process: the lease fence is this name, and two
         # workers sharing one would finish each other's jobs.
         self._name = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
-        self._idle = [Slot(task_modules) for _ in range(concurrency)]
+        self._idle = [
+            Slot(task_modules, memory_limit=child_memory_limit) for _ in range(concurrency)
+        ]
         self._running: set[asyncio.Task[None]] = set()
         self._wake = asyncio.Event()
         self._listener: asyncpg.Connection | None = None

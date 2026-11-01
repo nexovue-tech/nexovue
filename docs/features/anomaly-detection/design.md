@@ -292,6 +292,26 @@ Recorded as each plan step lands. It says where the built code differs from the 
       `detection_events`.
     - A failing project job never named its project. Each failure now logs `project_id` (C8).
   - **`docs/operations/detection.md`** is the runbook, walked on the dev stack (`status.md`).
+- **Step 8, 2026-11-01:**
+  - **AC29 at 200 projects and 2,000 services** (`tools/detection-measure/scale.py`, `just detection-scale`):
+    the first run missed the 768 MiB ceiling. Each spawned child imported every task module, about 70 MiB
+    each, and the hourly baseline job held 28 days of counts as Python tuples. Three fixes:
+    - **Children fork from a forkserver** that has preloaded every task module (`jobs/preload.py`), and a
+      child over 64 MiB of its own memory is replaced after its job, as Celery's
+      `worker_max_memory_per_child` does. Worst case: 8 × 64 MiB plus about 75 MiB, about 590 MiB.
+    - **The baseline job streams** the counts into compact arrays, 10 services at a time.
+    - **`index_granularity` is 256** on `service_stats_1m` and `detection_readings` (000035, 000036), so a
+      window read touches about the rows it needs. The sort key is unchanged.
+  - **The async insert** is stated in the code. ClickHouse 26.2 already made it the server default, so the
+    readings insert's 59 ms is the wait for durability, not a missing feature.
+  - **Not met literally: "at most 10 rows per service".** A month-full partition reads about 300 rows per
+    service, and `endpoint_stats_1m` (000008, granularity 8,192) reads about 11,500 rows per job. AC29
+    passes with both. Lowering `endpoint_stats_1m`'s granularity means rebuilding that table, so it is left
+    as a follow-up.
+  - **The service cap (500), *too many services*, "Not judged: no incoming requests", and the scheduler's
+    Postgres tenancy structure test** were found unbuilt by the docs pass and built. *Busiest* is ranked:
+    open finding first, then the larger of current and expected traffic, then name, so a stopped service
+    keeps its place. The mark is a key in `detection_state.signals`.
 
 ## Words used here
 

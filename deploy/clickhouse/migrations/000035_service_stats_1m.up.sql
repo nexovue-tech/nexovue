@@ -22,6 +22,12 @@
 -- The sort key leads with the tenant and the project, so every read is bound
 -- to both, and ends with the minute a window reads as a range.
 --
+-- **Granules of 256 rows, not the default 8,192.** The project job reads each
+-- service's last few minutes every minute, and a read takes whole granules: at
+-- 8,192 a month-full partition read 90,112 rows for 69, and at 256 it reads
+-- 3,072 (T8.2). The price is a primary index 32 times larger in memory: 2.1 MiB
+-- for the 78 million rows of AC29's month, measured.
+--
 -- Kept for the lesser of the derived retention and 35 days: detection's normal
 -- reads four weeks plus the current day, and nothing else reads this table.
 --
@@ -42,4 +48,4 @@ ENGINE = AggregatingMergeTree
 PARTITION BY (toYYYYMM(minute), derived_retention_days)
 ORDER BY (tenant_id, project_id, service_name, minute)
 TTL minute + toIntervalDay(least(derived_retention_days, 35))
-SETTINGS index_granularity = 8192, non_replicated_deduplication_window = 1000
+SETTINGS index_granularity = 256, non_replicated_deduplication_window = 1000

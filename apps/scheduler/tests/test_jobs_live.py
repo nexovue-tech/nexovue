@@ -40,7 +40,7 @@ DSN: Final = os.environ.get(
 )
 ASYNC_DSN: Final = DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
 MODULES: Final = ("job_fixtures",)
-# Long enough for a spawned child to import every task module and run a job.
+# Long enough for the forkserver to import every task module and a child to run a job.
 PATIENCE_SECONDS: Final = 20.0
 
 
@@ -110,6 +110,7 @@ async def _work_until(
     concurrency: int = 1,
     queues: list[str] | None = None,
     caps: dict[str, int] | None = None,
+    child_memory_limit: int = worker.MAX_CHILD_PRIVATE_BYTES,
 ) -> None:
     """Run workers on `lane` until `done()` holds, or fail when patience runs out."""
     stop = asyncio.Event()
@@ -122,6 +123,7 @@ async def _work_until(
                 concurrency=concurrency,
                 task_modules=MODULES,
                 caps=caps or {},
+                child_memory_limit=child_memory_limit,
             ).run(stop)
         )
         for _ in range(workers)
@@ -415,3 +417,47 @@ async def test_a_capped_queue_never_holds_more_than_its_slots(
     finally:
         async with engine.begin() as connection:
             await connection.execute(text("DELETE FROM jobs WHERE queue = :q"), {"q": others})
+
+
+def _pids(path: Path) -> list[str]:
+    return [line.split()[1] for line in _lines(path)]
+
+
+async def test_a_child_starts_from_the_preloaded_task_modules_frozen(
+    engine: AsyncEngine, lane: str, tmp_path: Path
+) -> None:
+    """Children share one import of the task modules rather than each holding its own,
+    and inherit them frozen, so their collector does not unshare those pages (AC29)."""
+    notes = tmp_path / "notes"
+    await _add(engine, JobRequest(task=job_fixtures.WHO, queue=lane, kwargs={"path": str(notes)}))
+
+    await _work_until(engine, lane, lambda: bool(_lines(notes)))
+
+    _, _, _, preloaded, _, frozen = _lines(notes)[0].split()
+    assert preloaded == "True"
+    assert int(frozen) > 0
+
+
+async def test_a_child_that_grew_past_its_limit_is_replaced_after_its_job(
+    engine: AsyncEngine, lane: str, tmp_path: Path
+) -> None:
+    """A child keeps the memory its biggest job grew into; past the limit it is replaced
+    once that job ends, as Celery's `worker_max_memory_per_child` does, and a child under
+    it is kept."""
+    notes = tmp_path / "notes"
+    path = {"path": str(notes)}
+    await _add(engine, JobRequest(task=job_fixtures.WHO, queue=lane, kwargs=path))
+    await _add(engine, JobRequest(task=job_fixtures.WHO, queue=lane, kwargs=path))
+    await _work_until(engine, lane, lambda: len(_lines(notes)) == 2)
+    kept = _pids(notes)
+
+    notes.unlink()
+    await _add(
+        engine, JobRequest(task=job_fixtures.GROW, queue=lane, kwargs={**path, "mebibytes": 48})
+    )
+    await _add(engine, JobRequest(task=job_fixtures.WHO, queue=lane, kwargs=path))
+    await _work_until(engine, lane, lambda: len(_lines(notes)) == 2, child_memory_limit=32 * 2**20)
+    replaced = _pids(notes)
+
+    assert kept[0] == kept[1]
+    assert replaced[0] != replaced[1]

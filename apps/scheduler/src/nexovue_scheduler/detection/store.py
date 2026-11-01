@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Sequence
+from array import array
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import astuple, dataclass, fields
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 from urllib.parse import unquote, urlsplit
 
@@ -44,6 +45,7 @@ from nexovue_scheduler.settings import get_settings
 logger = get_logger(__name__)
 
 READINGS_TABLE: Final = "detection_readings"
+_MINUTE: Final = timedelta(minutes=1)
 
 # A project job has 20 seconds in all (design, "Where it runs"); one read may not
 # take the shared server's 30 seconds or its gigabyte. The spill threshold stays at
@@ -53,6 +55,11 @@ DETECTION_READ_SETTINGS: Final = lowered_read_settings(
     max_memory_usage=256 * 1024 * 1024,
     max_bytes_before_external_group_by=128 * 1024 * 1024,
 )
+
+# One insert per project job, a few a second at the cost target: the server batches them
+# into fewer parts, and the job waits until its readings are written (design, *Performance
+# and scale*). Stated because ClickHouse's default changed in 26.2.
+READINGS_INSERT_SETTINGS: Final = {"async_insert": 1, "wait_for_async_insert": 1}
 
 NO_STORE: Final = (
     "CLICKHOUSE_DSN or CLICKHOUSE_DETECTION_WRITER_DSN is not set for the scheduler; "
@@ -340,8 +347,9 @@ class ProjectDetection:
     ) -> dict[str, dict[datetime, Minute]]:
         """Every service's counted minutes in [start, end). A minute with no row had
         no inbound requests."""
-        rows = self._query(WINDOW_MINUTES_SQL, {"from_minute": start, "to_minute": end})
-        return _by_service(rows)
+        return _by_service(
+            self._blocks(WINDOW_MINUTES_SQL, {"from_minute": start, "to_minute": end})
+        )
 
     def service_minutes(
         self, services: Sequence[str], *, start: datetime, end: datetime
@@ -349,11 +357,12 @@ class ProjectDetection:
         """The named services' counted minutes in [start, end)."""
         if not services:
             return {}
-        rows = self._query(
-            SERVICE_MINUTES_SQL,
-            {"services": list(services), "from_minute": start, "to_minute": end},
+        return _by_service(
+            self._blocks(
+                SERVICE_MINUTES_SQL,
+                {"services": list(services), "from_minute": start, "to_minute": end},
+            )
         )
-        return _by_service(rows)
 
     def endpoint_minutes(
         self, services: Sequence[str] | None, *, start: datetime, end: datetime
@@ -376,18 +385,23 @@ class ProjectDetection:
 
     def service_counts(
         self, services: Sequence[str], *, start: datetime, end: datetime
-    ) -> dict[str, dict[datetime, EndpointCounts]]:
-        """The named services' requests and failures for each counted minute."""
+    ) -> dict[str, MinuteCounts]:
+        """The named services' requests and failures for each counted minute in [start, end).
+
+        Streamed in blocks into compact arrays: 28 days of a service is 40,320 minutes, and
+        as Python tuples keyed by datetime ten services' took about 100 MiB (AC29)."""
         if not services:
             return {}
-        rows = self._query(
-            SERVICE_COUNTS_SQL,
-            {"services": list(services), "from_minute": start, "to_minute": end},
-        )
-        found: dict[str, dict[datetime, EndpointCounts]] = {}
-        for service, epoch, requests, errors in rows:
-            minute = datetime.fromtimestamp(int(epoch), UTC)
-            found.setdefault(str(service), {})[minute] = (int(requests), int(errors))
+        found: dict[str, MinuteCounts] = {}
+        parameters = {"services": list(services), "from_minute": start, "to_minute": end}
+        for services_column, epochs, requests, errors in self._blocks(
+            SERVICE_COUNTS_SQL, parameters
+        ):
+            for service, epoch, n, e in zip(services_column, epochs, requests, errors, strict=True):
+                counts = found.get(service)
+                if counts is None:
+                    counts = found[service] = MinuteCounts(start, end)
+                counts.add(datetime.fromtimestamp(int(epoch), UTC), int(n), int(e))
         return found
 
     def failing_normals(
@@ -458,23 +472,89 @@ class ProjectDetection:
             READINGS_TABLE,
             [(*bound, *astuple(reading)) for reading in readings],
             column_names=list(_WRITTEN_COLUMNS),
+            settings=READINGS_INSERT_SETTINGS,
         )
 
     def _query(self, sql: str, parameters: dict[str, Any]) -> list[tuple[Any, ...]]:
+        result = self._reader.query(
+            sql, parameters=self._bound(sql, parameters), settings=DETECTION_READ_SETTINGS
+        )
+        return [tuple(row) for row in result.result_rows]
+
+    def _blocks(self, sql: str, parameters: dict[str, Any]) -> Iterator[Sequence[Sequence[Any]]]:
+        """The result one block of columns at a time, so no read is held whole as rows."""
+        stream = self._reader.query_column_block_stream(
+            sql, parameters=self._bound(sql, parameters), settings=DETECTION_READ_SETTINGS
+        )
+        with stream:
+            yield from stream
+
+    def _bound(self, sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
         if not binds_tenant(sql):
             raise TenantFilterMissingError(sql)
         if not binds_project(sql):
             raise ProjectFilterMissingError(sql)
-        bound = parameters | {
+        return parameters | {
             "tenant_id": self._binding.org_id,
             "project_id": self._binding.project_id,
         }
-        result = self._reader.query(sql, parameters=bound, settings=DETECTION_READ_SETTINGS)
-        return [tuple(row) for row in result.result_rows]
 
 
-def _by_service(rows: Sequence[tuple[Any, ...]]) -> dict[str, dict[datetime, Minute]]:
+class MinuteCounts(Mapping[datetime, EndpointCounts]):
+    """One service's (requests, failures) by minute over [start, end), held as two arrays
+    of machine integers rather than a tuple and a datetime per minute. A minute never
+    added had no row, and is absent."""
+
+    def __init__(self, start: datetime, end: datetime) -> None:
+        self._start = start
+        length = max(0, (end - start) // _MINUTE)
+        self._requests = array("Q", bytes(8 * length))
+        self._failures = array("Q", bytes(8 * length))
+        self._counted = bytearray(length)
+
+    def add(self, minute: datetime, requests: int, failures: int) -> None:
+        index = self._index(minute)
+        if index is None:
+            raise ValueError(f"{minute} is outside [{self._start}, {self._end})")
+        self._requests[index] = requests
+        self._failures[index] = failures
+        self._counted[index] = 1
+
+    @property
+    def _end(self) -> datetime:
+        return self._start + len(self._counted) * _MINUTE
+
+    def _index(self, minute: datetime) -> int | None:
+        offset = minute - self._start
+        index = offset // _MINUTE
+        if offset % _MINUTE or not 0 <= index < len(self._counted):
+            return None
+        return index
+
+    def get(self, minute: datetime, default: Any = None) -> Any:
+        index = self._index(minute)
+        if index is None or not self._counted[index]:
+            return default
+        return self._requests[index], self._failures[index]
+
+    def __getitem__(self, minute: datetime) -> EndpointCounts:
+        found: EndpointCounts | None = self.get(minute)
+        if found is None:
+            raise KeyError(minute)
+        return found
+
+    def __iter__(self) -> Iterator[datetime]:
+        for index, counted in enumerate(self._counted):
+            if counted:
+                yield self._start + index * _MINUTE
+
+    def __len__(self) -> int:
+        return sum(self._counted)
+
+
+def _by_service(blocks: Iterable[Sequence[Sequence[Any]]]) -> dict[str, dict[datetime, Minute]]:
     found: dict[str, dict[datetime, Minute]] = {}
+    rows = (row for block in blocks for row in zip(*block, strict=True))
     for service, epoch, requests, errors, buckets in rows:
         counts = tuple(int(count) for count in buckets)
         if len(counts) != BUCKET_COUNT:

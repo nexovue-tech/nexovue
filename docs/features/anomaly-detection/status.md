@@ -146,6 +146,23 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
     - the web gives 1,474, plus 124 in the browser SDK;
     - the Python suites give 9,246 passed. The 75 that fail all need gateseed's data or internet DNS. The
       walk's one service now makes two `test_services_live.py` tests fail rather than error.
+- **Step 8** so far (2026-11-01): the fault bed (T8.1, its run waits on the founder's Mac), AC27's
+  no-AI test (T8.4), the docs (T8.5), and AC29 (T8.2).
+  - **AC29 passes,** measured here with 200 organizations × 10 services, live spans through the real
+    receiver, and `scheduler-light` from source in a real 768 MiB cgroup, over 79 judged minutes and a full
+    hourly baseline sweep:
+
+    | Clause | Result |
+    |---|---|
+    | Judged within 90 s of settling | max 78.2 s, p95 73.9 s, 0 service-minutes over 90 s |
+    | Inside the ceiling | cgroup peak 553 of 768 MiB, 0 OOM kills |
+    | Rows read | 4.17 M per pass; a project's window, month-full, 2,931 rows for 64 needed |
+    | Memory | children 45–58 MiB each; trace worker 233–250 MiB; worker CPU 0.13 cores |
+    | Storage | `service_stats_1m` +2.58 M rows, about 22 MiB a day; `detection_readings` about 78 MiB a day, 2.7 GiB over 35 days; Postgres `detection_baselines` 553 MiB, rewritten hourly |
+
+    The machine (4 vCPUs, 15 GiB) is close to the 16 GB install; memory transfers directly. ClickHouse
+    reads grow as the month's partition fills. The 200 `ac29-*` tenants remain in the dev stores
+    (`just detection-scale remove --yes`).
 - **A stop's limit:** at high sensitivity a stop needs about 2.2 expected requests a minute, not 2
   (spec, FR32, *Limit*; AC41).
 - **The dev stores run in this environment**, through a local compose override for the sandbox's open-file
@@ -203,6 +220,15 @@ here for review (2026-11-01).
 - **Four design items found unbuilt are built, not deferred:** the scheduler's Postgres tenancy structure
   test, the cap of 500 judged services per project, the *too many services* state, and "Not judged: no
   incoming requests". The approved design promised them, and the first is a tenant-safety check.
+- **AC29's fixes:** a forkserver with preloaded modules, a 64 MiB per-child limit, a streamed baseline job,
+  and `index_granularity` 256 changed in the unreleased migrations 000035 and 000036, not by a fixup
+  migration. Concurrency and the ceiling are unchanged.
+- **`endpoint_stats_1m`'s read cost is a follow-up,** not fixed here. AC29 passes with it, and its fix
+  rebuilds a table older than F6.
+- **"Busiest" for the service cap** puts services with open findings first, then ranks by the larger of
+  current and expected traffic, so a stopped service is still judged and its stop is still caught.
+- **The connector poller's two updates by id are allowlisted** in the new tenancy test, not changed. The
+  poll is install-wide and carries no `org_id`; binding one needs a change to the poller beyond F6.
 - **Step 7's *detection stalled* alert is the heartbeat** for a scheduler whose minute sweep never runs. The
   owners' email can't report that case, because the email is sent by the sweep itself.
 

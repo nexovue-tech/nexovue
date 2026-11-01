@@ -27,6 +27,9 @@
 -- requests for a p95. Verdicts are strings so the method's vocabulary
 -- (T2c.2) is defined in one place, the scheduler.
 --
+-- **Granules of 256 rows**, for the reason `service_stats_1m` gives (000035):
+-- reads take one service's minutes, and a granule of 8,192 holds many services'.
+--
 -- Kept for the lesser of the derived retention and 35 days. A finding copies
 -- what it needs into its own record, so it stays explainable after its readings
 -- expire (AC40).
@@ -79,4 +82,4 @@ ENGINE = ReplacingMergeTree(version)
 PARTITION BY (toYYYYMM(minute), derived_retention_days)
 ORDER BY (tenant_id, project_id, service_name, minute)
 TTL minute + toIntervalDay(least(derived_retention_days, 35))
-SETTINGS index_granularity = 8192
+SETTINGS index_granularity = 256

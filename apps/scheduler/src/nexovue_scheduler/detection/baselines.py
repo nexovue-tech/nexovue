@@ -115,10 +115,9 @@ AHEAD: Final = timedelta(hours=2)
 BASELINE_SPREAD: Final = timedelta(minutes=30)
 # Older rows than this are deleted by the next run; nothing judges them again.
 KEPT: Final = timedelta(hours=1)
-# Services read together: about 50 services, 4 days and 500 minutes, well inside a read's rows.
-SERVICE_BATCH: Final = 50
-# A burst profile reads 28 days of a service's counts: fewer services at once.
-PROFILE_BATCH: Final = 10
+# Services read, computed and written together. A worker child keeps the memory a job grew
+# into, so a job's peak is bounded by this, not by the project's size (AC29).
+SERVICE_BATCH: Final = 10
 # A finding this short is one of the service's own bursts, which the burst profile
 # keeps (the simulation's `SHORT_FINDING`, "history-volume" profile), unless it was
 # marked a false alarm (D26).
@@ -1046,6 +1045,22 @@ def horizon(now: datetime) -> list[datetime]:
     return [start + index * MINUTE for index in range((BEHIND + AHEAD) // MINUTE)]
 
 
+@dataclass(frozen=True, slots=True)
+class _ProjectRun:
+    """What one baseline run reads once for its project and uses for every batch."""
+
+    binding: ProjectBinding
+    detection: ProjectDetection
+    zone: ZoneInfo
+    width: int
+    minutes: Sequence[datetime]
+    days: Sequence[date]
+    first_seen: Mapping[str, datetime]
+    kept: Mapping[str, ServiceExclusions]
+    endpoint_runs: Mapping[str, Mapping[str, Sequence[tuple[datetime, datetime]]]]
+    shifts: Mapping[str, Sequence[Shift]]
+
+
 async def compute_project(
     engine: AsyncEngine, store: DetectionStore, project_id: uuid.UUID, *, now: datetime
 ) -> int | None:
@@ -1060,54 +1075,24 @@ async def compute_project(
         settings = await project_settings(connection, binding)
         detection = store.for_project(binding)
         width = settings.sensitivity.window_minutes
-        zone = settings.zone
         minutes = horizon(now)
         first_seen = detection.first_seen(since=now - HISTORY)
-        kept = await project_exclusions(
-            connection, binding, sorted(first_seen), now=now, width=width
+        run = _ProjectRun(
+            binding=binding,
+            detection=detection,
+            zone=settings.zone,
+            width=width,
+            minutes=minutes,
+            days=sorted({minute.astimezone(settings.zone).date() for minute in minutes}),
+            first_seen=first_seen,
+            kept=await project_exclusions(
+                connection, binding, sorted(first_seen), now=now, width=width
+            ),
+            endpoint_runs=await recorded_endpoint_runs(connection, binding),
+            shifts=await project_shifts(connection, binding, now=now),
         )
-        days = sorted({minute.astimezone(zone).date() for minute in minutes})
-        endpoint_runs = await recorded_endpoint_runs(connection, binding)
-        shifts = await project_shifts(connection, binding, now=now)
-        rows: list[dict[str, Any]] = []
         for batch in batched(sorted(first_seen), SERVICE_BATCH, strict=False):
-            pools = {
-                service: [
-                    select_pool(minute, zone, first_seen[service], kept[service].normal)
-                    for minute in minutes
-                ]
-                for service in batch
-            }
-            history = _read_history(detection, pools, width)
-            profiles, endpoint_day_profiles = _read_profiles(
-                detection, batch, days, zone, width, kept, endpoint_runs
-            )
-            for service in batch:
-                computed = service_baselines(
-                    history.get(service, {}),
-                    minutes,
-                    zone=zone,
-                    first_seen=first_seen[service],
-                    width=width,
-                    kept_out=kept[service].normal,
-                    profiles=profiles.get(service, {}),
-                    endpoint_profiles=endpoint_day_profiles.get(service, {}),
-                    shifts=shifts.get(service, ()),
-                )
-                rows.extend(
-                    {
-                        "org_id": uuid.UUID(binding.org_id),
-                        "project_id": project_id,
-                        "service_name": service,
-                        "signal": signal,
-                        "minute": minute,
-                        "baseline": json.dumps(stored),
-                    }
-                    for minute, baselines in computed.items()
-                    for signal, stored in baselines_json(baselines).items()
-                )
-        if rows:
-            await connection.execute(_UPSERT, rows)
+            await connection.execute(_UPSERT, _batch_rows(run, batch))
         await connection.execute(
             _PRUNE,
             {
@@ -1117,6 +1102,50 @@ async def compute_project(
             },
         )
     return len(first_seen)
+
+
+def _batch_rows(run: _ProjectRun, services: Sequence[str]) -> list[dict[str, Any]]:
+    """The stored rows of a batch of services. Its history is local, so it is freed before
+    the next batch reads its own; the profiles are read first, so their 28 days of counts
+    are freed before the history is read."""
+    profiles, endpoint_day_profiles = _read_profiles(
+        run.detection, services, run.days, run.zone, run.width, run.kept, run.endpoint_runs
+    )
+    pools = {
+        service: [
+            select_pool(minute, run.zone, run.first_seen[service], run.kept[service].normal)
+            for minute in run.minutes
+        ]
+        for service in services
+    }
+    history = _read_history(run.detection, pools, run.width)
+    org_id, project_id = uuid.UUID(run.binding.org_id), uuid.UUID(run.binding.project_id)
+    rows: list[dict[str, Any]] = []
+    for service in services:
+        computed = service_baselines(
+            history.get(service, {}),
+            run.minutes,
+            zone=run.zone,
+            first_seen=run.first_seen[service],
+            width=run.width,
+            kept_out=run.kept[service].normal,
+            profiles=profiles.get(service, {}),
+            endpoint_profiles=endpoint_day_profiles.get(service, {}),
+            shifts=run.shifts.get(service, ()),
+        )
+        rows.extend(
+            {
+                "org_id": org_id,
+                "project_id": project_id,
+                "service_name": service,
+                "signal": signal,
+                "minute": minute,
+                "baseline": json.dumps(stored),
+            }
+            for minute, baselines in computed.items()
+            for signal, stored in baselines_json(baselines).items()
+        )
+    return rows
 
 
 async def project_exclusions(
@@ -1246,36 +1275,33 @@ def _read_profiles(
     last = max(starts.values())
     found: dict[str, dict[date, BurstProfile]] = {}
     endpoints: dict[str, dict[date, dict[str, BurstProfile]]] = {}
-    for batch in batched(services, PROFILE_BATCH, strict=False):
-        normals = detection.failing_normals(
-            list(batch), start=first, end=last, window_minutes=width
-        )
-        judged = sorted(normals)
-        counts = detection.service_counts(judged, start=first - (width - 1) * MINUTE, end=last)
-        windows = detection.endpoint_windows(judged, start=first, end=last, window_minutes=width)
-        for service in judged:
-            profile_kept = kept[service].profile
-            found[service] = {
-                day: failing_profile(
-                    counts.get(service, {}),
-                    normals[service],
-                    day_start=start,
-                    width=width,
-                    kept_out=profile_kept,
-                )
-                for day, start in starts.items()
-            }
-            endpoints[service] = {
-                day: endpoint_profiles(
-                    windows.get(service, {}),
-                    endpoint_runs.get(service, {}),
-                    day_start=start,
-                    width=width,
-                    kept_out=profile_kept,
-                    days=judged_days(normals[service], start),
-                )
-                for day, start in starts.items()
-            }
+    normals = detection.failing_normals(list(services), start=first, end=last, window_minutes=width)
+    judged = sorted(normals)
+    counts = detection.service_counts(judged, start=first - (width - 1) * MINUTE, end=last)
+    windows = detection.endpoint_windows(judged, start=first, end=last, window_minutes=width)
+    for service in judged:
+        profile_kept = kept[service].profile
+        found[service] = {
+            day: failing_profile(
+                counts.get(service, {}),
+                normals[service],
+                day_start=start,
+                width=width,
+                kept_out=profile_kept,
+            )
+            for day, start in starts.items()
+        }
+        endpoints[service] = {
+            day: endpoint_profiles(
+                windows.get(service, {}),
+                endpoint_runs.get(service, {}),
+                day_start=start,
+                width=width,
+                kept_out=profile_kept,
+                days=judged_days(normals[service], start),
+            )
+            for day, start in starts.items()
+        }
     return found, endpoints
 
 
