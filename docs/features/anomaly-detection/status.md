@@ -194,6 +194,15 @@ here for review (2026-11-01).
   dependency other than Kafka, so a control-plane outage is not left to a ticket.
 - **The sweep records itself in a table, not only a metric:** a worker's metric resets on restart, and
   *stalled* must fire when the sweep stops. Both Step 7 alerts page, like D33's email.
+- **AC29 missed on memory, so its root cause is fixed rather than a fallback chosen.** At 200 projects and
+  2,000 services, lag passed (75–80 s) but `scheduler-light` hit its 768 MiB ceiling, with OOM kills that
+  also hit the probes sharing it. The plan said the design's fallbacks would come back to the founder; the
+  founder asked for decisions to be made and listed instead. The order chosen: lower the jobs' own peak
+  memory, then bound each child's memory, then cut the rows read, then the async insert the design
+  promised. Concurrency or the ceiling only with numbers. A separate container stays rejected (D32).
+- **Four design items found unbuilt are built, not deferred:** the scheduler's Postgres tenancy structure
+  test, the cap of 500 judged services per project, the *too many services* state, and "Not judged: no
+  incoming requests". The approved design promised them, and the first is a tenant-safety check.
 - **Step 7's *detection stalled* alert is the heartbeat** for a scheduler whose minute sweep never runs. The
   owners' email can't report that case, because the email is sent by the sweep itself.
 

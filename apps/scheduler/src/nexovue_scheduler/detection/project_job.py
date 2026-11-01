@@ -8,7 +8,9 @@ A run, all inside one Postgres transaction that holds the project's lock:
 2. **Which minutes.** Each service resumes after its `last_judged_minute`, at most
    2 minutes per run; more than 10 behind, it restarts at the settled minute and
    judges nothing older. A service seen for the first time gets its state row now
-   (C24) and starts at the settled minute.
+   (C24) and starts at the settled minute. A project judges at most
+   `MAX_JUDGED_SERVICES`, its busiest (`busiest`); the rest are not judged, and
+   their state says since when they are past the cap, for *too many services*.
 3. **Judging** all three signals and each endpoint, against the hourly baseline
    (`baselines.py`). A missing baseline judges nothing for that minute and asks
    for one.
@@ -61,6 +63,9 @@ from nexovue_platform.detection import (
     ADOPTED_AUDIT_ACTION,
     ADOPTION_AFTER_DAYS,
     FINDING_AUDIT_TARGET,
+    MAX_JUDGED_SERVICES,
+    TOO_MANY_SERVICES_KEY,
+    WINDOW_REQUESTS_KEY,
     FindingSignal,
     compute_baselines_request,
     finding_signal,
@@ -284,6 +289,19 @@ _STOP_REPORTED: Final = text(
     FOR UPDATE
     """
 )
+# A service past the cap keeps the minute it first was, so the screen can say since
+# when; its judging state is left as it stood (design, *Security, tenancy, and privacy*).
+_MARK_TOO_MANY: Final = text(
+    f"""
+    UPDATE detection_state
+    SET signals = jsonb_set(
+        coalesce(signals, '{{}}'), '{{{TOO_MANY_SERVICES_KEY}}}', to_jsonb(CAST(:since AS text))
+    )
+    WHERE org_id = :org_id AND project_id = :project_id
+      AND service_name = ANY(CAST(:services AS text[]))
+      AND signals -> '{TOO_MANY_SERVICES_KEY}' IS NULL
+    """
+)
 # When the run ended, not when its transaction began: freshness (C17). A run that
 # judged minutes also casts the project's vote for the install-wide guard; one
 # that judged none, held by the coordinator, leaves its last vote standing.
@@ -354,6 +372,32 @@ def _spans_in(spans: Iterable[Sequence[str]]) -> tuple[Span, ...]:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ServiceLoad:
+    """How busy one service is at the settled minute, for the cap."""
+
+    name: str
+    # The window ending at the settled minute, and what its normal expects there.
+    requests: int
+    expected: float
+    holds_a_finding: bool
+
+    @property
+    def busyness(self) -> float:
+        """This window's requests, or what its normal expects when that is more: a
+        service that stopped keeps its place, so its stop is still judged (D30)."""
+        return max(float(self.requests), self.expected)
+
+
+def busiest(loads: Iterable[ServiceLoad], cap: int) -> tuple[list[str], list[str]]:
+    """The services judged and those past the cap, each in rank order. An open finding
+    goes first, so it can close; then the busiest; then the name, so every run with
+    the same loads chooses the same services."""
+    ranked = sorted(loads, key=lambda load: (not load.holds_a_finding, -load.busyness, load.name))
+    names = [load.name for load in ranked]
+    return names[:cap], names[cap:]
+
+
 class StaleJudgementError(RuntimeError):
     """A service's state moved under this job: another judged it. Nothing commits."""
 
@@ -372,6 +416,8 @@ class Outcome:
     org_id: str | None = None
     skipped: str | None = None
     services: int = 0
+    # Services past the cap this run, which it did not judge.
+    over_cap: int = 0
     minutes_judged: int = 0
     opened: int = 0
     closed: int = 0
@@ -462,7 +508,18 @@ async def judge_project(
         if not judged_minutes:
             outcome.notified += await _record_run(connection, binding, now=now, judged=False)
             return outcome
-        normals = await _normals(connection, binding, min(judged_minutes), max(judged_minutes))
+        # Through the settled minute, which the cap ranks every service at.
+        normals = await _normals(connection, binding, min(judged_minutes), settled)
+        judging, over = busiest(
+            [_load(state, counted, normals, settled, width) for state in states.values()],
+            MAX_JUDGED_SERVICES,
+        )
+        await _mark_too_many(connection, binding, over, since=settled)
+        outcome.over_cap = len(over)
+        plan = {service: plan[service] for service in judging if service in plan}
+        if not plan:
+            outcome.notified += await _record_run(connection, binding, now=now, judged=False)
+            return outcome
         judged = {
             service: _judge_service(
                 counted.get(service, {}), normals, service, minutes, states[service], sensitivity
@@ -510,6 +567,7 @@ async def judge_project(
             stored = _record_exclusions(
                 stored, runs, snoozed=service in snoozed, held_out=held_out, now=now
             )
+            stored.pop(TOO_MANY_SERVICES_KEY, None)
             await _advance(connection, binding, state, runs[-1].at, stored)
             outcome.minutes_judged += len(runs)
         outcome.services = len(judged)
@@ -682,6 +740,7 @@ def _signal_states(stored: Mapping[str, Any], runs: Sequence[Judged]) -> dict[st
     else:
         found[FAILING].pop(ENDPOINTS_KEY, None)
     last = runs[-1]
+    found[TRAFFIC][WINDOW_REQUESTS_KEY] = last.minute.traffic.window_requests
     for signal, verdict, baseline in (
         (TRAFFIC, last.minute.traffic.verdict, last.normals.traffic),
         (FAILING, last.minute.failing.verdict, last.normals.failing),
@@ -1278,6 +1337,42 @@ def _with_endpoints(
     }
 
 
+def _load(
+    state: ServiceState,
+    counted: Mapping[str, Mapping[datetime, Minute]],
+    normals: Mapping[tuple[str, datetime], Normals],
+    settled: datetime,
+    width: int,
+) -> ServiceLoad:
+    """One service's load in the window ending at the settled minute."""
+    minutes = counted.get(state.service_name, {})
+    traffic = normals.get((state.service_name, settled), Normals()).traffic
+    return ServiceLoad(
+        name=state.service_name,
+        requests=sum(
+            minutes[at].requests
+            for at in (settled - back * MINUTE for back in range(width))
+            if at in minutes
+        ),
+        expected=0.0 if traffic is None else traffic.expected,
+        holds_a_finding=FINDING_KEY in state.signals,
+    )
+
+
+async def _mark_too_many(
+    connection: AsyncConnection,
+    binding: ProjectBinding,
+    services: Sequence[str],
+    *,
+    since: datetime,
+) -> None:
+    if services:
+        await connection.execute(
+            _MARK_TOO_MANY,
+            {**_project_key(binding), "services": list(services), "since": _iso(since)},
+        )
+
+
 async def _states(connection: AsyncConnection, binding: ProjectBinding) -> dict[str, ServiceState]:
     rows = await connection.execute(_STATES, _project_key(binding))
     return {
@@ -1471,6 +1566,7 @@ def _judge_project_job(
         settled_minute=settled_minute,
         skipped=outcome.skipped,
         services=outcome.services,
+        over_cap=outcome.over_cap,
         minutes=outcome.minutes_judged,
         opened=outcome.opened,
         closed=outcome.closed,

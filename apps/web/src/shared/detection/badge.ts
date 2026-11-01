@@ -57,10 +57,26 @@ export function describeBadge(
           : null,
         tone: "attention",
       };
+    case "too_many_services":
+      return {
+        label: "Too many services",
+        detail:
+          "This project has more services than detection judges. Only the busiest are judged, and this is not one of them.",
+        tone: "attention",
+      };
+    case "no_incoming_requests":
+      return {
+        label: "Not judged: no incoming requests",
+        detail:
+          "None arrived in the last window, and its normal expects too few for that to be a problem.",
+        tone: "quiet",
+      };
     case "no_detection_yet":
+      // A service with only outgoing or internal calls stays here: it has no incoming requests.
       return {
         label: "No detection yet",
-        detail: "Detection has not judged a minute of this service yet.",
+        detail:
+          "Detection judges a service's incoming requests, and has judged none of this one's yet.",
         tone: "quiet",
       };
     case "learning":

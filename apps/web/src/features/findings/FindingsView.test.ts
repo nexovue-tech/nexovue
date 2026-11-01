@@ -324,6 +324,8 @@ describe("detection's line leads the feed (C18)", () => {
     not_running_since: null,
     delayed_since: null,
     open_findings: 0,
+    services_too_many: 0,
+    judged_service_limit: 500,
   };
   const NOT_RUNNING: DetectionStatus = {
     ...JUDGING,
@@ -362,6 +364,18 @@ describe("detection's line leads the feed (C18)", () => {
     expect(text).toContain("Detection has not run since");
     expect(text).toContain("14:02 UTC");
     expect(text).not.toContain("services are normal");
+  });
+
+  it("says services past the cap are not judged, above the findings (design, *Security*)", async () => {
+    const text = await readable({
+      detection: { ...JUDGING, state: "too_many_services", services_too_many: 12 },
+      findings: [FINDING],
+    });
+
+    expect(text).toContain(
+      "Too many services to judge all: the 500 busiest are judged, and 12 are not",
+    );
+    expect(text.indexOf("Too many services")).toBeLessThan(text.indexOf(FINDING.title));
   });
 
   it("shows the error state, never a healthy line, when a read failed", async () => {

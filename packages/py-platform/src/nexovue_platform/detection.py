@@ -61,6 +61,17 @@ INTAKE_REFUSAL_REASONS: Final = ("broker_unavailable",)
 # the scheduler's install-wide count of projects behind read it alike.
 NOT_RUNNING_AFTER: Final = timedelta(minutes=3)
 
+# A project judges at most this many services, its busiest; the rest read *too many
+# services* (design, *Security, tenancy, and privacy*). A starting cap, measured in
+# AC29. The scheduler applies it and the API names it.
+MAX_JUDGED_SERVICES: Final = 500
+# Under `detection_state.signals`, written by the project job and read by the API:
+# since when a service has been past the cap, and the last judged window's requests
+# (*Inputs*: a service with none, and a normal that expects too few to judge, says
+# *Not judged: no incoming requests*).
+TOO_MANY_SERVICES_KEY: Final = "too_many_services_since"
+WINDOW_REQUESTS_KEY: Final = "window_requests"
+
 # Detection's queue and its baseline job, named here so the API can ask for a
 # service's normal to be rebuilt the moment a person moves it, without importing
 # scheduler code (as Run now does, ADR-011).

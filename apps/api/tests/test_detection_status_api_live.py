@@ -23,6 +23,11 @@ import httpx
 import pytest
 from environment import TEST_ENVIRONMENT
 from live import require_stack
+from nexovue_platform.detection import (
+    MAX_JUDGED_SERVICES,
+    TOO_MANY_SERVICES_KEY,
+    WINDOW_REQUESTS_KEY,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.auth.dependencies import Identity, Reader, get_current_reader
@@ -503,6 +508,8 @@ async def test_a_project_detection_has_seen_nothing_of_has_no_services(
         "not_running_since": None,
         "delayed_since": None,
         "open_findings": 0,
+        "services_too_many": 0,
+        "judged_service_limit": MAX_JUDGED_SERVICES,
     }
 
 
@@ -631,6 +638,115 @@ async def test_a_service_detection_has_never_seen_reads_no_detection_yet(
     assert body["state"] == "no_detection_yet"
     assert {signal["state"] for signal in body["signals"]} == {"not_judged"}
     assert body["findings"] == []
+
+
+# ------------------------------------------- past the cap (design, *Security*)
+
+
+def _past_the_cap(since: datetime) -> dict[str, Any]:
+    """A service the project job did not judge because the project has too many."""
+    return {**_slower("normal"), TOO_MANY_SERVICES_KEY: since.isoformat()}
+
+
+async def test_services_past_the_cap_read_too_many_services_never_data_delayed(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """The busiest are judged; the rest say why they are not, and their old judged
+    minute is the cap's doing, not a delayed pipeline's."""
+    capped_at = _minute(40)
+    await _detection(
+        db,
+        acme,
+        services={"checkout": _slower("normal"), "batch": _past_the_cap(capped_at)},
+        last_run=_ago(seconds=20),
+        judged={"batch": capped_at - timedelta(minutes=1)},
+    )
+
+    for reader in (_callers(acme).person, _callers(acme).token):
+        body = (await _get(db, reader, _status_path(acme.project.id))).json()
+        assert body["state"] == "too_many_services"
+        assert body["services_too_many"] == 1
+        assert body["judged_service_limit"] == MAX_JUDGED_SERVICES
+        assert (body["services_judged"], body["services_learning"]) == (1, 0)
+        assert body["services_delayed"] == 0
+        batch = (
+            await _get(db, reader, "/services/batch/detection", project_id=acme.project.id)
+        ).json()
+        assert batch["state"] == "too_many_services"
+        checkout = (
+            await _get(db, reader, "/services/checkout/detection", project_id=acme.project.id)
+        ).json()
+        assert checkout["state"] == "judged"
+
+
+async def test_a_stopped_detector_outranks_too_many_services(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    await _detection(
+        db,
+        acme,
+        services={"batch": _past_the_cap(_minute(40))},
+        last_run=_ago(minutes=10),
+    )
+
+    body = (await _get(db, _callers(acme).person, _status_path(acme.project.id))).json()
+    batch = (
+        await _get(
+            db, _callers(acme).person, "/services/batch/detection", project_id=acme.project.id
+        )
+    ).json()
+
+    assert body["state"] == "not_running"
+    assert batch["state"] == "not_running"
+
+
+# ------------------------------------- no incoming requests (design, *Inputs*)
+
+
+def _quiet(
+    traffic: str, window_requests: int, slower: str = "too_little_traffic"
+) -> dict[str, Any]:
+    """After a run: the traffic signal's verdict and the judged window's requests."""
+    return {
+        **_slower(slower),
+        "traffic": {
+            "verdict": traffic,
+            "clear_minutes": 0,
+            "learning_until": None,
+            WINDOW_REQUESTS_KEY: window_requests,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("signals", "state"),
+    [
+        # Nothing came, and the normal expects too few to tell an empty window from chance.
+        (_quiet("too_little_traffic", 0), "no_incoming_requests"),
+        # Before 3 weeks only a stop is judged; nothing came and none was expected.
+        (_quiet("learning", 0), "no_incoming_requests"),
+        # Some came, too few to judge: still a judged service.
+        (_quiet("too_little_traffic", 3), "judged"),
+        # Nothing came against a normal that expects some: a stop, judged (D30).
+        (_quiet("unusual", 0), "judged"),
+        # A service still learning says when it is judged from, not that it is quiet.
+        (_quiet("learning", 0, slower="learning"), "learning"),
+        # A run before this was recorded says nothing it does not know.
+        (_slower("too_little_traffic"), "judged"),
+    ],
+)
+async def test_a_service_with_no_requests_its_normal_expects_none_of_is_not_judged(
+    db: AsyncSession, acme: ProvisionedTenant, signals: dict[str, Any], state: str
+) -> None:
+    await _detection(db, acme, services={"checkout": signals}, last_run=_ago(seconds=5))
+
+    body = (
+        await _get(
+            db, _callers(acme).person, "/services/checkout/detection", project_id=acme.project.id
+        )
+    ).json()
+
+    assert body["state"] == state
 
 
 # ------------------------------------------------------------------- scope

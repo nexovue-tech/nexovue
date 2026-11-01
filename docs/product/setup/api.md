@@ -52,7 +52,7 @@ and reach only the documented read API.**
 | `GET /projects` | The projects this token may read, with the ids the rest take |
 | `GET /services` | Every service in a window, worst first |
 | `GET /services/{name}` | One service's health in a window |
-| `GET /services/{name}/detection` | One service's detection state, each signal's phase, and its findings in a window (at most 200) |
+| `GET /services/{name}/detection` | One service's detection state, each signal's phase, and its findings in a window (at most 200). The state says when a service is not judged and why: still learning, data delayed, detection not running, muted, `too_many_services` (the project is past the cap and the service is not among its busiest) or `no_incoming_requests` |
 | `GET /traces` | Traces matching filters, newest first (paged) |
 | `GET /traces/{trace_id}` | One trace and its spans |
 | `GET /logs/search` | Log records matching a phrase (paged) |
@@ -65,7 +65,7 @@ and reach only the documented read API.**
 | `GET /findings` | Detected problems: open, then acknowledged, then closed; at most 200, muted ones apart |
 | `GET /findings/stats` | Findings opened and marked false alarms over the last 7 days (`days` up to 90), per service-week |
 | `GET /findings/{finding_id}` | One finding, its signals, each signal's readings against its normal band while they last (35 days), its linked incidents, and a project finding's services |
-| `GET /projects/{project_id}/detection/status` | Whether detection is running, how many services are learning or judged, when judging starts, and the open findings |
+| `GET /projects/{project_id}/detection/status` | Whether detection is running, how many services are learning or judged, when judging starts, and the open findings. A project judges at most `judged_service_limit` services (500), its busiest; past that the state is `too_many_services` and `services_too_many` counts the rest |
 | `GET /projects/{project_id}/detection` | The project's detection sensitivity and the time zone its normal is read in |
 | `GET /checks` | Synthetic checks and their confirmed state |
 | `GET /checks/{check_id}` | One check |

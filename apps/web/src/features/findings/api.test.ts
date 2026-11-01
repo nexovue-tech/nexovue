@@ -188,6 +188,8 @@ describe("useDetectionStatus", () => {
       not_running_since: null,
       delayed_since: null,
       open_findings: 0,
+      services_too_many: 0,
+      judged_service_limit: 500,
     };
     const fetch = stubFetch(
       () =>

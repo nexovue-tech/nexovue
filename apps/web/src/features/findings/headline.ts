@@ -11,7 +11,8 @@ import type { CheckCounts, DetectionStatus, ProjectTotals } from "./api";
  * **Detection's line** (`detectionHeadlineFor`, C18) goes first. It may call services
  * normal, because the engine judged them, but only the judged ones: it says so while
  * others are still learning (AC42), and says detection is behind or stopped rather than
- * calling anything normal when it is (FR25, AC26).
+ * calling anything normal when it is (FR25, AC26). Past the cap, it says how many
+ * services are not judged at all.
  *
  * **The checks' line** (`headlineFor`) reports what a probe said about the checks, and a
  * check that has not run is a gap in what we can see, not a failure. It never claims
@@ -86,6 +87,14 @@ export function detectionHeadlineFor(
         title: `nexovue is behind on reading your data${since(status.delayed_since, at)} — your services may be fine`,
         wrong: false,
       };
+    case "too_many_services": {
+      // Said even with a finding open: the feed cannot speak for services nobody judges.
+      const over = status.services_too_many;
+      return {
+        title: `Too many services to judge all: the ${status.judged_service_limit} busiest are judged, and ${over} ${over === 1 ? "is" : "are"} not`,
+        wrong: false,
+      };
+    }
     case "learning": {
       const starts = known(status.earliest_judging_date, formatCalendarDay);
       return {

@@ -15,7 +15,9 @@ export type ServiceDetectionState =
   | "muted"
   | "data_delayed"
   | "not_running"
-  | "no_detection_yet";
+  | "no_detection_yet"
+  | "too_many_services"
+  | "no_incoming_requests";
 
 export type SignalKind = "slower" | "failing" | "traffic";
 

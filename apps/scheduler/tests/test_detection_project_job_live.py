@@ -24,6 +24,7 @@ from detection_history import (
     PAST_CRITICAL,
     PAST_THE_MINIMUM,
     POSTGRES_DSN,
+    REQUESTS,
     SERVICE,
     SUSTAIN,
     TIME_TO_A_FINDING,
@@ -37,6 +38,7 @@ from detection_history import span as _span
 from detection_history import state as _state
 from live import require_stack
 from nexovue_platform.alerts.model import service_subject
+from nexovue_platform.detection import TOO_MANY_SERVICES_KEY, WINDOW_REQUESTS_KEY
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -44,6 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from nexovue_scheduler.alerts import incidents
 from nexovue_scheduler.alerts.rules import Rule
 from nexovue_scheduler.detection import project_job
+from nexovue_scheduler.detection.baselines import TRAFFIC
 from nexovue_scheduler.detection.coordinator import project_requests
 from nexovue_scheduler.detection.method import RECOVERY_MINUTES
 from nexovue_scheduler.detection.project_job import (
@@ -641,3 +644,81 @@ async def test_a_finding_opening_beside_a_threshold_incident_is_linked_and_told_
         ("resolved", project.owners_channel_id),
     ]
     assert sum(outcome.notified for outcome in outcomes) == 2
+
+
+# ------------------------------------------- the cap and the quiet (design, *Inputs*)
+
+
+async def test_past_the_cap_the_busiest_are_judged_and_the_rest_are_marked(
+    engine: AsyncEngine,
+    store: DetectionStore,
+    administrator: Client,
+    project: AlertTenant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The design's cap of 500 judged services, at 2: the two busiest are judged, and
+    the third is not, read nothing for, and says since when it is past the cap."""
+    window = _span(ONSET - timedelta(minutes=10), ONSET)
+    for service, requests in (("busy", 300), ("mid", 100), ("quiet", 10)):
+        _seed(administrator, project, window, service=service, requests=requests)
+    monkeypatch.setattr(project_job, "MAX_JUDGED_SERVICES", 2)
+
+    outcome = await judge_project(engine, store, project.project_id, settled=ONSET, now=ONSET)
+
+    assert (outcome.services, outcome.over_cap) == (2, 1)
+    for service in ("busy", "mid"):
+        judged = await _state(engine, project, service)
+        assert judged.last_judged_minute == ONSET
+        assert TOO_MANY_SERVICES_KEY not in judged.signals
+    quiet = await _state(engine, project, "quiet")
+    assert quiet.last_judged_minute is None
+    assert quiet.signals[TOO_MANY_SERVICES_KEY] == ONSET.isoformat()
+    readings = store.for_project(await _bound(engine, project)).readings(
+        start=ONSET, end=ONSET + MINUTE
+    )
+    assert {reading.service_name for reading in readings} == {"busy", "mid"}
+
+
+async def test_a_service_back_under_the_cap_is_judged_and_loses_its_mark(
+    engine: AsyncEngine,
+    store: DetectionStore,
+    administrator: Client,
+    project: AlertTenant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = _span(ONSET - timedelta(minutes=10), ONSET + MINUTE)
+    for service, requests in (("busy", 300), ("quiet", 10)):
+        _seed(administrator, project, window, service=service, requests=requests)
+    monkeypatch.setattr(project_job, "MAX_JUDGED_SERVICES", 1)
+    await judge_project(engine, store, project.project_id, settled=ONSET, now=ONSET)
+    first = (await _state(engine, project, "quiet")).signals[TOO_MANY_SERVICES_KEY]
+    # Still past it a minute later: the mark keeps the minute it began.
+    later = ONSET + MINUTE
+    await judge_project(engine, store, project.project_id, settled=later, now=later)
+    assert (await _state(engine, project, "quiet")).signals[TOO_MANY_SERVICES_KEY] == first
+
+    monkeypatch.setattr(project_job, "MAX_JUDGED_SERVICES", 2)
+    again = ONSET + 2 * MINUTE
+    outcome = await judge_project(engine, store, project.project_id, settled=again, now=again)
+
+    assert (outcome.services, outcome.over_cap) == (2, 0)
+    quiet = await _state(engine, project, "quiet")
+    assert quiet.last_judged_minute == again
+    assert TOO_MANY_SERVICES_KEY not in quiet.signals
+
+
+async def test_each_run_records_the_judged_window_s_requests_for_no_incoming_requests(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """*Inputs*: a service with no requests, against a normal that expects too few to
+    judge, reads *Not judged: no incoming requests*. The API tells it from the
+    traffic signal's verdict and the window's requests, which the job records."""
+    _seed(administrator, project, _span(ONSET - timedelta(minutes=10), ONSET))
+    await judge_project(engine, store, project.project_id, settled=ONSET, now=ONSET)
+    sending = (await _state(engine, project)).signals[TRAFFIC]
+    assert sending[WINDOW_REQUESTS_KEY] == SUSTAIN * REQUESTS
+
+    quiet = ONSET + timedelta(minutes=15)
+    await judge_project(engine, store, project.project_id, settled=quiet, now=quiet)
+
+    assert (await _state(engine, project)).signals[TRAFFIC][WINDOW_REQUESTS_KEY] == 0

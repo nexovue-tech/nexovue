@@ -13,9 +13,18 @@ from pydantic import AwareDatetime, BaseModel, Field
 from nexovue_api.data.postgres.models import TIMEZONE_NAME_LENGTH
 from nexovue_api.findings.schemas import FindingSeverity, SignalName
 
-ProjectDetectionState = Literal["learning", "judging", "data_delayed", "not_running", "no_services"]
+ProjectDetectionState = Literal[
+    "learning", "judging", "data_delayed", "not_running", "no_services", "too_many_services"
+]
 ServiceDetectionState = Literal[
-    "judged", "learning", "muted", "data_delayed", "not_running", "no_detection_yet"
+    "judged",
+    "learning",
+    "muted",
+    "data_delayed",
+    "not_running",
+    "no_detection_yet",
+    "too_many_services",
+    "no_incoming_requests",
 ]
 SignalState = Literal["judged", "learning", "too_little_traffic", "not_judged"]
 # Why a signal is not judged: its hour's normal is not computed yet, or the
@@ -26,9 +35,9 @@ NotJudgedReason = Literal["no_baseline", "not_recorded"]
 class ProjectDetectionStatus(BaseModel):
     """What the feed's headline says (FR25, AC26, AC42, AC43).
 
-    `services_learning` and `services_judged` sum to `services_total`; a judged
-    service may be too quiet to judge this minute. `services_muted` overlaps them:
-    a muted service is still judged.
+    `services_learning`, `services_judged` and `services_too_many` sum to
+    `services_total`; a judged service may be too quiet to judge this minute.
+    `services_muted` overlaps them: a muted service is still judged.
     """
 
     state: ProjectDetectionState
@@ -46,6 +55,10 @@ class ProjectDetectionStatus(BaseModel):
     delayed_since: datetime | None
     # Open findings, muted ones included: a muted problem is still not "normal".
     open_findings: int
+    # Services past the cap, which are not judged, and the cap: a project judges at
+    # most `judged_service_limit` services, its busiest.
+    services_too_many: int
+    judged_service_limit: int
 
 
 class SignalStatus(BaseModel):

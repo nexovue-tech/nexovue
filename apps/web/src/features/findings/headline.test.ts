@@ -113,6 +113,8 @@ const status = (over: Partial<DetectionStatus> = {}): DetectionStatus => ({
   not_running_since: null,
   delayed_since: null,
   open_findings: 0,
+  services_too_many: 0,
+  judged_service_limit: 500,
   ...over,
 });
 
@@ -203,6 +205,28 @@ describe("what detection may say above the checks", () => {
     expect(
       detectionHeadlineFor(status({ state: "data_delayed", delayed_since: "garbled" }), AT)?.title,
     ).toBe("nexovue is behind on reading your data — your services may be fine");
+  });
+
+  it("says how many services are past the cap, and that the busiest are judged", () => {
+    const headline = detectionHeadlineFor(
+      status({ state: "too_many_services", services_judged: 500, services_too_many: 37 }),
+      AT,
+    );
+
+    expect(headline).toEqual({
+      title: "Too many services to judge all: the 500 busiest are judged, and 37 are not",
+      wrong: false,
+    });
+    expect(headline?.title).not.toMatch(/normal/i);
+  });
+
+  it("says so while a finding is open too, because the feed cannot speak for the rest", () => {
+    expect(
+      detectionHeadlineFor(
+        status({ state: "too_many_services", services_too_many: 1, open_findings: 2 }),
+        AT,
+      )?.title,
+    ).toBe("Too many services to judge all: the 500 busiest are judged, and 1 is not");
   });
 
   it("says nothing when the project has no services to judge", () => {

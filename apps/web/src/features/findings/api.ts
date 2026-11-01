@@ -250,7 +250,8 @@ export type DetectionState =
   | "judging"
   | "data_delayed"
   | "not_running"
-  | "no_services";
+  | "no_services"
+  | "too_many_services";
 
 export interface DetectionStatus {
   state: DetectionState;
@@ -264,6 +265,9 @@ export interface DetectionStatus {
   not_running_since: string | null;
   delayed_since: string | null;
   open_findings: number;
+  /** Services past the cap, which are not judged; a project judges at most the limit. */
+  services_too_many: number;
+  judged_service_limit: number;
 }
 
 /**

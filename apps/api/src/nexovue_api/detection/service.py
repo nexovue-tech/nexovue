@@ -20,6 +20,11 @@ Two facts decide it, both written by the scheduler:
   moved past an old minute, because the pipeline has not settled a newer one
   (BR5). A pipeline that settles nothing at all queues no job, and reads *not
   running*.
+- **Too many services**: a project judges at most `MAX_JUDGED_SERVICES`, its
+  busiest. The job marks the rest in their state, and their old judged minute is
+  the cap's doing, never delayed data.
+- **No incoming requests** (design, *Inputs*): a judged service whose last window
+  had no requests, against a normal that expects too few to judge one empty.
 """
 
 from __future__ import annotations
@@ -30,7 +35,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Final, get_args
 
-from nexovue_platform.detection import MAX_MUTE, MAX_SNOOZE, NOT_RUNNING_AFTER
+from nexovue_platform.detection import (
+    MAX_JUDGED_SERVICES,
+    MAX_MUTE,
+    MAX_SNOOZE,
+    NOT_RUNNING_AFTER,
+    TOO_MANY_SERVICES_KEY,
+    WINDOW_REQUESTS_KEY,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexovue_api.audit import service as audit
@@ -68,6 +80,9 @@ _LEARNING: Final = "learning"
 _TOO_LITTLE_TRAFFIC: Final = "too_little_traffic"
 _NO_BASELINE: Final = "no_baseline"
 _PAST_LEARNING: Final = frozenset({"judged", "too_little_traffic"})
+# Traffic verdicts that mean its normal expects too few for an empty window to be a
+# stop: before 3 weeks only a stop is judged, so a quiet one reads *learning* (FR6).
+_EXPECTS_TOO_FEW: Final = frozenset({_TOO_LITTLE_TRAFFIC, _LEARNING})
 
 NO_SUCH_SERVICE: Final = "Detection has not seen a service by that name in this project."
 NOT_AHEAD: Final = "Choose a time still to come, or end it now."
@@ -96,14 +111,16 @@ async def project_status(
 ) -> ProjectDetectionStatus:
     running = await _running(session, org_id=org_id, project_id=project_id, now=now)
     rows = await queries.service_states(session, org_id=org_id, project_id=project_id)
+    capped = sum(1 for row in rows if past_the_cap(row))
+    counted = [row for row in rows if not past_the_cap(row)]
     learning_dates: list[date] = []
     judged = 0
-    for row in rows:
+    for row in counted:
         signals = signal_statuses(row.signals)
         if service_is_judged(row, signals):
             judged += 1
         learning_dates.extend(s.learning_until for s in signals if s.learning_until is not None)
-    newest = max((r.last_judged_minute for r in rows if r.last_judged_minute), default=None)
+    newest = max((r.last_judged_minute for r in counted if r.last_judged_minute), default=None)
     delayed = running.delayed(newest, now)
 
     if not running.running:
@@ -112,6 +129,8 @@ async def project_status(
         state = "data_delayed"
     elif not rows:
         state = "no_services"
+    elif capped:
+        state = "too_many_services"
     elif judged == 0:
         state = "learning"
     else:
@@ -119,9 +138,9 @@ async def project_status(
     return ProjectDetectionStatus(
         state=state,
         services_total=len(rows),
-        services_learning=len(rows) - judged,
+        services_learning=len(counted) - judged,
         services_judged=judged,
-        services_delayed=sum(1 for r in rows if running.delayed(r.last_judged_minute, now)),
+        services_delayed=sum(1 for r in counted if running.delayed(r.last_judged_minute, now)),
         services_muted=await queries.muted_service_count(
             session, org_id=org_id, project_id=project_id, now=now
         ),
@@ -131,6 +150,8 @@ async def project_status(
         open_findings=await queries.open_finding_count(
             session, org_id=org_id, project_id=project_id
         ),
+        services_too_many=capped,
+        judged_service_limit=MAX_JUDGED_SERVICES,
     )
 
 
@@ -373,6 +394,18 @@ def service_is_judged(row: DetectionState | None, signals: Iterable[SignalStatus
     return any(each.state in _PAST_LEARNING for each in signals)
 
 
+def past_the_cap(row: DetectionState | None) -> bool:
+    """Whether the project job left the service unjudged: the project has too many."""
+    return row is not None and TOO_MANY_SERVICES_KEY in (row.signals or {})
+
+
+def has_no_incoming_requests(stored: Mapping[str, Any]) -> bool:
+    """The last judged window had no requests, and its normal expects too few for an
+    empty window to be a stop. A run that recorded no count says nothing."""
+    traffic = stored.get("traffic") or {}
+    return traffic.get(WINDOW_REQUESTS_KEY) == 0 and traffic.get("verdict") in _EXPECTS_TOO_FEW
+
+
 def service_state(
     *,
     running: bool,
@@ -381,16 +414,21 @@ def service_state(
     signals: Iterable[SignalStatus],
     muted: bool,
 ) -> ServiceDetectionState:
-    """The badge's one word: a stopped detector, then delayed data, outrank the rest."""
+    """The badge's one word: a stopped detector, then the cap, then delayed data,
+    outrank the rest. Past the cap, an old judged minute is not delayed data."""
     if not running:
         return "not_running"
+    if past_the_cap(row):
+        return "too_many_services"
     if delayed:
         return "data_delayed"
     if muted:
         return "muted"
     if row is None or row.last_judged_minute is None:
         return "no_detection_yet"
-    return "judged" if service_is_judged(row, signals) else "learning"
+    if not service_is_judged(row, signals):
+        return "learning"
+    return "no_incoming_requests" if has_no_incoming_requests(row.signals or {}) else "judged"
 
 
 def _still_ahead(moment: datetime | None, now: datetime) -> datetime | None:

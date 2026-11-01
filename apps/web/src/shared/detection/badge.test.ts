@@ -48,6 +48,32 @@ describe("the detection badge", () => {
     expect(describeBadge(detection({ state }), { failed: false })?.label).toBe(label);
   });
 
+  it("says a service past the project's cap is not judged, and never Judged or delayed", () => {
+    const badge = describeBadge(detection({ state: "too_many_services" }), { failed: false });
+
+    expect(badge?.label).toBe("Too many services");
+    expect(badge?.detail).toBe(
+      "This project has more services than detection judges. Only the busiest are judged, and this is not one of them.",
+    );
+    expect(badge?.tone).toBe("attention");
+  });
+
+  it("says a quiet service is not judged, and why, rather than calling it judged", () => {
+    const badge = describeBadge(detection({ state: "no_incoming_requests" }), { failed: false });
+
+    expect(badge?.label).toBe("Not judged: no incoming requests");
+    expect(badge?.detail).toBe(
+      "None arrived in the last window, and its normal expects too few for that to be a problem.",
+    );
+  });
+
+  it("says detection judges incoming requests when it has judged none of a service's", () => {
+    // A service with only outgoing or internal calls never has any (design, *Inputs*).
+    expect(describeBadge(detection({ state: "no_detection_yet" }), { failed: false })?.detail).toBe(
+      "Detection judges a service's incoming requests, and has judged none of this one's yet.",
+    );
+  });
+
   it("names the day a learning service is judged from: its latest signal's", () => {
     const badge = describeBadge(
       detection({
