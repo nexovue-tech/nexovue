@@ -11,12 +11,24 @@ prunes them. As a `smallint` the 32,768th stop could not be recorded, and the
 owners would stop hearing about a project that keeps failing.
 
 **Affected store and schema.** Postgres: `notifications.sequence` from `smallint`
-to `integer`. The three unique keys that name it are rebuilt by the type change.
+to `integer`.
 
-**Compatibility and backfill.** Every stored value fits; nothing is rewritten.
+**Cost, and why it is accepted.** The two types are stored differently, so
+Postgres rewrites the whole table and rebuilds every index on it, including the
+incident key that names `sequence`, while holding an ACCESS EXCLUSIVE lock: no
+delivery is claimed, recorded or read until it ends, for as long as copying every
+notification takes. Done later, on an install with a long outbox, that would be a
+delivery outage. nexovue is pre-deployment, so no install holds notifications yet
+and the rewrite costs nothing now; it is accepted here because once there are
+installs it would not be. The finding and project keys that also name `sequence`
+are built after it, in 0050, so they are not rebuilt here.
 
-**Rollback and recovery.** `downgrade` narrows the column back, and refuses
-while any row holds a value a `smallint` cannot, rather than losing it.
+**Compatibility and backfill.** Every stored value fits in an `integer`; the
+rewrite copies them unchanged.
+
+**Rollback and recovery.** `downgrade` narrows the column back, with the same
+rewrite and lock, and refuses while any row holds a value a `smallint` cannot,
+rather than losing it.
 
 **Tenant, retention, and security impact.** None: the column's meaning, scope and
 retention are unchanged.

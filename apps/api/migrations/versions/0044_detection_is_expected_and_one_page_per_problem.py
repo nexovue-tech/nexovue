@@ -30,9 +30,11 @@ from the first stop sweep after the upgrade, which starts their clock then. Rows
 already delivered keep a null key; a subject told before the upgrade is keyed
 afresh at its next claim, as its own (nexovue is pre-deployment).
 
-**Rollback and recovery.** `downgrade` drops both new columns and restores the
-not-null on `last_completed_at`, first deleting the runs of projects never judged:
-they hold only when detection began expecting them, which the next sweep rebuilds.
+**Rollback and recovery.** Roll forward only: `downgrade` refuses. Dropping
+`dedup_key` would lose which PagerDuty alert each delivered notification went to,
+which exists nowhere else in nexovue: an alert still open in PagerDuty could then
+never be resolved, because its later notifications would go under a new key. Going
+back past this revision is a restore (`docs/operations/rollback.md`).
 
 **Tenant, retention, and security impact.** Both tables are already scoped by
 `org_id` and deleted with their project. No new data about a tenant is kept.
@@ -67,12 +69,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("notifications", "dedup_key")
-    op.execute("DELETE FROM detection_project_runs WHERE last_completed_at IS NULL")
-    op.alter_column(
-        "detection_project_runs",
-        "last_completed_at",
-        existing_type=sa.DateTime(timezone=True),
-        nullable=False,
+    """Roll forward only (group 9, C6).
+
+    It would drop `notifications.dedup_key`, the PagerDuty alert each delivered
+    notification went to, which an open alert needs to be resolved.
+
+    Going back past this revision is a restore of the database, never a
+    downgrade — the records it would drop exist nowhere else.
+    """
+    raise RuntimeError(
+        "0044 is roll forward only: its downgrade would drop the PagerDuty alert each "
+        "notification went to. Restore a backup instead."
     )
-    op.drop_column("detection_project_runs", "expected_since")

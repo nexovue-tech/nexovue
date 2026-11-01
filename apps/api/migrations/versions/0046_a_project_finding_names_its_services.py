@@ -18,8 +18,10 @@ keeps it empty, since it names its one service in `service_name`.
 project finding gains its services at the job's next run; a closed one keeps none,
 which is what was known of it.
 
-**Rollback and recovery.** `downgrade` drops the column; nothing is lost but the
-lists.
+**Rollback and recovery.** Roll forward only: `downgrade` refuses. Dropping the
+column would lose which services each closed project finding was about, which
+nothing else records, so going back past this revision is a restore
+(`docs/operations/rollback.md`).
 
 **Tenant, retention, and security impact.** None: service names on a row already
 scoped by `org_id`, removed with its project. They are telemetry text, shown as
@@ -54,4 +56,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("findings", "services")
+    """Roll forward only (group 9, C6).
+
+    It would drop `findings.services`, the only record of which services a closed
+    project finding was about.
+
+    Going back past this revision is a restore of the database, never a
+    downgrade — the records it would drop exist nowhere else.
+    """
+    raise RuntimeError(
+        "0046 is roll forward only: its downgrade would drop the services each "
+        "project finding was about. Restore a backup instead."
+    )

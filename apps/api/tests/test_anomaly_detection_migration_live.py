@@ -1,14 +1,15 @@
-"""Migration 0041 against a real Postgres, in a database of its own.
+"""Migration 0041, with the keys and checks 0050 completes, against a real Postgres.
 
-A database of its own for `test_alerts_migration_live.py`'s reason: the
-downgrade drops tables, and the development database is shared.
+A database of its own for `test_alerts_migration_live.py`'s reason: these tests
+downgrade, and the development database is shared.
 
 What it proves: existing projects take UTC and normal sensitivity (C24); the
 database refuses a second open finding for one service or one project, a closed
 finding that does not say how, and a notification without exactly one subject —
-the project kinds excepted (D24); `anomaly_finding` is a condition kind; and the
-revision downgrades, removing what the narrower schema cannot hold, and upgrades
-again.
+the project kinds excepted (D24); `anomaly_finding` is a condition kind; 0041
+refuses to downgrade, since it would drop findings and the rules about them; and
+0050 validates 0041's checks, builds the outbox's keys again after a downgrade,
+and recovers from a failed concurrent build.
 
 This suite fails rather than skips when the stack is down; see tests/helpers/live.
 """
@@ -38,20 +39,14 @@ POSTGRES_DSN: Final = os.environ.get(
 ALEMBIC_INI: Final = Path(nexovue_api.__file__).parents[2] / "alembic.ini"
 BEFORE_DETECTION: Final = "0040"
 DETECTION: Final = "0041"
+# The last migration before 0050, and 0050: the outbox keys and 0041's checks validated.
+BEFORE_KEYS: Final = "0049"
+KEYS: Final = "0050"
+FINDING_KEY: Final = "uq_notifications_finding_id_channel_id_kind_sequence"
+PROJECT_KEY: Final = "uq_notifications_project_id_channel_id_kind_sequence_project"
 
 ORG: Final = "00000000-0000-7000-8000-000000000001"
 PROJECT: Final = "00000000-0000-7000-8000-00000000000a"
-NEW_TABLES: Final = (
-    "findings",
-    "finding_incidents",
-    "detection_state",
-    "detection_project_runs",
-    "detection_baselines",
-    "baseline_shifts",
-    "service_detection_settings",
-    "intake_refusals",
-    "detection_events",
-)
 
 
 def _reachable(url: str) -> bool:
@@ -94,23 +89,27 @@ def scratch_dsn() -> Iterator[str]:
         asyncio.run(run(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
 
 
-def _alembic(dsn: str, *arguments: str) -> None:
+def _run_alembic(dsn: str, *arguments: str) -> subprocess.CompletedProcess[str]:
     environment = os.environ | {
         "POSTGRES_DSN": dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
     }
-    completed = subprocess.run(
+    return subprocess.run(
         [sys.executable, "-m", "alembic", "-c", str(ALEMBIC_INI), *arguments],
         env=environment,
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def _alembic(dsn: str, *arguments: str) -> None:
+    completed = _run_alembic(dsn, *arguments)
     assert completed.returncode == 0, completed.stderr
 
 
 @pytest.fixture
 async def migrated(scratch_dsn: str) -> AsyncIterator[asyncpg.Connection]:
-    """An organization with a project created before 0041, then 0041."""
+    """An organization with a project created before 0041, then 0041 to 0050."""
     _alembic(scratch_dsn, "upgrade", BEFORE_DETECTION)
     connection = await asyncpg.connect(scratch_dsn)
     try:
@@ -123,7 +122,7 @@ async def migrated(scratch_dsn: str) -> AsyncIterator[asyncpg.Connection]:
                 VALUES ('{ORG}', 'owners', 'Organization owners');
             """
         )
-        _alembic(scratch_dsn, "upgrade", DETECTION)
+        _alembic(scratch_dsn, "upgrade", KEYS)
         yield connection
     finally:
         await connection.close()
@@ -348,40 +347,71 @@ async def test_a_rule_can_alert_on_anomaly_findings(migrated: asyncpg.Connection
     )
 
 
-async def test_the_revision_downgrades_and_upgrades_again(
+async def test_every_check_0041_added_not_valid_is_validated(
+    migrated: asyncpg.Connection,
+) -> None:
+    unvalidated = await migrated.fetchval(
+        "SELECT count(*) FROM pg_constraint WHERE contype = 'c' AND NOT convalidated"
+    )
+    assert unvalidated == 0
+
+
+async def test_0041_refuses_to_downgrade(scratch_dsn: str) -> None:
+    _alembic(scratch_dsn, "upgrade", DETECTION)
+
+    completed = _run_alembic(scratch_dsn, "downgrade", BEFORE_DETECTION)
+
+    assert completed.returncode != 0
+    assert "roll forward only" in completed.stderr
+    connection = await asyncpg.connect(scratch_dsn)
+    try:
+        assert await connection.fetchval("SELECT to_regclass('findings') IS NOT NULL")
+    finally:
+        await connection.close()
+
+
+async def _keys(connection: asyncpg.Connection) -> dict[str, bool]:
+    """Each outbox key present, and whether its index is valid."""
+    rows = await connection.fetch(
+        "SELECT indexrelid::regclass::text AS name, indisvalid FROM pg_index "
+        "WHERE indexrelid::regclass::text = ANY($1::text[])",
+        [FINDING_KEY, PROJECT_KEY],
+    )
+    return {row["name"]: row["indisvalid"] for row in rows}
+
+
+async def test_the_keys_downgrade_and_build_again(
     migrated: asyncpg.Connection, scratch_dsn: str
 ) -> None:
-    incident_id, finding_id = await _incident(migrated), await _finding(migrated)
-    await _notify(migrated, "opened", incident_id=incident_id)
+    _alembic(scratch_dsn, "downgrade", BEFORE_KEYS)
+    assert await _keys(migrated) == {}
+
+    _alembic(scratch_dsn, "upgrade", KEYS)
+    assert await _keys(migrated) == {FINDING_KEY: True, PROJECT_KEY: True}
+    await test_no_retry_tells_one_channel_twice_about_one_subject(migrated)
+
+
+async def test_a_failed_concurrent_build_is_built_again(
+    migrated: asyncpg.Connection, scratch_dsn: str
+) -> None:
+    _alembic(scratch_dsn, "downgrade", BEFORE_KEYS)
+    finding_id = await _finding(migrated)
     await _notify(migrated, "opened", finding_id=finding_id)
-    await _notify(migrated, "stopped")
-    await test_a_rule_can_alert_on_anomaly_findings(migrated)
-
-    _alembic(scratch_dsn, "downgrade", BEFORE_DETECTION)
-
-    remaining = await migrated.fetchval(
-        "SELECT count(*) FROM information_schema.tables WHERE table_name = ANY($1::text[])",
-        list(NEW_TABLES),
-    )
-    assert remaining == 0
-    columns = await migrated.fetchval(
-        "SELECT count(*) FROM information_schema.columns WHERE "
-        "(table_name = 'projects' AND column_name IN ('timezone', 'detection_sensitivity')) "
-        "OR (table_name = 'notifications' AND column_name = 'finding_id')"
-    )
-    assert columns == 0
-    # The incident's notification survives; what only the new schema could hold does not.
-    assert await migrated.fetchval("SELECT count(*) FROM notifications") == 1
-    assert (
-        await migrated.fetchval(
-            "SELECT count(*) FROM alert_rules WHERE condition_kind = 'anomaly_finding'"
+    await _notify(migrated, "opened", finding_id=finding_id)
+    # A concurrent build that fails leaves its index behind, invalid.
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await migrated.execute(
+            f"CREATE UNIQUE INDEX CONCURRENTLY {FINDING_KEY} "
+            "ON notifications (finding_id, channel_id, kind, sequence)"
         )
-        == 0
+    assert await _keys(migrated) == {FINDING_KEY: False}
+    await migrated.execute(
+        "DELETE FROM notifications WHERE ctid = (SELECT max(ctid) FROM notifications)"
     )
 
-    _alembic(scratch_dsn, "upgrade", DETECTION)
-    tables = await migrated.fetchval(
-        "SELECT count(*) FROM information_schema.tables WHERE table_name = ANY($1::text[])",
-        list(NEW_TABLES),
+    _alembic(scratch_dsn, "upgrade", KEYS)
+
+    assert await _keys(migrated) == {FINDING_KEY: True, PROJECT_KEY: True}
+    assert await migrated.fetchval(
+        "SELECT count(*) FROM pg_constraint WHERE conname = $1", FINDING_KEY
     )
-    assert tables == len(NEW_TABLES)

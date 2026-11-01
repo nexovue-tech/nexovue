@@ -49,7 +49,18 @@ the notifications': `joined` (D29), `adopted` (D22), and `stopped` and
 **The outbox's subjects.** `notifications.incident_id` becomes nullable, and a
 check holds every row to exactly one subject: an incident, a finding, or — for
 the two project kinds only — neither. Each subject has its own unique key, so no
-retry writes a second *opened* for one finding on one channel (NFR3).
+retry writes a second *opened* for one finding on one channel (NFR3). Those two
+keys are indexes on a table that holds rows, so they are built concurrently in a
+migration of their own, 0050; no migration between relies on them.
+
+**Locks on tables that hold rows.** `projects`, `alert_rules`, `incidents` and
+`notifications` already hold rows, and a CHECK added plainly reads every one of
+them under an ACCESS EXCLUSIVE lock, stopping reads and writes for the scan. Each
+check here on those tables is therefore added `NOT VALID`, which holds new rows to
+it at once and reads none; 0050 validates them under a lock that lets writes go
+on (`docs/engineering/database.md`). Every existing row passes: the widened
+checks admit everything the old ones did, existing projects take the default
+sensitivity, and every existing notification names its incident.
 
 **Compatibility and backfill.** Existing projects take the server defaults:
 UTC, because no project yet has a creator's zone to copy (C24, C15), and normal
@@ -57,11 +68,11 @@ sensitivity. No other backfill: every new table starts empty, and a service's
 state row is created when detection first sees it. The widened checks admit
 everything they admitted before.
 
-**Rollback and recovery.** `downgrade` drops the nine tables and the two
-`projects` columns, and deletes what the narrower schema cannot hold: every
-notification with no incident, every row of a new kind, and every rule and
-incident of the *anomaly finding* kind. nexovue is pre-deployment; once it is
-not, a rollback across this revision is a restore (`docs/operations/rollback.md`).
+**Rollback and recovery.** Roll forward only: `downgrade` refuses. Going back
+would drop every finding, with the acknowledgements and false-alarm reasons people
+gave, every rule people wrote on *anomaly finding*, and the delivery log of every
+notification about a finding or a project. They exist nowhere else, so going back
+past this revision is a restore (`docs/operations/rollback.md`).
 
 **Tenant, retention, and security impact.** Every new table but two carries
 `org_id`, cascades from its project, and is listed in `organizations/tables.py`
@@ -120,25 +131,6 @@ _SENSITIVITIES = "'low', 'normal', 'high'"
 _DEFAULT_SENSITIVITY = "normal"
 _DEFAULT_TIMEZONE = "UTC"
 _INTAKE_REFUSAL_REASONS = "'broker_unavailable'"
-
-# What 0028 allowed, for the downgrade.
-_CONDITION_KINDS_BEFORE = (
-    "'check_state', 'new_error_group', 'service_error_rate', "
-    "'service_latency_p95', 'service_silent'"
-)
-_NOTIFICATION_KINDS_BEFORE = "'opened', 'escalated', 'resolved', 'repeated', 'flapping', 'closed'"
-
-_NEW_TABLES = (
-    "detection_events",
-    "intake_refusals",
-    "service_detection_settings",
-    "baseline_shifts",
-    "detection_baselines",
-    "detection_project_runs",
-    "detection_state",
-    "finding_incidents",
-    "findings",
-)
 
 
 def _org() -> sa.Column[Any]:
@@ -217,6 +209,7 @@ def _projects_gain_detection_settings() -> None:
         "detection_sensitivity_is_known",
         "projects",
         f"detection_sensitivity IN ({_SENSITIVITIES})",
+        postgresql_not_valid=True,
     )
 
 
@@ -446,7 +439,12 @@ def _create_install_wide_records() -> None:
 def _set_condition_kinds(allowed: str) -> None:
     for table in ("alert_rules", "incidents"):
         op.drop_constraint("condition_is_known", table, type_="check")
-        op.create_check_constraint("condition_is_known", table, f"condition_kind IN ({allowed})")
+        op.create_check_constraint(
+            "condition_is_known",
+            table,
+            f"condition_kind IN ({allowed})",
+            postgresql_not_valid=True,
+        )
 
 
 def _notifications_gain_subjects() -> None:
@@ -466,47 +464,28 @@ def _notifications_gain_subjects() -> None:
         "notifications",
         "num_nonnulls(incident_id, finding_id) = "
         f"CASE WHEN kind IN ({_PROJECT_NOTIFICATION_KINDS}) THEN 0 ELSE 1 END",
-    )
-    op.create_unique_constraint(
-        "uq_notifications_finding_id_channel_id_kind_sequence",
-        "notifications",
-        ["finding_id", "channel_id", "kind", "sequence"],
-    )
-    op.create_index(
-        "uq_notifications_project_id_channel_id_kind_sequence_project",
-        "notifications",
-        ["project_id", "channel_id", "kind", "sequence"],
-        unique=True,
-        postgresql_where=sa.text("incident_id IS NULL AND finding_id IS NULL"),
+        postgresql_not_valid=True,
     )
 
 
 def _set_notification_kinds(allowed: str) -> None:
     op.drop_constraint("kind_is_known", "notifications", type_="check")
-    op.create_check_constraint("kind_is_known", "notifications", f"kind IN ({allowed})")
+    op.create_check_constraint(
+        "kind_is_known", "notifications", f"kind IN ({allowed})", postgresql_not_valid=True
+    )
 
 
 def downgrade() -> None:
-    op.execute(
-        "DELETE FROM notifications "
-        f"WHERE incident_id IS NULL OR kind NOT IN ({_NOTIFICATION_KINDS_BEFORE})"
+    """Roll forward only (group 9, C6).
+
+    It would drop findings, with people's acknowledgements and false-alarm
+    reasons, the rules people wrote on *anomaly finding*, and the delivery log of
+    every notification about a finding or a project.
+
+    Going back past this revision is a restore of the database, never a
+    downgrade — the records it would drop exist nowhere else.
+    """
+    raise RuntimeError(
+        "0041 is roll forward only: its downgrade would drop findings and the rules "
+        "and notifications about them. Restore a backup instead."
     )
-    op.drop_index("uq_notifications_project_id_channel_id_kind_sequence_project", "notifications")
-    op.drop_constraint(
-        "uq_notifications_finding_id_channel_id_kind_sequence", "notifications", type_="unique"
-    )
-    op.drop_constraint("names_one_subject", "notifications", type_="check")
-    _set_notification_kinds(_NOTIFICATION_KINDS_BEFORE)
-    op.alter_column("notifications", "incident_id", existing_type=_UUID, nullable=False)
-    op.drop_column("notifications", "finding_id")
-
-    op.execute("DELETE FROM incidents WHERE condition_kind = 'anomaly_finding'")
-    op.execute("DELETE FROM alert_rules WHERE condition_kind = 'anomaly_finding'")
-    _set_condition_kinds(_CONDITION_KINDS_BEFORE)
-
-    for table in _NEW_TABLES:
-        op.drop_table(table)
-
-    op.drop_constraint("detection_sensitivity_is_known", "projects", type_="check")
-    op.drop_column("projects", "detection_sensitivity")
-    op.drop_column("projects", "timezone")
