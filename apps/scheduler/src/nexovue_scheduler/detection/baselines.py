@@ -45,6 +45,7 @@ from typing import Any, Final
 from zoneinfo import ZoneInfo
 
 from nexovue_platform.detection import compute_baselines_request
+from nexovue_platform.jobs import JobRequest
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -72,6 +73,7 @@ from nexovue_scheduler.detection.method import (
     window_above,
 )
 from nexovue_scheduler.detection.projects import (
+    ActiveProject,
     active_projects,
     fair_order,
     project_settings,
@@ -107,6 +109,10 @@ HISTORY: Final = timedelta(days=POOL_DAYS + 1)
 # normal, to two hours ahead, so one late hourly run leaves no gap.
 BEHIND: Final = timedelta(minutes=15)
 AHEAD: Final = timedelta(hours=2)
+# The hourly run spreads its projects' jobs over this much of the hour (T8.2). Queued at
+# once they held both detection slots for minutes, and the minute pass waited behind them.
+# A project's last normals reach AHEAD, so its next run may come this much late.
+BASELINE_SPREAD: Final = timedelta(minutes=30)
 # Older rows than this are deleted by the next run; nothing judges them again.
 KEPT: Final = timedelta(hours=1)
 # Services read together: about 50 services, 4 days and 500 minutes, well inside a read's rows.
@@ -1286,16 +1292,28 @@ def compute_baselines(*, project_id: str) -> None:
         logger.info("detection baselines written", project_id=project_id, services=services)
 
 
+def hourly_requests(projects: Sequence[ActiveProject]) -> list[JobRequest]:
+    """The hourly run's baseline jobs, one per project, in the fair order, spread evenly
+    over `BASELINE_SPREAD` so each is due alone."""
+    ordered = fair_order(list(projects))
+    step = BASELINE_SPREAD.total_seconds() / max(1, len(ordered))
+    return [
+        replace(
+            compute_baselines_request(each.project_id, each.org_id),
+            countdown_seconds=position * step,
+        )
+        for position, each in enumerate(ordered)
+    ]
+
+
 @task(SWEEP_BASELINES_TASK)
 def sweep_baselines() -> None:
     """Hourly: one baseline job for each project detection judges."""
 
     async def queue_all(engine: AsyncEngine) -> int:
         async with engine.connect() as connection:
-            projects = fair_order(await active_projects(connection, now=datetime.now(UTC)))
-        await enqueue_all(
-            engine, [compute_baselines_request(each.project_id, each.org_id) for each in projects]
-        )
+            projects = await active_projects(connection, now=datetime.now(UTC))
+        await enqueue_all(engine, hourly_requests(projects))
         return len(projects)
 
     queued = with_engine(queue_all)

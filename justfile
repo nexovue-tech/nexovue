@@ -104,6 +104,13 @@ detection-measure *args:
 detection-seed *args:
     uv run python tools/detection-seed/seed.py {{args}}
 
+# F6 plan T8.2 (AC29): 200 projects, 2,000 services. In order: tenants, load (keep it running),
+# seed, then watch while the scheduler runs. `profile` times project jobs; `remove --yes` closes
+# the tenants. Each command's options: `just detection-scale <command> --help`.
+# Measure detection at its cost target (tenants, load, seed, watch, profile, remove)
+detection-scale *args:
+    uv run python tools/detection-measure/scale.py {{args}}
+
 # F6 plan T8.1: the demo's fault flags against detection, scored as AC36's table. A run takes about
 # 12 days after its warm-up; see tools/fault-bed/README.md. Needs NEXOVUE_TOKEN, a read API token.
 # Drive the demo's fault flags and score detection (check, run, score)

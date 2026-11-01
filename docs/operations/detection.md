@@ -162,6 +162,9 @@ followed by the worker's `a job failed` traceback.
   job needs more than its 20 seconds. It continues from where it stopped each minute, so a project that
   only just overruns catches up by itself; one that always overruns needs its size looked at (the cost
   target is 2,000 services, NFR2).
+- **`a job's process died` with `exit_code` -9:** the kernel killed a `scheduler-light` child, usually
+  because the container reached its memory limit. A probe running in the same container can die the same
+  way. Read the container's peak (`docker stats`) against its `mem_limit`.
 - **One project, any other traceback:** a defect. Record the traceback and the project id, and raise it.
 - **No traceback, and no `detection project judged` line for the project:** its job is not being run.
   Check `jobs_ready{queue="detection"}` as for a stopped sweep.

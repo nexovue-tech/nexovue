@@ -56,6 +56,11 @@ REACH_POSTGRES_SECONDS: Final = 10.0
 # poll carries every job meanwhile.
 RELISTEN_SECONDS: Final = 30.0
 KILLED: Final = "killed"
+# The child died mid-job, so it could not report its own end: killed by the
+# kernel over the container's memory limit, or crashed.
+DIED: Final = "died"
+# How long a dead child is given to be reaped, so its exit code can be read.
+REAP_SECONDS: Final = 5.0
 # The most jobs a worker runs at once from each capped queue.
 QUEUE_CAPS: Final[Mapping[str, int]] = {DETECTION_QUEUE: DETECTION_CONCURRENCY}
 
@@ -88,8 +93,7 @@ class Slot:
                 outcome: tuple[Any, ...] = self._pipe.recv()
                 return outcome
             except (EOFError, OSError):
-                self._replace()
-                return (child.FAILED, "the child running it died")
+                return (DIED, self._reap())
         self._replace()
         return (KILLED, f"killed at its hard time limit of {job.hard_limit_seconds}s")
 
@@ -100,6 +104,15 @@ class Slot:
             self._process.join(timeout=5)
             if self._process.is_alive():
                 self._process.kill()
+
+    def _reap(self) -> int | None:
+        """Replace a child that died, returning its exit code: minus the signal
+        that killed it, -9 when the kernel's OOM killer did."""
+        assert self._process is not None
+        self._process.join(REAP_SECONDS)
+        exit_code = self._process.exitcode
+        self._replace()
+        return exit_code
 
     def _replace(self) -> None:
         if self._process is not None:
@@ -240,8 +253,10 @@ class Worker:
             logger.error(
                 "a job was killed at its hard time limit", task=job.task, reason=outcome[1]
             )
+        elif kind == DIED:
+            logger.error("a job's process died", task=job.task, exit_code=outcome[1])
         await queue.finish(self._engine, job, worker=self._name)
-        ended = metrics.KILLED if kind == KILLED else metrics.FINISHED
+        ended = metrics.KILLED if kind in (KILLED, DIED) else metrics.FINISHED
         metrics.JOBS_ENDED.labels(outcome=ended).inc()
 
     async def _listen(self) -> None:

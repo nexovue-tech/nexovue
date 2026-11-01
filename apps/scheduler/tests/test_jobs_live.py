@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import socket
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -27,7 +28,9 @@ from live import require_stack
 from nexovue_platform.jobs import JobRequest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from structlog.testing import capture_logs
 
+from nexovue_scheduler import metrics
 from nexovue_scheduler.jobs import queue, worker
 from nexovue_scheduler.jobs.queue import enqueue
 from nexovue_scheduler.jobs.worker import Worker
@@ -234,6 +237,34 @@ async def test_the_hard_limit_kills_a_stuck_task_and_its_slot_runs_the_next(
     await _work_until(engine, lane, lambda: "next" in _lines(notes))
 
     assert _lines(notes) == ["blocking", "next"]
+
+
+async def test_a_job_whose_child_is_killed_is_reported_and_its_slot_runs_the_next(
+    engine: AsyncEngine, lane: str, tmp_path: Path
+) -> None:
+    """A child the kernel killed over the container's memory limit cannot log its own end.
+    The worker must say which job died and count it killed, or it is lost without a trace
+    (F6 T8.2: 49 baseline jobs vanished this way at the memory ceiling)."""
+    notes = tmp_path / "notes"
+    await _add(engine, JobRequest(task=job_fixtures.DIE, queue=lane, kwargs={"path": str(notes)}))
+    await _add(
+        engine,
+        JobRequest(
+            task=job_fixtures.NOTE, queue=lane, kwargs={"path": str(notes), "marker": "next"}
+        ),
+    )
+    killed = metrics.JOBS_ENDED.labels(outcome=metrics.KILLED)
+    killed_before = killed._value.get()
+
+    with capture_logs() as logs:
+        await _work_until(engine, lane, lambda: "next" in _lines(notes))
+
+    assert _lines(notes) == ["dying", "next"]
+    died = [line for line in logs if line["event"] == "a job's process died"]
+    assert [(line["task"], line["exit_code"]) for line in died] == [
+        (job_fixtures.DIE, -signal.SIGKILL)
+    ]
+    assert killed._value.get() == killed_before + 1
 
 
 async def test_a_dead_workers_job_runs_again_once_its_lease_lapses(

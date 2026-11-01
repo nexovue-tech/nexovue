@@ -8,12 +8,14 @@ and the queue the worker that runs them takes.
 from __future__ import annotations
 
 import inspect
+import itertools
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
 from nexovue_scheduler.__main__ import worker_queues
 from nexovue_scheduler.detection import DETECTION_CONCURRENCY, DETECTION_QUEUE, JUDGE_PROJECT_TASK
+from nexovue_scheduler.detection.baselines import AHEAD, BASELINE_SPREAD, hourly_requests
 from nexovue_scheduler.detection.coordinator import project_requests
 from nexovue_scheduler.detection.project_job import (
     INTAKE_WAIT,
@@ -65,6 +67,34 @@ def test_each_project_gets_one_job_on_the_detection_queue_in_the_fair_order() ->
     assert first.expires_seconds == 60
     assert first.soft_limit_seconds == PROJECT_SOFT_LIMIT_SECONDS == 20
     assert first.hard_limit_seconds == PROJECT_HARD_LIMIT_SECONDS
+
+
+def test_the_hourly_baselines_are_spread_so_the_minute_pass_never_waits_behind_them() -> None:
+    """F6 T8.2: queued at one instant, 200 baseline jobs held both detection slots for over
+    two minutes, so three minutes went unjudged for 3.5 minutes. Spread over half an hour,
+    each is due alone, in the fair order, and every project's last baselines, which reach two
+    hours ahead, still cover it until its next run."""
+    projects = [ActiveProject(uuid.uuid4(), uuid.uuid4()) for _ in range(200)]
+
+    requests = hourly_requests(projects)
+
+    assert [r.kwargs["project_id"] for r in requests] == [
+        str(p.project_id) for p in fair_order(projects)
+    ]
+    countdowns = [request.countdown_seconds for request in requests]
+    assert countdowns[0] == 0
+    gaps = {round(b - a, 6) for a, b in itertools.pairwise(countdowns)}
+    assert gaps == {BASELINE_SPREAD.total_seconds() / len(projects)}
+    assert countdowns[-1] < BASELINE_SPREAD.total_seconds()
+    # Each still runs before it expires, and before the last run's normals end.
+    assert all(c < (requests[0].expires_seconds or 0) for c in countdowns)
+    assert timedelta(hours=1) + BASELINE_SPREAD < AHEAD
+
+
+def test_one_projects_hourly_baseline_is_due_at_once() -> None:
+    (request,) = hourly_requests(_projects()[:1])
+
+    assert request.countdown_seconds == 0
 
 
 def test_a_default_worker_takes_detection_beside_its_probes_capped_at_two() -> None:

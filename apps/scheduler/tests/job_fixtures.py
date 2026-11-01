@@ -7,6 +7,7 @@ the job ended — including by a kill.
 
 from __future__ import annotations
 
+import os
 import signal
 import time
 from pathlib import Path
@@ -18,6 +19,7 @@ SLEEP: str = "jobs-test.sleep"
 BLOCK: str = "jobs-test.block"
 RETRY: str = "jobs-test.retry"
 SPAN: str = "jobs-test.span"
+DIE: str = "jobs-test.die"
 
 
 def _write(path: str, line: str) -> None:
@@ -66,3 +68,10 @@ def span(*, path: str, marker: str, pause: float) -> None:
     _write(path, f"start {marker}")
     time.sleep(pause)
     _write(path, f"end {marker}")
+
+
+@task(DIE)
+def die(*, path: str) -> None:
+    """Killed outright mid-job, as the kernel kills a child over its memory limit."""
+    _write(path, "dying")
+    os.kill(os.getpid(), signal.SIGKILL)
