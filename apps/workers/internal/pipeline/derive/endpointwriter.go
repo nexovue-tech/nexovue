@@ -69,10 +69,10 @@ type endpointBlock struct {
 func newEndpointBlock() *endpointBlock {
 	b := &endpointBlock{latencyMS: proto.NewArray[float64](new(proto.ColFloat64))}
 	b.columns = proto.Input{
-		{Name: "tenant_id", Data: &b.tenantID},
+		{Name: columnTenantID, Data: &b.tenantID},
 		{Name: "derived_retention_days", Data: &b.retentionDays},
-		{Name: "project_id", Data: &b.projectID},
-		{Name: "service_name", Data: &b.serviceName},
+		{Name: columnProjectID, Data: &b.projectID},
+		{Name: columnServiceName, Data: &b.serviceName},
 		{Name: "span_kind", Data: &b.spanKind},
 		{Name: "span_name", Data: &b.spanName},
 		{Name: "minute", Data: &b.minute},

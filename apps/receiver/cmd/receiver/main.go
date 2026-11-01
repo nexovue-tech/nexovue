@@ -24,6 +24,7 @@ import (
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/config"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/health"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ingest"
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/intake"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/logging"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/otlp"
 	"github.com/nexovue-tech/nexovue/apps/receiver/internal/ratelimit"
@@ -87,6 +88,10 @@ func run() error {
 	siteKeys := auth.NewPostgresSiteKeys(dependencies.postgres)
 	siteKeyUses := auth.NewLastUsedRecorder(siteKeys)
 
+	// The minutes the broker refused exports in, which detection holds rather than
+	// judges as a customer's traffic falling (C5).
+	refusals := intake.NewRecorder(intake.NewPostgresRefusals(dependencies.postgres), receiverID(), log)
+
 	// One set of collaborators for both transports and both doors: the gates
 	// behind them are the same code, and a second Options would be a second
 	// pipeline. Only the gatekeeper differs, and it is the whole difference.
@@ -114,6 +119,7 @@ func run() error {
 		}, cfg.ProduceTimeout),
 		Logger:              log,
 		Traffic:             traffic,
+		Refusals:            refusals,
 		Admission:           otlp.NewAdmission(cfg.MaxInflightExports, cfg.MaxUnverifiedExports),
 		MaxBodyBytes:        cfg.MaxBodyBytes,
 		MaxDecodedBodyBytes: cfg.MaxDecodedBodyBytes,
@@ -171,12 +177,27 @@ func run() error {
 	// Off the request path on purpose: an export must never wait on bookkeeping.
 	go keyUses.Run(ctx)
 	go siteKeyUses.Run(ctx)
+	go refusals.Run(ctx)
 
 	return serveUntilSignal(ctx, log, []listener{
 		httpListener(admin),
 		httpListener(overHTTP),
 		grpcListener(overGRPC),
 	}, cfg.ShutdownTimeout)
+}
+
+// unknownReceiver names a receiver whose host has no name. Two such receivers
+// share one row a minute, which still says the minute was refused.
+const unknownReceiver = "unknown"
+
+// receiverID is this receiver's name in `intake_refusals`: its host, which in
+// Compose is the container.
+func receiverID() string {
+	name, err := os.Hostname()
+	if err != nil || name == "" {
+		return unknownReceiver
+	}
+	return name
 }
 
 // withRecorder pairs the shared credential-cache settings with one kind's use

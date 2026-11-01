@@ -198,7 +198,7 @@ our own deployments pull authenticated.
 ### Phase 2 and later
 
 Phase 2 is the incident chain the vision is built on, to production level and released as a whole: see
-[`phase-2-plan.md`](phase-2-plan.md) (founder, 2026-10-30, awaiting approval of the plan). It holds anomaly
+[`phase-2-plan.md`](phase-2-plan.md) (approved by the founder, 2026-10-30). It holds anomaly
 detection, findings with something behind them, the insight engine, the release-comparison screen, cases, the
 chatbot and the suggested fix, then SLOs and the dashboard builder. The AWS role flow and data archival moved to
 Later (founder, 2026-10-30). Everything marked *Later* in §4 has no phase and is not scheduled.
@@ -229,7 +229,7 @@ The default screen after login. A reverse-chronological, priority-weighted feed 
 - AC1.5: Feed orders by: active before resolved, then severity, then recency. Ordering is deterministic and documented.
 - AC1.6: Filters (service, severity, status) combine and persist per user across sessions.
 - AC1.7: Empty/healthy state shows: "all systems normal" statement + count of services reporting + synthetic checks passing + last-finding timestamp. It never shows a blank page or spinner-forever. The statement needs the engine: until one assesses the system, the screen reports only what the checks said ([record](../changes/findings-false-all-clear/bug.md)).
-- AC1.8: Clicking a finding opens F2 Finding Detail. Acknowledge/resolve actions available on the card and reflected in F22 Case management.
+- AC1.8: Clicking a finding opens F2 Finding Detail. Acknowledge/resolve actions available on the card and reflected in F22 Case management. *Amended by F6 (2026-10-31):* a finding closes itself. A person acknowledges it, or marks it a false alarm or the new normal. A closed card names how it closed. Muted findings are reached through a link under the feed, not a filter. The first version of the detail page is built in F6 (D12).
 - AC1.9: A finding whose root incident continues does NOT duplicate — it updates (duration, impact) on the same card (grouping/dedup requirement on the insight engine).
 - AC1.10: Feed is fully usable on mobile-width screens (the paged-at-2am scenario).
 
@@ -258,8 +258,8 @@ The proactive finding-generation surface rules: cross-signal correlation present
 ### F5 — AI Solution 🔲 TO SPECIFY
 Suggested fix with explanation on finding detail; optional draft-PR flow via GitHub connector; human-in-the-loop gating (never auto-applies without explicit action).
 
-### F6 — Anomaly Detection (user-facing surface) 🔲 TO SPECIFY
-What the user sees/controls: sensitivity settings, muting, per-endpoint baselines visibility, feedback ("this was a false alarm" → tunes system).
+### F6 — Anomaly Detection (user-facing surface) ✅ SPECIFIED
+What the user sees/controls: sensitivity settings, muting, per-endpoint baselines visibility, feedback ("this was a false alarm" → tunes system). Specification approved 2026-10-30: [`anomaly-detection/spec.md`](../features/anomaly-detection/spec.md).
 
 ### F7 — Owner Status Page 🔲 TO SPECIFY
 Plain-language health view for P3: overall badge, per-area status, human sentence for current issues, "your developer has been notified," update timestamps. Zero jargon. Shareable/inviteable.

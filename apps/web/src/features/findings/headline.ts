@@ -1,17 +1,26 @@
-import type { CheckCounts, ProjectTotals } from "./api";
+import { UNKNOWN } from "@/shared/format/number";
+import type { ZonedOptions } from "@/shared/format/zoned";
+import { formatCalendarDay, formatZonedTime } from "@/shared/format/zoned";
+
+import type { CheckCounts, DetectionStatus, ProjectTotals } from "./api";
 
 /**
- * What the screen is allowed to say when the feed is empty.
+ * What the screen is allowed to say about the project's health. Two lines, from two
+ * sources, and neither speaks for more than it saw.
  *
- * An empty feed is not evidence of health, because no engine writes findings yet
- * (`api.ts`). So the headline never speaks for the whole system. It reports what a
- * probe actually said about the checks, and a check that has not run is a gap in what
- * we can see, not a failure.
+ * **Detection's line** (`detectionHeadlineFor`, C18) goes first. It may call services
+ * normal, because the engine judged them, but only the judged ones: it says so while
+ * others are still learning (AC42), and says detection is behind or stopped rather than
+ * calling anything normal when it is (FR25, AC26). Past the cap, it says how many
+ * services are not judged at all.
+ *
+ * **The checks' line** (`headlineFor`) reports what a probe said about the checks, and a
+ * check that has not run is a gap in what we can see, not a failure. It never claims
+ * the whole system is healthy (`docs/changes/findings-false-all-clear/bug.md`), and no
+ * line on this screen ever says "All systems normal" on its own.
  *
  * Errors are deliberately not a headline. A nonzero error rate is normal for most
- * services, and deciding when it is not is the engine's job. They stay on screen as a
- * reading, and F1 AC1.7's "all systems normal" waits for that engine
- * (`docs/changes/findings-false-all-clear/bug.md`).
+ * services, and deciding when it is not is the engine's job.
  */
 
 export interface Headline {
@@ -45,4 +54,81 @@ export function headlineFor(totals?: ProjectTotals, checks?: CheckCounts): Headl
     title: `${checks.passing} of ${checks.total} synthetic checks are passing, and the rest have not run`,
     wrong: false,
   };
+}
+
+/**
+ * Detection's line, or nothing when it has nothing true to add.
+ *
+ * Nothing when the status was not read: the screen shows its error state for a failed
+ * read, and an absent status must never fall through to a healthy line. Nothing, too,
+ * while a finding is open, because then the feed is the answer. Times are on the clock
+ * `at.zone` names, the browser's until the project's own is read.
+ */
+export function detectionHeadlineFor(
+  status: DetectionStatus | undefined,
+  at: ZonedOptions = {},
+): Headline | undefined {
+  if (status === undefined) return undefined;
+
+  switch (status.state) {
+    case "no_services":
+      return undefined;
+    case "not_running":
+      return {
+        // "Has not run since 14:02" when the last run is known; plain "is not running" when it is not.
+        title: since(status.not_running_since, at)
+          ? `Detection has not run${since(status.not_running_since, at)}`
+          : "Detection is not running",
+        wrong: true,
+      };
+    case "data_delayed":
+      // Our lateness, not their outage: said plainly, and not drawn as wrong.
+      return {
+        title: `nexovue is behind on reading your data${since(status.delayed_since, at)} — your services may be fine`,
+        wrong: false,
+      };
+    case "too_many_services": {
+      // Said even with a finding open: the feed cannot speak for services nobody judges.
+      const over = status.services_too_many;
+      return {
+        title: `Too many services to judge all: the ${status.judged_service_limit} busiest are judged, and ${over} ${over === 1 ? "is" : "are"} not`,
+        wrong: false,
+      };
+    }
+    case "learning": {
+      const starts = known(status.earliest_judging_date, formatCalendarDay);
+      return {
+        title: `Learning your services' normal${starts ? `. Judging starts on ${starts}` : ""}`,
+        wrong: false,
+      };
+    }
+    case "judging": {
+      // Before the open findings: the feed cannot speak for services it has no data for.
+      const delayed = status.services_delayed;
+      if (delayed > 0) {
+        const services = delayed === 1 ? "service" : "services";
+        return {
+          title: `Data from ${delayed} ${services} is delayed, so ${delayed === 1 ? "it is" : "they are"} judged once it arrives`,
+          wrong: false,
+        };
+      }
+      if (status.open_findings > 0) return undefined;
+      const learning = status.services_learning;
+      const rest =
+        learning > 0 ? `. ${learning} ${learning === 1 ? "is" : "are"} still learning` : "";
+      return { title: `All judged services are normal${rest}`, wrong: false };
+    }
+  }
+}
+
+/** " since 14:02 London time", or nothing when the time is missing or unreadable. */
+function since(iso: string | null, at: ZonedOptions): string {
+  const when = known(iso, (value) => formatZonedTime(value, at));
+  return when ? ` since ${when}` : "";
+}
+
+function known(value: string | null, format: (value: string) => string): string | undefined {
+  if (value === null) return undefined;
+  const formatted = format(value);
+  return formatted === UNKNOWN ? undefined : formatted;
 }

@@ -52,6 +52,7 @@ and reach only the documented read API.**
 | `GET /projects` | The projects this token may read, with the ids the rest take |
 | `GET /services` | Every service in a window, worst first |
 | `GET /services/{name}` | One service's health in a window |
+| `GET /services/{name}/detection` | One service's detection state, each signal's phase, and its findings in a window (at most 200). The state says when a service is not judged and why: still learning, data delayed, detection not running, muted, `too_many_services` (the project is past the cap and the service is not among its busiest) or `no_incoming_requests` |
 | `GET /traces` | Traces matching filters, newest first (paged) |
 | `GET /traces/{trace_id}` | One trace and its spans |
 | `GET /logs/search` | Log records matching a phrase (paged) |
@@ -61,6 +62,11 @@ and reach only the documented read API.**
 | `GET /error-groups/{group_id}` | One error group and sample occurrences |
 | `GET /alerts/incidents` | Open incidents, then the last thirty days |
 | `GET /alerts/incidents/{incident_id}` | One incident and who was told |
+| `GET /findings` | Detected problems: open, then acknowledged, then closed; at most 200, muted ones apart |
+| `GET /findings/stats` | Findings opened and marked false alarms over the last 7 days (`days` up to 90), per service-week, and for each service with a finding in the window (`services`, most false alarms first; a project finding counts for the project alone) |
+| `GET /findings/{finding_id}` | One finding, its signals (each with its normal band and its evidence endpoint against the same time last week, both kept after the readings expire), each signal's readings against its normal band while they last (35 days), its linked incidents, and a project finding's services |
+| `GET /projects/{project_id}/detection/status` | Whether detection is running, how many services are learning or judged, when judging starts, and the open findings. The state is `data_delayed` while nexovue's pipeline holds back the minutes detection judges, such as one partition 3 minutes behind; `services_delayed` counts the services waiting. A project judges at most `judged_service_limit` services (500), its busiest; past that the state is `too_many_services` and `services_too_many` counts the rest |
+| `GET /projects/{project_id}/detection` | The project's detection sensitivity and the time zone its normal is read in |
 | `GET /checks` | Synthetic checks and their confirmed state |
 | `GET /checks/{check_id}` | One check |
 | `GET /synthetics/checks` | Check results in a window |
@@ -70,6 +76,13 @@ and reach only the documented read API.**
 
 Most take `project_id` as a query parameter, and a window as `from` and `to`
 (ISO-8601). Leaving the window out reads the last hour.
+
+A finding read with a token leaves out what the console shows only a signed-in
+person: who acknowledged it (`acknowledged_by`, `acknowledged_by_name`), the reason
+given for a false alarm (`feedback_reason`), and what *This is the new normal* would
+make its normal (`new_normal`). Acknowledging a finding, calling it a false alarm,
+setting a new normal, snoozing or muting a service, and changing the sensitivity
+are a person's, in the console; a token can do none of them.
 
 **Machine-readable.** The same list is published as OpenAPI 3.1 at
 `GET /api/v1/openapi.read.json` — no credential needed to fetch it — so you can

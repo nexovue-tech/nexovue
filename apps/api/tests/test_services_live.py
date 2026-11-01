@@ -26,6 +26,7 @@ import clickhouse_connect
 import pytest
 import pytest_asyncio
 from clickhouse_connect.driver.asyncclient import AsyncClient
+from dev_project import dev_project_async
 from live import require_stack
 
 from nexovue_api.data.clickhouse.base import TenantScopedRepository
@@ -95,15 +96,19 @@ async def clickhouse() -> AsyncIterator[AsyncClient]:
 
 @pytest_asyncio.fixture
 async def busiest(clickhouse: AsyncClient) -> BusiestProject:
-    """The project with real traffic in it, and the window that contains it."""
+    """The dev project's real traffic, and the window that contains it. Named, not the
+    busiest: other suites seed synthetic history into the same table."""
+    tenant, project = await dev_project_async()
     result = await clickhouse.query(
         "SELECT tenant_id, project_id, min(minute) AS first_minute, max(minute) AS last_minute "
-        "FROM endpoint_stats_1m GROUP BY tenant_id, project_id "
-        "ORDER BY sum(request_count) DESC LIMIT 1"
+        "FROM endpoint_stats_1m "
+        "WHERE tenant_id = {tenant:String} AND project_id = {project:String} "
+        "GROUP BY tenant_id, project_id",
+        parameters={"tenant": tenant, "project": project},
     )
     assert result.result_rows, (
-        "endpoint_stats_1m is empty — this suite would prove nothing. "
-        "Run the load generator, or check that the trace pipeline is writing."
+        "the dev project has nothing in endpoint_stats_1m — this suite would prove nothing. "
+        "Run `just gate-seed` or the load generator, or check that the trace pipeline is writing."
     )
 
     tenant_id, project_id, first_minute, last_minute = result.result_rows[0]

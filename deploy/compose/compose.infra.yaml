@@ -73,6 +73,9 @@ services:
       # The account that can only read and delete (users.d/eraser.xml), for the
       # nightly erasure. A development default only: both deployment files demand it.
       CLICKHOUSE_ERASER_PASSWORD: ${CLICKHOUSE_ERASER_PASSWORD:-nexovue_eraser_dev}
+      # The account that can only insert into detection_readings (users.d/detection-writer.xml),
+      # for anomaly detection. A development default only: both deployment files demand it.
+      CLICKHOUSE_DETECTION_WRITER_PASSWORD: ${CLICKHOUSE_DETECTION_WRITER_PASSWORD:-nexovue_detection_writer_dev}
       # No MALLOC_CONF here, and that is the conclusion rather than an omission.
       #
       # The drift is real: 2.27 GiB resident against 1.24 GiB allocated after
@@ -96,6 +99,7 @@ services:
       - clickhouse-data:/var/lib/clickhouse
       - ../clickhouse/users.d/reader.xml:/etc/clickhouse-server/users.d/reader.xml:ro
       - ../clickhouse/users.d/eraser.xml:/etc/clickhouse-server/users.d/eraser.xml:ro
+      - ../clickhouse/users.d/detection-writer.xml:/etc/clickhouse-server/users.d/detection-writer.xml:ro
       # One file, not the directory: config.d already holds the image's own
       # docker_related_config.xml, and mounting over it leaves ClickHouse
       # listening on loopback where no other container can reach it.

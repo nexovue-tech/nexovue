@@ -25,6 +25,9 @@ class Action(StrEnum):
     MANAGE_CHANNELS = "manage_channels"
     MANAGE_CHECK_SECRETS = "manage_check_secrets"
     CONFIGURE_PROJECTS = "configure_projects"
+    # Anomaly detection's sensitivity, mutes and new normals, and every *anomaly
+    # finding* alert rule (F6 FR23, D11): what decides whether detection is heard.
+    CONFIGURE_DETECTION = "configure_detection"
     # Ingest keys, site keys, deploy webhook secrets and integrations.
     MANAGE_CREDENTIALS = "manage_credentials"
     # Read tokens for the organization's own data (F36, BR9).
@@ -51,6 +54,7 @@ ALLOWED: Final[dict[Action, frozenset[str]]] = {
     Action.MANAGE_CHANNELS: _ADMINISTRATORS,
     Action.MANAGE_CHECK_SECRETS: _ADMINISTRATORS,
     Action.CONFIGURE_PROJECTS: _ADMINISTRATORS,
+    Action.CONFIGURE_DETECTION: _ADMINISTRATORS,
     Action.MANAGE_CREDENTIALS: _ADMINISTRATORS,
     Action.MANAGE_API_TOKENS: _ADMINISTRATORS,
     Action.MANAGE_MEMBERS: _ADMINISTRATORS,

@@ -132,6 +132,12 @@ const (
 	messageNotABrowserKey         = "this ingest key cannot be used from a browser; a public site key is what a web page sends"
 )
 
+// RefusalRecorder is told of each export the broker refused while its sender
+// waited (`intake.Recorder`). Called from the request path, so it must not block.
+type RefusalRecorder interface {
+	Refused(at time.Time)
+}
+
 // Options are the collaborators and limits the door needs. All are required.
 type Options struct {
 	// Gatekeeper is the one credential this door accepts, fixed when it is
@@ -153,6 +159,10 @@ type Options struct {
 	Publisher *ingest.Publisher
 	Logger    *slog.Logger
 	Traffic   *Traffic
+
+	// Refusals records the minutes the broker refused exports in, for detection
+	// to hold (C5). Shared by both doors and both transports.
+	Refusals RefusalRecorder
 
 	// Admission is the receiver's in-flight export budget, one per process and
 	// shared by both doors and both transports.

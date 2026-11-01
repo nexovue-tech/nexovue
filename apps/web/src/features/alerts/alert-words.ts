@@ -55,7 +55,11 @@ export const CONDITION_NAMES: Record<ConditionKind, string> = {
   service_latency_p95: "A service's p95 latency",
   service_silent: "A service goes silent",
   new_error_group: "A new error appears",
+  anomaly_finding: "Anomaly detection finds a problem",
 };
+
+/** The kinds that decide whether detection is heard: an owner's or an admin's (D11). */
+export const DETECTION_KINDS: readonly ConditionKind[] = ["anomaly_finding"];
 
 /** A rule's condition as a sentence: *"Any check is down or degraded"*. */
 export function describeCondition(
@@ -78,6 +82,8 @@ export function describeCondition(
       return `${describeServices(condition.services)} sends nothing for ${condition.silent_minutes} min`;
     case "new_error_group":
       return `A new error in ${condition.services === null ? "any service" : joinOr(condition.services)}`;
+    case "anomaly_finding":
+      return `Anomaly detection finds a ${condition.minimum_severity === "critical" ? "critical problem" : "problem"} in ${condition.services === null ? "any service" : joinOr(condition.services)}`;
   }
 }
 
@@ -290,6 +296,8 @@ export const KIND_DEFAULTS: Record<
   service_latency_p95: { severity: "warning", threshold: "1000" },
   service_silent: { severity: "critical", threshold: "" },
   new_error_group: { severity: "warning", threshold: "" },
+  // The default rule sends critical findings only (FR29); a new rule starts wider.
+  anomaly_finding: { severity: "warning", threshold: "" },
 };
 
 export function emptyRuleDraft(
@@ -358,7 +366,9 @@ export function ruleDraftOf(rule: AlertRule): RuleDraft {
   const services = {
     scope: condition.services === null ? ("all" as const) : ("chosen" as const),
     services: condition.services ?? [],
-    severity: condition.severity,
+    // An anomaly rule's is a minimum, not the severity it gives.
+    severity:
+      condition.kind === "anomaly_finding" ? condition.minimum_severity : condition.severity,
   };
   switch (condition.kind) {
     case "service_error_rate":
@@ -379,6 +389,8 @@ export function ruleDraftOf(rule: AlertRule): RuleDraft {
     case "service_silent":
       return { ...draft, ...services, silentMinutes: String(condition.silent_minutes) };
     case "new_error_group":
+      return { ...draft, ...services };
+    case "anomaly_finding":
       return { ...draft, ...services };
   }
 }
@@ -453,6 +465,9 @@ function conditionOf(draft: RuleDraft): Condition {
       return { kind: draft.kind, ...scope, silent_minutes: Number(draft.silentMinutes) };
     case "new_error_group":
       return { kind: draft.kind, ...scope };
+    case "anomaly_finding":
+      // The draft's severity is the rule's minimum: a finding's own comes from the detector.
+      return { kind: draft.kind, services: scope.services, minimum_severity: draft.severity };
   }
 }
 
@@ -462,7 +477,9 @@ export function ruleRequestOf(draft: RuleDraft, projectId: string): WriteRule {
     name: draft.name.trim(),
     condition: conditionOf(draft),
     channel_ids: draft.channelIds,
-    renotify_minutes: draft.renotify === "" ? null : Number(draft.renotify),
+    // Findings are never repeated (design, *What a finding sends*).
+    renotify_minutes:
+      draft.renotify === "" || draft.kind === "anomaly_finding" ? null : Number(draft.renotify),
     enabled: draft.enabled,
   };
 }

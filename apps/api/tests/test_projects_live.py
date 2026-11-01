@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.data.postgres.models import Project, UsageDaily
 from nexovue_api.projects import service
+from nexovue_api.projects.schemas import ProjectCreateRequest
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 
 POSTGRES_DSN: Final = os.environ.get(
@@ -152,3 +153,55 @@ async def test_another_organizations_arrivals_are_invisible(db: AsyncSession) ->
 
     assert await _first_reported(db, quiet) == {quiet.project.id: None}
     assert (await _first_reported(db, busy))[busy.project.id] == TODAY
+
+
+# ------------------------------------------------------------ the time zone (F6)
+
+
+async def test_signup_s_zone_is_the_owner_s_and_the_first_project_s(db: AsyncSession) -> None:
+    """D23, FR24: a project's days are its creator's local days."""
+    unique = uuid.uuid4().hex[:12]
+    tenant = await provision_tenant(
+        db,
+        organization_name=f"Zoned {unique}",
+        email=f"owner-{unique}@live.test",
+        password="correct-horse-battery",
+        timezone="Asia/Kolkata",
+    )
+
+    assert tenant.user.timezone == "Asia/Kolkata"
+    assert tenant.project.timezone == "Asia/Kolkata"
+
+
+async def test_a_project_created_by_someone_with_no_zone_is_utc(db: AsyncSession) -> None:
+    """AC35: UTC applies only when nobody's zone is known."""
+    tenant = await _new_tenant(db)
+    assert tenant.user.timezone is None
+
+    created = await service.create(
+        db,
+        org_id=tenant.organization.id,
+        actor=tenant.user,
+        request=ProjectCreateRequest(name="Staging"),
+    )
+
+    project = await db.get(Project, created.id)
+    assert tenant.project.timezone == "UTC"
+    assert project is not None and project.timezone == "UTC"
+
+
+async def test_a_project_takes_the_zone_of_whoever_creates_it(db: AsyncSession) -> None:
+    """FR24: the creating user's zone, not the organization's first owner's."""
+    tenant = await _new_tenant(db)
+    tenant.user.timezone = "America/New_York"
+    await db.flush()
+
+    created = await service.create(
+        db,
+        org_id=tenant.organization.id,
+        actor=tenant.user,
+        request=ProjectCreateRequest(name="Staging"),
+    )
+
+    project = await db.get(Project, created.id)
+    assert project is not None and project.timezone == "America/New_York"

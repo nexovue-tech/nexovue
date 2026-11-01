@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import socket
 import uuid
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
@@ -27,9 +29,11 @@ from live import require_stack
 from nexovue_platform.jobs import JobRequest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from structlog.testing import capture_logs
 
-from nexovue_scheduler.jobs import queue, worker
-from nexovue_scheduler.jobs.queue import enqueue
+from nexovue_scheduler import metrics
+from nexovue_scheduler.jobs import child, queue, worker
+from nexovue_scheduler.jobs.queue import ClaimedJob, enqueue
 from nexovue_scheduler.jobs.worker import Worker
 
 DSN: Final = os.environ.get(
@@ -37,7 +41,7 @@ DSN: Final = os.environ.get(
 )
 ASYNC_DSN: Final = DSN.replace("postgresql://", "postgresql+asyncpg://", 1)
 MODULES: Final = ("job_fixtures",)
-# Long enough for a spawned child to import every task module and run a job.
+# Long enough for the forkserver to import every task module and a child to run a job.
 PATIENCE_SECONDS: Final = 20.0
 
 
@@ -105,6 +109,9 @@ async def _work_until(
     *,
     workers: int = 1,
     concurrency: int = 1,
+    queues: list[str] | None = None,
+    caps: dict[str, int] | None = None,
+    child_memory_limit: int = worker.MAX_CHILD_PRIVATE_BYTES,
 ) -> None:
     """Run workers on `lane` until `done()` holds, or fail when patience runs out."""
     stop = asyncio.Event()
@@ -113,9 +120,11 @@ async def _work_until(
             Worker(
                 engine,
                 listen_dsn=DSN,
-                queues=[lane],
+                queues=queues or [lane],
                 concurrency=concurrency,
                 task_modules=MODULES,
+                caps=caps or {},
+                child_memory_limit=child_memory_limit,
             ).run(stop)
         )
         for _ in range(workers)
@@ -233,6 +242,34 @@ async def test_the_hard_limit_kills_a_stuck_task_and_its_slot_runs_the_next(
     assert _lines(notes) == ["blocking", "next"]
 
 
+async def test_a_job_whose_child_is_killed_is_reported_and_its_slot_runs_the_next(
+    engine: AsyncEngine, lane: str, tmp_path: Path
+) -> None:
+    """A child the kernel killed over the container's memory limit cannot log its own end.
+    The worker must say which job died and count it killed, or it is lost without a trace
+    (F6 T8.2: 49 baseline jobs vanished this way at the memory ceiling)."""
+    notes = tmp_path / "notes"
+    await _add(engine, JobRequest(task=job_fixtures.DIE, queue=lane, kwargs={"path": str(notes)}))
+    await _add(
+        engine,
+        JobRequest(
+            task=job_fixtures.NOTE, queue=lane, kwargs={"path": str(notes), "marker": "next"}
+        ),
+    )
+    killed = metrics.JOBS_ENDED.labels(outcome=metrics.KILLED)
+    killed_before = killed._value.get()
+
+    with capture_logs() as logs:
+        await _work_until(engine, lane, lambda: "next" in _lines(notes))
+
+    assert _lines(notes) == ["dying", "next"]
+    died = [line for line in logs if line["event"] == "a job's process died"]
+    assert [(line["task"], line["exit_code"]) for line in died] == [
+        (job_fixtures.DIE, -signal.SIGKILL)
+    ]
+    assert killed._value.get() == killed_before + 1
+
+
 async def test_a_dead_workers_job_runs_again_once_its_lease_lapses(
     engine: AsyncEngine, lane: str, tmp_path: Path
 ) -> None:
@@ -325,3 +362,152 @@ async def test_a_job_somebody_waits_on_wakes_the_worker(
     finally:
         stop.set()
         await running
+
+
+def _most_at_once(lines: list[str], marker_prefix: str) -> int:
+    running = most = 0
+    for line in lines:
+        kind, marker = line.split(" ", 1)
+        if not marker.startswith(marker_prefix):
+            continue
+        running += 1 if kind == "start" else -1
+        most = max(most, running)
+    return most
+
+
+async def test_a_capped_queue_never_holds_more_than_its_slots(
+    engine: AsyncEngine, lane: str, tmp_path: Path
+) -> None:
+    """C23, D32: `scheduler-light` takes detection beside its probes, and detection
+    holds at most its cap of the slots while the rest stay free for the others."""
+    others = f"{lane}.others"
+    notes = tmp_path / "notes"
+    try:
+        for number in range(4):
+            await _add(
+                engine,
+                JobRequest(
+                    task=job_fixtures.SPAN,
+                    queue=lane,
+                    kwargs={"path": str(notes), "marker": f"capped {number}", "pause": 0.6},
+                ),
+            )
+        for number in range(4):
+            await _add(
+                engine,
+                JobRequest(
+                    task=job_fixtures.SPAN,
+                    queue=others,
+                    kwargs={"path": str(notes), "marker": f"other {number}", "pause": 0.6},
+                ),
+            )
+
+        await _work_until(
+            engine,
+            lane,
+            lambda: sum(line.startswith("end") for line in _lines(notes)) >= 8,
+            concurrency=4,
+            queues=[lane, others],
+            caps={lane: 1},
+        )
+
+        lines = _lines(notes)
+        assert _most_at_once(lines, "capped") == 1
+        # The slots the cap leaves are the others', and they used them.
+        assert _most_at_once(lines, "other") >= 2
+    finally:
+        async with engine.begin() as connection:
+            await connection.execute(text("DELETE FROM jobs WHERE queue = :q"), {"q": others})
+
+
+def _pids(path: Path) -> list[str]:
+    return [line.split()[1] for line in _lines(path)]
+
+
+async def test_a_child_starts_from_the_preloaded_task_modules_frozen(
+    engine: AsyncEngine, lane: str, tmp_path: Path
+) -> None:
+    """Children share one import of the task modules rather than each holding its own,
+    and inherit them frozen, so their collector does not unshare those pages (AC29)."""
+    notes = tmp_path / "notes"
+    await _add(engine, JobRequest(task=job_fixtures.WHO, queue=lane, kwargs={"path": str(notes)}))
+
+    await _work_until(engine, lane, lambda: bool(_lines(notes)))
+
+    _, _, _, preloaded, _, frozen = _lines(notes)[0].split()
+    assert preloaded == "True"
+    assert int(frozen) > 0
+
+
+async def test_a_child_that_grew_past_its_limit_is_replaced_after_its_job(
+    engine: AsyncEngine, lane: str, tmp_path: Path
+) -> None:
+    """A child keeps the memory its biggest job grew into; past the limit it is replaced
+    once that job ends, as Celery's `worker_max_memory_per_child` does, and a child under
+    it is kept."""
+    notes = tmp_path / "notes"
+    path = {"path": str(notes)}
+    await _add(engine, JobRequest(task=job_fixtures.WHO, queue=lane, kwargs=path))
+    await _add(engine, JobRequest(task=job_fixtures.WHO, queue=lane, kwargs=path))
+    await _work_until(engine, lane, lambda: len(_lines(notes)) == 2)
+    kept = _pids(notes)
+
+    notes.unlink()
+    await _add(
+        engine, JobRequest(task=job_fixtures.GROW, queue=lane, kwargs={**path, "mebibytes": 48})
+    )
+    await _add(engine, JobRequest(task=job_fixtures.WHO, queue=lane, kwargs=path))
+    await _work_until(engine, lane, lambda: len(_lines(notes)) == 2, child_memory_limit=32 * 2**20)
+    replaced = _pids(notes)
+
+    assert kept[0] == kept[1]
+    assert replaced[0] != replaced[1]
+
+
+def _claimed(task: str, **kwargs: object) -> ClaimedJob:
+    return ClaimedJob(
+        id=uuid.uuid4(),
+        task=task,
+        kwargs=dict(kwargs),
+        attempts=1,
+        max_attempts=1,
+        soft_limit_seconds=10,
+        hard_limit_seconds=15,
+    )
+
+
+@pytest.mark.parametrize("replaced_by", ["memory", "hard limit"])
+async def test_a_slot_whose_new_child_fails_to_start_rebuilds_before_its_next_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replaced_by: str
+) -> None:
+    """A child that cannot be started in its slot's place, after a job grew past the
+    memory limit or was killed at its hard limit, leaves no closed pipe behind: the
+    job's outcome is still reported, and the slot builds a child before its next job."""
+    notes = tmp_path / "notes"
+    slot = worker.Slot(MODULES, memory_limit=0 if replaced_by == "memory" else 2**40)
+    started = worker.Slot.start
+    failures = [OSError("the forkserver could not fork")]
+
+    def start_unless_failing(self: worker.Slot) -> None:
+        if failures:
+            raise failures.pop()
+        started(self)
+
+    monkeypatch.setattr(worker.Slot, "start", start_unless_failing)
+    try:
+        if replaced_by == "memory":
+            first = await slot.run(_claimed(job_fixtures.WHO, path=str(notes)))
+            assert first == (child.DONE,)
+        else:
+            stuck = _claimed(job_fixtures.BLOCK, path=str(notes), seconds=30)
+            first = await slot.run(replace(stuck, soft_limit_seconds=1, hard_limit_seconds=1))
+            assert first[0] == worker.KILLED
+
+        second = await slot.run(_claimed(job_fixtures.WHO, path=str(notes)))
+
+        assert second == (child.DONE,)
+        assert len([line for line in _lines(notes) if line.startswith("pid")]) == (
+            2 if replaced_by == "memory" else 1
+        )
+    finally:
+        slot.stop()

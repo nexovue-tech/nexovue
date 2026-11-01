@@ -131,6 +131,10 @@ const FindingsScreen = lazyRouteComponent(
   () => import("@/features/findings/FindingsScreen"),
   "FindingsScreen",
 );
+const FindingScreen = lazyRouteComponent(
+  () => import("@/features/findings/FindingScreen"),
+  "FindingScreen",
+);
 const InfrastructureScreen = lazyRouteComponent(
   () => import("@/features/infrastructure/InfrastructureScreen"),
   "InfrastructureScreen",
@@ -246,6 +250,14 @@ const findingsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/findings",
   component: FindingsScreen,
+});
+
+// What every finding card and message links to (D12): one finding, its evidence and
+// what a person may do about it.
+const findingRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/findings/$findingId",
+  component: FindingScreen,
 });
 
 const servicesRoute = createRoute({
@@ -669,6 +681,7 @@ const routeTree = rootRoute.addChildren([
   shellRoute.addChildren([
     overviewRoute,
     findingsRoute,
+    findingRoute,
     alertsRoute,
     newRuleRoute,
     ruleRoute,

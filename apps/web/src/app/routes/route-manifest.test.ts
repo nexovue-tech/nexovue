@@ -85,6 +85,8 @@ describe("the sidebar", () => {
       "/alerts/rules/$ruleId",
       // Reached from an alert message's link and the Alerts screen's rows.
       "/alerts/incidents/$incidentId",
+      // F6 (D12): reached from a finding's card, a service's timeline and its messages.
+      "/findings/$findingId",
       "/settings/channels/$channelId",
       // The platform area's own pages: the sidebar offers `/admin` to the
       // operator, and these are reached from it.

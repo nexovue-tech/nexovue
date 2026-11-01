@@ -4,40 +4,54 @@ import type { Finding } from "./api";
 import { needsAttention, orderFindings } from "./ordering";
 
 const finding = (overrides: Partial<Finding> & { id: string }): Finding => ({
+  project_id: "5f6d6f14-0e3b-4a2f-8b5d-1f3f7d6a00aa",
+  scope: "service",
+  service_name: "checkout-api",
   title: "Something changed",
   severity: "warning",
-  state: "active",
-  subject: "checkout-api",
-  impact: "",
-  probable_cause: "",
+  state: "open",
+  closed_reason: null,
+  muted: false,
   started_at: "2026-09-13T10:00:00Z",
-  resolved_at: null,
+  closed_at: null,
+  acknowledged_at: null,
+  signals: [],
   trend: [],
   ...overrides,
 });
 
 const ids = (findings: Finding[]) => findings.map((found) => found.id);
 
-describe("F1 AC1.5: active before resolved, then severity, then recency", () => {
+describe("F1 AC1.5: open, then acknowledged, then closed; then severity, then recency", () => {
   it("puts anything still wrong above anything already fixed", () => {
-    // Even when the resolved one is far newer. A feed that leads with good news
+    // Even when the closed one is far newer. A feed that leads with good news
     // buries the reason somebody opened it.
     const ordered = orderFindings([
-      finding({ id: "fixed", state: "resolved", resolved_at: "2026-09-13T11:59:00Z" }),
+      finding({ id: "fixed", state: "closed", closed_at: "2026-09-13T11:59:00Z" }),
       finding({ id: "broken", started_at: "2026-09-13T08:00:00Z" }),
     ]);
 
     expect(ids(ordered)).toEqual(["broken", "fixed"]);
   });
 
-  it("keeps an acknowledged finding above a resolved one", () => {
+  it("keeps an acknowledged finding above a closed one", () => {
     // Acknowledged means somebody saw it, not that anybody fixed it.
     const ordered = orderFindings([
-      finding({ id: "fixed", state: "resolved", resolved_at: "2026-09-13T11:00:00Z" }),
+      finding({ id: "fixed", state: "closed", closed_at: "2026-09-13T11:00:00Z" }),
       finding({ id: "seen", state: "acknowledged" }),
     ]);
 
     expect(ids(ordered)).toEqual(["seen", "fixed"]);
+  });
+
+  it("puts an open finding nobody has seen above an acknowledged one", () => {
+    // Even a newer, critical acknowledged one: somebody already has that.
+    const ordered = orderFindings([
+      finding({ id: "seen", state: "acknowledged", severity: "critical" }),
+      finding({ id: "unseen", started_at: "2026-09-13T08:00:00Z" }),
+    ]);
+
+    expect(ids(ordered)).toEqual(["unseen", "seen"]);
   });
 
   it("ranks critical above warning inside the same tier", () => {
@@ -58,21 +72,21 @@ describe("F1 AC1.5: active before resolved, then severity, then recency", () => 
     expect(ids(ordered)).toEqual(["newer", "older"]);
   });
 
-  it("orders resolved findings by when they resolved, not when they started", () => {
+  it("orders closed findings by when they closed, not when they started", () => {
     // The question about the quiet half of the feed is what stopped being wrong
     // and when. Ordering by start date interleaves them by something nobody reads.
     const ordered = orderFindings([
       finding({
         id: "started-first-fixed-last",
-        state: "resolved",
+        state: "closed",
         started_at: "2026-09-13T06:00:00Z",
-        resolved_at: "2026-09-13T11:00:00Z",
+        closed_at: "2026-09-13T11:00:00Z",
       }),
       finding({
         id: "started-last-fixed-first",
-        state: "resolved",
+        state: "closed",
         started_at: "2026-09-13T10:00:00Z",
-        resolved_at: "2026-09-13T10:30:00Z",
+        closed_at: "2026-09-13T10:30:00Z",
       }),
     ]);
 
@@ -99,12 +113,16 @@ describe("F1 AC1.5: active before resolved, then severity, then recency", () => 
 });
 
 describe("whether anything needs somebody", () => {
-  it("is false when every finding is resolved", () => {
-    expect(needsAttention([finding({ id: "a", state: "resolved" })])).toBe(false);
+  it("is false when every finding is closed", () => {
+    expect(needsAttention([finding({ id: "a", state: "closed" })])).toBe(false);
   });
 
   it("is false when there are no findings at all", () => {
     expect(needsAttention([])).toBe(false);
+  });
+
+  it("is true while one is open", () => {
+    expect(needsAttention([finding({ id: "a" })])).toBe(true);
   });
 
   it("is true while one is merely acknowledged", () => {

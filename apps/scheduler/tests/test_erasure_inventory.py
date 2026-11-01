@@ -95,14 +95,19 @@ def test_the_purge_names_no_table_the_schema_does_not_have() -> None:
 
 
 def test_the_offset_tables_are_excluded_with_their_reason() -> None:
-    """The three watermark tables must never be purged by tenant.
+    """The four watermark tables must never be purged by tenant.
 
     They are keyed by topic and partition. Deleting rows from them makes the
     worker re-derive counters it has already stored — a silent, permanent
     over-count and an over-bill. Named here so removing the
     exclusion is a test failure rather than a quiet change.
     """
-    watermarks = ("span_ingest_offsets", "span_written_offsets", "ingest_written_offsets")
+    watermarks = (
+        "span_ingest_offsets",
+        "span_written_offsets",
+        "ingest_written_offsets",
+        "span_derived_progress",
+    )
     for table in watermarks:
         assert table not in PURGED_TABLES, f"{table} must not be purged by tenant"
         assert EXCLUDED_TABLES.get(table), f"{table} is excluded without a recorded reason"

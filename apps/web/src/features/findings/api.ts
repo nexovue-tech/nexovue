@@ -1,30 +1,67 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
+import { findingStatsKey, servicesDetectionKey } from "@/shared/detection/api";
 import type { TimeWindow } from "@/shared/selection";
 import { liveOptions, windowKeyOf } from "@/shared/selection";
 
 /**
- * The feed's shape, and the reads its healthy state is made of.
+ * The feed, and the reads its healthy state is made of.
  *
- * **Nothing produces findings.** The specification is explicit that it covers the
- * Findings *screen* and not the engine behind it, and the wireframe is explicit about
- * the consequence: until that engine exists, the healthy state is the entire screen.
- * `useFindings` therefore asks nothing and answers with an empty feed — deliberately,
- * and named so, rather than pointing at an endpoint that does not exist and rendering a
- * failed load to every customer.
- *
- * The feed itself is built and tested because its structure, ordering and actions are
- * committed (OD1, resolved 2026-09-13). Only the card's *contents* are provisional, so
- * that a drawing does not quietly become the specification for an engine nobody has
- * designed yet.
+ * The feed is `GET /findings`: one row per detected problem, written by the detection
+ * engine (ADR-022). The checks and the RED summary beneath it stay as they were, because
+ * an empty feed is still not proof of health (`headline.ts`).
  */
 
 export type FindingSeverity = "critical" | "warning";
-export type FindingState = "active" | "acknowledged" | "resolved";
+/** Acknowledged is still open in every way that matters: somebody saw it, nobody fixed it. */
+export type FindingState = "open" | "acknowledged" | "closed";
+/** How a closed finding closed. Null while it is open, and the card names it once closed. */
+export type ClosedReason =
+  | "recovered"
+  | "false_alarm"
+  | "new_normal"
+  | "adopted"
+  | "service_gone"
+  | "could_not_be_judged";
+export type FindingScope = "service" | "project";
+export type FindingSignalKind = "slower" | "failing" | "traffic";
+
+/** One signal behind a finding, with the normal it was judged against. */
+export interface FindingSignal {
+  signal: FindingSignalKind;
+  /**
+   * The job's key for the entry: the signal, or `endpoint:<name>` for an endpoint failing on
+   * its own. Null for a finding stored before keys were kept.
+   */
+  key: string | null;
+  /** Null when there is no reading, never 0: a missing number and a real zero differ. */
+  normal: number | null;
+  current: number | null;
+  worst: number | null;
+  unit: "ms" | "%" | "rpm";
+  comparison: string;
+  endpoint: string | null;
+  /**
+   * The normal band as it was when judged (FR16), stored with the finding so it outlives
+   * the readings. Null for a finding stored before the band was kept.
+   */
+  band_low: number | null;
+  band_high: number | null;
+  /**
+   * The evidence endpoint's value then and the same time last week (FR3): its p95 for
+   * slower, its share failing for failing more. Null when no week was compared.
+   */
+  endpoint_current: number | null;
+  endpoint_last_week: number | null;
+}
 
 export interface Finding {
   id: string;
+  project_id: string;
+  /** A project finding has no service: it spans several. */
+  scope: FindingScope;
+  service_name: string | null;
   /**
    * **The title is the product.** A finding is a sentence: subject, what changed, how
    * much, since when. F1 AC1.3 forbids raw metric names and percentile jargon here, and
@@ -34,31 +71,114 @@ export interface Finding {
   title: string;
   severity: FindingSeverity;
   state: FindingState;
-  /** The entity the sentence is about: "checkout-api · POST /checkout". */
-  subject: string;
-  /** Scale, in the engine's own words: "~12% of checkout requests affected". */
-  impact: string;
-  /** Provisional, and the first thing an engine is likely to overrule. */
-  probable_cause: string;
+  closed_reason: ClosedReason | null;
+  muted: boolean;
   started_at: string;
-  resolved_at: string | null;
+  closed_at: string | null;
+  acknowledged_at: string | null;
+  signals: FindingSignal[];
   /** A rollup behind the entity, drawn with the same sparkline as everywhere else. */
   trend: number[];
 }
 
+/** One judged minute of one signal, in the signal's unit. */
+export interface SignalPoint {
+  at: string;
+  /** Null when the minute had nothing to measure; drawn as a gap, never as zero. */
+  value: number | null;
+  normal: number | null;
+  /**
+   * Where the sensitivity's minimum change lies: above the normal for slower and
+   * failing more, below it for losing traffic. Between it and the normal is the band.
+   */
+  edge: number | null;
+}
+
+/** One signal's readings against its normal band, oldest first (AC38). */
+export interface SignalSeries {
+  signal: FindingSignalKind;
+  unit: FindingSignal["unit"];
+  points: SignalPoint[];
+}
+
+/** A threshold or *went silent* incident on the same service (BR2). */
+export interface LinkedIncident {
+  id: string;
+  rule_name: string;
+  condition_kind: string;
+  opened_at: string;
+  resolved_at: string | null;
+}
+
+/** What *This is the new normal* would make one signal's normal (FR21). */
+export interface ProposedShift {
+  signal: FindingSignalKind;
+  unit: FindingSignal["unit"];
+  ratio: number;
+  normal_before: number | null;
+  normal_after: number | null;
+}
+
+/** Whether the level is known well enough to become the normal yet. */
+export interface NewNormalPreview {
+  available: boolean;
+  readings: number;
+  needed: number;
+  signals: ProposedShift[];
+}
+
+/** One finding as its page reads it (FR31). */
+export interface FindingDetail extends Finding {
+  /** Empty once the readings have expired, and always for a project finding (AC40). */
+  series: SignalSeries[];
+  incidents: LinkedIncident[];
+  /** A project finding's services; empty for a service's. */
+  services: string[];
+  /** A signed-in person's alone: an API token never reads these. */
+  acknowledged_by?: string | null;
+  acknowledged_by_name?: string | null;
+  feedback_reason?: string | null;
+  /** Null when closed, or a project's finding, which has no normal of its own. */
+  new_normal?: NewNormalPreview | null;
+}
+
+/** What an action did: the finding as it now is, and who hears it close. */
+export interface FindingChanged {
+  finding: FindingDetail;
+  /** The channels its *resolved* message goes to; empty when nothing is sent. */
+  resolved_to: string[];
+}
+
 export interface FindingsResponse {
   findings: Finding[];
+  /** How many findings the feed is leaving out because somebody muted them. */
+  muted_count: number;
+  /** True when there were more than the feed's 200, and only the first 200 came. */
+  truncated: boolean;
 }
 
 /**
- * The feed. Empty until an insight engine exists.
+ * The feed: every finding, open and closed, muted or not as asked.
  *
- * Not a query against a missing endpoint: a 404 on every load would render the error
- * state, and the error state is the one thing on this screen that must never be shown
- * when it is not true.
+ * It asks for `state=all` and sends no time window, because the feed's question is
+ * "what needs me, and what stopped being wrong", not "what happened between two
+ * instants": an open finding from before the window still needs somebody. The window is
+ * taken only for its refresh, so the feed stays as live as the summary beneath it.
+ *
+ * A failed read is the query's error, never an empty feed: an empty feed would read as
+ * "nothing is wrong", and the error state exists so that it never does (AC18).
  */
-export function useFindings(_projectId: string | undefined, _timeWindow: TimeWindow) {
-  return { findings: [] as Finding[], isPending: false, isError: false };
+export function useFindings(projectId: string | undefined, muted: boolean, refresh: TimeWindow) {
+  return useQuery({
+    ...liveOptions(refresh),
+    queryKey: ["findings", "feed", projectId ?? "", muted] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<FindingsResponse>("findings", {
+        searchParams: { project_id: projectId, state: "all", muted },
+        signal,
+      }),
+  });
 }
 
 export interface ProjectTotals {
@@ -141,5 +261,99 @@ export function useCheckCounts(
       // check down when a probe said so (`headline.ts`).
       down: response.checks.filter((check) => check.up === false).length,
     }),
+  });
+}
+
+/** What detection is doing for a project, decided by the API, never inferred here. */
+export type DetectionState =
+  | "learning"
+  | "judging"
+  | "data_delayed"
+  | "not_running"
+  | "no_services"
+  | "too_many_services";
+
+export interface DetectionStatus {
+  state: DetectionState;
+  services_total: number;
+  services_learning: number;
+  services_judged: number;
+  services_delayed: number;
+  services_muted: number;
+  /** A day on the project's calendar (`2026-11-03`), or null when nothing is learning. */
+  earliest_judging_date: string | null;
+  not_running_since: string | null;
+  delayed_since: string | null;
+  open_findings: number;
+  /** Services past the cap, which are not judged; a project judges at most the limit. */
+  services_too_many: number;
+  judged_service_limit: number;
+}
+
+/**
+ * Whether detection is judging this project, for the line above the checks
+ * (`headline.ts`).
+ *
+ * Not gated behind the summary like the checks read: `/projects` is outside the
+ * telemetry tier, so it takes none of that tier's in-flight slots and can go at once.
+ * A failed read stays the query's error, and the screen shows its error state for it:
+ * a missing status must never leave a healthy line standing.
+ */
+export function useDetectionStatus(projectId: string | undefined, refresh: TimeWindow) {
+  return useQuery({
+    ...liveOptions(refresh),
+    queryKey: ["findings", "detection", projectId ?? ""] as const,
+    enabled: projectId !== undefined,
+    queryFn: ({ signal }) =>
+      apiClient.get<DetectionStatus>(
+        `projects/${encodeURIComponent(projectId ?? "")}/detection/status`,
+        { signal },
+      ),
+  });
+}
+
+export const findingQueryKey = (findingId: string) => ["findings", "one", findingId] as const;
+
+/** One finding and its page. */
+export function useFinding(findingId: string) {
+  return useQuery({
+    queryKey: findingQueryKey(findingId),
+    queryFn: ({ signal }) =>
+      apiClient.get<FindingDetail>(`findings/${encodeURIComponent(findingId)}`, { signal }),
+  });
+}
+
+export type FindingAction = "acknowledge" | "false-alarm" | "new-normal";
+
+export interface FindingActionInput {
+  action: FindingAction;
+  /** A false alarm's reason, the person's to give or not. */
+  reason?: string;
+}
+
+/**
+ * Acknowledge, false alarm or new normal (FR19 to FR21). Each answers with the finding
+ * as it now is, which replaces the page's copy. What a closed or marked finding changes
+ * reads again: the feed, the detection status, the false-alarm counts, and the
+ * finding markers on its project's service pages.
+ */
+export function useFindingAction(findingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["findings", "action", findingId],
+    mutationFn: ({ action, reason }: FindingActionInput) =>
+      apiClient.post<FindingChanged>(
+        `findings/${encodeURIComponent(findingId)}/${action}`,
+        action === "false-alarm" ? { reason: reason?.trim() ? reason.trim() : null } : undefined,
+      ),
+    onSuccess: (changed) => {
+      queryClient.setQueryData(findingQueryKey(findingId), changed.finding);
+      const projectId = changed.finding.project_id;
+      void queryClient.invalidateQueries({ queryKey: ["findings", "feed"] });
+      void queryClient.invalidateQueries({ queryKey: ["findings", "detection"] });
+      void queryClient.invalidateQueries({ queryKey: findingStatsKey(projectId) });
+      // Every service's, by prefix: a project finding spans several.
+      void queryClient.invalidateQueries({ queryKey: servicesDetectionKey(projectId) });
+    },
   });
 }

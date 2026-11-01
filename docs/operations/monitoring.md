@@ -14,7 +14,7 @@ Every service answers three paths on an internal port. No edge routes any of the
 | receiver | `RECEIVER_HEALTH_ADDR` (`:8081`) | never (the process answers) | Kafka or Postgres does not answer |
 | worker | `WORKERS_HEALTH_ADDR` (`:8081`) | a pipeline has stopped | that, or Kafka, ClickHouse, Postgres or a usage meter |
 | api | `:8000`, at the root | never | Postgres or ClickHouse does not answer |
-| scheduler (each of beat, light, deliveries) | `SCHEDULER_HEALTH_ADDR` (`:8081`) | its loop has been silent for 30 s | it has not reached Postgres for 30 s |
+| scheduler (each of beat, light, deliveries) | `HEALTH_ADDR` (`:8081`) | its loop has been silent for 30 s | it has not reached Postgres for 30 s |
 
 Every long-running service has a compose healthcheck in both deployment files. A frozen beat went
 `unhealthy` after 75 s with its container still `running`, and `healthy` again 15 s after it resumed.
@@ -43,7 +43,7 @@ scrape (`up == 0` in Prometheus terms) for every service.
 |---|---|---|
 | `nexovue_receiver_requests_total{outcome}` | Export requests accepted and refused | refused / all > 5% for 10 min |
 | `nexovue_receiver_items_total{signal,outcome}` | Spans, log records, data points and samples | accepted for a signal flat at 0 for 30 min while customers send |
-| `nexovue_receiver_events_total{reason}` | Refusals by reason; `unavailable` is Kafka refusing | `unavailable` rising at all |
+| `nexovue_receiver_events_total{reason}` | Refusals by reason; `broker_unavailable` is Kafka refusing while the sender waited, `unavailable` the control plane or a record Kafka rejected | `broker_unavailable` rising at all; `unavailable` over half of all requests for 5 minutes |
 
 ### Scheduler
 
@@ -55,6 +55,11 @@ scrape (`up == 0` in Prometheus terms) for every service.
 | `nexovue_scheduler_alerts_waiting`, `…_oldest_alert_waiting_seconds` | Alert notifications due and undelivered (leader only) | oldest > 300 s |
 | `nexovue_scheduler_erasures_overdue` | Deleted organizations past their three days | > 0 |
 | `nexovue_scheduler_jobs_added_total`, `…_enqueue_failures_total`, `…_jobs_ended_total{outcome}` | What beat added, could not add, and how workers' jobs ended | enqueue failures rising; `killed` rising |
+| `nexovue_scheduler_detection_events_recent{kind}` | `detection_events` rows of the last 15 minutes: detection held every project because nexovue's own intake failed (`intake_guard`), or released such a hold at its 30-minute limit (`hold_expired`) (leader only) | > 0 |
+| `nexovue_scheduler_detection_settled_minute_age_seconds` | How old the newest minute detection handed to project jobs is; `+Inf` before any (leader only). It ages when the sweep stops as well as when the pipeline does | > 600 s for 1 min |
+| `nexovue_scheduler_detection_projects_behind`, `…_detection_oldest_lag_seconds` | Projects detection should judge with no completed run for 3 minutes, and the longest any has waited (leader only). No label names the project; the log does | > 0 for 2 min |
+
+Each detection alert has its procedure in [detection](detection.md).
 
 Stopping the light worker on the dev stack raised `jobs_ready` on `light` and `light.local` within
 20 s, and both cleared once it restarted.
@@ -90,7 +95,7 @@ curl -s localhost:18000/metrics | grep ^nexovue_
 
 - `prometheus.yml` scrapes every service above by DNS, so each replica of the API and the receiver is
   its own target;
-- `rules/nexovue.yml` — 16 alerts on the thresholds in the tables above, plus **a service that is
+- `rules/nexovue.yml` — 19 alerts on the thresholds in the tables above, plus **a service that is
   missing altogether**: a stopped container leaves DNS, so it is never `up == 0`, only absent;
 - `tests/nexovue_test.yml` — `promtool test rules`, run by `just lint-deploy` in `just check`;
 - `alertmanager.yml` — routes to nowhere until a receiver is named.

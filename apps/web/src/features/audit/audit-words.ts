@@ -48,6 +48,27 @@ export function describeEntry(entry: AuditEntry): string {
       return `${who} signed out`;
     case "session.denied":
       return "A sign-in was refused";
+    // F6: a person's word on a finding, and what quietens a service.
+    case "finding.acknowledged":
+      return `${who} acknowledged a finding`;
+    case "finding.false_alarm":
+      return typeof detail.reason === "string" && detail.reason.length > 0
+        ? `${who} marked a finding a false alarm: “${detail.reason}”`
+        : `${who} marked a finding a false alarm`;
+    case "finding.new_normal":
+      return `${who} made a finding's level the new normal`;
+    case "finding.adopted":
+      return `${who} made a finding's level the new normal after 7 days`;
+    case "service.snoozed":
+      return detail.until === null
+        ? `${who} ended the snooze on ${text(detail.service)}`
+        : `${who} snoozed ${text(detail.service)}`;
+    case "service.muted":
+      return detail.until === null
+        ? `${who} unmuted ${text(detail.service)}`
+        : `${who} muted ${text(detail.service)}`;
+    case "project.detection_changed":
+      return `${who} changed a project's detection settings`;
     default:
       return `${who}: ${entry.action.replaceAll("_", " ").replace(".", " — ")}`;
   }

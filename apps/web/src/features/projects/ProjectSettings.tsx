@@ -17,6 +17,7 @@ import {
 } from "./api";
 import { CheckSecretsSection } from "./CheckSecretsSection";
 import { CheckVariablesSection } from "./CheckVariablesSection";
+import { DetectionSection } from "./DetectionSection";
 import { MaintenanceWindowsSection } from "./MaintenanceWindowsSection";
 import type { MaskingForm } from "./masking";
 import {
@@ -55,6 +56,7 @@ export function ProjectSettings({
   const canConfigure = useCan("configure_projects");
   const canManageSecrets = useCan("manage_check_secrets");
   const canOperateAlerts = useCan("operate_alerts");
+  const canConfigureDetection = useCan("configure_detection");
   return (
     <div className="flex flex-col gap-10 border-line border-t pt-8">
       {canConfigure ? <Identity project={project} /> : null}
@@ -64,10 +66,12 @@ export function ProjectSettings({
       {canManageSecrets ? <CheckSecretsSection projectId={project.id} /> : null}
       {canManageSecrets ? <CheckVariablesSection projectId={project.id} /> : null}
       {canOperateAlerts ? <MaintenanceWindowsSection projectId={project.id} /> : null}
+      {canConfigureDetection ? <DetectionSection projectId={project.id} /> : null}
       {canConfigure ? <Deletion project={project} onDeleted={onDeleted} /> : null}
       {canConfigure ? null : (
         <p className="max-w-2xl text-ink-dim text-sm">
-          Renaming, sampling, masking and deleting a project are an owner's or an admin's to change.
+          Renaming, sampling, masking, detection and deleting a project are an owner's or an admin's
+          to change.
         </p>
       )}
     </div>

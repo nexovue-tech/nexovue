@@ -42,6 +42,7 @@ THE_SURFACE: Final = {
     "nexovue_api/projects/router.py:list_projects": "GET /projects",
     "nexovue_api/services/router.py:list_services": "GET /services",
     "nexovue_api/services/router.py:get_service": "GET /services/{service}",
+    "nexovue_api/detection/router.py:service_detection": "GET /services/{service}/detection",
     "nexovue_api/traces/router.py:list_traces": "GET /traces",
     "nexovue_api/traces/router.py:get_trace": "GET /traces/{trace_id}",
     "nexovue_api/logs/search.py:search": "GET /logs/search",
@@ -51,6 +52,13 @@ THE_SURFACE: Final = {
     "nexovue_api/errorgroups/router.py:get_error_group": "GET /error-groups/{group_id}",
     "nexovue_api/alerts/router.py:list_incidents": "GET /alerts/incidents",
     "nexovue_api/alerts/router.py:get_incident": "GET /alerts/incidents/{incident_id}",
+    "nexovue_api/findings/router.py:list_findings": "GET /findings",
+    "nexovue_api/findings/router.py:finding_stats": "GET /findings/stats",
+    "nexovue_api/findings/router.py:get_finding": "GET /findings/{finding_id}",
+    "nexovue_api/detection/router.py:detection_status": (
+        "GET /projects/{project_id}/detection/status"
+    ),
+    "nexovue_api/detection/router.py:detection_settings": "GET /projects/{project_id}/detection",
     "nexovue_api/checks/router.py:list_checks": "GET /checks",
     "nexovue_api/checks/router.py:get_check": "GET /checks/{check_id}",
     "nexovue_api/synthetics/router.py:list_check_results": "GET /synthetics/checks",

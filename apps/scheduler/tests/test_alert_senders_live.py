@@ -15,9 +15,18 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from alert_fixtures import AlertTenant, add_channel, add_rule, future, postgres_reachable, rows
+from alert_fixtures import (
+    AlertTenant,
+    add_channel,
+    add_finding,
+    add_rule,
+    anomaly_rule,
+    future,
+    postgres_reachable,
+    rows,
+)
 from live import require_stack
-from nexovue_platform.alerts.channels import new_webhook_secret
+from nexovue_platform.alerts.channels import PAGERDUTY_ENDPOINTS, new_webhook_secret
 from nexovue_platform.checks.sealing import (
     NOTIFICATION_CHANNEL_PURPOSE,
     Keyring,
@@ -34,6 +43,7 @@ from nexovue_scheduler.alerts.dispatch import Outbound, Outgoing, send
 from nexovue_scheduler.alerts.messages import AlertMessage
 from nexovue_scheduler.alerts.outbox import Channel
 from nexovue_scheduler.alerts.senders.http import NOT_PUBLIC
+from nexovue_scheduler.detection import notify
 from nexovue_scheduler.probes import state_store
 
 require_stack(
@@ -56,7 +66,9 @@ MESSAGE = AlertMessage(
 OUTGOING = Outgoing(
     message=MESSAGE,
     message_id="batch-1",
-    dedup_key="incident-1",
+    dedup_key="incident:incident-1",
+    subject_kind="incident",
+    subject_id="incident-1",
     subject="Checkout API",
     opened_at=datetime(2026, 9, 19, 14, 3, tzinfo=UTC),
     resolved_at=None,
@@ -284,3 +296,84 @@ async def test_a_retried_webhook_carries_the_same_webhook_id(
         ("retrying", 503),
         ("delivered", 200),
     ]
+
+
+async def _sealed_channel(
+    engine: AsyncEngine, tenant: AlertTenant, kind: str, secret: str, config: dict[str, object]
+) -> uuid.UUID:
+    async with engine.begin() as connection:
+        channel_id = await add_channel(
+            connection, tenant.org_id, kind=kind, name=kind.title(), config=json.dumps(config)
+        )
+        await connection.execute(
+            text("UPDATE notification_channels SET sealed_secret = :sealed WHERE id = :id"),
+            {
+                "sealed": BOX.seal(
+                    secret, owner=channel_secret_owner(str(tenant.org_id), str(channel_id))
+                ),
+                "id": channel_id,
+            },
+        )
+        await add_rule(
+            connection,
+            tenant.org_id,
+            tenant.project_id,
+            name="Findings",
+            condition=anomaly_rule(),
+            channel_ids=[channel_id],
+        )
+    return channel_id
+
+
+async def _finding_opened(engine: AsyncEngine, tenant: AlertTenant, at: datetime) -> uuid.UUID:
+    async with engine.begin() as connection:
+        finding = await add_finding(connection, tenant, started_at=at - timedelta(minutes=5))
+        await notify.finding_opened(
+            connection, finding, org_id=tenant.org_id, severity="warning", at=at
+        )
+    return finding
+
+
+async def test_a_finding_reaches_a_webhook_as_a_version_2_finding_event(
+    engine: AsyncEngine, tenant: AlertTenant, recording_site: RecordingSite
+) -> None:
+    """ADR-022, through the outbox: `finding.opened`, with the finding under
+    `data.subject` and its page as the link."""
+    await _sealed_channel(
+        engine,
+        tenant,
+        "webhook",
+        new_webhook_secret(),
+        {"url": recording_site.url("/hooks/findings")},
+    )
+    at = future()
+    finding = await _finding_opened(engine, tenant, at)
+
+    await deliver_due(engine, _outbound(), now=lambda: at, org_id=tenant.org_id)
+
+    [hook] = [request for request in recording_site.requests if request.path == "/hooks/findings"]
+    body = json.loads(hook.body)
+    assert (body["version"], body["type"]) == (2, "finding.opened")
+    assert body["data"]["subject"]["kind"] == "finding"
+    assert body["data"]["subject"]["id"] == str(finding)
+    assert body["data"]["subject"]["label"] == "checkout"
+    assert body["data"]["link"] == f"https://app.nexovue.test/findings/{finding}"
+
+
+async def test_a_finding_reaches_pagerduty_under_its_own_prefixed_key(
+    engine: AsyncEngine,
+    tenant: AlertTenant,
+    recording_site: RecordingSite,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADR-022: `finding:<id>`, so a finding and an incident never share an alert."""
+    monkeypatch.setitem(PAGERDUTY_ENDPOINTS, "us", recording_site.url("/v2/enqueue"))
+    await _sealed_channel(engine, tenant, "pagerduty", "r" * 32, {"region": "us"})
+    at = future()
+    finding = await _finding_opened(engine, tenant, at)
+
+    await deliver_due(engine, _outbound(), now=lambda: at, org_id=tenant.org_id)
+
+    [event] = [request for request in recording_site.requests if request.path == "/v2/enqueue"]
+    body = json.loads(event.body)
+    assert (body["event_action"], body["dedup_key"]) == ("trigger", f"finding:{finding}")

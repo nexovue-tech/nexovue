@@ -6,6 +6,13 @@
 recommended and are recorded under *Decisions taken*. **Amended 2026-09-19** with the approved design:
 FR1, FR2 and FR10 amended and AC27 added (see the design's *Specification impact*). **Amended again
 2026-09-19** after implementation review, by the founder's decision: BR5 and FR11 corrected, D8 added.
+**Amended 2026-10-31** with the approved F6 design (`docs/features/anomaly-detection/design.md`,
+ADR-022):
+
+- BR10 has an exception for *anomaly finding* rules;
+- findings are not incidents;
+- the webhook schema becomes version 2;
+- PagerDuty's `dedup_key` names its subject's kind.
 
 ## Problem
 
@@ -180,7 +187,11 @@ organization's owners* — so a single-person account is alerted with zero confi
   own data and a link into the console; it carries no telemetry payloads, no request bodies from check
   evidence, and no secret — redacted or not.
 - **BR10 — Severity is part of the rule, not a guess.** Every rule states whether it is *critical* or
-  *warning*; defaults are given per condition (FR5) and can be changed.
+  *warning*; defaults are given per condition (FR5) and can be changed. *Exception (F6, 2026-10-31):* an
+  *anomaly finding* rule states only a minimum severity, and each message carries the finding's own
+  severity, which the detector sets. Findings are their own record, not incidents (ADR-022). The outbox
+  addresses either kind of subject. The webhook schema is version 2, with `incident.*` and `finding.*`
+  events. PagerDuty's `dedup_key` is `incident:<id>` or `finding:<id>`.
 
 ## Functional requirements
 

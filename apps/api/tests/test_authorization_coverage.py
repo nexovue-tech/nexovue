@@ -163,6 +163,16 @@ POLICY_OF: Final = {
     "nexovue_api/alerts/router.py:update_rule": "MayOperateAlerts",
     "nexovue_api/alerts/router.py:mute_rule": "MayOperateAlerts",
     "nexovue_api/alerts/router.py:delete_rule": "MayOperateAlerts",
+    # F6 (FR19, FR20, D25): acknowledging, calling a false alarm and snoozing are
+    # every working role's, as operating alerts is. A viewer may do none of them.
+    "nexovue_api/findings/router.py:acknowledge_finding": "MayOperateAlerts",
+    "nexovue_api/findings/router.py:mark_false_alarm": "MayOperateAlerts",
+    "nexovue_api/detection/router.py:snooze_service": "MayOperateAlerts",
+    # F6 (FR23, D11): what decides whether detection is heard at all, and what it
+    # judges by, is an admin's.
+    "nexovue_api/findings/router.py:accept_new_normal": "MayConfigureDetection",
+    "nexovue_api/detection/router.py:mute_service": "MayConfigureDetection",
+    "nexovue_api/detection/router.py:change_detection_settings": "MayConfigureDetection",
     "nexovue_api/maintenance/router.py:create_window": "MayOperateAlerts",
     "nexovue_api/maintenance/router.py:update_window": "MayOperateAlerts",
     "nexovue_api/maintenance/router.py:delete_window": "MayOperateAlerts",
@@ -239,6 +249,18 @@ SECRET_READS: Final = {
     # gate, nothing else would notice (`docs/changes/super-admin-in-the-console/`).
     "nexovue_api/admin/router.py:search_organizations": "MayAdministerThePlatform",
     "nexovue_api/admin/router.py:organization": "MayAdministerThePlatform",
+}
+
+
+# Checks a route's gate cannot make, because they depend on the row: the service
+# function makes them. F6 FR23, D11, security M4: the alert-rule routes admit every
+# working member, and an *anomaly finding* rule is an admin's, so each function that
+# changes a rule must ask `CONFIGURE_DETECTION` through this check.
+SERVICE_CHECKS: Final = {
+    "nexovue_api/alerts/service.py:create_rule": "_require_detection_role",
+    "nexovue_api/alerts/service.py:update_rule": "_require_detection_role",
+    "nexovue_api/alerts/service.py:mute_rule": "_require_detection_role",
+    "nexovue_api/alerts/service.py:delete_rule": "_require_detection_role",
 }
 
 
@@ -355,3 +377,22 @@ def test_every_policy_named_exists() -> None:
 
     missing = sorted({*POLICY_OF.values(), *SECRET_READS.values()} - set(dir(policy)))
     assert not missing, f"no such policy in auth/policy.py: {missing}"
+
+
+@pytest.mark.parametrize("key", sorted(SERVICE_CHECKS))
+def test_a_service_function_makes_the_check_its_routes_rely_on(key: str) -> None:
+    """The alert-rule routes carry `MayOperateAlerts`, which admits members; what
+    keeps an *anomaly finding* rule an admin's is this call in each service function."""
+    path, _, name = key.partition(":")
+    tree = ast.parse((API_SOURCE / path).read_text(encoding="utf-8"))
+    [function] = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and node.name == name
+    ]
+    called = {
+        node.func.id
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert SERVICE_CHECKS[key] in called, f"{key} no longer calls {SERVICE_CHECKS[key]}"

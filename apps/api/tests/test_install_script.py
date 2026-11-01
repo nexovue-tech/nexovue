@@ -26,6 +26,7 @@ SECRETS: Final = (
     "CLICKHOUSE_PASSWORD",
     "CLICKHOUSE_READER_PASSWORD",
     "CLICKHOUSE_ERASER_PASSWORD",
+    "CLICKHOUSE_DETECTION_WRITER_PASSWORD",
     "KAFKA_CLUSTER_ID",
     "WORKERS_MASKING_HASH_SECRET",
     "CHECK_SECRET_KEY",
@@ -213,6 +214,48 @@ def test_an_upgrade_backs_up_first_and_records_whether_the_schema_changed(
     assert settings["NEXOVUE_ROLLBACK_SCHEMA"] == recorded
     assert settings["NEXOVUE_PRE_UPGRADE_SNAPSHOT"] == "2026-10-28T020000Z"
     assert (home / "current").resolve() == (home / "releases" / "1.1.0").resolve()
+
+
+# What an upgrade itself records, which may change; every other line must not.
+UPGRADE_RECORDS: Final = (
+    "NEXOVUE_VERSION",
+    "NEXOVUE_PREVIOUS_VERSION",
+    "NEXOVUE_PRE_UPGRADE_SNAPSHOT",
+    "NEXOVUE_ROLLBACK_SCHEMA",
+)
+NEW_ACCOUNT: Final = "CLICKHOUSE_DETECTION_WRITER_PASSWORD"
+
+
+def test_an_upgrade_adds_a_missing_account_password_and_changes_nothing_else(
+    machine: dict[str, str],
+) -> None:
+    """C9, C25: an install from before an account existed gains its password, and no
+    secret the stores were created with is regenerated."""
+    home = _installed_with_a_stand_in_backup(machine)
+    settings_file = home / "nexovue.env"
+    older = [
+        line
+        for line in settings_file.read_bytes().splitlines(keepends=True)
+        if not line.startswith(f"{NEW_ACCOUNT}=".encode())
+    ]
+    settings_file.write_bytes(b"".join(older))
+    machine |= {"NEXOVUE_VERSION": "1.1.0"}
+
+    result = _run(machine, "upgrade")
+
+    assert result.returncode == 0, result.stderr
+    after = settings_file.read_bytes().splitlines(keepends=True)
+    kept = [
+        line
+        for line in older
+        if not line.startswith(tuple(f"{k}=".encode() for k in UPGRADE_RECORDS))
+    ]
+    assert [line for line in kept if line not in after] == [], "an existing value changed"
+    settings = _settings(machine)
+    added = settings.get(NEW_ACCOUNT, "")
+    assert len(added) == 48, f"{NEW_ACCOUNT} was not added"
+    assert added not in {settings[name] for name in SECRETS if name != NEW_ACCOUNT}
+    assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600, "the settings hold every secret"
 
 
 def test_rollback_past_a_schema_change_is_refused_without_the_restore(

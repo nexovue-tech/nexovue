@@ -375,7 +375,7 @@ async def test_creating_a_project_derives_a_slug_from_its_name(
     created = await service.create(
         _store(db),
         org_id=acme.organization.id,
-        actor_user_id=acme.user.id,
+        actor=acme.user,
         request=ProjectCreateRequest(name="EU Production"),
     )
 
@@ -391,7 +391,7 @@ async def test_a_derived_slug_that_collides_is_suffixed(db: FakeControlPlane, ac
     created = await service.create(
         _store(db),
         org_id=acme.organization.id,
-        actor_user_id=acme.user.id,
+        actor=acme.user,
         request=ProjectCreateRequest(name="Production"),
     )
 
@@ -406,7 +406,7 @@ async def test_a_slug_the_customer_chose_is_refused_rather_than_suffixed(
         await service.create(
             _store(db),
             org_id=acme.organization.id,
-            actor_user_id=acme.user.id,
+            actor=acme.user,
             request=ProjectCreateRequest(name="Production", slug="production"),
         )
 
@@ -418,7 +418,7 @@ async def test_a_created_project_belongs_to_the_session_tenant(
     await service.create(
         _store(db),
         org_id=acme.organization.id,
-        actor_user_id=acme.user.id,
+        actor=acme.user,
         request=ProjectCreateRequest(name="Staging Two"),
     )
 
@@ -435,7 +435,7 @@ async def test_another_organizations_slug_does_not_collide(
     created = await service.create(
         _store(db),
         org_id=acme.organization.id,
-        actor_user_id=acme.user.id,
+        actor=acme.user,
         request=ProjectCreateRequest(name="Prod", slug="prod"),
     )
     assert created.slug == "prod"
@@ -447,15 +447,16 @@ async def test_creating_a_project_records_who_created_it(
     created = await service.create(
         _store(db),
         org_id=acme.organization.id,
-        actor_user_id=acme.user.id,
+        actor=acme.user,
         request=ProjectCreateRequest(name="EU"),
     )
 
-    entry, default_rule = db.entries
+    entry, *default_rules = db.entries
     assert entry.action == audit.PROJECT_CREATED
-    # F21: every project starts with the default alert rule, recorded in the same name.
-    assert default_rule.action == audit.ALERT_RULE_CREATED
-    assert default_rule.actor_user_id == acme.user.id
+    # F21, F6 FR29: every project starts with two default alert rules, recorded in the
+    # same name.
+    assert [rule.action for rule in default_rules] == [audit.ALERT_RULE_CREATED] * 2
+    assert {rule.actor_user_id for rule in default_rules} == {acme.user.id}
     assert entry.org_id == acme.organization.id
     assert entry.actor_user_id == acme.user.id
     assert entry.target == f"{audit.PROJECT_TARGET}:{created.id}"

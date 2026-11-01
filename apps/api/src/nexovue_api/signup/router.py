@@ -91,6 +91,7 @@ async def sign_up(
         email=payload.email,
         password=payload.password,
         name=payload.name,
+        timezone=service.browser_timezone(payload.timezone),
     )
 
     # The session is written in a transaction of its own and names these rows by

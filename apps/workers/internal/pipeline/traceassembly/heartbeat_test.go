@@ -27,6 +27,8 @@ func TestTheHeartbeatCarriesWhatTheTraceStagesHold(t *testing.T) {
 		"spans_kept", "spans_dropped", "traces_closed_early", "spans_retimed",
 		"summarised_traces", "trace_summaries_written", "trace_summaries_revised",
 		"trace_summaries_evicted", "trace_summaries_truncated",
+		"service_series", "services_over_cap", "derived_progress_held",
+		"derived_progress_holds_released",
 	} {
 		if _, carried := held[field]; !carried {
 			t.Errorf("the heartbeat does not carry %s", field)

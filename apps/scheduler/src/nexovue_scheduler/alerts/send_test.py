@@ -126,6 +126,8 @@ def _test(link: str, kind: str, *, dedup_key: str) -> Outgoing:
         message=message,
         message_id=f"test-{uuid.uuid4()}",
         dedup_key=dedup_key,
+        subject_kind="test",
+        subject_id=dedup_key,
         subject="Send test",
         opened_at=datetime.now(UTC),
         resolved_at=None,

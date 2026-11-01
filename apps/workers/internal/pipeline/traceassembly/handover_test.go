@@ -3,7 +3,9 @@ package traceassembly
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"testing"
+	"time"
 
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/dedupe"
 	"github.com/nexovue-tech/nexovue/apps/workers/internal/pipeline/ingeststate"
@@ -26,9 +28,23 @@ func pipelineForHandover(t *testing.T, store ingeststate.Store) *Pipeline {
 		stages: stagesFor(t, 100),
 		seen:   dedupe.NewOffsets(),
 		ingest: ingeststate.NewGuard(store),
-		topic:  spansPartition.Topic,
-		log:    slog.New(slog.DiscardHandler),
+		progress: ingeststate.NewProgress(&progressRows{rows: make(ingeststate.Marks)},
+			ingeststate.MaxProgressHold),
+		topic: spansPartition.Topic,
+		log:   slog.New(slog.DiscardHandler),
 	}
+}
+
+// progressRows stands in for the progress table.
+type progressRows struct{ rows ingeststate.Marks }
+
+func (p *progressRows) Load(context.Context) (ingeststate.Written, error) {
+	return ingeststate.Written{}, nil
+}
+
+func (p *progressRows) Save(_ context.Context, marks ingeststate.Marks) error {
+	maps.Copy(p.rows, marks)
+	return nil
 }
 
 // absorbOn runs one trace's message through the stages as a record on the given
@@ -174,4 +190,34 @@ func (refusingStore) Save(context.Context, map[ingeststate.Partition]ingeststate
 
 func (refusingStore) SaveWritten(context.Context, ingeststate.Written) error {
 	panic("the rebalance callback wrote the span watermark")
+}
+
+// Progress held after a refusal belongs to the partitions this worker owns. A
+// partition that moved is recorded by its new owner, so the hold this worker
+// had for it must go with the handover, or its end would write behind the new
+// owner's progress (C1).
+func TestAHandoverDropsTheProgressHoldOfThePartitionThatLeft(t *testing.T) {
+	rows := &progressRows{rows: make(ingeststate.Marks)}
+	pipeline := pipelineForHandover(t, newRecordingStore())
+	pipeline.progress = ingeststate.NewProgress(rows, ingeststate.MaxProgressHold)
+	moved := ingeststate.Partition{Topic: pipeline.topic, ID: spansMoved}
+	kept := ingeststate.Partition{Topic: pipeline.topic, ID: spansKept}
+
+	if _, err := pipeline.progress.Record(t.Context(), invariantStart,
+		ingeststate.Marks{moved: {CountedThrough: 100}, kept: {CountedThrough: 200}},
+		[]ingeststate.Partition{moved, kept}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	pipeline.release(map[string][]int32{pipeline.topic: {spansMoved}})
+	if _, err := pipeline.progress.Record(t.Context(),
+		invariantStart.Add(ingeststate.MaxProgressHold+time.Second), nil, nil); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	if _, written := rows.rows[moved]; written {
+		t.Errorf("the partition that left had its progress written: %+v", rows.rows[moved])
+	}
+	if rows.rows[kept].CountedThrough != 200 {
+		t.Errorf("the partition still owned recorded %+v, want 200", rows.rows[kept])
+	}
 }

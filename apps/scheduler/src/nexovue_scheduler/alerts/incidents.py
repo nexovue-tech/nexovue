@@ -12,6 +12,11 @@ subject serialize rather than race.
 muted, and nothing about it is ever sent — not when it opens, escalates or
 resolves — because a person who silenced a rule has said they will look.
 
+**An incident on a service with an open finding is linked to it** (F6 BR2, AC20),
+in the transaction that opens it: detection and a threshold rule watching one
+service are one problem with two records, never two problems. The project job
+links in the other direction when the finding comes second.
+
 **A flapping subject is said once** (FR11). From the fifth opening in an hour the
 incident is marked flapping and one *flapping* message goes out; after that,
 people hear nothing about the subject until it has stayed resolved for 30
@@ -29,7 +34,7 @@ from datetime import datetime, timedelta
 from typing import Any, Final
 
 from nexovue_platform.alerts.channels import READ_BY_PEOPLE
-from nexovue_platform.alerts.model import SEVERITY_RANK
+from nexovue_platform.alerts.model import SEVERITY_RANK, service_subject
 from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -52,6 +57,7 @@ GROUPING_WAIT_SECONDS: Final = 30
 MAX_REPEATS: Final = 5
 
 _HUMAN_KINDS: Final = sorted(READ_BY_PEOPLE)
+SERVICE_PREFIX: Final = service_subject("")
 
 _OPEN_INCIDENT: Final = text(
     """
@@ -94,6 +100,20 @@ _INSERT_INCIDENT: Final = text(
          :subject_label, :severity, :at, :muted, :flapping, CAST(:detail AS jsonb))
     ON CONFLICT (rule_id, subject_key) WHERE resolved_at IS NULL DO NOTHING
     RETURNING id
+    """
+)
+# The kinds of incident a finding is linked to when they share a service (F6 BR2).
+# Check and new-error subjects name no service.
+SERVICE_KINDS: Final = frozenset({"service_error_rate", "service_latency_p95", "service_silent"})
+_LINK_FINDING: Final = text(
+    """
+    INSERT INTO finding_incidents (org_id, finding_id, incident_id)
+    SELECT :org_id, findings.id, :incident_id
+    FROM findings
+    WHERE findings.org_id = :org_id AND findings.project_id = :project_id
+      AND findings.scope = 'service' AND findings.service_name = :service_name
+      AND findings.state = 'open'
+    ON CONFLICT DO NOTHING
     """
 )
 _ESCALATE: Final = text(
@@ -334,6 +354,16 @@ async def _open(
             },
         )
     ).scalar_one_or_none()
+    if incident_id is not None and rule.condition_kind in SERVICE_KINDS:
+        await connection.execute(
+            _LINK_FINDING,
+            {
+                "org_id": rule.org_id,
+                "project_id": rule.project_id,
+                "incident_id": incident_id,
+                "service_name": subject.key.removeprefix(SERVICE_PREFIX),
+            },
+        )
     if incident_id is None or muted or still_flapping:
         # None: another decision opened it between our read and our write, and that
         # decision wrote its own notifications. Still flapping: said once already.

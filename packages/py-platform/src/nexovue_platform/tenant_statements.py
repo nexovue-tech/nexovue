@@ -8,6 +8,10 @@ source). What it rejects is the mistake anyone actually makes — forgetting the
 filter — and the three near-misses that contain the required text and filter
 nothing: inside a comment, inside a string literal, or projected rather than
 compared.
+
+Detection's statements must bind the project as well (`binds_project`), and its
+reads run under lowered bounds (`lowered_read_settings`), which can never loosen
+the shared ones (F6, ADR-023).
 """
 
 from __future__ import annotations
@@ -49,6 +53,53 @@ READ_SETTINGS: Final[dict[str, Any]] = {
 }
 
 
+# The bounds a caller may lower for its own reads, never raise (design 2.1, m6).
+# `result_overflow_mode` is not a bound, so it cannot be overridden at all.
+_BOUNDS: Final = (
+    "max_execution_time",
+    "max_result_rows",
+    "max_memory_usage",
+    "max_bytes_before_external_group_by",
+)
+
+# The project, for statements that must be bound to one (F6, AC28): detection
+# judges one project at a time, so a statement missing it reads its siblings.
+PROJECT_BINDING: Final = "{project_id:String}"
+PROJECT_PREDICATE: Final = re.compile(r"\bproject_id\s*=\s*\{project_id:String\}")
+
+
+class LimitRaisedError(ValueError):
+    """An override that would loosen a read bound, or name one that is not a bound."""
+
+
+def lowered_read_settings(**lowered: int) -> dict[str, Any]:
+    """READ_SETTINGS with some bounds lowered for one caller's reads.
+
+    Zero is refused as well as anything higher: ClickHouse reads 0 as unlimited.
+    """
+    settings = dict(READ_SETTINGS)
+    for name, value in lowered.items():
+        if name not in _BOUNDS:
+            raise LimitRaisedError(f"{name} is not a read bound that can be lowered")
+        if not 0 < value <= READ_SETTINGS[name]:
+            raise LimitRaisedError(
+                f"{name}={value} is not below the shared bound of {READ_SETTINGS[name]}"
+            )
+        settings[name] = value
+    return settings
+
+
+class ProjectFilterMissingError(RuntimeError):
+    """A statement that must be bound to one project reached a reader without it."""
+
+    def __init__(self, sql: str) -> None:
+        super().__init__(
+            f"query has no `project_id = {PROJECT_BINDING}` predicate outside of "
+            f"comments and string literals, and would read across projects: "
+            f"{sql.strip()[:200]}"
+        )
+
+
 class TenantFilterMissingError(RuntimeError):
     """A query reached a reader without binding a tenant.
 
@@ -73,3 +124,8 @@ def executable_text(sql: str) -> str:
 def binds_tenant(sql: str) -> bool:
     """Whether the statement filters on the tenant, as opposed to mentioning it."""
     return bool(TENANT_PREDICATE.search(executable_text(sql)))
+
+
+def binds_project(sql: str) -> bool:
+    """Whether the statement filters on the project, as opposed to mentioning it."""
+    return bool(PROJECT_PREDICATE.search(executable_text(sql)))

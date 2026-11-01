@@ -25,6 +25,8 @@ ADRs preserve why a consequential decision was made; `docs/architecture/` preser
 - [ADR-019 — nexovue ships as two images, and each role runs as its own container](ADR-019-two-images-each-role-its-own-container.md)
 - [ADR-020 — Postgres carries what Redis held, Redis goes, and object storage is optional](ADR-020-postgres-carries-what-redis-held.md)
 - [ADR-021 — nexovue reports its own health for an outside monitor to read](ADR-021-nexovue-reports-its-own-health-for-an-outside-monitor.md)
+- [ADR-022 — A finding is the one record of a detected problem, and the outbox addresses findings or incidents](ADR-022-a-finding-is-the-one-record-of-a-detected-problem.md) — with the F6 design, 2026-10-31
+- [ADR-023 — The scheduler writes detection readings to ClickHouse, through an account that can insert into that one table only](ADR-023-the-scheduler-writes-detection-state-to-clickhouse-through-its-own-account.md) — with the F6 design, 2026-10-31
 
 ## Earlier decisions, 0001–0112
 

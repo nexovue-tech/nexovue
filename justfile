@@ -92,6 +92,31 @@ logs service="":
 repo-audit:
     uv run python tools/repo-audit/repo_audit.py
 
+# F6 spec D15: how bursty the demo's failures really are, from the dev stack's rollup. Run after
+# `just dev` has run for at least 3 days; writes detection-measure.json.
+# Measure the dev stack's failure bursts and variability
+detection-measure *args:
+    uv run python tools/detection-measure/measure.py {{args}}
+
+# F6 plan T2c.4: 4 weeks of synthetic per-service history for a dev project, written straight into
+# the dev ClickHouse (the receiver takes spans only 7 days back), ending where the live data begins.
+# Seed a dev project's 4 weeks of detection history
+detection-seed *args:
+    uv run python tools/detection-seed/seed.py {{args}}
+
+# F6 plan T8.2 (AC29): 200 projects, 2,000 services. In order: tenants, load (keep it running),
+# seed, then watch while the scheduler runs. `profile` times project jobs; `remove --yes` closes
+# the tenants. Each command's options: `just detection-scale <command> --help`.
+# Measure detection at its cost target (tenants, load, seed, watch, profile, remove)
+detection-scale *args:
+    uv run python tools/detection-measure/scale.py {{args}}
+
+# F6 plan T8.1: the demo's fault flags against detection, scored as AC36's table. A run takes about
+# 12 days after its warm-up; see tools/fault-bed/README.md. Needs NEXOVUE_TOKEN, a read API token.
+# Drive the demo's fault flags and score detection (check, run, score)
+fault-bed *args:
+    uv run python tools/fault-bed/fault_bed.py {{args}}
+
 # Known vulnerabilities in what production runs, nothing else (docs/changes/ready-to-deploy):
 # govulncheck reports a Go flaw only where our code reaches it; pip-audit reads the Python runtime
 # dependencies, not the dev tools; pnpm audit reads the console's and SDK's runtime packages, high

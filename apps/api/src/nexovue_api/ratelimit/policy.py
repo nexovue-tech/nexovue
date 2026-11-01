@@ -242,6 +242,7 @@ TELEMETRY_PATHS: Final = (
     f"{API_PREFIX}/profiles",
     f"{API_PREFIX}/usage",
     f"{API_PREFIX}/llm",
+    f"{API_PREFIX}/findings",
 )
 
 # Probes must answer while the API is being hammered; that is the whole point

@@ -2,8 +2,9 @@
 
 The zero-configuration promise (US21.1, FR8, AC21): a new organization's first
 check that goes down emails the owner, which is only true if signup leaves an
-owners channel and a default rule sending to it. And the promise's limit (AC22):
-a default rule somebody deleted stays deleted.
+owners channel and a default rule sending to it. F6 FR29 adds a second default
+rule, *Critical problems*, so a critical finding emails the owner too. And the
+promise's limit (AC22): a default rule somebody deleted stays deleted.
 
 Every test runs in a transaction that is rolled back.
 
@@ -22,7 +23,11 @@ from urllib.parse import urlsplit
 
 import pytest
 from live import require_stack
-from nexovue_platform.alerts.model import DEFAULT_RULE_NAME, OWNERS_CHANNEL_NAME
+from nexovue_platform.alerts.model import (
+    CRITICAL_PROBLEMS_RULE_NAME,
+    DEFAULT_RULE_NAME,
+    OWNERS_CHANNEL_NAME,
+)
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -87,7 +92,11 @@ async def tenant(db: AsyncSession) -> ProvisionedTenant:
 
 
 async def _rules(db: AsyncSession, project_id: uuid.UUID) -> list[AlertRule]:
-    return list(await db.scalars(select(AlertRule).where(AlertRule.project_id == project_id)))
+    return list(
+        await db.scalars(
+            select(AlertRule).where(AlertRule.project_id == project_id).order_by(AlertRule.name)
+        )
+    )
 
 
 async def _channels_of(db: AsyncSession, rule: AlertRule) -> list[NotificationChannel]:
@@ -99,7 +108,7 @@ async def _channels_of(db: AsyncSession, rule: AlertRule) -> list[NotificationCh
     return list(await db.scalars(statement))
 
 
-async def test_signup_leaves_an_owners_channel_and_a_default_rule_sending_to_it(
+async def test_signup_leaves_an_owners_channel_and_two_default_rules_sending_to_it(
     db: AsyncSession, tenant: ProvisionedTenant
 ) -> None:
     channels = list(
@@ -111,49 +120,58 @@ async def test_signup_leaves_an_owners_channel_and_a_default_rule_sending_to_it(
         ("owners", OWNERS_CHANNEL_NAME)
     ]
 
-    rules = await _rules(db, tenant.project.id)
-    assert len(rules) == 1
-    rule = rules[0]
-    assert rule.name == DEFAULT_RULE_NAME
-    assert rule.is_default is True
-    assert rule.enabled is True
-    assert rule.condition == {
+    checks_down, critical_problems = await _rules(db, tenant.project.id)
+    assert checks_down.name == DEFAULT_RULE_NAME
+    assert checks_down.condition == {
         "kind": "check_state",
         "check_ids": None,
         "states": {"down": "critical"},
     }
-    assert [channel.id for channel in await _channels_of(db, rule)] == [channels[0].id]
+    # FR29: critical findings only; warnings stay in the feed until a rule asks for them.
+    assert critical_problems.name == CRITICAL_PROBLEMS_RULE_NAME
+    assert critical_problems.condition_kind == "anomaly_finding"
+    assert critical_problems.condition == {
+        "kind": "anomaly_finding",
+        "services": None,
+        "minimum_severity": "critical",
+    }
+    for rule in (checks_down, critical_problems):
+        assert (rule.is_default, rule.enabled) == (True, True)
+        assert [channel.id for channel in await _channels_of(db, rule)] == [channels[0].id]
 
 
 async def test_both_defaults_are_audited_in_the_owners_name(
     db: AsyncSession, tenant: ProvisionedTenant
 ) -> None:
-    actions = {
-        entry.action: entry.actor_user_id
-        for entry in await db.scalars(
+    entries = list(
+        await db.scalars(
             select(AuditLogEntry).where(AuditLogEntry.org_id == tenant.organization.id)
         )
-    }
-    assert actions["notification_channel.created"] == tenant.user.id
-    assert actions["alert_rule.created"] == tenant.user.id
+    )
+    created = [entry for entry in entries if entry.action == "alert_rule.created"]
+    assert len(created) == 2
+    assert {entry.actor_user_id for entry in created} == {tenant.user.id}
+    [channel] = [entry for entry in entries if entry.action == "notification_channel.created"]
+    assert channel.actor_user_id == tenant.user.id
 
 
-async def test_a_new_project_gets_its_own_default_rule_to_the_same_owners(
+async def test_a_new_project_gets_its_own_default_rules_to_the_same_owners(
     db: AsyncSession, tenant: ProvisionedTenant
 ) -> None:
     created = await projects.create(
         db,
         org_id=tenant.organization.id,
-        actor_user_id=tenant.user.id,
+        actor=tenant.user,
         request=ProjectCreateRequest(name="Staging"),
     )
 
-    first = (await _rules(db, tenant.project.id))[0]
+    first = await _rules(db, tenant.project.id)
     second = await _rules(db, created.id)
-    assert len(second) == 1
-    assert second[0].id != first.id
-    assert [channel.kind for channel in await _channels_of(db, second[0])] == ["owners"]
-    assert (await _channels_of(db, second[0]))[0].id == (await _channels_of(db, first))[0].id
+    assert [rule.name for rule in second] == [DEFAULT_RULE_NAME, CRITICAL_PROBLEMS_RULE_NAME]
+    assert {rule.id for rule in second}.isdisjoint({rule.id for rule in first})
+    owners = (await _channels_of(db, first[0]))[0].id
+    for rule in second:
+        assert [channel.id for channel in await _channels_of(db, rule)] == [owners]
 
 
 async def test_a_deleted_default_rule_is_not_recreated(
@@ -165,7 +183,7 @@ async def test_a_deleted_default_rule_is_not_recreated(
     await projects.create(
         db,
         org_id=tenant.organization.id,
-        actor_user_id=tenant.user.id,
+        actor=tenant.user,
         request=ProjectCreateRequest(name="Another"),
     )
     assert await _rules(db, tenant.project.id) == []
@@ -179,10 +197,10 @@ async def test_deleting_a_project_takes_its_rules_and_closes_its_incidents(
     staging = await projects.create(
         db,
         org_id=tenant.organization.id,
-        actor_user_id=tenant.user.id,
+        actor=tenant.user,
         request=ProjectCreateRequest(name="Staging"),
     )
-    [rule] = await _rules(db, staging.id)
+    rule, _ = await _rules(db, staging.id)
     incident = Incident(
         org_id=tenant.organization.id,
         project_id=staging.id,
@@ -203,4 +221,4 @@ async def test_deleting_a_project_takes_its_rules_and_closes_its_incidents(
     assert await _rules(db, staging.id) == []
     await db.refresh(incident)
     assert incident.resolved_at is not None
-    assert len(await _rules(db, tenant.project.id)) == 1
+    assert len(await _rules(db, tenant.project.id)) == 2

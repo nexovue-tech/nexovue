@@ -1,0 +1,74 @@
+<!--
+  The detection writer: the account the scheduler's anomaly detection freezes
+  each judged minute with (ADR-023, `nexovue_scheduler.detection.store`).
+
+  It can insert into `detection_readings` and nothing else: no SELECT, no other
+  table, no DDL. The reader account is not widened instead, because the API
+  shares it and the API faces the internet.
+
+  Not readonly: a readonly account cannot insert. What stops it from loosening
+  its own bounds is the profile's constraints, enforced by the server whatever
+  the client sends. Each bound has a minimum too, because 0 means unlimited.
+
+  The quota is per hour, sized from the cost target of 2,000 services (D32): one
+  insert per project job a minute, at most 2 minutes of readings each, about
+  120,000 rows. The bytes are an estimate of under 1 KiB a row with 4x headroom,
+  not a measurement; Plan Step 8 (T8.2) measures it.
+
+  Private networks only: the compose network and Docker's host-side gateway. It
+  is never reachable from outside the install.
+-->
+<clickhouse>
+  <profiles>
+    <detection_writer>
+      <max_execution_time>10</max_execution_time>
+      <max_memory_usage>268435456</max_memory_usage>
+      <allow_ddl>0</allow_ddl>
+      <allow_introspection_functions>0</allow_introspection_functions>
+      <constraints>
+        <max_execution_time>
+          <min>1</min>
+          <max>10</max>
+        </max_execution_time>
+        <max_memory_usage>
+          <min>1</min>
+          <max>268435456</max>
+        </max_memory_usage>
+        <allow_ddl>
+          <const/>
+        </allow_ddl>
+        <allow_introspection_functions>
+          <const/>
+        </allow_introspection_functions>
+      </constraints>
+    </detection_writer>
+  </profiles>
+
+  <quotas>
+    <detection_writer>
+      <interval>
+        <duration>3600</duration>
+        <query_inserts>60000</query_inserts>
+        <written_bytes>1073741824</written_bytes>
+      </interval>
+    </detection_writer>
+  </quotas>
+
+  <users>
+    <nexovue_detection_writer>
+      <password from_env="CLICKHOUSE_DETECTION_WRITER_PASSWORD"/>
+      <profile>detection_writer</profile>
+      <quota>detection_writer</quota>
+      <networks>
+        <ip>10.0.0.0/8</ip>
+        <ip>172.16.0.0/12</ip>
+        <ip>192.168.0.0/16</ip>
+        <ip>127.0.0.1</ip>
+        <ip>::1</ip>
+      </networks>
+      <grants>
+        <query>GRANT INSERT ON nexovue.detection_readings</query>
+      </grants>
+    </nexovue_detection_writer>
+  </users>
+</clickhouse>

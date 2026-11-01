@@ -5,9 +5,21 @@ prefork pool, so `scheduler-light` still runs eight probes at once and
 `scheduler-deliveries` four. A child is reused job after job; one killed at its
 hard limit, or one that died, is replaced before its slot takes another job.
 
+**Children share their imports and are bounded in memory** (AC29). Each is forked
+from a forkserver that imported every task module once (`preload`), so eight
+children do not hold eight copies. A child keeps the memory its biggest job grew
+into, so one past `MAX_CHILD_PRIVATE_BYTES` after a job is replaced before its slot
+takes the next, as Celery's `worker_max_memory_per_child` does.
+
 **It polls every second and wakes early on `NOTIFY`.** The poll is what picks up
 beat's work and every retry; the notification only shortens the wait for a
 person who pressed Run now or Send test.
+
+**Some queues are capped.** A worker never runs more than `QUEUE_CAPS` allows
+from a capped queue at once, whatever slots are free: `scheduler-light` takes the
+`detection` queue beside its probes, and detection may hold at most two of its
+eight slots (D32). The cap is per worker, which is per container; it is the
+container's slots it protects.
 
 **Stopping is orderly.** On SIGTERM it claims nothing more and waits for what it
 is running. A job still running when the process is killed outright keeps its
@@ -22,9 +34,11 @@ import multiprocessing
 import os
 import socket
 import uuid
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing.connection import Connection
-from multiprocessing.context import SpawnProcess
+from multiprocessing.context import ForkServerProcess
+from pathlib import Path
 from typing import Any, Final
 
 import asyncpg
@@ -34,6 +48,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from nexovue_scheduler import metrics
+from nexovue_scheduler.detection import DETECTION_CONCURRENCY, DETECTION_QUEUE
 from nexovue_scheduler.health import Pulse
 from nexovue_scheduler.jobs import child, queue, registry
 from nexovue_scheduler.jobs.queue import ClaimedJob
@@ -48,40 +63,99 @@ REACH_POSTGRES_SECONDS: Final = 10.0
 # poll carries every job meanwhile.
 RELISTEN_SECONDS: Final = 30.0
 KILLED: Final = "killed"
+# The child died mid-job, so it could not report its own end: killed by the
+# kernel over the container's memory limit, or crashed.
+DIED: Final = "died"
+# How long a dead child is given to be reaped, so its exit code can be read.
+REAP_SECONDS: Final = 5.0
+# The most jobs a worker runs at once from each capped queue.
+QUEUE_CAPS: Final[Mapping[str, int]] = {DETECTION_QUEUE: DETECTION_CONCURRENCY}
+# A child's own memory, beyond the pages it shares, past which it is replaced after a job.
+# A fresh child holds a few MiB of its own; the worst job measured, a project's hourly
+# baseline, leaves about 30 MiB (T8.2). Eight at this limit fit `scheduler-light`.
+MAX_CHILD_PRIVATE_BYTES: Final = 64 * 2**20
+# The lines of /proc/<pid>/smaps_rollup that count pages no other process maps.
+_PRIVATE_LINES: Final = ("Private_Clean:", "Private_Dirty:")
 
-_SPAWN = multiprocessing.get_context("spawn")
+# Not `fork`: a child must share no socket, thread or event loop with this process. The
+# forkserver is a fresh process that has only imported the task modules.
+_CHILDREN = multiprocessing.get_context("forkserver")
+_CHILDREN.set_forkserver_preload(["nexovue_scheduler.jobs.preload"])
+
+
+def private_bytes(pid: int) -> int | None:
+    """The memory only this process maps, which is what it adds to its container's; None
+    where Linux's `smaps_rollup` cannot be read."""
+    try:
+        rollup = Path(f"/proc/{pid}/smaps_rollup").read_text(encoding="ascii")
+    except OSError:
+        return None
+    lines = rollup.splitlines()
+    return sum(int(line.split()[1]) * 1024 for line in lines if line.startswith(_PRIVATE_LINES))
 
 
 class Slot:
     """One child process and the pipe to it."""
 
-    def __init__(self, modules: tuple[str, ...] = registry.TASK_MODULES) -> None:
+    def __init__(
+        self,
+        modules: tuple[str, ...] = registry.TASK_MODULES,
+        *,
+        memory_limit: int = MAX_CHILD_PRIVATE_BYTES,
+    ) -> None:
         self._modules = modules
-        self._process: SpawnProcess | None = None
+        self._memory_limit = memory_limit
+        self._process: ForkServerProcess | None = None
         self._pipe: Connection | None = None
         self.start()
 
     def start(self) -> None:
-        ours, theirs = _SPAWN.Pipe()
-        process = _SPAWN.Process(target=child.serve, args=(theirs, self._modules), daemon=True)
-        process.start()
-        theirs.close()
+        ours, theirs = _CHILDREN.Pipe()
+        try:
+            process = _CHILDREN.Process(
+                target=child.serve, args=(theirs, self._modules), daemon=True
+            )
+            process.start()
+        except BaseException:
+            ours.close()
+            raise
+        finally:
+            theirs.close()
         self._process, self._pipe = process, ours
 
     async def run(self, job: ClaimedJob) -> tuple[Any, ...]:
-        """Run one job in the child; kill and replace the child at the hard limit."""
+        """Run one job in the child; kill and replace the child at the hard limit, and
+        replace it after the job when it has grown past its memory limit. A slot left
+        with no child by a failed replacement builds one first; if that fails too, the
+        job is not run and its lease lapses."""
+        if self._pipe is None:
+            self.start()
         assert self._pipe is not None
         self._pipe.send((job.task, job.kwargs, job.soft_limit_seconds, job.attempts))
         finished = await asyncio.to_thread(self._pipe.poll, job.hard_limit_seconds)
         if finished:
             try:
                 outcome: tuple[Any, ...] = self._pipe.recv()
-                return outcome
             except (EOFError, OSError):
-                self._replace()
-                return (child.FAILED, "the child running it died")
+                return (DIED, self._reap())
+            await asyncio.to_thread(self._renew_if_grown, job.task)
+            return outcome
         self._replace()
         return (KILLED, f"killed at its hard time limit of {job.hard_limit_seconds}s")
+
+    def _renew_if_grown(self, task: str) -> None:
+        assert self._process is not None and self._process.pid is not None
+        held = private_bytes(self._process.pid)
+        if held is None or held <= self._memory_limit:
+            return
+        logger.info(
+            "a worker child is replaced: it grew past its memory limit",
+            task=task,
+            private_mib=held // 2**20,
+            limit_mib=self._memory_limit // 2**20,
+        )
+        self.stop()
+        self._start_again()
 
     def stop(self) -> None:
         if self._pipe is not None:
@@ -90,6 +164,16 @@ class Slot:
             self._process.join(timeout=5)
             if self._process.is_alive():
                 self._process.kill()
+                self._process.join()
+
+    def _reap(self) -> int | None:
+        """Replace a child that died, returning its exit code: minus the signal
+        that killed it, -9 when the kernel's OOM killer did."""
+        assert self._process is not None
+        self._process.join(REAP_SECONDS)
+        exit_code = self._process.exitcode
+        self._replace()
+        return exit_code
 
     def _replace(self) -> None:
         if self._process is not None:
@@ -97,7 +181,17 @@ class Slot:
             self._process.join()
         if self._pipe is not None:
             self._pipe.close()
-        self.start()
+        self._start_again()
+
+    def _start_again(self) -> None:
+        """Start a child in the old one's place. The old one is already gone, so a start
+        that fails leaves the slot empty rather than holding its closed pipe, and the
+        job just run still reports its outcome; `run` builds the child before the next."""
+        self._process, self._pipe = None, None
+        try:
+            self.start()
+        except Exception:
+            logger.exception("a worker child could not be started; its slot tries again")
 
 
 class Worker:
@@ -110,16 +204,23 @@ class Worker:
         concurrency: int,
         task_modules: tuple[str, ...] = registry.TASK_MODULES,
         pulse: Pulse | None = None,
+        caps: Mapping[str, int] = QUEUE_CAPS,
+        child_memory_limit: int = MAX_CHILD_PRIVATE_BYTES,
     ) -> None:
         self._engine = engine
         self._pulse = pulse or Pulse()
         self._reach_postgres_at = 0.0
         self._listen_dsn = listen_dsn
         self._queues = queues
+        self._caps = {queue_name: cap for queue_name, cap in caps.items() if queue_name in queues}
+        self._uncapped = [queue_name for queue_name in queues if queue_name not in self._caps]
+        self._running_from = dict.fromkeys(self._caps, 0)
         # Unique per worker, not per process: the lease fence is this name, and two
         # workers sharing one would finish each other's jobs.
         self._name = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
-        self._idle = [Slot(task_modules) for _ in range(concurrency)]
+        self._idle = [
+            Slot(task_modules, memory_limit=child_memory_limit) for _ in range(concurrency)
+        ]
         self._running: set[asyncio.Task[None]] = set()
         self._wake = asyncio.Event()
         self._listener: asyncpg.Connection | None = None
@@ -158,19 +259,32 @@ class Worker:
                 await self._listener.close()
 
     async def _claim_into_idle_slots(self) -> None:
-        try:
-            jobs = await queue.claim(
-                self._engine, queues=self._queues, worker=self._name, limit=len(self._idle)
-            )
-        except Exception:
-            logger.exception("jobs could not be claimed; trying again")
-            return
-        self._pulse.reached_postgres()
-        for job in jobs:
-            slot = self._idle.pop()
-            running = asyncio.create_task(self._run(slot, job))
-            self._running.add(running)
-            running.add_done_callback(self._running.discard)
+        # Capped queues first: each takes no more than its room, so it cannot
+        # crowd out the rest, and the rest cannot starve it.
+        lanes = [
+            ([queue_name], cap - self._running_from[queue_name])
+            for queue_name, cap in self._caps.items()
+        ]
+        if self._uncapped:
+            lanes.append((self._uncapped, len(self._idle)))
+        for lane, room in lanes:
+            limit = min(room, len(self._idle))
+            if limit <= 0:
+                continue
+            try:
+                jobs = await queue.claim(self._engine, queues=lane, worker=self._name, limit=limit)
+            except Exception:
+                logger.exception("jobs could not be claimed; trying again")
+                return
+            self._pulse.reached_postgres()
+            capped = lane[0] if lane[0] in self._caps else None
+            for job in jobs:
+                slot = self._idle.pop()
+                if capped is not None:
+                    self._running_from[capped] += 1
+                running = asyncio.create_task(self._run(slot, job, capped))
+                self._running.add(running)
+                running.add_done_callback(self._running.discard)
 
     async def _reach_postgres(self) -> None:
         self._reach_postgres_at = asyncio.get_running_loop().time() + REACH_POSTGRES_SECONDS
@@ -182,7 +296,7 @@ class Worker:
             return
         self._pulse.reached_postgres()
 
-    async def _run(self, slot: Slot, job: ClaimedJob) -> None:
+    async def _run(self, slot: Slot, job: ClaimedJob, capped: str | None) -> None:
         try:
             outcome = await slot.run(job)
             await self._record(job, outcome)
@@ -191,6 +305,8 @@ class Worker:
             # left; nothing here is worth stopping the worker for.
             logger.exception("a job's outcome could not be recorded", task=job.task)
         finally:
+            if capped is not None:
+                self._running_from[capped] -= 1
             self._idle.append(slot)
             self._wake.set()
 
@@ -211,8 +327,10 @@ class Worker:
             logger.error(
                 "a job was killed at its hard time limit", task=job.task, reason=outcome[1]
             )
+        elif kind == DIED:
+            logger.error("a job's process died", task=job.task, exit_code=outcome[1])
         await queue.finish(self._engine, job, worker=self._name)
-        ended = metrics.KILLED if kind == KILLED else metrics.FINISHED
+        ended = metrics.KILLED if kind in (KILLED, DIED) else metrics.FINISHED
         metrics.JOBS_ENDED.labels(outcome=ended).inc()
 
     async def _listen(self) -> None:

@@ -260,6 +260,9 @@ func (o Options) record(ctx context.Context, path string, unit Unit, items int, 
 	}
 
 	reason := refused.reason()
+	if reason == reasonBrokerUnavailable {
+		o.Refusals.Refused(time.Now())
+	}
 	if !o.Traffic.Refused(unit, reason, items) {
 		return
 	}

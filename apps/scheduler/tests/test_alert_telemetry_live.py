@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 import clickhouse_connect
 import pytest
+from dev_project import dev_project
 from live import require_stack
 from nexovue_platform import readings
 from nexovue_platform.tenant_statements import TenantFilterMissingError
@@ -45,7 +46,9 @@ require_stack(
 
 
 def _busiest(table: str, time_column: str, where: str = "1") -> tuple[str, str]:
-    """A tenant and project with rows in the last day — the dev stack's own traffic."""
+    """The dev project, once it has rows in the last day. Named, not the busiest: other
+    suites seed synthetic history, some of it dated ahead, into the same tables."""
+    tenant, project = dev_project()
     parts = urlsplit(CLICKHOUSE_DSN)
     client = clickhouse_connect.get_client(
         host=parts.hostname,
@@ -56,15 +59,16 @@ def _busiest(table: str, time_column: str, where: str = "1") -> tuple[str, str]:
     )
     found = client.query(
         f"SELECT tenant_id, project_id FROM {table} "
-        f"WHERE {time_column} >= now() - INTERVAL 1 DAY AND {where} "
-        "GROUP BY tenant_id, project_id "
-        "ORDER BY count() DESC LIMIT 1"
+        f"WHERE tenant_id = {{tenant:String}} AND project_id = {{project:String}} "
+        f"AND {time_column} >= now() - INTERVAL 1 DAY AND {time_column} <= now() AND {where} "
+        "GROUP BY tenant_id, project_id",
+        parameters={"tenant": tenant, "project": project},
     ).result_rows
     if not found:
         pytest.fail(
-            f"no {table} rows in the last day matching `{where}` — send traffic that "
-            "produces them. `just load` covers spans, logs and browser errors; an "
-            "exception carried as a *span event* comes only from `just otel-demo up`, "
+            f"no {table} rows for the dev project in the last day matching `{where}` — "
+            "send traffic that produces them. `just load` covers spans, logs and browser "
+            "errors; an exception carried as a *span event* comes only from `just otel-demo up`, "
             "which is what this suite's error-group reads need."
         )
     return str(found[0][0]), str(found[0][1])

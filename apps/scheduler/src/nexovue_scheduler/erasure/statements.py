@@ -66,6 +66,12 @@ DELETE_OWED_ROWS: Final[dict[str, str]] = {
     "web_vitals_1m": (
         "ALTER TABLE web_vitals_1m DELETE WHERE tenant_id IN {owed_tenants:Array(String)}"
     ),
+    "service_stats_1m": (
+        "ALTER TABLE service_stats_1m DELETE WHERE tenant_id IN {owed_tenants:Array(String)}"
+    ),
+    "detection_readings": (
+        "ALTER TABLE detection_readings DELETE WHERE tenant_id IN {owed_tenants:Array(String)}"
+    ),
 }
 
 # What is left of each owed tenant, per table: the proof, asked of the data. A
@@ -100,6 +106,10 @@ UNION ALL SELECT 'service_edges_1m', tenant_id, count()
 FROM service_edges_1m WHERE tenant_id IN {owed_tenants:Array(String)} GROUP BY tenant_id
 UNION ALL SELECT 'web_vitals_1m', tenant_id, count()
 FROM web_vitals_1m WHERE tenant_id IN {owed_tenants:Array(String)} GROUP BY tenant_id
+UNION ALL SELECT 'service_stats_1m', tenant_id, count()
+FROM service_stats_1m WHERE tenant_id IN {owed_tenants:Array(String)} GROUP BY tenant_id
+UNION ALL SELECT 'detection_readings', tenant_id, count()
+FROM detection_readings WHERE tenant_id IN {owed_tenants:Array(String)} GROUP BY tenant_id
 """
 
 # This run's mutation on one table, still in flight. `system.mutations` has no

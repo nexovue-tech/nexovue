@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+from nexovue_platform.detection import DEFAULT_TIMEZONE
 from pydantic import SecretStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +37,12 @@ from nexovue_api.data.postgres.models import (
     User,
 )
 from nexovue_api.deploys.signatures import new_secret
-from nexovue_api.errors.exceptions import ConflictError, InvalidRequestError
+from nexovue_api.errors.exceptions import (
+    ConflictError,
+    DependencyUnavailableError,
+    InvalidRequestError,
+)
+from nexovue_api.profile.timezones import stored_timezone
 from nexovue_api.signup import queries
 from nexovue_api.signup.apikeys import hash_api_key
 from nexovue_api.signup.slugs import disambiguate, slugify
@@ -90,11 +96,14 @@ async def provision_tenant(
     organization_slug: str | None = None,
     api_key: str | None = None,
     api_key_name: str = DEFAULT_API_KEY_NAME,
+    timezone: str | None = None,
 ) -> ProvisionedTenant:
     """Create a tenant. `organization_slug` and `api_key` are for the seed only.
 
     `password` is None for an owner nexovue onboards by hand (F31, ADR-008): they
     choose their own through a set-password link, and until then cannot sign in.
+    `timezone` is the owner's, already judged; the first project takes it, or UTC
+    when it is unknown (FR24).
     """
     address = normalize_email(email)
     if region not in REGIONS:
@@ -118,8 +127,14 @@ async def provision_tenant(
         name=name,
         password_hash=hash_password(password) if password is not None else None,
         role=OWNER_ROLE,
+        timezone=timezone,
     )
-    project = Project(org_id=organization.id, slug=DEFAULT_PROJECT_SLUG, name=DEFAULT_PROJECT_NAME)
+    project = Project(
+        org_id=organization.id,
+        slug=DEFAULT_PROJECT_SLUG,
+        name=DEFAULT_PROJECT_NAME,
+        timezone=timezone or DEFAULT_TIMEZONE,
+    )
     session.add_all([user, project])
     await _flush(session)
 
@@ -159,6 +174,19 @@ async def provision_tenant(
     return ProvisionedTenant(
         organization=organization, user=user, project=project, api_key=SecretStr(plaintext_key)
     )
+
+
+def browser_timezone(reported: str | None) -> str | None:
+    """The zone a signup's browser reported, if this system knows it (D23).
+
+    Lenient where a person's own setting is strict (`profile.timezones`): nobody
+    typed this, and refusing a new customer because their browser named a zone our
+    database lacks would be a signup lost to a detail. Unknown means UTC (FR24).
+    """
+    try:
+        return stored_timezone(reported)
+    except (InvalidRequestError, DependencyUnavailableError):
+        return None
 
 
 async def _flush(session: AsyncSession) -> None:
