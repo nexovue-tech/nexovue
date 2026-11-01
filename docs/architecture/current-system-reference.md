@@ -1,6 +1,6 @@
 # Detailed current-system reference
 
-> **Status:** Source-derived reference retained from the former root README. It records behavior verified from the repository as of 2026-09-12. Focused documents in this directory are the easier-to-navigate current-state architecture entry points; code, migrations, tests, and deployment configuration remain authoritative when they disagree.
+> **Status:** Source-derived reference retained from the former root README. It records behavior verified from the repository as of 2026-09-12; anomaly detection (F6) was added on 2026-11-01. Focused documents in this directory are the easier-to-navigate current-state architecture entry points; code, migrations, tests, and deployment configuration remain authoritative when they disagree.
 
 An engineering reference derived entirely from the source code in this repository — no external documentation was consulted to write it. Every claim below is either observed directly in a file (cited as `path:line`) or explicitly marked as inferred. Where comments in the code point out that an earlier assumption turned out to be wrong, that correction is described rather than the outdated assumption.
 
@@ -24,7 +24,7 @@ An engineering reference derived entirely from the source code in this repositor
 16. [Deployment shape](#16-deployment-shape)
 17. [Coding standards and conventions](#17-coding-standards-and-conventions)
 18. [Known gaps and inconsistencies found in the code](#18-known-gaps-and-inconsistencies-found-in-the-code)
-19. [Product planning documents](#19-product-planning-documents)
+19. [Product, SDD, and research documents](#19-product-sdd-and-research-documents)
 
 ---
 
@@ -39,7 +39,7 @@ The system is built as five independently deployable services plus two shared li
 | `apps/receiver` | Go | Terminates OTLP over HTTP and gRPC, authenticates the caller, enforces rate limits and plan allowance, converts everything into one internal message shape, publishes to Kafka |
 | `apps/workers` | Go | Consumes Kafka, masks sensitive values, derives metrics from every span before any sampling happens, tail-samples traces, writes everything to ClickHouse |
 | `apps/api` | Python (FastAPI) | Owns the Postgres schema (organizations, users, projects, credentials, billing), reads ClickHouse, serves the REST API the web app calls |
-| `apps/scheduler` | Python | Runs synthetic API, multistep, TCP, DNS and heartbeat checks and polls customer cloud/database metrics, on a schedule stored in Postgres |
+| `apps/scheduler` | Python | Runs synthetic API, multistep, TCP, DNS and heartbeat checks and polls customer cloud/database metrics, on a schedule stored in Postgres; evaluates and delivers alerts (F21); judges every service against its own normal and opens findings (anomaly detection, F6, [§7.6](#76-anomaly-detection-f6)) |
 | `apps/web` | TypeScript (React) | The console — traces, logs, services, service map, errors, RUM, synthetics, database, infrastructure, usage, billing, settings |
 | `packages/browser-sdk` | TypeScript | The JavaScript SDK a customer drops into their own web page to send RUM data |
 | `packages/contracts` | Protobuf (Go + Python generated) | The one internal envelope message every ingestion path normalizes into before Kafka |
@@ -67,7 +67,7 @@ Every message that eventually reaches ClickHouse arrives through one of five typ
 
 **Data plane** (telemetry): `apps/receiver` → Kafka → `apps/workers` → ClickHouse. Nothing in this path ever touches a customer's Postgres row directly except to read tenant/project identity and per-project masking/sampling/retention configuration.
 
-**Control plane** (everything else): `apps/api` owns Postgres — organizations, users, sessions, projects, API keys, site keys, checks, integrations, deploy events, billing, audit log — and is the only service that writes it. `apps/scheduler` reads Postgres for check/integration definitions but writes almost nothing back (only integration health status, and the rows of its own job queue — `jobs`, `job_results` — ADR-020). `apps/receiver` and `apps/workers` read Postgres only for authentication/authorization and per-project configuration; neither ever writes to it.
+**Control plane** (everything else): `apps/api` owns Postgres — organizations, users, sessions, projects, API keys, site keys, checks, integrations, deploy events, billing, audit log — and is the only service that writes it. `apps/scheduler` reads Postgres for check/integration definitions and writes integration health, the rows of its own job queue (`jobs`, `job_results` — ADR-020), check states, alerting's incidents and outbox (F21), and anomaly detection's findings and state (F6). `apps/receiver` and `apps/workers` read Postgres for authentication/authorization and per-project configuration, and write it only off the request path: the workers' usage meter and first-traces count (`project_first_traces`), and the receiver's record of when a key was last used and of the minutes Kafka refused its exports (`intake_refusals`, §4.7).
 
 ### 2.3 Infrastructure
 
@@ -119,6 +119,8 @@ Auto-creation is disabled on the broker; topics are created explicitly by the se
 | `profiles-raw` | 4 | `apps/receiver` (converted to `nexovue.v1.ProfileSamples` at the door, ADR-015) | `worker` (profile ingest), `nexovue-workers-profiles-usage` | tenant id |
 | `spans-dlq` / `logs-dlq` / `metrics-dlq` / `profiles-dlq` | 1 each | `apps/workers`, on decode/processing failure | none — nothing drains a dead-letter topic automatically | inherits the source record's key |
 
+The scheduler also reads `spans-raw` without consuming it: its high watermarks and, per minute, how many records it took, from the records' timestamps, to decide which minute anomaly detection may judge (§7.6).
+
 Every raw topic: 7-day retention, roughly 16 MiB max message size (sized to the receiver's decoded-body cap plus envelope overhead — a previous 1 MiB default silently dropped any oversized trace, with the sender retrying an unshrinkable batch forever), `zstd` compression.
 
 Dead-letter records carry triage headers prefixed `nexovue-` (`nexovue-dlq-reason`, `nexovue-source-topic/partition/offset`, `nexovue-parked-at`, `nexovue-consumer-group`, and optionally `nexovue-ingest-id/tenant-id/project-id`) so a human can read why a message was refused without decoding it — `apps/workers/internal/pipeline/dlq/dlq.go:22-35,72-103`.
@@ -133,13 +135,13 @@ The Go binary at `apps/receiver/cmd/receiver/main.go` terminates OTLP over both 
 
 ### 4.2 Startup and shutdown
 
-`main.go:52-168`: load config → build the logger → install a signal-cancellable context → dial Kafka/Postgres (closing whatever was already opened if a later dial fails) → build health checks → wire two credential doors (secret-key and public-site-key) sharing one set of collaborators → start the admin, OTLP/HTTP, and OTLP/gRPC listeners → launch background goroutines for a periodic traffic summary and non-blocking "credential last used" recorders.
+`main.go:52-168`: load config → build the logger → install a signal-cancellable context → dial Kafka/Postgres (closing whatever was already opened if a later dial fails) → build health checks → wire two credential doors (secret-key and public-site-key) sharing one set of collaborators → start the admin, OTLP/HTTP, and OTLP/gRPC listeners → launch background goroutines for a periodic traffic summary, non-blocking "credential last used" recorders, and the recorder of minutes Kafka refused exports (§4.7).
 
 On `SIGTERM`/`SIGINT`: every listener gets `SHUTDOWN_TIMEOUT` (default 20s) to drain, on a fresh deadline rather than the already-cancelled request context; the gRPC server calls `GracefulStop()` and falls back to a hard stop if the drain budget expires.
 
 ### 4.3 Configuration
 
-Parsed by `apps/receiver/internal/config/config.go`; a missing required variable fails boot with the variable's own name. Selected variables (all have `RECEIVER_`-prefixed or shared names — see the full list in [§14.3](#143-environment-variables)):
+Parsed by `apps/receiver/internal/config/config.go`; a missing required variable fails boot with the variable's own name. Selected variables (all have `RECEIVER_`-prefixed or shared names — see the full list in [§14.4](#144-environment-variables)):
 
 - `RECEIVER_OTLP_HTTP_ADDR` (`:4318`), `RECEIVER_OTLP_GRPC_ADDR` (`:4317`), `RECEIVER_HEALTH_ADDR` (`:8081`)
 - `RECEIVER_MAX_BODY_BYTES` (4 MiB, wire/compressed cap), `RECEIVER_MAX_DECODED_BODY_BYTES` (16 MiB, decompressed cap)
@@ -191,6 +193,8 @@ Two independent gates, run in order allowance → rate-limit.
 
 Partition key: trace id for spans, tenant (organization) id for logs and metrics. The Kafka producer uses a sticky key partitioner set explicitly (not left to the client library's default, since correctness of trace assembly depends on it), a bounded buffer, and a per-record delivery timeout. Publishing is synchronous: the HTTP/gRPC response is written only after Kafka has acknowledged the record, and on a partial batch failure only the unpublished subset is retried (bounded to three attempts) — never the whole batch. When even that retry gives up, the sender is told 503 and resends the whole export, so records that already landed are published again at new offsets; each record therefore carries a digest of its tenant, project, signal and payload (`nexovue-payload-digest`), the first offset to consume a digest claims it in `stored_payload_digests` (15 minutes), and a later record with a claimed digest is acknowledged and skipped by every pipeline and usage meter (`pipeline/resend`, group 9).
 
+**Minutes the broker refused** (F6, `internal/intake`). When Kafka fails to take a record while the sender is still waiting, the refusal is counted under the reason `broker_unavailable`; a cancelled request, or a record Kafka rejected on its own, is counted as `unavailable` instead. The request path only adds to an in-memory count per minute. One goroutine writes each finished minute that had at least 5 such refusals to Postgres's `intake_refusals`, one row per minute per receiver, and drops a minute it still cannot write after 30 minutes. Anomaly detection reads these rows and judges no project in such a minute, because the missing traffic is nexovue's failure, not the customer's (§7.6).
+
 ### 4.8 Health
 
 `GET /healthz` (liveness) touches nothing external and always returns `200` — checking a shared dependency here would let one bad dependency restart every replica of every service at once. `GET /readyz` (readiness) checks Kafka and Postgres in parallel under individual timeouts and returns `503` if any fails. Both are served on a separate admin port (`RECEIVER_HEALTH_ADDR`, default `:8081`) so probes still answer when the data ports are saturated.
@@ -205,6 +209,7 @@ Partition key: trace id for spans, tenant (organization) id for logs and metrics
 | `internal/config` | Environment parsing and cross-field validation |
 | `internal/health` | Liveness/readiness, admin server, container self-check, optional pprof |
 | `internal/ingest` | Envelope construction and Kafka publishing, with retry-of-failed-subset semantics |
+| `internal/intake` | The minutes Kafka refused exports, counted in memory and written to `intake_refusals` off the request path (F6) |
 | `internal/logging` | Structured logger shared with the workers, credential redaction |
 | `internal/otlp` | The HTTP/gRPC doors: gate chain, CORS, origin allow-listing, body decoding, per-signal wiring |
 | `internal/ratelimit` | Per-credential in-process token buckets, each replica enforcing its share |
@@ -229,6 +234,7 @@ Two kinds of durable state, stored in ClickHouse's embedded Keeper coordination 
 
 - **Write watermarks** (logs, metrics, and the raw span rows): the highest offset actually written, advanced *only after* ClickHouse acknowledges the insert, never before — writing it early would turn a duplicate into a hole.
 - **Settlement ranges** (the pre-sampling span counters specifically): a before/after bracket around each counter-insert, so a replayed batch can be classified as already-counted, overlapping, or genuinely new, and recounted safely when ambiguous.
+- **Derived progress** (F6, `span_derived_progress`): per span partition, the highest offset whose spans are in every pre-sampling rollup, and when the receiver took that record. Written after ClickHouse acknowledges a settlement's derived inserts, only for that settlement's own partitions, and never backwards. A refused derived insert holds every partition in the settlement for at most 15 minutes (`ingeststate.MaxProgressHold`), so the scheduler sees those minutes as unfinished rather than quiet. It is what anomaly detection reads to know a minute is complete (§7.6).
 
 Where an insert statement can't rely on ClickHouse's own block-hash deduplication (any insert that goes through `INSERT … SELECT … FROM input(...)`, needed whenever a server-side aggregate fold is required), the writer computes its own content-derived `insert_deduplication_token` — a deterministic hash of the row's own fields.
 
@@ -238,7 +244,7 @@ Consumes `spans-raw`. Per batch: decode the envelope → **mask in place** (alwa
 
 **Tail sampling** (`sample/buffer.go`, `sample/policy.go`): a trace stays open for a configured window (default 10s) after its first span arrives, then a policy decides whether to keep it, checked in this order: an unconditional keep while the project is still inside its "first traces" carve-out (see [§13, Flow 6](#flow-6--sign-up-to-first-data)) → keep if the trace contains an error → keep if the trace's total duration exceeds a configured threshold → otherwise keep a healthy trace with a configured probability, decided by a deterministic function of the trace id (so every worker that ever sees that trace agrees on the same verdict without coordinating).
 
-**Pre-sampling counters and rollups**, written regardless of the sampling verdict: three per-minute `metrics_sum` series (span count, error count, duration sum), the `endpoint_stats_1m` rollup (request/error counts and latency quantiles per service+endpoint+minute), and `service_edges_1m` (the caller→callee dependency graph). These three write paths are the reason the platform's rate/error/latency dashboards and service map are accurate even though most healthy traces are never actually stored.
+**Pre-sampling counters and rollups**, written regardless of the sampling verdict: three per-minute `metrics_sum` series (span count, error count, duration sum), the `endpoint_stats_1m` rollup (request/error counts and latency quantiles per service+endpoint+minute), `service_stats_1m` (F6: exact request and error counts and a 64-bucket latency histogram per service+minute, from the same inbound SERVER and CONSUMER spans; at most 2,000 services per organization per minute in one drain, the rest not counted), and `service_edges_1m` (the caller→callee dependency graph). These write paths are the reason the platform's rate/error/latency dashboards and service map are accurate even though most healthy traces are never actually stored.
 
 **Trace summaries**: a per-trace snapshot (`trace_summaries`) is written *after* the sampling verdict, unlike the three rollups above — it indexes only traces that were actually stored, since it exists so the trace list can page without scanning raw spans. Its sort key's `start_time` is fixed at the row's first write, so a revision (a root arriving after its children) merges into the same row; the true start is the `trace_start` column (migration `000034`). The worker holds a trace until the sampler's `DecisionTTL` after its *last* write, so a trace still arriving stays one row. A span replayed after a crash, once the trace is forgotten, still writes a second row; the list can then show that trace twice, and opening it shows each span once (`docs/changes/trace-list-split-traces`).
 
@@ -268,7 +274,7 @@ Consumes `profiles-raw`, whose payload is `nexovue.v1.ProfileSamples` — the re
 
 ### 5.8 Health and self-observation
 
-`/healthz` reports whether each selected pipeline's consume loop is actually running (a stopped pipeline is treated as fatal — the process exits rather than continuing half-alive). `/readyz` additionally checks Kafka, ClickHouse, and (if configured) Postgres reachability. `/metrics` (ADR-021) reports every readiness check as up or down, each consumer group's lag (the topics' end offsets minus its committed offsets, read from the broker by `kadm` on scrape — absent rather than zero when Kafka cannot answer), and each dead-letter topic's retained records; the receiver's admin listener reports export totals by outcome, signal and refusal reason. The structured-log "ingest heartbeat" (uncommitted records, per-signal write counts, buffered traces and spans) is unchanged.
+`/healthz` reports whether each selected pipeline's consume loop is actually running (a stopped pipeline is treated as fatal — the process exits rather than continuing half-alive). `/readyz` additionally checks Kafka, ClickHouse, and (if configured) Postgres reachability. `/metrics` (ADR-021) reports every readiness check as up or down, each consumer group's lag (the topics' end offsets minus its committed offsets, read from the broker by `kadm` on scrape — absent rather than zero when Kafka cannot answer), and each dead-letter topic's retained records; the receiver's admin listener reports export totals by outcome, signal and refusal reason, where `broker_unavailable` is Kafka failing while the sender waited and `unavailable` the control plane or a record Kafka rejected (§4.7). The structured-log "ingest heartbeat" (uncommitted records, per-signal write counts, buffered traces and spans) is unchanged.
 
 ### 5.9 Package map
 
@@ -277,14 +283,14 @@ Consumes `profiles-raw`, whose payload is `nexovue.v1.ProfileSamples` — the re
 | `internal/pipeline/consume` | The shared Kafka consume loop: batching, commit-only-when-stored, retry, dead-letter parking, rebalance handling |
 | `internal/pipeline/traceassembly` | The spans pipeline end to end |
 | `internal/pipeline/sample` | The tail-sampling buffer and policy |
-| `internal/pipeline/derive` | Pre-sampling counters and the endpoint rollup |
+| `internal/pipeline/derive` | Pre-sampling counters, the endpoint rollup, and the service rollup detection reads (F6) |
 | `internal/pipeline/serviceedges` | Caller/callee pairing into the service-dependency graph |
 | `internal/pipeline/logwriting` | The logs pipeline, including web-vital extraction |
 | `internal/pipeline/vitals` | Web-vital reading extraction, rollup, and writer |
 | `internal/pipeline/metricwriting` | Customer OTLP metrics into the five metric tables |
 | `internal/pipeline/usage` | Per-signal ingestion metering into Postgres, for billing |
 | `internal/pipeline/mask` | Masking rules, families, and hashing |
-| `internal/pipeline/ingeststate` | Durable Keeper-backed watermarks |
+| `internal/pipeline/ingeststate` | Durable Keeper-backed watermarks, and the derived progress marks (F6) |
 | `internal/pipeline/dedupe` | In-process (non-durable) redelivery guard within one worker run |
 | `internal/pipeline/insertdedup` | The content-derived deduplication token |
 | `internal/pipeline/dlq` | Dead-letter republishing with triage headers |
@@ -388,6 +394,8 @@ Each follows the same internal layout: `router.py` (HTTP only, no SQL, no busine
 | `usage` | Per-organization usage counters and the same allowance arithmetic the receiver enforces |
 | `billing` | Plan, pricing, checkout, and the payment-processor webhook |
 | `integrations` | Cloud/database connector definitions, with no credentials ever stored server-side |
+| `findings` | Anomaly detection's feed, one finding with its readings, and the counts the settings show; acknowledge, false alarm and new normal (F6). The reads are on the token read surface |
+| `detection` | A project's detection status and settings (sensitivity, time zone), one service's state, and a service's snooze (members, up to 4 hours) and mute (admins, up to 30 days) (F6). The reads are on the token read surface |
 
 ### 6.10 Billing, in more detail
 
@@ -403,13 +411,13 @@ The payment-processor integration is behind an abstract port with no vendor voca
 
 A job-queue service running two kinds of measurement: synthetic checks (API and multistep API requests, TCP connections, DNS resolution, and heartbeats judged against their last call) and pollers (reading a customer's AWS CloudWatch RDS metrics or Postgres statistics). There is deliberately no result store for measurements — each task builds its own OTLP-shaped envelope and publishes it directly to Kafka, following the exact same internal envelope contract every other door uses.
 
-Every scheduler process — beat and each worker — answers `/healthz`, `/readyz` and `/metrics` on `SCHEDULER_HEALTH_ADDR` (`:8081`) from a thread that reads timestamps only (`health.py`): liveness fails when the loop has been silent for 30 s, readiness when it has not reached Postgres for 30 s (a worker with every slot busy asks Postgres every 10 s for exactly this). `python -m nexovue_scheduler health` is the compose healthcheck. Beat's leader reads the queues every 15 s for `/metrics`: jobs ready per queue and the oldest's wait, alerts waiting, erasures overdue (`metrics.py`).
+Every scheduler process — beat and each worker — answers `/healthz`, `/readyz` and `/metrics` on `HEALTH_ADDR` (`:8081`) from a thread that reads timestamps only (`health.py`): liveness fails when the loop has been silent for 30 s, readiness when it has not reached Postgres for 30 s (a worker with every slot busy asks Postgres every 10 s for exactly this). `python -m nexovue_scheduler health` is the compose healthcheck. Beat's leader reads the queues every 15 s for `/metrics`: jobs ready per queue and the oldest's wait, alerts waiting, erasures overdue, and anomaly detection's install-wide gauges (§7.6) (`metrics.py`).
 
 ### 7.2 Scheduling
 
 The schedule is not code — beat (`python -m nexovue_scheduler beat`, its own asyncio loop) re-reads the `checks` and `integrations` tables from Postgres on a refresh timer (default 30s). It builds one entry per enabled check **per probe location**, dispatched to that location's queue (`light.<location>`), with the *entire* definition in the task's arguments — variables, file names, maintenance windows, and the secrets it uses **still sealed** — so the worker that runs the check never queries Postgres on the path of a measurement (ADR-010's amendment). Each entry expires with its interval, so a late run is dropped rather than queued, and a check's first run is offset by a stable hash of its id so checks saved together do not fire together. Heartbeats have no entry of their own; a sweep judges them every minute. A second sweep deletes uploaded files no saved check uses, a day after upload.
 
-Beat inserts each due entry as a row in the Postgres `jobs` table (ADR-020), and marks the entry fired only after the insert. Workers (`python -m nexovue_scheduler worker`, one for `light` and `light.<region>`, one for `deliveries`) claim rows with `FOR UPDATE SKIP LOCKED` under a lease of the task's hard limit plus 30 seconds, run each in a fixed pool of spawned child processes (a soft limit raises inside the task; the child is killed at the hard limit and replaced), and poll every second, waking early on `LISTEN`/`NOTIFY`. A worker that dies leaves its job to be re-claimed once the lease lapses, if the job has attempts left.
+Beat inserts each due entry as a row in the Postgres `jobs` table (ADR-020), and marks the entry fired only after the insert. Workers (`python -m nexovue_scheduler worker`, one for `light`, `light.<region>` and `detection`, one for `deliveries`) claim rows with `FOR UPDATE SKIP LOCKED` under a lease of the task's hard limit plus 30 seconds, run each in a fixed pool of spawned child processes (a soft limit raises inside the task; the child is killed at the hard limit and replaced), and poll every second, waking early on `LISTEN`/`NOTIFY`. A worker that dies leaves its job to be re-claimed once the lease lapses, if the job has attempts left.
 
 Because two beat replicas run for availability, only one may actually schedule at a time: a Postgres advisory lock, held on a dedicated connection, decides leadership. A follower polls for the lock every five seconds and does nothing else. When a leader dies, its connection drops, the lock is freed and the new leader rebuilds its schedule from zero — deliberately not firing a backlog of everything that was "due" while no leader existed.
 
@@ -426,6 +434,20 @@ Two kinds: CloudWatch (AWS RDS metrics) and Postgres (`pg_stat_statements`/`pg_s
 ### 7.5 Publishing
 
 Results are encoded as OTLP protobuf — for a check, gauges carrying the run's outcome, attempt, location and whether it was final, plus one log record whose body is the run's evidence as JSON (the request sent, the response received, each assertion with expected and actual) — and produced directly to Kafka with `acks=all` and idempotence enabled, and the publish call blocks until the broker confirms delivery — a probe that reported success while its result sat undelivered would be claiming a check ran when nothing downstream could ever see it.
+
+### 7.6 Anomaly detection (F6)
+
+`nexovue_scheduler/detection/` judges every service, each minute, against its own normal, and opens a **finding** when it moves: losing traffic, failing more, or slower (design: `docs/features/anomaly-detection/design.md`; runbook: `docs/operations/detection.md`). It runs on its own `detection` queue, which a worker takes by default beside `light` and `light.<region>`, so in a deployment `scheduler-light` runs it; `jobs/worker.py` caps it at 2 jobs at once of the worker's slots, so judging never holds every probe's slot.
+
+- **Which minute is settled** (`settle.py`). Beat queues `sweep:detection` every minute. It reads each span partition's derived progress (§5.2) and compares it with Kafka's high watermark: a partition with nothing unread is caught up through now, otherwise it is through the receive time of its last counted record, and one holding records with no progress row is behind. Minute M is settled once every partition is through M + 1 minute + the 2-minute export allowance. "Now" is ClickHouse's clock, read in the same statement as the progress.
+- **What holds a minute for everyone** (`holds.py`). A minute in `intake_refusals` (§4.7), or one the **install-wide guard** covers: at least 5 organizations, not projects, losing traffic in the minutes the span topic's record count fell to half its recent rate or below. Either is nexovue's failure, so no project is judged in it and every project reads *data delayed*. A hold ends once the pipeline has delivered past it, and lasts at most 30 minutes; reaching the limit writes a `detection_events` row and logs an ERROR.
+- **One job per project.** The sweep queues a project job for each project with traffic in the last day or an open finding, one organization's project at a time in turn, so one tenant with many projects cannot hold the rest back. It then writes `detection_sweep`: when it ran, and the newest minute it handed out.
+- **A project job** (`project_job.py`, 20 s soft limit) takes a per-project advisory lock, judges each service's minutes after its `last_judged_minute` (at most 2 a run; more than 10 behind, it restarts at the settled minute), and moves that mark by compare-and-set, so two overlapping jobs never judge a minute twice. It writes what it saw to ClickHouse's `detection_readings` first, then commits each service's state, its finding, the notifications and the project's completed run in one Postgres transaction. A crash between the two judges the minute again; reads keep the newest reading.
+- **The normal** (`baselines.py`). `sweep:detection-baselines` hourly, and a job a person's change queues at once, builds each service's normal for the next two hours from `service_stats_1m`: the same weekday over 4 weeks, or the same class of day, ±15 minutes for the level and ±180 for the spread, in the project's time zone. Fewer than 3 days is *learning*. Minutes inside a finding (unless an admin called it a false alarm), snoozed, or held by nexovue's intake are left out.
+- **The test** (`method.py`, held equal to `tools/detection-sim/` by a parity fixture). Each signal is judged on a window as long as the sensitivity's wait. It is unusual only if it is past a tail probability of about 3 in 100,000 and the minimum change, also with its worst minute removed, so one minute never opens a finding.
+- **Findings** (`lifecycle.py`, `notify.py`). One per service and one per project at most, open at a time. Each opens, turns critical, gains signals and closes on its own, and notifies through *anomaly finding* alert rules and the F21 outbox. Every new project gets a second default rule, *Critical problems*, to its owners. The owners are also emailed outside any rule when detection has not run for a project for 15 minutes, and again when it runs.
+- **Retention** (`retention.py`, in the expiry sweep). A closed finding is purged at its project's derived retention, because it names services and endpoints. `intake_refusals`, `detection_events` and `baseline_shifts` are kept 30 days.
+- **What operators see.** Beat's leader publishes, with no project label, the settled minute's age, how many projects have had no completed run for 3 minutes and the longest wait, and recent `detection_events` by kind. A failing project job logs its `project_id`.
 
 ---
 
@@ -490,7 +512,10 @@ Every table below carries `tenant_id` (and, except for the trace-lookup index, `
 | `trace_summaries` | AggregatingMergeTree | One row per stored trace (span count, error count, root service, duration, worst severity) — written **after** sampling, since it indexes what can actually be opened |
 | `web_vitals` / `web_vitals_1m` | MergeTree / AggregatingMergeTree | Raw Core Web Vital readings and their per-minute p75 rollup |
 | `profile_samples` | MergeTree | One row per profile sample: stack inline (functions, files, lines, binaries, addresses — leaf first), value in its type's unit, service/host/version/environment, span link. Sorted by hour then `stack_hash`; retention ≤ 14 days, and reads refuse rows past it before the TTL merge removes them |
+| `service_stats_1m` | AggregatingMergeTree | F6: per-minute exact request and error counts and a 64-bucket latency histogram (`sumForEach`) per service — written **before** sampling; kept the lesser of the derived retention and 35 days |
+| `detection_readings` | ReplacingMergeTree(version) | F6: one frozen reading per service per judged minute — the window, the normal compared with, and each signal's verdict. Written only by the scheduler's `nexovue_detection_writer` (ADR-023); read with `argMax(…, version)`; kept the lesser of the derived retention and 35 days |
 | `span_ingest_offsets` / `span_written_offsets` / `ingest_written_offsets` | KeeperMap | Durable per-partition offset watermarks used for crash recovery — hold no customer data |
+| `span_derived_progress` | KeeperMap | F6: how far each span partition is counted into the derived rollups, and when that record was received (§5.2). No tenant column; read without one by `detection.settle` alone, by a named exemption in the tenant-structure test. A backup restores it empty |
 
 Raw signal tables default to 30 days' retention, keyed off the platform's own receive clock rather than a customer-supplied timestamp (a device or application clock can claim any year, so it is never trusted to expire data). Rollup tables default to roughly 13 months. Retention is enforced by expiring whole storage parts rather than mutating rows, which is also what makes the tenant-erasure deletion (§6.7) cheap.
 
@@ -502,7 +527,7 @@ Only one materialized view remains live today (`span_trace_lookup`, fed from `sp
 
 ### 11.3 Deduplication
 
-Every table that receives a retried insert relies on one of two mechanisms: ClickHouse's own block-hash deduplication window (for tables written with a plain columnar insert — `spans`, `logs`, all five raw metric tables), or an explicit content-derived deduplication token computed by the writer (for tables written through a server-side aggregate fold via `INSERT … SELECT … FROM input(...)` — `endpoint_stats_1m`, `service_edges_1m`, the web-vitals rollup). `trace_summaries` needs neither: every field is merged with an idempotent function (max, min, most-recent-value, or set union), so a repeated identical write changes nothing regardless of how many times it lands.
+Every table that receives a retried insert relies on one of two mechanisms: ClickHouse's own block-hash deduplication window (for tables written with a plain columnar insert — `spans`, `logs`, all five raw metric tables), or an explicit content-derived deduplication token computed by the writer (for tables written through a server-side aggregate fold via `INSERT … SELECT … FROM input(...)` — `endpoint_stats_1m`, `service_stats_1m`, `service_edges_1m`, the web-vitals rollup). `detection_readings` keeps the highest `version` of a re-judged minute, and its reads use `argMax` so a duplicate counts once even before a merge. `trace_summaries` needs neither: every field is merged with an idempotent function (max, min, most-recent-value, or set union), so a repeated identical write changes nothing regardless of how many times it lands.
 
 ---
 
@@ -528,6 +553,11 @@ Owned entirely by `apps/api`, applied with Alembic. Selected tables (columns abb
 | `billing_subscriptions` / `billing_webhook_deliveries` | Paid-arrangement state (`pending`, `active` — with `grace_until` while a failed payment's 7-day grace runs — `cancelled`, `lapsed`) and a global (not per-tenant) idempotency record of processed webhook deliveries, whose event id may not be blank. One live checkout per organization; closing an organization cancels its arrangements at the processor first; the scheduler's hourly `billing.end_lapsed_grace` ends a grace that has run out |
 | `source_maps` | Metadata pointing at object-store bytes — never the bytes themselves |
 | `project_first_traces` | The sampling carve-out counter described in §5.3 and §13, Flow 6 |
+| `findings` / `finding_incidents` | F6 (ADR-022): one row per detected problem — scope (service or project), severity, state, how it closed, its signals' normal, current and worst values, mute, acknowledgement and false-alarm reason. Partial unique indexes allow one open finding per service and one per project. Linked to threshold and *went silent* incidents on the same service |
+| `detection_state` / `detection_project_runs` / `detection_baselines` / `baseline_shifts` / `service_detection_settings` | F6: each service's last judged minute (moved by compare-and-set) and per-signal phase; each project's last completed run, when detection began expecting it, and its vote for the install-wide guard; the hourly normal; a normal moved by a person or by adoption; a service's mute and snooze |
+| `intake_refusals` / `detection_events` / `detection_sweep` | F6, install-wide, no `org_id`: the minutes Kafka refused exports, per receiver; what detection did on its own that an operator must see; the minute sweep's own record (one row) |
+
+`projects` gained `timezone` (server default `'UTC'`; a new project takes its creator's zone) and `detection_sensitivity`. `notifications` gained `finding_id` and `dedup_key`: a notification's subject is an incident, a finding, or — for *detection stopped* and *running again* — the project itself, and a check holds each row to exactly one (F6, migrations 0041 to 0049).
 | `audit_log` | Every consequential action, with the actor and target recorded but never a credential value |
 
 Primary keys are UUIDv7, generated server-side by Postgres itself, never minted by application code. Every timestamp column is timezone-aware; a naive datetime is refused by the linter across the whole Python codebase.

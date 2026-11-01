@@ -15,6 +15,11 @@ With it, the founder accepted [ADR-022](../../decisions/ADR-022-a-finding-is-the
 and [ADR-023](../../decisions/ADR-023-the-scheduler-writes-detection-state-to-clickhouse-through-its-own-account.md).
 Both are accepted with this design.
 
+**The plan's corrections, 2026-11-01.** Writing the plan against the code found 26 places where this design
+was wrong about the code or left something out ([`plan.md`](plan.md), *Design corrections*, C1 to C26). The
+founder approved them with the plan. They are written into the sections below, each marked with its number,
+such as (C8). *As built* stays the record of where the built code differs again.
+
 ## Revision 2.1, 2026-11-01
 
 Six persona reviews read the spec, this design and the plan: a solo developer, an on-call lead, the
@@ -328,9 +333,10 @@ What exists, verified in code:
   incidents: delivery joins `incidents` (`outbox.py:162-170`), and the PagerDuty `dedup_key` and the
   message link come from `incident_id` (`delivery.py:84`, `messages.py:115`).
 - **The workers' per-partition progress records**, in KeeperMap (`ingeststate/`), written only after
-  ClickHouse acknowledges, behind `WriteGuard`.
+  ClickHouse acknowledges. `WriteGuard` checks offsets only, never which worker owns a partition (C1).
 - **The silence sweep's guard.** It compares stored progress with Kafka's high watermarks, so a partition
-  with nothing unread counts as caught up (`alerts/silence.py`, `alerts/sweeps.py:44`).
+  with nothing unread counts as caught up (`alerts/silence.py`, `alerts/sweeps.py:44`). It takes its
+  partitions from stored rows; nothing read Kafka's metadata (C4).
 - **The scheduler's ClickHouse account** can only read: `nexovue_reader`, `readonly = 2`, `GRANT SELECT`
   (`deploy/clickhouse/users.d/reader.xml:20,46`).
 
@@ -340,8 +346,9 @@ What exists, verified in code:
   3 Nov" (FR25, AC42). It never says "all systems normal" while it is learning. On the service screen,
   each service carries a *Learning until 3 Nov* badge.
 - **A problem appears.** A card appears: "Checkout is 4× slower than normal since 15:04 IST". Its times
-  are in the project's time zone, which is named. A critical card also emails the owners through the
-  second default rule.
+  are in the project's time zone, which is named. The web formatted times only in the browser's zone, so a
+  new helper, `shared/format/zoned.ts`, names the project's (C13). A critical card also emails the owners
+  through the second default rule.
 - **The card opens the finding's page** (D12). It shows:
   - each signal's readings drawn against its normal band;
   - the normal, current and worst values;
@@ -370,7 +377,9 @@ What exists, verified in code:
     *recovered*, *false alarm*, *new normal*, *adopted* or *service gone*. It never just says "resolved".
   - Muted findings stay out of the list. A "Muted (2)" link under the list opens them. The built feed has
     no filters, so none is invented here.
-  - The headline (`headline.ts`) reads `GET /projects/{id}/detection/status` and says one of these:
+  - The headline (`headline.ts`) reads `GET /projects/{id}/detection/status`. #22 already removed "All
+    systems normal", and the headline reports only what the checks said, so detection's line goes above the
+    checks' lines rather than replacing anything (C18). It says one of these:
     - all learning;
     - some still learning;
     - data delayed;
@@ -387,11 +396,15 @@ What exists, verified in code:
   - *muted*;
   - *project finding*: it has no service, and lists the services affected;
   - *dangerous action*: *This is the new normal* names its effect in real numbers ("Checkout's normal
-    becomes about 330 ms") and asks for confirmation;
+    becomes about 330 ms") and asks for confirmation. The console has no shared confirm or badge component,
+    so confirmation is inline, as in `ProjectSettings.tsx`, and the detection state is a new `DetectionBadge`
+    (C11; *As built*, Step 5, for where it lives);
   - *action failed*: if the finding changed meanwhile (`409`), it says so and reloads;
   - *success*: "Closed as false alarm. Resolved message sent to #ops".
 - **The service screen:**
   - ~~**The band**~~ *deferred to after version 1 (D32). The finding page draws its own band from its readings.*
+    `TrendChart` drew strokes only, with no band or fill (C12), so the finding page draws the band's edge as a
+    line (*As built*, Step 5).
   - **States:**
     - *Learning*, with a date for each signal;
     - *Too little traffic* for one signal;
@@ -400,7 +413,8 @@ What exists, verified in code:
     - *No detection yet*: a service seen for the first time, with no detection state;
     - *Detection unavailable*: if the detection read fails, the badge shows an error, never *Judged*.
 - **Settings, *Detection* section:**
-  - shown with every control disabled to anyone without the detection permission; editable by admins;
+  - hidden from anyone without the detection permission, as every gated section of `ProjectSettings.tsx`
+    is; never shown disabled (C10). Editable by admins;
   - validation, unsaved-changes and success states;
   - a time zone change warns that the normal bands move to the new local clock.
 - **The rule editor** (`RuleEditor.tsx`) gains the *anomaly finding* condition: services (all, or a list)
@@ -413,13 +427,17 @@ What exists, verified in code:
 *Revision 2.1:* there is no new container. `scheduler-light` takes the `detection` queue, at most 2 jobs at once
 (D32).
 
-The design splits the work into three kinds of job, each on a `detection` queue of its own so check probes
-are never starved:
+The design splits the work into three kinds of job, all on a `detection` queue of their own so check probes
+are never starved. `scheduler-deliveries` is only `worker --queues deliveries`, so there is no detection role
+to reuse: `scheduler-light` takes the `detection` queue beside `light`, with a cap on how many detection jobs
+run at once, and `roles.py` is unchanged (C23; *As built*, Step 2c, for how the queue is taken).
 
 - **The coordinator.** `sweep:detection` runs each minute. It does no judging. It reads which minute is
   settled (next section), then queues one **project job** for each project that has had traffic in the
-  last 24 hours or has an open finding. It records its own finish. A skip is recorded separately from a
-  finish, because `results.py` sets `finished_at` even on a skip.
+  last 24 hours or has an open finding. Detection's freshness is each project job's last completed run, not
+  the coordinator's finish. `alert_evaluation_status` is not reused: `record_evaluation` sets `finished_at`
+  even on a skip, and the Alerts screen reads that table (C17). The sweep records itself separately
+  (*As built*, Step 7).
 - **A project job** judges one project. It has its own time budget (20 s) and short query limits (5 s,
   256 MiB).
   - It takes a per-project transaction advisory lock.
@@ -427,13 +445,14 @@ are never starved:
     judge the same minute twice.
   - It judges at most 2 minutes of catch-up per run. If a project is more than 10 minutes behind, it
     restarts at the latest settled minute and judges nothing older (spec, *Backfill*).
-- **The baseline job** runs hourly for each project. It computes the next hour's normal for every service
-  and signal (*The normal*), and stores them. The project job then reads one small row per service, not
-  four weeks of history. A finding opening or closing, a false alarm or a new normal queues an immediate
-  recompute for that service.
+- **The baseline job** runs hourly for each project. It computes the normal for every service and signal
+  over the next two hours, so a late run never leaves a minute without one (*The normal*), and stores
+  them. The project job then reads one small row per service, not four weeks of history. A finding
+  opening or closing, a false alarm or a new normal queues an immediate recompute for that service.
 
-Projects never wait on each other, and a large project can only overrun its own budget. Each service's
-state is fresh when its `last_judged_minute` is recent; it no longer depends on when a whole pass ended.
+Projects never wait on each other, and a large project can only overrun its own budget. A project's
+detection is fresh when its job last completed within 3 minutes (C17; revision 2.1, item 2); it no longer
+depends on when a whole pass ended.
 
 ### When a minute is settled (BR5) — *Review: architecture 1, 2; operations 1, 2, 3*
 
@@ -442,18 +461,31 @@ A minute M is settled when all three of these hold:
 1. **Every partition of the trace topic has delivered past M plus the export allowance.**
    - The worker writes `span_derived_progress` after ClickHouse acknowledges each drain's rollup insert.
      This is a KeeperMap table, one row per partition, holding the partition's counted-through offset and
-     that record's `received_at`. It goes through the existing `WriteGuard`, so a worker that has lost a
-     partition cannot write for it.
+     that record's `received_at`.
+   - **It is written only for the partitions in the current settlement's positions** (C1). `WriteGuard`
+     checks offsets, not ownership, so it cannot keep a worker that lost a partition from writing for it.
+     Handover safety comes from releasing the lost partition's state and from Kafka's commit fencing.
+     *As built*, Step 2a, says what KeeperMap still cannot stop.
+   - **The worker carries `received_at` through.** It was computed for each message and kept nowhere, so the
+     trace stage now carries it into the settlement's positions (C3).
+   - **A refused derived insert holds progress.** The worker counted a refusal and settled anyway, so
+     progress would have passed minutes that were never written (C2). One insert covers every partition in a
+     settlement, so a refusal holds all of them, and `stepOverRefusal` returns the refusal to its caller
+     rather than only logging it (C22). The hold is bounded (revision 2.1, item 1; *As built*, Step 2a).
    - The scheduler compares each row with Kafka's high watermark, as the silence sweep does. A partition
      with nothing unread is caught up through now. Otherwise it is through its `received_at`.
    - M is settled when every partition is through **M + 1 minute + 2 minutes**. Two minutes is the
      export allowance F21's thresholds already use (`thresholds.py:3-5`). It lets an SDK's batch, or a
      request lasting up to about 2 minutes, arrive before the minute is judged.
-   - The partition count comes from Kafka's metadata, and freshness from ClickHouse's own `now()`, so one
-     clock decides.
-2. **nexovue's receiver refused nothing in M for lack of a store.** When it refuses a request because its
-   store is unavailable, the receiver records the minute in Postgres, in `intake_refusals`: one upsert per
-   minute per receiver, rate-limited in memory. Any such minute is unsettled for every project.
+   - The partition count comes from Kafka's metadata, through a new `list_topics` read beside
+     `KafkaWatermarks` (C4), and freshness from ClickHouse's own `now()`, so one clock decides.
+2. **nexovue's receiver refused nothing in M because Kafka would not take it.** The receiver's
+   `unavailable` reason mixed Kafka being down with the control plane failing to authenticate, and Postgres
+   may itself be the store that is down. So a distinct reason, `broker_unavailable`, is counted only at the
+   three refusals where Kafka would not take a publish (C5). The receiver counts those in memory, and one
+   goroutine writes the minute to Postgres's `intake_refusals`, as `auth/lastused.go` writes a key's last
+   use: one upsert per minute per receiver, never on the request path. Any such minute is unsettled for
+   every project. Revision 2.1, item 1, narrows which refusals count.
 3. **Most projects did not lose traffic in the same minutes.** If at least half of the projects expecting
    traffic become unusual for *losing traffic* together, the cause is upstream of all of them: nexovue's
    edge or network.
@@ -476,13 +508,14 @@ changes a judgement already made, because the judged reading is frozen (*Reading
     weights, rounding or randomness. A service's window p95, and its count of requests above any bucket
     boundary, can therefore be reproduced exactly.
   - It carries the insert-dedup token and `non_replicated_deduplication_window`, as migration 000021 gives
-    `endpoint_stats_1m`, so a replayed batch is not counted twice.
+    `endpoint_stats_1m`, so a replayed batch is not counted twice. *As built*, Step 2a, gives the column's
+    stored type.
   - Its retention is the lesser of the plan's derived retention and 35 days.
   - A service with only client or internal spans has no inbound requests, so it is never judged. Its
     service screen says *Not judged: no incoming requests*.
-- **`endpoint_stats_1m`**, counts only, for each endpoint's *failing more* (FR2). Its per-endpoint p95 is
-  also read for the *slower* evidence endpoint (FR3). It is compared with the same window last week, and it
-  is evidence only, never a judgement.
+- **`endpoint_stats_1m`**, counts only, for each endpoint's *failing more* (FR2). Its per-endpoint p95 was
+  to be read for the *slower* evidence endpoint (FR3), compared with the same window last week, as evidence
+  only; *As built*, Step 3: *slower* names no endpoint.
 
 ### The normal (FR4 to FR8) — *Review: statistics 1, 6, 8, 9; product 1*
 
@@ -639,17 +672,26 @@ Other details:
   organization deletes its users before its projects (`organizations/tables.py`).
 - **`finding_incidents`** links a finding to a threshold or *went silent* incident on the same service. The
   threshold and silence sweeps, and the project job, write it in whichever direction comes second (BR2).
-- **`detection_state`** holds one row per service:
+- **`detection_state`** holds one row per service, created when detection first sees the service, because a
+  compare-and-set needs a row to compare (C24):
   - `last_judged_minute`, moved by compare-and-set;
   - for each signal: its phase, its clear-minute count, its false-alarm hold (FR20) and its learning date.
-- **`detection_baselines`** holds the hourly baseline rows, one per service, signal and local minute of the
-  coming hour.
+- **`detection_baselines`** holds the hourly baseline rows, one per service, signal and minute they apply to
+  (*As built*, Step 2c: the absolute minute).
 - **`baseline_shifts`** is described under *Level shifts*.
 - **`service_detection_settings`** holds a service's sensitivity, `muted_until` and `muted_by`. `muted_by`
   is set null when its user is deleted.
 - **`projects`** gains `timezone`, which is not null. It is the creating user's zone, or UTC (FR24).
   It also gains `detection_sensitivity`.
-- **Every new table** carries `org_id` (not null), and every upsert's conflict key includes it.
+  - Existing projects have no zone to copy, so the column has a server default of `'UTC'` (C24).
+  - Signup built its user with no zone, and `projects/service.py` loaded no user (C15). Signup now records the
+    browser's zone on the user (D23) and gives the first project that zone, or UTC. `projects.create` reads
+    the acting user's zone.
+- **Every new table** carries `org_id` (not null), and every upsert's conflict key includes it, except the
+  install-wide `intake_refusals` and `detection_events` (revision 2.1, item 8).
+- **Nothing grows without limit** (C24). `intake_refusals`, `detection_events` and `baseline_shifts` would,
+  so a prune joins the existing expiry sweep (`EXPIRY_SWEEP_ENTRY`). *As built*, Step 6, gives what is kept
+  and for how long.
 
 ### Notifications (ADR-022) — *Review: architecture 3; operations 11; product 11*
 
@@ -666,11 +708,13 @@ Other details:
     `data.subject`. nexovue is pre-deployment, so version 1 is replaced, not kept beside it.
 - **What a finding sends.** In the job's transaction, a finding that opens, turns critical or closes writes
   one row per channel, for each enabled *anomaly finding* rule that matches it. A closing message goes only
-  to the channels told at opening (F21's `_TOLD_CHANNELS`). Findings have no repeats, and no grouping wait,
-  because FR15's project finding is the grouping. The burst cap and quiet hours apply unchanged.
-- **The flap guard.** F21's guard (`incidents.py:41`) flags a fifth opening within an hour, for one project
-  and service. It sends one *flapping* message, then nothing until the service has been quiet for 30
-  minutes. This adds one message to what FR28 lists. See *Specification impact*.
+  to the channels told at opening or escalation (F21's `_TOLD_CHANNELS`, AC22; *As built*, Step 4, adds
+  joining). Findings have no repeats, and no grouping wait, because FR15's project finding is the grouping.
+  The burst cap and quiet hours apply unchanged.
+- **The flap guard.** F21's guard (`incidents.py`) flags a fifth opening within an hour, but it is keyed per
+  rule and subject, and a finding may have no rule. So findings get their own guard, keyed per project and
+  service, with F21's constants (C7). It sends one *flapping* message, then nothing until the service has
+  been quiet for 30 minutes. This adds one message to what FR28 lists. See *Specification impact*.
 - **Mute (BR9, D8).** A finding that opens while its service is muted is marked muted, and nothing is sent
   for it: not when it opens, escalates or closes. Muting an open finding, or its service, stops everything
   after that, except the recovery a PagerDuty or webhook channel needs to close what it was sent (F21 D8).
@@ -697,7 +741,13 @@ Other details:
   - new normal;
   - creating, changing, muting or deleting any *anomaly finding* rule. This check is in the alerts service,
     because the router's `MayOperateAlerts` admits members.
-- **`OPERATE_ALERTS`**, which excludes viewers, gates acknowledge and false alarm.
+- **`OPERATE_ALERTS`**, which excludes viewers, gates acknowledge, false alarm and snooze (D25).
+- **Actions live in Python, not in a migration** (`auth/permissions.py`). Five places copy the list, and all
+  of them change with it (C14):
+  - `test_policy.py`;
+  - the web's `identity.ts` and `identity.test-util.ts`;
+  - `MembersScreen.test.ts`;
+  - the FR1 table in `team-and-api-access/spec.md`.
 - **The authorization coverage table**, which `test_authorization_coverage.py` checks, is updated, and the
   router's stale "changes are an admin's" comment is corrected.
 - **The read API (ADR-017).** `GET /findings`, `/findings/{id}` and `/findings/stats` are on the read
@@ -707,12 +757,13 @@ Other details:
 ## Data flow and interfaces
 
 ```
-receiver ── refuses for lack of a store ─► intake_refusals (Postgres)
+receiver ── Kafka refuses (broker_unavailable) ─► intake_refusals (Postgres, off the request path)
 spans ─► worker derive ─┬─ endpoint_stats_1m                     (as today)
                         ├─ service_stats_1m                      (new: exact buckets)
                         └─ span_derived_progress (KeeperMap)     (after the insert is acknowledged)
 
-each minute   sweep:detection: settled minute ← progress + Kafka high watermarks + intake_refusals
+each minute   sweep:detection: settled minute ← progress + Kafka high watermarks and metadata
+                                                + intake_refusals + the install-wide guard
                   └─ one project job per active project, on the `detection` queue
 each hour     baseline job: dispersion and level pools ← service_stats_1m ─► detection_baselines
 project job   this window ← service_stats_1m, endpoint_stats_1m counts   (tenant_statements, project-bound)
@@ -734,32 +785,47 @@ deliver (subject-aware) ─► channels
 | `POST /findings/{id}/false-alarm` `{reason?}` | `OPERATE_ALERTS` | FR20. Also allowed on a finding closed as recovered |
 | `POST /findings/{id}/new-normal` | `CONFIGURE_DETECTION` | FR21. `409` if the finding is no longer open |
 | `GET /projects/{id}/detection/status` | read surface | The counts of learning, judged, delayed and not running, and the earliest judging date |
-| `GET /services/{name}/detection?project_id&from&to` | read surface | State, bands and markers for a chart range |
-| `PUT /services/{name}/detection` `{sensitivity: low\|normal\|high\|null, muted_until?}` | `CONFIGURE_DETECTION` | FR18, FR22. `null` returns the service to its project's sensitivity. A mute is limited to 30 days |
+| `GET /services/{name}/detection?project_id&from&to` | read surface | State, each signal's state, mute and snooze, and finding markers for a chart range. Bands are deferred (D32) |
+| `POST /services/{name}/snooze` `{project_id, until}` | `OPERATE_ALERTS` | D25. Up to 4 hours; `null` ends it |
+| `PUT /services/{name}/mute` `{project_id, until}` | `CONFIGURE_DETECTION` | FR22. Up to 30 days; `null` unmutes. Per-service sensitivity is deferred (D32) |
 | `GET`, `PUT /projects/{id}/detection` `{sensitivity, timezone}` | read; `CONFIGURE_DETECTION` | FR18, FR24 |
 
 ## Data and migration impact
 
-- **Postgres** (one migration, additive):
-  - new tables `findings`, `finding_incidents`, `detection_state`, `detection_baselines`,
-    `baseline_shifts`, `service_detection_settings`, `intake_refusals` and `detection_events`;
+- **Postgres**, migration **0041**, because 0040 was already taken (C19). Later steps add 0042 to 0049
+  (*As built*). It is not purely additive, and says so (C6): making `notifications.incident_id` nullable
+  changes a column, and `anomaly_finding` widens two existing checks, on `alert_rules` and `incidents`.
+  nexovue is pre-deployment, so that is done on purpose rather than worked around.
+  - new tables `findings`, `finding_incidents`, `detection_state`, `detection_project_runs` (each project's
+    last completed run, C17), `detection_baselines`, `baseline_shifts`, `service_detection_settings`,
+    `intake_refusals` and `detection_events`;
   - `projects.timezone` and `projects.detection_sensitivity`;
   - `notifications.finding_id`, its check and its unique key;
-  - the `CONFIGURE_DETECTION` action;
   - the `anomaly_finding` condition kind;
-  - the second default rule, for new projects.
+  - the second default rule, for new projects, written by `provision_project`, not by the migration.
+
+  The `CONFIGURE_DETECTION` action is not in the migration: actions are Python only (C14, *Roles*).
 
   The deletion inventory moves `notifications` under `projects`, and lists the new tables in
-  `REMOVED_BY_CASCADE`.
-- **ClickHouse** (one migration, additive): `service_stats_1m`, `detection_readings` and
-  `span_derived_progress`. The migration file states each table's reasoning.
-  - `span_derived_progress` holds no tenant data. It gets a stated exception in the tenant-structure test,
-    and an entry in the erasure exclusions.
+  `REMOVED_BY_CASCADE`. `test_erasure_inventory.py` and `test_deletion_live.py` read the migrations, so they
+  fail as soon as a table exists that the inventories don't list. Each table's inventory entries therefore
+  land in the same task as its migration (C20).
+
+  `test_alert_vocabulary.py` read seven constants that exist only in `0028_alerts.py`. It now reads each one
+  from the latest migration that defines it, changed in the same task as `anomaly_finding` (C6, C21).
+- **ClickHouse**: `service_stats_1m`, `detection_readings` and `span_derived_progress`, additive (*As built*,
+  Step 2a: three files). Each migration file states its table's reasoning.
+  - `span_derived_progress` holds no tenant data. The tenant-structure test had no way to exempt a table
+    (C16), so it gains a named allowlist, each entry with its reason, for `detection.settle` alone (revision
+    2.1, item 8). The table also has an entry in the erasure exclusions.
   - It joins `KEEPERMAP_TABLES` in `deploy/backup/common.sh`, so a restore drops its stale rows as it does
     for the three already listed.
 - **ClickHouse users:** a new `nexovue_detection_writer`, with `GRANT INSERT ON nexovue.detection_readings`
   and nothing else. It needs its own DSN, its install step and its secret (ADR-023).
-- **Rollback.** Both migrations add and never change, but `docs/operations/rollback.md` refuses a rollback
+  - An upgrade must add its password. `cmd_upgrade` wrote no secrets, only install and quickstart did (C9),
+    and `write_secrets` makes every password at once (C25). A new `add_missing_secrets` adds only the keys
+    that are absent, and `cmd_upgrade` calls it. *As built*, Step 2b, narrows which keys it may add.
+- **Rollback.** 0041 changes columns and checks (C6), and `docs/operations/rollback.md` refuses a rollback
   across a schema change, so its restore path applies, as for every migration.
 
 ## Performance and scale
@@ -781,9 +847,10 @@ deliver (subject-aware) ─► channels
 
 | Failure | Behaviour |
 |---|---|
-| A worker is behind, dead, or has lost a partition | That partition's progress stops, or the `WriteGuard` refuses it. The minute is not settled. *Data delayed* (AC23) |
+| A worker is behind, dead, or has lost a partition | That partition's progress stops; a worker writes progress only for its settlement's own partitions (C1). The minute is not settled. *Data delayed* (AC23) |
+| A derived insert is refused | Every partition in that settlement is held, for a bounded time (C2, C22). The minute is not settled. *Data delayed* |
 | A partition is idle | Nothing is unread, so it is caught up. It never blocks settling |
-| nexovue's intake refuses data, or its edge fails | `intake_refusals`, or the install-wide guard. No customer findings. *Data delayed* |
+| nexovue's intake refuses data because Kafka will not take it, or its edge fails | `intake_refusals` (C5), or the install-wide guard. No customer findings. *Data delayed* |
 | Spans arrive after the minute was judged | They are in the rollup and in later history. The frozen reading and every finding are unchanged (AC24) |
 | A project job overruns its budget | It stops where it is. The next run continues, catching up at most 2 minutes. Other projects are unaffected |
 | Two project jobs overlap | The advisory lock and the compare-and-set mean one judges and the other finds nothing to do (AC25) |
@@ -803,7 +870,9 @@ deliver (subject-aware) ─► channels
   - Another proves the API's account is refused an insert.
 - **Postgres:** a new scheduler structure test parses its `text()` statements for `org_id`.
   `test_postgres_tenancy_structure.py` scans only `apps/api/src`, and only statements built with
-  SQLAlchemy, so it cannot see the scheduler's.
+  SQLAlchemy, so it cannot see the scheduler's. *Not built, found 2026-11-01:* no plan task carried this
+  test, so the scheduler's statements bind `org_id` by review alone. The reasoned exemptions for
+  `intake_refusals` and `detection_events` (revision 2.1, item 8) live only in the deletion inventory.
 - **Personal data:**
   - acknowledge, false alarm, mute and new normal each write an audit row with their reason. The
     personal-data export already includes a person's audit activity, and a test proves these appear in it;
@@ -815,25 +884,31 @@ deliver (subject-aware) ─► channels
   - Stage 2's AI will receive names as structured fields marked untrusted, never as a composed title, and
     gets its own injection tests (`phase-2-plan.md`, *AI safety*).
 - **Fairness between tenants:** each project job has its own budget and lock, so a noisy project cannot
-  starve another. A project with more than 500 judged services judges the 500 busiest, and shows *too many
-  services to judge all* on the rest. This is a starting cap, measured in Plan Step 1.
+  starve another. The cap that holds is revision 2.1's, item 8: 2,000 service names per organization,
+  applied by the worker (*As built*, Step 2a). *Not built, found 2026-11-01:* the earlier cap of 500 judged
+  services per project, and the *too many services* state on any screen.
 
 ## Observability and operations — *Review: operations 4*
 
-- **Gauges:**
+- **Gauges are install-wide** (C8). nexovue's metrics never put a tenant in a label (`metrics.py`), so no
+  gauge is "per project". They count instead:
   - the age of the settled minute;
-  - the oldest `last_judged_minute` per project;
-  - project jobs failed and overrun;
-  - install-wide intake events;
-  - rows read per job.
+  - how many projects are behind, and the oldest lag;
+  - install-wide intake events.
+
+  The project is named in logs, never in a label. *As built*, Step 7, lists the gauges as shipped.
 - **Prometheus alerts:**
   - *detection stalled*: the settled minute is more than 10 minutes old;
-  - *project detection failing*: 3 failed jobs in a row for one project.
+  - *project detection failing*: any project behind (C8; *As built*, Step 7, for the rule).
 
   The rules go into `deploy/monitoring/rules/nexovue.yml`, with tests.
 - **A runbook**, `docs/operations/detection.md`. It covers what *data delayed* means, how to see which
   partition holds it back, and what to do.
-- **Logs:** one structured line per project job, and one per finding change.
+- **Logs:** one structured line per project job, with how many findings it opened and closed, and one
+  naming the project when a job fails (C8).
+- **Architecture documents** (C26). `current-system-reference.md`, `security-and-tenancy.md`, `system.md`,
+  `database.md` and `observability.md` describe what this changes. AGENTS.md's rule that the ingest path
+  does not write Postgres was already untrue (`receiver/auth/lastused.go`); it now names every such write.
 
 ## Simulation — *Review: statistics 1 to 9; D17*
 
@@ -963,7 +1038,7 @@ What earlier runs established, and this design keeps:
   - the burst quantiles (*Simulation*);
   - the 2-minute export allowance;
   - the 3-minute wait for the project rule;
-  - the cap of 500 services;
+  - the cap of 2,000 services per organization (revision 2.1, item 8);
   - the 20-second budget for a project job.
 
 ## ADRs

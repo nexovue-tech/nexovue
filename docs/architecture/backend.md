@@ -10,4 +10,4 @@ The FastAPI API owns the Postgres control plane and reads tenant-scoped telemetr
 
 ## Boundaries
 
-`apps/api` is the only Postgres schema owner. Receiver and workers read configuration and identity but do not use Postgres as a general write path. Scheduler reads schedules from Postgres and writes only integration health and the rows of its own job queue. See `current-system-reference.md` for pipeline details.
+`apps/api` is the only Postgres schema owner. Receiver and workers read configuration and identity but do not use Postgres as a general write path: off the request path, the workers write usage and the first-traces count, and the receiver a key's last use and the minutes Kafka refused its exports (`intake_refusals`). The scheduler writes integration health, its own job queue, alerting state and the outbox (F21), and findings and detection state (F6). See `current-system-reference.md` for pipeline details.

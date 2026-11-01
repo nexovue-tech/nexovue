@@ -440,7 +440,7 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
 - [ ] **T8.3** — AC37 **waits on the test server's price**. It is recorded as blocked.
 - [x] **T8.4** — AC27 (AI off): no AI code exists in Stage 1, so a test asserts that `detection.*` imports no
   AI module. Proved by `test_detection_has_no_ai.py` (new).
-- [ ] **T8.5** — Docs (C26):
+- [x] **T8.5** — Docs (C26):
   - `current-system-reference.md`, `security-and-tenancy.md`, `system.md`, `database.md` and
     `observability.md`;
   - AGENTS.md's ingest-writes invariant;

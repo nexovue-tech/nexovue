@@ -10,7 +10,7 @@
 -- Written by the trace worker after ClickHouse has acknowledged a settlement's
 -- derived inserts, beside `span_ingest_offsets`' AFTER, and only for that
 -- settlement's own partitions (C1). A refused derived insert holds it for every
--- partition in the settlement, for at most 30 minutes (C22, design 2.1). It
+-- partition in the settlement, for at most 15 minutes (C22, design 2.1). It
 -- never moves backwards.
 --
 -- No tenant column: it describes the pipeline, not a customer. It is exempt

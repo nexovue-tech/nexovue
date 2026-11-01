@@ -21,7 +21,7 @@ pipeline; and nexovue's own telemetry is an organization of its own. It was defe
 
 1. **Pull, not push.** Every service answers `/healthz` (alive), `/readyz` (able to do its job) and
    `/metrics` (the Prometheus text format) on an internal port — the Go services' admin listener, the
-   scheduler's `SCHEDULER_HEALTH_ADDR`, the API's root. No edge routes any of them: the edge sends the
+   scheduler's `HEALTH_ADDR`, the API's root. No edge routes any of them: the edge sends the
    API `/api/*` only, which a test holds. A monitor outside nexovue reads them.
 2. **Liveness means the work is moving, not that a process answers.** The scheduler's `/healthz`
    fails when its loop has been silent for 30 s; the worker's when a pipeline has stopped. Every

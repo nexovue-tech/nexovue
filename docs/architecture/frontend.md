@@ -15,8 +15,10 @@ may read a status, each for a stated reason; the allowlist in that test is the r
 The console implements services, service map, traces, errors, logs, RUM, synthetics, infrastructure,
 usage, and account/settings screens. Databases are a view *inside* infrastructure rather than a route
 of their own: both are polled rather than pushed, and a database is reached from a trace far more
-often than it is browsed. The root Findings route is deliberately a Phase 2 placeholder; it is not an
-implemented insight feed.
+often than it is browsed. Findings (F6) is anomaly detection's feed, at `/findings`, with each finding's
+page at `/findings/$findingId`; a service's page carries its detection badge, snooze and mute, and the
+project settings a *Detection* section that only admins see. `shared/detection/` holds the badge, because
+two features show it. Finding times are printed in the project's zone (`shared/format/zoned.ts`).
 
 **Narrowing a list is the server's job.** Filters and ordering travel with the request, never applied
 to the answer. Every ranked read is capped, so a filter or a sort over what came back can only
