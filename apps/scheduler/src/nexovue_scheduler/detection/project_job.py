@@ -28,6 +28,14 @@ The service's state also records what its normal must leave out that no other
 table holds (BR3): its snoozed minutes (D25) and, before 3 weeks, the minutes
 the traffic shadow test found far below normal (FR6).
 
+**nexovue's own intake** (design 2.1, item 1). The coordinator hands each job
+the minutes the install's accepted count fell in, and the install-wide guard's
+spans. A traffic drop that began inside a guard span is nexovue's, never a
+finding. One that began as the intake fell waits as long as FR15's wait, so the
+coordinator can count the organizations it is one of before anything opens. The
+run's completed row records the project's own vote: since when it is losing
+traffic.
+
 **What people said** (FR20, FR21). A finding a person closed as a false alarm
 holds its signals: they open nothing until each reads normal for *recovery*, and
 while a member's hold lasts its minutes stay out of the normal too (D28). A new
@@ -79,6 +87,7 @@ from nexovue_scheduler.detection.baselines import (
     traffic_from_json,
 )
 from nexovue_scheduler.detection.lifecycle import (
+    PROJECT_WAIT,
     Change,
     Context,
     KeyRecord,
@@ -110,6 +119,7 @@ from nexovue_scheduler.detection.method import (
     judge_traffic,
 )
 from nexovue_scheduler.detection.projects import project_settings, try_lock
+from nexovue_scheduler.detection.settle import Span
 from nexovue_scheduler.detection.store import (
     DetectionStore,
     ProjectBinding,
@@ -150,6 +160,10 @@ HELD_OUT: Final = "held"
 # Under the open finding's record: when its keys last changed (AC16's "the same signals").
 SINCE_KEY: Final = "since"
 ADOPTION_AFTER: Final = timedelta(days=ADOPTION_AFTER_DAYS)
+# A drop that began as the install's intake fell waits this long from its first
+# unusual minute, so the coordinator sees the other organizations' votes: FR15's
+# wait, which the project rule is given for the same reason.
+INTAKE_WAIT: Final = PROJECT_WAIT
 
 _STATES: Final = text(
     """
@@ -270,13 +284,19 @@ _STOP_REPORTED: Final = text(
     FOR UPDATE
     """
 )
-# When the run ended, not when its transaction began: freshness (C17).
+# When the run ended, not when its transaction began: freshness (C17). A run that
+# judged minutes also casts the project's vote for the install-wide guard; one
+# that judged none, held by the coordinator, leaves its last vote standing.
 _COMPLETED: Final = text(
     """
-    INSERT INTO detection_project_runs (org_id, project_id, last_completed_at)
-    VALUES (:org_id, :project_id, clock_timestamp())
+    INSERT INTO detection_project_runs
+        (org_id, project_id, last_completed_at, traffic_lost_since)
+    VALUES (:org_id, :project_id, clock_timestamp(), :traffic_lost_since)
     ON CONFLICT (org_id, project_id) DO UPDATE
-    SET last_completed_at = EXCLUDED.last_completed_at, stopped_reported_at = NULL
+    SET last_completed_at = EXCLUDED.last_completed_at, stopped_reported_at = NULL,
+        traffic_lost_since = CASE WHEN CAST(:judged AS boolean)
+            THEN EXCLUDED.traffic_lost_since
+            ELSE detection_project_runs.traffic_lost_since END
     """
 )
 # BR2, AC20: an open finding is linked to every open threshold or *went silent*
@@ -293,6 +313,45 @@ _LINK_INCIDENTS: Final = text(
     ON CONFLICT DO NOTHING
     """
 )
+
+
+@dataclass(frozen=True, slots=True)
+class IntakeTrouble:
+    """What the coordinator found wrong with nexovue's own intake (design 2.1,
+    item 1): the spans the install's accepted count fell in, and the spans the
+    install-wide guard holds."""
+
+    fell: tuple[Span, ...] = ()
+    guarded: tuple[Span, ...] = ()
+
+    def keeps_traffic_out(self, onset: datetime, minute: datetime, first: datetime) -> bool:
+        """Whether a drop from `onset`, unusual since `first`, may not open or join
+        a finding at `minute`: it is nexovue's, or it waits for the count."""
+        if any(span.meets(onset, minute) for span in self.guarded):
+            return True
+        return minute - first < INTAKE_WAIT and any(span.meets(onset, minute) for span in self.fell)
+
+    def kwargs(self) -> dict[str, list[list[str]]]:
+        return {"intake_fell": _spans_out(self.fell), "intake_guarded": _spans_out(self.guarded)}
+
+    @classmethod
+    def from_kwargs(
+        cls, fell: Sequence[Sequence[str]], guarded: Sequence[Sequence[str]]
+    ) -> IntakeTrouble:
+        return cls(fell=_spans_in(fell), guarded=_spans_in(guarded))
+
+
+NO_TROUBLE: Final = IntakeTrouble()
+
+
+def _spans_out(spans: Iterable[Span]) -> list[list[str]]:
+    return [[span.first.isoformat(), span.last.isoformat()] for span in spans]
+
+
+def _spans_in(spans: Iterable[Sequence[str]]) -> tuple[Span, ...]:
+    return tuple(
+        Span(datetime.fromisoformat(first), datetime.fromisoformat(last)) for first, last in spans
+    )
 
 
 class StaleJudgementError(RuntimeError):
@@ -369,6 +428,7 @@ async def judge_project(
     *,
     settled: datetime,
     now: datetime,
+    trouble: IntakeTrouble = NO_TROUBLE,
 ) -> Outcome:
     """Judge one project's services up to the settled minute."""
     async with engine.connect() as connection, connection.begin():
@@ -400,7 +460,7 @@ async def judge_project(
         plan = {service: minutes for service, minutes in plan.items() if minutes}
         judged_minutes = [m for minutes in plan.values() for m in minutes]
         if not judged_minutes:
-            outcome.notified += await _record_run(connection, binding, now=now)
+            outcome.notified += await _record_run(connection, binding, now=now, judged=False)
             return outcome
         normals = await _normals(connection, binding, min(judged_minutes), max(judged_minutes))
         judged = {
@@ -420,7 +480,15 @@ async def judge_project(
         muted, snoozed = await _muted_and_snoozed(connection, binding, now)
         false_alarms = await _false_alarms(connection, binding, states.values())
         project = await _keep_project_finding(
-            connection, binding, states, judged, signal_states, zone=zone, now=now, outcome=outcome
+            connection,
+            binding,
+            states,
+            judged,
+            signal_states,
+            trouble,
+            zone=zone,
+            now=now,
+            outcome=outcome,
         )
         for service, runs in judged.items():
             state = states[service]
@@ -433,6 +501,7 @@ async def judge_project(
                 signal_states[service],
                 project,
                 false_alarms,
+                trouble,
                 zone=zone,
                 muted=service in muted,
                 now=now,
@@ -444,8 +513,24 @@ async def judge_project(
             await _advance(connection, binding, state, runs[-1].at, stored)
             outcome.minutes_judged += len(runs)
         outcome.services = len(judged)
-        outcome.notified += await _record_run(connection, binding, now=now)
+        outcome.notified += await _record_run(
+            connection,
+            binding,
+            now=now,
+            judged=True,
+            traffic_lost_since=_losing_since(signal_states),
+        )
     return outcome
+
+
+def _losing_since(signal_states: Mapping[str, Mapping[str, Mapping[str, Any]]]) -> datetime | None:
+    """The project's vote: the earliest drop among its services still losing traffic."""
+    onsets = [
+        datetime.fromisoformat(phases[TRAFFIC]["unusual_since"])
+        for phases in signal_states.values()
+        if phases[TRAFFIC].get("unusual_since")
+    ]
+    return min(onsets, default=None)
 
 
 # ------------------------------------------------------------------- judging
@@ -627,13 +712,15 @@ async def _keep_project_finding(
     states: Mapping[str, ServiceState],
     judged: Mapping[str, Sequence[Judged]],
     signal_states: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    trouble: IntakeTrouble,
     *,
     zone: ZoneInfo,
     now: datetime,
     outcome: Outcome,
 ) -> ProjectContext:
     """Open, keep or close the project's one finding from each service's latest
-    traffic (FR15), and say which services its traffic holds."""
+    traffic (FR15), and say which services its traffic holds. A drop nexovue's
+    intake explains, or that waits on it, opens none."""
     key = _project_key(binding)
     row = (await connection.execute(_OPEN_PROJECT_FINDING, key)).one_or_none()
     finding_id = None if row is None else row.id
@@ -651,6 +738,11 @@ async def _keep_project_finding(
         service: _snapshot(runs[-1], states[service], signal_states[service])
         for service, runs in judged.items()
     }
+    if involved is None:
+        snapshots = {
+            service: _kept_out(snapshot, states[service], trouble, minute)
+            for service, snapshot in snapshots.items()
+        }
     decision = project_rule(snapshots, involved=involved, minute=minute)
     members = [snapshots[name] for name in decision.involved if name in snapshots]
     signal = _project_signal(members, None if row is None else row.signals)
@@ -740,6 +832,20 @@ def _snapshot(
     )
 
 
+def _kept_out(
+    snapshot: TrafficSnapshot, state: ServiceState, trouble: IntakeTrouble, minute: datetime
+) -> TrafficSnapshot:
+    """A service's drop as the project rule may count it: not at all while nexovue's
+    intake explains it or the count is awaited."""
+    if not snapshot.unusual or snapshot.unusual_since is None:
+        return snapshot
+    pending = state.signals.get(TRAFFIC, {}).get("pending_since")
+    first = minute if pending is None else datetime.fromisoformat(pending)
+    if trouble.keeps_traffic_out(snapshot.unusual_since, minute, first):
+        return replace(snapshot, unusual=False)
+    return snapshot
+
+
 def _project_signal(
     members: Sequence[TrafficSnapshot], stored: Sequence[Mapping[str, Any]] | None
 ) -> FindingSignal:
@@ -765,6 +871,7 @@ async def _keep_finding(
     phases: dict[str, dict[str, Any]],
     project: ProjectContext,
     false_alarms: Mapping[str, bool],
+    trouble: IntakeTrouble,
     *,
     zone: ZoneInfo,
     muted: bool,
@@ -797,10 +904,12 @@ async def _keep_finding(
         waits = False
         holds_traffic = finding is not None and "traffic" in finding.keys
         if judged.traffic.verdict == "unusual" and not absorbed and not holds_traffic:
-            since_pending = traffic.setdefault("pending_since", _iso(judged.minute))
-            waits = traffic_waits(
-                datetime.fromisoformat(since_pending), judged.minute, project.pending
+            since_pending = datetime.fromisoformat(
+                traffic.setdefault("pending_since", _iso(judged.minute))
             )
+            waits = traffic_waits(
+                since_pending, judged.minute, project.pending
+            ) or trouble.keeps_traffic_out(judged.onset(TRAFFIC), judged.minute, since_pending)
         else:
             traffic.pop("pending_since", None)
         context = Context(
@@ -1244,13 +1353,20 @@ async def _advance(
 
 
 async def _record_run(
-    connection: AsyncConnection, binding: ProjectBinding, *, now: datetime
+    connection: AsyncConnection,
+    binding: ProjectBinding,
+    *,
+    now: datetime,
+    judged: bool,
+    traffic_lost_since: datetime | None = None,
 ) -> int:
     """The run completed. Returns the notifications written: one *running again* to
     the owners if they had been told it stopped (D24)."""
     key = _project_key(binding)
     reported = (await connection.execute(_STOP_REPORTED, key)).scalar_one_or_none()
-    await connection.execute(_COMPLETED, key)
+    await connection.execute(
+        _COMPLETED, {**key, "judged": judged, "traffic_lost_since": traffic_lost_since}
+    )
     if reported is None:
         return 0
     return await notify.running_again(
@@ -1300,20 +1416,35 @@ def _reading(service: str, each: Judged, width: int) -> Reading:
 # -------------------------------------------------------------------- task
 
 
-def judge_request_kwargs(project_id: uuid.UUID, settled: datetime) -> dict[str, str]:
-    return {"project_id": str(project_id), "settled_minute": settled.isoformat()}
+def judge_request_kwargs(
+    project_id: uuid.UUID, settled: datetime, trouble: IntakeTrouble = NO_TROUBLE
+) -> dict[str, Any]:
+    return {
+        "project_id": str(project_id),
+        "settled_minute": settled.isoformat(),
+        **trouble.kwargs(),
+    }
 
 
 @task(JUDGE_PROJECT_TASK)
-def judge(*, project_id: str, settled_minute: str) -> None:
+def judge(
+    *,
+    project_id: str,
+    settled_minute: str,
+    intake_fell: Sequence[Sequence[str]] = (),
+    intake_guarded: Sequence[Sequence[str]] = (),
+) -> None:
     """One project's minutes up to the settled minute the coordinator read."""
     store = store_for_process()
     if store is None:
         return
     project = uuid.UUID(project_id)
     settled = datetime.fromisoformat(settled_minute)
+    trouble = IntakeTrouble.from_kwargs(intake_fell, intake_guarded)
     outcome = with_engine(
-        lambda engine: judge_project(engine, store, project, settled=settled, now=datetime.now(UTC))
+        lambda engine: judge_project(
+            engine, store, project, settled=settled, now=datetime.now(UTC), trouble=trouble
+        )
     )
     logger.info(
         "detection project judged",

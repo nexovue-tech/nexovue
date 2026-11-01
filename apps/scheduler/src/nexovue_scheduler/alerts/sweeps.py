@@ -31,6 +31,7 @@ from nexovue_scheduler.settings import get_settings
 logger = get_logger(__name__)
 
 KAFKA_TIMEOUT_SECONDS: Final = 5.0
+_MILLISECONDS: Final = 1000
 
 NO_TELEMETRY_STORE: Final = "CLICKHOUSE_DSN is not set for the scheduler"
 METER_BEHIND: Final = (
@@ -60,6 +61,20 @@ class KafkaWatermarks:
             TopicPartition(topic, partition), timeout=KAFKA_TIMEOUT_SECONDS, cached=False
         )
         return int(high) - 1
+
+    def offsets_at(self, topic: str, partitions: int, at: datetime) -> dict[int, int]:
+        """Each partition's first offset whose record was received at or after `at`,
+        by the record's own timestamp; -1 where no record was (F6, the install-wide
+        guard's reading of what the receiver accepted)."""
+        asked = [
+            TopicPartition(topic, partition, int(at.timestamp() * _MILLISECONDS))
+            for partition in range(partitions)
+        ]
+        found = self._consumer.offsets_for_times(asked, timeout=KAFKA_TIMEOUT_SECONDS)
+        for each in found:
+            if each.error is not None:
+                raise KafkaMetadataError(f"no offset at {at} for {topic}:{each.partition}")
+        return {each.partition: int(each.offset) for each in found}
 
     def partition_count(self, topic: str) -> int:
         """How many partitions the topic has, from the cluster's metadata (C4).

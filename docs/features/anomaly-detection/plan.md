@@ -404,16 +404,16 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
 3. Cancel requests from a script: nothing is unsettled.
 4. Restart the scheduler: no duplicates.
 
-- [ ] **T6.1** — `apps/receiver/internal/otlp/`: a `broker_unavailable` reason, recorded only for broker-level
+- [x] **T6.1** — `apps/receiver/internal/otlp/`: a `broker_unavailable` reason, recorded only for broker-level
   failures on a live context, at least 5 a minute (design 2.1, item 1). `internal/intake/refusals.go` (new),
   modelled on `auth/lastused.go`. Proved by:
   - `refusals_test.go`;
   - `traffic_test.go`: a cancelled request or a per-record error is not recorded.
-- [ ] **T6.2** — `detection/settle.py` and `project_job.py`: refusal minutes; the install-wide guard, with
+- [x] **T6.2** — `detection/settle.py` and `project_job.py`: refusal minutes; the install-wide guard, with
   organization votes, a pipeline signal, the 30-minute bound and the operator alert. Proved by
   `test_detection_settle.py` and `test_detection_failure_live.py` (AC23 to AC25, the guard, the bound, and one
   organization with many projects not tripping it).
-- [ ] **T6.3** — The prune of `intake_refusals`, `detection_events` and `baseline_shifts`, and findings purged
+- [x] **T6.3** — The prune of `intake_refusals`, `detection_events` and `baseline_shifts`, and findings purged
   at the derived retention (C24, security m4). Proved by `test_detection_prune_live.py` (new).
 
 ### Step 7 — Operations

@@ -307,9 +307,9 @@ def _finding(
 def test_a_finding_s_minutes_are_kept_out_unless_an_admin_said_they_were_normal() -> None:
     """BR3, D28: a member's false alarm leaves the minutes out; an admin's returns them."""
     noon = TUESDAY + timedelta(hours=12)
-    member = exclusions("checkout", [_finding(noon, 1, false_alarm=True)], recorded={}, refused=[])
+    member = exclusions("checkout", [_finding(noon, 1, false_alarm=True)], recorded={}, delayed=[])
     admin = exclusions(
-        "checkout", [_finding(noon, 1, false_alarm=True, by_admin=True)], recorded={}, refused=[]
+        "checkout", [_finding(noon, 1, false_alarm=True, by_admin=True)], recorded={}, delayed=[]
     )
 
     assert member.normal.kept_out(noon + timedelta(minutes=30))
@@ -330,7 +330,7 @@ def test_snoozed_refused_and_another_service_s_minutes() -> None:
             _finding(noon + timedelta(hours=3), 1, service=None),
         ],
         recorded={"snoozed": [_range(noon + timedelta(hours=6), 2)]},
-        refused=[noon + timedelta(hours=9)],
+        delayed=[(noon + timedelta(hours=9), noon + timedelta(hours=9))],
     )
 
     assert not kept.normal.kept_out(noon + timedelta(minutes=10))
@@ -338,6 +338,20 @@ def test_snoozed_refused_and_another_service_s_minutes() -> None:
     assert kept.normal.kept_out(noon + timedelta(hours=7))
     assert kept.normal.kept_out(noon + timedelta(hours=9))
     assert not kept.normal.kept_out(noon + timedelta(hours=9, minutes=1))
+
+
+def test_minutes_the_install_wide_guard_held_stay_out_of_every_normal() -> None:
+    """Design 2.1, item 1: the guard's minutes are nexovue's intake failing, *data
+    delayed* like a refused minute, so neither the normal nor the profile learns
+    the drop."""
+    noon = TUESDAY + timedelta(hours=12)
+    guarded = (noon, noon + timedelta(minutes=9))
+
+    kept = exclusions("checkout", [], recorded={}, delayed=[guarded])
+
+    for minute in (noon, noon + timedelta(minutes=9)):
+        assert kept.normal.kept_out(minute) and kept.profile.kept_out(minute)
+    assert not kept.normal.kept_out(noon + timedelta(minutes=10))
 
 
 def test_a_short_finding_stays_in_the_burst_profile_and_a_long_one_does_not() -> None:
@@ -348,7 +362,7 @@ def test_a_short_finding_stays_in_the_burst_profile_and_a_long_one_does_not() ->
         "checkout",
         [_finding(noon, 0.25), _finding(noon + timedelta(hours=2), 2)],
         recorded={},
-        refused=[],
+        delayed=[],
     )
 
     assert kept.normal.kept_out(noon) and not kept.profile.kept_out(noon)

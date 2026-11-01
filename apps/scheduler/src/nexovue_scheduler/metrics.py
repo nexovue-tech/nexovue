@@ -66,6 +66,13 @@ ENQUEUE_FAILURES: Final = Counter(
 JOBS_ENDED: Final = Counter(
     "nexovue_scheduler_jobs_ended", "Jobs this worker ran, by how they ended.", ["outcome"]
 )
+# F6, design 2.1 item 1: detection held every project for nexovue's own intake, or
+# released such a hold at its limit. Whichever worker ran the sweep counts it.
+DETECTION_INTAKE_EVENTS: Final = Counter(
+    "nexovue_scheduler_detection_intake_events",
+    "Times detection held every project for nexovue's intake, or released a hold at its limit.",
+    ["kind"],
+)
 JOBS_READY: Final = Gauge(
     "nexovue_scheduler_jobs_ready", "Jobs due and unclaimed, per queue (leader only).", ["queue"]
 )

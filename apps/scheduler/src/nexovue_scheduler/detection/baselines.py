@@ -19,7 +19,8 @@ For each judged minute M, in the project's time zone:
   judged, so each baseline is for one window length, the project's sensitivity's.
 - **Kept out** (BR3): minutes inside a finding, unless an admin marked it a false
   alarm (D28); snoozed minutes (D25); minutes nexovue's intake refused for lack of
-  a store, which read *data delayed*; and before 3 weeks, minutes the traffic
+  a store, or the install-wide guard held, which read *data delayed*; and before
+  3 weeks, minutes the traffic
   shadow test found far below normal (FR6). A window counts by its last minute,
   as the simulation's do.
 - **Losing traffic** waits for 21 days of history; before then only a stop is
@@ -76,6 +77,7 @@ from nexovue_scheduler.detection.projects import (
     project_settings,
     try_lock,
 )
+from nexovue_scheduler.detection.settle import GUARD_EVENT
 from nexovue_scheduler.detection.store import (
     DetectionStore,
     ProjectBinding,
@@ -172,9 +174,15 @@ _SHIFTS: Final = text(
     ORDER BY from_minute
     """
 )
-# Install-wide on purpose: a refused minute is delayed for every project (design,
-# "When a minute is settled"). It names no tenant.
+# Install-wide on purpose: a refused minute, and a minute the install-wide guard
+# held, is delayed for every project (design 2.1, item 1). Neither names a tenant.
 _REFUSED: Final = text("SELECT DISTINCT minute FROM intake_refusals WHERE minute >= :since")
+_GUARDED: Final = text(
+    """
+    SELECT detail ->> 'from' AS first, detail ->> 'through' AS last FROM detection_events
+    WHERE kind = :kind AND CAST(detail ->> 'through' AS timestamptz) >= :since
+    """
+)
 
 # Under `detection_state.signals`, the minutes the project job keeps out (BR3).
 EXCLUDED_KEY: Final = "excluded"
@@ -259,11 +267,11 @@ def exclusions(
     findings: Sequence[FindingSpan],
     *,
     recorded: Mapping[str, Sequence[tuple[datetime, datetime]]],
-    refused: Sequence[datetime],
+    delayed: Sequence[tuple[datetime, datetime]],
 ) -> ServiceExclusions:
-    """BR3 for one service. A project finding (FR15) keeps every service's minutes out."""
+    """BR3 for one service. A project finding (FR15) keeps every service's minutes out,
+    and nexovue's own intake failing, `delayed`, keeps them out of every service's."""
     own = [f for f in findings if f.service_name in (service, None)]
-    delayed = [(minute, minute) for minute in refused]
     recorded_ranges = [span for spans in recorded.values() for span in spans]
     normal = [(f.first, f.last) for f in own if not f.returns_minutes]
     # The profile keeps a short finding, which is one of the service's own bursts,
@@ -1131,9 +1139,16 @@ async def project_exclusions(
         row.service_name: recorded_ranges(row.excluded)
         for row in await connection.execute(_RECORDED, key)
     }
-    refused = [_floor(row.minute) for row in await connection.execute(_REFUSED, {"since": since})]
+    delayed = [
+        (_floor(row.minute), _floor(row.minute))
+        for row in await connection.execute(_REFUSED, {"since": since})
+    ]
+    guarded = await connection.execute(_GUARDED, {"kind": GUARD_EVENT, "since": since})
+    delayed += [
+        (datetime.fromisoformat(row.first), datetime.fromisoformat(row.last)) for row in guarded
+    ]
     return {
-        service: exclusions(service, findings, recorded=recorded.get(service, {}), refused=refused)
+        service: exclusions(service, findings, recorded=recorded.get(service, {}), delayed=delayed)
         for service in services
     }
 

@@ -493,10 +493,12 @@ def _lead_sentence(service: str, key: str, record: KeyRecord, since: str) -> str
 
 
 def project_title(stopped: int, judged: int, since: datetime, zone: ZoneInfo) -> str:
-    """FR15's sentence for a project finding."""
+    """FR15's sentence for a project finding. It names nexovue's intake too: when the
+    install-wide guard can blame the intake no finding opens, so one that does open
+    could not rule it out (design, the settled minute, item 3)."""
     return (
         f"Traffic stopped arriving from {stopped} of {judged} services at "
-        f"{local_clock(since, zone)}. Check your collector or network"
+        f"{local_clock(since, zone)}. Check your collector, your network or nexovue's intake"
     )
 
 

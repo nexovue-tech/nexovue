@@ -153,7 +153,7 @@ Go runs per module, never from repository-root `./...`; always use `-count=1`. P
 ## Repository invariants
 
 - The data plane is receiver → Kafka → workers → ClickHouse. The receiver acknowledges only after Kafka does; workers commit offsets only after ClickHouse does.
-- Postgres is the control plane. `apps/api` owns its schema; the ingest path does not write it except workers' usage metering.
+- Postgres is the control plane. `apps/api` owns its schema; the ingest path does not write it except workers' usage metering and the receiver's bookkeeping, off the request path: a key's last use and the minutes the broker refused exports (`intake_refusals`).
 - Tenant isolation, masking before downstream processing, and pre-sampling metric derivation are load-bearing. Read the relevant architecture document before changing them.
 - API and ClickHouse tenancy chokepoints, migration rules, and web import/UI rules are enforced by tests and standards. Preserve them rather than bypassing them.
 

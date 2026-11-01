@@ -1616,6 +1616,12 @@ class Finding(Base):
             "service_name",
             "started_at",
         ),
+        # The expiry sweep's purge at the derived retention (security m4; migration 0048).
+        Index(
+            "ix_findings_closed_at",
+            "closed_at",
+            postgresql_where=text("state = 'closed'"),
+        ),
     )
 
 
@@ -1685,6 +1691,9 @@ class DetectionProjectRun(Base):
     expected_since: Mapped[OptionalTimestamp]
     # Set when the owners are told detection stopped; cleared when told it runs again (D24).
     stopped_reported_at: Mapped[OptionalTimestamp]
+    # The earliest minute a service of the project is losing traffic from, as of its
+    # last judged minute: its vote for the install-wide guard (design 2.1, item 1).
+    traffic_lost_since: Mapped[OptionalTimestamp]
 
 
 class DetectionBaseline(Base):

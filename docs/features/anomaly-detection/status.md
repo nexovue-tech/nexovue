@@ -109,6 +109,21 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
     `test_profiles_live.py`'s TTL test fails here: ClickHouse removed an expired row inside the test's
     3-second wait. The test is timing-sensitive, and no profile code changed;
   - the web gives 1,474, plus 124 in the browser SDK; Biome, typecheck and bundle sizes pass.
+- **Step 6**, safety under nexovue's own failures and a hostile tenant, was built on 2026-11-01:
+  - the receiver's `broker_unavailable` reason and `intake_refusals`;
+  - holds, the pipeline signal, and the install-wide guard with organization votes;
+  - the prune; migrations 0047 and 0048; two paging alerts.
+
+  Its checks:
+  - ruff passes, and mypy reports no issues in 708 files;
+  - the Python suites give 9,189 passed, with only the 85 environment-only failures. The profile TTL test
+    passed this time, which confirms it is timing-sensitive;
+  - all 42 Go packages pass, and lint reports 0 issues; the intake store probe passes;
+  - promtool passes, with 18 rules;
+  - the web gives 1,474, plus 124 in the browser SDK.
+
+  Unproved here: the plan's demo checks, and the receiver's writer inside a real receiver with a real
+  Kafka.
 - **A stop's limit:** at high sensitivity a stop needs about 2.2 expected requests a minute, not 2
   (spec, FR32, *Limit*; AC41).
 - **The dev stores run in this environment**, through a local compose override for the sandbox's open-file
@@ -124,7 +139,7 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
 
 ## Next action
 
-Step 6, safety under nexovue's own failures and a hostile tenant. Step 1, the demo run on the founder's Mac, can run at any time alongside.
+Step 7, operations: the metrics, alerts and runbook. Step 1, the demo run on the founder's Mac, can run at any time alongside.
 
 ## Open decisions
 
@@ -146,6 +161,15 @@ here for review (2026-11-01).
   such an index. No migration had needed one before. Both runners, Postgres's and ClickHouse's, are fixed at the root, and 0045 indexes the
   PagerDuty alert key. The rejected alternatives were no index, which would scan a channel's whole history,
   and a plain index, which would break the standard.
+- **Step 6's own choices** are listed in `design.md`, *As built*, Step 6. They include the hold and guard
+  rules, the "fallen" threshold of half the reference rate, the 5-refusal and 5-organization thresholds
+  (first guesses until the demo run), and the 30-day retention.
+- **A project finding names nexovue's intake** as a possible cause, as the design says. When the guard can
+  blame the intake, no finding opens, so one that opens couldn't rule it out. On most self-hosted installs
+  there are too few organizations for the guard. Spec FR15's example sentence is amended to match.
+- **A control plane that is down still pages.** Step 6 narrowed the Kafka alert to Kafka's own failures,
+  so a sender cancelling no longer pages. A new alert pages when over half the exports are refused for a
+  dependency other than Kafka, so a control-plane outage is not left to a ticket.
 - **Step 7's *detection stalled* alert is the heartbeat** for a scheduler whose minute sweep never runs. The
   owners' email can't report that case, because the email is sent by the sweep itself.
 

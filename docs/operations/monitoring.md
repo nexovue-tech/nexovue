@@ -43,7 +43,7 @@ scrape (`up == 0` in Prometheus terms) for every service.
 |---|---|---|
 | `nexovue_receiver_requests_total{outcome}` | Export requests accepted and refused | refused / all > 5% for 10 min |
 | `nexovue_receiver_items_total{signal,outcome}` | Spans, log records, data points and samples | accepted for a signal flat at 0 for 30 min while customers send |
-| `nexovue_receiver_events_total{reason}` | Refusals by reason; `unavailable` is Kafka refusing | `unavailable` rising at all |
+| `nexovue_receiver_events_total{reason}` | Refusals by reason; `broker_unavailable` is Kafka refusing while the sender waited, `unavailable` the control plane or a record Kafka rejected | `broker_unavailable` rising at all; `unavailable` over half of all requests for 5 minutes |
 
 ### Scheduler
 
@@ -55,6 +55,7 @@ scrape (`up == 0` in Prometheus terms) for every service.
 | `nexovue_scheduler_alerts_waiting`, `…_oldest_alert_waiting_seconds` | Alert notifications due and undelivered (leader only) | oldest > 300 s |
 | `nexovue_scheduler_erasures_overdue` | Deleted organizations past their three days | > 0 |
 | `nexovue_scheduler_jobs_added_total`, `…_enqueue_failures_total`, `…_jobs_ended_total{outcome}` | What beat added, could not add, and how workers' jobs ended | enqueue failures rising; `killed` rising |
+| `nexovue_scheduler_detection_intake_events_total{kind}` | Detection held every project because nexovue's own intake failed (`intake_guard`), or released such a hold at its 30-minute limit (`hold_expired`); each is a `detection_events` row | rising at all |
 
 Stopping the light worker on the dev stack raised `jobs_ready` on `light` and `light.local` within
 20 s, and both cleared once it restarted.

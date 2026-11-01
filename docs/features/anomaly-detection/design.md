@@ -245,6 +245,33 @@ Recorded as each plan step lands. It says where the built code differs from the 
     may not import another. The finding page draws the reading, the normal and the band's edge as lines.
     `TrendChart` gains shaded spans and series with gaps, and a fix for a redraw that never fired, which
     left late deploy markers undrawn.
+- **Step 6, 2026-11-01:**
+  - **The receiver** counts a refusal under `broker_unavailable` only when the broker failed while the
+    sender waited. `internal/intake/refusals.go` writes a finished minute to `intake_refusals` once it has
+    at least 5, and drops a minute it can't write after 30 minutes.
+  - **Holds:** a refused minute, or one the guard covers, is judged for no project. A hold ends once the
+    pipeline has delivered past it, so retries are counted, and lasts at most 30 minutes, counted from its
+    first minute; held minutes up to 3 minutes apart are one hold. Reaching the limit writes a
+    `detection_events` row and logs an ERROR. The logic is in `detection/holds.py`.
+  - **The pipeline signal** is the span topic's record count per minute, read from Kafka's record
+    timestamps. A minute has fallen at half the reference rate or below, the reference being the 10 minutes
+    before the 30-minute window. Under 1 record a minute, nothing can fall. If Kafka can't be read, the guard
+    can't engage.
+  - **The guard** needs 5 organizations, not projects, losing traffic in a fall, counting a drop that began
+    up to 5 minutes before it. Migration 0047 holds each project's vote, `traffic_lost_since`. A drop that
+    began during a fall waits FR15's 3 minutes for the votes, so traffic findings can be up to 3 minutes
+    slower then. One `intake_guard` event is written per guard, its span is enforced for 30 minutes, and
+    its minutes stay out of the normal.
+  - **With fewer than 5 organizations,** on most self-hosted installs, the guard can't engage. A project
+    finding then names nexovue's intake as a possible cause, as item 3 above says.
+  - **Pruning** is in the expiry sweep (`detection/retention.py`). A closed finding is purged at its
+    plan's derived retention, and an open one never is. `intake_refusals`, `detection_events` and
+    `baseline_shifts` are kept 30 days, as far back as the baseline job reads. Migration 0048 indexes
+    closed findings by when they closed, built concurrently.
+  - **Alerts:** `NexovueReceiverKafkaUnavailable` now pages on `broker_unavailable` only, so a sender
+    cancelling no longer pages. A new `NexovueReceiverDependencyUnavailable` pages when over half the exports
+    are refused as `unavailable` for 5 minutes, the control plane being down. `NexovueDetectionHeldByIntake`
+    pages on a guard or a hold reaching its limit.
 
 ## Words used here
 
@@ -534,8 +561,8 @@ one-sided tail of 4 spreads, at every sensitivity. Sensitivity changes the windo
     to 3 extra minutes, so the project rule can fire first. That is AC21's one finding, not 9.
   - A project finding is critical. It closes when fewer than half of those services remain unusual for the
     recovery time.
-  - Its title reads: "Traffic stopped arriving from 9 of 11 services at 14:02 IST. Check your collector or
-    network".
+  - Its title reads: "Traffic stopped arriving from 9 of 11 services at 14:02 IST. Check your collector,
+    your network or nexovue's intake".
 - **A service that stops (FR32):**
   - a fall to zero requests is critical *losing traffic*;
   - after 24 hours of silence, the finding closes as *service gone*, with one message, and is never

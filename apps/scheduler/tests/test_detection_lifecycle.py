@@ -397,7 +397,7 @@ def test_nine_of_eleven_services_stopping_together_is_one_project_finding() -> N
     assert decision.judged == 11
     assert project_title(9, 11, ONSET, KOLKATA) == (
         "Traffic stopped arriving from 9 of 11 services at 19:30 IST. "
-        "Check your collector or network"
+        "Check your collector, your network or nexovue's intake"
     )
 
 

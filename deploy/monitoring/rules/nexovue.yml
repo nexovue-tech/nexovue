@@ -69,10 +69,30 @@ groups:
           summary: "the receiver refuses {{ $value | humanizePercentage }} of export requests"
 
       - alert: NexovueReceiverKafkaUnavailable
-        expr: increase(nexovue_receiver_events_total{reason="unavailable"}[5m]) > 0
+        expr: increase(nexovue_receiver_events_total{reason="broker_unavailable"}[5m]) > 0
         labels: {severity: page}
         annotations:
           summary: "Kafka refused the receiver; customers' telemetry is being turned away"
+
+      # A dependency other than Kafka down, such as the control plane while authenticating:
+      # most exports refused. A share, not any count, because a sender cancelling an export
+      # is counted under the same reason.
+      - alert: NexovueReceiverDependencyUnavailable
+        expr: |
+          sum(rate(nexovue_receiver_events_total{reason="unavailable"}[5m]))
+            / sum(rate(nexovue_receiver_requests_total[5m])) > 0.5
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "the receiver refuses {{ $value | humanizePercentage }} of export requests because a dependency is down"
+
+      # F6, design 2.1 item 1: detection held every project because nexovue's own
+      # intake failed, or released such a hold at its 30-minute limit.
+      - alert: NexovueDetectionHeldByIntake
+        expr: sum by (kind) (increase(nexovue_scheduler_detection_intake_events_total[15m])) > 0
+        labels: {severity: page}
+        annotations:
+          summary: "detection recorded {{ $labels.kind }}: nexovue's own intake failed for every project (detection_events)"
 
       - alert: NexovueSchedulerLoopSilent
         expr: nexovue_scheduler_loop_silent_seconds > 30

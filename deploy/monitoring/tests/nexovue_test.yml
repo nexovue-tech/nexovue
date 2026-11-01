@@ -73,6 +73,40 @@ tests:
             exp_annotations:
               summary: "the receiver refuses 10% of export requests"
 
+  - name: the receiver refusing most exports because a dependency other than Kafka is down
+    interval: 1m
+    input_series:
+      - series: 'nexovue_receiver_requests_total{outcome="accepted"}'
+        values: "0+40x30"
+      - series: 'nexovue_receiver_requests_total{outcome="refused"}'
+        values: "0+60x30"
+      - series: 'nexovue_receiver_events_total{reason="unavailable"}'
+        values: "0+60x30"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: NexovueReceiverDependencyUnavailable
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: NexovueReceiverDependencyUnavailable
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "the receiver refuses 60% of export requests because a dependency is down"
+
+  - name: senders cancelling a few exports page nobody
+    interval: 1m
+    input_series:
+      - series: 'nexovue_receiver_requests_total{outcome="accepted"}'
+        values: "0+99x30"
+      - series: 'nexovue_receiver_requests_total{outcome="refused"}'
+        values: "0+1x30"
+      - series: 'nexovue_receiver_events_total{reason="unavailable"}'
+        values: "0+1x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NexovueReceiverDependencyUnavailable
+        exp_alerts: []
+
   - name: spans far behind for ten minutes
     interval: 1m
     input_series:
@@ -142,3 +176,21 @@ tests:
           - exp_labels: {severity: page, job: worker}
             exp_annotations:
               summary: "no worker is running to be scraped"
+
+  - name: detection holding every project for nexovue's intake pages, once per event
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_detection_intake_events_total{job="scheduler-light", instance="a", kind="intake_guard"}'
+        values: "0 0 0 1 1"
+      - series: 'nexovue_scheduler_detection_intake_events_total{job="scheduler-light", instance="a", kind="hold_expired"}'
+        values: "0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: NexovueDetectionHeldByIntake
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: NexovueDetectionHeldByIntake
+        exp_alerts:
+          - exp_labels: {severity: page, kind: intake_guard}
+            exp_annotations:
+              summary: "detection recorded intake_guard: nexovue's own intake failed for every project (detection_events)"

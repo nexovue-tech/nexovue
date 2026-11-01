@@ -8,7 +8,10 @@ with many projects cannot hold the others back (design 2.1, M5). At most
 
 A minute that is not settled queues nothing: a project's freshness is its last
 completed run (C17), so a stalled pipeline shows as detection falling behind,
-never as a quiet minute.
+never as a quiet minute. Nor is one nexovue's own intake failed in: a minute the
+receiver refused, or one the install-wide guard holds (`settle.py`, `holds.py`).
+Each job is told where the intake fell and what the guard holds, so a drop that
+is nexovue's opens nothing.
 
 Each sweep also tells the owners of every project whose detection has not run
 for 15 minutes of being expected to, or never has (D24, D34) — first, and
@@ -32,12 +35,15 @@ from nexovue_scheduler.detection import (
     DETECTION_QUEUE,
     JUDGE_PROJECT_TASK,
     SWEEP_DETECTION_TASK,
+    holds,
     notify,
     settle,
 )
 from nexovue_scheduler.detection.project_job import (
+    NO_TROUBLE,
     PROJECT_HARD_LIMIT_SECONDS,
     PROJECT_SOFT_LIMIT_SECONDS,
+    IntakeTrouble,
     judge_request_kwargs,
 )
 from nexovue_scheduler.detection.projects import ActiveProject, active_projects, fair_order
@@ -60,13 +66,15 @@ _progress: settle.PipelineProgress | None = None
 _watermarks: KafkaWatermarks | None = None
 
 
-def project_requests(projects: Sequence[ActiveProject], settled: datetime) -> list[JobRequest]:
+def project_requests(
+    projects: Sequence[ActiveProject], settled: datetime, trouble: IntakeTrouble = NO_TROUBLE
+) -> list[JobRequest]:
     """One job per project, in the fair order, each judging up to `settled`."""
     return [
         JobRequest(
             task=JUDGE_PROJECT_TASK,
             queue=DETECTION_QUEUE,
-            kwargs=judge_request_kwargs(project.project_id, settled),
+            kwargs=judge_request_kwargs(project.project_id, settled, trouble),
             org_id=str(project.org_id),
             countdown_seconds=position * FAIR_STEP_SECONDS,
             expires_seconds=PROJECT_JOB_EXPIRES_SECONDS,
@@ -77,10 +85,12 @@ def project_requests(projects: Sequence[ActiveProject], settled: datetime) -> li
     ]
 
 
-async def queue_project_jobs(engine: AsyncEngine, settled: datetime, *, now: datetime) -> int:
+async def queue_project_jobs(
+    engine: AsyncEngine, settled: datetime, trouble: IntakeTrouble, *, now: datetime
+) -> int:
     async with engine.connect() as connection:
         projects = await active_projects(connection, now=now)
-    await enqueue_all(engine, project_requests(projects, settled))
+    await enqueue_all(engine, project_requests(projects, settled, trouble))
     return len(projects)
 
 
@@ -92,10 +102,26 @@ async def report_stopped(engine: AsyncEngine, *, now: datetime) -> int:
 @task(SWEEP_DETECTION_TASK)
 def sweep() -> None:
     _report_stopped()
-    settled = _settled()
+    found = _settled()
+    if found is None:
+        return
+    intake = _intake(found.now)
+    decision = with_engine(lambda engine: holds.decide(engine, found, intake))
+    settled = decision.minute
     if settled is None:
         return
-    queued = with_engine(lambda engine: queue_project_jobs(engine, settled, now=datetime.now(UTC)))
+    if decision.holding:
+        logger.warning(
+            "nexovue's intake failed; holding every project's minutes",
+            settled_minute=settled.isoformat(),
+            held=[
+                {"reason": hold.reason, "from": hold.span.first.isoformat()}
+                for hold in decision.holding
+            ],
+        )
+    queued = with_engine(
+        lambda engine: queue_project_jobs(engine, settled, decision.trouble, now=datetime.now(UTC))
+    )
     logger.info(
         "detection project jobs queued", settled_minute=settled.isoformat(), projects=queued
     )
@@ -115,8 +141,20 @@ def _report_stopped() -> None:
         enqueue(JobRequest(task=DELIVER_TASK, queue=DELIVERIES_QUEUE))
 
 
-def _settled() -> datetime | None:
-    """The settled minute, or None, said at the level it deserves."""
+def _intake(now: datetime) -> settle.Intake | None:
+    """What the receiver got Kafka to accept, minute by minute; None, and no guard
+    this minute, when Kafka cannot say."""
+    try:
+        return settle.read_intake(_kafka(), get_settings().kafka_spans_topic, now)
+    except (SoftTimeLimit, KeyboardInterrupt):
+        raise
+    except Exception:
+        logger.exception("could not read what the receiver accepted; no install-wide guard")
+        return None
+
+
+def _settled() -> settle.Settled | None:
+    """The pipeline's settled minute, or None, said at the level it deserves."""
     settings = get_settings()
     if not settings.clickhouse_dsn:
         logger.error(NO_PROGRESS_STORE)
@@ -141,7 +179,7 @@ def _settled() -> datetime | None:
             current_minute=found.current.isoformat(),
             lagging=list(found.lagging),
         )
-    return found.minute
+    return found
 
 
 def _progress_store() -> settle.PipelineProgress:

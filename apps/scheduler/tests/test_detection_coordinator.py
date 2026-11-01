@@ -7,19 +7,23 @@ and the queue the worker that runs them takes.
 
 from __future__ import annotations
 
+import inspect
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Final
 
 from nexovue_scheduler.__main__ import worker_queues
 from nexovue_scheduler.detection import DETECTION_CONCURRENCY, DETECTION_QUEUE, JUDGE_PROJECT_TASK
 from nexovue_scheduler.detection.coordinator import project_requests
 from nexovue_scheduler.detection.project_job import (
+    INTAKE_WAIT,
     PROJECT_HARD_LIMIT_SECONDS,
     PROJECT_SOFT_LIMIT_SECONDS,
+    IntakeTrouble,
     minutes_to_judge,
 )
 from nexovue_scheduler.detection.projects import ActiveProject, fair_order
+from nexovue_scheduler.detection.settle import Span
 from nexovue_scheduler.jobs import registry
 from nexovue_scheduler.jobs.worker import QUEUE_CAPS
 
@@ -96,3 +100,40 @@ def test_a_run_catches_up_two_minutes_and_restarts_past_ten() -> None:
     assert minutes_to_judge(behind(5), minute) == [behind(4), behind(3)]
     assert minutes_to_judge(behind(10), minute) == [behind(9), behind(8)]
     assert minutes_to_judge(behind(11), minute) == [minute]
+
+
+# ------------------------------------------- nexovue's intake (design 2.1, item 1)
+
+MINUTE: Final = timedelta(minutes=1)
+FELL: Final = Span(SETTLED, SETTLED + 9 * MINUTE)
+
+
+def test_each_job_is_told_where_the_intake_fell_and_what_the_guard_holds() -> None:
+    trouble = IntakeTrouble(fell=(FELL,), guarded=(Span(SETTLED, SETTLED + 4 * MINUTE),))
+
+    (request,) = project_requests(_projects()[:1], SETTLED, trouble)
+
+    told = IntakeTrouble.from_kwargs(
+        request.kwargs["intake_fell"], request.kwargs["intake_guarded"]
+    )
+    assert told == trouble
+    judge = registry.registered()["nexovue_scheduler.detection.judge_project"]
+    assert set(request.kwargs) <= set(inspect.signature(judge).parameters)
+
+
+def test_a_drop_that_began_as_the_intake_fell_waits_for_the_count_then_opens() -> None:
+    trouble = IntakeTrouble(fell=(FELL,))
+    onset = SETTLED + MINUTE
+    first = onset + 3 * MINUTE
+
+    assert trouble.keeps_traffic_out(onset, first, first)
+    assert trouble.keeps_traffic_out(onset, first + INTAKE_WAIT - MINUTE, first)
+    assert not trouble.keeps_traffic_out(onset, first + INTAKE_WAIT, first)
+
+
+def test_a_drop_the_guard_holds_never_opens_and_one_after_it_does() -> None:
+    trouble = IntakeTrouble(guarded=(FELL,))
+
+    assert trouble.keeps_traffic_out(SETTLED + MINUTE, SETTLED + timedelta(hours=1), SETTLED)
+    after = FELL.last + MINUTE
+    assert not trouble.keeps_traffic_out(after, after + 4 * MINUTE, after + 4 * MINUTE)

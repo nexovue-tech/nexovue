@@ -230,7 +230,7 @@ describe("the finding page", () => {
         service_name: null,
         severity: "critical",
         title:
-          "Traffic stopped arriving from 2 of 3 services at 14:02 UTC. Check your collector or network",
+          "Traffic stopped arriving from 2 of 3 services at 14:02 UTC. Check your collector, your network or nexovue's intake",
         services: ["cart", "checkout"],
         series: [],
         new_normal: null,

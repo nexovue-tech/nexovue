@@ -393,7 +393,7 @@ async def test_nine_of_eleven_services_stopping_is_one_project_finding(
     assert finding.severity == "critical" and finding.state == "open"
     assert finding.title == (
         f"Traffic stopped arriving from 9 of 11 services at {ONSET:%H:%M} UTC. "
-        "Check your collector or network"
+        "Check your collector, your network or nexovue's intake"
     )
     # Its page lists them, and still does once it closes (migration 0046).
     assert finding.services == services[:9]

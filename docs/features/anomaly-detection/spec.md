@@ -267,7 +267,7 @@ scientist** who wants to choose algorithms or see model parameters. Sensitivity 
   It can rise while the finding is open, and never falls.
 - **FR15**: **Many services at once is one problem.** When most of a project's services lose traffic in
   the same minutes, the product opens one project finding instead of one per service. It says: "Traffic
-  stopped arriving from 9 of 11 services at 14:02. Check your collector or network."
+  stopped arriving from 9 of 11 services at 14:02. Check your collector, your network or nexovue's intake."
 
 ### Product values
 
