@@ -434,10 +434,11 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
 - [ ] **T8.1** — `tools/fault-bed/` (new). It drives the demo's flags with a reference run and 5 injections
   each, injecting traffic at 40% (D19). Its 3-week warm-up is the seeded history from T2c.4 plus 1 week of
   live demo traffic. Proved by its tests on a recorded run, and by the AC36 table in `status.md`.
+  *The tool and its tests are built (2026-11-01). The run, and so the table, waits on the founder's Mac.*
 - [ ] **T8.2** — AC29: 200 projects and 2,000 services, with history from `tools/detection-seed` and live load from `tools/gateseed`, with the container's memory
   and the storage recorded. If the target is missed, the design's fallbacks come back to you.
 - [ ] **T8.3** — AC37 **waits on the test server's price**. It is recorded as blocked.
-- [ ] **T8.4** — AC27 (AI off): no AI code exists in Stage 1, so a test asserts that `detection.*` imports no
+- [x] **T8.4** — AC27 (AI off): no AI code exists in Stage 1, so a test asserts that `detection.*` imports no
   AI module. Proved by `test_detection_has_no_ai.py` (new).
 - [ ] **T8.5** — Docs (C26):
   - `current-system-reference.md`, `security-and-tenancy.md`, `system.md`, `database.md` and

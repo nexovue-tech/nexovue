@@ -104,6 +104,12 @@ detection-measure *args:
 detection-seed *args:
     uv run python tools/detection-seed/seed.py {{args}}
 
+# F6 plan T8.1: the demo's fault flags against detection, scored as AC36's table. A run takes about
+# 12 days after its warm-up; see tools/fault-bed/README.md. Needs NEXOVUE_TOKEN, a read API token.
+# Drive the demo's fault flags and score detection (check, run, score)
+fault-bed *args:
+    uv run python tools/fault-bed/fault_bed.py {{args}}
+
 # Known vulnerabilities in what production runs, nothing else (docs/changes/ready-to-deploy):
 # govulncheck reports a Go flaw only where our code reaches it; pip-audit reads the Python runtime
 # dependencies, not the dev tools; pnpm audit reads the console's and SDK's runtime packages, high
