@@ -408,11 +408,6 @@ class EndpointJudgement:
     def rate(self) -> float:
         return self.failures / self.requests if self.requests else 0.0
 
-    @property
-    def extra_failures(self) -> float:
-        """Failures beyond what its normal rate expects: FR3's evidence measure."""
-        return self.failures - self.requests * self.normal_rate
-
 
 @dataclass(frozen=True, slots=True)
 class FailingJudgement:
@@ -436,13 +431,6 @@ class FailingJudgement:
     @property
     def rate(self) -> float:
         return self.window_failures / self.window_requests if self.window_requests else 0.0
-
-    @property
-    def evidence_endpoint(self) -> str | None:
-        """FR3: the judged endpoint with the most failures beyond its normal."""
-        judged = [each for each in self.endpoints if each.judged]
-        best = max(judged, key=lambda each: each.extra_failures, default=None)
-        return best.name if best is not None and best.extra_failures > 0 else None
 
 
 def judge_failing(

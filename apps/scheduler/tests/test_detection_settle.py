@@ -9,6 +9,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
+from nexovue_platform.detection import SETTLING_LAG
+
+from nexovue_scheduler.alerts import thresholds
 from nexovue_scheduler.detection.settle import (
     EXPORT_ALLOWANCE,
     GUARD_ORGANIZATIONS,
@@ -34,7 +37,14 @@ LONG_AGO: Final = NOW - timedelta(hours=3)
 
 
 def test_the_allowance_is_f21_s_settling_time() -> None:
-    assert timedelta(minutes=2) == EXPORT_ALLOWANCE
+    assert timedelta(minutes=2) == EXPORT_ALLOWANCE == thresholds.SETTLING
+
+
+def test_the_newest_settled_minute_starts_the_shared_lag_before_the_clock() -> None:
+    """The API reads delays by the same lag the scheduler settles by."""
+    assert settled_minute(now=NOW, partition_count=0, marks={}, newest_offsets={}).current == (
+        NOW - SETTLING_LAG
+    ).replace(second=0)
 
 
 def test_an_idle_partition_is_caught_up_however_old_its_progress() -> None:

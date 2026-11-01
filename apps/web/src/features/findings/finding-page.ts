@@ -41,6 +41,35 @@ export function describeSignal(entry: FindingSignal): string {
   return `${value(entry.worst)} at worst, against ${value(entry.normal)} normally. Now ${value(entry.current)}.`;
 }
 
+/**
+ * The endpoint a signal belongs to, for its heading: only an endpoint's own entry. A
+ * service's entry may name an endpoint as evidence, which the evidence line shows.
+ */
+export function ownEndpoint(entry: FindingSignal): string | null {
+  if (!entry.key) return entry.endpoint;
+  return entry.key.startsWith("endpoint:") ? entry.endpoint : null;
+}
+
+/**
+ * The evidence endpoint against the same time last week (FR3), or null when the signal
+ * names none: "POST /pay: p95 400ms, against 100ms the same time last week."
+ */
+export function evidenceSentence(entry: FindingSignal): string | null {
+  if (!entry.endpoint) return null;
+  const now = formatSignalValue(entry.unit, entry.endpoint_current);
+  const before = formatSignalValue(entry.unit, entry.endpoint_last_week);
+  const reading = entry.signal === "failing" ? `${now} failing` : `p95 ${now}`;
+  return `${entry.endpoint}: ${reading}, against ${before} the same time last week.`;
+}
+
+/** The band the finding was judged by, as stored with it (FR16): "Normal band 110ms to 165ms." */
+export function bandSentence(entry: FindingSignal): string {
+  if (entry.band_low === null && entry.band_high === null) return `Normal band ${UNKNOWN}.`;
+  const low = formatSignalValue(entry.unit, entry.band_low);
+  const high = formatSignalValue(entry.unit, entry.band_high);
+  return `Normal band ${low} to ${high}.`;
+}
+
 /** Who may do what to this finding, as this person (FR22, FR23, AC39). */
 export interface FindingActions {
   acknowledge: boolean;

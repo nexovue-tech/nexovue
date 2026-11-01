@@ -18,9 +18,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 from nexovue_platform.detection import (
-    MINIMUM_CHANGES,
     SHIFT_READINGS,
     SHIFT_READINGS_NEEDED,
+    normal_band,
     shift_ratio,
     signal_reading,
 )
@@ -482,16 +482,14 @@ def signal_point(signal: SignalName, reading: dict[str, Any]) -> SignalPoint:
 
 
 def band_edge(signal: SignalName, normal: float | None, window_minutes: int) -> float | None:
-    """Where the minimum change lies for the sensitivity that judged the reading, which
-    its window names (spec, *Product values*)."""
-    change = MINIMUM_CHANGES.get(window_minutes)
-    if change is None or normal is None:
+    """The band's far edge, where the minimum change lies for the sensitivity that
+    judged the reading (`normal_band`): above the normal for *slower* and *failing
+    more*, below it for *losing traffic*."""
+    band = normal_band(signal, normal, window_minutes)
+    if band is None:
         return None
-    if signal == "slower":
-        return normal * change.slower_ratio
-    if signal == "failing":
-        return normal + change.failing_points
-    return normal * change.traffic_ratio
+    low, high = band
+    return low if signal == "traffic" else high
 
 
 def new_normal_preview(

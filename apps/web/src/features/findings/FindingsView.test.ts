@@ -51,12 +51,17 @@ const FINDING: Finding = {
   signals: [
     {
       signal: "slower",
+      key: "slower",
       normal: 340,
+      band_low: 340,
+      band_high: 510,
       current: 1_360,
       worst: 3_900,
       unit: "ms",
       comparison: "4× slower than normal",
       endpoint: "POST /checkout",
+      endpoint_current: null,
+      endpoint_last_week: null,
     },
   ],
   trend: [1, 2, 3, 5, 7, 8, 7],

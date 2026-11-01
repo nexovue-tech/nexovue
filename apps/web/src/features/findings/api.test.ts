@@ -48,12 +48,17 @@ const RESPONSE: FindingsResponse = {
       signals: [
         {
           signal: "slower",
+          key: "slower",
           normal: 340,
+          band_low: 340,
+          band_high: 510,
           current: null,
           worst: 3_900,
           unit: "ms",
           comparison: "4× slower than normal",
           endpoint: null,
+          endpoint_current: null,
+          endpoint_last_week: null,
         },
       ],
       trend: [1, 2, 3],

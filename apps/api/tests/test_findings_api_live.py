@@ -57,11 +57,16 @@ MEMBER_ONLY_FIELDS: Final = {
 }
 SLOWER: Final[dict[str, Any]] = {
     "signal": "slower",
+    "key": "slower",
     "normal": 110.0,
     "current": 330.0,
     "worst": 412.0,
     "comparison": "Tuesdays around 15:00, last 3 weeks",
-    "endpoint": None,
+    "endpoint": "POST /pay",
+    "band_low": 110.0,
+    "band_high": 165.0,
+    "endpoint_current": 400.0,
+    "endpoint_last_week": 100.0,
 }
 
 
@@ -515,6 +520,7 @@ async def test_a_finding_with_no_readings_has_an_empty_trend(
     detail = (await _get(db, clickhouse, _callers(acme).person, f"/findings/{finding.id}")).json()
 
     assert detail["trend"] == []
+    # With no readings, the stored band and the week's comparison still say it (FR31).
     assert detail["signals"] == [SLOWER | {"unit": "ms"}]
 
 

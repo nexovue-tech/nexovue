@@ -18,15 +18,18 @@ import { formatZonedTime } from "@/shared/format/zoned";
 import { useCan } from "@/shared/identity";
 import { setSelectedProjectId, useSelection } from "@/shared/selection";
 
-import type { FindingDetail, FindingSignalKind, SignalSeries } from "./api";
+import type { FindingDetail, FindingSignal, FindingSignalKind, SignalSeries } from "./api";
 import { useFinding, useFindingAction } from "./api";
 import type { DoneAction } from "./finding-page";
 import {
   availableActions,
+  bandSentence,
   describeSignal,
+  evidenceSentence,
   formatSignalValue,
   newNormalSentence,
   notYetSentence,
+  ownEndpoint,
   PLOT_LINES,
   SIGNAL_NAMES,
   signalPlot,
@@ -429,17 +432,28 @@ function Signals({ finding }: { finding: FindingDetail }) {
           <li key={`${entry.signal}-${entry.endpoint ?? index}`} className={`text-sm ${PROSE}`}>
             <span className="font-medium text-ink">
               {SIGNAL_NAMES[entry.signal]}
-              {entry.endpoint ? <span className="font-mono"> · {entry.endpoint}</span> : null}
+              {ownEndpoint(entry) ? (
+                <span className="font-mono"> · {ownEndpoint(entry)}</span>
+              ) : null}
             </span>
             <span className="text-ink"> — {describeSignal(entry)}</span>
+            <span className="block text-ink-dim">{bandSentence(entry)}</span>
             {entry.comparison ? (
               <span className="block text-ink-dim">Compared with {entry.comparison}.</span>
             ) : null}
+            <Evidence entry={entry} />
           </li>
         ))}
       </ul>
     </section>
   );
+}
+
+/** FR3: the evidence endpoint against the same time last week, when the signal names one. */
+function Evidence({ entry }: { entry: FindingSignal }) {
+  const sentence = evidenceSentence(entry);
+  if (sentence === null) return null;
+  return <span className="block font-mono text-ink-dim">{sentence}</span>;
 }
 
 /**

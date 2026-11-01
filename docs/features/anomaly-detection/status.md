@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-In development. Specification (through D32), design (revision 2.1) and plan (revision 2) approved.
+Built; awaiting review. Specification (through D36), design (revision 2.1) and plan (revision 2) approved.
 
 ## Current task
 
-Building the plan, step by step, without stopping (the founder, 2026-11-01).
+The pull request is open for the founder's review. The feature is built and checked here.
 
 ## Completed
 
@@ -163,6 +163,22 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
     The machine (4 vCPUs, 15 GiB) is close to the 16 GB install; memory transfers directly. ClickHouse
     reads grow as the month's partition fills. The 200 `ac29-*` tenants remain in the dev stores
     (`just detection-scale remove --yes`).
+- **The final review, 2026-11-01:** four independent reviews (tenancy and security, durability and
+  migrations, the console, spec coverage) found nothing high. Every finding was fixed with a test seen red,
+  or is recorded under *Decisions made without asking*. AC2, AC5, AC19, AC25, AC31, AC35 and AC41 gained
+  the tests the coverage review asked for.
+  - **The final checks** (2026-11-01):
+    - ruff and its format check pass, and mypy reports no issues in 725 files;
+    - the Python suites give 9,395 passed. The 61 failures and errors are all in suites that need
+      gateseed's telemetry or internet DNS, which this environment lacks: test_metrics_live,
+      test_services_live, test_servicemap_live, test_synthetics_live, test_traces_live, test_dbstats_live,
+      test_llm_observability_live, test_tenant_isolation_live, test_alert_telemetry_live and
+      test_connect_guard;
+    - the web gives 1,515, plus 124 in the browser SDK; Biome, typecheck and bundle sizes pass;
+    - all 42 Go packages pass, and lint reports 0 issues; promtool passes.
+  - **Not run here:** `just check` as one command (gate-seed needs the API image), `buf lint` (no
+    network to its server), and the Go store probes inside the gate (`just test` only compiles them; each
+    was run by hand). CI runs them.
 - **A stop's limit:** at high sensitivity a stop needs about 2.2 expected requests a minute, not 2
   (spec, FR32, *Limit*; AC41).
 - **The dev stores run in this environment**, through a local compose override for the sandbox's open-file
@@ -178,7 +194,10 @@ Building the plan, step by step, without stopping (the founder, 2026-11-01).
 
 ## Next action
 
-Step 8: the cost measurement (T8.2), the docs (T8.5) and the gate (T8.6). Step 1, the demo run on the founder's Mac, can run at any time alongside.
+1. The founder reviews and merges the pull request (CI: `check`, `license/cla`, CodeQL).
+2. On the founder's Mac: Step 1's demo measurement, and the fault-bed run for AC36
+   (`tools/fault-bed/README.md`, about 3 weeks of warm-up and 12 days of run).
+3. The plan's demo checks for Steps 2c to 6, which need the application images.
 
 ## Open decisions
 
@@ -229,6 +248,31 @@ here for review (2026-11-01).
   current and expected traffic, so a stopped service is still judged and its stop is still caught.
 - **The connector poller's two updates by id are allowlisted** in the new tenancy test, not changed. The
   poll is install-wide and carries no `org_id`; binding one needs a change to the poller beyond F6.
+- **A member's snoozes of one service total at most 4 hours in any 24 hours.** Without a limit, a member
+  could re-snooze forever and so mute a service, which D11 and FR23 keep for admins. Admins and owners are
+  not limited, because they may mute. (Option chosen over refusing to extend a running snooze, which a
+  member could get round by waiting for it to lapse.)
+- **Snooze and mute send a duration,** and the server works out the end. A browser clock running a second
+  ahead had made the longest choice fail.
+- **The guard's repeatable delay is accepted** (design 2.1, item 1). Five organizations acting together
+  could hold every tenant's detection for up to 30 minutes, again and again. Their votes count only once
+  their traffic can be judged, which takes days of history. Each hold pages the operator through
+  `NexovueDetectionHeldByIntake`.
+- **FR3's *slower* evidence endpoint, FR16's stored band and FR26's per-service counts,** found unbuilt by
+  the final review, are built rather than dropped. The spec was never amended to drop them.
+- **Migration safety, from the final review:** 0041's keys and checks on tables with rows moved to 0050,
+  built concurrently and validated without stopping writes. 0041, 0044 and 0046 now refuse to downgrade
+  ("roll forward only"), because each would drop records found nowhere else. A rule test catches a
+  non-concurrent index on an existing table from 0040 on.
+- **Outside F6, not fixed here:** 0028's downgrade drops alert rules and channels people created. It needs
+  its own change.
+- **FR3's evidence values are shares failing for *failing*, p95 ms for *slower*,** each against the same
+  window last week, with at least 20 requests in both. "Extra failures" are those beyond last week's share,
+  so more traffic alone adds none. *Slower* ranks by the rise in milliseconds, not the ratio.
+- **A project job commits in batches of 25 services, furthest behind first,** so a run stopped by its
+  limit keeps its work and a project that always runs long still reaches every service.
+- **A refusal holds every partition with an uncommitted batch,** the narrowest set sure to include the
+  refused rows, because rows carry no partition.
 - **Step 7's *detection stalled* alert is the heartbeat** for a scheduler whose minute sweep never runs. The
   owners' email can't report that case, because the email is sent by the sweep itself.
 
@@ -236,13 +280,17 @@ here for review (2026-11-01).
 
 AC37, the two-week no-fault run, waits on the test server's price (`phase-2-plan.md`, Open 2).
 
+AC36, the fault-bed run, waits on the founder's Mac: about 3 weeks of warm-up and 12 days of run
+(`tools/fault-bed/README.md`). The tool and its scoring are built and tested.
+
 ## Risks
 
 - **Real failure bursts are unknown.** Every burst rate, length and height is a guess until the plan's demo
   run (D14, D17). The simulation covers a range of guesses, not the real value.
 - **The traffic is synthetic.** It has no deploys, daylight-saving changes or late data, and no user
   actions.
-- **Per-pass cost and storage** are estimated, not measured. Plan Step 1 measures them.
+- **Per-pass cost and storage are measured here, not on the demo.** AC29's run used seeded history and synthetic
+  spans; ClickHouse reads grow as a month's partition fills. Plan Step 1 measures the real demo.
 - **Nothing is pushed.** Commits on `feature/anomaly-detection` exist only in this container until the
   feature's final push, by the founder's decision.
 

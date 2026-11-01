@@ -549,6 +549,48 @@ def test_an_open_finding_is_restored_with_its_counts() -> None:
     assert set(unknown.keys) == set(restored.keys)
 
 
+def test_a_finding_whose_keys_the_state_lost_is_read_by_what_each_entry_names() -> None:
+    """AC11: an endpoint failing alone is its endpoint's key, not the service's; and a
+    service whose evidence is one of the finding's endpoints keeps both keys."""
+    alone: list[dict[str, Any]] = [{"signal": "failing", "endpoint": "POST /pay"}]
+    both: list[dict[str, Any]] = [
+        {"signal": "failing", "endpoint": "POST /pay"},
+        {"signal": "slower", "endpoint": "GET /cart"},
+        {"signal": "failing", "endpoint": "POST /pay"},
+    ]
+    service: list[dict[str, Any]] = [
+        {"signal": "failing", "endpoint": None},
+        {"signal": "failing", "endpoint": "GET /"},
+    ]
+
+    def restored(entries: list[dict[str, Any]]) -> list[str]:
+        row = _Row(uuid.uuid4(), "warning", False, entries, ONSET)
+        return list(project_job._restore(row, {}).keys)
+
+    assert restored(alone) == ["endpoint:POST /pay"]
+    assert restored(both) == ["endpoint:POST /pay", "slower", "failing"]
+    assert restored(service) == ["failing", "endpoint:GET /"]
+
+
+def test_each_stored_entry_names_its_key_so_a_lost_state_restores_it_exactly() -> None:
+    """A service's *failing* entry whose evidence is an endpoint that is not itself a key
+    reads, by what it names, as that endpoint's key. The key stored with each entry
+    removes the guess."""
+    run = Run()
+    pay = _endpoint("POST /pay", "unusual", failures=50)
+    run.feed([_at(ONSET, failing=_failing("unusual", failures=40, endpoints=[pay]))])
+    assert run.finding is not None
+    written = json.loads(json.dumps(run.finding.signals()))
+    assert [entry["key"] for entry in written] == run.finding.ordered()
+
+    service_with_evidence: list[dict[str, Any]] = [
+        {"signal": "failing", "endpoint": "GET /x", "key": "failing"}
+    ]
+    row = _Row(uuid.uuid4(), "warning", False, service_with_evidence, ONSET)
+
+    assert list(project_job._restore(row, {}).keys) == ["failing"]
+
+
 def test_snoozed_and_shadowed_minutes_are_recorded_merged_and_forgotten() -> None:
     """BR3, D25, FR6: the minutes the baseline job must leave out, kept as ranges in the
     service's state, and dropped once no pool reaches them."""

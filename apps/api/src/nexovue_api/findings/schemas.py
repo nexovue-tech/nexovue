@@ -33,6 +33,9 @@ class StoredSignal(BaseModel):
     """
 
     signal: SignalName
+    # The job's key for the entry: the signal, or "endpoint:<name>" for an endpoint failing
+    # on its own. None for a finding stored before keys were kept.
+    key: str | None = None
     # None when there was no reading, never 0: a missing number and a real zero differ.
     normal: float | None
     current: float | None
@@ -40,6 +43,14 @@ class StoredSignal(BaseModel):
     # The sentence naming what it was compared with ("Tuesdays around 15:00, last 3 weeks").
     comparison: str
     endpoint: str | None = None
+    # The normal's band when the finding was judged (FR16), so a closed finding whose
+    # readings expired still shows it. None for a finding stored before it was kept.
+    band_low: float | None = None
+    band_high: float | None = None
+    # The evidence endpoint's value then and in the same window last week (FR3): its p95
+    # for *slower*, its share failing for *failing*. None when no week compared.
+    endpoint_current: float | None = None
+    endpoint_last_week: float | None = None
 
 
 class FindingSignal(StoredSignal):

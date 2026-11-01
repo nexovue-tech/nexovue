@@ -25,6 +25,7 @@ from environment import TEST_ENVIRONMENT
 from live import require_stack
 from nexovue_platform.detection import (
     MAX_JUDGED_SERVICES,
+    SETTLING_LAG,
     TOO_MANY_SERVICES_KEY,
     WINDOW_REQUESTS_KEY,
 )
@@ -42,7 +43,6 @@ from nexovue_api.data.postgres.models import (
     ServiceLastSeen,
 )
 from nexovue_api.deps import get_app_settings, get_db_session
-from nexovue_api.detection.service import SETTLING_LAG
 from nexovue_api.settings import API_PREFIX, Settings
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 

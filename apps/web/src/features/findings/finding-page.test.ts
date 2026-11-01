@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { bandStretches } from "@/shared/components/chart-band";
 
-import type { SignalSeries } from "./api";
-import { PLOT_LINES, signalPlot } from "./finding-page";
+import type { FindingSignal, SignalSeries } from "./api";
+import {
+  bandSentence,
+  evidenceSentence,
+  ownEndpoint,
+  PLOT_LINES,
+  signalPlot,
+} from "./finding-page";
 import { finding } from "./render-harness.test-util";
 
 /**
@@ -71,5 +77,82 @@ describe("a signal's chart (AC38)", () => {
     if (!series) throw new Error("the fixture has a series");
 
     expect(bandStretches(signalPlot(series).data, signalPlot(series).band)).toHaveLength(1);
+  });
+});
+
+const stored: FindingSignal = {
+  signal: "slower",
+  key: "slower",
+  normal: 110,
+  band_low: 110,
+  band_high: 165,
+  current: 330,
+  worst: 412,
+  unit: "ms",
+  comparison: "Tuesdays around 15:00, last 3 weeks",
+  endpoint: "POST /pay",
+  endpoint_current: 400,
+  endpoint_last_week: 100,
+};
+
+describe("a signal's evidence endpoint (FR3, FR31)", () => {
+  it("names a slower endpoint's p95 against the same time last week", () => {
+    expect(evidenceSentence(stored)).toBe(
+      "POST /pay: p95 400ms, against 100ms the same time last week.",
+    );
+  });
+
+  it("names a failing endpoint's share failing against the same time last week", () => {
+    const failing: FindingSignal = {
+      ...stored,
+      signal: "failing",
+      unit: "%",
+      endpoint_current: 12.5,
+      endpoint_last_week: 0,
+    };
+
+    expect(evidenceSentence(failing)).toBe(
+      "POST /pay: 12.5% failing, against 0.0% the same time last week.",
+    );
+  });
+
+  it("writes a value it does not have as the em dash, never a zero", () => {
+    const older = { ...stored, endpoint_current: null, endpoint_last_week: null };
+
+    expect(evidenceSentence(older)).toBe("POST /pay: p95 —, against — the same time last week.");
+  });
+
+  it("says nothing for a signal that names no endpoint", () => {
+    expect(evidenceSentence({ ...stored, endpoint: null })).toBeNull();
+  });
+});
+
+describe("a signal's stored band (FR16)", () => {
+  it("reads from the normal to its edge, in the signal's unit", () => {
+    expect(bandSentence(stored)).toBe("Normal band 110ms to 165ms.");
+  });
+
+  it("is the em dash for a finding stored before its band was kept", () => {
+    expect(bandSentence({ ...stored, band_low: null, band_high: null })).toBe("Normal band —.");
+  });
+});
+
+describe("ownEndpoint", () => {
+  const base = finding().signals[0] as FindingSignal;
+
+  it("names the endpoint only on an endpoint's own entry, not on a service's evidence", () => {
+    expect(
+      ownEndpoint({ ...base, signal: "failing", key: "endpoint:POST /pay", endpoint: "POST /pay" }),
+    ).toBe("POST /pay");
+    expect(
+      ownEndpoint({ ...base, signal: "failing", key: "failing", endpoint: "GET /x" }),
+    ).toBeNull();
+    expect(
+      ownEndpoint({ ...base, signal: "slower", key: "slower", endpoint: "GET /x" }),
+    ).toBeNull();
+  });
+
+  it("keeps an entry stored before keys were kept as it was", () => {
+    expect(ownEndpoint({ ...base, key: null, endpoint: "GET /x" })).toBe("GET /x");
   });
 });

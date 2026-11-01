@@ -35,6 +35,7 @@ from detection_history import findings as _findings
 from detection_history import judge_through as _judge_through
 from detection_history import seed as _seed
 from detection_history import seed_endpoint_latency as _seed_endpoint_latency
+from detection_history import seed_endpoints as _seed_endpoints
 from detection_history import seed_four_weeks as _seed_four_weeks
 from detection_history import span as _span
 from detection_history import state as _state
@@ -118,6 +119,7 @@ async def test_a_sustained_slowdown_opens_exactly_one_finding_and_closes_it(
     assert signal["signal"] == "slower"
     assert set(signal) == {
         "signal",
+        "key",
         "normal",
         "band_low",
         "band_high",
@@ -788,7 +790,7 @@ async def test_a_re_judged_minute_wins_over_a_crashed_run_from_a_clock_ahead(
     assert reading.window_requests == (SUSTAIN + 1) * REQUESTS
 
 
-# --------------------------------------------- the evidence endpoint (FR3, *slower*)
+# ------------------------------------------------------- the evidence endpoint (FR3)
 
 
 async def test_a_slower_finding_names_the_endpoint_whose_p95_rose_most_since_last_week(
@@ -818,6 +820,48 @@ async def test_a_slower_finding_names_the_endpoint_whose_p95_rose_most_since_las
     assert signal["endpoint"] == "POST /pay"
     assert signal["endpoint_current"] == pytest.approx(400.0)
     assert signal["endpoint_last_week"] == pytest.approx(100.0)
+
+
+async def test_a_failing_finding_names_the_endpoint_with_most_extra_failures_since_last_week(
+    engine: AsyncEngine, store: DetectionStore, administrator: Client, project: AlertTenant
+) -> None:
+    """FR3: *failing more* names the endpoint with the largest share of the failures
+    beyond the same window last week, with both shares failing. One that failed as
+    much then has no extra failures, however far it is above its normal."""
+    endpoints = {"GET /cart": (60, 0), "POST /pay": (40, 0)}
+    _seed_four_weeks(administrator, project, endpoints=endpoints)
+    await _baselines(engine, store, project)
+    week = timedelta(days=7)
+    failing_span = _span(ONSET, ONSET + timedelta(minutes=SUSTAIN + 4))
+    around = _span(ONSET - timedelta(minutes=10), ONSET + timedelta(minutes=20))
+    # Last week's same minutes: GET /cart already failed half its requests then.
+    _seed_endpoints(
+        administrator,
+        project,
+        SERVICE,
+        {minute - week: {"GET /cart": (0, 30)} for minute in around},
+    )
+    today = {"GET /cart": (60, 30), "POST /pay": (40, 20)}
+    seeded = _span(ONSET - timedelta(minutes=30), ONSET + timedelta(minutes=40))
+    _seed(
+        administrator,
+        project,
+        seeded,
+        endpoints={minute: today if minute in failing_span else endpoints for minute in seeded},
+    )
+
+    await _judge_through(engine, store, project, failing_span)
+
+    (finding,) = await _findings(engine, project)
+    service, *endpoint_entries = [s for s in finding.signals if s["signal"] == "failing"]
+    assert service["endpoint"] == "POST /pay"
+    assert service["endpoint_current"] == pytest.approx(50.0)
+    assert service["endpoint_last_week"] == pytest.approx(0.0)
+    # Each endpoint's own entry compares itself with the same window last week.
+    compared = {
+        e["endpoint"]: (e["endpoint_current"], e["endpoint_last_week"]) for e in endpoint_entries
+    }
+    assert compared == {"GET /cart": (50.0, 50.0), "POST /pay": (50.0, 0.0)}
 
 
 # ------------------------------------ an overrunning run (design, *Failure handling*)

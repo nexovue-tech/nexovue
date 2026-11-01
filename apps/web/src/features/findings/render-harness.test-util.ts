@@ -48,12 +48,17 @@ export function finding(overrides: Partial<FindingDetail> = {}): FindingDetail {
     signals: [
       {
         signal: "slower",
+        key: "slower",
         normal: 110,
+        band_low: 110,
+        band_high: 165,
         current: 330,
         worst: 412,
         unit: "ms",
         comparison: "Tuesdays around 15:00, last 3 weeks",
-        endpoint: null,
+        endpoint: "POST /pay",
+        endpoint_current: 400,
+        endpoint_last_week: 100,
       },
     ],
     trend: [110, 330],

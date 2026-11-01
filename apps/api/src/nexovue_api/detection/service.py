@@ -44,6 +44,7 @@ from nexovue_platform.detection import (
     MAX_MUTE,
     MAX_SNOOZE,
     NOT_RUNNING_AFTER,
+    SETTLING_LAG,
     TOO_MANY_SERVICES_KEY,
     WINDOW_REQUESTS_KEY,
 )
@@ -78,10 +79,6 @@ from nexovue_api.profile.timezones import stored_timezone
 from nexovue_api.projects import queries as projects_queries
 from nexovue_api.projects.service import NO_SUCH_PROJECT
 
-# A minute settles once its end plus the 2-minute export allowance has been
-# delivered (`settle._settled_through`): the clock's newest settled minute starts
-# this long before it. Data counts as delayed from when its newest minute settled.
-SETTLING_LAG: Final = timedelta(minutes=3)
 # The worker records progress once a minute, so on time the sweep's settled minute
 # trails its clock's by at most one; a partition held 2 minutes holds it 2 back.
 PIPELINE_BEHIND_BY: Final = timedelta(minutes=2)
@@ -185,6 +182,7 @@ async def project_status(
         ),
         earliest_judging_date=min(learning_dates, default=None),
         not_running_since=running.stopped_since,
+        # Delayed from when its newest judged minute settled.
         delayed_since=newest + SETTLING_LAG if delayed and newest is not None else None,
         open_findings=await queries.open_finding_count(
             session, org_id=org_id, project_id=project_id

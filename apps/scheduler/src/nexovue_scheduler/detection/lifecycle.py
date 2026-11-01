@@ -214,7 +214,8 @@ class KeyRecord:
     weight: float = 0.0
     # The normal's band, from the sensitivity that judged the worst window (FR16).
     band: tuple[float, float] | None = None
-    # *Slower*'s evidence endpoint's p95 then and the same window a week before (FR3).
+    # The evidence endpoint's value then and in the same window a week before (FR3):
+    # its p95 in ms for *slower*, its share failing in percent for *failing more*.
     endpoint_current: float | None = None
     endpoint_last_week: float | None = None
 
@@ -250,6 +251,7 @@ class OpenFinding:
                 endpoint=record.endpoint,
                 endpoint_current=record.endpoint_current,
                 endpoint_last_week=record.endpoint_last_week,
+                key=key,
             )
             for key, record in ((key, self.keys[key]) for key in self.ordered())
         ]
@@ -400,7 +402,7 @@ def _record(judged: MinuteJudged, key: str, zone: ZoneInfo) -> KeyRecord:
         current=current,
         worst=current,
         comparison=_comparison_of(normal_of, judged.minute, zone),
-        endpoint=_endpoint_of(judged, key),
+        endpoint=key_endpoint(key),
         weight=weight(key, normal, current),
         band=normal_band(key_signal(key), normal, judged.width),
     )
@@ -417,7 +419,6 @@ def _worsen(record: KeyRecord, judged: MinuteJudged, key: str, zone: ZoneInfo) -
     record.weight, record.worst, record.normal = reached, current, normal
     record.band = normal_band(key_signal(key), normal, judged.width)
     record.comparison = _comparison_of(normal_of, judged.minute, zone)
-    record.endpoint = _endpoint_of(judged, key)
     return True
 
 
@@ -459,14 +460,6 @@ def weight(key: str, normal: float | None, current: float | None) -> float:
     if key == SLOWER:
         return (current / normal - 1) / (CRITICAL_SLOWER - 1) if normal > 0 else 0.0
     return (current - normal) / (CRITICAL_FAILING * _PERCENT)
-
-
-def _endpoint_of(judged: MinuteJudged, key: str) -> str | None:
-    """FR3's evidence endpoint for *failing more*; an endpoint key names itself. The
-    project job reads *slower*'s from the store, which this module never touches."""
-    if key == FAILING:
-        return judged.failing.evidence_endpoint
-    return key_endpoint(key)
 
 
 def _comparison_of(normal: Normal | None, minute: datetime, zone: ZoneInfo) -> str:

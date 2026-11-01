@@ -64,7 +64,7 @@ and reach only the documented read API.**
 | `GET /alerts/incidents/{incident_id}` | One incident and who was told |
 | `GET /findings` | Detected problems: open, then acknowledged, then closed; at most 200, muted ones apart |
 | `GET /findings/stats` | Findings opened and marked false alarms over the last 7 days (`days` up to 90), per service-week, and for each service with a finding in the window (`services`, most false alarms first; a project finding counts for the project alone) |
-| `GET /findings/{finding_id}` | One finding, its signals, each signal's readings against its normal band while they last (35 days), its linked incidents, and a project finding's services |
+| `GET /findings/{finding_id}` | One finding, its signals (each with its normal band and its evidence endpoint against the same time last week, both kept after the readings expire), each signal's readings against its normal band while they last (35 days), its linked incidents, and a project finding's services |
 | `GET /projects/{project_id}/detection/status` | Whether detection is running, how many services are learning or judged, when judging starts, and the open findings. The state is `data_delayed` while nexovue's pipeline holds back the minutes detection judges, such as one partition 3 minutes behind; `services_delayed` counts the services waiting. A project judges at most `judged_service_limit` services (500), its busiest; past that the state is `too_many_services` and `services_too_many` counts the rest |
 | `GET /projects/{project_id}/detection` | The project's detection sensitivity and the time zone its normal is read in |
 | `GET /checks` | Synthetic checks and their confirmed state |

@@ -72,6 +72,9 @@ describe("the finding page", () => {
     await heading(container);
     const text = readable(container);
     expect(text).toContain("412ms at worst, against 110ms normally");
+    // The band and the evidence were stored with the finding, so they outlive the chart.
+    expect(text).toContain("Normal band 110ms to 165ms.");
+    expect(text).toContain("POST /pay: p95 400ms, against 100ms the same time last week.");
     expect(text).toContain("The chart is no longer available");
     expect(text).toContain("Recovered at");
     expect(container.querySelector("figure")).toBeNull();

@@ -178,7 +178,7 @@ Recorded as each plan step lands. It says where the built code differs from the 
     the window (spec, FR32, *Limit*). At high sensitivity, with its 3-minute window, that is about 2.2 a
     minute.
   - **"Data delayed" needs no new column.** The API derives it when the judged minute is more than 6
-    minutes behind; up to 3 minutes is ordinary settling.
+    minutes behind; up to 3 minutes is ordinary settling. *Replaced in the final review: see Step 8.*
   - **Times name the project's zone.** `shared/format/zoned.ts` prints the abbreviation, or the zone's full
     name where the abbreviation is ambiguous, as with IST.
   - **A job that has stopped** reads "Detection has not run since 14:02" when its last run is known, and
@@ -247,7 +247,7 @@ Recorded as each plan step lands. It says where the built code differs from the 
     hours of readings.
   - **Signup** sends the browser's zone. A bad one falls back to UTC rather than refusing the signup.
   - **The web:** `DetectionBadge` lives in `shared/detection/`, because two features use it and a feature
-    may not import another. The finding page draws the reading, the normal and the band's edge as lines.
+    may not import another. The finding page draws the reading and the normal as lines, and the band as a filled shape (Step 8).
     `TrendChart` gains shaded spans and series with gaps, and a fix for a redraw that never fired, which
     left late deploy markers undrawn.
 - **Step 6, 2026-11-01:**
@@ -312,6 +312,41 @@ Recorded as each plan step lands. It says where the built code differs from the 
     Postgres tenancy structure test** were found unbuilt by the docs pass and built. *Busiest* is ranked:
     open finding first, then the larger of current and expected traffic, then name, so a stopped service
     keeps its place. The mark is a key in `detection_state.signals`.
+  - **The final review** (four reviewers: tenancy and security, durability and migrations, the console,
+    and spec coverage) found nothing high. Fixes:
+    - *Data delayed* reads the sweep's own record: the pipeline is behind when its settled minute trails
+      what the sweep's clock could have settled by 2 minutes, and a service when its judged minute trails
+      the settled minute by 3. The old 6-minute rule marked a healthy project delayed whenever a job ran
+      past a minute, which AC29 allows.
+    - Snooze and mute take a length; the server sets the end. A member's snoozes of one service total at
+      most 4 hours in any 24, shared by all members.
+    - The band is a filled shape in `TrendChart` (`chart-band.ts`), in the chart's colour at low opacity.
+    - Migration 0050 builds 0041's keys on `notifications` concurrently and validates its checks; 0041,
+      0044 and 0046 refuse to downgrade.
+    - **A refused derived insert holds every partition with an uncommitted batch,** not only the
+      settlement's marked ones. Rows carry no partition, so this is the narrowest set sure to include the
+      refused rows; progress can no longer pass a hole.
+    - **A project job commits as it goes.** It holds a session-level lock for the run, commits the project
+      finding, then services in batches of 25 (furthest behind first), each batch with its own
+      compare-and-set, `FOR UPDATE` and outbox writes, then the run. A run stopped by its 20-second limit
+      keeps what it finished, and the next continues. A continuing run decides the project finding from
+      every service, reading already-judged ones from their stored state (`window_expected`). Judging and
+      the readings write still happen before the first commit; they take milliseconds.
+    - **A reading's version is Postgres's `clock_timestamp()`,** so a re-judged minute always beats a
+      crashed run's on `argMax`, whatever host clocks say.
+    - **FR3 and FR16 are built:** each signal stores its band (`band_low`, `band_high`, from
+      `nexovue_platform.detection.normal_band`) and its evidence endpoint against the same window last
+      week (`endpoint_current`, `endpoint_last_week`). *Slower* ranks endpoints by the rise in p95 in
+      milliseconds, with at least 20 requests in both windows, so a fast endpoint going from 1 to 5 ms
+      can't outrank the one people wait on.
+      *Failing more* names the endpoint with the most failures beyond last week's share applied to this
+      week's requests, so traffic growth alone adds none. Both values are shares failing in percent, the
+      signal's unit (FR17: two rates, never a multiple).
+    - **Each stored entry carries its key** (`signal`, or `endpoint:<name>`), so a lost service state
+      restores a finding's keys exactly, and the finding page names an endpoint in a heading only for an
+      endpoint's own entry. Entries stored without a key are still read by what they name.
+    - **`SETTLING_LAG`** lives once, in `nexovue_platform.detection`, used by the scheduler's settle rule
+      and the API's *data delayed*.
 
 ## Words used here
 

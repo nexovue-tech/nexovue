@@ -259,14 +259,16 @@ FROM (
 )
 WHERE latest.2 = {window_minutes:UInt8}
 """
-# FR3's *slower* evidence: each endpoint's requests and p95 in one window and in the
+# FR3's evidence: each endpoint's requests, failures and p95 in one window and in the
 # same window a week earlier. The quantile levels are the column's own (000008).
-ENDPOINT_LATENCY_SQL: Final = """
+ENDPOINT_WEEKS_SQL: Final = """
 SELECT span_name,
        sumIf(request_count, minute >= {from_minute:DateTime}) AS requests,
+       sumIf(error_count, minute >= {from_minute:DateTime}) AS failures,
        (quantilesMergeIf(0.5, 0.95, 0.99)(
            latency_quantiles, minute >= {from_minute:DateTime}))[2] AS p95,
        sumIf(request_count, minute < {week_to:DateTime}) AS week_requests,
+       sumIf(error_count, minute < {week_to:DateTime}) AS week_failures,
        (quantilesMergeIf(0.5, 0.95, 0.99)(
            latency_quantiles, minute < {week_to:DateTime}))[2] AS week_p95
 FROM endpoint_stats_1m
@@ -482,13 +484,13 @@ class ProjectDetection:
             }
         return found
 
-    def endpoint_latency(
+    def endpoint_weeks(
         self, service: str, *, start: datetime, end: datetime
-    ) -> dict[str, EndpointLatency]:
+    ) -> dict[str, EndpointWeeks]:
         """Each of the service's endpoints in [start, end) and the same window a week
-        earlier: its requests and p95 in each, None where it had no latency."""
+        earlier: its requests, failures and p95 in each, None where it had no latency."""
         rows = self._query(
-            ENDPOINT_LATENCY_SQL,
+            ENDPOINT_WEEKS_SQL,
             {
                 "service": service,
                 "from_minute": start,
@@ -498,13 +500,15 @@ class ProjectDetection:
             },
         )
         return {
-            str(name): EndpointLatency(
+            str(name): EndpointWeeks(
                 requests=int(requests),
+                failures=int(failures),
                 p95_ms=_finite(p95),
                 week_requests=int(week_requests),
+                week_failures=int(week_failures),
                 week_p95_ms=_finite(week_p95),
             )
-            for name, requests, p95, week_requests, week_p95 in rows
+            for name, requests, failures, p95, week_requests, week_failures, week_p95 in rows
         }
 
     def first_seen(self, *, since: datetime) -> dict[str, datetime]:
@@ -560,12 +564,15 @@ class ProjectDetection:
 
 
 @dataclass(frozen=True, slots=True)
-class EndpointLatency:
-    """One endpoint's requests and p95 in a window and in the same window a week before."""
+class EndpointWeeks:
+    """One endpoint's requests, failures and p95 in a window and in the same window a
+    week before (FR3)."""
 
     requests: int
+    failures: int
     p95_ms: float | None
     week_requests: int
+    week_failures: int
     week_p95_ms: float | None
 
 

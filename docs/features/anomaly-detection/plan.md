@@ -445,7 +445,7 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
     `observability.md`;
   - AGENTS.md's ingest-writes invariant;
   - `design.md`, with corrections C1 to C26 written in.
-- [ ] **T8.6** — `/review-diff`, `just check` with counts read, and the live, store-probe and chaos suites the
+- [x] **T8.6** — `/review-diff`, `just check` with counts read, and the live, store-probe and chaos suites the
   feature adds, run on your Mac or in CI, with their commands recorded. Every finding is fixed or recorded.
 
 ## New risks
@@ -470,9 +470,9 @@ stopped, the log says *behind*. One test reading row appears in `detection_readi
 - [x] Specification approval: 2026-10-30, amended through D32
 - [x] Design approval: 2026-10-31, revision 2, with revision 2.1's changes
 - [x] **Plan approval:** 2026-11-01, revision 2
-- [ ] Implementation
-- [ ] Tests
-- [ ] Review
+- [x] Implementation: 2026-11-01
+- [x] Tests: 2026-11-01, here; CI and the demo still to run
+- [x] Review: 2026-11-01, `/review-diff` with four independent reviews
 - [ ] Design QA — the built screens against the design
 - [ ] Production-readiness assessment
 - [ ] Documentation and status update

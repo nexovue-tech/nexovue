@@ -41,21 +41,21 @@ from datetime import UTC, datetime, timedelta
 from typing import Final, Protocol
 
 from clickhouse_connect.driver.client import Client
+from nexovue_platform.detection import SETTLING_LAG
 from nexovue_platform.tenant_statements import READ_SETTINGS
 
-from nexovue_scheduler.alerts.thresholds import SETTLING
 from nexovue_scheduler.detection.lifecycle import PROJECT_ONSET
 from nexovue_scheduler.detection.store import client_at
 
 MINUTE: Final = timedelta(minutes=1)
-# The same allowance F21's thresholds give a late SDK batch, so the two agree on
-# when a minute is complete.
-EXPORT_ALLOWANCE: Final = SETTLING
+# The allowance a late SDK batch gets past a minute's end: F21's thresholds give the
+# same, which `test_detection_settle.py` holds equal.
+EXPORT_ALLOWANCE: Final = SETTLING_LAG - MINUTE
 
 # Design 2.1, item 1: a hold lasts at most this long from its first minute.
 HOLD_LIMIT: Final = timedelta(minutes=30)
 # Held minutes this close are one hold: a minute between them settles no sooner.
-HOLD_GAP: Final = MINUTE + EXPORT_ALLOWANCE
+HOLD_GAP: Final = SETTLING_LAG
 # Far enough back that a hold's real first minute is read: one that began before
 # this is past its limit however it is cut.
 HOLD_LOOKBACK: Final = 2 * HOLD_LIMIT
@@ -174,7 +174,7 @@ def settled_minute(
 
 def _settled_through(through: datetime) -> datetime:
     """The newest minute M whose end plus the allowance is at or before `through`."""
-    return (through - EXPORT_ALLOWANCE - MINUTE).replace(second=0, microsecond=0)
+    return (through - SETTLING_LAG).replace(second=0, microsecond=0)
 
 
 class PipelineProgress:

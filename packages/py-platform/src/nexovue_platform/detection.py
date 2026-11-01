@@ -56,6 +56,12 @@ DEFAULT_TIMEZONE: Final = "UTC"
 # Why the receiver refused a minute's telemetry for lack of a store (C5).
 INTAKE_REFUSAL_REASONS: Final = ("broker_unavailable",)
 
+# A minute is settled once the pipeline has delivered through its end plus the
+# 2-minute export allowance a late SDK batch gets (design, *When a minute is
+# settled*): the newest minute a clock can have settled starts this long before it.
+# The scheduler settles by it and the API reads delays by it.
+SETTLING_LAG: Final = timedelta(minutes=3)
+
 # A project detection is expected to judge is *not running* once its job has not
 # completed for this long (design 2.1, item 2; FR25, AC26). The API's status and
 # the scheduler's install-wide count of projects behind read it alike.
@@ -256,6 +262,9 @@ class FindingSignal(TypedDict):
     """
 
     signal: Signal
+    # The job's own key for the entry: the signal, or `endpoint:<name>` for an endpoint
+    # failing on its own. Stored so a lost service state restores keys without guessing.
+    key: str
     normal: float | None
     # The normal's band (FR16, `normal_band`): its lower and upper edge.
     band_low: float | None
@@ -266,8 +275,9 @@ class FindingSignal(TypedDict):
     comparison: str
     # The evidence endpoint (FR3), when one is named.
     endpoint: str | None
-    # For *slower*: the evidence endpoint's p95 in the worst window, and in the same
-    # window a week before. Evidence only, never a judgement (FR3).
+    # The evidence endpoint's value in the worst window, and in the same window a week
+    # before: its p95 in ms for *slower*, its share failing in percent for *failing*.
+    # Evidence only, never a judgement (FR3).
     endpoint_current: float | None
     endpoint_last_week: float | None
 
@@ -283,12 +293,14 @@ def finding_signal(
     endpoint: str | None = None,
     endpoint_current: float | None = None,
     endpoint_last_week: float | None = None,
+    key: str | None = None,
 ) -> FindingSignal:
-    """A `findings.signals` entry, every key present."""
+    """A `findings.signals` entry, every key present. `key` defaults to the signal."""
     if signal not in SIGNALS:
         raise ValueError(f"{signal!r} is not a detection signal")
     return FindingSignal(
         signal=signal,
+        key=signal if key is None else key,
         normal=normal,
         band_low=None if band is None else band[0],
         band_high=None if band is None else band[1],

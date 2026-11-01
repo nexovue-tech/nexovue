@@ -30,6 +30,11 @@ export type FindingSignalKind = "slower" | "failing" | "traffic";
 /** One signal behind a finding, with the normal it was judged against. */
 export interface FindingSignal {
   signal: FindingSignalKind;
+  /**
+   * The job's key for the entry: the signal, or `endpoint:<name>` for an endpoint failing on
+   * its own. Null for a finding stored before keys were kept.
+   */
+  key: string | null;
   /** Null when there is no reading, never 0: a missing number and a real zero differ. */
   normal: number | null;
   current: number | null;
@@ -37,6 +42,18 @@ export interface FindingSignal {
   unit: "ms" | "%" | "rpm";
   comparison: string;
   endpoint: string | null;
+  /**
+   * The normal band as it was when judged (FR16), stored with the finding so it outlives
+   * the readings. Null for a finding stored before the band was kept.
+   */
+  band_low: number | null;
+  band_high: number | null;
+  /**
+   * The evidence endpoint's value then and the same time last week (FR3): its p95 for
+   * slower, its share failing for failing more. Null when no week was compared.
+   */
+  endpoint_current: number | null;
+  endpoint_last_week: number | null;
 }
 
 export interface Finding {

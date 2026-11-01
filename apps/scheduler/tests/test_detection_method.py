@@ -23,6 +23,7 @@ import pytest
 from detection_series import daily, poisson, series, span
 from detection_series import minute as series_minute
 from detection_series import window as series_window
+from nexovue_platform.detection import SETTLING_LAG
 
 from nexovue_scheduler.detection.baselines import Baselines, service_baselines
 from nexovue_scheduler.detection.method import (
@@ -496,9 +497,8 @@ NORMAL: Final = SENSITIVITIES["normal"]
 UTC_ZONE: Final = ZoneInfo("UTC")
 # Days in a pool, and windows on each: 4 weeks of the same weekday at ±15 minutes.
 POOL_WINDOWS: Final = 4 * 31
-# The settled minute is judged at least 3 minutes after it ends (design, *When a
-# minute is settled*): the rest of *time to a finding* is the method's.
-SETTLING: Final = timedelta(minutes=3)
+# The settled minute is judged up to the settling lag after it starts (design, *When
+# a minute is settled*): the rest of *time to a finding* is the method's.
 TIME_TO_A_FINDING: Final = timedelta(minutes=12)
 
 
@@ -593,8 +593,8 @@ def test_one_failure_on_a_service_that_never_fails_opens_nothing(per_minute: int
 
 
 def test_an_endpoint_with_one_percent_of_the_traffic_failing_completely_is_named() -> None:
-    """AC11, FR2, FR3: the service moves one point, under the minimum; the endpoint is
-    unusual on its own, critical at its own share (D27), and is the evidence."""
+    """AC11, FR2: the service moves one point, under the minimum; the endpoint is
+    unusual on its own, and critical at its own share (D27)."""
     baseline = _failing(
         0.005, 10_000, endpoints={"POST /checkout": (9_900, 0.005), "POST /pay": (100, 0.005)}
     )
@@ -609,7 +609,6 @@ def test_an_endpoint_with_one_percent_of_the_traffic_failing_completely_is_named
     pay = next(each for each in judged.endpoints if each.name == "POST /pay")
     assert pay.verdict == "unusual"
     assert pay.critical
-    assert judged.evidence_endpoint == "POST /pay"
     checkout = next(each for each in judged.endpoints if each.name == "POST /checkout")
     assert checkout.verdict == "normal"
 
@@ -643,7 +642,7 @@ def test_a_failure_beyond_critical_is_a_critical_finding_in_time() -> None:
     assert found is not None
     index, judged = found
     assert judged.critical
-    assert timedelta(minutes=index - len(calm)) + SETTLING <= TIME_TO_A_FINDING
+    assert timedelta(minutes=index - len(calm)) + SETTLING_LAG <= TIME_TO_A_FINDING
 
 
 def test_a_burst_at_or_above_critical_is_never_tolerated() -> None:
@@ -675,7 +674,7 @@ def test_traffic_falling_to_five_percent_is_a_critical_finding_in_time() -> None
     assert found is not None
     index, judged = found
     assert judged.critical
-    assert timedelta(minutes=index - len(calm)) + SETTLING <= TIME_TO_A_FINDING
+    assert timedelta(minutes=index - len(calm)) + SETTLING_LAG <= TIME_TO_A_FINDING
     assert all(
         judge_traffic(Window(tuple(calm[end - 5 : end])), baseline, NORMAL).verdict == "normal"
         for end in range(5, len(calm) + 1)
@@ -700,7 +699,7 @@ def test_a_small_service_that_stops_is_a_critical_finding_in_time(stops_only: bo
     assert found is not None
     index, judged = found
     assert judged.stop and judged.critical
-    assert timedelta(minutes=index - len(calm)) + SETTLING <= TIME_TO_A_FINDING
+    assert timedelta(minutes=index - len(calm)) + SETTLING_LAG <= TIME_TO_A_FINDING
 
 
 def test_before_three_weeks_a_clear_drop_is_kept_out_and_opens_nothing() -> None:

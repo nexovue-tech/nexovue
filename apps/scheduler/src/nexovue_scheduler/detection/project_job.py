@@ -111,6 +111,7 @@ from nexovue_scheduler.detection.lifecycle import (
     adoptable,
     advance_holds,
     endpoint_key,
+    key_endpoint,
     key_signal,
     project_rule,
     project_title,
@@ -137,7 +138,7 @@ from nexovue_scheduler.detection.projects import project_settings, session_lock
 from nexovue_scheduler.detection.settle import Span
 from nexovue_scheduler.detection.store import (
     DetectionStore,
-    EndpointLatency,
+    EndpointWeeks,
     ProjectBinding,
     ProjectDetection,
     Reading,
@@ -172,6 +173,8 @@ LAST_REQUEST_KEY: Final = "last_request_minute"
 WINDOW_EXPECTED_KEY: Final = "window_expected"
 # Under the failing signal's state: each endpoint's runs above the base test.
 ENDPOINTS_KEY: Final = "endpoints"
+# A share failing is in percent, as the *failing* signal's own values are.
+_PERCENT: Final = 100.0
 # What the project finding's one entry compares with.
 PROJECT_COMPARISON: Final = "Each service against its own normal"
 # Under `detection_state.signals`: the keys a false alarm holds, each with its clear
@@ -1104,8 +1107,7 @@ async def _keep_finding(
         holds = advance_holds(holds, judged)
         if finding is None:
             continue
-        if SLOWER in change.worsened:
-            _name_slower_evidence(detection, service, finding.keys[SLOWER], judged)
+        _name_evidence(detection, service, finding, change.worsened, judged)
         if change.opened:
             finding.muted = muted
             finding_id = await _open(connection, key, service, finding, zone)
@@ -1194,32 +1196,45 @@ async def _keep_finding(
     return stored, kept_out
 
 
-def _name_slower_evidence(
-    detection: ProjectDetection, service: str, record: KeyRecord, judged: MinuteJudged
+def _name_evidence(
+    detection: ProjectDetection,
+    service: str,
+    finding: OpenFinding,
+    worsened: Sequence[str],
+    judged: MinuteJudged,
 ) -> None:
-    """FR3: *slower*'s evidence endpoint, read for the window that is now its worst."""
+    """FR3: each worsened key's evidence endpoint, read for the window that is now its
+    worst. *Slower* and the service's *failing more* rank the endpoints; an endpoint's
+    own key compares itself. Traffic names no endpoint."""
+    keys = [key for key in worsened if key != TRAFFIC]
+    if not keys:
+        return
     end = judged.minute + MINUTE
-    latency = detection.endpoint_latency(service, start=end - judged.width * MINUTE, end=end)
-    found = slower_evidence(latency)
-    record.endpoint, record.endpoint_current, record.endpoint_last_week = found or (
-        None,
-        None,
-        None,
-    )
+    weeks = detection.endpoint_weeks(service, start=end - judged.width * MINUTE, end=end)
+    for key in keys:
+        if key == SLOWER:
+            found = slower_evidence(weeks)
+        elif key == FAILING:
+            found = failing_evidence(weeks)
+        else:
+            found = _endpoint_failing(key, weeks)
+        record = finding.keys[key]
+        record.endpoint, record.endpoint_current, record.endpoint_last_week = found or (
+            key_endpoint(key),
+            None,
+            None,
+        )
 
 
-def slower_evidence(
-    latency: Mapping[str, EndpointLatency],
-) -> tuple[str, float, float] | None:
+def slower_evidence(weeks: Mapping[str, EndpointWeeks]) -> tuple[str, float, float] | None:
     """The endpoint whose p95 rose most, in milliseconds, against the same window a week
     before, with both p95s: evidence only, never a judgement (FR3). Milliseconds rather
     than a ratio, so a fast endpoint that doubles does not outrank the one people wait
     on. Each window needs the endpoint request floor, or its p95 says nothing."""
     rises = [
         (now - before, name, now, before)
-        for name, each in latency.items()
-        if each.requests >= ENDPOINT_REQUESTS_TO_JUDGE
-        and each.week_requests >= ENDPOINT_REQUESTS_TO_JUDGE
+        for name, each in weeks.items()
+        if _compared(each)
         and (now := each.p95_ms) is not None
         and (before := each.week_p95_ms) is not None
         and now > before
@@ -1228,6 +1243,51 @@ def slower_evidence(
         return None
     _, name, now, before = min(rises, key=lambda rise: (-rise[0], rise[1]))
     return name, now, before
+
+
+def failing_evidence(weeks: Mapping[str, EndpointWeeks]) -> tuple[str, float, float] | None:
+    """The endpoint with the largest share of the extra failures against the same
+    window a week before, with its share failing in each, in percent: evidence only,
+    never a judgement (FR3). Extra failures are those beyond last week's share of this
+    week's requests, so more traffic alone adds none, and the largest share of them is
+    the largest count. Each window needs the endpoint request floor."""
+    extras = []
+    for name, each in weeks.items():
+        if not _compared(each):
+            continue
+        before = each.week_failures / each.week_requests
+        extra = each.failures - each.requests * before
+        if extra > 0:
+            extras.append(
+                (extra, name, _PERCENT * each.failures / each.requests, _PERCENT * before)
+            )
+    if not extras:
+        return None
+    _, name, now, before = min(extras, key=lambda found: (-found[0], found[1]))
+    return name, now, before
+
+
+def _endpoint_failing(
+    key: str, weeks: Mapping[str, EndpointWeeks]
+) -> tuple[str, float, float] | None:
+    """An endpoint key's own share failing, this window and the same window last week."""
+    name = key_endpoint(key)
+    each = None if name is None else weeks.get(name)
+    if name is None or each is None or not _compared(each):
+        return None
+    return (
+        name,
+        _PERCENT * each.failures / each.requests,
+        _PERCENT * each.week_failures / each.week_requests,
+    )
+
+
+def _compared(each: EndpointWeeks) -> bool:
+    """Both windows reach the endpoint request floor, so either can be compared."""
+    return (
+        each.requests >= ENDPOINT_REQUESTS_TO_JUDGE
+        and each.week_requests >= ENDPOINT_REQUESTS_TO_JUDGE
+    )
 
 
 def _since(tracked: Mapping[str, Any], finding_id: uuid.UUID, finding: OpenFinding) -> datetime:
@@ -1387,20 +1447,16 @@ async def _open(
 def _restore(row: Any, tracked: Mapping[str, Any]) -> OpenFinding:
     """An open finding from its row and the counts its service's state keeps. A row
     whose keys the state does not hold (closed and reopened elsewhere) is read by
-    signal: its first *failing* entry is the service's, the rest its endpoints'."""
+    signal (`_keys_by_signal`)."""
     entries: list[Mapping[str, Any]] = list(row.signals or [])
     counts = tracked.get("keys", []) if tracked.get("id") == str(row.id) else []
     if len(counts) == len(entries):
         names = [str(entry[0]) for entry in counts]
+    elif all(entry.get("key") for entry in entries):
+        names, counts = [str(entry["key"]) for entry in entries], []
     else:
-        names, counts, seen_failing = [], [], False
-        for entry in entries:
-            signal = entry.get("signal")
-            if signal == "failing" and seen_failing and entry.get("endpoint"):
-                names.append(endpoint_key(entry["endpoint"]))
-            else:
-                names.append(str(signal))
-                seen_failing = seen_failing or signal == "failing"
+        # Written before entries carried their key.
+        names, counts = _keys_by_signal(entries), []
     keys = {}
     for position, (name, entry) in enumerate(zip(names, entries, strict=True)):
         clear, unjudged = (int(counts[position][1]), int(counts[position][2])) if counts else (0, 0)
@@ -1422,6 +1478,19 @@ def _restore(row: Any, tracked: Mapping[str, Any]) -> OpenFinding:
     return OpenFinding(
         severity=row.severity, started_at=row.started_at, keys=keys, muted=bool(row.muted)
     )
+
+
+def _keys_by_signal(entries: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Each entry's key, read from what it names: an endpoint's *failing* entry always
+    names its endpoint, and the service's names its evidence or nothing. So a failing
+    entry naming an endpoint is that endpoint's, unless its key is already taken, when
+    it is the service's: the service's evidence may be one of the finding's endpoints."""
+    names: list[str] = []
+    for entry in entries:
+        signal, endpoint = str(entry.get("signal")), entry.get("endpoint")
+        key = endpoint_key(endpoint) if signal == "failing" and endpoint else signal
+        names.append(signal if key in names else key)
+    return names
 
 
 def _last_request(stored: Mapping[str, Any], runs: Sequence[Judged]) -> datetime | None:
