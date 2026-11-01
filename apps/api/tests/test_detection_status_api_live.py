@@ -28,18 +28,21 @@ from nexovue_platform.detection import (
     TOO_MANY_SERVICES_KEY,
     WINDOW_REQUESTS_KEY,
 )
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from nexovue_api.auth.dependencies import Identity, Reader, get_current_reader
 from nexovue_api.data.postgres.models import (
     DetectionProjectRun,
     DetectionState,
+    DetectionSweep,
     Finding,
     Project,
     ServiceDetectionSettings,
     ServiceLastSeen,
 )
 from nexovue_api.deps import get_app_settings, get_db_session
+from nexovue_api.detection.service import SETTLING_LAG
 from nexovue_api.settings import API_PREFIX, Settings
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 
@@ -173,14 +176,19 @@ async def _detection(
     project_id: uuid.UUID | None = None,
     judged: dict[str, datetime] | None = None,
     expected_minutes_ago: float | None = 60,
+    settled: datetime | None = None,
+    swept_at: datetime | None = None,
 ) -> None:
     """A project the scheduler has judged: its services, its run, and its traffic.
 
     Each service's last judged minute is 4 minutes back, the normal lag, unless
     `judged` names another. `expected_minutes_ago` is when the stop sweep began
     expecting the project to be judged; None when detection does not work on it.
+    The detection sweep ran 5 seconds ago and settled that same minute, unless
+    `settled` and `swept_at` say otherwise.
     """
     on_time = _ago(minutes=4).replace(second=0, microsecond=0)
+    await _sweep(db, settled=settled or on_time, swept_at=swept_at or _ago(seconds=5))
     org_id, project = tenant.organization.id, project_id or tenant.project.id
     for name, signals in services.items():
         db.add(
@@ -211,6 +219,15 @@ async def _detection(
         )
     )
     await db.flush()
+
+
+async def _sweep(db: AsyncSession, *, settled: datetime, swept_at: datetime) -> None:
+    """The install's one `detection_sweep` row, as `coordinator.record_sweep` writes it."""
+    values = {"swept_at": swept_at, "settled_minute": settled}
+    statement = insert(DetectionSweep).values(one_row=True, **values)
+    await db.execute(
+        statement.on_conflict_do_update(index_elements=[DetectionSweep.one_row], set_=values)
+    )
 
 
 # ------------------------------------------------------------ not running (AC26, AC43)
@@ -374,6 +391,7 @@ async def test_a_fresh_run_whose_judging_stands_at_an_old_minute_reads_data_dela
         services={"checkout": _slower("normal"), "search": _slower("normal")},
         last_run=_ago(seconds=20),
         judged={"checkout": stuck, "search": stuck - timedelta(minutes=1)},
+        settled=stuck,
     )
 
     for reader in (_callers(acme).person, _callers(acme).token):
@@ -386,6 +404,59 @@ async def test_a_fresh_run_whose_judging_stands_at_an_old_minute_reads_data_dela
             await _get(db, reader, "/services/checkout/detection", project_id=acme.project.id)
         ).json()
         assert service["state"] == "data_delayed"
+
+
+async def test_one_partition_held_3_minutes_behind_reads_data_delayed(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """AC23: the settled minute waits for every partition, so one held 3 minutes back
+    holds every service's judging back with it, and each reads *data delayed*."""
+    swept = _ago(seconds=5)
+    held = (swept - timedelta(minutes=3) - SETTLING_LAG).replace(second=0, microsecond=0)
+    await _detection(
+        db,
+        acme,
+        services={"checkout": _slower("normal"), "search": _slower("normal")},
+        last_run=_ago(seconds=3),
+        judged={"checkout": held, "search": held},
+        settled=held,
+        swept_at=swept,
+    )
+
+    for reader in (_callers(acme).person, _callers(acme).token):
+        body = (await _get(db, reader, _status_path(acme.project.id))).json()
+        assert body["state"] == "data_delayed"
+        assert body["services_delayed"] == 2
+        service = (
+            await _get(db, reader, "/services/checkout/detection", project_id=acme.project.id)
+        ).json()
+        assert service["state"] == "data_delayed"
+
+
+async def test_a_healthy_project_whose_job_overruns_a_minute_is_not_delayed(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """AC43's spirit for *data delayed*: AC29 gives a job 90 s, so the next sweep's job
+    finds the lock held and the project's judged minute trails the settled one by 2,
+    though the pipeline is on time. The sweep ran at second 59, so the judged minute
+    is over 6 minutes old by the wall clock."""
+    swept = _ago(seconds=60).replace(second=59, microsecond=0)
+    settled = (swept - SETTLING_LAG).replace(second=0, microsecond=0)
+    trailing = settled - timedelta(minutes=2)
+    await _detection(
+        db,
+        acme,
+        services={"checkout": _slower("normal"), "search": _slower("normal")},
+        last_run=_ago(seconds=30),
+        judged={"checkout": trailing, "search": trailing},
+        settled=settled,
+        swept_at=swept,
+    )
+
+    body = (await _get(db, _callers(acme).person, _status_path(acme.project.id))).json()
+
+    assert body["state"] == "judging"
+    assert body["services_delayed"] == 0
 
 
 async def test_one_service_behind_is_delayed_while_the_project_judges_on_time(

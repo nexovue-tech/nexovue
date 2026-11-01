@@ -1,3 +1,4 @@
+import type { ChartBand } from "@/shared/components/chart-band";
 import type { PlotRows } from "@/shared/components/TrendChart";
 import { formatDuration } from "@/shared/format/duration";
 import { formatPercent, UNKNOWN } from "@/shared/format/number";
@@ -40,11 +41,12 @@ export function describeSignal(entry: FindingSignal): string {
   return `${value(entry.worst)} at worst, against ${value(entry.normal)} normally. Now ${value(entry.current)}.`;
 }
 
-/** Who may do what to this finding, as this person (FR23, AC39). */
+/** Who may do what to this finding, as this person (FR22, FR23, AC39). */
 export interface FindingActions {
   acknowledge: boolean;
   falseAlarm: boolean;
   newNormal: boolean;
+  snooze: boolean;
   mute: boolean;
 }
 
@@ -60,6 +62,8 @@ export function availableActions(
     // been nothing (design, *closed*).
     falseAlarm: canOperate && (open || finding.closed_reason === "recovered"),
     newNormal: canConfigure && open && ofAService,
+    // The 3 a.m. lever, every working role's (D25); a mute is an admin's.
+    snooze: canOperate && open && ofAService,
     mute: canConfigure && open && ofAService,
   };
 }
@@ -109,14 +113,26 @@ export interface SignalPlot {
   signal: FindingSignalKind;
   unit: FindingSignal["unit"];
   data: PlotRows;
+  /** The normal band, filled between the normal and its edge (AC38). */
+  band: ChartBand;
 }
 
 export const PLOT_LINES = ["This finding", "Normal", "Edge of the normal band"] as const;
 
+// `data`'s rows: the x axis, then each of `PLOT_LINES` in order.
+const NORMAL_ROW = 2;
+const EDGE_ROW = 3;
+
 export function signalPlot(series: SignalSeries): SignalPlot {
+  // Losing traffic is judged below its normal; the other signals above it.
+  const band =
+    series.signal === "traffic"
+      ? { upper: NORMAL_ROW, lower: EDGE_ROW }
+      : { upper: EDGE_ROW, lower: NORMAL_ROW };
   return {
     signal: series.signal,
     unit: series.unit,
+    band,
     data: [
       series.points.map((point) => Date.parse(point.at) / MS_PER_SECOND),
       series.points.map((point) => point.value),

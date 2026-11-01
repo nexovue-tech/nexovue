@@ -228,6 +228,30 @@ async def opened_and_false_alarms(
     return int(opened), int(false_alarms)
 
 
+async def opened_and_false_alarms_per_service(
+    session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID, since: datetime
+) -> list[tuple[str, int, int]]:
+    """Per service, findings opened since `since` and how many of them are marked a false
+    alarm: most false alarms first, then most opened, then by name."""
+    opened = func.count()
+    false_alarms = func.count().filter(Finding.false_alarm_at.is_not(None))
+    statement = (
+        select(Finding.service_name, opened, false_alarms)
+        .where(
+            Finding.org_id == org_id,
+            Finding.project_id == project_id,
+            Finding.started_at >= since,
+            Finding.service_name.is_not(None),
+        )
+        .group_by(Finding.service_name)
+        .order_by(false_alarms.desc(), opened.desc(), Finding.service_name)
+    )
+    return [
+        (str(name), int(count), int(marked))
+        for name, count, marked in (await session.execute(statement)).all()
+    ]
+
+
 async def judged_service_count(
     session: AsyncSession, *, org_id: uuid.UUID, project_id: uuid.UUID
 ) -> int:

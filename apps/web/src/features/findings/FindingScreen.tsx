@@ -1,22 +1,24 @@
 import { Link, useParams } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { ApiError, isConflict } from "@/shared/api-client";
 import { Button } from "@/shared/components/Button";
+import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SelectField } from "@/shared/components/SelectField";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import type { SeriesToken } from "@/shared/components/TrendChart";
 import { TrendChart } from "@/shared/components/TrendChart";
+import type { Quieting } from "@/shared/detection/api";
 import { useDetectionSettings, useQuietService } from "@/shared/detection/api";
-import { QUIET_CHOICES, quietUntil } from "@/shared/detection/quiet";
+import { QUIET_CHOICES, quietDone, quietEffect } from "@/shared/detection/quiet";
 import { formatRelativeTime } from "@/shared/format/time";
 import { formatZonedTime } from "@/shared/format/zoned";
 import { useCan } from "@/shared/identity";
 import { setSelectedProjectId, useSelection } from "@/shared/selection";
 
-import type { FindingDetail, FindingSignalKind } from "./api";
+import type { FindingDetail, FindingSignalKind, SignalSeries } from "./api";
 import { useFinding, useFindingAction } from "./api";
 import type { DoneAction } from "./finding-page";
 import {
@@ -57,8 +59,8 @@ const PROSE = "max-w-prose";
  * says it is gone (AC40). Times are on the project's clock, named.
  *
  * What a person may do follows the API's table (FR23, AC39): a viewer sees no action,
- * a member may acknowledge and call a false alarm, an admin may also set a new normal
- * and mute the service. Each confirms inline, as the rest of the console does (C11).
+ * a member may acknowledge, call a false alarm and snooze the service, an admin may
+ * also set a new normal and mute it. Each confirms inline, as the rest of the console does (C11).
  */
 export function FindingScreen() {
   const { findingId } = useParams({ from: "/shell/findings/$findingId" });
@@ -137,18 +139,37 @@ function Header({ finding, zone }: { finding: FindingDetail; zone?: string }) {
 
 /** Where the evidence is: the service's own page, in the finding's project. */
 function Subject({ finding }: { finding: FindingDetail }) {
-  const { projectId } = useSelection();
   if (finding.service_name === null) return <span>This project</span>;
+  return (
+    <ServiceLink
+      service={finding.service_name}
+      projectId={finding.project_id}
+      className="font-mono text-ink hover:underline"
+    />
+  );
+}
+
+/** A service's page, opened in the finding's project, which may not be the one selected. */
+function ServiceLink({
+  service,
+  projectId,
+  className,
+}: {
+  service: string;
+  projectId: string;
+  className: string;
+}) {
+  const selected = useSelection().projectId;
   return (
     <Link
       to="/services/$name"
-      params={{ name: finding.service_name }}
+      params={{ name: service }}
       onClick={() => {
-        if (projectId !== finding.project_id) setSelectedProjectId(finding.project_id);
+        if (selected !== projectId) setSelectedProjectId(projectId);
       }}
-      className="font-mono text-ink hover:underline"
+      className={className}
     >
-      {finding.service_name}
+      {service}
     </Link>
   );
 }
@@ -167,7 +188,7 @@ function describeState(finding: FindingDetail, zone?: string): string {
   return `Open since ${since}`;
 }
 
-type Armed = "false-alarm" | "new-normal" | "mute";
+type Armed = "false-alarm" | "new-normal" | Quieting;
 
 /**
  * The actions this person may take, each confirmed inline. A finding that changed
@@ -190,14 +211,17 @@ function Controls({
   const quiet = useQuietService(finding.project_id, finding.service_name ?? "");
   const [armed, setArmed] = useState<Armed>();
   const [reason, setReason] = useState("");
-  const [muteChoice, setMuteChoice] = useState(QUIET_CHOICES.mute[1]?.id ?? "");
-  const [done, setDone] = useState<string>();
-  const [changedMeanwhile, setChangedMeanwhile] = useState<string>();
+  const [quietChoice, setQuietChoice] = useState<Record<Quieting, string>>({
+    snooze: QUIET_CHOICES.snooze[0]?.id ?? "",
+    mute: QUIET_CHOICES.mute[1]?.id ?? "",
+  });
+  const [done, setDone] = useState("");
+  const [changedMeanwhile, setChangedMeanwhile] = useState("");
 
   const run = (action: DoneAction) => {
     const wasOpen = finding.state !== "closed";
-    setDone(undefined);
-    setChangedMeanwhile(undefined);
+    setDone("");
+    setChangedMeanwhile("");
     act.mutate(
       { action, reason },
       {
@@ -217,20 +241,17 @@ function Controls({
     );
   };
 
-  const mute = () => {
-    const choice = QUIET_CHOICES.mute.find((each) => each.id === muteChoice);
-    if (choice === undefined) return;
-    setDone(undefined);
+  const quieten = (kind: Quieting) => {
+    const choice = QUIET_CHOICES[kind].find((each) => each.id === quietChoice[kind]);
+    if (choice === undefined || finding.service_name === null) return;
+    const service = finding.service_name;
+    setDone("");
     quiet.mutate(
-      { kind: "mute", until: quietUntil(choice) },
+      { kind, minutes: choice.minutes },
       {
         onSuccess: (controls) => {
           setArmed(undefined);
-          setDone(
-            controls.muted_until
-              ? `${finding.service_name} is muted until ${formatZonedTime(controls.muted_until, { zone })}. Its findings are still recorded.`
-              : `${finding.service_name} is no longer muted.`,
-          );
+          setDone(quietDone(kind, service, controls, zone));
         },
       },
     );
@@ -264,6 +285,11 @@ function Controls({
         {allowed.newNormal ? (
           <Button variant="secondary" onClick={() => setArmed("new-normal")}>
             This is the new normal
+          </Button>
+        ) : null}
+        {allowed.snooze ? (
+          <Button variant="secondary" onClick={() => setArmed("snooze")}>
+            Snooze this service
           </Button>
         ) : null}
         {allowed.mute ? (
@@ -325,23 +351,20 @@ function Controls({
         )
       ) : null}
 
-      {armed === "mute" ? (
+      {(armed === "snooze" || armed === "mute") && finding.service_name !== null ? (
         <Confirm
           onCancel={() => setArmed(undefined)}
-          onConfirm={mute}
+          onConfirm={() => quieten(armed)}
           pending={quiet.isPending}
-          confirmLabel={`Mute ${finding.service_name}`}
+          confirmLabel={`${armed === "snooze" ? "Snooze" : "Mute"} ${finding.service_name}`}
         >
-          <p className={PROSE}>
-            Nothing is sent about {finding.service_name} until the mute ends, and nothing is sent
-            for what it covered after. Its findings are still recorded, under Muted.
-          </p>
+          <p className={PROSE}>{quietEffect(armed, finding.service_name)}</p>
           <div className="max-w-xs">
             <SelectField
               label="For"
-              value={muteChoice}
-              options={QUIET_CHOICES.mute}
-              onChange={setMuteChoice}
+              value={quietChoice[armed]}
+              options={QUIET_CHOICES[armed]}
+              onChange={(id) => setQuietChoice((chosen) => ({ ...chosen, [armed]: id }))}
               optionLabel={(choice) => choice.label}
               stacked
             />
@@ -349,16 +372,13 @@ function Controls({
         </Confirm>
       ) : null}
 
-      {done ? (
-        <p role="status" className={`text-ink text-sm ${PROSE}`}>
-          {done}
-        </p>
-      ) : null}
-      {changedMeanwhile ? (
-        <p role="alert" className={`text-warning-text text-sm ${PROSE}`}>
-          {changedMeanwhile}
-        </p>
-      ) : null}
+      {/* Both always in the page, so a screen reader hears the words when they arrive. */}
+      <p role="status" className={`text-ink text-sm ${PROSE}`}>
+        {done}
+      </p>
+      <p role="alert" className={`text-warning-text text-sm ${PROSE}`}>
+        {changedMeanwhile}
+      </p>
       {failure ? <InlineFailure title="That did not go through" error={failure} /> : null}
     </section>
   );
@@ -382,7 +402,7 @@ function Confirm({
   onCancel: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-3 rounded border border-warning-border bg-warning-subtle p-4 text-sm">
+    <ConfirmPanel label={confirmLabel}>
       {children}
       <div className="flex gap-2">
         <Button pending={pending} pendingLabel="Saving" onClick={onConfirm}>
@@ -392,7 +412,7 @@ function Confirm({
           Cancel
         </Button>
       </div>
-    </div>
+    </ConfirmPanel>
   );
 }
 
@@ -441,26 +461,38 @@ function Readings({ finding }: { finding: FindingDetail }) {
           for this finding. The values above were stored with it.
         </p>
       ) : (
-        finding.series.map((series) => {
-          const plot = signalPlot(series);
-          return (
-            <figure key={series.signal} className="flex flex-col gap-1">
-              <figcaption className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
-                {SIGNAL_NAMES[series.signal]}
-              </figcaption>
-              <TrendChart
-                label={PLOT_LINES}
-                seriesToken={SERIES_TOKEN[series.signal]}
-                data={plot.data}
-                formatValue={(value) => formatSignalValue(series.unit, value)}
-                description={`${SIGNAL_NAMES[series.signal]}: each judged minute against its normal and the edge of its normal band, ${series.points.length} minutes.`}
-                showPoints={series.points.length < 30}
-              />
-            </figure>
-          );
-        })
+        finding.series.map((series) => <SignalChart key={series.signal} series={series} />)
       )}
     </section>
+  );
+}
+
+/** Below this many readings each is drawn as a dot too: a lone minute has no line. */
+const DOTS_BELOW = 30;
+
+/** One signal's readings, its normal, and the band between the normal and its edge. */
+function SignalChart({ series }: { series: SignalSeries }) {
+  // Built once per series, so a re-render of the page does not hand the chart new rows.
+  const plot = useMemo(() => signalPlot(series), [series]);
+  const formatValue = useMemo(
+    () => (value: number) => formatSignalValue(series.unit, value),
+    [series.unit],
+  );
+  return (
+    <figure className="flex flex-col gap-1">
+      <figcaption className="font-mono text-2xs text-ink-dim uppercase tracking-caps">
+        {SIGNAL_NAMES[series.signal]}
+      </figcaption>
+      <TrendChart
+        label={PLOT_LINES}
+        seriesToken={SERIES_TOKEN[series.signal]}
+        data={plot.data}
+        band={plot.band}
+        formatValue={formatValue}
+        description={`${SIGNAL_NAMES[series.signal]}: each judged minute against its normal band, shaded from the normal to its edge, ${series.points.length} minutes.`}
+        showPoints={series.points.length < DOTS_BELOW}
+      />
+    </figure>
   );
 }
 
@@ -477,13 +509,11 @@ function Services({ finding }: { finding: FindingDetail }) {
         <ul className="flex flex-wrap gap-x-4 gap-y-1">
           {finding.services.map((service) => (
             <li key={service}>
-              <Link
-                to="/services/$name"
-                params={{ name: service }}
+              <ServiceLink
+                service={service}
+                projectId={finding.project_id}
                 className="font-mono text-ink text-sm hover:underline"
-              >
-                {service}
-              </Link>
+              />
             </li>
           ))}
         </ul>

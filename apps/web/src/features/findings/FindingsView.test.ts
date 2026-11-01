@@ -221,6 +221,25 @@ describe("the feed leads when there is anything in it", () => {
     expect(text).toContain("This project");
   });
 
+  it("names each open finding's severity in a word, not by its colour alone", async () => {
+    const container = await render({
+      findings: [FINDING, { ...FINDING, id: "f2", severity: "warning" }],
+    });
+
+    const rows = [...container.querySelectorAll("li")].map((row) =>
+      (row.textContent ?? "").replace(/\s+/g, " "),
+    );
+    expect(rows[0]).toContain("Critical");
+    expect(rows[1]).toContain("Warning");
+  });
+
+  it("says when the feed shows only the first 200", async () => {
+    expect(await readable({ findings: [FINDING], truncated: true })).toContain(
+      "Showing the first 200 findings",
+    );
+    expect(await readable({ findings: [FINDING] })).not.toContain("Showing the first 200");
+  });
+
   it("offers no probable cause until Stage 2 can name one", async () => {
     expect(await readable({ findings: [FINDING] })).not.toContain("Probably");
   });

@@ -575,6 +575,12 @@ async def test_stats_count_this_week_s_findings_and_false_alarms_per_judged_serv
             "judged_services": 2,
             # 2 false alarms over 2 services for one week.
             "false_finding_rate_per_service_week": 1.0,
+            # FR26: each service with a finding in the window, most false alarms first.
+            "services": [
+                {"service_name": "b", "opened": 1, "false_alarms": 1, "false_alarms_per_week": 1.0},
+                {"service_name": "c", "opened": 1, "false_alarms": 1, "false_alarms_per_week": 1.0},
+                {"service_name": "a", "opened": 1, "false_alarms": 0, "false_alarms_per_week": 0.0},
+            ],
         }
 
 
@@ -605,6 +611,35 @@ async def test_stats_over_a_longer_window_divide_by_its_weeks(
     ).json()
 
     assert body["false_finding_rate_per_service_week"] == pytest.approx(0.5)
+    [checkout] = body["services"]
+    assert checkout["false_alarms_per_week"] == pytest.approx(0.5)
+
+
+async def test_stats_count_each_service_apart_and_a_project_finding_for_none(
+    db: AsyncSession, clickhouse: AsyncClient, acme: ProvisionedTenant
+) -> None:
+    """FR26: per service. A project finding spans several, so it counts for the project
+    alone."""
+    now = datetime.now(UTC)
+    await _finding(db, acme, service_name="checkout", closed_minutes_ago=10, false_alarm_at=now)
+    await _finding(db, acme, service_name="checkout", started_minutes_ago=90)
+    await _finding(db, acme, service_name="search", closed_minutes_ago=10, false_alarm_at=now)
+    await _finding(db, acme, service_name="search", closed_minutes_ago=20, false_alarm_at=now)
+    await _finding(db, acme, service_name=None)
+
+    body = (
+        await _get(
+            db, clickhouse, _callers(acme).person, "/findings/stats", project_id=acme.project.id
+        )
+    ).json()
+
+    assert body["opened"] == 5
+    assert [
+        (each["service_name"], each["opened"], each["false_alarms"]) for each in body["services"]
+    ] == [
+        ("search", 2, 2),
+        ("checkout", 2, 1),
+    ]
 
 
 async def test_stats_with_nothing_judged_have_no_rate(
@@ -617,3 +652,4 @@ async def test_stats_with_nothing_judged_have_no_rate(
     ).json()
 
     assert (body["opened"], body["false_finding_rate_per_service_week"]) == (0, None)
+    assert body["services"] == []

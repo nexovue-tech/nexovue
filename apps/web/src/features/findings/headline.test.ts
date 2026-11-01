@@ -160,6 +160,22 @@ describe("what detection may say above the checks", () => {
     ).toBe("All judged services are normal. 1 is still learning");
   });
 
+  it("says how many services' data is delayed, never that every judged one is normal", () => {
+    expect(detectionHeadlineFor(status({ services_delayed: 2 }), AT)).toEqual({
+      title: "Data from 2 services is delayed, so they are judged once it arrives",
+      wrong: false,
+    });
+    expect(detectionHeadlineFor(status({ services_delayed: 1 }), AT)?.title).toBe(
+      "Data from 1 service is delayed, so it is judged once it arrives",
+    );
+  });
+
+  it("says so while a finding is open too: the feed cannot speak for those services", () => {
+    expect(detectionHeadlineFor(status({ services_delayed: 2, open_findings: 1 }), AT)?.title).toBe(
+      "Data from 2 services is delayed, so they are judged once it arrives",
+    );
+  });
+
   it("calls the judged services normal when every one is judged and nothing is open", () => {
     expect(detectionHeadlineFor(status(), AT)).toEqual({
       title: "All judged services are normal",

@@ -1,12 +1,15 @@
-"""The Postgres reads behind detection's status. Every statement binds `org_id`.
+"""The Postgres reads behind detection's status. Every statement binds `org_id`,
+except `detection_sweep`'s, whose one row describes nexovue's pipeline and names no
+tenant.
 
-Detection's own tables are written by the scheduler (`detection/project_job.py`);
-nothing here reads ClickHouse.
+Detection's own tables are written by the scheduler (`detection/project_job.py`,
+`detection/coordinator.py`); nothing here reads ClickHouse.
 """
 
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
@@ -14,9 +17,12 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nexovue_api.audit import service as audit
 from nexovue_api.data.postgres.models import (
+    AuditLogEntry,
     DetectionProjectRun,
     DetectionState,
+    DetectionSweep,
     Finding,
     ServiceDetectionSettings,
 )
@@ -33,6 +39,12 @@ async def project_run(
     )
     run: DetectionProjectRun | None = await session.scalar(statement)
     return run
+
+
+async def detection_sweep(session: AsyncSession) -> DetectionSweep | None:
+    """When the install's detection sweep last ran, and the newest minute it settled."""
+    sweep: DetectionSweep | None = await session.scalar(select(DetectionSweep))
+    return sweep
 
 
 async def service_states(
@@ -148,3 +160,43 @@ async def quieten(
     )
     found: ServiceDetectionSettings = (await session.scalars(statement)).one()
     return found
+
+
+@dataclass(frozen=True, slots=True)
+class SnoozeRecord:
+    """One snooze set or ended, as the audit log keeps it: when, until when (None when
+    it ended one), and whether it counts toward the members' allowance."""
+
+    at: datetime
+    until: datetime | None
+    member: bool
+
+
+async def snooze_records(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    project_id: uuid.UUID,
+    service_name: str,
+    since: datetime,
+) -> list[SnoozeRecord]:
+    """Every snooze of one service set or ended since `since`, oldest first."""
+    statement = (
+        select(AuditLogEntry.at, AuditLogEntry.detail)
+        .where(
+            AuditLogEntry.org_id == org_id,
+            AuditLogEntry.action == audit.SERVICE_SNOOZED,
+            AuditLogEntry.target == audit.project_target(project_id),
+            AuditLogEntry.detail["service"].astext == service_name,
+            AuditLogEntry.at >= since,
+        )
+        .order_by(AuditLogEntry.at, AuditLogEntry.id)
+    )
+    return [
+        SnoozeRecord(
+            at=at,
+            until=None if detail.get("until") is None else datetime.fromisoformat(detail["until"]),
+            member=bool(detail.get(audit.MEMBER_SNOOZE_KEY)),
+        )
+        for at, detail in (await session.execute(statement)).all()
+    ]

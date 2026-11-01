@@ -395,7 +395,7 @@ Each follows the same internal layout: `router.py` (HTTP only, no SQL, no busine
 | `billing` | Plan, pricing, checkout, and the payment-processor webhook |
 | `integrations` | Cloud/database connector definitions, with no credentials ever stored server-side |
 | `findings` | Anomaly detection's feed, one finding with its readings, and the counts the settings show; acknowledge, false alarm and new normal (F6). The reads are on the token read surface |
-| `detection` | A project's detection status and settings (sensitivity, time zone), one service's state, and a service's snooze (members, up to 4 hours) and mute (admins, up to 30 days) (F6). The reads are on the token read surface |
+| `detection` | A project's detection status and settings (sensitivity, time zone), one service's state, and a service's snooze (members, up to 4 hours, and members' snoozes of one service at most 4 hours in any 24, counted from the audit log) and mute (admins, up to 30 days) (F6). A snooze or mute is asked for in minutes and ends on the API's clock. *Data delayed* is read from `detection_sweep`: the pipeline is behind when its settled minute trails what the sweep's own clock could settle by 2 minutes or more. The reads are on the token read surface |
 
 ### 6.10 Billing, in more detail
 

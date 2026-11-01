@@ -160,13 +160,13 @@ function RuleEditorPage({ title, children }: { title: string; children: React.Re
  *  and who can change it — never a form the API would refuse. */
 function ReadOnlyRule({ rule }: { rule: AlertRule }) {
   return (
-    <section aria-label="This rule" className="flex max-w-2xl flex-col gap-2 text-ink text-sm">
-      <p>{describeCondition(rule)}.</p>
-      <p className="text-ink-dim">
+    <section aria-label="This rule" className="flex flex-col gap-2 text-ink text-sm">
+      <p className="max-w-prose">{describeCondition(rule)}.</p>
+      <p className="max-w-prose text-ink-dim">
         To {rule.channels.map((channel) => channel.name).join(", ") || "nobody"}.
         {isMuted(rule.muted_until) ? ` Muted until ${formatUntil(rule.muted_until)}.` : null}
       </p>
-      <p className="text-ink-dim">Only an owner or an admin can change this rule.</p>
+      <p className="max-w-prose text-ink-dim">Only an owner or an admin can change this rule.</p>
     </section>
   );
 }

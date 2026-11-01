@@ -74,19 +74,39 @@ describe("the detection badge", () => {
     );
   });
 
-  it("names the day a learning service is judged from: its latest signal's", () => {
+  it("leads with the day judging starts, as the feed does, and names traffic's later day", () => {
+    // Spec, *Error cases*: "Learning, with the date judging starts. Traffic drops wait
+    // for 3 weeks."
     const badge = describeBadge(
       detection({
         state: "learning",
         signals: [
           { ...judged("slower"), state: "learning", learning_until: "2026-11-03" },
+          { ...judged("failing"), state: "learning", learning_until: "2026-11-03" },
           { ...judged("traffic"), state: "learning", learning_until: "2026-11-21" },
         ],
       }),
       { failed: false },
     );
 
-    expect(badge?.label).toBe("Learning until 21 Nov");
+    expect(badge?.label).toBe("Learning until 3 Nov");
+    expect(badge?.detail).toBe("Traffic drops are judged from 21 Nov.");
+  });
+
+  it("adds nothing when every signal starts on the same day", () => {
+    const badge = describeBadge(
+      detection({
+        state: "learning",
+        signals: [
+          { ...judged("slower"), state: "learning", learning_until: "2026-11-03" },
+          { ...judged("traffic"), state: "learning", learning_until: "2026-11-03" },
+        ],
+      }),
+      { failed: false },
+    );
+
+    expect(badge?.label).toBe("Learning until 3 Nov");
+    expect(badge?.detail).toBeNull();
   });
 
   it("says which signal a judged service is too quiet to judge", () => {

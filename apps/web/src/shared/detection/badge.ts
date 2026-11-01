@@ -80,20 +80,38 @@ export function describeBadge(
         tone: "quiet",
       };
     case "learning":
-      return { label: learningLabel(detection.signals), detail: null, tone: "quiet" };
+      return learningBadge(detection.signals);
     case "judged":
       return { label: "Judged", detail: notJudgedDetail(detection.signals), tone: "quiet" };
   }
 }
 
-/** "Learning until 3 Nov": the latest day any signal is still learning. */
-function learningLabel(signals: readonly SignalStatus[]): string {
-  const days = signals
-    .map((each) => each.learning_until)
-    .filter((day): day is string => day !== null)
-    .sort();
-  const last = days.at(-1);
-  return last === undefined ? "Learning" : `Learning until ${formatCalendarDay(last)}`;
+/** What a signal judged later than the rest is, in a sentence's opening words. */
+const JUDGED_LATER: Record<SignalKind, string> = {
+  slower: "Slowness is",
+  failing: "Failures are",
+  traffic: "Traffic drops are",
+};
+
+/**
+ * "Learning until 3 Nov": the day judging starts, as the feed's headline says it. A
+ * signal that waits longer, as traffic drops wait 3 weeks (spec, *Error cases*), is
+ * named beside it, so neither day contradicts the other.
+ */
+function learningBadge(signals: readonly SignalStatus[]): Badge {
+  const learning = signals.flatMap((each) =>
+    each.learning_until === null ? [] : [{ signal: each.signal, day: each.learning_until }],
+  );
+  const first = learning.map((each) => each.day).sort()[0];
+  if (first === undefined) return { label: "Learning", detail: null, tone: "quiet" };
+  const later = learning
+    .filter((each) => each.day > first)
+    .map((each) => `${JUDGED_LATER[each.signal]} judged from ${formatCalendarDay(each.day)}.`);
+  return {
+    label: `Learning until ${formatCalendarDay(first)}`,
+    detail: later.length > 0 ? later.join(" ") : null,
+    tone: "quiet",
+  };
 }
 
 /** What a judged service still cannot be judged on, signal by signal (BR4). */

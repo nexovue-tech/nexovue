@@ -229,9 +229,15 @@ async def test_the_export_holds_what_the_person_said_about_findings_and_services
     await findings.mark_false_alarm(
         db, readings, actor=priya, finding_id=finding.id, reason="our load test", now=_now()
     )
-    until = _now() + timedelta(hours=1)
+    now = _now()
+    until = now + timedelta(hours=1)
     await detection.snooze_service(
-        db, actor=priya, project_id=project_id, service_name="checkout", until=until, now=_now()
+        db,
+        actor=priya,
+        project_id=project_id,
+        service_name="checkout",
+        length=timedelta(hours=1),
+        now=now,
     )
     await db.flush()
 
@@ -243,7 +249,12 @@ async def test_the_export_holds_what_the_person_said_about_findings_and_services
         "reason": "our load test",
         "returns_minutes": True,
     }
-    assert activity[audit.SERVICE_SNOOZED] == {"service": "checkout", "until": until.isoformat()}
+    # An admin's snooze uses none of the members' 4 hours a day (AC34).
+    assert activity[audit.SERVICE_SNOOZED] == {
+        "service": "checkout",
+        "until": until.isoformat(),
+        audit.MEMBER_SNOOZE_KEY: False,
+    }
     owner = await personal_data.export(
         db, user=acme.user, organization=acme.organization, now=_now()
     )

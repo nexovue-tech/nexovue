@@ -136,6 +136,9 @@ FINDING_ADOPTED: Final = detection.ADOPTED_AUDIT_ACTION
 SERVICE_SNOOZED: Final = "service.snoozed"
 SERVICE_MUTED: Final = "service.muted"
 PROJECT_DETECTION_CHANGED: Final = "project.detection_changed"
+# In a snooze's detail: set by someone who may not mute, so it counts toward the
+# members' 4 hours a day (AC34).
+MEMBER_SNOOZE_KEY: Final = "member"
 
 MEMBER_INVITED: Final = "member.invited"
 MEMBER_INVITE_RESENT: Final = "member.invite_resent"
@@ -920,16 +923,24 @@ def record_service_quietened(
     service_name: str,
     until: datetime | None,
     actor_user_id: uuid.UUID,
+    member: bool = False,
 ) -> None:
     """A service muted (BR9) or snoozed (D25) until a time, or ended early when `until`
-    is None. The target is the project: a service has no row of its own to name."""
+    is None. The target is the project: a service has no row of its own to name.
+
+    `member` marks a snooze by someone who may not mute: the members' allowance is
+    counted from these rows (AC34)."""
     _add(
         db,
         org_id=org_id,
         actor_user_id=actor_user_id,
         action=action,
-        target=_target(PROJECT_TARGET, project_id),
-        detail={"service": service_name, "until": None if until is None else until.isoformat()},
+        target=project_target(project_id),
+        detail={
+            "service": service_name,
+            "until": None if until is None else until.isoformat(),
+            MEMBER_SNOOZE_KEY: member,
+        },
     )
 
 
@@ -1294,6 +1305,11 @@ def _add(
             detail=detail,
         )
     )
+
+
+def project_target(project_id: uuid.UUID) -> str:
+    """The target a project's entries name, as readers that filter by it spell it."""
+    return _target(PROJECT_TARGET, project_id)
 
 
 def _target(kind: str, identifier: uuid.UUID) -> str:

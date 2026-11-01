@@ -47,6 +47,7 @@ from nexovue_api.findings.schemas import (
     LinkedIncident,
     NewNormalPreview,
     ProposedShift,
+    ServiceFindingStats,
     SignalName,
     SignalPoint,
     SignalSeries,
@@ -395,6 +396,9 @@ async def finding_stats(
         session, org_id=org_id, project_id=project_id, since=now - timedelta(days=days)
     )
     services = await queries.judged_service_count(session, org_id=org_id, project_id=project_id)
+    per_service = await queries.opened_and_false_alarms_per_service(
+        session, org_id=org_id, project_id=project_id, since=now - timedelta(days=days)
+    )
     return FindingStats(
         days=days,
         opened=opened,
@@ -403,6 +407,15 @@ async def finding_stats(
         false_finding_rate_per_service_week=false_finding_rate(
             false_alarms=false_alarms, services=services, days=days
         ),
+        services=[
+            ServiceFindingStats(
+                service_name=name,
+                opened=count,
+                false_alarms=marked,
+                false_alarms_per_week=marked / (days / DAYS_PER_WEEK),
+            )
+            for name, count, marked in per_service
+        ],
     )
 
 

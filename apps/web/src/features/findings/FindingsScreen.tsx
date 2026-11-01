@@ -4,6 +4,7 @@ import { useState } from "react";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SkeletonRows } from "@/shared/components/Skeleton";
 import { Sparkline } from "@/shared/components/Sparkline";
+import { useDetectionSettings } from "@/shared/detection/api";
 import { formatDuration } from "@/shared/format/duration";
 import { formatCount, formatPercent, UNKNOWN } from "@/shared/format/number";
 import { plural } from "@/shared/format/plural";
@@ -11,7 +12,7 @@ import { formatRatePerMinute } from "@/shared/format/rate";
 import { formatRelativeTime } from "@/shared/format/time";
 import { useLiveWindow, useSelection } from "@/shared/selection";
 
-import type { CheckCounts, DetectionStatus, Finding, ProjectTotals } from "./api";
+import type { CheckCounts, DetectionStatus, Finding, FindingSeverity, ProjectTotals } from "./api";
 import { useCheckCounts, useDetectionStatus, useFindings, useProjectSummary } from "./api";
 import { CLOSED_AS } from "./finding-words";
 import { detectionHeadlineFor, headlineFor } from "./headline";
@@ -48,10 +49,13 @@ export function FindingsScreen() {
   // the fifth is refused rather than queued.
   const checks = useCheckCounts(projectId, timeWindow, summary.data !== undefined);
   const detection = useDetectionStatus(projectId, timeWindow);
+  // Not waited for: the browser's clock serves until the project's is read.
+  const settings = useDetectionSettings(projectId);
 
   return (
     <FindingsView
       findings={feed.data?.findings ?? []}
+      truncated={feed.data?.truncated ?? false}
       mutedCount={feed.data?.muted_count ?? 0}
       showingMuted={showingMuted}
       onToggleMuted={() => setShowingMuted((showing) => !showing)}
@@ -66,12 +70,15 @@ export function FindingsScreen() {
       totals={summary.data}
       checks={checks.data}
       detection={detection.data}
+      zone={settings.data?.timezone}
     />
   );
 }
 
 export interface FindingsViewProps {
   findings: readonly Finding[];
+  /** True when the API held more than it sent: the feed says it is the first 200. */
+  truncated?: boolean;
   /** How many findings are muted, and so left out of the feed. */
   mutedCount: number;
   /** True when the list holds the muted findings instead of the feed. */
@@ -90,6 +97,7 @@ export interface FindingsViewProps {
 
 export function FindingsView({
   findings,
+  truncated = false,
   mutedCount,
   showingMuted,
   onToggleMuted,
@@ -153,13 +161,21 @@ export function FindingsView({
             </section>
           ) : null}
           {ordered.length > 0 ? (
-            <ul className="shrink-0 border-line border-t">
-              {ordered.map((found) => (
-                <li key={found.id}>
-                  <FindingRow finding={found} />
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="shrink-0 border-line border-t">
+                {ordered.map((found) => (
+                  <li key={found.id}>
+                    <FindingRow finding={found} />
+                  </li>
+                ))}
+              </ul>
+              {truncated ? (
+                <p className="shrink-0 px-4 pt-3 text-ink-dim text-xs">
+                  Showing the first {formatCount(FEED_LIMIT)} findings: open ones first, then the
+                  most recent.
+                </p>
+              ) : null}
+            </>
           ) : showingMuted ? (
             // Not the summary: an empty muted list says nothing about the system.
             <p className="shrink-0 border-line border-t px-4 py-6 text-ink-dim text-sm">
@@ -278,6 +294,19 @@ function MutedLink({
   );
 }
 
+/** The API's cap on one read of the feed (`GET /findings`, at most 200). */
+const FEED_LIMIT = 200;
+
+const SEVERITY_WORD: Record<FindingSeverity, string> = {
+  critical: "Critical",
+  warning: "Warning",
+};
+
+const SEVERITY_TEXT: Record<FindingSeverity, string> = {
+  critical: "text-critical-text",
+  warning: "text-warning-text",
+};
+
 /** The card's sentence, which opens the finding's own page (D12). */
 function FindingLink({ finding }: { finding: Finding }) {
   return (
@@ -341,7 +370,12 @@ function FindingRow({ finding }: { finding: Finding }) {
         <h3 className="text-ink text-sm">
           <FindingLink finding={finding} />
         </h3>
-        <p className="mt-0.5 font-mono text-2xs text-ink-dim">{subject}</p>
+        {/* The severity in a word as well as the dot's colour (design principle 6). */}
+        <p className="mt-0.5 font-mono text-2xs text-ink-dim">
+          <span className={SEVERITY_TEXT[finding.severity]}>{SEVERITY_WORD[finding.severity]}</span>
+          {" · "}
+          {subject}
+        </p>
       </div>
 
       <div className="flex shrink-0 items-start gap-3">

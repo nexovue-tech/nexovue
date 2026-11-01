@@ -33,7 +33,13 @@ async function heading(container: HTMLElement) {
   return found;
 }
 
-const ACTIONS = ["Acknowledge", "False alarm", "This is the new normal", "Mute this service"];
+const ACTIONS = [
+  "Acknowledge",
+  "False alarm",
+  "This is the new normal",
+  "Snooze this service",
+  "Mute this service",
+];
 
 describe("the finding page", () => {
   it("leads with the sentence, then each signal's values, comparison and readings (AC38)", async () => {
@@ -79,7 +85,7 @@ describe("the finding page", () => {
     expect(buttons(container).filter((label) => ACTIONS.includes(label))).toEqual([]);
   });
 
-  it("offers a member acknowledge and false alarm, but not the new normal or a mute (AC39)", async () => {
+  it("offers a member acknowledge, false alarm and a snooze, but not the new normal or a mute (AC39, FR22)", async () => {
     stubApi(finding(), { role: "member" });
     const { container } = await mountFinding();
 
@@ -87,10 +93,11 @@ describe("the finding page", () => {
     expect(buttons(container).filter((label) => ACTIONS.includes(label))).toEqual([
       "Acknowledge",
       "False alarm",
+      "Snooze this service",
     ]);
   });
 
-  it("offers an admin all four", async () => {
+  it("offers an admin all five", async () => {
     stubApi(finding(), { role: "admin" });
     const { container } = await mountFinding();
 
@@ -249,6 +256,33 @@ describe("the finding page", () => {
     ]);
   });
 
+  it("opens a project finding's services in the finding's own project", async () => {
+    const other = "0d3c5a7e-1111-4c2f-9b5d-1f3f7d6a0999";
+    stubApi(
+      finding({
+        project_id: other,
+        scope: "project",
+        service_name: null,
+        services: ["cart"],
+        series: [],
+        new_normal: null,
+      }),
+      {
+        extra: {
+          [`GET /projects/${other}/detection`]: json({ sensitivity: "normal", timezone: "UTC" }),
+        },
+      },
+    );
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const link = container.querySelector<HTMLAnchorElement>('a[href="/services/cart"]');
+    if (!link) throw new Error("no link to cart");
+    await act(async () => link.click());
+
+    expect(JSON.parse(localStorage.getItem("nexovue.selection") ?? "{}").projectId).toBe(other);
+  });
+
   it("says a muted finding sends nothing, and links its threshold incident", async () => {
     stubApi(
       finding({
@@ -302,6 +336,72 @@ describe("the finding page", () => {
 
     await waitFor(() => readable(container).includes("checkout is muted until"), "the mute");
     const [call] = api.to("PUT", "/services/checkout/mute");
-    expect(call?.body).toMatchObject({ project_id: PROJECT_ID });
+    // A length, so the server's clock says when it ends: a day, the default.
+    expect(call?.body).toEqual({ project_id: PROJECT_ID, minutes: 1440 });
+  });
+
+  it("lets a member snooze the service, for a length the server counts (FR22, FR31)", async () => {
+    const api = stubApi(finding(), {
+      role: "member",
+      extra: {
+        "POST /services/checkout/snooze": json({
+          muted_until: null,
+          snoozed_until: minutesAgo(-30),
+        }),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    await press(container, "Snooze this service");
+    expect(readable(container)).toContain("its minutes stay out of its normal");
+    await press(container, "Snooze checkout");
+
+    await waitFor(() => readable(container).includes("checkout is snoozed until"), "the snooze");
+    expect(api.to("POST", "/services/checkout/snooze")[0]?.body).toEqual({
+      project_id: PROJECT_ID,
+      minutes: 30,
+    });
+  });
+
+  it("shows the API's word when a member's snoozes have used the day's 4 hours", async () => {
+    stubApi(finding(), {
+      role: "member",
+      extra: {
+        "POST /services/checkout/snooze": problem(
+          409,
+          "Members may snooze a service for at most 4 hours in any 24, and this snooze would pass that.",
+        ),
+      },
+    });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    await press(container, "Snooze this service");
+    await press(container, "Snooze checkout");
+
+    await waitFor(() => readable(container).includes("at most 4 hours in any 24"), "the refusal");
+  });
+
+  it("moves focus into a confirmation when it opens", async () => {
+    stubApi(finding(), { role: "member" });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    await press(container, "False alarm");
+
+    const panel = container.querySelector("fieldset");
+    expect(panel).not.toBeNull();
+    expect(panel?.contains(document.activeElement)).toBe(true);
+  });
+
+  it("keeps its announcement's live region in place before anything is done", async () => {
+    stubApi(finding(), { role: "member" });
+    const { container } = await mountFinding();
+    await heading(container);
+
+    const status = container.querySelector('section[aria-label="What you can do"] [role="status"]');
+    expect(status).not.toBeNull();
+    expect(readable(status as Element)).toBe("");
   });
 });

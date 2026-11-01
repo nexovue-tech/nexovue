@@ -1,9 +1,11 @@
-import type { Quieting } from "./api";
+import { formatZonedTime } from "../format/zoned";
+import type { Quieting, ServiceControls } from "./api";
 
 /**
  * How long a service can be quietened, as choices rather than a clock to type: a
- * snooze is at most 4 hours (D25), a mute at most 30 days (FR22). The API refuses
- * anything longer, so nothing here can offer it.
+ * snooze is at most 4 hours (D25), a mute at most 30 days (FR22). The choice is sent
+ * as a length and the API's clock says when it ends, so a browser clock running ahead
+ * cannot turn the longest choice into one the API refuses.
  */
 
 export interface QuietChoice {
@@ -30,9 +32,26 @@ export const QUIET_CHOICES: Record<Quieting, readonly QuietChoice[]> = {
   ],
 };
 
-const MS_PER_MINUTE = 60_000;
+/** What arming a snooze or a mute will do, said before it is confirmed. */
+export function quietEffect(kind: Quieting, service: string): string {
+  return kind === "snooze"
+    ? `Nothing is sent about ${service} until the snooze ends, and its minutes stay out of its normal. Members can snooze a service for 4 hours in any 24.`
+    : `Nothing is sent about ${service} until the mute ends, nor afterwards for what it covered. Its findings are still recorded, under Muted.`;
+}
 
-/** The instant a choice ends, from now. */
-export function quietUntil(choice: QuietChoice, now = Date.now()): string {
-  return new Date(now + choice.minutes * MS_PER_MINUTE).toISOString();
+/** What a snooze or a mute did, from the API's answer, on the project's clock. */
+export function quietDone(
+  kind: Quieting,
+  service: string,
+  controls: ServiceControls,
+  zone?: string,
+): string {
+  if (kind === "snooze") {
+    return controls.snoozed_until
+      ? `${service} is snoozed until ${formatZonedTime(controls.snoozed_until, { zone })}.`
+      : `The snooze on ${service} has ended.`;
+  }
+  return controls.muted_until
+    ? `${service} is muted until ${formatZonedTime(controls.muted_until, { zone })}. Its findings are still recorded.`
+    : `${service} is no longer muted.`;
 }

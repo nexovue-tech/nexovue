@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Button } from "@/shared/components/Button";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SelectField } from "@/shared/components/SelectField";
+import { SkeletonRows } from "@/shared/components/Skeleton";
 import { UnsavedChangesPrompt, useUnsavedChanges } from "@/shared/components/UnsavedChanges";
 import type { DetectionSettings, FindingStats, Sensitivity } from "@/shared/detection/api";
 import {
@@ -28,14 +29,16 @@ export function DetectionSection({ projectId }: { projectId: string }) {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="max-w-2xl">
+      <div>
         <h3 className="font-medium font-serif text-base text-ink tracking-tight">Detection</h3>
-        <p className="mt-1 text-ink-dim text-sm leading-relaxed">
+        <p className="mt-1 max-w-prose text-ink-dim text-sm leading-relaxed">
           How far a service must move from its own normal before it is a finding, and the clock its
           days and weeks follow.
         </p>
       </div>
-      {settings.isPending ? null : settings.isError ? (
+      {settings.isPending ? (
+        <SkeletonRows rows={2} label="Loading the detection settings" />
+      ) : settings.isError ? (
         <InlineFailure
           title="The detection settings could not be loaded"
           error={settings.error}
@@ -44,10 +47,62 @@ export function DetectionSection({ projectId }: { projectId: string }) {
       ) : (
         <DetectionForm projectId={projectId} stored={settings.data} />
       )}
-      {stats.data ? (
-        <p className="max-w-prose text-ink-dim text-sm">{describeStats(stats.data)}</p>
-      ) : null}
+      {stats.data ? <FalseAlarms stats={stats.data} /> : null}
     </section>
+  );
+}
+
+/** FR26: the project's count against the budget, then each service's (design, *Settings*). */
+function FalseAlarms({ stats }: { stats: FindingStats }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="max-w-prose text-ink-dim text-sm">{describeStats(stats)}</p>
+      {stats.services.length > 0 ? (
+        <table className="w-full text-sm">
+          <caption className="sr-only">Findings and false alarms by service</caption>
+          <thead>
+            <tr className="border-line-subtle border-b text-left font-mono text-2xs text-ink-dim uppercase tracking-caps">
+              <th scope="col" className="py-1.5 pr-4 font-normal">
+                Service
+              </th>
+              <th scope="col" className="py-1.5 pr-4 text-right font-normal">
+                Findings
+              </th>
+              <th scope="col" className="py-1.5 pr-4 text-right font-normal">
+                False alarms
+              </th>
+              <th scope="col" className="py-1.5 text-right font-normal">
+                Per week
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {stats.services.map((each) => (
+              <tr key={each.service_name} className="border-line-subtle border-b">
+                <th scope="row" className="py-1.5 pr-4 text-left font-mono font-normal text-ink">
+                  {each.service_name}
+                </th>
+                <td className="py-1.5 pr-4 text-right font-mono text-ink">
+                  {formatCount(each.opened)}
+                </td>
+                <td className="py-1.5 pr-4 text-right font-mono text-ink">
+                  {formatCount(each.false_alarms)}
+                </td>
+                <td
+                  className={`py-1.5 text-right font-mono ${
+                    each.false_alarms_per_week > FALSE_ALARM_BUDGET
+                      ? "text-warning-text"
+                      : "text-ink"
+                  }`}
+                >
+                  {trimmed(each.false_alarms_per_week)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </div>
   );
 }
 
@@ -125,16 +180,15 @@ function DetectionForm({ projectId, stored }: { projectId: string; stored: Detec
           the new clock. Nothing starts learning again: the history is the same.
         </p>
       ) : null}
-      <div>
+      <div className="flex flex-wrap items-center gap-3">
         <Button type="submit" pending={save.isPending} pendingLabel="Saving" disabled={!changed}>
           Save detection
         </Button>
-      </div>
-      {saved && !changed ? (
+        {/* Always in the page, so a screen reader hears the words when they arrive. */}
         <p role="status" className="text-ink text-sm">
-          Saved. It applies from the next judged minute.
+          {saved && !changed ? "Saved. It applies from the next judged minute." : ""}
         </p>
-      ) : null}
+      </div>
       {save.error ? (
         <InlineFailure title="The detection settings were not saved" error={save.error} />
       ) : null}
@@ -151,8 +205,11 @@ export function describeStats(stats: FindingStats): string {
     return `${window}, ${opened}. No service has been judged yet, so there is no false-alarm rate.`;
   }
   const rate = trimmed(stats.false_finding_rate_per_service_week);
-  return `${window}, ${opened} and ${marked}: ${rate} false findings per service per week, against a budget of 1.`;
+  return `${window}, ${opened} and ${marked}: ${rate} false findings per service per week, against a budget of ${FALSE_ALARM_BUDGET}.`;
 }
+
+/** Spec, *False-alarm budget*: one false finding per service per week. */
+const FALSE_ALARM_BUDGET = 1;
 
 const RATE_DIGITS = 2;
 

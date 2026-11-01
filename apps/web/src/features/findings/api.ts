@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiClient } from "@/shared/api-client";
+import { findingStatsKey, servicesDetectionKey } from "@/shared/detection/api";
 import type { TimeWindow } from "@/shared/selection";
 import { liveOptions, windowKeyOf } from "@/shared/selection";
 
@@ -135,6 +136,8 @@ export interface FindingsResponse {
   findings: Finding[];
   /** How many findings the feed is leaving out because somebody muted them. */
   muted_count: number;
+  /** True when there were more than the feed's 200, and only the first 200 came. */
+  truncated: boolean;
 }
 
 /**
@@ -313,8 +316,9 @@ export interface FindingActionInput {
 
 /**
  * Acknowledge, false alarm or new normal (FR19 to FR21). Each answers with the finding
- * as it now is, which replaces the page's copy; the feed and the detection status read
- * again, since the finding may have closed.
+ * as it now is, which replaces the page's copy. What a closed or marked finding changes
+ * reads again: the feed, the detection status, the false-alarm counts, and the
+ * finding markers on its project's service pages.
  */
 export function useFindingAction(findingId: string) {
   const queryClient = useQueryClient();
@@ -327,8 +331,12 @@ export function useFindingAction(findingId: string) {
       ),
     onSuccess: (changed) => {
       queryClient.setQueryData(findingQueryKey(findingId), changed.finding);
+      const projectId = changed.finding.project_id;
       void queryClient.invalidateQueries({ queryKey: ["findings", "feed"] });
       void queryClient.invalidateQueries({ queryKey: ["findings", "detection"] });
+      void queryClient.invalidateQueries({ queryKey: findingStatsKey(projectId) });
+      // Every service's, by prefix: a project finding spans several.
+      void queryClient.invalidateQueries({ queryKey: servicesDetectionKey(projectId) });
     },
   });
 }

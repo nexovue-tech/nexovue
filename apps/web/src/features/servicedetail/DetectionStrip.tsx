@@ -2,12 +2,13 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { Button } from "@/shared/components/Button";
+import { ConfirmPanel } from "@/shared/components/ConfirmPanel";
 import { InlineFailure } from "@/shared/components/InlineFailure";
 import { SelectField } from "@/shared/components/SelectField";
 import type { Quieting, ServiceDetection } from "@/shared/detection/api";
 import { useQuietService } from "@/shared/detection/api";
 import { DetectionBadge } from "@/shared/detection/DetectionBadge";
-import { QUIET_CHOICES, quietUntil } from "@/shared/detection/quiet";
+import { QUIET_CHOICES, quietDone, quietEffect } from "@/shared/detection/quiet";
 import { formatZonedTime } from "@/shared/format/zoned";
 import { useCan } from "@/shared/identity";
 
@@ -39,15 +40,29 @@ export function DetectionStrip({
   const quiet = useQuietService(projectId, serviceName);
   const [arming, setArming] = useState<Quieting>();
   const [choice, setChoice] = useState("");
+  const [done, setDone] = useState("");
 
   const choices = arming === undefined ? [] : QUIET_CHOICES[arming];
   const chosen = choices.find((each) => each.id === choice) ?? choices[0];
   const arm = (kind: Quieting) => {
+    setDone("");
     setArming(kind);
     setChoice(QUIET_CHOICES[kind][0]?.id ?? "");
   };
-  const set = (kind: Quieting, until: string | null) =>
-    quiet.mutate({ kind, until }, { onSuccess: () => setArming(undefined) });
+  const set = (kind: Quieting, minutes: number | null) => {
+    setDone("");
+    quiet.mutate(
+      { kind, minutes },
+      {
+        onSuccess: (controls) => {
+          setArming(undefined);
+          setDone(quietDone(kind, serviceName, controls, zone));
+        },
+      },
+    );
+  };
+  const ending = (kind: Quieting) =>
+    quiet.isPending && quiet.variables?.kind === kind && quiet.variables.minutes === null;
 
   return (
     <section
@@ -63,37 +78,37 @@ export function DetectionStrip({
             {canSnooze ? (
               <>
                 {" "}
-                <button type="button" className={LINK} onClick={() => set("snooze", null)}>
+                <LinkButton
+                  pending={ending("snooze")}
+                  pendingLabel="Ending the snooze"
+                  onClick={() => set("snooze", null)}
+                >
                   End snooze
-                </button>
+                </LinkButton>
               </>
             ) : null}
           </span>
         ) : canSnooze && detection ? (
-          <button type="button" className={LINK} onClick={() => arm("snooze")}>
-            Snooze
-          </button>
+          <LinkButton onClick={() => arm("snooze")}>Snooze</LinkButton>
         ) : null}
         {canMute && detection ? (
           detection.muted_until ? (
-            <button type="button" className={LINK} onClick={() => set("mute", null)}>
+            <LinkButton
+              pending={ending("mute")}
+              pendingLabel="Unmuting"
+              onClick={() => set("mute", null)}
+            >
               Unmute
-            </button>
+            </LinkButton>
           ) : (
-            <button type="button" className={LINK} onClick={() => arm("mute")}>
-              Mute
-            </button>
+            <LinkButton onClick={() => arm("mute")}>Mute</LinkButton>
           )
         ) : null}
       </div>
 
       {arming && chosen ? (
-        <div className="flex flex-col gap-3 rounded border border-warning-border bg-warning-subtle p-3">
-          <p className="max-w-prose text-ink">
-            {arming === "snooze"
-              ? `Nothing is sent about ${serviceName} until the snooze ends, and its minutes stay out of its normal.`
-              : `Nothing is sent about ${serviceName} until the mute ends, nor afterwards for what it covered. Its findings are still recorded, under Muted.`}
-          </p>
+        <ConfirmPanel label={arming === "snooze" ? "Snooze" : "Mute"}>
+          <p className="max-w-prose text-ink">{quietEffect(arming, serviceName)}</p>
           <div className="flex flex-wrap items-end gap-3">
             <div className="w-40">
               <SelectField
@@ -108,7 +123,7 @@ export function DetectionStrip({
             <Button
               pending={quiet.isPending}
               pendingLabel="Saving"
-              onClick={() => set(arming, quietUntil(chosen))}
+              onClick={() => set(arming, chosen.minutes)}
             >
               {arming === "snooze" ? `Snooze ${serviceName}` : `Mute ${serviceName}`}
             </Button>
@@ -116,8 +131,12 @@ export function DetectionStrip({
               Cancel
             </Button>
           </div>
-        </div>
+        </ConfirmPanel>
       ) : null}
+      {/* Always in the page, so a screen reader hears what changed when it does. */}
+      <p role="status" className="text-ink">
+        {done}
+      </p>
       {quiet.error ? <InlineFailure title="That did not go through" error={quiet.error} /> : null}
 
       {detection ? (
@@ -135,5 +154,30 @@ export function DetectionStrip({
         </p>
       ) : null}
     </section>
+  );
+}
+
+/** A quiet action in the strip's line, which says while it works that it is working. */
+function LinkButton({
+  children,
+  pending = false,
+  pendingLabel,
+  onClick,
+}: {
+  children: string;
+  pending?: boolean;
+  pendingLabel?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`${LINK} disabled:cursor-not-allowed disabled:opacity-60`}
+      disabled={pending}
+      aria-busy={pending || undefined}
+      onClick={onClick}
+    >
+      {pending && pendingLabel ? pendingLabel : children}
+    </button>
   );
 }

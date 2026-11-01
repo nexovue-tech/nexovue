@@ -16,9 +16,13 @@ The console implements services, service map, traces, errors, logs, RUM, synthet
 usage, and account/settings screens. Databases are a view *inside* infrastructure rather than a route
 of their own: both are polled rather than pushed, and a database is reached from a trace far more
 often than it is browsed. Findings (F6) is anomaly detection's feed, at `/findings`, with each finding's
-page at `/findings/$findingId`; a service's page carries its detection badge, snooze and mute, and the
-project settings a *Detection* section that only admins see. `shared/detection/` holds the badge, because
-two features show it. Finding times are printed in the project's zone (`shared/format/zoned.ts`).
+page at `/findings/$findingId`; a service's page and a finding's page carry its snooze and mute, the
+service's page its detection badge, and the project settings a *Detection* section, with the per-service
+false-alarm counts, that only admins see. `shared/detection/` holds the badge and the snooze and mute
+choices, because several features use them; a snooze or mute is sent as a length, never an instant, so
+the API's clock decides when it ends. A finding's chart fills its normal band (`TrendChart`'s `band`,
+`shared/components/chart-band.ts`). Finding times, the feed's included, are printed in the project's zone
+(`shared/format/zoned.ts`).
 
 **Narrowing a list is the server's job.** Filters and ordering travel with the request, never applied
 to the answer. Every ranked read is capped, so a filter or a sort over what came back can only

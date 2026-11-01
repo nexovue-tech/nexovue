@@ -167,8 +167,19 @@ class FindingListResponse(BaseModel):
     truncated: bool = False
 
 
+class ServiceFindingStats(BaseModel):
+    """FR26 for one service: its findings opened over the window, and its false alarms."""
+
+    service_name: str
+    opened: int
+    false_alarms: int
+    # The service's own measure against the budget of one false finding a week.
+    false_alarms_per_week: float
+
+
 class FindingStats(BaseModel):
-    """FR26: findings opened over a window, and how many were false alarms."""
+    """FR26: findings opened over a window, and how many were false alarms, for the
+    project and for each of its services."""
 
     days: int
     opened: int
@@ -179,3 +190,6 @@ class FindingStats(BaseModel):
     # false_alarms / (judged_services * days / 7), the budget's own measure (spec,
     # *False-alarm budget*). None when no service has been judged.
     false_finding_rate_per_service_week: float | None
+    # Each service with a finding opened in the window, most false alarms first. A
+    # project finding spans several services, so it counts for the project alone.
+    services: list[ServiceFindingStats]

@@ -5,14 +5,16 @@ chose, so it is proved to belong to the caller's organization, and to a token's
 scope, before anything is read. All of them read Postgres only.
 
 Who may change what (FR23, D11, D25): a snooze is every working role's, the 3 a.m.
-lever; a mute, the sensitivity and the time zone decide whether detection is heard
-at all, and are an admin's.
+lever, though members' snoozes of one service total at most 4 hours in any 24
+(AC34); a mute, the sensitivity and the time zone decide whether detection is heard
+at all, and are an admin's. A snooze or mute is asked for in minutes, and ends on
+this server's clock.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Path, Query
@@ -94,7 +96,7 @@ async def snooze_service(
         actor=identity.user,
         project_id=request.project_id,
         service_name=service_name,
-        until=request.until,
+        length=None if request.minutes is None else timedelta(minutes=request.minutes),
         now=datetime.now(UTC),
     )
 
@@ -113,7 +115,7 @@ async def mute_service(
         actor=identity.user,
         project_id=request.project_id,
         service_name=service_name,
-        until=request.until,
+        length=None if request.minutes is None else timedelta(minutes=request.minutes),
         now=datetime.now(UTC),
     )
 

@@ -46,8 +46,12 @@ export interface ServiceDetection {
   truncated: boolean;
 }
 
+/** Every service's detection in a project: a prefix of each one's key. */
+export const servicesDetectionKey = (projectId: string | undefined) =>
+  ["detection", "service", projectId ?? ""] as const;
+
 export const serviceDetectionKey = (projectId: string | undefined, service: string) =>
-  ["detection", "service", projectId ?? "", service] as const;
+  [...servicesDetectionKey(projectId), service] as const;
 
 /** One service's detection state, and its findings over the chart's window. */
 export function useServiceDetection(
@@ -100,17 +104,17 @@ export type Quieting = "snooze" | "mute";
 
 export interface QuietInput {
   kind: Quieting;
-  /** An ISO instant still to come, or null to end it now. */
-  until: string | null;
+  /** How long from now, counted on the API's clock, or null to end it now. */
+  minutes: number | null;
 }
 
 export function useQuietService(projectId: string, service: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationKey: ["detection", "quiet", projectId, service],
-    mutationFn: ({ kind, until }: QuietInput) => {
+    mutationFn: ({ kind, minutes }: QuietInput) => {
       const path = `services/${encodeURIComponent(service)}/${kind}`;
-      const body = { project_id: projectId, until };
+      const body = { project_id: projectId, minutes };
       return kind === "snooze"
         ? apiClient.post<ServiceControls>(path, body)
         : apiClient.put<ServiceControls>(path, body);
@@ -139,6 +143,14 @@ export function useSaveDetectionSettings(projectId: string) {
   });
 }
 
+/** FR26 for one service: its findings over the window, and its false alarms a week. */
+export interface ServiceFindingStats {
+  service_name: string;
+  opened: number;
+  false_alarms: number;
+  false_alarms_per_week: number;
+}
+
 /** FR26: findings opened and false alarms over a window, against the budget. */
 export interface FindingStats {
   days: number;
@@ -147,11 +159,15 @@ export interface FindingStats {
   judged_services: number;
   /** Null when no service has been judged: there is nothing to divide by. */
   false_finding_rate_per_service_week: number | null;
+  /** Each service with a finding in the window, most false alarms first. */
+  services: ServiceFindingStats[];
 }
+
+export const findingStatsKey = (projectId: string) => ["detection", "stats", projectId] as const;
 
 export function useFindingStats(projectId: string) {
   return useQuery({
-    queryKey: ["detection", "stats", projectId] as const,
+    queryKey: findingStatsKey(projectId),
     queryFn: ({ signal }) =>
       apiClient.get<FindingStats>("findings/stats", {
         searchParams: { project_id: projectId },

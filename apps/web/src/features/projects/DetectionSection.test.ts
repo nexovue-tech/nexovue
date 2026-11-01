@@ -12,6 +12,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { FindingStats } from "@/shared/detection/api";
 import type { TestRole } from "@/shared/identity.test-util";
 import { identityFor } from "@/shared/identity.test-util";
 
@@ -37,12 +38,16 @@ const PROJECT: ProjectDetail = {
   masking_config: {},
   created_at: "2026-09-01T09:00:00Z",
 };
-const STATS = {
+const STATS: FindingStats = {
   days: 7,
   opened: 4,
   false_alarms: 1,
   judged_services: 3,
   false_finding_rate_per_service_week: 1 / 3,
+  services: [
+    { service_name: "checkout", opened: 3, false_alarms: 1, false_alarms_per_week: 1 },
+    { service_name: "search", opened: 1, false_alarms: 0, false_alarms_per_week: 0 },
+  ],
 };
 
 const mounted: Root[] = [];
@@ -69,7 +74,7 @@ function stubApi({
   save,
 }: {
   role?: TestRole;
-  stats?: typeof STATS;
+  stats?: FindingStats | (() => Promise<Response>);
   save?: (body: unknown) => Response;
 } = {}) {
   const saved: unknown[] = [];
@@ -84,7 +89,7 @@ function stubApi({
         return save ? save(body) : json(body);
       }
       if (url.pathname === SETTINGS_PATH) return json({ sensitivity: "normal", timezone: "UTC" });
-      if (url.pathname === STATS_PATH) return json(stats);
+      if (url.pathname === STATS_PATH) return typeof stats === "function" ? stats() : json(stats);
       // The other sections' lists, all empty: this suite is about one section.
       if (method === "GET") return json({ secrets: [], variables: [], windows: [], checks: [] });
       throw new Error(`no stub for ${method} ${url.pathname}`);
@@ -175,6 +180,43 @@ describe("the Detection section", () => {
     );
   });
 
+  it("counts each service's findings and false alarms against the budget (FR26)", async () => {
+    stubApi();
+    const container = await section();
+
+    const rows = [...container.querySelectorAll("tbody tr")].map((row) =>
+      [...row.querySelectorAll("th, td")].map((cell) => text(cell)),
+    );
+    expect(rows).toEqual([
+      ["checkout", "3", "1", "1"],
+      ["search", "1", "0", "0"],
+    ]);
+  });
+
+  it("waits with a skeleton, not a blank, while the settings load", async () => {
+    stubApi();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL) =>
+        url.pathname === "/api/v1/auth/me" ? json(identityFor("owner")) : new Promise(() => {}),
+      ),
+    );
+    const container = await section();
+
+    expect(
+      container.querySelector('[role="status"][aria-label="Loading the detection settings"]'),
+    ).not.toBeNull();
+  });
+
+  it("has its saved announcement's live region in place before anything is saved", async () => {
+    stubApi();
+    const container = await section();
+
+    const status = container.querySelector('[role="status"]');
+    expect(status).not.toBeNull();
+    expect(text(status as Element)).toBe("");
+  });
+
   it("says when nothing has been judged, rather than a rate of zero", async () => {
     stubApi({
       stats: {
@@ -183,7 +225,8 @@ describe("the Detection section", () => {
         false_alarms: 0,
         judged_services: 0,
         false_finding_rate_per_service_week: null,
-      } as unknown as typeof STATS,
+        services: [],
+      },
     });
     const container = await section();
 

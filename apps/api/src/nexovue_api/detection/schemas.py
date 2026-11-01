@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import BaseModel, Field
 
 from nexovue_api.data.postgres.models import TIMEZONE_NAME_LENGTH
 from nexovue_api.findings.schemas import FindingSeverity, SignalName
@@ -88,11 +88,13 @@ class ServiceDetection(BaseModel):
 
 
 class QuietServiceRequest(BaseModel):
-    """Snooze or mute a service until a time, or end it now with `until` null."""
+    """Snooze or mute a service for some minutes from now, or end it now with
+    `minutes` null."""
 
     project_id: uuid.UUID
-    # Aware, so "until 18:00" never means a different instant on another machine.
-    until: AwareDatetime | None
+    # A length, never an instant: the server's clock decides when it ends, so a caller
+    # whose clock runs ahead is not refused the longest choice.
+    minutes: Annotated[int, Field(ge=1)] | None
 
 
 class ServiceControls(BaseModel):

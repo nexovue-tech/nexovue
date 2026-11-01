@@ -8,8 +8,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { TimeWindow } from "@/shared/selection";
 
-import type { DetectionStatus, FindingsResponse } from "./api";
-import { useDetectionStatus, useFindings } from "./api";
+import type { DetectionStatus, FindingDetail, FindingsResponse } from "./api";
+import { useDetectionStatus, useFindingAction, useFindings } from "./api";
 
 /**
  * The feed's read: what it asks `GET /findings` for, and that a failed read stays a
@@ -60,6 +60,7 @@ const RESPONSE: FindingsResponse = {
     },
   ],
   muted_count: 2,
+  truncated: false,
 };
 
 function stubFetch(response: () => Response) {
@@ -221,5 +222,57 @@ describe("useDetectionStatus", () => {
 
     await vi.waitFor(() => expect(seen.current?.isError).toBe(true));
     expect(seen.current?.data).toBeUndefined();
+  });
+});
+
+type ActionSeen = { current?: ReturnType<typeof useFindingAction> };
+
+function ActionProbe({ findingId, seen }: { findingId: string; seen: ActionSeen }) {
+  seen.current = useFindingAction(findingId);
+  return null;
+}
+
+describe("useFindingAction", () => {
+  it("reads again what a closed finding changes: the feed, the status, the counts and the service's markers", async () => {
+    const [found] = RESPONSE.findings;
+    if (!found) throw new Error("the fixture has a finding");
+    const changed: FindingDetail = { ...found, series: [], incidents: [], services: [] };
+    stubFetch(
+      () =>
+        new Response(JSON.stringify({ finding: changed, resolved_to: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidated = vi.spyOn(client, "invalidateQueries");
+    const seen: ActionSeen = {};
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    mounted.push(root);
+    act(() =>
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client },
+          createElement(ActionProbe, { findingId: found.id, seen }),
+        ),
+      ),
+    );
+
+    await act(async () => {
+      await seen.current?.mutateAsync({ action: "false-alarm" });
+    });
+
+    const keys = invalidated.mock.calls.map(([filters]) => filters?.queryKey);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        ["findings", "feed"],
+        ["findings", "detection"],
+        ["detection", "stats", PROJECT_ID],
+        ["detection", "service", PROJECT_ID],
+      ]),
+    );
   });
 });

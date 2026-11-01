@@ -103,6 +103,15 @@ export function detectionHeadlineFor(
       };
     }
     case "judging": {
+      // Before the open findings: the feed cannot speak for services it has no data for.
+      const delayed = status.services_delayed;
+      if (delayed > 0) {
+        const services = delayed === 1 ? "service" : "services";
+        return {
+          title: `Data from ${delayed} ${services} is delayed, so ${delayed === 1 ? "it is" : "they are"} judged once it arrives`,
+          wrong: false,
+        };
+      }
       if (status.open_findings > 0) return undefined;
       const learning = status.services_learning;
       const rest =

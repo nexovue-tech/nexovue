@@ -17,6 +17,7 @@ import { setSelectedProjectId } from "@/shared/selection";
 
 import type { FindingDetail } from "./api";
 import { FindingScreen } from "./FindingScreen";
+import { FindingsScreen } from "./FindingsScreen";
 
 /**
  * The finding page mounted as the app mounts it, inside a `shell` layout route, with a
@@ -145,7 +146,22 @@ export function unmountAll() {
   vi.unstubAllGlobals();
 }
 
-export async function mountFinding() {
+export function mountFinding() {
+  return mountAt("/findings/f-1", placeholder("Feed"));
+}
+
+/** The feed itself, at `/findings`, with each finding's page a placeholder. */
+export function mountFeed() {
+  return mountAt("/findings", FindingsScreen, placeholder("Finding"));
+}
+
+const placeholder = (text: string) => () => createElement("p", null, text);
+
+async function mountAt(
+  initial: string,
+  feed: () => ReturnType<typeof createElement>,
+  page: () => ReturnType<typeof createElement> = FindingScreen,
+) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setSelectedProjectId(PROJECT_ID);
   const client = new QueryClient({
@@ -153,18 +169,17 @@ export async function mountFinding() {
   });
   const rootRoute = createRootRoute({ component: Outlet });
   const shellRoute = createRoute({ getParentRoute: () => rootRoute, id: "shell" });
-  const placeholder = (text: string) => () => createElement("p", null, text);
   const routeTree = rootRoute.addChildren([
     shellRoute.addChildren([
       createRoute({
         getParentRoute: () => shellRoute,
         path: "/findings/$findingId",
-        component: FindingScreen,
+        component: page,
       }),
       createRoute({
         getParentRoute: () => shellRoute,
         path: "/findings",
-        component: placeholder("Feed"),
+        component: feed,
       }),
       createRoute({
         getParentRoute: () => shellRoute,
@@ -180,7 +195,7 @@ export async function mountFinding() {
   ]);
   const router = createRouter({
     routeTree,
-    history: createMemoryHistory({ initialEntries: ["/findings/f-1"] }),
+    history: createMemoryHistory({ initialEntries: [initial] }),
   });
   await router.load();
 

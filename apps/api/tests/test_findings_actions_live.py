@@ -679,8 +679,9 @@ def _service(action: str, name: str = SERVICE) -> str:
     return f"/services/{name}/{action}"
 
 
-def _ahead(**delta: float) -> str:
-    return (datetime.now(UTC) + timedelta(**delta)).isoformat()
+def _for(team: Team, minutes: int | None) -> dict[str, Any]:
+    """A snooze or mute's body: how long, counted by the server, or None to end it."""
+    return {"project_id": str(team.project_id), "minutes": minutes}
 
 
 async def _settings(db: AsyncSession, team: Team) -> ServiceDetectionSettings | None:
@@ -696,24 +697,22 @@ async def _settings(db: AsyncSession, team: Team) -> ServiceDetectionSettings | 
     return found
 
 
+def _ends_in(response: httpx.Response, field: str, length: timedelta) -> bool:
+    """Whether the answer's end is `length` from now, as the server's clock counts it."""
+    ends = datetime.fromisoformat(response.json()[field])
+    return abs(ends - (datetime.now(UTC) + length)) < timedelta(seconds=30)
+
+
 async def test_a_member_snoozes_a_service_for_up_to_four_hours_and_ends_it(
     db: AsyncSession, clickhouse: AsyncClient, acme: Team
 ) -> None:
     """D25, FR22."""
-    until = _ahead(hours=2)
-
     snoozed = await _call(
-        db,
-        clickhouse,
-        acme,
-        acme.member,
-        "POST",
-        _service("snooze"),
-        {"project_id": str(acme.project_id), "until": until},
+        db, clickhouse, acme, acme.member, "POST", _service("snooze"), _for(acme, 120)
     )
 
     assert snoozed.status_code == 200, snoozed.text
-    assert snoozed.json()["snoozed_until"] is not None
+    assert _ends_in(snoozed, "snoozed_until", timedelta(hours=2))
     stored = await _settings(db, acme)
     assert stored is not None and stored.snoozed_by == acme.member.id
     [entry] = await _audit(db, acme, "service.snoozed")
@@ -722,13 +721,7 @@ async def test_a_member_snoozes_a_service_for_up_to_four_hours_and_ends_it(
     assert entry.detail is not None and entry.detail["service"] == SERVICE
 
     ended = await _call(
-        db,
-        clickhouse,
-        acme,
-        acme.member,
-        "POST",
-        _service("snooze"),
-        {"project_id": str(acme.project_id), "until": None},
+        db, clickhouse, acme, acme.member, "POST", _service("snooze"), _for(acme, None)
     )
     assert ended.status_code == 200, ended.text
     assert ended.json()["snoozed_until"] is None
@@ -736,18 +729,30 @@ async def test_a_member_snoozes_a_service_for_up_to_four_hours_and_ends_it(
     assert stored is not None and stored.snoozed_until is None
 
 
-@pytest.mark.parametrize("until", [{"hours": 4, "minutes": 5}, {"minutes": -1}])
-async def test_a_snooze_past_four_hours_or_already_over_is_refused(
-    db: AsyncSession, clickhouse: AsyncClient, acme: Team, until: dict[str, float]
+async def test_the_longest_snooze_and_mute_are_counted_on_the_server_s_clock(
+    db: AsyncSession, clickhouse: AsyncClient, acme: Team
+) -> None:
+    """A browser's clock ahead of the server's must not turn "4 hours" or "30 days"
+    into too long: the caller says how long, and the server says until when."""
+    snoozed = await _call(
+        db, clickhouse, acme, acme.member, "POST", _service("snooze"), _for(acme, 4 * 60)
+    )
+    muted = await _call(
+        db, clickhouse, acme, acme.admin, "PUT", _service("mute"), _for(acme, 30 * 24 * 60)
+    )
+
+    assert snoozed.status_code == 200, snoozed.text
+    assert _ends_in(snoozed, "snoozed_until", timedelta(hours=4))
+    assert muted.status_code == 200, muted.text
+    assert _ends_in(muted, "muted_until", timedelta(days=30))
+
+
+@pytest.mark.parametrize("minutes", [4 * 60 + 1, 0, -5])
+async def test_a_snooze_past_four_hours_or_of_no_length_is_refused(
+    db: AsyncSession, clickhouse: AsyncClient, acme: Team, minutes: int
 ) -> None:
     response = await _call(
-        db,
-        clickhouse,
-        acme,
-        acme.member,
-        "POST",
-        _service("snooze"),
-        {"project_id": str(acme.project_id), "until": _ahead(**until)},
+        db, clickhouse, acme, acme.member, "POST", _service("snooze"), _for(acme, minutes)
     )
 
     assert response.status_code == 422, response.text
@@ -759,22 +764,10 @@ async def test_an_admin_mutes_a_service_for_up_to_thirty_days(
 ) -> None:
     """BR9, FR22."""
     response = await _call(
-        db,
-        clickhouse,
-        acme,
-        acme.admin,
-        "PUT",
-        _service("mute"),
-        {"project_id": str(acme.project_id), "until": _ahead(days=29)},
+        db, clickhouse, acme, acme.admin, "PUT", _service("mute"), _for(acme, 29 * 24 * 60)
     )
     too_long = await _call(
-        db,
-        clickhouse,
-        acme,
-        acme.admin,
-        "PUT",
-        _service("mute"),
-        {"project_id": str(acme.project_id), "until": _ahead(days=31)},
+        db, clickhouse, acme, acme.admin, "PUT", _service("mute"), _for(acme, 30 * 24 * 60 + 1)
     )
 
     assert response.status_code == 200, response.text
@@ -790,13 +783,167 @@ async def test_a_member_may_not_mute_and_a_viewer_may_not_snooze(
     db: AsyncSession, clickhouse: AsyncClient, acme: Team
 ) -> None:
     """AC34."""
-    body = {"project_id": str(acme.project_id), "until": _ahead(hours=1)}
-    muted = await _call(db, clickhouse, acme, acme.member, "PUT", _service("mute"), body)
-    snoozed = await _call(db, clickhouse, acme, acme.viewer, "POST", _service("snooze"), body)
+    muted = await _call(db, clickhouse, acme, acme.member, "PUT", _service("mute"), _for(acme, 60))
+    snoozed = await _call(
+        db, clickhouse, acme, acme.viewer, "POST", _service("snooze"), _for(acme, 60)
+    )
 
     assert muted.status_code == 403, muted.text
     assert snoozed.status_code == 403, snoozed.text
     assert await _settings(db, acme) is None
+
+
+# A member's snoozes of one service total at most 4 hours in any 24 (AC34, D25):
+# repeating one cannot silence a service a member may not mute.
+
+
+async def _snoozed_before(
+    db: AsyncSession,
+    team: Team,
+    person: User,
+    *,
+    began_ago: timedelta,
+    length: timedelta,
+    ended_ago: timedelta | None = None,
+) -> None:
+    """A snooze `person` set `began_ago`, for `length`, as its audit rows record it;
+    ended early `ended_ago` when given."""
+    began = datetime.now(UTC) - began_ago
+    member = person.role not in ("owner", "admin")
+    entries: list[tuple[datetime, datetime | None, User]] = [(began, began + length, person)]
+    if ended_ago is not None:
+        entries.append((datetime.now(UTC) - ended_ago, None, person))
+    for at, until, actor in entries:
+        db.add(
+            AuditLogEntry(
+                org_id=team.org_id,
+                actor_user_id=actor.id,
+                action="service.snoozed",
+                target=f"project:{team.project_id}",
+                detail={
+                    "service": SERVICE,
+                    "until": None if until is None else until.isoformat(),
+                    "member": member and until is not None,
+                },
+                at=at,
+            )
+        )
+    await db.flush()
+
+
+async def test_a_member_repeating_a_snooze_past_four_hours_a_day_is_refused(
+    db: AsyncSession, clickhouse: AsyncClient, acme: Team
+) -> None:
+    """AC34: three hours used of the day's four leave one, and the refusal says when
+    the asked-for length fits again, if nobody changes anything."""
+    await _snoozed_before(
+        db, acme, acme.member, began_ago=timedelta(hours=3), length=timedelta(hours=4)
+    )
+
+    refused = await _call(
+        db, clickhouse, acme, acme.member, "POST", _service("snooze"), _for(acme, 120)
+    )
+    # Not the whole hour: the three used ran on while this test did.
+    allowed = await _call(
+        db, clickhouse, acme, acme.member, "POST", _service("snooze"), _for(acme, 55)
+    )
+
+    assert refused.status_code == 409, refused.text
+    problem = refused.json()
+    assert "4 hours in any 24" in problem["detail"]
+    assert "An admin can mute it" in problem["detail"]
+    # Left to run, the snooze ends in an hour with all four used; two more fit once
+    # the 24 hours ending with them hold only two of those: 21 hours from now.
+    again = datetime.fromisoformat(problem["snooze_again_at"])
+    expected = datetime.now(UTC) + timedelta(hours=21)
+    assert abs(again - expected) < timedelta(minutes=2)
+    assert allowed.status_code == 200, allowed.text
+
+
+async def test_another_member_shares_the_same_four_hours(
+    db: AsyncSession, clickhouse: AsyncClient, acme: Team
+) -> None:
+    """Members together: a second member cannot extend the first's silence."""
+    second = User(
+        org_id=acme.org_id, email=f"m2-{uuid.uuid4()}@example.test", name="M2", role="member"
+    )
+    db.add(second)
+    await _snoozed_before(
+        db, acme, acme.member, began_ago=timedelta(hours=4), length=timedelta(hours=4)
+    )
+
+    response = await _call(db, clickhouse, acme, second, "POST", _service("snooze"), _for(acme, 30))
+
+    assert response.status_code == 409, response.text
+
+
+@pytest.mark.parametrize("who", ["owner", "admin"])
+async def test_an_admin_may_snooze_past_the_members_four_hours(
+    db: AsyncSession, clickhouse: AsyncClient, acme: Team, who: str
+) -> None:
+    """Who may mute is not limited: a snooze is the gentler of the two."""
+    await _snoozed_before(
+        db, acme, acme.member, began_ago=timedelta(hours=4), length=timedelta(hours=4)
+    )
+
+    response = await _call(
+        db, clickhouse, acme, getattr(acme, who), "POST", _service("snooze"), _for(acme, 240)
+    )
+
+    assert response.status_code == 200, response.text
+
+
+async def test_an_admin_s_snooze_uses_none_of_the_members_four_hours(
+    db: AsyncSession, clickhouse: AsyncClient, acme: Team
+) -> None:
+    await _snoozed_before(
+        db, acme, acme.admin, began_ago=timedelta(hours=5), length=timedelta(hours=4)
+    )
+
+    response = await _call(
+        db, clickhouse, acme, acme.member, "POST", _service("snooze"), _for(acme, 240)
+    )
+
+    assert response.status_code == 200, response.text
+
+
+async def test_the_members_four_hours_come_back_after_24_hours(
+    db: AsyncSession, clickhouse: AsyncClient, acme: Team
+) -> None:
+    """A 4-hour snooze that ended 20 hours ago leaves room for 4 more: no 24 hours
+    hold both."""
+    await _snoozed_before(
+        db, acme, acme.member, began_ago=timedelta(hours=24), length=timedelta(hours=4)
+    )
+
+    response = await _call(
+        db, clickhouse, acme, acme.member, "POST", _service("snooze"), _for(acme, 240)
+    )
+
+    assert response.status_code == 200, response.text
+
+
+async def test_a_snooze_ended_early_counts_only_what_it_lasted(
+    db: AsyncSession, clickhouse: AsyncClient, acme: Team
+) -> None:
+    await _snoozed_before(
+        db,
+        acme,
+        acme.member,
+        began_ago=timedelta(hours=2),
+        length=timedelta(hours=4),
+        ended_ago=timedelta(hours=1),
+    )
+
+    allowed = await _call(
+        db, clickhouse, acme, acme.member, "POST", _service("snooze"), _for(acme, 175)
+    )
+    refused = await _call(
+        db, clickhouse, acme, acme.member, "POST", _service("snooze"), _for(acme, 240)
+    )
+
+    assert allowed.status_code == 200, allowed.text
+    assert refused.status_code == 409, refused.text
 
 
 async def test_a_service_detection_has_never_seen_is_not_found(
@@ -809,7 +956,7 @@ async def test_a_service_detection_has_never_seen_is_not_found(
         acme.admin,
         "PUT",
         _service("mute", "nobody-knows-me"),
-        {"project_id": str(acme.project_id), "until": _ahead(hours=1)},
+        _for(acme, 60),
     )
 
     assert response.status_code == 404, response.text
@@ -819,13 +966,7 @@ async def test_another_organization_s_project_cannot_be_snoozed(
     db: AsyncSession, clickhouse: AsyncClient, acme: Team, globex: Team
 ) -> None:
     response = await _call(
-        db,
-        clickhouse,
-        acme,
-        acme.owner,
-        "POST",
-        _service("snooze"),
-        {"project_id": str(globex.project_id), "until": _ahead(hours=1)},
+        db, clickhouse, acme, acme.owner, "POST", _service("snooze"), _for(globex, 60)
     )
 
     assert response.status_code == 404, response.text
