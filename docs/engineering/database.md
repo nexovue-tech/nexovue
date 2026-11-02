@@ -16,6 +16,12 @@ Enforced by `apps/api/tests/test_migration_rules.py` where a test can see it (re
 - **An index on a table that already holds rows is built `CONCURRENTLY`**, in a migration of its own that
   runs outside a transaction (`op.get_context().autocommit_block()`), because `CREATE INDEX` without it
   blocks every write for as long as the build takes. An index on a table created in the same migration
-  needs neither.
+  needs neither. A failed concurrent build leaves an invalid index behind, so the migration drops one
+  of the same name first (`DROP INDEX CONCURRENTLY IF EXISTS`), and its downgrade drops concurrently too.
+- **A setup waiting for another's migrations holds no transaction and runs no statement.** A concurrent
+  build waits for every session holding a snapshot, including one blocked in `pg_advisory_lock` even
+  in autocommit, while that session waits for the builder's lock: Postgres ends one as a deadlock.
+  `migrations/env.py` therefore polls `pg_try_advisory_lock` in autocommit, and gives up with an error
+  after 15 minutes. `test_setup_live.py` holds both.
 - **A downgrade that would drop records that exist nowhere else raises** "roll forward only" rather than
   dropping them: going back past it is a restore. `0020`, `0022` and `0026` (billing) are those today.

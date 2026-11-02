@@ -85,6 +85,7 @@ plugins = ["pydantic.mypy"]
 exclude = [
     "packages/contracts/gen/",   # generated code is not ours to type
     "tools/otel-demo/upstream/", # P1-62 pins a clone of the OTel Demo; upstream code, not ours
+    "tools/detection-sim/",      # its own uv project (numpy, scipy), typed by its own strict mypy
 ]
 # tests/helpers holds `live`, the shared "fail rather than skip" guard.
 mypy_path = ["packages/contracts/gen/python", "tests/helpers"]  # ...but it must still resolve
@@ -103,11 +104,11 @@ ignore_errors = true
 asyncio_mode = "auto"
 # tests/helpers holds `live`, the shared "a live suite fails rather than skips"
 # guard. It sits above the apps because the API and the scheduler both need it.
-pythonpath = ["tests/helpers", "packages/contracts/gen/python", "tools/repo-audit"]
+pythonpath = ["tests/helpers", "packages/contracts/gen/python", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed"]
 # Test tenants' ClickHouse rows are deleted once at the end of the run: a mutation
 # per test held thousands of superseded parts in memory (tests/helpers/clickhouse_cleanup.py).
 addopts = "-p clickhouse_cleanup"
-testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests", "tools/repo-audit"]
+testpaths = ["apps/api/tests", "apps/scheduler/tests", "packages/contracts/tests", "packages/py-platform/tests", "tools/repo-audit", "tools/detection-measure", "tools/detection-seed", "tools/fault-bed"]
 
 [tool.uv.sources]
 nexovue-platform = { workspace = true }

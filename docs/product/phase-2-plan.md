@@ -1,13 +1,16 @@
 # Phase 2 plan: the incident chain
 
-> **Status:** Awaiting the founder's approval. Each feature still goes through its own specification, design
-> and plan gates. Nothing here is built.
+> **Status:** Approved by the founder, 2026-10-30. Each feature still goes through its own specification,
+> design and plan gates. Nothing here is built.
 
 ## Decided by the founder, 2026-10-30
 
 - **Scope.** Phase 2 is the chain in [`vision.md`](vision.md) §4, built completely, to production level.
-- **Timing.** There is no release date. Every link is specified and designed before feature code is written, and
-  the chain is released as a whole. Building still proves one path at a time (`ADR-0019`).
+- **Timing.** There is no release date. Building proves one path at a time (`ADR-0019`).
+  - *Changed 2026-11-01:* **Stage 1, detection with its findings and alerts, ships on its own**, ahead of the
+    rest of the chain (F6 spec, D32). Detection and alerts already work with AI off, so Stage 1 can be judged
+    by real installs before Stages 2 to 6 are built.
+  - Each later stage is still specified and designed before its code is written.
 - **Selling reason.** "It finds the problem, explains it and suggests the fix, all on your own server, so your
   data stays with you." See *Risks*: this is not unique.
 - **Where AI runs for a self-hosted install.** The customer chooses: their own AI account, or a model on their
@@ -35,17 +38,24 @@ ships exactly two images. Where the AI code runs is a design decision for Stage 
 
 ## Order
 
-Each stage depends on the one before it. **Detection and alerts must work with AI turned off.** An alert never
+Progress, the order of work and how lanes run in parallel: [`phase-2-tracker.md`](phase-2-tracker.md).
+
+Each stage's documents (spec, design and plan) were approved by the founder on 2026-11-02 ([shared foundation](phase-2-foundation.md); [features index](../features/README.md)). Each stage depends on the one before it. **Detection and alerts must work with AI turned off.** An alert never
 waits for AI: it goes out when detection fires, and the explanation joins it later.
 
 ### Stage 1: Detect (F6, F1, F2's evidence)
 
+**F6 documents:** [spec](../features/anomaly-detection/spec.md), [design](../features/anomaly-detection/design.md), [plan](../features/anomaly-detection/plan.md).
+
 - A service getting slower, failing more, or losing traffic, against its own daily and weekly normal.
 - *Done when:* new services and low traffic stay quiet and say why; an outage cannot teach a false normal; findings
   update in place and close themselves; users can give false-alarm feedback, set sensitivity and mute; the
-  injected faults below are caught.
+  injected faults below are caught, except those that move none of its signals, which are recorded as gaps
+  (founder, 2026-10-30; F6 spec, D3).
 
 ### Stage 2: Explain (F28, F3)
+
+**F28 documents:** [spec](../features/deployment-release-tracking/spec.md), [design](../features/deployment-release-tracking/design.md), [plan](../features/deployment-release-tracking/plan.md). **F3 documents:** [spec](../features/ai-insights/spec.md), [design](../features/ai-insights/design.md), [plan](../features/ai-insights/plan.md).
 
 - Correlation from stored facts first (deploys, errors, dependencies), then AI wording, through one interface for
   both AI options.
@@ -54,24 +64,33 @@ waits for AI: it goes out when detection fires, and the explanation joins it lat
 
 ### Stage 3: Track (F22)
 
-- A finding opens a case by growing the existing incident, not by adding a second record.
+**F22 documents:** [spec](../features/case-management/spec.md), [design](../features/case-management/design.md), [plan](../features/case-management/plan.md).
+
+- A finding opens a case by growing the finding itself, not by adding a second record (F6 D1, ADR-022).
 - *Done when:* lifecycle and timeline work; GitHub Issues and Jira create and stay in sync; on-call stays with
   PagerDuty (never built here).
 
 ### Stage 4: Ask (F4)
+
+**F4 documents:** [spec](../features/ai-chatbot/spec.md), [design](../features/ai-chatbot/design.md), [plan](../features/ai-chatbot/plan.md).
 
 - Live, tool-based queries first, then resolved findings, notes and runbooks through pgvector.
 - *Done when:* it reads only what the asking user may see, cites every answer, and passes the injection tests.
 
 ### Stage 5: Fix (F5)
 
-- A suggested fix on the finding, then a draft pull request.
+**F5 documents:** [spec](../features/ai-solution/spec.md), [design](../features/ai-solution/design.md), [plan](../features/ai-solution/plan.md).
+
+- A suggested fix on the finding, then a draft pull request. Where Nexovue cannot read the code, a general suggestion with example code, from the finding's facts only (rung 2b, founder's decision 2026-11-02).
 - *Done when:* a person always approves; the part reading telemetry cannot itself write; repository access is
   narrow and audited.
 
 ### Stage 6: Around the chain (F19, F20)
 
+**F19 documents:** [spec](../features/slo-tracking/spec.md), [design](../features/slo-tracking/design.md), [plan](../features/slo-tracking/plan.md). **F20 documents:** [spec](../features/dashboards/spec.md), [design](../features/dashboards/design.md), [plan](../features/dashboards/plan.md).
+
 - SLO targets and the dashboard builder, each through its own specification.
+- **One exception to the order, approved 2026-11-02:** F20's Step 1 alone, moving `/` to the Findings feed, ships as soon as F6 merges. It carries no dashboard code, and it is the timing of the recorded front-door decision (FD15), not a new one ([F20 spec](../features/dashboards/spec.md), D58).
 
 ## AI safety, across Stages 2, 4 and 5
 
@@ -95,6 +114,8 @@ The demo's fault flags give known answers: `paymentFailure`, `paymentUnreachable
 - **False alarms:** the demo runs with no fault, and every finding counts as false.
 - **Starting bar:** at most 1 false finding per service per week. It is a guess until measured, and is set by the
   founder from the first results.
+- **Where:** on Oracle Cloud, after Phase 2 is deployed (open question 2). AI runs use free tiers or a local model,
+  on synthetic data only, with no paid model calls ([foundation, *Founder decisions*, 4](phase-2-foundation.md#founder-decisions)).
 
 ## Risks
 
@@ -103,12 +124,16 @@ The demo's fault flags give known answers: `paymentFailure`, `paymentUnreachable
 - **Daily and weekly patterns need shaped traffic.** The flat load generator has none, so the test needs traffic
   shaped over time through `loadGeneratorVUs` or `tools/loadgen`.
 - **A weeks-long run needs a machine that stays on.** The founder's Mac is not one, and the demo competes for its
-  11.7 GiB. It needs a small server, at a cost not yet priced.
+  11.7 GiB. The founder decided on 2026-11-02 to rent nothing now and run it on Oracle Cloud after Phase 2 is
+  deployed (open question 2). So the false-alarm bar below is not measured before then, and nothing may claim it.
 - **The selling reason is not unique.** OpenObserve's own blog claims a self-hosted AI SRE with bring-your-own and
   self-hosted models. SigNoz and Grafana appear to keep their AI in the cloud, by a competitor's account and a
   fork's README. All of this needs checking against their own documentation before anything is published.
 - **Local AI may be weaker.** Quality must be proven on both options, and a local model needs hardware the 16 GB
   install sizing does not include. Decision 0047 flags this for the dev machine too.
+- **Tested only on free models (2026-11-02).** With no paid model calls, the cloud option is tested on free tiers,
+  which have low limits and may train on what is sent, so only synthetic data goes. OpenAI, Anthropic and Bedrock have
+  no free API tier, so they stay "not yet tested" until someone tests them.
 - **Baselines need history.** Retention must hold enough weeks of rollups on every plan, and storage cost is
   unmeasured.
 
@@ -117,8 +142,8 @@ The demo's fault flags give known answers: `paymentFailure`, `paymentUnreachable
 | # | Question | Who | When |
 |---|---|---|---|
 | 1 | AI on the paid hosted service | Founder | Before hosting opens |
-| 2 | The test server's price. The founder accepts the need for one (2026-10-30); the price comes back for approval before anything is rented | Founder | Before Stage 1's false-alarm run |
-| 3 | Competitors' AI, from their own documentation | Research | Before any public claim |
+| 2 | The test server's price. **Answered 2026-11-02:** no rented test server now. Long runs and measurements happen on Oracle Cloud once the Phase 2 features are built and deployed ([foundation, *Founder decisions*, 9](phase-2-foundation.md#founder-decisions)). So Stage 1's false-alarm run, and every other weeks-long run, waits until then. Oracle's free allowance (2 Arm CPUs, 12 GB) is below the 16 GB minimum, so the shape to measure on comes back to the founder at deployment | Founder | At deployment |
+| 3 | Competitors' AI, from their own documentation. **Answered 2026-11-02, Proposed** ([research](../research/phase-2-competitors-2026-11.md), read through summarizing tools). The Risks line above holds, with limits: OpenObserve's AI is in its Enterprise licence, and its setup guide does not list a local model; SigNoz's assistant is Cloud, though its MCP server can run self-hosted; Grafana's backend stays in Grafana Cloud. It also missed overlaps: Aurora, HolmesGPT and OpenSRE run on the customer's machine with their own models. **Still open before naming any of them:** OpenObserve's local path, Elastic's tier and Rootly's own-key status; Coroot's editions were read again by F3, and OneUptime's fix path by F5 | Research, then the founder | Before any public claim |
 
 ## Sources
 

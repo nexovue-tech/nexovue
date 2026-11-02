@@ -193,6 +193,10 @@ type doorOptions struct {
 	// admission replaces the roomy default when a test is about the in-flight
 	// budget. One per fixture, shared by both doors, as in the receiver.
 	admission *otlp.Admission
+
+	// refusals replaces the default when a test reads which refusals the door
+	// blamed on the broker.
+	refusals otlp.RefusalRecorder
 }
 
 func sampleBudget(opts doorOptions) *ratelimit.Limiter {
@@ -239,6 +243,9 @@ func (o *doorOptions) applyDefaults() {
 	}
 	if o.traffic == nil {
 		o.traffic = otlp.NewTraffic()
+	}
+	if o.refusals == nil {
+		o.refusals = &countedRefusals{}
 	}
 }
 
@@ -287,6 +294,7 @@ func sharedDoorOptions(producer *countingProducer, opts doorOptions) otlp.Option
 		Publisher:           ingest.NewPublisher(publishingTo(producer, opts), testTopics, opts.produceBudget),
 		Logger:              opts.log,
 		Traffic:             opts.traffic,
+		Refusals:            opts.refusals,
 		Admission:           opts.admission,
 		MaxBodyBytes:        opts.maxBodyBytes,
 		MaxDecodedBodyBytes: opts.maxBodyBytes * 4,

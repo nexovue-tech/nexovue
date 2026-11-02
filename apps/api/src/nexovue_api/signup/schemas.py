@@ -7,7 +7,7 @@ from typing import Annotated
 from pydantic import BaseModel, Field, SecretStr, field_serializer
 
 from nexovue_api.auth.schemas import EmailAddress, OrganizationSummary, Password
-from nexovue_api.data.postgres.models import NAME_MAX_LENGTH
+from nexovue_api.data.postgres.models import NAME_MAX_LENGTH, TIMEZONE_NAME_LENGTH
 from nexovue_api.projects.schemas import ProjectSummary
 
 OrganizationName = Annotated[str, Field(min_length=1, max_length=NAME_MAX_LENGTH)]
@@ -21,6 +21,10 @@ class SignupRequest(BaseModel):
     # Optional because `users.name` is nullable: an account can exist before
     # anyone has said what to call its owner.
     name: PersonName | None = None
+    # The browser's IANA zone (D23), so the first project's days are the owner's local
+    # days (FR24). A hint, not something typed: one this system does not know is
+    # dropped rather than refused (`signup.service.browser_timezone`).
+    timezone: Annotated[str, Field(max_length=TIMEZONE_NAME_LENGTH)] | None = None
 
 
 class SignupResponse(BaseModel):

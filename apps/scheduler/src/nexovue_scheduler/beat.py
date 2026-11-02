@@ -49,6 +49,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from nexovue_scheduler import metrics
 from nexovue_scheduler.billing import END_LAPSED_GRACE_TASK
 from nexovue_scheduler.checks import ScheduledCheck, load_enabled_checks
+from nexovue_scheduler.detection import (
+    DETECTION_QUEUE,
+    SWEEP_BASELINES_TASK,
+    SWEEP_DETECTION_TASK,
+)
 from nexovue_scheduler.erasure import ERASE_OWED_TASK
 from nexovue_scheduler.health import Pulse
 from nexovue_scheduler.jobs import queue
@@ -78,6 +83,13 @@ THRESHOLD_EVALUATION_ENTRY: Final = "sweep:alert-thresholds"
 SILENCE_EVALUATION_ENTRY: Final = "sweep:alert-silence"
 NEW_ERROR_EVALUATION_ENTRY: Final = "sweep:alert-new-errors"
 ATTEMPT_PRUNE_ENTRY: Final = "sweep:alert-attempts"
+
+# F6: which minute is settled, and a job per project to judge it; and each
+# project's normal for the next two hours, rebuilt hourly (design, "Where it runs").
+DETECTION_SWEEP_SECONDS: Final = 60
+DETECTION_SWEEP_ENTRY: Final = "sweep:detection"
+BASELINE_SWEEP_SECONDS: Final = 3600
+BASELINE_SWEEP_ENTRY: Final = "sweep:detection-baselines"
 
 # The rows that lapse rather than being removed (ADR-020): sessions, links, results, jobs.
 EXPIRY_SWEEP_SECONDS: Final = 60
@@ -392,6 +404,12 @@ class Beat:
                 EVALUATION_SECONDS,
                 SHARED_QUEUE,
             ),
+            DETECTION_SWEEP_ENTRY: (
+                SWEEP_DETECTION_TASK,
+                DETECTION_SWEEP_SECONDS,
+                DETECTION_QUEUE,
+            ),
+            BASELINE_SWEEP_ENTRY: (SWEEP_BASELINES_TASK, BASELINE_SWEEP_SECONDS, DETECTION_QUEUE),
             EXPIRY_SWEEP_ENTRY: (SWEEP_EXPIRED_TASK, EXPIRY_SWEEP_SECONDS, SHARED_QUEUE),
             ERASURE_ENTRY: (ERASE_OWED_TASK, ERASURE_SECONDS, SHARED_QUEUE),
         }

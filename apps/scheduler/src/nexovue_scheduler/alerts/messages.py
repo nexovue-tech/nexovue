@@ -1,8 +1,8 @@
 """What an alert says, before any channel shapes it (FR16).
 
 Every message states the rule, the severity, what happened in words, when it
-started, how long it lasted when it is over, and one link — to the incident, whose
-page links on to the evidence (D9). Not to the evidence itself: a check can be
+started, how long it lasted when it is over, and one link — to the incident or the
+finding, whose page links on to the evidence (D9). Not to the evidence itself: a check can be
 deleted, and a message is read long after it was sent. It states nothing from the
 evidence itself (BR9, FR18): the failure's reason arrives here already stripped by
 `alerts.reasons`, and nothing else from a run is read.
@@ -13,21 +13,15 @@ Discord with a colour, Teams as a card, PagerDuty as an event (FR17).
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Final
+from typing import Any, Final
 
 from nexovue_platform.alerts.model import SEVERITY_RANK
+from nexovue_platform.detection import ADOPTION_AFTER_DAYS
 
-from nexovue_scheduler.alerts.outbox import Notice
-
-# A subject's name can come from telemetry, which anyone with a public browser key can
-# send. Long enough for any real name; short enough that one cannot bury the message.
-NAME_LIMIT: Final = 200
-# C0 and C1 controls and the Unicode line and paragraph separators: anything that could
-# start a line the message did not write.
-_CONTROLS: Final = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+from nexovue_scheduler.alerts.outbox import Notice, Subject, one_line
+from nexovue_scheduler.detection.lifecycle import times
 
 _STATE_WORDS: Final = {
     "down": "is down",
@@ -65,12 +59,22 @@ class _Said:
 
 
 def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
+    """The words for one notification, whatever its subject."""
+    if notice.subject.kind == "finding":
+        return _compose_finding(notice, app_base_url=app_base_url)
+    if notice.subject.kind == "project":
+        return _compose_project(notice, app_base_url=app_base_url)
+    return _compose_incident(notice, app_base_url=app_base_url)
+
+
+def _compose_incident(notice: Notice, *, app_base_url: str) -> AlertMessage:
     """The words for one notification about one incident."""
     base = app_base_url.rstrip("/")
-    said = _said(notice)
-    label = one_line(notice.subject_label)
-    rule_name = one_line(notice.rule_name)
-    new_error = notice.condition_kind == "new_error_group"
+    subject = notice.subject
+    said = _said(subject)
+    label = subject.label
+    rule_name = one_line(subject.rule_name or "")
+    new_error = subject.condition_kind == "new_error_group"
 
     if notice.kind == "resolved":
         summary = f"[resolved] {label} {said.recovered}"
@@ -83,7 +87,7 @@ def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
             "check was removed, or the rule stopped covering it."
         ]
     elif notice.kind == "flapping":
-        openings = notice.detail.get("openings")
+        openings = subject.detail.get("openings")
         summary = f"[{notice.severity}] {label} is flapping"
         lines = [
             f"{label} has changed state {openings or 'several'} times in the last hour. "
@@ -93,7 +97,7 @@ def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
         summary = f"[{notice.severity}] {label} {said.still}"
         lines = [
             f"{label} {said.still}, open for "
-            f"{describe_duration(notice.opened_at, notice.created_at)}."
+            f"{describe_duration(subject.opened_at, notice.created_at)}."
         ]
     elif notice.kind == "escalated":
         worse = (
@@ -110,9 +114,9 @@ def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
 
     if notice.kind not in ("resolved", "closed"):
         lines.extend(said.facts)
-    lines.append(f"{'Seen' if new_error else 'Started'}: {_moment(notice.opened_at)}.")
-    if notice.resolved_at is not None and not new_error:
-        lasted = describe_duration(notice.opened_at, notice.resolved_at)
+    lines.append(f"{'Seen' if new_error else 'Started'}: {_moment(subject.opened_at)}.")
+    if subject.closed_at is not None and not new_error:
+        lasted = describe_duration(subject.opened_at, subject.closed_at)
         lines.append(f"Open for: {lasted}." if notice.kind == "closed" else f"Lasted: {lasted}.")
     lines.append(f"Rule: {rule_name}.")
 
@@ -121,15 +125,15 @@ def compose(notice: Notice, *, app_base_url: str) -> AlertMessage:
         severity=notice.severity,
         summary=summary,
         details=tuple(lines),
-        link=f"{base}/alerts/incidents/{notice.incident_id}",
+        link=f"{base}/alerts/incidents/{subject.id}",
         rule_name=rule_name,
-        manage_link=f"{base}/alerts/rules/{notice.rule_id}" if notice.rule_id else None,
+        manage_link=f"{base}/alerts/rules/{subject.rule_id}" if subject.rule_id else None,
     )
 
 
-def _said(notice: Notice) -> _Said:
-    detail = notice.detail
-    match notice.condition_kind:
+def _said(subject: Subject) -> _Said:
+    detail = subject.detail
+    match subject.condition_kind:
         case "service_error_rate" | "service_latency_p95":
             reading = str(detail.get("reading") or "reading")
             unit = str(detail.get("unit") or "")
@@ -213,11 +217,11 @@ def compose_batch(notices: tuple[Notice, ...], *, app_base_url: str) -> AlertMes
     opened = [notice for notice in notices if notice.kind == "opened"]
     if (
         len(opened) == len(notices)
-        and all(notice.condition_kind == "check_state" for notice in opened)
-        and len({notice.detail.get("state") for notice in opened}) == 1
+        and all(notice.subject.condition_kind == "check_state" for notice in opened)
+        and len({notice.subject.detail.get("state") for notice in opened}) == 1
     ):
         # The shape of a shared outage: the same thing happening to several at once.
-        state = str(opened[0].detail.get("state") or "failing")
+        state = str(opened[0].subject.detail.get("state") or "failing")
         summary = f"[{worst.severity}] {len(notices)} checks are {state}"
     elif still_open == 0:
         summary = f"[resolved] {len(notices)} incidents recovered"
@@ -239,11 +243,142 @@ def compose_batch(notices: tuple[Notice, ...], *, app_base_url: str) -> AlertMes
     )
 
 
-def one_line(name: str) -> str:
-    """A name as one line of at most `NAME_LIMIT` characters, so it can only ever be
-    words inside the message, never a line of its own."""
-    flat = _CONTROLS.sub(" ", name).strip()
-    return flat if len(flat) <= NAME_LIMIT else flat[: NAME_LIMIT - 1] + "…"
+# How a closed finding is said, after its subject (FR13, FR20, FR21, FR32, D20).
+_FINDING_CLOSED_WORDS: Final = {
+    "recovered": "is back to normal",
+    "false_alarm": "was marked a false alarm",
+    "new_normal": "has a new normal, set by a person",
+    "adopted": "has a new normal, adopted by itself",
+    "service_gone": "has sent nothing for 24 hours and is treated as gone",
+    "could_not_be_judged": "could no longer be judged, so its finding closed",
+}
+# Each signal's line: its name, and the unit `_number` writes its values in.
+_SIGNAL_WORDS: Final = {
+    "slower": ("Slower", "ms"),
+    "failing": ("Failing", "%"),
+    "traffic": ("Traffic", "requests a minute"),
+}
+_PROJECT_NOTICE_WORDS: Final = {
+    "stopped": (
+        "Detection stopped for {project}",
+        "nexovue's anomaly detection has not judged {project} for 15 minutes, as of {at}. "
+        "No finding can open until it runs again.",
+    ),
+    "running_again": (
+        "Detection is running again for {project}",
+        "nexovue's anomaly detection is judging {project} again, as of {at}. It starts "
+        "from the latest complete minute; what happened while it was stopped is not judged.",
+    ),
+}
+
+
+def _compose_finding(notice: Notice, *, app_base_url: str) -> AlertMessage:
+    """A finding's words (FR17): its title, which already names the project's zone, and
+    one line for each signal. Service and endpoint names are telemetry text: each is
+    one line, the subject's from `Subject` and the rest through `one_line` here, and
+    the channel escapes them after."""
+    base = app_base_url.rstrip("/")
+    subject = notice.subject
+    detail = subject.detail
+    label = subject.label
+    title = one_line(str(detail.get("title") or label))
+    rule_name = one_line(subject.rule_name or "")
+    reason = str(detail.get("closed_reason") or "recovered")
+    if notice.kind == "resolved":
+        said = _FINDING_CLOSED_WORDS.get(reason, _FINDING_CLOSED_WORDS["recovered"])
+        summary = f"[resolved] {label} {said}"
+        lines = [f"{label} {said}.", f"It was: {title}."]
+    elif notice.kind == "adopted":
+        summary = f"[{notice.severity}] {label} has a new normal"
+        lines = [_adopted_sentence(label, detail.get("adopted_shifts") or [])]
+        lines.append(
+            "Nobody marked this finding, so the change became the normal by itself. "
+            "If it is not normal, open the finding and mark it."
+        )
+    elif notice.kind == "flapping":
+        summary = f"[{notice.severity}] {label} is flapping"
+        lines = [
+            f"Detection has opened a finding on {label} five times in the last hour. "
+            "Further findings are not sent until it has stayed normal for 30 minutes."
+        ]
+    elif notice.kind == "escalated":
+        summary = f"[critical] Now critical: {title}"
+        lines = [f"{title}.", "This finding is now critical."]
+    elif notice.kind == "joined":
+        summary = f"[{notice.severity}] More is unusual: {title}"
+        lines = [f"{title}.", "Another signal or endpoint joined this finding."]
+    else:
+        summary = f"[{notice.severity}] {title}"
+        lines = [f"{title}."]
+    if notice.kind not in ("resolved", "adopted", "flapping"):
+        lines.extend(_signal_lines(detail.get("signals") or []))
+    lines.append(f"Started: {_moment(subject.opened_at)}.")
+    if subject.closed_at is not None:
+        lines.append(f"Lasted: {describe_duration(subject.opened_at, subject.closed_at)}.")
+    if rule_name:
+        lines.append(f"Rule: {rule_name}.")
+    return AlertMessage(
+        kind=notice.kind,
+        severity=notice.severity,
+        summary=summary,
+        details=tuple(lines),
+        link=f"{base}/findings/{subject.id}",
+        rule_name=rule_name,
+        manage_link=f"{base}/alerts/rules/{subject.rule_id}" if subject.rule_id else None,
+    )
+
+
+def _signal_lines(signals: list[dict[str, Any]]) -> list[str]:
+    """One line a signal: "Slower: 480 ms at worst, against 300 ms normally (…)"."""
+    lines = []
+    for entry in signals:
+        name, unit = _SIGNAL_WORDS.get(str(entry.get("signal")), ("Unusual", ""))
+        endpoint = entry.get("endpoint")
+        if endpoint and entry.get("signal") == "failing":
+            name = f"{name}, {one_line(str(endpoint))}"
+        line = (
+            f"{name}: {_number(entry.get('worst'), unit)} at worst, "
+            f"against {_number(entry.get('normal'), unit)} normally"
+        )
+        comparison = entry.get("comparison")
+        lines.append(f"{line} ({comparison})." if comparison else f"{line}.")
+    return lines
+
+
+def _adopted_sentence(label: str, shifts: list[dict[str, Any]]) -> str:
+    """FR21's words: Checkout's new normal is 1.6 times slower, adopted after 7 days."""
+    changes = []
+    for shift in shifts:
+        ratio = shift.get("ratio")
+        if not isinstance(ratio, int | float) or ratio <= 0:
+            continue
+        if shift.get("signal") == "slower":
+            changes.append(f"{times(ratio)} slower" if ratio >= 1 else f"{times(1 / ratio)} faster")
+        elif shift.get("signal") == "traffic":
+            changes.append(f"{round(100 * ratio)}% of its earlier traffic")
+    after = f"Adopted after {ADOPTION_AFTER_DAYS} days."
+    if not changes:
+        return f"{label}'s new level became its normal. {after}"
+    return f"{label}'s new normal is {' and '.join(changes)}. {after}"
+
+
+def _compose_project(notice: Notice, *, app_base_url: str) -> AlertMessage:
+    """Detection stopping or running again for a whole project (D24)."""
+    base = app_base_url.rstrip("/")
+    project = notice.subject.label
+    headline, sentence = _PROJECT_NOTICE_WORDS[notice.kind]
+    words = {"project": project, "at": _moment(notice.created_at)}
+    summary = headline.format(**words)
+    return AlertMessage(
+        # Running again is a recovery: it is coloured and filed as one.
+        kind="resolved" if notice.kind == "running_again" else notice.kind,
+        severity=notice.severity,
+        summary=f"[{'resolved' if notice.kind == 'running_again' else notice.severity}] {summary}",
+        details=(sentence.format(**words),),
+        link=f"{base}/findings",
+        rule_name="",
+        manage_link=None,
+    )
 
 
 def describe_duration(start: datetime, end: datetime) -> str:

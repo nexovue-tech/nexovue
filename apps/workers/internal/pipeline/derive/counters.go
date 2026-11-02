@@ -1,6 +1,7 @@
 // Package derive computes the exact per-minute aggregates that the screens,
 // the dashboards and anomaly detection read: the counter points of
-// `metrics_sum`, and the endpoint rollup `endpoint_stats_1m`.
+// `metrics_sum`, the endpoint rollup `endpoint_stats_1m`, and the service
+// rollup `service_stats_1m` that anomaly detection judges.
 //
 // It runs before the sampler, over every span of every trace. That order is the
 // whole point: storage can drop nine healthy traces in ten and the
@@ -9,8 +10,8 @@
 // over `spans` until 000024, which put it *downstream* of the sampler and made
 // the service overview read a tenth of the traffic at ten times the error rate.
 //
-// Both outputs come out of one Observe and one drain, so a row of the rollup
-// and the counters beside it can never disagree about the same span.
+// Every output comes out of one Observe and one drain, so a row of a rollup and
+// the counters beside it can never disagree about the same span.
 package derive
 
 import (
@@ -185,6 +186,9 @@ type Counters struct {
 	// span kind, and folding span_name into its series would multiply that
 	// table by a dimension only this rollup reads.
 	endpoints map[countedEndpoint]*endpointTotals
+	// services is the third, one row per service-minute with a latency
+	// histogram, fed from the same inbound spans as endpoints.
+	services  map[countedService]*serviceTotals
 	lateGrace time.Duration
 }
 
@@ -195,10 +199,15 @@ type Counters struct {
 type Derived struct {
 	Points    []Point
 	Endpoints []EndpointStat
+	Services  []ServiceStat
+	// ServicesOverCap is what the per-tenant cap left out of Services.
+	ServicesOverCap ServiceCap
 }
 
 // Empty reports whether a drain produced nothing at all.
-func (d Derived) Empty() bool { return len(d.Points) == 0 && len(d.Endpoints) == 0 }
+func (d Derived) Empty() bool {
+	return len(d.Points) == 0 && len(d.Endpoints) == 0 && len(d.Services) == 0
+}
 
 // NewCounters returns counters that hold a minute open for lateGrace after it
 // ends, so spans that arrive a little late still land in their own minute.
@@ -210,6 +219,7 @@ func NewCounters(lateGrace time.Duration) *Counters {
 	return &Counters{
 		buckets:   make(map[counted]*totals),
 		endpoints: make(map[countedEndpoint]*endpointTotals),
+		services:  make(map[countedService]*serviceTotals),
 		lateGrace: lateGrace,
 	}
 }
@@ -252,7 +262,7 @@ func (c *Counters) Observe(now time.Time, span Span) (minute time.Time, discarde
 }
 
 // Drained reports whether everything derived for a minute has already been
-// written. One answer covers both outputs: they share the bucket and the grace,
+// written. One answer covers every output: they share the bucket and the grace,
 // and they are drained in the same call.
 //
 // A zero minute means nothing was counted, which is trivially drained.
@@ -314,7 +324,13 @@ func (c *Counters) drain(closed func(minute time.Time) bool) Derived {
 	// Go randomises map iteration, so without this the same counts produce a
 	// different block every time and every replay double-counts.
 	sort.Slice(points, func(i, j int) bool { return points[i].less(points[j]) })
-	return Derived{Points: points, Endpoints: c.drainEndpoints(closed)}
+	services, overCap := c.drainServices(closed)
+	return Derived{
+		Points:          points,
+		Endpoints:       c.drainEndpoints(closed),
+		Services:        services,
+		ServicesOverCap: overCap,
+	}
 }
 
 // points is the three rows one series' totals become.
@@ -328,15 +344,16 @@ func (s series) points(summed totals) []Point {
 }
 
 // Disowned is what leaving a partition cost the counters: the shares taken out
-// of both maps, and the spans whose counts went with them.
+// of each map, and the spans whose counts went with them.
 type Disowned struct {
 	Series    int
 	Endpoints int
+	Services  int
 	Spans     uint64
 }
 
 // Disown drops every share that arrived on one of the given partitions, from
-// both the counter buckets and the endpoint rollup.
+// the counter buckets and both rollups.
 //
 // This is not lost data, and the reason is the ordering the offsets already
 // rest on: a batch's offsets — and its durable counted-through watermark — move
@@ -372,6 +389,13 @@ func (c *Counters) Disown(partitions []int32) Disowned {
 		dropped.Endpoints++
 		delete(c.endpoints, key)
 	}
+	for key := range c.services {
+		if _, gone := leaving[key.partition]; !gone {
+			continue
+		}
+		dropped.Services++
+		delete(c.services, key)
+	}
 	return dropped
 }
 
@@ -404,6 +428,11 @@ func (c *Counters) Pending() int { return len(c.buckets) }
 // cardinality, and each of its buckets holds a latency sample rather than three
 // floats.
 func (c *Counters) PendingEndpoints() int { return len(c.endpoints) }
+
+// PendingServices reports how many service-minute shares are held. Bounded by
+// the same customer cardinality as the endpoint map, at a fixed 64 buckets
+// each.
+func (c *Counters) PendingServices() int { return len(c.services) }
 
 func (s series) point(name string, value float64, attrs string) Point {
 	return Point{

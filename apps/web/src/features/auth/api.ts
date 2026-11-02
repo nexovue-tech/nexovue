@@ -15,6 +15,11 @@ export interface SignupRequest {
   password: string;
   /** Optional, per the contract. Omitted rather than sent empty. */
   name?: string;
+  /**
+   * The browser's IANA zone (F6, D23), so the first project's days are the owner's
+   * local days. A hint the API checks, and drops for UTC if it does not know it.
+   */
+  timezone?: string;
 }
 
 export interface SignupResponse {

@@ -20,6 +20,8 @@ KNOWN_VARIABLES = (
     *EMAIL_VARIABLES,
     "APP_BASE_URL",
     "CLICKHOUSE_ERASER_DSN",
+    "CLICKHOUSE_DETECTION_WRITER_DSN",
+    "KAFKA_SPANS_TOPIC",
     "ERASURE_HOUR_UTC",
     "ERASURE_BATCH_SIZE",
     "CHECK_SECRET_KEY",
@@ -109,6 +111,36 @@ def test_the_nightly_erasure_runs_at_two_utc_unless_told_otherwise(
     assert settings.erasure_hour_utc == 2
     assert settings.erasure_batch_size == 100
     assert settings.clickhouse_eraser_dsn == ""
+
+
+def test_detection_is_off_until_its_writer_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-023: no credential has a default. Empty switches detection off, which the
+    store reports at ERROR rather than quietly (`detection.store.open_store`)."""
+    _apply(monkeypatch, COMPLETE_ENVIRONMENT)
+
+    settings = get_settings()
+
+    assert settings.clickhouse_detection_writer_dsn == ""
+    assert settings.kafka_spans_topic == "spans-raw", "the receiver's and the worker's default"
+
+
+def test_detection_reads_its_writer_and_topic_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dsn = "clickhouse://nexovue_detection_writer:secret@clickhouse:8123/nexovue"
+    _apply(
+        monkeypatch,
+        {
+            **COMPLETE_ENVIRONMENT,
+            "CLICKHOUSE_DETECTION_WRITER_DSN": dsn,
+            "KAFKA_SPANS_TOPIC": "spans-test",
+        },
+    )
+
+    settings = get_settings()
+
+    assert settings.clickhouse_detection_writer_dsn == dsn
+    assert settings.kafka_spans_topic == "spans-test"
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,8 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { identityFor } from "@/shared/identity.test-util";
+
 import {
   alertReads,
   button,
@@ -190,5 +192,88 @@ describe("a saved rule", () => {
       [...select.options].some((option) => option.value === "service_silent"),
     );
     expect(kinds).toEqual([]);
+  });
+});
+
+describe("an anomaly finding rule (F6 FR28, FR29, D11)", () => {
+  const criticalProblems = rule({
+    id: "rule-critical",
+    name: "Critical problems",
+    condition_kind: "anomaly_finding",
+    condition: { kind: "anomaly_finding", services: null, minimum_severity: "critical" },
+  });
+  const reads = () => alertReads({ rules: [rule(), criticalProblems] });
+
+  it("says what it sends on the Alerts screen", async () => {
+    stubApi(reads());
+    const { container } = await mountAt("/alerts");
+    await waitFor(
+      () =>
+        readable(container).includes("Anomaly detection finds a critical problem in any service"),
+      "the default rule's sentence",
+    );
+  });
+
+  it("opens in the editor for an admin, and saves its own kind of condition", async () => {
+    const api = stubApi({
+      ...reads(),
+      "GET /alerts/rules/rule-critical": json(criticalProblems),
+      "PATCH /alerts/rules/rule-critical": json(criticalProblems),
+      "GET /auth/me": json(identityFor("admin")),
+    });
+    const { container } = await mountAt("/alerts/rules/rule-critical");
+
+    await waitFor(
+      () => readable(container).includes("Anomaly detection finds a problem"),
+      "the kind",
+    );
+    expect(readable(container)).toContain("Critical only");
+    await submit(container.querySelector("form") as HTMLFormElement);
+
+    const [sent] = await waitFor(() => api.to("PATCH", "/alerts/rules/rule-critical"), "the save");
+    expect(sent.body).toMatchObject({
+      name: "Critical problems",
+      condition: { kind: "anomaly_finding", services: null, minimum_severity: "critical" },
+    });
+  });
+
+  it("is read-only to a member, who may not change detection", async () => {
+    stubApi({
+      ...reads(),
+      "GET /alerts/rules/rule-critical": json(criticalProblems),
+      "GET /auth/me": json(identityFor("member")),
+    });
+    const { container } = await mountAt("/alerts/rules/rule-critical");
+
+    await waitFor(
+      () => readable(container).includes("Only an owner or an admin can change this rule."),
+      "the read-only rule",
+    );
+    expect(readable(container)).toContain(
+      "Anomaly detection finds a critical problem in any service",
+    );
+    expect(container.querySelector("form")).toBeNull();
+    const labels = [...container.querySelectorAll("button")].map((each) =>
+      each.textContent?.trim(),
+    );
+    expect(labels).not.toContain("Delete");
+    expect(labels).not.toContain("1 hour");
+  });
+
+  it("is offered as a new rule's kind only to those who may change detection", async () => {
+    for (const [role, offered] of [
+      ["admin", true],
+      ["member", false],
+    ] as const) {
+      stubApi({
+        ...alertReads({ channels: [channel()] }),
+        "GET /auth/me": json(identityFor(role)),
+      });
+      const { container } = await mountAt("/alerts/rules/new");
+      await waitFor(() => container.querySelector("form"), "the form");
+      const kinds = [...container.querySelectorAll("option")].map((option) => option.value);
+      expect(kinds.includes("anomaly_finding")).toBe(offered);
+      unmountAll();
+    }
   });
 });

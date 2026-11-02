@@ -28,6 +28,9 @@ KINDS: Final[dict[EventKind, tuple[str, ...]]] = {
         "integration.",
         "project.",
         "organization.",
+        # F6: a person's word on a finding, and a service's mute or snooze.
+        "finding.",
+        "service.",
     ),
     "support": ("support.",),
 }

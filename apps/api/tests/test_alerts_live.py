@@ -30,7 +30,11 @@ from nexovue_api.data.postgres.models import (
     Notification,
     NotificationChannel,
 )
-from nexovue_api.errors.exceptions import InvalidRequestError, NotFoundError
+from nexovue_api.errors.exceptions import (
+    InvalidRequestError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from nexovue_api.signup.service import ProvisionedTenant, provision_tenant
 
 POSTGRES_DSN: Final = os.environ.get(
@@ -119,19 +123,25 @@ async def _create(db: AsyncSession, tenant: ProvisionedTenant, **fields: Any) ->
         db,
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
         request=WriteRuleRequest(**request),
     )
 
 
-async def test_a_new_project_lists_its_default_rule_sending_to_the_owners(
+async def test_a_new_project_lists_its_default_rules_sending_to_the_owners(
     db: AsyncSession, tenant: ProvisionedTenant
 ) -> None:
     listed = await service.list_rules(
         db, org_id=tenant.organization.id, project_id=tenant.project.id
     )
-    [rule] = listed.rules
-    assert (rule.name, rule.is_default, rule.notifying_nobody) == ("Any check down", True, False)
-    assert [channel.kind for channel in rule.channels] == ["owners"]
+    assert [(rule.name, rule.is_default, rule.notifying_nobody) for rule in listed.rules] == [
+        ("Any check down", True, False),
+        ("Critical problems", True, False),
+    ]
+    assert [[channel.kind for channel in rule.channels] for rule in listed.rules] == [
+        ["owners"],
+        ["owners"],
+    ]
 
 
 async def test_a_rule_is_saved_in_the_scheduler_s_own_vocabulary(
@@ -234,6 +244,7 @@ async def test_a_rule_naming_a_deleted_check_can_still_be_edited_and_forgets_it(
         db,
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
         rule_id=created.id,
         request=UpdateRuleRequest(name="Checkout, renamed", condition=condition),
     )
@@ -248,6 +259,7 @@ async def test_a_rule_naming_a_deleted_check_can_still_be_edited_and_forgets_it(
             db,
             org_id=tenant.organization.id,
             actor_user_id=tenant.user.id,
+            actor_role=tenant.user.role,
             rule_id=created.id,
             request=UpdateRuleRequest(condition=condition),
         )
@@ -260,6 +272,7 @@ async def test_a_rule_naming_a_deleted_check_can_still_be_edited_and_forgets_it(
             db,
             org_id=tenant.organization.id,
             actor_user_id=tenant.user.id,
+            actor_role=tenant.user.role,
             rule_id=created.id,
             request=UpdateRuleRequest(condition=condition | {"check_ids": [str(uuid.uuid4())]}),
         )
@@ -274,6 +287,7 @@ async def test_a_rule_left_without_channels_is_notifying_nobody(
         db,
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
         rule_id=created.id,
         request=UpdateRuleRequest(channel_ids=[]),
     )
@@ -289,6 +303,7 @@ async def test_a_mute_records_who_and_until_when(
         db,
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
         rule_id=created.id,
         until=until,
     )
@@ -298,6 +313,7 @@ async def test_a_mute_records_who_and_until_when(
             db,
             org_id=tenant.organization.id,
             actor_user_id=tenant.user.id,
+            actor_role=tenant.user.role,
             rule_id=created.id,
             until=datetime.now(UTC) - timedelta(minutes=1),
         )
@@ -322,7 +338,11 @@ async def test_deleting_a_rule_closes_its_open_incidents_and_keeps_their_history
     await db.flush()
 
     await service.delete_rule(
-        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, rule_id=created.id
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
+        rule_id=created.id,
     )
     await db.refresh(incident)
     assert incident.resolved_at is not None
@@ -455,6 +475,7 @@ async def test_every_rule_change_is_audited(db: AsyncSession, tenant: Provisione
         db,
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
         rule_id=created.id,
         request=UpdateRuleRequest(name="Checkout, renamed"),
     )
@@ -462,11 +483,16 @@ async def test_every_rule_change_is_audited(db: AsyncSession, tenant: Provisione
         db,
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
         rule_id=created.id,
         until=datetime.now(UTC) + timedelta(hours=1),
     )
     await service.delete_rule(
-        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, rule_id=created.id
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
+        rule_id=created.id,
     )
     actions = [
         entry.action
@@ -524,7 +550,8 @@ async def test_a_service_shows_only_the_rules_that_watch_it(
     coverage = await service.coverage_of_service(
         db, org_id=tenant.organization.id, project_id=tenant.project.id, service="checkout"
     )
-    assert [rule.name for rule in coverage.rules] == ["Every service silent"]
+    # The default *Critical problems* rule watches every service too (F6 FR29).
+    assert [rule.name for rule in coverage.rules] == ["Critical problems", "Every service silent"]
 
 
 async def _open(
@@ -581,6 +608,7 @@ async def test_disabling_a_rule_closes_what_it_had_open(
         db,
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
         rule_id=created.id,
         request=UpdateRuleRequest(enabled=False),
     )
@@ -605,6 +633,7 @@ async def test_narrowing_a_rule_closes_only_what_it_stopped_watching(
         db,
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
         rule_id=created.id,
         request=UpdateRuleRequest(condition=condition | {"check_ids": [str(kept.id)]}),
     )
@@ -628,6 +657,7 @@ async def test_narrowing_a_service_rule_closes_the_service_it_dropped(
         db,
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
         rule_id=created.id,
         request=UpdateRuleRequest(condition=condition | {"services": ["checkout"]}),
     )
@@ -651,7 +681,10 @@ async def test_an_incident_outlives_its_check_and_says_the_check_is_gone(
     assert before.check_deleted is False
 
     await checks.remove(
-        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, check_id=check.id
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        check_id=check.id,
     )
 
     after = await service.get_incident(db, org_id=tenant.organization.id, incident_id=incident.id)
@@ -669,7 +702,10 @@ async def test_deleting_a_check_closes_its_open_incidents(
     incident = await _open(db, tenant, rules.rules[0].id, f"check:{check.id}")
 
     await checks.remove(
-        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, check_id=check.id
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        check_id=check.id,
     )
     assert await _still_open(db, incident) == [False]
 
@@ -719,7 +755,11 @@ async def test_deleting_a_rule_tells_the_machines_it_alerted_that_the_incident_c
     hook = await _told(db, tenant, incident)
 
     await service.delete_rule(
-        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, rule_id=created.id
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
+        rule_id=created.id,
     )
     assert await _closes(db, incident) == [hook]
 
@@ -735,6 +775,7 @@ async def test_disabling_a_rule_tells_the_machines_it_alerted_too(
         db,
         org_id=tenant.organization.id,
         actor_user_id=tenant.user.id,
+        actor_role=tenant.user.role,
         rule_id=created.id,
         request=UpdateRuleRequest(enabled=False),
     )
@@ -752,6 +793,138 @@ async def test_deleting_a_check_tells_the_machines_it_alerted_too(
     hook = await _told(db, tenant, incident)
 
     await checks.remove(
-        db, org_id=tenant.organization.id, actor_user_id=tenant.user.id, check_id=check.id
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        check_id=check.id,
     )
     assert await _closes(db, incident) == [hook]
+
+
+# ---------------------------------------------------------- F6: anomaly rules
+
+ANOMALY: Final = {"kind": "anomaly_finding", "minimum_severity": "warning"}
+
+
+async def _critical_problems(db: AsyncSession, tenant: ProvisionedTenant) -> Any:
+    listed = await service.list_rules(
+        db, org_id=tenant.organization.id, project_id=tenant.project.id
+    )
+    return next(rule for rule in listed.rules if rule.condition_kind == "anomaly_finding")
+
+
+async def test_a_member_may_not_create_an_anomaly_finding_rule_and_an_admin_may(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """F6 AC34, D11: otherwise anyone refused a mute could silence detection through
+    its rule (FR23)."""
+    request = WriteRuleRequest(
+        project_id=tenant.project.id,
+        name="Findings",
+        condition=ANOMALY,
+        channel_ids=[await _owners(db, tenant)],
+    )
+    with pytest.raises(PermissionDeniedError):
+        await service.create_rule(
+            db,
+            org_id=tenant.organization.id,
+            actor_user_id=tenant.user.id,
+            actor_role="member",
+            request=request,
+        )
+    created = await service.create_rule(
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        actor_role="admin",
+        request=request,
+    )
+    assert created.condition_kind == "anomaly_finding"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"name": "Renamed"},
+        {"enabled": False},
+        {"channel_ids": []},
+        {"condition": {"kind": "anomaly_finding", "minimum_severity": "warning"}},
+        {"condition": DOWN},
+    ],
+    ids=["rename", "enable", "channels", "condition", "from-the-kind"],
+)
+async def test_a_member_may_not_change_an_anomaly_finding_rule(
+    db: AsyncSession, tenant: ProvisionedTenant, change: dict[str, Any]
+) -> None:
+    """F6 AC34, security M4: every route, the default rule included."""
+    rule = await _critical_problems(db, tenant)
+    with pytest.raises(PermissionDeniedError):
+        await service.update_rule(
+            db,
+            org_id=tenant.organization.id,
+            actor_user_id=tenant.user.id,
+            actor_role="member",
+            rule_id=rule.id,
+            request=UpdateRuleRequest(**change),
+        )
+
+
+async def test_a_member_may_not_change_a_rule_to_the_anomaly_kind(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    created = await _create(db, tenant)
+    with pytest.raises(PermissionDeniedError):
+        await service.update_rule(
+            db,
+            org_id=tenant.organization.id,
+            actor_user_id=tenant.user.id,
+            actor_role="member",
+            rule_id=created.id,
+            request=UpdateRuleRequest(condition=ANOMALY),
+        )
+
+
+async def test_a_member_may_not_mute_or_delete_an_anomaly_finding_rule(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    rule = await _critical_problems(db, tenant)
+    with pytest.raises(PermissionDeniedError):
+        await service.mute_rule(
+            db,
+            org_id=tenant.organization.id,
+            actor_user_id=tenant.user.id,
+            actor_role="member",
+            rule_id=rule.id,
+            until=datetime.now(UTC) + timedelta(hours=1),
+        )
+    with pytest.raises(PermissionDeniedError):
+        await service.delete_rule(
+            db,
+            org_id=tenant.organization.id,
+            actor_user_id=tenant.user.id,
+            actor_role="member",
+            rule_id=rule.id,
+        )
+
+
+async def test_a_member_still_changes_every_other_rule(
+    db: AsyncSession, tenant: ProvisionedTenant
+) -> None:
+    """The check is for the anomaly kind alone: F21's rules stay every working member's."""
+    created = await _create(db, tenant)
+    renamed = await service.update_rule(
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        actor_role="member",
+        rule_id=created.id,
+        request=UpdateRuleRequest(name="Renamed"),
+    )
+    assert renamed.name == "Renamed"
+    await service.delete_rule(
+        db,
+        org_id=tenant.organization.id,
+        actor_user_id=tenant.user.id,
+        actor_role="member",
+        rule_id=created.id,
+    )

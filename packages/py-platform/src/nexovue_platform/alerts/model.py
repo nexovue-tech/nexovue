@@ -27,6 +27,7 @@ CONDITION_KINDS: Final = (
     "service_error_rate",
     "service_latency_p95",
     "service_silent",
+    "anomaly_finding",
 )
 
 SEVERITIES: Final = ("critical", "warning")
@@ -39,12 +40,45 @@ SEVERITY_RANK: Final[dict[str, int]] = {"warning": 1, "critical": 2}
 # shapes a delivery takes, not things that happened, so they are not kinds.
 # `closed` is an incident ended without recovering — its rule or check removed, or
 # the rule narrowed — told only to the machines that were sent its opening.
-NOTIFICATION_KINDS: Final = ("opened", "escalated", "resolved", "repeated", "flapping", "closed")
-NotificationKind = Literal["opened", "escalated", "resolved", "repeated", "flapping", "closed"]
+# F6 adds four. `joined`: a new signal or endpoint joined an open finding (D29).
+# `adopted`: a finding's level became the new normal by itself, told to the owners
+# outside any rule (D22). `stopped` and `running_again`: detection stopped judging a
+# project, and resumed (D24); their subject is the project, not an incident or finding.
+NOTIFICATION_KINDS: Final = (
+    "opened",
+    "escalated",
+    "resolved",
+    "repeated",
+    "flapping",
+    "closed",
+    "joined",
+    "adopted",
+    "stopped",
+    "running_again",
+)
+NotificationKind = Literal[
+    "opened",
+    "escalated",
+    "resolved",
+    "repeated",
+    "flapping",
+    "closed",
+    "joined",
+    "adopted",
+    "stopped",
+    "running_again",
+]
+
+# Kinds whose subject is a project, so the row names neither an incident nor a finding.
+PROJECT_NOTIFICATION_KINDS: Final = ("stopped", "running_again")
+
+# Kinds that end their subject: PagerDuty resolves the alert on either.
+ENDING_KINDS: Final = frozenset({"resolved", "closed"})
 
 # `delivering` is claimed under a lease; a worker that dies leaves it to be
 # reclaimed when the lease ends (ADR-013). `dropped` is a decision not to send —
-# a muted channel — recorded so the delivery log still shows it.
+# a muted channel, or a PagerDuty resolve withheld while the alert still carries
+# another open subject (D35) — recorded so the delivery log still shows it.
 NOTIFICATION_STATES: Final = ("pending", "delivering", "delivered", "failed", "dropped")
 
 ATTEMPT_OUTCOMES: Final = ("delivered", "retrying", "failed")
@@ -176,6 +210,24 @@ class NewErrorCondition(_ServiceCondition):
     severity: Severity = "warning"
 
 
+class AnomalyFindingCondition(_ServiceCondition):
+    """A finding the detector opened (F6, FR28). The finding's severity is the
+    detector's, never the rule's (BR10 as amended); the rule only chooses which
+    findings it sends, at or above `minimum_severity`."""
+
+    kind: Literal["anomaly_finding"] = "anomaly_finding"
+    minimum_severity: Severity
+
+    def admits(self, severity: str) -> bool:
+        return SEVERITY_RANK[severity] >= SEVERITY_RANK[self.minimum_severity]
+
+
+# The second default rule every project is created with (F6 FR29): critical findings
+# to the organization's owners. A rule has one condition kind, so the first default
+# cannot carry it; warnings stay in the feed until a rule asks for them.
+CRITICAL_PROBLEMS_RULE_NAME: Final = "Critical problems"
+CRITICAL_PROBLEMS_CONDITION: Final = AnomalyFindingCondition(minimum_severity="critical")
+
 # How long a service may have been quiet and still be one that "sent some" (FR5).
 SILENCE_LOOKBACK_HOURS: Final = 24
 
@@ -185,6 +237,7 @@ Condition = (
     | LatencyCondition
     | SilenceCondition
     | NewErrorCondition
+    | AnomalyFindingCondition
 )
 
 
@@ -203,6 +256,8 @@ def parse_condition(raw: object) -> Condition:
             return SilenceCondition.model_validate(raw)
         case "new_error_group":
             return NewErrorCondition.model_validate(raw)
+        case "anomaly_finding":
+            return AnomalyFindingCondition.model_validate(raw)
         case _:
             raise ValueError(f"unknown condition kind {kind!r}")
 

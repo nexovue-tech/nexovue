@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"google.golang.org/genproto/googleapis/rpc/code"
+
+	"github.com/nexovue-tech/nexovue/apps/receiver/internal/intake"
 )
 
 // Reasons an export did not go through, or went through degraded. These are the
@@ -54,8 +56,17 @@ const (
 	// reasonUnsupportedVersion is an OTLP profiles request in a version nexovue does
 	// not read: a Collector newer or older than the one the setup page names.
 	reasonUnsupportedVersion = "unsupported_version"
-	reasonUnavailable        = "unavailable"
-	reasonInternal           = "internal"
+
+	// reasonUnavailable is a dependency of ours down that is not the broker: the
+	// control plane while authenticating, or a publish the record itself failed.
+	reasonUnavailable = "unavailable"
+
+	// reasonBrokerUnavailable is a publish the broker failed while its sender was
+	// still waiting. Its own tally because it is the one refusal detection reads
+	// as nexovue's outage (intake_refusals, C5).
+	reasonBrokerUnavailable = intake.ReasonBrokerUnavailable
+
+	reasonInternal = "internal"
 
 	// reasonAllowanceUnknown is not a refusal: the plan gate failing open still
 	// admits the request, and a window of these is ingest nobody billed.
@@ -74,7 +85,8 @@ var (
 		reasonUnauthenticated, reasonForbiddenOrigin, reasonThrottled,
 		reasonAllowanceSpent, reasonBrowserAllowanceSpent,
 		reasonOrganizationGone, reasonIngestSuspended,
-		reasonInvalid, reasonUnsupportedVersion, reasonUnavailable, reasonInternal,
+		reasonInvalid, reasonUnsupportedVersion, reasonUnavailable, reasonBrokerUnavailable,
+		reasonInternal,
 	}
 	degradationReasons = []string{reasonAllowanceUnknown}
 )

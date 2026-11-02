@@ -31,17 +31,22 @@ from nexovue_api.auth import second_factor, set_password
 from nexovue_api.auth.dependencies import get_current_identity
 from nexovue_api.auth.sessions import Session
 from nexovue_api.auth.totp import SecondFactorStore
+from nexovue_api.data.clickhouse.base import TenantScopedRepository
 from nexovue_api.data.postgres.models import (
     ApiToken,
     AuditLogEntry,
+    DetectionState,
+    Finding,
     SessionRecord,
     User,
 )
+from nexovue_api.detection import service as detection
 from nexovue_api.errors.exceptions import (
     ConflictError,
     InvalidRequestError,
     UnauthenticatedError,
 )
+from nexovue_api.findings import service as findings
 from nexovue_api.members import service as members
 from nexovue_api.members.schemas import Role
 from nexovue_api.profile import personal_data
@@ -189,6 +194,71 @@ async def test_the_export_holds_the_person_and_nobody_else(
         db, user=acme.user, organization=acme.organization, now=_now()
     )
     assert {one.email for one in owner.invitations_sent} == {priya.email, other.email}
+
+
+class _NoReadings:
+    """The telemetry store, holding no readings: the export reads Postgres alone."""
+
+    async def query(self, *_: Any, **__: Any) -> list[dict[str, Any]]:
+        return []
+
+
+async def test_the_export_holds_what_the_person_said_about_findings_and_services(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """F6 design, *Personal data*: acknowledge, false alarm and snooze each record
+    their reason, and a person's export holds them as their own activity."""
+    priya = await _join(db, acme, "admin", "Priya")
+    org_id, project_id = acme.organization.id, acme.project.id
+    db.add(DetectionState(org_id=org_id, project_id=project_id, service_name="checkout"))
+    finding = Finding(
+        org_id=org_id,
+        project_id=project_id,
+        scope="service",
+        service_name="checkout",
+        severity="warning",
+        title="checkout is 3 times slower than normal since 14:02 UTC",
+        signals=[],
+        started_at=_now() - timedelta(minutes=30),
+    )
+    db.add(finding)
+    await db.flush()
+    readings = cast(TenantScopedRepository, _NoReadings())
+
+    await findings.acknowledge(db, readings, actor=priya, finding_id=finding.id, now=_now())
+    await findings.mark_false_alarm(
+        db, readings, actor=priya, finding_id=finding.id, reason="our load test", now=_now()
+    )
+    now = _now()
+    until = now + timedelta(hours=1)
+    await detection.snooze_service(
+        db,
+        actor=priya,
+        project_id=project_id,
+        service_name="checkout",
+        length=timedelta(hours=1),
+        now=now,
+    )
+    await db.flush()
+
+    export = await personal_data.export(db, user=priya, organization=acme.organization, now=_now())
+    activity = {entry.action: entry.detail for entry in export.activity}
+
+    assert audit.FINDING_ACKNOWLEDGED in activity
+    assert activity[audit.FINDING_FALSE_ALARM] == {
+        "reason": "our load test",
+        "returns_minutes": True,
+    }
+    # An admin's snooze uses none of the members' 4 hours a day (AC34).
+    assert activity[audit.SERVICE_SNOOZED] == {
+        "service": "checkout",
+        "until": until.isoformat(),
+        audit.MEMBER_SNOOZE_KEY: False,
+    }
+    owner = await personal_data.export(
+        db, user=acme.user, organization=acme.organization, now=_now()
+    )
+    assert "our load test" not in json.dumps(owner.model_dump(mode="json"))
 
 
 async def test_the_export_is_cut_at_its_bound_and_says_so(

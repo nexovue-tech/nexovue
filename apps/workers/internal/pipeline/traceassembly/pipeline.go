@@ -8,8 +8,11 @@
 package traceassembly
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/ClickHouse/ch-go/chpool"
@@ -87,13 +90,20 @@ type Pipeline struct {
 	// of the sampler, so the service overview read a tenth of the traffic at
 	// ten times the error rate.
 	endpoints *derive.EndpointWriter
-	edges     *serviceedges.Writer
-	seen      *dedupe.Offsets
+	// services writes `service_stats_1m`, anomaly detection's input, from the
+	// same inbound spans as the endpoint rollup.
+	services *derive.ServiceWriter
+	edges    *serviceedges.Writer
+	seen     *dedupe.Offsets
 
 	// ingest is the durable half of `seen`: the per-partition record of what has
 	// already been counted and what has already been written, which unlike the
 	// in-process watermark survives both this process and the store restarting.
 	ingest *ingeststate.Guard
+
+	// progress records how far each partition is counted into the derived
+	// rollups, which is how the scheduler knows a minute is settled.
+	progress *ingeststate.Progress
 
 	// alreadyStoredSpans counts spans a replay did not write because the
 	// durable watermark says ClickHouse already has them. It climbs in a step
@@ -129,6 +139,18 @@ type Pipeline struct {
 	spansParked        uint64
 	derivedRowsRefused uint64
 
+	// servicesOverCap counts service-minutes left out of `service_stats_1m`
+	// by the per-organization cap. Flat is normal; climbing names a tenant
+	// minting service names.
+	servicesOverCap uint64
+
+	// progressHeld is how many partitions' progress is held after a refusal
+	// right now; progressHoldsReleased counts holds that reached their bound
+	// and were advanced past the refusal anyway. Either above zero means
+	// detection is reading "data delayed" or has judged over a hole.
+	progressHeld          int
+	progressHoldsReleased uint64
+
 	// topic is the one this pipeline consumes, so a rebalance callback can tell
 	// which of its partitions are ours.
 	topic string
@@ -150,6 +172,22 @@ type spanStorage struct {
 	// latestEdgeMinute settles later than latestMinute: an edge waits for its
 	// partner span before it exists at all, so offsets wait for it separately.
 	latestEdgeMinute time.Time
+	// receivedAt is, per partition, when the receiver took the newest record
+	// this batch absorbed. The settlement that counts the batch records it
+	// with its progress (C3).
+	receivedAt map[ingeststate.Partition]time.Time
+}
+
+// note folds one absorbed record into what its batch owes storage.
+func (s *spanStorage) note(partition ingeststate.Partition, result absorbed) {
+	s.latestMinute = later(s.latestMinute, result.latestMinute)
+	s.latestEdgeMinute = later(s.latestEdgeMinute, result.latestEdgeMinute)
+	if s.receivedAt == nil {
+		s.receivedAt = make(map[ingeststate.Partition]time.Time)
+	}
+	// Records of a partition are absorbed in offset order, so the last one
+	// noted is the one at its highest offset.
+	s.receivedAt[partition] = result.receivedAt
 }
 
 // New builds the pipeline and joins the consumer group. The caller owns the
@@ -161,6 +199,7 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 	}
 
 	ingest := ingeststate.NewGuard(ingeststate.NewKeeperMap(pool))
+	progress := ingeststate.NewProgress(ingeststate.NewProgressStore(pool), ingeststate.MaxProgressHold)
 	pipeline := &Pipeline{
 		writer:        newSpanWriter(pool),
 		block:         newSpanBlock(),
@@ -169,9 +208,11 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		stages:        stages,
 		metrics:       derive.NewWriter(pool),
 		endpoints:     derive.NewEndpointWriter(pool),
+		services:      derive.NewServiceWriter(pool),
 		edges:         serviceedges.NewWriter(pool),
 		seen:          dedupe.NewOffsets(),
 		ingest:        ingest,
+		progress:      progress,
 		topic:         cfg.Spans.Topic,
 		log:           log.With(slog.String("pipeline", string(config.PipelineTraceAssembly))),
 		sampling:      cfg.Sampling,
@@ -189,8 +230,12 @@ func New(cfg config.Config, pool *chpool.Pool, log *slog.Logger, opts Options) (
 		MaxDelay:    cfg.Spans.MaxDelay,
 		// A partition can arrive from another worker, whose settlements this
 		// process never saw. Re-reading the durable state before counting
-		// anything is what keeps the handover from counting a minute twice.
-		OnAssigned: ingest.Invalidate,
+		// anything is what keeps the handover from counting a minute twice,
+		// and from recording its progress behind the previous owner's.
+		OnAssigned: func() {
+			ingest.Invalidate()
+			progress.Invalidate()
+		},
 		// The other half of the same fact. A partition leaving takes this
 		// process's buffered spans with it, or they are written here and again
 		// by the worker that took it over.
@@ -226,6 +271,9 @@ func (p *Pipeline) release(disowned map[string][]int32) {
 	// recognised as replays and skipped — and their spans were dropped, not
 	// stored, so that is a hole rather than a duplicate.
 	p.seen.Forget(p.topic, partitions)
+	// A progress hold ending later must not write for a partition another
+	// worker now records (C1).
+	p.progress.Forget(p.partitionsOf(partitions))
 	p.disownedSpans += dropped.Spans
 	p.disownedCountedSpans += counters.Spans
 	p.disownedEdgeCalls += edges.Calls
@@ -238,6 +286,7 @@ func (p *Pipeline) release(disowned map[string][]int32) {
 		slog.Uint64("counted_spans", counters.Spans),
 		slog.Int("counter_series", counters.Series),
 		slog.Int("endpoint_series", counters.Endpoints),
+		slog.Int("service_series", counters.Services),
 		slog.Uint64("edge_calls", edges.Calls),
 		slog.Int("edge_series", edges.Edges),
 		slog.Int("edge_pairs_pending", edges.Pending),
@@ -255,6 +304,16 @@ func (p *Pipeline) release(disowned map[string][]int32) {
 func (p *Pipeline) releaseLost(disowned map[string][]int32) {
 	p.release(disowned)
 	p.ingest.Invalidate()
+	p.progress.Invalidate()
+}
+
+// partitionsOf names this pipeline's partitions by the topic it consumes.
+func (p *Pipeline) partitionsOf(ids []int32) []ingeststate.Partition {
+	partitions := make([]ingeststate.Partition, 0, len(ids))
+	for _, id := range ids {
+		partitions = append(partitions, ingeststate.Partition{Topic: p.topic, ID: id})
+	}
+	return partitions
 }
 
 func samplingOptions(cfg config.Sampling) sample.Options {
@@ -321,6 +380,7 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Int("buffered_spans", stats.BufferedSpans),
 		slog.Int("counter_series", p.stages.counters.Pending()),
 		slog.Int("endpoint_series", p.stages.counters.PendingEndpoints()),
+		slog.Int("service_series", p.stages.counters.PendingServices()),
 		slog.Uint64("spans_kept", stats.SpansKept),
 		slog.Uint64("spans_dropped", stats.SpansDropped),
 		slog.Uint64("traces_closed_early", stats.ClosedEarly),
@@ -331,6 +391,9 @@ func (p *Pipeline) Holding() []slog.Attr {
 		slog.Uint64("edge_calls_disowned", p.disownedEdgeCalls),
 		slog.Uint64("spans_parked", p.spansParked),
 		slog.Uint64("derived_rows_refused", p.derivedRowsRefused),
+		slog.Uint64("services_over_cap", p.servicesOverCap),
+		slog.Int("derived_progress_held", p.progressHeld),
+		slog.Uint64("derived_progress_holds_released", p.progressHoldsReleased),
 		slog.Int("summarised_traces", summaries.OpenTraces),
 		slog.Uint64("trace_summaries_written", summaries.Written),
 		// Revised counts traces that gained a span after their row was written.
@@ -392,8 +455,7 @@ func (p *Pipeline) Absorb(ctx context.Context, polled consume.Polled) (spanStora
 			p.alreadyStoredSpans += result.spans
 		}
 		p.appendRows(polled.At, result.rows)
-		produced.latestMinute = later(produced.latestMinute, result.latestMinute)
-		produced.latestEdgeMinute = later(produced.latestEdgeMinute, result.latestEdgeMinute)
+		produced.note(partition, result)
 		skew.merge(result.skew)
 		spans += result.spans
 		messages++
@@ -499,17 +561,53 @@ func (p *Pipeline) Settle(ctx context.Context, now time.Time) error {
 		return err
 	}
 
-	// Derived output alone, without waiting for the sampling window: a batch's
-	// spans can still be in the buffer while everything derived from them is
-	// already exact. Both counters and edges must be drained, because both are
-	// summing rollups whose offsets must not move before they reach storage.
-	derivedDrained := func(produced spanStorage) bool {
+	drained := p.derivedDrained(now)
+	reached := ingeststate.RangesOf(p.loop.Reached(drained))
+	received := receivedThrough(p.loop.ReachedOutput(drained))
+	return p.settleDerived(ctx, now, p.spansWritten(now), reached, received,
+		p.stages.counters.Drain(now), p.stages.edges.Drain(now))
+}
+
+// derivedDrained reports whether everything derived from a batch has been
+// drained, without waiting for the sampling window: a batch's spans can still
+// be in the buffer while everything derived from them is already exact. Both
+// counters and edges must be drained, because both are summing rollups whose
+// offsets must not move before they reach storage.
+func (p *Pipeline) derivedDrained(now time.Time) func(spanStorage) bool {
+	return func(produced spanStorage) bool {
 		return p.stages.counters.Drained(now, produced.latestMinute) &&
 			p.stages.edges.Drained(now, produced.latestEdgeMinute)
 	}
-	reached := ingeststate.RangesOf(p.loop.Reached(derivedDrained))
-	return p.settleDerived(ctx, p.spansWritten(now), reached,
-		p.stages.counters.Drain(now), p.stages.edges.Drain(now))
+}
+
+// receivedThrough is, per partition, when the newest record of the given
+// batches was received. They are in poll order, so a later batch's record is
+// the later offset.
+func receivedThrough(batches []spanStorage) map[ingeststate.Partition]time.Time {
+	received := make(map[ingeststate.Partition]time.Time)
+	for _, batch := range batches {
+		maps.Copy(received, batch.receivedAt)
+	}
+	return received
+}
+
+// progressMarks pairs each settled partition's last offset with when that
+// record was received. A partition none of whose records was absorbed here — a
+// batch of resends, or of parked records — has no time to report and is left
+// for the next settlement, rather than recorded as received at the epoch.
+func progressMarks(
+	settlement ingeststate.Settlement,
+	received map[ingeststate.Partition]time.Time,
+) ingeststate.Marks {
+	marks := make(ingeststate.Marks, len(settlement))
+	for partition, offsets := range settlement {
+		at, known := received[partition]
+		if !known {
+			continue
+		}
+		marks[partition] = ingeststate.Mark{CountedThrough: offsets.Max, ReceivedAt: at}
+	}
+	return marks
 }
 
 // spansWritten is how far each partition's spans have certainly reached
@@ -542,6 +640,9 @@ func spansStored(now time.Time) func(spanStorage) bool {
 // after that — so a worker that comes back to a restarted store can tell a
 // finished insert from an interrupted one instead of guessing.
 //
+// Progress for detection is recorded last, once the store has acknowledged the
+// derived inserts, and only for this settlement's partitions (C1).
+//
 // The span watermark obeys the same rule in its simpler form. It is written
 // after ClickHouse has acknowledged the spans and before the loop commits the
 // offsets, in that order and no other: recorded early, a failed insert would
@@ -549,8 +650,10 @@ func spansStored(now time.Time) func(spanStorage) bool {
 // repaired where a duplicate row can.
 func (p *Pipeline) settleDerived(
 	ctx context.Context,
+	now time.Time,
 	written ingeststate.Written,
 	reached map[ingeststate.Partition]ingeststate.Range,
+	received map[ingeststate.Partition]time.Time,
 	derived derive.Derived,
 	edges []serviceedges.Edge,
 ) error {
@@ -560,18 +663,108 @@ func (p *Pipeline) settleDerived(
 	}); err != nil {
 		return err
 	}
-	if err := p.insertCounters(ctx, derived.Points); err != nil {
+	refused, err := p.insertDerived(ctx, derived, edges)
+	if err != nil {
 		return err
 	}
-	if err := p.insertEndpoints(ctx, derived.Endpoints); err != nil {
-		return err
-	}
-	if err := p.insertEdges(ctx, edges); err != nil {
-		return err
-	}
-	return p.loop.Retry(ctx, "confirm counted offsets", func(callCtx context.Context) error {
+	if err := p.loop.Retry(ctx, "confirm counted offsets", func(callCtx context.Context) error {
 		return p.ingest.Complete(callCtx, settlement)
+	}); err != nil {
+		return err
+	}
+	var holding []ingeststate.Partition
+	if refused {
+		holding = partitionsOf(p.loop.Reached(everyBatch))
+	}
+	return p.recordProgress(ctx, now, progressMarks(settlement, received), holding)
+}
+
+// everyBatch reaches every batch the loop holds.
+func everyBatch(spanStorage) bool { return true }
+
+// partitionsOf names the partitions of the given offsets, in order.
+//
+// After a refusal it is given every batch still held, not only the settled
+// prefix: a drain writes each closed minute, and the batches carrying a minute's
+// records can still be waiting on edges, so the refused rows may belong to any
+// partition this worker has not yet committed.
+func partitionsOf(positions []consume.Position) []ingeststate.Partition {
+	partitions := slices.Collect(maps.Keys(ingeststate.RangesOf(positions)))
+	slices.SortFunc(partitions, func(a, b ingeststate.Partition) int {
+		return cmp.Or(cmp.Compare(a.Topic, b.Topic), cmp.Compare(a.ID, b.ID))
 	})
+	return partitions
+}
+
+// insertDerived writes one drain's derived rows, and reports whether the store
+// refused any of them. One insert per table carries every partition, so one
+// refusal leaves a hole in all of the settlement's partitions (C22).
+func (p *Pipeline) insertDerived(
+	ctx context.Context,
+	derived derive.Derived,
+	edges []serviceedges.Edge,
+) (bool, error) {
+	p.reportServiceCap(ctx, derived.ServicesOverCap)
+	inserts := []func(context.Context) (bool, error){
+		func(ctx context.Context) (bool, error) { return p.insertCounters(ctx, derived.Points) },
+		func(ctx context.Context) (bool, error) { return p.insertEndpoints(ctx, derived.Endpoints) },
+		func(ctx context.Context) (bool, error) { return p.insertServices(ctx, derived.Services) },
+		func(ctx context.Context) (bool, error) { return p.insertEdges(ctx, edges) },
+	}
+	anyRefused := false
+	for _, insert := range inserts {
+		refused, err := insert(ctx)
+		if err != nil {
+			return false, err
+		}
+		anyRefused = anyRefused || refused
+	}
+	return anyRefused, nil
+}
+
+// recordProgress writes how far each settled partition is counted, holding the
+// refused partitions (ingeststate.Progress), and says when a hold ran out.
+func (p *Pipeline) recordProgress(
+	ctx context.Context,
+	now time.Time,
+	marks ingeststate.Marks,
+	refused []ingeststate.Partition,
+) error {
+	if err := p.loop.Retry(ctx, "read derived progress", p.progress.Refresh); err != nil {
+		return err
+	}
+	var recorded ingeststate.Recorded
+	if err := p.loop.Retry(ctx, "record derived progress", func(callCtx context.Context) error {
+		var err error
+		recorded, err = p.progress.Record(callCtx, now, marks, refused)
+		return err
+	}); err != nil {
+		return err
+	}
+	p.progressHeld = recorded.Held
+	if len(recorded.Released) == 0 {
+		return nil
+	}
+	p.progressHoldsReleased += uint64(len(recorded.Released))
+	p.log.ErrorContext(ctx, "derived progress was held past a refusal for its limit; advanced anyway",
+		slog.Any("partitions", recorded.Released),
+		slog.Duration("held_for", ingeststate.MaxProgressHold),
+	)
+	return nil
+}
+
+// reportServiceCap says once per drain that an organization had more services
+// in a minute than the rollup counts, naming the one that lost the most.
+func (p *Pipeline) reportServiceCap(ctx context.Context, overCap derive.ServiceCap) {
+	if overCap.Services == 0 {
+		return
+	}
+	p.servicesOverCap += uint64(max(overCap.Services, 0)) //nolint:gosec // clamped to non-negative
+	p.log.WarnContext(ctx, "left services out of the service rollup; the organization is over its cap",
+		slog.Int("services", overCap.Services),
+		slog.String("tenant_id", overCap.TenantID),
+		slog.Int("cap", derive.MaxServicesPerTenant),
+	)
 }
 
 // Drain writes everything still held, which is what makes a planned shutdown
@@ -587,10 +780,10 @@ func (p *Pipeline) Drain(ctx context.Context, now time.Time) error {
 	}
 	// Everything held is drained here, so every held offset is both counted
 	// through and written through.
-	everything := func(spanStorage) bool { return true }
-	reached := ingeststate.RangesOf(p.loop.Reached(everything))
+	reached := ingeststate.RangesOf(p.loop.Reached(everyBatch))
+	received := receivedThrough(p.loop.ReachedOutput(everyBatch))
 	written := p.ingest.Writing(reached)
-	return p.settleDerived(ctx, written, reached,
+	return p.settleDerived(ctx, now, written, reached, received,
 		p.stages.counters.DrainAll(), p.stages.edges.DrainAll())
 }
 
@@ -601,9 +794,9 @@ func (p *Pipeline) Drain(ctx context.Context, now time.Time) error {
 // and the drain sorts its rows so a re-derived block is byte-identical. This
 // used to read the table back first as well, which could not tell a retry from
 // a minute legitimately reopened by late data, and dropped the late row.
-func (p *Pipeline) insertEdges(ctx context.Context, edges []serviceedges.Edge) error {
+func (p *Pipeline) insertEdges(ctx context.Context, edges []serviceedges.Edge) (bool, error) {
 	if len(edges) == 0 {
-		return nil
+		return false, nil
 	}
 	err := p.loop.Retry(ctx, "insert service edges", func(callCtx context.Context) error {
 		return p.edges.Insert(callCtx, edges)
@@ -613,9 +806,9 @@ func (p *Pipeline) insertEdges(ctx context.Context, edges []serviceedges.Edge) e
 
 // insertCounters writes derived counters, guarded the same way and for the same
 // reason: `metrics_sum` has its own deduplication window and the drain sorts.
-func (p *Pipeline) insertCounters(ctx context.Context, points []derive.Point) error {
+func (p *Pipeline) insertCounters(ctx context.Context, points []derive.Point) (bool, error) {
 	if len(points) == 0 {
-		return nil
+		return false, nil
 	}
 	err := p.loop.Retry(ctx, "insert counters", func(callCtx context.Context) error {
 		return p.metrics.Insert(callCtx, points)
@@ -627,14 +820,27 @@ func (p *Pipeline) insertCounters(ctx context.Context, points []derive.Point) er
 // for the same reason: `endpoint_stats_1m` carries its own deduplication window
 // (000021) and the drain sorts, so a retry after a lost acknowledgement is
 // recognised as the repeat it is rather than summed in twice.
-func (p *Pipeline) insertEndpoints(ctx context.Context, stats []derive.EndpointStat) error {
+func (p *Pipeline) insertEndpoints(ctx context.Context, stats []derive.EndpointStat) (bool, error) {
 	if len(stats) == 0 {
-		return nil
+		return false, nil
 	}
 	err := p.loop.Retry(ctx, "insert endpoint rollup", func(callCtx context.Context) error {
 		return p.endpoints.Insert(callCtx, stats)
 	})
 	return p.stepOverRefusal(ctx, "endpoint_stats_1m", len(stats), err)
+}
+
+// insertServices writes the derived service rollup, guarded the same way and
+// for the same reason: `service_stats_1m` carries a deduplication window
+// (000035) and the drain sorts.
+func (p *Pipeline) insertServices(ctx context.Context, stats []derive.ServiceStat) (bool, error) {
+	if len(stats) == 0 {
+		return false, nil
+	}
+	err := p.loop.Retry(ctx, "insert service rollup", func(callCtx context.Context) error {
+		return p.services.Insert(callCtx, stats)
+	})
+	return p.stepOverRefusal(ctx, "service_stats_1m", len(stats), err)
 }
 
 // insertSummaries writes the per-trace rows behind the trace list.
@@ -650,7 +856,10 @@ func (p *Pipeline) insertSummaries(ctx context.Context, rows []summaryRow) error
 	err := p.loop.Retry(ctx, "insert trace summaries", func(callCtx context.Context) error {
 		return p.summaryWriter.insert(callCtx, rows)
 	})
-	return p.stepOverRefusal(ctx, "trace_summaries", len(rows), err)
+	// Not part of any settlement, so a refusal here holds no progress:
+	// detection never reads the trace list.
+	_, err = p.stepOverRefusal(ctx, "trace_summaries", len(rows), err)
+	return err
 }
 
 // startBlock empties the block and the rows it holds, together.

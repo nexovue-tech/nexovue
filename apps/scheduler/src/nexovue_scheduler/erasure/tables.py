@@ -40,6 +40,8 @@ DERIVED_TABLES: Final[tuple[str, ...]] = (
     "endpoint_stats_1m",
     "service_edges_1m",
     "web_vitals_1m",
+    "service_stats_1m",
+    "detection_readings",
 )
 
 PURGED_TABLES: Final[tuple[str, ...]] = RAW_SIGNAL_TABLES + DERIVED_TABLES
@@ -65,6 +67,11 @@ EXCLUDED_TABLES: Final[dict[str, str]] = {
     "ingest_written_offsets": (
         "keyed by topic and partition, not by tenant. Same replay as "
         "span_written_offsets, for the log and metric pipelines (migration 000029)"
+    ),
+    "span_derived_progress": (
+        "keyed by topic and partition, not by tenant: how far the derived rollups are "
+        "counted, which tells detection a minute is settled. Losing it reads every "
+        "project as data delayed until the worker writes it again (migration 000037)"
     ),
     "stored_payload_digests": (
         "a digest of each payload and the offset that consumed it, kept fifteen "

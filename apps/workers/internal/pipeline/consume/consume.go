@@ -438,6 +438,12 @@ func (l *Loop[S]) Reached(stored func(S) bool) []Position {
 	return l.queue.Reached(stored)
 }
 
+// ReachedOutput reports what those same batches produced. See
+// Queue.ReachedOutput.
+func (l *Loop[S]) ReachedOutput(stored func(S) bool) []S {
+	return l.queue.ReachedOutput(stored)
+}
+
 // Run consumes until ctx is cancelled, then drains whatever it still holds.
 //
 // Each turn of the loop does the same four things: take in whatever has

@@ -91,7 +91,7 @@ function allZero(values: readonly number[]): boolean {
 export function sharedCeiling(plot: OverviewPlot): number {
   let ceiling = 0;
   for (const line of plot.lines) {
-    for (const value of line.data[1]) if (value > ceiling) ceiling = value;
+    for (const value of line.data[1]) if (value !== null && value > ceiling) ceiling = value;
   }
   return ceiling;
 }

@@ -17,6 +17,7 @@ export type Action =
   | "manage_channels"
   | "manage_check_secrets"
   | "configure_projects"
+  | "configure_detection"
   | "manage_credentials"
   | "manage_api_tokens"
   | "manage_members"

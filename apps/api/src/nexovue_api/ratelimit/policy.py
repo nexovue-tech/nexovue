@@ -62,16 +62,20 @@ class Tier:
 AUTH_TIER: Final = Tier(quota=Quota(name="auth", limit=10, window_seconds=60, exact=True))
 
 # The most telemetry reads one screen asks for at once. Service detail wants the
-# service, its trend, its endpoints, its dependencies, its errors and its duration
-# heatmap; Overview wanted five before it was made to wait for itself.
+# service, its trend, its endpoints, its dependencies, its errors, its duration
+# heatmap, its detection state and its profiles; Overview wanted five before it was
+# made to wait for itself.
 #
 # This is not a limit. It is the measurement the limit below has to clear, and it
 # is stated here so the next screen that grows a read fails a test rather than a
 # customer.
-LARGEST_SCREEN_FANOUT: Final = 6
+LARGEST_SCREEN_FANOUT: Final = 8
 
 TELEMETRY_TIER: Final = Tier(
-    quota=Quota(name="telemetry", limit=60, window_seconds=60),
+    # A service screen left refreshing every 10 seconds spends 48 a minute, so 60 left
+    # room for one more screen. This allows that and ten more screens opened in a minute;
+    # what scans at once is still held by the cap below.
+    quota=Quota(name="telemetry", limit=180, window_seconds=60),
     # **Above one screen's fan-out, and still below the number this tier exists
     # to prevent.** At 4 it sat *under* legitimate use: opening one service
     # refused one of its five reads, and the screen rendered with its errors
@@ -83,13 +87,12 @@ TELEMETRY_TIER: Final = Tier(
     # that ceiling, leaves a screen room to load at once, and leaves the 60/minute
     # quota to bound sustained load, which is the thing a counter is good at.
     #
-    # **Refusing is still the wrong answer for a legitimate burst**; a bounded
-    # wait would make a sixth read slow rather than absent. That is a larger
-    # change than a number and is recorded rather than assumed.
+    # A read over the cap waits a bounded time for a slot rather than being refused
+    # (`middleware/ratelimit.py`), so a burst is slow rather than absent.
     max_concurrent=8,
     # **Per organization, however many of its people read** (founder,
     # 2026-09-20; `docs/changes/rate-limit-per-person/`). Ten people with a
-    # screen each open is about 130 reads a minute; 600 leaves a team of that
+    # screen each open is about 480 reads a minute; 600 leaves a team of that
     # size room for an incident, and 32 scans in flight is four people's worth
     # of the per-person cap — the tenant ceiling the cluster is protected by.
     org_quota=Quota(name="telemetry-organization", limit=600, window_seconds=60),
@@ -242,6 +245,7 @@ TELEMETRY_PATHS: Final = (
     f"{API_PREFIX}/profiles",
     f"{API_PREFIX}/usage",
     f"{API_PREFIX}/llm",
+    f"{API_PREFIX}/findings",
 )
 
 # Probes must answer while the API is being hammered; that is the whole point

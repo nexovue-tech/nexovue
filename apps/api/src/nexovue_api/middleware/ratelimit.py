@@ -11,7 +11,9 @@ the limit exists to avoid.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -60,6 +62,11 @@ MAX_AUTH_BODY_BYTES: Final = 8 * 1024
 UNKNOWN_CLIENT: Final = "unknown"
 FORWARDED_FOR_HEADER: Final = "x-forwarded-for"
 
+# A read over the cap waits this long for a slot before it is refused: a screen's burst is
+# legitimate, and the cap still holds what scans at once.
+CONCURRENCY_WAIT_SECONDS: Final = 5.0
+CONCURRENCY_POLL_SECONDS: Final = 0.05
+
 TOO_MANY_REQUESTS_DETAIL: Final = "Too many requests. Retry after the interval in Retry-After."
 TOO_MANY_CONCURRENT_DETAIL: Final = (
     "Too many queries in flight for this caller. Retry when one finishes."
@@ -81,6 +88,19 @@ class Counted:
     # The tier the bucket belongs to. In-flight slots are counted per tier, so an
     # organization's tokens and its people do not share one ceiling (group 9, D5).
     pool: str
+
+
+async def _wait_for_slot(
+    limiter: RateLimiter, *, pool: str, scope: str, identity: str, max_concurrent: int
+) -> bool:
+    deadline = time.monotonic() + CONCURRENCY_WAIT_SECONDS
+    while True:
+        granted = await limiter.acquire_slot(
+            pool=pool, scope=scope, identity=identity, max_concurrent=max_concurrent
+        )
+        if granted or time.monotonic() >= deadline:
+            return granted
+        await asyncio.sleep(CONCURRENCY_POLL_SECONDS)
 
 
 class RateLimitMiddleware:
@@ -176,7 +196,8 @@ class RateLimitMiddleware:
                 if bucket.max_concurrent is None:
                     continue
                 limit_scope, value = bucket.identity
-                granted = await limiter.acquire_slot(
+                granted = await _wait_for_slot(
+                    limiter,
                     pool=bucket.pool,
                     scope=limit_scope,
                     identity=value,

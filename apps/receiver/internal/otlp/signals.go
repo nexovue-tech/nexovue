@@ -3,9 +3,12 @@ package otlp
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
 	logscollectorpb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	metricscollectorpb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	profilescollectorpb "go.opentelemetry.io/proto/otlp/collector/profiles/v1development"
@@ -171,7 +174,7 @@ func acceptTraces(
 
 	identity, _ := auth.FromContext(ctx)
 	if err := opts.Publisher.PublishTraces(ctx, identity, receivedAt, groups); err != nil {
-		return refuseUntil(code.Code_UNAVAILABLE, messageBrokerDown, brokerRetryAfter).because(err)
+		return publishRefusal(ctx, err)
 	}
 	return nil
 }
@@ -251,7 +254,7 @@ func acceptProfiles(
 	}
 	identity, _ := auth.FromContext(ctx)
 	if err := opts.Publisher.PublishBatches(ctx, identity, receivedAt, batches); err != nil {
-		return refuseUntil(code.Code_UNAVAILABLE, messageBrokerDown, brokerRetryAfter).because(err)
+		return publishRefusal(ctx, err)
 	}
 	return nil
 }
@@ -264,9 +267,41 @@ func acceptBatch(
 ) *refusal {
 	identity, _ := auth.FromContext(ctx)
 	if err := opts.Publisher.PublishBatch(ctx, identity, receivedAt, batch); err != nil {
-		return refuseUntil(code.Code_UNAVAILABLE, messageBrokerDown, brokerRetryAfter).because(err)
+		return publishRefusal(ctx, err)
 	}
 	return nil
+}
+
+// publishRefusal is every door's answer to a publish the broker did not take:
+// retryable, whatever the cause. It is counted as broker_unavailable, which
+// detection reads as nexovue's own outage (C5), only when the broker failed and
+// the sender had not ended the request. Anyone can cancel a request or send a
+// record the broker rejects, so neither may hold every tenant's minute.
+func publishRefusal(ctx context.Context, err error) *refusal {
+	refused := refuseUntil(code.Code_UNAVAILABLE, messageBrokerDown, brokerRetryAfter).because(err)
+	if ctx.Err() == nil && brokerFailed(err) {
+		return refused.countedUnder(reasonBrokerUnavailable)
+	}
+	return refused
+}
+
+// brokerFailed is whether a publish failed for the broker's sake rather than the
+// record's: the publish budget or the client's delivery timeout ran out, the
+// client's buffer was full, the network failed, or Kafka called the error
+// retriable. Anything else, a record too large or one it could not encode
+// included, is the record's. CORRUPT_MESSAGE is Kafka-retriable but names the
+// record, so it is the record's too.
+func brokerFailed(err error) bool {
+	if errors.Is(err, kerr.CorruptMessage) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, kgo.ErrRecordTimeout) ||
+		errors.Is(err, kgo.ErrRecordRetries) || errors.Is(err, kgo.ErrMaxBuffered) ||
+		kerr.IsRetriable(err) {
+		return true
+	}
+	var network net.Error
+	return errors.As(err, &network)
 }
 
 // How much telemetry one export carried, in each signal's own unit. A batch is

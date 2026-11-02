@@ -90,6 +90,18 @@ func (q *Queue[S]) Reached(stored func(S) bool) []Position {
 	return reached
 }
 
+// ReachedOutput reports what the batches Reached would report produced, in poll
+// order, without releasing them. A pipeline that records more than the offsets
+// for a settled prefix reads it here, from the same scan.
+func (q *Queue[S]) ReachedOutput(stored func(S) bool) []S {
+	_, settled := q.prefix(stored)
+	produced := make([]S, 0, settled)
+	for _, entry := range q.entries[:settled] {
+		produced = append(produced, entry.Produced)
+	}
+	return produced
+}
+
 // prefix scans from the front while stored holds, returning those positions and
 // how many batches they came from.
 func (q *Queue[S]) prefix(stored func(S) bool) ([]Position, int) {

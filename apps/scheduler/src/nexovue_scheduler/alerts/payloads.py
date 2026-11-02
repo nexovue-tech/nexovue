@@ -13,6 +13,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Final
 
+from nexovue_platform.alerts.model import ENDING_KINDS
+
 from nexovue_scheduler.alerts.messages import AlertMessage
 
 # Chat colours by what happened. Not design tokens: they are drawn by Slack and
@@ -22,11 +24,19 @@ _AMBER: Final = "#f79009"
 _GREEN: Final = "#12b76a"
 
 # The version of the webhook body's schema (FR4). A change a receiver would have
-# to handle is a new version, never an edit to this one.
-WEBHOOK_SCHEMA_VERSION: Final = 1
+# to handle is a new version, never an edit to this one. Version 2 added findings
+# and moved the incident under `data.subject` (ADR-022); version 1 is not kept,
+# because nexovue had no receiver of it yet.
+WEBHOOK_SCHEMA_VERSION: Final = 2
 
 PAGERDUTY_SUMMARY_LIMIT: Final = 1024
 PAGERDUTY_SOURCE: Final = "nexovue"
+# D29, D35: said on the alert a linked finding or incident opened first, so the
+# responder knows the trigger log entry is the same problem, not a second one.
+PAGERDUTY_NOTE: Final = (
+    "nexovue found this on the same service as the alert already open here, so it is "
+    "added to that alert rather than paging again."
+)
 
 
 def slack_text(text: str) -> str:
@@ -134,15 +144,29 @@ def teams(message: AlertMessage) -> bytes:
 
 
 def pagerduty(
-    message: AlertMessage, *, routing_key: str, dedup_key: str, subject: str, app_base_url: str
+    message: AlertMessage,
+    *,
+    routing_key: str,
+    dedup_key: str,
+    subject: str,
+    app_base_url: str,
+    noted: bool = False,
 ) -> bytes:
-    """Events API v2. The incident's id is the `dedup_key`, so escalation updates the
-    alert PagerDuty already has and recovery resolves exactly it (AC20). An incident
-    closed without recovering resolves it too: nothing will ever send its recovery."""
-    if message.kind in ("resolved", "closed"):
+    """Events API v2. The subject's key is the `dedup_key`, so escalation updates the
+    alert PagerDuty already has and recovery resolves exactly it (AC20). A subject
+    closed without recovering resolves it too: nothing will ever send its recovery.
+
+    `noted` (D29, D35): the key is a linked finding's or incident's, whose alert is
+    open. PagerDuty adds a trigger with an open alert's key to that alert's log
+    instead of opening a new one, which is the Events API's only way to add to an
+    incident (developer.pagerduty.com, *Events API v2*, *Trigger Events*)."""
+    if message.kind in ENDING_KINDS:
         return _json(
             {"routing_key": routing_key, "event_action": "resolve", "dedup_key": dedup_key}
         )
+    details: dict[str, Any] = {"details": list(message.details)}
+    if noted:
+        details["note"] = PAGERDUTY_NOTE
     return _json(
         {
             "routing_key": routing_key,
@@ -154,7 +178,7 @@ def pagerduty(
                 "severity": message.severity,
                 "component": subject,
                 "group": message.rule_name,
-                "custom_details": {"details": list(message.details)},
+                "custom_details": details,
             },
             "links": [{"href": message.link, "text": "Open in nexovue"}],
             "client": "nexovue",
@@ -166,27 +190,33 @@ def pagerduty(
 def webhook(
     message: AlertMessage,
     *,
-    incident_id: str,
+    subject_kind: str,
+    subject_id: str,
     subject: str,
     opened_at: datetime,
     resolved_at: datetime | None,
     sent_at: datetime,
 ) -> bytes:
-    """A documented, versioned JSON body (FR4). Its schema is in the product docs."""
+    """A documented, versioned JSON body (FR4); its schema is in
+    `docs/product/setup/alerts/webhooks.md`. `type` is the subject's kind and what
+    happened: `incident.opened`, `finding.joined`. `data.subject.label`, `summary` and
+    `details` can carry a service or endpoint name from telemetry, which anyone with
+    a browser key can send: the documentation says to treat them as untrusted text."""
     return _json(
         {
             "version": WEBHOOK_SCHEMA_VERSION,
-            "type": f"incident.{message.kind}",
+            "type": f"{subject_kind}.{message.kind}",
             "timestamp": sent_at.astimezone(UTC).isoformat(),
             "data": {
-                "incident": {
-                    "id": incident_id,
-                    "subject": subject,
+                "subject": {
+                    "kind": subject_kind,
+                    "id": subject_id,
+                    "label": subject,
                     "severity": message.severity,
                     "opened_at": opened_at.astimezone(UTC).isoformat(),
                     "resolved_at": resolved_at.astimezone(UTC).isoformat() if resolved_at else None,
                 },
-                "rule": {"name": message.rule_name},
+                "rule": {"name": message.rule_name} if message.rule_name else None,
                 "summary": message.summary,
                 "details": list(message.details),
                 "link": message.link,

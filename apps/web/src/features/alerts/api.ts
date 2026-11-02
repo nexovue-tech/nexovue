@@ -58,12 +58,25 @@ export interface NewErrorCondition extends ServiceScope {
   kind: "new_error_group";
 }
 
+/**
+ * A finding anomaly detection opened (F6, FR28). The finding's severity is the
+ * detector's; the rule only chooses the findings it sends, at or above a minimum.
+ * Only an owner or an admin may create or change one (D11, `configure_detection`).
+ */
+export interface AnomalyFindingCondition {
+  kind: "anomaly_finding";
+  /** Null covers every service in the project, including ones that start later. */
+  services: string[] | null;
+  minimum_severity: Severity;
+}
+
 export type Condition =
   | CheckStateCondition
   | ErrorRateCondition
   | LatencyCondition
   | SilenceCondition
-  | NewErrorCondition;
+  | NewErrorCondition
+  | AnomalyFindingCondition;
 export type ConditionKind = Condition["kind"];
 
 export interface RuleChannel {

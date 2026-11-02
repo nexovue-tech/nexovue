@@ -5,6 +5,7 @@ import { type FormEvent, useState } from "react";
 import { Button } from "@/shared/components/Button";
 import { TextField } from "@/shared/components/TextField";
 import { useSystemInfo } from "@/shared/deployment";
+import { browserTimeZone } from "@/shared/format/zoned";
 import { rememberFirstSetup } from "@/shared/session";
 
 import { AuthScreenLayout, FormMessage } from "./AuthScreenLayout";
@@ -91,6 +92,7 @@ function SignupForm() {
       email,
       password,
       name: name.trim() === "" ? undefined : name.trim(),
+      timezone: browserTimeZone(),
     });
   }
 

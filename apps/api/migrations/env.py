@@ -5,6 +5,7 @@ second driver means two connection stacks to keep in agreement.
 """
 
 import asyncio
+import time
 from logging.config import fileConfig
 
 from alembic import context
@@ -54,15 +55,44 @@ LOCK_TIMEOUT = "5s"
 # blocks; it ends with the connection, which NullPool closes when the run does.
 MIGRATION_LOCK = 0x6E65786F76756502  # "nexovue" and 2; ClickHouse's runner holds 1
 
+# How long a setup waits for another's migrations before giving up. Generous, because the other
+# may be building an index concurrently on a large table; a stuck holder is the operator's to end.
+MIGRATION_LOCK_WAIT_MINUTES = 15
+MIGRATION_LOCK_POLL_SECONDS = 0.5
+
+
+def wait_for_migration_lock(connection: Connection) -> None:
+    """Take MIGRATION_LOCK by polling in autocommit, so the wait holds no transaction and no
+    running statement.
+
+    CREATE INDEX CONCURRENTLY waits for every transaction holding a snapshot, and a session
+    blocked in pg_advisory_lock holds one even in autocommit: the holder's index build would
+    wait on the waiter, which waits on the holder, and Postgres ends one as a deadlock.
+    """
+    deadline = time.monotonic() + MIGRATION_LOCK_WAIT_MINUTES * 60
+    connection.execution_options(isolation_level="AUTOCOMMIT")
+    while not connection.exec_driver_sql(
+        f"SELECT pg_try_advisory_lock({MIGRATION_LOCK})"
+    ).scalar_one():
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"another setup has held the migration lock for {MIGRATION_LOCK_WAIT_MINUTES} "
+                "minutes; if it is still migrating, wait for it and run setup again, "
+                "otherwise end its session (pg_stat_activity names it)"
+            )
+        time.sleep(MIGRATION_LOCK_POLL_SECONDS)
+    # SQLAlchemy began a transaction it never sent to the database; end it, so Alembic's
+    # begin_transaction starts a real one rather than joining this.
+    connection.commit()
+    connection.execution_options(isolation_level=connection.default_isolation_level)
+
 
 def do_run_migrations(connection: Connection) -> None:
+    wait_for_migration_lock(connection)
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         # Inside Alembic's own transaction: a statement before it starts one
         # Alembic does not commit, and every migration is silently rolled back.
-        # The lock comes before lock_timeout, which would otherwise end the wait
-        # for it after five seconds.
-        connection.exec_driver_sql(f"SELECT pg_advisory_lock({MIGRATION_LOCK})")
         # Session-level rather than LOCAL, so it outlives the autocommit blocks a
         # few migrations open.
         connection.exec_driver_sql(f"SET lock_timeout = '{LOCK_TIMEOUT}'")

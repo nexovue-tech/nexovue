@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # A run's evidence — the request sent, the response received, the failing
     # assertion — is a log record: text, not a number.
     kafka_logs_topic: str = "logs-raw"
+    # The topic the trace worker counts, read (never consumed) to decide which
+    # minute anomaly detection may judge. The receiver's and worker's default.
+    kafka_spans_topic: str = "spans-raw"
 
     # The probe location this worker is, stamped on every run as `cloud.region`
     # and `synthetic.check.location`. A check answers differently from different
@@ -135,6 +138,13 @@ class Settings(BaseSettings):
     # The most organizations one group of mutations names. A larger queue is
     # erased in groups, waiting out `old_parts_lifetime` between them.
     erasure_batch_size: Annotated[int, Field(gt=0, le=1000)] = 100
+
+    # --- anomaly detection (F6, ADR-023) ------------------------------------
+    # The one credential that writes telemetry-store rows from the scheduler: it
+    # can insert into `detection_readings` and nothing else
+    # (users.d/detection-writer.xml). Empty means detection judges nothing on this
+    # deployment, and says so at ERROR on every pass rather than doing nothing quietly.
+    clickhouse_detection_writer_dsn: str = ""
 
     # --- beat leadership ----------------------------------------------------
     # More than one beat process runs, so that a dead one does not stop every

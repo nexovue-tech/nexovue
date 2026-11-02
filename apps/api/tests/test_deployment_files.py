@@ -133,6 +133,22 @@ def test_the_erasure_connects_as_the_account_that_can_only_delete(file_name: str
     )
 
 
+@pytest.mark.parametrize("file_name", [*DEPLOYED, "docker-compose.yaml"])
+def test_detection_writes_as_the_account_that_can_only_insert_readings(file_name: str) -> None:
+    """ADR-023: the writer's DSN is the insert-only account's, and `scheduler-light`'s
+    alone (D32)."""
+    holders = {
+        name: str((service.get("environment") or {})["CLICKHOUSE_DETECTION_WRITER_DSN"])
+        for name, service in _services(file_name).items()
+        if "CLICKHOUSE_DETECTION_WRITER_DSN" in (service.get("environment") or {})
+    }
+    assert set(holders) == {"scheduler-light"}, f"{file_name}: {sorted(holders)} hold it"
+    assert "nexovue_detection_writer:" in holders["scheduler-light"], (
+        f"{file_name}: detection writes as {holders['scheduler-light'].split('@')[0]!r}; it "
+        "needs INSERT on detection_readings and nothing else."
+    )
+
+
 # Runs once at deploy time and exits; nothing to watch.
 # Jobs that run to completion and exit: the deploy step and the console copy.
 ONE_SHOT: Final = frozenset({"web-assets-init", "setup", "setup-pipeline"})

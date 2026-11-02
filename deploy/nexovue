@@ -109,16 +109,22 @@ write_choices() {
     set_setting "$file" NEXOVUE_MONITORING "${NEXOVUE_MONITORING:-no}"
 }
 
+# ClickHouse's own accounts (deploy/clickhouse/users.d), whose passwords the store reads from its
+# environment each time it starts. Only these can be created after the install: every other secret
+# is written into a store, a key or the Kafka log once, and a new value would lock that data away.
+ACCOUNT_PASSWORDS="CLICKHOUSE_READER_PASSWORD CLICKHOUSE_ERASER_PASSWORD CLICKHOUSE_DETECTION_WRITER_PASSWORD"
+
 write_secrets() {
-    local file="$1"
+    local file="$1" key
     set_setting "$file" POSTGRES_DB nexovue
     set_setting "$file" POSTGRES_USER nexovue
     set_setting "$file" POSTGRES_PASSWORD "$(random_hex 24)"
     set_setting "$file" CLICKHOUSE_DB nexovue
     set_setting "$file" CLICKHOUSE_USER nexovue
     set_setting "$file" CLICKHOUSE_PASSWORD "$(random_hex 24)"
-    set_setting "$file" CLICKHOUSE_READER_PASSWORD "$(random_hex 24)"
-    set_setting "$file" CLICKHOUSE_ERASER_PASSWORD "$(random_hex 24)"
+    for key in $ACCOUNT_PASSWORDS; do
+        set_setting "$file" "$key" "$(random_hex 24)"
+    done
     set_setting "$file" KAFKA_CLUSTER_ID "$(random_cluster_id)"
     set_setting "$file" WORKERS_MASKING_HASH_SECRET "$(random_base64)"
     set_setting "$file" CHECK_SECRET_KEY "$(random_key)"
@@ -126,6 +132,15 @@ write_secrets() {
     set_setting "$file" S3_BUCKET nexovue
     set_setting "$file" S3_ACCESS_KEY_ID "$(random_hex 10)"
     set_setting "$file" S3_SECRET_ACCESS_KEY "$(random_hex 20)"
+}
+
+# For settings written by an older version: an account added since gets its password, and nothing
+# that exists is touched (C9, C25). Settings are never regenerated after the install.
+add_missing_secrets() {
+    local file="$1" key
+    for key in $ACCOUNT_PASSWORDS; do
+        grep -qE "^${key}=" "$file" || set_setting "$file" "$key" "$(random_hex 24)"
+    done
 }
 
 # ---------- docker ----------
@@ -345,6 +360,7 @@ cmd_install() {
         write_secrets "$draft"
         mv "$draft" "$settings_file"
     fi
+    add_missing_secrets "$settings_file"
     set_setting "$settings_file" NEXOVUE_VERSION "$version"
 
     take_release "$version"
@@ -383,6 +399,8 @@ cmd_upgrade() {
     current=$(setting "$settings_file" NEXOVUE_VERSION)
     target=$(kit_version)
     [ "$current" != "$target" ] || die "nexovue is already at $target."
+    # Before the pull: the new version's Compose files refuse an account password that is unset.
+    add_missing_secrets "$settings_file"
 
     step "checking this machine"
     preflight 12
@@ -660,6 +678,7 @@ cmd_quickstart() {
         set_setting "$settings.draft" SEAWEEDFS_VOLUME_MAX 40
         mv "$settings.draft" "$settings"
     fi
+    add_missing_secrets "$settings"
     set_setting "$settings" NEXOVUE_VERSION "$(kit_version)"
     [ -z "${NEXOVUE_PULL_POLICY:-}" ] || set_setting "$settings" NEXOVUE_PULL_POLICY "$NEXOVUE_PULL_POLICY"
 

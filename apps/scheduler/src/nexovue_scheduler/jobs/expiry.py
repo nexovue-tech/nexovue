@@ -1,8 +1,12 @@
-"""The expiry sweep: deletes what Redis used to forget on its own (ADR-020).
+"""The expiry sweep: deletes what Redis used to forget on its own (ADR-020), and
+what detection keeps only for a while (`detection/retention.py`).
 
-Every read of these tables already ignores a lapsed row, so this sweep is about
-disk, never correctness — a missed run leaves rows that answer nothing. It
-deletes in batches so a backlog is cleared in bites, never one long lock.
+Every read of the first group already ignores a lapsed row, so for them this
+sweep is about disk, never correctness — a missed run leaves rows that answer
+nothing. Detection's are different: a closed finding past its project's derived
+retention still names services, so a missed run keeps telemetry text a day
+longer than the plan says (security m4). It deletes in batches so a backlog is
+cleared in bites, never one long lock.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from nexovue_platform.telemetry.logging import get_logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from nexovue_scheduler.detection import retention
 from nexovue_scheduler.jobs import queue
 from nexovue_scheduler.jobs.registry import task
 from nexovue_scheduler.process_engine import with_engine
@@ -34,6 +39,7 @@ _EXPIRED: Final = (
     ("job_results", "request_id", "expires_at < now()"),
     # The auth tier's windows are a minute long; an hour is room for any quota.
     ("rate_limit_windows", "key, window_start", "window_start < now() - interval '1 hour'"),
+    *retention.EXPIRED,
 )
 
 

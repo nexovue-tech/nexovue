@@ -5,8 +5,10 @@ project's rules can send to them. Connect them under **Settings → Alert channe
 or from a rule while you write it.
 
 Every organization starts with one channel, **Organization owners**, and every
-project with one rule, **Any check down**, sending to it. So the first check that
-goes down emails you without any setup. Owners are emailed at their verified
+project with two rules sending to it: **Any check down**, and **Critical problems**,
+which sends every critical finding anomaly detection opens. So the first check that
+goes down, and the first critical finding, email you without any setup. Only an owner
+or an admin can change or delete an anomaly-finding rule. Owners are emailed at their verified
 address only — verify yours from the link in your sign-up email.
 
 ## Connecting each kind
@@ -54,8 +56,17 @@ body, a header, a secret, or a stack trace: those stay behind the link.
 - **Mute** a channel or a rule for an hour, four hours, or until 09:00 tomorrow.
   What fires during a mute is recorded on the Alerts screen and never sent.
 
-PagerDuty and webhooks are read by machines, so they get one event per incident,
-never grouped or held.
+PagerDuty and webhooks are read by machines, so they get one event per incident or
+finding, never grouped or held. In PagerDuty each incident and each finding is one
+alert, keyed `incident:<id>` or `finding:<id>`.
+
+One problem pages once, whichever fires first. A finding and a threshold or *went
+silent* incident on the same service are linked. If one of them has already paged a
+PagerDuty integration, the other is added to that alert's log, under its key, instead
+of paging again. The alert is resolved when the last of them ends. When one ends
+while the other is still open, nothing is sent: a resolve would close the alert the
+open one is still on, and its next update would page again. The delivery log shows
+that message as not sent, with the reason.
 
 ## When a channel stops working
 

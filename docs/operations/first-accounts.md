@@ -48,10 +48,11 @@ defaults nobody tested:
 - an **ingest key**, for sending telemetry
 - a **deploy webhook secret**
 - a notification channel, **"Organization owners"**
-- an alert rule, **"Any check down"**, wired to that channel
+- two alert rules wired to that channel: **"Any check down"**, and **"Critical
+  problems"**, which sends every critical anomaly-detection finding
 
-That last pair is the point: the first check that goes down emails you, with
-nothing to set up.
+That channel and those rules are the point: the first check that goes down, and the
+first critical finding, email you, with nothing to set up.
 
 ### Three things to know
 

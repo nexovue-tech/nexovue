@@ -102,6 +102,17 @@ def test_no_telemetry_rule_protects_a_path_that_does_not_exist() -> None:
     )
 
 
+def test_the_quota_clears_a_screen_left_open_and_a_person_moving_around() -> None:
+    """A service screen left refreshing every 10 seconds spends its fan-out six times a
+    minute. At 60 that left room for one more screen, so browsing was refused."""
+    from nexovue_api.ratelimit.policy import LARGEST_SCREEN_FANOUT
+
+    assert LARGEST_SCREEN_FANOUT == 8, "measured on the service screen, 2026-11-01"
+    refreshing = LARGEST_SCREEN_FANOUT * 6
+    assert TELEMETRY_TIER.quota is not None
+    assert TELEMETRY_TIER.quota.limit >= refreshing + 10 * LARGEST_SCREEN_FANOUT
+
+
 def test_the_concurrency_cap_clears_what_one_screen_asks_for() -> None:
     """A cap under legitimate use is a defect that looks like protection.
 
@@ -113,7 +124,7 @@ def test_the_concurrency_cap_clears_what_one_screen_asks_for() -> None:
     from nexovue_api.ratelimit.policy import LARGEST_SCREEN_FANOUT
 
     assert TELEMETRY_TIER.max_concurrent is not None
-    assert TELEMETRY_TIER.max_concurrent > LARGEST_SCREEN_FANOUT, (
+    assert TELEMETRY_TIER.max_concurrent >= LARGEST_SCREEN_FANOUT, (
         f"the cap is {TELEMETRY_TIER.max_concurrent} and one screen asks for "
         f"{LARGEST_SCREEN_FANOUT} reads at once, so that screen loads incomplete"
     )

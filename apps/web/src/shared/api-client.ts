@@ -55,6 +55,7 @@ export class ApiError extends Error {
 }
 
 const HTTP_NOT_FOUND = 404;
+const HTTP_CONFLICT = 409;
 
 /**
  * True when the API answered "no such resource in this organization".
@@ -66,6 +67,15 @@ const HTTP_NOT_FOUND = 404;
  */
 export function isNotFound(error: unknown): boolean {
   return error instanceof ApiError && error.status === HTTP_NOT_FOUND;
+}
+
+/**
+ * True when the API refused a change because what it would change has moved on since
+ * the screen read it: a finding closed or acknowledged meanwhile. The screen says so
+ * and reads again, rather than show an action that can no longer apply.
+ */
+export function isConflict(error: unknown): boolean {
+  return error instanceof ApiError && error.status === HTTP_CONFLICT;
 }
 
 export interface RequestOptions {

@@ -73,6 +73,40 @@ tests:
             exp_annotations:
               summary: "the receiver refuses 10% of export requests"
 
+  - name: the receiver refusing most exports because a dependency other than Kafka is down
+    interval: 1m
+    input_series:
+      - series: 'nexovue_receiver_requests_total{outcome="accepted"}'
+        values: "0+40x30"
+      - series: 'nexovue_receiver_requests_total{outcome="refused"}'
+        values: "0+60x30"
+      - series: 'nexovue_receiver_events_total{reason="unavailable"}'
+        values: "0+60x30"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: NexovueReceiverDependencyUnavailable
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: NexovueReceiverDependencyUnavailable
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "the receiver refuses 60% of export requests because a dependency is down"
+
+  - name: senders cancelling a few exports page nobody
+    interval: 1m
+    input_series:
+      - series: 'nexovue_receiver_requests_total{outcome="accepted"}'
+        values: "0+99x30"
+      - series: 'nexovue_receiver_requests_total{outcome="refused"}'
+        values: "0+1x30"
+      - series: 'nexovue_receiver_events_total{reason="unavailable"}'
+        values: "0+1x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NexovueReceiverDependencyUnavailable
+        exp_alerts: []
+
   - name: spans far behind for ten minutes
     interval: 1m
     input_series:
@@ -142,3 +176,104 @@ tests:
           - exp_labels: {severity: page, job: worker}
             exp_annotations:
               summary: "no worker is running to be scraped"
+
+  # Beat's leader counts the rows: the sweep that writes them runs in a worker's child process,
+  # whose own metrics no scrape sees (found by the detection runbook's walk, 2026-11-01).
+  - name: detection holding every project for nexovue's intake pages while its event is recent
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_detection_events_recent{job="scheduler-beat", instance="leader", kind="intake_guard"}'
+        values: "0 0 0 1x15 0x5"
+      - series: 'nexovue_scheduler_detection_events_recent{job="scheduler-beat", instance="leader", kind="hold_expired"}'
+        values: "0x23"
+      - series: 'nexovue_scheduler_detection_events_recent{job="scheduler-beat", instance="follower", kind="intake_guard"}'
+        values: "0x23"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: NexovueDetectionHeldByIntake
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: NexovueDetectionHeldByIntake
+        exp_alerts:
+          - exp_labels: {severity: page, kind: intake_guard}
+            exp_annotations:
+              summary: "detection recorded intake_guard: nexovue's own intake failed for every project (docs/operations/detection.md)"
+      - eval_time: 22m
+        alertname: NexovueDetectionHeldByIntake
+        exp_alerts: []
+
+  # The heartbeat: a stopped sweep settles nothing, so the minute it last settled ages, though no
+  # project is counted behind and the owners' email, which the sweep sends, never goes.
+  - name: detection stalled pages when the minute sweep stops, with no project behind
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_detection_settled_minute_age_seconds{job="scheduler-beat", instance="leader"}'
+        values: "240+60x15"
+      - series: 'nexovue_scheduler_detection_settled_minute_age_seconds{job="scheduler-beat", instance="follower"}'
+        values: "0x15"
+      - series: 'nexovue_scheduler_detection_projects_behind{job="scheduler-beat", instance="leader"}'
+        values: "0x15"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: NexovueDetectionStalled
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: NexovueDetectionStalled
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "the newest minute detection settled is 13m 0s old; nothing newer is judged (docs/operations/detection.md)"
+      - eval_time: 9m
+        alertname: NexovueProjectDetectionFailing
+        exp_alerts: []
+
+  - name: a sweep that has never settled a minute is stalled
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_detection_settled_minute_age_seconds{job="scheduler-beat", instance="leader"}'
+        values: "+Inf+0x5"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: NexovueDetectionStalled
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "the newest minute detection settled is +Inf old; nothing newer is judged (docs/operations/detection.md)"
+
+  - name: detection settling on time stays quiet
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_detection_settled_minute_age_seconds{job="scheduler-beat", instance="leader"}'
+        values: "200 260 230 290 250 210 270 240 300 220 280 240 200 260 230 290 250 210 270 240 300"
+      - series: 'nexovue_scheduler_detection_projects_behind{job="scheduler-beat", instance="leader"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: NexovueDetectionStalled
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: NexovueProjectDetectionFailing
+        exp_alerts: []
+
+  - name: projects detection has not judged for three minutes page, naming none
+    interval: 1m
+    input_series:
+      - series: 'nexovue_scheduler_detection_projects_behind{job="scheduler-beat", instance="leader"}'
+        values: "0 0 2x10"
+      - series: 'nexovue_scheduler_detection_projects_behind{job="scheduler-beat", instance="follower"}'
+        values: "0x12"
+      - series: 'nexovue_scheduler_detection_settled_minute_age_seconds{job="scheduler-beat", instance="leader"}'
+        values: "240x12"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: NexovueProjectDetectionFailing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: NexovueProjectDetectionFailing
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "detection has completed no run in over 3 minutes for 2 projects; their owners are emailed at 15 (docs/operations/detection.md)"
+      - eval_time: 5m
+        alertname: NexovueDetectionStalled
+        exp_alerts: []

@@ -23,6 +23,14 @@ const (
 	monotonicSum     = true
 )
 
+// The tenancy columns every derived table here carries, spelled once for the
+// three writers that name them.
+const (
+	columnTenantID    = "tenant_id"
+	columnProjectID   = "project_id"
+	columnServiceName = "service_name"
+)
+
 // jsonAsStringSetting lets the JSON column travel the native protocol as one
 // JSON document per row, which is the shape ch-go's ColJSONStr encodes.
 const jsonAsStringSetting = "output_format_native_write_json_as_string"
@@ -61,11 +69,11 @@ func newBlock() *block {
 		{Name: "timestamp", Data: &b.timestamp},
 		{Name: "start_timestamp", Data: &b.startAt},
 		{Name: "retention_days", Data: &b.retentionDays},
-		{Name: "tenant_id", Data: b.tenantID},
-		{Name: "project_id", Data: b.projectID},
+		{Name: columnTenantID, Data: b.tenantID},
+		{Name: columnProjectID, Data: b.projectID},
 		{Name: "metric_name", Data: b.metricName},
 		{Name: "value", Data: &b.value},
-		{Name: "service_name", Data: b.serviceName},
+		{Name: columnServiceName, Data: b.serviceName},
 		{Name: "attrs", Data: &b.attrs},
 		{Name: "aggregation_temporality", Data: b.temporality},
 		{Name: "is_monotonic", Data: &b.monotonic},

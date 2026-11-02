@@ -193,7 +193,7 @@ async def add_rule(
                 """
                 INSERT INTO alert_rules
                     (org_id, project_id, name, condition_kind, condition, is_default, muted_until)
-                VALUES (:org_id, :project_id, :name, 'check_state', CAST(:condition AS jsonb),
+                VALUES (:org_id, :project_id, :name, :kind, CAST(:condition AS jsonb),
                         :is_default, CASE WHEN :muted THEN now() + interval '1 hour' END)
                 RETURNING id
                 """
@@ -202,6 +202,7 @@ async def add_rule(
                 "org_id": org_id,
                 "project_id": project_id,
                 "name": name,
+                "kind": condition["kind"],
                 "condition": json.dumps(condition),
                 "is_default": is_default,
                 "muted": muted,
@@ -222,3 +223,54 @@ async def add_rule(
 async def rows(engine: AsyncEngine, sql: str, **parameters: Any) -> list[Any]:
     async with engine.connect() as connection:
         return list((await connection.execute(text(sql), parameters)).fetchall())
+
+
+async def add_finding(
+    connection: Any,
+    tenant: AlertTenant,
+    *,
+    service: str | None = "checkout",
+    severity: str = "warning",
+    started_at: datetime,
+    closed_at: datetime | None = None,
+    muted: bool = False,
+    flapping: bool = False,
+) -> uuid.UUID:
+    """A finding as the project job writes one: a service's, or the project's when
+    `service` is None."""
+    finding_id: uuid.UUID = (
+        await connection.execute(
+            text(
+                """
+                INSERT INTO findings
+                    (org_id, project_id, scope, service_name, severity, state, closed_reason,
+                     muted, flapping, title, signals, started_at, closed_at)
+                VALUES (:org_id, :project_id, :scope, :service, :severity,
+                        CASE WHEN :closed THEN 'closed' ELSE 'open' END,
+                        CASE WHEN :closed THEN 'recovered' END,
+                        :muted, :flapping, :title, '[]', :started_at, :closed_at)
+                RETURNING id
+                """
+            ),
+            {
+                "org_id": tenant.org_id,
+                "project_id": tenant.project_id,
+                "scope": "service" if service is not None else "project",
+                "service": service,
+                "severity": severity,
+                "closed": closed_at is not None,
+                "muted": muted,
+                "flapping": flapping,
+                "title": f"{service or 'The project'} is 4x slower than normal since 14:02 UTC",
+                "started_at": started_at,
+                "closed_at": closed_at,
+            },
+        )
+    ).scalar_one()
+    return finding_id
+
+
+def anomaly_rule(
+    minimum_severity: str = "warning", services: list[str] | None = None
+) -> dict[str, Any]:
+    return {"kind": "anomaly_finding", "minimum_severity": minimum_severity, "services": services}

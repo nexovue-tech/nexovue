@@ -78,16 +78,18 @@ printf '  %-28s %s row(s) live, %s in the backup\n' "$POSTGRES_WATERMARK_TABLE" 
 echo
 echo "no watermark above its broker offset"
 if docker inspect -f '{{.State.Running}}' "$KAFKA_CONTAINER" 2>/dev/null | grep -q true; then
-    # One line per live watermark, as `topic:partition<TAB>offset`, from all four
+    # One line per live watermark, as `topic:partition<TAB>offset`, from all five
     # tables at once — the two stores hold the same shape of state and the same
     # rule applies to both. The offset column differs per table, so each is named
     # rather than guessed: `span_ingest_offsets` is the counter guard and carries
-    # a range, the other three carry a single "written through".
+    # a range, `span_derived_progress` a "counted through", and the other two a
+    # single "written through".
     live_watermarks() {
         ch --query "SELECT partition_key, max_offset FROM span_ingest_offsets FORMAT TSV"
         for table in span_written_offsets ingest_written_offsets; do
             ch --query "SELECT partition_key, written_through FROM \`$table\` FORMAT TSV"
         done
+        ch --query "SELECT partition_key, counted_through FROM span_derived_progress FORMAT TSV"
         pg_scalar "SELECT topic || ':' || partition_id || E'\t' || counted_through FROM $POSTGRES_WATERMARK_TABLE"
     }
 

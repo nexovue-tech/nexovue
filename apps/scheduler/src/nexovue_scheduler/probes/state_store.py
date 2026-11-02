@@ -28,7 +28,7 @@ _ATTEMPTS: Final = 2
 _CURRENT: Final = text(
     """
     SELECT state, last_run_at FROM check_states
-    WHERE check_id = :check_id
+    WHERE org_id = :org_id AND check_id = :check_id
     FOR UPDATE
     """
 )
@@ -43,13 +43,13 @@ _UPDATE_STATE: Final = text(
     """
     UPDATE check_states
     SET state = :state, since = :at, run_id = :run_id, location = :location, last_run_at = :at
-    WHERE check_id = :check_id
+    WHERE org_id = :org_id AND check_id = :check_id
     """
 )
 _TOUCH_STATE: Final = text(
     """
     UPDATE check_states SET last_run_at = :at, run_id = :run_id, location = :location
-    WHERE check_id = :check_id
+    WHERE org_id = :org_id AND check_id = :check_id
     """
 )
 _INSERT_CHANGE: Final = text(

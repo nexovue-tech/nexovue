@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted 2026-09-19, with the F21 design.
+Accepted 2026-09-19, with the F21 design. **Amended 2026-10-31** by
+[ADR-022](ADR-022-a-finding-is-the-one-record-of-a-detected-problem.md) (F6): a notification's subject is
+an incident, a finding, or the project itself, and each subject has its own unique key in place of item 2's
+`incident_id` key. The in-order rule of item 3 holds within each subject.
 
 ## Context
 

@@ -17,6 +17,9 @@ import pytest
 import yaml
 
 import nexovue_api
+from nexovue_api.roles import command_for
+from nexovue_scheduler.__main__ import worker_queues
+from nexovue_scheduler.detection import DETECTION_QUEUE
 
 COMPOSE: Final = Path(nexovue_api.__file__).parents[4] / "deploy" / "compose"
 
@@ -48,6 +51,7 @@ SETTINGS: Final = {
     "CLICKHOUSE_PASSWORD": "clickhouse-secret",
     "CLICKHOUSE_READER_PASSWORD": "reader-secret",
     "CLICKHOUSE_ERASER_PASSWORD": "eraser-secret",
+    "CLICKHOUSE_DETECTION_WRITER_PASSWORD": "detection-writer-secret",
     "KAFKA_CLUSTER_ID": "fo8KHCs9Tl-KmwwdLj9KWw",
     "WORKERS_MASKING_HASH_SECRET": "masking-secret",
     "CHECK_SECRET_KEY": "check-key",
@@ -64,11 +68,20 @@ SETTINGS: Final = {
 def _render(
     layout: str, tmp_path: Path, *, profiles: tuple[str, ...] = (), **extra: str
 ) -> dict[str, Any]:
+    rendered = _compose_config(layout, tmp_path, SETTINGS | extra, profiles)
+    assert rendered.returncode == 0, f"{layout} does not render:\n{rendered.stderr}"
+    services: dict[str, Any] = json.loads(rendered.stdout)["services"]
+    return services
+
+
+def _compose_config(
+    layout: str, tmp_path: Path, values: dict[str, str], profiles: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[str]:
     settings = tmp_path / f"{layout}.env"
-    settings.write_text("".join(f"{k}={v}\n" for k, v in (SETTINGS | extra).items()))
+    settings.write_text("".join(f"{k}={v}\n" for k, v in values.items()))
     files = [argument for name in LAYOUTS[layout] for argument in ("-f", str(COMPOSE / name))]
     chosen = [argument for profile in profiles for argument in ("--profile", profile)]
-    rendered = subprocess.run(
+    return subprocess.run(
         [
             "docker",
             "compose",
@@ -85,9 +98,6 @@ def _render(
         check=False,
         timeout=60,
     )
-    assert rendered.returncode == 0, f"{layout} does not render:\n{rendered.stderr}"
-    services: dict[str, Any] = json.loads(rendered.stdout)["services"]
-    return services
 
 
 @pytest.fixture(params=sorted(LAYOUTS))
@@ -231,3 +241,79 @@ def test_the_monitor_runs_only_when_asked_for(tmp_path: Path) -> None:
     services = _render("self-hosted", tmp_path, profiles=("monitoring",))
 
     assert {"prometheus", "alertmanager"} <= set(services)
+
+
+WRITER_ACCOUNT_FILE: Final = "/etc/clickhouse-server/users.d/detection-writer.xml"
+
+
+def test_the_detection_writer_is_provisioned_and_handed_to_one_worker(
+    layout: str, tmp_path: Path
+) -> None:
+    """ADR-023, D32: the account exists in the store, and only `scheduler-light` holds it."""
+    services = _render(layout, tmp_path, profiles=("monitoring",))
+
+    clickhouse = services["clickhouse"]
+    assert clickhouse["environment"]["CLICKHOUSE_DETECTION_WRITER_PASSWORD"] == (
+        "detection-writer-secret"
+    )
+    assert WRITER_ACCOUNT_FILE in {volume["target"] for volume in clickhouse["volumes"]}
+    holders = {
+        name: service["environment"]["CLICKHOUSE_DETECTION_WRITER_DSN"]
+        for name, service in services.items()
+        if "CLICKHOUSE_DETECTION_WRITER_DSN" in (service.get("environment") or {})
+    }
+    assert set(holders) == {"scheduler-light"}, f"{layout}: {sorted(holders)} hold the writer"
+    assert "//nexovue_detection_writer:detection-writer-secret@" in holders["scheduler-light"]
+
+
+def test_an_install_without_the_writer_password_refuses_to_start(tmp_path: Path) -> None:
+    """`${…:?}`: an empty password would start the account with none (design 2.1, m5)."""
+    values = {k: v for k, v in SETTINGS.items() if k != "CLICKHOUSE_DETECTION_WRITER_PASSWORD"}
+
+    rendered = _compose_config("self-hosted", tmp_path, values)
+
+    assert rendered.returncode != 0
+    assert "set CLICKHOUSE_DETECTION_WRITER_PASSWORD" in rendered.stderr
+
+
+def _queues_of(argv: list[str], region: str) -> list[str]:
+    """What a scheduler worker started with `argv` claims from (`__main__.py`)."""
+    named = argv[argv.index("--queues") + 1] if "--queues" in argv else ""
+    return worker_queues(named, region=region)
+
+
+def test_scheduler_light_judges_detection_beside_its_probes(layout: str, tmp_path: Path) -> None:
+    """C23, D32: `scheduler-light` takes the `detection` queue, capped there at two of
+    its slots, and still takes its own location's probes. No other worker takes it."""
+    services = _render(layout, tmp_path)
+
+    queues = {
+        name: _queues_of(
+            command_for(service["command"][0], service["command"][1:]),
+            service["environment"]["PROBER_REGION"],
+        )
+        for name, service in services.items()
+        if name.startswith("scheduler-") and name != "scheduler-beat"
+    }
+
+    region = services["scheduler-light"]["environment"]["PROBER_REGION"]
+    assert DETECTION_QUEUE in queues["scheduler-light"]
+    assert f"light.{region}" in queues["scheduler-light"], "the location's probes were dropped"
+    others = [name for name, taken in queues.items() if DETECTION_QUEUE in taken]
+    assert others == ["scheduler-light"], f"{layout}: {others} take detection jobs"
+
+
+def test_the_development_stack_s_scheduler_light_judges_detection_too() -> None:
+    """The dev stack runs the worker by its own command line, not by role."""
+    dev = yaml.safe_load((COMPOSE / "docker-compose.yaml").read_text(encoding="utf-8"))
+    workers = {
+        name: _queues_of(
+            service["command"].split(), service["environment"].get("PROBER_REGION", "local")
+        )
+        for name, service in dev["services"].items()
+        if name in {"scheduler-light", "scheduler-deliveries"}
+    }
+
+    assert DETECTION_QUEUE in workers["scheduler-light"]
+    assert "light.local" in workers["scheduler-light"]
+    assert DETECTION_QUEUE not in workers["scheduler-deliveries"]

@@ -78,13 +78,17 @@ async def _send(
 ) -> outbox.SendResult:
     # One notice, or several shaped into one message for a channel people read.
     notice = batch.notices[0]
+    subject = notice.subject
     outgoing = Outgoing(
         message=messages.compose_batch(batch.notices, app_base_url=outbound.app_base_url),
         message_id=str(batch.id),
-        dedup_key=str(notice.incident_id),
-        subject=notice.subject_label,
-        opened_at=notice.opened_at,
-        resolved_at=notice.resolved_at,
+        dedup_key=notice.pagerduty_key,
+        noted=notice.noted,
+        subject_kind=subject.kind,
+        subject_id=str(subject.id),
+        subject=subject.label,
+        opened_at=subject.opened_at,
+        resolved_at=subject.closed_at,
     )
     return await send(engine, outbound, batch.channel, outgoing, now=now)
 

@@ -101,13 +101,15 @@ func inbound(spanKind string) bool {
 	return spanKind == KindServer || spanKind == KindConsumer
 }
 
-// observeEndpoint folds one span into its endpoint-minute. minute is the bucket
-// Observe already decided, so the rollup and the counters beside it cannot
-// disagree about which clock the span was bucketed on.
+// observeEndpoint folds one span into its endpoint-minute, and into its
+// service-minute. minute is the bucket Observe already decided, so the rollups
+// and the counters beside them cannot disagree about which clock the span was
+// bucketed on.
 func (c *Counters) observeEndpoint(minute time.Time, span Span) {
 	if !inbound(span.SpanKind) {
 		return
 	}
+	c.observeService(minute, span)
 	key := countedEndpoint{
 		endpointKey: endpointKey{
 			minute:        minute,
