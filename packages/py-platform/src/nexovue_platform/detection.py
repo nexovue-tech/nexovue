@@ -62,6 +62,11 @@ INTAKE_REFUSAL_REASONS: Final = ("broker_unavailable",)
 # The scheduler settles by it and the API reads delays by it.
 SETTLING_LAG: Final = timedelta(minutes=3)
 
+# The pipeline is behind once the settled minute trails what the clock could settle by
+# this much. The worker records progress once a minute, about 20 s in and through the
+# minute before, so a sweep just ahead of that write reads 2 short with nothing wrong.
+PIPELINE_BEHIND_BY: Final = timedelta(minutes=3)
+
 # A project detection is expected to judge is *not running* once its job has not
 # completed for this long (design 2.1, item 2; FR25, AC26). The API's status and
 # the scheduler's install-wide count of projects behind read it alike.

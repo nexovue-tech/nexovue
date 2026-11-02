@@ -249,3 +249,31 @@ def test_drops_long_before_the_fall_are_not_its_votes() -> None:
     fell = [_at(12, 30) + step * MINUTE for step in range(5)]
 
     assert guards(_votes(GUARD_ORGANIZATIONS, _at(12, 0)), fell) == []
+
+
+def test_the_worker_s_ordinary_minute_of_progress_is_not_behind() -> None:
+    """Measured on the demo: the worker records progress about 20 s into a minute, through
+    second 58 of the one before. A sweep at second 17 reads it 2 minutes short, on time."""
+    sweep = datetime(2026, 11, 1, 12, 5, 17, tzinfo=UTC)
+    settled = settled_minute(
+        now=sweep,
+        partition_count=1,
+        marks={0: Mark(100, datetime(2026, 11, 1, 12, 3, 58, tzinfo=UTC))},
+        newest_offsets={0: 150},
+    )
+
+    assert settled.minute == datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+    assert settled.current == datetime(2026, 11, 1, 12, 2, tzinfo=UTC)
+    assert not settled.behind
+
+
+def test_a_partition_held_3_minutes_is_behind() -> None:
+    """AC23's single partition held 3 minutes behind."""
+    settled = settled_minute(
+        now=NOW,
+        partition_count=1,
+        marks={0: Mark(100, NOW - timedelta(minutes=3))},
+        newest_offsets={0: 150},
+    )
+
+    assert settled.behind

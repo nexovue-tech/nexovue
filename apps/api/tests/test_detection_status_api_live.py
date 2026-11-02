@@ -433,6 +433,29 @@ async def test_one_partition_held_3_minutes_behind_reads_data_delayed(
         assert service["state"] == "data_delayed"
 
 
+async def test_the_worker_s_ordinary_minute_of_progress_is_not_delayed(
+    db: AsyncSession, acme: ProvisionedTenant
+) -> None:
+    """A sweep just before the worker's once-a-minute write settles 2 minutes short of its
+    clock, with nothing wrong. Measured on the demo at every sweep."""
+    swept = _ago(seconds=5)
+    settled = (swept - timedelta(minutes=2) - SETTLING_LAG).replace(second=0, microsecond=0)
+    await _detection(
+        db,
+        acme,
+        services={"checkout": _slower("normal"), "search": _slower("normal")},
+        last_run=_ago(seconds=3),
+        judged={"checkout": settled, "search": settled},
+        settled=settled,
+        swept_at=swept,
+    )
+
+    body = (await _get(db, _callers(acme).person, _status_path(acme.project.id))).json()
+    assert body["state"] == "judging"
+    assert body["delayed_since"] is None
+    assert body["services_delayed"] == 0
+
+
 async def test_a_healthy_project_whose_job_overruns_a_minute_is_not_delayed(
     db: AsyncSession, acme: ProvisionedTenant
 ) -> None:

@@ -44,6 +44,7 @@ from nexovue_platform.detection import (
     MAX_MUTE,
     MAX_SNOOZE,
     NOT_RUNNING_AFTER,
+    PIPELINE_BEHIND_BY,
     SETTLING_LAG,
     TOO_MANY_SERVICES_KEY,
     WINDOW_REQUESTS_KEY,
@@ -79,9 +80,6 @@ from nexovue_api.profile.timezones import stored_timezone
 from nexovue_api.projects import queries as projects_queries
 from nexovue_api.projects.service import NO_SUCH_PROJECT
 
-# The worker records progress once a minute, so on time the sweep's settled minute
-# trails its clock's by at most one; a partition held 2 minutes holds it 2 back.
-PIPELINE_BEHIND_BY: Final = timedelta(minutes=2)
 # A job still running (AC29 allows 90 s) and the next one skipped on its lock leave
 # a service judged 2 minutes behind the settled minute; 3 is judging that has stalled.
 JUDGING_BEHIND_BY: Final = timedelta(minutes=3)

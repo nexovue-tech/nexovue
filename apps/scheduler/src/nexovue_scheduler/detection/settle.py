@@ -41,7 +41,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Final, Protocol
 
 from clickhouse_connect.driver.client import Client
-from nexovue_platform.detection import SETTLING_LAG
+from nexovue_platform.detection import PIPELINE_BEHIND_BY, SETTLING_LAG
 from nexovue_platform.tenant_statements import READ_SETTINGS
 
 from nexovue_scheduler.detection.lifecycle import PROJECT_ONSET
@@ -125,7 +125,7 @@ class Settled:
 
     @property
     def behind(self) -> bool:
-        return self.minute is None or self.minute < self.current
+        return self.minute is None or self.current - self.minute >= PIPELINE_BEHIND_BY
 
 
 class TopicOffsets(Protocol):
