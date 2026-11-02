@@ -2,11 +2,13 @@
 
 ## Lifecycle status
 
-**Proposed.** Specification, design and plan are written, reviewed by eight personas and changed as a result, and awaiting the founder. Nothing is approved, and no code exists.
+**Approved; plan approved, ready to implement once Preconditions 1 and 2 are met.** The founder approved the specification, design and plan on 2026-11-02, and kept that approval after the same day's later decisions (below). No code exists yet.
+
 
 ## Current task
 
-The founder answered [`spec.md`](spec.md)'s founder decisions on 2026-11-02. Waiting for the founder's review of [`spec.md`](spec.md), [`design.md`](design.md) and [`plan.md`](plan.md).
+None. Waiting for F6 (pull request #24) to merge.
+
 
 ## Completed
 
@@ -19,20 +21,29 @@ The founder answered [`spec.md`](spec.md)'s founder decisions on 2026-11-02. Wai
 
 ## Next action
 
-F5's questions go into the shared buyer round (foundation decision 8; spec, D57). The founder's decisions were answered on 2026-11-02. With that approval, in the free test organization shared with F22, run the GitHub trial on a scratch repository, about two hours (a guess) and 21 questions (`design.md`, *The GitHub trial*), and write its results into the design.
+Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Before Step 1: the shared buyer round and the GitHub trial (plan, Preconditions 1 and 2). Steps 1, 2 and 2b need F3 (its fix brief, and for Step 2b its provider) but not F22. Steps 3 onward need F22's GitHub connection. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+
 
 ## Open decisions
 
-**None for the founder.** All five were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below). The write-access go is still given at T6.5, against the approved rule.
+**None blocking for the founder.** All five were answered on 2026-11-02 (*Founder answers, 2026-11-02*, below). The write-access go is still given at T6.5, against the approved rule.
 
-**Not decisions, but still to happen:** the shared buyer round (approved, foundation decision 8) and the GitHub trial (approved 2026-11-02). Both block design approval.
+**Not decisions, but still to happen:** the shared buyer round (approved, foundation decision 8) and the GitHub trial (approved 2026-11-02). Both were to block design approval; the founder approved the design first, and decided on 2026-11-02 that both block Step 1 instead, and that **a result that changes the design comes back to him** (spec D64).
+
+**To confirm, from the later decisions of 2026-11-02** (each is written as decided, and is easy to reverse on paper):
+
+- **D65: the picked language** is the one thing rung 2b sends beyond F3's facts. Strike it, and examples have no set language.
+- **D71: rung 2b on hosted** follows F3's explanations once hosting opens AI, which changes D59's "rungs 1 and 2 on hosted".
+- **The scope sentence** gained two sentences (rung 2b; imports and the AI asking). Its final words are yours under foundation decision 2.
+- **Steps 1, 2 and 2b touch no GitHub,** yet wait on the trial because Preconditions 1 and 2 block Step 1. You may let them start before the trial; the documents do not assume so.
 
 **Removed from this list, with where each went:** the buyer conversations (foundation decision 8; D57); F5 and the hosted service (foundation decisions 1 and 2, FD19; D59); when a draft opens (D58); publishing verdict and refusal numbers (foundation decision 5 names them); the bed's money as a process (foundation decision 4; now item 3's amount); D1 to D56 (decided, approved with the spec, not open questions); the foundation's 15 differences (checked, none open: `design.md`, *Where this differs*); the finding page's order (D54; F22 carries the order at `case-management/design.md:91`, but not yet the *Suggested fix* jump link, see `design.md`, *What other features must carry*).
 
 ## Blocked
 
 - **Everything in the plan is blocked** on F6 merging, then F28, F3, F22 and F4 being built.
-- **Design approval is blocked** on the GitHub trial, which has not been run.
+- **Step 1 is blocked** on the GitHub trial and the shared buyer round (spec D64). Design approval is no longer blocked: the founder approved it first.
+- **Step 2b is blocked** on F3's provider (F3 Step 4) and on F3's consent screen naming rung 2b.
 - **Step 3 is blocked** on F3's evidence holding a group id and window.
 - **Step 7 is blocked** on T6.5: the safety gates, the founder's go, and the buyers' answer.
 
@@ -379,6 +390,9 @@ Each was checked against the documents and code before anything changed. All 15 
 - **Quoted code in backups** stays until they age out. A restore empties it and withdraws every consent, apart from the stated crash window.
 - **The source-secret scan is a net:** a secret in an unknown format is sent.
 - **F5 has no revenue path under current assumptions.** It is free on self-hosted, and off on hosted.
+- **Rung 2b's advice may be wrong for the customer's code.** It is written from facts only, and a reader may paste it without reading the label. The label, G1 to G9 and no copy control narrow this; the bed and verdicts measure usefulness. Nobody has asked buyers whether they want it.
+- **Asked-for files widen what planted text can steer** (A19). A planted instruction can make the model ask for an allowed file; only the person's Send stops it going.
+- **Import following may fill the caps with files that do not matter,** crowding out test files. The bed reports how often an imported file is the one edited.
 - **Tested only on free models (foundation items 4 and 10, 2026-11-02).** A call of about 25,000 tokens (a guess) is above some free tiers' per-minute limit, and 240 or more calls per option at daily caps take days. Free tiers may train on inputs and let people read them, so only fixtures and nexovue's own public code are sent.
 - **"Named option" covers only what was run.** OpenAI, Anthropic and Bedrock have no free API tier, so they stay "not yet tested", and the write-access gate (T6.5) can only pass on a free-tier or local model. A small local model on the 24 GB Mac may be weak at code, and competes with the dev stack for memory (decision 0047).
 - **No server measurement before deployment** (foundation item 9). F5's memory share of `scheduler-insight` (768 MB, a guess) is read on the Mac's Docker; the 16 GB server waits for Oracle.
@@ -400,6 +414,7 @@ The specification is new, and was revised by the reviews. The design's *Specific
 - `docs/product/feature-catalog.md` still says F5 is "TO SPECIFY". To be updated when the founder approves.
 - `vision.md:136` needs changing, as the spec says, and `docs/research/phase-2-competitors-2026-11.md` needs OneUptime, Better Stack, Middleware and Grafana.
 - No document in `docs/decisions/` was touched. Four ADRs are proposed inside `design.md`.
+- **2026-11-02, later:** the foundation (FD14, section 5, section 11, section 12, founder items 25 and 26), `phase-2-tracker.md`'s order, `phase-2-plan.md`'s Stage 5, `feature-catalog.md` and `docs/features/README.md` were updated for rung 2b.
 
 ## Cross-feature reconciliation, 2026-11-02
 
@@ -440,7 +455,7 @@ Every open question in this feature's documents was read against the code, the r
 | The finding page's order | **Closed by D54.** F22 carries the order; the *Suggested fix* jump link is still F22's to add | `case-management/design.md:91`; `:121` names only *Evidence* |
 | Liability; source sentence; F5's bed money; go on write access | **Left to the founder,** with recommendations | Legal, public claim, money, customer trust |
 
-**F5's questions for the shared round (D57).** Screen: "Would you run this yourselves, and do you use GitHub.com?" Past behaviour first: "Describe your last three incidents: was there a stack, and what did you do first? How often do you deploy? Which GitHub plan? Which git host and CI? Who approves a new GitHub App, and did they last time? Do you already use an agent on incidents?" Then the real consent screen wording: "Would you send source to your AI provider, per repository? Would you use a suggestion nobody compiled? Would you grant write access? Would you want a draft pull request from an error stack alone, with no deploy behind it? Would you run this self-hosted or want it hosted? What would you pay, and for what?"
+**F5's questions for the shared round (D57).** Screen: "Would you run this yourselves, and do you use GitHub.com?" Past behaviour first: "Describe your last three incidents: was there a stack, and what did you do first? How often do you deploy? Which GitHub plan? Which git host and CI? Who approves a new GitHub App, and did they last time? Do you already use an agent on incidents?" Rung 2b: "If Nexovue could not read your code, would a general example from the finding's facts help, or be noise?" (informs, does not gate; added 2026-11-02). Then the real consent screen wording: "Would you send source to your AI provider, per repository? Would you use a suggestion nobody compiled? Would you grant write access? Would you want a draft pull request from an error stack alone, with no deploy behind it? Would you run this self-hosted or want it hosted? What would you pay, and for what?"
 
 **Review, 2026-11-02.** A second pass tried to break each answer above, against the code, the foundation and fresh sources.
 
@@ -464,3 +479,44 @@ The founder approved every Phase 2 founder question as recommended, with two cha
 - **Changed, B: no paid budget** (item 10, replacing the US$150 cap). Steps 4 and 6 run on a free tier or the local model. Only fixtures and public code go to a free tier.
 - **Changed, A: no rented test server.** Nothing in F5 needed one directly; memory on the 16 GB server waits for Oracle after deployment.
 - **Open decisions:** none for the founder. The go itself is given at T6.5, against the approved rule.
+
+## Spec, design and plan approved, 2026-11-02
+
+The founder approved [`spec.md`](spec.md), [`design.md`](design.md) and [`plan.md`](plan.md) on 2026-11-02, with the foundation. **The design's 4 proposed ADRs are to be filed in `docs/decisions/` at implementation start**, numbered then; none is filed yet.
+
+The design had asked not to be approved before the GitHub trial and the buyer round. The founder approved it first; both now come before Step 1, and a result that changes the design returns to the founder.
+
+## Founder decision 2026-11-02: approval and Step 1
+
+F5 stays approved. The design had asked not to be approved before the GitHub trial and the shared buyer round; instead both block Step 1 (plan, Preconditions 1 and 2, kept as written), and any result that changes the design comes back to the founder (spec D64). Fixed in passing: this file's *Blocked* still said design approval was blocked; the spec's *Dependencies*, founder item 5 and buyer table, and the design's trial heading, said "before the design is approved". All now say "before Step 1".
+
+## Founder decision 2026-11-02: rung 2b
+
+**What it is, in plain words.** When AI is on but Nexovue cannot read a service's code, a member can click **Suggest a general fix**. The AI gets only the facts the explanation already sends, plus a language the person picks, and returns a short pattern with example code. Nexovue's code checks it, and it is shown labelled "Example pattern, not your code. Nexovue has not seen your code. Check before using." It never becomes a patch, download, pull request, alert or email.
+
+**What was decided** (spec D65 to D72; FR31 to FR38; AC67 to AC78; plan Step 2b, T2b.1 to T2b.11):
+
+- **Shown only** with a likely cause or an error group whose exception type passed F3's pattern, and only where rung 3 stops for want of code access (`no_code_location`, `no_read_permission`, `no_consent`). Otherwise nothing is shown. FD14 in the foundation now says this (D66).
+- **Not a fallback beside rung 3:** when the repository is connected, only rung 3 is offered (D67).
+- **Checked by G1 to G9:** shape, size, hidden characters, addresses, shell and process calls, install steps and non-standard imports, secrets, overclaiming words, unknown aliases. Any hit shows nothing and says why. One retry only for a wrong shape (D68).
+- **Who and where:** `REQUEST_FIX`; queue `insight-fix` on `scheduler-insight`; task `insight.suggest_general_fix`; `ai_runs` purpose `fix`, marked by `fields_sent`; F5's share of tokens and the 3 tries a day (D69).
+- **Stored** in `finding_fixes` with kind `general`, no source, deleted with the finding; viewers read it; no copy control (D70).
+- **Hosted:** follows F3's explanations, so off today (D71; to confirm).
+- **Order:** Step 2b, after Step 2 and before Step 3. It needs F3's provider, not F22, so it is the cheapest model rung and ships before rung 3. It brings forward `finding_fixes` (three migrations now), `REQUEST_FIX` and the `insight-fix` grants (D72; tracker updated).
+- **Evaluation:** free-tier or local models, synthetic findings, hostile exception types and endpoint names, with a safety gate per option (AC76, T2b.10).
+
+**Not done:** no persona review of these changes; nothing run.
+
+## Founder decision 2026-11-02: imports and the AI asking for files
+
+**What it is, in plain words.** Code tied to a crash is often not in the stack. So (A) for the top two stack files, Nexovue also adds the files they import from the same folder, one hop only; and (B) after reading, the AI may ask for up to 3 more files, with a reason. Nexovue checks each name and shows "The AI asks for N more files. Send them?". Nothing goes without that click. At most two extra rounds.
+
+**What was decided** (spec D73 to D77; FR12a, FR15b, FR15c; AC79 to AC89; plan T3.18, T3.19, T4.13 to T4.15; T2.6 and T6.1 extended):
+
+- **Imports (D73, D76):** Python, JavaScript and TypeScript, Go, Java and Kotlin, by plain line parsing in a pure module, with no new dependency, so ADR-019's third-image question does not arise. Inside the mapped folder only; same filters, secret scan and caps; order under the caps is stack, then imports, then tests. Read in the pack job after Ask, under live consent, in the same audit entry. Imported configuration still meets D9's list and is shown as left out.
+- **The AI asking (D74, D75, D77):** a `needs_files` answer of up to 3 paths, each tied to a sent file and line. Names are untrusted: checked against the tree, folder, lists and caps; refused ones listed, unknown ones only counted. Checking happens at once (it sends nothing), started through one narrow database function the AI room may call. Only the person's Send sends them, as a new call. One try per proposal; each call reserves tokens; at most 3 sends, 6 calls.
+- **Still not an agent loop:** no tools, no browsing, no read by the model, and every send is a person's click on an exact list. D2 now reads "fixed pack, which a person may widen". New attack A19 states what stays open.
+- **`not_in_these_files`** now means the model named no file it needed, or its rounds were used up.
+- **Scope sentence** gained the words on imports and the AI asking (founder's to approve, foundation decision 2).
+
+**Not done:** no persona review; no web research on parsers was run for this change (the choice rests on ADR-019 and the plainness of import lines; the bed measures resolution); nothing run.

@@ -2,8 +2,8 @@
 
 ## Status
 
-**Awaiting approval.** Proposed 2026-11-02, revised the same day after eight persona reviews (`status.md`, *Reviews*).
-Nothing here is approved until the founder approves it. Lifecycle status is in [`status.md`](status.md). It follows
+**Approved** by the founder, 2026-11-02. Written and revised the same day after eight persona reviews (`status.md`, *Reviews*).
+Lifecycle status is in [`status.md`](status.md). It follows
 [`spec.md`](spec.md); decision numbers (D1 and so on) are the spec's.
 
 **How it was checked.** The code was read on branch `feature/anomaly-detection`, with uncommitted work present. Nothing
@@ -546,17 +546,32 @@ Two read paths exist because the scheduler cannot import the API (`apps/schedule
 **Signatures, for F3.**
 
 ```python
-async def deploys_in_window(conn, *, org_id, project_id, service, start, end) -> list[DeployFact]: ...
+async def deploys_in_window(conn, *, org_id, project_id, service, start, end) -> list[DeployFact]:
+    ...
     # Signed deploy events only, from Postgres. Each has a stable deploy_id. basis is "reported".
-async def releases_seen_in_window(conn, *, org_id, project_id, service, start, end) -> list[SeenFact]: ...
+
+
+async def releases_seen_in_window(
+    conn, *, org_id, project_id, service, start, end
+) -> list[SeenFact]:
+    ...
     # Periods with start_basis "seen". basis is "seen", F3's class telemetry_text. A secret ingest key can plant these.
-async def release_comparison(ch, conn, *, org_id, project_id, period_id, window) -> Comparison: ...
+
+
+async def release_comparison(ch, conn, *, org_id, project_id, period_id, window) -> Comparison:
+    ...
     # Reads ClickHouse as well as Postgres, so F3's table must list a ClickHouse read.
+
+
 def coverage_of(reported_at, seen_at, *, at) -> Coverage: ...  # pure
-async def release_before(conn, *, org_id, project_id, service, at) -> PeriodFact | None: ...
+async def release_before(conn, *, org_id, project_id, service, at) -> PeriodFact | None:
+    ...
     # The last period starting before `at`, at any age (FR32, FR44). D56. PeriodFact: period id, service,
     # version, basis, start; no sender text.
-async def releases_near(conn, *, org_id, project_id, service, at, lookback) -> list[PeriodFact]: ...
+
+
+async def releases_near(conn, *, org_id, project_id, service, at, lookback) -> list[PeriodFact]:
+    ...
     # Every release in the project in `lookback` before `at`, `service` first (FR52). D56. Postgres only:
     # marking the callees needs `service_edges_1m`, which the caller reads (F3 already reads edges).
 ```

@@ -2,7 +2,7 @@
 
 ## Status
 
-**Draft, revision 2, awaiting approval.** Proposed 2026-11-02, with [`spec.md`](spec.md). Revision 2 regenerates this document from the revised spec and answers the persona reviews (`status.md`, *Reviews*). The code was read on branch `feature/anomaly-detection`, with uncommitted work. Line numbers are for that working tree and will drift. Nothing was run: no test, no query, no call to GitHub or Jira. Every memory, row and interval figure is a guess or plain arithmetic, and says so.
+**Approved** by the founder, 2026-11-02, as revision 2, with [`spec.md`](spec.md). Revision 2 regenerates this document from the revised spec and answers the persona reviews (`status.md`, *Reviews*). The code was read on branch `feature/anomaly-detection`, with uncommitted work. Line numbers are for that working tree and will drift. Nothing was run: no test, no query, no call to GitHub or Jira. Every memory, row and interval figure is a guess or plain arithmetic, and says so.
 
 ## Context and goal
 
@@ -414,7 +414,7 @@ Any act resets `case_warned_at`, so a warning ends when someone acts. The issue 
 
 ```python
 class Tracker(Protocol):
-    def read(self, link: LinkKey) -> TrackerRead: ...      # status, close reason, moved, gone
+    def read(self, link: LinkKey) -> TrackerRead: ...  # status, close reason, moved, gone
     def find_existing(self, place: PlaceKey, finding_url: str) -> IssueRef | None: ...
     def create(self, place: PlaceKey, text: IssueText) -> IssueRef: ...
     def set_status(self, link: LinkKey, wanted: Status, why: Why) -> WriteResult: ...
@@ -627,14 +627,20 @@ promoting:            the same public check, then read the issue's status. in_sy
 **The rank, in one expression, shared by the page, the feed and AC27:**
 
 ```python
-open_joined = exists(select(1).where(joined.org_id == Finding.org_id,
-                                     joined.root_finding_id == Finding.id, joined.state == "open"))
+open_joined = exists(
+    select(1).where(
+        joined.org_id == Finding.org_id,
+        joined.root_finding_id == Finding.id,
+        joined.state == "open",
+    )
+)
 case_rank = case(
     ((Finding.state == "open") & Finding.acknowledged_at.is_(None), 0),
     (open_joined & (Finding.case_state == "investigating"), 0),
     (Finding.state == "open", 1),
     (Finding.case_state == "investigating", 2),
-    else_=3)
+    else_=3,
+)
 ```
 
 `case_severity` is the worse of the row's severity and any open joined finding's. This is a subquery per row, not "one more CASE branch", and it is served by the partial index below. `orderFindings` applies the same rule from `case_signal` and `case_severity`.

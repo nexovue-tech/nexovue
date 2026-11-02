@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed**, 2026-11-02. Nothing here is approved until the founder approves it, and no code has been written.
+**Approved** by the founder, 2026-11-02. No code has been written yet.
 Stage 6 of [`phase-2-plan.md`](../../product/phase-2-plan.md), built after the chain, except the front-door move,
 which ships as soon as F6 merges (D58).
 

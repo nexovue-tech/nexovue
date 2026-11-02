@@ -2,8 +2,8 @@
 
 ## Status
 
-**Proposed**, 2026-11-02, revised the same day after eight persona reviews (`status.md`, *Reviews*). New numbers start at FR48, AC90 and D70, and nothing was renumbered. A further review the same day added AC134 to AC139 and D90 to D92, and narrowed BR5, BR10, BR11, D2, D51 and D79. Stage 3 of [`phase-2-plan.md`](../../product/phase-2-plan.md). Nothing here is approved until
-the founder approves it, and no code is written from it. Read with [`research.md`](research.md), which holds the
+**Approved** by the founder, 2026-11-02, revised the same day after eight persona reviews (`status.md`, *Reviews*). New numbers start at FR48, AC90 and D70, and nothing was renumbered. A further review the same day added AC134 to AC139 and D90 to D92, and narrowed BR5, BR10, BR11, D2, D51 and D79. Stage 3 of [`phase-2-plan.md`](../../product/phase-2-plan.md). No code is
+written from it yet. Read with [`research.md`](research.md), which holds the
 evidence, and [`design.md`](design.md), which holds how it is built.
 
 Founder decisions in the plan, F6 D1 and ADR-022 stand: a case grows the finding, and on-call stays with PagerDuty.

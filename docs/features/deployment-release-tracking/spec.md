@@ -2,8 +2,8 @@
 
 ## Status
 
-**Proposed**, 2026-11-02, revised the same day after eight persona reviews (see [`status.md`](status.md), *Reviews*).
-Nothing here is approved until the founder approves it, and no code is written from it. Stage 2 of
+**Approved** by the founder, 2026-11-02. Written and revised the same day after eight persona reviews (see [`status.md`](status.md), *Reviews*).
+No code is written from it yet. Stage 2 of
 [`phase-2-plan.md`](../../product/phase-2-plan.md). Input: [`research.md`](research.md). Next: [`design.md`](design.md),
 [`plan.md`](plan.md), [`status.md`](status.md).
 

@@ -1,7 +1,7 @@
 # Phase 2 foundation: the shared decisions every feature follows
 
-> **Status:** Proposed, 2026-11-02. Nothing here is approved until the founder approves it, and no code is
-> written from it until each feature passes its own specification, design and plan gates.
+> **Status:** Approved by the founder, 2026-11-02, with the seven features' specs, designs and plans. Written and
+> approved the same day. No code is written from it yet; each feature starts per [`phase-2-tracker.md`](phase-2-tracker.md).
 >
 > **What it is for.** Seven feature documents (F28, F3, F22, F4, F5, F19, F20) are being written at the same
 > time. This document is what keeps them agreeing. Where a feature document disagrees with this one, the feature
@@ -92,9 +92,9 @@ channel within its reach.
 - The default job limits, 30 and 60 seconds (`jobs.py:27-28`), are too short for a model. Each AI task must name its
   own. **Starting guess:** 120 s soft and 180 s hard; a local model may need more. Concurrency is capped through
   `QUEUE_CAPS` (`worker.py:72`), and rises as features arrive: 4 slots with F3, 6 with F4 (`assistant` 4, `insight` 4), 8 with F5 (`assistant` 4, `insight` 3, `insight-fix` 2). All guesses.
-- **On `scheduler-light`, capped queues share one floor** (F3 A56): together they hold at most 4 of its 8 slots, a guess, taking turns, so probes and alert sweeps keep the rest.
+- **On `scheduler-light`, capped queues share one floor** (F3 A56): together they hold at most 4 of its 8 slots, a guess, taking turns, so probes and alert sweeps keep the rest. The capped queues are `detection` (F6), `evidence` (F3), `releases` (F28) and F19's `slo`, `slo_counts` and `slo_history` (F19 D66). They ask for 10 seats against 4, so they wait for each other; probes and alert sweeps never wait for them.
 - The container always runs, idle when AI is off, so that turning AI on in the console needs no server access.
-  **Memory ceilings are guesses:** this role 384 MB, then 576 MB with F4 and 768 MB with F5; `scheduler-connections` 384 MB; `scheduler-slo` 384 MB (F19). Together about 1.5 GB (arithmetic on guesses) on top of the 13 GB of ceilings on
+  **Memory ceilings are guesses:** this role 384 MB, then 576 MB with F4 and 768 MB with F5; `scheduler-connections` 384 MB. F19 adds no container: its SLO queues run on `scheduler-light` under the floor above, which keeps its 768 MB (F19 D66, the founder's decision of 2026-11-02, superseding a 384 MB `scheduler-slo`). Together about 1.1 GB (768 + 384 MB; arithmetic on guesses) on top of the 13 GB of ceilings on
   a 16 GB server (`docs/self-hosting/sizing.md`). None is measured, and `sizing.md` must be updated when each is.
 - **A local model never runs in nexovue's Compose file.** The founder's decision is that nexovue runs no AI service
   for self-hosters. The customer runs Ollama or similar themselves, and the 16 GB sizing does not include it.
@@ -130,13 +130,15 @@ shows one format cannot honestly carry that.
 
 ### The interface (FD3)
 
-`nexovue_platform.ai` (proposed; does not exist). Names may be refined by F3; the shape may not.
+`nexovue_platform.ai` (approved; does not exist yet). Names may be refined by F3; the shape may not.
 
 ```python
 class AIProvider(Protocol):
-    def complete(self, request: AIRequest) -> AIResponse: ...      # one model call
-    def embed(self, texts: list[str], model: str) -> AIEmbeddings: ...  # optional; F4 only; a customer's embedding model is not its chat model
-    def check(self) -> AICheckResult: ...                          # "test this connection"
+    def complete(self, request: AIRequest) -> AIResponse: ...  # one model call
+    def embed(
+        self, texts: list[str], model: str
+    ) -> AIEmbeddings: ...  # optional; F4 only; a customer's embedding model is not its chat model
+    def check(self) -> AICheckResult: ...  # "test this connection"
 ```
 
 - `AIRequest`: `instructions`, `parts` (each either `Trusted` or `Untrusted`, section 3), `response_schema` or
@@ -290,7 +292,7 @@ no row (`permissions.py:49`), and that rule stays.
 | `DELETE_ANY_CASE_NOTE` | As F22's design sets | Deleting another person's note. An author may always delete their own, even as a viewer: the one exception to the viewer rule | F22 |
 | `ASK_ASSISTANT` | Owner, admin, member | Asking F4. It spends money and stores text, so it is not a plain read | F4 |
 | `MANAGE_KNOWLEDGE` | Owner, admin, member | Runbooks | F4 |
-| `REQUEST_FIX` | Owner, admin, member | Asking for a suggested fix | F5 |
+| `REQUEST_FIX` | Owner, admin, member | Asking for a suggested fix, including a general one without code access (F5 rung 2b) | F5 |
 | `OPEN_FIX_PULL_REQUEST` | Owner, admin, member. F5 may narrow this, not widen it | The click that opens a draft pull request | F5 |
 | `CONFIGURE_SLOS` | Owner, admin, member | Targets | F19 |
 | `EDIT_DASHBOARDS` | Owner, admin, member | Dashboards | F20 |
@@ -415,7 +417,7 @@ findings ──┬── finding_incidents  (exists)   threshold incidents, link
 ### The fix (FD14, F5 owns)
 
 `finding_fixes` has one row per proposal: its `explanation_version`, state (working states, then `proposed`, `refused`, `approved`, `stale`, `opened`, `failed`, with a separate `pull_request_state`; F5's design holds the list), the change as validated data, what evidence led to it, what was not checked, the
-files read, and the pull request's address. A draft requires a non-null `likely_cause`; a stack alone may reach a patch; whether it may reach a draft is F5's founder decision 4 (until then F5 D58 builds drafts for a signed deploy only). The default is a suggestion on the finding; a draft pull request is an extra, explicit click.
+files read, and the pull request's address. A draft requires a non-null `likely_cause`; a stack alone may reach a patch; whether it may reach a draft is F5's founder decision 4 (until then F5 D58 builds drafts for a signed deploy only). The default is a suggestion on the finding; a draft pull request is an extra, explicit click. **A general fix suggestion without code access (F5 rung 2b, founder's decision 2026-11-02) needs a likely cause or a linked error group whose exception type passed F3's pattern.** It is written from F3's facts only, is labelled as not the customer's code, and never becomes a patch, a pull request, an alert or an email. Its row is `finding_fixes` with kind `general`.
 
 ### Notifications
 
@@ -427,7 +429,7 @@ only to channels people read (`READ_BY_PEOPLE`, `channels.py:34`), never paging 
 
 ## 8. Names
 
-All of these are proposed and exist nowhere today. A feature may add to this list, and must not rename what is here without saying why.
+All of these are approved names and exist nowhere today. A feature may add to this list, and must not rename what is here without saying why.
 
 ### Tables
 
@@ -473,7 +475,7 @@ New columns: `findings.*` (F22, section 7); `deploy_events.commit_sha` and `door
 | Other AI queues | `assistant` (F4), `insight-fix` (F5), both on role `scheduler-insight` |
 | Connector tasks | `nexovue_scheduler.connections` (queues `connections`, capped at 2 of 3, and `connections-interactive`; role `scheduler-connections`) |
 | Release sync | Queue `releases`, on `scheduler-light`, capped at 2 under the floor (F28) |
-| SLO work | Queues `slo`, `slo_counts`, `slo_history`; **new role `scheduler-slo`,** same image (F19 D39) |
+| SLO work | Queues `slo` (cap 2), `slo_counts` (1), `slo_history` (1), on `scheduler-light` under the floor; **no new role or container** (F19 D66, the founder's decision of 2026-11-02, superseding D39's `scheduler-slo`) |
 | Event writer | `RECORD_FINDING_EVENT_SQL` with `finding_event_parameters()`, in `nexovue_platform/cases.py` (F22) |
 | API's ClickHouse account | `nexovue_api_reader`, for all the API's reads (F20 D45) |
 | Deploy reading both sides need | `DeployHistory` moves to `nexovue_platform`, because the scheduler cannot import the API (F28 does this) |
@@ -578,7 +580,7 @@ to the feed, with Overview at `/overview`, because the founder's decision stands
 | **Replay** | 5 to 20 known incidents with one whose right answer is "not enough evidence" (Rootly, NeuBird). **None exists yet; the first come from fault runs, then real customers** | Each miss classified: missing source, wrong context, wrong reasoning | F3 |
 | **Injection** | LogJack's public 42 payloads, including 10 harmless controls, adapted from AWS logs to nexovue's fields; AIOpsDoom-style false causes; attempts to leave through output; disguised references | Instruction followed; way out reached; false cause stated; harmless controls not blocked | F3, then F4 and F5 |
 | **Chat** | Questions with known answers | Right number, right time range shown; refusal to read another tenant | F4 |
-| **Fix** | A fixture repository, since the demo's faults are coded flags (F5 D30) | Proposal refused when thin; **zero writes without a click** | F5 |
+| **Fix** | A fixture repository, since the demo's faults are coded flags (F5 D30). **Rung 2b:** synthetic findings, with hostile exception types and endpoint names, on free-tier or local models only | Proposal refused when thin; **zero writes without a click**. Rung 2b: no address, shell command, install step or secret reaches a person; hostile names never reach the request except as aliases | F5 |
 | **Cost** | All the above | Tokens per explanation, question and fix. **This replaces every guess in section 4** | F3 |
 
 **Gates (R2).** Passing means, on every option Nexovue names:
@@ -630,6 +632,7 @@ These must stay in the future tense until shipped (competitors research).
 | "More accurate than X" | Nothing is measured |
 | "Injection-proof" or plain "safe" | Read-only limits damage and does not stop injection. False causes remain possible |
 | "Works as well on a local model" | Unproven. The plan flags it |
+| A general suggestion (F5 rung 2b) "fixes your code" or was written from it | Nexovue never read that code. It is an example pattern from the finding's facts, and is labelled so |
 | "The only tool where a person approves the fix" | It is the norm: Datadog, Sentry, incident.io, Rootly |
 | "Replaces PagerDuty, incident.io or Rootly" | On-call stays with PagerDuty, and no status pages or Slack-run response are planned |
 | A deploy "caused" a finding, or a version seen in telemetry is a deploy | Order is not cause, and a seen version can be planted |
@@ -664,7 +667,7 @@ A commenter asked this ([HN](https://news.ycombinator.com/item?id=50009404)). Th
 | FD11 | GitHub connection | (a) Personal token. (b) OAuth. (c) GitHub App, one per self-hosted install, and a second if F5 is chosen | **(c).** Chosen repositories, 1-hour narrowed tokens, and no person's reach. Setup is a little longer. GitHub.com first; Enterprise Server later, once tried |
 | FD12 | Where case state lives | (a) `state`. (b) New columns on `findings`. (c) `cases` table | **(b).** (a) breaks because findings close themselves. (c) contradicts ADR-022 |
 | FD13 | Whether a threshold incident becomes a case | (a) Yes. (b) Not in the first version; it links | **(b).** See section 7. F22 may overrule with reasons, as ADR-022 assigns it |
-| FD14 | Whether a draft can exist without a likely cause | Yes / no | **No.** Thin evidence must not reach a one-reviewer team as a pull request. A labelled stack may reach a patch, and F5's founder decision 4 settles the rest |
+| FD14 | Whether a draft can exist without a likely cause | Yes / no | **No.** Thin evidence must not reach a one-reviewer team as a pull request. A labelled stack may reach a patch, and F5's founder decision 4 settles the rest. **A fix needs a cause:** F5's general suggestion without code access (rung 2b, 2026-11-02) needs a likely cause or a recognised error type, and never reaches a patch or a draft |
 | FD15 | What `/` becomes | (a) Leave Overview. (b) Move to the feed | **(b),** as the founder's recorded decision says. F20 owns it |
 | FD16 | SLO burn | (a) Grow the finding. (b) F21 incident, linked | **(b),** as R7, without a second alarm |
 | FD17 | Model words in alerts | (a) Include. (b) Facts by template only | **(b).** Keeps a way out closed, and works with AI off. Cost: messages read less smoothly |
@@ -678,7 +681,7 @@ A commenter asked this ([HN](https://news.ycombinator.com/item?id=50009404)). Th
 
 ## Founder decisions
 
-**All approved by the founder on 2026-11-02.** Items 1 to 8 were approved first, each as recommended. Items 9 to 24 are the questions the seven feature specs then asked; the founder approved them all as recommended, with two changes, A and B, which also rewrite item 4. Each feature's spec marks its own items approved, and its `status.md` records the answers under *Founder answers, 2026-11-02*.
+**All approved by the founder on 2026-11-02.** Items 1 to 8 were approved first, each as recommended. Items 25 and 26 are the founder's own later decisions on F5, the same day. Items 9 to 24 are the questions the seven feature specs then asked; the founder approved them all as recommended, with two changes, A and B, which also rewrite item 4. Each feature's spec marks its own items approved, and its `status.md` records the answers under *Founder answers, 2026-11-02*.
 
 1. **Approved 2026-11-02.** **AI on the hosted service** (plan, open question 1). It decides who pays for models, and makes nexovue a processor of telemetry going to a provider. **Recommendation:** when hosting opens, offer the customer's own key only. Never pay for inference until measured costs are in hand. Nothing here needs this answer yet, and F3 builds for either.
 2. **Approved 2026-11-02.** **The selling line** (customers research, 1). "All on your own server, so your data stays with you" is false for a customer using their own AI account. **Recommendation,** one wording built from F3's and F4's, true with chat on or off: "Your telemetry is stored on your server. AI is off until you turn it on, and you choose where it runs: your own AI account, or a model on your own server. Finding explanations send only numbers, times, fixed labels and stand-in names, and you can read the exact request first. Chat, if you add it, sends questions, log text, notes and runbooks under its own consent." Do not use the "own server" clause until a local model passes the bed (F3 item 2). Your approved wording, and what is sold, so your call.
@@ -690,7 +693,7 @@ A commenter asked this ([HN](https://news.ycombinator.com/item?id=50009404)). Th
 
 8. **Approved 2026-11-02.** Five to eight conversations with on-call engineers and CTOs. **One round, not five.** F28 asks for them before its Step 1b, and F4, F5, F19 and F20 each add questions and a rule for what the answers change, in their own specs. Hold the round before F28's Step 1b, using all their questions. It costs your time, and it is the one thing no research here could answer.
 
-### Items 9 to 24, approved 2026-11-02
+### Items 9 to 26, approved 2026-11-02
 
 Each was asked in a feature's spec, which holds the full recommendation. "As recommended" means that text, unchanged.
 
@@ -710,6 +713,8 @@ Each was asked in a feature's spec, which holds the full recommendation. "As rec
 22. **Approved 2026-11-02, as recommended.** **F28 owns the shared browser-door change** (item 7).
 23. **Approved 2026-11-02, as recommended.** **One free GitHub test organization, plus one spare free personal account,** shared by F22's Step 3 and F5's GitHub trial (F22 D93, F5 item 5). Nothing private goes in it.
 24. **Approved in advance, 2026-11-02, as recommended.** **F28's later gate, only if Step 1a fails** (F28 spec). If only a cost check fails: keep version comparison and pay, if it fits the 16 GB server. If a correctness check fails: time comparison only.
+25. **The founder's own decision, 2026-11-02.** **F5 stays approved.** Its design had asked not to be approved before the GitHub trial and the buyer round. Instead both block F5's Step 1, and a result that changes the design comes back to the founder (F5 D64).
+26. **The founder's own decision, 2026-11-02.** **F5 rung 2b: a general fix suggestion without code access.** Where AI is on but Nexovue cannot read the service's code, a member may ask for a general pattern with example code, written from F3's facts only (FD18), checked by code, labelled "Example pattern, not your code. Nexovue has not seen your code. Check before using." It reads no repository and needs no GitHub connection or source consent. FD14 and section 5 carry it (F5 D65 to D72).
 
 ### What A and B change
 
@@ -745,7 +750,7 @@ What B costs, stated plainly:
 - F6's weeks-long false-alarm run (`phase-2-plan.md`, *Test bed*), and so the plan's false-alarm bar.
 - F3 Step 2c: the rules' weeks-long scoring, T2.17's report and T2.18's check against the bar. **Until then no rule states a likely cause;** F3 ships facts only.
 - F3 and F4's long model runs (F3 Step 6, F4 Step 4's report) where they need the demo running for days. Short runs and replays go ahead on the Mac with free tiers or a local model.
-- F19 AC49, the weeks-long fault run, which reads "not run" until then. AC50's scale run may go ahead on the Mac's Docker, as F6's AC29 did, but its figures (the 200-target limit, `scheduler-slo`'s 384M) are not published as server figures before Oracle.
+- F19 AC49, the weeks-long fault run, which reads "not run" until then. AC50's scale run may go ahead on the Mac's Docker, as F6's AC29 did, but its figures (the 200-target limit, `scheduler-light`'s 768M with SLO work on it) are not published as server figures before Oracle.
 - F20 T5.7 and T11.6 may run on the Mac as build gates (their pass-mark file names the machine), but no cap or "how many at once" is published until they are rerun on Oracle.
 - F22 T5.2 (a real GitHub webhook reaching a reachable server, so AC130 stays open) and its poll and write figures; F28's whole-server fit on 16 GB. Per-container memory (F22 T4.9, F28 T1.6) can still be read on the Mac's Docker.
 - Every memory ceiling in section 1, and every `sizing.md` row they add; item 6's raised retention default, which waits for the bed's disk figures.

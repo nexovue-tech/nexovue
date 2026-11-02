@@ -2,24 +2,27 @@
 
 ## Lifecycle status
 
-Proposed
+**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+
 
 ## Current task
 
-Documents revised after eight persona reviews and one further review of the revision, awaiting the founder's approval. No code has been written.
+None. Waiting for F6 (pull request #24) to merge.
+
 
 ## Completed
 
 - [`research.md`](research.md): users, attacker paths, competitors, methods, limits. Rival facts corrected from each vendor's page on 2026-11-02.
-- [`spec.md`](spec.md): Proposed. **139 acceptance criteria, 54 functional requirements, 98 decisions taken; every founder decision answered on 2026-11-02** (item 2 by the foundation).
-- [`design.md`](design.md): revision 2, regenerated from the spec, awaiting approval. Three proposed ADRs, written inside it.
-- [`plan.md`](plan.md): revision 2, regenerated, awaiting founder approval. Eight steps, plus T0.1 and T0.2 first. Every acceptance criterion has exactly one owning task, placed at or after every task its table says it depends on. That table is written by hand, so the check is only as complete as the table.
+- [`spec.md`](spec.md): approved by the founder 2026-11-02. **139 acceptance criteria, 54 functional requirements, 98 decisions taken; every founder decision answered on 2026-11-02** (item 2 by the foundation).
+- [`design.md`](design.md): revision 2, regenerated from the spec, approved by the founder 2026-11-02. Three proposed ADRs, written inside it.
+- [`plan.md`](plan.md): revision 2, regenerated, approved by the founder 2026-11-02. Eight steps, plus T0.1 and T0.2 first. Every acceptance criterion has exactly one owning task, placed at or after every task its table says it depends on. That table is written by hand, so the check is only as complete as the table.
 - Read for these: the findings service, router, queries and schemas; `Finding`'s model and migration; the project job's writes; `notify`; retention and expiry; the job queue, registry, worker and preload; the guarded client; the sender; webhook signatures; rate tiers; sealing and keys; Compose, Caddy, monitoring rules and the install script; member removal and the export; the finding and feed screens; F3's, F4's and F5's designs where they touch F22.
 - Checked again on 2026-11-02 from GitHub's own pages: the manifest flow, the setup URL's warning, the issue list's parameters, and the App permissions. Jira's webhook page too. **Atlassian's reference pages for transitions, status categories and search would not load.**
 
 ## Next action
 
-Bring the founder the revised documents and the two questions below. **The personas have not read the revised documents again.** One further review has (*Reviews*, *Second review*). A second pass on `design.md` and `plan.md` is worth considering, since most of both was rewritten.
+Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Start at plan Step 1. Step 7 (Jira) still waits on Atlassian's written answer. File the design's 3 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+
 
 ## Open decisions
 
@@ -453,3 +456,7 @@ The founder approved every Phase 2 founder question as recommended, with two cha
 - **Changed, A: no rented test server.** T5.2's real webhook delivery and AC130 wait for the Oracle deployment. The 16 GB memory figure stays arithmetic until then; T4.9 reads one container's memory on the Mac.
 - **Changed, B: no paid model calls.** F22 calls no model, so nothing changes here.
 - **Open decisions:** none for the founder. Step 7 waits on Atlassian.
+
+## Spec, design and plan approved, 2026-11-02
+
+The founder approved [`spec.md`](spec.md), [`design.md`](design.md) and [`plan.md`](plan.md) on 2026-11-02, with the foundation. **The design's 3 proposed ADRs are to be filed in `docs/decisions/` at implementation start**, numbered then; none is filed yet.

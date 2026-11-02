@@ -1,6 +1,6 @@
 # Plan: SLO tracking (F19)
 
-> **Status:** Awaiting founder approval. Proposed 2026-11-02, rewritten the same day against the revised spec. No file is edited until this is approved.
+> **Status:** Approved by the founder, 2026-11-02, with D66. Rewritten the same day against the revised spec. Ready to implement once F6 merges.
 >
 > **One document: the order of the work and its tasks.** Steps say what ships and in what order. Tasks under each step name the file
 > that changes and the test that proves it, read from the code. **The founder approves this plan before any file is edited.**
@@ -12,6 +12,8 @@
 - **P1. F6 is merged.** Then F28, F3, F22, F4 and F5, as the plan's stages order them. They will add migrations and touch `incidents.py` and
   `outbox.py`, so **every line reference below must be read again when this starts.** F19 also re-reads [SigNoz issue 658](https://github.com/SigNoz/signoz/issues/658) at the start of Step 1.
 - **P2. The one browser-door change (foundation section 9, shared with F28 and F3) has landed before Step 4:** browser-door spans stay out of the service and endpoint rollups, the cap keeps the busiest services, going over the cap is recorded, and `synthetic.*` readings are accepted only from the prober's door ([`design.md`](design.md), *Forged spans*). It has no record yet. Its timing is settled by foundation item 7 (before Stage 1 reaches a customer), and its owner is F28 (foundation item 22, approved 2026-11-02). It filters by door, not by span kind (spec D63). F19 adds the endpoint rollup, the cap and `synthetic.*` to what F28 requires of it. This plan does not build it. **Step 4 must not start, and F19 must not be released, without it and AC37's end-to-end test in its record.**
+
+- **P3. F3's floor exists before T1.5 ships the SLO queues** (`uncapped_floor`, F3's T1.7; D66). Without it, capped queues are served first and could take probes' slots. If F3's T1.7 has not merged when T1.5 starts, T1.5 builds the floor as F3's design describes.
 
 ## Current system
 
@@ -28,7 +30,7 @@ Places where writing this plan refined the design. Each is already written into 
 | C2 | Research: `alert_evaluations.subject_key` takes `slo:<id>` without change | True of the table (`models.py:1332`), but `thresholds._positions` strips `service:` for its own rule kinds only (`thresholds.py:195-205`) | F19 has its own read, and does not share `_positions` |
 | C3 | Research: reuse `_COUNTED` | It is in the API, and the scheduler cannot import the API (`apps/scheduler/pyproject.toml:14`, foundation section 1) | T2.3 moves it to `nexovue_platform/readings.py` |
 | C4 | Research: "Add F19's module to the structural check" | The test's `DETECTION` root and imports walk one package (`test_detection_has_no_ai.py:35`) | T1.10 adds three roots, not just a line |
-| C5 | Research R14: "Whether long reads need their own slot limit" | `QUEUE_CAPS` exists for this (`jobs/worker.py:72`), but F3 and F28 also take slots | A role, `scheduler-slo`, with three capped queues |
+| C5 | Research R14: "Whether long reads need their own slot limit" | `QUEUE_CAPS` exists for this (`jobs/worker.py:72`), but F3 and F28 also take slots | Three capped queues on `scheduler-light`, under F3's floor (D66, the founder's decision of 2026-11-02; it supersedes D39's role `scheduler-slo`) |
 | C6 | Foundation: "`/slos`, `/slos/{id}/budget`" | The spec needs months, history, exclusions, restore, burn and a suggestion too | Added under foundation's rule that a feature may add names |
 | C7 | First draft: the job runs `step()`, then "fire or clear" | `step()` returns no action once firing (`thresholds.py:92-95`), and `fire` at the same severity writes nothing (`incidents.py:221-223`) | T4.5 calls `fire` each breached minute, and adds `refresh_detail` |
 | C8 | First draft: F6's `active_projects` decides who gets a job | It drops a project silent for 24 hours (`detection/projects.py:22-45`) | T1.5 has its own statement |
@@ -76,8 +78,8 @@ As [`spec.md`](spec.md) and [`design.md`](design.md). Where this plan and they d
 
 | Area | What changes |
 |---|---|
-| Files | Platform: new `slo.py`; `alerts/model.py`, `readings.py`. Scheduler: new `slos/`; `alerts/incidents.py`, `outbox.py`, `messages.py`, `telemetry.py`, `tasks.py`; `detection/coordinator.py`, `project_job.py`, `method.py`, `holds.py`; `jobs/registry.py`, `worker.py`, `expiry.py`; `metrics.py`. API: new `slos/`; `alerts/`, `auth/`, `audit/`, `organizations/tables.py`, `ratelimit/policy.py`, `data/postgres/models.py`, `main.py`, `members/`, `profile/`, `synthetics/queries.py`, `findings/schemas.py`, `roles.py`. Web: new `features/slos/`; `features/alerts/`, `features/findings/`, `features/servicedetail/`, `app/router.tsx`, `app/routes/route-manifest.ts`. Deploy: `deploy/compose/nexovue.yaml`, `docker-compose.yaml`, and the overlays `nexovue.kafka3.yaml`, `nexovue.build.yaml`, `nexovue.hosted.yaml`, `nexovue.quickstart.yaml`; monitoring rules. Tools: `tools/detection-seed/`, `tools/detection-measure/`, `tools/fault-bed/`. Docs: setup, operations, architecture, `docs/self-hosting/sizing.md` |
-| Services | A new role, `scheduler-slo`, on the same image; the API; `scheduler-deliveries` gains two steps. **Worker and receiver: none** (P2 aside) |
+| Files | Platform: new `slo.py`; `alerts/model.py`, `readings.py`. Scheduler: new `slos/`; `alerts/incidents.py`, `outbox.py`, `messages.py`, `telemetry.py`, `tasks.py`; `detection/coordinator.py`, `project_job.py`, `method.py`, `holds.py`; `jobs/registry.py`, `worker.py`, `expiry.py`; `__main__.py`; `metrics.py`. API: new `slos/`; `alerts/`, `auth/`, `audit/`, `organizations/tables.py`, `ratelimit/policy.py`, `data/postgres/models.py`, `main.py`, `members/`, `profile/`, `synthetics/queries.py`, `findings/schemas.py`. Web: new `features/slos/`; `features/alerts/`, `features/findings/`, `features/servicedetail/`, `app/router.tsx`, `app/routes/route-manifest.ts`. Deploy: `deploy/compose/nexovue.yaml` (`scheduler-light`'s comment only); monitoring rules. Tools: `tools/detection-seed/`, `tools/detection-measure/`, `tools/fault-bed/`. Docs: setup, operations, architecture, `docs/self-hosting/sizing.md` |
+| Services | **No new role or container:** `scheduler-light` takes three more queues under F3's floor (D66); the API; `scheduler-deliveries` gains two steps. **Worker and receiver: none** (P2 aside) |
 | Schema / migrations | One Postgres migration per step that needs one: Steps 1, 3, 4 and 5, with the `VALIDATE` and `CONCURRENTLY` ones apart. **No ClickHouse migration** |
 | UI | Four new routes and the *Last month* view; changes to the rule editor, incident, finding and service pages, and the snooze and mute controls |
 | Tests | New in each step. Changed: `test_alert_vocabulary.py`, `test_alert_defaults_live.py`, `test_authorization_coverage.py`, `test_ratelimit_coverage.py`, `test_deletion_live.py`, `test_tenant_isolation_live.py`, `test_policy.py`, `test_detection_has_no_ai.py`, `test_detection_coordinator.py`, `test_read_surface_structure.py`, `test_scheduler_postgres_tenancy_structure.py`, `test_migration_rules.py`, `test_compose_contract.py`, `test_mcp_tools.py`, `route-manifest.test.ts`, `RuleEditor.test.ts` |
@@ -97,7 +99,7 @@ Everything above. In particular:
 What is genuinely new:
 
 - the `nexovue_platform/slo.py` arithmetic and labels;
-- the `scheduler-slo` role, three queues and three jobs;
+- three queues on `scheduler-light`, under F3's floor, and three jobs;
 - the six tables;
 - the `about_*` and `withheld_*` columns;
 - `_WITHHOLD_SECOND`, `_RELEASE`, `_DROP_SNOOZED`, and a branch in `_PIN_KEY`;
@@ -118,7 +120,7 @@ Ordered so the first step ships something you can see (ADR-0019). Each step is b
 - [ ] **T1.2** — `apps/api/migrations/versions/<next>_slo_targets.py`, `data/postgres/models.py`, `organizations/tables.py`, `apps/api/tests/test_migration_rules.py` · `slo_targets` with its soft-delete, left-out, sampling and version columns, `slo_status`, `slo_daily_counts`, `slo_target_changes`, with inventory lines (F6's C20). The downgrade refuses, and the revision joins `ROLL_FORWARD_ONLY` · proved by `test_deletion_live.py` (AC46), `test_migration_rules.py`
 - [ ] **T1.3** — `alerts/telemetry.py`, `slos/store.py` (new) · `_query` gains a `settings` argument; `SLO_SERVICE_DAY_SQL`, availability first; **a first test of `sumForEachMergeIf`** against the dev server, with the design's fallback ready · proved by `apps/scheduler/tests/test_slo_store_live.py`, including that lowered limits are sent, and `test_tenant_chokepoint_structure.py` still passing
 - [ ] **T1.4** — `slos/counts.py` (new), `detection/holds.py` header · a day's row; quiet and lost minutes; leading, trailing and longest stretches; D37's stated rule in `holds.py` · proved by `test_slo_counts.py`: AC6, AC9, AC10, AC12, AC73, a stretch across midnight, and no good events from missing minutes
-- [ ] **T1.5** — `slos/job.py`, `slos/__init__.py` (new), `jobs/registry.py:19-30`, `jobs/worker.py:72,75-77`, `apps/api/src/nexovue_api/roles.py:22`, `deploy/compose/nexovue.yaml:349-385`, `docker-compose.yaml:450-463`, the four overlays, `detection/coordinator.py:137-163`, `docs/self-hosting/sizing.md`, `test_scheduler_postgres_tenancy_structure.py` · the `scheduler-slo` role and three queues; `judge_slos`, with `session_lock` and older-minute guard; `count_slos`, by age; `read_slo_history`, by version; `queue_jobs`' new statement, oldest first, named in `CROSS_TENANT_STATEMENTS`; a failure to queue is logged and does not stop the sweep · proved by `test_slo_job_live.py` (AC8 at 16 minutes, 25 hours, 3, 10 and 27 days through the coordinator, AC64, AC65 at 2 times overload, AC66), `test_detection_coordinator.py` (AC95d), `test_compose_contract.py` (AC68), and AC48
+- [ ] **T1.5** — `slos/job.py`, `slos/__init__.py` (new), `jobs/registry.py:19-30`, `jobs/worker.py:72`, `__main__.py:78-85`, `deploy/compose/nexovue.yaml:351-352` (comment), `detection/coordinator.py:137-163`, `test_scheduler_postgres_tenancy_structure.py` · queues `slo` (cap 2), `slo_counts` (1) and `slo_history` (1) in `scheduler-light`'s default queues and `QUEUE_CAPS`, under F3's floor (D66). **Needs the floor:** if F3's T1.7 has not merged, this task builds `uncapped_floor` and `--uncapped-floor 4` as F3's design describes, and F3 rebases onto it. No new role, compose service or `sizing.md` row; `judge_slos`, with `session_lock` and older-minute guard; `count_slos`, by age; `read_slo_history`, by version; `queue_jobs`' new statement, oldest first, named in `CROSS_TENANT_STATEMENTS`; a failure to queue is logged and does not stop the sweep · proved by `test_slo_job_live.py` (AC8 at 16 minutes, 25 hours, 3, 10 and 27 days through the coordinator, AC64, AC65 at 2 times overload, AC66), `test_detection_coordinator.py` (AC95d), `test_compose_contract.py` and `test_jobs_live.py` (AC68: SLO queues on `scheduler-light` only, within the floor, probes keeping 4 of 8), and AC48
 - [ ] **T1.6** — `apps/api/src/nexovue_api/auth/permissions.py`, `auth/policy.py`, `test_policy.py`, `apps/web/src/shared/identity.ts`, `identity.test-util.ts`, `MembersScreen.test.ts`, and the FR1 table in `docs/features/team-and-api-access/spec.md` · `CONFIGURE_SLOS`, all five copies at once · proved by `test_policy.py` and `test_authorization_coverage.py` (AC32)
 - [ ] **T1.7** — `apps/api/src/nexovue_api/slos/` (new), `main.py:39,116-`, `audit/service.py`, `test_read_surface_structure.py` and the customer document its list feeds · list, read, create, change, soft delete, restore, for `service_availability` only; `slo_target_changes`, and audit `slo.created`, `slo.target_changed`, `slo.deleted`, `slo.restored`, with ids only; token schemas; F4's ticket refused; `slos/router.py` names no repository, so it stays on the default tier and `TELEMETRY_PATHS` is not touched here · proved by `test_slos_live.py` (AC33, AC34, AC71's first half, AC74, AC97, AC105, AC116), `test_ratelimit_coverage.py`, `test_tenant_isolation_live.py` (AC35)
 - [ ] **T1.8** — `apps/web/src/features/slos/` (new): `api.ts`, `SlosScreen.tsx`, `SloScreen.tsx`, `SloForm.tsx`, `slo-words.ts`; `app/router.tsx`; `app/routes/route-manifest.ts:18-34` · the linked list, tones, order, headline, banner, deleted line, restore, disable, four routes, 60-second refresh with age worked out in the browser, zone on every time · proved by `route-manifest.test.ts`, `SlosScreen.test.ts` and `SloScreen.test.ts` for each rule 3 state: AC39 and AC40 so far, AC41, AC42, AC43, AC63, AC81, AC82, AC83, AC107, AC108. Also `apps/api/tests/test_slo_words.py` (new): AC13's scan, whole words and ignoring case, over `features/slos`, failing if a named path holds no file. **The step fails without it,** and T3.6, T4.9, T5.7 and T6.6 each add their paths to it
@@ -169,7 +171,7 @@ The result is written into `status.md`, whichever way it goes.
 
 ### Step 4 — Burn alerts, on their own channel
 
-*Judgeable:* On the demo, you turn on the `paymentFailure` flag with a target on `payment`. An email arrives: "using its allowed failures 14 times faster than its target allows", with how long what is left lasts. You turn it off, and about 10 minutes later it resolves. A thin service stays silent. You stop `scheduler-slo`, and a message says targets are not being judged.
+*Judgeable:* On the demo, you turn on the `paymentFailure` flag with a target on `payment`. An email arrives: "using its allowed failures 14 times faster than its target allows", with how long what is left lasts. You turn it off, and about 10 minutes later it resolves. A thin service stays silent. You stop `scheduler-light`, and a message says targets are not being judged.
 
 **Needs P2, and the gate.**
 
@@ -208,7 +210,7 @@ The result is written into `status.md`, whichever way it goes.
 - [ ] **T6.1** — `metrics.py`, `deploy/monitoring/rules/nexovue.yml`, `deploy/monitoring/tests/nexovue_test.yml` · metrics and the alert · proved by the monitoring tests
 - [ ] **T6.2** — `tools/detection-measure/scale.py` · adds `metrics_gauge`, check targets, target creation, and each statement's time and memory; measures 200 projects and 2,000 services, read times, job times, slot use, Postgres writes, claim time with and without the statement at AC50's three counts of open burns, and what buckets on named endpoints would cost, recorded for a later request (spec D65) · proved by AC50's, AC86's and AC90's numbers in `status.md`. **If they fail, the design's order applies, and comes back to the founder if it is more than that**
 - [ ] **T6.3** — `tools/fault-bed/` · a target-aware score, reading incidents and the delivery log through the API, and development alert mail switched on so one email can be seen (`docker-compose.yaml:423,539-545`) · proved by AC49, labelled as a demo. Reported number on the no-fault run, never a fixed zero
-- [ ] **T6.4** — Failure drill · stop `scheduler-slo`, stop ClickHouse, stop the prober and the metrics worker · proved by AC40, AC48, AC67, AC91
+- [ ] **T6.4** — Failure drill · stop `scheduler-light`, stop ClickHouse, stop the prober and the metrics worker · proved by AC40, AC48, AC67, AC91
 - [ ] **T6.5** — Re-run of P2's end-to-end test, `test_slo_system.py`, and the cap's record · proved by AC37 and AC87. Hard exit from this step
 - [ ] **T6.6** — `docs/product/setup/` (a new page, with what targets do not measure, what leaves the server, default routing, migrating, an outside heartbeat), `docs/operations/`, `current-system-reference.md`, `database.md`, `security-and-tenancy.md`, `observability.md`, `feature-catalog.md` · reviewed against the must-not list; `test_slo_words.py` gains the new page, and must find "SLO" and "error budget" there (AC13)
 - [ ] **T6.7** — `/review-diff`, `/readiness-check`, then design QA against `design.md`, including a named check that no `slos/` module reaches a provider by plain HTTP
@@ -353,7 +355,8 @@ Only what this analysis found.
 | **The release writes a message that should not go** | A new writer in delivery | One statement, one marker, and AC52, AC57, AC59 |
 | **The endpoint read costs more than arithmetic says** | Granules of 8,192, and most targets may leave out health checks | T6.2, and the design's fallback order |
 | **`sumForEachMergeIf` might be refused** | Combinator order is untested | T1.3 proves it first, with a fallback |
-| **`scheduler-slo`'s ceiling is a guess** | Nothing measured | AC50 |
+| **`scheduler-light`'s 768M ceiling is a guess with SLO work added** | Nothing measured | AC50, on the deployed server; raise the ceiling and `sizing.md` together if it OOM-kills |
+| **SLO judging runs late when detection, evidence and releases are busy** | Ten capped seats asked for, four given (D66) | Longest-waiting first, **Not up to date** on screen, AC65; probes and alert sweeps are not affected |
 | **Suggestions look silly on real traffic** | Never tried | T2.7's judgment, and it is easy to change |
 | **Coverage reads low for an unaffected tenant** | A hold is install-wide | Wording says "may have lost". Counts stand |
 | **Later features move what this cites** | F28 to F5 come first | Read again at start (P1) |
@@ -376,9 +379,9 @@ Checked again 2026-11-02. What is left is the founder's, and none blocks writing
 
 ## Gates
 
-- [ ] Specification approval
-- [ ] Design approval
-- [ ] **Plan approval — before the first edited file**
+- [x] Specification approval: 2026-11-02
+- [x] Design approval: 2026-11-02
+- [x] **Plan approval:** 2026-11-02
 - [ ] Implementation
 - [ ] Demand gate, before Step 4
 - [ ] Tests
@@ -403,7 +406,7 @@ Pre-deployment. **The real risk is not rollout, but building the alert work for 
 
 A later project-level on or off is not needed: a project with no target gets no job, and the default rule is silent. To back out of Step 5 alone, remove the `_WITHHOLD_SECOND`, `_RELEASE` and `_DROP_SNOOZED` calls and `_PIN_KEY`'s branch, and customers get both messages, which is noisy but never loses news. Snooze then does not hold burns, so that needs saying.
 
-To stop the feature: stop `scheduler-slo`, and leave its queues empty. **The migrations past Steps 1, 3 and 4 refuse to go back,** because daily counts, change history and exclusions exist nowhere else once rollups expire. Going back past them is a restore. A later migration can remove F19 forward, by a decision of its own.
+To stop the feature: take `slo`, `slo_counts` and `slo_history` out of `scheduler-light`'s default queues (`__main__.py`) and redeploy; queued jobs expire. Probes and alert sweeps carry on. **The migrations past Steps 1, 3 and 4 refuse to go back,** because daily counts, change history and exclusions exist nowhere else once rollups expire. Going back past them is a restore. A later migration can remove F19 forward, by a decision of its own.
 
 ## Outcome
 

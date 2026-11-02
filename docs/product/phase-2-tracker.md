@@ -6,7 +6,7 @@
 This page answers one question: **how far along is Phase 2?** Each feature's own `status.md` holds the detail.
 When a step's state changes, update its row here in the same pull request.
 
-States: **Docs** (spec, design and plan written, Proposed) · **Approved** (the founder approved the plan) ·
+States: **Docs** (spec, design and plan written) · **Approved** (the founder approved the plan) ·
 **Building** · **In review** (a pull request is open) · **Merged** · **Measured** (checked on the deployed
 server; see foundation, *What A and B change*).
 
@@ -16,15 +16,15 @@ server; see foundation, *What A and B change*).
 |---|---|---|---|---|---|---|---|
 | 1 Detect | [F6 Anomaly detection](../features/anomaly-detection/status.md) | Done | Yes | Yes | Yes | PR #24 open | After deploy |
 | — | Browser-door change (owned by F28) | In F28's docs | — | — | — | — | — |
-| 2 Explain | [F28 Deploy and release tracking](../features/deployment-release-tracking/status.md) | Done | No | No | No | No | After deploy |
-| 2 Explain | [F3 AI insights](../features/ai-insights/status.md) | Done | No | No | No | No | After deploy |
-| 3 Track | [F22 Case management](../features/case-management/status.md) | Done | No | No | No | No | After deploy |
-| 4 Ask | [F4 AI chatbot](../features/ai-chatbot/status.md) | Done | No | No | No | No | After deploy |
-| 5 Fix | [F5 AI solution](../features/ai-solution/status.md) | Done | No | No | No | No | After deploy |
-| 6 Around | [F19 SLO tracking](../features/slo-tracking/status.md) | Done | No | No | No | No | After deploy |
-| 6 Around | [F20 Dashboards](../features/dashboards/status.md) | Done | No | No | No | No | After deploy |
+| 2 Explain | [F28 Deploy and release tracking](../features/deployment-release-tracking/status.md) | Done | Yes | Yes | No | No | After deploy |
+| 2 Explain | [F3 AI insights](../features/ai-insights/status.md) | Done | Yes | Yes | No | No | After deploy |
+| 3 Track | [F22 Case management](../features/case-management/status.md) | Done | Yes | Yes | No | No | After deploy |
+| 4 Ask | [F4 AI chatbot](../features/ai-chatbot/status.md) | Done | Yes | Yes | No | No | After deploy |
+| 5 Fix | [F5 AI solution](../features/ai-solution/status.md) | Done | Yes | Yes | No | No | After deploy |
+| 6 Around | [F19 SLO tracking](../features/slo-tracking/status.md) | Done | Yes | Yes | No | No | After deploy |
+| 6 Around | [F20 Dashboards](../features/dashboards/status.md) | Done | Yes | Yes | No | No | After deploy |
 
-Founder questions open: **none** (all approved 2026-11-02). Waiting on outside parties: Atlassian's written
+**All seven features' specs, designs and plans, and the foundation, approved by the founder on 2026-11-02.** Each starts as *The order of work* below allows, once F6 (PR #24) merges. Founder questions open: **none** (all approved 2026-11-02). F19's SLO work runs on `scheduler-light`, not a new container (F19 D66, 2026-11-02). Waiting on outside parties: Atlassian's written
 answer for Jira (F22 Step 7); the lawyer's review (foundation items 3 and 16).
 
 ## The order of work
@@ -46,8 +46,10 @@ What each feature needs before it can start, read from the documents (foundation
 | F22 Steps 3 to 6 (GitHub connection) | F22 Step 2 |
 | F22 Step 7 (Jira) | Atlassian's written yes |
 | F4 Steps 2 onward (chat panel) | F3's provider (F3 Step 4); the buyer-conversation rule (foundation, *Founder decisions*) |
-| F5 | F3's fix brief and provider; F22's GitHub connection |
-| F19 Steps 1 to 3 | F6 |
+| F5 Steps 1 and 2 (deploy line, brief; the checks) | F28's release facts and F3's fix brief; the buyer round and the GitHub trial (F5 D64) |
+| F5 Step 2b (general suggestion without code access) | F5 Step 2; F3's provider (F3 Step 4). **Not F22,** so it can ship before rung 3 (F5 D72) |
+| F5 Steps 3 onward (rung 3 and up) | F22's GitHub connection (F22 Steps 3 to 6) |
+| F19 Steps 1 to 3 | F6; for T1.5, F3's floor (F3 T1.7), or F19 builds it first (F19 plan P3) |
 | F19 Step 4 onward (burn alerts) | The browser-door change |
 | F20 Steps 2 to 4 | F20 Step 1 |
 | F20 Step 5 (marks on charts) | F28's `markers_in_window` |
@@ -65,7 +67,7 @@ is the sensible most, for the reasons under *Limits*.
 | **B: cases** | `feature/case-management`, then `feature/ai-chatbot` | F22 Steps 1 to 6 → F4 Step 2 onward, once F3's provider is merged |
 | **C: around the chain** | `feature/dashboards`, `feature/slo-tracking` | F20 Step 1 and F4 Step 1 first (both small), then F19 Steps 1 to 3, then F20 Steps 2 to 4 |
 
-Lane A is the critical path: F5 cannot finish until F28, F3 and F22 are merged.
+Lane A is the critical path: F5 cannot finish until F28, F3 and F22 are merged. F5's Steps 1, 2 and 2b need only F3, so they can merge while lane B still builds F22.
 
 ### Rules for parallel lanes
 
@@ -75,7 +77,8 @@ Lane A is the critical path: F5 cannot finish until F28, F3 and F22 are merged.
    ClickHouse (`deploy/clickhouse/migrations`, next free `000038`) both break if two branches take the same
    number. Before a branch merges, rebase it on `main` and renumber its migrations to the next free ones.
 3. **Shared files have one owner** (foundation section 9, *Foundation pieces*). For example, `lifespan.py`'s
-   import change is done by whichever of F5, F19 or F20 lands first, and the others rebase onto it.
+   import change is done by whichever of F5, F19 or F20 lands first, and the others rebase onto it. Likewise the
+   `scheduler-light` floor (`uncapped_floor`): whichever of F3's T1.7 or F19's T1.5 lands first.
 4. **Rebase each lane on `main` after every merge**, so conflicts stay small.
 5. **One dev stack at a time.** The Mac's Docker has about 11.7 GiB, and the full stack uses most of it. Lanes
    share the one running stack, and a lane runs its live tests only when the stack is on its branch. Unit

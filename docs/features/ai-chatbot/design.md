@@ -2,7 +2,7 @@
 
 ## Status
 
-**Draft, awaiting founder approval,** 2026-11-02, against [`spec.md`](spec.md). Nothing is approved and no code exists.
+**Approved** by the founder, 2026-11-02, against [`spec.md`](spec.md). No code exists yet.
 
 **How it was checked.** The code was read on branch `feature/anomaly-detection`, with uncommitted work present. Line numbers
 are for that working tree. Two things were run: a small FastAPI probe in review, and a Postgres probe of row-level security and grants in a throwaway container in the second review (`status.md`, *Reviews*). Every token, time and memory figure is a guess, or arithmetic on a guess, and
@@ -217,7 +217,10 @@ Reached from `SETTINGS_GROUPS` (`shared/settings/settings-nav.ts`), so `route-ma
 ```python
 if presented is not None and looks_like_assistant_ticket(presented):
     message = await tickets.valid_for(
-        db, presented, connection=connection, now=datetime.now(UTC),
+        db,
+        presented,
+        connection=connection,
+        now=datetime.now(UTC),
     )
     return Reader(org_id=message.org_id, project_scope=message.project_id, message_id=message.id)
 ```
@@ -247,17 +250,18 @@ if presented is not None and looks_like_assistant_ticket(presented):
 ```python
 @dataclass(frozen=True, slots=True)
 class ChatTool:
-    name: str; description: str          # what the model chooses by
-    handler: str                         # "nexovue_api/logs/search.py:search", as THE_SURFACE
-    route: str                           # "/api/v1/logs/search", for the client to build a URL
+    name: str
+    description: str  # what the model chooses by
+    handler: str  # "nexovue_api/logs/search.py:search", as THE_SURFACE
+    route: str  # "/api/v1/logs/search", for the client to build a URL
     arguments: Mapping[str, ArgumentRule]  # type, range, query name or path slot
     takes_window: bool
-    retention: RetentionClock            # raw, derived, derived capped at 35 days, or none
-    fields: Mapping[str, FieldRule]      # every field sent, with its kind and basis, below
-    drops_at_facts_level: bool           # not offered at data level facts
+    retention: RetentionClock  # raw, derived, derived capped at 35 days, or none
+    fields: Mapping[str, FieldRule]  # every field sent, with its kind and basis, below
+    drops_at_facts_level: bool  # not offered at data level facts
     max_rows: int
-    max_characters: int                  # 8 KiB, a guess
-    link: LinkTemplate                   # how nexovue builds the console link
+    max_characters: int  # 8 KiB, a guess
+    link: LinkTemplate  # how nexovue builds the console link
 ```
 
 **A field's kind decides everything about it.** `FieldRule(kind, basis)`. Kinds: `number`, `closed` (an enum), `id`, `time`, `name` (a short attacker-reachable name, fenced), `text` (free text, fenced), `team_text`. Basis: `verified`, `telemetry`, `telemetry_text` (F3's three) or `team_notes`, or `from_row` with a path, for a tool whose rows differ (`facts[].basis`, `releases[].basis`, `chunks[].source_kind`). A citation names step and rows, so a label rests on the fields actually cited. **Never in any tool:** `findings.title` (U1), deploy `metadata`, `url`, `source`, a check's `config` (only type and URL host, query and headers stripped), an incident's `detail`, a notification's `reason` and `channel_name`, F3's model `wording`. `CheckConfig` can hold literal URLs, query values and headers a person typed (`checks/config.py:339-341`), and intake masking does not reach it. `DeployEventSummary.metadata` is `dict[str, Any]` (`deploys/schemas.py:50-56`). MCP's `list_checks` dumps the whole model today (`tools.py:267`), and T1.2 fixes that too.

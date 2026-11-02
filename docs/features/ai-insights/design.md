@@ -2,7 +2,7 @@
 
 ## Status
 
-**Draft, awaiting approval.** Proposed 2026-11-02, against [`spec.md`](spec.md), and revised after eight persona reviews (`status.md`, *Reviews*). Nothing here is approved, and no code is written from it.
+**Approved** by the founder, 2026-11-02, against [`spec.md`](spec.md), after eight persona reviews (`status.md`, *Reviews*). No code is written from it yet.
 The feature's lifecycle status lives in [`status.md`](status.md).
 
 **How it was checked.** The code was read on branch `feature/anomaly-detection` with uncommitted work present. Line numbers are for that
@@ -271,7 +271,7 @@ Detection adds them on its open connection through `queue.enqueue`:
 
 A person closing a finding (false alarm, new normal) adds nothing: what was read stays. `__main__.py:78-85` adds `EVIDENCE_QUEUE` to the default queues, and `worker.py:72`'s `QUEUE_CAPS` caps it at `EVIDENCE_CONCURRENCY`, 2, imported from the platform's evidence contract, so `worker.py` imports no more of the evidence package than a name. It also gains `insight: 4`, which does nothing on a 4-slot worker, and is what F4's design builds on.
 
-**The floor (A56).** A cap alone does not protect probes: `_claim_into_idle_slots` serves capped queues first and the uncapped lane last, with what is left (`worker.py:261-269`), and detection 2, evidence 2 and F28's `releases` 2 hold 6 of 8, leaving 2 for probes and alert sweeps, and the next queue added would take those. So `Worker` gains `uncapped_floor`: capped lanes together may hold at most `concurrency - uncapped_floor` slots, and each pass starts from the next capped lane, so none starves. `roles.py` passes `--uncapped-floor 4` to `scheduler-light`, a guess. Other roles default to 0: `scheduler-insight` has no uncapped queue. It holds if slots rise, and needs no feature to re-count. F19 is not part of this: its spec gives SLO work its own role, `scheduler-slo`, and its AC68 keeps its queues off `scheduler-light`.
+**The floor (A56).** A cap alone does not protect probes: `_claim_into_idle_slots` serves capped queues first and the uncapped lane last, with what is left (`worker.py:261-269`), and detection 2, evidence 2 and F28's `releases` 2 hold 6 of 8, leaving 2 for probes and alert sweeps, and the next queue added would take those. So `Worker` gains `uncapped_floor`: capped lanes together may hold at most `concurrency - uncapped_floor` slots, and each pass starts from the next capped lane, so none starves. `roles.py` passes `--uncapped-floor 4` to `scheduler-light`, a guess. Other roles default to 0: `scheduler-insight` has no uncapped queue. It holds if slots rise, and needs no feature to re-count. F19's SLO queues join this floor too: `slo` 2, `slo_counts` 1 and `slo_history` 1, on `scheduler-light`, with no role of their own (F19 D66, the founder's decision of 2026-11-02). Capped queues then ask for 10 seats against 4 and wait for each other; probes and alert sweeps keep 4 whatever they do. Whichever of F3's T1.7 and F19's T1.5 is built first builds the floor.
 
 **`gather(finding_id, org_id, reason)`**, in `scheduler-light`, using the existing accounts:
 
@@ -395,6 +395,7 @@ As FD3, with no field for temperature, tool choice or top-p:
 class AIProvider(Protocol):
     def complete(self, request: AIRequest) -> AIResponse: ...
     def check(self) -> AICheckResult: ...
+
     # embed(): F4 adds it. tools on AIRequest: F4 adds them.
 ```
 
@@ -402,7 +403,9 @@ Because the HTTP cannot live in the platform (row 3), a wire format is two pure 
 
 ```python
 class WireFormat(Protocol):
-    def build(self, request: AIRequest, *, model: str, base_url: str, key: str | None) -> HttpCall: ...
+    def build(
+        self, request: AIRequest, *, model: str, base_url: str, key: str | None
+    ) -> HttpCall: ...
     def parse(self, status: int, body: bytes) -> AIResponse: ...
 ```
 
@@ -535,7 +538,7 @@ Plus: the `notifications` `kind_is_known` check widened with `explained`, by the
 | Gather reads per finding | About 7, about 3 of them on ClickHouse, per read reason | From the design |
 | Reads per finding opened | 2 (opening, 5 minutes later), plus changes and close | Design |
 | Versions per finding | Fewer than reads, since moved counts make none (FR43). Guess: 1 to 4 | Unmeasured |
-| A wide outage, 100 services opening at once | About 200 gather jobs, 2 at a time, at perhaps 5 seconds each: about 8 minutes to clear, and longer while detection and `releases` hold the shared capped slots | **Arithmetic on a guessed read time. Not measured,** until AC97's test reports it. Probes and alert sweeps keep at least 4 of 8 slots however many capped queues are full (A56) |
+| A wide outage, 100 services opening at once | About 200 gather jobs, 2 at a time, at perhaps 5 seconds each: about 8 minutes to clear, and longer while detection, `releases` and F19's SLO queues hold the shared capped slots | **Arithmetic on a guessed read time. Not measured,** until AC97's test reports it. Probes and alert sweeps keep at least 4 of 8 slots however many capped queues are full (A56) |
 | Same, with the error-group read failing | With a whole-job retry it would have been about 200 × 3 × 30 s ÷ 2 slots, about 2.5 hours, past the 3,600-second expiry. **A failed read now writes at once and does not repeat, and the statement runs once per project and minute** | Arithmetic on guesses |
 | Wording, same outage | Up to 100 runs, 4 at a time, and warnings stop at 80% of the limit | Starting concurrency is a guess |
 | Row size | Guess: 5 to 30 KB per version | Unmeasured. `jsonb` compresses |

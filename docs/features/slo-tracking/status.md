@@ -2,11 +2,11 @@
 
 ## Lifecycle status
 
-**Proposed.** Specification, design and plan are written, revised after eight persona reviews, and awaiting founder review. Nothing is approved, and no code is written.
+**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code is written.
 
 ## Current task
 
-Awaiting the founder's approval of [`spec.md`](spec.md), [`design.md`](design.md) and [`plan.md`](plan.md), in that order.
+None. Waiting for F6 (pull request #24) to merge.
 
 ## Completed
 
@@ -20,7 +20,7 @@ Awaiting the founder's approval of [`spec.md`](spec.md), [`design.md`](design.md
 
 ## Next action
 
-Bring the founder the spec for approval, starting at [`spec.md`](spec.md). Its two founder decisions were answered on 2026-11-02. P2's timing is settled by foundation item 7, and F28 owns it (item 22).
+Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges: Step 1, after re-reading every line reference (plan P1). File the design's four proposed ADRs in `docs/decisions/` at the start of implementation, numbered then. T1.5 needs F3's floor (plan P3): build it there if F3's T1.7 has not merged.
 
 ## Open decisions
 
@@ -34,10 +34,11 @@ Bring the founder the spec for approval, starting at [`spec.md`](spec.md). Its t
 ## Risks
 
 - **P2 affects what is already on this branch.** By reading the code, anyone holding a site key can forge server spans under any service name, and they count in the rollups F6 judges. It was not run. This should be seen before F6's release is decided.
-- **F28's design still says "2 of 8" for `scheduler-light`** (`deployment-release-tracking/design.md:356`). F3's floor keeps probes and alert sweeps 4 of 8 (`ai-insights/design.md:271,829`), and F3 already asks F28 to correct this (`:785`). Nothing for the founder to decide. F19's reason for its own role is that capped queues share the other 4.
+- **F28's design still says "2 of 8" for `scheduler-light`** (`deployment-release-tracking/design.md:356`). F3's floor keeps probes and alert sweeps 4 of 8 (`ai-insights/design.md:271,829`), and F3 already asks F28 to correct this (`:785`). Nothing for the founder to decide. Since D66, F19's queues share those other 4 too.
 - **F20's document disagrees with F19 until its author takes the hand-off.** F20 stores the SLO by name, and F19 now does too. F20 also wants the panel's burn rate from ClickHouse, and F19 recommends Postgres (design, *API*; `dashboards/design.md:436,446-447,970`). Both sides split the budget and burn functions the same way. F20's document was left alone.
+- **SLO work shares `scheduler-light` (D66).** It waits behind detection, evidence and release reads, so burns can be judged a minute or two late under load, and a crash of that container stops probes and SLO judging together. Probes and alert sweeps never wait behind SLO work.
 - **The rule on what a burn may withhold changes a path F6 has tested closely.** It is gated on a burn being involved, existing tests must pass unedited, and they run again beside an open burn.
-- **All costs are unmeasured.** Reads, jobs, slots, the new role's 384M and Postgres writes are arithmetic and guesses until T6.2. The named endpoint read is the largest figure.
+- **All costs are unmeasured.** Reads, jobs, slots, `scheduler-light`'s 768M with SLO work added, and Postgres writes are arithmetic and guesses until T6.2. The named endpoint read is the largest figure.
 - **Every guess in the spec is in one register:** *Cannot be proved before a customer*.
 - **The suggestion has never been tried on real traffic.**
 - **`sumForEachMergeIf` is untested.** T1.3 is the first check.
@@ -57,7 +58,7 @@ New specification. The design's *Specification impact* names what would change i
 
 ## Documentation impact
 
-None yet. `feature-catalog.md` F19 still reads "targets on services/endpoints" and "into findings feed", which the spec narrows. Foundation's F19 row, its section 12 line on exact counts, and research R2 differ from the spec, and the spec says so at the top. On approval, the catalog is updated.
+The catalog's F19 entry and the features index now read approved, not built (2026-11-02). Foundation's F19 row, its section 12 line on exact counts, and research R2 differ from the spec, and the spec says so at the top. D66 is in the foundation (section 1's memory line and the names table) and in F3's design, *The floor (A56)*.
 
 ## Reviews
 
@@ -257,7 +258,7 @@ Each problem below was checked against the code or the sibling document before c
 - **These reviewers have not seen this revision.** The design is new text, and new text has new errors. A second review of the design and plan is worth its cost, above all on `_RELEASE`.
 - **`_RELEASE` is a new writer in delivery,** with one statement called from two places. Only AC52, AC57 and AC59 would catch a mistake, and none has run.
 - **The endpoint read's skip is a guess** about how the sort key behaves on 8,192-row granules. Up to about 65 million rows a minute across the install, by arithmetic. It may force the fallback.
-- **`scheduler-slo`'s 384M, and one more container on a 16 GB server,** are unmeasured.
+- **`scheduler-slo`'s 384M, and one more container on a 16 GB server,** are unmeasured. *(Superseded by D66: no new container; `scheduler-light`'s 768M with SLO work is what is unmeasured.)*
 - **The 24-hour close** could close a burn on a service with a long regular gap, and page again on its return. It is in the register.
 - **Withholding a burn for as long as its finding stays open** (D49) means a burn held back at 02:30 may be told only when the finding ends. Severity rises and repeats still go.
 - **A short partial outage still reads well.** FR27c catches only a day-long fall. It is stated on the form, and in the docs, and it remains the most embarrassing figure this feature can show.
@@ -278,6 +279,20 @@ All seven Phase 2 features and the foundation were read against each other. Chan
 ## Last updated
 
 2026-11-02
+
+## Founder decision, 2026-11-02: SLO work runs on `scheduler-light` (D66)
+
+The founder decided that F19 adds no role or container. **D66 supersedes D39** (`scheduler-slo`).
+
+- **Where:** queues `slo` (cap 2), `slo_counts` (1) and `slo_history` (1) on `scheduler-light`, under F3's floor (A56). All capped queues together hold at most 4 of its 8 slots; probes and alert sweeps keep 4.
+- **Trade-off:** capped queues now ask for 10 seats against 4. SLO work waits behind detection, evidence and release reads, and is judged late, not never (AC65, **Not up to date** on screen). Probes and alert sweeps never wait behind SLO work. A crash of the container stops both.
+- **Memory:** `scheduler-light` keeps 768M, a guess, since its slot count does not change. AC50 measures it on the deployed server. Phase 2's extra memory drops by 384 MB (foundation section 1).
+- **Changed:** spec (NFR2, AC50, AC64, AC68, AC91, D39, new D66, the register, the differences table); design (*Where it runs*, *Slots*, *Memory*, the fallback, alternatives, accepted costs, the ADR); plan (C5, services, files, P3, T1.5, T6.4, risks, rollback); foundation; F3's design; the tracker.
+- **Depends on F3's floor** (plan P3).
+
+## Spec, design and plan approved, 2026-11-02
+
+The founder approved [`spec.md`](spec.md), [`design.md`](design.md) and [`plan.md`](plan.md) on 2026-11-02, with D66 above. **The design's four proposed ADRs are to be filed in `docs/decisions/` at implementation start**, numbered then; none is filed yet.
 
 ## Founder approval, 2026-11-02
 

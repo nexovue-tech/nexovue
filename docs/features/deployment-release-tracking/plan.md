@@ -1,7 +1,7 @@
 # Plan: Deployment and release tracking (F28)
 
-> **Status:** Awaiting approval. **Awaiting founder approval: no file may be edited from this plan until the founder
-> approves it,** after the specification and design. Revised 2026-11-02 after eight persona reviews (`status.md`, *Reviews*).
+> **Status:** Approved by the founder, 2026-11-02, with the specification and design. Ready to implement once F6 merges.
+> Revised 2026-11-02 after eight persona reviews (`status.md`, *Reviews*).
 >
 > **One document: the order of the work and its tasks.** Steps say what ships and in what order. Tasks under each step
 > name the file that changes and the test that proves it, read from the code on 2026-11-02. New files are marked *new*.
@@ -270,9 +270,9 @@ no test server is rented (item 9). The whole-server fit on 16 GB waits for Oracl
 
 ## Gates
 
-- [ ] Specification approval
-- [ ] Design approval
-- [ ] **Plan approval — before the first edited file**
+- [x] Specification approval: 2026-11-02
+- [x] Design approval: 2026-11-02
+- [x] **Plan approval:** 2026-11-02
 - [ ] F6 merged
 - [ ] Step 1a cost gate
 - [ ] The one round of customer conversations held, before Step 1b (foundation item 8)

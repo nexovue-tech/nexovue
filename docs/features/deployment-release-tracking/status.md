@@ -2,12 +2,13 @@
 
 ## Lifecycle status
 
-**Proposed.** Specification, design and plan are written, revised after eight persona reviews, and await the founder. No
-code exists from them.
+**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+
 
 ## Current task
 
-Waiting on founder approval. The persona reviews have run and their findings are recorded under *Reviews*.
+None. Waiting for F6 (pull request #24) to merge.
+
 
 ## Completed
 
@@ -27,8 +28,8 @@ Waiting on founder approval. The persona reviews have run and their findings are
 
 ## Next action
 
-The founder reads and approves the specification, design and plan. No question is waiting on the founder. Nothing can be
-built until F6 has merged.
+Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Start at plan Step 1a (and the browser-door change it owns), after re-reading line references. File the design's 3 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+
 
 ## Open decisions
 
@@ -500,3 +501,7 @@ The founder approved every Phase 2 founder question as recommended, with two cha
   the whole-server fit on 16 GB, so `sizing.md`'s new figures are labelled "measured on a development machine" until then.
 - **Changed, B: no paid model calls.** F28 calls no model, so nothing changes here.
 - **Open decisions:** none for the founder. The Oracle shape to measure on comes back at deployment (foundation, *What A and B change*).
+
+## Spec, design and plan approved, 2026-11-02
+
+The founder approved [`spec.md`](spec.md), [`design.md`](design.md) and [`plan.md`](plan.md) on 2026-11-02, with the foundation. **The design's 3 proposed ADRs are to be filed in `docs/decisions/` at implementation start**, numbered then; none is filed yet.

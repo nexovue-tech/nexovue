@@ -2,11 +2,13 @@
 
 ## Lifecycle status
 
-**Proposed.** Specification, design and plan are written, reviewed by eight personas, corrected, and await the founder. Nothing is approved, and no code has been written.
+**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+
 
 ## Current task
 
-Waiting on the founder: review of [`spec.md`](spec.md), [`design.md`](design.md) and [`plan.md`](plan.md), and the two decisions below (1 and 4).
+None. Waiting for F6 (pull request #24) to merge.
+
 
 ## Completed
 
@@ -27,7 +29,8 @@ Waiting on the founder: review of [`spec.md`](spec.md), [`design.md`](design.md)
 
 ## Next action
 
-The founder answered decisions 1 and 4 on 2026-11-02. He reads `spec.md` and approves or changes it. Next after that: the design, then the plan. Implementation then starts at the plan's Step 1, `apps/web/src/app/router.tsx`, once F6 has merged.
+Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Start at plan Step 1 (`apps/web/src/app/router.tsx`), which ships as soon as F6 merges. File the design's 3 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+
 
 ## Open decisions
 
@@ -374,3 +377,7 @@ The founder approved every Phase 2 founder question as recommended, with two cha
 - **Changed, A: no rented test server.** T5.7 and T11.6 run on the Mac as build gates; no cap is published until they are rerun on Oracle after deployment.
 - **Changed, B: no paid model calls.** F20 calls no model, so nothing changes here.
 - **Open decisions:** none for the founder.
+
+## Spec, design and plan approved, 2026-11-02
+
+The founder approved [`spec.md`](spec.md), [`design.md`](design.md) and [`plan.md`](plan.md) on 2026-11-02, with the foundation. **The design's 3 proposed ADRs are to be filed in `docs/decisions/` at implementation start**, numbered then; none is filed yet.

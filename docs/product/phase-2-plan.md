@@ -40,7 +40,7 @@ ships exactly two images. Where the AI code runs is a design decision for Stage 
 
 Progress, the order of work and how lanes run in parallel: [`phase-2-tracker.md`](phase-2-tracker.md).
 
-Each stage's documents are Proposed and await the founder ([shared foundation](phase-2-foundation.md); [features index](../features/README.md)). Each stage depends on the one before it. **Detection and alerts must work with AI turned off.** An alert never
+Each stage's documents (spec, design and plan) were approved by the founder on 2026-11-02 ([shared foundation](phase-2-foundation.md); [features index](../features/README.md)). Each stage depends on the one before it. **Detection and alerts must work with AI turned off.** An alert never
 waits for AI: it goes out when detection fires, and the explanation joins it later.
 
 ### Stage 1: Detect (F6, F1, F2's evidence)
@@ -81,7 +81,7 @@ waits for AI: it goes out when detection fires, and the explanation joins it lat
 
 **F5 documents:** [spec](../features/ai-solution/spec.md), [design](../features/ai-solution/design.md), [plan](../features/ai-solution/plan.md).
 
-- A suggested fix on the finding, then a draft pull request.
+- A suggested fix on the finding, then a draft pull request. Where Nexovue cannot read the code, a general suggestion with example code, from the finding's facts only (rung 2b, founder's decision 2026-11-02).
 - *Done when:* a person always approves; the part reading telemetry cannot itself write; repository access is
   narrow and audited.
 
@@ -90,7 +90,7 @@ waits for AI: it goes out when detection fires, and the explanation joins it lat
 **F19 documents:** [spec](../features/slo-tracking/spec.md), [design](../features/slo-tracking/design.md), [plan](../features/slo-tracking/plan.md). **F20 documents:** [spec](../features/dashboards/spec.md), [design](../features/dashboards/design.md), [plan](../features/dashboards/plan.md).
 
 - SLO targets and the dashboard builder, each through its own specification.
-- **One exception to the order, Proposed 2026-11-02:** F20's Step 1 alone, moving `/` to the Findings feed, ships as soon as F6 merges. It carries no dashboard code, and it is the timing of the recorded front-door decision (FD15), not a new one ([F20 spec](../features/dashboards/spec.md), D58).
+- **One exception to the order, approved 2026-11-02:** F20's Step 1 alone, moving `/` to the Findings feed, ships as soon as F6 merges. It carries no dashboard code, and it is the timing of the recorded front-door decision (FD15), not a new one ([F20 spec](../features/dashboards/spec.md), D58).
 
 ## AI safety, across Stages 2, 4 and 5
 

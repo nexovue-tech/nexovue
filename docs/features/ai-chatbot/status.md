@@ -2,11 +2,13 @@
 
 ## Lifecycle status
 
-**Proposed.** Specification, design and plan are written, and await the founder's approval. No code exists.
+**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+
 
 ## Current task
 
-The four documents were reviewed by eight personas and corrected, then a second review's proven problems were fixed. See *Reviews*. They await the founder's approval.
+None. Waiting for F6 (pull request #24) to merge.
+
 
 ## Completed
 
@@ -24,7 +26,8 @@ The four documents were reviewed by eight personas and corrected, then a second 
 
 ## Next action
 
-The founder reads `spec.md`, starting at *Founder decisions needed* and *Decisions taken*, then approves or redirects. On approval of all three documents, start at `plan.md` T1.1, once F6 is merged.
+Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Start at plan T1.1 (Step 1 needs only F6). Step 2 onward waits for F3's provider and the buyer round's rule. File the design's 2 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+
 
 ## Open decisions
 
@@ -409,3 +412,7 @@ The founder approved every Phase 2 founder question as recommended, with two cha
 - **Changed, B: no paid model calls.** Step 4 runs on a free-tier cloud model and `gpt-oss:20b` on the Mac. "Supported" names only what passed; OpenAI, Anthropic and Bedrock stay "not yet tested".
 - **Changed, A: no rented test server.** Memory and search time are read on the Mac's Docker; the 16 GB server waits for Oracle after deployment.
 - **Open decisions:** none for the founder.
+
+## Spec, design and plan approved, 2026-11-02
+
+The founder approved [`spec.md`](spec.md), [`design.md`](design.md) and [`plan.md`](plan.md) on 2026-11-02, with the foundation. **The design's 2 proposed ADRs are to be filed in `docs/decisions/` at implementation start**, numbered then; none is filed yet.

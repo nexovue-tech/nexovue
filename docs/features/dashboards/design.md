@@ -2,8 +2,8 @@
 
 ## Status
 
-**Awaiting approval.** Proposed 2026-11-02, against [`spec.md`](spec.md), also Proposed. Nothing here is approved, and no
-code has been written. The feature's lifecycle status is in [`status.md`](status.md).
+**Approved** by the founder, 2026-11-02, against [`spec.md`](spec.md). No
+code has been written yet. The feature's lifecycle status is in [`status.md`](status.md).
 
 **How it was checked.** The code was read on branch `feature/anomaly-detection`, with uncommitted work present. One
 throwaway check was run (route order, below). No test, query, browser or load test was run. Every figure marked *guess*
@@ -970,5 +970,5 @@ Written here and not in `docs/decisions/`. Each becomes a numbered file if appro
 - **`docs/features/personal-data/spec.md`:** gains the dashboards statement from *Data and migration impact*, including purge.
 - **`docs/self-hosting/sizing.md`, `docs/operations/monitoring.md`,** `deploy/clickhouse/users.d/`, compose and `deploy/nexovue`: the new account (T5.6b).
 - **Overview's newest bucket:** a separate bug record (T4.9). **The Infrastructure screen's silent cut:** a separate bug record, as section 4 says. **Both staged-read comments:** corrected in T1.8, with removing the waits a separate change.
-- **`phase-2-plan.md`:** Stage 6 notes that F20's Step 1, the front door, ships as soon as F6 merges, ahead of the stage order (spec D58). Applied 2026-11-02, Proposed.
+- **`phase-2-plan.md`:** Stage 6 notes that F20's Step 1, the front door, ships as soon as F6 merges, ahead of the stage order (spec D58). Applied 2026-11-02; approved 2026-11-02.
 - **`research.md`:** the original text stays as a record, with corrections marked, including section 4's facts added in review; `spec.md`'s table at the top lists where it was overruled.

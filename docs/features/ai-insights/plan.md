@@ -1,6 +1,6 @@
 # Plan: Finding explanation, with optional AI wording (F3)
 
-> **Status:** Awaiting founder approval. Proposed 2026-11-02. No file named below has been edited.
+> **Status:** Approved by the founder, 2026-11-02. Ready to implement once F6 merges. No file named below has been edited yet.
 >
 > **One document: the order of the work and its tasks.** Steps say what ships and in what order. Tasks name the file that changes and the
 > test that proves it, read from the code. **The founder approves this plan before any file is edited.**
@@ -125,7 +125,7 @@ Correlation; evidence record; provider interface; validator; limits; AI settings
 - [ ] **T1.4** `evidence/reads.py` *new*: findings, incidents, checks (name and state only, never `reason`), other findings, F28's `deploys_in_window`, `releases_seen_in_window`, coverage. Calls F28's `release_before` and `releases_near` (built in F28's T3.8, D56) for the last release before the start and the 2-hour list (F28's FR32, FR52), and adds no reader of its own; marks called services from `service_edges_1m`. Self-hosted intake fact. Proved by `test_evidence_reads_live.py` *new* (AC10, AC12, AC91, AC93, tenant bind).
 - [ ] **T1.5** `evidence/rules.py`, `evidence/sentences.py` *new*, pure. Proved by `test_evidence_rules.py` *new*, table-driven (AC6 to AC11, AC13, AC15, AC16's table, AC74's rule cases, AC98), with a test that no sentence holds a banned word.
 - [ ] **T1.6** `evidence/gather.py` *new*: the task, fingerprint, versions, partial reads, alias building and `model_input`, bounds, type check, lock retry. `jobs/registry.py`: register it. Proved by `test_evidence_gather_live.py` *new* (AC1, AC3, AC4, AC94's row sizes, AC95, and a holder at the full hard limit must not lose the waiting job). `test_detection_memory_live.py`: a gather at its row bounds stays under `MAX_CHILD_PRIVATE_BYTES` (AC47's memory part, which must pass whether or not Step 3 is ever built). Also `test_model_input_built.py` *new*: a real finding's `model_input` is non-null and holds aliases only.
-- [ ] **T1.7** `detection/project_job.py:905-925,945,1113,1139,1372,1379` and `deploys/service.py` (per item of F28's batch): enqueue on the open connection. `__main__.py:78-85`, `jobs/worker.py:72,261-269`, `roles.py`: queue, cap, `uncapped_floor`, lanes taking turns. Proved by `test_detection_project_job_live.py` (AC2, AC79), `test_compose_contract.py`, and `test_jobs_live.py` (AC47's saturation case, with F28's real `releases` queue).
+- [ ] **T1.7** `detection/project_job.py:905-925,945,1113,1139,1372,1379` and `deploys/service.py` (per item of F28's batch): enqueue on the open connection. `__main__.py:78-85`, `jobs/worker.py:72,261-269`, `roles.py`: queue, cap, `uncapped_floor`, lanes taking turns (if F19's T1.5 built the floor first, this task uses it; F19's SLO queues share it, F19 D66). Proved by `test_detection_project_job_live.py` (AC2, AC79), `test_compose_contract.py`, and `test_jobs_live.py` (AC47's saturation case, with F28's real `releases` queue).
 - [ ] **T1.8** `test_detection_has_no_ai.py`: walk `evidence` too, and add `nexovue_platform.ai`, `nexovue_scheduler.insight` to the list ahead of their existing. Proved by itself (AC5).
 - [ ] **T1.9** Confirm that `apps/api/tests/test_scheduler_postgres_tenancy_structure.py` (F6's, extended by F28's T1.13) walks `evidence/`, adding named exemptions for cross-tenant sweeps and the intake read. Proved by that test.
 - [ ] **T1.10** `findings/schemas.py`, `findings/queries.py`, `findings/service.py`, `findings/router.py`, `auth/dependencies.py` (`Reader.is_person`): `GET /findings/{id}/explanation`, `POST .../read-again`, `raw_kept_until` on `GET /findings/{id}`, the held cause; `likely_cause_sentence` on the feed. `test_authorization_coverage.py`'s `POLICY_OF`. Proved by `test_findings_api_live.py` (a token in another project gets 404; AC23, AC80, AC92), `test_findings.py`, `test_ratelimit_coverage.py`.
@@ -271,9 +271,9 @@ Settled 2026-11-02 and removed from this list: model calls, now free tiers or a 
 
 ## Gates
 
-- [ ] Specification approval
-- [ ] Design approval
-- [ ] **Plan approval: before the first edited file**
+- [x] Specification approval: 2026-11-02
+- [x] Design approval: 2026-11-02
+- [x] **Plan approval:** 2026-11-02
 - [ ] Implementation
 - [ ] Tests
 - [ ] Review

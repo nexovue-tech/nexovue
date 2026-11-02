@@ -2,8 +2,8 @@
 
 ## Status
 
-**Proposed**, 2026-11-02. Stage 4 of [`phase-2-plan.md`](../../product/phase-2-plan.md). Nothing here is approved
-until the founder approves it, and no code is written from it.
+**Approved** by the founder, 2026-11-02. Stage 4 of [`phase-2-plan.md`](../../product/phase-2-plan.md). No code is
+written from it yet.
 
 Written from [`research.md`](research.md), [`phase-2-foundation.md`](../../product/phase-2-foundation.md) and a
 reading of the code on branch `feature/anomaly-detection`, with uncommitted work present. No test, query or model ran. One small FastAPI probe and one Postgres probe ran during review (see `status.md`, *Reviews*). Every token, time and memory figure is a guess or arithmetic on a guess, and says so.

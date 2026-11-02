@@ -1,14 +1,13 @@
 # Plan: AI chatbot (F4)
 
-> **Status:** Awaiting founder approval, 2026-11-02. No file is edited until the specification, the design and this plan are
-> approved.
+> **Status:** Approved by the founder, 2026-11-02, with the specification and the design. Ready to implement once F6 merges.
 >
 > **One document: the order of the work and its tasks.** Steps say what ships and in what order. Tasks under each step name the
 > file that changes and the test that proves it, read from the code. Where a file or test is new, it says *new*, and the path is a proposal.
 
 ## Preconditions
 
-- [`spec.md`](spec.md) and [`design.md`](design.md) approved, including the proposed ADRs and the differences from the foundation.
+- [`spec.md`](spec.md) and [`design.md`](design.md) approved, including the proposed ADRs and the differences from the foundation. Done, 2026-11-02.
 - **F6 merged.** Findings and migrations 0041 to 0050 exist only on this unmerged branch (foundation, section 9). Step 1 needs this and nothing else, so it is built straight after F6 merges, ahead of the foundation's feature order, so the shared customer round can see it (D88).
 - **For Step 2 onward, F3 built:** `scheduler-insight`, `nexovue_insight`, `AI_SECRET_KEY`, `nexovue_platform.ai` (provider contract, fence, validator), `ai_connections`, `ai_project_opt_outs`, `ai_usage_monthly`, `ai_runs`, `/settings/ai`, `shared/url-window.ts`, `TASK_SETS`, `INSIGHT_GRANTS`, the `ai` network, `tools/ai-eval`. F3's design exists and these documents were reconciled with it in review. F3 gives `nexovue_insight` no grant on `jobs`, and proves no row-level security, so T2.0a proves F4's own.
 - **Before Step 2 starts: the founder's five to eight conversations** with on-call engineers and CTOs, the one shared round held before F28's Step 1b (foundation item 8), with Step 1 to show them, and the founder's continue rule, approved 2026-11-02 before the round (spec, *Founder decisions needed*, 1; foundation item 21). They need only the founder's time, and do not wait for F3. Ask: where would you ask this at 3 a.m.? Is Claude Code with MCP enough? Would you give a provider log text? Is a read-only answer without a dashboard useful?
@@ -255,9 +254,9 @@ None open. The three earlier questions were answered on 2026-11-02 (spec, *Own q
 
 ## Gates
 
-- [ ] Specification approval
-- [ ] Design approval
-- [ ] **Plan approval — before the first edited file**
+- [x] Specification approval: 2026-11-02
+- [x] Design approval: 2026-11-02
+- [x] **Plan approval:** 2026-11-02
 - [ ] Implementation
 - [ ] Tests
 - [ ] Review

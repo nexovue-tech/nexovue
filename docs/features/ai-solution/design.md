@@ -2,8 +2,7 @@
 
 ## Status
 
-**Draft: Proposed**, 2026-11-02. Against [`spec.md`](spec.md). Nothing here is approved until the founder approves it, and no code is
-written in this run. **It must not be approved before two things happen:** the GitHub trial below, and the one shared buyer round (foundation decision 8, approved 2026-11-02; F5's questions and rule are the spec's D57).
+**Approved** by the founder, 2026-11-02. Against [`spec.md`](spec.md). No code is written from it yet. **This document had asked not to be approved before two things happen:** the GitHub trial below, and the one shared buyer round (foundation decision 8, approved 2026-11-02; F5's questions and rule are the spec's D57). The founder approved it first. Both still come before Step 1 (plan, *Preconditions* 1 and 2), and a result that changes this design comes back to the founder (spec D64, the founder's decision of 2026-11-02). **Also added on 2026-11-02, by the founder's decision:** rung 2b, a general fix suggestion without code access (*Rung 2b*, below; spec FR31 to FR38, D65 to D72).
 
 Code was read on branch `feature/anomaly-detection`, with uncommitted work present. F3, F22, F4 and F28's documents were read for this revision; none has code. Nothing was run. Every figure marked "guess" is one. If those designs rename something, their names win, and this document follows. F3 is cited by section name, not line, because it is still changing. Eight persona reviews and what they changed are in [`status.md`](status.md), *Reviews*.
 
@@ -25,6 +24,8 @@ Finding page
   ├─ Last deploy before this            (first row of F3's section, from F28; extended; always shown)
   ├─ Brief for your own coding tool     (one line; opens to read; copy; add the files named by the error)
   └─ Suggested fix
+       ├─ No code access (rung 2b): [Suggest a general fix]  language ▾
+       │      └─ General fix suggestion: label ▸ summary ▸ steps ▸ example code ▸ evidence ▸ useful?
        ├─ Not available: one sentence why, and who can change it
        └─ [Ask for a suggested fix]   ☑ Email me when this needs me
               │
@@ -121,7 +122,7 @@ The single table the tests follow (AC37e). *Requester* means anyone with `REQUES
 | Ready | Suggested fix | Ask, with tries left and the email box | No section, unless older fixes exist |
 | Ready without a stack | Name the files | "This finding has no error stack to start from. Name up to 5 files you think are involved, as paths inside `<folder>`." Inputs and Ask | No section, unless older fixes exist |
 | `gathering` | Reading files | "Reading files. You will need to confirm the file list here. It waits 15 minutes." Elapsed. Polls every 5 seconds. Past the job's hard limit plus 5 minutes (guess): "This is taking longer than it should. It may not finish. What changed and the brief above still work." | "A suggested fix is being prepared" |
-| `gathered` | Files to send | File list, provider, tokens, countdown, hint, Send, Cancel. "These files came from the error's stack, which an outsider can forge. If one looks unrelated to this error, remove it." | "A suggested fix is being prepared" |
+| `gathered` | Files to send | File list, provider, tokens, countdown, hint, Send, Cancel. Imported files read "imported by `<file>`". **After the AI asks (round 2 or 3):** "The AI asks for N more files. Send them?", each with "asked because of `<path>`, line `<n>`" and the model's reason under "The model's words, not checked by Nexovue"; refused names with their reasons; a count of names matching no file; "Round 2 of at most 3." "These files came from the error's stack, which an outsider can forge. If one looks unrelated to this error, remove it." | "A suggested fix is being prepared" |
 | `proposing` | Writing a suggestion | "Writing a suggestion. You may leave this page. The result will be here, and on the finding's timeline." Elapsed, then the same slow step | "A suggested fix is being prepared" |
 | Ready, owner requires GitHub access, no link | Connect your GitHub account | The `not_linked` sentence and the link step. Ask appears once linked | No section, unless older fixes exist |
 | `proposed` | Suggested fix | The change, as above | State, file count, line count, "Code is shown to people who can ask for a suggested fix. Ask an owner, admin or member." |
@@ -132,6 +133,10 @@ The single table the tests follow (AC37e). *Requester* means anyone with `REQUES
 | Check: refused | Not available | The code's sentence. The row has not moved | n/a |
 | `stale` | Out of date | The old diff, "Out of date", what moved, no actions but Ask again | "Out of date" |
 | `refused` | No suggestion | One sentence with its next step. A calm tone. Withheld text not shown | The sentence |
+| Rung 2b offered (FR31) | Suggested fix not available | The code-access reason's sentence, then "Without access to the code: **Suggest a general fix**", the language list and the send sentence (FR33), and tries left | The reason's sentence |
+| Rung 2b `proposing` | Writing a general suggestion | "Writing a general suggestion. You may leave this page." Elapsed | "A general suggestion is being prepared" |
+| Rung 2b `proposed` | General fix suggestion | The label first, then the lead sentence, summary, steps, example, evidence, "Was this suggestion useful?", tokens, age. No other action | The same, without the verdict |
+| Rung 2b `refused` or `failed` | No general suggestion | The code's sentence; Ask again when tries remain | The viewer's sentence |
 | `failed`, cancelled or lapsed | No suggestion | Neutral: no fix id, no failure tone. Ask again | No line |
 | `failed`, otherwise | Could not finish | What broke, retry if it could help, the fix id | "Could not be prepared" |
 | `approved` | Opening the draft | "Opening the draft", elapsed. After 5 minutes, "This did not finish. A branch may already exist on GitHub", naming it. **Try again** appears when the sweep returns it | "A draft is being opened" |
@@ -168,7 +173,7 @@ Principle 10 settles words before React. These live in one constant in code, and
 | `no_stack` | This error arrived with no stack. You can name the files yourself. | The error has no stack | Requester | Name files |
 | `repository_too_large` | This folder is too large for Nexovue to list. An admin can set a narrower folder. | The folder is too large | Admin | After |
 | `edit_did_not_apply` | The model's change did not match the file, even after one more try. | Could not be applied | Requester | Sometimes |
-| `not_in_these_files`, `evidence_too_thin`, `needs_a_decision`, `not_a_code_problem` | The model said: the answer is not in these files / the evidence is not enough / this needs a person's decision / this does not look like a code problem. | The model did not suggest a change | Requester | Name other files |
+| `not_in_these_files`, `evidence_too_thin`, `needs_a_decision`, `not_a_code_problem` | The model said: the answer is not in these files, and it named no other file it needed, or its extra rounds were used up / the evidence is not enough / this needs a person's decision / this does not look like a code problem. | The model did not suggest a change | Requester | Name other files |
 | `withheld_K1` | The suggestion was withheld because it touched a file outside the list you agreed to. | Withheld by a rule | Requester | Ask again |
 | `withheld_K2` | The suggestion was withheld because it tried to change a build, CI, dependency or agent instruction file. This can mean a file in this repository holds planted text. Tell an admin before asking again, and use the brief carefully. | Withheld by a rule | Admin | After |
 | `withheld_K3` | The suggestion was withheld because its change did not match the file exactly once. Asking again may help. | Withheld by a rule | Requester | Ask again |
@@ -206,6 +211,14 @@ Principle 10 settles words before React. These live in one constant in code, and
 | `not_linked` | Connect your GitHub account so GitHub can tell us what access you have to this repository. | Could not be prepared | Person | Yes |
 | `no_github_access` | GitHub says you do not have the access to `<repo>` that this needs. | Could not be prepared | Repository admin | After |
 | `access_unknown` | GitHub could not say who has access, so this was refused. | Could not be prepared | Requester | Yes |
+| `general_withheld_G3` | The general suggestion was withheld because it held hidden or look-alike characters. Asking again may help. | Withheld by a rule | Requester | Ask again |
+| `general_withheld_G4` | The general suggestion was withheld because it held a web address or host name. Asking again may help. | Withheld by a rule | Requester | Ask again |
+| `general_withheld_G5` | The general suggestion was withheld because it held a shell command or a call that starts a program. Asking again may help. | Withheld by a rule | Requester | Ask again |
+| `general_withheld_G6` | The general suggestion was withheld because it told you to install or download something, or used a package outside the language's standard library. Asking again may help. | Withheld by a rule | Requester | Ask again |
+| `general_withheld_G7` | The general suggestion was withheld because it held something shaped like a secret or a long encoded string. Asking again may help. | Withheld by a rule | Requester | Ask again |
+| `general_withheld_G8` | The general suggestion was withheld because it claimed more than Nexovue checked, or wrote as if it had read your code. Asking again may help. | Withheld by a rule | Requester | Ask again |
+| `general_withheld_G9` | The general suggestion was withheld because it named something Nexovue could not match to this finding. Asking again may help. | Withheld by a rule | Requester | Ask again |
+| `general_has_no_code` | A general suggestion is an example, not a change to your code, so it cannot become a patch or a pull request. | n/a | Nobody | No |
 | `open` (a pull request state) | A draft pull request is open: `<link>`. | Same | Reviewer | n/a |
 | `merged` (a pull request state) | This pull request was merged: `<link>`. | Same | Nobody | n/a |
 | `closed` (a pull request state) | This pull request was closed without merging: `<link>`. | Same | Requester | n/a |
@@ -285,12 +298,65 @@ The findings feed is unchanged. A suggested fix is not a finding's headline.
 3. **Read.** `scheduler-connections` starts with a conditional check that the row is `gathering`, and stops with no call if not. It checks consent still covers the row's folder and, with the owner's requirement, the person's GitHub read access, failing closed before any blob is read. It mints a `contents: read` token, reads the default branch head, and proves any `commit_sha` is an ancestor of it (`GET /repos/{r}/compare/{sha}...{default}`, status `ahead` or `identical`; a file from a fork's commit would otherwise look like the customer's). It lists both trees, filters candidates, fetches blobs, drops secrets, compares blob ids to label moved files, then in one transaction writes the pack (upsert on `fix_id`) with `files` and `frames`, writes `repository.read` naming the requester and its purpose (`project_job.py:241-246` is the precedent), stores `checks_version`, the extra-list hash and `files_digest`, sets `gathered`, and clears `path_candidates`. A second run finds the state moved and stops, so the job can safely repeat.
 4. **Files, and Send.** `POST .../files` carries removals or further typed paths. It sets the row back to `gathering` and runs step 3 again, so the rules on who writes `files_read` stay true. `POST .../send`, by a person with `REQUEST_FIX`, carries `files_digest`, and the top-file confirmation when needed. In one conditional update (`state='gathered' AND files_digest=:digest`), the API checks consent covers the current code location and the limit, sets `proposing`, stores the hint in the pack row, extends the pack's expiry, writes `fix.sent` (exact paths, blob ids and provider host), and enqueues the proposal job. Zero rows answers 409 with the new list (AC3b).
 5. **Propose.** `scheduler-insight` starts with a conditional check on `proposing`. In one read it loads the fix, the project's opt-out, the connection and any consent for `connection_repository_id` whose scope covers the row's `folder`, compares them (FR8), and calls **that** address. This room does not compare code locations, which it cannot read; the API did that at Send. It reserves one call's tokens (`ai_usage_monthly`, under the shared ceiling), builds the request from F3's `model_input`, the pack's files, frames and hint, and calls the provider (`purpose="fix"`). It parses and validates, runs K1 to K10 on the pack's whole files, and adds the display facts (D53) to each edit from those files. In one transaction: **first delete the pack, asserting one row was deleted,** because the pack's row policy needs `state='proposing'` and a delete after the move would silently remove nothing; then store `edits`, or a reason and `withheld_refs`, and move the state. **It stores nothing else that a person will read.**
+   **When the answer is `needs_files`** (rounds 1 and 2): the job does not delete the pack. In one transaction it stores `requested_paths`, `tokens_used` and the run, and calls `fix_request_more_files`, which moves the row to `gathering`, raises `round`, extends the pack's expiry and enqueues the pack job (D75). From then the AI room can read neither the row's pack nor its names. Each Send of a later round runs this step again, with every file in the pack.
 6. **Read the result.** `GET /findings/{id}/fixes`. The API derives hunks, flags and not-checked from `edits`, including its display facts, and `files_read`, checks the display facts' shape, and re-runs the rules that need no file (K1, K2, K5, K7, K8, K9, K10) and the prose checks on `why`, including evidence ids against the frozen evidence. It restores aliases in `why` from `explanation_version`'s map; with no explanation, an alias-shaped token fails. It calls no GitHub and no ClickHouse. **At a different `checks_version`, the row reads "Out of date", with no alert. At the same version, a failing row shows no code.** A GET raises no alert and changes no state. A person's first read of code inserts one `finding_fix_code_views` row, and on insert audits `fix.code_viewed`.
 7. **Check run.** `POST .../check`, on opening a patch or confirm, or on **Check my access**. See below.
 8. **Click.** `POST .../draft-pull-request`, carrying the digest and any requester's note.
 9. **Run CI.** `POST .../run-ci`, on its own click.
 
+### Rung 2b: a general fix suggestion without code access
+
+**In plain words.** Where Nexovue cannot read a service's code, a member may click **Suggest a general fix**. The AI gets the same facts F3's explanation already sends, and the language the person picked. It returns a short pattern and example code. Nexovue's code checks it, and shows it labelled "Example pattern, not your code. Nexovue has not seen your code. Check before using." No repository is read, no GitHub call is made, and nothing can turn it into a patch or a pull request. Founder decision, 2026-11-02; spec FR31 to FR38, D65 to D72.
+
+**Where it runs.** The API decides eligibility and enqueues. `scheduler-insight` makes the call and the first check, on queue `insight-fix`. `scheduler-connections` and GitHub take no part, so it needs neither F22 nor the Fix App.
+
+**The flow.**
+
+1. **Ask.** `POST /findings/{id}/fixes/general`, gated by `MayRequestFix`, carrying `language`. The API runs FR31: AI on, FR9 stopping at a code-access reason (or no code-location table yet, before Step 3), a `model_input`, and either `likely_cause` or an `error_group` fact with an `error_N` alias; then the limit and tries. In one transaction it inserts a `finding_fixes` row (kind `general`, `proposing`, `explanation_version`, `general_language`), audits `fix.general_requested` (person, provider host), and enqueues `insight.suggest_general_fix` with ids only. Zero eligibility answers 409 with the code.
+2. **Propose.** The job checks `proposing`, loads the connection and opt-out and compares consent as F3's `word` does, reserves one call (`max_output_tokens` 1,500, a guess), and sends: F5's fixed rung 2b instructions and schema (`nexovue_platform/fixes/general_prompt.py`, its own `PROMPT_VERSION`), F3's `model_input` for that version, and the language as a `Literal`. **No `Untrusted` part exists in this request.** It parses, runs G1 to G9, and in one transaction stores `general_suggestion`, `evidence_ids`, `tokens_used` and the end state. A G1 or G2 failure retries once as a new attempt with `retry_code` (D51). A G3 to G9 hit stores only the reason.
+3. **Read.** `GET /findings/{id}/fixes` returns general rows in every role's shape except a token's. It re-runs G1 to G9 on the stored answer; a failing row shows nothing and raises no alert. It restores aliases in the summary and steps as segments, through F3's function. Code is returned as one text value and rendered as text.
+4. **Record.** `fixes.sweep_general_fixes` moves a stuck `proposing` row to `failed`, `timed_out`, after job expiry plus hard limit, and writes `fix_proposed` (kind `general`, ids and counts) or `fix.withheld` (rule only) once, by `result_recorded_at`. It runs on `light`, since it touches no source, no GitHub and no key, and it stays separate from `sweep_fixes` so rung 2b never needs `scheduler-connections`.
+
+**The answer's schema.**
+
+```json
+{
+  "outcome": "suggestion",
+  "abstain_reason": null,
+  "summary": "...",
+  "steps": ["...", "..."],
+  "example": {"language": "python", "code": "..."},
+  "evidence_ids": ["e1"]
+}
+```
+
+**The rules, exactly** (`nexovue_platform/fixes/general_rules.py`, pure, reusing `checks.py`'s K7, K8 and K9 helpers and `prose.py`'s address patterns, so nothing is copied):
+
+| # | Pattern |
+|---|---|
+| G1 | Keys exactly as above; `outcome` in `suggestion`, `abstain`; `abstain_reason` in the fixed list; 1 to 5 steps; every evidence id in `model_input`; `example.language` equal to the row's `general_language` |
+| G2 | Summary 300 characters; each step 200; code 40 lines, 120 characters a line, 2 KiB; whole answer 8 KiB (guesses) |
+| G3 | C0 controls (code may hold tab and line feed), DEL, C1, bidirectional, zero-width and tag characters, lone surrogates; K7's mixed-script word test |
+| G4 | U4's URL, email and Markdown-link patterns and K6's IP and host-name patterns, over prose and code, with no allowance |
+| G5 | Prose and code: a line starting `$ ` followed by a command word; the words `curl`, `wget`, `sudo`, `chmod`, `chown`, `bash`, `sh -c`, `powershell`, `iex`, `Invoke-WebRequest`, `rm -`, a pipe into `sh` or `bash`. Code: FR18's process-start and dynamic-code call lists for the picked language |
+| G6 | `install`, `download`, `upgrade` as words; package-manager commands (`pip`, `npm`, `yarn`, `pnpm`, `go get`, `go install`, `cargo add`, `gem`, `bundle`, `composer`, `dotnet add`, `mvn`, `gradle`, `apt`, `brew`); K2's dependency file names; an import, `require`, `using`, `use` or `include` naming a module not on the language's standard-library list (`general_lists.py`, a fixed constant per language, a guess the bed measures) |
+| G7 | K9's secret patterns and K8's long opaque string test, over prose and code |
+| G8 | BR11's banned words; "your code", "your file", "your repository", "your function", "in your"; a path with a source extension; a `name.ext:number` shape |
+| G9 | F3's alias pattern: in prose, only aliases present in this version's map; in code, none |
+
+**Rung 3's flags become refusals here.** In rung 3 a person reads a diff against a real file, so a new import or process call is shown and judged. Here there is no file and the text is made to be copied, so the same patterns refuse. Network calls stay allowed, because G4 means no address can appear.
+
+**Copy is deliberately missing.** The text is selectable; a copy control would make pasting into an agent easier than reading the label (D70). Adding one later is a small change, if the bed and the founder's verdicts show the label is read.
+
 ### Picking files
+
+**In plain words** (updated 2026-11-02, founder's decisions; spec D73 to D77). Nexovue picks files in three ways, and the person sees and can trim the list before anything is sent:
+
+1. **From the error's stack:** the files the crash passed through, inside the service's folder.
+2. **One hop of imports:** for the top two of those files, the files they import from the same folder (a helper, a model, a settings module). Never a library, never an import of an import.
+3. **When the AI asks:** after reading, the AI may name up to 3 more files, with a reason. Nexovue checks each name against the repository and its lists, and shows the person "The AI asks for N more files". They go only if the person clicks Send. At most two such rounds.
+
+Under the caps (12 files, 64 KiB, D10), stack files come first, then imports, then test files. Asked-for files must fit beside what is already there; the person can remove files to make room.
 
 In a new API module, `findings/fix_paths.py`, with no knowledge of language:
 
@@ -306,7 +372,14 @@ Then, in `scheduler-connections`, `nexovue_scheduler/connections/source_pack.py`
 - **Build folders:** a frame under `dist`, `build`, `out` or `.next` also tries the source extensions (`.js` to `.ts`, `.tsx`, `.jsx`), so a compiled service can match, under the same filter.
 - It keeps only allowed source extensions (*Lists*). It drops never-sent paths, anything but mode `100644` or `100755`, so no symlink or submodule; and non-UTF-8 files, files holding a NUL byte, and control-character paths.
 - It fetches at most 12 blobs in frame order, 64 KiB sent in all (guesses). A file over 32 KiB and up to 256 KiB is sent as a window around the stack's lines, and its whole text is kept in the pack for K3. The file list states the lines sent. A larger file, or a large one with no line, is left out and listed. Each is scanned for secrets, whole, before anything is stored.
-- After stack files, the conventional test file for each (`test_x.py`, `x.test.ts`, `x_test.go`, `XTest.java`), when it exists and fits, is added, listed as "test for this file". The bed measures whether this helps.
+- **Imports, one hop (FR12a).** After fetching the stack's blobs, the job takes the top two files from this service's frames (or the first two typed paths), and reads their import lines with `nexovue_platform/fixes/imports.py`: pure, plain line parsing, no parser library (D76).
+  - **Python:** `import a.b`, `from a.b import c`, relative `from . import x` and `from ..p import y`, and a parenthesised list across lines. `a/b.py` or `a/b/__init__.py`, relative to the importing file or to the folder root.
+  - **JavaScript and TypeScript:** `import ... from '<p>'`, `import '<p>'`, `export ... from '<p>'`, `require('<p>')`, only for paths starting `./` or `../`. Tried as written, then with `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, then `<p>/index.*`. Bare names are libraries and are skipped; path aliases from `tsconfig.json` are not read in the first version.
+  - **Go:** single and grouped `import` lines. Only paths under the module path in the folder's `go.mod` (read to resolve, never sent), mapped to that package directory; its `.go` files, not `_test.go`, by name, at most 3 per import (guess).
+  - **Java and Kotlin:** `import a.b.C` (and Kotlin's without the semicolon) mapped to `a/b/C.java` or `.kt` by the same suffix match frames use. Wildcards and `static` imports are skipped.
+  - Every resolved path must be inside the subtree already listed, and passes the same filters, scan and caps as stack files. A never-sent match is listed as left out with its reason. Each added file is listed as "imported by `<file>`". Imported files' own imports are never read.
+- **Asked-for files (FR15b).** When the model answers `needs_files`, the AI job stores the names in `requested_paths` and calls `fix_request_more_files` (D75). The pack job then checks each name: a relative path, at most 200 characters, no `..` segment, no control character, present in the folder's tree, then the same filters, scan and caps against the pack as it stands. It fetches only names that pass, adds them to the pack with the role `asked` and "asked because of `<path>`, line `<n>`", lists existing-but-refused names with the reason, counts names matching no file, clears `requested_paths`, and moves the row to `gathered`. The person's Send starts the next round.
+- After stack and imported files, the conventional test file for each stack file (`test_x.py`, `x.test.ts`, `x_test.go`, `XTest.java`), when it exists and fits, is added, listed as "test for this file". The bed measures whether this helps.
 - **Left out:** only paths existing in the tree are stored and listed. Stack strings matching no file are stored as a count, so a forged string cannot sit in `files_read` for 30 days.
 **The brief's paths (FR5c).** `POST /findings/{id}/brief/files` adds `match_brief_paths` with `{"request_id", "finding_id", "org_id"}`. It reads only the tree, under the same path filters, and stores `[{path, line}]` through `jobs/results.py`, with a new `job_results` kind beside F3's `ai_check` (`JOB_RESULT_KINDS`, `models.py:2034`), for an hour (guess). The first result stands, which suits a read-only answer. The console polls it, and `GET /fixes` itself still calls no GitHub.
 - **No file survives:** `refused`, `no_usable_file`, with no provider call and no tokens spent.
@@ -352,6 +425,20 @@ Through F3's `AIRequest` (foundation, section 2), F5 adding the source-fenced in
 ```
 
 `abstain_reason` is from a fixed list: `not_in_these_files`, `evidence_too_thin`, `needs_a_decision`, `not_a_code_problem`. The last matters: a flag or configuration may be the true cause.
+
+**A third outcome, `needs_files`** (spec FR15b, D74), in rounds 1 and 2 only:
+
+```json
+{
+  "outcome": "needs_files",
+  "requests": [
+    {"path": "src/billing/tax.py", "because": {"file_ref": "file_1", "line": 42},
+     "reason": "..."}
+  ]
+}
+```
+
+At most 3 requests. `file_ref` must be in the pack and `line` within the lines sent; `reason` is plain text, at most 200 characters, under FR16's prose checks. The instructions say the model should ask only for files the shown code calls or reads, and should prefer edits when it can. In the last round the schema has no `needs_files`, and the instructions say so; such an answer is read as `not_in_these_files`. The path is data for Nexovue's checks and is never sent back to the model as written: an accepted file reaches the model as a new `file_N`.
 
 **Why edits and not a diff:** Nexovue can check the old text occurs exactly once, and builds the diff itself (`difflib`), so a model cannot misdescribe what its change does. More refusals when it misquotes; the bed measures how many. A misquote, or an edit on a never-changed file, gets the one permitted retry, as a new job attempt that reads a fixed `retry_code` from the row, with no echo of model text. **Several edits to one file apply in order against the original. Overlaps are refused (K3).** Before K1 to K10, the schema check needs at least one edit, `new_text` different from `old_text`, and no C0 control character other than tab, line feed and carriage return in `new_text`, since `jsonb` rejects `\u0000` (PostgreSQL's JSON Types page, read 2026-11-02), and by the same page's rule on surrogates, presumably a lone one. An edit that failed here would otherwise abort the transaction and leave the row in `proposing`. `difflib` gives no git headers and no `\ No newline at end of file` marker (from memory), so `fixes/diff.py` adds both and the mode, and AC41 proves the patch with a real `git apply --check`.
 
@@ -476,9 +563,9 @@ All in `nexovue_scheduler/connections/fix_github.py`, through `probes/http_check
 - **`granted_permissions`** on the connection, refreshed hourly with the repository list, and on the install event. This is what reason 9 and the draft button read. No GitHub call happens on page view.
 - `draft_refused_at`, on `fix_repository_settings`, is learned from GitHub's refusal, unless the trial finds that a plan can be read beforehand. It is ignored after 24 hours (guess), and the hourly poll refreshes it if a plan can be read, so a customer who upgrades to GitHub Team is not left blocked, and is not made to withdraw consent. **Before raising, the warning names the plan requirement,** because the panel helps only after a first refusal otherwise.
 
-### The GitHub trial (before this design is approved)
+### The GitHub trial (before Step 1)
 
-About two hours (a guess), on a scratch repository and a second account on GitHub Free, with the founder's approval. **Not run.** Each result changes something:
+About two hours (a guess), on a scratch repository and a second account on GitHub Free, with the founder's approval. **Not run. It blocks Step 1** (founder's decision, 2026-11-02; spec D64), and **a result that changes this design goes back to the founder** before work goes on. Each result changes something:
 
 | Question | If yes | If no |
 |---|---|---|
@@ -516,6 +603,7 @@ About two hours (a guess), on a scratch repository and a second account on GitHu
 |---|---|---|
 | `GET /findings/{id}/fixes` | `CurrentIdentity`, so tokens are refused | Rung 1 additions, brief, eligibility, latest fix, older fixes. Requester's or viewer's shape by `may(role, REQUEST_FIX)` **and `identity.impersonation`** |
 | `POST /findings/{id}/fixes` | `MayRequestFix` | Foundation's name |
+| `POST /findings/{id}/fixes/general` | `MayRequestFix` | Rung 2b. Carries `language`. Adds a job on `insight-fix`. No GitHub, no source |
 | `POST /findings/{id}/fixes/{fix_id}/files` | `MayRequestFix` | Removals and typed paths. Back to `gathering` |
 | `POST /findings/{id}/fixes/{fix_id}/send` | `MayRequestFix` | Carries `files_digest`, the top-file confirmation and the hint; `/cancel` beside it |
 | `POST /findings/{id}/fixes/{fix_id}/check` | `MayRequestFix` | Adds the check run. Under the owner's requirement, `for: read` |
@@ -545,6 +633,8 @@ Each uses `JobRequest` (`jobs.py:47-64`), ids only, and the job's own ids differ
 
 | Task | Kwargs | Queue | Soft, hard | Attempts | Expires |
 |---|---|---|---|---|---|
+| `insight.suggest_general_fix` | `fix_id`, `org_id` | `insight-fix` | As `propose_fix` | 2, the retry a new attempt (D51) | 15 min |
+| `fixes.sweep_general_fixes` | none | `light`, from beat, every minute (guess) | 20 s, 30 s | 1 | 2 min |
 | `connections.build_source_pack` | `fix_id`, `org_id` | `connections-interactive` | 60 s, 90 s (guess) | 3, on GitHub 5xx or rate limit, through `Retry` (`registry.py`) | 15 min |
 | `insight.propose_fix` | `fix_id`, `org_id` | `insight-fix` | Per connection, for one call: soft = `call_seconds` + 20, hard = `call_seconds` + 40 (F3's form; `call_seconds` is 30 to 300, default 100) | 2. **The one retry is a new attempt, as F3 does (D51),** so no job makes a third call, and a dead worker's rerun counts | 15 min |
 | `connections.check_fix_against_current_code` | `check_id`, `org_id` | `connections-interactive` | 60 s, 90 s (guess) | 3 | 15 min |
@@ -610,6 +700,8 @@ It does this, each in its own transaction:
 | F3 | `TASK_SETS["insight"]` covers `propose_fix`. The role also consumes `insight-fix`, with its cap. **F3 has no row policy on `jobs`** (F3 A57), so `insight_claim_jobs`, `insight_retry_job` and `insight_finish_job` gain `insight-fix`, as F4 adds `assistant` | T4.2 changes those functions, and F3's parity test follows |
 | F3 | A function to restore aliases in a string as segments, callable from the API (F3's read path, `nexovue_platform/evidence/aliases.py`) | T4.7 |
 | F3 | `ai` network: the optional outbound overlay sits on it | T4.11 |
+| F3 | **Rung 2b (2026-11-02):** F3's consent screen and `/ai/preview` name the general suggestion: "If a member asks for a general fix suggestion, the same facts, and a language they pick, go to this provider." The preview shows the rung 2b request shape | T2b.4 shows the request in F5's own test until F3 carries it; **needed before Step 2b ships** |
+| F3 | `insight-fix` in `insight_claim_jobs`, `insight_retry_job`, `insight_finish_job`, and the grants above, **from Step 2b,** not Step 4 | T2b.5 |
 | F22 | D54's order, now in F22's wireframe: the deploy line and brief lead the right column (`case-management/design.md:91`). **Still to add in F22:** a *Suggested fix* jump link beside its *Evidence* jump link (`:121` has only *Evidence*, checked 2026-11-02) | T1.4 builds it; F22's design must name it |
 | F22 | The hourly repository refresh takes a connection, not a kind; `SEALED_COLUMNS` and the "disconnected means sealed columns null" check grow with `sealed_client_secret` | T3.3 |
 | F22 | Disconnect withdraws consent, clears code and marks pull requests `untracked`, through a hook, in the same transaction | T5.3 |
@@ -636,7 +728,7 @@ It does this, each in its own transaction:
 
 ## Data and migration impact
 
-**Two Postgres migrations,** numbered next after the features before them (today's last is `0050`). Nexovue is pre-deployment, so each is a plain add, and adding the second later costs nothing. **The first, at Step 3,** holds rungs 3 and 4: `finding_fixes` without its pull request columns, `finding_fix_source_packs`, `finding_fix_checks`, `finding_fix_code_views`, `service_code_locations`, `fix_source_consents`, and `github_fix` in `connections.kind`, with the safe pattern in 0050. It also holds `github_user_links` and `github_link_attempts`, because the owner's requirement (D20) needs them from Step 3; `github_client_id`, `sealed_client_secret`, `granted_permissions` and `granted_at` on `connections`; and the `brief_paths` kind in `JOB_RESULT_KINDS` and the `job_results` check. **The second, at Step 7, which stops if the buyers said no to write access,** holds `fix_repository_settings`, the columns written only by the write path (`approved_by`, `approved_at`, `approved_digest`, `requester_note`, `ci_requested_by`, `ci_requested_at`, `pull_request_*`, `ci_commit_sha`, `last_write_failure`), the `approved` and `opened` states by the same safe pattern, the one-open index, and `fix_pull_request_opened`. `fix_proposed` goes in F22's frozen kinds and `FINDING_EVENT_KINDS` at Step 4. No ClickHouse change. **Composite foreign keys hold the tenant,** so a wrong join cannot store another organization's repository, as F22's do.
+**Three Postgres migrations,** numbered next after the features before them (today's last is `0050`). Nexovue is pre-deployment, so each is a plain add, and adding a later one costs nothing. **The first, at Step 2b,** creates `finding_fixes` with only what rung 2b needs: ids, `kind`, `explanation_version`, `state`, `state_changed_at`, `reason`, `retry_code`, `general_language`, `general_suggestion`, `evidence_ids`, `tokens_used`, `result_recorded_at`, requester, times and verdict, the one-in-flight index, and its row-level security. **The second, at Step 3,** holds rungs 3 and 4: on `finding_fixes`, the source columns without the pull request columns, and the `kind` CHECK; `finding_fix_source_packs`, `finding_fix_checks`, `finding_fix_code_views`, `service_code_locations`, `fix_source_consents`, and `github_fix` in `connections.kind`, with the safe pattern in 0050. It also holds `github_user_links` and `github_link_attempts`, because the owner's requirement (D20) needs them from Step 3; `github_client_id`, `sealed_client_secret`, `granted_permissions` and `granted_at` on `connections`; and the `brief_paths` kind in `JOB_RESULT_KINDS` and the `job_results` check. **The third, at Step 7, which stops if the buyers said no to write access,** holds `fix_repository_settings`, the columns written only by the write path (`approved_by`, `approved_at`, `approved_digest`, `requester_note`, `ci_requested_by`, `ci_requested_at`, `pull_request_*`, `ci_commit_sha`, `last_write_failure`), the `approved` and `opened` states by the same safe pattern, the one-open index, and `fix_pull_request_opened`. `fix_proposed` goes in F22's frozen kinds and `FINDING_EVENT_KINDS` at Step 2b. No ClickHouse change. **Composite foreign keys hold the tenant,** so a wrong join cannot store another organization's repository, as F22's do.
 
 **The migration holds tables and row-level security. Grants do not go in it:** the role is created by `setup` after migrations, and a restore with `--no-privileges` would drop them (F3 design, *The Postgres account*; `restore-postgres.sh:43`).
 
@@ -649,6 +741,8 @@ It does this, each in its own transaction:
 | `finding_id` | Composite FK `(org_id, finding_id)` to `findings`, cascade, not null | Needs F22's `UNIQUE (org_id, id)` |
 | `connection_repository_id` | Composite FK `(org_id, connection_repository_id)` to F22's table, `ON DELETE SET NULL (connection_repository_id)` | Copied at request. Survives disconnect, for the record. The column list needs Postgres 15; the install runs 18 |
 | `folder` | text | Copied at request. K1 uses this, so a remap makes `stale`, not an alert |
+| `kind` | text CHECK, not null | `source` (rungs 3 to 5) or `general` (rung 2b). **`CHECK (kind = 'source' OR (connection_repository_id IS NULL AND folder IS NULL AND files_read IS NULL AND edits IS NULL AND path_candidates IS NULL))`**, added with the source columns at Step 3 |
+| `general_language`, `general_suggestion` | text CHECK null; jsonb null, capped by check at 8 KiB | Rung 2b only. The picked language from FR33's list, and the answer after G1 to G9. **Not source:** not on the deletion list; goes with the finding |
 | `explanation_version`, `basis` | int null; text CHECK | Basis: `likely_cause`, `stack_only`, `named_files` |
 | `state` | text, CHECK | `gathering, gathered, proposing, proposed, refused, failed, stale`, joined at Step 7 by `approved, opened`. A frozen vocabulary, as `test_alert_vocabulary.py` shows the pattern |
 | `state_changed_at` | timestamptz, not null | **The sweep's clock.** `requested_at` would fail a row whose second job is still queued |
@@ -659,16 +753,18 @@ It does this, each in its own transaction:
 | `files_digest` | text | SHA-256 over the ordered path and blob id of what would be sent. Send must carry it |
 | `notify_requester`, `email_due` | bool | D46 |
 | `path_candidates` | jsonb | Attacker-writable. Cleared on every way out |
-| `candidates_from` | text CHECK | `stack`, `person` |
+| `requested_paths` | jsonb | The model's asked-for names, at most 3, untrusted. Written by the AI job, read and cleared by the pack job, cleared on every way out. On the deletion list |
+| `round` | smallint, not null, default 1, CHECK 1 to 3 | Which send this is (D74) |
+| `candidates_from` | text CHECK | `stack`, `person`, `model` (the AI asked, FR15b) |
 | `read_commit`, `read_commit_known` | text, bool | True only for a commit shown to be an ancestor |
-| `files_read` | jsonb | `[{ref, path, blob_sha, mode, why, moved_on_default, lines_sent, role}]`, those left out that exist in the tree, with reason, and a count of those that matched nothing. Written only by `scheduler-connections` |
+| `files_read` | jsonb | `[{ref, path, blob_sha, mode, why, moved_on_default, lines_sent, role}]`, with `role` one of `stack`, `named`, `imported`, `asked`, `test`, those left out that exist in the tree, with reason, and a count of those that matched nothing. Written only by `scheduler-connections` |
 | `checks_version`, `extra_list_hash` | text | Written with the pack |
 | `edits` | jsonb, capped by check at 64 KiB | **Source.** The only thing the AI room writes that a person reads. Holds the display facts (D53) |
 | `evidence_ids` | jsonb | |
 | `tokens_used` | int | |
 | `code_deleted_at`, `code_deleted_reason` | timestamptz, text CHECK | Separate from `state`, so a deletion cannot free the one-open index |
 | `requested_by`, `sent_by`, `approved_by`, `ci_requested_by` | FK to `users`, `SET NULL` | Member scrub keeps the row, as `members/service.py:188` does |
-| `approved_digest`, `requester_note` | text | Second migration. Written at the click. The note is under FR16's prose checks, and on the deletion list |
+| `approved_digest`, `requester_note` | text | Third migration (Step 7). Written at the click. The note is under FR16's prose checks, and on the deletion list |
 | `requested_at`, `sent_at`, `approved_at`, `ci_requested_at`, `finished_at` | timestamptz | |
 | `pull_request_number`, `pull_request_url`, `pull_request_branch` | | |
 | `pull_request_state` | text CHECK null | `open, merged, closed, not_opened, untracked`. **The only source for these** |
@@ -678,7 +774,7 @@ It does this, each in its own transaction:
 
 Indexes: `(org_id, finding_id, requested_at DESC)`. **One in flight:** `UNIQUE (finding_id) WHERE state IN ('gathering','gathered','proposing')`. **One draft Nexovue can still see:** `UNIQUE (finding_id) WHERE state = 'approved' OR (pull_request_branch IS NOT NULL AND (pull_request_state IS NULL OR pull_request_state = 'open'))`. So BR8 holds in the store, not only in code, from the moment before `POST /pulls`. A draft closed on GitHub frees it, once polled. A withdrawal does not. `untracked` and `not_opened` do.
 
-**What deletion empties, the one list:** `edits`, `files_read`, `path_candidates`, `requester_note`, `withheld_refs`, `files_digest`, `approved_digest`, any pack row and every check row for this fix. The fact, state, reason, counts, timestamps and pull request details stay. `clear_stored_code` is that list, in one statement, used by every trigger and the restore. Until the second migration exists, it leaves out `requester_note` and `approved_digest`, and T7.1 adds them, so it never names a column that is not there.
+**What deletion empties, the one list:** `edits`, `files_read`, `path_candidates`, `requested_paths`, `requester_note`, `withheld_refs`, `files_digest`, `approved_digest`, any pack row and every check row for this fix. The fact, state, reason, counts, timestamps and pull request details stay. `clear_stored_code` is that list, in one statement, used by every trigger and the restore. Until the third migration exists, it leaves out `requester_note` and `approved_digest`, and T7.1 adds them, so it never names a column that is not there.
 
 ### `finding_fix_source_packs`
 
@@ -732,7 +828,7 @@ Gains `github_client_id`, `sealed_client_secret`, and `granted_permissions` json
 
 | Table | Grant | Row-level security for `nexovue_insight` |
 |---|---|---|
-| `finding_fixes` | `SELECT (id, org_id, project_id, finding_id, connection_repository_id, explanation_version, state, folder, checks_version, retry_code)`. **No read of `edits`, `files_read`, or pull request columns.** `UPDATE (state, state_changed_at, reason, retry_code, edits, evidence_ids, withheld_refs, tokens_used, finished_at)` | `SELECT USING (state IN ('proposing','proposed','refused','failed'))`. `UPDATE USING (state = 'proposing') WITH CHECK (state IN ('proposing','proposed','refused','failed'))` |
+| `finding_fixes` | `SELECT (id, org_id, project_id, finding_id, kind, general_language, connection_repository_id, explanation_version, state, folder, checks_version, retry_code)`; rung 2b's migration grants the subset that exists then. **No read of `edits`, `files_read`, or pull request columns.** `UPDATE (state, state_changed_at, reason, retry_code, edits, general_suggestion, evidence_ids, withheld_refs, tokens_used, finished_at, requested_paths, candidates_from)` | `SELECT USING (state IN ('proposing','proposed','refused','failed'))`. `UPDATE USING (state = 'proposing') WITH CHECK (state IN ('proposing','proposed','refused','failed'))`. **The move back to `gathering` is not granted.** Only `fix_request_more_files(fix_id, org_id)` makes it: `SECURITY DEFINER`, `EXECUTE` for `nexovue_insight` only, it refuses unless the row is `proposing` with `requested_paths` set and `round < 3`, then sets `gathering`, `candidates_from = 'model'`, `round = round + 1`, and enqueues `connections.build_source_pack` with ids only, its task and queue hard-coded (D75) |
 | `finding_fix_source_packs` | `SELECT`, `DELETE` | `USING (EXISTS (SELECT 1 FROM finding_fixes f WHERE f.id = fix_id AND f.state = 'proposing'))` |
 | `fix_source_consents` | `SELECT (org_id, connection_repository_id, provider_base_url, provider_format, key_id, model, folder_scope, extra_excluded_paths, withdrawn_at)` | None |
 | `jobs`, `job_results` | **None,** as F3 and F4 | No policy. `EXECUTE` on F3's three job functions, whose queue list gains `insight-fix` (F3 AC44's parity test follows) |
@@ -828,6 +924,7 @@ From [`research.md`](research.md), *Thinking as the attacker*.
 | **A16** | Commit pushed to a suggestion branch by someone with push access | Commit sha stored; a retry or Run CI refuses another head | Anything pushed later is not tracked; the screen says so |
 | **A17** | A `commit_sha` from a forged deploy record, with the deploy secret, points at an old commit, or from memory a fork's commit served through the parent, so a pack holds removed secrets or an outsider's file shown as the customer's | Compare route proves ancestry before any read, else the default branch, labelled (AC12h). The trial asks about forks | A secret still in the default branch's history is not this path |
 | **A18** | Link forgery: tying one person's Nexovue account to another's GitHub identity, so D6 checks the wrong person | `state` hashed, single use, bound to the session's person; `code` sealed, never in a job row; PKCE if the trial confirms it | |
+| **A19** | Planted text in a sent file makes the model ask for a sensitive file (`.env`, a workflow, a key), or one outside the folder, in a `needs_files` answer | Names are checked against the folder's tree and the lists, scanned for secrets, and refused ones are only listed or counted; nothing goes without a person's Send on the exact list, with "asked because of" and the model's words labelled (D74, D75). **Open:** it can still steer which allowed file is asked for, as A1 steers a stack | AC84, AC89 |
 
 **Rule of Two.** This corrects the foundation's table: *F5 draft pull request: "Model-written code, checked by Nexovue. A person clicked; review is governed by the customer's repository rules. No new text enters."* No model runs in that step, but what it commits came from one. The requester's note is a person's checked line. *F5 proposal: "Source files, validated facts, and a person's short hint, all fenced except facts."*
 
@@ -886,6 +983,7 @@ The foundation asks that disagreement be stated. **For the founder's approval of
 13. **Section 12's claim 3, "A fence you can read: the model … can reach no … repository key",** holds. "No route to GitHub" must not be claimed.
 14. **Section 12's claim 1** ("none was confirmed") **must be marked out of date:** OneUptime's README describes a free, Apache-licensed Community edition, with an agent on a customer's own server and own or local models. Whether its self-hosted fix path is free is unconfirmed, and T9.6 checks it; strike the claim if confirmed. *Where rivals are plainly ahead* gains: no build or test before the diff (OneUptime's own Runner, Grafana, Better Stack by its own words), and GitHub.com only (Datadog, OneUptime). OneUptime, Better Stack, Middleware and Grafana's Managed Sandboxes join the competitors research.
 15. **Section 2's interface and F3:** the one retry is a new attempt, as F3 does (D51). **Decision 5,** as approved on 2026-11-02, already names F5's verdict and refusal numbers. **Decision 2** extending to source is the spec's founder decision 2.
+16. **Rung 2b and FD14.** FD14 was worded for drafts. Rung 2b needs a likely cause or a recognised error type, and never becomes a patch or draft; the foundation's FD14 text now says so (2026-11-02), so this does not differ. Section 5's `REQUEST_FIX` now names it, and section 11's fix run includes it.
 
 ## Observability and operations
 
@@ -893,7 +991,8 @@ The foundation asks that disagreement be stated. **For the founder's approval of
 - **Alert:** `checks_refused_at_click` above zero (`deploy/monitoring/rules/nexovue.yml`, with a test in `deploy/monitoring/tests/nexovue_test.yml`). **It fires only from a check run or the sweep's first recording, and only when the same rules, lists and files give a different result,** so an upgrade or a moved file cannot make it noise, and a `GET` cannot raise it (AC55). A second alert fires when `sweep_fixes` has not finished in 15 minutes (guess).
 - **Audit**, in the existing shape (`audit/service.py:41`): `ai.source_disclosure_agreed`, `ai.source_disclosure_withdrawn`, `fix.code_location_changed`, `fix.repository_settings_changed`, `repository.read` (names the person and the purpose, lists paths, and `chosen by a person` where so; written by the pack job, check run, draft job and FR5c), `fix.requested`, `fix.sent` (exact paths, blob ids and provider host, after any removal), `fix.code_viewed` (once per person per fix), `fix.withheld` (rule and files, written by the sweep), `fix.patch_downloaded`, `fix.pull_request_attempted`, `fix.pull_request_opened`, `fix.pull_request_refused`, `fix.ci_requested`, `fix.branch_deleted`, `fix.code_withdrawn`, `fix.checks_refused_at_click`, `github_account.linked`, `github_account.unlinked`. Details hold ids, fixed codes and those paths, and no GitHub login. **`audit/read` removes `paths` and `files` from these entries during a support view** (`/audit` is gated only by `MayReadAudit`, `audit/router.py:20-22`, and `auth/dependencies.py:145` lets a read through). **`fix.pull_request_attempted` commits with the claim,** so a crash after a GitHub write still leaves an entry. A second attempt's entry keeps the earlier person.
 - **`finding_events`:** `fix_proposed` and `fix_pull_request_opened` hold ids and counts only. No paths, since viewers read the timeline's kinds and a person reads the rest.
-- **`ai_runs`:** purpose `fix`, with file count and bytes, no contents (foundation, section 5).
+- **`ai_runs`:** purpose `fix`, with file count and bytes, no contents (foundation, section 5). Rung 2b's rows have `fields_sent` `model_input` and `language`, and no file count.
+- **Audit:** `fix.general_requested` (person, provider host). **`finding_events`:** `fix_proposed` with kind `general`.
 - **Admin view:** the summary, on F3's usage screen.
 - **Runbook:** `docs/operations/alerting.md` gains an entry for `checks_refused_at_click`: what it may mean, what to look at.
 
@@ -902,6 +1001,9 @@ The foundation asks that disagreement be stated. **For the founder's approval of
 | Rejected | Why |
 |---|---|
 | **The model fetches files with tools** | Injected text would choose the next read, and `scheduler-insight` would hold a token, which the foundation forbids |
+| **Asked-for files sent without a click, or checked only after a third click** | The first is the loop above in all but name. The second adds a wait and no protection, since checking sends nothing (D75) |
+| **A parser library for imports** | A native dependency for every role, for four languages whose import lines are plain (D76) |
+| **A general suggestion offered beside rung 3, as a fallback** | Competes with a checked, code-based suggestion, and would fall back after refusals that may mean planted text (D67) |
 | **The API opens the pull request (foundation)** | D37 |
 | **API-side minting in `nexovue_platform`, used by both sides** | Solves minting only. The API would still hold a write token, breaking F22's test |
 | **Preflight as a read route in the API, calling GitHub** | Same. Hence a job and a poll |
@@ -967,6 +1069,8 @@ The foundation asks that disagreement be stated. **For the founder's approval of
 ## Specification impact
 
 - The GitHub trial may change FR23, FR25, FR26 and D5. The table above states how.
+- **2026-11-02, founder's decisions:** approval stands with the trial and buyer round before Step 1 (D64); rung 2b added (FR31 to FR38, AC67 to AC78, D65 to D72, Step 2b).
+- **2026-11-02, founder's decisions:** imports followed one hop (FR12a, D73, D76) and the model asking for files with a person's Send (FR15b, FR15c, D74, D75, D77); AC79 to AC89; tasks T3.18, T3.19, T4.13 to T4.15. D2 now reads "fixed pack, which a person may widen"; the agent loop stays out.
 - FR8, BR9, D8, D19, D20, D25, D32, D33 and D35 were revised after the reviews. D38 to D55 are new. `status.md`, *Reviews*, lists why.
-- If buyers say no to source, FR11 onward leave the first version. If no to write access, FR22 to FR28, AC22 to AC28 and Steps 7 and 8 do, and the second migration is never written. The GitHub account link stays, because D20 needs it (D55).
+- If buyers say no to source, FR11 onward leave the first version. If no to write access, FR22 to FR28, AC22 to AC28 and Steps 7 and 8 do, and the third migration is never written. Rung 2b sends no source, so it stays either way. The GitHub account link stays, because D20 needs it (D55).
 - **On other documents, when approved:** `feature-catalog.md`'s F5 entry text beyond its link; `vision.md:136`; `docs/research/phase-2-competitors-2026-11.md` (OneUptime, Better Stack, Middleware, Grafana); `docs/architecture/security-and-tenancy.md`, `system.md`, `database.md`, `current-system-reference.md`; a new customer page, `docs/product/setup/ai-suggested-fixes.md`.

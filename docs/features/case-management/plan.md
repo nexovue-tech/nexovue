@@ -1,12 +1,12 @@
 # Plan: Case management (F22)
 
-> **Status:** Revision 2, awaiting founder approval. Proposed 2026-11-02, and regenerated from the revised spec after the persona reviews (`status.md`, *Reviews*). No file is edited until the founder approves this plan.
+> **Status:** Revision 2, approved by the founder, 2026-11-02. Regenerated from the revised spec after the persona reviews (`status.md`, *Reviews*). Ready to implement once F6 merges.
 >
 > **One document: the order of the work and its tasks.** Steps say what ships and in what order. Tasks under each step name the file that changes and the test that proves it, read from the code. File names marked *new* do not exist yet. **Every acceptance criterion has exactly one owning task, marked `Owns`.** A criterion may be exercised elsewhere, but its owner is where it is signed off, so **the owner is the last task the criterion depends on.** *Criteria that depend on other tasks* lists those dependencies, and T0.2 checks them.
 
 ## Preconditions
 
-- **`spec.md` and `design.md` approved by the founder.** Neither is yet.
+- **`spec.md` and `design.md` approved by the founder.** Both were, on 2026-11-02.
 - **F6 merged to `main`.** Findings, the outbox's finding subject and migrations 0041 to 0050 exist only on this unmerged branch. `main` is protected, so F22 is its own branch and pull request.
 - **F28 and F3 come first by the plan's order, and F22 needs neither.** If F3 has merged, T3.2 adds a third value to its `SCHEDULER_ROLE` and `TASK_SETS`. If it has not, T3.2 builds them, and F3 takes them over. T2.9 happens only once F3's `evidence/gather.py` exists.
 - **Step 7 alone waits on Atlassian's written answer** (the founder's Jira decision, approved 2026-11-02: `spec.md`, *Founder decisions needed*, 1).
@@ -261,9 +261,9 @@ Settled or answered, kept so old references resolve: **2**, self-hosted retentio
 
 ## Gates
 
-- [ ] Specification approval
-- [ ] Design approval
-- [ ] **Plan approval: before the first edited file**
+- [x] Specification approval: 2026-11-02
+- [x] Design approval: 2026-11-02
+- [x] **Plan approval:** 2026-11-02
 - [ ] Implementation
 - [ ] Tests
 - [ ] Review

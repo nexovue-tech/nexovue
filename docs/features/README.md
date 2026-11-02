@@ -15,17 +15,17 @@ requirements, and they move through the lifecycle in `docs/engineering/workflow.
   landing in `spans` — no new ingestion. Agent-trajectory views and a frozen metric contract are both
   explicitly deferred, with the reasoning on record.
 
-**Phase 2, Proposed 2026-11-02.** Specification, design and plan are written and await the founder. Nothing is
-approved and no code exists. They follow [`phase-2-foundation.md`](../product/phase-2-foundation.md), also Proposed,
-and appear in the [plan's](../product/phase-2-plan.md) order.
+**Phase 2, approved 2026-11-02.** The founder approved each feature's specification, design and plan, and
+[`phase-2-foundation.md`](../product/phase-2-foundation.md), on 2026-11-02. No code exists yet. They appear in the
+[plan's](../product/phase-2-plan.md) order and start per [`phase-2-tracker.md`](../product/phase-2-tracker.md) once F6 merges.
 
-- [Deployment and release tracking](deployment-release-tracking/spec.md) — **Proposed**, F28. Stage 2: a release record and a before-and-after comparison, with no AI.
-- [Finding explanation](ai-insights/spec.md) — **Proposed**, F3. Stage 2: stored facts from code, with AI wording optional.
-- [Case management](case-management/spec.md) — **Proposed**, F22. Stage 3: a case is a finding that grew, with GitHub and Jira sync.
-- [AI chatbot](ai-chatbot/spec.md) — **Proposed**, F4. Stage 4: a read-only chat, on the asking person's own access, and a safer MCP server first.
-- [AI solution](ai-solution/spec.md) — **Proposed**, F5. Stage 5: a suggested fix and a draft pull request, only on a person's click.
-- [SLO tracking](slo-tracking/spec.md) — **Proposed**, F19. Stage 6: reliability targets and budgets, with no AI link.
-- [Dashboards](dashboards/spec.md) — **Proposed**, F20. Stage 6: a builder of fixed panel kinds, and the Findings feed as the front door.
+- [Deployment and release tracking](deployment-release-tracking/spec.md) — **Approved 2026-11-02, not built**, F28. Stage 2: a release record and a before-and-after comparison, with no AI.
+- [Finding explanation](ai-insights/spec.md) — **Approved 2026-11-02, not built**, F3. Stage 2: stored facts from code, with AI wording optional.
+- [Case management](case-management/spec.md) — **Approved 2026-11-02, not built**, F22. Stage 3: a case is a finding that grew, with GitHub and Jira sync.
+- [AI chatbot](ai-chatbot/spec.md) — **Approved 2026-11-02, not built**, F4. Stage 4: a read-only chat, on the asking person's own access, and a safer MCP server first.
+- [AI solution](ai-solution/spec.md) — **Approved 2026-11-02, not built**, F5. Stage 5: a suggested fix and a draft pull request, only on a person's click; without code access, a labelled general suggestion (rung 2b).
+- [SLO tracking](slo-tracking/spec.md) — **Approved 2026-11-02, not built**, F19. Stage 6: reliability targets and budgets, with no AI link.
+- [Dashboards](dashboards/spec.md) — **Approved 2026-11-02, not built**, F20. Stage 6: a builder of fixed panel kinds, and the Findings feed as the front door.
 
 ## The specification backlog
 

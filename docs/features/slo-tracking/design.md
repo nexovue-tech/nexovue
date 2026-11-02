@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed. Awaiting approval.** Written 2026-11-02 and rewritten the same day against the revised [`spec.md`](spec.md), also Proposed, after eight
+**Approved** by the founder, 2026-11-02, with D66 (SLO work on `scheduler-light`). Written 2026-11-02 and rewritten the same day against the revised [`spec.md`](spec.md), after eight
 persona reviews ([`status.md`](status.md), *Reviews*). The feature's lifecycle status lives in [`status.md`](status.md).
 
 **How it was checked.** The code was read on branch `feature/anomaly-detection`, with uncommitted work present, so line numbers will
@@ -148,11 +148,22 @@ Each state's next step is in FR10's table, and comes straight after the sentence
 
 ### Where it runs
 
-**A new role, `scheduler-slo`, on the same `nexovue` image** (ADR-019 allows a role per container, and `roles.py:22-27` is where a role is named): `--queues slo,slo_counts,slo_history --concurrency 4`, with `QUEUE_CAPS` of `slo` 2, `slo_counts` 1, `slo_history` 1 (`jobs/worker.py:72`). It holds the reader DSN and the control-plane settings, and no writer. Memory ceiling **384M, a guess** until AC50 measures it: 4 children at the 64 MiB limit (`worker.py:75-77`), plus the parent.
+**On `scheduler-light`, with no new role or container** (D66, the founder's decision of 2026-11-02, superseding D39's `scheduler-slo`). The three queues `slo`, `slo_counts` and `slo_history` join the worker's default queues (`__main__.py:78-85`) and `QUEUE_CAPS` (`jobs/worker.py:72`), where detection is capped today at `DETECTION_CONCURRENCY`, 2 (`detection/__init__.py:24`). Caps: **`slo` 2, `slo_counts` 1, `slo_history` 1, guesses.** The job code reads ClickHouse only through the reader account (`CLICKHOUSE_DSN`, `deploy/compose/nexovue.yaml:360`); the container also holds the eraser and detection-writer accounts, which F19's code must never open (AC68's structure test names the DSN each SLO statement uses).
 
-**Why not `scheduler-light`,** which an earlier draft chose. Probes are not what is short there: F3's design adds a floor, so all capped queues together hold at most 4 of the 8 slots, taking turns, and probes and sweeps keep the other 4 (`ai-insights/design.md`, *The floor (A56)*, lines 271 and 829). **The capped queues are what would be short.** Detection 2, evidence 2 (`:269`) and F28's releases 2 already ask for 6 of those 4. F19's `slo` 2, `slo_counts` 1 and `slo_history` 1 would make 10 asking for 4, so a burn job that expires in 60 seconds would wait in turn behind evidence reads and 330-second history reads. Raising the slots to 12 with the floor at 4 gives capped queues 8, but at the 64 MiB child limit 12 children are 768 MiB, the whole of today's ceiling (`nexovue.yaml:385`), so the memory saved over a new role is nothing, and a read gone wrong that takes the container down would take probes with it. A separate container shares none of this. F3's line 79 counts F19's `slo` 2 on this role; with `scheduler-slo` that queue is not there, and the floor holds either way. The one correction left is F28's "2 of 8" (`deployment-release-tracking/design.md:356`), which F3 already asks for (`ai-insights/design.md:785`).
+**How probes and alert sweeps keep their slots.** A cap alone does not protect them: `_claim_into_idle_slots` serves capped queues first and the uncapped lane last, with what is left (`jobs/worker.py:261-287`). F3's floor (A56, `ai-insights/design.md`, *The floor (A56)*) closes that: all capped queues together hold at most `concurrency - uncapped_floor` slots, 8 − 4 = 4, taking turns so none starves. With F19 the capped queues are `detection` 2, `evidence` 2, `releases` 2, `slo` 2, `slo_counts` 1 and `slo_history` 1: **10 seats asked for, 4 given.** Probes and alert sweeps (`light`, `light.<region>`) always keep the other 4.
 
-**Why three queues.** History jobs may take 330 seconds. In one capped queue, two of them would stop burn judging for every organization while 60-second jobs expired. Apart, 20 queued history jobs cost burn nothing (AC64).
+**The trade-off, stated plainly.**
+
+- **SLO work waits; probes and alert sweeps do not.** When detection, evidence and release reads are busy, SLO jobs wait their turn. A burn job expires at 60 seconds, so under load a project's burn is judged a minute or two late, longest-waiting first (*Overload*, AC65), and its screen says **Not up to date**. It is never judged never.
+- **A history read holds one shared seat** for up to 330 seconds. Its cap of 1 keeps it to one.
+- **One failure domain.** A read that crashes `scheduler-light` (an OOM kill of the whole container, not one child) stops probes and alert sweeps with it. D39's own container avoided that. F19's reads keep detection's bounds, 5 seconds and 256 MiB on the ClickHouse side, and each child keeps the 64 MiB limit after a job (`jobs/worker.py:75-77`).
+- **Why the caps are these.** `slo` 2 matches detection's: at 200 projects, 0.6 seconds a job fills a minute (see *Slots*). `slo_counts` and `slo_history` at 1 keep the slow work from taking more than one shared seat each. A higher cap would only lengthen everyone's turn under the floor.
+
+**Memory.** `scheduler-light`'s ceiling stays **768M, a guess.** The slot count does not change, so neither does the number of children, and the 64 MiB per-child limit already sized eight children for it (`jobs/worker.py:73-77`). What grows is the forkserver's preloaded imports, by the `slos` package, shared by all children. AC50 measures it on the deployed server; if it OOM-kills there, the ceiling rises and `sizing.md` changes with it. **This removes F19's planned 384 MB container from the Phase 2 total** (foundation section 1).
+
+**Depends on F3's floor.** The floor is F3's T1.7 (`uncapped_floor`). If F19's Step 1 is built before F3's T1.7 merges, F19 builds the floor exactly as F3's design describes, and F3 rebases onto it (the tracker's shared-file rule). Without the floor, SLO queues must not ship on `scheduler-light`.
+
+**Why three queues.** History jobs may take 330 seconds. In one capped queue, two of them would stop burn judging for every organization while 60-second jobs expired. Apart, 20 queued history jobs hold one seat at most, and leave burn its own cap (AC64).
 
 **The trigger is F6's coordinator** (`detection/coordinator.py:137-163`), which already knows the settled minute and the holds. After queueing detection's jobs it also calls `slos.queue_jobs(engine, settled, trouble, now)`. That gives one clock and one reading of what nexovue's intake lost, and it avoids a second set of Kafka reads each minute. **Rejected:** its own beat entry, which would have to repeat `holds.decide` and its lock, or read `detection_sweep.settled_minute`, which never moves backwards and so can sit past a newly found hold (`coordinator.py:71-81`).
 
@@ -257,7 +268,7 @@ severity = critical if a fast or medium tier holds, else warning
 ```python
 class SloBurnCondition(_Condition):
     kind: Literal["slo_burn"] = "slo_burn"
-    slo_ids: list[uuid.UUID] | None = None   # absent means every target in the project
+    slo_ids: list[uuid.UUID] | None = None  # absent means every target in the project
     minimum_severity: Severity = "warning"
 ```
 
@@ -293,7 +304,7 @@ An exclusion overlapping an open burn also adds its id, start and end to that in
 
 If the SLO worker, the sweep or intake stops, burns stop too, and until now only a screen would say so. That is worse than no alert system, so:
 
-- **`sweep_deliveries` (`alerts/tasks.py:51-68`) gains a step,** `notices.report_blind`. It runs in `scheduler-deliveries` (`beat.py:390-394`), a different container from `scheduler-slo`, and needs only Postgres.
+- **`sweep_deliveries` (`alerts/tasks.py:51-68`) gains a step,** `notices.report_blind`. It runs in `scheduler-deliveries` (`beat.py:390-394`), a different container from `scheduler-light`, where SLO judging runs, and needs only Postgres.
 - For each project with a target whose `slo_status` is older than 15 minutes, or whose `unjudged_since` is older than 15 minutes (every tier unable to judge for coverage), it opens one incident per project: "Reliability targets in `production` are not being judged since 02:14. A burn would not reach you." When judging returns it resolves, which sends "judging again".
 - **It stays single through its own open and resolve path, not `fire` and `clear`.** Those find the open row by `rule_id = :rule_id` (`incidents.py:62-69`), and the unique index is on `(rule_id, subject_key)` (`incidents.py:101`, `models.py`, `uq_incidents_rule_id_subject_key_open`). Two nulls never conflict, and `rule_id = NULL` matches nothing, so built on those a sweep would open a new critical incident each run, or never resolve one. So:
   - `notices.report_blind` writes every blind incident with **`rule_id` null, whoever is told,** and a fixed `rule_name` composed by nexovue, "Reliability targets not being judged". So deleting a rule can change nothing about it.
@@ -451,7 +462,7 @@ One function per kind builds the fixed label (D42), used by the copy action and 
 ```
 worker ──► service_stats_1m, endpoint_stats_1m, metrics_gauge        (no change)
                     │ read (reader account, 24 h and 8 d)
-detection sweep ──► queue_jobs ──► judge_slos ──► slo_status          (Postgres, scheduler-slo)
+detection sweep ──► queue_jobs ──► judge_slos ──► slo_status          (Postgres, scheduler-light)
                                │              └► alert_evaluations, incidents, notifications, finding_incidents
                                ├► count_slos ──► slo_daily_counts
                                └► read_slo_history
@@ -589,15 +600,15 @@ slo_deleted_months                (Step 3) written at purge, so a report stays t
 
 **Why this looks affordable, and where it may not be.** The service read averages 14,400 rows per job, and fits its granules. The named endpoint read is the largest figure here, and it is unmeasured. The list and the target's figures read none of it.
 
-**Slots.** On `slo`, 200 jobs at a cap of 2 must average under 0.6 seconds each to finish in a minute (arithmetic). On `slo_counts`, one slot and 200 projects every 5 minutes must average under 1.5 seconds each (arithmetic). Over budget, jobs expire and are overtaken, and the longest-waiting go first, so a project is judged late, not never. **Unproved until AC65 runs.**
+**Slots.** On `slo`, 200 jobs at a cap of 2 must average under 0.6 seconds each to finish in a minute (arithmetic). On `slo_counts`, one slot and 200 projects every 5 minutes must average under 1.5 seconds each (arithmetic). Both assume the SLO queues get their caps; under F3's floor they share 4 seats with detection, evidence and releases, so when those are busy the figures above are not met and judging runs late. Over budget, jobs expire and are overtaken, and the longest-waiting go first, so a project is judged late, not never. **Unproved until AC65 runs.**
 
-**If the measurement fails, in this order:** (1) read 6-hour and 24-hour tiers every 5 minutes, holding their result in `slo_status`, since a slow burn needs no minute's precision; (2) raise `scheduler-slo`'s slots and memory, with extra arguments through `roles.py:41`; (3) read 6 h and 24 h from stored day and hour figures. **Do not build these first.**
+**If the measurement fails, in this order:** (1) read 6-hour and 24-hour tiers every 5 minutes, holding their result in `slo_status`, since a slow burn needs no minute's precision; (2) raise `scheduler-light`'s slots (keeping the floor of 4) and its memory ceiling, through `roles.py:22` and every compose file; (3) read 6 h and 24 h from stored day and hour figures. **Do not build these first.**
 
 **Postgres.** One upsert per target per minute in `slo_status`, 2,000 a minute at the cost target. `slo_daily_counts`: 2,000 rows times 400 days is 800,000 rows, and at a guessed 100 bytes each about 80 MB. Small and fine.
 
 **ClickHouse's read account** keeps its limits of 30 seconds and 1 GiB (`users.d/reader.xml:23-46`). F19's scheduler reads lower those to 5 seconds and 256 MiB through `lowered_read_settings`, as detection does (`store.py:53-57`), passed through the new `settings` argument. History reads a day at a time, for the same reason.
 
-**Memory.** `scheduler-slo` adds a ceiling of 384M, a guess, to the roughly 13 GB on a 16 GB server (`docs/self-hosting/sizing.md:8`). `sizing.md` gains the row. AC50 must show no OOM kills at it, and no added lag on probes or alert sweeps.
+**Memory.** No new container, so nothing is added to the roughly 13 GB of ceilings on a 16 GB server (`docs/self-hosting/sizing.md:8`). `scheduler-light` keeps 768M, a guess (*Where it runs*). AC50 must show no OOM kills at it with every capped queue busy, and no added lag on probes or alert sweeps; if it fails, the ceiling and its `sizing.md` row rise together.
 
 ### Capacity and AI cost
 
@@ -707,16 +718,17 @@ Model words cannot enter messages, since there is no model. No `dangerouslySetIn
 | **Holding a burn message briefly, to merge** | Breaks "an alert never waits" (plan) |
 | **Withholding at write time** | The other subject may be pending, may fail, or may arrive a moment later. Only the claim sees all of this |
 | **Widening the rule to everything now** | Would fix an existing two-email problem between findings and thresholds, and it changes F6's tested behaviour. Offer to F21 later with evidence from this |
-| **SLO work on `scheduler-light`, with 12 or more slots** | See *Where it runs*. Memory matches a new role, and it would share a failure with probes. If a founder prefers it: a new ceiling, `roles.py`, every compose file and `sizing.md` change, and AC50 must prove it |
+| **A new role, `scheduler-slo`** (D39, superseded) | The founder chose no new container (D66, 2026-11-02). It would have kept SLO failures apart from probes and given SLO work its own 4 slots, for one more container and 384 MB |
+| **SLO work on `scheduler-light`, with 12 or more slots** | 12 children at the 64 MiB limit is 768 MiB, the whole of today's ceiling. Kept as the fallback if AC50 fails (*If the measurement fails*) |
 | **Reading the service's snooze in `fire`** | Stored for the incident's whole life. See *What a burn may withhold* |
 | **A new notification kind for a release** | `opened` at a new `sequence` already reads right, and repeats and PagerDuty need no change |
 | **Each kind with its own rule type** | Rule editor grows fourfold, for no real difference in routing |
 
-**Accepted costs, stated plainly.** Whole-day windows step at midnight. Fast failures count as good on latency. A member can tidy a bad month, visibly. A check target and its check's own alert need care to stay one message. If the detection sweep stops, SLO judging stops with it, and people are told. One more container.
+**Accepted costs, stated plainly.** Whole-day windows step at midnight. Fast failures count as good on latency. A member can tidy a bad month, visibly. A check target and its check's own alert need care to stay one message. If the detection sweep stops, SLO judging stops with it, and people are told. SLO work waits behind detection, evidence and release reads on `scheduler-light`, and shares that container's failures (D66).
 
 ## Specification impact
 
-- The spec holds what this design decided, including D2, D4, D11, D13, D19, D35 and D37 to D54.
+- The spec holds what this design decided, including D2, D4, D11, D13, D19, D35 and D37 to D54, and D66, which supersedes D39.
 - `feature-catalog.md` F19's line narrows, on approval.
 - F21's spec: BR and FR notes on `slo_burn`, the `about_*` columns, the withheld columns, and the withholding and release rules.
 - F6's spec: FR on links gains "and a burn on the same service"; FR28's messages gain FR22's exception; the service snooze control's wording. Its mute is unchanged for burns.
@@ -749,9 +761,9 @@ Written here, not in `docs/decisions/`. Each becomes an ADR only when the founde
 - **Consequences.** Nothing waits. The delivery log shows every decision. No news is lost by being withheld. The outbox gains a release path and reads a service's snooze. F21 can later drop the "only where a burn is involved" condition, and this would also fix today's two emails.
 - **Rejected.** Holding and merging; deciding at write; widening it now.
 
-### Proposed ADR: SLO judging runs in its own role
+### Proposed ADR: SLO judging runs on `scheduler-light`, under the shared floor
 
-- **Context.** ADR-019 allows a role per container on one image. `scheduler-light` holds probes and sweeps. F3's floor keeps them 4 of its 8 slots, so all capped queues share the other 4, and F6, F3 and F28 already ask for 6.
-- **Decision.** `scheduler-slo`, 4 slots, three capped queues, ceiling a guess of 384M until AC50.
-- **Consequences.** One more container. A slow read cannot starve a probe, nor a history read starve a burn. `scheduler-light` needs only what it has.
-- **Rejected.** 12 or more slots on `scheduler-light`, which costs about the same memory.
+- **Context.** ADR-019 allows a role per container on one image. `scheduler-light` holds probes and alert sweeps. F3's floor keeps them 4 of its 8 slots, so all capped queues share the other 4, and F6, F3 and F28 already ask for 6. The founder decided on 2026-11-02 that SLO work adds no container (D66, superseding D39).
+- **Decision.** Queues `slo` (cap 2), `slo_counts` (1) and `slo_history` (1) run on `scheduler-light`, under the floor. Its 8 slots and its 768M ceiling, a guess until AC50, are unchanged.
+- **Consequences.** No new container and 384 MB less ceiling than D39. Probes and alert sweeps never wait behind SLO work. SLO work waits behind detection, evidence and release reads, and is judged late, not never. A crash of the container stops probes and SLO judging together.
+- **Rejected.** A new role, `scheduler-slo` (D39), by the founder's decision. 12 or more slots on `scheduler-light`, kept as the fallback.

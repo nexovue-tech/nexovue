@@ -1,14 +1,14 @@
 # Plan: Dashboards (F20)
 
-> **Status:** Awaiting founder approval. Proposed 2026-11-02, and rewritten that day from the reviewed [`spec.md`](spec.md) and
-> [`design.md`](design.md). Nothing here has started, and no file may be edited until the founder approves this plan, along with them.
+> **Status:** Approved by the founder, 2026-11-02, with [`spec.md`](spec.md) and [`design.md`](design.md). Rewritten that day from the
+> reviewed spec and design. Nothing here has started. Ready to implement once F6 merges.
 >
 > **One document: the order of the work and its tasks.** Steps say what ships and in what order. Tasks under each step name the
 > file that changes and the test that proves it, read from the code.
 
 ## Preconditions
 
-- **Specification, design and this plan approved.** All three are Proposed.
+- **Specification, design and this plan approved.** All three were, on 2026-11-02.
 - **F6 merged** (foundation section 9). Findings, and migrations up to 0050, exist only on `feature/anomaly-detection`.
 - **Step 1 needs only F6.** It ships as soon as F6 merges, ahead of Stages 2 to 5 (spec D58).
 - **Step 2 onward:** the one round of buyer conversations held (the foundation's founder decision 8), its notes recorded, and founder decision 1's rule applied to them, with T2.0's mapping in hand (spec D60).
@@ -440,9 +440,9 @@ Answered 2026-11-02, not asked again: whether to hold buyer conversations is the
 
 ## Gates
 
-- [ ] Specification approval
-- [ ] Design approval
-- [ ] **Plan approval — before the first edited file**
+- [x] Specification approval: 2026-11-02
+- [x] Design approval: 2026-11-02
+- [x] **Plan approval:** 2026-11-02
 - [ ] Implementation
 - [ ] Tests
 - [ ] Review

@@ -2,11 +2,13 @@
 
 ## Lifecycle status
 
-**Proposed.** Specification, design and plan are written, revised after eight persona reviews and a second review, and await the founder. Nothing is approved. No code exists.
+**Approved; plan approved, ready to implement.** The founder approved the specification, design and plan on 2026-11-02. No code exists yet.
+
 
 ## Current task
 
-Waiting on founder approval. The persona reviews have run, and their findings are recorded under *Reviews*.
+None. Waiting for F6 (pull request #24) to merge.
+
 
 ## Completed
 
@@ -24,7 +26,8 @@ Waiting on founder approval. The persona reviews have run, and their findings ar
 
 ## Next action
 
-The founder reads `spec.md`'s *Goal*, *Decisions taken* and *Founder decisions needed*, then approves or redirects the specification. On approval, T0.1 changes the catalog's wording, then review the design, then the plan. Step 1 of the plan is the first code edited, after plan approval, with F6 merged and F28's readers in place.
+Start per [`phase-2-tracker.md`](../../product/phase-2-tracker.md) once F6 (pull request #24) merges. Steps 1 to 2c start once F28's release functions (its Steps 1b to 3) are in; T0.1 first updates the catalog wording. File the design's 4 proposed ADRs in `docs/decisions/` at implementation start, numbered then.
+
 
 ## Open decisions
 
@@ -391,3 +394,7 @@ The founder approved every Phase 2 founder question as recommended, with two cha
 - **Changed, A: no rented test server.** Step 2c's weeks-long rule scoring, T2.17's report and T2.18's check wait for Oracle after Phase 2 is deployed, and so does any part of Step 6 that needs the demo running for days. **Until then no rule states a likely cause; F3 ships facts only.** A70 and A79 updated.
 - **Changed, B: no paid model calls.** T2.11's 20 calls and Step 6's model runs use a free tier (Gemini's is the likely one: Groq's listed 8,000 tokens a minute is below one F3 prompt of about 9,800, someone else's measurement; Gemini's limits are shown only in AI Studio) and the local model on the Mac (A81). Synthetic data only. The report names the models and says paid providers are not yet tested.
 - **Open decisions:** none for the founder. The Oracle shape to measure on comes back at deployment.
+
+## Spec, design and plan approved, 2026-11-02
+
+The founder approved [`spec.md`](spec.md), [`design.md`](design.md) and [`plan.md`](plan.md) on 2026-11-02, with the foundation. **The design's 4 proposed ADRs are to be filed in `docs/decisions/` at implementation start**, numbered then; none is filed yet.
